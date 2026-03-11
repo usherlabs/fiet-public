@@ -61,6 +61,10 @@ contract LiquidityCommitmentCertificateTest is Test {
     uint256 internal lastAnnulWrapped;
     uint256 internal lastAnnulMarket;
     uint256 internal lastAnnulAmount;
+    uint256 internal wrappedIngressCalls;
+    address internal lastWrappedIngressLcc;
+    uint256 internal lastWrappedIngressTotal;
+    uint256 internal lastWrappedIngressWrapped;
 
     bytes32 internal marketIdForThis = bytes32("market-id");
     address internal factoryForThis = address(this);
@@ -148,7 +152,12 @@ contract LiquidityCommitmentCertificateTest is Test {
         assertEq(lcc6.decimals(), 6);
     }
 
-    function recordWrappedIngress(address, uint256, uint256) external {}
+    function recordWrappedIngress(address lccToken, uint256 totalAmount, uint256 wrappedAmount) external {
+        wrappedIngressCalls++;
+        lastWrappedIngressLcc = lccToken;
+        lastWrappedIngressTotal = totalAmount;
+        lastWrappedIngressWrapped = wrappedAmount;
+    }
 
     function test_mint_revertsWhenNotHub() public {
         vm.prank(alice);
@@ -490,6 +499,28 @@ contract LiquidityCommitmentCertificateTest is Test {
         assertEq(plannedCancelCalls, 1);
         assertEq(lastCancelSender, alice);
         assertEq(lastCancelRecipient, protocol);
+    }
+
+    function test_transfer_toHubExemptSink_doesNotReportWrappedIngress() public {
+        _setBoundLevel(address(this), BOUND_EXEMPT);
+        lcc.mint(alice, 10, 0);
+
+        vm.prank(alice);
+        lcc.transfer(address(this), 4);
+
+        assertEq(wrappedIngressCalls, 0, "hub transfers must not emit sequencer ingress facts");
+    }
+
+    function test_transfer_toNonHubExemptSink_reportsWrappedIngress() public {
+        lcc.mint(alice, 10, 0);
+
+        vm.prank(alice);
+        lcc.transfer(protocol, 4);
+
+        assertEq(wrappedIngressCalls, 1);
+        assertEq(lastWrappedIngressLcc, address(lcc));
+        assertEq(lastWrappedIngressTotal, 4);
+        assertEq(lastWrappedIngressWrapped, 4);
     }
 
     /// @dev Mutation-hardening: bucket-tracked protocol -> protocol transfer must:

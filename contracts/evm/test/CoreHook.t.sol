@@ -100,7 +100,8 @@ contract CoreHookTest is Test {
     // ------------------------------------------------------------
 
     function test_afterAddLiquidity_forwardsEffectiveDelta_minusFeeAdj_whenNotMM() public {
-        BalanceDelta delta = toBalanceDelta(int128(10), int128(20));
+        // Add-liquidity caller legs are negative deltas.
+        BalanceDelta delta = toBalanceDelta(int128(-10), int128(-20));
         BalanceDelta feeAdj = toBalanceDelta(int128(3), int128(5));
 
         vts.setReturn(feeAdj, false);
@@ -110,7 +111,7 @@ contract CoreHookTest is Test {
         assertEq(sel, hook.afterAddLiquidity.selector);
         assertEq(BalanceDelta.unwrap(returnedFeeAdj), BalanceDelta.unwrap(feeAdj));
 
-        BalanceDelta expectedEffective = delta - feeAdj;
+        BalanceDelta expectedEffective = toBalanceDelta(int128(13), int128(25));
         assertEq(spy.calls(), 1, "spy should be called once");
         assertEq(
             BalanceDelta.unwrap(spy.lastDelta()), BalanceDelta.unwrap(expectedEffective), "effective delta mismatch"

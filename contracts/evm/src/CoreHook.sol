@@ -167,10 +167,11 @@ contract CoreHook is BaseHook, Exttload, ImmutableMarketState, ImmutableVTSState
 
         // only add direct liquidity if this is not an MM position operation
         if (!isMMPosition) {
-            // Forward effective caller delta including fee adjustment (Uniswap will apply callerDelta - hookDelta)
-            BalanceDelta effective = delta - feeAdj; //  equivalent to doing (delta1.amount0 + delta2.amount0, delta1.amount1 + delta2.amount1)
-            uint256 amount0 = effective.amount0() > 0 ? LiquidityUtils.safeInt128ToUint256(effective.amount0()) : 0;
-            uint256 amount1 = effective.amount1() > 0 ? LiquidityUtils.safeInt128ToUint256(effective.amount1()) : 0;
+            // For add-liquidity, the caller-funded legs are represented as negative deltas.
+            // Sequence those lane demands so later LCC ingress can reconcile wrapped eligibility/order.
+            BalanceDelta effective = delta - feeAdj; // equivalent to (delta1 + delta2) per leg
+            uint256 amount0 = effective.amount0() < 0 ? LiquidityUtils.safeInt128ToUint256(effective.amount0()) : 0;
+            uint256 amount1 = effective.amount1() < 0 ? LiquidityUtils.safeInt128ToUint256(effective.amount1()) : 0;
             marketFactory.sequenceDirectAddLiquidity(key, amount0, amount1);
         }
 
