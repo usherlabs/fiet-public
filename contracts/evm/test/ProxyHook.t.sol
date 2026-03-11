@@ -57,18 +57,18 @@ contract ProxyHookTest is MarketVaultBase {
         fresh.setCorePoolKey(corePoolKey);
     }
 
-    function test_handleLiquidity_revertsIfNotFactory() public {
+    function test_handleLiquidity_revertsIfNotCoreHook() public {
         ProxyHookHarness fresh = new ProxyHookHarness(address(manager), address(marketFactory));
 
         vm.expectRevert(Errors.InvalidSender.selector);
-        fresh.handleAddLiquidity(1, 0);
+        fresh.handleAddLiquidity();
     }
 
-    function test_handleSwap_revertsIfNotFactory() public {
+    function test_handleSwap_revertsIfNotCoreHook() public {
         ProxyHookHarness fresh = new ProxyHookHarness(address(manager), address(marketFactory));
 
         vm.expectRevert(Errors.InvalidSender.selector);
-        fresh.handleSwap(address(0), 1);
+        fresh.handleSwap(address(0));
     }
 
     function test_activate_onlyFactory_gate_isObservableViaLowLevelCall() public {
@@ -105,20 +105,19 @@ contract ProxyHookTest is MarketVaultBase {
         assertEq(PoolId.unwrap(fresh.getCorePoolId()), PoolId.unwrap(corePoolKey.toId()));
     }
 
-    function test_handleLiquidity_onlyFactory_gate_isObservableWithNoopInputs() public {
+    function test_handleLiquidity_onlyCoreHook_gate_isObservableWithNoopInputs() public {
         ProxyHookHarness fresh = new ProxyHookHarness(address(manager), address(marketFactory));
         address attacker = makeAddr("attacker_handleLiquidity");
 
         vm.prank(attacker);
-        (bool ok,) =
-            address(fresh).call(abi.encodeCall(IVaultCoreActionHandler.handleAddLiquidity, (uint256(0), uint256(0))));
-        assertFalse(ok, "handleLiquidity should be gated by onlyFactory");
+        (bool ok,) = address(fresh).call(abi.encodeCall(IVaultCoreActionHandler.handleAddLiquidity, ()));
+        assertFalse(ok, "handleLiquidity should be gated by onlyCoreHook");
 
-        vm.prank(marketFactory);
-        fresh.handleAddLiquidity(0, 0);
+        vm.prank(coreHookAddress);
+        fresh.handleAddLiquidity();
     }
 
-    function test_handleSwap_onlyFactory_gate_isObservableOnEarlyReturnPath() public {
+    function test_handleSwap_onlyCoreHook_gate_isObservableOnEarlyReturnPath() public {
         ProxyHookHarness fresh = new ProxyHookHarness(address(manager), address(marketFactory));
         address attacker = makeAddr("attacker_handleSwap");
 
@@ -127,11 +126,11 @@ contract ProxyHookTest is MarketVaultBase {
 
         vm.prank(attacker);
         (bool ok,) = address(fresh)
-            .call(abi.encodeCall(IVaultCoreActionHandler.handleSwap, (Currency.unwrap(corePoolKey.currency0), 0)));
-        assertFalse(ok, "handleSwap should be gated by onlyFactory");
+            .call(abi.encodeCall(IVaultCoreActionHandler.handleSwap, (Currency.unwrap(corePoolKey.currency0))));
+        assertFalse(ok, "handleSwap should be gated by onlyCoreHook");
 
-        vm.prank(marketFactory);
-        fresh.handleSwap(Currency.unwrap(corePoolKey.currency0), 0);
+        vm.prank(coreHookAddress);
+        fresh.handleSwap(Currency.unwrap(corePoolKey.currency0));
     }
 
     function _isProxyKeyAlignedWithCoreLCCUnderlying() internal view returns (bool) {
@@ -944,7 +943,7 @@ contract ProxyHookTest is MarketVaultBase {
         harness.setCorePoolKey(corePoolKey);
 
         vm.prank(marketFactory);
-        harness.handleSwap(Currency.unwrap(corePoolKey.currency0), 0);
+        harness.handleSwap(Currency.unwrap(corePoolKey.currency0));
     }
 
     function test_proxySwap_priceLimit_zero_executesCalc_thenReturnsNonZeroDelta() public {

@@ -3,23 +3,27 @@ pragma solidity ^0.8.26;
 
 /**
  * @title IVaultCoreActionHandler
- * @notice Factory-scoped handler surface for reconciled direct-core actions.
- * @dev Methods are intentionally broad (`handleAddLiquidity`, `handleSwap`) but contract-scoped:
- *      they are not general router entrypoints and must only be called by `MarketFactory` after sequencing.
+ * @notice Factory-scoped handler surface for ingress settlement and direct-core follow-up.
+ * @dev Methods are intentionally broad but contract-scoped: they are not general router entrypoints and
+ *      must only be called by `MarketFactory`.
  */
 interface IVaultCoreActionHandler {
     /**
-     * @notice Handles a reconciled direct core swap reaction for this vault.
-     * @param lccTokenIn The LCC lane whose underlying enters from Hub to vault.
-     * @param wrappedAmountIn Wrapped-only portion eligible for Hub -> vault settlement.
+     * @notice Handles wrapped ingress observed on LCC -> PoolManager transfer paths.
+     * @param lcc The LCC lane where wrapped ingress occurred.
+     * @param wrappedAmount Wrapped-only portion eligible for Hub -> vault settlement.
      */
-    function handleSwap(address lccTokenIn, uint256 wrappedAmountIn) external;
+    function handleIngress(address lcc, uint256 wrappedAmount) external;
 
     /**
-     * @notice Handles a reconciled direct core liquidity-add reaction for this vault.
-     * @param wrappedAmount0 Wrapped-only portion for lane token0.
-     * @param wrappedAmount1 Wrapped-only portion for lane token1.
+     * @notice Handles a direct core swap follow-up for this vault.
+     * @param lccTokenIn The input-side LCC lane for the direct swap.
      */
-    function handleAddLiquidity(uint256 wrappedAmount0, uint256 wrappedAmount1) external;
+    function handleSwap(address lccTokenIn) external;
+
+    /**
+     * @notice Handles a direct core liquidity-add follow-up for this vault.
+     */
+    function handleAddLiquidity() external;
 }
 

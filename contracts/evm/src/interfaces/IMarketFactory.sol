@@ -168,26 +168,9 @@ interface IMarketFactory {
 
     /**
      * @notice Records wrapped ingress facts emitted by LCC during protocol transfers to bucket-exempt sinks.
-     * @dev This is raw provenance input for sequencing; it does not execute vault reactions directly.
+     * @dev MarketFactory validates canonical market scope and forwards ingress settlement to the canonical vault handler.
      * @param lcc The LCC lane where ingress occurred
-     * @param totalAmount Total transferred ingress amount for this transfer slice
-     * @param wrappedAmount Wrapped-only component within `totalAmount`
+     * @param wrappedAmount Wrapped-only component for this transfer slice
      */
-    function recordWrappedIngress(address lcc, uint256 totalAmount, uint256 wrappedAmount) external;
-
-    /**
-     * @notice Queues or resolves a direct core swap action against accumulated transfer provenance.
-     * @param key The core pool key
-     * @param lccTokenIn Input-side LCC lane for the swap
-     * @param amountIn Total input-side ingress amount for the action
-     */
-    function sequenceDirectSwap(PoolKey calldata key, address lccTokenIn, uint256 amountIn) external;
-
-    /**
-     * @notice Queues or resolves a direct core liquidity-add action against accumulated transfer provenance.
-     * @param key The core pool key
-     * @param amount0 Total token0 ingress amount for the action
-     * @param amount1 Total token1 ingress amount for the action
-     */
-    function sequenceDirectAddLiquidity(PoolKey calldata key, uint256 amount0, uint256 amount1) external;
+    function prepareMarketLiquidity(address lcc, uint256 wrappedAmount) external;
 }

@@ -208,7 +208,7 @@ contract LCCFactoryLibHarness {
         external
         pure {}
 
-    function recordWrappedIngress(address, uint256, uint256) external pure {}
+    function prepareMarketLiquidity(address, uint256) external pure {}
 
     function getLCC(bytes32 marketId, address underlying) external view returns (address) {
         return LCCFactoryLib.getLCC(s, marketId, underlying);

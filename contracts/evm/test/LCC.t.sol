@@ -63,7 +63,6 @@ contract LiquidityCommitmentCertificateTest is Test {
     uint256 internal lastAnnulAmount;
     uint256 internal wrappedIngressCalls;
     address internal lastWrappedIngressLcc;
-    uint256 internal lastWrappedIngressTotal;
     uint256 internal lastWrappedIngressWrapped;
 
     bytes32 internal marketIdForThis = bytes32("market-id");
@@ -152,10 +151,9 @@ contract LiquidityCommitmentCertificateTest is Test {
         assertEq(lcc6.decimals(), 6);
     }
 
-    function recordWrappedIngress(address lccToken, uint256 totalAmount, uint256 wrappedAmount) external {
+    function prepareMarketLiquidity(address lccToken, uint256 wrappedAmount) external {
         wrappedIngressCalls++;
         lastWrappedIngressLcc = lccToken;
-        lastWrappedIngressTotal = totalAmount;
         lastWrappedIngressWrapped = wrappedAmount;
     }
 
@@ -519,7 +517,6 @@ contract LiquidityCommitmentCertificateTest is Test {
 
         assertEq(wrappedIngressCalls, 1);
         assertEq(lastWrappedIngressLcc, address(lcc));
-        assertEq(lastWrappedIngressTotal, 4);
         assertEq(lastWrappedIngressWrapped, 4);
     }
 

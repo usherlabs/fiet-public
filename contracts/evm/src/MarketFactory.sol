@@ -25,7 +25,6 @@ import {ICoreHook} from "./interfaces/ICoreHook.sol";
 import {IVaultCoreActionHandler} from "./interfaces/IVaultCoreActionHandler.sol";
 import {TransientStateLibrary} from "@uniswap/v4-core/src/libraries/TransientStateLibrary.sol";
 import {IUnlockCallback} from "@uniswap/v4-core/src/interfaces/callback/IUnlockCallback.sol";
-import {MarketActionSequencer} from "./libraries/MarketActionSequencer.sol";
 
 /**
  * @title MarketFactory
@@ -439,70 +438,18 @@ contract MarketFactory is IMarketFactory, Ownable, ImmutableState, ImmutableVTSS
 
     /**
      * @inheritdoc IMarketFactory
-     * @dev LCC reports transfer facts only; this function reconciles them against queued direct-core actions.
+     * @dev LCC reports wrapped ingress facts for PoolManager-bound transfers.
      */
-    function recordWrappedIngress(address lcc, uint256 totalAmount, uint256 wrappedAmount) external {
-        // Ignore out-of-unlock transfers. Sequencing is only meaningful within active PoolManager batches.
-        if (!poolManager.isUnlocked()) {
-            return;
-        }
+    function prepareMarketLiquidity(address lcc, uint256 wrappedAmount) external {
         if (msg.sender != lcc) revert Errors.InvalidSender();
         (bytes32 marketId, address factory) = liquidityHub.lccToMarket(lcc);
         if (factory != address(this) || marketId == bytes32(0)) revert Errors.InvalidSender();
 
-        MarketActionSequencer.addIngress(lcc, totalAmount, wrappedAmount);
+        if (wrappedAmount == 0) return;
         address handler = _proxyToHook[coreToProxy[PoolId.wrap(marketId)]];
         if (handler != address(0)) {
-            MarketActionSequencer.resolve(marketId, handler);
+            IVaultCoreActionHandler(handler).handleIngress(lcc, wrappedAmount);
         }
-    }
-
-    /**
-     * @inheritdoc IMarketFactory
-     * @dev CoreHook submits raw action facts; sequencing determines when the vault handler executes.
-     */
-    function sequenceDirectSwap(PoolKey calldata key, address lccTokenIn, uint256 amountIn)
-        external
-        onlyIfPoolManagerUnlocked
-    {
-        if (msg.sender != coreHook) revert Errors.InvalidSender();
-        if (amountIn == 0) return;
-
-        PoolId corePoolId = key.toId();
-        address[2] memory pair = _corePoolToCurrencyPair[corePoolId];
-        if (lccTokenIn != pair[0] && lccTokenIn != pair[1]) revert Errors.InvalidSender();
-
-        address handler = _proxyToHook[coreToProxy[corePoolId]];
-        if (handler == address(0)) revert Errors.InvalidSender();
-
-        // Consume any currently observed ingress signal first. Any unobserved remainder in this callback window
-        // is treated conservatively as wrapped to preserve direct-action liveness across swap ordering variants.
-        (uint256 consumedTotal, uint256 consumedWrapped) = MarketActionSequencer.consumeImmediate(lccTokenIn, amountIn);
-        uint256 wrappedAmountIn = consumedWrapped + (amountIn - consumedTotal);
-        IVaultCoreActionHandler(handler).handleSwap(lccTokenIn, wrappedAmountIn);
-    }
-
-    /**
-     * @inheritdoc IMarketFactory
-     * @dev This entrypoint is broad by name but scoped to direct-core liquidity reconciliation for this factory.
-     */
-    function sequenceDirectAddLiquidity(PoolKey calldata key, uint256 amount0, uint256 amount1)
-        external
-        onlyIfPoolManagerUnlocked
-    {
-        if (msg.sender != coreHook) revert Errors.InvalidSender();
-        if (amount0 == 0 && amount1 == 0) return;
-
-        PoolId corePoolId = key.toId();
-        address[2] memory pair = _corePoolToCurrencyPair[corePoolId];
-        address handler = _proxyToHook[coreToProxy[corePoolId]];
-        if (handler == address(0) || pair[0] == address(0) || pair[1] == address(0)) revert Errors.InvalidSender();
-
-        (uint256 consumedTotal0, uint256 consumedWrapped0) = MarketActionSequencer.consumeImmediate(pair[0], amount0);
-        (uint256 consumedTotal1, uint256 consumedWrapped1) = MarketActionSequencer.consumeImmediate(pair[1], amount1);
-        uint256 wrappedAmount0 = consumedWrapped0 + (amount0 - consumedTotal0);
-        uint256 wrappedAmount1 = consumedWrapped1 + (amount1 - consumedTotal1);
-        IVaultCoreActionHandler(handler).handleAddLiquidity(wrappedAmount0, wrappedAmount1);
     }
 
     // ============ VIEW FUNCTIONS ============

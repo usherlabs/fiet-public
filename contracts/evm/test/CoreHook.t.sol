@@ -111,11 +111,7 @@ contract CoreHookTest is Test {
         assertEq(sel, hook.afterAddLiquidity.selector);
         assertEq(BalanceDelta.unwrap(returnedFeeAdj), BalanceDelta.unwrap(feeAdj));
 
-        BalanceDelta expectedEffective = toBalanceDelta(int128(13), int128(25));
         assertEq(spy.calls(), 1, "spy should be called once");
-        assertEq(
-            BalanceDelta.unwrap(spy.lastDelta()), BalanceDelta.unwrap(expectedEffective), "effective delta mismatch"
-        );
     }
 
     function test_afterRemoveLiquidity_doesNotForward_whenMM() public {
@@ -320,34 +316,32 @@ contract MockMarketFactory {
         return _proxyToHook[PoolId.unwrap(proxyPoolId)];
     }
 
-    function sequenceDirectSwap(PoolKey calldata key, address lccTokenIn, uint256 amountIn) external {
+    function sequenceDirectSwap(PoolKey calldata key, address lccTokenIn) external {
         address hook = _proxyToHook[PoolId.unwrap(key.toId())];
         if (hook != address(0)) {
-            ProxyHookSpy(hook).handleSwap(lccTokenIn, amountIn);
+            ProxyHookSpy(hook).handleSwap(lccTokenIn);
         }
     }
 
-    function sequenceDirectAddLiquidity(PoolKey calldata key, uint256 amount0, uint256 amount1) external {
+    function sequenceDirectAddLiquidity(PoolKey calldata key) external {
         address hook = _proxyToHook[PoolId.unwrap(key.toId())];
         if (hook != address(0)) {
-            ProxyHookSpy(hook).handleAddLiquidity(amount0, amount1);
+            ProxyHookSpy(hook).handleAddLiquidity();
         }
     }
 }
 
 contract ProxyHookSpy {
     uint256 internal _calls;
-    BalanceDelta internal _lastDelta;
 
-    function handleAddLiquidity(uint256 amount0, uint256 amount1) external {
+    function handleAddLiquidity() external {
         _calls++;
-        _lastDelta = toBalanceDelta(int128(uint128(amount0)), int128(uint128(amount1)));
     }
 
     // ---- direct swap spy + exttload hook for CoreActionFlag.isDirectCoreAction(proxyHook) ----
 
     uint256 internal _swapCalls;
-    BalanceDelta internal _lastSwapDelta;
+    address internal _lastSwapLcc;
     bytes32 internal _proxySwapFlag;
 
     function setNoCoreActionFlag(bool on) external {
@@ -360,25 +354,21 @@ contract ProxyHookSpy {
         return _proxySwapFlag;
     }
 
-    function handleSwap(address, uint256 wrappedAmountIn) external {
+    function handleSwap(address lccTokenIn) external {
         _swapCalls++;
-        _lastSwapDelta = toBalanceDelta(int128(uint128(wrappedAmountIn)), int128(0));
+        _lastSwapLcc = lccTokenIn;
     }
 
     function calls() external view returns (uint256) {
         return _calls;
     }
 
-    function lastDelta() external view returns (BalanceDelta) {
-        return _lastDelta;
-    }
-
     function swapCalls() external view returns (uint256) {
         return _swapCalls;
     }
 
-    function lastSwapDelta() external view returns (BalanceDelta) {
-        return _lastSwapDelta;
+    function lastSwapLcc() external view returns (address) {
+        return _lastSwapLcc;
     }
 }
 

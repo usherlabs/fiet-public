@@ -75,8 +75,8 @@ contract LiquidityCommitmentCertificate is ERC20, ILCC {
         return fromProtocol || toProtocol;
     }
 
-    /// @dev Wrapped ingress facts are only relevant when LCC enters bucket-exempt non-Hub sinks (e.g. PoolManager).
-    function _shouldReportSequencerIngress(address to) internal view returns (bool) {
+    /// @dev Wrapped ingress settlement is only relevant when LCC enters bucket-exempt non-Hub sinks (e.g. PoolManager).
+    function _shouldReportIngress(address to) internal view returns (bool) {
         return to != hub;
     }
 
@@ -228,10 +228,10 @@ contract LiquidityCommitmentCertificate is ERC20, ILCC {
         if (!Bounds.isExempt(toLevel)) {
             marketDerivedBalances[to] += fromMarketDerived;
             wrappedBalances[to] += fromWrapped;
-        } else if (amount > 0 && _shouldReportSequencerIngress(to)) {
-            // Bucket-exempt sinks (e.g. PoolManager) are where CoreHook direct actions materialise.
-            // Report wrapped ingress as raw lane credit to MarketFactory for sequencing.
-            IMarketFactory(factory).recordWrappedIngress(address(this), amount, fromWrapped);
+        } else if (amount > 0 && _shouldReportIngress(to)) {
+            // Bucket-exempt sinks (e.g. PoolManager) are ingress boundaries.
+            // Report wrapped ingress slice to MarketFactory for immediate Hub -> vault settlement.
+            IMarketFactory(factory).prepareMarketLiquidity(address(this), fromWrapped);
         }
     }
 
@@ -277,10 +277,10 @@ contract LiquidityCommitmentCertificate is ERC20, ILCC {
         if (!Bounds.isExempt(toLevel)) {
             marketDerivedBalances[to] += fromMarketDerived;
             wrappedBalances[to] += fromWrapped;
-        } else if (amount > 0 && _shouldReportSequencerIngress(to)) {
+        } else if (amount > 0 && _shouldReportIngress(to)) {
             // Protocol -> bucket-exempt transfers can source wrapped balance from non-exempt protocols.
-            // Report only wrapped movement; market-derived movement must not trigger Hub->vault settlement.
-            IMarketFactory(factory).recordWrappedIngress(address(this), amount, fromWrapped);
+            // Report wrapped movement only; market-derived movement must not trigger Hub -> vault settlement.
+            IMarketFactory(factory).prepareMarketLiquidity(address(this), fromWrapped);
         }
     }
 

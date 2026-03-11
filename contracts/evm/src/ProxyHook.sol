@@ -199,6 +199,7 @@ contract ProxyHook is BaseHook, VaultCoreActionHandler, Exttload {
         key.currency0.take(poolManager, address(this), amountIn, true);
 
         // Mint and settle LCC tokens for input
+        // Note: Proxy-routed issuance still does not mobilise reserve because ProxyHook issues pure market-derived LCC via LiquidityHub.issue().
         liquidityHub.issue(address(ctx.lccTokenForCurrency0), address(this), amountIn);
         ctx.lccCurrencyForCurrency0.settle(poolManager, address(this), amountIn, false);
 
