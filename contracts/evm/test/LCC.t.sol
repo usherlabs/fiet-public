@@ -43,6 +43,7 @@ contract LiquidityCommitmentCertificateTest is Test {
     uint8 internal constant BOUND_NONE = 0;
     uint8 internal constant BOUND_ENDPOINT = 1;
     uint8 internal constant BOUND_EXEMPT = 2;
+    uint8 internal constant BOUND_DEX = 3;
 
     mapping(address => mapping(address => uint8)) internal boundLevelMap;
 
@@ -509,11 +510,13 @@ contract LiquidityCommitmentCertificateTest is Test {
         assertEq(wrappedIngressCalls, 0, "hub transfers must not emit sequencer ingress facts");
     }
 
-    function test_transfer_toNonHubExemptSink_reportsWrappedIngress() public {
+    function test_transfer_toDexSink_reportsWrappedIngress() public {
+        address dexSink = makeAddr("dexSink");
+        _setBoundLevel(dexSink, BOUND_DEX);
         lcc.mint(alice, 10, 0);
 
         vm.prank(alice);
-        lcc.transfer(protocol, 4);
+        lcc.transfer(dexSink, 4);
 
         assertEq(wrappedIngressCalls, 1);
         assertEq(lastWrappedIngressLcc, address(lcc));

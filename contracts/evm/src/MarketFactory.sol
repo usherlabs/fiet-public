@@ -140,8 +140,9 @@ contract MarketFactory is IMarketFactory, Ownable, ImmutableState, ImmutableVTSS
         coreHook = _coreHook;
         initialised = true;
 
+        // DEX ingress sink endpoint.
+        liquidityHub.setBoundLevel(address(poolManager), Bounds.BOUND_DEX);
         // Bucket-exempt endpoints.
-        liquidityHub.setBoundLevel(address(poolManager), Bounds.BOUND_EXEMPT);
         // LiquidityHub is a bucket-exempt endpoint as it handles special case where processSettlementFor isForHub, and also derived from caller balance buckets during wrapWith.
         liquidityHub.setBoundLevel(address(liquidityHub), Bounds.BOUND_EXEMPT);
 

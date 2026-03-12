@@ -74,6 +74,10 @@ contract ProxyHook is BaseHook, VaultCoreActionHandler, Exttload {
         return corePoolKey;
     }
 
+    function _coreHook() internal view override returns (address) {
+        return coreHook;
+    }
+
     function activate() external onlyFactory {
         if (coreHook == address(0)) {
             coreHook = MarketHandlerLib.getCoreHook(marketFactory);

@@ -83,8 +83,8 @@ contract BoundsRegistryTest is Test {
         address who = makeAddr("who");
 
         vm.prank(factory);
-        vm.expectRevert(abi.encodeWithSelector(Errors.InvalidAmount.selector, uint256(3), uint256(Bounds.BOUND_EXEMPT)));
-        registry.setBoundLevel(who, 3);
+        vm.expectRevert(abi.encodeWithSelector(Errors.InvalidAmount.selector, uint256(4), uint256(Bounds.BOUND_DEX)));
+        registry.setBoundLevel(who, 4);
     }
 
     function test_boundLevels_areFactoryScoped() public {

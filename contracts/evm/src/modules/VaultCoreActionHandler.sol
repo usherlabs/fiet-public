@@ -17,9 +17,11 @@ import {CoreActionFlag} from "../libraries/CoreActionFlag.sol";
 abstract contract VaultCoreActionHandler is MarketVault, IVaultCoreActionHandler {
     constructor(address _marketFactory) MarketVault(_marketFactory) {}
 
-    // TODO: Adopt _coreHook(), or move activate into this abstract.
+    /// @dev Derived vaults provide the bound core hook address for direct-action gating.
+    function _coreHook() internal view virtual returns (address);
+
     modifier onlyCoreHook() {
-        if (msg.sender != marketFactory.coreHook()) {
+        if (msg.sender != _coreHook()) {
             revert Errors.InvalidSender();
         }
         _;
