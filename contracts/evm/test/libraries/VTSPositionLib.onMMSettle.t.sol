@@ -343,17 +343,23 @@ contract VTSPositionLibOnMMSettleTest is VTSLibTestBase {
         assertEq(settlementDelta.amount1(), 60e18, "token1 should use dry cap");
     }
 
-    function test_onMMSettle_active_invalidCommitmentMax_reverts() public {
+    function test_onMMSettle_active_oneSidedCommitmentMax_doesNotRevert() public {
         _initMarket();
         PositionId positionId = _registerActivePosition();
 
-        // Active position with a zero commitment max is invalid in _settleActive.
+        // Active position with a one-sided zero commitment max should remain settleable.
         harness.setCommitmentMax(positionId, 0, 1000e18);
         harness.setSettled(positionId, 0, 0);
         harness.setPositionActive(positionId, true);
 
-        vm.expectRevert("VTSPositionLib: Invalid position");
-        harness.onMMSettle(manager, mockVault, positionId, lccCurrency0, lccCurrency1, toBalanceDelta(-1e18, 0), false);
+        (BalanceDelta settlementDelta, bool rfsOpen,) = harness.onMMSettle(
+            manager, mockVault, positionId, lccCurrency0, lccCurrency1, toBalanceDelta(-1e18, 0), false
+        );
+
+        // token0 deposit is clamped by commitmentMax(0), while token1 still reports open RFS.
+        assertTrue(rfsOpen, "RFS should remain open due to unmet token1 requirement");
+        assertEq(settlementDelta.amount0(), 0, "token0 settlement should clamp to commitmentMax=0");
+        assertEq(settlementDelta.amount1(), 0, "token1 settlement should remain unchanged");
     }
 
     function test_onMMSettle_withdrawals_positiveCurrencyDelta_isReducedByClearance() public {

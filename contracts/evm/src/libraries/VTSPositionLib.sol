@@ -1800,12 +1800,7 @@ library VTSPositionLib {
         BalanceDelta rfsDelta,
         bool rfsOpen
     ) internal returns (int256, int256) {
-        PositionAccounting storage pa = s.positionAccounting[positionId];
-
-        // Active and not seizing: validate and apply RFS clamps
-        if (pa.commitmentMax.token0 == 0 || pa.commitmentMax.token1 == 0) {
-            revert("VTSPositionLib: Invalid position");
-        }
+        // Active and not seizing: apply RFS clamps
         // For withdrawals, validate RFS closure
         bool isWithdrawal = amount0 > 0 || amount1 > 0;
         if (isWithdrawal && rfsOpen) {

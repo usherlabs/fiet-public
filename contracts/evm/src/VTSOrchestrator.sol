@@ -218,8 +218,7 @@ contract VTSOrchestrator is
         if (pos.owner == address(0)) return false;
         if (requireActive) {
             if (!pos.isActive) return false;
-            PositionAccounting storage pa = s.positionAccounting[id];
-            if (pa.commitmentMax.token0 == 0 || pa.commitmentMax.token1 == 0) return false;
+            // Previously we checked if the commitment max was zero, but this exposes a vulnerability where dust maxima calculations via rounding cause incorrect outcomes.
         }
         return true;
     }

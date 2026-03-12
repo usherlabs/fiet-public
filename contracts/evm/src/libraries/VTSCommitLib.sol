@@ -30,6 +30,10 @@ library VTSCommitLib {
     using TokenPairLib for TokenPairUint;
     using StateLibrary for IPoolManager;
 
+    /// @notice Hard cap on unique reserve tickers per MM signal.
+    /// @dev This is a per-MM reserve composition limit, not a global protocol ticker registry limit.
+    uint256 internal constant MAX_MM_UNIQUE_RESERVE_TICKERS = 100;
+
     // ============ INTERNAL STRUCTS (Stack Depth Optimisation) ============
 
     /// @dev Internal struct to reduce stack depth in checkpoint
@@ -420,8 +424,11 @@ library VTSCommitLib {
         returns (uint256 totalValue)
     {
         (string[] memory tickers, uint256[] memory amounts) = MarketMaker.getReserves(mmState);
-        // Despite getTotalValue iterating over tickers, Fiet Provers are responsible for filtering out unsupported tickers/currencies and dust amounts.
-        // Therefore, the signal should always include valid tickers, with max 50 - 100 iterations.
+        uint256 reserveCount = tickers.length;
+        if (reserveCount > MAX_MM_UNIQUE_RESERVE_TICKERS) {
+            revert Errors.MMReserveTickerLimitExceeded(reserveCount, MAX_MM_UNIQUE_RESERVE_TICKERS);
+        }
+
         totalValue = oracleHelper.getTotalValue(tickers, amounts);
     }
 }

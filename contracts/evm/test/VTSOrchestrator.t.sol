@@ -622,15 +622,15 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
         assertTrue(isValid, "Valid position should return true");
     }
 
-    function test_isPositionValid_missingOneCommitmentMax_returnsFalse() public {
-        // commitmentMax is tracked mechanically; to hit the edge-case behind the `||` check we force it via test harness.
+    function test_isPositionValid_missingOneCommitmentMax_returnsTrueWhenActive() public {
+        // commitmentMax is tracked mechanically; force one side to zero to cover the edge-case.
         (, PositionId positionId,,) = _createCommittedPosition();
 
         // Force only one side to be zero.
         _testableOrchestrator()._setCommitmentMax(positionId, 0, 1);
 
         bool isValid = vtsOrchestrator.isPositionValid(positionId, true);
-        assertFalse(isValid, "Position should be invalid when exactly one commitment max is zero");
+        assertTrue(isValid, "Position should remain valid while active even if one commitment max is zero");
     }
 
     function test_getPosition_returnsCorrectPosition() public {
@@ -696,6 +696,16 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
         // Should not revert: the orchestrator guards on isPositionValid(positionId, true).
         PositionId invalidId = PositionId.wrap(bytes32(uint256(999)));
         vtsOrchestrator.settlePositionGrowths(invalidId);
+    }
+
+    function test_settlePositionGrowths_activeOneSidedCommitmentMax_stillSettles() public {
+        (, PositionId positionId,,) = _createCommittedPosition();
+        _testableOrchestrator()._setCommitmentMax(positionId, 0, 1);
+
+        // Active positions should still settle growths even if one commitment side rounds to zero.
+        bytes4 extsload1 = bytes4(keccak256("extsload(bytes32)"));
+        vm.expectCall(address(manager), abi.encodeWithSelector(extsload1));
+        vtsOrchestrator.settlePositionGrowths(positionId);
     }
 
     function test_getCommitmentMaxima_returnsNonZero() public {

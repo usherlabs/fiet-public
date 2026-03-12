@@ -326,6 +326,28 @@ contract VTSCommitLibTest is VTSLibTestBase {
         harness.validateLiquidityDelta(oracle, commitId, positionId, p, true);
     }
 
+    function test_validateLiquidityDelta_reverts_whenSignalHasTooManyUniqueReserveTickers() public {
+        sigMgr.setExpirySeconds(3600);
+        harness.renewSignal(sigMgr, commitId, _makeSignalWithUniqueReserveCount(mmOwner, address(this), 101));
+
+        VTSCommitLib.LiquidityDeltaParams memory p = _defaultLiquidityDeltaParams();
+        oracle.setTotalValue(1_000_000e18);
+
+        vm.expectRevert(abi.encodeWithSelector(Errors.MMReserveTickerLimitExceeded.selector, 101, 100));
+        harness.validateLiquidityDelta(oracle, commitId, positionId, p, false);
+    }
+
+    function test_validateLiquidityDelta_allowsSignalAtMaxUniqueReserveTickers() public {
+        sigMgr.setExpirySeconds(3600);
+        harness.renewSignal(sigMgr, commitId, _makeSignalWithUniqueReserveCount(mmOwner, address(this), 100));
+
+        VTSCommitLib.LiquidityDeltaParams memory p = _defaultLiquidityDeltaParams();
+        oracle.setTotalValue(1_000_000e18);
+
+        (bool ok,,,) = harness.validateLiquidityDelta(oracle, commitId, positionId, p, false);
+        assertTrue(ok, "exact max unique reserve tickers should be accepted");
+    }
+
     // ============================================================
     // incrementCoverage
     // ============================================================
@@ -633,6 +655,52 @@ contract VTSCommitLibTest is VTSLibTestBase {
         });
 
         return abi.encode(sig);
+    }
+
+    function _makeSignalWithUniqueReserveCount(address owner, address adv, uint256 reserveCount)
+        internal
+        pure
+        returns (bytes memory)
+    {
+        MarketMaker.Reserve[] memory reserves = new MarketMaker.Reserve[](reserveCount);
+        for (uint256 i = 0; i < reserveCount; i++) {
+            reserves[i] = MarketMaker.Reserve({asset: string.concat("TK", vm.toString(i)), amount: 1e18});
+        }
+        return _encodeSignal(owner, adv, reserves);
+    }
+
+    function _encodeSignal(address owner, address adv, MarketMaker.Reserve[] memory reserves)
+        internal
+        pure
+        returns (bytes memory)
+    {
+        MarketMaker.State memory mmState = MarketMaker.State({
+            owner: owner, reserves: reserves, sourceState: "", prover: "", nonce: "", advancer: adv
+        });
+
+        LiquiditySignal memory sig = LiquiditySignal({
+            nonce: 1,
+            rootHash: bytes32(0),
+            rootHashSignature: "",
+            merkleProof: new bytes32[](0),
+            mmState: mmState,
+            mmSignature: ""
+        });
+
+        return abi.encode(sig);
+    }
+
+    function _defaultLiquidityDeltaParams() internal view returns (VTSCommitLib.LiquidityDeltaParams memory p) {
+        (uint160 sqrtPriceX96, int24 tick,,) = _getSlot0(poolId);
+        p = VTSCommitLib.LiquidityDeltaParams({
+            currency0: corePoolKey.currency0,
+            currency1: corePoolKey.currency1,
+            sqrtPriceX96: sqrtPriceX96,
+            currentTick: tick,
+            tickLower: TL,
+            tickUpper: TU,
+            liquidityDelta: int256(uint256(LIQ))
+        });
     }
 
     function _computeIssuedUsd() internal view returns (uint256 issuedUsd) {

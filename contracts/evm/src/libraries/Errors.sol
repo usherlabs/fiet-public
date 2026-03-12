@@ -60,6 +60,11 @@ library Errors {
     /// @param settledValue Settled value already in-market
     error InvalidLiquiditySignal(uint256 issuedValue, uint256 signalValue, uint256 settledValue);
 
+    /// @notice Thrown when an MM reserve set exceeds the maximum allowed unique ticker count
+    /// @param uniqueTickerCount Unique ticker count in the MM reserve set
+    /// @param maxUniqueTickerCount Maximum allowed unique ticker count per MM reserve set
+    error MMReserveTickerLimitExceeded(uint256 uniqueTickerCount, uint256 maxUniqueTickerCount);
+
     /// @notice Thrown when an invalid LCC token is provided
     error InvalidLcc(address lcc);
 
