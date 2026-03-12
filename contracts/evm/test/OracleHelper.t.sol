@@ -30,12 +30,6 @@ contract OracleHelperTest is Test {
         resilientOracle = IResilientOracle(makeAddr("ResilientOracle"));
         oracleHelper = new OracleHelper(address(resilientOracle), address(this));
 
-        vm.mockCall(
-            address(resilientOracle),
-            abi.encodeWithSelector(IResilientOracle.getTokenConfig.selector, ASSET),
-            abi.encode(tc)
-        );
-
         // mock calls to the resilient oracle
         vm.mockCall(
             address(resilientOracle),
@@ -182,12 +176,12 @@ contract OracleHelperTest is Test {
         OracleHelper helper = new OracleHelper(oracle, address(this));
 
         vm.mockCall(lcc0, abi.encodeWithSelector(ILCC.underlying.selector), abi.encode(asset0));
+        vm.mockCall(lcc1, abi.encodeWithSelector(ILCC.underlying.selector), abi.encode(asset1));
+
         IResilientOracle.TokenConfig memory tc0;
         IResilientOracle.TokenConfig memory tc1;
         tc0.asset = asset0;
         tc1.asset = asset1;
-        tc0.oracles[uint256(IResilientOracle.OracleRole.MAIN)] = address(0x1111);
-        tc1.oracles[uint256(IResilientOracle.OracleRole.MAIN)] = address(0x2222);
         tc0.enableFlagsForOracles = [false, true, true]; // MAIN disabled for asset0
         tc1.enableFlagsForOracles = [true, true, true]; // MAIN enabled for asset1
 
@@ -216,12 +210,12 @@ contract OracleHelperTest is Test {
         OracleHelper helper = new OracleHelper(oracle, address(this));
 
         vm.mockCall(lcc0, abi.encodeWithSelector(ILCC.underlying.selector), abi.encode(asset0));
+        vm.mockCall(lcc1, abi.encodeWithSelector(ILCC.underlying.selector), abi.encode(asset1));
+
         IResilientOracle.TokenConfig memory tc0;
         IResilientOracle.TokenConfig memory tc1;
         tc0.asset = asset0;
         tc1.asset = asset1;
-        tc0.oracles[uint256(IResilientOracle.OracleRole.MAIN)] = address(0x1111);
-        tc1.oracles[uint256(IResilientOracle.OracleRole.MAIN)] = address(0x2222);
         tc0.enableFlagsForOracles = [true, true, true];
         tc1.enableFlagsForOracles = [true, true, true];
 
@@ -232,18 +226,16 @@ contract OracleHelperTest is Test {
     }
 
     function test_getPriceForLcc_returnsUnderlyingPrice() public {
+        address lcc = address(0x100);
+        address asset = address(0xabc1);
+        address oracle = makeAddr("resilientOracle.getPriceForLcc");
         OracleHelper helper = new OracleHelper(oracle, address(this));
 
         vm.mockCall(lcc, abi.encodeWithSelector(ILCC.underlying.selector), abi.encode(asset));
-        vm.mockCall(oracle, abi.encodeWithSelector(IResilientOracle.paused.selector), abi.encode(false));
-        IResilientOracle.TokenConfig memory tc = _healthyTokenConfig(asset);
-        vm.mockCall(oracle, abi.encodeWithSelector(IResilientOracle.getTokenConfig.selector, asset), abi.encode(tc));
+        vm.mockCall(oracle, abi.encodeWithSelector(IResilientOracle.getPrice.selector, asset), abi.encode(1234e18));
 
-        vm.mockCall(oracle, abi.encodeWithSelector(IResilientOracle.getTokenConfig.selector, asset0), abi.encode(tc0));
-        vm.mockCall(oracle, abi.encodeWithSelector(IResilientOracle.getTokenConfig.selector, asset1), abi.encode(tc1));
-
-        vm.expectRevert(Errors.MarketOraclesNotConfigured.selector);
-        helper.validateMarketOracles(lcc0, lcc1);
+        uint256 price = helper.getPriceForLcc(lcc);
+        assertEq(price, 1234e18);
     }
 
     function test_oracleInterface_smoke_fullCoverage() public {
