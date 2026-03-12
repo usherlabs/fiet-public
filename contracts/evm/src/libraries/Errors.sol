@@ -104,6 +104,12 @@ library Errors {
     /// @notice Thrown when market oracles are not configured
     error MarketOraclesNotConfigured();
 
+    /// @notice Thrown when the configured oracle is globally paused
+    error OraclePaused();
+
+    /// @notice Thrown when oracle returns an invalid (zero) price for an asset
+    error InvalidOraclePrice(address asset, uint256 price);
+
     /// @notice Thrown when adding liquidity through a hook is not allowed
     error AddLiquidityThroughHookNotAllowed();
 

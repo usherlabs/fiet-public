@@ -57,6 +57,18 @@ contract VTSOrchestratorTestable is VTSOrchestrator {
         pa.commitmentMax.token1 = commitmentMax1;
     }
 
+    /// @notice TEST-ONLY: set commitment deficit values directly
+    /// @dev This is intentionally unsafe and should only be used in tests.
+    function _setCommitmentDeficit(PositionId positionId, uint256 commitmentDeficit0, uint256 commitmentDeficit1)
+        external
+    {
+        PositionAccounting storage pa = s.positionAccounting[positionId];
+        pa.commitmentDeficit.token0 = commitmentDeficit0;
+        pa.commitmentDeficit.token1 = commitmentDeficit1;
+        if (commitmentDeficit0 == 0) pa.commitmentDeficitSince.token0 = 0;
+        if (commitmentDeficit1 == 0) pa.commitmentDeficitSince.token1 = 0;
+    }
+
     /// @notice Get pool DICE (Deficit-Indexed Coverage Exercise) accounting for debugging
     /// @param poolId The pool identifier
     /// @return totalDeficitPrincipal0 Total deficit principal for token0

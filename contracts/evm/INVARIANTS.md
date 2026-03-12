@@ -18,8 +18,10 @@ being an informal “should”.
 - **Position (positionId)**: a VTS-tracked liquidity position keyed like Uniswap positions.
 - **RfS / RFS**: “Required for Settlement”; when open, withdrawals are restricted.
 - **Deficits**:
-  - **cumulativeDeficit**: swap-driven outflow shortfall accumulated per position.
-  - **commitmentDeficit**: position-level insolvency gate derived from commitment backing checks.
+  - **cumulativeDeficit**: swap-driven outflow shortfall accumulated per position; this is the DICE principal used for
+    coverage-index attribution and fee-slash accounting.
+  - **commitmentDeficit**: position-level insolvency gate derived from commitment backing checks; this is used for
+    RFS/seizability hardening and is not part of DICE principal (`totalDeficitPrincipal`).
 
 ## LCC backing and liquidity domains
 
@@ -190,6 +192,8 @@ being an informal “should”.
 - **Statement**: Swaps accrue:
   - **deficit growth** on the output token per segment, and
   - **inflow growth** on the input token net of fees per segment.
+  - Settled against positions, this flow updates `cumulativeDeficit` (swap-incurred principal). It does not create
+    `commitmentDeficit`, which is only checkpoint/backing derived.
 - **Enforced by**:
   - `src/VTSOrchestrator.sol::afterCoreSwap` → `src/libraries/VTSSwapLib.sol::processSwap`
   - `VTSSwapLib._accrueSegmentGrowth`, `_accrueDeficitGlobalGrowth`, `_accrueInflowGlobalGrowth`.
@@ -225,6 +229,8 @@ being an informal “should”.
 - **Enforced by**: `src/libraries/VTSCommitLib.sol::checkpointWithCommitment`.
 - **Consequence**: Positions with non-zero `commitmentDeficit` can bypass normal grace only when the configured
   token-lane bypass age/severity gates in `SEIZE-01` are satisfied.
+- **Separation invariant**: `commitmentDeficit` is a checkpoint-derived solvency gate and is not the pool DICE
+  principal. DICE denominator (`totalDeficitPrincipal`) tracks swap-incurred `cumulativeDeficit` only.
 
 ### COMMIT-03: “Advancer” binding for checkpoint-with-commitment must hold
 
@@ -239,14 +245,20 @@ being an informal “should”.
 ### COV-01: Coverage burn is bounded by `(deficit + settled)`; fee burn is capped by deficit
 
 - **Statement**:
-  - Effective coverage usage must satisfy \(cov\_{eff} = \min(cov, deficit + settled)\).
-  - Burn base must satisfy \(burnBase = \min(cov\_{eff}, deficit)\).
+  - Effective coverage usage must satisfy \(cov\_{eff} = \min(cov, cumulativeDeficit + settled)\).
+  - Burn base must satisfy \(burnBase = \min(cov\_{eff}, cumulativeDeficit)\).
+  - `commitmentDeficit` is not used as slash principal in this burn path.
 - **Enforced by**: `src/libraries/VTSPositionLib.sol::_applyCoverageBurn`.
 
 ### COV-02: Coverage is applied before position modification to preserve economic integrity
 
 - **Statement**: Coverage burns must be settled before liquidity modification to prevent “cover then avoid burn in same
   call” games.
+- **Ordering requirement**: Settlement netting order is:
+  1. `cumulativeDeficit` first,
+  2. then `commitmentDeficit`,
+  3. then `settled` increases.
+  Only the `cumulativeDeficit` leg mutates DICE principal (`totalDeficitPrincipal`).
 - **Enforced by**:
   - `src/libraries/VTSPositionLib.sol::settlePositionGrowths` calls `_settleDeficitIndexedCoverageUsage` after settling
     deficit/inflow growths, and is invoked by `CoreHook` _before_ modifies.
@@ -255,6 +267,7 @@ being an informal “should”.
 
 - **Statement**: Coverage index increments are conditional:
   - If `totalDeficitPrincipal > 0`, increment DICE index; else accrue to residual.
+    (`totalDeficitPrincipal` is the pool sum of outstanding `cumulativeDeficit`, excluding `commitmentDeficit`.)
   - If `totalSettled > 0`, increment CISE index; else accrue to residual.
 - **Enforced by**: `src/libraries/VTSCommitLib.sol::incrementCoverage`.
 - **Practical implication**: Tests should not assume “arbitrary coverage” will always produce burns or index movement.
@@ -311,6 +324,9 @@ being an informal “should”.
 
 - **Statement**:
   - Commitment-deficit bypass is evaluated per token lane using token-specific deficit age and thresholds.
+  - `commitmentDeficit` bypass is distinct from swap-incurred `cumulativeDeficit` accounting:
+    - `commitmentDeficit` hardens solvency enforcement (RFS/seizability),
+    - `cumulativeDeficit` drives DICE slash attribution and pool deficit principal.
   - Normal grace-path seizability is evaluated only for token lanes currently marked open in the checkpoint mask.
   - Position-level seizability is true when at least one token lane is currently eligible.
   - Explicit protocol rule: token-lane behaviour is specific to seizability and bypass-gate mechanics only.

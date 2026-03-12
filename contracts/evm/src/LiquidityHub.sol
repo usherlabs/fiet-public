@@ -36,6 +36,8 @@ contract LiquidityHub is BoundRegistry, Ownable, ReentrancyGuardTransient {
     event LCCCreated(address indexed underlyingAsset, address indexed lccToken, bytes32 marketId);
     event LiquidityAvailable(address indexed lcc, address underlyingAsset, uint256 amount, bytes32 marketId);
     event SettlementQueued(address indexed lcc, address indexed recipient, uint256 amount);
+    event SettlementAnnulled(address indexed lcc, address indexed recipient, uint256 amount);
+    event SettlementProcessed(address indexed lcc, address indexed recipient, uint256 amount);
     event LccWrappedWith(address indexed lcc, address indexed withLCC, address from, address to, uint256 amount);
     event LccWrapped(address indexed lcc, address from, address to, uint256 amount);
     event LccUnwrapped(address indexed lcc, address from, address to, uint256 amount);
@@ -460,6 +462,11 @@ contract LiquidityHub is BoundRegistry, Ownable, ReentrancyGuardTransient {
         // Final mint: mint target LCC with appropriate direct/market-derived split
         LCCFactoryLib.mint(lcc, to, directToMint, marketToMint);
 
+        if (ctx.queuedShortfall > 0) {
+            // Ensure the queued settlement event is emitted
+            emit SettlementQueued(withLCC, address(this), ctx.queuedShortfall);
+        }
+
         emit LccWrappedWith(lcc, withLCC, from, to, amount);
     }
 
@@ -501,13 +508,16 @@ contract LiquidityHub is BoundRegistry, Ownable, ReentrancyGuardTransient {
             revert Errors.InvalidAmount(amount, fromBalance);
         }
 
-        (uint256 directUnwrapped, uint256 marketUnwrapped) =
+        (uint256 directUnwrapped, uint256 marketUnwrapped, uint256 queuedShortfall) =
             LiquidityHubLib.unwrapInternalLogic(s, lcc, queueTo, amount, wrappedBalance, marketDerivedBalance);
 
         // Burn the amount that was unwrapped
         // and transfer the underlying assets to the account
         if (directUnwrapped + marketUnwrapped > 0) {
             _pay(lcc, from, to, directUnwrapped, marketUnwrapped);
+        }
+        if (queuedShortfall > 0) {
+            emit SettlementQueued(lcc, queueTo, queuedShortfall);
         }
 
         emit LccUnwrapped(lcc, from, to, amount);
@@ -879,7 +889,13 @@ contract LiquidityHub is BoundRegistry, Ownable, ReentrancyGuardTransient {
      * @param maxAmount The maximum amount to settle
      */
     function _processSettlementFor(address lcc, address recipient, uint256 maxAmount) internal {
+        uint256 queuedBefore = s.settleQueue[lcc][recipient];
         LiquidityHubLib.processSettlementLogic(s, lcc, recipient, maxAmount);
+        uint256 queuedAfter = s.settleQueue[lcc][recipient];
+        uint256 settled = queuedBefore > queuedAfter ? queuedBefore - queuedAfter : 0;
+        if (settled > 0) {
+            emit SettlementProcessed(lcc, recipient, settled);
+        }
     }
 
     // -----------------------------------
@@ -932,6 +948,9 @@ contract LiquidityHub is BoundRegistry, Ownable, ReentrancyGuardTransient {
             // Safe: toAnnul <= queued and subtracting 0 is a no-op.
             s.settleQueue[lcc][from] -= toAnnul;
             s.totalQueued[lcc] -= toAnnul;
+            if (toAnnul > 0) {
+                emit SettlementAnnulled(lcc, from, toAnnul);
+            }
         }
     }
 

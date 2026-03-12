@@ -37,6 +37,8 @@ library LiquidityHubLib {
         uint256 backingToBurn;
         /// Remaining amount to process after netting
         uint256 remainingAmount;
+        /// Amount queued as settlement shortfall during residual unwrap
+        uint256 queuedShortfall;
     }
 
     // ============ ADAPTER FUNCTIONS ============
@@ -259,7 +261,7 @@ library LiquidityHubLib {
         }
 
         // Unwrap: consumes directSupply first, then market liquidity, queues shortfall if any
-        (uint256 directUnwrapped, uint256 marketUnwrapped) = unwrapInternalLogic(
+        (uint256 directUnwrapped, uint256 marketUnwrapped, uint256 queuedShortfall) = unwrapInternalLogic(
             s, withLCC, address(this), remainingAfterNet, residualWrappedForUnwrap, ctx.fromMarketDerivedAmount
         );
 
@@ -277,6 +279,7 @@ library LiquidityHubLib {
         //   exposure", not "market liquidity actually redeemed now"). By contrast, `ctx.backingToBurn` only burns what was
         //   actually redeemed now (direct + market), and the queued portion is burned lazily during settlement processing.
         ctx.marketToMint += (remainingAfterNet - directUnwrapped);
+        ctx.queuedShortfall += queuedShortfall;
 
         return ctx;
     }
@@ -399,6 +402,7 @@ library LiquidityHubLib {
      * @param marketDerivedBalance The market-derived balance of the account
      * @return directUnwrapped The amount unwrapped from direct supply
      * @return marketUnwrapped The amount unwrapped from market liquidity
+     * @return queuedShortfall The amount queued due to insufficient immediate liquidity
      */
     //#olympix-ignore-reentrancy
     function unwrapInternalLogic(
@@ -408,7 +412,7 @@ library LiquidityHubLib {
         uint256 amount,
         uint256 wrappedBalance,
         uint256 marketDerivedBalance
-    ) internal returns (uint256 directUnwrapped, uint256 marketUnwrapped) {
+    ) internal returns (uint256 directUnwrapped, uint256 marketUnwrapped, uint256 queuedShortfall) {
         // 1) Consume directSupply[lcc] if available
         if (wrappedBalance > 0) {
             uint256 directAvail = s.directSupply[lcc];
@@ -434,6 +438,7 @@ library LiquidityHubLib {
         // 3) Queue any shortfall for later processing
         if (remainingToUnwrap > 0) {
             queueSettlement(s, lcc, queueTo, remainingToUnwrap);
+            queuedShortfall = remainingToUnwrap;
         }
     }
 

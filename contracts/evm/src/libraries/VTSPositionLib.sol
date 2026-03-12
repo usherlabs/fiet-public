@@ -134,28 +134,28 @@ library VTSPositionLib {
     /// @param tokenIndex The token index (0 or 1)
     /// @param cur The previous settled amount
     /// @param next The new settled amount
-    /// @param deficitCoverage The amount of deficit that was covered
-    /// @return applied The total amount applied (deficit coverage + settled change)
+    /// @param cumulativeDeficitCoverage The amount of cumulativeDeficit that was covered
+    /// @return applied The helper-applied amount (cumulativeDeficit coverage + settled change)
     function _updatePoolAccounting(
         VTSStorage storage s,
         PositionId id,
         uint8 tokenIndex,
         uint256 cur,
         uint256 next,
-        uint256 deficitCoverage
+        uint256 cumulativeDeficitCoverage
     ) private returns (int256 applied) {
         Position memory pos = s.positions[id];
         PoolAccounting storage paPool = s.poolAccounting[pos.poolId];
 
         int256 settledDelta = next.toInt256() - cur.toInt256();
 
-        // DICE: Track pool-wide deficit principal decrease when deficits are netted
-        // deficitCoverage tracks amount of cumulativeDeficit that was netted (excludes commitmentDeficit)
-        // We only track cumulativeDeficit netting here; commitmentDeficit is a separate insolvency gate
-        if (deficitCoverage > 0) {
+        // DICE: Track pool-wide cumulative deficit principal decrease when cumulativeDeficit is netted.
+        // commitmentDeficit is an insolvency gate and is intentionally excluded from totalDeficitPrincipal.
+        if (cumulativeDeficitCoverage > 0) {
             uint256 currentPrincipal = paPool.totalDeficitPrincipal.get(tokenIndex);
             // Safely decrement (should not underflow if accounting is consistent)
-            uint256 newPrincipal = deficitCoverage > currentPrincipal ? 0 : currentPrincipal - deficitCoverage;
+            uint256 newPrincipal =
+                cumulativeDeficitCoverage > currentPrincipal ? 0 : currentPrincipal - cumulativeDeficitCoverage;
             paPool.totalDeficitPrincipal.set(tokenIndex, newPrincipal);
         }
 
@@ -179,10 +179,10 @@ library VTSPositionLib {
             }
         }
 
-        // Return total consumed: deficit coverage + settled change
-        // Deposits (positive delta to _updateSettlement): returns positive value (deficitCoverage + settledDelta, both ≥ 0)
+        // Return helper-consumed amount: cumulativeDeficit coverage + settled change
+        // Deposits (positive delta to _updateSettlement): returns positive value
         // Withdrawals (negative delta to _updateSettlement): returns negative value (0 + negative settledDelta)
-        applied = deficitCoverage.toInt256() + settledDelta;
+        applied = cumulativeDeficitCoverage.toInt256() + settledDelta;
     }
 
     /// @notice "Silent" update settlement helper wrapper for contexts where we deliberately don't need the applied return value
@@ -218,7 +218,11 @@ library VTSPositionLib {
         }
 
         uint256 next = cur;
-        uint256 deficitCoverage = 0; // Track total amount used for deficit netting
+        // Track deficit netting by source:
+        // - cumulativeDeficitCoverage: decrements pool totalDeficitPrincipal (DICE denominator)
+        // - totalDeficitCoverage: used for applied return semantics
+        uint256 cumulativeDeficitCoverage = 0;
+        uint256 totalDeficitCoverage = 0;
 
         if (delta > 0) {
             // Auto-net any lingering deficit first
@@ -227,7 +231,8 @@ library VTSPositionLib {
                 if (cover > 0) {
                     cumulativeDef -= cover;
                     delta -= int256(cover);
-                    deficitCoverage += cover;
+                    cumulativeDeficitCoverage += cover;
+                    totalDeficitCoverage += cover;
                 }
             }
 
@@ -243,7 +248,7 @@ library VTSPositionLib {
                             pa.commitmentDeficitSince.set(tokenIndex, 0);
                         }
                         delta -= int256(coverCd);
-                        deficitCoverage += coverCd;
+                        totalDeficitCoverage += coverCd;
                     }
                 }
             }
@@ -273,8 +278,14 @@ library VTSPositionLib {
         pa.settled.set(tokenIndex, next);
         pa.cumulativeDeficit.set(tokenIndex, cumulativeDef);
 
-        // Update pool accounting via helper function
-        applied = _updatePoolAccounting(s, id, tokenIndex, cur, next, deficitCoverage);
+        // Update pool accounting via helper function.
+        // This returns cumulativeDeficitCoverage + settledDelta.
+        applied = _updatePoolAccounting(s, id, tokenIndex, cur, next, cumulativeDeficitCoverage);
+
+        // Preserve existing semantics: include both cumulativeDeficit and commitmentDeficit netting in applied.
+        if (totalDeficitCoverage > cumulativeDeficitCoverage) {
+            applied += SafeCast.toInt256(totalDeficitCoverage - cumulativeDeficitCoverage);
+        }
     }
 
     // --------------------------------------------------

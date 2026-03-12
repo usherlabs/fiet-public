@@ -484,6 +484,7 @@ contract VTSPositionLibTest is VTSLibTestBase {
         harness.setCumulativeDeficit(positionId, 0, 0);
         harness.setCommitmentDeficit(positionId, 50e18, 0);
         harness.setSettled(positionId, 0, 0);
+        harness.setPoolTotalDeficitPrincipal(testPoolId, 33e18, 0);
 
         // Applied is now the total of deficit coverage and settled increase
         int256 applied = harness.updateSettlement(positionId, 0, 100e18);
@@ -494,6 +495,10 @@ contract VTSPositionLibTest is VTSLibTestBase {
         assertEq(cd0, 0, "commitment deficit should be netted");
         assertEq(settled0, 50e18, "remaining should be credited to settled");
         assertEq(applied, 100e18, "applied should be the sum of deficit coverage and settled increase");
+        (uint256 principal0,) = harness.getPoolTotalDeficitPrincipal(testPoolId);
+        assertEq(
+            principal0, 33e18, "pool totalDeficitPrincipal should not change when only commitmentDeficit is netted"
+        );
     }
 
     function test_updateSettlement_deficitCoverage_decrementsPoolDeficitPrincipal() public {
@@ -546,6 +551,7 @@ contract VTSPositionLibTest is VTSLibTestBase {
         harness.setCumulativeDeficit(positionId, 100e18, 0);
         harness.setCommitmentDeficit(positionId, 50e18, 0);
         harness.setSettled(positionId, 0, 0); // set settled before.
+        harness.setPoolTotalDeficitPrincipal(testPoolId, 100e18, 0);
 
         // Applied is now the total of deficit coverage and settled increase
         int256 applied = harness.updateSettlement(positionId, 0, 120e18);
@@ -557,6 +563,30 @@ contract VTSPositionLibTest is VTSLibTestBase {
         assertEq(cd0, 30e18, "commitment deficit should partially be netted");
         assertEq(settled0, 0, "No settled should be credited");
         assertEq(applied, 120e18, "applied should be the sum of deficit coverage and settled increase");
+        (uint256 principal0,) = harness.getPoolTotalDeficitPrincipal(testPoolId);
+        assertEq(principal0, 0, "pool totalDeficitPrincipal should only decrement by cumulativeDeficit coverage");
+    }
+
+    function test_updateSettlement_commitmentDeficitOnly_doesNotMutateDICEPrincipal() public {
+        PositionId positionId = _registerDefaultPosition();
+
+        harness.setCommitmentMax(positionId, 1000e18, 0);
+        harness.setCumulativeDeficit(positionId, 0, 0);
+        harness.setCommitmentDeficit(positionId, 60e18, 0);
+        harness.setSettled(positionId, 0, 0);
+        harness.setPoolTotalDeficitPrincipal(testPoolId, 40e18, 0);
+
+        int256 applied = harness.updateSettlement(positionId, 0, 50e18);
+
+        (uint256 cd0,) = harness.getCommitmentDeficit(positionId);
+        (,, uint256 settled0,, uint256 def0,) = harness.getPositionAccounting(positionId);
+        (uint256 principal0,) = harness.getPoolTotalDeficitPrincipal(testPoolId);
+
+        assertEq(def0, 0, "cumulative deficit should remain unchanged");
+        assertEq(cd0, 10e18, "commitment deficit should be partially netted");
+        assertEq(settled0, 0, "no settled should be credited when delta is fully consumed");
+        assertEq(principal0, 40e18, "DICE principal must ignore commitmentDeficit netting");
+        assertEq(applied, 50e18, "applied should include commitmentDeficit netting");
     }
 
     function test_updateSettlement_clampsToCommitmentMax() public {

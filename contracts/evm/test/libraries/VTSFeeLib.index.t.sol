@@ -394,6 +394,48 @@ contract VTSFeeLibIndexTest is VTSOrchestratorFixture {
         );
     }
 
+    /// @notice DICE Test 4: Repaying commitmentDeficit must not shrink DICE principal denominator
+    /// @dev Verifies pool totalDeficitPrincipal remains tied to cumulativeDeficit only.
+    function test_DICE_commitmentDeficitRepayment_doesNotMutatePrincipalDenominator() public {
+        // Position A: create swap-driven cumulative deficit (this mints DICE principal).
+        (, PositionId posA) = _createNewMMCommit(-60, 60, 3e10);
+        _swapCore(false, -int256(50e18)); // one-for-zero => deficit on token0
+        vtsOrchestrator.settlePositionGrowths(posA);
+
+        uint256 principalBefore;
+        uint256 index0Before;
+        (principalBefore,, index0Before,,,) = _testableOrchestrator().getPoolDICEAccounting(corePoolKey.toId());
+        assertGt(principalBefore, 0, "setup: token0 DICE principal must be non-zero");
+
+        // Position B: inject pure commitmentDeficit (without cumulativeDeficit), then cure it via settlement.
+        (uint256 tokenB, PositionId posB) = _createNewMMCommit(-60, 60, 3e10);
+        _testableOrchestrator()._setCommitmentDeficit(posB, 4e18, 0);
+
+        (uint256 cd0, uint256 cd1) = _testableOrchestrator().getCommitmentDeficit(posB);
+        assertEq(cd0, 4e18, "setup: commitment deficit token0 must be injected");
+        assertEq(cd1, 0, "setup: commitment deficit token1 must be zero");
+
+        _mmSettle(tokenB, 0, _negInt128Capped(cd0), _negInt128Capped(cd1));
+
+        uint256 principalAfterCure;
+        (principalAfterCure,,,,,) = _testableOrchestrator().getPoolDICEAccounting(corePoolKey.toId());
+        assertEq(
+            principalAfterCure, principalBefore, "DICE: curing commitmentDeficit must not change totalDeficitPrincipal"
+        );
+
+        // Coverage increment must use the same denominator (principalBefore).
+        uint256 covered = 1e18;
+        vm.prank(marketFactory);
+        vtsOrchestrator.incrementCoverage(corePoolKey.toId(), covered, 0);
+
+        uint256 index0After;
+        (,, index0After,,,) = _testableOrchestrator().getPoolDICEAccounting(corePoolKey.toId());
+        uint256 expectedDelta = FullMath.mulDiv(covered, FixedPoint128.Q128, principalBefore);
+        assertEq(
+            index0After - index0Before, expectedDelta, "DICE: index delta must use unchanged principal denominator"
+        );
+    }
+
     // ============================================================
     // CSI (Contribution Spend Index) Tests
     // ============================================================

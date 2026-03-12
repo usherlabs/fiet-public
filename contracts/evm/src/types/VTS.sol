@@ -129,7 +129,8 @@ struct PositionAccounting {
     TokenPairUint cumulativeOutflows;
     // Outflow snapshots at last fee snap per token
     TokenPairUint outflowsAtFeeSnap;
-    // Commitment-scoped deficit (insolvency gate) per token
+    // Commitment-scoped deficit (insolvency gate) per token.
+    // Derived from checkpoint backing shortfall; not part of DICE principal accounting.
     TokenPairUint commitmentDeficit;
     // Commitment deficit severity in bps (0-10000), updated by commitment checkpoints
     uint16 commitmentDeficitBps;
@@ -160,7 +161,8 @@ struct PoolAccounting {
     TokenPairUint protocolFeeAccrued;
     // Slashed pot balances per token
     TokenPairUint slashedPot;
-    // DICE: Pool-wide outstanding deficit principal per token
+    // DICE: Pool-wide outstanding swap-incurred deficit principal per token.
+    // Mirrors summed cumulativeDeficit and excludes commitmentDeficit.
     TokenPairUint totalDeficitPrincipal;
     // DICE: Coverage-per-deficit-unit index (Q128) per token
     TokenPairUint coveragePerDeficitIndexX128;

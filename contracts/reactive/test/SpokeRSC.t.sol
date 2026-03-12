@@ -8,17 +8,25 @@ import {SpokeRSC} from "../src/SpokeRSC.sol";
 
 contract SpokeRSCTest is Test {
     uint256 private constant SETTLEMENT_QUEUED_TOPIC = uint256(keccak256("SettlementQueued(address,address,uint256)"));
+    uint256 private constant SETTLEMENT_ANNULLED_TOPIC =
+        uint256(keccak256("SettlementAnnulled(address,address,uint256)"));
+    uint256 private constant SETTLEMENT_PROCESSED_TOPIC =
+        uint256(keccak256("SettlementProcessed(address,address,uint256)"));
+    uint256 private constant SETTLEMENT_FAILED_TOPIC =
+        uint256(keccak256("SettlementFailed(address,address,uint256,bytes)"));
 
     uint256 private originChainId;
     uint256 private destinationChainId;
     address private liquidityHub;
     address private hubCallback;
+    address private destinationReceiverContract;
 
     function setUp() public {
         originChainId = 1;
         destinationChainId = 2;
         liquidityHub = makeAddr("liquidityHub");
         hubCallback = makeAddr("hubCallback");
+        destinationReceiverContract = makeAddr("destinationReceiverContract");
     }
 
     /// @notice Reverts deployment when any required constructor field is invalid.
@@ -26,25 +34,28 @@ contract SpokeRSCTest is Test {
         address recipient = makeAddr("recipient");
 
         vm.expectRevert(abi.encodeWithSelector(SpokeRSC.InvalidConfig.selector));
-        new SpokeRSC(0, destinationChainId, liquidityHub, hubCallback, recipient);
+        new SpokeRSC(0, destinationChainId, liquidityHub, hubCallback, destinationReceiverContract, recipient);
 
         vm.expectRevert(abi.encodeWithSelector(SpokeRSC.InvalidConfig.selector));
-        new SpokeRSC(originChainId, 0, liquidityHub, hubCallback, recipient);
+        new SpokeRSC(originChainId, 0, liquidityHub, hubCallback, destinationReceiverContract, recipient);
 
         vm.expectRevert(abi.encodeWithSelector(SpokeRSC.InvalidConfig.selector));
-        new SpokeRSC(originChainId, destinationChainId, address(0), hubCallback, recipient);
+        new SpokeRSC(originChainId, destinationChainId, address(0), hubCallback, destinationReceiverContract, recipient);
 
         vm.expectRevert(abi.encodeWithSelector(SpokeRSC.InvalidConfig.selector));
-        new SpokeRSC(originChainId, destinationChainId, liquidityHub, address(0), recipient);
+        new SpokeRSC(originChainId, destinationChainId, liquidityHub, address(0), destinationReceiverContract, recipient);
 
         vm.expectRevert(abi.encodeWithSelector(SpokeRSC.InvalidConfig.selector));
-        new SpokeRSC(originChainId, destinationChainId, liquidityHub, hubCallback, address(0));
+        new SpokeRSC(originChainId, destinationChainId, liquidityHub, hubCallback, address(0), recipient);
+
+        vm.expectRevert(abi.encodeWithSelector(SpokeRSC.InvalidConfig.selector));
+        new SpokeRSC(originChainId, destinationChainId, liquidityHub, hubCallback, destinationReceiverContract, address(0));
     }
 
     /// @notice Emits a callback when a matching SettlementQueued log is processed.
     function test_reactEmitsCallbackForMatchingRecipient() public {
         address recipient = makeAddr("recipient");
-        SpokeRSC spoke = new SpokeRSC(originChainId, destinationChainId, liquidityHub, hubCallback, recipient);
+        SpokeRSC spoke = _newSpoke(recipient);
 
         address lcc = makeAddr("lcc");
         uint256 amount = 123;
@@ -79,7 +90,7 @@ contract SpokeRSCTest is Test {
     function test_reactIgnoresOtherRecipient() public {
         address recipient = makeAddr("recipient");
         address otherRecipient = makeAddr("otherRecipient");
-        SpokeRSC spoke = new SpokeRSC(originChainId, destinationChainId, liquidityHub, hubCallback, recipient);
+        SpokeRSC spoke = _newSpoke(recipient);
 
         address lcc = makeAddr("lcc");
         uint256 amount = 123;
@@ -112,7 +123,7 @@ contract SpokeRSCTest is Test {
     /// @notice Ignores logs emitted by contracts other than the configured LiquidityHub.
     function test_reactIgnoresWrongContract() public {
         address recipient = makeAddr("recipient");
-        SpokeRSC spoke = new SpokeRSC(originChainId, destinationChainId, liquidityHub, hubCallback, recipient);
+        SpokeRSC spoke = _newSpoke(recipient);
 
         IReactive.LogRecord memory log = IReactive.LogRecord({
             chain_id: originChainId,
@@ -138,7 +149,7 @@ contract SpokeRSCTest is Test {
     /// @notice Ignores logs whose event signature is not SettlementQueued.
     function test_reactIgnoresWrongTopic() public {
         address recipient = makeAddr("recipient");
-        SpokeRSC spoke = new SpokeRSC(originChainId, destinationChainId, liquidityHub, hubCallback, recipient);
+        SpokeRSC spoke = _newSpoke(recipient);
 
         IReactive.LogRecord memory log = IReactive.LogRecord({
             chain_id: originChainId,
@@ -164,7 +175,7 @@ contract SpokeRSCTest is Test {
     /// @notice Increments nonce once per distinct matching SettlementQueued log identity.
     function test_reactMonotonicNonceAcrossMultipleMatches() public {
         address recipient = makeAddr("recipient");
-        SpokeRSC spoke = new SpokeRSC(originChainId, destinationChainId, liquidityHub, hubCallback, recipient);
+        SpokeRSC spoke = _newSpoke(recipient);
         address lcc = makeAddr("lcc");
 
         IReactive.LogRecord memory firstLog = IReactive.LogRecord({
@@ -206,7 +217,7 @@ contract SpokeRSCTest is Test {
     /// @notice Processes a duplicate delivery of the same event only once.
     function test_reactDeduplicatesSameEventDeliveredTwice() public {
         address recipient = makeAddr("recipient");
-        SpokeRSC spoke = new SpokeRSC(originChainId, destinationChainId, liquidityHub, hubCallback, recipient);
+        SpokeRSC spoke = _newSpoke(recipient);
         address lcc = makeAddr("lcc");
         uint256 amount = 123;
 
@@ -241,5 +252,105 @@ contract SpokeRSCTest is Test {
         assertEq(callbackCount, 1);
         assertEq(spoke.nonce(), 1);
         assertTrue(spoke.processedLog(logId));
+    }
+
+    function test_reactForwardsSettlementAnnulledToHubCallback() public {
+        address recipient = makeAddr("recipient");
+        SpokeRSC spoke = _newSpoke(recipient);
+        address lcc = makeAddr("lcc");
+        uint256 amount = 22;
+
+        IReactive.LogRecord memory log = IReactive.LogRecord({
+            chain_id: originChainId,
+            _contract: liquidityHub,
+            topic_0: SETTLEMENT_ANNULLED_TOPIC,
+            topic_1: uint256(uint160(lcc)),
+            topic_2: uint256(uint160(recipient)),
+            topic_3: 0,
+            data: abi.encode(amount),
+            block_number: 0,
+            op_code: 0,
+            block_hash: 0,
+            tx_hash: 21,
+            log_index: 1
+        });
+
+        bytes memory payload = abi.encodeWithSignature(
+            "recordSettlementAnnulled(address,address,address,uint256)", address(0), lcc, recipient, amount
+        );
+        vm.expectEmit(true, true, true, true, address(spoke));
+        emit IReactive.Callback(destinationChainId, hubCallback, 8000000, payload);
+        spoke.react(log);
+    }
+
+    function test_reactForwardsSettlementProcessedToHubCallback() public {
+        address recipient = makeAddr("recipient");
+        SpokeRSC spoke = _newSpoke(recipient);
+        address lcc = makeAddr("lcc");
+        uint256 amount = 33;
+
+        IReactive.LogRecord memory log = IReactive.LogRecord({
+            chain_id: originChainId,
+            _contract: liquidityHub,
+            topic_0: SETTLEMENT_PROCESSED_TOPIC,
+            topic_1: uint256(uint160(lcc)),
+            topic_2: uint256(uint160(recipient)),
+            topic_3: 0,
+            data: abi.encode(amount),
+            block_number: 0,
+            op_code: 0,
+            block_hash: 0,
+            tx_hash: 22,
+            log_index: 1
+        });
+
+        bytes memory payload = abi.encodeWithSignature(
+            "recordSettlementProcessed(address,address,address,uint256)", address(0), lcc, recipient, amount
+        );
+        vm.expectEmit(true, true, true, true, address(spoke));
+        emit IReactive.Callback(destinationChainId, hubCallback, 8000000, payload);
+        spoke.react(log);
+    }
+
+    function test_reactForwardsSettlementFailedToHubCallback() public {
+        address recipient = makeAddr("recipient");
+        SpokeRSC spoke = _newSpoke(recipient);
+        address lcc = makeAddr("lcc");
+        uint256 maxAmount = 44;
+
+        IReactive.LogRecord memory log = IReactive.LogRecord({
+            chain_id: originChainId,
+            _contract: destinationReceiverContract,
+            topic_0: SETTLEMENT_FAILED_TOPIC,
+            topic_1: uint256(uint160(lcc)),
+            topic_2: uint256(uint160(recipient)),
+            topic_3: 0,
+            data: abi.encode(maxAmount, bytes("err")),
+            block_number: 0,
+            op_code: 0,
+            block_hash: 0,
+            tx_hash: 23,
+            log_index: 1
+        });
+
+        bytes memory payload = abi.encodeWithSignature(
+            "recordSettlementFailed(address,address,address,uint256)", address(0), lcc, recipient, maxAmount
+        );
+        vm.expectEmit(true, true, true, true, address(spoke));
+        emit IReactive.Callback(destinationChainId, hubCallback, 8000000, payload);
+        spoke.react(log);
+    }
+
+    function _newSpoke(address recipient) internal returns (SpokeRSC) {
+        return SpokeRSC(
+            new SpokeRSC(
+                originChainId,
+                destinationChainId,
+                liquidityHub,
+                hubCallback,
+                destinationReceiverContract,
+                recipient
+            )
+        );
     }
 }

@@ -74,6 +74,8 @@ contract LiquidityHubTest is LiquidityHubTestBase {
     event FactorySet(address indexed factory, bool enabled);
     event LiquidityAvailable(address indexed lcc, address underlyingAsset, uint256 amount, bytes32 marketId);
     event SettlementQueued(address indexed lcc, address indexed recipient, uint256 amount);
+    event SettlementAnnulled(address indexed lcc, address indexed recipient, uint256 amount);
+    event SettlementProcessed(address indexed lcc, address indexed recipient, uint256 amount);
     event BoundLevelSet(address indexed factory, address indexed who, uint8 level);
 
     function test_setFactory_revertsWhenNotOwner() public {
@@ -400,11 +402,66 @@ contract LiquidityHubTest is LiquidityHubTestBase {
         // Force market liquidity to 0 so it queues.
         vm.mockCall(factory, abi.encodeWithSelector(IMarketFactory.useMarketLiquidity.selector), abi.encode(uint256(0)));
 
+        vm.expectEmit(true, true, false, true, address(liquidityHub));
+        emit SettlementQueued(lccToken1, user3, amount);
+
         vm.prank(user1);
         liquidityHub.unwrapTo(address(underlyingAsset1), marketId1, user2, user3, amount);
 
         assertEq(liquidityHub.settleQueue(lccToken1, user3), amount, "queue should be attributed to queueTo");
         assertEq(liquidityHub.settleQueue(lccToken1, user2), 0, "to should not own the queued settlement");
+    }
+
+    function test_unwrap_doesNotEmitSettlementQueuedWhenNoShortfall() public {
+        uint256 amount = 10;
+        _wrapDirectLCC(user1, lccToken1, amount);
+
+        vm.recordLogs();
+        vm.prank(user1);
+        liquidityHub.unwrap(lccToken1, amount);
+
+        Vm.Log[] memory entries = vm.getRecordedLogs();
+        bytes32 topic0 = keccak256("SettlementQueued(address,address,uint256)");
+        for (uint256 i = 0; i < entries.length; i++) {
+            if (entries[i].topics.length > 0) {
+                require(entries[i].topics[0] != topic0, "unexpected SettlementQueued");
+            }
+        }
+    }
+
+    function test_unwrap_emitsSettlementQueuedOnShortfall() public {
+        uint256 amount = 17;
+        _wrapMarketDerivedLCC(user1, lccToken1, amount);
+
+        // Force market path to return 0 so full amount is queued.
+        vm.mockCall(factory, abi.encodeWithSelector(IMarketFactory.useMarketLiquidity.selector), abi.encode(uint256(0)));
+
+        vm.expectEmit(true, true, false, true, address(liquidityHub));
+        emit SettlementQueued(lccToken1, user1, amount);
+
+        vm.prank(user1);
+        liquidityHub.unwrap(lccToken1, amount);
+
+        assertEq(liquidityHub.settleQueue(lccToken1, user1), amount);
+    }
+
+    function test_wrapWith_emitsSettlementQueuedWhenResidualUnwrapQueuesToHub() public {
+        uint256 amount = 13;
+        (address lccToken3,) = _createSecondLCCPair();
+
+        vm.prank(proxyHook);
+        liquidityHub.issue(lccToken1, user1, amount);
+
+        vm.mockCall(factory, abi.encodeWithSelector(IMarketFactory.useMarketLiquidity.selector), abi.encode(uint256(0)));
+
+        vm.startPrank(user1);
+        ILCC(lccToken1).approve(address(liquidityHub), amount);
+        vm.expectEmit(true, true, false, true, address(liquidityHub));
+        emit SettlementQueued(lccToken1, address(liquidityHub), amount);
+        liquidityHub.wrapWith(lccToken3, lccToken1, amount);
+        vm.stopPrank();
+
+        assertEq(liquidityHub.settleQueue(lccToken1, address(liquidityHub)), amount);
     }
 
     function test_issue_cancel_and_cancelWithQueue_coverIssuerPaths() public {
@@ -606,6 +663,8 @@ contract LiquidityHubTest is LiquidityHubTestBase {
 
         // Bleed into queue: liquidBalance = 10, queued = 40 => transferableWithoutQueue = 0
         // amountToTransfer=15 => bleedIntoQueue=15 => annul 15.
+        vm.expectEmit(true, true, false, true, address(liquidityHub));
+        emit SettlementAnnulled(lccToken1, user1, 15);
         vm.prank(lccToken1);
         liquidityHub.annulSettlementBeforeTransfer(user1, 10, 0, 15);
         assertEq(liquidityHub.settleQueue(lccToken1, user1), q - 15);
