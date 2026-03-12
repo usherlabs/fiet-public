@@ -7,6 +7,7 @@ import {PoolId, PoolIdLibrary} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
 import {IHooks} from "@uniswap/v4-core/src/interfaces/IHooks.sol";
 import {MockERC20} from "./_mocks/MockERC20.sol";
+import {IERC20} from "openzeppelin-contracts/contracts/token/ERC20/IERC20.sol";
 
 import {MarketFactory} from "../src/MarketFactory.sol";
 import {IMarketFactory} from "../src/interfaces/IMarketFactory.sol";
@@ -331,6 +332,11 @@ contract MarketFactoryTest is Test, Deployers {
 // ============================================================
 
 contract MockPoolManager_MarketFactory {
+    // bytes32(uint256(keccak256("ReservesOf")) - 1)
+    bytes32 internal constant RESERVES_OF_SLOT = 0x1e0745a7db1623981f0b2a5d4232364c00787266eb75ad546f190e6cebe9bd95;
+    // bytes32(uint256(keccak256("Currency")) - 1)
+    bytes32 internal constant CURRENCY_SLOT = 0x27e098c505d44ec3574004bca052aabf76bd35004c182099d8c575fb238593b9;
+
     struct InitCall {
         PoolKey key;
         uint160 sqrtPriceX96;
@@ -367,6 +373,17 @@ contract MockPoolManager_MarketFactory {
         _exttload[Lock.IS_UNLOCKED_SLOT] = bytes32(uint256(1));
         result = IUnlockCallback(msg.sender).unlockCallback(data);
         _exttload[Lock.IS_UNLOCKED_SLOT] = bytes32(0);
+    }
+
+    function sync(Currency currency) external {
+        if (Currency.unwrap(currency) == address(0)) {
+            _exttload[CURRENCY_SLOT] = bytes32(0);
+            _exttload[RESERVES_OF_SLOT] = bytes32(0);
+            return;
+        }
+
+        _exttload[CURRENCY_SLOT] = bytes32(uint256(uint160(Currency.unwrap(currency))));
+        _exttload[RESERVES_OF_SLOT] = bytes32(IERC20(Currency.unwrap(currency)).balanceOf(address(this)));
     }
 
     function initCallsLength() external view returns (uint256) {
@@ -413,6 +430,8 @@ contract MockLiquidityHub_MarketFactory {
     address internal _lcc0;
     address internal _lcc1;
     mapping(address => uint8) internal _boundLevels;
+    mapping(address => bytes32) internal _lccMarketId;
+    mapping(address => address) internal _lccFactory;
 
     bytes internal _lastMarketRef;
     address internal _lastUnderlying0;
@@ -441,6 +460,15 @@ contract MockLiquidityHub_MarketFactory {
     }
 
     function initialize(address, address, bytes32, bytes memory) external pure {}
+
+    function setLccToMarket(address lcc, bytes32 marketId, address marketFactory) external {
+        _lccMarketId[lcc] = marketId;
+        _lccFactory[lcc] = marketFactory;
+    }
+
+    function lccToMarket(address lcc) external view returns (bytes32 marketId, address marketFactory) {
+        return (_lccMarketId[lcc], _lccFactory[lcc]);
+    }
 
     function boundLevel(address factory, address who) external view returns (uint8) {
         return _boundLevels[_scope(factory, who)];
@@ -481,9 +509,27 @@ contract MockLiquidityHub_MarketFactory {
     }
 }
 
+contract MockLCC_MarketFactory is MockERC20 {
+    address internal _underlying;
+
+    constructor(address underlying_) MockERC20("Mock LCC", "MLCC", 18) {
+        _underlying = underlying_;
+    }
+
+    function underlying() external view returns (address) {
+        return _underlying;
+    }
+}
+
 contract MockProxyHookVault_MarketFactory {
     bool internal _activated;
     PoolKey internal _coreKey;
+    address internal _poolManager;
+    bool internal _simulateNestedSync;
+    Currency internal _nestedSyncCurrency;
+    uint256 internal _ingressCalls;
+    address internal _lastIngressLcc;
+    uint256 internal _lastIngressWrapped;
 
     mapping(Currency => uint256) internal _balances;
     BalanceDelta internal _available;
@@ -496,6 +542,15 @@ contract MockProxyHookVault_MarketFactory {
 
     function activate() external {
         _activated = true;
+    }
+
+    function setPoolManager(address poolManager_) external {
+        _poolManager = poolManager_;
+    }
+
+    function setNestedIngressSync(address currency, bool enabled) external {
+        _nestedSyncCurrency = Currency.wrap(currency);
+        _simulateNestedSync = enabled;
     }
 
     function activated() external view returns (bool) {
@@ -552,6 +607,23 @@ contract MockProxyHookVault_MarketFactory {
     function dryModifyLiquidities(BalanceDelta requested) external view returns (BalanceDelta) {
         return this.tryModifyLiquidities(requested);
     }
+
+    function handleIngress(address lcc, uint256 wrappedAmount) external {
+        _ingressCalls++;
+        _lastIngressLcc = lcc;
+        _lastIngressWrapped = wrappedAmount;
+        if (_simulateNestedSync) {
+            MockPoolManager_MarketFactory(_poolManager).sync(_nestedSyncCurrency);
+        }
+    }
+
+    function ingressCalls() external view returns (uint256) {
+        return _ingressCalls;
+    }
+
+    function lastIngress() external view returns (address lcc, uint256 wrappedAmount) {
+        return (_lastIngressLcc, _lastIngressWrapped);
+    }
 }
 
 contract MockCoreHook_MarketFactory is ICoreHook {
@@ -568,6 +640,11 @@ contract MockCoreHook_MarketFactory is ICoreHook {
 
 contract MarketFactoryUnitTest is Test {
     using PoolIdLibrary for PoolKey;
+
+    // bytes32(uint256(keccak256("Currency")) - 1)
+    bytes32 internal constant CURRENCY_SLOT = 0x27e098c505d44ec3574004bca052aabf76bd35004c182099d8c575fb238593b9;
+    // bytes32(uint256(keccak256("ReservesOf")) - 1)
+    bytes32 internal constant RESERVES_OF_SLOT = 0x1e0745a7db1623981f0b2a5d4232364c00787266eb75ad546f190e6cebe9bd95;
 
     address internal owner = makeAddr("owner");
     address internal nonOwner = makeAddr("nonOwner");
@@ -599,6 +676,7 @@ contract MarketFactoryUnitTest is Test {
 
         proxyHook = new MockProxyHookVault_MarketFactory();
         coreHook = new MockCoreHook_MarketFactory();
+        proxyHook.setPoolManager(address(poolManager));
 
         liquidityHub.setLccPair(address(0x3000), address(0x4000)); // stable deterministic ordering
 
@@ -626,6 +704,22 @@ contract MarketFactoryUnitTest is Test {
         (coreId, proxyId) = factory.createMarket(
             ua0, ua1, 3000, 60, initialSqrtPriceX96, keccak256("salt"), VTSConfigs.getDefaultConfig()
         );
+    }
+
+    function _configureLccForMarket(address lcc, bytes32 marketId) internal {
+        liquidityHub.setLccToMarket(lcc, marketId, address(factory));
+    }
+
+    function _prepareMarketWithMockLcc(address underlying0, address underlying1)
+        internal
+        returns (MockLCC_MarketFactory lcc0, MockLCC_MarketFactory lcc1, PoolId coreId)
+    {
+        lcc0 = new MockLCC_MarketFactory(underlying0);
+        lcc1 = new MockLCC_MarketFactory(underlying1);
+        liquidityHub.setLccPair(address(lcc0), address(lcc1));
+        (coreId,) = _createMarket(address(0x100), address(0x200), 79228162514264337593543950336);
+        _configureLccForMarket(address(lcc0), PoolId.unwrap(coreId));
+        _configureLccForMarket(address(lcc1), PoolId.unwrap(coreId));
     }
 
     function test_constructor_revertsWhenPoolManagerZero() public {
@@ -972,6 +1066,82 @@ contract MarketFactoryUnitTest is Test {
         proxyHook.setInMarketBalance(Currency.wrap(address(0x100)), 123);
         uint256 got = factory.marketLiquidity(address(0x100), PoolId.unwrap(coreId));
         assertEq(got, 123);
+    }
+
+    function test_prepareMarketLiquidity_withoutActiveSync_forwardsIngress() public {
+        (MockLCC_MarketFactory lcc0,,) = _prepareMarketWithMockLcc(address(0x100), address(0x200));
+
+        vm.prank(address(lcc0));
+        factory.prepareMarketLiquidity(address(lcc0), 7);
+
+        assertEq(proxyHook.ingressCalls(), 1);
+        (address lastLcc, uint256 lastWrapped) = proxyHook.lastIngress();
+        assertEq(lastLcc, address(lcc0));
+        assertEq(lastWrapped, 7);
+    }
+
+    function test_prepareMarketLiquidity_sameLccSync_restoresAfterNestedErc20Sync() public {
+        (MockLCC_MarketFactory lcc0, MockLCC_MarketFactory lcc1,) =
+            _prepareMarketWithMockLcc(address(0x100), address(0x200));
+        lcc0.mint(address(poolManager), 100);
+        poolManager.sync(Currency.wrap(address(lcc0)));
+        proxyHook.setNestedIngressSync(address(lcc1), true);
+
+        vm.prank(address(lcc0));
+        factory.prepareMarketLiquidity(address(lcc0), 5);
+
+        assertEq(address(uint160(uint256(poolManager.exttload(CURRENCY_SLOT)))), address(lcc0));
+        assertEq(uint256(poolManager.exttload(RESERVES_OF_SLOT)), 100);
+    }
+
+    function test_prepareMarketLiquidity_sameLccSync_revertsWhenUnpaidIngressAlreadyExists() public {
+        (MockLCC_MarketFactory lcc0,,) = _prepareMarketWithMockLcc(address(0x100), address(0x200));
+        lcc0.mint(address(poolManager), 100);
+        poolManager.sync(Currency.wrap(address(lcc0)));
+        lcc0.mint(address(this), 1);
+        lcc0.transfer(address(poolManager), 1);
+
+        vm.prank(address(lcc0));
+        vm.expectRevert(abi.encodeWithSelector(Errors.NestedIngressUnpaidTransferExists.selector, uint256(100), 101));
+        factory.prepareMarketLiquidity(address(lcc0), 1);
+    }
+
+    function test_prepareMarketLiquidity_sameLccSync_revertsWhenSyncSnapshotInvalid() public {
+        (MockLCC_MarketFactory lcc0,,) = _prepareMarketWithMockLcc(address(0x100), address(0x200));
+        lcc0.mint(address(poolManager), 100);
+        poolManager.sync(Currency.wrap(address(lcc0)));
+
+        vm.prank(address(poolManager));
+        lcc0.transfer(address(this), 1);
+
+        vm.prank(address(lcc0));
+        vm.expectRevert(abi.encodeWithSelector(Errors.NestedIngressInvalidSyncSnapshot.selector, uint256(100), 99));
+        factory.prepareMarketLiquidity(address(lcc0), 1);
+    }
+
+    function test_prepareMarketLiquidity_revertsWhenDifferentCurrencyInFlight() public {
+        (MockLCC_MarketFactory lcc0,,) = _prepareMarketWithMockLcc(address(0x100), address(0x200));
+        address otherCurrency = address(0xDEAD);
+        poolManager.setExttload(CURRENCY_SLOT, bytes32(uint256(uint160(otherCurrency))));
+
+        vm.prank(address(lcc0));
+        vm.expectRevert(
+            abi.encodeWithSelector(Errors.NestedIngressSyncCurrencyMismatch.selector, otherCurrency, address(lcc0))
+        );
+        factory.prepareMarketLiquidity(address(lcc0), 1);
+    }
+
+    function test_prepareMarketLiquidity_sameLccSync_nativeUnderlying_clearsAndRestores() public {
+        (MockLCC_MarketFactory lcc0,,) = _prepareMarketWithMockLcc(address(0), address(0x200));
+        lcc0.mint(address(poolManager), 40);
+        poolManager.sync(Currency.wrap(address(lcc0)));
+        proxyHook.setNestedIngressSync(address(0), true);
+
+        vm.prank(address(lcc0));
+        factory.prepareMarketLiquidity(address(lcc0), 2);
+
+        assertEq(address(uint160(uint256(poolManager.exttload(CURRENCY_SLOT)))), address(lcc0));
+        assertEq(uint256(poolManager.exttload(RESERVES_OF_SLOT)), 40);
     }
 
     function test_afterModifyLiquidity_revertsWhenPoolManagerLocked() public {

@@ -113,6 +113,10 @@ contract ProxyHookTest is MarketVaultBase {
         (bool ok,) = address(fresh).call(abi.encodeCall(IVaultCoreActionHandler.handleAddLiquidity, ()));
         assertFalse(ok, "handleLiquidity should be gated by onlyCoreHook");
 
+        vm.prank(marketFactory);
+        fresh.activate();
+        fresh.exposed_setNoCoreActionFlag(true);
+
         vm.prank(coreHookAddress);
         fresh.handleAddLiquidity();
     }
@@ -122,7 +126,10 @@ contract ProxyHookTest is MarketVaultBase {
         address attacker = makeAddr("attacker_handleSwap");
 
         vm.prank(marketFactory);
+        fresh.activate();
+        vm.prank(marketFactory);
         fresh.setCorePoolKey(corePoolKey);
+        fresh.exposed_setNoCoreActionFlag(true);
 
         vm.prank(attacker);
         (bool ok,) = address(fresh)
@@ -940,9 +947,12 @@ contract ProxyHookTest is MarketVaultBase {
     function test_handleSwap_noop_whenWrappedAmountIsZero() public {
         ProxyHookHarness harness = new ProxyHookHarness(address(manager), address(marketFactory));
         vm.prank(marketFactory);
-        harness.setCorePoolKey(corePoolKey);
-
+        harness.activate();
         vm.prank(marketFactory);
+        harness.setCorePoolKey(corePoolKey);
+        harness.exposed_setNoCoreActionFlag(true);
+
+        vm.prank(coreHookAddress);
         harness.handleSwap(Currency.unwrap(corePoolKey.currency0));
     }
 

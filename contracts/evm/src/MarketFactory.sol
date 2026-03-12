@@ -22,7 +22,6 @@ import {Errors} from "./libraries/Errors.sol";
 import {ImmutableState} from "v4-periphery/src/base/ImmutableState.sol";
 import {ImmutableVTSState} from "./modules/ImmutableVTSState.sol";
 import {ICoreHook} from "./interfaces/ICoreHook.sol";
-import {IVaultCoreActionHandler} from "./interfaces/IVaultCoreActionHandler.sol";
 import {TransientStateLibrary} from "@uniswap/v4-core/src/libraries/TransientStateLibrary.sol";
 import {IUnlockCallback} from "@uniswap/v4-core/src/interfaces/callback/IUnlockCallback.sol";
 
@@ -445,12 +444,12 @@ contract MarketFactory is IMarketFactory, Ownable, ImmutableState, ImmutableVTSS
         if (msg.sender != lcc) revert Errors.InvalidSender();
         (bytes32 marketId, address factory) = liquidityHub.lccToMarket(lcc);
         if (factory != address(this) || marketId == bytes32(0)) revert Errors.InvalidSender();
-
-        if (wrappedAmount == 0) return;
         address handler = _proxyToHook[coreToProxy[PoolId.wrap(marketId)]];
-        if (handler != address(0)) {
-            IVaultCoreActionHandler(handler).handleIngress(lcc, wrappedAmount);
-        }
+        MarketLiquidityRouterLib.prepareMarketLiquidityIngress(
+            MarketLiquidityRouterLib.PrepareMarketLiquidityContext({
+                poolManager: poolManager, handler: handler, lcc: lcc, wrappedAmount: wrappedAmount
+            })
+        );
     }
 
     // ============ VIEW FUNCTIONS ============

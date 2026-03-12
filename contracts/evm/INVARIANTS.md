@@ -94,6 +94,32 @@ being an informal “should”.
   - `src/LiquidityHub.sol::annulSettlementBeforeTransfer` adjusts `settleQueue` / `totalQueued` if a transfer would
     implicitly consume queued claims.
 
+### LCC-03: Nested ingress settlement preserves canonical `sync(lcc) -> transfer -> settle()` windows
+
+- **Statement**:
+  - During `LCC -> PoolManager` ingress reporting, `MarketFactory.prepareMarketLiquidity(...)` must not leave the active
+    PoolManager sync context corrupted for the outer payment flow.
+  - If `prepareMarketLiquidity` executes while the active synced currency is this same `lcc`, it must:
+    - allow only the first unpaid ingress transfer in that sync window, and
+    - restore `sync(lcc)` after nested settlement side-effects.
+  - For native-underlying lanes, the temporary clear of ERC20 sync context (native reset) is allowed only inside this
+    controlled same-`lcc` branch, followed by restoring `sync(lcc)`.
+- **Enforced by**:
+  - `src/MarketFactory.sol::prepareMarketLiquidity`
+    - Reads PoolManager transient slots (`Currency`, `ReservesOf`) through `exttload`.
+    - Reverts when sync currency is different (`Errors.NestedIngressSyncCurrencyMismatch`).
+    - Reverts when a prior unpaid ingress already exists (`Errors.NestedIngressUnpaidTransferExists`).
+    - Reverts on invalid snapshot ordering (`Errors.NestedIngressInvalidSyncSnapshot`).
+    - Re-syncs `lcc` after nested ingress handling.
+- **Supported payment shape**:
+  - Canonical Uniswap v4 ERC20 settlement window:
+    - `sync(lcc)`
+    - one `LCC -> PoolManager` transfer
+    - `settle()`
+- **Non-goal**:
+  - Non-canonical flows that perform multiple unpaid `LCC -> PoolManager` transfers inside one active `sync(lcc)`
+    window are unsupported and intentionally revert.
+
 ### HUB-01: Wrapping mints 1:1 and increases Hub reserves
 
 - **Statement**: `wrap`/`wrapTo` must:

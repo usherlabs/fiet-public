@@ -144,6 +144,15 @@ library Errors {
     /// @notice Thrown when a signal is invalid (expired or doesn't exist)
     error InvalidSignal(uint256 commitId);
 
+    /// @notice Thrown when nested ingress settlement observes a different in-flight sync currency.
+    error NestedIngressSyncCurrencyMismatch(address syncedCurrency, address expectedLcc);
+
+    /// @notice Thrown when an active sync window already has an unpaid LCC ingress transfer.
+    error NestedIngressUnpaidTransferExists(uint256 syncedReserves, uint256 poolManagerBalance);
+
+    /// @notice Thrown when synced reserves exceed poolManager token balance for the synced LCC.
+    error NestedIngressInvalidSyncSnapshot(uint256 syncedReserves, uint256 poolManagerBalance);
+
     // ============ POSITION & COMMITMENT ERRORS ============
     // Errors related to positions, commitments, and position management
 
