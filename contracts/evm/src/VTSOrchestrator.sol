@@ -861,9 +861,16 @@ contract VTSOrchestrator is
             VTSCommitLib.checkpointWithCommitment(s, poolManager, oracleHelper, commitId, positionId);
         }
 
-        // Compute RFS without re-settling growths, then mark transition time from this unified snapshot.
-        (bool rfsOpen,) = VTSPositionLib.getRFS(s, positionId);
-        CheckpointLibrary.markCheckpoint(s, positionId, rfsOpen);
+        // Compute RFS without re-settling growths, then mark lane-open state from this unified snapshot.
+        (, BalanceDelta rfsDelta) = VTSPositionLib.getRFS(s, positionId);
+        uint8 rfsOpenMask = 0;
+        if (rfsDelta.amount0() > 0) {
+            rfsOpenMask |= 1;
+        }
+        if (rfsDelta.amount1() > 0) {
+            rfsOpenMask |= 2;
+        }
+        CheckpointLibrary.markCheckpoint(s, positionId, rfsOpenMask);
         emit Checkpointed(commitId, positionIndex, s.positions[positionId].checkpoint, withCommitment);
     }
 }

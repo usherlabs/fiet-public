@@ -859,7 +859,7 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
 
         // Event must be emitted; we don't assert the struct payload here (data unchecked).
         vm.expectEmit(false, false, false, false, address(vtsOrchestrator));
-        emit GracePeriodExtended(tokenId, 0, 0, RFSCheckpoint(0, false, 0, 0));
+        emit GracePeriodExtended(tokenId, 0, 0, RFSCheckpoint(0, 0, 0, 0, 0));
 
         unlockCaller.run(
             address(vtsOrchestrator),
@@ -943,19 +943,18 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
         vm.warp(block.timestamp + 10000000);
 
         vm.expectEmit(false, false, false, false, address(vtsOrchestrator));
-        emit Checkpointed(tokenId, 0, RFSCheckpoint(0, false, 0, 0), false);
+        emit Checkpointed(tokenId, 0, RFSCheckpoint(0, 0, 0, 0, 0), false);
 
         unlockCaller.run(
             address(vtsOrchestrator), abi.encodeWithSelector(VTSOrchestrator.checkpoint.selector, tokenId, 0, false)
         );
 
         RFSCheckpoint memory checkpointAfter = vtsOrchestrator.positionToCheckpoint(positionId);
-        // Checkpoint transition time should be updated
-        assertGt(
-            checkpointAfter.timeOfLastTransition,
-            checkpointBefore.timeOfLastTransition,
-            "Checkpoint transition time should be updated"
-        );
+        // Checkpoint lane-open state should be refreshed from current RFS.
+        bool stateChanged = checkpointAfter.openMask != checkpointBefore.openMask
+            || checkpointAfter.openSince0 != checkpointBefore.openSince0
+            || checkpointAfter.openSince1 != checkpointBefore.openSince1;
+        assertTrue(stateChanged, "Checkpoint lane-open state should be updated");
     }
 
     // ============================================================

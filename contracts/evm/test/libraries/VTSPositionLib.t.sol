@@ -908,8 +908,9 @@ contract VTSPositionLibTest is VTSLibTestBase {
         // Foundry starts at timestamp=1, so we must warp before subtracting.
         vm.warp(200);
         RFSCheckpoint memory cp = harness.getRFSCheckpoint(positionId);
-        cp.isOpen = false;
-        cp.timeOfLastTransition = block.timestamp - 100;
+        cp.openMask = 0;
+        cp.openSince0 = 0;
+        cp.openSince1 = 0;
         harness.setRFSCheckpoint(positionId, cp);
         vm.warp(block.timestamp + 1);
 
@@ -929,8 +930,9 @@ contract VTSPositionLibTest is VTSLibTestBase {
         harness.touchPosition(_mkCtx(), tp);
 
         RFSCheckpoint memory afterCp = harness.getRFSCheckpoint(positionId);
-        assertTrue(afterCp.isOpen, "checkpoint should be marked open when RFS is open");
-        assertEq(afterCp.timeOfLastTransition, block.timestamp, "checkpoint transition timestamp should update");
+        assertEq(afterCp.openMask, 1, "checkpoint should mark token0 lane open when RFS is open on token0");
+        assertEq(afterCp.openSince0, block.timestamp, "token0 open timestamp should update");
+        assertEq(afterCp.openSince1, 0, "token1 should remain closed");
         assertEq(afterCp.gracePeriodExtension0, 0, "grace extensions should reset on transition");
         assertEq(afterCp.gracePeriodExtension1, 0, "grace extensions should reset on transition");
     }

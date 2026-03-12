@@ -876,9 +876,18 @@ library VTSPositionLib {
             isActive: true,
             salt: params.salt,
             checkpoint: RFSCheckpoint({
-                timeOfLastTransition: block.timestamp, isOpen: false, gracePeriodExtension0: 0, gracePeriodExtension1: 0
+                openMask: 0, openSince0: 0, openSince1: 0, gracePeriodExtension0: 0, gracePeriodExtension1: 0
             })
         });
+    }
+
+    function _rfsOpenMask(BalanceDelta delta) internal pure returns (uint8 openMask) {
+        if (delta.amount0() > 0) {
+            openMask |= 1;
+        }
+        if (delta.amount1() > 0) {
+            openMask |= 2;
+        }
     }
 
     /// @notice Link a position to a commit
@@ -1315,8 +1324,8 @@ library VTSPositionLib {
         }
 
         // Mark RFS checkpoint
-        (bool rfsOpen,) = getRFS(s, result.id);
-        CheckpointLibrary.markCheckpoint(s, result.id, rfsOpen);
+        (, BalanceDelta rfsDelta) = getRFS(s, result.id);
+        CheckpointLibrary.markCheckpoint(s, result.id, _rfsOpenMask(rfsDelta));
     }
 
     // --------------------------------------------------
@@ -1677,7 +1686,7 @@ library VTSPositionLib {
         // ========================================
 
         // Mark RFS checkpoint for the position
-        CheckpointLibrary.markCheckpoint(s, p.positionId, result.rfsOpen);
+        CheckpointLibrary.markCheckpoint(s, p.positionId, _rfsOpenMask(rfsDelta));
     }
 
     /// @notice Handle settlement for inactive positions (unrestricted)

@@ -223,7 +223,8 @@ being an informal “should”.
 - **Statement**: A commitment checkpoint must set (or reduce/clear) `PositionAccounting.commitmentDeficit` in token
   units based on the USD backing shortfall.
 - **Enforced by**: `src/libraries/VTSCommitLib.sol::checkpointWithCommitment`.
-- **Consequence**: Positions with non-zero `commitmentDeficit` are **immediately seizable** (see `SEIZE-01`).
+- **Consequence**: Positions with non-zero `commitmentDeficit` can bypass normal grace only when the configured
+  token-lane bypass age/severity gates in `SEIZE-01` are satisfied.
 
 ### COMMIT-03: “Advancer” binding for checkpoint-with-commitment must hold
 

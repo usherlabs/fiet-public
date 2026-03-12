@@ -1493,7 +1493,7 @@ contract VTSPositionLibCISEExpose {
             isActive: true,
             salt: bytes32(0),
             checkpoint: RFSCheckpoint({
-                timeOfLastTransition: block.timestamp, isOpen: false, gracePeriodExtension0: 0, gracePeriodExtension1: 0
+                openMask: 0, openSince0: 0, openSince1: 0, gracePeriodExtension0: 0, gracePeriodExtension1: 0
             })
         });
     }
@@ -1556,7 +1556,7 @@ contract VTSPositionLibDICEExpose {
             isActive: true,
             salt: bytes32(0),
             checkpoint: RFSCheckpoint({
-                timeOfLastTransition: block.timestamp, isOpen: false, gracePeriodExtension0: 0, gracePeriodExtension1: 0
+                openMask: 0, openSince0: 0, openSince1: 0, gracePeriodExtension0: 0, gracePeriodExtension1: 0
             })
         });
     }

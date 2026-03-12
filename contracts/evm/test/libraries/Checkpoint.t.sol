@@ -69,8 +69,24 @@ contract CheckpointHarness {
         uint256 ext0,
         uint256 ext1
     ) external {
-        s.positions[positionId].checkpoint.timeOfLastTransition = timeOfLastTransition;
-        s.positions[positionId].checkpoint.isOpen = isOpen;
+        s.positions[positionId].checkpoint.openMask = isOpen ? 3 : 0;
+        s.positions[positionId].checkpoint.openSince0 = isOpen ? timeOfLastTransition : 0;
+        s.positions[positionId].checkpoint.openSince1 = isOpen ? timeOfLastTransition : 0;
+        s.positions[positionId].checkpoint.gracePeriodExtension0 = ext0;
+        s.positions[positionId].checkpoint.gracePeriodExtension1 = ext1;
+    }
+
+    function setCheckpointMask(
+        PositionId positionId,
+        uint8 openMask,
+        uint256 openSince0,
+        uint256 openSince1,
+        uint256 ext0,
+        uint256 ext1
+    ) external {
+        s.positions[positionId].checkpoint.openMask = openMask;
+        s.positions[positionId].checkpoint.openSince0 = openSince0;
+        s.positions[positionId].checkpoint.openSince1 = openSince1;
         s.positions[positionId].checkpoint.gracePeriodExtension0 = ext0;
         s.positions[positionId].checkpoint.gracePeriodExtension1 = ext1;
     }
@@ -135,7 +151,11 @@ contract CheckpointHarness {
     }
 
     function mark(PositionId positionId, bool isOpen) external {
-        CheckpointLibrary.markCheckpoint(s, positionId, isOpen);
+        CheckpointLibrary.markCheckpoint(s, positionId, isOpen ? 3 : 0);
+    }
+
+    function markMask(PositionId positionId, uint8 openMask) external {
+        CheckpointLibrary.markCheckpoint(s, positionId, openMask);
     }
 
     function get(PositionId positionId) external view returns (RFSCheckpoint memory) {
@@ -177,8 +197,9 @@ contract CheckpointLibraryTest is Test {
         h.mark(PID, true);
 
         RFSCheckpoint memory cp = h.get(PID);
-        assertTrue(cp.isOpen);
-        assertEq(cp.timeOfLastTransition, 1234);
+        assertEq(cp.openMask, 3);
+        assertEq(cp.openSince0, 1234);
+        assertEq(cp.openSince1, 1234);
         assertEq(cp.gracePeriodExtension0, 0);
         assertEq(cp.gracePeriodExtension1, 0);
 
@@ -186,7 +207,8 @@ contract CheckpointLibraryTest is Test {
         vm.warp(2000);
         h.mark(PID, true);
         RFSCheckpoint memory cp2 = h.get(PID);
-        assertEq(cp2.timeOfLastTransition, 1234);
+        assertEq(cp2.openSince0, 1234);
+        assertEq(cp2.openSince1, 1234);
     }
 
     function test_isSeizable_returnsTrueOnCommitmentDeficit() public {
@@ -367,6 +389,38 @@ contract CheckpointLibraryTest is Test {
         assertTrue(h.isSeizable(COMMIT_ID, POSITION_INDEX, false));
     }
 
+    function test_isSeizable_laneScopedGrace_ignoresClosedLaneEvenIfItsGraceElapsed() public {
+        PoolKey memory key = _defaultPoolKey();
+        PoolId poolId = key.toId();
+        h.setPosition(PID, poolId);
+        h.setGracePeriods(poolId, 100, 500, 1_000, 1_000);
+
+        uint256 nowTs = 1_000_000;
+        // token0 closed, token1 open since now
+        h.setCheckpointMask(PID, 2, 0, nowTs, 0, 0);
+        vm.warp(nowTs + 200);
+        // token0 grace would have elapsed if open, but closed lanes must not authorise seizure
+        assertFalse(h.isSeizable(COMMIT_ID, POSITION_INDEX, false));
+    }
+
+    function test_isSeizable_laneScopedGrace_usesOpenLaneTimestampWhenStaggered() public {
+        PoolKey memory key = _defaultPoolKey();
+        PoolId poolId = key.toId();
+        h.setPosition(PID, poolId);
+        h.setGracePeriods(poolId, 100, 100, 1_000, 1_000);
+
+        uint256 t0 = 1_000;
+        uint256 t1 = 1_100;
+        h.setCheckpointMask(PID, 3, t0, t1, 0, 0);
+
+        vm.warp(t0 + 101);
+        // token0 elapsed, token1 not elapsed yet -> still seizable because at least one lane is eligible
+        assertTrue(h.isSeizable(COMMIT_ID, POSITION_INDEX, false));
+
+        vm.warp(t1 + 101);
+        assertTrue(h.isSeizable(COMMIT_ID, POSITION_INDEX, false));
+    }
+
     function test_extendGracePeriod_revertsOnInvalidTokenIndex() public {
         PoolKey memory key = _defaultPoolKey();
         vm.expectRevert(abi.encodeWithSelector(Errors.InvalidTokenIndex.selector, uint8(2)));
@@ -405,6 +459,19 @@ contract CheckpointLibraryTest is Test {
 
         h.extendGracePeriod(observer, key, PID, 1, 9, hex"beef");
         assertEq(h.get(PID).gracePeriodExtension1, 60);
+    }
+
+    function test_extendGracePeriod_revertsWhenTargetLaneClosed() public {
+        PoolKey memory key = _defaultPoolKey();
+        PoolId poolId = key.toId();
+        h.setPosition(PID, poolId);
+        h.setGracePeriods(poolId, 50, 60, 1_000, 1_000);
+        // token0 open only
+        h.setCheckpointMask(PID, 1, block.timestamp, 0, 0, 0);
+        observer.setValidity(true);
+
+        vm.expectRevert(abi.encodeWithSelector(Errors.RFSNotOpenForPosition.selector, PID));
+        h.extendGracePeriod(observer, key, PID, 1, 9, hex"beef");
     }
 }
 

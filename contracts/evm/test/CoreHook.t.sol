@@ -402,7 +402,7 @@ contract MockVTSOrchestrator {
             isActive: false,
             salt: bytes32(0),
             checkpoint: RFSCheckpoint({
-                timeOfLastTransition: 0, isOpen: false, gracePeriodExtension0: 0, gracePeriodExtension1: 0
+                openMask: 0, openSince0: 0, openSince1: 0, gracePeriodExtension0: 0, gracePeriodExtension1: 0
             })
         });
         id = PositionId.wrap(bytes32(0));
