@@ -297,15 +297,28 @@ being an informal “should”.
 
 - **Statement**: During seizure, deposits/withdrawals must be clamped to prevent over-settling or extracting value
   outside allowed bounds.
+- **Protocol rule**:
+  - Token-lane granularity does **not** alter the settlement mechanics once a seizure is under way.
+  - After seizure has been authorised, settlement remains position-wide: any token-side settlement performed by the
+    seizing party is processed under the seizure clamps for that position.
+  - This is intentional because settlement on one side is economically incentivised by the collateralisation of assets
+    in the counterpart token within the same position.
 - **Enforced by**: `src/libraries/VTSPositionLib.sol::_settleSeizing` (deposit clamp uses positive RFS; withdrawal clamp
   uses `positionRequiredSettlementDelta`).
 
-### SEIZE-01: A position is seizable if (commitment deficit exists) OR (RFS open AND grace elapsed)
+### SEIZE-01: Seizability is token-lane scoped and aggregated at position level
 
 - **Statement**:
-  - If `commitmentDeficit.token0 > 0 || commitmentDeficit.token1 > 0`, seizure is immediately permitted.
-  - Otherwise, seizure requires an open checkpoint and elapsed grace period for at least one token (including proof
-    extensions).
+  - Commitment-deficit bypass is evaluated per token lane using token-specific deficit age and thresholds.
+  - Normal grace-path seizability is evaluated only for token lanes currently marked open in the checkpoint mask.
+  - Position-level seizability is true when at least one token lane is currently eligible.
+  - Explicit protocol rule: token-lane behaviour is specific to seizability and bypass-gate mechanics only.
+  - Once any eligible lane authorises seizure, the position may enter a position-level seizure flow.
+  - Underlying seizure mechanics remain position-wide: settlement need not stay confined to the triggering lane, and
+    liquidity can be slashed proportionally to the intervening party's realised settlement contribution across the
+    position.
+  - This position-wide consequence is intentional because a seizer who settles one token side is economically protected
+    by the collateralisation of assets on the counterpart side of the same position.
 - **Enforced by**: `src/libraries/Checkpoint.sol::isSeizable`, called by `src/VTSOrchestrator.sol::onSeize`.
 
 ### SEIZE-02: Grace period extensions require an allowed verifier for the settlement token
