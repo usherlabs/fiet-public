@@ -12,7 +12,6 @@ import {LiquidityUtils} from "./libraries/LiquidityUtils.sol";
 
 contract OracleHelper is Ownable {
     IResilientOracle public oracle;
-    uint256 private constant INVALID_PRICE = 0;
 
     // Mapping of ticker hash to asset address
     mapping(bytes32 => address) public tickerHashToAsset;
@@ -62,7 +61,7 @@ contract OracleHelper is Ownable {
      */
     function getPriceByTicker(string memory ticker) public view returns (uint256) {
         address asset = getAssetByTicker(ticker);
-        return _validatedPrice(OracleUtils.unifyNativeTokenAddress(asset));
+        return oracle.getPrice(OracleUtils.unifyNativeTokenAddress(asset));
     }
 
     /**
@@ -76,8 +75,15 @@ contract OracleHelper is Ownable {
         // thus if it is the native token then use the resilient oracle native token address
         address underlying0 = OracleUtils.unifyNativeTokenAddress(ILCC(lcc0).underlying());
         address underlying1 = OracleUtils.unifyNativeTokenAddress(ILCC(lcc1).underlying());
-        _validateAssetOracleConfigured(underlying0);
-        _validateAssetOracleConfigured(underlying1);
+        IResilientOracle.TokenConfig memory tokenConfig0 = oracle.getTokenConfig(underlying0);
+        IResilientOracle.TokenConfig memory tokenConfig1 = oracle.getTokenConfig(underlying1);
+        if (
+            tokenConfig0.enableFlagsForOracles[uint256(IResilientOracle.OracleRole.MAIN)] == false
+                || tokenConfig1.enableFlagsForOracles[uint256(IResilientOracle.OracleRole.MAIN)] == false
+                || tokenConfig0.asset == address(0) || tokenConfig1.asset == address(0)
+        ) {
+            revert Errors.MarketOraclesNotConfigured();
+        }
     }
 
     /**
@@ -108,7 +114,7 @@ contract OracleHelper is Ownable {
      */
     function getPriceForLcc(address lcc) external view returns (uint256 price) {
         address underlying = OracleUtils.unifyNativeTokenAddress(ILCC(lcc).underlying());
-        return _validatedPrice(underlying);
+        return oracle.getPrice(underlying);
     }
 
     /**
@@ -124,29 +130,7 @@ contract OracleHelper is Ownable {
         address underlying1 = OracleUtils.unifyNativeTokenAddress(ILCC(lcc1).underlying());
 
         // ResilientOracle returns prices scaled for token decimals (Venus semantics)
-        price0 = _validatedPrice(underlying0);
-        price1 = _validatedPrice(underlying1);
-    }
-
-    function _validatedPrice(address asset) internal view returns (uint256 price) {
-        if (oracle.paused()) revert Errors.OraclePaused();
-
-        _validateAssetOracleConfigured(asset);
-
-        price = oracle.getPrice(asset);
-        if (price == INVALID_PRICE) {
-            revert Errors.InvalidOraclePrice(asset, price);
-        }
-    }
-
-    function _validateAssetOracleConfigured(address asset) internal view {
-        IResilientOracle.TokenConfig memory tokenConfig = oracle.getTokenConfig(asset);
-        if (
-            tokenConfig.asset == address(0)
-                || tokenConfig.enableFlagsForOracles[uint256(IResilientOracle.OracleRole.MAIN)] == false
-                || tokenConfig.oracles[uint256(IResilientOracle.OracleRole.MAIN)] == address(0)
-        ) {
-            revert Errors.MarketOraclesNotConfigured();
-        }
+        price0 = oracle.getPrice(underlying0);
+        price1 = oracle.getPrice(underlying1);
     }
 }

@@ -16,6 +16,8 @@ Each recipient `SpokeRSC` subscribes to the corresponding protocol-chain events 
 
 This removes the earlier drift mode where dispatch-time optimistic decrements could orphan claims after destination failures or silent queue changes.
 
+**WIP: This has not been tested as of 12th March 2026.**
+
 ---
 
 ## Vulnerability #32: Strict Nonce Gating and Out-of-Order Delivery Risk
@@ -50,9 +52,9 @@ uint256 public nonce;
 
 function react(IReactive.LogRecord calldata log) external vmOnly {
     // ... validation logic ...
-    
+
     nonce += 1;  // Monotonically increases per settlement event
-    
+
     bytes memory payload = abi.encodeWithSignature(
         "recordSettlement(address,address,address,uint256,uint256)",
         address(0), lcc, recipient, amount, nonce
@@ -75,6 +77,7 @@ lastNonce[nonceKey] = nonce;
 ```
 
 The `nonceKey` is scoped to `(spoke, lcc, recipient)`, meaning:
+
 - Different LCCs for the same recipient share nonce history
 - Different recipients have independent nonce tracks
 
@@ -85,7 +88,7 @@ The `nonceKey` is scoped to `(spoke, lcc, recipient)`, meaning:
 // Only processes SettlementReported events from HubCallback
 function _handleSettlementReported(IReactive.LogRecord calldata log) internal {
     // ... deduplication by log identity ...
-    
+
     if (!entry.exists) {
         queueData.enqueue(key);
         queueDataByLcc[lcc].enqueue(key);
@@ -98,6 +101,7 @@ function _handleSettlementReported(IReactive.LogRecord calldata log) internal {
 ```
 
 **Critical dependency chain:**
+
 ```
 SettlementQueued (LiquidityHub)
     → SpokeRSC.react() [nonce++]
@@ -142,6 +146,7 @@ If `HubCallback` drops a settlement (due to out-of-order nonce), the entire down
 **Assumed:** The Reactive Network transport layer guarantees **FIFO/in-order delivery** of callbacks from a given `SpokeRSC` contract to `HubCallback`.
 
 Under this assumption:
+
 - Nonce 1 always arrives before nonce 2
 - The `nonce <= lastNonce` check only catches legitimate duplicates (e.g., network retries, reorgs)
 - Vulnerability #32 remains theoretical and does not manifest in production
@@ -156,9 +161,9 @@ If the FIFO assumption is ever violated, the following on-chain signals indicate
 
 ```solidity
 event DuplicateSettlementIgnored(
-    address indexed spoke, 
-    address indexed lcc, 
-    address indexed recipient, 
+    address indexed spoke,
+    address indexed lcc,
+    address indexed recipient,
     uint256 nonce
 );
 ```
@@ -168,6 +173,7 @@ event DuplicateSettlementIgnored(
 #### 2. HubRSC Queue Drift Detection
 
 Compare:
+
 - `LiquidityHub.settleQueue(lcc, recipient)` (on-chain queued amount)
 - `HubRSC.pending(HubRSC.computeKey(lcc, recipient)).amount` (authoritative mirrored pending)
 - `HubRSC.inFlightByKey(HubRSC.computeKey(lcc, recipient))` (reserved dispatch amount)
@@ -192,11 +198,11 @@ function checkSettlementDrift(
 ) {
     onChainQueued = ILiquidityHub(liquidityHub).settleQueue(lcc, recipient);
     totalProcessed = IHubCallback(hubCallback).getTotalAmountProcessed(lcc, recipient);
-    
+
     bytes32 key = IHubRSC(hubRSC).computeKey(lcc, recipient);
     (,, pendingInHubRSC,) = IHubRSC(hubRSC).pending(key);
     inFlightInHubRSC = IHubRSC(hubRSC).inFlightByKey(key);
-    
+
     // Positive drift = on-chain queue exceeds mirrored pending.
     // inFlight is tracked separately and should converge quickly via outcome events.
     drift = onChainQueued > pendingInHubRSC
@@ -278,7 +284,7 @@ function recordSettlement(...) external {
         emit DuplicateSettlementIgnored(...);
         return;
     }
-    
+
     // Process this nonce and any buffered sequential nonces
     _processAndFlushBuffer(nonceKey, nonce);
 }
@@ -304,21 +310,21 @@ Change `HubRSC` to read directly from `LiquidityHub` state rather than relying o
 
 ### Documentation References
 
-| Contract | Key Function | Relevance |
-|----------|--------------|-----------|
-| `SpokeRSC.sol` | `react()` | Nonce generation point |
-| `HubCallback.sol` | `recordSettlement()` | Nonce validation gate |
-| `HubRSC.sol` | `_handleSettlementReported()` | Queue ingestion |
-| `HubRSC.sol` | `_dispatchLiquidityForLcc()` | Settlement dispatch |
-| `LiquidityHub.sol` | `processSettlementFor()` | Final settlement execution |
-| `LiquidityHub.sol` | `settleQueue()` | Source of truth for queued amounts |
+| Contract           | Key Function                  | Relevance                          |
+| ------------------ | ----------------------------- | ---------------------------------- |
+| `SpokeRSC.sol`     | `react()`                     | Nonce generation point             |
+| `HubCallback.sol`  | `recordSettlement()`          | Nonce validation gate              |
+| `HubRSC.sol`       | `_handleSettlementReported()` | Queue ingestion                    |
+| `HubRSC.sol`       | `_dispatchLiquidityForLcc()`  | Settlement dispatch                |
+| `LiquidityHub.sol` | `processSettlementFor()`      | Final settlement execution         |
+| `LiquidityHub.sol` | `settleQueue()`               | Source of truth for queued amounts |
 
 ---
 
 ### Change Log
 
-| Date | Change |
-|------|--------|
+| Date       | Change                                     |
+| ---------- | ------------------------------------------ |
 | 2026-03-12 | Initial documentation of vulnerability #32 |
 
 ---
@@ -340,6 +346,12 @@ The `BatchProcessSettlement` receiver uses `try/catch` per item and continues on
 ### Reactive Network Dependency
 
 The entire automation flow depends on:
+pient, spokeRVMId)`must be correctly configured. Misconfiguration results in`SpokeNotForRecipient` events and dropped reports. This is an administrative operational risk, not a code vulnerability.
+
+### Reactive Network Dependency
+
+The entire automation flow depends on:
+
 - Reactive Network log ingestion latency
 - Callback execution funding (kREACT balance)
 - Transport ordering guarantees (for vulnerability #32)
