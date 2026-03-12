@@ -45,8 +45,8 @@ import {VTSConfigFileBase} from "./base/VTSConfigFileBase.sol";
  *   - `REFERENCE_POOL_CURRENCY0`, `REFERENCE_POOL_CURRENCY1`: explicit reference-pool token order; if swapped vs
  *     `UNDERLYING_ASSET_0/1` the script will invert the reference `sqrtPriceX96`
  *   - `REFERENCE_POOL_INVERT`: set to `1` to force inversion when you cannot (or do not want to) provide ref order
- * - OPTIONAL (VTS configuration):
- *   - `VTS_CONFIG_FILE_PATH`: JSON/TOML path to override defaults (otherwise defaults are used)
+ * - REQUIRED (VTS configuration):
+ *   - `VTS_CONFIG_FILE_PATH`: JSON/TOML path to a fully-specified VTS config file
  *
  * Market Creation Process:
  * 1. Read deployed MarketFactory address from deployment file

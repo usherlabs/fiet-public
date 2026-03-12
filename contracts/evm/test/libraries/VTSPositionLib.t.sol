@@ -630,6 +630,32 @@ contract VTSPositionLibTest is VTSLibTestBase {
         harness.touchPosition(_mkCtx(), tp);
     }
 
+    function test_touchPosition_newMMSeizingPosition_revertsInvariantViolated() public {
+        uint256 commitId = 77;
+        harness.setCommitExpiresAt(commitId, block.timestamp + 1);
+
+        ModifyLiquidityParams memory params = ModifyLiquidityParams({
+            tickLower: DEFAULT_TICK_LOWER,
+            tickUpper: DEFAULT_TICK_UPPER,
+            liquidityDelta: int256(uint256(1)),
+            salt: bytes32(uint256(0xBEEF))
+        });
+
+        TouchPositionParams memory tp = TouchPositionParams({
+            owner: DEFAULT_OWNER,
+            poolKey: _mkPoolKey(),
+            params: params,
+            callerDelta: toBalanceDelta(0, 0),
+            feesAccrued: toBalanceDelta(0, 0),
+            hookData: _mkHookData(true, true, commitId)
+        });
+
+        vm.expectRevert(
+            abi.encodeWithSelector(Errors.InvariantViolated.selector, "Invalid operation: Seizures cannot issue LCCs")
+        );
+        harness.touchPosition(_mkCtx(), tp);
+    }
+
     function test_touchPosition_decreaseOnInactive_revertsNotActive() public {
         PositionId positionId =
             _registerHarnessPosition(DEFAULT_OWNER, DEFAULT_TICK_LOWER, DEFAULT_TICK_UPPER, 1000, DEFAULT_SALT);
@@ -1302,6 +1328,15 @@ contract VTSPositionLibTest is VTSLibTestBase {
         uint256 commitId = 1;
 
         // Default commit state has expiresAt = 0, which is always < block.timestamp in tests.
+        vm.expectRevert(abi.encodeWithSelector(Errors.InvalidSignal.selector, commitId));
+        harness.linkPositionToCommit(positionId, commitId);
+    }
+
+    function test_linkPositionToCommit_commitAtExactExpiry_revertsInvalidSignal() public {
+        PositionId positionId = _registerDefaultPosition();
+        uint256 commitId = 2;
+        harness.setCommitExpiresAt(commitId, block.timestamp);
+
         vm.expectRevert(abi.encodeWithSelector(Errors.InvalidSignal.selector, commitId));
         harness.linkPositionToCommit(positionId, commitId);
     }

@@ -21,7 +21,7 @@ export PRIVATE_KEY=your_private_key_here
    - Then run `yarn install` from `contracts/evm/` (this installs Node deps including `lib/oracle`)
 
 4. For a fresh deployment, make sure `RESILIENT_ORACLE_ADDRESS` is not present so that a fresh copy can be deployed
-   
+
 ## E2E Scripts/Tests Overview
 
 End-to-end (E2E) tests are comprehensive integration tests that validate the full protocol flow. All E2E test scripts are located in the `script/e2e/` folder.
@@ -90,13 +90,13 @@ The comprehensive deployment script that deploys all contracts in the correct or
 
 5. **Create market** - `just create-market`
    - Creates a new market with configured assets
-   - **Required:** `PRIVATE_KEY`, `UNDERLYING_ASSET_0`, `UNDERLYING_ASSET_1`
+   - **Required:** `PRIVATE_KEY`, `UNDERLYING_ASSET_0`, `UNDERLYING_ASSET_1`, `VTS_CONFIG_FILE_PATH`
    - **Optional:** `CORE_POOL_FEE` (default: `0`), `TICK_SPACING` (default: `60`), `INITIAL_SQRT_PRICE_X96` (auto-calculated if not set), `REFERENCE_POOL_ID`, `ASSET0_PRICE`, `ASSET1_PRICE`, `PRICE_DECIMALS` (default: `6`)
-   - **Optional (VTS config):** `VTS_CONFIG_FILE_PATH` (can be configured in `.env`)
-     - If unset, the on-chain defaults are used (`VTSConfigs.getDefaultConfig()`).
-     - If set, it should point to a JSON or TOML file matching the VTS config struct shape:
-       - JSON keys: `.token0.gracePeriodTime` etc
-       - TOML keys: `token0.gracePeriodTime` etc
+   - **Required (VTS config):**
+     - `VTS_CONFIG_FILE_PATH` must point to a JSON or TOML file matching the full VTS config struct shape
+     - All VTS fields must be present in the file; market-creation scripts do not apply fallback defaults
+     - JSON keys: `.token0.gracePeriodTime`, `.token0.baseVTSRate`, `.token0.maxGracePeriodTime`, `.token0.unbackedCommitmentGraceBypassTime`, `.token0.unbackedCommitmentGraceBypassThreshold`, `.token1...`, `.coverageFeeShare`, `.minResidualUnits`, `.unbackedCommitmentGraceBypassBps`
+     - TOML keys: `token0.gracePeriodTime`, `token0.baseVTSRate`, `token0.maxGracePeriodTime`, `token0.unbackedCommitmentGraceBypassTime`, `token0.unbackedCommitmentGraceBypassThreshold`, `token1...`, `coverageFeeShare`, `minResidualUnits`, `unbackedCommitmentGraceBypassBps`
    - **Output:** Writes `CORE_POOL_ID` and `PROXY_POOL_ID` to `deployments/{NETWORK}_markets.json`. Use `just read-deployment` to retrieve these values.
 
 6. **Add liquidity** - `just add-liquidity`
@@ -211,7 +211,7 @@ The deployment follows a specific order to ensure proper contract relationships:
 
 ## Contract Relationships
 
-```
+```text
 MarketFactory
 ├── CoreHook (manages core pool operations)
 └── ProxyHook (manages proxy pool operations)
@@ -247,7 +247,7 @@ contract MyScript is ScriptHelper {
         address coreHook = readAddress("coreHook");
         address proxyHook = readAddress("proxyHook");
         address marketFactory = readAddress("marketFactory");
-        
+
         // Use the addresses...
     }
 }
@@ -265,7 +265,7 @@ The deployments JSON file contains:
 ```json
 {
   "coreHook": "0x...",
-  "proxyHook": "0x...", 
+  "proxyHook": "0x...",
   "marketFactory": "0x...",
   "deploymentDate": "1234567890",
   "deploymentNetwork": "sepolia",
@@ -332,4 +332,4 @@ forge script script/ReadDeployment.s.sol:ReadDeploymentScript --rpc-url <your_rp
 
 # Verify deployment
 forge script script/deploy/DeployContracts.s.sol:DeployContracts --sig "verifyDeployment()" --rpc-url <your_rpc_url>
-``` 
+```

@@ -896,7 +896,7 @@ library VTSPositionLib {
     /// @param commitId The token id (commit id)
     function _linkPositionToCommit(VTSStorage storage s, PositionId positionId, uint256 commitId) internal {
         // validate there is an existing commit for the token id
-        if (s.commits[commitId].expiresAt < block.timestamp) {
+        if (s.commits[commitId].expiresAt <= block.timestamp) {
             revert Errors.InvalidSignal(commitId);
         }
 
@@ -1052,6 +1052,10 @@ library VTSPositionLib {
         PositionId positionId,
         TouchPositionHookData memory hookData
     ) private returns (BalanceDelta requiredSettlementDelta) {
+        if (hookData.isMMOperation && hookData.isSeizing) {
+            revert Errors.InvariantViolated("Invalid operation: Seizures cannot issue LCCs");
+        }
+
         _registerPosition(s, owner, poolId, params);
 
         if (hookData.isMMOperation && hookData.commitId > 0) {

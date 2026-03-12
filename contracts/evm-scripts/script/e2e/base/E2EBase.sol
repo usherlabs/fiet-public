@@ -10,8 +10,7 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {Token} from "../../setup/MockERC20.s.sol";
 import {MarketFactory} from "src/MarketFactory.sol";
 import {GlobalConfig} from "src/GlobalConfig.sol";
-import {VTSConfigs} from "src/libraries/VTSConfigs.sol";
-import {MarketVTSConfiguration} from "src/types/VTS.sol";
+import {MarketVTSConfiguration, TokenConfiguration} from "src/types/VTS.sol";
 import {IResilientOracle} from "src/interfaces/IResilientOracle.sol";
 import {HookMiner} from "v4-periphery/src/utils/HookMiner.sol";
 import {HookFlags} from "src/libraries/HookFlags.sol";
@@ -126,7 +125,7 @@ abstract contract E2EBase is DeployFullStackBase {
                 abi.encodeWithSignature("registerTicker(string,address)", "USDT", m.underlying1)
             );
 
-        MarketVTSConfiguration memory cfg = VTSConfigs.getDefaultConfig();
+        MarketVTSConfiguration memory cfg = _defaultE2EVTSConfig();
         // IMPORTANT: ProxyHook is deployed via CREATE2 from `MarketVaultDeployer`.
         // BaseHook validates the deployed hook address encodes the expected hook flags, so we must mine a salt.
         address marketVaultDeployer = MarketFactory(m.stack.contracts.marketFactory).marketVaultDeployer();
@@ -165,6 +164,30 @@ abstract contract E2EBase is DeployFullStackBase {
         require(m.lcc0 != address(0) && m.lcc1 != address(0), "market: LCCs not created");
 
         vm.stopBroadcast();
+    }
+
+    function _defaultE2EVTSConfig() internal pure returns (MarketVTSConfiguration memory cfg) {
+        TokenConfiguration memory token0 = TokenConfiguration({
+            gracePeriodTime: 1800,
+            baseVTSRate: 1000,
+            maxGracePeriodTime: 3600,
+            unbackedCommitmentGraceBypassTime: 0,
+            unbackedCommitmentGraceBypassThreshold: 0
+        });
+        TokenConfiguration memory token1 = TokenConfiguration({
+            gracePeriodTime: 1800,
+            baseVTSRate: 1000,
+            maxGracePeriodTime: 36000,
+            unbackedCommitmentGraceBypassTime: 0,
+            unbackedCommitmentGraceBypassThreshold: 0
+        });
+        cfg = MarketVTSConfiguration({
+            token0: token0,
+            token1: token1,
+            coverageFeeShare: 5000,
+            minResidualUnits: 1,
+            unbackedCommitmentGraceBypassBps: 500
+        });
     }
 
     /// @dev Approve + wrap a single underlying into its LCC, minting the LCC to `to`.

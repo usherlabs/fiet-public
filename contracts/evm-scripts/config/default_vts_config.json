@@ -2,17 +2,18 @@
   "token0": {
     "gracePeriodTime": 1800,
     "maxGracePeriodTime": 3600,
-    "baseVTSRate": 1000
+    "baseVTSRate": 1000,
+    "unbackedCommitmentGraceBypassTime": 450,
+    "unbackedCommitmentGraceBypassThreshold": 0
   },
   "token1": {
     "gracePeriodTime": 1800,
     "maxGracePeriodTime": 36000,
-    "baseVTSRate": 1000
+    "baseVTSRate": 1000,
+    "unbackedCommitmentGraceBypassTime": 450,
+    "unbackedCommitmentGraceBypassThreshold": 0
   },
   "coverageFeeShare": 5000,
   "minResidualUnits": 1,
-  "unbackedCommitmentGraceBypassBps": 500,
-  "unbackedCommitmentGraceBypassThreshold0": 0,
-  "unbackedCommitmentGraceBypassThreshold1": 0
+  "unbackedCommitmentGraceBypassBps": 500
 }
-
