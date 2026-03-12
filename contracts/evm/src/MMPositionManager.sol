@@ -317,7 +317,7 @@ contract MMPositionManager is
     ) internal {
         MMHelpers.assertApprovedOrOwner(msgSender(), tokenId);
         vtsOrchestrator.extendGracePeriod(
-            poolKey, tokenId, positionIndex, settlementTokenIndex, verifierIndex, settlementProof
+            marketFactory, poolKey, tokenId, positionIndex, settlementTokenIndex, verifierIndex, settlementProof
         );
     }
 

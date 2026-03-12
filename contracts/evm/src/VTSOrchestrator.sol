@@ -690,6 +690,7 @@ contract VTSOrchestrator is
     /// @param verifierIndex The verifier index
     /// @param settlementProof The settlement proof
     function extendGracePeriod(
+        IMarketFactory factory,
         PoolKey memory poolKey,
         uint256 commitId,
         uint256 positionIndex,
@@ -701,6 +702,16 @@ contract VTSOrchestrator is
         // Validate position exists
         PositionId positionId = getPositionId(commitId, positionIndex);
         _assertPositionValid(positionId, true, poolKey.toId());
+
+        // Validate factory is registered and caller is authorized
+        if (!liquidityHub.isFactory(address(factory))) revert Errors.InvalidSender();
+        address caller = _msgSender();
+        bool isBound = MarketHandlerLib.isBounds(factory, caller);
+        if (!isBound) {
+            // Direct calls must be from the position owner
+            // This prevents bypassing MMPositionManager's owner/approval checks
+            revert Errors.InvalidSender();
+        }
 
         // Use the RFSCheckpoint module to extend the grace period
         CheckpointLibrary.extendGracePeriod(

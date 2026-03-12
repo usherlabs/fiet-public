@@ -145,6 +145,7 @@ contract ReentrantSignalManager {
             return target.call(
                 abi.encodeWithSelector(
                     VTSOrchestrator.extendGracePeriod.selector,
+                    marketFactory,
                     poolKey,
                     commitId,
                     positionIndex,

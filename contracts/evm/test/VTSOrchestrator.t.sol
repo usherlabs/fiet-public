@@ -229,7 +229,7 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
         bytes memory settlementProof = abi.encode(1);
 
         vm.expectRevert(Errors.PoolManagerMustBeUnlocked.selector);
-        vtsOrchestrator.extendGracePeriod(corePoolKey, tokenId, 0, 0, 0, settlementProof);
+        vtsOrchestrator.extendGracePeriod(IMarketFactory(marketFactory), corePoolKey, tokenId, 0, 0, 0, settlementProof);
     }
 
     function test_extendGracePeriod_revertsWhenPoolKeyDoesNotMatchPositionPool() public {
@@ -257,7 +257,7 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
         unlockCaller.run(
             address(vtsOrchestrator),
             abi.encodeWithSelector(
-                VTSOrchestrator.extendGracePeriod.selector, poolKeyA, tokenId, 0, 0, 0, settlementProof
+                VTSOrchestrator.extendGracePeriod.selector, marketFactory, poolKeyA, tokenId, 0, 0, 0, settlementProof
             )
         );
     }
@@ -819,7 +819,9 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
         vm.expectRevert(abi.encodeWithSelector(Errors.InvalidSignal.selector, uint256(0)));
         unlockCaller.run(
             address(vtsOrchestrator),
-            abi.encodeWithSelector(VTSOrchestrator.extendGracePeriod.selector, corePoolKey, 0, 0, 0, 0, settlementProof)
+            abi.encodeWithSelector(
+                VTSOrchestrator.extendGracePeriod.selector, marketFactory, corePoolKey, 0, 0, 0, 0, settlementProof
+            )
         );
     }
 
@@ -839,7 +841,14 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
         unlockCaller.run(
             address(vtsOrchestrator),
             abi.encodeWithSelector(
-                VTSOrchestrator.extendGracePeriod.selector, corePoolKey, tokenId, badIndex, 0, 0, settlementProof
+                VTSOrchestrator.extendGracePeriod.selector,
+                marketFactory,
+                corePoolKey,
+                tokenId,
+                badIndex,
+                0,
+                0,
+                settlementProof
             )
         );
     }
@@ -864,7 +873,14 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
         unlockCaller.run(
             address(vtsOrchestrator),
             abi.encodeWithSelector(
-                VTSOrchestrator.extendGracePeriod.selector, corePoolKey, tokenId, 0, 0, 0, settlementProof
+                VTSOrchestrator.extendGracePeriod.selector,
+                marketFactory,
+                corePoolKey,
+                tokenId,
+                0,
+                0,
+                0,
+                settlementProof
             )
         );
 
