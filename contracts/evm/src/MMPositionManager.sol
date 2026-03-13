@@ -94,7 +94,6 @@ contract MMPositionManager is
         }
         commitmentDescriptor = _descriptor;
         queueCustodian = IMMQueueCustodian(_queueCustodianAddr);
-        queueCustodian.setPositionManager(address(this));
     }
 
     // ═══════════════════════════════════════════════════════════════════════════

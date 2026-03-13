@@ -3,7 +3,6 @@ pragma solidity ^0.8.26;
 
 import {TransientSlots} from "./TransientSlots.sol";
 import {TransientSlot} from "openzeppelin-contracts/contracts/utils/TransientSlot.sol";
-import {IExttload} from "v4-periphery/lib/v4-core/src/interfaces/IExttload.sol";
 
 /**
  * @title CoreActionFlag
@@ -29,7 +28,19 @@ library CoreActionFlag {
 
     /// @notice Returns true when source context is proxy-routed and direct core actions should be skipped.
     function isNoCoreAction(address sourceAddress) internal view returns (bool) {
-        return IExttload(sourceAddress).exttload(TransientSlots.CORE_ACTION_FLAG_SLOT) != bytes32(0);
+        // Unsupported addresses (zero, EOAs, or non-implementing contracts) should not hard-revert this guard.
+        if (sourceAddress.code.length == 0) {
+            return false;
+        }
+
+        bytes4 exttloadSelector = bytes4(keccak256("exttload(bytes32)"));
+        (bool success, bytes memory data) =
+            sourceAddress.staticcall(abi.encodeWithSelector(exttloadSelector, TransientSlots.CORE_ACTION_FLAG_SLOT));
+        if (!success || data.length < 32) {
+            return false;
+        }
+
+        return abi.decode(data, (bytes32)) != bytes32(0);
     }
 
     /// @notice Returns true when current context is a direct core action.

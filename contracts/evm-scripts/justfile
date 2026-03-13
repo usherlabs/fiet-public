@@ -650,7 +650,7 @@ read-deployment:
 
 # === E2E ===
 # Note: Make sure fork is running
-e2e: e2e-deploy e2e-normal-lp e2e-swap e2e-market-maker e2e-mm-coverage
+e2e: e2e-deploy e2e-normal-lp e2e-market-maker e2e-mm-coverage
 
 # E2E: Deploy full stack only (standalone) and print MarketFactory.
 e2e-deploy:
@@ -658,7 +658,7 @@ e2e-deploy:
         --rpc-url {{ rpc_url }} \
         {{ broadcast_flag }} -vvv
 
-# E2E: Normal LP flow (LiquidityProvision scenario).
+# E2E: Normal LP stateful flow (add -> swap -> remove -> unwrap).
 e2e-normal-lp:
     FOUNDRY_PROFILE={{ foundry_profile }} forge script {{ script_dir }}/e2e/LiquidityProvision.s.sol:LiquidityProvisionE2E \
         --rpc-url {{ rpc_url }} \

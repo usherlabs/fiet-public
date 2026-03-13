@@ -8,13 +8,16 @@ import {MarketVault} from "./MarketVault.sol";
 import {IVaultCoreActionHandler} from "../interfaces/IVaultCoreActionHandler.sol";
 import {Errors} from "../libraries/Errors.sol";
 import {CoreActionFlag} from "../libraries/CoreActionFlag.sol";
+import {Exttload} from "v4-periphery/lib/v4-core/src/Exttload.sol";
 
 /**
  * @title VaultCoreActionHandler
  * @notice Ingress/direct-core reaction layer for canonical market vaults.
  * @dev This module sits between factory coordination and generic vault primitives (`MarketVault`).
+ *      It also centralises transient direct-core flag toggling plus `exttload` exposure,
+ *      so derived hooks inherit one isolated surface for cross-contract action provenance checks.
  */
-abstract contract VaultCoreActionHandler is MarketVault, IVaultCoreActionHandler {
+abstract contract VaultCoreActionHandler is MarketVault, IVaultCoreActionHandler, Exttload {
     constructor(address _marketFactory) MarketVault(_marketFactory) {}
 
     /// @dev Derived vaults provide the bound core hook address for direct-action gating.
@@ -25,6 +28,16 @@ abstract contract VaultCoreActionHandler is MarketVault, IVaultCoreActionHandler
             revert Errors.InvalidSender();
         }
         _;
+    }
+
+    /**
+     * @notice Modifier to mark proxy-routed execution as "no direct core action".
+     * @dev Sets the transient guard at the start and clears it at the end of the function.
+     */
+    modifier noCoreAction() {
+        CoreActionFlag.setNoCoreAction();
+        _;
+        CoreActionFlag.clearNoCoreAction();
     }
 
     /// @dev Derived vaults provide the bound core pool key for lane resolution.

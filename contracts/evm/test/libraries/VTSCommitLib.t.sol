@@ -128,7 +128,7 @@ contract MockSignalManager is IVRLSignalManager {
         return (true, _expirySeconds);
     }
 
-    function verifyLiquiditySignalRelayed(address, bytes memory, uint256, uint256, bytes memory, bool)
+    function verifyLiquiditySignalRelayed(address, uint256, bytes memory, uint256, uint256, bytes memory, bool)
         external
         view
         returns (bool, uint256)

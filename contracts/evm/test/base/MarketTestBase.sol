@@ -216,7 +216,7 @@ abstract contract MarketTestBase is Test, Deployers, DeployPermit2 {
         // Deploy MMPositionActionsImpl first
         MMPositionActionsImpl actionsImpl =
             new MMPositionActionsImpl(address(manager), address(marketFactory), address(vtsOrchestrator));
-        queueCustodian = address(new MMQueueCustodian());
+        queueCustodian = address(new MMQueueCustodian(address(this)));
 
         // Deploy MMPositionManager
         mmPositionManager = address(
@@ -231,6 +231,7 @@ abstract contract MarketTestBase is Test, Deployers, DeployPermit2 {
                 queueCustodian
             )
         );
+        MMQueueCustodian(queueCustodian).setPositionManager(mmPositionManager);
 
         // Deploy DirectLP delta resolver subscriber (will be protocol-bound after MarketFactory deployment).
         directLPDeltaResolver =

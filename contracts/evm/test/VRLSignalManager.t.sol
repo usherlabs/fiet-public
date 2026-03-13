@@ -37,8 +37,9 @@ contract VRLSignalManagerTest is MarketMakerTestBase {
     VRLSignalManager signalManager;
     bytes32 internal constant EIP712_DOMAIN_TYPEHASH =
         keccak256("EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)");
-    bytes32 internal constant SUBMIT_AUTH_TYPEHASH =
-        keccak256("SubmitAuth(address sender,bytes32 liquiditySignalHash,uint256 deadline,uint256 nonce)");
+    bytes32 internal constant RELAY_AUTH_TYPEHASH = keccak256(
+        "RelayAuth(address sender,uint256 commitId,bytes32 liquiditySignalHash,uint256 deadline,uint256 nonce)"
+    );
 
     function setUp() public {
         // Create and fill in the test state
@@ -202,10 +203,11 @@ contract VRLSignalManagerTest is MarketMakerTestBase {
         address sender = liquiditySignal.mmState.owner;
         uint256 deadline = block.timestamp + 1 hours;
         uint256 authNonce = signalManager.submitAuthNonce(sender);
-        bytes memory authSig = _signSubmitAuth(_ownerPrivateKey(), sender, liquiditySignalBytes, deadline, authNonce);
+        bytes memory authSig = _signRelayAuth(_ownerPrivateKey(), sender, 0, liquiditySignalBytes, deadline, authNonce);
 
-        (bool ok, uint256 expiry) =
-            signalManager.verifyLiquiditySignalRelayed(sender, liquiditySignalBytes, deadline, authNonce, authSig, true);
+        (bool ok, uint256 expiry) = signalManager.verifyLiquiditySignalRelayed(
+            sender, 0, liquiditySignalBytes, deadline, authNonce, authSig, true
+        );
 
         assertTrue(ok);
         assertEq(expiry, signalManager.signalExpiryInSeconds());
@@ -228,13 +230,48 @@ contract VRLSignalManagerTest is MarketMakerTestBase {
         address sender = advancer;
         uint256 deadline = block.timestamp + 1 hours;
         uint256 authNonce = signalManager.submitAuthNonce(sender);
-        bytes memory authSig = _signSubmitAuth(advancerPrivateKey, sender, liquiditySignalBytes, deadline, authNonce);
+        bytes memory authSig = _signRelayAuth(advancerPrivateKey, sender, 0, liquiditySignalBytes, deadline, authNonce);
 
-        (bool ok,) =
-            signalManager.verifyLiquiditySignalRelayed(sender, liquiditySignalBytes, deadline, authNonce, authSig, true);
+        (bool ok,) = signalManager.verifyLiquiditySignalRelayed(
+            sender, 0, liquiditySignalBytes, deadline, authNonce, authSig, true
+        );
 
         assertTrue(ok);
         assertEq(signalManager.submitAuthNonce(sender), authNonce + 1);
+    }
+
+    function test_verifyLiquiditySignalRenewRelayed_ownerSigner_success() public {
+        bytes memory liquiditySignalBytes = abi.encode(liquiditySignal);
+        address sender = liquiditySignal.mmState.owner;
+        uint256 commitId = 42;
+        uint256 deadline = block.timestamp + 1 hours;
+        uint256 authNonce = signalManager.submitAuthNonce(sender);
+        bytes memory authSig =
+            _signRelayAuth(_ownerPrivateKey(), sender, commitId, liquiditySignalBytes, deadline, authNonce);
+
+        (bool ok, uint256 expiry) = signalManager.verifyLiquiditySignalRelayed(
+            sender, commitId, liquiditySignalBytes, deadline, authNonce, authSig, true
+        );
+
+        assertTrue(ok);
+        assertEq(expiry, signalManager.signalExpiryInSeconds());
+        assertEq(signalManager.submitAuthNonce(sender), authNonce + 1);
+    }
+
+    function test_verifyLiquiditySignalRenewRelayed_revertsForWrongCommitId() public {
+        bytes memory liquiditySignalBytes = abi.encode(liquiditySignal);
+        address sender = liquiditySignal.mmState.owner;
+        uint256 signedCommitId = 42;
+        uint256 suppliedCommitId = 43;
+        uint256 deadline = block.timestamp + 1 hours;
+        uint256 authNonce = signalManager.submitAuthNonce(sender);
+        bytes memory authSig =
+            _signRelayAuth(_ownerPrivateKey(), sender, signedCommitId, liquiditySignalBytes, deadline, authNonce);
+
+        vm.expectRevert(Errors.InvalidSender.selector);
+        signalManager.verifyLiquiditySignalRelayed(
+            sender, suppliedCommitId, liquiditySignalBytes, deadline, authNonce, authSig, true
+        );
     }
 
     function test_verifyLiquiditySignalRelayed_revertsForNonSubmitterCaller() public {
@@ -242,12 +279,12 @@ contract VRLSignalManagerTest is MarketMakerTestBase {
         address sender = liquiditySignal.mmState.owner;
         uint256 deadline = block.timestamp + 1 hours;
         uint256 authNonce = signalManager.submitAuthNonce(sender);
-        bytes memory authSig = _signSubmitAuth(_ownerPrivateKey(), sender, liquiditySignalBytes, deadline, authNonce);
+        bytes memory authSig = _signRelayAuth(_ownerPrivateKey(), sender, 0, liquiditySignalBytes, deadline, authNonce);
         address nonSubmitter = makeAddr("nonSubmitter");
 
         vm.prank(nonSubmitter);
         vm.expectRevert(Errors.InvalidSender.selector);
-        signalManager.verifyLiquiditySignalRelayed(sender, liquiditySignalBytes, deadline, authNonce, authSig, true);
+        signalManager.verifyLiquiditySignalRelayed(sender, 0, liquiditySignalBytes, deadline, authNonce, authSig, true);
     }
 
     function test_verifyLiquiditySignalRelayed_revertsForWrongSignalBytes() public {
@@ -258,10 +295,10 @@ contract VRLSignalManagerTest is MarketMakerTestBase {
         address sender = liquiditySignal.mmState.owner;
         uint256 deadline = block.timestamp + 1 hours;
         uint256 authNonce = signalManager.submitAuthNonce(sender);
-        bytes memory authSig = _signSubmitAuth(_ownerPrivateKey(), sender, liquiditySignalBytes, deadline, authNonce);
+        bytes memory authSig = _signRelayAuth(_ownerPrivateKey(), sender, 0, liquiditySignalBytes, deadline, authNonce);
 
         vm.expectRevert(Errors.InvalidSender.selector);
-        signalManager.verifyLiquiditySignalRelayed(sender, tamperedBytes, deadline, authNonce, authSig, true);
+        signalManager.verifyLiquiditySignalRelayed(sender, 0, tamperedBytes, deadline, authNonce, authSig, true);
     }
 
     function test_verifyLiquiditySignalRelayed_revertsForExpiredDeadline() public {
@@ -269,10 +306,10 @@ contract VRLSignalManagerTest is MarketMakerTestBase {
         address sender = liquiditySignal.mmState.owner;
         uint256 deadline = block.timestamp - 1;
         uint256 authNonce = signalManager.submitAuthNonce(sender);
-        bytes memory authSig = _signSubmitAuth(_ownerPrivateKey(), sender, liquiditySignalBytes, deadline, authNonce);
+        bytes memory authSig = _signRelayAuth(_ownerPrivateKey(), sender, 0, liquiditySignalBytes, deadline, authNonce);
 
         vm.expectRevert(abi.encodeWithSelector(Errors.DeadlinePassed.selector, deadline));
-        signalManager.verifyLiquiditySignalRelayed(sender, liquiditySignalBytes, deadline, authNonce, authSig, true);
+        signalManager.verifyLiquiditySignalRelayed(sender, 0, liquiditySignalBytes, deadline, authNonce, authSig, true);
     }
 
     function test_verifyLiquiditySignalRelayed_revertsForReplayNonce() public {
@@ -280,14 +317,15 @@ contract VRLSignalManagerTest is MarketMakerTestBase {
         address sender = liquiditySignal.mmState.owner;
         uint256 deadline = block.timestamp + 1 hours;
         uint256 authNonce = signalManager.submitAuthNonce(sender);
-        bytes memory authSig = _signSubmitAuth(_ownerPrivateKey(), sender, liquiditySignalBytes, deadline, authNonce);
+        bytes memory authSig = _signRelayAuth(_ownerPrivateKey(), sender, 0, liquiditySignalBytes, deadline, authNonce);
 
-        (bool ok,) =
-            signalManager.verifyLiquiditySignalRelayed(sender, liquiditySignalBytes, deadline, authNonce, authSig, true);
+        (bool ok,) = signalManager.verifyLiquiditySignalRelayed(
+            sender, 0, liquiditySignalBytes, deadline, authNonce, authSig, true
+        );
         assertTrue(ok);
 
         vm.expectRevert(abi.encodeWithSelector(Errors.InvalidNonce.selector, authNonce, authNonce + 1));
-        signalManager.verifyLiquiditySignalRelayed(sender, liquiditySignalBytes, deadline, authNonce, authSig, true);
+        signalManager.verifyLiquiditySignalRelayed(sender, 0, liquiditySignalBytes, deadline, authNonce, authSig, true);
     }
 
     function test_verifyLiquiditySignalRelayed_revertsWhenSenderNotOwnerOrAdvancer() public {
@@ -296,21 +334,23 @@ contract VRLSignalManagerTest is MarketMakerTestBase {
         address sender = vm.addr(attackerPrivateKey);
         uint256 deadline = block.timestamp + 1 hours;
         uint256 authNonce = signalManager.submitAuthNonce(sender);
-        bytes memory authSig = _signSubmitAuth(attackerPrivateKey, sender, liquiditySignalBytes, deadline, authNonce);
+        bytes memory authSig = _signRelayAuth(attackerPrivateKey, sender, 0, liquiditySignalBytes, deadline, authNonce);
 
         vm.expectRevert(Errors.InvalidSender.selector);
-        signalManager.verifyLiquiditySignalRelayed(sender, liquiditySignalBytes, deadline, authNonce, authSig, true);
+        signalManager.verifyLiquiditySignalRelayed(sender, 0, liquiditySignalBytes, deadline, authNonce, authSig, true);
     }
 
     function _ownerPrivateKey() internal pure returns (uint256) {
         return uint256(keccak256(abi.encodePacked(uint256(0))));
     }
 
-    function _submitAuthDigest(address sender, bytes memory liquiditySignalBytes, uint256 deadline, uint256 authNonce)
-        internal
-        view
-        returns (bytes32 digest)
-    {
+    function _relayAuthDigest(
+        address sender,
+        uint256 commitId,
+        bytes memory liquiditySignalBytes,
+        uint256 deadline,
+        uint256 authNonce
+    ) internal view returns (bytes32 digest) {
         bytes32 domainSeparator = keccak256(
             abi.encode(
                 EIP712_DOMAIN_TYPEHASH,
@@ -320,19 +360,21 @@ contract VRLSignalManagerTest is MarketMakerTestBase {
                 address(signalManager)
             )
         );
-        bytes32 structHash =
-            keccak256(abi.encode(SUBMIT_AUTH_TYPEHASH, sender, keccak256(liquiditySignalBytes), deadline, authNonce));
+        bytes32 structHash = keccak256(
+            abi.encode(RELAY_AUTH_TYPEHASH, sender, commitId, keccak256(liquiditySignalBytes), deadline, authNonce)
+        );
         digest = keccak256(abi.encodePacked("\x19\x01", domainSeparator, structHash));
     }
 
-    function _signSubmitAuth(
+    function _signRelayAuth(
         uint256 signerPrivateKey,
         address sender,
+        uint256 commitId,
         bytes memory liquiditySignalBytes,
         uint256 deadline,
         uint256 authNonce
     ) internal view returns (bytes memory signature) {
-        bytes32 digest = _submitAuthDigest(sender, liquiditySignalBytes, deadline, authNonce);
+        bytes32 digest = _relayAuthDigest(sender, commitId, liquiditySignalBytes, deadline, authNonce);
         (uint8 v, bytes32 r, bytes32 s) = vm.sign(signerPrivateKey, digest);
         signature = abi.encodePacked(r, s, v);
     }

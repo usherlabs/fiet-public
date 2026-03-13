@@ -177,7 +177,9 @@ contract DeployContracts is CREATE3Script, NetworkConfig {
         // Step 7: Deploy MMPositionManager (must be before MarketFactory for bounds)
         console.log("\n=== Step 7: Deploying MMPositionManager ===");
         mmPositionManager = _deployMMPositionManager();
+        MMQueueCustodian(queueCustodian).setPositionManager(mmPositionManager);
         console.log("MMPositionManager deployed at:", mmPositionManager);
+        console.log("MMQueueCustodian positionManager bound to:", mmPositionManager);
 
         // Step 8: Deploy DirectLPDeltaResolver (must be protocol-bound for afterModifyLiquidity)
         console.log("\n=== Step 8: Deploying DirectLPDeltaResolver ===");
@@ -417,9 +419,13 @@ contract DeployContracts is CREATE3Script, NetworkConfig {
         actionsImpl = _deployCreate3(ACTIONS_IMPL, actionsImplCreationCode);
         console.log("MMPositionActionsImpl deployed at:", actionsImpl);
 
-        bytes memory queueCustodianCreationCode = type(MMQueueCustodian).creationCode;
+        address deployer = _getDeployer();
+        bytes memory queueCustodianConstructorArgs = abi.encode(deployer);
+        bytes memory queueCustodianCreationCode =
+            abi.encodePacked(type(MMQueueCustodian).creationCode, queueCustodianConstructorArgs);
         queueCustodian = _deployCreate3(QUEUE_CUSTODIAN, queueCustodianCreationCode);
         console.log("MMQueueCustodian deployed at:", queueCustodian);
+        console.log("MMQueueCustodian authorised binder:", deployer);
 
         // Deploy MMPositionManager (requires poolManager, liquidityHub, vtsOrchestrator, descriptor, weth9, permit2, actionsImpl)
         bytes memory positionManagerConstructorArgs = abi.encode(

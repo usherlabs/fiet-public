@@ -8,7 +8,7 @@ interface IMMQueueCustodian {
     function positionManager() external view returns (address);
 
     /// @notice Binds the position manager once
-    /// @dev Must be called by the position manager itself
+    /// @dev Must be called by the pre-authorised binder
     function setPositionManager(address _positionManager) external;
 
     /// @notice Records queued LCC that has already been transferred into custody

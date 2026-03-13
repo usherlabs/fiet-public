@@ -221,7 +221,7 @@ library VTSCommitLib {
         }
 
         (, uint256 expirySeconds) =
-            signalManager.verifyLiquiditySignalRelayed(sender, liquiditySignal, deadline, authNonce, authSig, true);
+            signalManager.verifyLiquiditySignalRelayed(sender, 0, liquiditySignal, deadline, authNonce, authSig, true);
         commitId = _commitSignalInternal(s, liquiditySignal, expirySeconds);
     }
 
@@ -257,8 +257,9 @@ library VTSCommitLib {
             revert Errors.InvalidLiquiditySignal(0, 0, 0);
         }
 
-        (, uint256 expirySeconds) =
-            signalManager.verifyLiquiditySignalRelayed(sender, liquiditySignal, deadline, authNonce, authSig, true);
+        (, uint256 expirySeconds) = signalManager.verifyLiquiditySignalRelayed(
+            sender, commitId, liquiditySignal, deadline, authNonce, authSig, true
+        );
         _renewSignalInternal(s, sender, commitId, liquiditySignal, expirySeconds);
     }
 

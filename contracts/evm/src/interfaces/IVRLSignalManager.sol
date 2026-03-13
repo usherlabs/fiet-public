@@ -27,9 +27,10 @@ interface IVRLSignalManager {
         external
         returns (bool, uint256);
 
-    // sender-bound bytes overload with EIP-712 relayer authorisation (reverting version)
+    // sender + commit-bound bytes overload with EIP-712 relayer authorisation (reverting version)
     function verifyLiquiditySignalRelayed(
         address sender,
+        uint256 commitId,
         bytes memory liquiditySignal,
         uint256 deadline,
         uint256 authNonce,

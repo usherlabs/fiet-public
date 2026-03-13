@@ -680,7 +680,7 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
             weth9,
             permit2,
             positionManager.actionsImpl(),
-            address(new MMQueueCustodian())
+            address(new MMQueueCustodian(address(this)))
         );
         vm.expectRevert(Errors.CommitmentDescriptorNotSet.selector);
         broken.tokenURI(1);
@@ -697,7 +697,7 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
             weth9,
             permit2,
             positionManager.actionsImpl(),
-            address(new MMQueueCustodian())
+            address(new MMQueueCustodian(address(this)))
         );
 
         assertEq(fresh.commitmentDescriptor(), address(desc), "constructor should set commitmentDescriptor");
@@ -714,7 +714,7 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
             weth9,
             permit2,
             positionManager.actionsImpl(),
-            address(new MMQueueCustodian())
+            address(new MMQueueCustodian(address(this)))
         );
 
         assertEq(fresh.tokenURI(123), "ipfs://mock/123", "tokenURI should delegate to descriptor when set");

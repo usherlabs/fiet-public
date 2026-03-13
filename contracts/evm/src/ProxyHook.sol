@@ -15,14 +15,12 @@ import {ILCC} from "./interfaces/ILCC.sol";
 import {SafeCast} from "@uniswap/v4-core/src/libraries/SafeCast.sol";
 import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
 import {VaultCoreActionHandler} from "./modules/VaultCoreActionHandler.sol";
-import {CoreActionFlag} from "./libraries/CoreActionFlag.sol";
 import {LiquidityUtils} from "../src/libraries/LiquidityUtils.sol";
-import {Exttload} from "v4-periphery/lib/v4-core/src/Exttload.sol";
 import {IMsgSender} from "v4-periphery/src/interfaces/IMsgSender.sol";
 import {Errors} from "./libraries/Errors.sol";
 import {MarketHandlerLib} from "./libraries/MarketHandlerLib.sol";
 
-contract ProxyHook is BaseHook, VaultCoreActionHandler, Exttload {
+contract ProxyHook is BaseHook, VaultCoreActionHandler {
     using CurrencySettler for Currency;
     address internal constant RECIPIENT_LOCKER = address(1);
     address internal constant RECIPIENT_ROUTER = address(2);
@@ -42,16 +40,6 @@ contract ProxyHook is BaseHook, VaultCoreActionHandler, Exttload {
     PoolKey public corePoolKey;
 
     PoolKey public proxyPoolKey;
-
-    /**
-     * @notice Modifier to mark proxy-routed execution as "no direct core action".
-     * @dev Sets the transient guard at the start and clears it at the end of the function.
-     */
-    modifier noCoreAction() {
-        CoreActionFlag.setNoCoreAction();
-        _;
-        CoreActionFlag.clearNoCoreAction();
-    }
 
     constructor(address _poolManager, address _marketFactory)
         BaseHook(IPoolManager(_poolManager))

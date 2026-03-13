@@ -50,7 +50,7 @@ contract HookTest is Test, Deployers {
         // Deploy MMPositionActionsImpl first
         MMPositionActionsImpl actionsImpl =
             new MMPositionActionsImpl(address(poolManager), address(factory), address(vtsOrchestrator));
-        MMQueueCustodian queueCustodian = new MMQueueCustodian();
+        MMQueueCustodian queueCustodian = new MMQueueCustodian(address(this));
 
         mmPositionManager = new MMPositionManager(
             address(poolManager),
@@ -62,6 +62,7 @@ contract HookTest is Test, Deployers {
             address(actionsImpl),
             address(queueCustodian)
         );
+        queueCustodian.setPositionManager(address(mmPositionManager));
 
         // Compute flags for CoreHook
         uint160 coreFlags = HookFlags.CORE_HOOK_FLAGS;

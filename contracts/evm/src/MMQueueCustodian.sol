@@ -11,6 +11,8 @@ import {Errors} from "./libraries/Errors.sol";
 contract MMQueueCustodian is IMMQueueCustodian {
     using CurrencyTransfer for Currency;
 
+    /// @notice One-time authoriser allowed to bind the position manager.
+    address public authorisedBinder;
     address public override positionManager;
 
     // tokenId => lcc => queued custody balance
@@ -22,12 +24,19 @@ contract MMQueueCustodian is IMMQueueCustodian {
         _;
     }
 
+    constructor(address _authorisedBinder) {
+        if (_authorisedBinder == address(0)) revert Errors.InvalidAddress(_authorisedBinder);
+        authorisedBinder = _authorisedBinder;
+    }
+
     function setPositionManager(address _positionManager) external override {
-        if (_positionManager == address(0)) revert Errors.InvalidAddress(_positionManager);
+        if (msg.sender != authorisedBinder) revert Errors.InvalidSender();
         if (positionManager != address(0)) revert Errors.InvalidSender();
-        // Only the target position manager may self-bind this custodian.
-        if (msg.sender != _positionManager) revert Errors.InvalidSender();
+        if (_positionManager == address(0) || _positionManager.code.length == 0) {
+            revert Errors.InvalidAddress(_positionManager);
+        }
         positionManager = _positionManager;
+        authorisedBinder = address(0);
     }
 
     function record(uint256 tokenId, address lcc, uint256 amount) external override onlyPositionManager {

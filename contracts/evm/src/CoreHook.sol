@@ -11,7 +11,6 @@ import {ModifyLiquidityParams} from "@uniswap/v4-core/src/types/PoolOperation.so
 import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
 import {CurrencySettler} from "@uniswap/v4-core/test/utils/CurrencySettler.sol";
 import {SwapParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
-import {Exttload} from "v4-periphery/lib/v4-core/src/Exttload.sol";
 import {TransientSlots} from "./libraries/TransientSlots.sol";
 import {TransientSlot} from "openzeppelin-contracts/contracts/utils/TransientSlot.sol";
 import {PositionLibrary} from "./types/Position.sol";
@@ -31,7 +30,7 @@ import {IVaultCoreActionHandler} from "./interfaces/IVaultCoreActionHandler.sol"
  * This way it can calculate and manage Liquidity Commitments (C_A(r)) for each Position.
  * Furthermore, we need to know when Direct LP occurs, as this determines whether the underlying native tokens are settled to the Pool Manager.
  */
-contract CoreHook is BaseHook, Exttload, ImmutableMarketState, ImmutableVTSState, ICoreHook {
+contract CoreHook is BaseHook, ImmutableMarketState, ImmutableVTSState, ICoreHook {
     using TransientSlot for *;
     using CurrencySettler for Currency;
     using SafeCast for int256;

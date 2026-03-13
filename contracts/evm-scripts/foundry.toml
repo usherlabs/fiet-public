@@ -59,6 +59,14 @@ remappings = [
 #
 # For deploy flows, use `FOUNDRY_PROFILE=deploy` (see `[profile.deploy]` below).
 
+[profile.debug]
+# Mirror `contracts/evm/foundry.toml` defaults for local debug builds.
+via_ir = false
+optimizer = false
+optimizer_runs = 0
+ffi = false
+libraries = []
+
 [profile.deploy]
 # Libraries from main project (deterministic CREATE3 addresses)
 libraries = [

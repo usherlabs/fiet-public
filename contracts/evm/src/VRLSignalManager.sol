@@ -41,8 +41,9 @@ contract VRLSignalManager is Ownable, EIP712, IVRLSignalManager {
     mapping(address => uint256) public submitAuthNonce;
     uint256 public signalExpiryInSeconds;
     address public immutable submitter;
-    bytes32 internal constant SUBMIT_AUTH_TYPEHASH =
-        keccak256("SubmitAuth(address sender,bytes32 liquiditySignalHash,uint256 deadline,uint256 nonce)");
+    bytes32 internal constant RELAY_AUTH_TYPEHASH = keccak256(
+        "RelayAuth(address sender,uint256 commitId,bytes32 liquiditySignalHash,uint256 deadline,uint256 nonce)"
+    );
 
     constructor(address _verifier, uint256 _signalExpiryInSeconds, address _submitter, address _initialOwner)
         Ownable(_initialOwner)
@@ -142,6 +143,7 @@ contract VRLSignalManager is Ownable, EIP712, IVRLSignalManager {
 
     function verifyLiquiditySignalRelayed(
         address sender,
+        uint256 commitId,
         bytes memory liquiditySignal,
         uint256 deadline,
         uint256 authNonce,
@@ -157,7 +159,7 @@ contract VRLSignalManager is Ownable, EIP712, IVRLSignalManager {
         _assertSenderAuthorised(signal, sender);
 
         bytes32 structHash = EfficientHashLib.hash(
-            abi.encode(SUBMIT_AUTH_TYPEHASH, sender, keccak256(liquiditySignal), deadline, authNonce)
+            abi.encode(RELAY_AUTH_TYPEHASH, sender, commitId, keccak256(liquiditySignal), deadline, authNonce)
         );
 
         if (_hashTypedDataV4(structHash).recover(authSig) != sender) {

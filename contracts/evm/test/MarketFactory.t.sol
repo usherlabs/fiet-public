@@ -109,7 +109,7 @@ contract MarketFactoryTest is Test, Deployers {
         vm.prank(owner);
         MMPositionActionsImpl actionsImpl =
             new MMPositionActionsImpl(address(poolManager), tempFactoryAddr, address(vtsOrchestrator));
-        MMQueueCustodian queueCustodian = new MMQueueCustodian();
+        MMQueueCustodian queueCustodian = new MMQueueCustodian(address(this));
 
         vm.prank(owner);
         positionManager = new MMPositionManager(
@@ -122,6 +122,7 @@ contract MarketFactoryTest is Test, Deployers {
             address(actionsImpl),
             address(queueCustodian)
         );
+        queueCustodian.setPositionManager(address(positionManager));
 
         // Deploy MarketFactory with all required arguments
         vm.prank(owner);

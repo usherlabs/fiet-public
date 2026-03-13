@@ -40,6 +40,9 @@ contract LiquidityCommitmentCertificate is ERC20, ILCC {
         address _hub,
         address _factory
     ) ERC20(name, symbol) {
+        if (_hub == address(0)) revert Errors.InvalidAddress(_hub);
+        if (_factory == address(0)) revert Errors.InvalidAddress(_factory);
+
         _decimals = __decimals;
         underlyingAsset = _underlyingAsset;
         resilientOracleAddress = _resilientOracleAddress;

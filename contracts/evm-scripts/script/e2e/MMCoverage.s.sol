@@ -39,7 +39,7 @@ import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
 import {PositionId} from "src/types/Position.sol";
 import {IVTSOrchestrator} from "src/interfaces/IVTSOrchestrator.sol";
 import {MMPositionManager} from "src/MMPositionManager.sol";
-import {MMActionAdapter} from "evm-test/utils/MMActionAdapter.sol";
+import {MMActions} from "src/libraries/MMActions.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {Token} from "../setup/MockERC20.s.sol";
 import {MarketVTSConfiguration} from "src/types/VTS.sol";
@@ -117,9 +117,10 @@ contract MMCoverageE2E is MME2EBase {
             IERC20(m.underlying1).approve(address(mmpm), fund1);
         }
 
-        MMActionAdapter.PreparedAction[] memory acts = new MMActionAdapter.PreparedAction[](1);
-        acts[0] = MMActionAdapter.prepareSettle(key, commitId, 0, settle0, settle1, false);
-        MMActionAdapter.executeWithUnlock(mmpm, acts, block.timestamp + 3600);
+        bytes memory actions = abi.encodePacked(bytes1(uint8(MMActions.SETTLE_POSITION)));
+        bytes[] memory params = new bytes[](1);
+        params[0] = abi.encode(key, commitId, 0, settle0, settle1, false);
+        mmpm.modifyLiquidities(abi.encode(actions, params), block.timestamp + 3600);
         vm.stopBroadcast();
     }
 
@@ -200,7 +201,8 @@ contract MMCoverageE2E is MME2EBase {
         int128 need1 = mm1RfsDelta.amount1();
         require(mm1RfsOpen && (need0 > 0 || need1 > 0), "mm1: expected RFS>0 after swaps");
         // CHECKPOINT should mirror the computed RFS open/closed state.
-        require(vtsLens.positionToCheckpoint(mm1PosId).isOpen == mm1RfsOpen, "mm1: checkpoint mismatch");
+        bool checkpointOpen = vtsLens.positionToCheckpoint(mm1PosId).openMask != 0;
+        require(checkpointOpen == mm1RfsOpen, "mm1: checkpoint mismatch");
         // we expect the rest of the MMs to not be open for RFS
         vts.calcRFS(mm2CommitId, 0, true);
         vts.calcRFS(mm3CommitId, 0, true);
