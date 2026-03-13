@@ -14,6 +14,7 @@ broadcast := env_var_or_default("BROADCAST", "false")
 anvil_port := "8545"
 anvil_fork_url := "http://localhost:" + anvil_port
 script_dir := "script"
+foundry_profile := env_var_or_default("FOUNDRY_PROFILE", "deploy")
 
 # Computed values
 fork_source_rpc := if network == "sepolia" {
@@ -138,6 +139,8 @@ build:
 # === Fork ===
 
 # Start Anvil fork for local development
+# Pass extra anvil args after --, e.g. just fork -- --fork-block-number 21000000
+# Or set BLOCK_NUMBER env var e.g BLOCK_NUMBER=8891589 just fork
 fork:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -146,7 +149,13 @@ fork:
     # Defensive: support quoted dotenv values like CHAIN_ID="421614"
     CHAIN_ID_ARG="${CHAIN_ID_ARG%\"}"
     CHAIN_ID_ARG="${CHAIN_ID_ARG#\"}"
-    anvil --fork-url {{ fork_source_rpc }} --port {{ anvil_port }} --chain-id "$CHAIN_ID_ARG"
+    if [ -n "${BLOCK_NUMBER:-}" ]; then
+        echo "  Forking at block: $BLOCK_NUMBER"
+        exec anvil --fork-url {{ fork_source_rpc }} --port {{ anvil_port }} --chain-id "$CHAIN_ID_ARG" \
+            --fork-block-number "$BLOCK_NUMBER" "$@"
+    else
+        exec anvil --fork-url {{ fork_source_rpc }} --port {{ anvil_port }} --chain-id "$CHAIN_ID_ARG" "$@"
+    fi
 
 # === Setup ===
 
@@ -645,31 +654,31 @@ e2e: e2e-deploy e2e-normal-lp e2e-swap e2e-market-maker e2e-mm-coverage
 
 # E2E: Deploy full stack only (standalone) and print MarketFactory.
 e2e-deploy:
-    FOUNDRY_PROFILE=deploy forge script {{ script_dir }}/e2e/Deploy.s.sol:DeployE2E \
+    FOUNDRY_PROFILE={{ foundry_profile }} forge script {{ script_dir }}/e2e/Deploy.s.sol:DeployE2E \
         --rpc-url {{ rpc_url }} \
         {{ broadcast_flag }} -vvv
 
 # E2E: Normal LP flow (LiquidityProvision scenario).
 e2e-normal-lp:
-    FOUNDRY_PROFILE=deploy forge script {{ script_dir }}/e2e/LiquidityProvision.s.sol:LiquidityProvisionE2E \
+    FOUNDRY_PROFILE={{ foundry_profile }} forge script {{ script_dir }}/e2e/LiquidityProvision.s.sol:LiquidityProvisionE2E \
         --rpc-url {{ rpc_url }} \
         {{ broadcast_flag }} -vvv
 
 # E2E: Exact-output swap flow (quotes expected input and asserts exact output received).
 e2e-swap:
-    FOUNDRY_PROFILE=deploy forge script {{ script_dir }}/e2e/Swap.s.sol:SwapE2E \
+    FOUNDRY_PROFILE={{ foundry_profile }} forge script {{ script_dir }}/e2e/Swap.s.sol:SwapE2E \
         --rpc-url {{ rpc_url }} \
         {{ broadcast_flag }} -vvv
 
 # E2E: MarketMaker (single-MM journey: commit+mint+settle, swaps, poke, close RFS, burn/decommit, unwrap).
 e2e-market-maker:
-    FOUNDRY_PROFILE=deploy forge script {{ script_dir }}/e2e/MarketMaker.s.sol:MarketMakerE2E \
+    FOUNDRY_PROFILE={{ foundry_profile }} forge script {{ script_dir }}/e2e/MarketMaker.s.sol:MarketMakerE2E \
         --rpc-url {{ rpc_url }} \
         {{ broadcast_flag }} -vvv
 
 # E2E: MMCoverage (two-MMs coverage + fee realisation exploration).
 e2e-mm-coverage:
-    FOUNDRY_PROFILE=deploy forge script {{ script_dir }}/e2e/MMCoverage.s.sol:MMCoverageE2E \
+    FOUNDRY_PROFILE={{ foundry_profile }} forge script {{ script_dir }}/e2e/MMCoverage.s.sol:MMCoverageE2E \
         --rpc-url {{ rpc_url }} \
         {{ broadcast_flag }} -vvv
 
@@ -844,9 +853,9 @@ unwrap-all:
 
 # === Quality & Security ===
 
-# Install project dependencies
+# Install project dependencies (Node deps including lib/oracle; must run from contracts/evm/)
 install-deps:
-    yarn install
+    cd ../evm && yarn install
 
 # Run linting checks
 lint:
