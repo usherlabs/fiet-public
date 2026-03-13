@@ -46,6 +46,7 @@ contract VRLSettlementObserverTest is Test {
 
     address public owner = makeAddr("owner");
     address public nonOwner = makeAddr("nonOwner");
+    address public submitter = makeAddr("submitter");
     address public verifier1;
     address public verifier2;
     address public verifierFalse;
@@ -54,7 +55,7 @@ contract VRLSettlementObserverTest is Test {
     function setUp() public {
         // Deploy as owner so owner is set correctly
         vm.prank(owner);
-        observer = new VRLSettlementObserver(address(this), owner);
+        observer = new VRLSettlementObserver(submitter, owner);
 
         // Deploy stub verifiers for testing
         stubVerifier = new StubSettlementVerifier();
@@ -68,6 +69,10 @@ contract VRLSettlementObserverTest is Test {
         // Add initial verifier
         vm.prank(owner);
         observer.addVerifier(verifier1);
+    }
+
+    function test_Submitter_Configured() public view {
+        assertEq(observer.submitter(), submitter);
     }
 
     function test_AddVerifier() public {
@@ -225,8 +230,30 @@ contract VRLSettlementObserverTest is Test {
         uint32 verifierIndex = 0;
 
         // Verify the proof (should succeed since stub verifier always returns true)
+        vm.prank(submitter);
         bool isValid = observer.verifySettlementProof(poolKey, tokenIndex, verifierIndex, settlementProof, false);
         assertTrue(isValid);
+    }
+
+    function test_VerifySettlementProof_Reverts_ForNonSubmitter() public {
+        address token = makeAddr("token");
+        address[] memory tokens = new address[](1);
+        tokens[0] = token;
+
+        vm.prank(owner);
+        observer.allowVerifierForTokens(0, tokens);
+
+        PoolKey memory poolKey = PoolKey({
+            currency0: Currency.wrap(token),
+            currency1: Currency.wrap(makeAddr("token1")),
+            fee: 3000,
+            tickSpacing: 60,
+            hooks: IHooks(address(0))
+        });
+
+        vm.prank(nonOwner);
+        vm.expectRevert(abi.encodeWithSelector(Errors.InvalidSender.selector));
+        observer.verifySettlementProof(poolKey, 0, 0, "proof", false);
     }
 
     function test_VerifySettlementProof_MarksProofHashUsed_AndRejectsReplay() public {
@@ -249,10 +276,12 @@ contract VRLSettlementObserverTest is Test {
         bytes32 proofHash = EfficientHashLib.hash(settlementProof);
 
         assertEq(observer.usedProofHashes(proofHash), false);
+        vm.prank(submitter);
         assertTrue(observer.verifySettlementProof(poolKey, 0, 0, settlementProof, true));
         assertEq(observer.usedProofHashes(proofHash), true);
 
         vm.expectRevert(abi.encodeWithSelector(Errors.InvalidProof.selector));
+        vm.prank(submitter);
         observer.verifySettlementProof(poolKey, 0, 0, settlementProof, true);
     }
 
@@ -274,6 +303,7 @@ contract VRLSettlementObserverTest is Test {
             hooks: IHooks(address(0))
         });
 
+        vm.prank(submitter);
         bool isValid = observer.verifySettlementProof(poolKey, 0, 0, "proof", true);
         assertTrue(isValid);
     }
@@ -296,6 +326,7 @@ contract VRLSettlementObserverTest is Test {
 
         bytes memory emptyProof = "";
         vm.expectRevert(abi.encodeWithSelector(Errors.InvalidProof.selector));
+        vm.prank(submitter);
         observer.verifySettlementProof(poolKey, 0, 0, emptyProof, false);
     }
 
@@ -312,6 +343,7 @@ contract VRLSettlementObserverTest is Test {
         bytes memory settlementProof = "proof";
         // Verifier not allowed for this token
         vm.expectRevert(abi.encodeWithSelector(Errors.InvalidVerifier.selector));
+        vm.prank(submitter);
         observer.verifySettlementProof(poolKey, 0, 0, settlementProof, false);
     }
 
@@ -327,6 +359,7 @@ contract VRLSettlementObserverTest is Test {
 
         bytes memory settlementProof = "proof";
         vm.expectRevert(abi.encodeWithSelector(Errors.InvalidVerifier.selector));
+        vm.prank(submitter);
         observer.verifySettlementProof(poolKey, 0, 999, settlementProof, false);
     }
 
@@ -343,6 +376,7 @@ contract VRLSettlementObserverTest is Test {
         bytes memory settlementProof = "proof";
         // tokenIndex must be 0 or 1
         vm.expectRevert(abi.encodeWithSelector(Errors.InvalidTokenIndex.selector, uint8(2)));
+        vm.prank(submitter);
         observer.verifySettlementProof(poolKey, 2, 0, settlementProof, false);
     }
 
@@ -361,6 +395,7 @@ contract VRLSettlementObserverTest is Test {
         bytes memory settlementProof = "proof";
         // Should revert with InvalidVerifier, not InvalidProof
         vm.expectRevert(abi.encodeWithSelector(Errors.InvalidVerifier.selector));
+        vm.prank(submitter);
         observer.verifySettlementProof(poolKey, 0, 999, settlementProof, true);
     }
 
@@ -383,6 +418,7 @@ contract VRLSettlementObserverTest is Test {
             hooks: IHooks(address(0))
         });
 
+        vm.prank(submitter);
         bool isValid = observer.verifySettlementProof(poolKey, 0, idx, "proof", false);
         assertEq(isValid, false);
     }
@@ -407,6 +443,7 @@ contract VRLSettlementObserverTest is Test {
         });
 
         vm.expectRevert(abi.encodeWithSelector(Errors.InvalidProof.selector));
+        vm.prank(submitter);
         observer.verifySettlementProof(poolKey, 0, idx, "proof", true);
     }
 
@@ -431,6 +468,7 @@ contract VRLSettlementObserverTest is Test {
             hooks: IHooks(address(0))
         });
 
+        vm.prank(submitter);
         bool isValid = observer.verifySettlementProof(poolKey, 1, idx, "proof", false);
         assertTrue(isValid);
     }
@@ -460,10 +498,12 @@ contract VRLSettlementObserverTest is Test {
 
         // tokenIndex=0
         bytes memory proof0 = abi.encode(poolId, uint8(0), bytes("VRL"));
+        vm.prank(submitter);
         assertTrue(observer.verifySettlementProof(poolKey, 0, idx, proof0, true));
 
         // tokenIndex=1
         bytes memory proof1 = abi.encode(poolId, uint8(1), bytes("VRL"));
+        vm.prank(submitter);
         assertTrue(observer.verifySettlementProof(poolKey, 1, idx, proof1, true));
     }
 
@@ -494,10 +534,12 @@ contract VRLSettlementObserverTest is Test {
         bytes memory mismatchedProof = abi.encode(poolId, uint8(1), bytes("VRL"));
 
         // revertOnInvalid=false => returns false (no revert)
+        vm.prank(submitter);
         assertEq(observer.verifySettlementProof(poolKey, 0, idx, mismatchedProof, false), false);
 
         // revertOnInvalid=true => reverts InvalidProof
         vm.expectRevert(abi.encodeWithSelector(Errors.InvalidProof.selector));
+        vm.prank(submitter);
         observer.verifySettlementProof(poolKey, 0, idx, mismatchedProof, true);
     }
 

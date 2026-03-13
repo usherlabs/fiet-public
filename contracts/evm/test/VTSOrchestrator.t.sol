@@ -178,6 +178,18 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
         vtsOrchestrator.renewSignal(IMarketFactory(marketFactory), address(this), 1, signalBytes);
     }
 
+    function test_creditExact_revert_whenCallerUnboundForFactory() public {
+        vm.expectRevert(Errors.InvalidSender.selector);
+        vtsOrchestrator.creditExact(IMarketFactory(marketFactory), CurrencyLibrary.ADDRESS_ZERO, address(this), 1);
+    }
+
+    function test_creditExact_succeeds_whenCallerIsFactoryBound() public {
+        vm.prank(mmPositionManager);
+        int128 deltaChange =
+            vtsOrchestrator.creditExact(IMarketFactory(marketFactory), CurrencyLibrary.ADDRESS_ZERO, address(this), 1);
+        assertEq(deltaChange, 1, "creditExact should report credited amount");
+    }
+
     function test_revert_commitSignal_whenUnboundCallerForwardsSender_insideUnlock() public {
         vm.mockCall(
             marketFactory,

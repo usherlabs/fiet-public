@@ -134,20 +134,26 @@ contract PositionManagerEntrypointTest is Test {
     function test_beforeBatch_nonZeroValue_syncsNativeAsCredit() public {
         vm.mockCall(
             orch,
-            abi.encodeWithSignature("creditExact(address,address,uint256)", address(0), locker, 1),
+            abi.encodeWithSignature("creditExact(address,address,address,uint256)", factory, address(0), locker, 1),
             abi.encode(int128(1))
         );
-        vm.expectCall(orch, abi.encodeWithSignature("creditExact(address,address,uint256)", address(0), locker, 1));
+        vm.expectCall(
+            orch,
+            abi.encodeWithSignature("creditExact(address,address,address,uint256)", factory, address(0), locker, 1)
+        );
         h.exposeBeforeBatch{value: 1}();
     }
 
     function test_beforeBatch_zeroThenNonZero_afterBatchClearsReadGuard_andCreditsSecondCall() public {
         vm.mockCall(
             orch,
-            abi.encodeWithSignature("creditExact(address,address,uint256)", address(0), locker, 1),
+            abi.encodeWithSignature("creditExact(address,address,address,uint256)", factory, address(0), locker, 1),
             abi.encode(int128(1))
         );
-        vm.expectCall(orch, abi.encodeWithSignature("creditExact(address,address,uint256)", address(0), locker, 1));
+        vm.expectCall(
+            orch,
+            abi.encodeWithSignature("creditExact(address,address,address,uint256)", factory, address(0), locker, 1)
+        );
         caller.callZeroThenOne{value: 1}(h);
     }
 

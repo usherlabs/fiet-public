@@ -352,14 +352,17 @@ contract VTSPositionLibOnMMSettleTest is VTSLibTestBase {
         harness.setSettled(positionId, 0, 0);
         harness.setPositionActive(positionId, true);
 
-        (BalanceDelta settlementDelta, bool rfsOpen,) = harness.onMMSettle(
+        (, bool rfsOpen,) = harness.onMMSettle(
             manager, mockVault, positionId, lccCurrency0, lccCurrency1, toBalanceDelta(-1e18, 0), false
         );
 
         // token0 deposit is clamped by commitmentMax(0), while token1 still reports open RFS.
         assertTrue(rfsOpen, "RFS should remain open due to unmet token1 requirement");
-        assertEq(settlementDelta.amount0(), 0, "token0 settlement should clamp to commitmentMax=0");
-        assertEq(settlementDelta.amount1(), 0, "token1 settlement should remain unchanged");
+
+        // Assert persistent accounting state (not transient deltas).
+        (,, uint256 settled0, uint256 settled1,,) = harness.getPositionAccounting(positionId);
+        assertEq(settled0, 0, "token0 settled should remain unchanged");
+        assertEq(settled1, 0, "token1 settled should remain unchanged");
     }
 
     function test_onMMSettle_withdrawals_positiveCurrencyDelta_isReducedByClearance() public {

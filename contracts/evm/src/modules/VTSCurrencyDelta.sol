@@ -7,6 +7,7 @@ import {BalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
 import {VTSStorage} from "../types/VTS.sol";
 import {DynamicCurrencyDelta} from "../libraries/DynamicCurrencyDelta.sol";
 import {IVTSCurrencyDelta} from "../interfaces/IVTSCurrencyDelta.sol";
+import {IMarketFactory} from "../interfaces/IMarketFactory.sol";
 
 /**
  * @title VTSCurrencyDelta
@@ -25,6 +26,7 @@ abstract contract VTSCurrencyDelta is IVTSCurrencyDelta {
      * @dev Returns the VTSStorage reference. Must be implemented by inheriting contracts.
      */
     function _vtsStorage() internal view virtual returns (VTSStorage storage);
+    function _assertBoundFactoryCaller(IMarketFactory factory) internal view virtual;
 
     // ═══════════════════════════════════════════════════════════════════════════
     // IVTSCurrencyDelta IMPLEMENTATION
@@ -108,9 +110,18 @@ abstract contract VTSCurrencyDelta is IVTSCurrencyDelta {
         deltaChange1 = DynamicCurrencyDelta.syncBalanceAsCredit(currency1, owner, target);
     }
 
-    /// @inheritdoc IVTSCurrencyDelta
-    function creditExact(Currency currency, address target, uint256 amount) external returns (int128 deltaChange) {
+    function _creditExact(Currency currency, address target, uint256 amount) internal returns (int128 deltaChange) {
         deltaChange = DynamicCurrencyDelta.creditExact(currency, target, amount);
+    }
+
+    /// @notice Credits an exact known amount to target's delta
+    /// @dev Restricted to protocol-bound callers in the provided factory namespace.
+    function creditExact(IMarketFactory factory, Currency currency, address target, uint256 amount)
+        external
+        returns (int128 deltaChange)
+    {
+        _assertBoundFactoryCaller(factory);
+        deltaChange = _creditExact(currency, target, amount);
     }
 }
 

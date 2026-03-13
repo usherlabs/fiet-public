@@ -65,6 +65,6 @@ abstract contract PositionManagerBase is ImmutableVTSState {
     /// @param currency The currency to credit
     /// @param amount The exact amount to credit
     function _creditExact(Currency currency, uint256 amount) internal {
-        vtsOrchestrator.creditExact(currency, msgSender(), amount);
+        vtsOrchestrator.creditExact(marketFactory, currency, msgSender(), amount);
     }
 }

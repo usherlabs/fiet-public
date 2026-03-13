@@ -48,7 +48,6 @@ import {MarketHandlerLib} from "./libraries/MarketHandlerLib.sol";
 import {VTSCurrencyDelta} from "./modules/VTSCurrencyDelta.sol";
 import {Ownable} from "openzeppelin-contracts/contracts/access/Ownable.sol";
 import {VTSFeeLib} from "./libraries/VTSFeeLib.sol";
-import {DynamicCurrencyDelta} from "./libraries/DynamicCurrencyDelta.sol";
 import {IMarketVault} from "./interfaces/IMarketVault.sol";
 import {IMarketFactory} from "./interfaces/IMarketFactory.sol";
 import {LiquidityUtils} from "./libraries/LiquidityUtils.sol";
@@ -158,6 +157,19 @@ contract VTSOrchestrator is
         MarketHandlerLib.assertCoreHook(factory, _msgSender());
     }
 
+    function _assertRegisteredFactory(IMarketFactory factory) internal view {
+        if (!liquidityHub.isFactory(address(factory))) revert Errors.InvalidSender();
+    }
+
+    function _isBoundFactoryCaller(IMarketFactory factory, address caller) internal view returns (bool) {
+        _assertRegisteredFactory(factory);
+        return MarketHandlerLib.isBounds(factory, caller);
+    }
+
+    function _assertBoundFactoryCaller(IMarketFactory factory) internal view override {
+        if (!_isBoundFactoryCaller(factory, _msgSender())) revert Errors.InvalidSender();
+    }
+
     /// @dev Resolve effective sender for non-relayed signal actions.
     ///      Forwarded sender is trusted only from protocol-bound endpoints in the provided factory namespace.
     function _resolveSignalSender(IMarketFactory factory, address sender)
@@ -168,7 +180,7 @@ contract VTSOrchestrator is
         // The factory argument is required because sender forwarding is only safe within a specific market's
         // protocol-bound namespace. Without validating the factory and checking caller bounds against it,
         // any contract inside PoolManager.unlock() could fabricate `sender = owner/advancer` and bump MM nonce.
-        if (!liquidityHub.isFactory(address(factory))) revert Errors.InvalidSender();
+        _assertRegisteredFactory(factory);
         address caller = _msgSender();
         if (MarketHandlerLib.isBounds(factory, caller)) {
             return sender;
@@ -703,14 +715,7 @@ contract VTSOrchestrator is
         _assertPositionValid(positionId, true, poolKey.toId());
 
         // Validate factory is registered and caller is authorized
-        if (!liquidityHub.isFactory(address(factory))) revert Errors.InvalidSender();
-        address caller = _msgSender();
-        bool isBound = MarketHandlerLib.isBounds(factory, caller);
-        if (!isBound) {
-            // Direct calls must be from the position owner
-            // This prevents bypassing MMPositionManager's owner/approval checks
-            revert Errors.InvalidSender();
-        }
+        _assertBoundFactoryCaller(factory);
 
         // Use the RFSCheckpoint module to extend the grace period
         CheckpointLibrary.extendGracePeriod(
@@ -745,14 +750,13 @@ contract VTSOrchestrator is
         returns (BalanceDelta settlementDelta, bool rfsOpen, uint256 seizedLiquidityUnits)
     {
         _assertSignalValid(commitId, !isSeizing);
-        if (!liquidityHub.isFactory(address(factory))) revert Errors.InvalidSender();
+        _assertBoundFactoryCaller(factory);
 
         PositionId positionId = getPositionId(commitId, positionIndex);
         _assertPositionValid(positionId, false);
 
         Position memory pos = s.positions[positionId];
         if (_msgSender() != pos.owner) revert Errors.InvalidSender();
-        if (!MarketHandlerLib.isBounds(factory, _msgSender())) revert Errors.InvalidSender();
 
         if (isSeizing) {
             CheckpointLibrary.isSeizable(s, commitId, positionIndex, true);
@@ -873,14 +877,8 @@ contract VTSOrchestrator is
 
         // Compute RFS without re-settling growths, then mark lane-open state from this unified snapshot.
         (, BalanceDelta rfsDelta) = VTSPositionLib.getRFS(s, positionId);
-        uint8 rfsOpenMask = 0;
-        if (rfsDelta.amount0() > 0) {
-            rfsOpenMask |= 1;
-        }
-        if (rfsDelta.amount1() > 0) {
-            rfsOpenMask |= 2;
-        }
-        CheckpointLibrary.markCheckpoint(s, positionId, rfsOpenMask);
+
+        CheckpointLibrary.markCheckpoint(s, positionId, VTSPositionLib._rfsOpenMask(rfsDelta));
         emit Checkpointed(commitId, positionIndex, s.positions[positionId].checkpoint, withCommitment);
     }
 }
