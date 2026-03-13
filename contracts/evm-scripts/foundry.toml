@@ -80,6 +80,11 @@ libraries = [
 [profile.ci]
 # Mirrors `profile.deploy`: library addresses are generated using Anvil account 0
 # (PRIVATE_KEY=0xac0974...ff80) and the default CREATE3 salts.
+# Keep CI builds off via-ir to avoid known Yul stack-depth failures in large
+# linked builds while preserving deterministic library address mapping.
+via_ir = false
+optimizer = true
+optimizer_runs = 200
 libraries = [
   "src/libraries/VTSPositionLib.sol:VTSPositionLib:0x2C95130C4DE0504c82f4688C657c9A4CC01761EF",
   "src/libraries/VTSSwapLib.sol:VTSSwapLib:0x8AF1433f3d2b0547A63f7004B9dA9C5953fD522D",

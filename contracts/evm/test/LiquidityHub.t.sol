@@ -398,6 +398,7 @@ contract LiquidityHubTest is LiquidityHubTestBase {
 
         // user1 has only market-derived balance.
         _wrapMarketDerivedLCC(user1, lccToken1, amount);
+        _wrapMarketDerivedLCC(user3, lccToken1, amount);
 
         // Force market liquidity to 0 so it queues.
         vm.mockCall(factory, abi.encodeWithSelector(IMarketFactory.useMarketLiquidity.selector), abi.encode(uint256(0)));
@@ -466,6 +467,7 @@ contract LiquidityHubTest is LiquidityHubTestBase {
 
     function test_issue_cancel_and_cancelWithQueue_coverIssuerPaths() public {
         uint256 amount = 100;
+        uint256 queuedAmount = 25;
 
         // issue: issuer (factory) can mint market-derived (issued=true).
         vm.prank(proxyHook);
@@ -477,19 +479,23 @@ contract LiquidityHubTest is LiquidityHubTestBase {
         liquidityHub.cancel(lccToken1, user1, 40);
         assertEq(ILCC(lccToken1).balanceOf(user1), 60);
 
+        // Ensure queue recipients are serviceable for external settlement.
+        _wrapMarketDerivedLCC(user2, lccToken1, queuedAmount);
+        _wrapMarketDerivedLCC(user3, lccToken1, queuedAmount);
+
         // cancelWithQueue: burn a portion now and queue the remainder for settlement.
         vm.prank(proxyHook);
-        liquidityHub.cancelWithQueue(lccToken1, user1, 60, 25, user3);
+        liquidityHub.cancelWithQueue(lccToken1, user1, 60, queuedAmount, user3);
         // 35 burned, 25 queued.
-        assertEq(ILCC(lccToken1).balanceOf(user1), 25);
-        assertEq(liquidityHub.settleQueue(lccToken1, user3), 25);
-        assertEq(liquidityHub.totalQueued(lccToken1), 25);
+        assertEq(ILCC(lccToken1).balanceOf(user1), queuedAmount);
+        assertEq(liquidityHub.settleQueue(lccToken1, user3), queuedAmount);
+        assertEq(liquidityHub.totalQueued(lccToken1), queuedAmount);
 
         // queue-only branch (principal == queue): no burn, only queue.
         vm.prank(proxyHook);
-        liquidityHub.cancelWithQueue(lccToken1, user1, 25, 25, user2);
-        assertEq(ILCC(lccToken1).balanceOf(user1), 25);
-        assertEq(liquidityHub.settleQueue(lccToken1, user2), 25);
+        liquidityHub.cancelWithQueue(lccToken1, user1, queuedAmount, queuedAmount, user2);
+        assertEq(ILCC(lccToken1).balanceOf(user1), queuedAmount);
+        assertEq(liquidityHub.settleQueue(lccToken1, user2), queuedAmount);
         assertEq(liquidityHub.totalQueued(lccToken1), 50);
     }
 
@@ -531,6 +537,20 @@ contract LiquidityHubTest is LiquidityHubTestBase {
         liquidityHub.cancelWithQueue(lccToken1, user1, 1, 2, user2);
     }
 
+    function test_cancelWithQueue_revertsWhenRecipientIsZero() public {
+        _wrapMarketDerivedLCC(user1, lccToken1, 10);
+        vm.prank(proxyHook);
+        vm.expectRevert(abi.encodeWithSelector(Errors.InvalidAddress.selector, address(0)));
+        liquidityHub.cancelWithQueue(lccToken1, user1, 5, 1, address(0));
+    }
+
+    function test_cancelWithQueue_revertsWhenRecipientIsExempt() public {
+        _wrapMarketDerivedLCC(user1, lccToken1, 10);
+        vm.prank(proxyHook);
+        vm.expectRevert(abi.encodeWithSelector(Errors.NotApproved.selector, proxyHook));
+        liquidityHub.cancelWithQueue(lccToken1, user1, 5, 1, proxyHook);
+    }
+
     function test_cancelWithQueue_doesNotEmitSettlementQueuedWhenQueueAmountIsZero() public {
         // Give user1 some market-derived balance so cancelWithQueue can burn.
         _wrapMarketDerivedLCC(user1, lccToken1, 10);
@@ -560,6 +580,26 @@ contract LiquidityHubTest is LiquidityHubTestBase {
         vm.prank(proxyHook);
         vm.expectRevert(abi.encodeWithSelector(Errors.NotApproved.selector, user2));
         liquidityHub.queueForTransferRecipient(lccToken1, user2, amount);
+    }
+
+    function test_unwrapTo_withQueueTo_revertsWhenQueueRecipientIsZero() public {
+        uint256 amount = 8;
+        _wrapMarketDerivedLCC(user1, lccToken1, amount);
+        vm.mockCall(factory, abi.encodeWithSelector(IMarketFactory.useMarketLiquidity.selector), abi.encode(uint256(0)));
+
+        vm.prank(user1);
+        vm.expectRevert(abi.encodeWithSelector(Errors.InvalidAddress.selector, address(0)));
+        liquidityHub.unwrapTo(lccToken1, user2, address(0), amount);
+    }
+
+    function test_unwrapTo_withQueueTo_revertsWhenQueueRecipientIsExempt() public {
+        uint256 amount = 8;
+        _wrapMarketDerivedLCC(user1, lccToken1, amount);
+        vm.mockCall(factory, abi.encodeWithSelector(IMarketFactory.useMarketLiquidity.selector), abi.encode(uint256(0)));
+
+        vm.prank(user1);
+        vm.expectRevert(abi.encodeWithSelector(Errors.NotApproved.selector, proxyHook));
+        liquidityHub.unwrapTo(lccToken1, user2, proxyHook, amount);
     }
 
     function test_queueForTransferRecipient_revertsWhenMarketDerivedIsInsufficient() public {

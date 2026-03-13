@@ -41,8 +41,13 @@ contract ECDSASignatureSignalVerifier is ISignalVerifier {
             return false;
         }
 
+        bytes memory signature = rootStateHashSignature;
+        (address recoveredSigner, ECDSA.RecoverError err,) = ECDSA.tryRecover(
+            MessageHashUtils.toEthSignedMessageHash(EfficientHashLib.hash(abi.encodePacked(nonce, rootStateHash))),
+            signature
+        );
+
         // verify signature of the canister on the root state hash
-        return MessageHashUtils.toEthSignedMessageHash(EfficientHashLib.hash(abi.encodePacked(nonce, rootStateHash)))
-                .recover(rootStateHashSignature) == publicKeyAddress;
+        return err == ECDSA.RecoverError.NoError && recoveredSigner == publicKeyAddress;
     }
 }

@@ -116,6 +116,7 @@ contract LiquidityHubPlanCancelTest is LiquidityHubTestBase {
 
         // Setup: Mint LCC to factory
         _wrapDirectLCC(factory, lccToken1, principalAmount);
+        _wrapMarketDerivedLCC(user2, lccToken1, queueAmount);
 
         // Factory plans a cancel with queue for when it transfers to user1
         // Settlement queue recipient is user2
@@ -152,6 +153,7 @@ contract LiquidityHubPlanCancelTest is LiquidityHubTestBase {
 
         // Setup: Mint LCC to factory
         _wrapDirectLCC(factory, lccToken1, principalAmount);
+        _wrapMarketDerivedLCC(user3, lccToken1, queueAmount);
 
         // Factory plans a cancel with queue where everything is queued
         vm.prank(vtsOrchestrator);
@@ -262,6 +264,7 @@ contract LiquidityHubPlanCancelTest is LiquidityHubTestBase {
 
         // Setup: Mint LCC to factory
         _wrapDirectLCC(factory, lccToken1, principalAmount);
+        _wrapMarketDerivedLCC(user2, lccToken1, queueAmount);
 
         // First: plan a simple cancel
         vm.prank(vtsOrchestrator);

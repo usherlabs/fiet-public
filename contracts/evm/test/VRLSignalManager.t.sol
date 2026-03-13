@@ -198,6 +198,17 @@ contract VRLSignalManagerTest is MarketMakerTestBase {
         assertEq(success, false);
     }
 
+    function test_verifyLiquiditySignal_malformedRootSignature_returnsFalseWhenNotReverting() public {
+        LiquiditySignal memory invalidLiquiditySignal = liquiditySignal;
+        invalidLiquiditySignal.rootHashSignature = hex"1234";
+
+        (bool success,) = signalManager.verifyLiquiditySignal(
+            invalidLiquiditySignal.mmState.owner, abi.encode(invalidLiquiditySignal), false
+        );
+
+        assertEq(success, false);
+    }
+
     function test_verifyLiquiditySignalRelayed_ownerSigner_success() public {
         bytes memory liquiditySignalBytes = abi.encode(liquiditySignal);
         address sender = liquiditySignal.mmState.owner;

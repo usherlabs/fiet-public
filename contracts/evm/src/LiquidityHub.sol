@@ -511,6 +511,12 @@ contract LiquidityHub is BoundRegistry, Ownable, ReentrancyGuardTransient {
         (uint256 directUnwrapped, uint256 marketUnwrapped, uint256 queuedShortfall) =
             LiquidityHubLib.unwrapInternalLogic(s, lcc, queueTo, amount, wrappedBalance, marketDerivedBalance);
 
+        // `unwrapInternalLogic` updates queue state directly in library storage.
+        // Validate queue recipient here so invalid recipients revert atomically and roll back queue writes.
+        if (queuedShortfall > 0) {
+            _assertQueueRecipientServiceable(lcc, queueTo, queuedShortfall, true);
+        }
+
         // Burn the amount that was unwrapped
         // and transfer the underlying assets to the account
         if (directUnwrapped + marketUnwrapped > 0) {
@@ -669,21 +675,11 @@ contract LiquidityHub is BoundRegistry, Ownable, ReentrancyGuardTransient {
         onlyIssuer(lcc)
         nonReentrant
     {
-        if (recipient == address(0)) {
-            revert Errors.InvalidAddress(recipient);
-        }
         if (amount == 0) {
             revert Errors.InvalidAmount(0, 0);
         }
-        if (Bounds.isExempt(boundLevelOfLcc(lcc, recipient))) {
-            revert Errors.NotApproved(recipient);
-        }
-
-        (, uint256 marketDerivedBalance) = ILCC(lcc).balancesOf(recipient);
-        if (marketDerivedBalance < amount) {
-            revert Errors.InsufficientBalance(marketDerivedBalance, amount);
-        }
-
+        // Deficit queues must target a serviceable external recipient (Hub queueing is not allowed on this path).
+        _assertQueueRecipientServiceable(lcc, recipient, amount, false);
         _queueSettlement(lcc, recipient, amount);
     }
 
@@ -974,8 +970,34 @@ contract LiquidityHub is BoundRegistry, Ownable, ReentrancyGuardTransient {
      * @param recipient The address with pending settlements
      * @param amount The amount to eventually settle
      */
+    function _assertQueueRecipientServiceable(address lcc, address recipient, uint256 amount, bool allowHub)
+        internal
+        view
+    {
+        if (recipient == address(0)) {
+            revert Errors.InvalidAddress(recipient);
+        }
+
+        if (recipient == address(this)) {
+            if (!allowHub) revert Errors.NotApproved(recipient);
+            return;
+        }
+
+        // External settlement queues are only serviceable for bucket-tracked recipients.
+        if (Bounds.isExempt(boundLevelOfLcc(lcc, recipient))) {
+            revert Errors.NotApproved(recipient);
+        }
+
+        (, uint256 marketDerivedBalance) = ILCC(lcc).balancesOf(recipient);
+        if (marketDerivedBalance < amount) {
+            revert Errors.InsufficientBalance(marketDerivedBalance, amount);
+        }
+    }
+
     function _queueSettlement(address lcc, address recipient, uint256 amount) internal {
         if (amount == 0) return;
+        // Shared guard for all queue creation paths (cancel-with-queue, planned cancel execution, unwrap shortfalls).
+        _assertQueueRecipientServiceable(lcc, recipient, amount, true);
         LiquidityHubLib.queueSettlement(s, lcc, recipient, amount);
         emit SettlementQueued(lcc, recipient, amount);
     }

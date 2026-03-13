@@ -1008,6 +1008,15 @@ library VTSPositionLib {
         pa.coverageIndexLastX128.token1 = paPool.coveragePerDeficitIndexX128.token1;
     }
 
+    /// @dev Initialise CISE coverage index snapshot
+    /// @notice Sets ciseIndexLastX128 to current pool coveragePerSettledIndexX128
+    ///         to prevent new positions from inheriting historical settled-indexed coverage
+    function _initCISESnapshot(VTSStorage storage s, PositionAccounting storage pa, SnapshotParams memory sp) private {
+        PoolAccounting storage paPool = s.poolAccounting[sp.poolId];
+        pa.ciseIndexLastX128.token0 = paPool.coveragePerSettledIndexX128.token0;
+        pa.ciseIndexLastX128.token1 = paPool.coveragePerSettledIndexX128.token1;
+    }
+
     /**
      * @notice Initializes the snapshots for a position. Prevents new positions from inheriting historical tick-indexed growths.
      * @param s The central VTS storage
@@ -1027,6 +1036,7 @@ library VTSPositionLib {
         _initInflowSnapshot(s, pa, sp);
         _initFeeSnapshot(poolManager, pa, sp);
         _initCoverageSnapshot(s, pa, sp);
+        _initCISESnapshot(s, pa, sp);
     }
 
     /// @notice Touch a position to update its state, process fees, and handle MM-specific operations
@@ -1423,29 +1433,35 @@ library VTSPositionLib {
             return BalanceDelta.wrap(0);
         }
 
-        // Calculate queued delta in scoped block
-        BalanceDelta queuedDelta;
+        uint256 principalAmount0 = LiquidityUtils.safeInt128ToUint256(principalDelta.amount0());
+        uint256 principalAmount1 = LiquidityUtils.safeInt128ToUint256(principalDelta.amount1());
+        uint256 retainedPrincipal0;
+        uint256 retainedPrincipal1;
         {
             BalanceDelta availableDelta = ctx.marketVault.dryModifyLiquidities(requiredSettlementDelta);
-            // 1. Determine what amount of available liquidity can be used to cover settlement.
-            BalanceDelta rawQueued = requiredSettlementDelta - availableDelta;
-            // 2. Clamp queuedDelta to non-negative values (negative values become 0)
-            int128 qd0 = rawQueued.amount0();
-            int128 qd1 = rawQueued.amount1();
-            if (qd0 < 0) qd0 = 0;
-            if (qd1 < 0) qd1 = 0;
-            queuedDelta = toBalanceDelta(qd0, qd1);
+            // Queue only the unavailable shortfall and cap by this call's cancellable principal.
+            BalanceDelta rawShortfall = requiredSettlementDelta - availableDelta;
+            int128 shortfall0 = rawShortfall.amount0();
+            int128 shortfall1 = rawShortfall.amount1();
+            if (shortfall0 < 0) shortfall0 = 0;
+            if (shortfall1 < 0) shortfall1 = 0;
+
+            // Settle only the immediate portion (required minus unavailable shortfall).
+            settleableDelta = toBalanceDelta(
+                requiredSettlementDelta.amount0() - shortfall0, requiredSettlementDelta.amount1() - shortfall1
+            );
+
+            uint256 shortfallAmount0 = LiquidityUtils.safeInt128ToUint256(shortfall0);
+            uint256 shortfallAmount1 = LiquidityUtils.safeInt128ToUint256(shortfall1);
+            retainedPrincipal0 = shortfallAmount0 > principalAmount0 ? principalAmount0 : shortfallAmount0;
+            retainedPrincipal1 = shortfallAmount1 > principalAmount1 ? principalAmount1 : shortfallAmount1;
         }
-        // The settleable portion is what is immediately available; the rest is queued.
-        settleableDelta = requiredSettlementDelta - queuedDelta;
 
         // 3. Queue settlements via cancelWithQueue
         // Burns LCCs on transfer from PoolManager to owner (MMPM) and queues shortfall for queueRecipient (locker).
         // Only cancel LCCs for tokens that have non-zero principal delta (tokens actually removed from liquidity)
         // Process token0 cancellation
         {
-            uint256 principalAmount0 = LiquidityUtils.safeInt128ToUint256(principalDelta.amount0());
-            uint256 retainedPrincipal0 = LiquidityUtils.safeInt128ToUint256(queuedDelta.amount0());
             if (principalAmount0 > 0) {
                 ctx.liquidityHub
                     .planCancelWithQueue(
@@ -1461,8 +1477,6 @@ library VTSPositionLib {
 
         // Process token1 cancellation
         {
-            uint256 principalAmount1 = LiquidityUtils.safeInt128ToUint256(principalDelta.amount1());
-            uint256 retainedPrincipal1 = LiquidityUtils.safeInt128ToUint256(queuedDelta.amount1());
             if (principalAmount1 > 0) {
                 ctx.liquidityHub
                     .planCancelWithQueue(

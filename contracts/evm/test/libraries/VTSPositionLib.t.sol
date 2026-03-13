@@ -1462,6 +1462,28 @@ contract VTSPositionLibTest is VTSLibTestBase {
         assertEq(idx1, 456, "coverageIndexLastX128.token1 should be initialised to pool index");
     }
 
+    function test_initPositionSnapshots_setsCISEIndexLastToPoolIndex() public {
+        // Register into the real pool so slot0 reads succeed.
+        _initMarket();
+        PoolId corePoolId = _getDefaultPoolId();
+        harness.setupPool(corePoolId, _createDefaultVTSConfig());
+
+        PositionId positionId = _registerHarnessPositionInPool(corePoolId, DEFAULT_OWNER, -60, 60, 1, DEFAULT_SALT);
+
+        // Seed pool CISE index to a non-zero value.
+        harness.setPoolCoveragePerSettledIndexX128(corePoolId, 789, 987);
+
+        (uint256 idx0Before, uint256 idx1Before) = harness.getCISEIndexLastX128(positionId);
+        assertEq(idx0Before, 0, "ciseIndexLastX128.token0 should be not be initialised without snapshot.");
+        assertEq(idx1Before, 0, "ciseIndexLastX128.token1 should be not be initialised without snapshot.");
+
+        harness.initPositionSnapshots(manager, positionId);
+
+        (uint256 idx0, uint256 idx1) = harness.getCISEIndexLastX128(positionId);
+        assertEq(idx0, 789, "ciseIndexLastX128.token0 should be initialised to pool index");
+        assertEq(idx1, 987, "ciseIndexLastX128.token1 should be initialised to pool index");
+    }
+
     function test_onMMSettle_withdrawalClampedByVault_addsBackShortfall() public {
         _initMarket();
         PositionId positionId = _registerDefaultPosition();
@@ -1728,6 +1750,58 @@ contract VTSPositionLibTest is VTSLibTestBase {
         );
         assertEq(hub.lastQueued0(), 5, "queued0 should equal requiredSettlementDelta0 when availability is 0");
         assertEq(hub.lastQueued1(), 0, "queued1 passed to LiquidityHub should clamp to 0 on negative rawQueued1");
+    }
+
+    function test_handleLiquidityDecrease_capsQueueByPrincipal_whenShortfallExceedsPrincipal() public {
+        VTSPositionLibTest_LiquidityHubCapture hub = new VTSPositionLibTest_LiquidityHubCapture();
+        // No immediate availability, so full required amount is shortfall.
+        IMarketVault vault = new VTSPositionLibTest_VaultClamp(0, 0);
+
+        PositionContext memory ctx = PositionContext({
+            poolManager: manager,
+            liquidityHub: ILiquidityHub(address(hub)),
+            oracleHelper: IOracleHelper(address(0)),
+            marketVault: vault
+        });
+
+        PoolKey memory pk = corePoolKey;
+        BalanceDelta principalDelta = toBalanceDelta(int128(int256(3)), int128(int256(20)));
+        BalanceDelta requiredSettlementDelta = toBalanceDelta(int128(int256(10)), int128(int256(7)));
+
+        BalanceDelta settleable = harness.handleLiquidityDecrease(
+            ctx, DEFAULT_OWNER, pk, principalDelta, requiredSettlementDelta, DEFAULT_OWNER
+        );
+
+        assertEq(settleable.amount0(), 0, "token0 settleable should be zero when no liquidity is available");
+        assertEq(settleable.amount1(), 0, "token1 settleable should be zero when no liquidity is available");
+        assertEq(hub.lastQueued0(), 3, "token0 queue must be capped by per-call principal");
+        assertEq(hub.lastQueued1(), 7, "token1 queue can use full shortfall when principal is sufficient");
+    }
+
+    function test_handleLiquidityDecrease_settleableTracksAvailability_whenQueueIsPrincipalCapped() public {
+        VTSPositionLibTest_LiquidityHubCapture hub = new VTSPositionLibTest_LiquidityHubCapture();
+        // Partial availability with token1 shortfall exceeding principal.
+        IMarketVault vault = new VTSPositionLibTest_VaultClamp(4, 2);
+
+        PositionContext memory ctx = PositionContext({
+            poolManager: manager,
+            liquidityHub: ILiquidityHub(address(hub)),
+            oracleHelper: IOracleHelper(address(0)),
+            marketVault: vault
+        });
+
+        PoolKey memory pk = corePoolKey;
+        BalanceDelta principalDelta = toBalanceDelta(int128(int256(9)), int128(int256(5)));
+        BalanceDelta requiredSettlementDelta = toBalanceDelta(int128(int256(10)), int128(int256(10)));
+
+        BalanceDelta settleable = harness.handleLiquidityDecrease(
+            ctx, DEFAULT_OWNER, pk, principalDelta, requiredSettlementDelta, DEFAULT_OWNER
+        );
+
+        assertEq(settleable.amount0(), 4, "token0 settleable should equal immediate vault availability");
+        assertEq(settleable.amount1(), 2, "token1 settleable should equal immediate vault availability");
+        assertEq(hub.lastQueued0(), 6, "token0 queue should equal shortfall when principal is sufficient");
+        assertEq(hub.lastQueued1(), 5, "token1 queue must be capped by per-call principal");
     }
 
     // ============================================================

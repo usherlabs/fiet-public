@@ -217,6 +217,18 @@ contract ECDSASignatureSignalVerifierTest is MarketMakerTestBase {
         assertFalse(success, "Proof with invalid root state hash signature should fail");
     }
 
+    function test_verifyProof_malformedRootStateHashSignature_returnsFalse() public view {
+        bool success = verifier.verifyProof(
+            liquiditySignal.nonce,
+            liquiditySignal.rootHash,
+            hex"1234",
+            liquiditySignal.mmState,
+            liquiditySignal.merkleProof
+        );
+
+        assertFalse(success, "Proof with malformed root state hash signature should fail");
+    }
+
     function test_verifyProof_nonOwnerCallerWithoutSignature() public {
         // Create state
         uint256 privateKey = uint256(keccak256(abi.encodePacked("test_owner")));
