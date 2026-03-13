@@ -7,6 +7,7 @@ import {HookMiner} from "v4-periphery/src/utils/HookMiner.sol";
 import {CoreHook} from "src/CoreHook.sol";
 import {MarketFactory} from "src/MarketFactory.sol";
 import {HookFlags} from "src/libraries/HookFlags.sol";
+import {MMQueueCustodian} from "src/MMQueueCustodian.sol";
 import {MMPositionManager} from "src/MMPositionManager.sol";
 import {MMPositionActionsImpl} from "src/MMPositionActionsImpl.sol";
 import {VRLSignalManager} from "src/VRLSignalManager.sol";
@@ -60,6 +61,7 @@ abstract contract DeployFullStackBase is CREATE3Script, NetworkConfig {
         address coreHook;
         address marketFactory;
         address mmPositionManager;
+        address queueCustodian;
         address oracleHelper;
         address payable liquidityHub;
         address signalManager;
@@ -90,6 +92,7 @@ abstract contract DeployFullStackBase is CREATE3Script, NetworkConfig {
     string internal constant VTS_ORCHESTRATOR = "VTSOrchestrator";
     string internal constant COMMITMENT_DESCRIPTOR = "MMPCommitmentDescriptor";
     string internal constant ACTIONS_IMPL = "MMPositionActionsImpl";
+    string internal constant QUEUE_CUSTODIAN = "MMQueueCustodian";
     string internal constant MM_POSITION_MANAGER = "MMPositionManager";
     string internal constant DIRECT_LP_DELTA_RESOLVER = "DirectLPDeltaResolver";
     string internal constant MARKET_FACTORY = "MarketFactory";
@@ -212,7 +215,7 @@ abstract contract DeployFullStackBase is CREATE3Script, NetworkConfig {
         out.contracts.commitmentDescriptor =
             _deployCreate3(COMMITMENT_DESCRIPTOR, type(MMPCommitmentDescriptor).creationCode);
 
-        // 9) MMPositionActionsImpl + MMPositionManager
+        // 9) MMPositionActionsImpl + MMQueueCustodian + MMPositionManager
         address weth9 = address(PositionManager(payable(config.positionManager)).WETH9());
         address permit2 = address(PositionManager(payable(config.positionManager)).permit2());
 
@@ -222,6 +225,11 @@ abstract contract DeployFullStackBase is CREATE3Script, NetworkConfig {
                 type(MMPositionActionsImpl).creationCode,
                 abi.encode(config.poolManager, out.contracts.liquidityHub, out.contracts.vtsOrchestrator)
             )
+        );
+
+        out.contracts.queueCustodian = _deployCreate3(
+            QUEUE_CUSTODIAN,
+            abi.encodePacked(type(MMQueueCustodian).creationCode, abi.encode(deployer))
         );
 
         out.contracts.mmPositionManager = _deployCreate3(
@@ -235,10 +243,12 @@ abstract contract DeployFullStackBase is CREATE3Script, NetworkConfig {
                     out.contracts.commitmentDescriptor,
                     weth9,
                     permit2,
-                    out.contracts.actionsImpl
+                    out.contracts.actionsImpl,
+                    out.contracts.queueCustodian
                 )
             )
         );
+        MMQueueCustodian(out.contracts.queueCustodian).setPositionManager(out.contracts.mmPositionManager);
 
         // 10) DirectLPDeltaResolver
         out.contracts.directLPDeltaResolver = _deployCreate3(
@@ -281,9 +291,10 @@ abstract contract DeployFullStackBase is CREATE3Script, NetworkConfig {
         out.contracts.coreHook = hookAddress;
 
         // 13) Initialise MarketFactory (via GlobalConfig)
-        address[] memory initialBounds = new address[](2);
+        address[] memory initialBounds = new address[](3);
         initialBounds[0] = out.contracts.mmPositionManager;
-        initialBounds[1] = out.contracts.directLPDeltaResolver;
+        initialBounds[1] = out.contracts.queueCustodian;
+        initialBounds[2] = out.contracts.directLPDeltaResolver;
         GlobalConfig(out.contracts.globalConfig)
             .proxyCall(
                 out.contracts.marketFactory,
