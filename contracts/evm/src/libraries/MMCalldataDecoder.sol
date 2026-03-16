@@ -200,49 +200,70 @@ library MMCalldataDecoder {
     // Medium Priority Decoders (Delta Operations & Signal Management)
     // ═══════════════════════════════════════════════════════════════════════════════════════════
 
-    /// @dev INCREASE_LIQUIDITY_FROM_DELTAS: (PoolKey, uint256, uint256, bool)
+    /// @dev INCREASE_LIQUIDITY_FROM_DELTAS: (PoolKey, uint256, uint256, uint128, uint128, bool)
     /// @param params The calldata bytes to decode
     /// @return poolKey The pool key (calldata pointer)
     /// @return tokenId The commitment NFT token ID
     /// @return positionIndex The position index within the commitment
+    /// @return amount0Max The maximum amount of token0 to spend
+    /// @return amount1Max The maximum amount of token1 to spend
     /// @return payerIsUser If true, user consumes credit protocol owes them (MMPM delta).
     ///         If false, uses locker's direct credit.
     function decodeIncreaseFromDeltasParams(bytes calldata params)
         internal
         pure
-        returns (PoolKey calldata poolKey, uint256 tokenId, uint256 positionIndex, bool payerIsUser)
+        returns (
+            PoolKey calldata poolKey,
+            uint256 tokenId,
+            uint256 positionIndex,
+            uint128 amount0Max,
+            uint128 amount1Max,
+            bool payerIsUser
+        )
     {
         assembly ("memory-safe") {
-            // PoolKey: 5 slots (0xa0), then tokenId, positionIndex, payerIsUser
-            // Minimum length: 0xa0 + 0x20*3 = 0x100
-            if lt(params.length, 0x100) {
+            // PoolKey: 5 slots (0xa0), then tokenId, positionIndex, amount0Max, amount1Max, payerIsUser
+            // Minimum length: 0xa0 + 0x20*5 = 0x140
+            if lt(params.length, 0x140) {
                 mstore(0, SLICE_ERROR_SELECTOR)
                 revert(0x1c, 4)
             }
             poolKey := params.offset
             tokenId := calldataload(add(params.offset, 0xa0))
             positionIndex := calldataload(add(params.offset, 0xc0))
-            payerIsUser := calldataload(add(params.offset, 0xe0))
+            amount0Max := calldataload(add(params.offset, 0xe0))
+            amount1Max := calldataload(add(params.offset, 0x100))
+            payerIsUser := calldataload(add(params.offset, 0x120))
         }
     }
 
-    /// @dev MINT_POSITION_FROM_DELTAS: (PoolKey, uint256, int24, int24, bool)
+    /// @dev MINT_POSITION_FROM_DELTAS: (PoolKey, uint256, int24, int24, uint128, uint128, bool)
     /// @param params The calldata bytes to decode
     /// @return poolKey The pool key (calldata pointer)
     /// @return tokenId The commitment NFT token ID
     /// @return tickLower The lower tick of the position
     /// @return tickUpper The upper tick of the position
+    /// @return amount0Max The maximum amount of token0 to spend
+    /// @return amount1Max The maximum amount of token1 to spend
     /// @return payerIsUser If true, user consumes credit protocol owes them (MMPM delta).
     ///         If false, uses locker's direct credit.
     function decodeMintFromDeltasParams(bytes calldata params)
         internal
         pure
-        returns (PoolKey calldata poolKey, uint256 tokenId, int24 tickLower, int24 tickUpper, bool payerIsUser)
+        returns (
+            PoolKey calldata poolKey,
+            uint256 tokenId,
+            int24 tickLower,
+            int24 tickUpper,
+            uint128 amount0Max,
+            uint128 amount1Max,
+            bool payerIsUser
+        )
     {
         assembly ("memory-safe") {
-            // PoolKey: 5 slots (0xa0), then tokenId, tickLower, tickUpper, payerIsUser
-            // Minimum length: 0xa0 + 0x20*4 = 0x120
-            if lt(params.length, 0x120) {
+            // PoolKey: 5 slots (0xa0), then tokenId, tickLower, tickUpper, amount0Max, amount1Max, payerIsUser
+            // Minimum length: 0xa0 + 0x20*6 = 0x160
+            if lt(params.length, 0x160) {
                 mstore(0, SLICE_ERROR_SELECTOR)
                 revert(0x1c, 4)
             }
@@ -250,7 +271,9 @@ library MMCalldataDecoder {
             tokenId := calldataload(add(params.offset, 0xa0))
             tickLower := calldataload(add(params.offset, 0xc0))
             tickUpper := calldataload(add(params.offset, 0xe0))
-            payerIsUser := calldataload(add(params.offset, 0x100))
+            amount0Max := calldataload(add(params.offset, 0x100))
+            amount1Max := calldataload(add(params.offset, 0x120))
+            payerIsUser := calldataload(add(params.offset, 0x140))
         }
     }
 

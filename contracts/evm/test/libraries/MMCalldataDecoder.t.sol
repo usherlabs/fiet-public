@@ -100,10 +100,17 @@ contract MMCalldataDecoderHarness {
     function decodeIncreaseFromDeltasParams(bytes calldata params)
         external
         pure
-        returns (PoolKey memory poolKey, uint256 tokenId, uint256 positionIndex, bool payerIsUser)
+        returns (
+            PoolKey memory poolKey,
+            uint256 tokenId,
+            uint256 positionIndex,
+            uint128 amount0Max,
+            uint128 amount1Max,
+            bool payerIsUser
+        )
     {
         PoolKey calldata pk;
-        (pk, tokenId, positionIndex, payerIsUser) = params.decodeIncreaseFromDeltasParams();
+        (pk, tokenId, positionIndex, amount0Max, amount1Max, payerIsUser) = params.decodeIncreaseFromDeltasParams();
         poolKey = PoolKey({
             currency0: pk.currency0, currency1: pk.currency1, fee: pk.fee, tickSpacing: pk.tickSpacing, hooks: pk.hooks
         });
@@ -112,10 +119,18 @@ contract MMCalldataDecoderHarness {
     function decodeMintFromDeltasParams(bytes calldata params)
         external
         pure
-        returns (PoolKey memory poolKey, uint256 tokenId, int24 tickLower, int24 tickUpper, bool payerIsUser)
+        returns (
+            PoolKey memory poolKey,
+            uint256 tokenId,
+            int24 tickLower,
+            int24 tickUpper,
+            uint128 amount0Max,
+            uint128 amount1Max,
+            bool payerIsUser
+        )
     {
         PoolKey calldata pk;
-        (pk, tokenId, tickLower, tickUpper, payerIsUser) = params.decodeMintFromDeltasParams();
+        (pk, tokenId, tickLower, tickUpper, amount0Max, amount1Max, payerIsUser) = params.decodeMintFromDeltasParams();
         poolKey = PoolKey({
             currency0: pk.currency0, currency1: pk.currency1, fee: pk.fee, tickSpacing: pk.tickSpacing, hooks: pk.hooks
         });
@@ -318,20 +333,26 @@ contract MMCalldataDecoderTest is Test {
 
     function test_decodeIncreaseFromDeltasParams_ok() public view {
         PoolKey memory key = _poolKey();
-        bytes memory params = abi.encode(key, uint256(10), uint256(2), true);
-        (, uint256 tokenId, uint256 positionIndex, bool payerIsUser) = h.decodeIncreaseFromDeltasParams(params);
+        bytes memory params = abi.encode(key, uint256(10), uint256(2), uint128(11), uint128(12), true);
+        (, uint256 tokenId, uint256 positionIndex, uint128 amount0Max, uint128 amount1Max, bool payerIsUser) =
+            h.decodeIncreaseFromDeltasParams(params);
         assertEq(tokenId, 10);
         assertEq(positionIndex, 2);
+        assertEq(amount0Max, 11);
+        assertEq(amount1Max, 12);
         assertTrue(payerIsUser);
     }
 
     function test_decodeMintFromDeltasParams_ok() public view {
         PoolKey memory key = _poolKey();
-        bytes memory params = abi.encode(key, uint256(10), int24(-1), int24(1), false);
-        (, uint256 tokenId, int24 tl, int24 tu, bool payerIsUser) = h.decodeMintFromDeltasParams(params);
+        bytes memory params = abi.encode(key, uint256(10), int24(-1), int24(1), uint128(21), uint128(22), false);
+        (, uint256 tokenId, int24 tl, int24 tu, uint128 amount0Max, uint128 amount1Max, bool payerIsUser) =
+            h.decodeMintFromDeltasParams(params);
         assertEq(tokenId, 10);
         assertEq(tl, -1);
         assertEq(tu, 1);
+        assertEq(amount0Max, 21);
+        assertEq(amount1Max, 22);
         assertFalse(payerIsUser);
     }
 

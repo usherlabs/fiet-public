@@ -20,6 +20,8 @@ interface IMinimalLiquidityHub {
      *         while queueing any unfulfilled portion to a separate settlement queue owner.
      * @dev If available liquidity is insufficient to fulfil `amount`, the shortfall is queued under `queueTo` and can be
      *      permissionlessly processed later via `processSettlementFor(lcc, queueTo, maxAmount)` when reserves become available.
+     *      Queue creation validates owner shape (for example non-zero and non-exempt unless Hub), while present settleability is
+     *      enforced at `processSettlementFor` time and may require a later retry after reconciliation.
      *
      *      This overload exists for protocol flows where "who receives underlying now" differs from "who owns the
      *      settlement claim".
@@ -39,6 +41,8 @@ interface IMinimalLiquidityHub {
      *         immediately-available underlying to `to`, while queueing any unfulfilled portion to `queueTo`.
      * @dev If available liquidity is insufficient to fulfil `amount`, the shortfall is queued under `queueTo` and can be
      *      permissionlessly processed later via `processSettlementFor(lcc, queueTo, maxAmount)`.
+     *      Queue creation validates owner shape (for example non-zero and non-exempt unless Hub), while present settleability is
+     *      enforced at `processSettlementFor` time and may require a later retry after reconciliation.
      *
      *      This overload exists for protocol flows where the settlement queue owner must differ from the immediate
      *      payout recipient.
@@ -55,7 +59,8 @@ interface IMinimalLiquidityHub {
 
     /**
      * @notice Process settlement for a specific recipient using reserveOfUnderlying
-     * @dev Permissionless function that allows anyone to process settlements when liquidity is available
+     * @dev Permissionless function that allows anyone to process settlements when liquidity is available.
+     *      Reverts for external recipients are retriable and indicate reserves/custody are not yet reconciled.
      * @param lcc The LCC token address
      * @param recipient The recipient address to settle for
      * @param maxAmount The maximum amount to settle (caller can limit to avoid large gas costs)

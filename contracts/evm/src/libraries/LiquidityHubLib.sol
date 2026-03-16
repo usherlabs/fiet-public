@@ -458,9 +458,11 @@ library LiquidityHubLib {
 
     /**
      * @notice Queues a settlement request for later processing
-     * @dev Adds a settlement amount to the queue for a specific recipient.
-     *      The settlement will be processed when liquidity becomes available.
-     *      Note: Events are emitted by the calling contract, not this library.
+     * @dev Pure queue accounting helper: this function intentionally only mutates queue state.
+     *      It does not assert immediate recipient serviceability, because queue ownership can be
+     *      decoupled from current LCC custody in protocol flows (for example MM custody release).
+     *      Runtime settleability is enforced by processSettlementLogic at redemption time.
+     *      Note: events are emitted by the calling contract, not this library.
      * @param s The liquidity hub storage
      * @param lcc The LCC token address
      * @param recipient The recipient address for the settlement
@@ -487,6 +489,10 @@ library LiquidityHubLib {
     ///      - Burns user's LCC tokens (market-derived supply)
     ///      - Transfers underlying assets to recipient
     ///      - Decrements reserveOfUnderlying
+    ///
+    ///      Important: this is the canonical runtime enforcement point for settleability.
+    ///      Queue creation may be valid even when claims are not executable yet. In those cases
+    ///      this function can revert (or no-op for Hub path) until reserves/custody reconcile.
     ///
     /// @param s The liquidity hub storage
     /// @param lcc The LCC token address

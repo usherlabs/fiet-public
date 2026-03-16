@@ -1412,6 +1412,58 @@ contract MMPositionManagerActionsTest is MarketTestBase, MarketMakerTestBase {
         MMA.executeWithUnlock(positionManager, actions, block.timestamp + 3600);
     }
 
+    function test_increaseFromDeltas_revertsWhenAmountMaxExceeded() public {
+        uint256 tokenId = 1;
+        uint256 positionIndex = 0;
+
+        _setupCommittedPosition(
+            positionManager,
+            corePoolKey,
+            abi.encode(liquiditySignal),
+            defaultlLiquidityParams,
+            marketVTSConfiguration,
+            address(lcc0),
+            address(lcc1)
+        );
+
+        uint256 settlementAmount = 1_000_000e18;
+        approveAndSettleUnderlyingToPosition(tokenId, positionIndex, settlementAmount, settlementAmount);
+
+        MMA.PreparedAction[] memory actions = new MMA.PreparedAction[](2);
+        actions[0] = MMA.prepareDecrease(corePoolKey, tokenId, positionIndex, 1_000_000_000);
+        actions[1] = MMA.prepareIncreaseFromDeltas(corePoolKey, tokenId, positionIndex, 0, 0, true);
+
+        vm.expectRevert();
+        MMA.executeWithUnlock(positionManager, actions, block.timestamp + 3600);
+    }
+
+    function test_mintFromDeltas_revertsWhenAmountMaxExceeded() public {
+        uint256 tokenId = 1;
+        uint256 positionIndex = 0;
+
+        _setupCommittedPosition(
+            positionManager,
+            corePoolKey,
+            abi.encode(liquiditySignal),
+            defaultlLiquidityParams,
+            marketVTSConfiguration,
+            address(lcc0),
+            address(lcc1)
+        );
+
+        uint256 settlementAmount = 1_000_000e18;
+        approveAndSettleUnderlyingToPosition(tokenId, positionIndex, settlementAmount, settlementAmount);
+
+        MMA.PreparedAction[] memory actions = new MMA.PreparedAction[](2);
+        actions[0] = MMA.prepareDecrease(corePoolKey, tokenId, positionIndex, 1_000_000_000);
+        actions[1] = MMA.prepareMintFromDeltas(
+            corePoolKey, tokenId, defaultlLiquidityParams.tickLower, defaultlLiquidityParams.tickUpper, 0, 0, true
+        );
+
+        vm.expectRevert();
+        MMA.executeWithUnlock(positionManager, actions, block.timestamp + 3600);
+    }
+
     function test_unauthorised_revertsNotApproved_forBurnIncreaseDecreaseAndDeltasActions() public {
         uint256 tokenId = 1;
         uint256 positionIndex = 0;

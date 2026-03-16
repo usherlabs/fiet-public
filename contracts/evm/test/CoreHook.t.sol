@@ -424,6 +424,18 @@ contract MockVTSOrchestrator {
     function lastLiqBefore() external view returns (uint128) {
         return _lastLiqBefore;
     }
+
+    function isPoolPaused(PoolId) external pure returns (bool) {
+        return false;
+    }
+
+    function isPaused() external pure returns (bool) {
+        return false;
+    }
+
+    function isPoolOrGlobalPaused(PoolId) external pure returns (bool) {
+        return false;
+    }
 }
 
 contract MockPoolManager {

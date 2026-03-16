@@ -131,6 +131,11 @@ library Errors {
     /// @notice Thrown when there is insufficient balance for an operation
     error InsufficientBalance(uint256 balance, uint256 needed);
 
+    /// @notice Thrown when a max input slippage guard is exceeded
+    /// @param maximumAmount User supplied max amount permitted
+    /// @param amountRequested Actual amount requested by execution
+    error MaximumAmountExceeded(uint128 maximumAmount, uint128 amountRequested);
+
     /// @notice Thrown when a liquidity error occurs
     error LiquidityError(address lcc, uint256 amount);
 

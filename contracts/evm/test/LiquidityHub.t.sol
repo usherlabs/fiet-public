@@ -684,6 +684,27 @@ contract LiquidityHubTest is LiquidityHubTestBase {
         assertEq(liquidityHub.totalQueued(lccToken1), amount1 + amount2);
     }
 
+    function test_processSettlementFor_external_retriableAfterReserveReconciliation() public {
+        uint256 amount = 11;
+        vm.prank(proxyHook);
+        liquidityHub.issue(lccToken1, proxyHook, amount);
+        vm.prank(proxyHook);
+        ILCC(lccToken1).transfer(user2, amount);
+        vm.prank(proxyHook);
+        liquidityHub.queueForTransferRecipient(lccToken1, user2, amount);
+
+        // Queue claim is valid but not yet executable because reserve is still zero.
+        vm.expectRevert(abi.encodeWithSelector(Errors.LiquidityError.selector, lccToken1, uint256(0)));
+        liquidityHub.processSettlementFor(lccToken1, user2, amount);
+
+        underlyingAsset1.mint(address(liquidityHub), amount);
+        vm.prank(proxyHook);
+        liquidityHub.confirmTake(lccToken1, amount, false);
+
+        liquidityHub.processSettlementFor(lccToken1, user2, amount);
+        assertEq(liquidityHub.settleQueue(lccToken1, user2), 0);
+    }
+
     function test_annulSettlementBeforeTransfer_noOpBranchesAndBleedLogic() public {
         // Create a queue entry for user1.
         uint256 q = 40;

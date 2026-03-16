@@ -89,12 +89,16 @@ contract LiquidityHub is BoundRegistry, Ownable, ReentrancyGuardTransient {
 
     /// Override from BoundRegistry
     function setBoundLevel(address who, uint8 level) external override onlyFactory {
+        // Administrative constraint:
+        // callers must not move `who` into an exempt role while that address owns queued settlements.
+        // We intentionally do not enforce this on-chain with additional queue indexing state.
         _setBoundLevel(msg.sender, who, level);
     }
 
     /// Override from BoundRegistry
     function setBoundLevels(address[] calldata who, uint8 level) external override onlyFactory {
         for (uint256 i = 0; i < who.length; i++) {
+            // Same operational constraint as setBoundLevel(...): queue-owner checks are governance/admin enforced.
             _setBoundLevel(msg.sender, who[i], level);
         }
     }
@@ -504,6 +508,9 @@ contract LiquidityHub is BoundRegistry, Ownable, ReentrancyGuardTransient {
         (uint256 wrappedBalance, uint256 marketDerivedBalance) = _balancesOf(lcc, from);
         uint256 fromBalance = wrappedBalance + marketDerivedBalance;
 
+        // Generic queue paths validate queue-owner shape only.
+        // Current settleability remains a redemption-time concern for processSettlementFor().
+        _assertValidQueueOwner(lcc, queueTo, true);
         if (amount == 0 || amount > fromBalance) {
             revert Errors.InvalidAmount(amount, fromBalance);
         }
@@ -512,10 +519,7 @@ contract LiquidityHub is BoundRegistry, Ownable, ReentrancyGuardTransient {
             LiquidityHubLib.unwrapInternalLogic(s, lcc, queueTo, amount, wrappedBalance, marketDerivedBalance);
 
         // `unwrapInternalLogic` updates queue state directly in library storage.
-        // Validate queue recipient here so invalid recipients revert atomically and roll back queue writes.
-        if (queuedShortfall > 0) {
-            _assertQueueRecipientServiceable(lcc, queueTo, queuedShortfall, true);
-        }
+        // Queue owner shape is validated at write time; present settleability is enforced on settlement.
 
         // Burn the amount that was unwrapped
         // and transfer the underlying assets to the account
@@ -640,7 +644,9 @@ contract LiquidityHub is BoundRegistry, Ownable, ReentrancyGuardTransient {
 
     /**
      * @notice Cancels LCC tokens and queues a settlement for the shortfall
-     * @dev Simulates unwrap-with-queue without touching direct supply or market liquidity
+     * @dev Simulates unwrap-with-queue without touching direct supply or market liquidity.
+     *      Queue recipient shape is validated (non-zero, non-exempt unless Hub), while present settleability
+     *      is intentionally enforced at processSettlementFor() when redemption is attempted.
      * @param lcc The LCC token address to cancel for
      * @param from The address to cancel tokens from
      * @param principalAmount Total amount to cancel (burn now) or queue (burn later)
@@ -669,6 +675,8 @@ contract LiquidityHub is BoundRegistry, Ownable, ReentrancyGuardTransient {
      *      - recipient must be non-zero
      *      - recipient must not be bucket-exempt (external settlement path requires market-derived balance accounting)
      *      - recipient must hold sufficient market-derived LCC to back the queued amount
+     *      This path is stricter than generic queue accounting because it is only used when the issuer
+     *      has already transferred deficit LCC to `recipient`, so queue owner and burn source must match now.
      */
     function queueForTransferRecipient(address lcc, address recipient, uint256 amount)
         external
@@ -698,6 +706,10 @@ contract LiquidityHub is BoundRegistry, Ownable, ReentrancyGuardTransient {
         uint256 queueAmount,
         address recipient
     ) internal {
+        if (queueAmount > 0) {
+            _assertValidQueueOwner(lcc, recipient, true);
+        }
+
         uint256 cancelAmount = principalAmount - queueAmount;
 
         // Burn the cancellable portion of the principal amount from the sender.
@@ -707,7 +719,8 @@ contract LiquidityHub is BoundRegistry, Ownable, ReentrancyGuardTransient {
             _safeBurn(lcc, from, cancelAmount);
         }
 
-        // Queue a portion for settlement to the specified recipient (no-op for queueAmount == 0)
+        // Queue accounting is intentionally decoupled from current holder backing.
+        // Runtime settleability is enforced when processSettlementFor executes.
         _queueSettlement(lcc, recipient, queueAmount);
     }
 
@@ -865,6 +878,7 @@ contract LiquidityHub is BoundRegistry, Ownable, ReentrancyGuardTransient {
      *      Unified interface: branches behaviour based on whether recipient is address(this) (Hub) or external address.
      *      For Hub: burns Hub-held LCC without transferring underlying or decrementing reserves.
      *      For external: checks holder balance, burns user tokens, transfers underlying, and decrements reserves.
+     *      External-path reverts are retriable and signal that reserves/custody are not yet reconciled.
      * @param lcc The LCC token address
      * @param recipient The recipient address to settle for (address(this) for Hub's own queue)
      * @param maxAmount The maximum amount to settle (caller can limit to avoid large gas costs)
@@ -974,6 +988,21 @@ contract LiquidityHub is BoundRegistry, Ownable, ReentrancyGuardTransient {
         internal
         view
     {
+        _assertValidQueueOwner(lcc, recipient, allowHub);
+
+        (, uint256 marketDerivedBalance) = ILCC(lcc).balancesOf(recipient);
+        if (marketDerivedBalance < amount) {
+            revert Errors.InsufficientBalance(marketDerivedBalance, amount);
+        }
+    }
+
+    /**
+     * @dev Minimal queue-owner validity check for generic queue creation.
+     * Queue owners must not be zero and must not be bucket-exempt unless the queue is intentionally
+     * attributed to the Hub itself. This keeps generic queue writes compatible with later settlement,
+     * while still allowing queue ownership to be decoupled from current holder backing.
+     */
+    function _assertValidQueueOwner(address lcc, address recipient, bool allowHub) internal view {
         if (recipient == address(0)) {
             revert Errors.InvalidAddress(recipient);
         }
@@ -983,21 +1012,19 @@ contract LiquidityHub is BoundRegistry, Ownable, ReentrancyGuardTransient {
             return;
         }
 
-        // External settlement queues are only serviceable for bucket-tracked recipients.
         if (Bounds.isExempt(boundLevelOfLcc(lcc, recipient))) {
             revert Errors.NotApproved(recipient);
         }
-
-        (, uint256 marketDerivedBalance) = ILCC(lcc).balancesOf(recipient);
-        if (marketDerivedBalance < amount) {
-            revert Errors.InsufficientBalance(marketDerivedBalance, amount);
-        }
     }
 
+    /**
+     * @dev Queue accounting helper only.
+     * Deliberately does not assert recipient backing/custody because queue ownership may be
+     * intentionally decoupled from current LCC holder state. Serviceability is enforced at
+     * processSettlementFor(), while explicit transfer-recipient flows validate earlier.
+     */
     function _queueSettlement(address lcc, address recipient, uint256 amount) internal {
         if (amount == 0) return;
-        // Shared guard for all queue creation paths (cancel-with-queue, planned cancel execution, unwrap shortfalls).
-        _assertQueueRecipientServiceable(lcc, recipient, amount, true);
         LiquidityHubLib.queueSettlement(s, lcc, recipient, amount);
         emit SettlementQueued(lcc, recipient, amount);
     }

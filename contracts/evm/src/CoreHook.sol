@@ -96,12 +96,15 @@ contract CoreHook is BaseHook, ImmutableMarketState, ImmutableVTSState, ICoreHoo
 
     function _beforeRemoveLiquidity(
         address sender,
-        PoolKey calldata,
+        PoolKey calldata key,
         ModifyLiquidityParams calldata params,
         bytes calldata
     ) internal override returns (bytes4) {
-        // Always an existing position; settle growths against pre-modification liquidity
-        vtsOrchestrator.settlePositionGrowths(PositionLibrary.generateId(sender, params));
+        // During pause, removals are still allowed but VTS mutations are frozen.
+        if (!_isPoolOrGlobalPaused(key)) {
+            // Always an existing position; settle growths against pre-modification liquidity
+            vtsOrchestrator.settlePositionGrowths(PositionLibrary.generateId(sender, params));
+        }
         return this.beforeRemoveLiquidity.selector;
     }
 
@@ -190,6 +193,10 @@ contract CoreHook is BaseHook, ImmutableMarketState, ImmutableVTSState, ICoreHoo
         BalanceDelta feesAccrued,
         bytes calldata hookData
     ) internal virtual override returns (bytes4, BalanceDelta) {
+        if (_isPoolOrGlobalPaused(key)) {
+            return (this.afterRemoveLiquidity.selector, BalanceDelta.wrap(0));
+        }
+
         // Update VTS position state with registration/update based on actual pool id
         // Pass callerDelta and feesAccrued for consolidated delta management
         (,, BalanceDelta feeAdj,) = vtsOrchestrator.processPosition(sender, key, params, delta, feesAccrued, hookData);
@@ -203,6 +210,10 @@ contract CoreHook is BaseHook, ImmutableMarketState, ImmutableVTSState, ICoreHoo
     // Helper function to get the proxy hook address from the core pool key
     function _getProxyHook(PoolKey calldata corePoolKey) internal view returns (address) {
         return MarketHandlerLib.getProxyHook(marketFactory, corePoolKey);
+    }
+
+    function _isPoolOrGlobalPaused(PoolKey calldata key) internal view returns (bool) {
+        return vtsOrchestrator.isPoolOrGlobalPaused(key.toId());
     }
 
     /// @dev Emits direct swap lane fact to canonical vault handler for obligation follow-up.

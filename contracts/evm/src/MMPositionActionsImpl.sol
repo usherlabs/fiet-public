@@ -169,15 +169,28 @@ contract MMPositionActionsImpl is
             return;
         }
         if (action == MMActions.INCREASE_LIQUIDITY_FROM_DELTAS) {
-            (PoolKey calldata poolKey, uint256 tokenId, uint256 positionIndex, bool payerIsUser) =
-                params.decodeIncreaseFromDeltasParams();
-            _increaseFromDeltas(poolKey, tokenId, positionIndex, payerIsUser);
+            (
+                PoolKey calldata poolKey,
+                uint256 tokenId,
+                uint256 positionIndex,
+                uint128 amount0Max,
+                uint128 amount1Max,
+                bool payerIsUser
+            ) = params.decodeIncreaseFromDeltasParams();
+            _increaseFromDeltas(poolKey, tokenId, positionIndex, amount0Max, amount1Max, payerIsUser);
             return;
         }
         if (action == MMActions.MINT_POSITION_FROM_DELTAS) {
-            (PoolKey calldata poolKey, uint256 tokenId, int24 tickLower, int24 tickUpper, bool payerIsUser) =
-                params.decodeMintFromDeltasParams();
-            _mintFromDeltas(poolKey, tokenId, tickLower, tickUpper, payerIsUser);
+            (
+                PoolKey calldata poolKey,
+                uint256 tokenId,
+                int24 tickLower,
+                int24 tickUpper,
+                uint128 amount0Max,
+                uint128 amount1Max,
+                bool payerIsUser
+            ) = params.decodeMintFromDeltasParams();
+            _mintFromDeltas(poolKey, tokenId, tickLower, tickUpper, amount0Max, amount1Max, payerIsUser);
             return;
         }
         if (action == MMActions.SETTLE_POSITION_FROM_DELTAS) {
@@ -223,6 +236,44 @@ contract MMPositionActionsImpl is
     /// @return The vault
     function _getVault(PoolKey calldata poolKey) internal view returns (IMarketVault) {
         return MarketHandlerLib.getVault(marketFactory, poolKey.toId());
+    }
+
+    /// @notice Reverts when principal token spend exceeds user-provided maxima
+    function _validateMaxIn(BalanceDelta principalDelta, uint128 amount0Max, uint128 amount1Max) internal pure {
+        int256 amount0 = principalDelta.amount0();
+        int256 amount1 = principalDelta.amount1();
+        if (amount0 < 0 && amount0Max < uint128(uint256(-amount0))) {
+            revert Errors.MaximumAmountExceeded(amount0Max, uint128(uint256(-amount0)));
+        }
+        if (amount1 < 0 && amount1Max < uint128(uint256(-amount1))) {
+            revert Errors.MaximumAmountExceeded(amount1Max, uint128(uint256(-amount1)));
+        }
+    }
+
+    function _settleFromDeltasCredits(
+        PoolKey calldata poolKey,
+        uint256 tokenId,
+        uint256 positionIndex,
+        uint256 credit0,
+        uint256 credit1,
+        bool payerIsUser
+    ) internal {
+        if (payerIsUser) {
+            // since credits exist (and already in market), net settlement for position
+            _callOnMMSettle(
+                SettleCallParams({
+                    vault: _getVault(poolKey),
+                    factory: marketFactory,
+                    tokenId: tokenId,
+                    positionIndex: positionIndex,
+                    requestedDelta: LiquidityUtils.safeToBalanceDelta(credit0, credit1, true, true),
+                    isSeizing: false
+                })
+            );
+        } else {
+            // Settle into the position the underlying tokens that are owed.
+            _settle(poolKey, tokenId, positionIndex, -credit0.toInt128(), -credit1.toInt128(), true);
+        }
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
@@ -473,6 +524,7 @@ contract MMPositionActionsImpl is
     /// @param tickUpper The upper tick of the position
     /// @param liquidity The amount of liquidity to add
     /// @return positionId The position ID
+    /// @return principalDelta Principal token deltas excluding informational fee accrual
     function _increaseInternal(
         PoolKey calldata poolKey,
         uint256 tokenId,
@@ -480,7 +532,7 @@ contract MMPositionActionsImpl is
         int24 tickLower,
         int24 tickUpper,
         uint256 liquidity
-    ) internal returns (PositionId positionId) {
+    ) internal returns (PositionId positionId, BalanceDelta principalDelta) {
         if (liquidity > type(uint128).max) {
             revert Errors.InvalidAmount(liquidity, type(uint128).max);
         }
@@ -494,22 +546,31 @@ contract MMPositionActionsImpl is
 
         positionId = PositionLibrary.generateId(address(this), params);
         bytes memory hookData = PositionModificationHookDataLib.encode(tokenId, positionIndex, msgSender());
-        _modifySyntheticLiquidity(poolKey, params, tokenId, hookData);
+        (BalanceDelta liquidityDelta, BalanceDelta feesAccrued) =
+            _modifySyntheticLiquidity(poolKey, params, tokenId, hookData);
+        principalDelta = liquidityDelta - feesAccrued;
     }
 
     /// @notice Increases liquidity using available delta credits
     /// @param poolKey The pool key
     /// @param tokenId The commitment NFT token ID
     /// @param positionIndex The position index within the commitment
+    /// @param amount0Max The maximum amount of token0 to spend
+    /// @param amount1Max The maximum amount of token1 to spend
     /// @param payerIsUser If true, user consumes credit the protocol owes them (delta target = MMPM).
     ///        If false, uses locker's direct credit (delta target = locker).
     /// @dev Delta target semantics:
     ///      - MMPM (address(this)): Protocol owes/is owed by external sources
     ///      - Locker (msgSender()): External entity owes/is owed by protocol
     /// @dev tickLower and tickUpper are read from the position via getPosition()
-    function _increaseFromDeltas(PoolKey calldata poolKey, uint256 tokenId, uint256 positionIndex, bool payerIsUser)
-        internal
-    {
+    function _increaseFromDeltas(
+        PoolKey calldata poolKey,
+        uint256 tokenId,
+        uint256 positionIndex,
+        uint128 amount0Max,
+        uint128 amount1Max,
+        bool payerIsUser
+    ) internal {
         address sender = msgSender();
         MMHelpers.assertApprovedOrOwner(sender, tokenId);
 
@@ -521,23 +582,11 @@ contract MMPositionActionsImpl is
         address deltaTarget = payerIsUser ? address(this) : sender;
         (uint256 liquidityFromDeltas, uint256 credit0, uint256 credit1) =
             _getLiquidityFromDeltas(poolKey, deltaTarget, position.tickLower, position.tickUpper);
-        _increaseInternal(poolKey, tokenId, positionIndex, position.tickLower, position.tickUpper, liquidityFromDeltas);
-        if (payerIsUser) {
-            // since credits exist (and already in market), net settlement for position
-            _callOnMMSettle(
-                SettleCallParams({
-                    vault: _getVault(poolKey),
-                    factory: marketFactory,
-                    tokenId: tokenId,
-                    positionIndex: positionIndex,
-                    requestedDelta: LiquidityUtils.safeToBalanceDelta(credit0, credit1, true, true),
-                    isSeizing: false
-                })
-            );
-        } else {
-            // Settle into the position the underlying tokens that are owed.
-            _settle(poolKey, tokenId, positionIndex, -credit0.toInt128(), -credit1.toInt128(), true);
-        }
+        (, BalanceDelta principalDelta) = _increaseInternal(
+            poolKey, tokenId, positionIndex, position.tickLower, position.tickUpper, liquidityFromDeltas
+        );
+        _validateMaxIn(principalDelta, amount0Max, amount1Max);
+        _settleFromDeltasCredits(poolKey, tokenId, positionIndex, credit0, credit1, payerIsUser);
     }
 
     /// @notice Mints a new position within a commitment
@@ -562,6 +611,8 @@ contract MMPositionActionsImpl is
     /// @param tokenId The commitment NFT token ID
     /// @param tickLower The lower tick of the position
     /// @param tickUpper The upper tick of the position
+    /// @param amount0Max The maximum amount of token0 to spend
+    /// @param amount1Max The maximum amount of token1 to spend
     /// @param payerIsUser If true, user consumes credit the protocol owes them (delta target = MMPM).
     ///        If false, uses locker's direct credit (delta target = locker).
     /// @dev Delta target semantics:
@@ -572,6 +623,8 @@ contract MMPositionActionsImpl is
         uint256 tokenId,
         int24 tickLower,
         int24 tickUpper,
+        uint128 amount0Max,
+        uint128 amount1Max,
         bool payerIsUser
     ) internal {
         MMHelpers.assertApprovedOrOwner(msgSender(), tokenId);
@@ -582,23 +635,10 @@ contract MMPositionActionsImpl is
         (uint256 liquidityFromDeltas, uint256 credit0, uint256 credit1) =
             _getLiquidityFromDeltas(poolKey, deltaTarget, tickLower, tickUpper);
         // This works as LCCs are issued, capitalised by underlying tokens owed to the MM.
-        (, uint256 positionIndex) = _mintPositionInternal(poolKey, tokenId, tickLower, tickUpper, liquidityFromDeltas);
-        if (payerIsUser) {
-            // since credits exist (and already in market), net settlement for position
-            _callOnMMSettle(
-                SettleCallParams({
-                    vault: _getVault(poolKey),
-                    factory: marketFactory,
-                    tokenId: tokenId,
-                    positionIndex: positionIndex,
-                    requestedDelta: LiquidityUtils.safeToBalanceDelta(credit0, credit1, true, true),
-                    isSeizing: false
-                })
-            );
-        } else {
-            // Settle into the position the underlying tokens that are owed.
-            _settle(poolKey, tokenId, positionIndex, -credit0.toInt128(), -credit1.toInt128(), true);
-        }
+        (, uint256 positionIndex, BalanceDelta principalDelta) =
+            _mintPositionInternal(poolKey, tokenId, tickLower, tickUpper, liquidityFromDeltas);
+        _validateMaxIn(principalDelta, amount0Max, amount1Max);
+        _settleFromDeltasCredits(poolKey, tokenId, positionIndex, credit0, credit1, payerIsUser);
     }
 
     /// @notice Settles into/from the position using available delta credits
@@ -741,13 +781,14 @@ contract MMPositionActionsImpl is
     /// @param liquidity The amount of liquidity to mint
     /// @return positionId The position ID
     /// @return positionIndex The position index within the commitment
+    /// @return principalDelta Principal token deltas excluding informational fee accrual
     function _mintPositionInternal(
         PoolKey calldata poolKey,
         uint256 tokenId,
         int24 tickLower,
         int24 tickUpper,
         uint256 liquidity
-    ) internal returns (PositionId positionId, uint256 positionIndex) {
+    ) internal returns (PositionId positionId, uint256 positionIndex, BalanceDelta principalDelta) {
         if (liquidity > type(uint128).max) {
             revert Errors.InvalidAmount(liquidity, type(uint128).max);
         }
@@ -763,7 +804,9 @@ contract MMPositionActionsImpl is
 
         positionId = PositionLibrary.generateId(address(this), params);
         bytes memory hookData = PositionModificationHookDataLib.encode(tokenId, positionIndex, msgSender());
-        _modifySyntheticLiquidity(poolKey, params, tokenId, hookData);
+        (BalanceDelta liquidityDelta, BalanceDelta feesAccrued) =
+            _modifySyntheticLiquidity(poolKey, params, tokenId, hookData);
+        principalDelta = liquidityDelta - feesAccrued;
     }
 }
 

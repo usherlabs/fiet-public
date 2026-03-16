@@ -137,9 +137,23 @@ library MMActionAdapter {
         int24 tickUpper,
         bool payerIsUser
     ) internal pure returns (PreparedAction memory) {
+        return prepareMintFromDeltas(
+            poolKey, tokenId, tickLower, tickUpper, type(uint128).max, type(uint128).max, payerIsUser
+        );
+    }
+
+    function prepareMintFromDeltas(
+        PoolKey memory poolKey,
+        uint256 tokenId,
+        int24 tickLower,
+        int24 tickUpper,
+        uint128 amount0Max,
+        uint128 amount1Max,
+        bool payerIsUser
+    ) internal pure returns (PreparedAction memory) {
         return PreparedAction({
             action: bytes1(uint8(MMActions.MINT_POSITION_FROM_DELTAS)),
-            params: abi.encode(poolKey, tokenId, tickLower, tickUpper, payerIsUser)
+            params: abi.encode(poolKey, tokenId, tickLower, tickUpper, amount0Max, amount1Max, payerIsUser)
         });
     }
 
@@ -276,9 +290,22 @@ library MMActionAdapter {
         uint256 positionIndex,
         bool payerIsUser
     ) internal pure returns (PreparedAction memory) {
+        return prepareIncreaseFromDeltas(
+            poolKey, tokenId, positionIndex, type(uint128).max, type(uint128).max, payerIsUser
+        );
+    }
+
+    function prepareIncreaseFromDeltas(
+        PoolKey memory poolKey,
+        uint256 tokenId,
+        uint256 positionIndex,
+        uint128 amount0Max,
+        uint128 amount1Max,
+        bool payerIsUser
+    ) internal pure returns (PreparedAction memory) {
         return PreparedAction({
             action: bytes1(uint8(MMActions.INCREASE_LIQUIDITY_FROM_DELTAS)),
-            params: abi.encode(poolKey, tokenId, positionIndex, payerIsUser)
+            params: abi.encode(poolKey, tokenId, positionIndex, amount0Max, amount1Max, payerIsUser)
         });
     }
 

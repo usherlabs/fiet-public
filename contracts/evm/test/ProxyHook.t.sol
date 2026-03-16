@@ -908,6 +908,26 @@ contract ProxyHookTest is MarketVaultBase {
         );
     }
 
+    function test_directLP_removeLiquidity_doesNotRevert_whenPoolPaused() public {
+        vtsOrchestrator.pausePool(corePoolKey.toId());
+
+        modifyLiquidityRouter.modifyLiquidity(
+            corePoolKey,
+            ModifyLiquidityParams({tickLower: -60, tickUpper: 60, liquidityDelta: -int256(1e18), salt: bytes32(0)}),
+            ZERO_BYTES
+        );
+    }
+
+    function test_directLP_removeLiquidity_doesNotRevert_whenGlobalPauseActive() public {
+        vtsOrchestrator.setGlobalPause(true);
+
+        modifyLiquidityRouter.modifyLiquidity(
+            corePoolKey,
+            ModifyLiquidityParams({tickLower: -60, tickUpper: 60, liquidityDelta: -int256(1e18), salt: bytes32(0)}),
+            ZERO_BYTES
+        );
+    }
+
     function test_activate_setsCoreHook_onFreshProxyHook() public {
         // Deploy a fresh proxy hook instance (not created via MarketFactory) so coreHook starts unset.
         // Use harness (no hook-address validation) so we can deploy at an arbitrary address in tests.
