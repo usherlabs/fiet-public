@@ -188,32 +188,35 @@ abstract contract MME2EBase is E2EBase {
         console.log(label, tick);
     }
 
-    /// @dev Create a new position for a market maker
-    function _createMmPosition(StandaloneMarket memory m, uint256 mmPk, int24 tickLower, int24 tickUpper, uint128 liq)
+    function _baseSettlementAmounts(
+        address vtsOrchestratorAddr,
+        PoolKey memory key,
+        int24 tickLower,
+        int24 tickUpper,
+        uint128 liq
+    )
         internal
-        returns (uint256 commitId)
+        view
+        returns (uint256 settle0, uint256 settle1)
     {
-        address mm = vm.addr(mmPk);
-
-        MMPositionManager mmpm = MMPositionManager(payable(m.stack.contracts.mmPositionManager));
-        IVTSOrchestrator vts = IVTSOrchestrator(m.stack.contracts.vtsOrchestrator);
-        PoolKey memory key = _corePoolKey(m);
+        IVTSOrchestrator vts = IVTSOrchestrator(vtsOrchestratorAddr);
         MarketVTSConfiguration memory vtsCfg = vts.getMarketVTSConfiguration(key.toId());
-
-        bytes memory liquiditySignalBytes = _buildSingleLeafLiquiditySignal(mmPk, 1);
-
         (uint256 c0, uint256 c1) = LiquidityUtils.calculateCommitmentMaxima(tickLower, tickUpper, liq);
-        (uint256 settle0, uint256 settle1) =
+        (settle0, settle1) =
             LiquidityUtils.getBaseSettlementAmounts(c0, c1, vtsCfg.token0.baseVTSRate, vtsCfg.token1.baseVTSRate);
+    }
 
-        commitId = mmpm.nextTokenId();
-
-        vm.startBroadcast(mmPk);
-        Token(m.underlying0).mint(mm, settle0);
-        Token(m.underlying1).mint(mm, settle1);
-        IERC20(m.underlying0).approve(address(mmpm), settle0);
-        IERC20(m.underlying1).approve(address(mmpm), settle1);
-
+    function _executeCreatePositionBatch(
+        MMPositionManager mmpm,
+        PoolKey memory key,
+        uint256 commitId,
+        int24 tickLower,
+        int24 tickUpper,
+        uint128 liq,
+        bytes memory liquiditySignalBytes,
+        uint256 settle0,
+        uint256 settle1
+    ) internal {
         bytes memory actions = abi.encodePacked(
             bytes1(uint8(MMActions.COMMIT_SIGNAL)),
             bytes1(uint8(MMActions.MINT_POSITION)),
@@ -225,6 +228,33 @@ abstract contract MME2EBase is E2EBase {
         params[2] =
             abi.encode(key, commitId, 0, -int128(int256(settle0)), -int128(int256(settle1)), false);
         _executeMMActions(mmpm, actions, params, block.timestamp + 3600);
+    }
+
+    /// @dev Create a new position for a market maker
+    function _createMmPosition(StandaloneMarket memory m, uint256 mmPk, int24 tickLower, int24 tickUpper, uint128 liq)
+        internal
+        returns (uint256 commitId)
+    {
+        address mm = vm.addr(mmPk);
+
+        MMPositionManager mmpm = MMPositionManager(payable(m.stack.contracts.mmPositionManager));
+        PoolKey memory key = _corePoolKey(m);
+
+        bytes memory liquiditySignalBytes = _buildSingleLeafLiquiditySignal(mmPk, 1);
+        (uint256 settle0, uint256 settle1) =
+            _baseSettlementAmounts(m.stack.contracts.vtsOrchestrator, key, tickLower, tickUpper, liq);
+
+        commitId = mmpm.nextTokenId();
+
+        vm.startBroadcast(mmPk);
+        Token(m.underlying0).mint(mm, settle0);
+        Token(m.underlying1).mint(mm, settle1);
+        IERC20(m.underlying0).approve(address(mmpm), settle0);
+        IERC20(m.underlying1).approve(address(mmpm), settle1);
+
+        _executeCreatePositionBatch(
+            mmpm, key, commitId, tickLower, tickUpper, liq, liquiditySignalBytes, settle0, settle1
+        );
         vm.stopBroadcast();
 
         require(mmpm.ownerOf(commitId) == mm, "mmpm: owner mismatch");

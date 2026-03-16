@@ -165,6 +165,8 @@ The LiquidityHub implements several security mechanisms. Factory authorisation e
 
 The Hub's design as an account-agnostic aggregator also provides security benefits: by not tracking individual user accounts directly, the Hub reduces complexity and potential attack vectors, delegating account management to the LCC tokens themselves.
 
+For queue/settlement validation placement and retriable settlement semantics, see `agents/spec/Settlement Queue Semantics.md`.
+
 ## Conclusion
 
 The LiquidityHub represents a sophisticated system for managing liquidity commitments across multiple markets, enabling efficient flattening, netting, and settlement operations while maintaining strict 1:1 backing ratios. Its integration with MarketVaults, ProxyHooks, and CoreHooks creates a cohesive protocol where liquidity flows efficiently between markets and the Hub, with lazy settlement mechanisms ensuring smooth operation even when immediate liquidity is unavailable. The LCC-backing-LCC mechanisms in particular demonstrate the protocol's ability to handle complex backing scenarios efficiently, minimising gas costs and market interactions while preserving accounting integrity.

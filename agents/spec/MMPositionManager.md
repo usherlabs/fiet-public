@@ -504,6 +504,7 @@ function checkpoint(uint256 tokenId, uint256 positionIndex, bytes calldata liqui
 - **`VTSOrchestrator.sol`**: VTS state coordination
 - **`MarketVault.sol`**: Per-market liquidity vault
 - **`LiquidityHub.sol`**: LCC wrapping/unwrapping and settlement queue
+- **`Settlement Queue Semantics.md`**: Queue ownership, settleability, and retry semantics
 - **`Currency-Delta-Accounting.md`**: Delta target semantics documentation
 
 ---

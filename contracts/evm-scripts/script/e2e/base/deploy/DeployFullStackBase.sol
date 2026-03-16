@@ -116,6 +116,71 @@ abstract contract DeployFullStackBase is CREATE3Script, NetworkConfig {
         return _deployCreate3(name, creationCode);
     }
 
+    function _deployMMStack(address liquidityHub, address vtsOrchestrator, address commitmentDescriptor, address deployer)
+        internal
+        returns (address actionsImpl, address queueCustodian, address mmPositionManager)
+    {
+        address weth9 = address(PositionManager(payable(config.positionManager)).WETH9());
+        address permit2 = address(PositionManager(payable(config.positionManager)).permit2());
+
+        actionsImpl = _deployCreate3(
+            ACTIONS_IMPL,
+            abi.encodePacked(
+                type(MMPositionActionsImpl).creationCode, abi.encode(config.poolManager, liquidityHub, vtsOrchestrator)
+            )
+        );
+
+        queueCustodian = _deployCreate3(
+            QUEUE_CUSTODIAN,
+            abi.encodePacked(type(MMQueueCustodian).creationCode, abi.encode(deployer))
+        );
+
+        mmPositionManager = _deployCreate3(
+            MM_POSITION_MANAGER,
+            abi.encodePacked(
+                type(MMPositionManager).creationCode,
+                abi.encode(
+                    config.poolManager,
+                    liquidityHub,
+                    vtsOrchestrator,
+                    commitmentDescriptor,
+                    weth9,
+                    permit2,
+                    actionsImpl,
+                    queueCustodian
+                )
+            )
+        );
+        MMQueueCustodian(queueCustodian).setPositionManager(mmPositionManager);
+    }
+
+    function _deployCoreHook(address marketFactory, address vtsOrchestrator) internal returns (address coreHook) {
+        bytes memory ctorArgs = abi.encode(config.poolManager, marketFactory, vtsOrchestrator);
+        (address hookAddress, bytes32 salt) =
+            HookMiner.find(config.create2Deployer, HookFlags.CORE_HOOK_FLAGS, type(CoreHook).creationCode, ctorArgs);
+        CoreHook deployedHook = new CoreHook{salt: salt}(config.poolManager, marketFactory, vtsOrchestrator);
+        require(address(deployedHook) == hookAddress, "CoreHook: address mismatch");
+        coreHook = hookAddress;
+    }
+
+    function _initialiseFactory(
+        address globalConfig,
+        address marketFactory,
+        address coreHook,
+        address mmPositionManager,
+        address queueCustodian,
+        address directLPDeltaResolver
+    ) internal {
+        address[] memory initialBounds = new address[](3);
+        initialBounds[0] = mmPositionManager;
+        initialBounds[1] = queueCustodian;
+        initialBounds[2] = directLPDeltaResolver;
+        GlobalConfig(globalConfig)
+            .proxyCall(
+                marketFactory, abi.encodeWithSelector(MarketFactory.initialise.selector, coreHook, initialBounds)
+            );
+    }
+
     function _deployAll() internal returns (FullStack memory out) {
         // Load network constants + deployment file path (even though we don't write).
         _initNetwork();
@@ -216,39 +281,9 @@ abstract contract DeployFullStackBase is CREATE3Script, NetworkConfig {
             _deployCreate3(COMMITMENT_DESCRIPTOR, type(MMPCommitmentDescriptor).creationCode);
 
         // 9) MMPositionActionsImpl + MMQueueCustodian + MMPositionManager
-        address weth9 = address(PositionManager(payable(config.positionManager)).WETH9());
-        address permit2 = address(PositionManager(payable(config.positionManager)).permit2());
-
-        out.contracts.actionsImpl = _deployCreate3(
-            ACTIONS_IMPL,
-            abi.encodePacked(
-                type(MMPositionActionsImpl).creationCode,
-                abi.encode(config.poolManager, out.contracts.liquidityHub, out.contracts.vtsOrchestrator)
-            )
+        (out.contracts.actionsImpl, out.contracts.queueCustodian, out.contracts.mmPositionManager) = _deployMMStack(
+            out.contracts.liquidityHub, out.contracts.vtsOrchestrator, out.contracts.commitmentDescriptor, deployer
         );
-
-        out.contracts.queueCustodian = _deployCreate3(
-            QUEUE_CUSTODIAN,
-            abi.encodePacked(type(MMQueueCustodian).creationCode, abi.encode(deployer))
-        );
-
-        out.contracts.mmPositionManager = _deployCreate3(
-            MM_POSITION_MANAGER,
-            abi.encodePacked(
-                type(MMPositionManager).creationCode,
-                abi.encode(
-                    config.poolManager,
-                    out.contracts.liquidityHub,
-                    out.contracts.vtsOrchestrator,
-                    out.contracts.commitmentDescriptor,
-                    weth9,
-                    permit2,
-                    out.contracts.actionsImpl,
-                    out.contracts.queueCustodian
-                )
-            )
-        );
-        MMQueueCustodian(out.contracts.queueCustodian).setPositionManager(out.contracts.mmPositionManager);
 
         // 10) DirectLPDeltaResolver
         out.contracts.directLPDeltaResolver = _deployCreate3(
@@ -281,25 +316,17 @@ abstract contract DeployFullStackBase is CREATE3Script, NetworkConfig {
             );
 
         // 12) Deploy CoreHook via CREATE2 HookMiner
-        bytes memory ctorArgs =
-            abi.encode(config.poolManager, out.contracts.marketFactory, out.contracts.vtsOrchestrator);
-        (address hookAddress, bytes32 salt) =
-            HookMiner.find(config.create2Deployer, HookFlags.CORE_HOOK_FLAGS, type(CoreHook).creationCode, ctorArgs);
-        CoreHook deployedHook =
-            new CoreHook{salt: salt}(config.poolManager, out.contracts.marketFactory, out.contracts.vtsOrchestrator);
-        require(address(deployedHook) == hookAddress, "CoreHook: address mismatch");
-        out.contracts.coreHook = hookAddress;
+        out.contracts.coreHook = _deployCoreHook(out.contracts.marketFactory, out.contracts.vtsOrchestrator);
 
         // 13) Initialise MarketFactory (via GlobalConfig)
-        address[] memory initialBounds = new address[](3);
-        initialBounds[0] = out.contracts.mmPositionManager;
-        initialBounds[1] = out.contracts.queueCustodian;
-        initialBounds[2] = out.contracts.directLPDeltaResolver;
-        GlobalConfig(out.contracts.globalConfig)
-            .proxyCall(
-                out.contracts.marketFactory,
-                abi.encodeWithSelector(MarketFactory.initialise.selector, out.contracts.coreHook, initialBounds)
-            );
+        _initialiseFactory(
+            out.contracts.globalConfig,
+            out.contracts.marketFactory,
+            out.contracts.coreHook,
+            out.contracts.mmPositionManager,
+            out.contracts.queueCustodian,
+            out.contracts.directLPDeltaResolver
+        );
 
         vm.stopBroadcast();
 
