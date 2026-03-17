@@ -347,6 +347,7 @@ abstract contract MME2EBase is E2EBase {
     {
         address mm = vm.addr(mmPk);
         address underlying = ILCC(lcc).underlying();
+        ILiquidityHub hub = ILiquidityHub(m.stack.contracts.liquidityHub);
 
         uint256 lccBefore = IERC20(lcc).balanceOf(mm);
         uint256 underlyingBefore = IERC20(underlying).balanceOf(mm);
@@ -368,17 +369,19 @@ abstract contract MME2EBase is E2EBase {
 
         uint256 lccAfter = IERC20(lcc).balanceOf(mm);
         uint256 underlyingAfter = IERC20(underlying).balanceOf(mm);
+        uint256 outstandingQueued = hub.settleQueue(lcc, mm);
 
         uint256 lccSpent = lccBefore - lccAfter;
         underlyingDelta = underlyingAfter - underlyingBefore;
 
         console.log("unwrap spent lcc:", lccSpent);
         console.log("unwrap underlying received:", underlyingDelta);
+        console.log("unwrap queued shortfall:", outstandingQueued);
 
-        // Assert the balance of the underlying is equal to the amount of LCC spent
-        // i.e assert that we were able to unwrap all the LCC's we wanted to unwrap
+        // Unwrap may annul existing queue during transferFrom and then queue fresh shortfall.
+        // Assert immediate underlying plus the final outstanding queue equals LCC spent.
         if (assertBalance) {
-            require(underlyingDelta == lccSpent, "unwrap: underlying != unwrap amount");
+            require(underlyingDelta + outstandingQueued == lccSpent, "unwrap: redemption mismatch");
         }
     }
 
@@ -432,7 +435,9 @@ abstract contract MME2EBase is E2EBase {
         st.sourceState = "e2e.sourceState";
         st.prover = "e2e.prover";
         st.nonce = "e2e.nonce";
-        st.advancer = address(0);
+        // MMPositionManager forwards locker as hook-data sender on MM ops;
+        // keep advancer aligned with the E2E MM actor to satisfy sender guards.
+        st.advancer = mm;
         st.reserves = new MarketMaker.Reserve[](2);
         st.reserves[0] = MarketMaker.Reserve({asset: "BTC", amount: 1e20});
         st.reserves[1] = MarketMaker.Reserve({asset: "USDT", amount: 5e18});
