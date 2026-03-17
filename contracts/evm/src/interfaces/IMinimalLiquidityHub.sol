@@ -113,7 +113,7 @@ interface IMinimalLiquidityHub {
 
     /**
      * @notice Gets the unfunded queued settlement debt for the underlying backing a given LCC
-     * @dev Returns `max(queueOfUnderlying - reserveOfUnderlying, 0)` at underlying scope.
+     * @dev Returns `max(queueOfUnderlying - marketDerivedReserveOfUnderlying, 0)` at underlying scope.
      * @param lcc The LCC token address
      * @return The remaining underlying shortfall that still needs mobilisation
      */
@@ -125,6 +125,14 @@ interface IMinimalLiquidityHub {
      * @return The reserve of underlying
      */
     function reserveOfUnderlying(address lcc) external view returns (uint256);
+
+    /**
+     * @notice Gets the split underlying reserve tuple for a given LCC
+     * @param lcc The LCC token address
+     * @return direct The reserve backing direct/wrapped supply
+     * @return marketDerived The reserve mobilised from market-derived flows
+     */
+    function reserveOfUnderlyingTuple(address lcc) external view returns (uint256 direct, uint256 marketDerived);
 
     /**
      * @notice Returns the direct supply (wrapped underlying) for a given LCC token
