@@ -329,6 +329,111 @@ Change `HubRSC` to read directly from `LiquidityHub` state rather than relying o
 
 ---
 
+## Vulnerability #64: Zero-Sentinel Key Acceptance in `LinkedQueue`
+
+### Summary
+
+**Classification:** Library correctness / potential liveness failure  
+**Severity:** Informational for current deployment; potentially High if the library is reused with arbitrary keys  
+**Status:** Real library defect, not currently exploitable in `HubRSC`
+
+---
+
+### Description
+
+`LinkedQueue` uses `bytes32(0)` as the sentinel value for:
+
+- empty `head` / `tail`
+- unset `cursor`
+- missing `next` / `prev` links
+- wrap-to-head behaviour in `nextOrHead()`
+
+At the same time, `enqueue()` does not reject `key == bytes32(0)`. This means the zero value is treated as both a valid node identifier and the queue's null pointer.
+
+If a zero key were ever enqueued, queue invariants could break. Depending on insertion and removal order, this can corrupt traversal, leave stale links behind, and make later items unreachable from `head`, resulting in persistent starvation or effective DoS of queue processing.
+
+---
+
+### Technical Mechanics
+
+The defect comes from mixing a valid key domain with a sentinel-based linked-list design:
+
+```solidity
+function enqueue(Data storage self, bytes32 key) internal {
+    if (self.inQueue[key]) return;
+
+    if (self.tail == bytes32(0)) {
+        self.head = key;
+        self.tail = key;
+        self.cursor = key;
+    } else {
+        self.next[self.tail] = key;
+        self.prev[key] = self.tail;
+        self.tail = key;
+    }
+}
+
+function currentCursor(Data storage self) internal view returns (bytes32) {
+    return self.cursor == bytes32(0) ? self.head : self.cursor;
+}
+
+function nextOrHead(Data storage self, bytes32 key) internal view returns (bytes32) {
+    bytes32 nextKey = self.next[key];
+    return nextKey == bytes32(0) ? self.head : nextKey;
+}
+```
+
+Because `bytes32(0)` means "no node" everywhere else in the structure, enqueuing it can:
+
+1. Make a non-empty queue appear empty when `tail == bytes32(0)`
+2. Cause traversal to wrap to `head` instead of visiting the zero node
+3. Allow `remove(bytes32(0))` to reuse stale `prev[bytes32(0)]` state and restore an invalid tail
+4. Strand future entries behind an unreachable tail pointer
+
+---
+
+### Current Exploitability in This Repository
+
+This issue is **not currently exploitable** in the deployed `HubRSC` design.
+
+`HubRSC` does not accept arbitrary external queue keys. Every queued key is derived as:
+
+```solidity
+function computeKey(address lcc, address recipient) public pure returns (bytes32) {
+    return keccak256(abi.encode(lcc, recipient));
+}
+```
+
+Under the current integration, hitting `bytes32(0)` would require finding a preimage for `keccak256(abi.encode(lcc, recipient)) == bytes32(0)`, which is computationally infeasible.
+
+So:
+
+- the `LinkedQueue` defect is real as a library issue
+- the `HubRSC` consumer is not practically vulnerable today
+- the main risk is future reuse of `LinkedQueue` with arbitrary or insufficiently constrained keys
+
+---
+
+### Recommended Hardening
+
+If `LinkedQueue` is retained as a reusable library, the simplest hardening is to reject the sentinel explicitly:
+
+```solidity
+if (key == bytes32(0)) revert ZeroKeyNotAllowed();
+```
+
+Alternatively, document the non-zero-key precondition very clearly and ensure every caller derives keys from a domain that cannot produce `bytes32(0)` in practice.
+
+---
+
+### Change Log
+
+| Date       | Change                                                           |
+| ---------- | ---------------------------------------------------------------- |
+| 2026-03-17 | Documented vulnerability #64 as a real library defect but unreachable in current `HubRSC` usage |
+
+---
+
 ## Additional Caveats
 
 ### Bounded Dispatch Limits
