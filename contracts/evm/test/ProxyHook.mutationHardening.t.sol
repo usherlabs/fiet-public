@@ -96,6 +96,41 @@ contract ProxyHookMutationHardeningTest is MarketVaultBase {
         }
     }
 
+    function test_proxySwap_exactInput_revertsWhenAmountSpecifiedIsInt256Min() public {
+        int256 minSupported = -int256(type(int128).max);
+        bytes memory expectedReason =
+            abi.encodeWithSelector(Errors.UnsupportedExactInputAmount.selector, type(int256).min, minSupported, -1);
+
+        try swapRouter.swap(
+            proxyPoolKey,
+            SwapParams({zeroForOne: true, amountSpecified: type(int256).min, sqrtPriceLimitX96: ZERO_FOR_ONE_LIMIT}),
+            _getSwapSettings(),
+            bytes("")
+        ) {
+            fail();
+        } catch (bytes memory data) {
+            _assertWrappedReason(data, expectedReason);
+        }
+    }
+
+    function test_proxySwap_exactInput_revertsWhenAmountSpecifiedBelowSupportedRange() public {
+        int256 minSupported = -int256(type(int128).max);
+        int256 unsupported = minSupported - 1;
+        bytes memory expectedReason =
+            abi.encodeWithSelector(Errors.UnsupportedExactInputAmount.selector, unsupported, minSupported, -1);
+
+        try swapRouter.swap(
+            proxyPoolKey,
+            SwapParams({zeroForOne: true, amountSpecified: unsupported, sqrtPriceLimitX96: ZERO_FOR_ONE_LIMIT}),
+            _getSwapSettings(),
+            bytes("")
+        ) {
+            fail();
+        } catch (bytes memory data) {
+            _assertWrappedReason(data, expectedReason);
+        }
+    }
+
     function test_proxySwap_keepsProxySlot0Unchanged() public {
         (uint160 sqrtBefore, int24 tickBefore,,) = StateLibrary.getSlot0(manager, proxyPoolKey.toId());
 

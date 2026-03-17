@@ -210,6 +210,18 @@ contract LiquidityHubLibTest is LiquidityHubTestBase {
         liquidityHub.unwrap(lccToken1, amount);
     }
 
+    function test_prepareSettle_revertsWhenDirectSupplyIsLowerThanDirectReserve() public {
+        uint256 amount = 5;
+        _wrapDirectLCC(user1, lccToken1, amount);
+
+        // Manufacture a drifted state to harden the guard: direct reserve > directSupply.
+        _setReserveOfUnderlying(address(underlyingAsset1), amount * 2);
+
+        vm.prank(proxyHook);
+        vm.expectRevert(abi.encodeWithSelector(Errors.InvalidAmount.selector, amount + 1, amount));
+        liquidityHub.prepareSettle(lccToken1, amount + 1);
+    }
+
     function test_unwrap_whenNoMarketBalance_doesNotCallUseMarketLiquidity_andQueuesAll() public {
         // User has wrapped balance, but we set directSupply to 0 so direct-unwrapping is impossible.
         // With marketDerivedBalance == 0, unwrapInternalLogic must NOT call useMarketLiquidity at all.

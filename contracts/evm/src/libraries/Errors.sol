@@ -36,6 +36,12 @@ library Errors {
     /// @param maxAmount The maximum allowed amount (0 if not applicable)
     error InvalidAmount(uint256 amount, uint256 maxAmount);
 
+    /// @notice Thrown when exact-input amountSpecified is outside ProxyHook's supported range
+    /// @param amountSpecified The provided signed amountSpecified value
+    /// @param minSupported The minimum supported amountSpecified (most negative)
+    /// @param maxSupported The maximum supported amountSpecified for exact-input (-1)
+    error UnsupportedExactInputAmount(int256 amountSpecified, int256 minSupported, int256 maxSupported);
+
     /// @notice Thrown when an invalid address is provided (zero address or invalid for context)
     error InvalidAddress(address self);
 

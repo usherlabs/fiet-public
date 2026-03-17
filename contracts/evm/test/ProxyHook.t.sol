@@ -1139,16 +1139,16 @@ contract ProxyHookTest is MarketVaultBase {
         ProxyHookHarness harness = new ProxyHookHarness(address(manager), address(marketFactory));
 
         // Not flipped: identity.
-        assertEq(harness.exposed_calcCoreSqrtPriceLimit(uint160(123), false), uint160(123));
+        assertEq(harness.exposed_calcCoreSqrtPriceLimit(uint160(123), false, false), uint160(123));
 
         // Flipped extremes.
         assertEq(
-            harness.exposed_calcCoreSqrtPriceLimit(TickMath.MIN_SQRT_PRICE + 1, true),
+            harness.exposed_calcCoreSqrtPriceLimit(TickMath.MIN_SQRT_PRICE + 1, true, false),
             TickMath.MAX_SQRT_PRICE - 1,
             "flipped MIN+1 should map to MAX-1"
         );
         assertEq(
-            harness.exposed_calcCoreSqrtPriceLimit(TickMath.MAX_SQRT_PRICE - 1, true),
+            harness.exposed_calcCoreSqrtPriceLimit(TickMath.MAX_SQRT_PRICE - 1, true, true),
             TickMath.MIN_SQRT_PRICE + 1,
             "flipped MAX-1 should map to MIN+1"
         );
@@ -1157,11 +1157,30 @@ contract ProxyHookTest is MarketVaultBase {
         uint160 custom = SQRT_PRICE_1_1 + 1;
         uint160 expectedInverted = uint160((uint256(1) << 192) / uint256(custom));
         assertEq(
-            harness.exposed_calcCoreSqrtPriceLimit(custom, true), expectedInverted, "flipped non-zero should invert"
+            harness.exposed_calcCoreSqrtPriceLimit(custom, true, true),
+            expectedInverted,
+            "flipped non-zero should invert"
         );
 
-        // Flipped zero -> default to MAX-1.
-        assertEq(harness.exposed_calcCoreSqrtPriceLimit(0, true), TickMath.MAX_SQRT_PRICE - 1);
+        // Flipped near-MAX should clamp to MIN+1 instead of producing an out-of-bounds MIN/underflowed value.
+        uint160 nearMax = TickMath.MAX_SQRT_PRICE - 2;
+        assertEq(
+            harness.exposed_calcCoreSqrtPriceLimit(nearMax, true, true),
+            TickMath.MIN_SQRT_PRICE + 1,
+            "flipped near-MAX should clamp to MIN+1"
+        );
+
+        // Flipped zero -> direction-aware defaults.
+        assertEq(
+            harness.exposed_calcCoreSqrtPriceLimit(0, true, false),
+            TickMath.MAX_SQRT_PRICE - 1,
+            "core oneForZero default should be MAX-1"
+        );
+        assertEq(
+            harness.exposed_calcCoreSqrtPriceLimit(0, true, true),
+            TickMath.MIN_SQRT_PRICE + 1,
+            "core zeroForOne default should be MIN+1"
+        );
     }
 
     // More tests can be added for onDirectLP, unlockCallback, etc.
@@ -1186,8 +1205,12 @@ contract ProxyHookHarness is ProxyHook {
         expectedOutput = _getExpectedOutputFromDelta(swapDelta, zeroForOne);
     }
 
-    function exposed_calcCoreSqrtPriceLimit(uint160 sqrtPriceLimitX96, bool flipped) external pure returns (uint160) {
-        return _calcCoreSqrtPriceLimit(sqrtPriceLimitX96, flipped);
+    function exposed_calcCoreSqrtPriceLimit(uint160 sqrtPriceLimitX96, bool flipped, bool coreZeroForOne)
+        external
+        pure
+        returns (uint160)
+    {
+        return _calcCoreSqrtPriceLimit(sqrtPriceLimitX96, flipped, coreZeroForOne);
     }
 
     function exposed_determineExcessRecipient(address sender, bytes calldata hookData)

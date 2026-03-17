@@ -200,21 +200,24 @@ contract LiquidityHubTest is LiquidityHubTestBase {
         liquidityHub.prepareSettle(lccToken1, 1);
     }
 
-    function test_prepareSettle_approvesErc20AndDecrementsReserve() public {
+    function test_prepareSettle_approvesErc20AndDecrementsReserveAndDirectSupply() public {
         uint256 amount = 10 ether;
         _wrapDirectLCC(user1, lccToken1, amount);
 
         uint256 reserveBefore = liquidityHub.reserveOfUnderlying(lccToken1);
+        uint256 directSupplyBefore = liquidityHub.directSupply(lccToken1);
         assertEq(reserveBefore, amount);
+        assertEq(directSupplyBefore, amount);
 
         vm.prank(proxyHook);
         liquidityHub.prepareSettle(lccToken1, 3 ether);
 
         assertEq(liquidityHub.reserveOfUnderlying(lccToken1), reserveBefore - 3 ether);
+        assertEq(liquidityHub.directSupply(lccToken1), directSupplyBefore - 3 ether);
         assertEq(underlyingAsset1.allowance(address(liquidityHub), proxyHook), 3 ether);
     }
 
-    function test_prepareSettle_transfersNativeEthAndDecrementsReserve() public {
+    function test_prepareSettle_transfersNativeEthAndDecrementsReserveAndDirectSupply() public {
         // Create a market where one LCC is native-asset-backed.
         address lccNative;
         address lccErc20;
@@ -234,11 +237,13 @@ contract LiquidityHubTest is LiquidityHubTestBase {
         vm.prank(proxyHook);
         liquidityHub.wrap{value: amount}(lccNative, amount);
         assertEq(liquidityHub.reserveOfUnderlying(lccNative), amount);
+        assertEq(liquidityHub.directSupply(lccNative), amount);
 
         // prepareSettle should transfer ETH to the issuer (caller) and decrement reserves.
         vm.prank(proxyHook);
         liquidityHub.prepareSettle(lccNative, 0.4 ether);
         assertEq(liquidityHub.reserveOfUnderlying(lccNative), amount - 0.4 ether);
+        assertEq(liquidityHub.directSupply(lccNative), amount - 0.4 ether);
         assertEq(proxyHook.balance, proxyHookEthBefore + 0.4 ether);
     }
 

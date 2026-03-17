@@ -165,6 +165,25 @@ being an informal “should”.
     `useMarketLiquidity → ... → confirmTake()` callback patterns.
   - The balance-backed check ensures this flexibility cannot be abused to “mint” reserves via re-entrancy.
 
+### HUB-06: `prepareSettle` must preserve direct-liquidity accounting consistency
+
+- **Statement**: Preparing direct liquidity for vault settlement must reduce both:
+  - shared-underlying direct reserve (`reserveOfUnderlying[underlying].direct`), and
+  - per-LCC direct inventory (`directSupply[lcc]`),
+    by the same `amount`.
+
+  This prevents a drift where `directSupply[lcc]` overstates immediately serviceable direct liquidity after a settle
+  preparation step.
+- **Enforced by**:
+  - `src/LiquidityHub.sol::prepareSettle` computes `maxSettleableDirect = min(reserveDirect, directSupply[lcc])`,
+    reverts `Errors.InvalidAmount(amount, maxSettleableDirect)` when exceeded, then decrements both counters by
+    `amount`.
+- **Why**:
+  - `unwrap` direct-path eligibility uses `directSupply[lcc]` (`LiquidityHubLib.unwrapInternalLogic`), while payout
+    direct serviceability enforces direct reserve availability (`LiquidityHubLib.transferUnderlying`).
+  - Keeping these counters synchronised avoids invalid intermediate states where direct unwrap appears available but is
+    not currently payable.
+
 ## Swap attribution and growth accounting (economic correctness)
 
 ### VTS-01: “Settle growths before modify liquidity” (no retroactive accrual capture)

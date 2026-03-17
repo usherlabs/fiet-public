@@ -164,19 +164,29 @@ contract ProxyHook is BaseHook, VaultCoreActionHandler {
         ctx.lccCurrencyForCurrency1 = Currency.wrap(address(ctx.lccTokenForCurrency1));
     }
 
-    /// @dev Calculates the adjusted sqrt price limit for the core pool when direction is flipped
-    function _calcCoreSqrtPriceLimit(uint160 sqrtPriceLimitX96, bool flipped) internal pure returns (uint160) {
+    /// @dev Calculates the adjusted sqrt price limit for the core pool when direction is flipped.
+    ///      The mapped value is clamped into the strict open interval expected by v4 core.
+    function _calcCoreSqrtPriceLimit(uint160 sqrtPriceLimitX96, bool flipped, bool coreZeroForOne)
+        internal
+        pure
+        returns (uint160)
+    {
         if (!flipped) return sqrtPriceLimitX96;
 
-        if (sqrtPriceLimitX96 == TickMath.MIN_SQRT_PRICE + 1) {
-            return TickMath.MAX_SQRT_PRICE - 1;
-        } else if (sqrtPriceLimitX96 == TickMath.MAX_SQRT_PRICE - 1) {
-            return TickMath.MIN_SQRT_PRICE + 1;
-        } else if (sqrtPriceLimitX96 != 0) {
-            return uint160((uint256(1) << 192) / sqrtPriceLimitX96);
-        } else {
-            return TickMath.MAX_SQRT_PRICE - 1;
-        }
+        uint160 minValid = TickMath.MIN_SQRT_PRICE + 1;
+        uint160 maxValid = TickMath.MAX_SQRT_PRICE - 1;
+
+        // Direction-aware "no limit" default in flipped markets.
+        if (sqrtPriceLimitX96 == 0) return coreZeroForOne ? minValid : maxValid;
+
+        // Preserve canonical extreme mapping exactly.
+        if (sqrtPriceLimitX96 == minValid) return maxValid;
+        if (sqrtPriceLimitX96 == maxValid) return minValid;
+
+        uint160 inverted = uint160((uint256(1) << 192) / sqrtPriceLimitX96);
+        if (inverted < minValid) return minValid;
+        if (inverted > maxValid) return maxValid;
+        return inverted;
     }
 
     /// @dev Handles LCC settlement for zeroForOne swap direction
@@ -244,14 +254,17 @@ contract ProxyHook is BaseHook, VaultCoreActionHandler {
         noCoreAction
         returns (bytes4, BeforeSwapDelta, uint24)
     {
+        _assertSupportedExactInputAmount(params.amountSpecified);
+
         (address excessRecipient, bool recipientResolved) = _determineExcessRecipient(sender, hookData);
 
         // Build swap context with LCC mappings
         ProxySwapContext memory ctx = _buildSwapContext(key, params.zeroForOne);
 
         // Calculate adjusted sqrt price limit
-        ctx.sqrtPriceLimitX96Core =
-            _calcCoreSqrtPriceLimit(params.sqrtPriceLimitX96, params.zeroForOne != ctx.coreZeroForOne);
+        ctx.sqrtPriceLimitX96Core = _calcCoreSqrtPriceLimit(
+            params.sqrtPriceLimitX96, params.zeroForOne != ctx.coreZeroForOne, ctx.coreZeroForOne
+        );
 
         uint256 maxOutputAvailable = inMarketBalanceOf(params.zeroForOne ? key.currency1 : key.currency0);
 
@@ -264,6 +277,15 @@ contract ProxyHook is BaseHook, VaultCoreActionHandler {
             : toBeforeSwapDelta(-SafeCast.toInt128(amountToSettle), SafeCast.toInt128(amountIn));
 
         return (this.beforeSwap.selector, newDelta, 0);
+    }
+
+    function _assertSupportedExactInputAmount(int256 amountSpecified) private pure {
+        if (amountSpecified < 0) {
+            int256 minSupported = -int256(type(int128).max);
+            if (amountSpecified < minSupported) {
+                revert Errors.UnsupportedExactInputAmount(amountSpecified, minSupported, -1);
+            }
+        }
     }
 
     function _executeProxySwap(

@@ -371,7 +371,7 @@ contract CheckpointLibraryTest is Test {
         uint256 t0 = 777;
         h.setCheckpoint(PID, t0, true, 0, 0);
 
-        vm.warp(t0 + 101);
+        vm.warp(t0 + 100);
         assertTrue(h.isSeizable(COMMIT_ID, POSITION_INDEX, false));
     }
 
@@ -385,7 +385,35 @@ contract CheckpointLibraryTest is Test {
         uint256 t0 = 888;
         h.setCheckpoint(PID, t0, true, 0, 0);
 
-        vm.warp(t0 + 101);
+        vm.warp(t0 + 100);
+        assertTrue(h.isSeizable(COMMIT_ID, POSITION_INDEX, false));
+    }
+
+    function test_isSeizable_returnsFalseAtToken0BoundaryMinusOne() public {
+        PoolKey memory key = _defaultPoolKey();
+        PoolId poolId = key.toId();
+
+        h.setPosition(PID, poolId);
+        h.setGracePeriods(poolId, 100, 10_000, 1_000, 20_000);
+
+        uint256 t0 = 777;
+        h.setCheckpoint(PID, t0, true, 0, 0);
+
+        vm.warp(t0 + 99);
+        assertFalse(h.isSeizable(COMMIT_ID, POSITION_INDEX, false));
+    }
+
+    function test_isSeizable_returnsTrueWhenZeroGraceAtOpenTimestamp() public {
+        PoolKey memory key = _defaultPoolKey();
+        PoolId poolId = key.toId();
+
+        h.setPosition(PID, poolId);
+        h.setGracePeriods(poolId, 0, 0, 1_000, 1_000);
+
+        uint256 t0 = 1_000_000;
+        h.setCheckpoint(PID, t0, true, 0, 0);
+
+        vm.warp(t0);
         assertTrue(h.isSeizable(COMMIT_ID, POSITION_INDEX, false));
     }
 
@@ -413,11 +441,11 @@ contract CheckpointLibraryTest is Test {
         uint256 t1 = 1_100;
         h.setCheckpointMask(PID, 3, t0, t1, 0, 0);
 
-        vm.warp(t0 + 101);
+        vm.warp(t0 + 100);
         // token0 elapsed, token1 not elapsed yet -> still seizable because at least one lane is eligible
         assertTrue(h.isSeizable(COMMIT_ID, POSITION_INDEX, false));
 
-        vm.warp(t1 + 101);
+        vm.warp(t1 + 100);
         assertTrue(h.isSeizable(COMMIT_ID, POSITION_INDEX, false));
     }
 

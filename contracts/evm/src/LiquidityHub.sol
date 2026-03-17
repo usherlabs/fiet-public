@@ -890,17 +890,22 @@ contract LiquidityHub is BoundRegistry, Ownable, ReentrancyGuardTransient {
     /**
      * @notice Prepare settlement of underlying from Hub to MarketVault
      * @dev For ERC20, approve the caller (expected MarketVault) to pull tokens; for native, transfer ETH to caller.
-     *      Decrements direct reserve immediately; intended to be called just before settlement in the same tx.
+     *      Decrements direct reserve and per-LCC directSupply immediately; intended to be called just before settlement
+     *      in the same tx.
      */
     function prepareSettle(address lcc, uint256 amount) external onlyIssuer(lcc) nonReentrant {
         if (amount == 0) revert Errors.InvalidAmount(0, 0);
 
         address underlying = s.lccToUnderlying[lcc];
-        if (s.reserveOfUnderlying[underlying].direct < amount) {
-            revert Errors.InvalidAmount(amount, s.reserveOfUnderlying[underlying].direct);
+        uint256 reserveDirect = s.reserveOfUnderlying[underlying].direct;
+        uint256 directAvail = s.directSupply[lcc];
+        uint256 maxSettleableDirect = Math.min(reserveDirect, directAvail);
+        if (maxSettleableDirect < amount) {
+            revert Errors.InvalidAmount(amount, maxSettleableDirect);
         }
 
-        s.reserveOfUnderlying[underlying].direct -= amount;
+        s.reserveOfUnderlying[underlying].direct = reserveDirect - amount;
+        s.directSupply[lcc] = directAvail - amount;
 
         Currency underlyingCurrency = Currency.wrap(underlying);
         if (underlyingCurrency.isAddressZero()) {
