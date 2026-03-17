@@ -8,6 +8,14 @@ struct Market {
     bytes ref; // proxy
 }
 
+/// @notice Underlying reserve split by economic origin
+struct UnderlyingReserve {
+    // Reserve backing direct/wrapped supply
+    uint256 direct;
+    // Reserve mobilised from market-derived flows
+    uint256 marketDerived;
+}
+
 /// @title LiquidityHubStorage
 /// @notice Unified storage struct for LiquidityHub, consolidating LCC factory and hub state
 /// @dev This struct includes all fields from LCCFactoryState plus hub-specific mappings
@@ -51,7 +59,7 @@ struct LiquidityHubStorage {
     // Lazy netting claims per LCC
     mapping(address => uint256) nettedLCCsAsUnderlying;
 
-    // Reserve of underlying (keyed by underlying asset, not LCC)
-    mapping(address => uint256) reserveOfUnderlying;
+    // Reserve of underlying split by source (keyed by underlying asset, not LCC)
+    mapping(address => UnderlyingReserve) reserveOfUnderlying;
 }
 

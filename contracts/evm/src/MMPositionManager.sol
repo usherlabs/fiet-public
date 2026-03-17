@@ -435,7 +435,7 @@ contract MMPositionManager is
         uint256 queued = liquidityHub.settleQueue(lcc, locker);
 
         if (queued > 0) {
-            uint256 available = liquidityHub.reserveOfUnderlying(lcc);
+            (, uint256 available) = liquidityHub.reserveOfUnderlyingTuple(lcc);
             uint256 custodied = queueCustodian.queued(tokenId, lcc);
             uint256 toSettle = Math.min(Math.min(queued, available), Math.min(maxAmount, custodied));
             if (toSettle > 0) {

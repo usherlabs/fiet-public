@@ -6,7 +6,7 @@ import {IOracleHelper} from "./interfaces/IOracleHelper.sol";
 import {IMarketFactory} from "./interfaces/IMarketFactory.sol";
 import {LCCFactoryLib, LCCFactoryLinkedLib} from "./libraries/LCCFactoryLib.sol";
 import {LiquidityHubLib} from "./libraries/LiquidityHubLib.sol";
-import {LiquidityHubStorage, Market} from "./types/Liquidity.sol";
+import {LiquidityHubStorage, Market, UnderlyingReserve} from "./types/Liquidity.sol";
 import {CurrencyTransfer} from "./libraries/CurrencyTransfer.sol";
 import {Currency} from "v4-periphery/lib/v4-core/src/types/Currency.sol";
 import {Math} from "openzeppelin-contracts/contracts/utils/math/Math.sol";
@@ -226,7 +226,24 @@ contract LiquidityHub is BoundRegistry, Ownable, ReentrancyGuardTransient {
      * @return The amount of underlying assets held in reserve for this LCC
      */
     function reserveOfUnderlying(address lcc) external view onlyValidLcc(lcc) returns (uint256) {
-        return s.reserveOfUnderlying[s.lccToUnderlying[lcc]];
+        UnderlyingReserve storage reserve = s.reserveOfUnderlying[s.lccToUnderlying[lcc]];
+        return reserve.direct + reserve.marketDerived;
+    }
+
+    /**
+     * @notice Returns the split underlying reserve tuple for a given LCC token
+     * @param lcc The LCC token address
+     * @return direct The reserve component backing direct/wrapped supply
+     * @return marketDerived The reserve component mobilised from market-derived flows
+     */
+    function reserveOfUnderlyingTuple(address lcc)
+        external
+        view
+        onlyValidLcc(lcc)
+        returns (uint256 direct, uint256 marketDerived)
+    {
+        UnderlyingReserve storage reserve = s.reserveOfUnderlying[s.lccToUnderlying[lcc]];
+        return (reserve.direct, reserve.marketDerived);
     }
 
     /**
@@ -259,14 +276,14 @@ contract LiquidityHub is BoundRegistry, Ownable, ReentrancyGuardTransient {
 
     /**
      * @notice Returns the unfunded queued debt for the underlying of a given LCC
-     * @dev Unfunded debt is `max(queueOfUnderlying - reserveOfUnderlying, 0)` at the shared-underlying level.
+     * @dev Unfunded debt is `max(queueOfUnderlying - marketDerivedReserve, 0)` at the shared-underlying level.
      * @param lcc The LCC token address
      * @return The remaining underlying shortfall that still needs market-to-Hub mobilisation
      */
     function unfundedQueueOfUnderlying(address lcc) external view onlyValidLcc(lcc) returns (uint256) {
         address underlying = s.lccToUnderlying[lcc];
         uint256 queued = s.queueOfUnderlying[underlying];
-        uint256 reserve = s.reserveOfUnderlying[underlying];
+        uint256 reserve = s.reserveOfUnderlying[underlying].marketDerived;
         return queued > reserve ? queued - reserve : 0;
     }
 
@@ -421,7 +438,7 @@ contract LiquidityHub is BoundRegistry, Ownable, ReentrancyGuardTransient {
         }
 
         s.directSupply[lcc] += amount;
-        s.reserveOfUnderlying[underlying] += amount;
+        s.reserveOfUnderlying[underlying].direct += amount;
 
         // mint some tokens
         _mint(lcc, to, amount, 0);
@@ -848,7 +865,7 @@ contract LiquidityHub is BoundRegistry, Ownable, ReentrancyGuardTransient {
         address underlying = s.lccToUnderlying[lcc];
 
         // Track total underlying asset supply (must remain <= actual underlying balance held by this hub).
-        s.reserveOfUnderlying[underlying] += amount;
+        s.reserveOfUnderlying[underlying].marketDerived += amount;
 
         // Best-effort: settle Hub queue up to the newly available amount
         uint256 hubQueue = s.settleQueue[lcc][address(this)];
@@ -863,7 +880,8 @@ contract LiquidityHub is BoundRegistry, Ownable, ReentrancyGuardTransient {
 
         // Balance-backed invariant: reserve accounting must never exceed actual hub holdings.
         // This protects against re-entrancy and any accidental/malicious unbacked `confirmTake` calls.
-        uint256 reserve = s.reserveOfUnderlying[underlying];
+        UnderlyingReserve storage reserveTuple = s.reserveOfUnderlying[underlying];
+        uint256 reserve = reserveTuple.direct + reserveTuple.marketDerived;
         uint256 actualBalance =
             underlying == address(0) ? address(this).balance : Currency.wrap(underlying).balanceOf(address(this));
         if (reserve > actualBalance) revert Errors.InsufficientBalance(actualBalance, reserve);
@@ -872,17 +890,17 @@ contract LiquidityHub is BoundRegistry, Ownable, ReentrancyGuardTransient {
     /**
      * @notice Prepare settlement of underlying from Hub to MarketVault
      * @dev For ERC20, approve the caller (expected MarketVault) to pull tokens; for native, transfer ETH to caller.
-     *      Decrements Hub reserve immediately; intended to be called just before settlement in the same tx.
+     *      Decrements direct reserve immediately; intended to be called just before settlement in the same tx.
      */
     function prepareSettle(address lcc, uint256 amount) external onlyIssuer(lcc) nonReentrant {
         if (amount == 0) revert Errors.InvalidAmount(0, 0);
 
         address underlying = s.lccToUnderlying[lcc];
-        if (s.reserveOfUnderlying[underlying] < amount) {
-            revert Errors.InvalidAmount(amount, s.reserveOfUnderlying[underlying]);
+        if (s.reserveOfUnderlying[underlying].direct < amount) {
+            revert Errors.InvalidAmount(amount, s.reserveOfUnderlying[underlying].direct);
         }
 
-        s.reserveOfUnderlying[underlying] -= amount;
+        s.reserveOfUnderlying[underlying].direct -= amount;
 
         Currency underlyingCurrency = Currency.wrap(underlying);
         if (underlyingCurrency.isAddressZero()) {

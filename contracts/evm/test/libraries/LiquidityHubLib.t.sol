@@ -122,6 +122,10 @@ contract LiquidityHubLibTest is LiquidityHubTestBase {
         return keccak256(abi.encode(underlying, root));
     }
 
+    function _slotReserveOfUnderlyingMarketDerived(address underlying) internal returns (bytes32) {
+        return bytes32(uint256(_slotReserveOfUnderlying(underlying)) + 1);
+    }
+
     function _slotQueueOfUnderlying(address underlying) internal returns (bytes32) {
         uint256 base = _deriveSBaseSlot();
         uint256 root = base + _OFFSET_QUEUE_OF_UNDERLYING;
@@ -134,6 +138,10 @@ contract LiquidityHubLibTest is LiquidityHubTestBase {
 
     function _setReserveOfUnderlying(address underlying, uint256 value) internal {
         vm.store(address(liquidityHub), _slotReserveOfUnderlying(underlying), bytes32(value));
+    }
+
+    function _setMarketReserveOfUnderlying(address underlying, uint256 value) internal {
+        vm.store(address(liquidityHub), _slotReserveOfUnderlyingMarketDerived(underlying), bytes32(value));
     }
 
     /// @notice Reads `LiquidityHubStorage.nettedLCCsAsUnderlying[lcc]` from the Hub.
@@ -228,9 +236,9 @@ contract LiquidityHubLibTest is LiquidityHubTestBase {
         // Create queue for the Hub itself.
         _createSettlementQueueEntry(lccToken1, address(liquidityHub), queued);
 
-        // Ensure reserve is non-zero WITHOUT calling confirmTake (which would greedily process the Hub queue).
-        // We deliberately set the reserve mapping directly to keep the queue intact.
-        _setReserveOfUnderlying(address(underlyingAsset1), queued);
+        // Ensure market-derived reserve is non-zero WITHOUT calling confirmTake
+        // (which would greedily process the Hub queue). We set storage directly to keep the queue intact.
+        _setMarketReserveOfUnderlying(address(underlyingAsset1), queued);
 
         uint256 reserveBefore = liquidityHub.reserveOfUnderlying(lccToken1);
         uint256 hubUnderlyingBefore = underlyingAsset1.balanceOf(address(liquidityHub));
@@ -264,13 +272,13 @@ contract LiquidityHubLibTest is LiquidityHubTestBase {
         liquidityHub.processSettlementFor(lccToken1, address(liquidityHub), queued);
     }
 
-    function test_processSettlementFor_hub_usesTotalBalance_whenWrappedOnly() public {
+    function test_processSettlementFor_hub_noopsWhenOnlyDirectReserve() public {
         uint256 queued = 6;
 
         // Hub holds wrapped LCC only (market-derived is 0).
         _wrapDirectLCC(address(liquidityHub), lccToken1, queued);
 
-        // Seed hub queue and reserve directly to avoid market-derived balances.
+        // Seed hub queue with only direct reserve (market-derived reserve stays zero).
         _setSettleQueue(lccToken1, address(liquidityHub), queued);
         _setTotalQueued(lccToken1, queued);
         _setQueueOfUnderlying(address(underlyingAsset1), queued);
@@ -280,10 +288,9 @@ contract LiquidityHubLibTest is LiquidityHubTestBase {
         assertEq(hubBalanceBefore, queued, "precondition: hub balance should be wrapped only");
 
         liquidityHub.processSettlementFor(lccToken1, address(liquidityHub), queued);
-
-        assertEq(liquidityHub.settleQueue(lccToken1, address(liquidityHub)), 0, "hub queue should clear");
-        assertEq(liquidityHub.totalQueued(lccToken1), 0, "totalQueued should clear");
-        assertEq(ILCC(lccToken1).balanceOf(address(liquidityHub)), hubBalanceBefore - queued, "hub LCC should burn");
+        assertEq(liquidityHub.settleQueue(lccToken1, address(liquidityHub)), queued, "hub queue should remain");
+        assertEq(liquidityHub.totalQueued(lccToken1), queued, "totalQueued should remain");
+        assertEq(ILCC(lccToken1).balanceOf(address(liquidityHub)), hubBalanceBefore, "hub LCC should remain");
     }
 
     function test_wrapWith_step2_lazyClaim_increasesNetted_andDoesNotQueueResidual() public {
@@ -722,6 +729,8 @@ contract LiquidityHubLibTest is LiquidityHubTestBase {
 
         // Partial market liquidity: return less than requested to force queueing.
         vm.mockCall(factory, abi.encodeWithSelector(IMarketFactory.useMarketLiquidity.selector), abi.encode(used));
+        // Simulate confirmTake-side market-derived reserve accrual for the mocked market use.
+        _setMarketReserveOfUnderlying(address(underlyingAsset1), used);
 
         uint256 underlyingBefore = underlyingAsset1.balanceOf(user1);
 

@@ -60,7 +60,8 @@ contract MockPoolManager_Min {
 
 contract MockLiquidityHub_Min {
     mapping(address => uint256) internal _queued;
-    mapping(address => uint256) internal _reserve;
+    mapping(address => uint256) internal _reserveDirect;
+    mapping(address => uint256) internal _reserveMarket;
     address internal _nativeSettleLcc;
 
     // observability
@@ -93,16 +94,24 @@ contract MockLiquidityHub_Min {
 
     function unfundedQueueOfUnderlying(address lcc) external view returns (uint256) {
         uint256 queued = _queued[lcc];
-        uint256 reserve = _reserve[lcc];
+        uint256 reserve = _reserveMarket[lcc];
         return queued > reserve ? queued - reserve : 0;
     }
 
     function setReserve(address lcc, uint256 amount) external {
-        _reserve[lcc] = amount;
+        _reserveDirect[lcc] = amount;
+    }
+
+    function setMarketReserve(address lcc, uint256 amount) external {
+        _reserveMarket[lcc] = amount;
     }
 
     function reserveOfUnderlying(address lcc) external view returns (uint256) {
-        return _reserve[lcc];
+        return _reserveDirect[lcc] + _reserveMarket[lcc];
+    }
+
+    function reserveOfUnderlyingTuple(address lcc) external view returns (uint256 direct, uint256 marketDerived) {
+        return (_reserveDirect[lcc], _reserveMarket[lcc]);
     }
 
     function confirmTake(address lcc, uint256 amount, bool shouldEmit) external {
@@ -131,7 +140,7 @@ contract MockLiquidityHub_Min {
     }
 
     function prepareSettle(address lcc, uint256 amount) external {
-        _reserve[lcc] -= amount;
+        _reserveDirect[lcc] -= amount;
         if (lcc == _nativeSettleLcc) {
             (bool ok,) = payable(msg.sender).call{value: amount}("");
             require(ok, "native settle transfer failed");
@@ -143,7 +152,8 @@ contract MockLiquidityHub_Min {
 
 contract MockLiquidityHub_RejectEth {
     mapping(address => uint256) internal _queued;
-    mapping(address => uint256) internal _reserve;
+    mapping(address => uint256) internal _reserveDirect;
+    mapping(address => uint256) internal _reserveMarket;
 
     address public lastConfirmLcc;
     uint256 public lastConfirmAmount;
@@ -164,16 +174,24 @@ contract MockLiquidityHub_RejectEth {
 
     function unfundedQueueOfUnderlying(address lcc) external view returns (uint256) {
         uint256 queued = _queued[lcc];
-        uint256 reserve = _reserve[lcc];
+        uint256 reserve = _reserveMarket[lcc];
         return queued > reserve ? queued - reserve : 0;
     }
 
     function setReserve(address lcc, uint256 amount) external {
-        _reserve[lcc] = amount;
+        _reserveDirect[lcc] = amount;
+    }
+
+    function setMarketReserve(address lcc, uint256 amount) external {
+        _reserveMarket[lcc] = amount;
     }
 
     function reserveOfUnderlying(address lcc) external view returns (uint256) {
-        return _reserve[lcc];
+        return _reserveDirect[lcc] + _reserveMarket[lcc];
+    }
+
+    function reserveOfUnderlyingTuple(address lcc) external view returns (uint256 direct, uint256 marketDerived) {
+        return (_reserveDirect[lcc], _reserveMarket[lcc]);
     }
 
     function confirmTake(address lcc, uint256 amount, bool shouldEmit) external {
@@ -188,7 +206,7 @@ contract MockLiquidityHub_RejectEth {
     function queueForTransferRecipient(address, address, uint256) external {}
 
     function prepareSettle(address lcc, uint256 amount) external {
-        _reserve[lcc] -= amount;
+        _reserveDirect[lcc] -= amount;
     }
 
     receive() external payable {
@@ -645,7 +663,7 @@ contract MarketVaultUnitTest is Test {
         (MarketVaultUnitHarness vault, MockPoolManager_Min pm,,, MockLCC lccNative,) = _deployVaultWithHub(address(hub));
 
         hub.setTotalQueued(address(lccNative), 10);
-        hub.setReserve(address(lccNative), 10);
+        hub.setMarketReserve(address(lccNative), 10);
         pm.setClaimBalance(address(vault), Currency.wrap(address(0)), 25);
 
         vault.exposed_settleObligationsForLCC(ILCC(address(lccNative)));
@@ -658,7 +676,7 @@ contract MarketVaultUnitTest is Test {
             _deployVaultWithHub(address(hub));
 
         hub.setTotalQueued(address(lccErc20), 20);
-        hub.setReserve(address(lccErc20), 7);
+        hub.setMarketReserve(address(lccErc20), 7);
         pm.setClaimBalance(address(vault), Currency.wrap(address(ua)), 100);
         ua.mint(address(pm), 100);
 

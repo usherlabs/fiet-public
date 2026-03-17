@@ -191,7 +191,7 @@ abstract contract MarketVault is IMarketVault, ImmutableState, ImmutableMarketSt
      *         Settlement is capped to currently available Hub reserve for this LCC's underlying.
      */
     function _settleUnderlyingToVaultFromHub(ILCC lccToken, uint256 amount) internal {
-        uint256 available = liquidityHub.reserveOfUnderlying(address(lccToken));
+        (uint256 available,) = liquidityHub.reserveOfUnderlyingTuple(address(lccToken));
         uint256 toSettle = Math.min(amount, available);
         if (toSettle == 0) {
             return;

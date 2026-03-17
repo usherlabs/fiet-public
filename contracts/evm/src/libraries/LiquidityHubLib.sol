@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: BUSL-1.1
 pragma solidity ^0.8.26;
 
-import {LiquidityHubStorage, Market} from "../types/Liquidity.sol";
+import {LiquidityHubStorage, Market, UnderlyingReserve} from "../types/Liquidity.sol";
 import {LCCFactoryLib} from "./LCCFactoryLib.sol";
 import {Math} from "openzeppelin-contracts/contracts/utils/math/Math.sol";
 import {Errors} from "./Errors.sol";
@@ -510,7 +510,7 @@ library LiquidityHubLib {
         if (queued == 0) revert Errors.InvalidAmount(0, 0);
 
         address underlying = s.lccToUnderlying[lcc];
-        uint256 available = s.reserveOfUnderlying[underlying];
+        uint256 available = s.reserveOfUnderlying[underlying].marketDerived;
 
         uint256 holderBal = 0;
         if (isForHub) {
@@ -574,15 +574,23 @@ library LiquidityHubLib {
     /// @param s The liquidity hub storage
     /// @param underlying The underlying asset address
     /// @param account The account to transfer the underlying assets to
-    /// @param amount The amount of underlying assets to transfer
-    function transferUnderlying(LiquidityHubStorage storage s, address underlying, address account, uint256 amount)
-        internal
-    {
-        // confirm the amount is valid and not greater than the uaSupply
-        if (amount == 0 || amount > s.reserveOfUnderlying[underlying]) {
-            revert Errors.InvalidAmount(amount, s.reserveOfUnderlying[underlying]);
+    /// @param directAmount The direct reserve amount to transfer
+    /// @param marketDerivedAmount The market-derived reserve amount to transfer
+    function transferUnderlying(
+        LiquidityHubStorage storage s,
+        address underlying,
+        address account,
+        uint256 directAmount,
+        uint256 marketDerivedAmount
+    ) internal {
+        uint256 amount = directAmount + marketDerivedAmount;
+        UnderlyingReserve storage reserve = s.reserveOfUnderlying[underlying];
+        if (amount == 0 || directAmount > reserve.direct || marketDerivedAmount > reserve.marketDerived) {
+            uint256 totalReserve = reserve.direct + reserve.marketDerived;
+            revert Errors.InvalidAmount(amount, totalReserve);
         }
-        s.reserveOfUnderlying[underlying] -= amount;
+        reserve.direct -= directAmount;
+        reserve.marketDerived -= marketDerivedAmount;
 
         Currency.wrap(underlying).transfer(account, amount);
     }
@@ -603,7 +611,7 @@ library LiquidityHubLib {
         uint256 fromMarket
     ) internal {
         burn(lcc, owner, fromDirect, fromMarket);
-        transferUnderlying(s, s.lccToUnderlying[lcc], to, fromDirect + fromMarket);
+        transferUnderlying(s, s.lccToUnderlying[lcc], to, fromDirect, fromMarket);
     }
 }
 
