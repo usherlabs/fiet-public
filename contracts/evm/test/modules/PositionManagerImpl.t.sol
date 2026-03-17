@@ -237,6 +237,10 @@ contract PositionManagerImplHarness is PositionManagerQueueCustodian, PositionMa
     function exposeSyncPairBalanceAsCredit(Currency c0, Currency c1) external {
         _syncPairBalanceAsCredit(c0, c1);
     }
+
+    function exposeQueueCustodian() external view returns (address) {
+        return address(_queueCustodian());
+    }
 }
 
 contract PositionManagerImplTest is Test {
@@ -385,6 +389,10 @@ contract PositionManagerImplTest is Test {
             abi.encode(int128(0), int128(0))
         );
         h.exposeSyncPairBalanceAsCredit(c0, c1);
+    }
+
+    function test_queueCustodian_override_returnsHarnessAddress() public view {
+        assertEq(h.exposeQueueCustodian(), address(h));
     }
 
     function _seedPositionLiquidity(PoolKey memory key, int24 tickLower, int24 tickUpper, bytes32 salt, uint128 liq)

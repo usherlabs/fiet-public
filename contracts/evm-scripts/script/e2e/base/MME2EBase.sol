@@ -33,6 +33,55 @@ abstract contract MME2EBase is E2EBase {
     using BalanceDeltaLibrary for BalanceDelta;
     using StateLibrary for IPoolManager;
 
+    struct UnwrapSnapshot {
+        uint256 liquid;
+        uint256 queue;
+        uint256 lcc;
+        uint256 underlying;
+    }
+
+    function _assertUnwrapInvariant(
+        uint256 lccSpent,
+        uint256 underlyingDelta,
+        uint256 queueBefore,
+        uint256 queueAfter,
+        uint256 liquidBalanceBefore
+    ) internal pure returns (uint256 predictedAnnulledQueue) {
+        uint256 transferableWithoutQueue = liquidBalanceBefore > queueBefore ? (liquidBalanceBefore - queueBefore) : 0;
+        if (lccSpent > transferableWithoutQueue) {
+            uint256 bleedIntoQueue = lccSpent - transferableWithoutQueue;
+            predictedAnnulledQueue = bleedIntoQueue > queueBefore ? queueBefore : bleedIntoQueue;
+        }
+
+        require(
+            underlyingDelta + queueAfter == lccSpent + queueBefore - predictedAnnulledQueue, "unwrap: redemption mismatch"
+        );
+    }
+
+    function _runUnwrapAction(
+        StandaloneMarket memory m,
+        uint256 mmPk,
+        address lcc,
+        uint256 approveAmount,
+        uint256 unwrapAmount
+    ) internal {
+        address mm = vm.addr(mmPk);
+        vm.startBroadcast(mmPk);
+        {
+            MMPositionManager mmpm = MMPositionManager(payable(m.stack.contracts.mmPositionManager));
+
+            // UNWRAP_LCC(payerIsUser=true) pulls LCC from the MM via transferFrom.
+            // Approve exactly what we currently hold.
+            IERC20(lcc).approve(address(mmpm), approveAmount);
+
+            bytes memory actions = abi.encodePacked(bytes1(uint8(MMActions.UNWRAP_LCC)));
+            bytes[] memory params = new bytes[](1);
+            params[0] = abi.encode(lcc, unwrapAmount, mm, true);
+            _executeMMActions(mmpm, actions, params, block.timestamp + 3600);
+        }
+        vm.stopBroadcast();
+    }
+
     function _executeMMActions(MMPositionManager mmpm, bytes memory actions, bytes[] memory params, uint256 deadline)
         internal
     {
@@ -345,43 +394,38 @@ abstract contract MME2EBase is E2EBase {
         internal
         returns (uint256 underlyingDelta)
     {
-        address mm = vm.addr(mmPk);
-        address underlying = ILCC(lcc).underlying();
+        address owner = vm.addr(mmPk);
         ILiquidityHub hub = ILiquidityHub(m.stack.contracts.liquidityHub);
+        address underlying = ILCC(lcc).underlying();
 
-        uint256 lccBefore = IERC20(lcc).balanceOf(mm);
-        uint256 underlyingBefore = IERC20(underlying).balanceOf(mm);
-
-        vm.startBroadcast(mmPk);
+        UnwrapSnapshot memory before;
         {
-            MMPositionManager mmpm = MMPositionManager(payable(m.stack.contracts.mmPositionManager));
-
-            // UNWRAP_LCC(payerIsUser=true) pulls LCC from the MM via transferFrom.
-            // Approve exactly what we currently hold.
-            IERC20(lcc).approve(address(mmpm), lccBefore);
-
-            bytes memory actions = abi.encodePacked(bytes1(uint8(MMActions.UNWRAP_LCC)));
-            bytes[] memory params = new bytes[](1);
-            params[0] = abi.encode(lcc, unwrapAmount, mm, true);
-            _executeMMActions(mmpm, actions, params, block.timestamp + 3600);
+            (uint256 wrappedBefore, uint256 marketDerivedBefore) = ILCC(lcc).balancesOf(owner);
+            before.liquid = wrappedBefore + marketDerivedBefore;
+            before.queue = hub.settleQueue(lcc, owner);
+            before.lcc = IERC20(lcc).balanceOf(owner);
+            before.underlying = IERC20(underlying).balanceOf(owner);
         }
-        vm.stopBroadcast();
+        _runUnwrapAction(m, mmPk, lcc, before.lcc, unwrapAmount);
 
-        uint256 lccAfter = IERC20(lcc).balanceOf(mm);
-        uint256 underlyingAfter = IERC20(underlying).balanceOf(mm);
-        uint256 outstandingQueued = hub.settleQueue(lcc, mm);
+        UnwrapSnapshot memory afterState;
+        afterState.queue = hub.settleQueue(lcc, owner);
+        afterState.lcc = IERC20(lcc).balanceOf(owner);
+        afterState.underlying = IERC20(underlying).balanceOf(owner);
 
-        uint256 lccSpent = lccBefore - lccAfter;
-        underlyingDelta = underlyingAfter - underlyingBefore;
+        uint256 lccSpent = before.lcc - afterState.lcc;
+        underlyingDelta = afterState.underlying - before.underlying;
 
         console.log("unwrap spent lcc:", lccSpent);
         console.log("unwrap underlying received:", underlyingDelta);
-        console.log("unwrap queued shortfall:", outstandingQueued);
+        console.log("unwrap queue after:", afterState.queue);
 
-        // Unwrap may annul existing queue during transferFrom and then queue fresh shortfall.
-        // Assert immediate underlying plus the final outstanding queue equals LCC spent.
+        // Stronger invariant predicated on existing state (queue may already exist).
         if (assertBalance) {
-            require(underlyingDelta + outstandingQueued == lccSpent, "unwrap: redemption mismatch");
+            uint256 predictedAnnulledQueue =
+                _assertUnwrapInvariant(lccSpent, underlyingDelta, before.queue, afterState.queue, before.liquid);
+            console.log("unwrap queue before:", before.queue);
+            console.log("unwrap predicted queue annulled:", predictedAnnulledQueue);
         }
     }
 

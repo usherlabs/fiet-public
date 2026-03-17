@@ -140,6 +140,62 @@ contract ProxyHookTest is MarketVaultBase {
         fresh.handleSwap(Currency.unwrap(corePoolKey.currency0));
     }
 
+    function test_handleIngress_onlyFactory_gate_isObservableViaLowLevelCall() public {
+        ProxyHookHarness fresh = new ProxyHookHarness(address(manager), address(marketFactory));
+        address attacker = makeAddr("attacker_handleIngress");
+
+        vm.prank(attacker);
+        (bool ok,) = address(fresh).call(abi.encodeCall(IVaultCoreActionHandler.handleIngress, (address(1), 0)));
+        assertFalse(ok, "handleIngress should be gated by onlyFactory");
+    }
+
+    function test_handleIngress_noop_whenWrappedAmountIsZero() public {
+        ProxyHookHarness fresh = new ProxyHookHarness(address(manager), address(marketFactory));
+
+        vm.prank(marketFactory);
+        fresh.handleIngress(address(1), 0);
+    }
+
+    function test_handleIngress_revertsWhenLccIsNotInCorePair() public {
+        ProxyHookHarness fresh = new ProxyHookHarness(address(manager), address(marketFactory));
+
+        vm.prank(marketFactory);
+        vm.expectRevert(Errors.InvalidSender.selector);
+        fresh.handleIngress(address(0xBEEF), 1);
+    }
+
+    function test_handleSwap_revertsWhenInputTokenIsNotInCorePair() public {
+        ProxyHookHarness fresh = new ProxyHookHarness(address(manager), address(marketFactory));
+
+        vm.prank(marketFactory);
+        fresh.activate();
+        vm.prank(marketFactory);
+        fresh.setCorePoolKey(corePoolKey);
+
+        vm.prank(coreHookAddress);
+        vm.expectRevert(Errors.InvalidSender.selector);
+        fresh.handleSwap(makeAddr("notCorePairLcc"));
+    }
+
+    function test_handleAddLiquidity_directCoreAction_pathExecutes() public {
+        ProxyHookHarness fresh = new ProxyHookHarness(address(manager), address(marketFactory));
+
+        vm.prank(marketFactory);
+        fresh.activate();
+        vm.prank(marketFactory);
+        fresh.setCorePoolKey(corePoolKey);
+
+        vm.prank(coreHookAddress);
+        fresh.handleAddLiquidity();
+    }
+
+    function test_noCoreAction_modifier_setsAndClearsTransientFlag() public {
+        ProxyHookHarness fresh = new ProxyHookHarness(address(manager), address(marketFactory));
+        (bool duringExecution, bool afterExecution) = fresh.exposed_runNoCoreActionProbe();
+        assertTrue(duringExecution, "flag should be set during noCoreAction body");
+        assertFalse(afterExecution, "flag should be cleared after noCoreAction body");
+    }
+
     function _isProxyKeyAlignedWithCoreLCCUnderlying() internal view returns (bool) {
         LiquidityCommitmentCertificate lccA =
             LiquidityCommitmentCertificate(payable(Currency.unwrap(corePoolKey.currency0)));
@@ -1140,6 +1196,15 @@ contract ProxyHookHarness is ProxyHook {
         returns (address recipient, bool resolved)
     {
         return _determineExcessRecipient(sender, hookData);
+    }
+
+    function _probeNoCoreAction() internal noCoreAction returns (bool duringExecution) {
+        duringExecution = CoreActionFlag.isNoCoreAction();
+    }
+
+    function exposed_runNoCoreActionProbe() external returns (bool duringExecution, bool afterExecution) {
+        duringExecution = _probeNoCoreAction();
+        afterExecution = CoreActionFlag.isNoCoreAction();
     }
 }
 
