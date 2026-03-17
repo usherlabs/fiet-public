@@ -16,7 +16,7 @@ ignored_error_codes = [
 solc_version = '0.8.26'
 evm_version = "cancun"
 gas_limit = "3000000000"
-optimizer_runs = 17500
+optimizer_runs = 15000
 optimizer = true
 via_ir = true
 ffi = true
@@ -73,18 +73,18 @@ libraries = [
 # Mirrors `profile.deploy`: library addresses are generated using Anvil account 0
 # (PRIVATE_KEY=0xac0974...ff80) and the default CREATE3 salts.
 
-# additional_compiler_profiles = [
-#   { name = "script_ir", via_ir = true },
-#   { name = "e2e_non_ir", via_ir = false },
-# ]
+additional_compiler_profiles = [
+  { name = "script_ir", via_ir = true },
+  { name = "e2e_non_ir", via_ir = false },
+]
 
 # CI policy:
 # - E2E scripts compile without IR to avoid stack-depth regressions in test flows.
 # - Non-E2E scripts compile with IR to preserve existing deploy/runtime behaviour.
-# compilation_restrictions = [
-#   { paths = "script/e2e/**", via_ir = false },
-#   { paths = "script/deploy/DeployLibraries.s.sol", via_ir = false },
-# ]
+compilation_restrictions = [
+  { paths = "script/e2e/**", via_ir = false },
+  # { paths = "script/deploy/DeployLibraries.s.sol", via_ir = false },
+]
 
 libraries = [
   "src/libraries/VTSPositionLib.sol:VTSPositionLib:0x2C95130C4DE0504c82f4688C657c9A4CC01761EF",
