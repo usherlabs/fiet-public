@@ -632,6 +632,7 @@ contract LiquidityHubTest is LiquidityHubTestBase {
 
         assertEq(liquidityHub.settleQueue(lccToken1, user2), amount);
         assertEq(liquidityHub.totalQueued(lccToken1), amount);
+        assertEq(liquidityHub.queueOfUnderlying(lccToken1), amount);
     }
 
     function test_queueForTransferRecipient_revertsWhenCallerIsNotIssuer() public {
@@ -666,6 +667,7 @@ contract LiquidityHubTest is LiquidityHubTestBase {
 
         assertEq(liquidityHub.settleQueue(lccToken1, user2), amount);
         assertEq(liquidityHub.totalQueued(lccToken1), amount);
+        assertEq(liquidityHub.queueOfUnderlying(lccToken1), amount);
     }
 
     function test_queueForTransferRecipient_accumulatesQueueForSameRecipient() public {
@@ -682,6 +684,7 @@ contract LiquidityHubTest is LiquidityHubTestBase {
 
         assertEq(liquidityHub.settleQueue(lccToken1, user2), amount1 + amount2);
         assertEq(liquidityHub.totalQueued(lccToken1), amount1 + amount2);
+        assertEq(liquidityHub.queueOfUnderlying(lccToken1), amount1 + amount2);
     }
 
     function test_processSettlementFor_external_retriableAfterReserveReconciliation() public {
@@ -703,6 +706,7 @@ contract LiquidityHubTest is LiquidityHubTestBase {
 
         liquidityHub.processSettlementFor(lccToken1, user2, amount);
         assertEq(liquidityHub.settleQueue(lccToken1, user2), 0);
+        assertEq(liquidityHub.queueOfUnderlying(lccToken1), 0);
     }
 
     function test_annulSettlementBeforeTransfer_noOpBranchesAndBleedLogic() public {
@@ -730,6 +734,7 @@ contract LiquidityHubTest is LiquidityHubTestBase {
         liquidityHub.annulSettlementBeforeTransfer(user1, 10, 0, 15);
         assertEq(liquidityHub.settleQueue(lccToken1, user1), q - 15);
         assertEq(liquidityHub.totalQueued(lccToken1), q - 15);
+        assertEq(liquidityHub.queueOfUnderlying(lccToken1), q - 15);
     }
 
     function test_annulSettlementBeforeTransfer_bleedUsesTransferableWithoutQueue_whenLiquidBalanceExceedsQueued()
@@ -747,6 +752,7 @@ contract LiquidityHubTest is LiquidityHubTestBase {
 
         assertEq(liquidityHub.settleQueue(lccToken1, user1), q - 10);
         assertEq(liquidityHub.totalQueued(lccToken1), q - 10);
+        assertEq(liquidityHub.queueOfUnderlying(lccToken1), q - 10);
     }
 
     function test_confirmTake_emitsLiquidityAvailableWhenShouldEmitAndNotFullyConsumedByHubQueue() public {
@@ -830,6 +836,7 @@ contract LiquidityHubTest is LiquidityHubTestBase {
 
         assertEq(liquidityHub.settleQueue(lccToken1, address(liquidityHub)), 0, "Hub queue should be cleared");
         assertEq(liquidityHub.totalQueued(lccToken1), 0, "totalQueued should be decremented");
+        assertEq(liquidityHub.queueOfUnderlying(lccToken1), 0, "underlying queue should be decremented");
         assertEq(ILCC(lccToken1).balanceOf(address(liquidityHub)), hubLccBefore - queued, "Hub-held LCC burned");
     }
 }

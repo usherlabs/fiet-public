@@ -12,7 +12,7 @@ This design enables several key capabilities: efficient pooling of liquidity acr
 
 The LiquidityHub maintains several critical state mappings that enable its functionality. The `directSupply` mapping tracks Out-of-Market (OOM) balances for each LCC token, representing liquidity directly wrapped by users and held in the Hub's reserves. The `reserveOfUnderlying` mapping aggregates underlying asset reserves across all LCCs sharing the same underlying, enabling shared liquidity pools.
 
-Settlement queues are managed through two mappings: `settleQueue[lcc][recipient]` tracks pending settlements owed to specific recipients, while `totalQueued[lcc]` provides aggregate tracking for each LCC. These queues represent commitments to provide underlying assets when liquidity becomes available, created during unwrap operations when immediate liquidity is insufficient.
+Settlement queues are managed through three related mappings: `settleQueue[lcc][recipient]` tracks pending settlements owed to specific recipients, `totalQueued[lcc]` provides aggregate tracking per LCC, and `queueOfUnderlying[underlying]` aggregates queued debt across all LCCs sharing an underlying. These queues represent commitments to provide underlying assets when liquidity becomes available, created during unwrap operations when immediate liquidity is insufficient.
 
 A critical innovation is the `nettedLCCsAsUnderlying` mapping, which implements lazy claiming for LCC-backing-LCC operations. This prevents over-netting across concurrent wrap operations by tracking claimed but unreconciled portions of settlement queues, enabling efficient netting without immediate queue modifications.
 
@@ -128,6 +128,8 @@ The `cancel` function allows issuers to burn LCC tokens, also marked as "issued"
 ### Confirming Takes
 
 The `confirmTake` function is called by MarketVaults after taking underlying liquidity from markets to the Hub. This function increments `reserveOfUnderlying`, processes any pending Hub queue settlements, and optionally emits a `LiquidityAvailable` event if new liquidity beyond queued amounts becomes available. This is a critical integration point between MarketVault operations and Hub accounting, ensuring that liquidity movements are properly tracked and settlements are processed promptly.
+
+For vault-to-Hub mobilisation sizing, the protocol should use the shared-underlying shortfall rather than raw per-LCC queue totals: `unfundedQueueOfUnderlying = max(queueOfUnderlying - reserveOfUnderlying, 0)`. This avoids repeated mobilisation when obligations are already reserve-backed.
 
 ## Market Liquidity Interactions
 

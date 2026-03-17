@@ -45,6 +45,9 @@ struct LiquidityHubStorage {
     // Total queued per LCC
     mapping(address => uint256) totalQueued;
 
+    // Total queued per underlying asset across all LCCs sharing that underlying
+    mapping(address => uint256) queueOfUnderlying;
+
     // Lazy netting claims per LCC
     mapping(address => uint256) nettedLCCsAsUnderlying;
 

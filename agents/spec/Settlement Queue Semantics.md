@@ -25,7 +25,7 @@ The model is intentionally eventual rather than eager: queue writes are accounti
 
 ## Core Invariants
 
-1. `settleQueue[lcc][recipient]` and `totalQueued[lcc]` move together for queue increments/decrements.
+1. `settleQueue[lcc][recipient]`, `totalQueued[lcc]`, and `queueOfUnderlying[underlying]` move together for queue increments/decrements/de-annulments.
 2. Queue ownership is a claim attribution primitive, not proof of immediate redeemability.
 3. External settlement burns market-derived balance only.
 4. Hub settlement follows separate rules (`recipient == address(this)`), including lazy-netting reconciliation.
@@ -47,6 +47,18 @@ Queue writes do **not** need to prove that settlement can execute immediately.
 - recipient backing is currently valid for the selected settlement path.
 
 If these are not reconciled yet, reverting is the expected behaviour and callers should retry later.
+
+## Funding Awareness For Vault-To-Hub Top-Ups
+
+Queue validity and settleability are execution concerns; top-up sizing is a funding concern.
+
+- `totalQueued[lcc]` remains the per-LCC aggregate queue metric.
+- `queueOfUnderlying[underlying]` tracks queued debt at shared-underlying scope (across sibling LCCs).
+- `reserveOfUnderlying[underlying]` tracks already-mobilised Hub reserve for that underlying.
+- Vault top-ups should target the unfunded shortfall:
+  - `unfundedQueueOfUnderlying = max(queueOfUnderlying - reserveOfUnderlying, 0)`
+
+This prevents repeated vault-to-Hub drains when queue debt is already reserve-backed.
 
 ## Queue-Producing Paths
 

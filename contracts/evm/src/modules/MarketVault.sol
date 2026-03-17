@@ -274,16 +274,17 @@ abstract contract MarketVault is IMarketVault, ImmutableState, ImmutableMarketSt
      * @param lccToken The LCC token contract to settle obligations for
      */
     function _settleObligationsForLCC(ILCC lccToken) internal {
-        // Check how much total pending settlement is queued for this LCC
-        uint256 totalPendingSettlement = liquidityHub.totalQueued(address(lccToken));
-        if (totalPendingSettlement == 0) return; // No pending settlements to fulfill
+        // Compute only the remaining unfunded shortfall for this underlying.
+        // This avoids repeatedly draining vault liquidity when the Hub reserve already covers queued debt.
+        uint256 unfunded = liquidityHub.unfundedQueueOfUnderlying(address(lccToken));
+        if (unfunded == 0) return;
 
         // Check how much underlying liquidity is available in the vault for this LCC's underlying asset
         Currency uaCurrency = Currency.wrap(lccToken.underlying());
         uint256 availableLiquidity = inMarketBalanceOf(uaCurrency);
 
         // Calculate how much we can actually settle (limited by available liquidity)
-        uint256 amountToSettle = Math.min(totalPendingSettlement, availableLiquidity);
+        uint256 amountToSettle = Math.min(unfunded, availableLiquidity);
         if (amountToSettle == 0) return; // No liquidity available to fulfill obligations
 
         // Transfer liquidity from vault to Hub and emit event

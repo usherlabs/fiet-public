@@ -248,6 +248,28 @@ contract LiquidityHub is BoundRegistry, Ownable, ReentrancyGuardTransient {
         return s.totalQueued[lcc];
     }
 
+    /**
+     * @notice Returns the total queued settlement debt for the underlying of a given LCC
+     * @param lcc The LCC token address
+     * @return The total queued debt aggregated across all LCCs sharing the same underlying
+     */
+    function queueOfUnderlying(address lcc) external view onlyValidLcc(lcc) returns (uint256) {
+        return s.queueOfUnderlying[s.lccToUnderlying[lcc]];
+    }
+
+    /**
+     * @notice Returns the unfunded queued debt for the underlying of a given LCC
+     * @dev Unfunded debt is `max(queueOfUnderlying - reserveOfUnderlying, 0)` at the shared-underlying level.
+     * @param lcc The LCC token address
+     * @return The remaining underlying shortfall that still needs market-to-Hub mobilisation
+     */
+    function unfundedQueueOfUnderlying(address lcc) external view onlyValidLcc(lcc) returns (uint256) {
+        address underlying = s.lccToUnderlying[lcc];
+        uint256 queued = s.queueOfUnderlying[underlying];
+        uint256 reserve = s.reserveOfUnderlying[underlying];
+        return queued > reserve ? queued - reserve : 0;
+    }
+
     // ============ ADMIN FUNCTIONS ============
 
     /**
@@ -958,6 +980,7 @@ contract LiquidityHub is BoundRegistry, Ownable, ReentrancyGuardTransient {
             // Safe: toAnnul <= queued and subtracting 0 is a no-op.
             s.settleQueue[lcc][from] -= toAnnul;
             s.totalQueued[lcc] -= toAnnul;
+            s.queueOfUnderlying[s.lccToUnderlying[lcc]] -= toAnnul;
             if (toAnnul > 0) {
                 emit SettlementAnnulled(lcc, from, toAnnul);
             }

@@ -150,10 +150,12 @@ library LiquidityHubLib {
             }
         }
 
-        // Update storage and context
-        // Netting: burn target LCC from queue, burn backing LCC, mint target LCC as market-derived
+        // Update storage and context.
+        // Netting: burn target LCC from queue, burn backing LCC, mint target LCC as market-derived.
+        // Keep both per-LCC and per-underlying queue aggregates in sync.
         s.settleQueue[lcc][address(this)] = targetQueue - netTarget;
         s.totalQueued[lcc] -= netTarget;
+        s.queueOfUnderlying[s.lccToUnderlying[lcc]] -= netTarget;
         ctx.targetToBurn = netTarget;
         ctx.backingToBurn += netTarget;
         ctx.marketToMint += netTarget;
@@ -462,6 +464,7 @@ library LiquidityHubLib {
      *      It does not assert immediate recipient serviceability, because queue ownership can be
      *      decoupled from current LCC custody in protocol flows (for example MM custody release).
      *      Runtime settleability is enforced by processSettlementLogic at redemption time.
+     *      Updates both per-LCC queue totals and shared-underlying queue totals.
      *      Note: events are emitted by the calling contract, not this library.
      * @param s The liquidity hub storage
      * @param lcc The LCC token address
@@ -471,6 +474,7 @@ library LiquidityHubLib {
     function queueSettlement(LiquidityHubStorage storage s, address lcc, address recipient, uint256 amount) internal {
         s.settleQueue[lcc][recipient] += amount;
         s.totalQueued[lcc] += amount;
+        s.queueOfUnderlying[s.lccToUnderlying[lcc]] += amount;
         // Event will be emitted by the calling contract
     }
 
@@ -529,9 +533,10 @@ library LiquidityHubLib {
             return;
         }
 
-        // Update queue
+        // Update queue state at both LCC and shared-underlying scopes.
         s.settleQueue[lcc][recipient] -= toSettle;
         s.totalQueued[lcc] -= toSettle;
+        s.queueOfUnderlying[underlying] -= toSettle;
 
         if (isForHub) {
             // Reconcile lazy netting from wrapWith Step 2.

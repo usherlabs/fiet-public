@@ -87,6 +87,16 @@ contract MockLiquidityHub_Min {
         return _queued[lcc];
     }
 
+    function queueOfUnderlying(address lcc) external view returns (uint256) {
+        return _queued[lcc];
+    }
+
+    function unfundedQueueOfUnderlying(address lcc) external view returns (uint256) {
+        uint256 queued = _queued[lcc];
+        uint256 reserve = _reserve[lcc];
+        return queued > reserve ? queued - reserve : 0;
+    }
+
     function setReserve(address lcc, uint256 amount) external {
         _reserve[lcc] = amount;
     }
@@ -146,6 +156,16 @@ contract MockLiquidityHub_RejectEth {
 
     function totalQueued(address lcc) external view returns (uint256) {
         return _queued[lcc];
+    }
+
+    function queueOfUnderlying(address lcc) external view returns (uint256) {
+        return _queued[lcc];
+    }
+
+    function unfundedQueueOfUnderlying(address lcc) external view returns (uint256) {
+        uint256 queued = _queued[lcc];
+        uint256 reserve = _reserve[lcc];
+        return queued > reserve ? queued - reserve : 0;
     }
 
     function setReserve(address lcc, uint256 amount) external {
@@ -618,6 +638,33 @@ contract MarketVaultUnitTest is Test {
 
         vault.exposed_settleObligationsForLCC(ILCC(address(lccNative)));
         assertEq(hub.confirmCalls(), 0);
+    }
+
+    function test_settleObligationsForLCC_earlyReturnsWhenQueueAlreadyFundedByReserve() public {
+        MockLiquidityHub_Min hub = new MockLiquidityHub_Min();
+        (MarketVaultUnitHarness vault, MockPoolManager_Min pm,,, MockLCC lccNative,) = _deployVaultWithHub(address(hub));
+
+        hub.setTotalQueued(address(lccNative), 10);
+        hub.setReserve(address(lccNative), 10);
+        pm.setClaimBalance(address(vault), Currency.wrap(address(0)), 25);
+
+        vault.exposed_settleObligationsForLCC(ILCC(address(lccNative)));
+        assertEq(hub.confirmCalls(), 0);
+    }
+
+    function test_settleObligationsForLCC_settlesOnlyUnfundedQueuePortion() public {
+        MockLiquidityHub_Min hub = new MockLiquidityHub_Min();
+        (MarketVaultUnitHarness vault, MockPoolManager_Min pm,, MockLCC lccErc20,, MockERC20 ua) =
+            _deployVaultWithHub(address(hub));
+
+        hub.setTotalQueued(address(lccErc20), 20);
+        hub.setReserve(address(lccErc20), 7);
+        pm.setClaimBalance(address(vault), Currency.wrap(address(ua)), 100);
+        ua.mint(address(pm), 100);
+
+        vault.exposed_settleObligationsForLCC(ILCC(address(lccErc20)));
+        assertEq(hub.confirmCalls(), 1);
+        assertEq(hub.lastConfirmAmount(), 13);
     }
 
     function test_cancelLCCWithDeficit_transfersDeficitToRecipientWhenProvided() public {
