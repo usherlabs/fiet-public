@@ -105,6 +105,21 @@ interface IMinimalLiquidityHub {
     function totalQueued(address lcc) external view returns (uint256);
 
     /**
+     * @notice Gets the total queued settlement debt for the underlying backing a given LCC
+     * @param lcc The LCC token address
+     * @return The aggregated queued debt across all LCCs sharing the same underlying
+     */
+    function queueOfUnderlying(address lcc) external view returns (uint256);
+
+    /**
+     * @notice Gets the unfunded queued settlement debt for the underlying backing a given LCC
+     * @dev Returns `max(queueOfUnderlying - reserveOfUnderlying, 0)` at underlying scope.
+     * @param lcc The LCC token address
+     * @return The remaining underlying shortfall that still needs mobilisation
+     */
+    function unfundedQueueOfUnderlying(address lcc) external view returns (uint256);
+
+    /**
      * @notice Gets the LCC's reserve of underlying assets
      * @param lcc The LCC token address
      * @return The reserve of underlying
