@@ -11,6 +11,7 @@ import {ImmutableState} from "v4-periphery/src/base/ImmutableState.sol";
 import {WETH} from "@uniswap/v4-core/lib/solmate/src/tokens/WETH.sol";
 import {Errors} from "../src/libraries/Errors.sol";
 import {IMarketFactory} from "../src/interfaces/IMarketFactory.sol";
+import {ILiquidityHub} from "../src/interfaces/ILiquidityHub.sol";
 
 // ============ MOCK CONTRACTS ============
 
@@ -104,12 +105,14 @@ contract ForksNativeWrapperHarness is ForksNativeWrapper {
 /// @dev This harness tests the EXTENDED NativeWrapper from modules/ directory
 contract ModulesNativeWrapperHarness is FietNativeWrapper {
     IMarketFactory internal immutable _factory;
+    ILiquidityHub internal immutable _hub;
 
-    constructor(IWETH9 _weth9, IPoolManager _poolManager, address marketFactory_)
+    constructor(IWETH9 _weth9, IPoolManager _poolManager, address marketFactory_, address hub_)
         FietNativeWrapper(_weth9)
         ImmutableState(_poolManager)
     {
         _factory = IMarketFactory(marketFactory_);
+        _hub = ILiquidityHub(hub_);
     }
 
     /// @notice Expose internal _wrap function for testing
@@ -129,6 +132,10 @@ contract ModulesNativeWrapperHarness is FietNativeWrapper {
 
     function _canonicalMarketFactory() internal view override returns (IMarketFactory) {
         return _factory;
+    }
+
+    function _liquidityHub() internal view override returns (ILiquidityHub) {
+        return _hub;
     }
 }
 
@@ -152,6 +159,7 @@ contract NativeWrapperTest is Test {
     // Test addresses
     address public unauthorisedSender;
     address public marketFactory;
+    address public liquidityHub;
 
     function setUp() public {
         // Deploy WETH9
@@ -160,11 +168,12 @@ contract NativeWrapperTest is Test {
         // Create mock pool manager
         poolManager = IPoolManager(makeAddr("poolManager"));
         marketFactory = makeAddr("marketFactory");
+        liquidityHub = makeAddr("liquidityHub");
         vm.etch(marketFactory, hex"00");
 
         // Deploy harnesses
         forksHarness = new ForksNativeWrapperHarness(weth9, poolManager);
-        modulesHarness = new ModulesNativeWrapperHarness(weth9, poolManager, marketFactory);
+        modulesHarness = new ModulesNativeWrapperHarness(weth9, poolManager, marketFactory, liquidityHub);
 
         // Deploy mock contracts
         mockMarketVault = new MockMarketVaultForNativeWrapper();

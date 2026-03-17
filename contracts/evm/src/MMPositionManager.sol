@@ -32,6 +32,7 @@ import {TransientStateLibrary} from "v4-periphery/lib/v4-core/src/libraries/Tran
 import {CurrencyTransfer} from "./libraries/CurrencyTransfer.sol";
 import {IMMQueueCustodian} from "./interfaces/IMMQueueCustodian.sol";
 import {IMarketFactory} from "./interfaces/IMarketFactory.sol";
+import {ILiquidityHub} from "./interfaces/ILiquidityHub.sol";
 
 /// @title MMPositionManager
 /// @notice Entry point for VRL commitment position management
@@ -136,6 +137,11 @@ contract MMPositionManager is
     /// @inheritdoc FietNativeWrapper
     function _canonicalMarketFactory() internal view override returns (IMarketFactory) {
         return marketFactory;
+    }
+
+    /// @inheritdoc FietNativeWrapper
+    function _liquidityHub() internal view override returns (ILiquidityHub) {
+        return liquidityHub;
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
@@ -367,8 +373,9 @@ contract MMPositionManager is
         ILCC lcc = ILCC(lccAddr);
         Currency lccCurrency = Currency.wrap(lccAddr);
         address underlying = lcc.underlying();
+        bool isNativeUnderlying = underlying == address(0);
 
-        uint256 beforeBal = IERC20(underlying).balanceOf(to);
+        uint256 beforeBal = isNativeUnderlying ? to.balance : IERC20(underlying).balanceOf(to);
         uint256 toUnwrap = vtsOrchestrator.take(lccCurrency, msgSender(), requested);
 
         if (toUnwrap > 0) {
@@ -376,10 +383,15 @@ contract MMPositionManager is
             liquidityHub.unwrapTo(lccAddr, to, queueTo, toUnwrap);
         }
 
-        unwrapped = IERC20(underlying).balanceOf(to) - beforeBal;
+        uint256 afterBal = isNativeUnderlying ? to.balance : IERC20(underlying).balanceOf(to);
+        unwrapped = afterBal - beforeBal;
 
         if (to == address(this) && unwrapped > 0) {
-            _syncBalanceAsCredit(Currency.wrap(underlying));
+            if (isNativeUnderlying) {
+                _creditExact(CurrencyLibrary.ADDRESS_ZERO, unwrapped);
+            } else {
+                _syncBalanceAsCredit(Currency.wrap(underlying));
+            }
         }
     }
 
@@ -388,6 +400,7 @@ contract MMPositionManager is
         ILCC lcc = ILCC(lccAddr);
         Currency lccCurrency = Currency.wrap(lccAddr);
         address underlying = lcc.underlying();
+        bool isNativeUnderlying = underlying == address(0);
 
         address payer = msgSender();
         uint256 toUnwrap = lcc.balanceOf(payer);
@@ -395,16 +408,21 @@ contract MMPositionManager is
             toUnwrap = Math.min(toUnwrap, requested);
         }
 
-        uint256 beforeBal = IERC20(underlying).balanceOf(to);
+        uint256 beforeBal = isNativeUnderlying ? to.balance : IERC20(underlying).balanceOf(to);
         if (toUnwrap > 0) {
             // Pull only from the locker/user (never arbitrary third parties).
             lccCurrency.transferFrom(payer, address(this), toUnwrap);
             liquidityHub.unwrapTo(lccAddr, to, payer, toUnwrap);
         }
 
-        unwrapped = IERC20(underlying).balanceOf(to) - beforeBal;
+        uint256 afterBal = isNativeUnderlying ? to.balance : IERC20(underlying).balanceOf(to);
+        unwrapped = afterBal - beforeBal;
         if (to == address(this) && unwrapped > 0) {
-            _syncBalanceAsCredit(Currency.wrap(underlying));
+            if (isNativeUnderlying) {
+                _creditExact(CurrencyLibrary.ADDRESS_ZERO, unwrapped);
+            } else {
+                _syncBalanceAsCredit(Currency.wrap(underlying));
+            }
         }
     }
 

@@ -5,6 +5,7 @@ import {NativeWrapper as UniNativeWrapper} from "../forks/NativeWrapper.sol";
 import {IWETH9} from "v4-periphery/src/interfaces/external/IWETH9.sol";
 import {Errors} from "../libraries/Errors.sol";
 import {IMarketFactory} from "../interfaces/IMarketFactory.sol";
+import {ILiquidityHub} from "../interfaces/ILiquidityHub.sol";
 
 /// @title FietNativeWrapper
 /// @notice Used for wrapping and unwrapping native assets in PositionManagers.
@@ -14,8 +15,10 @@ abstract contract FietNativeWrapper is UniNativeWrapper {
 
     /// @dev Implemented by inheritors that already bind a canonical MarketFactory namespace.
     function _canonicalMarketFactory() internal view virtual returns (IMarketFactory);
+    /// @dev Implemented by inheritors with canonical LiquidityHub binding.
+    function _liquidityHub() internal view virtual returns (ILiquidityHub);
 
-    /// @notice Validates that the ETH sender is either WETH9, poolManager, or a canonical native vault
+    /// @notice Validates that the ETH sender is either WETH9, poolManager, canonical LiquidityHub, or a canonical native vault
     /// @dev Uses MarketFactory registry data to avoid interface-probing based sender spoofing.
     function _assertValidEthSender() internal view {
         // If sender is WETH9 or poolManager, allow it (these are trusted sources)
@@ -23,13 +26,19 @@ abstract contract FietNativeWrapper is UniNativeWrapper {
             return;
         }
 
+        // Allow canonical Hub-native payouts (e.g. native LCC unwrap-to-self in MMPM).
+        if (msg.sender == address(_liquidityHub())) {
+            return;
+        }
+
+        IMarketFactory factory = _canonicalMarketFactory();
         address sender = msg.sender;
         if (sender.code.length == 0) {
             revert Errors.InvalidEthSender();
         }
 
         // Canonical vault lookup by sender address; unknown senders map to [0,0].
-        address[2] memory underlyingPair = _canonicalMarketFactory().proxyHookToCurrencyPair(sender);
+        address[2] memory underlyingPair = factory.proxyHookToCurrencyPair(sender);
         bool native0 = underlyingPair[0] == address(0);
         bool native1 = underlyingPair[1] == address(0);
 

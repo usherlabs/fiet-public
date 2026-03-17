@@ -566,6 +566,43 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
         );
     }
 
+    /// @notice Native-backed unwrap-to-self should only credit the exact ETH received from Hub.
+    /// @dev Regression guard: ambient ETH on MMPM must never be auto-credited during LCC unwrap sync.
+    function test_unwrapLcc_nativeToThis_creditsExactHubPayout_only() public {
+        address recipient = makeAddr("recipient");
+        uint256 amount = 500;
+        uint256 ambient = 2 ether;
+        MockERC20 underlying = MockERC20(lcc0.underlying());
+        Currency lccCurrency = Currency.wrap(address(lcc0));
+
+        // Put LCC on MMPM, then sync locker credit from MMPM balance.
+        underlying.mint(address(this), amount);
+        underlying.approve(address(liquidityHub), amount);
+        ILiquidityHub(liquidityHub).wrap(address(lcc0), amount);
+        lcc0.transfer(address(positionManager), amount);
+
+        // Replace Hub runtime with a deterministic native payout mock.
+        MockNativeUnwrapHubPayer hubPayer = new MockNativeUnwrapHubPayer();
+        vm.etch(liquidityHub, address(hubPayer).code);
+        vm.deal(liquidityHub, 5 ether);
+
+        // Force this unwrap path to treat lcc0 as native-backed.
+        vm.mockCall(address(lcc0), abi.encodeWithSelector(ILCC.underlying.selector), abi.encode(address(0)));
+
+        // Seed ambient ETH that must remain untouched by native unwrap crediting.
+        vm.deal(address(positionManager), ambient);
+        uint256 recipientBefore = recipient.balance;
+
+        MMA.PreparedAction[] memory prepared = new MMA.PreparedAction[](3);
+        prepared[0] = MMA.prepareSync(lccCurrency);
+        prepared[1] = MMA.prepareUnwrapLcc(address(lcc0), amount, ActionConstants.ADDRESS_THIS, false);
+        prepared[2] = MMA.prepareTake(CurrencyLibrary.ADDRESS_ZERO, recipient, 0);
+        MMA.execute(positionManager, prepared);
+
+        assertEq(recipient.balance - recipientBefore, 1 ether, "should credit and take only Hub native payout");
+        assertEq(address(positionManager).balance, ambient, "ambient ETH must not be auto-credited");
+    }
+
     function testCanCheckpointWithCommitment() public {
         // get the default market configuration so we can tweak it
         LiquiditySignal memory renewSignal = liquiditySignal;
@@ -2010,5 +2047,19 @@ contract UnlockCaller {
             targetMmpm.transferFrom(transferFromFrom, transferFromTo, tokenId);
         }
         return "";
+    }
+}
+
+/// @dev Test helper: emulates LiquidityHub native unwrap payout to recipient.
+contract MockNativeUnwrapHubPayer {
+    receive() external payable {}
+
+    function isFactory(address) external pure returns (bool) {
+        return true;
+    }
+
+    function unwrapTo(address, address to, address, uint256) external {
+        (bool ok,) = payable(to).call{value: 1 ether}("");
+        require(ok, "native payout failed");
     }
 }
