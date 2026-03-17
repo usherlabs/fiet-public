@@ -424,6 +424,26 @@ contract VTSPositionLibHarness {
         s.inflowGrowthOutside[poolId][tick] = GrowthPair({token0: outside0, token1: outside1});
     }
 
+    /// @notice Gets per-tick deficit growth outside values
+    function getDeficitGrowthOutside(PoolId poolId, int24 tick)
+        external
+        view
+        returns (uint256 outside0, uint256 outside1)
+    {
+        GrowthPair storage outside = s.deficitGrowthOutside[poolId][tick];
+        return (outside.token0, outside.token1);
+    }
+
+    /// @notice Gets per-tick inflow growth outside values
+    function getInflowGrowthOutside(PoolId poolId, int24 tick)
+        external
+        view
+        returns (uint256 outside0, uint256 outside1)
+    {
+        GrowthPair storage outside = s.inflowGrowthOutside[poolId][tick];
+        return (outside.token0, outside.token1);
+    }
+
     /// @notice Sets position isActive state
     function setPositionActive(PositionId id, bool active) external {
         s.positions[id].isActive = active;

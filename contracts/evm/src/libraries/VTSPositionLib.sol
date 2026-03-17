@@ -1017,6 +1017,51 @@ library VTSPositionLib {
         pa.ciseIndexLastX128.token1 = paPool.coveragePerSettledIndexX128.token1;
     }
 
+    /// @dev Seed per-tick outside growth snapshots when a tick is initialised by this liquidity add.
+    ///      This moves first-write cost from swap-time tick crossing to modify-liquidity time.
+    ///      Mirrors Uniswap initialisation semantics: if tick <= currentTick, outside starts at global, else 0.
+    function _seedOutsideGrowthForNewlyInitializedTicks(
+        VTSStorage storage s,
+        IPoolManager poolManager,
+        PoolId poolId,
+        ModifyLiquidityParams calldata params
+    ) private {
+        if (params.liquidityDelta <= 0) return;
+
+        uint128 addLiq = uint256(params.liquidityDelta).toUint128();
+        (uint128 lowerGross,) = StateLibrary.getTickLiquidity(poolManager, poolId, params.tickLower);
+        (uint128 upperGross,) = StateLibrary.getTickLiquidity(poolManager, poolId, params.tickUpper);
+
+        bool lowerInitializedByThisAdd = lowerGross == addLiq;
+        bool upperInitializedByThisAdd = upperGross == addLiq;
+        if (!lowerInitializedByThisAdd && !upperInitializedByThisAdd) return;
+
+        (, int24 tickCurrent,,) = StateLibrary.getSlot0(poolManager, poolId);
+        PoolAccounting storage paPool = s.poolAccounting[poolId];
+
+        if (lowerInitializedByThisAdd) {
+            _seedOutsideAtInitializedTick(s, paPool, poolId, params.tickLower, tickCurrent);
+        }
+        if (upperInitializedByThisAdd && params.tickUpper != params.tickLower) {
+            _seedOutsideAtInitializedTick(s, paPool, poolId, params.tickUpper, tickCurrent);
+        }
+    }
+
+    function _seedOutsideAtInitializedTick(
+        VTSStorage storage s,
+        PoolAccounting storage paPool,
+        PoolId poolId,
+        int24 tick,
+        int24 tickCurrent
+    ) private {
+        if (tick > tickCurrent) return;
+
+        s.deficitGrowthOutside[poolId][tick].token0 = paPool.deficitGrowthGlobal.token0;
+        s.deficitGrowthOutside[poolId][tick].token1 = paPool.deficitGrowthGlobal.token1;
+        s.inflowGrowthOutside[poolId][tick].token0 = paPool.inflowGrowthGlobal.token0;
+        s.inflowGrowthOutside[poolId][tick].token1 = paPool.inflowGrowthGlobal.token1;
+    }
+
     /**
      * @notice Initializes the snapshots for a position. Prevents new positions from inheriting historical tick-indexed growths.
      * @param s The central VTS storage
@@ -1189,6 +1234,8 @@ library VTSPositionLib {
         returns (TouchPositionResult memory result)
     {
         PoolId poolId = p.poolKey.toId();
+        _seedOutsideGrowthForNewlyInitializedTicks(s, ctx.poolManager, poolId, p.params);
+
         result.id = PositionLibrary.generateId(p.owner, p.params);
         Position storage posStorage = s.positions[result.id];
         uint256 initialLiquidity = posStorage.liquidity;

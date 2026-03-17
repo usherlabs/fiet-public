@@ -630,6 +630,108 @@ contract VTSPositionLibTest is VTSLibTestBase {
         return PositionModificationHookDataLib.encode(commitId, 0, address(2));
     }
 
+    function test_touchPosition_newlyInitializedTicks_seedOutsideGrowthAtModifyTime() public {
+        _initMarket();
+        PoolId corePoolId = _getDefaultPoolId();
+        harness.setupPool(corePoolId, _createDefaultVTSConfig());
+        int24 tickLower = -120;
+        int24 tickUpper = 120;
+
+        // Seed non-zero globals so we can observe whether initialisation snapshots are written.
+        harness.setDeficitGrowthGlobal(corePoolId, 111, 222);
+        harness.setInflowGrowthGlobal(corePoolId, 333, 444);
+
+        address owner = address(modifyLiquidityRouter);
+        bytes32 salt = bytes32(uint256(0xD001));
+        ModifyLiquidityParams memory addParams = ModifyLiquidityParams({
+            tickLower: tickLower, tickUpper: tickUpper, liquidityDelta: int256(uint256(1e18)), salt: salt
+        });
+
+        // Core modify first so PoolManager tick-liquidity reflects the newly initialised ticks.
+        modifyLiquidityRouter.modifyLiquidity(corePoolKey, addParams, ZERO_BYTES);
+
+        TouchPositionParams memory tp = TouchPositionParams({
+            owner: owner,
+            poolKey: _mkPoolKey(),
+            params: addParams,
+            callerDelta: toBalanceDelta(0, 0),
+            feesAccrued: toBalanceDelta(0, 0),
+            hookData: _mkHookData(false, false, 0)
+        });
+        harness.touchPosition(_mkCtx(), tp);
+
+        {
+            (uint256 defLower0, uint256 defLower1) = harness.getDeficitGrowthOutside(corePoolId, tickLower);
+            (uint256 infLower0, uint256 infLower1) = harness.getInflowGrowthOutside(corePoolId, tickLower);
+            assertEq(defLower0, 111, "lower tick deficit outside token0 should seed from global");
+            assertEq(defLower1, 222, "lower tick deficit outside token1 should seed from global");
+            assertEq(infLower0, 333, "lower tick inflow outside token0 should seed from global");
+            assertEq(infLower1, 444, "lower tick inflow outside token1 should seed from global");
+        }
+
+        // With the default initial tick around zero, the upper boundary stays on the > current side and remains zero.
+        {
+            (uint256 defUpper0, uint256 defUpper1) = harness.getDeficitGrowthOutside(corePoolId, tickUpper);
+            (uint256 infUpper0, uint256 infUpper1) = harness.getInflowGrowthOutside(corePoolId, tickUpper);
+            assertEq(defUpper0, 0, "upper tick deficit outside token0 should remain zero");
+            assertEq(defUpper1, 0, "upper tick deficit outside token1 should remain zero");
+            assertEq(infUpper0, 0, "upper tick inflow outside token0 should remain zero");
+            assertEq(infUpper1, 0, "upper tick inflow outside token1 should remain zero");
+        }
+    }
+
+    function test_touchPosition_existingInitializedTicks_doNotReseedOutsideGrowth() public {
+        _initMarket();
+        PoolId corePoolId = _getDefaultPoolId();
+        harness.setupPool(corePoolId, _createDefaultVTSConfig());
+        int24 tickLower = -180;
+        int24 tickUpper = 180;
+
+        address owner = address(modifyLiquidityRouter);
+        bytes32 salt = bytes32(uint256(0xD002));
+        ModifyLiquidityParams memory addParams = ModifyLiquidityParams({
+            tickLower: tickLower, tickUpper: tickUpper, liquidityDelta: int256(uint256(1e18)), salt: salt
+        });
+
+        harness.setDeficitGrowthGlobal(corePoolId, 10, 20);
+        harness.setInflowGrowthGlobal(corePoolId, 30, 40);
+        modifyLiquidityRouter.modifyLiquidity(corePoolKey, addParams, ZERO_BYTES);
+
+        TouchPositionParams memory firstTouch = TouchPositionParams({
+            owner: owner,
+            poolKey: _mkPoolKey(),
+            params: addParams,
+            callerDelta: toBalanceDelta(0, 0),
+            feesAccrued: toBalanceDelta(0, 0),
+            hookData: _mkHookData(false, false, 0)
+        });
+        harness.touchPosition(_mkCtx(), firstTouch);
+
+        // Change globals and increase liquidity again on the same initialised boundaries.
+        harness.setDeficitGrowthGlobal(corePoolId, 1000, 2000);
+        harness.setInflowGrowthGlobal(corePoolId, 3000, 4000);
+        modifyLiquidityRouter.modifyLiquidity(corePoolKey, addParams, ZERO_BYTES);
+
+        TouchPositionParams memory secondTouch = TouchPositionParams({
+            owner: owner,
+            poolKey: _mkPoolKey(),
+            params: addParams,
+            callerDelta: toBalanceDelta(0, 0),
+            feesAccrued: toBalanceDelta(0, 0),
+            hookData: _mkHookData(false, false, 0)
+        });
+        harness.touchPosition(_mkCtx(), secondTouch);
+
+        {
+            (uint256 defLower0, uint256 defLower1) = harness.getDeficitGrowthOutside(corePoolId, tickLower);
+            (uint256 infLower0, uint256 infLower1) = harness.getInflowGrowthOutside(corePoolId, tickLower);
+            assertEq(defLower0, 10, "existing lower tick must not be re-seeded for deficit token0");
+            assertEq(defLower1, 20, "existing lower tick must not be re-seeded for deficit token1");
+            assertEq(infLower0, 30, "existing lower tick must not be re-seeded for inflow token0");
+            assertEq(infLower1, 40, "existing lower tick must not be re-seeded for inflow token1");
+        }
+    }
+
     function test_touchPosition_existingPosition_commitIdMismatch_reverts() public {
         // Register a position in harness storage (existing position path)
         PositionId positionId =

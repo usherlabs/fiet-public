@@ -87,6 +87,41 @@ contract MMCoverageE2E is MME2EBase {
     uint256 internal constant WRAP_FOR_SWAPS = 5e7;
     uint128 internal constant SWAP_AMOUNT_IN = 5e7;
 
+    struct ActorKeys {
+        uint256 mm1Pk;
+        uint256 mm2Pk;
+        uint256 mm3Pk;
+        uint256 takerPk;
+    }
+
+    struct ActorAddrs {
+        address mm1;
+        address mm2;
+        address mm3;
+        address taker;
+    }
+
+    struct ScenarioState {
+        StandaloneMarket market;
+        PoolKey key;
+        IVTSOrchestrator vts;
+        IVTSOrchestratorExtraLens vtsLens;
+        uint256 mm1CommitId;
+        uint256 mm2CommitId;
+        uint256 mm3CommitId;
+        PositionId mm1PosId;
+        PositionId mm2PosId;
+    }
+
+    struct SwapState {
+        uint256 lcc0AfterSwap;
+        uint256 lcc1AfterSwap;
+        uint256 protoFee0AfterSwap;
+        uint256 protoFee1AfterSwap;
+        uint256 pot0AfterPokeMM1;
+        uint256 pot1AfterPokeMM1;
+    }
+
     function _abs(int256 x) internal pure returns (uint256) {
         return uint256(x < 0 ? -x : x);
     }
@@ -124,174 +159,205 @@ contract MMCoverageE2E is MME2EBase {
         vm.stopBroadcast();
     }
 
-    function run() external {
-        console.log("=== E2E: MMCoverage ===");
-        _initNetwork();
-        // --- Get all the private keys and addresses of all the market makers and swapper
-        uint256 mm1Pk = uint256(
+    function _loadActorKeys() internal view returns (ActorKeys memory keys) {
+        keys.mm1Pk = uint256(
             _requireEnvBytes32("LP_PRIVATE_KEY", "Missing LP_PRIVATE_KEY env var (anvil keys can be used directly)")
         );
-        uint256 mm2Pk = uint256(
+        keys.mm2Pk = uint256(
             _requireEnvBytes32("LP2_PRIVATE_KEY", "Missing LP2_PRIVATE_KEY env var (anvil keys can be used directly)")
         );
-        uint256 mm3Pk = uint256(
+        keys.mm3Pk = uint256(
             _requireEnvBytes32("LP3_PRIVATE_KEY", "Missing LP3_PRIVATE_KEY env var (anvil keys can be used directly)")
         );
-        uint256 takerPk = _getDeployerPrivateKey();
+        keys.takerPk = _getDeployerPrivateKey();
+    }
 
-        address mm1 = vm.addr(mm1Pk);
-        address mm2 = vm.addr(mm2Pk);
-        address mm3 = vm.addr(mm3Pk);
-        address takerAddress = vm.addr(takerPk);
+    function _deriveActors(ActorKeys memory keys) internal view returns (ActorAddrs memory actors) {
+        actors.mm1 = vm.addr(keys.mm1Pk);
+        actors.mm2 = vm.addr(keys.mm2Pk);
+        actors.mm3 = vm.addr(keys.mm3Pk);
+        actors.taker = vm.addr(keys.takerPk);
+    }
 
-        // --- Deploy shared “core” stack (PoolManager + system contracts) and create a market for LCC/LCC swaps.
+    function _setupScenario(ActorKeys memory keys, ActorAddrs memory actors) internal returns (ScenarioState memory s) {
         CoreDeployment memory d = _deployCoreContracts();
-        StandaloneMarket memory m = _createMarket(d, mm1, CORE_POOL_FEE);
+        s.market = _createMarket(d, actors.mm1, CORE_POOL_FEE);
+        s.vts = IVTSOrchestrator(s.market.stack.contracts.vtsOrchestrator);
+        s.vtsLens = IVTSOrchestratorExtraLens(s.market.stack.contracts.vtsOrchestrator);
 
-        IVTSOrchestrator vts = IVTSOrchestrator(m.stack.contracts.vtsOrchestrator);
-        IVTSOrchestratorExtraLens vtsLens = IVTSOrchestratorExtraLens(m.stack.contracts.vtsOrchestrator);
+        s.mm1CommitId = _createMmPosition(s.market, keys.mm1Pk, MM1_TICK_LOWER, MM1_TICK_UPPER, MM1_LIQUIDITY);
+        s.mm2CommitId = _createMmPosition(s.market, keys.mm2Pk, MM2_TICK_LOWER, MM2_TICK_UPPER, MM2_LIQUIDITY);
+        s.mm3CommitId = _createMmPosition(s.market, keys.mm3Pk, MM3_TICK_LOWER, MM3_TICK_UPPER, MM3_LIQUIDITY);
 
-        // --- Create both MM positions (commit → mint → settle).
-        uint256 mm1CommitId = _createMmPosition(m, mm1Pk, MM1_TICK_LOWER, MM1_TICK_UPPER, MM1_LIQUIDITY);
-        uint256 mm2CommitId = _createMmPosition(m, mm2Pk, MM2_TICK_LOWER, MM2_TICK_UPPER, MM2_LIQUIDITY);
-        uint256 mm3CommitId = _createMmPosition(m, mm3Pk, MM3_TICK_LOWER, MM3_TICK_UPPER, MM3_LIQUIDITY);
+        s.mm1PosId = s.vts.getPositionId(s.mm1CommitId, 0);
+        s.mm2PosId = s.vts.getPositionId(s.mm2CommitId, 0);
+        s.key = _corePoolKey(s.market);
 
-        // --- Get the position IDs for all the positions
-        PositionId mm1PosId = vts.getPositionId(mm1CommitId, 0);
-        PositionId mm2PosId = vts.getPositionId(mm2CommitId, 0);
+        console.log("takerAddress:", actors.taker);
+        console.log("mm1:", actors.mm1);
+        console.log("mm2:", actors.mm2);
+        console.log("mm3:", actors.mm3);
+        console.log("mm1CommitId:", s.mm1CommitId);
+        console.log("mm2CommitId:", s.mm2CommitId);
+    }
 
-        // --- Log the addresses and commit IDs for all the positions
-        console.log("takerAddress:", takerAddress);
-        console.log("mm1:", mm1);
-        console.log("mm2:", mm2);
-        console.log("mm3:", mm3);
-        console.log("mm1CommitId:", mm1CommitId);
-        console.log("mm2CommitId:", mm2CommitId);
-
-        PoolKey memory key = _corePoolKey(m);
-        // --- Pool should not be paused (sanity check).
-        (,,,, bool isPaused) = vtsLens.getPool(key.toId());
+    function _assertPoolAndSettlement(ScenarioState memory s, ActorKeys memory keys) internal {
+        (,,,, bool isPaused) = s.vtsLens.getPool(s.key.toId());
         require(!isPaused, "pool: paused");
 
-        // --- Aggressively settle and validate settlement of MM2 to ensure it is well-backed (useful for exploring bonus allocation paths).
-        (uint256 mm2Settled0Before, uint256 mm2Settled1Before) = vts.getPositionSettledAmounts(mm2PosId);
-        _settleToPosition(m, mm2Pk, mm2CommitId, type(int128).max, type(int128).max);
-        (uint256 mm2Settled0After, uint256 mm2Settled1After) = vts.getPositionSettledAmounts(mm2PosId);
+        (uint256 mm2Settled0Before, uint256 mm2Settled1Before) = s.vts.getPositionSettledAmounts(s.mm2PosId);
+        _settleToPosition(s.market, keys.mm2Pk, s.mm2CommitId, type(int128).max, type(int128).max);
+        (uint256 mm2Settled0After, uint256 mm2Settled1After) = s.vts.getPositionSettledAmounts(s.mm2PosId);
         require(mm2Settled0After > mm2Settled0Before && mm2Settled1After > mm2Settled1Before, "mm2: settled not up");
+    }
 
-        // --- Get the protocol fee and slashed pot before swaps and validate they are zero
-        (uint256 initialProtoFee0, uint256 initialProtoFee1) = vts.getProtocolFeeAccrued(key.toId());
-        (uint256 initialPot0, uint256 initialPot1) = vts.getSlashedPot(key.toId());
+    function _assertMm1CheckpointMatchesRfs(ScenarioState memory s, bool mm1RfsOpen) internal view {
+        bool checkpointOpen = s.vtsLens.positionToCheckpoint(s.mm1PosId).openMask != 0;
+        require(checkpointOpen == mm1RfsOpen, "mm1: checkpoint mismatch");
+    }
+
+    function _runSwapAndPreSettlementChecks(ScenarioState memory s, ActorKeys memory keys)
+        internal
+        returns (SwapState memory swapState)
+    {
+        (uint256 initialProtoFee0, uint256 initialProtoFee1) = s.vts.getProtocolFeeAccrued(s.key.toId());
+        (uint256 initialPot0, uint256 initialPot1) = s.vts.getSlashedPot(s.key.toId());
         require(initialProtoFee0 == 0 && initialProtoFee1 == 0, "initialProtoFee not zero");
         require(initialPot0 == 0 && initialPot1 == 0, "initialPot not zero");
 
-        // --- Generate activity: swap
-        uint256 amountOut = _mintAndSwap(m, takerPk, WRAP_FOR_SWAPS, false, SWAP_AMOUNT_IN);
-
+        uint256 amountOut = _mintAndSwap(s.market, keys.takerPk, WRAP_FOR_SWAPS, false, SWAP_AMOUNT_IN);
         require(amountOut > 0, "swap amountOut not greater than zero");
-        uint256 lcc0AfterSwap = ILCC(m.lcc0).balanceOf(takerAddress);
-        uint256 lcc1AfterSwap = ILCC(m.lcc1).balanceOf(takerAddress);
-        console.log("lcc0After Swap:", lcc0AfterSwap);
-        console.log("lcc1After Swap:", lcc1AfterSwap);
 
-        // Perform some validations on the RFS state of the smaller MM (MM1)
-        // After swaps we expect the smaller MM (MM1) to be under-settled (RFS open with a positive requirement).
-        (, bool mm1RfsOpen, BalanceDelta mm1RfsDelta) = vts.calcRFS(mm1CommitId, 0, false);
-        int128 need0 = mm1RfsDelta.amount0();
-        int128 need1 = mm1RfsDelta.amount1();
-        require(mm1RfsOpen && (need0 > 0 || need1 > 0), "mm1: expected RFS>0 after swaps");
-        // CHECKPOINT should mirror the computed RFS open/closed state.
-        bool checkpointOpen = vtsLens.positionToCheckpoint(mm1PosId).openMask != 0;
-        require(checkpointOpen == mm1RfsOpen, "mm1: checkpoint mismatch");
-        // we expect the rest of the MMs to not be open for RFS
-        vts.calcRFS(mm2CommitId, 0, true);
-        vts.calcRFS(mm3CommitId, 0, true);
+        address taker = vm.addr(keys.takerPk);
+        swapState.lcc0AfterSwap = ILCC(s.market.lcc0).balanceOf(taker);
+        swapState.lcc1AfterSwap = ILCC(s.market.lcc1).balanceOf(taker);
+        console.log("lcc0After Swap:", swapState.lcc0AfterSwap);
+        console.log("lcc1After Swap:", swapState.lcc1AfterSwap);
 
-        // --- Unwrap all the LCC's that were obtained from the swap in order to enable coverage/settlement flows
-        if (lcc0AfterSwap > 0) _unwrapLcc(m, m.lcc0, takerPk, 0, true);
-        if (lcc1AfterSwap > 0) _unwrapLcc(m, m.lcc1, takerPk, 0, true);
+        {
+            (, bool mm1RfsOpen, BalanceDelta mm1RfsDelta) = s.vts.calcRFS(s.mm1CommitId, 0, false);
+            int128 need0 = mm1RfsDelta.amount0();
+            int128 need1 = mm1RfsDelta.amount1();
+            require(mm1RfsOpen && (need0 > 0 || need1 > 0), "mm1: expected RFS>0 after swaps");
+            _assertMm1CheckpointMatchesRfs(s, mm1RfsOpen);
+        }
+        s.vts.calcRFS(s.mm2CommitId, 0, true);
+        s.vts.calcRFS(s.mm3CommitId, 0, true);
 
-        // ---Settle for all mms to settle position growths
-        _settleRfsRequired(m, mm1Pk, mm1CommitId, type(int128).max, type(int128).max);
-        _settleRfsRequired(m, mm2Pk, mm2CommitId, type(int128).max, type(int128).max);
-        _settleRfsRequired(m, mm3Pk, mm3CommitId, type(int128).max, type(int128).max);
+        if (swapState.lcc0AfterSwap > 0) _unwrapLcc(s.market, s.market.lcc0, keys.takerPk, 0, true);
+        if (swapState.lcc1AfterSwap > 0) _unwrapLcc(s.market, s.market.lcc1, keys.takerPk, 0, true);
 
-        // Assert the RFS is now closed (requireClosed=true must not revert; rfsOpen must be false).
-        vts.calcRFS(mm1CommitId, 0, true);
-        vts.calcRFS(mm2CommitId, 0, true);
-        vts.calcRFS(mm3CommitId, 0, true);
+        _settleRfsRequired(s.market, keys.mm1Pk, s.mm1CommitId, type(int128).max, type(int128).max);
+        _settleRfsRequired(s.market, keys.mm2Pk, s.mm2CommitId, type(int128).max, type(int128).max);
+        _settleRfsRequired(s.market, keys.mm3Pk, s.mm3CommitId, type(int128).max, type(int128).max);
 
-        // --- validate the fees accumulates after swaps
-        (uint256 protoFee0AfterSwap, uint256 protoFee1AfterSwap) = vts.getProtocolFeeAccrued(key.toId());
-        // if theres lcc0 output then it was a oneForZero swap, so the fees should be on token1 and fee1 should be greater than zero
-        if (lcc0AfterSwap > 0) require(protoFee1AfterSwap > 0, "protocol Fee1 AfterSwap not greater than zero");
-        // if theres lcc1 output then it was a zeroForOne swap, so the fees should be on token0 and fee0 should be greater than zero
-        if (lcc1AfterSwap > 0) require(protoFee0AfterSwap > 0, "protocol Fee0 AfterSwap not greater than zero");
-        console.log("protocol Fees 0 AfterSwap:", protoFee0AfterSwap);
-        console.log("protocol Fees 1 AfterSwap:", protoFee1AfterSwap);
+        s.vts.calcRFS(s.mm1CommitId, 0, true);
+        s.vts.calcRFS(s.mm2CommitId, 0, true);
+        s.vts.calcRFS(s.mm3CommitId, 0, true);
+    }
 
-        // --- poke all positions to materialise fee-sharing state
-        // poke the position of the first mm, this should materialise the slashed pot, since we expect them to be slashed as they are relatively undersettled to other market makers
-        (,, int256 mm1Pending0BeforePoke, int256 mm1Pending1BeforePoke) = vts.getPositionFeeAccounting(mm1PosId);
-        // validate the pending fees are equal to the total protocol fees
+    function _collectMm1FeesAndPot(ScenarioState memory s, ActorKeys memory keys, SwapState memory swapState)
+        internal
+        returns (SwapState memory)
+    {
+        (swapState.protoFee0AfterSwap, swapState.protoFee1AfterSwap) = s.vts.getProtocolFeeAccrued(s.key.toId());
+
+        if (swapState.lcc0AfterSwap > 0) {
+            require(swapState.protoFee1AfterSwap > 0, "protocol Fee1 AfterSwap not greater than zero");
+        }
+        if (swapState.lcc1AfterSwap > 0) {
+            require(swapState.protoFee0AfterSwap > 0, "protocol Fee0 AfterSwap not greater than zero");
+        }
+        console.log("protocol Fees 0 AfterSwap:", swapState.protoFee0AfterSwap);
+        console.log("protocol Fees 1 AfterSwap:", swapState.protoFee1AfterSwap);
+
+        (,, int256 mm1Pending0BeforePoke, int256 mm1Pending1BeforePoke) = s.vts.getPositionFeeAccounting(s.mm1PosId);
         require(
-            uint256(mm1Pending0BeforePoke) == protoFee0AfterSwap
-                && uint256(mm1Pending1BeforePoke) == protoFee1AfterSwap,
+            uint256(mm1Pending0BeforePoke) == swapState.protoFee0AfterSwap
+                && uint256(mm1Pending1BeforePoke) == swapState.protoFee1AfterSwap,
             "pending fees not equal to protocol fees"
         );
 
-        (uint256 mm1Amount0Fees, uint256 mm1Amount1Fees) = _pokePosition(m, mm1Pk, mm1CommitId);
-        if (lcc0AfterSwap > 0) require(mm1Amount1Fees > 0, "mm1Amount1Fees not greater than zero");
-        if (lcc1AfterSwap > 0) require(mm1Amount0Fees > 0, "mm1Amount0Fees not greater than zero");
-        // MM1 should be slashed, so right after poking it, the pot should be increased
-        (uint256 pot0AfterPokeMM1, uint256 pot1AfterPokeMM1) = vts.getSlashedPot(key.toId());
-        // if we have protocol fees0, then the pot for token0 should be greater than zero
-        if (protoFee0AfterSwap > 0) {
+        (uint256 mm1Amount0Fees, uint256 mm1Amount1Fees) = _pokePosition(s.market, keys.mm1Pk, s.mm1CommitId);
+        if (swapState.lcc0AfterSwap > 0) require(mm1Amount1Fees > 0, "mm1Amount1Fees not greater than zero");
+        if (swapState.lcc1AfterSwap > 0) require(mm1Amount0Fees > 0, "mm1Amount0Fees not greater than zero");
+
+        (swapState.pot0AfterPokeMM1, swapState.pot1AfterPokeMM1) = s.vts.getSlashedPot(s.key.toId());
+        if (swapState.protoFee0AfterSwap > 0) {
             require(
-                pot0AfterPokeMM1 > 0 && pot0AfterPokeMM1 == protoFee0AfterSwap, "pot0AfterPokeMM1 not greater than zero"
+                swapState.pot0AfterPokeMM1 > 0 && swapState.pot0AfterPokeMM1 == swapState.protoFee0AfterSwap,
+                "pot0AfterPokeMM1 not greater than zero"
             );
         }
-        // if we have protocol fees1, then the pot for token1 should be greater than zero
-        if (protoFee1AfterSwap > 0) {
+        if (swapState.protoFee1AfterSwap > 0) {
             require(
-                pot1AfterPokeMM1 > 0 && pot1AfterPokeMM1 == protoFee1AfterSwap, "pot1AfterPokeMM1 not greater than zero"
+                swapState.pot1AfterPokeMM1 > 0 && swapState.pot1AfterPokeMM1 == swapState.protoFee1AfterSwap,
+                "pot1AfterPokeMM1 not greater than zero"
             );
         }
-        console.log("pot0AfterPokeMM1:", pot0AfterPokeMM1);
-        console.log("pot1AfterPokeMM1:", pot1AfterPokeMM1);
+        console.log("pot0AfterPokeMM1:", swapState.pot0AfterPokeMM1);
+        console.log("pot1AfterPokeMM1:", swapState.pot1AfterPokeMM1);
+        return swapState;
+    }
 
-        // --- poke the position of the other mms, this should give them their fees and  bonuses
-        (uint256 mm2Amount0Fees, uint256 mm2Amount1Fees) = _pokePosition(m, mm2Pk, mm2CommitId);
-        if (lcc0AfterSwap > 0) require(mm2Amount1Fees > 0, "mm2Amount1Fees not greater than zero");
-        if (lcc1AfterSwap > 0) require(mm2Amount0Fees > 0, "mm2Amount0Fees not greater than zero");
-        (uint256 mm3Amount0Fees, uint256 mm3Amount1Fees) = _pokePosition(m, mm3Pk, mm3CommitId);
-        if (lcc0AfterSwap > 0) require(mm3Amount1Fees > 0, "mm3Amount1Fees not greater than zero");
-        if (lcc1AfterSwap > 0) require(mm3Amount0Fees > 0, "mm3Amount0Fees not greater than zero");
+    function _pokeRemainingMmsAndAssertPotCleared(ScenarioState memory s, ActorKeys memory keys, SwapState memory swapState)
+        internal
+    {
+        (uint256 mm2Amount0Fees, uint256 mm2Amount1Fees) = _pokePosition(s.market, keys.mm2Pk, s.mm2CommitId);
+        if (swapState.lcc0AfterSwap > 0) require(mm2Amount1Fees > 0, "mm2Amount1Fees not greater than zero");
+        if (swapState.lcc1AfterSwap > 0) require(mm2Amount0Fees > 0, "mm2Amount0Fees not greater than zero");
+        (uint256 mm3Amount0Fees, uint256 mm3Amount1Fees) = _pokePosition(s.market, keys.mm3Pk, s.mm3CommitId);
+        if (swapState.lcc0AfterSwap > 0) require(mm3Amount1Fees > 0, "mm3Amount1Fees not greater than zero");
+        if (swapState.lcc1AfterSwap > 0) require(mm3Amount0Fees > 0, "mm3Amount0Fees not greater than zero");
 
-        // pot should be empty now as other mms have taken their earned fees and bonuses
-        (uint256 pot0After, uint256 pot1After) = vts.getSlashedPot(key.toId());
+        (uint256 pot0After, uint256 pot1After) = s.vts.getSlashedPot(s.key.toId());
         require(pot0After == 0 && pot1After == 0, "pot should be empty");
+    }
 
+    function _assertMm1FeeAccounting(ScenarioState memory s, SwapState memory swapState) internal view {
         (
             uint256 mm1FeesShared0After,
             uint256 mm1FeesShared1After,
             int256 mm1Pending0AfterFeeCollected,
             int256 mm1Pending1AfterFeeCollected
-        ) = vts.getPositionFeeAccounting(mm1PosId);
-        // all pending fees must have been applied at this point
+        ) = s.vts.getPositionFeeAccounting(s.mm1PosId);
         require(
             mm1Pending0AfterFeeCollected == 0 && mm1Pending1AfterFeeCollected == 0, "pending fees not equal to zero"
         );
-        // validate the fees shared for mm1 is equal to the total pot after poking
         require(
-            mm1FeesShared0After == pot0AfterPokeMM1 && mm1FeesShared1After == pot1AfterPokeMM1,
+            mm1FeesShared0After == swapState.pot0AfterPokeMM1 && mm1FeesShared1After == swapState.pot1AfterPokeMM1,
             "fees shared not equal to protocol fees"
         );
+    }
 
-        // --- Exit: close RFS (if any), burn → settle-from-deltas → decommit, and withdraw remaining credits.
-        _closeRfsBurnDecommitAndTakeAllLccs(m, mm1Pk, mm1CommitId);
-        _closeRfsBurnDecommitAndTakeAllLccs(m, mm2Pk, mm2CommitId);
-        _closeRfsBurnDecommitAndTakeAllLccs(m, mm3Pk, mm3CommitId);
+    function _materialiseFeesAndValidate(ScenarioState memory s, ActorKeys memory keys, SwapState memory swapState)
+        internal
+        returns (SwapState memory)
+    {
+        swapState = _collectMm1FeesAndPot(s, keys, swapState);
+        _pokeRemainingMmsAndAssertPotCleared(s, keys, swapState);
+        _assertMm1FeeAccounting(s, swapState);
+        return swapState;
+    }
+
+    function _closeAllPositions(ScenarioState memory s, ActorKeys memory keys) internal {
+        _closeRfsBurnDecommitAndTakeAllLccs(s.market, keys.mm1Pk, s.mm1CommitId);
+        _closeRfsBurnDecommitAndTakeAllLccs(s.market, keys.mm2Pk, s.mm2CommitId);
+        _closeRfsBurnDecommitAndTakeAllLccs(s.market, keys.mm3Pk, s.mm3CommitId);
+    }
+
+    function run() external {
+        console.log("=== E2E: MMCoverage ===");
+        _initNetwork();
+
+        ActorKeys memory keys = _loadActorKeys();
+        ActorAddrs memory actors = _deriveActors(keys);
+        ScenarioState memory scenario = _setupScenario(keys, actors);
+
+        _assertPoolAndSettlement(scenario, keys);
+        SwapState memory swapState = _runSwapAndPreSettlementChecks(scenario, keys);
+        _materialiseFeesAndValidate(scenario, keys, swapState);
+        _closeAllPositions(scenario, keys);
     }
 }
 
