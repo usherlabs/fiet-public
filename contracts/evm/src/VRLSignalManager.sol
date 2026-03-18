@@ -7,12 +7,16 @@ pragma solidity ^0.8.26;
 import {MarketMaker} from "./libraries/MarketMaker.sol";
 import {ISignalVerifier} from "./interfaces/ISignalVerifier.sol";
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
+import {EIP712} from "@openzeppelin/contracts/utils/cryptography/EIP712.sol";
+import {ECDSA} from "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
+import {EfficientHashLib} from "solady/utils/EfficientHashLib.sol";
 import {LiquiditySignal} from "./types/Commit.sol";
 import {Errors} from "./libraries/Errors.sol";
 import {IVRLSignalManager} from "./interfaces/IVRLSignalManager.sol";
 
-contract VRLSignalManager is Ownable, IVRLSignalManager {
+contract VRLSignalManager is Ownable, EIP712, IVRLSignalManager {
     using MarketMaker for MarketMaker.State;
+    using ECDSA for bytes32;
 
     ISignalVerifier internal verifier;
 
@@ -34,11 +38,31 @@ contract VRLSignalManager is Ownable, IVRLSignalManager {
      * nonce 5, but MM A cannot submit nonce 4 if they've already submitted nonce 5.
      */
     mapping(address => uint256) public mmNonce;
+    mapping(address => uint256) public submitAuthNonce;
     uint256 public signalExpiryInSeconds;
+    address public immutable submitter;
+    bytes32 internal constant RELAY_AUTH_TYPEHASH = keccak256(
+        "RelayAuth(address sender,uint256 commitId,bytes32 liquiditySignalHash,uint256 deadline,uint256 nonce)"
+    );
 
-    constructor(address _verifier, uint256 _signalExpiryInSeconds, address _initialOwner) Ownable(_initialOwner) {
+    constructor(address _verifier, uint256 _signalExpiryInSeconds, address _submitter, address _initialOwner)
+        Ownable(_initialOwner)
+        EIP712("VRLSignalManager", "1")
+    {
+        if (_submitter == address(0)) revert Errors.InvalidAddress(_submitter);
+
         verifier = ISignalVerifier(_verifier);
         signalExpiryInSeconds = _signalExpiryInSeconds;
+        submitter = _submitter;
+    }
+
+    modifier onlySubmitter() {
+        _onlySubmitter();
+        _;
+    }
+
+    function _onlySubmitter() internal view {
+        if (msg.sender != submitter) revert Errors.InvalidSender();
     }
 
     /**
@@ -70,6 +94,12 @@ contract VRLSignalManager is Ownable, IVRLSignalManager {
         emit SignalExpiryInSecondsChanged(_oldSignalExpiryInSeconds, _signalExpiryInSeconds);
     }
 
+    function _assertSenderAuthorised(LiquiditySignal memory signal, address sender) internal pure {
+        if (sender != signal.mmState.owner && sender != signal.mmState.advancer) {
+            revert Errors.InvalidSender();
+        }
+    }
+
     /**
      * @dev This function is used to verify the liquidity signal and return the tickers and amounts of the assets
      * @param signal The liquidity signal to verify
@@ -87,12 +117,7 @@ contract VRLSignalManager is Ownable, IVRLSignalManager {
 
         // verify the proofs associated with the state
         isProofValid = verifier.verifyProof(
-            signal.nonce,
-            signal.rootHash,
-            signal.rootHashSignature,
-            signal.mmSignature,
-            signal.mmState,
-            signal.merkleProof
+            signal.nonce, signal.rootHash, signal.rootHashSignature, signal.mmState, signal.merkleProof
         );
 
         if (isProofValid) {
@@ -105,30 +130,46 @@ contract VRLSignalManager is Ownable, IVRLSignalManager {
         _signalExpiryInSeconds = signalExpiryInSeconds;
     }
 
-    function verifyLiquiditySignal(LiquiditySignal memory signal)
-        public
-        returns (bool isProofValid, uint256 _signalExpiryInSeconds)
-    {
-        return _verifyLiquiditySignalInternal(signal);
-    }
-
-    // bytes overload to match interface (non-reverting version)
-    function verifyLiquiditySignal(bytes memory liquiditySignal)
+    function verifyLiquiditySignal(address sender, bytes memory liquiditySignal, bool revertOnInvalid)
         external
+        onlySubmitter
         returns (bool ok, uint256 _signalExpiryInSeconds)
     {
         LiquiditySignal memory signal = abi.decode(liquiditySignal, (LiquiditySignal));
-        (ok, _signalExpiryInSeconds) = _verifyLiquiditySignalInternal(signal);
-    }
-
-    // removed: checkSignalBacking (documentation cleaned up)
-
-    function verifyLiquiditySignal(bytes memory liquiditySignal, bool revertOnInvalid)
-        external
-        returns (bool ok, uint256 _signalExpiryInSeconds)
-    {
-        LiquiditySignal memory signal = abi.decode(liquiditySignal, (LiquiditySignal));
+        _assertSenderAuthorised(signal, sender);
         (ok, _signalExpiryInSeconds) = _verifyLiquiditySignalInternal(signal);
         if (revertOnInvalid && !ok) revert Errors.InvalidProof();
+    }
+
+    function verifyLiquiditySignalRelayed(
+        address sender,
+        uint256 commitId,
+        bytes memory liquiditySignal,
+        uint256 deadline,
+        uint256 authNonce,
+        bytes memory authSig,
+        bool revertOnInvalid
+    ) external onlySubmitter returns (bool ok, uint256 _signalExpiryInSeconds) {
+        if (block.timestamp > deadline) revert Errors.DeadlinePassed(deadline);
+        if (authNonce != submitAuthNonce[sender]) {
+            revert Errors.InvalidNonce(authNonce, submitAuthNonce[sender]);
+        }
+
+        LiquiditySignal memory signal = abi.decode(liquiditySignal, (LiquiditySignal));
+        _assertSenderAuthorised(signal, sender);
+
+        bytes32 structHash = EfficientHashLib.hash(
+            abi.encode(RELAY_AUTH_TYPEHASH, sender, commitId, keccak256(liquiditySignal), deadline, authNonce)
+        );
+
+        if (_hashTypedDataV4(structHash).recover(authSig) != sender) {
+            revert Errors.InvalidSender();
+        }
+
+        (ok, _signalExpiryInSeconds) = _verifyLiquiditySignalInternal(signal);
+        if (revertOnInvalid && !ok) revert Errors.InvalidProof();
+        if (ok) {
+            submitAuthNonce[sender] = authNonce + 1;
+        }
     }
 }

@@ -200,49 +200,70 @@ library MMCalldataDecoder {
     // Medium Priority Decoders (Delta Operations & Signal Management)
     // ═══════════════════════════════════════════════════════════════════════════════════════════
 
-    /// @dev INCREASE_LIQUIDITY_FROM_DELTAS: (PoolKey, uint256, uint256, bool)
+    /// @dev INCREASE_LIQUIDITY_FROM_DELTAS: (PoolKey, uint256, uint256, uint128, uint128, bool)
     /// @param params The calldata bytes to decode
     /// @return poolKey The pool key (calldata pointer)
     /// @return tokenId The commitment NFT token ID
     /// @return positionIndex The position index within the commitment
+    /// @return amount0Max The maximum amount of token0 to spend
+    /// @return amount1Max The maximum amount of token1 to spend
     /// @return payerIsUser If true, user consumes credit protocol owes them (MMPM delta).
     ///         If false, uses locker's direct credit.
     function decodeIncreaseFromDeltasParams(bytes calldata params)
         internal
         pure
-        returns (PoolKey calldata poolKey, uint256 tokenId, uint256 positionIndex, bool payerIsUser)
+        returns (
+            PoolKey calldata poolKey,
+            uint256 tokenId,
+            uint256 positionIndex,
+            uint128 amount0Max,
+            uint128 amount1Max,
+            bool payerIsUser
+        )
     {
         assembly ("memory-safe") {
-            // PoolKey: 5 slots (0xa0), then tokenId, positionIndex, payerIsUser
-            // Minimum length: 0xa0 + 0x20*3 = 0x100
-            if lt(params.length, 0x100) {
+            // PoolKey: 5 slots (0xa0), then tokenId, positionIndex, amount0Max, amount1Max, payerIsUser
+            // Minimum length: 0xa0 + 0x20*5 = 0x140
+            if lt(params.length, 0x140) {
                 mstore(0, SLICE_ERROR_SELECTOR)
                 revert(0x1c, 4)
             }
             poolKey := params.offset
             tokenId := calldataload(add(params.offset, 0xa0))
             positionIndex := calldataload(add(params.offset, 0xc0))
-            payerIsUser := calldataload(add(params.offset, 0xe0))
+            amount0Max := calldataload(add(params.offset, 0xe0))
+            amount1Max := calldataload(add(params.offset, 0x100))
+            payerIsUser := calldataload(add(params.offset, 0x120))
         }
     }
 
-    /// @dev MINT_POSITION_FROM_DELTAS: (PoolKey, uint256, int24, int24, bool)
+    /// @dev MINT_POSITION_FROM_DELTAS: (PoolKey, uint256, int24, int24, uint128, uint128, bool)
     /// @param params The calldata bytes to decode
     /// @return poolKey The pool key (calldata pointer)
     /// @return tokenId The commitment NFT token ID
     /// @return tickLower The lower tick of the position
     /// @return tickUpper The upper tick of the position
+    /// @return amount0Max The maximum amount of token0 to spend
+    /// @return amount1Max The maximum amount of token1 to spend
     /// @return payerIsUser If true, user consumes credit protocol owes them (MMPM delta).
     ///         If false, uses locker's direct credit.
     function decodeMintFromDeltasParams(bytes calldata params)
         internal
         pure
-        returns (PoolKey calldata poolKey, uint256 tokenId, int24 tickLower, int24 tickUpper, bool payerIsUser)
+        returns (
+            PoolKey calldata poolKey,
+            uint256 tokenId,
+            int24 tickLower,
+            int24 tickUpper,
+            uint128 amount0Max,
+            uint128 amount1Max,
+            bool payerIsUser
+        )
     {
         assembly ("memory-safe") {
-            // PoolKey: 5 slots (0xa0), then tokenId, tickLower, tickUpper, payerIsUser
-            // Minimum length: 0xa0 + 0x20*4 = 0x120
-            if lt(params.length, 0x120) {
+            // PoolKey: 5 slots (0xa0), then tokenId, tickLower, tickUpper, amount0Max, amount1Max, payerIsUser
+            // Minimum length: 0xa0 + 0x20*6 = 0x160
+            if lt(params.length, 0x160) {
                 mstore(0, SLICE_ERROR_SELECTOR)
                 revert(0x1c, 4)
             }
@@ -250,7 +271,9 @@ library MMCalldataDecoder {
             tokenId := calldataload(add(params.offset, 0xa0))
             tickLower := calldataload(add(params.offset, 0xc0))
             tickUpper := calldataload(add(params.offset, 0xe0))
-            payerIsUser := calldataload(add(params.offset, 0x100))
+            amount0Max := calldataload(add(params.offset, 0x100))
+            amount1Max := calldataload(add(params.offset, 0x120))
+            payerIsUser := calldataload(add(params.offset, 0x140))
         }
     }
 
@@ -350,22 +373,23 @@ library MMCalldataDecoder {
         }
     }
 
-    /// @dev COMMIT_SIGNAL: (bytes, address)
+    /// @dev COMMIT_SIGNAL: (bytes, address, bytes relayParams)
     /// @param params The calldata bytes to decode
     /// @return liquiditySignal The liquidity signal bytes
     /// @return owner The address to receive the commitment NFT (can be mapped constants)
+    /// @return relayParams Optional relayer auth params encoded as (uint256 deadline, uint256 authNonce, bytes authSig)
     function decodeCommitSignalParams(bytes calldata params)
         internal
         pure
-        returns (bytes calldata liquiditySignal, address owner)
+        returns (bytes calldata liquiditySignal, address owner, bytes calldata relayParams)
     {
         assembly ("memory-safe") {
-            // ABI encoding: (bytes liquiditySignal, address owner)
-            // Minimum length for empty bytes is:
-            // - head (2 words): offset, owner  => 0x40
-            // - tail (length word)            => 0x20
-            // total                           => 0x60
-            if lt(params.length, 0x60) {
+            // ABI encoding: (bytes liquiditySignal, address owner, bytes relayParams)
+            // Minimum length for empty bytes fields:
+            // - head (3 words): offset, owner, offset => 0x60
+            // - tails (2 length words)                => 0x40
+            // total                                    => 0xa0
+            if lt(params.length, 0xa0) {
                 mstore(0, SLICE_ERROR_SELECTOR)
                 revert(0x1c, 4)
             }
@@ -373,17 +397,26 @@ library MMCalldataDecoder {
         }
         // Use CalldataDecoder.toBytes for dynamic bytes (index 0 = 1st argument)
         liquiditySignal = params.toBytes(0);
+        relayParams = params.toBytes(2);
     }
 
-    /// @dev RENEW_SIGNAL: (uint256, bytes)
+    /// @dev RENEW_SIGNAL: (uint256, bytes, bytes relayParams)
     /// @param params The calldata bytes to decode
     /// @return tokenId The commitment NFT token ID
     /// @return data The liquidity signal bytes
-    function decodeTokenIdAndBytes(bytes calldata params) internal pure returns (uint256 tokenId, bytes calldata data) {
+    /// @return relayParams Optional relayer auth params encoded as (uint256 deadline, uint256 authNonce, bytes authSig)
+    function decodeTokenIdAndBytes(bytes calldata params)
+        internal
+        pure
+        returns (uint256 tokenId, bytes calldata data, bytes calldata relayParams)
+    {
         assembly ("memory-safe") {
-            // ABI encoding: (uint256 tokenId, bytes data)
-            // Minimum length for empty bytes is head (0x40) + tail length word (0x20) = 0x60
-            if lt(params.length, 0x60) {
+            // ABI encoding: (uint256 tokenId, bytes data, bytes relayParams)
+            // Minimum length for empty bytes fields:
+            // - head (3 words): tokenId, offset, offset => 0x60
+            // - tails (2 length words)                  => 0x40
+            // total                                      => 0xa0
+            if lt(params.length, 0xa0) {
                 mstore(0, SLICE_ERROR_SELECTOR)
                 revert(0x1c, 4)
             }
@@ -391,6 +424,7 @@ library MMCalldataDecoder {
         }
         // Use CalldataDecoder.toBytes for dynamic bytes (index 1 = 2nd argument)
         data = params.toBytes(1);
+        relayParams = params.toBytes(2);
     }
 
     /// @dev CHECKPOINT: (uint256, uint256, bool)
@@ -444,22 +478,24 @@ library MMCalldataDecoder {
         }
     }
 
-    /// @dev COLLECT_AVAILABLE_LIQUIDITY: (address, uint256)
+    /// @dev COLLECT_AVAILABLE_LIQUIDITY: (address, uint256, uint256)
     /// @param params The calldata bytes to decode
     /// @return lcc The LCC token address
+    /// @return tokenId The commitment NFT token ID bucket to collect from
     /// @return maxAmount The maximum amount to collect
     function decodeCollectLiquidityParams(bytes calldata params)
         internal
         pure
-        returns (address lcc, uint256 maxAmount)
+        returns (address lcc, uint256 tokenId, uint256 maxAmount)
     {
         assembly ("memory-safe") {
-            if lt(params.length, 0x40) {
+            if lt(params.length, 0x60) {
                 mstore(0, SLICE_ERROR_SELECTOR)
                 revert(0x1c, 4)
             }
             lcc := calldataload(params.offset)
-            maxAmount := calldataload(add(params.offset, 0x20))
+            tokenId := calldataload(add(params.offset, 0x20))
+            maxAmount := calldataload(add(params.offset, 0x40))
         }
     }
 

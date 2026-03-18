@@ -6,8 +6,6 @@ import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 import {VTSOrchestrator} from "../src/VTSOrchestrator.sol";
-import {VRLSettlementObserver} from "../src/VRLSettlementObserver.sol";
-import {IVRLSettlementObserver} from "../src/interfaces/IVRLSettlementObserver.sol";
 import {Errors} from "../src/libraries/Errors.sol";
 
 contract PausableVTSTest is Test {
@@ -19,35 +17,15 @@ contract PausableVTSTest is Test {
     function setUp() public {
         poolManager = IPoolManager(makeAddr("poolManager"));
 
-        // Deploy VRLSettlementObserver
-        vm.prank(owner);
-        IVRLSettlementObserver settlementObserver = new VRLSettlementObserver(owner);
-
         // Deploy VTSOrchestrator
         vm.prank(owner);
-        vtsOrchestrator = new VTSOrchestrator(
-            address(poolManager),
-            makeAddr("signalManager"),
-            makeAddr("oracleHelper"),
-            makeAddr("liquidityHub"),
-            address(settlementObserver),
-            owner
-        );
+        vtsOrchestrator =
+            new VTSOrchestrator(address(poolManager), makeAddr("oracleHelper"), makeAddr("liquidityHub"), owner);
     }
 
     function test_constructor_revert_whenPoolManagerIsZeroAddress() public {
-        vm.prank(owner);
-        IVRLSettlementObserver settlementObserver = new VRLSettlementObserver(owner);
-
         vm.expectRevert(abi.encodeWithSelector(Errors.InvalidAddress.selector, address(0)));
-        new VTSOrchestrator(
-            address(0),
-            makeAddr("signalManager"),
-            makeAddr("oracleHelper"),
-            makeAddr("liquidityHub"),
-            address(settlementObserver),
-            owner
-        );
+        new VTSOrchestrator(address(0), makeAddr("oracleHelper"), makeAddr("liquidityHub"), owner);
     }
 
     // ═══════════════════════════════════════════════════════════════════════════

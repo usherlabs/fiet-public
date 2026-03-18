@@ -83,7 +83,15 @@ contract LCCFactoryLibHarness {
         address resilientOracleAddress
     ) external returns (address) {
         return LCCFactoryLib.createLCC(
-            s, marketRef, underlyingPair, index, marketName, initialIssuers, resilientOracleAddress
+            s,
+            marketRef,
+            underlyingPair,
+            index,
+            marketName,
+            initialIssuers,
+            address(this),
+            address(this),
+            resilientOracleAddress
         );
     }
 
@@ -146,6 +154,14 @@ contract LCCFactoryLibHarness {
     // These unit tests only need mint/burn + balancesOf to work, so we provide no-op / zero-bound
     // implementations sufficient for bucket accounting.
 
+    function boundLevel(address, address) external pure returns (uint8) {
+        return 0;
+    }
+
+    function boundLevels(address, address, address) external pure returns (uint8, uint8) {
+        return (0, 0);
+    }
+
     function boundLevelOfLcc(
         address,
         /* lcc */
@@ -191,6 +207,8 @@ contract LCCFactoryLibHarness {
     )
         external
         pure {}
+
+    function prepareMarketLiquidity(address, uint256) external pure {}
 
     function getLCC(bytes32 marketId, address underlying) external view returns (address) {
         return LCCFactoryLib.getLCC(s, marketId, underlying);

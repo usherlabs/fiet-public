@@ -28,12 +28,17 @@ interface IResilientOracle {
 
     /// @notice Gets price of an asset
     /// @param asset Asset address
-    /// @return price USD price in 18 decimals
+    /// @return price USD price scaled for token decimals (Venus semantics)
+    /// @dev Venus' ResilientOracle (via ChainlinkOracle) returns a price scaled such that:
+    ///      - `valueUsdWad = (price * amountRaw) / 1e18`
+    ///      - `amountRaw` is in the asset's native decimals (e.g. USDC has 6 decimals).
+    ///      For a token with `d` decimals, the returned `price` is effectively scaled to \(10^(36 - d)\).
+    ///      (For native 18-decimal assets, this is the familiar 18-decimal USD WAD price.)
     function getPrice(address asset) external view returns (uint256);
 
     /// @notice Gets price of the underlying asset for a given vToken
     /// @param vToken vToken address (LCC address in our case)
-    /// @return price USD price in 18 decimals
+    /// @return price USD price scaled for token decimals (see `getPrice`)
     function getUnderlyingPrice(address vToken) external view returns (uint256);
 
     /// @notice Gets token configuration for an asset

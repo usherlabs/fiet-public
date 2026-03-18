@@ -137,9 +137,9 @@ abstract contract MarketMakerTestBase is Test {
         state.sourceState = "0xstate.sourceState";
         state.prover = "state.prover";
         state.nonce = "nonce123";
-        // this field could potentially be a zero address
-        // it signifies who requests for the proof advance
-        state.advancer = makeAddr("advancer");
+        // Default advancer to the calling test contract to model the common
+        // "router forwards on behalf of locker" path used in protocol tests.
+        state.advancer = address(this);
 
         // Add reserves
         state.reserves = new MarketMaker.Reserve[](2);

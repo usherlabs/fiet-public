@@ -100,7 +100,8 @@ contract CoreHookTest is Test {
     // ------------------------------------------------------------
 
     function test_afterAddLiquidity_forwardsEffectiveDelta_minusFeeAdj_whenNotMM() public {
-        BalanceDelta delta = toBalanceDelta(int128(10), int128(20));
+        // Add-liquidity caller legs are negative deltas.
+        BalanceDelta delta = toBalanceDelta(int128(-10), int128(-20));
         BalanceDelta feeAdj = toBalanceDelta(int128(3), int128(5));
 
         vts.setReturn(feeAdj, false);
@@ -110,11 +111,7 @@ contract CoreHookTest is Test {
         assertEq(sel, hook.afterAddLiquidity.selector);
         assertEq(BalanceDelta.unwrap(returnedFeeAdj), BalanceDelta.unwrap(feeAdj));
 
-        BalanceDelta expectedEffective = delta - feeAdj;
         assertEq(spy.calls(), 1, "spy should be called once");
-        assertEq(
-            BalanceDelta.unwrap(spy.lastDelta()), BalanceDelta.unwrap(expectedEffective), "effective delta mismatch"
-        );
     }
 
     function test_afterRemoveLiquidity_doesNotForward_whenMM() public {
@@ -193,12 +190,12 @@ contract CoreHookTest is Test {
     }
 
     // ------------------------------------------------------------
-    // Mutant: ProxySwapFlag.isDirectSwap(proxyHook) forced true in CoreHook._afterSwap
+    // Mutant: CoreActionFlag.isDirectCoreAction(proxyHook) forced true in CoreHook._afterSwap
     // ------------------------------------------------------------
 
-    function test_afterSwap_doesNotNotifyProxyHook_whenProxySwapFlagIsSet() public {
+    function test_afterSwap_doesNotNotifyProxyHook_whenNoCoreActionFlagIsSet() public {
         // Simulate proxy swap in progress: direct-swap detection must be false, so no notification.
-        spy.setProxySwapFlag(true);
+        spy.setNoCoreActionFlag(true);
 
         SwapParams memory sp = SwapParams({zeroForOne: true, amountSpecified: int256(1), sqrtPriceLimitX96: 0});
         hook.exposed_afterSwap(address(this), key, sp, toBalanceDelta(int128(-1), int128(1)), bytes(""));
@@ -318,52 +315,60 @@ contract MockMarketFactory {
     function proxyToHook(PoolId proxyPoolId) external view returns (address) {
         return _proxyToHook[PoolId.unwrap(proxyPoolId)];
     }
+
+    function sequenceDirectSwap(PoolKey calldata key, address lccTokenIn) external {
+        address hook = _proxyToHook[PoolId.unwrap(key.toId())];
+        if (hook != address(0)) {
+            ProxyHookSpy(hook).handleSwap(lccTokenIn);
+        }
+    }
+
+    function sequenceDirectAddLiquidity(PoolKey calldata key) external {
+        address hook = _proxyToHook[PoolId.unwrap(key.toId())];
+        if (hook != address(0)) {
+            ProxyHookSpy(hook).handleAddLiquidity();
+        }
+    }
 }
 
 contract ProxyHookSpy {
     uint256 internal _calls;
-    BalanceDelta internal _lastDelta;
 
-    function onDirectLP(BalanceDelta delta) external {
+    function handleAddLiquidity() external {
         _calls++;
-        _lastDelta = delta;
     }
 
-    // ---- direct swap spy + exttload hook for ProxySwapFlag.isDirectSwap(proxyHook) ----
+    // ---- direct swap spy + exttload hook for CoreActionFlag.isDirectCoreAction(proxyHook) ----
 
     uint256 internal _swapCalls;
-    BalanceDelta internal _lastSwapDelta;
+    address internal _lastSwapLcc;
     bytes32 internal _proxySwapFlag;
 
-    function setProxySwapFlag(bool on) external {
+    function setNoCoreActionFlag(bool on) external {
         _proxySwapFlag = on ? bytes32(uint256(1)) : bytes32(0);
     }
 
     function exttload(bytes32) external view returns (bytes32) {
-        // CoreHook checks direct swaps via ProxySwapFlag.isDirectSwap(proxyHook),
+        // CoreHook checks direct swaps via CoreActionFlag.isDirectCoreAction(proxyHook),
         // which reads PROXY_SWAP_FLAG_SLOT from the proxy hook via IExttload.exttload.
         return _proxySwapFlag;
     }
 
-    function onCorePoolDirectSwap(BalanceDelta delta) external {
+    function handleSwap(address lccTokenIn) external {
         _swapCalls++;
-        _lastSwapDelta = delta;
+        _lastSwapLcc = lccTokenIn;
     }
 
     function calls() external view returns (uint256) {
         return _calls;
     }
 
-    function lastDelta() external view returns (BalanceDelta) {
-        return _lastDelta;
-    }
-
     function swapCalls() external view returns (uint256) {
         return _swapCalls;
     }
 
-    function lastSwapDelta() external view returns (BalanceDelta) {
-        return _lastSwapDelta;
+    function lastSwapLcc() external view returns (address) {
+        return _lastSwapLcc;
     }
 }
 
@@ -397,7 +402,7 @@ contract MockVTSOrchestrator {
             isActive: false,
             salt: bytes32(0),
             checkpoint: RFSCheckpoint({
-                timeOfLastTransition: 0, isOpen: false, gracePeriodExtension0: 0, gracePeriodExtension1: 0
+                openMask: 0, openSince0: 0, openSince1: 0, gracePeriodExtension0: 0, gracePeriodExtension1: 0
             })
         });
         id = PositionId.wrap(bytes32(0));
@@ -418,6 +423,18 @@ contract MockVTSOrchestrator {
 
     function lastLiqBefore() external view returns (uint128) {
         return _lastLiqBefore;
+    }
+
+    function isPoolPaused(PoolId) external pure returns (bool) {
+        return false;
+    }
+
+    function isPaused() external pure returns (bool) {
+        return false;
+    }
+
+    function isPoolOrGlobalPaused(PoolId) external pure returns (bool) {
+        return false;
     }
 }
 

@@ -4,6 +4,8 @@ pragma solidity ^0.8.26;
 import "forge-std/Test.sol";
 
 import {PositionManagerImpl} from "../../src/modules/PositionManagerImpl.sol";
+import {PositionManagerQueueCustodian} from "../../src/modules/PositionManagerQueueCustodian.sol";
+import {IMMQueueCustodian} from "../../src/interfaces/IMMQueueCustodian.sol";
 import {IPoolManager} from "v4-periphery/lib/v4-core/src/interfaces/IPoolManager.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
@@ -36,6 +38,11 @@ contract MockERC20 {
 
 contract MockMarketFactory {
     event AfterModifyLiquidityCalled(bytes32 poolId);
+    address public liquidityHub;
+
+    function setLiquidityHub(address hub) external {
+        liquidityHub = hub;
+    }
 
     function afterModifyLiquidity(PoolKey memory key) external {
         emit AfterModifyLiquidityCalled(PoolId.unwrap(key.toId()));
@@ -171,15 +178,27 @@ contract MockPoolManager {
     function burn(address, uint256, uint256) external {}
 }
 
-contract PositionManagerImplHarness is PositionManagerImpl {
+contract PositionManagerImplHarness is PositionManagerQueueCustodian, PositionManagerImpl {
     address internal _locker;
 
-    constructor(IPoolManager pm, address hub, address orch, address locker) PositionManagerImpl(pm, hub, orch) {
+    constructor(IPoolManager pm, address marketFactory, address orch, address locker)
+        PositionManagerImpl(pm, marketFactory, orch)
+    {
         _locker = locker;
     }
 
     function msgSender() public view override returns (address) {
         return _locker;
+    }
+
+    function _queueCustodian() internal view override(PositionManagerQueueCustodian) returns (IMMQueueCustodian) {
+        return IMMQueueCustodian(address(this));
+    }
+
+    function _forwardQueuedLccToCustodian(Currency currency, uint256 tokenId, uint256 amount) internal override {
+        currency;
+        tokenId;
+        amount;
     }
 
     function exposeGetLiquidityFromDeltas(PoolKey memory key, address owner, int24 tl, int24 tu)
@@ -193,9 +212,10 @@ contract PositionManagerImplHarness is PositionManagerImpl {
     function exposeModifySyntheticLiquidity(
         PoolKey memory key,
         ModifyLiquidityParams memory params,
+        uint256 tokenId,
         bytes memory hookData
     ) external returns (BalanceDelta, BalanceDelta) {
-        return _modifySyntheticLiquidity(key, params, hookData);
+        return _modifySyntheticLiquidity(key, params, tokenId, hookData);
     }
 
     function exposeGetFullCredit(Currency c, address owner) external view returns (uint256) {
@@ -216,6 +236,10 @@ contract PositionManagerImplHarness is PositionManagerImpl {
 
     function exposeSyncPairBalanceAsCredit(Currency c0, Currency c1) external {
         _syncPairBalanceAsCredit(c0, c1);
+    }
+
+    function exposeQueueCustodian() external view returns (address) {
+        return address(_queueCustodian());
     }
 }
 
@@ -239,6 +263,7 @@ contract PositionManagerImplTest is Test {
         poolManager = new MockPoolManager();
         hub = new MockLiquidityHub();
         factory = new MockMarketFactory();
+        factory.setLiquidityHub(address(hub));
         hub.setFactory(address(factory));
 
         orch = makeAddr("vtsOrchestrator");
@@ -256,7 +281,7 @@ contract PositionManagerImplTest is Test {
         vm.mockCall(lcc0, abi.encodeWithSignature("underlying()"), abi.encode(ua0));
         vm.mockCall(lcc1, abi.encodeWithSignature("underlying()"), abi.encode(ua1));
 
-        h = new PositionManagerImplHarness(IPoolManager(address(poolManager)), address(hub), orch, locker);
+        h = new PositionManagerImplHarness(IPoolManager(address(poolManager)), address(factory), orch, locker);
     }
 
     function _defaultKey() internal view returns (PoolKey memory) {
@@ -366,6 +391,10 @@ contract PositionManagerImplTest is Test {
         h.exposeSyncPairBalanceAsCredit(c0, c1);
     }
 
+    function test_queueCustodian_override_returnsHarnessAddress() public view {
+        assertEq(h.exposeQueueCustodian(), address(h));
+    }
+
     function _seedPositionLiquidity(PoolKey memory key, int24 tickLower, int24 tickUpper, bytes32 salt, uint128 liq)
         internal
     {
@@ -393,7 +422,7 @@ contract PositionManagerImplTest is Test {
         poolManager.setModifyLiquidityReturn(BalanceDelta.wrap(0), BalanceDelta.wrap(0));
 
         vm.expectRevert(abi.encodeWithSelector(Errors.InvariantViolated.selector, "liquidity change incorrect"));
-        h.exposeModifySyntheticLiquidity(key, params, "");
+        h.exposeModifySyntheticLiquidity(key, params, 0, "");
     }
 
     function test_modifySyntheticLiquidity_settlesDebts_takesCredits_syncsLCC_andCallsFactory() public {
@@ -424,12 +453,15 @@ contract PositionManagerImplTest is Test {
 
         // Orchestrator sync is called only for positive deltas AND LCC currencies.
         vm.expectCall(orch, abi.encodeWithSignature("sync(address,address,address)", lcc1, address(h), locker));
+        vm.mockCall(
+            orch, abi.encodeWithSignature("getFullCredit(address,address)", lcc1, locker), abi.encode(uint256(0))
+        );
 
         // afterModifyLiquidity must be called on the market factory.
         vm.expectEmit(false, false, false, true, address(factory));
         emit MockMarketFactory.AfterModifyLiquidityCalled(PoolId.unwrap(key.toId()));
 
-        h.exposeModifySyntheticLiquidity(key, params, "");
+        h.exposeModifySyntheticLiquidity(key, params, 0, "");
 
         // settle path for delta0<0 does one sync+settle on the pool manager.
         assertEq(poolManager.syncCount(), 1);

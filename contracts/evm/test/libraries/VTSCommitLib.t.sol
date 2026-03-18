@@ -108,6 +108,14 @@ contract MockSignalManager is IVRLSignalManager {
         return 0;
     }
 
+    function submitAuthNonce(address) external pure returns (uint256) {
+        return 0;
+    }
+
+    function submitter() external pure returns (address) {
+        return address(0xBEEF);
+    }
+
     function setVerifier(address) external pure {
         revert("MockSignalManager: not implemented");
     }
@@ -116,15 +124,15 @@ contract MockSignalManager is IVRLSignalManager {
         revert("MockSignalManager: not implemented");
     }
 
-    function verifyLiquiditySignal(LiquiditySignal memory) external view returns (bool, uint256) {
+    function verifyLiquiditySignal(address, bytes memory, bool) external view returns (bool, uint256) {
         return (true, _expirySeconds);
     }
 
-    function verifyLiquiditySignal(bytes memory) external view returns (bool, uint256) {
-        return (true, _expirySeconds);
-    }
-
-    function verifyLiquiditySignal(bytes memory, bool) external view returns (bool, uint256) {
+    function verifyLiquiditySignalRelayed(address, uint256, bytes memory, uint256, uint256, bytes memory, bool)
+        external
+        view
+        returns (bool, uint256)
+    {
         return (true, _expirySeconds);
     }
 }
@@ -158,7 +166,7 @@ contract VTSCommitLibTest is VTSLibTestBase {
         mmOwner = makeAddr("mmOwner");
         advancer = makeAddr("advancer");
 
-        commitId = harness.commitSignal(sigMgr, _makeSignal(mmOwner, advancer));
+        commitId = harness.commitSignal(sigMgr, advancer, _makeSignal(mmOwner, advancer));
 
         positionId = _generatePositionId(DEFAULT_OWNER, TL, TU, DEFAULT_SALT);
         harness.setupPosition(positionId, poolId, commitId, TL, TU, LIQ);
@@ -173,7 +181,7 @@ contract VTSCommitLibTest is VTSLibTestBase {
 
     function test_commitSignal_revertsOnEmptySignal() public {
         vm.expectRevert(abi.encodeWithSelector(Errors.InvalidLiquiditySignal.selector, 0, 0, 0));
-        harness.commitSignal(IVRLSignalManager(makeAddr("signalManager")), "");
+        harness.commitSignal(IVRLSignalManager(makeAddr("signalManager")), address(this), "");
     }
 
     function test_commitSignal_incrementsAndStoresState() public {
@@ -183,7 +191,7 @@ contract VTSCommitLibTest is VTSLibTestBase {
         address adv2 = makeAddr("adv2");
         sigMgr.setExpirySeconds(1234);
 
-        uint256 newCommitId = harness.commitSignal(sigMgr, _makeSignal(owner2, adv2));
+        uint256 newCommitId = harness.commitSignal(sigMgr, owner2, _makeSignal(owner2, adv2));
 
         assertEq(newCommitId, beforeNext + 1, "commitId should increment");
         assertEq(harness.getNextCommitId(), newCommitId, "nextCommitId should match latest");
@@ -318,6 +326,28 @@ contract VTSCommitLibTest is VTSLibTestBase {
         harness.validateLiquidityDelta(oracle, commitId, positionId, p, true);
     }
 
+    function test_validateLiquidityDelta_reverts_whenSignalHasTooManyUniqueReserveTickers() public {
+        sigMgr.setExpirySeconds(3600);
+        harness.renewSignal(sigMgr, commitId, _makeSignalWithUniqueReserveCount(mmOwner, address(this), 101));
+
+        VTSCommitLib.LiquidityDeltaParams memory p = _defaultLiquidityDeltaParams();
+        oracle.setTotalValue(1_000_000e18);
+
+        vm.expectRevert(abi.encodeWithSelector(Errors.MMReserveTickerLimitExceeded.selector, 101, 100));
+        harness.validateLiquidityDelta(oracle, commitId, positionId, p, false);
+    }
+
+    function test_validateLiquidityDelta_allowsSignalAtMaxUniqueReserveTickers() public {
+        sigMgr.setExpirySeconds(3600);
+        harness.renewSignal(sigMgr, commitId, _makeSignalWithUniqueReserveCount(mmOwner, address(this), 100));
+
+        VTSCommitLib.LiquidityDeltaParams memory p = _defaultLiquidityDeltaParams();
+        oracle.setTotalValue(1_000_000e18);
+
+        (bool ok,,,) = harness.validateLiquidityDelta(oracle, commitId, positionId, p, false);
+        assertTrue(ok, "exact max unique reserve tickers should be accepted");
+    }
+
     // ============================================================
     // incrementCoverage
     // ============================================================
@@ -399,11 +429,14 @@ contract VTSCommitLibTest is VTSLibTestBase {
     // ============================================================
 
     function test_checkpoint_zeroIssuedValue_zerosDeficitAndReturns() public {
+        uint256 t0 = 1_000_000;
+        vm.warp(t0);
         // Make issuedUsd == 0 by setting liquidity to 0.
         PositionId pid = _generatePositionId(DEFAULT_OWNER, TL, TU, bytes32(uint256(123)));
         harness.setupPosition(pid, poolId, commitId, TL, TU, 0);
 
         harness.setPositionCommitmentDeficit(pid, 123, 456);
+        harness.setPositionCommitmentDeficitSince(pid, t0 - 10, t0 - 10);
         oracle.setTotalValue(0);
 
         harness.checkpoint(manager, oracle, commitId, pid);
@@ -412,6 +445,9 @@ contract VTSCommitLibTest is VTSLibTestBase {
         assertEq(d0, 0, "deficit0 should be cleared");
         assertEq(d1, 0, "deficit1 should be cleared");
         assertEq(harness.getPositionCommitmentDeficitBps(pid), 0, "deficit bps should be zero when issued is zero");
+        (uint256 since0, uint256 since1) = harness.getPositionCommitmentDeficitSince(pid);
+        assertEq(since0, 0, "deficit0 age should be cleared");
+        assertEq(since1, 0, "deficit1 age should be cleared");
     }
 
     function test_checkpoint_sufficientBacking_clearsDeficit_whenSurplusCovers() public {
@@ -477,6 +513,26 @@ contract VTSCommitLibTest is VTSLibTestBase {
             LiquidityUtils.BPS_DENOMINATOR,
             "deficit bps should be 100%"
         );
+        (uint256 since0, uint256 since1) = harness.getPositionCommitmentDeficitSince(positionId);
+        assertEq(since0, block.timestamp, "deficit0 age should initialise at first non-zero deficit");
+        assertEq(since1, block.timestamp, "deficit1 age should initialise at first non-zero deficit");
+    }
+
+    function test_checkpoint_insufficientBacking_preservesDeficitSince_whenAlreadyDeficient() public {
+        harness.setPositionSettled(positionId, 0, 0);
+        harness.setPositionCommitmentDeficit(positionId, 0, 0);
+        oracle.setTotalValue(0);
+
+        vm.warp(1_000_000);
+        harness.checkpoint(manager, oracle, commitId, positionId);
+        (uint256 since0First, uint256 since1First) = harness.getPositionCommitmentDeficitSince(positionId);
+
+        vm.warp(1_000_100);
+        harness.checkpoint(manager, oracle, commitId, positionId);
+        (uint256 since0Second, uint256 since1Second) = harness.getPositionCommitmentDeficitSince(positionId);
+
+        assertEq(since0Second, since0First, "deficit0 age should not reset while deficit remains non-zero");
+        assertEq(since1Second, since1First, "deficit1 age should not reset while deficit remains non-zero");
     }
 
     function test_checkpoint_partialBacking_setsDeficitFromBps() public {
@@ -563,6 +619,22 @@ contract VTSCommitLibTest is VTSLibTestBase {
         );
     }
 
+    function test_checkpoint_sufficientBacking_clearsDeficitSince_forTokensCleared() public {
+        uint256 t0 = 1_000_000;
+        vm.warp(t0);
+        harness.setCommitExpiresAt(commitId, t0 + 1 days);
+        harness.setPositionCommitmentDeficit(positionId, 123e18, 0);
+        harness.setPositionCommitmentDeficitSince(positionId, t0 - 100, 0);
+        harness.setPositionSettled(positionId, 0, 0);
+        oracle.setTotalValue(1_000_000e18);
+
+        harness.checkpoint(manager, oracle, commitId, positionId);
+
+        (uint256 since0, uint256 since1) = harness.getPositionCommitmentDeficitSince(positionId);
+        assertEq(since0, 0, "deficit0 age should clear when token0 deficit is cleared");
+        assertEq(since1, 0, "deficit1 age should remain zero");
+    }
+
     // ============================================================
     // helpers
     // ============================================================
@@ -583,6 +655,52 @@ contract VTSCommitLibTest is VTSLibTestBase {
         });
 
         return abi.encode(sig);
+    }
+
+    function _makeSignalWithUniqueReserveCount(address owner, address adv, uint256 reserveCount)
+        internal
+        pure
+        returns (bytes memory)
+    {
+        MarketMaker.Reserve[] memory reserves = new MarketMaker.Reserve[](reserveCount);
+        for (uint256 i = 0; i < reserveCount; i++) {
+            reserves[i] = MarketMaker.Reserve({asset: string.concat("TK", vm.toString(i)), amount: 1e18});
+        }
+        return _encodeSignal(owner, adv, reserves);
+    }
+
+    function _encodeSignal(address owner, address adv, MarketMaker.Reserve[] memory reserves)
+        internal
+        pure
+        returns (bytes memory)
+    {
+        MarketMaker.State memory mmState = MarketMaker.State({
+            owner: owner, reserves: reserves, sourceState: "", prover: "", nonce: "", advancer: adv
+        });
+
+        LiquiditySignal memory sig = LiquiditySignal({
+            nonce: 1,
+            rootHash: bytes32(0),
+            rootHashSignature: "",
+            merkleProof: new bytes32[](0),
+            mmState: mmState,
+            mmSignature: ""
+        });
+
+        return abi.encode(sig);
+    }
+
+    function _defaultLiquidityDeltaParams() internal view returns (VTSCommitLib.LiquidityDeltaParams memory p) {
+        (uint160 sqrtPriceX96, int24 tick,,) = _getSlot0(poolId);
+        p = VTSCommitLib.LiquidityDeltaParams({
+            currency0: corePoolKey.currency0,
+            currency1: corePoolKey.currency1,
+            sqrtPriceX96: sqrtPriceX96,
+            currentTick: tick,
+            tickLower: TL,
+            tickUpper: TU,
+            liquidityDelta: int256(uint256(LIQ))
+        });
     }
 
     function _computeIssuedUsd() internal view returns (uint256 issuedUsd) {

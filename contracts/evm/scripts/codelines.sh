@@ -84,7 +84,7 @@ FILES=(
   src/libraries/MarketHandlerLib.sol
   src/libraries/MarketMaker.sol
   src/libraries/OracleUtils.sol
-  src/libraries/ProxySwapFlag.sol
+  src/libraries/CoreActionFlag.sol
   src/libraries/SwapSimulator.sol
   src/libraries/TransientSlots.sol
   src/libraries/VTSCommitLib.sol

@@ -21,6 +21,10 @@ struct TokenConfiguration {
     uint256 baseVTSRate;
     // Max grace period time
     uint256 maxGracePeriodTime;
+    // Minimum time a non-zero commitment deficit must persist before grace bypass is allowed (0 disables age gating)
+    uint256 unbackedCommitmentGraceBypassTime;
+    // Optional token deficit threshold used only when deficit bps is below bypass bps (0 disables)
+    uint256 unbackedCommitmentGraceBypassThreshold;
 }
 
 // forge-lint: disable-next-line(pascal-case-struct)
@@ -35,10 +39,6 @@ struct MarketVTSConfiguration {
     uint256 minResidualUnits;
     // Commitment deficit severity threshold (bps) above which grace bypass is allowed
     uint16 unbackedCommitmentGraceBypassBps;
-    // Optional token0 deficit threshold used only when deficit bps is below bypass bps (0 disables)
-    uint256 unbackedCommitmentGraceBypassThreshold0;
-    // Optional token1 deficit threshold used only when deficit bps is below bypass bps (0 disables)
-    uint256 unbackedCommitmentGraceBypassThreshold1;
 }
 
 /// @notice Context struct for position processing dependencies
@@ -129,10 +129,13 @@ struct PositionAccounting {
     TokenPairUint cumulativeOutflows;
     // Outflow snapshots at last fee snap per token
     TokenPairUint outflowsAtFeeSnap;
-    // Commitment-scoped deficit (insolvency gate) per token
+    // Commitment-scoped deficit (insolvency gate) per token.
+    // Derived from checkpoint backing shortfall; not part of DICE principal accounting.
     TokenPairUint commitmentDeficit;
     // Commitment deficit severity in bps (0-10000), updated by commitment checkpoints
     uint16 commitmentDeficitBps;
+    // Timestamp at which commitment deficit became non-zero per token (0 when token deficit is zero)
+    TokenPairUint commitmentDeficitSince;
     // Fees shared by position per token
     TokenPairUint feesShared;
     // Pending fee adjustments per token: +slash (reduces payout), -bonus (increases payout)
@@ -158,7 +161,8 @@ struct PoolAccounting {
     TokenPairUint protocolFeeAccrued;
     // Slashed pot balances per token
     TokenPairUint slashedPot;
-    // DICE: Pool-wide outstanding deficit principal per token
+    // DICE: Pool-wide outstanding swap-incurred deficit principal per token.
+    // Mirrors summed cumulativeDeficit and excludes commitmentDeficit.
     TokenPairUint totalDeficitPrincipal;
     // DICE: Coverage-per-deficit-unit index (Q128) per token
     TokenPairUint coveragePerDeficitIndexX128;

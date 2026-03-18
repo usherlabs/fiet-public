@@ -15,8 +15,21 @@ contract VRLSettlementObserver is Ownable, IVRLSettlementObserver {
     uint32 public nextVerifierIndex;
     mapping(address => mapping(uint32 => bool)) public allowedVerifiersForToken;
     mapping(bytes32 => bool) public usedProofHashes;
+    address public immutable submitter;
 
-    constructor(address _initialOwner) Ownable(_initialOwner) {}
+    constructor(address _submitter, address _initialOwner) Ownable(_initialOwner) {
+        if (_submitter == address(0)) revert Errors.InvalidAddress(_submitter);
+        submitter = _submitter;
+    }
+
+    modifier onlySubmitter() {
+        _onlySubmitter();
+        _;
+    }
+
+    function _onlySubmitter() internal view {
+        if (msg.sender != submitter) revert Errors.InvalidSender();
+    }
 
     // New function to add a verifier
     function addVerifier(address _verifier) external onlyOwner returns (uint32) {
@@ -73,7 +86,7 @@ contract VRLSettlementObserver is Ownable, IVRLSettlementObserver {
         uint32 verifierIndex,
         bytes memory settlementProof,
         bool revertOnInvalid
-    ) public returns (bool isProofValid) {
+    ) public onlySubmitter returns (bool isProofValid) {
         if (tokenIndex != 0 && tokenIndex != 1) {
             revert Errors.InvalidTokenIndex(tokenIndex);
         }

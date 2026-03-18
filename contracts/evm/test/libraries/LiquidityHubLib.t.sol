@@ -28,14 +28,16 @@ contract LiquidityHubLibTest is LiquidityHubTestBase {
     //
     // Field offsets within LiquidityHubStorage (see `src/types/Liquidity.sol`):
     // - lccToUnderlying offset = 1
-    // - nettedLCCsAsUnderlying offset = 11
+    // - queueOfUnderlying offset = 11
+    // - nettedLCCsAsUnderlying offset = 12
     uint256 internal constant _OFFSET_LCC_TO_UNDERLYING = 1;
     uint256 internal constant _OFFSET_LCC_TO_MARKET = 3;
-    uint256 internal constant _OFFSET_NETTED = 11;
+    uint256 internal constant _OFFSET_NETTED = 12;
     uint256 internal constant _OFFSET_DIRECT_SUPPLY = 8;
     uint256 internal constant _OFFSET_SETTLE_QUEUE = 9;
     uint256 internal constant _OFFSET_TOTAL_QUEUED = 10;
-    uint256 internal constant _OFFSET_RESERVE_OF_UNDERLYING = 12;
+    uint256 internal constant _OFFSET_QUEUE_OF_UNDERLYING = 11;
+    uint256 internal constant _OFFSET_RESERVE_OF_UNDERLYING = 13;
 
     function _deriveSBaseSlot() internal returns (uint256 base) {
         // Find the *actual* slot used for lccToUnderlying[lccToken1] in LiquidityHub storage.
@@ -120,8 +122,26 @@ contract LiquidityHubLibTest is LiquidityHubTestBase {
         return keccak256(abi.encode(underlying, root));
     }
 
+    function _slotReserveOfUnderlyingMarketDerived(address underlying) internal returns (bytes32) {
+        return bytes32(uint256(_slotReserveOfUnderlying(underlying)) + 1);
+    }
+
+    function _slotQueueOfUnderlying(address underlying) internal returns (bytes32) {
+        uint256 base = _deriveSBaseSlot();
+        uint256 root = base + _OFFSET_QUEUE_OF_UNDERLYING;
+        return keccak256(abi.encode(underlying, root));
+    }
+
+    function _setQueueOfUnderlying(address underlying, uint256 value) internal {
+        vm.store(address(liquidityHub), _slotQueueOfUnderlying(underlying), bytes32(value));
+    }
+
     function _setReserveOfUnderlying(address underlying, uint256 value) internal {
         vm.store(address(liquidityHub), _slotReserveOfUnderlying(underlying), bytes32(value));
+    }
+
+    function _setMarketReserveOfUnderlying(address underlying, uint256 value) internal {
+        vm.store(address(liquidityHub), _slotReserveOfUnderlyingMarketDerived(underlying), bytes32(value));
     }
 
     /// @notice Reads `LiquidityHubStorage.nettedLCCsAsUnderlying[lcc]` from the Hub.
@@ -190,6 +210,18 @@ contract LiquidityHubLibTest is LiquidityHubTestBase {
         liquidityHub.unwrap(lccToken1, amount);
     }
 
+    function test_prepareSettle_revertsWhenDirectSupplyIsLowerThanDirectReserve() public {
+        uint256 amount = 5;
+        _wrapDirectLCC(user1, lccToken1, amount);
+
+        // Manufacture a drifted state to harden the guard: direct reserve > directSupply.
+        _setReserveOfUnderlying(address(underlyingAsset1), amount * 2);
+
+        vm.prank(proxyHook);
+        vm.expectRevert(abi.encodeWithSelector(Errors.InvalidAmount.selector, amount + 1, amount));
+        liquidityHub.prepareSettle(lccToken1, amount + 1);
+    }
+
     function test_unwrap_whenNoMarketBalance_doesNotCallUseMarketLiquidity_andQueuesAll() public {
         // User has wrapped balance, but we set directSupply to 0 so direct-unwrapping is impossible.
         // With marketDerivedBalance == 0, unwrapInternalLogic must NOT call useMarketLiquidity at all.
@@ -216,9 +248,9 @@ contract LiquidityHubLibTest is LiquidityHubTestBase {
         // Create queue for the Hub itself.
         _createSettlementQueueEntry(lccToken1, address(liquidityHub), queued);
 
-        // Ensure reserve is non-zero WITHOUT calling confirmTake (which would greedily process the Hub queue).
-        // We deliberately set the reserve mapping directly to keep the queue intact.
-        _setReserveOfUnderlying(address(underlyingAsset1), queued);
+        // Ensure market-derived reserve is non-zero WITHOUT calling confirmTake
+        // (which would greedily process the Hub queue). We set storage directly to keep the queue intact.
+        _setMarketReserveOfUnderlying(address(underlyingAsset1), queued);
 
         uint256 reserveBefore = liquidityHub.reserveOfUnderlying(lccToken1);
         uint256 hubUnderlyingBefore = underlyingAsset1.balanceOf(address(liquidityHub));
@@ -252,25 +284,25 @@ contract LiquidityHubLibTest is LiquidityHubTestBase {
         liquidityHub.processSettlementFor(lccToken1, address(liquidityHub), queued);
     }
 
-    function test_processSettlementFor_hub_usesTotalBalance_whenWrappedOnly() public {
+    function test_processSettlementFor_hub_noopsWhenOnlyDirectReserve() public {
         uint256 queued = 6;
 
         // Hub holds wrapped LCC only (market-derived is 0).
         _wrapDirectLCC(address(liquidityHub), lccToken1, queued);
 
-        // Seed hub queue and reserve directly to avoid market-derived balances.
+        // Seed hub queue with only direct reserve (market-derived reserve stays zero).
         _setSettleQueue(lccToken1, address(liquidityHub), queued);
         _setTotalQueued(lccToken1, queued);
+        _setQueueOfUnderlying(address(underlyingAsset1), queued);
         _setReserveOfUnderlying(address(underlyingAsset1), queued);
 
         uint256 hubBalanceBefore = ILCC(lccToken1).balanceOf(address(liquidityHub));
         assertEq(hubBalanceBefore, queued, "precondition: hub balance should be wrapped only");
 
         liquidityHub.processSettlementFor(lccToken1, address(liquidityHub), queued);
-
-        assertEq(liquidityHub.settleQueue(lccToken1, address(liquidityHub)), 0, "hub queue should clear");
-        assertEq(liquidityHub.totalQueued(lccToken1), 0, "totalQueued should clear");
-        assertEq(ILCC(lccToken1).balanceOf(address(liquidityHub)), hubBalanceBefore - queued, "hub LCC should burn");
+        assertEq(liquidityHub.settleQueue(lccToken1, address(liquidityHub)), queued, "hub queue should remain");
+        assertEq(liquidityHub.totalQueued(lccToken1), queued, "totalQueued should remain");
+        assertEq(ILCC(lccToken1).balanceOf(address(liquidityHub)), hubBalanceBefore, "hub LCC should remain");
     }
 
     function test_wrapWith_step2_lazyClaim_increasesNetted_andDoesNotQueueResidual() public {
@@ -607,6 +639,11 @@ contract LiquidityHubLibTest is LiquidityHubTestBase {
             totalQueuedBefore + marketAmount,
             "totalQueued should match market-derived remainder"
         );
+        assertEq(
+            liquidityHub.queueOfUnderlying(withLcc),
+            totalQueuedBefore + marketAmount,
+            "underlying queue should track queued remainder"
+        );
 
         (uint256 wrappedOut, uint256 marketOut) = ILCC(targetLcc).balancesOf(user1);
         assertEq(wrappedOut, wrappedAmount, "target wrapped mint should equal direct conversion");
@@ -636,6 +673,7 @@ contract LiquidityHubLibTest is LiquidityHubTestBase {
         // Queue cleared.
         assertEq(liquidityHub.settleQueue(lccToken1, address(liquidityHub)), 0);
         assertEq(liquidityHub.totalQueued(lccToken1), 0);
+        assertEq(liquidityHub.queueOfUnderlying(lccToken1), 0);
 
         // Claimed portion consumed first; no burn when claimed >= toSettle.
         assertEq(ILCC(lccToken1).balanceOf(address(liquidityHub)), hubLccBefore, "no burn expected");
@@ -657,6 +695,7 @@ contract LiquidityHubLibTest is LiquidityHubTestBase {
         // Queue cleared.
         assertEq(liquidityHub.settleQueue(lccToken1, address(liquidityHub)), 0);
         assertEq(liquidityHub.totalQueued(lccToken1), 0);
+        assertEq(liquidityHub.queueOfUnderlying(lccToken1), 0);
 
         // Burn only the unclaimed portion.
         uint256 expectedBurn = queued - claimed;
@@ -702,6 +741,8 @@ contract LiquidityHubLibTest is LiquidityHubTestBase {
 
         // Partial market liquidity: return less than requested to force queueing.
         vm.mockCall(factory, abi.encodeWithSelector(IMarketFactory.useMarketLiquidity.selector), abi.encode(used));
+        // Simulate confirmTake-side market-derived reserve accrual for the mocked market use.
+        _setMarketReserveOfUnderlying(address(underlyingAsset1), used);
 
         uint256 underlyingBefore = underlyingAsset1.balanceOf(user1);
 

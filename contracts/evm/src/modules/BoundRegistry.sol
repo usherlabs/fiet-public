@@ -10,7 +10,7 @@ import {Errors} from "../libraries/Errors.sol";
  * @notice Abstract registry for protocol-bound endpoints (per-factory namespace).
  */
 abstract contract BoundRegistry is IBoundRegistry {
-    // Bound levels: _boundLevel[factory][who] -> 0 = none, 1 = transfer endpoint, 2 = bucket-exempt endpoint.
+    // Bound levels: _boundLevel[factory][who] -> 0 = none, 1 = transfer endpoint, 2 = bucket-exempt endpoint, 3 = dex ingress sink.
     mapping(address => mapping(address => uint8)) internal _boundLevel;
 
     /// @notice Resolve the market id + factory for a given LCC (implemented by child).
@@ -44,8 +44,8 @@ abstract contract BoundRegistry is IBoundRegistry {
 
     /// @dev Internal setter with validation + event emission.
     function _setBoundLevel(address factory, address who, uint8 level) internal {
-        if (level > Bounds.BOUND_EXEMPT) {
-            revert Errors.InvalidAmount(level, Bounds.BOUND_EXEMPT);
+        if (level > Bounds.BOUND_DEX) {
+            revert Errors.InvalidAmount(level, Bounds.BOUND_DEX);
         }
         _boundLevel[factory][who] = level;
         emit BoundLevelSet(factory, who, level);

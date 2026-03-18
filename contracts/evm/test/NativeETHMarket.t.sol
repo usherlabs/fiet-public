@@ -603,4 +603,56 @@ contract NativeETHMarket is MarketTestBase, MarketMakerTestBase {
         // The excess ETH should have been returned via the TAKE action
         assertEq(selfEthBalanceAfter, selfEthBalanceBefore - c0, "Some excess ETH should be refunded");
     }
+
+    function test_settle_nativeNegativeDelta_usePositionManagerBalanceFalse_reverts_andDoesNotDrainMmpmEth() public {
+        ModifyLiquidityParams memory liquidityParams =
+            ModifyLiquidityParams({tickLower: -60, tickUpper: 60, liquidityDelta: 1e10, salt: bytes32(0)});
+        bytes memory signalBytes = abi.encode(liquiditySignal);
+
+        (uint256 requiredSettlementAmount0, uint256 requiredSettlementAmount1) =
+            _calculateSettlementAmounts(liquidityParams, marketVTSConfiguration);
+
+        // Seed token1-side funding for initial position settlement setup.
+        Currency underlyingCurrency1 = Currency.wrap(lcc1.underlying());
+        underlyingCurrency1.approve(address(vtsOrchestrator), requiredSettlementAmount1);
+        underlyingCurrency1.transfer(address(positionManager), requiredSettlementAmount1);
+
+        // Create an active position first, then try the unsupported native transferFrom settle branch.
+        MMA.PreparedAction[] memory setupActions = _commitMintSettleFromPositionManager(
+            signalBytes, liquidityParams, requiredSettlementAmount0, requiredSettlementAmount1
+        );
+        (bytes memory setupActionsBytes, bytes[] memory setupParams) = MMA.concatPrepared(setupActions);
+        positionManager.modifyLiquidities{
+            value: requiredSettlementAmount0
+        }(abi.encode(setupActionsBytes, setupParams), block.timestamp + 3600);
+
+        // Pre-existing ETH balance on MMPM must remain untouched when native transferFrom is unsupported.
+        vm.deal(address(positionManager), 1 ether);
+        uint256 mmpmEthBefore = address(positionManager).balance;
+
+        address underlying0 = ILCC(payable(Currency.unwrap(corePoolKey.currency0))).underlying();
+        bool nativeIsToken0 = underlying0 == address(0);
+        int128 amount0 = nativeIsToken0 ? -int128(int256(1)) : int128(0);
+        int128 amount1 = nativeIsToken0 ? int128(0) : -int128(int256(1));
+
+        MMA.PreparedAction[] memory actions = new MMA.PreparedAction[](1);
+        actions[0] = MMA.prepareSettle(corePoolKey, 1, 0, amount0, amount1, false);
+        (bytes memory actionsBytes, bytes[] memory params) = MMA.concatPrepared(actions);
+        bytes memory unlockData = abi.encode(actionsBytes, params);
+
+        vm.expectPartialRevert(Errors.NativeTransferFromUnsupported.selector);
+        positionManager.modifyLiquidities(unlockData, block.timestamp + 3600);
+
+        assertEq(address(positionManager).balance, mmpmEthBefore, "MMPM ETH should not be drained on unsupported path");
+    }
+
+    function test_currencyTransfer_nativeTransferFrom_revertsWhenFromIsNotSelf() public {
+        address nonSelfFrom = makeAddr("nonSelfFrom");
+        vm.expectRevert(abi.encodeWithSelector(Errors.NativeTransferFromUnsupported.selector, nonSelfFrom));
+        this.callNativeTransferFrom(nonSelfFrom, address(this), 1);
+    }
+
+    function callNativeTransferFrom(address from, address to, uint256 amount) external {
+        Currency.wrap(address(0)).transferFrom(from, to, amount);
+    }
 }

@@ -54,7 +54,10 @@ contract OracleHelper is Ownable {
     /**
      * @notice Gets price by ticker
      * @param ticker The ticker string (e.g., "ETH", "USDC")
-     * @return price The asset price in USD (18 decimals)
+     * @return price The asset USD price scaled for token decimals (Venus semantics)
+     * @dev This is a Venus ResilientOracle passthrough. The returned value is scaled such that:
+     *      `valueUsdWad = (price * amountRaw) / 1e18`, where `amountRaw` is in the asset's native decimals.
+     *      For 18-decimal assets, this degenerates to the familiar 18-decimal USD WAD price.
      */
     function getPriceByTicker(string memory ticker) public view returns (uint256) {
         address asset = getAssetByTicker(ticker);
@@ -85,20 +88,19 @@ contract OracleHelper is Ownable {
 
     /**
      * @notice Gets the total USD value of a list of assets by ticker
-     * @dev Oracle prices are pre-normalised to 18 decimals by ChainlinkOracle:
-     *      `uint256 decimalDelta = 18 - decimals; return price * (10 ** decimalDelta);`
-     *      Formula: value = sum((price_18d * amount_18d) / 1e18) = totalValue_18d
+     * @dev Venus oracle semantics: prices are scaled based on each asset's decimals such that:
+     *      `valueUsdWad = (price * amountRaw) / 1e18`, where `amountRaw` is in the asset's native decimals.
+     *      Formula: totalValueUsdWad = sum((price_scaled * amount_raw) / 1e18)
      *      Uses FullMath.mulDiv to prevent overflow and maintain precision.
      * @param tickers The list of asset tickers (e.g., ["ETH", "USDC"])
-     * @param amounts The list of amounts (in token units, 18 decimals)
+     * @param amounts The list of amounts in raw token units (native token decimals per asset)
      * @return totalValue The total USD value (18 decimals)
      */
     function getTotalValue(string[] memory tickers, uint256[] memory amounts) public view returns (uint256) {
         uint256 totalValue = 0;
         for (uint256 i = 0; i < tickers.length; i++) {
             uint256 price = getPriceByTicker(tickers[i]);
-            // Oracle returns price in 18 decimals. Amount is in 18 decimals.
-            // Multiply then divide by 1e18 to normalise result to 18 decimals.
+            // Venus semantics: amount is raw token units; dividing by 1e18 yields an 18-decimal USD WAD value.
             totalValue += FullMath.mulDiv(price, amounts[i], LiquidityUtils.ONE_WAD);
         }
         return totalValue;
@@ -106,9 +108,9 @@ contract OracleHelper is Ownable {
 
     /**
      * @notice Gets the USD price of an LCC's underlying asset
-     * @dev Price is normalised to 18 decimals by ChainlinkOracle internally.
+     * @dev Venus semantics: returned price is scaled for the underlying token's decimals.
      * @param lcc The address of the LCC token
-     * @return price The price in USD (18 decimals, e.g., 3200e18 = $3200)
+     * @return price The USD price scaled for token decimals (see `getPriceByTicker`)
      */
     function getPriceForLcc(address lcc) external view returns (uint256 price) {
         address underlying = OracleUtils.unifyNativeTokenAddress(ILCC(lcc).underlying());
@@ -117,18 +119,17 @@ contract OracleHelper is Ownable {
 
     /**
      * @notice Gets USD prices for an LCC pair (batched for gas efficiency)
-     * @dev Prices are normalised to 18 decimals by ChainlinkOracle internally:
-     *      `uint256 decimalDelta = 18 - decimals; return price * (10 ** decimalDelta);`
+     * @dev Venus semantics: returned prices are scaled for each underlying token's decimals.
      * @param lcc0 Address of the first LCC token
      * @param lcc1 Address of the second LCC token
-     * @return price0 USD price of lcc0's underlying (18 decimals)
-     * @return price1 USD price of lcc1's underlying (18 decimals)
+     * @return price0 USD price of lcc0's underlying, scaled for its decimals
+     * @return price1 USD price of lcc1's underlying, scaled for its decimals
      */
     function getPricesForLccPair(address lcc0, address lcc1) external view returns (uint256 price0, uint256 price1) {
         address underlying0 = OracleUtils.unifyNativeTokenAddress(ILCC(lcc0).underlying());
         address underlying1 = OracleUtils.unifyNativeTokenAddress(ILCC(lcc1).underlying());
 
-        // ResilientOracle -> ChainlinkOracle normalises prices to 18 decimals
+        // ResilientOracle returns prices scaled for token decimals (Venus semantics)
         price0 = oracle.getPrice(underlying0);
         price1 = oracle.getPrice(underlying1);
     }

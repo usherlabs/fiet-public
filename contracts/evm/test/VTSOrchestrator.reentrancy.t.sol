@@ -6,7 +6,6 @@ import "forge-std/Test.sol";
 import {VTSOrchestratorFixture} from "./base/VTSOrchestratorFixture.sol";
 import {VTSOrchestrator} from "../src/VTSOrchestrator.sol";
 import {LiquiditySignal} from "../src/types/Commit.sol";
-import {IMarketVault} from "../src/interfaces/IMarketVault.sol";
 import {IOracleHelper} from "../src/interfaces/IOracleHelper.sol";
 import {IVRLSettlementObserver} from "../src/interfaces/IVRLSettlementObserver.sol";
 import {BalanceDelta, toBalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
@@ -22,7 +21,7 @@ import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
  *
  * Reentrancy premise:
  * - `VTSCommitLib.commitSignal` / `renewSignal` / `checkpointWithCommitment` all call
- *     `signalManager.verifyLiquiditySignal(bytes,bool)`
+ *     `signalManager.verifyLiquiditySignal(address,bytes,bool)`
  * - We re-enter various `VTSOrchestrator` entrypoints during that external call.
  * - If the target entrypoint’s `nonReentrant` is removed by mutation, the re-entry succeeds and we revert with
  *   `Reentered()` to kill the mutant deterministically.
@@ -31,6 +30,7 @@ contract ReentrantSignalManager {
     error Reentered();
 
     address internal immutable target;
+    address internal immutable marketFactory;
 
     // 0 = none, 1 = commitSignal, 2 = extendGracePeriod, 3 = onMMSettle, 4 = onSeize, 5 = renewSignal, 6 = checkpoint
     uint8 internal kind;
@@ -48,8 +48,9 @@ contract ReentrantSignalManager {
     Currency internal lccCurrency0;
     Currency internal lccCurrency1;
 
-    constructor(address target_) {
+    constructor(address target_, address marketFactory_) {
         target = target_;
+        marketFactory = marketFactory_;
     }
 
     function armCommitSignal() external {
@@ -113,8 +114,9 @@ contract ReentrantSignalManager {
         lccCurrency1 = _lccCurrency1;
     }
 
-    // bytes overload (reverting version) used by VTSCommitLib
+    // sender-bound bytes overload (reverting version) used by VTSCommitLib
     function verifyLiquiditySignal(
+        address,
         bytes memory liquiditySignal,
         bool /*revertOnInvalid*/
     )
@@ -132,12 +134,18 @@ contract ReentrantSignalManager {
 
     function _reenter(uint8 k, bytes memory liquiditySignal) internal returns (bool ok, bytes memory data) {
         if (k == 1) {
-            return target.call(abi.encodeWithSelector(VTSOrchestrator.commitSignal.selector, liquiditySignal));
+            LiquiditySignal memory sig = abi.decode(liquiditySignal, (LiquiditySignal));
+            return target.call(
+                abi.encodeWithSelector(
+                    VTSOrchestrator.commitSignal.selector, marketFactory, sig.mmState.owner, liquiditySignal
+                )
+            );
         }
         if (k == 2) {
             return target.call(
                 abi.encodeWithSelector(
                     VTSOrchestrator.extendGracePeriod.selector,
+                    marketFactory,
                     poolKey,
                     commitId,
                     positionIndex,
@@ -151,14 +159,7 @@ contract ReentrantSignalManager {
             BalanceDelta amountDelta = toBalanceDelta(0, 0);
             return target.call(
                 abi.encodeWithSelector(
-                    VTSOrchestrator.onMMSettle.selector,
-                    IMarketVault(marketVault),
-                    commitId,
-                    positionIndex,
-                    lccCurrency0,
-                    lccCurrency1,
-                    amountDelta,
-                    false
+                    VTSOrchestrator.onMMSettle.selector, marketFactory, commitId, positionIndex, amountDelta, false
                 )
             );
         }
@@ -170,7 +171,8 @@ contract ReentrantSignalManager {
             LiquiditySignal memory sig = abi.decode(liquiditySignal, (LiquiditySignal));
             return target.call(
                 abi.encodeWithSelector(
-                    bytes4(keccak256("renewSignal(address,uint256,bytes)")),
+                    bytes4(keccak256("renewSignal(address,address,uint256,bytes)")),
+                    marketFactory,
                     sig.mmState.advancer,
                     commitId,
                     liquiditySignal
@@ -199,21 +201,21 @@ contract ReentrantSignalManager {
         return 0;
     }
 
+    function submitAuthNonce(address) external pure returns (uint256) {
+        return 0;
+    }
+
+    function submitter() external pure returns (address) {
+        return address(0xBEEF);
+    }
+
     function setVerifier(address) external {}
     function setSignalExpiryInSeconds(uint256) external {}
-
-    function verifyLiquiditySignal(bytes memory) external pure returns (bool, uint256) {
-        return (true, 3600);
-    }
-
-    function verifyLiquiditySignal(LiquiditySignal memory) external pure returns (bool, uint256) {
-        return (true, 3600);
-    }
 }
 
 contract VTSOrchestratorReentrancyTest is VTSOrchestratorFixture {
     function _etchReentrantSignalManager() internal returns (ReentrantSignalManager impl) {
-        impl = new ReentrantSignalManager(address(vtsOrchestrator));
+        impl = new ReentrantSignalManager(address(vtsOrchestrator), marketFactory);
         vm.etch(address(signalManager), address(impl).code);
     }
 
@@ -229,7 +231,10 @@ contract VTSOrchestratorReentrancyTest is VTSOrchestratorFixture {
 
         // Must run inside unlock context for commitSignal (onlyIfPoolManagerUnlocked).
         bytes memory out = unlockCaller.run(
-            address(vtsOrchestrator), abi.encodeWithSelector(VTSOrchestrator.commitSignal.selector, signalBytes)
+            address(vtsOrchestrator),
+            abi.encodeWithSelector(
+                VTSOrchestrator.commitSignal.selector, marketFactory, liquiditySignal.mmState.owner, signalBytes
+            )
         );
         uint256 commitId = abi.decode(out, (uint256));
         assertEq(commitId, 1, "outer commitSignal should still succeed and return first commitId");
@@ -243,7 +248,10 @@ contract VTSOrchestratorReentrancyTest is VTSOrchestratorFixture {
         // Create a commit without arming re-entry.
         uint256 commitId = abi.decode(
             unlockCaller.run(
-                address(vtsOrchestrator), abi.encodeWithSelector(VTSOrchestrator.commitSignal.selector, signalBytes)
+                address(vtsOrchestrator),
+                abi.encodeWithSelector(
+                    VTSOrchestrator.commitSignal.selector, marketFactory, liquiditySignal.mmState.owner, signalBytes
+                )
             ),
             (uint256)
         );
@@ -257,7 +265,8 @@ contract VTSOrchestratorReentrancyTest is VTSOrchestratorFixture {
         unlockCaller.run(
             address(vtsOrchestrator),
             abi.encodeWithSelector(
-                bytes4(keccak256("renewSignal(address,uint256,bytes)")),
+                bytes4(keccak256("renewSignal(address,address,uint256,bytes)")),
+                marketFactory,
                 liquiditySignal.mmState.advancer,
                 commitId,
                 signalBytes
@@ -304,7 +313,8 @@ contract VTSOrchestratorReentrancyTest is VTSOrchestratorFixture {
         unlockCaller.run(
             address(vtsOrchestrator),
             abi.encodeWithSelector(
-                bytes4(keccak256("renewSignal(address,uint256,bytes)")),
+                bytes4(keccak256("renewSignal(address,address,uint256,bytes)")),
+                marketFactory,
                 liquiditySignal.mmState.advancer,
                 commitId,
                 signalBytes
@@ -325,7 +335,8 @@ contract VTSOrchestratorReentrancyTest is VTSOrchestratorFixture {
         unlockCaller.run(
             address(vtsOrchestrator),
             abi.encodeWithSelector(
-                bytes4(keccak256("renewSignal(address,uint256,bytes)")),
+                bytes4(keccak256("renewSignal(address,address,uint256,bytes)")),
+                marketFactory,
                 liquiditySignal.mmState.advancer,
                 commitId,
                 signalBytes
@@ -360,7 +371,8 @@ contract VTSOrchestratorReentrancyTest is VTSOrchestratorFixture {
         unlockCaller.run(
             address(vtsOrchestrator),
             abi.encodeWithSelector(
-                bytes4(keccak256("renewSignal(address,uint256,bytes)")),
+                bytes4(keccak256("renewSignal(address,address,uint256,bytes)")),
+                marketFactory,
                 liquiditySignal.mmState.advancer,
                 commitId,
                 signalBytes

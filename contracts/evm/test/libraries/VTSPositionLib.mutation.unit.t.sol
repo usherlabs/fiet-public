@@ -93,16 +93,16 @@ contract VTSPositionLibMutationUnitTest is Test {
         TokenConfiguration memory tokenCfg = TokenConfiguration({
             gracePeriodTime: DEFAULT_GRACE_PERIOD,
             baseVTSRate: DEFAULT_BASE_VTS_RATE,
-            maxGracePeriodTime: DEFAULT_MAX_GRACE_PERIOD
+            maxGracePeriodTime: DEFAULT_MAX_GRACE_PERIOD,
+            unbackedCommitmentGraceBypassTime: 0,
+            unbackedCommitmentGraceBypassThreshold: 0
         });
         return MarketVTSConfiguration({
             token0: tokenCfg,
             token1: tokenCfg,
             coverageFeeShare: DEFAULT_COVERAGE_FEE_SHARE,
             minResidualUnits: DEFAULT_MIN_RESIDUAL_UNITS,
-            unbackedCommitmentGraceBypassBps: 500,
-            unbackedCommitmentGraceBypassThreshold0: 0,
-            unbackedCommitmentGraceBypassThreshold1: 0
+            unbackedCommitmentGraceBypassBps: 500
         });
     }
 
@@ -1493,7 +1493,7 @@ contract VTSPositionLibCISEExpose {
             isActive: true,
             salt: bytes32(0),
             checkpoint: RFSCheckpoint({
-                timeOfLastTransition: block.timestamp, isOpen: false, gracePeriodExtension0: 0, gracePeriodExtension1: 0
+                openMask: 0, openSince0: 0, openSince1: 0, gracePeriodExtension0: 0, gracePeriodExtension1: 0
             })
         });
     }
@@ -1556,7 +1556,7 @@ contract VTSPositionLibDICEExpose {
             isActive: true,
             salt: bytes32(0),
             checkpoint: RFSCheckpoint({
-                timeOfLastTransition: block.timestamp, isOpen: false, gracePeriodExtension0: 0, gracePeriodExtension1: 0
+                openMask: 0, openSince0: 0, openSince1: 0, gracePeriodExtension0: 0, gracePeriodExtension1: 0
             })
         });
     }

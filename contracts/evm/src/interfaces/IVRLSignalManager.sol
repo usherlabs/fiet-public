@@ -15,17 +15,26 @@ interface IVRLSignalManager {
     function getVerifier() external view returns (address);
     function signalExpiryInSeconds() external view returns (uint256);
     function mmNonce(address) external view returns (uint256);
+    function submitAuthNonce(address) external view returns (uint256);
+    function submitter() external view returns (address);
 
     // External functions
     function setVerifier(address _newVerifier) external;
     function setSignalExpiryInSeconds(uint256 _signalExpiryInSeconds) external;
 
-    // signal overload to match interface (non-reverting version)
-    function verifyLiquiditySignal(LiquiditySignal memory signal) external returns (bool, uint256);
+    // sender-bound bytes verification (reverting option)
+    function verifyLiquiditySignal(address sender, bytes memory liquiditySignal, bool revertOnInvalid)
+        external
+        returns (bool, uint256);
 
-    // bytes overload to match interface (non-reverting version)
-    function verifyLiquiditySignal(bytes memory liquiditySignal) external returns (bool, uint256);
-
-    // bytes overload to match interface (reverting version)
-    function verifyLiquiditySignal(bytes memory liquiditySignal, bool revertOnInvalid) external returns (bool, uint256);
+    // sender + commit-bound bytes overload with EIP-712 relayer authorisation (reverting version)
+    function verifyLiquiditySignalRelayed(
+        address sender,
+        uint256 commitId,
+        bytes memory liquiditySignal,
+        uint256 deadline,
+        uint256 authNonce,
+        bytes memory authSig,
+        bool revertOnInvalid
+    ) external returns (bool, uint256);
 }

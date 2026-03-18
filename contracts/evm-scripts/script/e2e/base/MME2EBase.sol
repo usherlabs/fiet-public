@@ -18,19 +18,75 @@ import {Token} from "../../setup/MockERC20.s.sol";
 import {LiquiditySignal} from "src/types/Commit.sol";
 import {MarketMaker} from "src/libraries/MarketMaker.sol";
 import {MessageHashUtils} from "@openzeppelin/contracts/utils/cryptography/MessageHashUtils.sol";
+import {ActionConstants} from "v4-periphery/src/libraries/ActionConstants.sol";
 
 import {ILCC} from "src/interfaces/ILCC.sol";
 import {MMPositionManager} from "src/MMPositionManager.sol";
-import {MMActionAdapter} from "evm-test/utils/MMActionAdapter.sol";
 import {IVTSOrchestrator} from "src/interfaces/IVTSOrchestrator.sol";
 import {LiquidityUtils} from "src/libraries/LiquidityUtils.sol";
 import {MarketVTSConfiguration} from "src/types/VTS.sol";
 import {ILiquidityHub} from "src/interfaces/ILiquidityHub.sol";
+import {MMActions} from "src/libraries/MMActions.sol";
 
 abstract contract MME2EBase is E2EBase {
     using MarketMaker for MarketMaker.State;
     using BalanceDeltaLibrary for BalanceDelta;
     using StateLibrary for IPoolManager;
+
+    struct UnwrapSnapshot {
+        uint256 liquid;
+        uint256 queue;
+        uint256 lcc;
+        uint256 underlying;
+    }
+
+    function _assertUnwrapInvariant(
+        uint256 lccSpent,
+        uint256 underlyingDelta,
+        uint256 queueBefore,
+        uint256 queueAfter,
+        uint256 liquidBalanceBefore
+    ) internal pure returns (uint256 predictedAnnulledQueue) {
+        uint256 transferableWithoutQueue = liquidBalanceBefore > queueBefore ? (liquidBalanceBefore - queueBefore) : 0;
+        if (lccSpent > transferableWithoutQueue) {
+            uint256 bleedIntoQueue = lccSpent - transferableWithoutQueue;
+            predictedAnnulledQueue = bleedIntoQueue > queueBefore ? queueBefore : bleedIntoQueue;
+        }
+
+        require(
+            underlyingDelta + queueAfter == lccSpent + queueBefore - predictedAnnulledQueue, "unwrap: redemption mismatch"
+        );
+    }
+
+    function _runUnwrapAction(
+        StandaloneMarket memory m,
+        uint256 mmPk,
+        address lcc,
+        uint256 approveAmount,
+        uint256 unwrapAmount
+    ) internal {
+        address mm = vm.addr(mmPk);
+        vm.startBroadcast(mmPk);
+        {
+            MMPositionManager mmpm = MMPositionManager(payable(m.stack.contracts.mmPositionManager));
+
+            // UNWRAP_LCC(payerIsUser=true) pulls LCC from the MM via transferFrom.
+            // Approve exactly what we currently hold.
+            IERC20(lcc).approve(address(mmpm), approveAmount);
+
+            bytes memory actions = abi.encodePacked(bytes1(uint8(MMActions.UNWRAP_LCC)));
+            bytes[] memory params = new bytes[](1);
+            params[0] = abi.encode(lcc, unwrapAmount, mm, true);
+            _executeMMActions(mmpm, actions, params, block.timestamp + 3600);
+        }
+        vm.stopBroadcast();
+    }
+
+    function _executeMMActions(MMPositionManager mmpm, bytes memory actions, bytes[] memory params, uint256 deadline)
+        internal
+    {
+        mmpm.modifyLiquidities(abi.encode(actions, params), deadline);
+    }
 
     /// @dev Fee “poke”: no-op increase (0) to touch the position, then TAKE both pool currencies to wallet.
     function _pokePosition(StandaloneMarket memory m, uint256 mmPk, uint256 commitId)
@@ -50,11 +106,14 @@ abstract contract MME2EBase is E2EBase {
         {
             // IMPORTANT: The unlock batch must end with no residual deltas, so we TAKE both currencies after touching.
             MMPositionManager mmpm = MMPositionManager(payable(m.stack.contracts.mmPositionManager));
-            MMActionAdapter.PreparedAction[] memory acts = new MMActionAdapter.PreparedAction[](3);
-            acts[0] = MMActionAdapter.prepareIncrease(corePoolKey, commitId, 0, 0);
-            acts[1] = MMActionAdapter.prepareTake(corePoolKey.currency0, mm, 0);
-            acts[2] = MMActionAdapter.prepareTake(corePoolKey.currency1, mm, 0);
-            MMActionAdapter.executeWithUnlock(mmpm, acts, block.timestamp + 3600);
+            bytes memory actions = abi.encodePacked(
+                bytes1(uint8(MMActions.INCREASE_LIQUIDITY)), bytes1(uint8(MMActions.TAKE)), bytes1(uint8(MMActions.TAKE))
+            );
+            bytes[] memory params = new bytes[](3);
+            params[0] = abi.encode(corePoolKey, commitId, 0, 0);
+            params[1] = abi.encode(corePoolKey.currency0, mm, 0);
+            params[2] = abi.encode(corePoolKey.currency1, mm, 0);
+            _executeMMActions(mmpm, actions, params, block.timestamp + 3600);
         }
         vm.stopBroadcast();
 
@@ -81,9 +140,7 @@ abstract contract MME2EBase is E2EBase {
         vm.startBroadcast(mmPk);
         {
             MMPositionManager mmpm = MMPositionManager(payable(m.stack.contracts.mmPositionManager));
-            MMActionAdapter.PreparedAction[] memory acts = new MMActionAdapter.PreparedAction[](1);
-            acts[0] = MMActionAdapter.prepareCheckpoint(commitId, positionIndex, liquiditySignal);
-            MMActionAdapter.executeWithUnlock(mmpm, acts, block.timestamp + 3600);
+            mmpm.checkpoint(commitId, positionIndex, liquiditySignal.length > 0);
         }
         vm.stopBroadcast();
     }
@@ -167,9 +224,10 @@ abstract contract MME2EBase is E2EBase {
         IERC20(m.underlying1).approve(address(mmpm), uint256(uint128(amount1)));
 
         PoolKey memory key = _corePoolKey(m);
-        MMActionAdapter.PreparedAction[] memory acts = new MMActionAdapter.PreparedAction[](1);
-        acts[0] = MMActionAdapter.prepareSettle(key, commitId, 0, -amount0, -amount1, false);
-        MMActionAdapter.executeWithUnlock(mmpm, acts, block.timestamp + 3600);
+        bytes memory actions = abi.encodePacked(bytes1(uint8(MMActions.SETTLE_POSITION)));
+        bytes[] memory params = new bytes[](1);
+        params[0] = abi.encode(key, commitId, 0, -amount0, -amount1, false);
+        _executeMMActions(mmpm, actions, params, block.timestamp + 3600);
         vm.stopBroadcast();
     }
 
@@ -177,6 +235,48 @@ abstract contract MME2EBase is E2EBase {
     function _logTick(string memory label, PoolKey memory key) internal view {
         (, int24 tick,,) = IPoolManager(config.poolManager).getSlot0(key.toId());
         console.log(label, tick);
+    }
+
+    function _baseSettlementAmounts(
+        address vtsOrchestratorAddr,
+        PoolKey memory key,
+        int24 tickLower,
+        int24 tickUpper,
+        uint128 liq
+    )
+        internal
+        view
+        returns (uint256 settle0, uint256 settle1)
+    {
+        IVTSOrchestrator vts = IVTSOrchestrator(vtsOrchestratorAddr);
+        MarketVTSConfiguration memory vtsCfg = vts.getMarketVTSConfiguration(key.toId());
+        (uint256 c0, uint256 c1) = LiquidityUtils.calculateCommitmentMaxima(tickLower, tickUpper, liq);
+        (settle0, settle1) =
+            LiquidityUtils.getBaseSettlementAmounts(c0, c1, vtsCfg.token0.baseVTSRate, vtsCfg.token1.baseVTSRate);
+    }
+
+    function _executeCreatePositionBatch(
+        MMPositionManager mmpm,
+        PoolKey memory key,
+        uint256 commitId,
+        int24 tickLower,
+        int24 tickUpper,
+        uint128 liq,
+        bytes memory liquiditySignalBytes,
+        uint256 settle0,
+        uint256 settle1
+    ) internal {
+        bytes memory actions = abi.encodePacked(
+            bytes1(uint8(MMActions.COMMIT_SIGNAL)),
+            bytes1(uint8(MMActions.MINT_POSITION)),
+            bytes1(uint8(MMActions.SETTLE_POSITION))
+        );
+        bytes[] memory params = new bytes[](3);
+        params[0] = abi.encode(liquiditySignalBytes, ActionConstants.MSG_SENDER, bytes(""));
+        params[1] = abi.encode(key, commitId, tickLower, tickUpper, liq);
+        params[2] =
+            abi.encode(key, commitId, 0, -int128(int256(settle0)), -int128(int256(settle1)), false);
+        _executeMMActions(mmpm, actions, params, block.timestamp + 3600);
     }
 
     /// @dev Create a new position for a market maker
@@ -187,15 +287,11 @@ abstract contract MME2EBase is E2EBase {
         address mm = vm.addr(mmPk);
 
         MMPositionManager mmpm = MMPositionManager(payable(m.stack.contracts.mmPositionManager));
-        IVTSOrchestrator vts = IVTSOrchestrator(m.stack.contracts.vtsOrchestrator);
         PoolKey memory key = _corePoolKey(m);
-        MarketVTSConfiguration memory vtsCfg = vts.getMarketVTSConfiguration(key.toId());
 
         bytes memory liquiditySignalBytes = _buildSingleLeafLiquiditySignal(mmPk, 1);
-
-        (uint256 c0, uint256 c1) = LiquidityUtils.calculateCommitmentMaxima(tickLower, tickUpper, liq);
         (uint256 settle0, uint256 settle1) =
-            LiquidityUtils.getBaseSettlementAmounts(c0, c1, vtsCfg.token0.baseVTSRate, vtsCfg.token1.baseVTSRate);
+            _baseSettlementAmounts(m.stack.contracts.vtsOrchestrator, key, tickLower, tickUpper, liq);
 
         commitId = mmpm.nextTokenId();
 
@@ -205,18 +301,9 @@ abstract contract MME2EBase is E2EBase {
         IERC20(m.underlying0).approve(address(mmpm), settle0);
         IERC20(m.underlying1).approve(address(mmpm), settle1);
 
-        MMActionAdapter.PreparedAction[] memory acts = new MMActionAdapter.PreparedAction[](3);
-        acts[0] = MMActionAdapter.prepareCommit(liquiditySignalBytes);
-        acts[1] = MMActionAdapter.prepareMint(key, commitId, tickLower, tickUpper, liq);
-        acts[2] = MMActionAdapter.prepareSettle(
-            key,
-            commitId,
-            0,
-            -int128(int256(settle0)),
-            -int128(int256(settle1)),
-            false // usePositionManagerBalance
+        _executeCreatePositionBatch(
+            mmpm, key, commitId, tickLower, tickUpper, liq, liquiditySignalBytes, settle0, settle1
         );
-        MMActionAdapter.executeWithUnlock(mmpm, acts, block.timestamp + 3600);
         vm.stopBroadcast();
 
         require(mmpm.ownerOf(commitId) == mm, "mmpm: owner mismatch");
@@ -263,16 +350,10 @@ abstract contract MME2EBase is E2EBase {
                 IERC20(m.underlying1).approve(address(mmpm), fund1);
             }
 
-            MMActionAdapter.PreparedAction[] memory acts = new MMActionAdapter.PreparedAction[](1);
-            acts[0] = MMActionAdapter.prepareSettle(
-                corePoolKey,
-                commitId,
-                0,
-                settle0,
-                settle1,
-                false // usePositionManagerBalance
-            );
-            MMActionAdapter.executeWithUnlock(mmpm, acts, block.timestamp + 3600);
+            bytes memory actions = abi.encodePacked(bytes1(uint8(MMActions.SETTLE_POSITION)));
+            bytes[] memory params = new bytes[](1);
+            params[0] = abi.encode(corePoolKey, commitId, 0, settle0, settle1, false);
+            _executeMMActions(mmpm, actions, params, block.timestamp + 3600);
         }
         vm.stopBroadcast();
 
@@ -287,13 +368,20 @@ abstract contract MME2EBase is E2EBase {
         vm.startBroadcast(mmPk);
         {
             MMPositionManager mmpm = MMPositionManager(payable(m.stack.contracts.mmPositionManager));
-            MMActionAdapter.PreparedAction[] memory acts = new MMActionAdapter.PreparedAction[](5);
-            acts[0] = MMActionAdapter.prepareBurn(corePoolKey, commitId, 0);
-            acts[1] = MMActionAdapter.prepareSettleFromDeltas(corePoolKey, commitId, 0, true, true);
-            acts[2] = MMActionAdapter.prepareDecommit(commitId);
-            acts[3] = MMActionAdapter.prepareTake(corePoolKey.currency0, mm, 0);
-            acts[4] = MMActionAdapter.prepareTake(corePoolKey.currency1, mm, 0);
-            MMActionAdapter.executeWithUnlock(mmpm, acts, block.timestamp + 3600);
+            bytes memory actions = abi.encodePacked(
+                bytes1(uint8(MMActions.BURN_POSITION)),
+                bytes1(uint8(MMActions.SETTLE_POSITION_FROM_DELTAS)),
+                bytes1(uint8(MMActions.DECOMMIT_SIGNAL)),
+                bytes1(uint8(MMActions.TAKE)),
+                bytes1(uint8(MMActions.TAKE))
+            );
+            bytes[] memory params = new bytes[](5);
+            params[0] = abi.encode(corePoolKey, commitId, 0);
+            params[1] = abi.encode(corePoolKey, commitId, 0, true, true);
+            params[2] = abi.encode(commitId);
+            params[3] = abi.encode(corePoolKey.currency0, mm, 0);
+            params[4] = abi.encode(corePoolKey.currency1, mm, 0);
+            _executeMMActions(mmpm, actions, params, block.timestamp + 3600);
         }
         vm.stopBroadcast();
 
@@ -306,39 +394,38 @@ abstract contract MME2EBase is E2EBase {
         internal
         returns (uint256 underlyingDelta)
     {
-        address mm = vm.addr(mmPk);
+        address owner = vm.addr(mmPk);
+        ILiquidityHub hub = ILiquidityHub(m.stack.contracts.liquidityHub);
         address underlying = ILCC(lcc).underlying();
 
-        uint256 lccBefore = IERC20(lcc).balanceOf(mm);
-        uint256 underlyingBefore = IERC20(underlying).balanceOf(mm);
-
-        vm.startBroadcast(mmPk);
+        UnwrapSnapshot memory before;
         {
-            MMPositionManager mmpm = MMPositionManager(payable(m.stack.contracts.mmPositionManager));
-
-            // UNWRAP_LCC(payerIsUser=true) pulls LCC from the MM via transferFrom.
-            // Approve exactly what we currently hold.
-            IERC20(lcc).approve(address(mmpm), lccBefore);
-
-            MMActionAdapter.PreparedAction[] memory acts = new MMActionAdapter.PreparedAction[](1);
-            acts[0] = MMActionAdapter.prepareUnwrapLcc(lcc, unwrapAmount, mm, true);
-            MMActionAdapter.executeWithUnlock(mmpm, acts, block.timestamp + 3600);
+            (uint256 wrappedBefore, uint256 marketDerivedBefore) = ILCC(lcc).balancesOf(owner);
+            before.liquid = wrappedBefore + marketDerivedBefore;
+            before.queue = hub.settleQueue(lcc, owner);
+            before.lcc = IERC20(lcc).balanceOf(owner);
+            before.underlying = IERC20(underlying).balanceOf(owner);
         }
-        vm.stopBroadcast();
+        _runUnwrapAction(m, mmPk, lcc, before.lcc, unwrapAmount);
 
-        uint256 lccAfter = IERC20(lcc).balanceOf(mm);
-        uint256 underlyingAfter = IERC20(underlying).balanceOf(mm);
+        UnwrapSnapshot memory afterState;
+        afterState.queue = hub.settleQueue(lcc, owner);
+        afterState.lcc = IERC20(lcc).balanceOf(owner);
+        afterState.underlying = IERC20(underlying).balanceOf(owner);
 
-        uint256 lccSpent = lccBefore - lccAfter;
-        underlyingDelta = underlyingAfter - underlyingBefore;
+        uint256 lccSpent = before.lcc - afterState.lcc;
+        underlyingDelta = afterState.underlying - before.underlying;
 
         console.log("unwrap spent lcc:", lccSpent);
         console.log("unwrap underlying received:", underlyingDelta);
+        console.log("unwrap queue after:", afterState.queue);
 
-        // Assert the balance of the underlying is equal to the amount of LCC spent
-        // i.e assert that we were able to unwrap all the LCC's we wanted to unwrap
+        // Stronger invariant predicated on existing state (queue may already exist).
         if (assertBalance) {
-            require(underlyingDelta == lccSpent, "unwrap: underlying != unwrap amount");
+            uint256 predictedAnnulledQueue =
+                _assertUnwrapInvariant(lccSpent, underlyingDelta, before.queue, afterState.queue, before.liquid);
+            console.log("unwrap queue before:", before.queue);
+            console.log("unwrap predicted queue annulled:", predictedAnnulledQueue);
         }
     }
 
@@ -392,7 +479,9 @@ abstract contract MME2EBase is E2EBase {
         st.sourceState = "e2e.sourceState";
         st.prover = "e2e.prover";
         st.nonce = "e2e.nonce";
-        st.advancer = address(0);
+        // MMPositionManager forwards locker as hook-data sender on MM ops;
+        // keep advancer aligned with the E2E MM actor to satisfy sender guards.
+        st.advancer = mm;
         st.reserves = new MarketMaker.Reserve[](2);
         st.reserves[0] = MarketMaker.Reserve({asset: "BTC", amount: 1e20});
         st.reserves[1] = MarketMaker.Reserve({asset: "USDT", amount: 5e18});

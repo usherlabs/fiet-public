@@ -187,13 +187,23 @@ abstract contract MarketVault is IMarketVault, ImmutableState, ImmutableMarketSt
     /**
      * @dev Settle underlying asset to the vault from the Hub
      * @notice For ERC20: Hub approves MarketVault and we pull from Hub. For native: Hub transfers ETH to MarketVault and we settle from self.
+     *         This path is intentionally best-effort for direct-core reactions: reserve competition must not force swap/LP reverts.
+     *         Settlement is capped to currently available Hub reserve for this LCC's underlying.
      */
     function _settleUnderlyingToVaultFromHub(ILCC lccToken, uint256 amount) internal {
-        liquidityHub.prepareSettle(address(lccToken), amount);
+        (uint256 available,) = liquidityHub.reserveOfUnderlyingTuple(address(lccToken));
+        uint256 toSettle = Math.min(amount, available);
+        if (toSettle == 0) {
+            return;
+        }
+
+        liquidityHub.prepareSettle(address(lccToken), toSettle);
 
         Currency uaCurrency = Currency.wrap(lccToken.underlying());
-        // CurrencySettler handles transfer of native ETH from address(this), assuming LiquidityHub conducts native transfer to this first.
-        _settleUnderlyingToVaultFromSender(uaCurrency, address(liquidityHub), amount);
+        // For native ETH, LiquidityHub transfers ETH to this vault first, so settle from self.
+        // For ERC20, pull from LiquidityHub after prepareSettle approval.
+        address payer = uaCurrency.isAddressZero() ? address(this) : address(liquidityHub);
+        _settleUnderlyingToVaultFromSender(uaCurrency, payer, toSettle);
     }
 
     /**
@@ -264,16 +274,17 @@ abstract contract MarketVault is IMarketVault, ImmutableState, ImmutableMarketSt
      * @param lccToken The LCC token contract to settle obligations for
      */
     function _settleObligationsForLCC(ILCC lccToken) internal {
-        // Check how much total pending settlement is queued for this LCC
-        uint256 totalPendingSettlement = liquidityHub.totalQueued(address(lccToken));
-        if (totalPendingSettlement == 0) return; // No pending settlements to fulfill
+        // Compute only the remaining unfunded shortfall for this underlying.
+        // This avoids repeatedly draining vault liquidity when the Hub reserve already covers queued debt.
+        uint256 unfunded = liquidityHub.unfundedQueueOfUnderlying(address(lccToken));
+        if (unfunded == 0) return;
 
         // Check how much underlying liquidity is available in the vault for this LCC's underlying asset
         Currency uaCurrency = Currency.wrap(lccToken.underlying());
         uint256 availableLiquidity = inMarketBalanceOf(uaCurrency);
 
         // Calculate how much we can actually settle (limited by available liquidity)
-        uint256 amountToSettle = Math.min(totalPendingSettlement, availableLiquidity);
+        uint256 amountToSettle = Math.min(unfunded, availableLiquidity);
         if (amountToSettle == 0) return; // No liquidity available to fulfill obligations
 
         // Transfer liquidity from vault to Hub and emit event

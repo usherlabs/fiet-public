@@ -12,13 +12,13 @@ import {ModifyLiquidityParams, SwapParams} from "@uniswap/v4-core/src/types/Pool
 import {RFSCheckpoint} from "../types/Checkpoint.sol";
 import {IPausableVTS} from "./IPausableVTS.sol";
 import {IVTSCurrencyDelta} from "./IVTSCurrencyDelta.sol";
-import {IMarketVault} from "./IMarketVault.sol";
+import {IVTSAdmin} from "./IVTSAdmin.sol";
+import {IMarketFactory} from "./IMarketFactory.sol";
 
-interface IVTSOrchestrator is IPausableVTS, IVTSCurrencyDelta {
+interface IVTSOrchestrator is IPausableVTS, IVTSCurrencyDelta, IVTSAdmin {
     // Events
     event Checkpointed(uint256 commitId, uint256 positionIndex, RFSCheckpoint checkpoint, bool withCommitment);
     event GracePeriodExtended(uint256 commitId, uint256 positionIndex, uint8 tokenIndex, RFSCheckpoint checkpoint);
-    event VTSConfigSet(bytes32 indexed marketId, MarketVTSConfiguration newConfig);
     event PositionSettled(
         uint256 indexed commitId,
         uint256 indexed positionIndex,
@@ -134,11 +134,6 @@ interface IVTSOrchestrator is IPausableVTS, IVTSCurrencyDelta {
     /// @param vtsConfiguration The VTS configuration
     function initPool(PoolKey memory corePoolKey, MarketVTSConfiguration memory vtsConfiguration) external;
 
-    /// @notice Set the market VTS configuration
-    /// @param corePoolId The core pool ID
-    /// @param vtsConfiguration The VTS configuration to set
-    function setMarketVTSConfiguration(PoolId corePoolId, MarketVTSConfiguration memory vtsConfiguration) external;
-
     /// @notice Get the market VTS configuration
     /// @param corePoolId The core pool ID
     /// @return The MarketVTSConfiguration struct
@@ -225,9 +220,20 @@ interface IVTSOrchestrator is IPausableVTS, IVTSCurrencyDelta {
 
     // MMPositionManager Functions
     /// @notice Commit a liquidity signal to the VTS state
+    /// @param sender The effective caller (locker) for commit authorisation
     /// @param liquiditySignal The liquidity signal to commit
     /// @return commitId The commit identifier for the committed signal
-    function commitSignal(bytes memory liquiditySignal) external returns (uint256 commitId);
+    function commitSignal(IMarketFactory factory, address sender, bytes memory liquiditySignal)
+        external
+        returns (uint256 commitId);
+    /// @notice Commit a liquidity signal using sender-signed EIP-712 relayer authorisation
+    function commitSignalRelayed(
+        address sender,
+        bytes memory liquiditySignal,
+        uint256 deadline,
+        uint256 authNonce,
+        bytes memory authSig
+    ) external returns (uint256 commitId);
     /// @notice Extend the grace period for a position
     /// @param poolKey The pool key for the position
     /// @param commitId The commit identifier
@@ -236,6 +242,7 @@ interface IVTSOrchestrator is IPausableVTS, IVTSCurrencyDelta {
     /// @param verifierIndex The verifier index
     /// @param settlementProof The settlement proof
     function extendGracePeriod(
+        IMarketFactory factory,
         PoolKey memory poolKey,
         uint256 commitId,
         uint256 positionIndex,
@@ -246,22 +253,18 @@ interface IVTSOrchestrator is IPausableVTS, IVTSCurrencyDelta {
 
     /// @notice Settle a market maker position
     /// @dev Called by MMPositionManager to settle a position, handling both normal settlement and seizure
-    /// @param marketVault The market vault contract
+    /// @param factory The market factory namespace for caller-bound validation
     /// @param commitId The commit identifier
     /// @param positionIndex The position index within the commit
-    /// @param currency0 The currency0 token
-    /// @param currency1 The currency1 token
     /// @param amountDelta The amount delta for settlement
     /// @param isSeizing Whether the position is being seized
     /// @return settlementDelta The settlement balance delta
     /// @return rfsOpen Whether the RFS is open after settlement
     /// @return seizedLiquidityUnits The amount of liquidity units seized (0 if not seizing)
     function onMMSettle(
-        IMarketVault marketVault,
+        IMarketFactory factory,
         uint256 commitId,
         uint256 positionIndex,
-        Currency currency0,
-        Currency currency1,
         BalanceDelta amountDelta,
         bool isSeizing
     ) external returns (BalanceDelta settlementDelta, bool rfsOpen, uint256 seizedLiquidityUnits);
@@ -276,7 +279,17 @@ interface IVTSOrchestrator is IPausableVTS, IVTSCurrencyDelta {
     /// @param sender The effective caller (locker) used for advancer validation
     /// @param commitId The commit identifier to renew
     /// @param liquiditySignal The new liquidity signal
-    function renewSignal(address sender, uint256 commitId, bytes memory liquiditySignal) external;
+    function renewSignal(IMarketFactory factory, address sender, uint256 commitId, bytes memory liquiditySignal)
+        external;
+    /// @notice Renew a liquidity signal using sender-signed EIP-712 relayer authorisation
+    function renewSignalRelayed(
+        address sender,
+        uint256 commitId,
+        bytes memory liquiditySignal,
+        uint256 deadline,
+        uint256 authNonce,
+        bytes memory authSig
+    ) external;
 
     /// @notice Checkpoint a position and optionally run commitment backing checks
     /// @param commitId The commit identifier

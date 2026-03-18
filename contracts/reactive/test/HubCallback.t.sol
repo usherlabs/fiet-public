@@ -146,4 +146,41 @@ contract HubCallbackTest is Test {
         emit HubCallback.InvalidCallbackSender(wrongCallerRVMId);
         callback.triggerMoreLiquidityAvailable(wrongCallerRVMId, lcc, amountAvailable);
     }
+
+    function test_recordSettlementAnnulledEmitsNormalisedEvent() public {
+        callback.setSpokeForRecipient(recipient, spoke);
+
+        vm.prank(callbackProxy);
+        vm.expectEmit(true, true, false, true, address(callback));
+        emit HubCallback.SettlementAnnulledReported(recipient, lcc, 9);
+        callback.recordSettlementAnnulled(spoke, lcc, recipient, 9);
+    }
+
+    function test_recordSettlementProcessedEmitsNormalisedEvent() public {
+        callback.setSpokeForRecipient(recipient, spoke);
+
+        vm.prank(callbackProxy);
+        vm.expectEmit(true, true, false, true, address(callback));
+        emit HubCallback.SettlementProcessedReported(recipient, lcc, 11);
+        callback.recordSettlementProcessed(spoke, lcc, recipient, 11);
+    }
+
+    function test_recordSettlementFailedEmitsNormalisedEvent() public {
+        callback.setSpokeForRecipient(recipient, spoke);
+
+        vm.prank(callbackProxy);
+        vm.expectEmit(true, true, false, true, address(callback));
+        emit HubCallback.SettlementFailedReported(recipient, lcc, 7);
+        callback.recordSettlementFailed(spoke, lcc, recipient, 7);
+    }
+
+    function test_recordSettlementAnnulledRejectsUnexpectedSpoke() public {
+        callback.setSpokeForRecipient(recipient, spoke);
+        address wrongSpoke = makeAddr("wrongSpoke");
+
+        vm.prank(callbackProxy);
+        vm.expectEmit(true, true, true, true, address(callback));
+        emit HubCallback.SpokeNotForRecipient(recipient, spoke, wrongSpoke);
+        callback.recordSettlementAnnulled(wrongSpoke, lcc, recipient, 1);
+    }
 }

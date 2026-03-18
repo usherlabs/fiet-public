@@ -20,16 +20,28 @@ import {MMCalldataDecoder} from "../../src/libraries/MMCalldataDecoder.sol";
 contract MMCalldataDecoderLengthsHarness {
     using MMCalldataDecoder for bytes;
 
-    function decodeCommitSignalParams(bytes calldata params) external pure returns (bytes memory sig, address owner) {
+    function decodeCommitSignalParams(bytes calldata params)
+        external
+        pure
+        returns (bytes memory sig, address owner, bytes memory relay)
+    {
         bytes calldata s;
-        (s, owner) = params.decodeCommitSignalParams();
+        bytes calldata r;
+        (s, owner, r) = params.decodeCommitSignalParams();
         sig = s;
+        relay = r;
     }
 
-    function decodeTokenIdAndBytes(bytes calldata params) external pure returns (uint256 tokenId, bytes memory data) {
+    function decodeTokenIdAndBytes(bytes calldata params)
+        external
+        pure
+        returns (uint256 tokenId, bytes memory data, bytes memory relay)
+    {
         bytes calldata cd;
-        (tokenId, cd) = params.decodeTokenIdAndBytes();
+        bytes calldata r;
+        (tokenId, cd, r) = params.decodeTokenIdAndBytes();
         data = cd;
+        relay = r;
     }
 
     function decodeCheckpointParams(bytes calldata params)
@@ -49,22 +61,23 @@ contract MMCalldataDecoderLengthsTest is Test {
     }
 
     function test_decodeCommitSignalParams_revertsOnTruncatedTailLengthWord() public {
-        // ABI: (bytes,address). Minimum valid length (even for empty bytes) is 0x60.
-        bytes memory headOnly = new bytes(0x40);
+        // ABI: (bytes,address,bytes). Minimum valid length (even for empty bytes fields) is 0xa0.
+        bytes memory headOnly = new bytes(0x60);
         vm.expectRevert(MMCalldataDecoder.SliceOutOfBounds.selector);
         h.decodeCommitSignalParams(headOnly);
     }
 
     function test_decodeCommitSignalParams_allowsEmptyBytesWithProperAbiTail() public view {
-        bytes memory params = abi.encode(bytes(""), address(0xBEEF));
-        (bytes memory sig, address owner) = h.decodeCommitSignalParams(params);
+        bytes memory params = abi.encode(bytes(""), address(0xBEEF), bytes(""));
+        (bytes memory sig, address owner, bytes memory relay) = h.decodeCommitSignalParams(params);
         assertEq(sig.length, 0);
+        assertEq(relay.length, 0);
         assertEq(owner, address(0xBEEF));
     }
 
     function test_decodeTokenIdAndBytes_revertsOnTruncatedTailLengthWord() public {
-        // ABI: (uint256,bytes). Minimum valid length (even for empty bytes) is 0x60.
-        bytes memory headOnly = new bytes(0x40);
+        // ABI: (uint256,bytes,bytes). Minimum valid length (even for empty bytes fields) is 0xa0.
+        bytes memory headOnly = new bytes(0x60);
         vm.expectRevert(MMCalldataDecoder.SliceOutOfBounds.selector);
         h.decodeTokenIdAndBytes(headOnly);
     }

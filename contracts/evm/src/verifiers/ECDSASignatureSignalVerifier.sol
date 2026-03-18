@@ -25,7 +25,6 @@ contract ECDSASignatureSignalVerifier is ISignalVerifier {
      * @param nonce The nonce of the market maker
      * @param rootStateHash The root state hash of the market maker
      * @param rootStateHashSignature The signature of the root state hash
-     * @param mmStateHashSignature The signature of the market maker state
      * @param mmStateData The market maker state data
      * @param merkleProof The merkle proof of the market maker state
      * @return True if the proof is valid, false otherwise
@@ -34,46 +33,21 @@ contract ECDSASignatureSignalVerifier is ISignalVerifier {
         uint256 nonce,
         bytes32 rootStateHash,
         bytes calldata rootStateHashSignature,
-        bytes calldata mmStateHashSignature,
         MarketMaker.State calldata mmStateData,
         bytes32[] calldata merkleProof
     ) external view returns (bool) {
-        address caller = address(msg.sender);
-        bytes32 mmStateHash = mmStateData.toLeafHash();
-        bool isCallerAuthorized = false;
-        // if signature is provided, validate it against mmstate 'owner' field
-        // if it is not, verify the msg.sender is the mmstate 'owner' field i.e owner is caller
-        if (mmStateHashSignature.length == 0) {
-            // if the caller is valid, set isCallerAuthorized to true
-            isCallerAuthorized = caller == mmStateData.owner;
-        } else {
-            // if the signature is valid, set isCallerAuthorized to true
-            // generate the message hash to sign from the leafhash and the nonce
-            address recovered =
-                MessageHashUtils.toEthSignedMessageHash(mmStateData.toLeafHash()).recover(mmStateHashSignature);
-            isCallerAuthorized = recovered == mmStateData.owner;
-        }
-
-        // make sure the caller is authorized to perform this action
-        if (!isCallerAuthorized) {
-            return false;
-        }
-
         // verify the merkle proof
-        bool isProofValid = MerkleProofLib.verify(merkleProof, rootStateHash, mmStateHash);
-        if (!isProofValid) {
+        if (!MerkleProofLib.verify(merkleProof, rootStateHash, mmStateData.toLeafHash())) {
             return false;
         }
+
+        bytes memory signature = rootStateHashSignature;
+        (address recoveredSigner, ECDSA.RecoverError err,) = ECDSA.tryRecover(
+            MessageHashUtils.toEthSignedMessageHash(EfficientHashLib.hash(abi.encodePacked(nonce, rootStateHash))),
+            signature
+        );
 
         // verify signature of the canister on the root state hash
-        bytes32 message = EfficientHashLib.hash(abi.encodePacked(nonce, rootStateHash));
-        bool isRootStateHashValid =
-            MessageHashUtils.toEthSignedMessageHash(message).recover(rootStateHashSignature) == publicKeyAddress;
-
-        if (!isRootStateHashValid) {
-            return false;
-        }
-
-        return true;
+        return err == ECDSA.RecoverError.NoError && recoveredSigner == publicKeyAddress;
     }
 }

@@ -16,8 +16,8 @@ import {Errors} from "../libraries/Errors.sol";
 abstract contract PositionManagerEntrypoint is PositionManagerBase {
     address public immutable actionsImpl;
 
-    constructor(address _liquidityHub, address _vtsOrchestrator, address _actionsImpl)
-        PositionManagerBase(_liquidityHub, _vtsOrchestrator)
+    constructor(address _marketFactory, address _vtsOrchestrator, address _actionsImpl)
+        PositionManagerBase(_marketFactory, _vtsOrchestrator)
     {
         if (_actionsImpl == address(0) || _actionsImpl.code.length == 0) {
             revert Errors.InvalidAddress(_actionsImpl);
@@ -40,12 +40,12 @@ abstract contract PositionManagerEntrypoint is PositionManagerBase {
     // ------------------------------------------------------------------------------------------------
 
     /// @notice Hook called before batch execution
-    /// @dev Handles native value sent with the transaction and syncs as credit
+    /// @dev Handles native value sent with the transaction and credits the exact msg.value amount
     function _beforeBatch() internal {
-        // Handle native value
+        // Handle native value EXACTLY once per batch.
         uint256 amount = TransientSlots.readMsgValueOnce();
         if (amount > 0) {
-            _syncBalanceAsCredit(CurrencyLibrary.ADDRESS_ZERO);
+            _creditExact(CurrencyLibrary.ADDRESS_ZERO, amount);
         }
     }
 
@@ -54,6 +54,7 @@ abstract contract PositionManagerEntrypoint is PositionManagerBase {
     function _afterBatch() internal {
         // Clear any per-batch transient context to avoid same-tx leakage into subsequent batches.
         TransientSlots.clearSeizedPositionId();
+        TransientSlots.clearMsgValueRead();
         // Assert that deltas are non-zero after batch execution
         vtsOrchestrator.assertNonZeroDeltas();
     }

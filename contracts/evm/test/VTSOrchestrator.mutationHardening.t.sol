@@ -41,6 +41,7 @@ contract ReentrantSignalManagerForMutation {
     }
 
     function verifyLiquiditySignal(
+        address,
         bytes memory liquiditySignal,
         bool /*revertOnInvalid*/
     )
@@ -86,14 +87,6 @@ contract ReentrantSignalManagerForMutation {
 
     function setVerifier(address) external {}
     function setSignalExpiryInSeconds(uint256) external {}
-
-    function verifyLiquiditySignal(bytes memory) external pure returns (bool, uint256) {
-        return (true, 3600);
-    }
-
-    function verifyLiquiditySignal(LiquiditySignal memory) external pure returns (bool, uint256) {
-        return (true, 3600);
-    }
 }
 
 /**
@@ -133,7 +126,7 @@ contract VTSOrchestratorMutationHardeningTest is VTSOrchestratorFixture {
         );
 
         Vm.Log[] memory entries = vm.getRecordedLogs();
-        bytes32 topic0 = keccak256("Checkpointed(uint256,uint256,(uint256,bool,uint256,uint256),bool)");
+        bytes32 topic0 = keccak256("Checkpointed(uint256,uint256,(uint8,uint256,uint256,uint256,uint256),bool)");
         bool found = false;
         for (uint256 i = 0; i < entries.length; i++) {
             if (entries[i].topics.length == 0 || entries[i].topics[0] != topic0) continue;
@@ -146,7 +139,7 @@ contract VTSOrchestratorMutationHardeningTest is VTSOrchestratorFixture {
             if (loggedCommitId == commitId && loggedPositionIndex == 0 && withCommitment) {
                 found = true;
                 // Use checkpoint data to ensure the decode is exercised.
-                assertTrue(checkpoint.timeOfLastTransition <= block.timestamp, "checkpoint data should be present");
+                assertTrue(checkpoint.openMask <= 3, "checkpoint data should be present");
                 break;
             }
         }

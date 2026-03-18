@@ -85,7 +85,7 @@ library MMActionAdapter {
     function prepareCommit(bytes memory liquiditySignal) internal pure returns (PreparedAction memory) {
         return PreparedAction({
             action: bytes1(uint8(MMActions.COMMIT_SIGNAL)),
-            params: abi.encode(liquiditySignal, ActionConstants.MSG_SENDER)
+            params: abi.encode(liquiditySignal, ActionConstants.MSG_SENDER, bytes(""))
         });
     }
 
@@ -99,7 +99,20 @@ library MMActionAdapter {
         returns (PreparedAction memory)
     {
         return PreparedAction({
-            action: bytes1(uint8(MMActions.COMMIT_SIGNAL)), params: abi.encode(liquiditySignal, owner)
+            action: bytes1(uint8(MMActions.COMMIT_SIGNAL)), params: abi.encode(liquiditySignal, owner, bytes(""))
+        });
+    }
+
+    function prepareCommitRelayed(
+        bytes memory liquiditySignal,
+        address owner,
+        uint256 deadline,
+        uint256 authNonce,
+        bytes memory authSig
+    ) internal pure returns (PreparedAction memory) {
+        bytes memory relayParams = abi.encode(deadline, authNonce, authSig);
+        return PreparedAction({
+            action: bytes1(uint8(MMActions.COMMIT_SIGNAL)), params: abi.encode(liquiditySignal, owner, relayParams)
         });
     }
 
@@ -124,9 +137,23 @@ library MMActionAdapter {
         int24 tickUpper,
         bool payerIsUser
     ) internal pure returns (PreparedAction memory) {
+        return prepareMintFromDeltas(
+            poolKey, tokenId, tickLower, tickUpper, type(uint128).max, type(uint128).max, payerIsUser
+        );
+    }
+
+    function prepareMintFromDeltas(
+        PoolKey memory poolKey,
+        uint256 tokenId,
+        int24 tickLower,
+        int24 tickUpper,
+        uint128 amount0Max,
+        uint128 amount1Max,
+        bool payerIsUser
+    ) internal pure returns (PreparedAction memory) {
         return PreparedAction({
             action: bytes1(uint8(MMActions.MINT_POSITION_FROM_DELTAS)),
-            params: abi.encode(poolKey, tokenId, tickLower, tickUpper, payerIsUser)
+            params: abi.encode(poolKey, tokenId, tickLower, tickUpper, amount0Max, amount1Max, payerIsUser)
         });
     }
 
@@ -201,10 +228,26 @@ library MMActionAdapter {
      * @notice Prepares a RENEW_SIGNAL action
      */
     function prepareRenew(uint256 tokenId, bytes memory liquiditySignal) internal pure returns (PreparedAction memory) {
-        return
-            PreparedAction({
-                action: bytes1(uint8(MMActions.RENEW_SIGNAL)), params: abi.encode(tokenId, liquiditySignal)
-            });
+        return PreparedAction({
+            action: bytes1(uint8(MMActions.RENEW_SIGNAL)), params: abi.encode(tokenId, liquiditySignal, bytes(""))
+        });
+    }
+
+    /**
+     * @notice Prepares a relayed RENEW_SIGNAL action
+     * @dev Encodes relayParams=(deadline,authNonce,authSig) into the existing RENEW_SIGNAL payload.
+     */
+    function prepareRenewRelayed(
+        uint256 tokenId,
+        bytes memory liquiditySignal,
+        uint256 deadline,
+        uint256 authNonce,
+        bytes memory authSig
+    ) internal pure returns (PreparedAction memory) {
+        bytes memory relayParams = abi.encode(deadline, authNonce, authSig);
+        return PreparedAction({
+            action: bytes1(uint8(MMActions.RENEW_SIGNAL)), params: abi.encode(tokenId, liquiditySignal, relayParams)
+        });
     }
 
     /**
@@ -247,9 +290,22 @@ library MMActionAdapter {
         uint256 positionIndex,
         bool payerIsUser
     ) internal pure returns (PreparedAction memory) {
+        return prepareIncreaseFromDeltas(
+            poolKey, tokenId, positionIndex, type(uint128).max, type(uint128).max, payerIsUser
+        );
+    }
+
+    function prepareIncreaseFromDeltas(
+        PoolKey memory poolKey,
+        uint256 tokenId,
+        uint256 positionIndex,
+        uint128 amount0Max,
+        uint128 amount1Max,
+        bool payerIsUser
+    ) internal pure returns (PreparedAction memory) {
         return PreparedAction({
             action: bytes1(uint8(MMActions.INCREASE_LIQUIDITY_FROM_DELTAS)),
-            params: abi.encode(poolKey, tokenId, positionIndex, payerIsUser)
+            params: abi.encode(poolKey, tokenId, positionIndex, amount0Max, amount1Max, payerIsUser)
         });
     }
 
@@ -331,15 +387,16 @@ library MMActionAdapter {
     /**
      * @notice Prepares a COLLECT_AVAILABLE_LIQUIDITY action to collect queued settlement
      * @param lcc The LCC token address
+     * @param tokenId The commitment token id bucket to collect from
      * @param maxAmount The maximum amount to collect (0 for max)
      */
-    function prepareCollectAvailableLiquidity(address lcc, uint256 maxAmount)
+    function prepareCollectAvailableLiquidity(address lcc, uint256 tokenId, uint256 maxAmount)
         internal
         pure
         returns (PreparedAction memory)
     {
         return PreparedAction({
-            action: bytes1(uint8(MMActions.COLLECT_AVAILABLE_LIQUIDITY)), params: abi.encode(lcc, maxAmount)
+            action: bytes1(uint8(MMActions.COLLECT_AVAILABLE_LIQUIDITY)), params: abi.encode(lcc, tokenId, maxAmount)
         });
     }
 

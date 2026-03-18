@@ -19,6 +19,16 @@ interface IPausableVTSAdmin {
     function unpausePool(PoolId poolId) external;
 }
 
+/**
+ * @notice Pauses or unpauses a market in `VTSOrchestrator` (uses `GlobalConfig.proxyCall` when needed).
+ *
+ * Env vars
+ * - REQUIRED:
+ *   - `PRIVATE_KEY`: admin key (must be the VTS owner, or the owner of `GlobalConfig`)
+ *   - `NETWORK`: deployment namespace (e.g. `sepolia`, `arbitrum`)
+ *   - `CORE_POOL_ID`: market core pool id (`bytes32`)
+ *   - `PAUSE`: `1` to pause, `0` to unpause
+ */
 contract PauseMarketScript is FileHelper {
     function run() external {
         uint256 deployerPrivateKey = uint256(vm.envBytes32("PRIVATE_KEY"));

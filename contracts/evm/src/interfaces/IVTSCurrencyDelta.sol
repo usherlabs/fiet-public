@@ -3,6 +3,7 @@ pragma solidity ^0.8.26;
 
 import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
 import {BalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
+import {IMarketFactory} from "./IMarketFactory.sol";
 
 /**
  * @title IVTSCurrencyDelta
@@ -101,5 +102,11 @@ interface IVTSCurrencyDelta {
     function syncPair(Currency currency0, Currency currency1, address owner, address target)
         external
         returns (int128 deltaChange0, int128 deltaChange1);
+
+    /// @notice Credits an exact known amount to target's delta
+    /// @dev Restricted to protocol-bound callers in the provided factory namespace.
+    function creditExact(IMarketFactory factory, Currency currency, address target, uint256 amount)
+        external
+        returns (int128 deltaChange);
 }
 

@@ -4,8 +4,8 @@ pragma solidity ^0.8.26;
 import {NativeWrapper as UniNativeWrapper} from "../forks/NativeWrapper.sol";
 import {IWETH9} from "v4-periphery/src/interfaces/external/IWETH9.sol";
 import {Errors} from "../libraries/Errors.sol";
-import {IMarketVault} from "../interfaces/IMarketVault.sol";
-import {ILCC} from "../interfaces/ILCC.sol";
+import {IMarketFactory} from "../interfaces/IMarketFactory.sol";
+import {ILiquidityHub} from "../interfaces/ILiquidityHub.sol";
 
 /// @title FietNativeWrapper
 /// @notice Used for wrapping and unwrapping native assets in PositionManagers.
@@ -13,44 +13,37 @@ import {ILCC} from "../interfaces/ILCC.sol";
 abstract contract FietNativeWrapper is UniNativeWrapper {
     constructor(IWETH9 _weth9) UniNativeWrapper(_weth9) {}
 
-    /// @notice Validates that the ETH sender is either WETH9, poolManager, or a valid MarketVault
-    /// @dev Validates MarketVault by checking its LCC tokens and verifying at least one underlying is native ETH
+    /// @dev Implemented by inheritors that already bind a canonical MarketFactory namespace.
+    function _canonicalMarketFactory() internal view virtual returns (IMarketFactory);
+    /// @dev Implemented by inheritors with canonical LiquidityHub binding.
+    function _liquidityHub() internal view virtual returns (ILiquidityHub);
+
+    /// @notice Validates that the ETH sender is either WETH9, poolManager, canonical LiquidityHub, or a canonical native vault
+    /// @dev Uses MarketFactory registry data to avoid interface-probing based sender spoofing.
     function _assertValidEthSender() internal view {
         // If sender is WETH9 or poolManager, allow it (these are trusted sources)
         if (msg.sender == address(WETH9) || msg.sender == address(poolManager)) {
             return;
         }
 
+        // Allow canonical Hub-native payouts (e.g. native LCC unwrap-to-self in MMPM).
+        if (msg.sender == address(_liquidityHub())) {
+            return;
+        }
+
+        IMarketFactory factory = _canonicalMarketFactory();
         address sender = msg.sender;
         if (sender.code.length == 0) {
             revert Errors.InvalidEthSender();
         }
 
-        address lccToken0;
-        address lccToken1;
-        // Prefer typed call + try/catch over low-level staticcall probing.
-        try IMarketVault(sender).lccs() returns (address _lcc0, address _lcc1) {
-            lccToken0 = _lcc0;
-            lccToken1 = _lcc1;
-        } catch {
-            revert Errors.InvalidEthSender();
-        }
+        // Canonical vault lookup by sender address; unknown senders map to [0,0].
+        address[2] memory underlyingPair = factory.proxyHookToCurrencyPair(sender);
+        bool native0 = underlyingPair[0] == address(0);
+        bool native1 = underlyingPair[1] == address(0);
 
-        address underlying0;
-        address underlying1;
-        // Defensive: if the returned tokens don't implement ILCC properly, treat as invalid sender.
-        try ILCC(lccToken0).underlying() returns (address u0) {
-            underlying0 = u0;
-        } catch {
-            revert Errors.InvalidEthSender();
-        }
-        try ILCC(lccToken1).underlying() returns (address u1) {
-            underlying1 = u1;
-        } catch {
-            revert Errors.InvalidEthSender();
-        }
-        // Validate that at least one underlying is native ETH (address(0))
-        if (underlying0 != address(0) && underlying1 != address(0)) {
+        // Require exactly one native leg. This rejects unknown senders ([0,0]) and non-native markets.
+        if (native0 == native1) {
             revert Errors.InvalidEthSender();
         }
     }

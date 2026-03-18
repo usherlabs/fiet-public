@@ -31,7 +31,6 @@ contract MarketMakerTest is MarketMakerTestBase {
             liquiditySignal.nonce,
             liquiditySignal.rootHash,
             liquiditySignal.rootHashSignature,
-            liquiditySignal.mmSignature,
             liquiditySignal.mmState,
             liquiditySignal.merkleProof
         );

@@ -10,18 +10,20 @@ library VTSConfigs {
             token0: TokenConfiguration({
                 gracePeriodTime: 1800, // 30 minutes
                 maxGracePeriodTime: 3600, // 1 hours
-                baseVTSRate: 1000 // 10% (1000 bips)
+                baseVTSRate: 1000, // 10% (1000 bips)
+                unbackedCommitmentGraceBypassTime: 0, // no extra age gating by default
+                unbackedCommitmentGraceBypassThreshold: 0 // optional token amount threshold (disabled by default)
             }),
             token1: TokenConfiguration({
                 gracePeriodTime: 1800, // 30 minutes
                 maxGracePeriodTime: 36000, // 10 hours
-                baseVTSRate: 1000 // 10% (1000 bips)
+                baseVTSRate: 1000, // 10% (1000 bips)
+                unbackedCommitmentGraceBypassTime: 0, // no extra age gating by default
+                unbackedCommitmentGraceBypassThreshold: 0 // optional token amount threshold (disabled by default)
             }),
             coverageFeeShare: 5000, // 50% (5000 bps)
             minResidualUnits: 1, // minimum units of liquidity that will result in full seizure
-            unbackedCommitmentGraceBypassBps: 500, // 5% under-backing bypasses grace
-            unbackedCommitmentGraceBypassThreshold0: 0, // optional token0 amount threshold (disabled by default)
-            unbackedCommitmentGraceBypassThreshold1: 0 // optional token1 amount threshold (disabled by default)
+            unbackedCommitmentGraceBypassBps: 500 // 5% under-backing bypasses grace
         });
     }
 }

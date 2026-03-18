@@ -30,6 +30,10 @@ library VTSCommitLib {
     using TokenPairLib for TokenPairUint;
     using StateLibrary for IPoolManager;
 
+    /// @notice Hard cap on unique reserve tickers per MM signal.
+    /// @dev This is a per-MM reserve composition limit, not a global protocol ticker registry limit.
+    uint256 internal constant MAX_MM_UNIQUE_RESERVE_TICKERS = 100;
+
     // ============ INTERNAL STRUCTS (Stack Depth Optimisation) ============
 
     /// @dev Internal struct to reduce stack depth in checkpoint
@@ -52,6 +56,18 @@ library VTSCommitLib {
         int24 tickLower;
         int24 tickUpper;
         int256 liquidityDelta;
+    }
+
+    function _writeCommitmentDeficitToken(PositionAccounting storage pa, uint8 tokenIndex, uint256 nextDeficit)
+        internal
+    {
+        uint256 prevDeficit = pa.commitmentDeficit.get(tokenIndex);
+        pa.commitmentDeficit.set(tokenIndex, nextDeficit);
+        if (nextDeficit == 0) {
+            pa.commitmentDeficitSince.set(tokenIndex, 0);
+        } else if (prevDeficit == 0) {
+            pa.commitmentDeficitSince.set(tokenIndex, block.timestamp);
+        }
     }
 
     /// @notice Calculates the USD value of the position's issued commitment
@@ -174,34 +190,47 @@ library VTSCommitLib {
     /// @notice Commits a liquidity signal to the VTS state (linked-library entry)
     /// @dev Intentionally keeps all commitment logic in the linked library to reduce VTSOrchestrator bytecode size.
     //#olympix-ignore-reentrancy
-    function commitSignal(VTSStorage storage s, IVRLSignalManager signalManager, bytes memory liquiditySignal)
-        external
-        returns (uint256 commitId)
-    {
+    function commitSignal(
+        VTSStorage storage s,
+        address sender,
+        IVRLSignalManager signalManager,
+        bytes memory liquiditySignal
+    ) external returns (uint256 commitId) {
         // validate the liquidity signal was actually provided
         if (liquiditySignal.length == 0) {
             revert Errors.InvalidLiquiditySignal(0, 0, 0);
         }
 
         // verify the proofs associated with the state
-        (, uint256 expirySeconds) = signalManager.verifyLiquiditySignal(liquiditySignal, true);
-        LiquiditySignal memory signal = abi.decode(liquiditySignal, (LiquiditySignal));
+        (, uint256 expirySeconds) = signalManager.verifyLiquiditySignal(sender, liquiditySignal, true);
+        commitId = _commitSignalInternal(s, liquiditySignal, expirySeconds);
+    }
 
-        // get the commit id
-        // increment first then assign because nextCommitId starts at 0 and we want to start at 1
-        commitId = ++s.nextCommitId;
+    /// @notice Commits a liquidity signal using sender-signed EIP-712 relayer auth (linked-library entry)
+    function commitSignalRelayed(
+        VTSStorage storage s,
+        address sender,
+        IVRLSignalManager signalManager,
+        bytes memory liquiditySignal,
+        uint256 deadline,
+        uint256 authNonce,
+        bytes memory authSig
+    ) external returns (uint256 commitId) {
+        if (liquiditySignal.length == 0) {
+            revert Errors.InvalidLiquiditySignal(0, 0, 0);
+        }
 
-        // store the signal state (only state and expiresAt are relevant) and bind commit to pool
-        MarketMaker.save(s.commits[commitId].mmState, signal.mmState);
-        s.commits[commitId].expiresAt = block.timestamp + expirySeconds;
+        (, uint256 expirySeconds) =
+            signalManager.verifyLiquiditySignalRelayed(sender, 0, liquiditySignal, deadline, authNonce, authSig, true);
+        commitId = _commitSignalInternal(s, liquiditySignal, expirySeconds);
     }
 
     /// @notice Renews a liquidity signal for a commit (linked-library entry)
     //#olympix-ignore-reentrancy
     function renewSignal(
         VTSStorage storage s,
-        IVRLSignalManager signalManager,
         address sender,
+        IVRLSignalManager signalManager,
         uint256 commitId,
         bytes memory liquiditySignal
     ) external {
@@ -209,20 +238,58 @@ library VTSCommitLib {
             revert Errors.InvalidLiquiditySignal(0, 0, 0);
         }
 
-        // Verify new signal once (nonce bump) and decode
-        (, uint256 expirySeconds) = signalManager.verifyLiquiditySignal(liquiditySignal, true);
+        (, uint256 expirySeconds) = signalManager.verifyLiquiditySignal(sender, liquiditySignal, true);
+        _renewSignalInternal(s, sender, commitId, liquiditySignal, expirySeconds);
+    }
+
+    /// @notice Renews a liquidity signal using sender-signed EIP-712 relayer auth (linked-library entry)
+    function renewSignalRelayed(
+        VTSStorage storage s,
+        address sender,
+        IVRLSignalManager signalManager,
+        uint256 commitId,
+        bytes memory liquiditySignal,
+        uint256 deadline,
+        uint256 authNonce,
+        bytes memory authSig
+    ) external {
+        if (liquiditySignal.length == 0) {
+            revert Errors.InvalidLiquiditySignal(0, 0, 0);
+        }
+
+        (, uint256 expirySeconds) = signalManager.verifyLiquiditySignalRelayed(
+            sender, commitId, liquiditySignal, deadline, authNonce, authSig, true
+        );
+        _renewSignalInternal(s, sender, commitId, liquiditySignal, expirySeconds);
+    }
+
+    function _commitSignalInternal(VTSStorage storage s, bytes memory liquiditySignal, uint256 expirySeconds)
+        internal
+        returns (uint256 commitId)
+    {
         LiquiditySignal memory signal = abi.decode(liquiditySignal, (LiquiditySignal));
+        // increment first then assign because nextCommitId starts at 0 and we want to start at 1
+        commitId = ++s.nextCommitId;
+        // store the signal state (only state and expiresAt are relevant) and bind commit to pool
+        MarketMaker.save(s.commits[commitId].mmState, signal.mmState);
+        s.commits[commitId].expiresAt = block.timestamp + expirySeconds;
+    }
 
-        // Persist signal state (only state and expiresAt)
+    function _renewSignalInternal(
+        VTSStorage storage s,
+        address sender,
+        uint256 commitId,
+        bytes memory liquiditySignal,
+        uint256 expirySeconds
+    ) internal {
+        LiquiditySignal memory signal = abi.decode(liquiditySignal, (LiquiditySignal));
         Commit storage commit = s.commits[commitId];
-
         // Invariants:
         // - Commit ownership must be immutable across renewals (prevents commitId hijack)
         // - Only the designated advancer may renew on-chain (reduces mempool proof sniping)
         if (signal.mmState.owner != commit.mmState.owner || sender != signal.mmState.advancer) {
             revert Errors.InvalidSender();
         }
-
         MarketMaker.save(commit.mmState, signal.mmState);
         commit.expiresAt = block.timestamp + expirySeconds;
     }
@@ -275,8 +342,8 @@ library VTSCommitLib {
         }
 
         if (ctx.issuedUsd == 0) {
-            pa.commitmentDeficit.token0 = 0;
-            pa.commitmentDeficit.token1 = 0;
+            _writeCommitmentDeficitToken(pa, 0, 0);
+            _writeCommitmentDeficitToken(pa, 1, 0);
             pa.commitmentDeficitBps = 0;
             return;
         }
@@ -299,8 +366,8 @@ library VTSCommitLib {
                 uint256 surplusUsd = backingUsd - ctx.issuedUsd;
                 if (surplusUsd >= currentDeficitUsd) {
                     // Is the difference in value backing vs issued sufficient to cover the deficit?
-                    pa.commitmentDeficit.token0 = 0;
-                    pa.commitmentDeficit.token1 = 0;
+                    _writeCommitmentDeficitToken(pa, 0, 0);
+                    _writeCommitmentDeficitToken(pa, 1, 0);
                 } else {
                     // Reduce the deficit proportionally to the surplus.
                     uint256 reduce0 = FullMath.mulDiv(pa.commitmentDeficit.token0, surplusUsd, currentDeficitUsd);
@@ -309,13 +376,13 @@ library VTSCommitLib {
                     if (reduce0 > pa.commitmentDeficit.token0) reduce0 = pa.commitmentDeficit.token0;
                     if (reduce1 > pa.commitmentDeficit.token1) reduce1 = pa.commitmentDeficit.token1;
 
-                    pa.commitmentDeficit.token0 -= reduce0;
-                    pa.commitmentDeficit.token1 -= reduce1;
+                    _writeCommitmentDeficitToken(pa, 0, pa.commitmentDeficit.token0 - reduce0);
+                    _writeCommitmentDeficitToken(pa, 1, pa.commitmentDeficit.token1 - reduce1);
                 }
             } else {
                 // Zero out deficit if no value.
-                pa.commitmentDeficit.token0 = 0;
-                pa.commitmentDeficit.token1 = 0;
+                _writeCommitmentDeficitToken(pa, 0, 0);
+                _writeCommitmentDeficitToken(pa, 1, 0);
             }
 
             return;
@@ -326,8 +393,8 @@ library VTSCommitLib {
             uint256 deficitUsd = ctx.issuedUsd - backingUsd;
             uint256 deficitBps = FullMath.mulDiv(deficitUsd, LiquidityUtils.BPS_DENOMINATOR, ctx.issuedUsd);
             pa.commitmentDeficitBps = uint16(deficitBps);
-            pa.commitmentDeficit.token0 = FullMath.mulDiv(ctx.eff0, deficitBps, LiquidityUtils.BPS_DENOMINATOR);
-            pa.commitmentDeficit.token1 = FullMath.mulDiv(ctx.eff1, deficitBps, LiquidityUtils.BPS_DENOMINATOR);
+            _writeCommitmentDeficitToken(pa, 0, FullMath.mulDiv(ctx.eff0, deficitBps, LiquidityUtils.BPS_DENOMINATOR));
+            _writeCommitmentDeficitToken(pa, 1, FullMath.mulDiv(ctx.eff1, deficitBps, LiquidityUtils.BPS_DENOMINATOR));
         }
     }
 
@@ -358,8 +425,11 @@ library VTSCommitLib {
         returns (uint256 totalValue)
     {
         (string[] memory tickers, uint256[] memory amounts) = MarketMaker.getReserves(mmState);
-        // Despite getTotalValue iterating over tickers, Fiet Provers are responsible for filtering out unsupported tickers/currencies and dust amounts.
-        // Therefore, the signal should always include valid tickers, with max 50 - 100 iterations.
+        uint256 reserveCount = tickers.length;
+        if (reserveCount > MAX_MM_UNIQUE_RESERVE_TICKERS) {
+            revert Errors.MMReserveTickerLimitExceeded(reserveCount, MAX_MM_UNIQUE_RESERVE_TICKERS);
+        }
+
         totalValue = oracleHelper.getTotalValue(tickers, amounts);
     }
 }

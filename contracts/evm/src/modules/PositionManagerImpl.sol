@@ -18,6 +18,7 @@ import {PositionManagerBase} from "./PositionManagerBase.sol";
 import {SafeCast} from "v4-periphery/lib/v4-core/src/libraries/SafeCast.sol";
 import {Math} from "openzeppelin-contracts/contracts/utils/math/Math.sol";
 import {IMarketFactory} from "../interfaces/IMarketFactory.sol";
+import {IMMQueueCustodian} from "../interfaces/IMMQueueCustodian.sol";
 
 /**
  * @title PositionManagerImpl
@@ -30,9 +31,9 @@ abstract contract PositionManagerImpl is PositionManagerBase, ImmutableState {
     using TransientStateLibrary for IPoolManager;
     using CurrencySettler for Currency;
 
-    constructor(IPoolManager _poolManager, address _liquidityHub, address _vtsOrchestrator)
+    constructor(IPoolManager _poolManager, address _marketFactory, address _vtsOrchestrator)
         ImmutableState(_poolManager)
-        PositionManagerBase(_liquidityHub, _vtsOrchestrator)
+        PositionManagerBase(_marketFactory, _vtsOrchestrator)
     {}
 
     // ------------------------------------------------------------------------------------------------
@@ -126,6 +127,9 @@ abstract contract PositionManagerImpl is PositionManagerBase, ImmutableState {
         vtsOrchestrator.syncPair(currency0, currency1, address(this), msgSender());
     }
 
+    /// @notice Forwards queued LCC to the queue custodian
+    function _forwardQueuedLccToCustodian(Currency currency, uint256 tokenId, uint256 amount) internal virtual;
+
     // ------------------------------------------------------------------------------------------------
     // Liquidity Flow/Modification Handlers
     // ------------------------------------------------------------------------------------------------
@@ -146,11 +150,13 @@ abstract contract PositionManagerImpl is PositionManagerBase, ImmutableState {
         uint256 balanceBefore,
         uint256 balanceAfter,
         int128 feesAccruedAmount,
-        address locker
+        address locker,
+        uint256 tokenId
     ) internal {
         // Sync LCC fee balance ONLY increases as credit to locker
         // After taking from PoolManager, MMPM now holds LCC as ERC20 - sync as takeable credit to locker
         // However, MMPM can hold LCCs queued after _decrease, therefore we extract feesAccrued from the balance change
+        uint256 prevCredit = _getFullCredit(currency, locker);
         _syncBalanceAsCredit(currency);
 
         // IMPORTANT: PoolManager returns `callerDelta` already net of the hook delta.
@@ -162,8 +168,17 @@ abstract contract PositionManagerImpl is PositionManagerBase, ImmutableState {
         int256 hookDelta = poolManager.currencyDelta(address(key.hooks), currency);
         int256 netFeei = int256(feesAccruedAmount) - hookDelta;
         uint256 fee = netFeei > 0 ? uint256(netFeei) : 0;
+        uint256 currentCredit = _getFullCredit(currency, locker);
+        uint256 addedCredit = currentCredit > prevCredit ? (currentCredit - prevCredit) : 0;
+        uint256 extra = addedCredit > fee ? (addedCredit - fee) : 0;
+        if (extra > 0) {
+            vtsOrchestrator.take(currency, locker, extra);
+        }
+
         uint256 nonFee = inc > fee ? (inc - fee) : 0;
-        if (nonFee > 0) vtsOrchestrator.take(currency, locker, nonFee);
+        if (nonFee > 0) {
+            _forwardQueuedLccToCustodian(currency, tokenId, nonFee);
+        }
     }
 
     function _takePositiveDeltasAndHandleLcc(
@@ -172,10 +187,11 @@ abstract contract PositionManagerImpl is PositionManagerBase, ImmutableState {
         int128 delta0,
         int128 delta1,
         BalanceDelta feesAccrued,
-        address locker
+        address locker,
+        uint256 tokenId
     ) internal {
         // Take positive deltas: receive tokens owed from PoolManager (LP is withdrawing)
-        // Anything planned for cancel via VTSPositionLib will cancel here (on PM -> MMPM transfer)
+        // Queued principal is then forwarded to the queue custodian, where planned cancel executes on the MMPM -> custodian transfer.
         if (delta0 > 0) {
             uint256 balance0Before = key.currency0.balanceOfSelf();
             key.currency0.take(poolManager, self, LiquidityUtils.safeInt128ToUint256(delta0), false);
@@ -183,7 +199,7 @@ abstract contract PositionManagerImpl is PositionManagerBase, ImmutableState {
 
             if (_isLCC(key.currency0)) {
                 _handleLccBalanceIncrease(
-                    key, key.currency0, balance0Before, balance0After, feesAccrued.amount0(), locker
+                    key, key.currency0, balance0Before, balance0After, feesAccrued.amount0(), locker, tokenId
                 );
             }
         }
@@ -194,7 +210,7 @@ abstract contract PositionManagerImpl is PositionManagerBase, ImmutableState {
 
             if (_isLCC(key.currency1)) {
                 _handleLccBalanceIncrease(
-                    key, key.currency1, balance1Before, balance1After, feesAccrued.amount1(), locker
+                    key, key.currency1, balance1Before, balance1After, feesAccrued.amount1(), locker, tokenId
                 );
             }
         }
@@ -204,8 +220,7 @@ abstract contract PositionManagerImpl is PositionManagerBase, ImmutableState {
         // Settle CoreHook's PoolManager deltas (hook delta applied after hook returned)
         // This ensures feeAdj-based claims are minted/burned to/from the fee pot held by CoreHook
         // Must be called within PoolManager.unlockCallback, but outside of modifyLiquidity hook
-        IMarketFactory factory = liquidityHub.getFactory(Currency.unwrap(key.currency0), Currency.unwrap(key.currency1));
-        factory.afterModifyLiquidity(key);
+        marketFactory.afterModifyLiquidity(key);
     }
 
     /// @notice Modifies liquidity in a Uniswap V4 pool and immediately settles the deltas
@@ -219,14 +234,16 @@ abstract contract PositionManagerImpl is PositionManagerBase, ImmutableState {
     ///      via the hook callback, so this function only needs to handle the PoolManager settlement.
     /// @param key The pool key identifying the pool to modify
     /// @param params Parameters for the liquidity modification (tick range, delta, salt)
+    /// @param tokenId Commitment token id for queued LCC custody accounting
     /// @param hookData Arbitrary data to pass to hooks (contains PositionModificationHookData)
     /// @return callerDelta The principal balance delta - includes liquidity change plus immediate fee/hook deltas
     /// @return feesAccrued Informational delta of fee growth in the modified range for this call
-    function _modifySyntheticLiquidity(PoolKey memory key, ModifyLiquidityParams memory params, bytes memory hookData)
-        internal
-        virtual
-        returns (BalanceDelta callerDelta, BalanceDelta feesAccrued)
-    {
+    function _modifySyntheticLiquidity(
+        PoolKey memory key,
+        ModifyLiquidityParams memory params,
+        uint256 tokenId,
+        bytes memory hookData
+    ) internal virtual returns (BalanceDelta callerDelta, BalanceDelta feesAccrued) {
         address self = address(this);
 
         // Get liquidity state before modification for validation
@@ -253,11 +270,10 @@ abstract contract PositionManagerImpl is PositionManagerBase, ImmutableState {
         // The callerDelta includes: principalDelta + feesAccrued, adjusted by any hookDelta returned.
         int128 delta0 = callerDelta.amount0();
         int128 delta1 = callerDelta.amount1();
-
         _settleNegativeDeltas(key, self, delta0, delta1);
 
         if (delta0 > 0 || delta1 > 0) {
-            _takePositiveDeltasAndHandleLcc(key, self, delta0, delta1, feesAccrued, msgSender());
+            _takePositiveDeltasAndHandleLcc(key, self, delta0, delta1, feesAccrued, msgSender(), tokenId);
         }
 
         _afterModifyLiquidity(key);

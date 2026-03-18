@@ -13,8 +13,14 @@ contract LiquidityCommitmentCertificateExposed is LiquidityCommitmentCertificate
         string memory name,
         string memory symbol,
         uint8 __decimals,
-        address _resilientOracleAddress
-    ) LiquidityCommitmentCertificate(_underlyingAsset, name, symbol, __decimals, _resilientOracleAddress) {}
+        address _resilientOracleAddress,
+        address _hub,
+        address _factory
+    )
+        LiquidityCommitmentCertificate(
+            _underlyingAsset, name, symbol, __decimals, _resilientOracleAddress, _hub, _factory
+        )
+    {}
 
     function exposed_isProtocolTransfer(address from, address to, bool fromProtocol, bool toProtocol)
         external
@@ -37,6 +43,7 @@ contract LiquidityCommitmentCertificateTest is Test {
     uint8 internal constant BOUND_NONE = 0;
     uint8 internal constant BOUND_ENDPOINT = 1;
     uint8 internal constant BOUND_EXEMPT = 2;
+    uint8 internal constant BOUND_DEX = 3;
 
     mapping(address => mapping(address => uint8)) internal boundLevelMap;
 
@@ -55,18 +62,25 @@ contract LiquidityCommitmentCertificateTest is Test {
     uint256 internal lastAnnulWrapped;
     uint256 internal lastAnnulMarket;
     uint256 internal lastAnnulAmount;
+    uint256 internal wrappedIngressCalls;
+    address internal lastWrappedIngressLcc;
+    uint256 internal lastWrappedIngressWrapped;
 
     bytes32 internal marketIdForThis = bytes32("market-id");
-    address internal factoryForThis = makeAddr("factory");
+    address internal factoryForThis = address(this);
 
     function setUp() public {
         // Mark a protocol-bound address for transfer tests.
         _setBoundLevel(protocol, BOUND_EXEMPT);
 
         // Deploy with hub == address(this) so we can observe callbacks.
-        lcc = new LiquidityCommitmentCertificate(address(0xBEEF), "LCC", "LCC", 18, oracle);
-        lccNative = new LiquidityCommitmentCertificate(address(0), "LCCN", "LCCN", 18, oracle);
-        lccExposed = new LiquidityCommitmentCertificateExposed(address(0xBEEF), "LCCX", "LCCX", 18, oracle);
+        lcc =
+            new LiquidityCommitmentCertificate(address(0xBEEF), "LCC", "LCC", 18, oracle, address(this), address(this));
+        lccNative =
+            new LiquidityCommitmentCertificate(address(0), "LCCN", "LCCN", 18, oracle, address(this), address(this));
+        lccExposed = new LiquidityCommitmentCertificateExposed(
+            address(0xBEEF), "LCCX", "LCCX", 18, oracle, address(this), address(this)
+        );
     }
 
     // -------------------------
@@ -132,9 +146,16 @@ contract LiquidityCommitmentCertificateTest is Test {
     }
 
     function test_decimals_returnsConstructorValue() public {
-        LiquidityCommitmentCertificate lcc6 =
-            new LiquidityCommitmentCertificate(address(0xBEEF), "LCC6", "LCC6", 6, oracle);
+        LiquidityCommitmentCertificate lcc6 = new LiquidityCommitmentCertificate(
+            address(0xBEEF), "LCC6", "LCC6", 6, oracle, address(this), address(this)
+        );
         assertEq(lcc6.decimals(), 6);
+    }
+
+    function prepareMarketLiquidity(address lccToken, uint256 wrappedAmount) external {
+        wrappedIngressCalls++;
+        lastWrappedIngressLcc = lccToken;
+        lastWrappedIngressWrapped = wrappedAmount;
     }
 
     function test_mint_revertsWhenNotHub() public {
@@ -477,6 +498,29 @@ contract LiquidityCommitmentCertificateTest is Test {
         assertEq(plannedCancelCalls, 1);
         assertEq(lastCancelSender, alice);
         assertEq(lastCancelRecipient, protocol);
+    }
+
+    function test_transfer_toHubExemptSink_doesNotReportWrappedIngress() public {
+        _setBoundLevel(address(this), BOUND_EXEMPT);
+        lcc.mint(alice, 10, 0);
+
+        vm.prank(alice);
+        lcc.transfer(address(this), 4);
+
+        assertEq(wrappedIngressCalls, 0, "hub transfers must not emit sequencer ingress facts");
+    }
+
+    function test_transfer_toDexSink_reportsWrappedIngress() public {
+        address dexSink = makeAddr("dexSink");
+        _setBoundLevel(dexSink, BOUND_DEX);
+        lcc.mint(alice, 10, 0);
+
+        vm.prank(alice);
+        lcc.transfer(dexSink, 4);
+
+        assertEq(wrappedIngressCalls, 1);
+        assertEq(lastWrappedIngressLcc, address(lcc));
+        assertEq(lastWrappedIngressWrapped, 4);
     }
 
     /// @dev Mutation-hardening: bucket-tracked protocol -> protocol transfer must:

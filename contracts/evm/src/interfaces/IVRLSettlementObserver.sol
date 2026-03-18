@@ -13,6 +13,7 @@ interface IVRLSettlementObserver {
         bytes32 indexed proofHash, PoolId indexed poolId, uint32 verifierIndex, uint8 tokenIndex
     );
 
+    function submitter() external view returns (address);
     function addVerifier(address _verifier) external returns (uint32);
     function nullifyVerifier(uint32 index) external;
     function allowVerifierForTokens(uint32 verifierIndex, address[] memory tokens) external;

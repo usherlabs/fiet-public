@@ -7,7 +7,7 @@ pragma solidity ^0.8.26;
  * Includes:
  * - pausePool/unpausePool (already exist via PauseMarketScript; included here for completeness)
  * - setGlobalPause
- * - setMarketVTSConfiguration (default config, or optional override file)
+ * - setMarketVTSConfiguration (from an explicit config file)
  *
  * Run:
  * - `just admin-vts-set-global-pause`
@@ -19,11 +19,11 @@ pragma solidity ^0.8.26;
  * - CORE_POOL_ID: bytes32 (for per-pool operations)
  * - PAUSED: 0|1 (for setGlobalPause)
  *
- * Optional VTS config input:
+ * Required VTS config input:
  * - VTS_CONFIG_FILE_PATH: path to a JSON or TOML file containing VTS config fields.
  *   - JSON keys should match the struct field names (e.g. `.token0.gracePeriodTime`).
  *   - TOML keys should match the struct field names (e.g. `token0.gracePeriodTime`).
- *   - Any missing fields will fall back to `VTSConfigs.getDefaultConfig()`.
+ *   - All fields must be present; the loader does not apply fallback defaults.
  */
 
 import {console} from "forge-std/Script.sol";

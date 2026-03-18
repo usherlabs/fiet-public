@@ -13,23 +13,24 @@ import {MarketVaultDeployer} from "./MarketVaultDeployer.sol";
 import {MarketVTSConfiguration} from "./types/VTS.sol";
 import {IOracleHelper} from "./interfaces/IOracleHelper.sol";
 import {ILiquidityHub} from "./interfaces/ILiquidityHub.sol";
-import {IERC20Metadata} from "openzeppelin-contracts/contracts/token/ERC20/extensions/IERC20Metadata.sol";
 import {BalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
 import {IMarketVault} from "./interfaces/IMarketVault.sol";
 import {LiquidityUtils} from "./libraries/LiquidityUtils.sol";
+import {MarketLiquidityRouterLib} from "./libraries/MarketLiquidityRouterLib.sol";
 import {Bounds} from "./libraries/Bounds.sol";
 import {Errors} from "./libraries/Errors.sol";
 import {ImmutableState} from "v4-periphery/src/base/ImmutableState.sol";
 import {ImmutableVTSState} from "./modules/ImmutableVTSState.sol";
 import {ICoreHook} from "./interfaces/ICoreHook.sol";
 import {TransientStateLibrary} from "@uniswap/v4-core/src/libraries/TransientStateLibrary.sol";
+import {IUnlockCallback} from "@uniswap/v4-core/src/interfaces/callback/IUnlockCallback.sol";
 
 /**
  * @title MarketFactory
  * @notice Factory contract for creating Fiet protocol markets with LCC tokens and pool management
  * @dev Manages LCC token creation, pool deployment, and protocol bounds administration
  */
-contract MarketFactory is IMarketFactory, Ownable, ImmutableState, ImmutableVTSState {
+contract MarketFactory is IMarketFactory, Ownable, ImmutableState, ImmutableVTSState, IUnlockCallback {
     using PoolIdLibrary for PoolKey;
     using TransientStateLibrary for IPoolManager;
 
@@ -138,8 +139,9 @@ contract MarketFactory is IMarketFactory, Ownable, ImmutableState, ImmutableVTSS
         coreHook = _coreHook;
         initialised = true;
 
+        // DEX ingress sink endpoint.
+        liquidityHub.setBoundLevel(address(poolManager), Bounds.BOUND_DEX);
         // Bucket-exempt endpoints.
-        liquidityHub.setBoundLevel(address(poolManager), Bounds.BOUND_EXEMPT);
         // LiquidityHub is a bucket-exempt endpoint as it handles special case where processSettlementFor isForHub, and also derived from caller balance buckets during wrapWith.
         liquidityHub.setBoundLevel(address(liquidityHub), Bounds.BOUND_EXEMPT);
 
@@ -397,20 +399,10 @@ contract MarketFactory is IMarketFactory, Ownable, ImmutableState, ImmutableVTSS
         address proxyHook = _proxyToHook[coreToProxy[pId]];
         address currency0 = _corePoolToCurrencyPair[pId][0];
         address currency1 = _corePoolToCurrencyPair[pId][1];
-        uint256 amount0 = 0;
-        uint256 amount1 = 0;
-        if (currency0 == lcc) {
-            amount0 = amount;
-        } else if (currency1 == lcc) {
-            amount1 = amount;
-        } else {
-            revert Errors.InvalidAddress(lcc);
-        }
-
-        BalanceDelta usedDelta = IMarketVault(proxyHook)
-            .tryModifyLiquiditiesWithRecipient(
-                LiquidityUtils.safeToBalanceDelta(amount0, amount1, false, false), address(liquidityHub)
-            ); // positive delta indicating withdrawal from market
+        BalanceDelta requestedDelta = MarketLiquidityRouterLib.toRequestedDelta(lcc, currency0, currency1, amount);
+        BalanceDelta usedDelta = MarketLiquidityRouterLib.useWithOptionalUnlock(
+            poolManager, proxyHook, requestedDelta, address(liquidityHub)
+        );
 
         vtsOrchestrator.incrementCoverage(
             pId,
@@ -418,6 +410,19 @@ contract MarketFactory is IMarketFactory, Ownable, ImmutableState, ImmutableVTSS
             LiquidityUtils.safeInt128ToUint256(usedDelta.amount1())
         );
         used = LiquidityUtils.safeInt128ToUint256(usedDelta.amount0() + usedDelta.amount1());
+    }
+
+    /// @inheritdoc IUnlockCallback
+    /// @dev Callback function for useMarketLiquidity
+    function unlockCallback(bytes calldata data) external override returns (bytes memory) {
+        if (msg.sender != address(poolManager)) revert Errors.InvalidSender();
+
+        MarketLiquidityRouterLib.UseMarketLiquidityUnlockData memory unlockData =
+            MarketLiquidityRouterLib.decodeUnlockData(data);
+        BalanceDelta usedDelta = MarketLiquidityRouterLib.useWithoutUnlock(
+            unlockData.proxyHook, BalanceDelta.wrap(unlockData.requestedDelta), unlockData.recipient
+        );
+        return MarketLiquidityRouterLib.encodeUnlockResult(usedDelta);
     }
 
     /// @notice Called after modifyLiquidity to settle CoreHook's PoolManager deltas
@@ -429,6 +434,22 @@ contract MarketFactory is IMarketFactory, Ownable, ImmutableState, ImmutableVTSS
             revert Errors.InvalidSender();
         }
         ICoreHook(coreHook).settleHookDeltasToPot(key);
+    }
+
+    /**
+     * @inheritdoc IMarketFactory
+     * @dev LCC reports wrapped ingress facts for PoolManager-bound transfers.
+     */
+    function prepareMarketLiquidity(address lcc, uint256 wrappedAmount) external {
+        if (msg.sender != lcc) revert Errors.InvalidSender();
+        (bytes32 marketId, address factory) = liquidityHub.lccToMarket(lcc);
+        if (factory != address(this) || marketId == bytes32(0)) revert Errors.InvalidSender();
+        address handler = _proxyToHook[coreToProxy[PoolId.wrap(marketId)]];
+        MarketLiquidityRouterLib.prepareMarketLiquidityIngress(
+            MarketLiquidityRouterLib.PrepareMarketLiquidityContext({
+                poolManager: poolManager, handler: handler, lcc: lcc, wrappedAmount: wrappedAmount
+            })
+        );
     }
 
     // ============ VIEW FUNCTIONS ============
@@ -472,6 +493,17 @@ contract MarketFactory is IMarketFactory, Ownable, ImmutableState, ImmutableVTSS
      */
     function proxyHookToCurrencyPair(address proxyHook) external view returns (address[2] memory) {
         return _proxyHookToCurrencyPair[proxyHook];
+    }
+
+    /// @inheritdoc IMarketFactory
+    function isCanonicalVault(bytes32 marketId, address vault) external view returns (bool) {
+        if (vault == address(0)) return false;
+        PoolId corePoolId = PoolId.wrap(marketId);
+        PoolId proxyPoolId = coreToProxy[corePoolId];
+        if (PoolId.unwrap(proxyPoolId) == bytes32(0)) return false;
+        address canonicalVault = _proxyToHook[proxyPoolId];
+        if (canonicalVault == address(0)) return false;
+        return canonicalVault == vault;
     }
 
     /**

@@ -28,6 +28,26 @@ import {VTSConfigFileBase} from "./base/VTSConfigFileBase.sol";
  * @notice Script to create a new market via the Market Factory
  * @dev Creates both core and proxy pools with LCC tokens and underlying assets
  *
+ * Env vars
+ * - REQUIRED:
+ *   - `PRIVATE_KEY`: Deployer key (must be authorised to call `MarketFactory.createMarket`)
+ * - OPTIONAL (network + assets):
+ *   - `NETWORK`: e.g. `sepolia`, `arbitrum`, `ethsepolia` (defaults come from `NetworkConfig`)
+ *   - `UNDERLYING_ASSET_0`, `UNDERLYING_ASSET_1`: underlying token addresses (some dev networks have fallbacks)
+ *   - `CORE_POOL_FEE`: default `0`
+ *   - `TICK_SPACING`: default `60`
+ * - OPTIONAL (initial price; pick one strategy):
+ *   - `INITIAL_SQRT_PRICE_X96`: exact uint160 sqrt price for the **core** pool
+ *   - `REFERENCE_POOL_ID`: bytes32 pool id to copy `sqrtPriceX96` from (with optional inversion controls below)
+ *   - `ASSET0_PRICE` + `ASSET1_PRICE`: integer prices for the two underlyings (see `PRICE_DECIMALS`)
+ *     - `PRICE_DECIMALS`: default `6`
+ * - OPTIONAL (reference pool inversion controls):
+ *   - `REFERENCE_POOL_CURRENCY0`, `REFERENCE_POOL_CURRENCY1`: explicit reference-pool token order; if swapped vs
+ *     `UNDERLYING_ASSET_0/1` the script will invert the reference `sqrtPriceX96`
+ *   - `REFERENCE_POOL_INVERT`: set to `1` to force inversion when you cannot (or do not want to) provide ref order
+ * - REQUIRED (VTS configuration):
+ *   - `VTS_CONFIG_FILE_PATH`: JSON/TOML path to a fully-specified VTS config file
+ *
  * Market Creation Process:
  * 1. Read deployed MarketFactory address from deployment file
  * 2. Validate market parameters
@@ -51,10 +71,16 @@ contract CreateMarketScript is NetworkConfig, VTSConfigFileBase {
     address public marketFactory;
     address public globalConfig;
     address public coreHook;
+    address public liquidityHub;
 
     // Created market details
     PoolId public corePoolId;
     PoolId public proxyPoolId;
+
+    function _invertSqrtPriceX96(uint160 sqrtPriceX96) internal pure returns (uint160) {
+        require(sqrtPriceX96 != 0, "sqrtPriceX96 is 0");
+        return uint160((uint256(1) << 192) / sqrtPriceX96);
+    }
 
     function run() external {
         uint256 deployerPrivateKey = uint256(vm.envBytes32("PRIVATE_KEY"));
@@ -110,8 +136,10 @@ contract CreateMarketScript is NetworkConfig, VTSConfigFileBase {
         marketFactory = readAddress("marketFactory");
         globalConfig = readAddress("globalConfig");
         coreHook = readAddress("coreHook");
+        liquidityHub = readAddress("liquidityHub");
         console.log("MarketFactory address loaded:", marketFactory);
         console.log("PoolManager address loaded:", config.poolManager);
+        console.log("LiquidityHub address loaded:", liquidityHub);
     }
 
     /**
@@ -187,6 +215,34 @@ contract CreateMarketScript is NetworkConfig, VTSConfigFileBase {
 
                 (uint160 sqrtPrice,,,) = manager.getSlot0(referencePoolId);
 
+                // If the reference pool's (currency0,currency1) ordering is known and differs from the market's
+                // sorted underlying ordering, invert the reference sqrtPrice so it matches this script's
+                // (underlyingAsset0, underlyingAsset1) semantics.
+                bool shouldInvertReference;
+                bool hasRefOrder;
+                try vm.envAddress("REFERENCE_POOL_CURRENCY0") returns (address ref0) {
+                    address ref1 = vm.envAddress("REFERENCE_POOL_CURRENCY1");
+                    hasRefOrder = true;
+                    if (ref0 == underlyingAsset0 && ref1 == underlyingAsset1) {
+                        shouldInvertReference = false;
+                    } else if (ref0 == underlyingAsset1 && ref1 == underlyingAsset0) {
+                        shouldInvertReference = true;
+                    } else {
+                        revert("REFERENCE_POOL_CURRENCY0/1 do not match UNDERLYING_ASSET_0/1");
+                    }
+                } catch {
+                    hasRefOrder = false;
+                }
+
+                if (!hasRefOrder) {
+                    shouldInvertReference = vm.envOr("REFERENCE_POOL_INVERT", uint256(0)) == 1;
+                }
+
+                if (shouldInvertReference) {
+                    sqrtPrice = _invertSqrtPriceX96(sqrtPrice);
+                    console.log("Inverted reference sqrt price to match underlying ordering");
+                }
+
                 // For price calculation, we assume underlying assets are already sorted
                 // LCC tokens will be sorted the same way when created
                 uint8 dec0 = IERC20Metadata(underlyingAsset0).decimals();
@@ -207,6 +263,22 @@ contract CreateMarketScript is NetworkConfig, VTSConfigFileBase {
                 }
 
                 initialSqrtPriceX96 = sqrtPrice;
+
+                // IMPORTANT: Core pool ordering is based on sorted LCC token addresses, which may NOT align with
+                // sorted underlying addresses. Since LiquidityHub creates the LCC pair with sequential CREATEs,
+                // we can predict the two LCC addresses from LiquidityHub's nonce and flip the price if needed.
+                //
+                // This makes the core pool initialise at the same *economic* price as the reference pool, even when
+                // `lccToken0/lccToken1` ordering differs from `underlyingAsset0/underlyingAsset1`.
+                uint64 hubNonce = vm.getNonce(liquidityHub);
+                address predictedLcc0 = vm.computeCreateAddress(liquidityHub, uint256(hubNonce));
+                address predictedLcc1 = vm.computeCreateAddress(liquidityHub, uint256(hubNonce) + 1);
+                console.log("Predicted LCC(underlyingAsset0) address:", predictedLcc0);
+                console.log("Predicted LCC(underlyingAsset1) address:", predictedLcc1);
+                if (predictedLcc0 > predictedLcc1) {
+                    initialSqrtPriceX96 = _invertSqrtPriceX96(initialSqrtPriceX96);
+                    console.log("Inverted initial sqrt price to match core/LCC ordering");
+                }
 
                 console.log("Adjusted initial sqrt price: %s", vm.toString(initialSqrtPriceX96));
             } else {
@@ -238,6 +310,16 @@ contract CreateMarketScript is NetworkConfig, VTSConfigFileBase {
 
                     uint256 sqrtPrice = _sqrt(price);
                     initialSqrtPriceX96 = uint160(FullMath.mulDiv(sqrtPrice, 1 << 96, 10 ** 9)); // Since sqrt(price) * 10^9 for 18-decimal price
+
+                    // Apply the same predicted-LCC ordering adjustment as the reference-pool path, so manual price
+                    // inputs are also mapped correctly to core/LCC ordering.
+                    uint64 hubNonce = vm.getNonce(liquidityHub);
+                    address predictedLcc0 = vm.computeCreateAddress(liquidityHub, uint256(hubNonce));
+                    address predictedLcc1 = vm.computeCreateAddress(liquidityHub, uint256(hubNonce) + 1);
+                    if (predictedLcc0 > predictedLcc1) {
+                        initialSqrtPriceX96 = _invertSqrtPriceX96(initialSqrtPriceX96);
+                        console.log("Inverted derived initial sqrt price to match core/LCC ordering");
+                    }
 
                     console.log("Derived initial sqrt price: %s", vm.toString(initialSqrtPriceX96));
                 } else {

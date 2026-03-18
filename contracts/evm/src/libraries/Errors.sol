@@ -36,6 +36,12 @@ library Errors {
     /// @param maxAmount The maximum allowed amount (0 if not applicable)
     error InvalidAmount(uint256 amount, uint256 maxAmount);
 
+    /// @notice Thrown when exact-input amountSpecified is outside ProxyHook's supported range
+    /// @param amountSpecified The provided signed amountSpecified value
+    /// @param minSupported The minimum supported amountSpecified (most negative)
+    /// @param maxSupported The maximum supported amountSpecified for exact-input (-1)
+    error UnsupportedExactInputAmount(int256 amountSpecified, int256 minSupported, int256 maxSupported);
+
     /// @notice Thrown when an invalid address is provided (zero address or invalid for context)
     error InvalidAddress(address self);
 
@@ -59,6 +65,11 @@ library Errors {
     /// @param signalValue Signal value from MarketMaker reserves
     /// @param settledValue Settled value already in-market
     error InvalidLiquiditySignal(uint256 issuedValue, uint256 signalValue, uint256 settledValue);
+
+    /// @notice Thrown when an MM reserve set exceeds the maximum allowed unique ticker count
+    /// @param uniqueTickerCount Unique ticker count in the MM reserve set
+    /// @param maxUniqueTickerCount Maximum allowed unique ticker count per MM reserve set
+    error MMReserveTickerLimitExceeded(uint256 uniqueTickerCount, uint256 maxUniqueTickerCount);
 
     /// @notice Thrown when an invalid LCC token is provided
     error InvalidLcc(address lcc);
@@ -126,6 +137,11 @@ library Errors {
     /// @notice Thrown when there is insufficient balance for an operation
     error InsufficientBalance(uint256 balance, uint256 needed);
 
+    /// @notice Thrown when a max input slippage guard is exceeded
+    /// @param maximumAmount User supplied max amount permitted
+    /// @param amountRequested Actual amount requested by execution
+    error MaximumAmountExceeded(uint128 maximumAmount, uint128 amountRequested);
+
     /// @notice Thrown when a liquidity error occurs
     error LiquidityError(address lcc, uint256 amount);
 
@@ -135,11 +151,23 @@ library Errors {
     /// @notice Thrown when a transfer is not allowed
     error TransferNotAllowed();
 
+    /// @notice Thrown when native ETH transferFrom is attempted from a non-self source
+    error NativeTransferFromUnsupported(address from);
+
     /// @notice Thrown when a deadline has passed
     error DeadlinePassed(uint256 deadline);
 
     /// @notice Thrown when a signal is invalid (expired or doesn't exist)
     error InvalidSignal(uint256 commitId);
+
+    /// @notice Thrown when nested ingress settlement observes a different in-flight sync currency.
+    error NestedIngressSyncCurrencyMismatch(address syncedCurrency, address expectedLcc);
+
+    /// @notice Thrown when an active sync window already has an unpaid LCC ingress transfer.
+    error NestedIngressUnpaidTransferExists(uint256 syncedReserves, uint256 poolManagerBalance);
+
+    /// @notice Thrown when synced reserves exceed poolManager token balance for the synced LCC.
+    error NestedIngressInvalidSyncSnapshot(uint256 syncedReserves, uint256 poolManagerBalance);
 
     // ============ POSITION & COMMITMENT ERRORS ============
     // Errors related to positions, commitments, and position management

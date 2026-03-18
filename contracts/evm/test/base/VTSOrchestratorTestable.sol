@@ -14,14 +14,9 @@ import {PositionId} from "../../src/types/Position.sol";
 /// @notice Extends VTSOrchestrator with debug view functions for testing
 /// @dev Only used in test files - keeps production VTSOrchestrator clean
 contract VTSOrchestratorTestable is VTSOrchestrator {
-    constructor(
-        address _poolManager,
-        address _signalManager,
-        address _oracleHelper,
-        address _liquidityHub,
-        address _settlementObserver,
-        address _owner
-    ) VTSOrchestrator(_poolManager, _signalManager, _oracleHelper, _liquidityHub, _settlementObserver, _owner) {}
+    constructor(address _poolManager, address _oracleHelper, address _liquidityHub, address _owner)
+        VTSOrchestrator(_poolManager, _oracleHelper, _liquidityHub, _owner)
+    {}
 
     /// @notice Get position accounting details for debugging
     /// @param positionId The position identifier
@@ -60,6 +55,18 @@ contract VTSOrchestratorTestable is VTSOrchestrator {
         PositionAccounting storage pa = s.positionAccounting[positionId];
         pa.commitmentMax.token0 = commitmentMax0;
         pa.commitmentMax.token1 = commitmentMax1;
+    }
+
+    /// @notice TEST-ONLY: set commitment deficit values directly
+    /// @dev This is intentionally unsafe and should only be used in tests.
+    function _setCommitmentDeficit(PositionId positionId, uint256 commitmentDeficit0, uint256 commitmentDeficit1)
+        external
+    {
+        PositionAccounting storage pa = s.positionAccounting[positionId];
+        pa.commitmentDeficit.token0 = commitmentDeficit0;
+        pa.commitmentDeficit.token1 = commitmentDeficit1;
+        if (commitmentDeficit0 == 0) pa.commitmentDeficitSince.token0 = 0;
+        if (commitmentDeficit1 == 0) pa.commitmentDeficitSince.token1 = 0;
     }
 
     /// @notice Get pool DICE (Deficit-Indexed Coverage Exercise) accounting for debugging

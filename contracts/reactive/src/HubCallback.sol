@@ -15,6 +15,9 @@ contract HubCallback is AbstractCallback, Ownable {
     event DuplicateSettlementIgnored(
         address indexed spoke, address indexed lcc, address indexed recipient, uint256 nonce
     );
+    event SettlementAnnulledReported(address indexed recipient, address indexed lcc, uint256 amount);
+    event SettlementProcessedReported(address indexed recipient, address indexed lcc, uint256 amount);
+    event SettlementFailedReported(address indexed recipient, address indexed lcc, uint256 maxAmount);
     event MoreLiquidityAvailable(address indexed lcc, uint256 amountAvailable);
     event InvalidCallbackSender(address indexed sender);
     event ZeroAmountProvided();
@@ -68,7 +71,7 @@ contract HubCallback is AbstractCallback, Ownable {
         external
         authorizedSenderOnly
     {
-        if (spokeRVMId == address(0)) revert InvalidSpoke();
+        if (!_isExpectedSpoke(spokeRVMId, recipient)) return;
         // revert for invalid amounts
         if (amount == 0) {
             return;
@@ -81,15 +84,47 @@ contract HubCallback is AbstractCallback, Ownable {
         }
         lastNonce[nonceKey] = nonce;
 
-        // Reject reports when the supplied spoke is not the configured spoke for recipient.
-        address expectedSpoke = spokeForRecipient[recipient];
-        if (expectedSpoke == address(0) || expectedSpoke != spokeRVMId) {
-            emit SpokeNotForRecipient(recipient, expectedSpoke, spokeRVMId);
-            return;
-        }
-
         totalAmountProcessed[lcc][recipient] += amount;
         emit SettlementReported(recipient, lcc, amount, nonce);
+    }
+
+    /// @notice Record a queue-annulment callback for a recipient.
+    function recordSettlementAnnulled(address spokeRVMId, address lcc, address recipient, uint256 amount)
+        external
+        authorizedSenderOnly
+    {
+        if (!_isExpectedSpoke(spokeRVMId, recipient)) return;
+        if (amount == 0) {
+            emit ZeroAmountProvided();
+            return;
+        }
+        emit SettlementAnnulledReported(recipient, lcc, amount);
+    }
+
+    /// @notice Record a settlement-processed callback for a recipient.
+    function recordSettlementProcessed(address spokeRVMId, address lcc, address recipient, uint256 amount)
+        external
+        authorizedSenderOnly
+    {
+        if (!_isExpectedSpoke(spokeRVMId, recipient)) return;
+        if (amount == 0) {
+            emit ZeroAmountProvided();
+            return;
+        }
+        emit SettlementProcessedReported(recipient, lcc, amount);
+    }
+
+    /// @notice Record a settlement-failed callback for a recipient.
+    function recordSettlementFailed(address spokeRVMId, address lcc, address recipient, uint256 maxAmount)
+        external
+        authorizedSenderOnly
+    {
+        if (!_isExpectedSpoke(spokeRVMId, recipient)) return;
+        if (maxAmount == 0) {
+            emit ZeroAmountProvided();
+            return;
+        }
+        emit SettlementFailedReported(recipient, lcc, maxAmount);
     }
 
     /// @notice Emits a liquidity-available signal from an authorised sender (compatibility overload).
@@ -111,6 +146,16 @@ contract HubCallback is AbstractCallback, Ownable {
             return;
         }
         emit MoreLiquidityAvailable(lcc, amountAvailable);
+    }
+
+    function _isExpectedSpoke(address spokeRVMId, address recipient) internal returns (bool) {
+        if (spokeRVMId == address(0)) revert InvalidSpoke();
+        address expectedSpoke = spokeForRecipient[recipient];
+        if (expectedSpoke == address(0) || expectedSpoke != spokeRVMId) {
+            emit SpokeNotForRecipient(recipient, expectedSpoke, spokeRVMId);
+            return false;
+        }
+        return true;
     }
 }
 

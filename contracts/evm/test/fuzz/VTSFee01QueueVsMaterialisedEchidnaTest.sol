@@ -230,7 +230,7 @@ contract VTSFee01QueueVsMaterialisedEchidnaTest {
         uint256 selfRemaining = sSelfRemaining;
         uint256 potAvail = pot > selfRemaining ? (pot - selfRemaining) : 0;
 
-        if (sExposure == 0 || sExposure < 1e6 || sTotalExposure == 0 || potAvail == 0) {
+        if (sExposure == 0 || sTotalExposure == 0 || potAvail == 0) {
             return (beforeQueue.protocolFee, beforeQueue.pending, beforeQueue.spendIndex, false);
         }
 
@@ -287,15 +287,19 @@ contract VTSFee01QueueVsMaterialisedEchidnaTest {
     }
 
     function _config(uint16 coverageFeeShare) internal pure returns (MarketVTSConfiguration memory) {
-        TokenConfiguration memory tc = TokenConfiguration({gracePeriodTime: 0, baseVTSRate: 0, maxGracePeriodTime: 0});
+        TokenConfiguration memory tc = TokenConfiguration({
+            gracePeriodTime: 0,
+            baseVTSRate: 0,
+            maxGracePeriodTime: 0,
+            unbackedCommitmentGraceBypassTime: 0,
+            unbackedCommitmentGraceBypassThreshold: 0
+        });
         return MarketVTSConfiguration({
             token0: tc,
             token1: tc,
             coverageFeeShare: coverageFeeShare,
             minResidualUnits: 0,
-            unbackedCommitmentGraceBypassBps: 0,
-            unbackedCommitmentGraceBypassThreshold0: 0,
-            unbackedCommitmentGraceBypassThreshold1: 0
+            unbackedCommitmentGraceBypassBps: 0
         });
     }
 }

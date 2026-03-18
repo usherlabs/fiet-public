@@ -10,6 +10,8 @@ import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
 import {ImmutableState} from "v4-periphery/src/base/ImmutableState.sol";
 import {WETH} from "@uniswap/v4-core/lib/solmate/src/tokens/WETH.sol";
 import {Errors} from "../src/libraries/Errors.sol";
+import {IMarketFactory} from "../src/interfaces/IMarketFactory.sol";
+import {ILiquidityHub} from "../src/interfaces/ILiquidityHub.sol";
 
 // ============ MOCK CONTRACTS ============
 
@@ -102,7 +104,16 @@ contract ForksNativeWrapperHarness is ForksNativeWrapper {
 /// @notice Test harness to expose internal functions from modules/NativeWrapper.sol
 /// @dev This harness tests the EXTENDED NativeWrapper from modules/ directory
 contract ModulesNativeWrapperHarness is FietNativeWrapper {
-    constructor(IWETH9 _weth9, IPoolManager _poolManager) FietNativeWrapper(_weth9) ImmutableState(_poolManager) {}
+    IMarketFactory internal immutable _factory;
+    ILiquidityHub internal immutable _hub;
+
+    constructor(IWETH9 _weth9, IPoolManager _poolManager, address marketFactory_, address hub_)
+        FietNativeWrapper(_weth9)
+        ImmutableState(_poolManager)
+    {
+        _factory = IMarketFactory(marketFactory_);
+        _hub = ILiquidityHub(hub_);
+    }
 
     /// @notice Expose internal _wrap function for testing
     function wrap(uint256 amount) external {
@@ -117,6 +128,14 @@ contract ModulesNativeWrapperHarness is FietNativeWrapper {
     /// @notice Expose internal _assertValidEthSender for testing
     function assertValidEthSender() external view {
         _assertValidEthSender();
+    }
+
+    function _canonicalMarketFactory() internal view override returns (IMarketFactory) {
+        return _factory;
+    }
+
+    function _liquidityHub() internal view override returns (ILiquidityHub) {
+        return _hub;
     }
 }
 
@@ -139,6 +158,8 @@ contract NativeWrapperTest is Test {
 
     // Test addresses
     address public unauthorisedSender;
+    address public marketFactory;
+    address public liquidityHub;
 
     function setUp() public {
         // Deploy WETH9
@@ -146,10 +167,13 @@ contract NativeWrapperTest is Test {
 
         // Create mock pool manager
         poolManager = IPoolManager(makeAddr("poolManager"));
+        marketFactory = makeAddr("marketFactory");
+        liquidityHub = makeAddr("liquidityHub");
+        vm.etch(marketFactory, hex"00");
 
         // Deploy harnesses
         forksHarness = new ForksNativeWrapperHarness(weth9, poolManager);
-        modulesHarness = new ModulesNativeWrapperHarness(weth9, poolManager);
+        modulesHarness = new ModulesNativeWrapperHarness(weth9, poolManager, marketFactory, liquidityHub);
 
         // Deploy mock contracts
         mockMarketVault = new MockMarketVaultForNativeWrapper();
@@ -401,51 +425,57 @@ contract NativeWrapperTest is Test {
         // If we reach here, the function returned successfully
     }
 
-    function test_modules_assertValidEthSender_reverts_whenLccsCallFails() public {
-        // Use a contract that doesn't implement lccs()
+    function test_modules_assertValidEthSender_reverts_whenSenderNotInFactoryRegistry() public {
+        vm.mockCall(
+            marketFactory,
+            abi.encodeWithSelector(IMarketFactory.proxyHookToCurrencyPair.selector, address(contractWithoutLccs)),
+            abi.encode([address(0), address(0)])
+        );
         vm.prank(address(contractWithoutLccs));
         vm.expectRevert(Errors.InvalidEthSender.selector);
         modulesHarness.assertValidEthSender();
     }
 
     function test_modules_assertValidEthSender_reverts_whenNeitherUnderlyingIsNativeEth() public {
-        // Setup mock vault with both LCCs having ERC20 underlyings (not native ETH)
-        MockLCCForNativeWrapper lcc0Erc20 = new MockLCCForNativeWrapper(makeAddr("token0"));
-        MockLCCForNativeWrapper lcc1Erc20 = new MockLCCForNativeWrapper(makeAddr("token1"));
-
-        mockMarketVault.setLccs(address(lcc0Erc20), address(lcc1Erc20));
-
+        vm.mockCall(
+            marketFactory,
+            abi.encodeWithSelector(IMarketFactory.proxyHookToCurrencyPair.selector, address(mockMarketVault)),
+            abi.encode([makeAddr("token0"), makeAddr("token1")])
+        );
         vm.prank(address(mockMarketVault));
         vm.expectRevert(Errors.InvalidEthSender.selector);
         modulesHarness.assertValidEthSender();
     }
 
     function test_modules_assertValidEthSender_succeeds_whenUnderlying0IsNativeEth() public {
-        // Setup mock vault with LCC0 having native ETH underlying
-        mockMarketVault.setLccs(address(mockLccNativeEth), address(mockLccErc20));
-
+        vm.mockCall(
+            marketFactory,
+            abi.encodeWithSelector(IMarketFactory.proxyHookToCurrencyPair.selector, address(mockMarketVault)),
+            abi.encode([address(0), makeAddr("token1")])
+        );
         vm.prank(address(mockMarketVault));
         modulesHarness.assertValidEthSender();
-        // If we reach here, the function returned successfully
     }
 
     function test_modules_assertValidEthSender_succeeds_whenUnderlying1IsNativeEth() public {
-        // Setup mock vault with LCC1 having native ETH underlying
-        mockMarketVault.setLccs(address(mockLccErc20), address(mockLccNativeEth));
-
+        vm.mockCall(
+            marketFactory,
+            abi.encodeWithSelector(IMarketFactory.proxyHookToCurrencyPair.selector, address(mockMarketVault)),
+            abi.encode([makeAddr("token0"), address(0)])
+        );
         vm.prank(address(mockMarketVault));
         modulesHarness.assertValidEthSender();
-        // If we reach here, the function returned successfully
     }
 
-    function test_modules_assertValidEthSender_succeeds_whenBothUnderlyingsAreNativeEth() public {
-        // Setup mock vault with both LCCs having native ETH underlying
-        MockLCCForNativeWrapper anotherNativeEthLcc = new MockLCCForNativeWrapper(address(0));
-        mockMarketVault.setLccs(address(mockLccNativeEth), address(anotherNativeEthLcc));
-
+    function test_modules_assertValidEthSender_reverts_whenBothUnderlyingsAreNativeEth() public {
+        vm.mockCall(
+            marketFactory,
+            abi.encodeWithSelector(IMarketFactory.proxyHookToCurrencyPair.selector, address(mockMarketVault)),
+            abi.encode([address(0), address(0)])
+        );
         vm.prank(address(mockMarketVault));
+        vm.expectRevert(Errors.InvalidEthSender.selector);
         modulesHarness.assertValidEthSender();
-        // If we reach here, the function returned successfully
     }
 
     // ------------ receive() Override Tests (Modules version) ------------
@@ -479,8 +509,11 @@ contract NativeWrapperTest is Test {
     }
 
     function test_modules_receive_acceptsEth_fromValidMarketVault() public {
-        // Setup mock vault with valid native ETH LCC
-        mockMarketVault.setLccs(address(mockLccNativeEth), address(mockLccErc20));
+        vm.mockCall(
+            marketFactory,
+            abi.encodeWithSelector(IMarketFactory.proxyHookToCurrencyPair.selector, address(mockMarketVault)),
+            abi.encode([address(0), makeAddr("token1")])
+        );
 
         uint256 sendAmount = 1 ether;
         uint256 harnessBalanceBefore = address(modulesHarness).balance;
@@ -496,10 +529,11 @@ contract NativeWrapperTest is Test {
     }
 
     function test_modules_receive_reverts_fromInvalidMarketVault() public {
-        // Setup mock vault with NO native ETH LCCs (both ERC20)
-        MockLCCForNativeWrapper lcc0Erc20 = new MockLCCForNativeWrapper(makeAddr("token0"));
-        MockLCCForNativeWrapper lcc1Erc20 = new MockLCCForNativeWrapper(makeAddr("token1"));
-        mockMarketVault.setLccs(address(lcc0Erc20), address(lcc1Erc20));
+        vm.mockCall(
+            marketFactory,
+            abi.encodeWithSelector(IMarketFactory.proxyHookToCurrencyPair.selector, address(mockMarketVault)),
+            abi.encode([makeAddr("token0"), makeAddr("token1")])
+        );
 
         uint256 sendAmount = 1 ether;
 
@@ -512,6 +546,11 @@ contract NativeWrapperTest is Test {
         uint256 sendAmount = 1 ether;
 
         // Contract without lccs() function tries to send ETH
+        vm.mockCall(
+            marketFactory,
+            abi.encodeWithSelector(IMarketFactory.proxyHookToCurrencyPair.selector, address(contractWithoutLccs)),
+            abi.encode([address(0), address(0)])
+        );
         vm.expectRevert(Errors.InvalidEthSender.selector);
         contractWithoutLccs.sendEth{value: sendAmount}(payable(address(modulesHarness)));
     }

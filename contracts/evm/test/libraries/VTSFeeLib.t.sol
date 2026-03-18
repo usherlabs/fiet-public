@@ -335,8 +335,8 @@ contract VTSFeeLibTest is VTSLibTestBase {
     // _queueBonusForToken + _cleanupAfterAllocationForToken Tests (CISE + CSI)
     // ============================================================
 
-    /// @dev Mutation-killer: if the `ciseExposure == 0` early return is removed, the function would still return false
-    ///      (due to dust guard), but it would incorrectly checkpoint CSI indexLast via `_syncFeesSharedRemainingForToken`.
+    /// @dev Mutation-killer: if the `ciseExposure == 0` early return is removed, the function could still return false
+    ///      later in the flow, but it would incorrectly checkpoint CSI indexLast via `_syncFeesSharedRemainingForToken`.
     function test_queueBonusForToken_ciseExposureZero_doesNotCheckpointCSIIndexLast() public {
         // Arrange: make CSI spend index non-zero and indexLast zero so checkpointing is observable.
         harness.setFeesShared(testPositionId, 1000, 0);
@@ -367,10 +367,10 @@ contract VTSFeeLibTest is VTSLibTestBase {
         harness.setPoolFeesSharedSpendIndexX128(testPoolId, FixedPoint128.Q128 / 2, 0);
         harness.setPositionFeesSharedIndexLastX128(testPositionId, 0, 0);
 
-        // Exposure (non-dust) + denominator for bonus calculation.
+        // Exposure + denominator for bonus calculation.
         harness.setPoolTotalCISEExposure(testPoolId, 0, 2e6);
 
-        // Act: feeTokenIndex=0 uses coverageTokenIndex=1 denominator, and ciseExposure is non-zero and above dust.
+        // Act: feeTokenIndex=0 uses coverageTokenIndex=1 denominator, and ciseExposure is positive.
         bool allocated = harness.queueBonusForToken(testPositionId, testPoolId, 0, 1, 2e6);
         assertTrue(allocated, "Expected allocation once sync reduces selfRemaining");
 
@@ -400,13 +400,28 @@ contract VTSFeeLibTest is VTSLibTestBase {
         assertFalse(allocated);
     }
 
-    function test_queueBonusForToken_dustExposure_returnsFalse() public {
+    function test_queueBonusForToken_smallExposure_bonusZero_returnsFalse() public {
+        harness.setProtocolFeeAccrued(testPoolId, 1, 0);
+        harness.setFeesShared(testPositionId, 0, 0);
+        harness.setPoolTotalCISEExposure(testPoolId, 0, 1e18);
+
+        bool allocated = harness.queueBonusForToken(testPositionId, testPoolId, 0, 1, 1);
+        assertFalse(allocated);
+    }
+
+    function test_queueBonusForToken_smallExposure_nonZeroBonus_allocates() public {
         harness.setProtocolFeeAccrued(testPoolId, 100, 0);
         harness.setFeesShared(testPositionId, 0, 0);
-        harness.setPoolTotalCISEExposure(testPoolId, 0, 999_999);
+        harness.setPoolTotalCISEExposure(testPoolId, 0, 1);
 
-        bool allocated = harness.queueBonusForToken(testPositionId, testPoolId, 0, 1, 999_999);
-        assertFalse(allocated);
+        bool allocated = harness.queueBonusForToken(testPositionId, testPoolId, 0, 1, 1);
+        assertTrue(allocated);
+
+        (uint256 pot0After,) = harness.getProtocolFeeAccrued(testPoolId);
+        assertEq(pot0After, 0, "small positive exposure should allocate when it earns a non-zero bonus");
+
+        (int256 pend0After,) = harness.getPendingFeeAdj(testPositionId);
+        assertEq(pend0After, -int256(100), "pending should reflect the allocated bonus");
     }
 
     function test_queueBonusForToken_totalExposureZero_returnsFalse() public {
@@ -722,7 +737,7 @@ contract VTSFeeLibTest is VTSLibTestBase {
         uint256 selfContrib
     ) public {
         // Bound inputs to valid ranges
-        ciseExposure = bound(ciseExposure, 1e12, 1e30); // Above dust threshold
+        ciseExposure = bound(ciseExposure, 1, 1e30); // Positive exposure; bonus zero cases are covered elsewhere
         poolExposure = bound(poolExposure, ciseExposure, type(uint128).max);
         selfContrib = bound(selfContrib, 0, type(uint128).max / 2);
         protocolFee = bound(protocolFee, selfContrib, type(uint128).max);

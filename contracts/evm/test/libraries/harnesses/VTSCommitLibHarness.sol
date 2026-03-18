@@ -38,12 +38,12 @@ contract VTSCommitLibHarness {
         VTSCommitLib.incrementCoverage(s, poolId, tokenIndex, coveredAmount);
     }
 
-    function commitSignal(IVRLSignalManager mgr, bytes memory sig) external returns (uint256) {
-        return VTSCommitLib.commitSignal(s, mgr, sig);
+    function commitSignal(IVRLSignalManager mgr, address sender, bytes memory sig) external returns (uint256) {
+        return VTSCommitLib.commitSignal(s, sender, mgr, sig);
     }
 
     function renewSignal(IVRLSignalManager mgr, uint256 commitId, bytes memory sig) external {
-        VTSCommitLib.renewSignal(s, mgr, msg.sender, commitId, sig);
+        VTSCommitLib.renewSignal(s, msg.sender, mgr, commitId, sig);
     }
 
     function checkpoint(IPoolManager poolManager, IOracleHelper oracleHelper, uint256 commitId, PositionId positionId)
@@ -76,7 +76,7 @@ contract VTSCommitLibHarness {
             isActive: true,
             salt: bytes32(0),
             checkpoint: RFSCheckpoint({
-                timeOfLastTransition: block.timestamp, isOpen: false, gracePeriodExtension0: 0, gracePeriodExtension1: 0
+                openMask: 0, openSince0: 0, openSince1: 0, gracePeriodExtension0: 0, gracePeriodExtension1: 0
             })
         });
     }
@@ -89,6 +89,11 @@ contract VTSCommitLibHarness {
     function setPositionCommitmentDeficit(PositionId id, uint256 deficit0, uint256 deficit1) external {
         s.positionAccounting[id].commitmentDeficit.token0 = deficit0;
         s.positionAccounting[id].commitmentDeficit.token1 = deficit1;
+    }
+
+    function setPositionCommitmentDeficitSince(PositionId id, uint256 since0, uint256 since1) external {
+        s.positionAccounting[id].commitmentDeficitSince.token0 = since0;
+        s.positionAccounting[id].commitmentDeficitSince.token1 = since1;
     }
 
     function setCommitExpiresAt(uint256 commitId, uint256 expiresAt) external {
@@ -155,19 +160,26 @@ contract VTSCommitLibHarness {
         return s.positionAccounting[id].commitmentDeficitBps;
     }
 
+    function getPositionCommitmentDeficitSince(PositionId id) external view returns (uint256 since0, uint256 since1) {
+        return (
+            s.positionAccounting[id].commitmentDeficitSince.token0,
+            s.positionAccounting[id].commitmentDeficitSince.token1
+        );
+    }
+
     // ============ Internal Helpers ============
 
     function _emptyConfig() internal pure returns (MarketVTSConfiguration memory cfg) {
         // Keep the harness independent from MarketTestBase defaults; commit lib doesn't read config.
-        TokenConfiguration memory tc = TokenConfiguration({gracePeriodTime: 0, baseVTSRate: 0, maxGracePeriodTime: 0});
+        TokenConfiguration memory tc = TokenConfiguration({
+            gracePeriodTime: 0,
+            baseVTSRate: 0,
+            maxGracePeriodTime: 0,
+            unbackedCommitmentGraceBypassTime: 0,
+            unbackedCommitmentGraceBypassThreshold: 0
+        });
         cfg = MarketVTSConfiguration({
-            token0: tc,
-            token1: tc,
-            coverageFeeShare: 0,
-            minResidualUnits: 0,
-            unbackedCommitmentGraceBypassBps: 0,
-            unbackedCommitmentGraceBypassThreshold0: 0,
-            unbackedCommitmentGraceBypassThreshold1: 0
+            token0: tc, token1: tc, coverageFeeShare: 0, minResidualUnits: 0, unbackedCommitmentGraceBypassBps: 0
         });
     }
 }

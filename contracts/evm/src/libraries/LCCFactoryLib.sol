@@ -66,6 +66,8 @@ library LCCFactoryLib {
     /// @param index The index in the underlying pair (0 or 1)
     /// @param marketName The market name (can be empty string)
     /// @param initialIssuers Array of addresses to set as issuers for this LCC token
+    /// @param hub LiquidityHub authority passed into the LCC constructor
+    /// @param factory Factory namespace passed into the LCC constructor
     /// @param resilientOracleAddress The oracle address for LCC metadata resolution
     /// @return lccToken The LCC token address
     function createLCC(
@@ -75,6 +77,8 @@ library LCCFactoryLib {
         uint8 index,
         string memory marketName,
         address[] memory initialIssuers,
+        address hub,
+        address factory,
         address resilientOracleAddress
     ) internal returns (address lccToken) {
         address underlying = underlyingPair[index];
@@ -89,7 +93,7 @@ library LCCFactoryLib {
         // Create LCC token
         lccToken = address(
             new LiquidityCommitmentCertificate(
-                underlying, params.name, params.symbol, params.decimals, resilientOracleAddress
+                underlying, params.name, params.symbol, params.decimals, resilientOracleAddress, hub, factory
             )
         );
 
@@ -289,6 +293,8 @@ library LCCFactoryLinkedLib {
     /// @param index The index in the underlying pair (0 or 1)
     /// @param marketName The market name (can be empty string)
     /// @param initialIssuers Array of addresses to set as issuers for this LCC token
+    /// @param hub LiquidityHub authority passed into the LCC constructor
+    /// @param factory Factory namespace passed into the LCC constructor
     /// @param resilientOracleAddress The oracle address for LCC metadata resolution
     /// @return lccToken The LCC token address
     function createLCC(
@@ -298,10 +304,12 @@ library LCCFactoryLinkedLib {
         uint8 index,
         string memory marketName,
         address[] memory initialIssuers,
+        address hub,
+        address factory,
         address resilientOracleAddress
     ) external returns (address lccToken) {
         return LCCFactoryLib.createLCC(
-            s, marketRef, underlyingPair, index, marketName, initialIssuers, resilientOracleAddress
+            s, marketRef, underlyingPair, index, marketName, initialIssuers, hub, factory, resilientOracleAddress
         );
     }
 }

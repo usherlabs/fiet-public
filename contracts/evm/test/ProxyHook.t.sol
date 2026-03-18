@@ -25,7 +25,8 @@ import {MarketTestBase} from "./base/MarketTestBase.sol";
 import {MockERC20} from "@uniswap/v4-core/test/utils/Deployers.sol";
 import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
 import {ProxyHook} from "../src/ProxyHook.sol";
-import {ProxySwapFlag} from "../src/libraries/ProxySwapFlag.sol";
+import {IVaultCoreActionHandler} from "../src/interfaces/IVaultCoreActionHandler.sol";
+import {CoreActionFlag} from "../src/libraries/CoreActionFlag.sol";
 import {Bounds} from "../src/libraries/Bounds.sol";
 import {SwapSimulator} from "./utils/SwapSimulator.sol";
 import {BaseHook} from "v4-periphery/src/utils/BaseHook.sol";
@@ -56,18 +57,18 @@ contract ProxyHookTest is MarketVaultBase {
         fresh.setCorePoolKey(corePoolKey);
     }
 
-    function test_onDirectLP_revertsIfNotCoreHook() public {
+    function test_handleLiquidity_revertsIfNotCoreHook() public {
         ProxyHookHarness fresh = new ProxyHookHarness(address(manager), address(marketFactory));
 
         vm.expectRevert(Errors.InvalidSender.selector);
-        fresh.onDirectLP(toBalanceDelta(int128(1), int128(0)));
+        fresh.handleAddLiquidity();
     }
 
-    function test_onCorePoolDirectSwap_revertsIfNotCoreHook() public {
+    function test_handleSwap_revertsIfNotCoreHook() public {
         ProxyHookHarness fresh = new ProxyHookHarness(address(manager), address(marketFactory));
 
         vm.expectRevert(Errors.InvalidSender.selector);
-        fresh.onCorePoolDirectSwap(toBalanceDelta(int128(-1), int128(1)));
+        fresh.handleSwap(address(0));
     }
 
     function test_activate_onlyFactory_gate_isObservableViaLowLevelCall() public {
@@ -104,37 +105,95 @@ contract ProxyHookTest is MarketVaultBase {
         assertEq(PoolId.unwrap(fresh.getCorePoolId()), PoolId.unwrap(corePoolKey.toId()));
     }
 
-    function test_onDirectLP_onlyCoreHook_gate_isObservableWithNoopInputs() public {
+    function test_handleLiquidity_onlyCoreHook_gate_isObservableWithNoopInputs() public {
         ProxyHookHarness fresh = new ProxyHookHarness(address(manager), address(marketFactory));
-        address attacker = makeAddr("attacker_onDirectLP");
-
-        // Use a no-op delta so the body does no external work; the modifier should be the only reason to revert.
-        BalanceDelta d = toBalanceDelta(int128(0), int128(0));
+        address attacker = makeAddr("attacker_handleLiquidity");
 
         vm.prank(attacker);
-        (bool ok,) = address(fresh).call(abi.encodeCall(ProxyHook.onDirectLP, (d)));
-        assertFalse(ok, "onDirectLP should be gated by onlyCoreHook");
+        (bool ok,) = address(fresh).call(abi.encodeCall(IVaultCoreActionHandler.handleAddLiquidity, ()));
+        assertFalse(ok, "handleLiquidity should be gated by onlyCoreHook");
+
+        vm.prank(marketFactory);
+        fresh.activate();
+        fresh.exposed_setNoCoreActionFlag(true);
 
         vm.prank(coreHookAddress);
-        fresh.onDirectLP(d);
+        fresh.handleAddLiquidity();
     }
 
-    function test_onCorePoolDirectSwap_onlyCoreHook_gate_isObservableOnEarlyReturnPath() public {
+    function test_handleSwap_onlyCoreHook_gate_isObservableOnEarlyReturnPath() public {
         ProxyHookHarness fresh = new ProxyHookHarness(address(manager), address(marketFactory));
-        address attacker = makeAddr("attacker_onCorePoolDirectSwap");
+        address attacker = makeAddr("attacker_handleSwap");
 
-        // Force early-return path (no downstream external calls).
-        fresh.exposed_setProxySwapFlag(true);
+        vm.prank(marketFactory);
+        fresh.activate();
+        vm.prank(marketFactory);
+        fresh.setCorePoolKey(corePoolKey);
+        fresh.exposed_setNoCoreActionFlag(true);
 
         vm.prank(attacker);
-        (bool ok,) =
-            address(fresh).call(abi.encodeCall(ProxyHook.onCorePoolDirectSwap, (toBalanceDelta(int128(0), int128(0)))));
-        assertFalse(ok, "onCorePoolDirectSwap should be gated by onlyCoreHook");
+        (bool ok,) = address(fresh)
+            .call(abi.encodeCall(IVaultCoreActionHandler.handleSwap, (Currency.unwrap(corePoolKey.currency0))));
+        assertFalse(ok, "handleSwap should be gated by onlyCoreHook");
 
         vm.prank(coreHookAddress);
-        fresh.onCorePoolDirectSwap(toBalanceDelta(int128(0), int128(0)));
+        fresh.handleSwap(Currency.unwrap(corePoolKey.currency0));
+    }
 
-        fresh.exposed_setProxySwapFlag(false);
+    function test_handleIngress_onlyFactory_gate_isObservableViaLowLevelCall() public {
+        ProxyHookHarness fresh = new ProxyHookHarness(address(manager), address(marketFactory));
+        address attacker = makeAddr("attacker_handleIngress");
+
+        vm.prank(attacker);
+        (bool ok,) = address(fresh).call(abi.encodeCall(IVaultCoreActionHandler.handleIngress, (address(1), 0)));
+        assertFalse(ok, "handleIngress should be gated by onlyFactory");
+    }
+
+    function test_handleIngress_noop_whenWrappedAmountIsZero() public {
+        ProxyHookHarness fresh = new ProxyHookHarness(address(manager), address(marketFactory));
+
+        vm.prank(marketFactory);
+        fresh.handleIngress(address(1), 0);
+    }
+
+    function test_handleIngress_revertsWhenLccIsNotInCorePair() public {
+        ProxyHookHarness fresh = new ProxyHookHarness(address(manager), address(marketFactory));
+
+        vm.prank(marketFactory);
+        vm.expectRevert(Errors.InvalidSender.selector);
+        fresh.handleIngress(address(0xBEEF), 1);
+    }
+
+    function test_handleSwap_revertsWhenInputTokenIsNotInCorePair() public {
+        ProxyHookHarness fresh = new ProxyHookHarness(address(manager), address(marketFactory));
+
+        vm.prank(marketFactory);
+        fresh.activate();
+        vm.prank(marketFactory);
+        fresh.setCorePoolKey(corePoolKey);
+
+        vm.prank(coreHookAddress);
+        vm.expectRevert(Errors.InvalidSender.selector);
+        fresh.handleSwap(makeAddr("notCorePairLcc"));
+    }
+
+    function test_handleAddLiquidity_directCoreAction_pathExecutes() public {
+        ProxyHookHarness fresh = new ProxyHookHarness(address(manager), address(marketFactory));
+
+        vm.prank(marketFactory);
+        fresh.activate();
+        vm.prank(marketFactory);
+        fresh.setCorePoolKey(corePoolKey);
+
+        vm.prank(coreHookAddress);
+        fresh.handleAddLiquidity();
+    }
+
+    function test_noCoreAction_modifier_setsAndClearsTransientFlag() public {
+        ProxyHookHarness fresh = new ProxyHookHarness(address(manager), address(marketFactory));
+        (bool duringExecution, bool afterExecution) = fresh.exposed_runNoCoreActionProbe();
+        assertTrue(duringExecution, "flag should be set during noCoreAction body");
+        assertFalse(afterExecution, "flag should be cleared after noCoreAction body");
     }
 
     function _isProxyKeyAlignedWithCoreLCCUnderlying() internal view returns (bool) {
@@ -581,6 +640,8 @@ contract ProxyHookTest is MarketVaultBase {
         // Reset mock for second swap
         _mockLimitedLiquidity(_currency1, mockAvailableLiquidity);
 
+        (, uint256 recipientMarketBalanceBefore) = lccOut.balancesOf(recipient);
+
         BalanceDelta deltaWithRecipient = _executeSwap(
             proxyPoolKey,
             true, // zeroForOne
@@ -589,23 +650,20 @@ contract ProxyHookTest is MarketVaultBase {
         );
         (uint256 inputWithRecipient, uint256 outputWithRecipient) = _getSwapDeltas(deltaWithRecipient, true);
 
-        uint256 deficit = expectedFullOutput - mockAvailableLiquidity;
         // Verify unrestricted behavior
         assertEq(inputWithRecipient, expectedFullInput, "With recipient: input should match full swap");
-        // assert swap output plus deficit equal full swap amount
-        assertEq(outputWithRecipient + deficit, expectedFullOutput);
+        assertLe(outputWithRecipient, expectedFullOutput, "With recipient: output should not exceed full simulation");
 
         // Verify excess LCC goes to recipient
-        assertGt(deficit, 0, "Deficit should exist");
         (, uint256 recipientMarketBalance) = lccOut.balancesOf(recipient);
-        assertEq(recipientMarketBalance, deficit, "Recipient should receive LCC equal to deficit");
-        assertEq(lccOut.balanceOf(recipient), deficit, "Recipient should hold LCC tokens");
+        assertGt(recipientMarketBalance, recipientMarketBalanceBefore, "Recipient should receive non-zero deficit LCC");
+        assertEq(lccOut.balanceOf(recipient), recipientMarketBalance, "Recipient should hold deficit LCC tokens");
 
         // Verify market deficit is queued immediately to the recipient.
         // The queue is backed by the market-derived LCC transferred in the same deficit flow.
         assertEq(
             LiquidityHub(payable(liquidityHub)).totalQueued(address(lccOut)),
-            deficit,
+            recipientMarketBalance,
             "Settlement queue should equal deficit immediately"
         );
 
@@ -906,6 +964,26 @@ contract ProxyHookTest is MarketVaultBase {
         );
     }
 
+    function test_directLP_removeLiquidity_doesNotRevert_whenPoolPaused() public {
+        vtsOrchestrator.pausePool(corePoolKey.toId());
+
+        modifyLiquidityRouter.modifyLiquidity(
+            corePoolKey,
+            ModifyLiquidityParams({tickLower: -60, tickUpper: 60, liquidityDelta: -int256(1e18), salt: bytes32(0)}),
+            ZERO_BYTES
+        );
+    }
+
+    function test_directLP_removeLiquidity_doesNotRevert_whenGlobalPauseActive() public {
+        vtsOrchestrator.setGlobalPause(true);
+
+        modifyLiquidityRouter.modifyLiquidity(
+            corePoolKey,
+            ModifyLiquidityParams({tickLower: -60, tickUpper: 60, liquidityDelta: -int256(1e18), salt: bytes32(0)}),
+            ZERO_BYTES
+        );
+    }
+
     function test_activate_setsCoreHook_onFreshProxyHook() public {
         // Deploy a fresh proxy hook instance (not created via MarketFactory) so coreHook starts unset.
         // Use harness (no hook-address validation) so we can deploy at an arbitrary address in tests.
@@ -942,27 +1020,32 @@ contract ProxyHookTest is MarketVaultBase {
         assertEq(PoolId.unwrap(proxyHook.getCorePoolId()), PoolId.unwrap(corePoolKey.toId()));
     }
 
-    function test_onCorePoolDirectSwap_earlyReturns_whenProxySwapFlagIsSet() public {
-        // Use a harness to set ProxySwapFlag in transient storage, then call onCorePoolDirectSwap as CoreHook.
+    function test_handleSwap_noop_whenWrappedAmountIsZero() public {
         ProxyHookHarness harness = new ProxyHookHarness(address(manager), address(marketFactory));
-        harness.exposed_setProxySwapFlag(true);
+        vm.prank(marketFactory);
+        harness.activate();
+        vm.prank(marketFactory);
+        harness.setCorePoolKey(corePoolKey);
+        harness.exposed_setNoCoreActionFlag(true);
 
         vm.prank(coreHookAddress);
-        harness.onCorePoolDirectSwap(toBalanceDelta(int128(-1), int128(1)));
+        harness.handleSwap(Currency.unwrap(corePoolKey.currency0));
     }
 
-    function test_proxySwap_priceLimit_zero_executesCalc_thenRevertsLater() public {
+    function test_proxySwap_priceLimit_zero_executesCalc_thenReturnsNonZeroDelta() public {
         // PoolManager calls beforeSwap before Pool.swap validates sqrtPriceLimitX96 bounds, so this still exercises
-        // ProxyHook's _calcCoreSqrtPriceLimit(0, flipped) branch even though the swap ultimately reverts.
+        // ProxyHook's _calcCoreSqrtPriceLimit(0, flipped) branch.
         PoolSwapTest.TestSettings memory settings = _getSwapSettings();
 
-        vm.expectRevert(); // PriceLimitOutOfBounds from v4-core Pool.swap (selector varies by import path)
-        swapRouter.swap(
+        BalanceDelta delta = swapRouter.swap(
             proxyPoolKey,
             SwapParams({zeroForOne: true, amountSpecified: -int256(1e18), sqrtPriceLimitX96: 0}),
             settings,
             ZERO_BYTES
         );
+
+        // Guard against silent no-op paths: branch should execute as an actual swap attempt.
+        assertTrue(delta.amount0() != 0 || delta.amount1() != 0, "swap should return non-zero delta");
     }
 
     function test_proxySwap_priceLimit_flipBranches_minMaxAndInvert_whenFlippedMarketExists() public {
@@ -1056,16 +1139,16 @@ contract ProxyHookTest is MarketVaultBase {
         ProxyHookHarness harness = new ProxyHookHarness(address(manager), address(marketFactory));
 
         // Not flipped: identity.
-        assertEq(harness.exposed_calcCoreSqrtPriceLimit(uint160(123), false), uint160(123));
+        assertEq(harness.exposed_calcCoreSqrtPriceLimit(uint160(123), false, false), uint160(123));
 
         // Flipped extremes.
         assertEq(
-            harness.exposed_calcCoreSqrtPriceLimit(TickMath.MIN_SQRT_PRICE + 1, true),
+            harness.exposed_calcCoreSqrtPriceLimit(TickMath.MIN_SQRT_PRICE + 1, true, false),
             TickMath.MAX_SQRT_PRICE - 1,
             "flipped MIN+1 should map to MAX-1"
         );
         assertEq(
-            harness.exposed_calcCoreSqrtPriceLimit(TickMath.MAX_SQRT_PRICE - 1, true),
+            harness.exposed_calcCoreSqrtPriceLimit(TickMath.MAX_SQRT_PRICE - 1, true, true),
             TickMath.MIN_SQRT_PRICE + 1,
             "flipped MAX-1 should map to MIN+1"
         );
@@ -1074,11 +1157,30 @@ contract ProxyHookTest is MarketVaultBase {
         uint160 custom = SQRT_PRICE_1_1 + 1;
         uint160 expectedInverted = uint160((uint256(1) << 192) / uint256(custom));
         assertEq(
-            harness.exposed_calcCoreSqrtPriceLimit(custom, true), expectedInverted, "flipped non-zero should invert"
+            harness.exposed_calcCoreSqrtPriceLimit(custom, true, true),
+            expectedInverted,
+            "flipped non-zero should invert"
         );
 
-        // Flipped zero -> default to MAX-1.
-        assertEq(harness.exposed_calcCoreSqrtPriceLimit(0, true), TickMath.MAX_SQRT_PRICE - 1);
+        // Flipped near-MAX should clamp to MIN+1 instead of producing an out-of-bounds MIN/underflowed value.
+        uint160 nearMax = TickMath.MAX_SQRT_PRICE - 2;
+        assertEq(
+            harness.exposed_calcCoreSqrtPriceLimit(nearMax, true, true),
+            TickMath.MIN_SQRT_PRICE + 1,
+            "flipped near-MAX should clamp to MIN+1"
+        );
+
+        // Flipped zero -> direction-aware defaults.
+        assertEq(
+            harness.exposed_calcCoreSqrtPriceLimit(0, true, false),
+            TickMath.MAX_SQRT_PRICE - 1,
+            "core oneForZero default should be MAX-1"
+        );
+        assertEq(
+            harness.exposed_calcCoreSqrtPriceLimit(0, true, true),
+            TickMath.MIN_SQRT_PRICE + 1,
+            "core zeroForOne default should be MIN+1"
+        );
     }
 
     // More tests can be added for onDirectLP, unlockCallback, etc.
@@ -1090,9 +1192,9 @@ contract ProxyHookHarness is ProxyHook {
     /// @dev Disable hook-address flag validation for harness deployments in unit tests.
     function validateHookAddress(BaseHook) internal pure override {}
 
-    function exposed_setProxySwapFlag(bool on) external {
-        if (on) ProxySwapFlag.setProxySwapFlag();
-        else ProxySwapFlag.clearProxySwapFlag();
+    function exposed_setNoCoreActionFlag(bool on) external {
+        if (on) CoreActionFlag.setNoCoreAction();
+        else CoreActionFlag.clearNoCoreAction();
     }
 
     function exposed_getExpectedOutputFromDelta(BalanceDelta swapDelta, bool zeroForOne)
@@ -1103,8 +1205,12 @@ contract ProxyHookHarness is ProxyHook {
         expectedOutput = _getExpectedOutputFromDelta(swapDelta, zeroForOne);
     }
 
-    function exposed_calcCoreSqrtPriceLimit(uint160 sqrtPriceLimitX96, bool flipped) external pure returns (uint160) {
-        return _calcCoreSqrtPriceLimit(sqrtPriceLimitX96, flipped);
+    function exposed_calcCoreSqrtPriceLimit(uint160 sqrtPriceLimitX96, bool flipped, bool coreZeroForOne)
+        external
+        pure
+        returns (uint160)
+    {
+        return _calcCoreSqrtPriceLimit(sqrtPriceLimitX96, flipped, coreZeroForOne);
     }
 
     function exposed_determineExcessRecipient(address sender, bytes calldata hookData)
@@ -1113,6 +1219,15 @@ contract ProxyHookHarness is ProxyHook {
         returns (address recipient, bool resolved)
     {
         return _determineExcessRecipient(sender, hookData);
+    }
+
+    function _probeNoCoreAction() internal noCoreAction returns (bool duringExecution) {
+        duringExecution = CoreActionFlag.isNoCoreAction();
+    }
+
+    function exposed_runNoCoreActionProbe() external returns (bool duringExecution, bool afterExecution) {
+        duringExecution = _probeNoCoreAction();
+        afterExecution = CoreActionFlag.isNoCoreAction();
     }
 }
 
