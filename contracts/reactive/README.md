@@ -2,7 +2,7 @@
 
 This package provides the [Reactive Network](https://reactive.network/) contracts and deployment helpers that automate _queued settlement_ processing for Fiet markets.
 
-When a user unwraps an LCC and there is insufficient immediate underlying liquidity, Fiet queues the shortfall as a settlement claim. This automation stack watches the queue events and, when liquidity becomes available, automatically calls `LiquidityHub.processSettlementFor(lcc, recipient, maxAmount)` to settle the claim.
+When a user unwraps an LCC and there is insufficient immediate underlying liquidity, Fiet queues the shortfall as a settlement claim. This automation stack watches queue additions and authoritative queue decrements and, when liquidity becomes available, automatically calls `LiquidityHub.processSettlementFor(lcc, recipient, maxAmount)` to settle the claim.
 
 ## Reactive Network Context
 
@@ -35,22 +35,30 @@ This project is built for the Reactive Network execution model:
 4. **Admin whitelist**: `HubCallback` only accepts a settlement report if the recipient is whitelisted to the expected Spoke address (`setSpokeForRecipient(recipient, spoke)`).
 5. **Aggregation**: `HubRSC` reacts to `SettlementReported` events and queues pending work.
 6. **Liquidity arrival**: `LiquidityHub` emits `LiquidityAvailable(...)` on the _protocol chain_.
-7. **Bounded dispatch**: `HubRSC` scans pending work with explicit bounds and emits a callback to the _protocol chain_ Receiver.
+7. **Bounded dispatch**: `HubRSC` scans dispatchable work (`pending - inFlight`) with explicit bounds and emits a callback to the _protocol chain_ Receiver.
 8. **Settlement execution**: The Receiver calls `LiquidityHub.processSettlementFor(...)` for each batch item.
+9. **Spoke-routed reconciliation**: each recipient `SpokeRSC` also subscribes to:
+   - `SettlementProcessed(lcc, recipient, amount)`
+   - `SettlementAnnulled(lcc, recipient, amount)`
+   - receiver `SettlementFailed(lcc, recipient, maxAmount, reason)`
+   and forwards those to `HubCallback`, which emits normalised events consumed by `HubRSC`.
 
 ## Contracts and artefacts
 
 ### Reactive chain
 
 - `src/SpokeRSC.sol`
-  - Subscribes to `SettlementQueued(...)` on the protocol chain filtered by `recipient`.
-  - Deduplicates by on-chain log identity and forwards a bounded payload to `HubCallback`.
+  - Subscribes to recipient-scoped protocol-chain events (`SettlementQueued`, `SettlementProcessed`, `SettlementAnnulled`, receiver `SettlementFailed`).
+  - Deduplicates by on-chain log identity and forwards bounded payloads to `HubCallback`.
+  - This keeps per-recipient subscription cost/funding at the spoke level (deployed by/on behalf of end users).
 - `src/HubCallback.sol`
   - Authorised callback entrypoints.
   - Admin whitelist: `setSpokeForRecipient(recipient, spoke)` must be set correctly for reports to be accepted.
-  - Emits `SettlementReported(recipient, lcc, amount, nonce)` for the Hub.
+  - Emits `SettlementReported(...)` plus normalised decrement/failure events for the Hub.
 - `src/HubRSC.sol`
   - Aggregates pending settlements in a linked-list queue and dispatches bounded settlement batches when liquidity becomes available.
+  - Tracks `pending` and `inFlight` separately; dispatch reserves in-flight amount without optimistically decrementing pending.
+  - Reconciles pending state from normalised `HubCallback` events and releases reservations from normalised settlement-failure reports.
 
 ### Protocol chain
 
@@ -77,7 +85,7 @@ This project is built for the Reactive Network execution model:
 
 ### Continue-on-error semantics
 
-The receiver uses `try/catch` per item and **does not revert the whole batch** if one item fails. It emits per‑item success/failure events.
+The receiver uses `try/catch` per item and **does not revert the whole batch** if one item fails. It emits per‑item success/failure events; `HubRSC` listens to `SettlementFailed` to release in-flight reservations and keep work retryable.
 
 ### Multi-round processing (“recursive” completion)
 
@@ -165,9 +173,10 @@ cast call "$HUB_CALLBACK" \
 
 ### Confirm the Hub has pending work (reactive chain)
 
-`HubRSC` keeps pending state in:
+`HubRSC` keeps queue mirror state in:
 
 - `HubRSC.pending(HubRSC.computeKey(lcc, recipient))`
+- `HubRSC.inFlightByKey(HubRSC.computeKey(lcc, recipient))`
 - `HubRSC.queueSize()` for total queued keys
 
 Copy-paste read (example):
@@ -185,6 +194,11 @@ cast call "$HUB_RSC" \
   --rpc-url "$REACTIVE_RPC"
 
 cast call "$HUB_RSC" \
+  "inFlightByKey(bytes32)(uint256)" \
+  "$KEY" \
+  --rpc-url "$REACTIVE_RPC"
+
+cast call "$HUB_RSC" \
   "queueSize()(uint256)" \
   --rpc-url "$REACTIVE_RPC"
 ```
@@ -192,6 +206,7 @@ cast call "$HUB_RSC" \
 ### Confirm settlement execution happened (protocol chain)
 
 - Watch for receiver events (`BatchReceived`, `SettlementSucceeded`, `SettlementFailed`).
+- Watch for authoritative hub decrement events (`SettlementProcessed`, `SettlementAnnulled`).
 - Watch for `LiquidityHub.processSettlementFor(...)` effects (e.g. queue decreases, underlying transfers, etc.).
 
 ### Expected latency model
