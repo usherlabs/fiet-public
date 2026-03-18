@@ -3,7 +3,6 @@ pragma solidity ^0.8.26;
 
 import {AbstractReactive} from "reactive-lib/abstract-base/AbstractReactive.sol";
 import {IReactive} from "reactive-lib/interfaces/IReactive.sol";
-import {SpokeRSC} from "./SpokeRSC.sol";
 import {LinkedQueue} from "./libs/LinkedQueue.sol";
 
 /// @notice Hub RSC that aggregates Spoke reports and dispatches settlements.
@@ -18,12 +17,25 @@ contract HubRSC is AbstractReactive {
         uint256(keccak256("LiquidityAvailable(address,address,uint256,bytes32)"));
 
     /// @notice SettlementReported(address indexed recipient, address indexed lcc, uint256 amount, uint256 nonce).
+    // Indicates that a SettlementQueue event from protocol chain is reported.
     uint256 public constant SETTLEMENT_REPORTED_TOPIC =
         uint256(keccak256("SettlementReported(address,address,uint256,uint256)"));
 
     /// @notice MoreLiquidityAvailable(address indexed lcc, uint256 amountAvailable).
     uint256 public constant MORE_LIQUIDITY_AVAILABLE_TOPIC =
         uint256(keccak256("MoreLiquidityAvailable(address,uint256)"));
+
+    /// @notice SettlementAnnulledReported(address indexed recipient, address indexed lcc, uint256 amount).
+    uint256 public constant SETTLEMENT_ANNULLED_REPORTED_TOPIC =
+        uint256(keccak256("SettlementAnnulledReported(address,address,uint256)"));
+
+    /// @notice SettlementProcessedReported(address indexed recipient, address indexed lcc, uint256 amount).
+    uint256 public constant SETTLEMENT_PROCESSED_REPORTED_TOPIC =
+        uint256(keccak256("SettlementProcessedReported(address,address,uint256)"));
+
+    /// @notice SettlementFailedReported(address indexed recipient, address indexed lcc, uint256 maxAmount).
+    uint256 public constant SETTLEMENT_FAILED_REPORTED_TOPIC =
+        uint256(keccak256("SettlementFailedReported(address,address,uint256)"));
 
     struct Pending {
         address lcc;
@@ -58,6 +70,8 @@ contract HubRSC is AbstractReactive {
 
     /// @notice Pending settlement by key.
     mapping(bytes32 => Pending) public pending;
+    /// @notice Amount reserved for in-flight dispatch by key.
+    mapping(bytes32 => uint256) public inFlightByKey;
 
     /// @notice Deduplicate SettlementReported logs.
     mapping(bytes32 => bool) public processedReport;
@@ -116,6 +130,32 @@ contract HubRSC is AbstractReactive {
                 REACTIVE_IGNORE,
                 REACTIVE_IGNORE
             );
+            // subscribe to authoritative queue decrements normalised by HubCallback
+            service.subscribe(
+                reactChainId,
+                hubCallback,
+                SETTLEMENT_ANNULLED_REPORTED_TOPIC,
+                REACTIVE_IGNORE,
+                REACTIVE_IGNORE,
+                REACTIVE_IGNORE
+            );
+            service.subscribe(
+                reactChainId,
+                hubCallback,
+                SETTLEMENT_PROCESSED_REPORTED_TOPIC,
+                REACTIVE_IGNORE,
+                REACTIVE_IGNORE,
+                REACTIVE_IGNORE
+            );
+            // subscribe to failed destination execution reports normalised by HubCallback
+            service.subscribe(
+                reactChainId,
+                hubCallback,
+                SETTLEMENT_FAILED_REPORTED_TOPIC,
+                REACTIVE_IGNORE,
+                REACTIVE_IGNORE,
+                REACTIVE_IGNORE
+            );
         }
     }
 
@@ -138,6 +178,21 @@ contract HubRSC is AbstractReactive {
 
         if (log.topic_0 == MORE_LIQUIDITY_AVAILABLE_TOPIC) {
             _handleMoreLiquidityAvailable(log);
+            return;
+        }
+
+        if (log.topic_0 == SETTLEMENT_ANNULLED_REPORTED_TOPIC) {
+            _handleSettlementAnnulled(log);
+            return;
+        }
+
+        if (log.topic_0 == SETTLEMENT_PROCESSED_REPORTED_TOPIC) {
+            _handleSettlementProcessed(log);
+            return;
+        }
+
+        if (log.topic_0 == SETTLEMENT_FAILED_REPORTED_TOPIC) {
+            _handleSettlementFailed(log);
             return;
         }
     }
@@ -174,7 +229,53 @@ contract HubRSC is AbstractReactive {
         } else {
             // Accumulate additional queued amount for the same pair.
             entry.amount += amount;
+            // Defensive repair: if queue membership was dropped unexpectedly, re-enqueue.
+            if (!queueDataByLcc[lcc].inQueue[key]) {
+                queueDataByLcc[lcc].enqueue(key);
+            }
+            if (!queueData.inQueue[key]) {
+                queueData.enqueue(key);
+            }
             emit PendingIncreased(lcc, recipient, amount);
+        }
+    }
+
+    /// @notice Reconciles pending amount from authoritative LiquidityHub settlement processing.
+    function _handleSettlementProcessed(IReactive.LogRecord calldata log) internal {
+        if (log._contract != hubCallback) return;
+        address recipient = address(uint160(log.topic_1));
+        address lcc = address(uint160(log.topic_2));
+        uint256 settledAmount = abi.decode(log.data, (uint256));
+        _applyAuthoritativeDecrease(lcc, recipient, settledAmount, true);
+    }
+
+    /// @notice Reconciles pending amount from authoritative LiquidityHub queue annulments.
+    function _handleSettlementAnnulled(IReactive.LogRecord calldata log) internal {
+        if (log._contract != hubCallback) return;
+        address recipient = address(uint160(log.topic_1));
+        address lcc = address(uint160(log.topic_2));
+        uint256 annulledAmount = abi.decode(log.data, (uint256));
+        _applyAuthoritativeDecrease(lcc, recipient, annulledAmount, false);
+    }
+
+    /// @notice Releases reserved in-flight amount for failed destination settlements.
+    function _handleSettlementFailed(IReactive.LogRecord calldata log) internal {
+        if (log._contract != hubCallback) return;
+        address recipient = address(uint160(log.topic_1));
+        address lcc = address(uint160(log.topic_2));
+        uint256 failedAmount = abi.decode(log.data, (uint256));
+        if (failedAmount == 0) return;
+
+        bytes32 key = computeKey(lcc, recipient);
+        uint256 reserved = inFlightByKey[key];
+        if (reserved == 0) return;
+
+        uint256 release = failedAmount < reserved ? failedAmount : reserved;
+        inFlightByKey[key] = reserved - release;
+
+        Pending storage entry = pending[key];
+        if (entry.exists) {
+            _pruneIfFullySettled(entry, key);
         }
     }
 
@@ -221,25 +322,30 @@ contract HubRSC is AbstractReactive {
             cursor = lccQueue.nextOrHead(key);
             Pending storage entry = pending[key];
 
-            if (!lccQueue.inQueue[key] || !entry.exists || entry.amount == 0) {
+            if (!lccQueue.inQueue[key] || !entry.exists) {
                 lccQueue.remove(key);
                 queueData.remove(key);
             } else if (entry.lcc == lcc) {
-                uint256 settleAmount = entry.amount <= remainingLiquidity ? entry.amount : remainingLiquidity;
+                uint256 reserved = inFlightByKey[key];
+                uint256 dispatchable = entry.amount > reserved ? (entry.amount - reserved) : 0;
+                if (entry.amount == 0 && reserved == 0) {
+                    _pruneIfFullySettled(entry, key);
+                    scanned++;
+                    continue;
+                }
+                if (dispatchable == 0) {
+                    scanned++;
+                    continue;
+                }
+                uint256 settleAmount = dispatchable <= remainingLiquidity ? dispatchable : remainingLiquidity;
 
-                entry.amount -= settleAmount;
+                inFlightByKey[key] = reserved + settleAmount;
                 remainingLiquidity -= settleAmount;
 
                 lccs[batchCount] = entry.lcc;
                 recipients[batchCount] = entry.recipient;
                 amounts[batchCount] = settleAmount;
                 batchCount++;
-
-                if (entry.amount == 0) {
-                    entry.exists = false;
-                    lccQueue.remove(key);
-                    queueData.remove(key);
-                }
             }
             scanned++;
         }
@@ -272,6 +378,40 @@ contract HubRSC is AbstractReactive {
             );
             emit Callback(reactChainId, hubCallback, CALLBACK_GAS_LIMIT, liquidityPayload);
         }
+    }
+
+    /// @notice Applies authoritative queue decrement and keeps in-flight reservations bounded.
+    function _applyAuthoritativeDecrease(address lcc, address recipient, uint256 amount, bool consumeInFlight) internal {
+        if (amount == 0) return;
+        bytes32 key = computeKey(lcc, recipient);
+        Pending storage entry = pending[key];
+        if (!entry.exists) return;
+
+        uint256 dec = amount < entry.amount ? amount : entry.amount;
+        if (dec > 0) {
+            entry.amount -= dec;
+        }
+
+        uint256 reserved = inFlightByKey[key];
+        if (consumeInFlight && dec > 0 && reserved > 0) {
+            uint256 consumed = dec < reserved ? dec : reserved;
+            reserved -= consumed;
+            inFlightByKey[key] = reserved;
+        }
+        if (reserved > entry.amount) {
+            inFlightByKey[key] = entry.amount;
+        }
+
+        _pruneIfFullySettled(entry, key);
+    }
+
+    /// @notice Removes queue membership once both pending and in-flight amounts are zero.
+    function _pruneIfFullySettled(Pending storage entry, bytes32 key) internal {
+        if (entry.amount != 0 || inFlightByKey[key] != 0) return;
+        address lcc = entry.lcc;
+        entry.exists = false;
+        queueDataByLcc[lcc].remove(key);
+        queueData.remove(key);
     }
 
     /// @notice Queue size accessor.
