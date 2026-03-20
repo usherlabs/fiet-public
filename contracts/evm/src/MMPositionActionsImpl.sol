@@ -101,6 +101,9 @@ contract MMPositionActionsImpl is
         return IMMPositionManager(address(this)).queueCustodian();
     }
 
+    /// @dev `beneficiary` is the batch locker (`msgSender()` in impl), matching the Hub queue recipient chosen in
+    ///      `VTSPositionLib` for `planCancelWithQueue`. Custody slices are keyed by this address so collect cannot
+    ///      pair an arbitrary `tokenId` bucket with another party's queue.
     function _forwardQueuedLccToCustodian(Currency currency, uint256 tokenId, address beneficiary, uint256 amount)
         internal
         override(PositionManagerImpl)

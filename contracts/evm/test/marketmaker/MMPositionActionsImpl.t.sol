@@ -751,7 +751,9 @@ contract MMPositionManagerActionsTest is MarketTestBase, MarketMakerTestBase {
         );
     }
 
-    /// @notice COLLECT_AVAILABLE_LIQUIDITY is a no-op when the locker has no Hub queue, even if beneficiary-scoped custody holds LCC (seizure can retain LCC in custody without mirroring a per-lcc queue entry).
+    /// @notice Documents intended behaviour: `_collectAvailableLiquidity` is queue-gated. Custody without a matching
+    ///         per-LCC `settleQueue` for the guarantor is not collected here (no `processSettlementFor` / queue clear).
+    ///         Beneficiary-scoped custody must still not be drainable via collect in that state.
     function test_seize_whenGuarantorHasNoHubQueue_collectIsNoop_andDoesNotDrainCustody() public {
         uint256 positionIndex = 0;
 

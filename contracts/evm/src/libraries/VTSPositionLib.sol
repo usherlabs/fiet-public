@@ -1352,9 +1352,14 @@ library VTSPositionLib {
             );
         } else if (p.params.liquidityDelta < 0) {
             // Re-decode hookData to get locker - scoped to free memory
+            //
+            // Intended beneficiary / queue recipient model (always hook-data `locker`, not a separate owner lookup):
+            // - Normal liquidity decrease: locker is the party executing the batch (NFT owner or approved operator on MMPM).
+            // - Seizure decrease: locker is the seizer (guarantor). Same encoding path; `isSeizing` only changes principal/settlement deltas.
+            //
             // queueRecipient == MM batch locker == LiquidityHub settleQueue recipient for this decrease/seizure.
             // MMQueueCustodian records the same address as the beneficiary so COLLECT_AVAILABLE_LIQUIDITY can only
-            // release LCC from the slice matching the caller's queue (owner-operated decreases vs seizure use the same encoding).
+            // release LCC from the slice matching the caller's queue.
             address queueRecipient;
             {
                 PositionModificationHookData memory mmData = PositionModificationHookDataLib.decodeCalldata(p.hookData);

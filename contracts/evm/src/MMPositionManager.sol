@@ -430,6 +430,15 @@ contract MMPositionManager is
     /// @dev Intersects three caps: caller's Hub queue, underlying reserve availability, and this caller's
     ///      beneficiary-scoped slice in the queue custodian for `tokenId`. Without the beneficiary key, a locker
     ///      with any queue could pair it with another party's commit custody bucket.
+    ///
+    ///      Intended model (queue-gated collect):
+    ///      - This path exists to release custodied LCC and then call `processSettlementFor`, which burns the
+    ///        caller's LCC and clears their Hub `settleQueue` entry. If `settleQueue(lcc, locker) == 0`, this
+    ///        function is a no-op by design — e.g. some flows (including certain seizure shapes) may record LCC
+    ///        in the custodian for the locker without creating a per-LCC queue entry; those are not settled here.
+    ///      - Arbitrary `processSettlementFor` calls cannot drain another party's custody: settlement still
+    ///        requires the recipient's market-derived LCC balance; beneficiary-scoped custody ensures collect
+    ///        only debits the slice matching the caller's queue.
     /// @param lcc The LCC token address
     /// @param tokenId The commitment NFT token ID bucket to collect from
     /// @param maxAmount The maximum amount to collect
@@ -437,6 +446,8 @@ contract MMPositionManager is
         address locker = msgSender();
         uint256 queued = liquidityHub.settleQueue(lcc, locker);
 
+        // No Hub queue => no collection. Custody may still exist for this locker under `tokenId` from other flows;
+        // that liquidity is not cleared via this queue-settlement helper.
         if (queued > 0) {
             (, uint256 available) = liquidityHub.reserveOfUnderlyingTuple(lcc);
             uint256 custodied = queueCustodian.queued(tokenId, lcc, locker);

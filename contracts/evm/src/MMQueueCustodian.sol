@@ -10,6 +10,12 @@ import {Errors} from "./libraries/Errors.sol";
 /// @notice Shared custody for queued MM-backed LCC balances, bucketed by commitment token id and beneficiary
 /// @dev Beneficiary-scoped slices prevent cross-composition: Hub queue is per-(lcc, recipient); custody must
 ///      align so COLLECT_AVAILABLE_LIQUIDITY cannot spend another recipient's LCC under the same tokenId.
+///
+///      Intended model:
+///      - `beneficiary` is always the MM batch locker whose `LiquidityHub.settleQueue(lcc, beneficiary)` entry
+///        was created for that staged principal (see `VTSPositionLib` queue recipient == hook `locker`).
+///      - Normal decreases: locker is the authorised party acting on the commitment (typically owner or approved operator).
+///      - Seizure decreases: locker is the seizer. Custody and queue (when present) both attribute to that locker.
 contract MMQueueCustodian is IMMQueueCustodian {
     using CurrencyTransfer for Currency;
 
