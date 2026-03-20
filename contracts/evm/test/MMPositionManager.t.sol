@@ -779,6 +779,19 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
         MMA.execute(positionManager, prepared);
     }
 
+    /// @notice Unauthorised EOAs cannot fabricate locker credit via `sync` (marketFactory-bound caller check).
+    function test_vtsOrchestrator_sync_revertsWhenCallerNotProtocolBound() public {
+        address attacker = makeAddr("syncAttacker");
+        MockERC20 underlying = MockERC20(lcc0.underlying());
+        underlying.mint(address(positionManager), 1e18);
+
+        vm.prank(attacker);
+        vm.expectRevert(Errors.InvalidSender.selector);
+        vtsOrchestrator.sync(
+            IMarketFactory(marketFactory), Currency.wrap(address(underlying)), address(positionManager), attacker
+        );
+    }
+
     function test_wrapNative_ignoresAmbientEthBalance_andCreditsOnlyMsgValue() public {
         // Seed ambient ETH that should not be auto-credited to the locker.
         vm.deal(address(positionManager), 5 ether);
@@ -1543,7 +1556,7 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
         vm.prank(address(positionManager));
         lcc0.transfer(custody, amount);
         vm.prank(address(positionManager));
-        IMMQueueCustodian(custody).record(0, lccAddr, amount);
+        IMMQueueCustodian(custody).record(0, lccAddr, user, amount);
 
         MMA.PreparedAction[] memory prepared = new MMA.PreparedAction[](1);
         prepared[0] = MMA.prepareCollectAvailableLiquidity(lccAddr, 0, type(uint256).max);
@@ -1587,13 +1600,13 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
         // Move all queued backing LCC into shared custody, split across two commit buckets.
         vm.startPrank(address(positionManager));
         lcc0.transfer(custody, totalAmount);
-        IMMQueueCustodian(custody).record(tokenIdA, lccAddr, amountCommitA);
-        IMMQueueCustodian(custody).record(tokenIdB, lccAddr, amountCommitB);
+        IMMQueueCustodian(custody).record(tokenIdA, lccAddr, user, amountCommitA);
+        IMMQueueCustodian(custody).record(tokenIdB, lccAddr, user, amountCommitB);
         vm.stopPrank();
 
         assertEq(ILiquidityHub(liquidityHub).settleQueue(lccAddr, user), totalAmount);
-        assertEq(IMMQueueCustodian(custody).queued(tokenIdA, lccAddr), amountCommitA);
-        assertEq(IMMQueueCustodian(custody).queued(tokenIdB, lccAddr), amountCommitB);
+        assertEq(IMMQueueCustodian(custody).queued(tokenIdA, lccAddr, user), amountCommitA);
+        assertEq(IMMQueueCustodian(custody).queued(tokenIdB, lccAddr, user), amountCommitB);
 
         // Make full underlying reserve available for settlement.
         underlying.mint(address(liquidityHub), totalAmount);
@@ -1612,8 +1625,8 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
 
         assertEq(underlying.balanceOf(user) - beforeUnderlying, amountCommitA);
         assertEq(ILiquidityHub(liquidityHub).settleQueue(lccAddr, user), amountCommitB);
-        assertEq(IMMQueueCustodian(custody).queued(tokenIdA, lccAddr), 0);
-        assertEq(IMMQueueCustodian(custody).queued(tokenIdB, lccAddr), amountCommitB);
+        assertEq(IMMQueueCustodian(custody).queued(tokenIdA, lccAddr, user), 0);
+        assertEq(IMMQueueCustodian(custody).queued(tokenIdB, lccAddr, user), amountCommitB);
 
         // Collect from commit B: settles remaining amount.
         {
@@ -1625,7 +1638,61 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
 
         assertEq(underlying.balanceOf(user) - beforeUnderlying, totalAmount);
         assertEq(ILiquidityHub(liquidityHub).settleQueue(lccAddr, user), 0);
-        assertEq(IMMQueueCustodian(custody).queued(tokenIdB, lccAddr), 0);
+        assertEq(IMMQueueCustodian(custody).queued(tokenIdB, lccAddr, user), 0);
+    }
+
+    /// @notice A locker with a Hub queue cannot collect using another party's beneficiary slice under the same tokenId.
+    function test_collectAvailableLiquidity_cannotDrainOtherBeneficiaryCustody() public {
+        address user = makeAddr("user");
+        address victim = makeAddr("victim");
+        address lccAddr = address(lcc0);
+        MockERC20 underlying = MockERC20(lcc0.underlying());
+        address custody = address(positionManager.queueCustodian());
+        uint256 tokenId = 99;
+        uint256 amount = 150;
+
+        underlying.mint(address(liquidityHub), amount);
+        vm.prank(address(liquidityHub));
+        ILiquidityHub(liquidityHub).wrap(lccAddr, amount);
+
+        vm.mockCall(
+            marketFactory, abi.encodeWithSelector(IMarketFactory.useMarketLiquidity.selector), abi.encode(uint256(0))
+        );
+
+        vm.prank(address(vtsOrchestrator));
+        ILiquidityHub(liquidityHub)
+            .planCancelWithQueue(lccAddr, address(liquidityHub), address(positionManager), amount, amount, user);
+
+        vm.prank(address(liquidityHub));
+        ILCC(lccAddr).transfer(address(positionManager), amount);
+
+        assertEq(ILiquidityHub(liquidityHub).settleQueue(lccAddr, user), amount);
+
+        // Only `victim` has custodied LCC for this tokenId; user's slice is zero.
+        vm.startPrank(address(positionManager));
+        lcc0.transfer(custody, amount);
+        IMMQueueCustodian(custody).record(tokenId, lccAddr, victim, amount);
+        vm.stopPrank();
+
+        underlying.mint(address(liquidityHub), amount);
+        vm.prank(address(vtsOrchestrator));
+        ILiquidityHub(liquidityHub).confirmTake(lccAddr, amount, false);
+
+        uint256 userUnderlyingBefore = underlying.balanceOf(user);
+        uint256 victimCustodyBefore = IMMQueueCustodian(custody).queued(tokenId, lccAddr, victim);
+
+        MMA.PreparedAction[] memory prepared = new MMA.PreparedAction[](1);
+        prepared[0] = MMA.prepareCollectAvailableLiquidity(lccAddr, tokenId, type(uint256).max);
+        vm.prank(user);
+        MMA.executeWithUnlock(positionManager, prepared, block.timestamp + 3600);
+
+        assertEq(
+            ILiquidityHub(liquidityHub).settleQueue(lccAddr, user), amount, "user queue must be unchanged (no release)"
+        );
+        assertEq(underlying.balanceOf(user), userUnderlyingBefore, "user must not receive underlying");
+        assertEq(
+            IMMQueueCustodian(custody).queued(tokenId, lccAddr, victim), victimCustodyBefore, "victim slice intact"
+        );
     }
 
     /// @notice Mutation-killer: when `recipient == address(this)`, COLLECT_AVAILABLE_LIQUIDITY must sync underlying credit.
@@ -1835,7 +1902,7 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
         recipientLcc0FeeAfterTake = IERC20(lcc0Addr).balanceOf(recipient) - recipientLcc0Before;
         assertGt(recipientLcc0FeeAfterTake, 0, "expected non-zero LCC0 fees to be takeable after swap");
         assertGe(
-            positionManager.queueCustodian().queued(_scratchTokenId, lcc0Addr),
+            positionManager.queueCustodian().queued(_scratchTokenId, lcc0Addr, recipient),
             amount,
             "custodian must still hold >= queued principal LCC0 after fee TAKE"
         );

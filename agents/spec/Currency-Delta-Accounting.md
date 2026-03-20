@@ -552,14 +552,18 @@ take(lcc, recipient, 150):
 
 ## Security Considerations
 
-1. **Explicit Target Separation**: By splitting deltas by target address (locker vs MMPM), the system explicitly separates takeable balances from settlement obligations. This is safer than relying on implicit balance caps.
+1. **`sync` / `syncPair` access control**: These entrypoints credit a `target` delta from an `owner` balance and must not be callable by arbitrary EOAs. They require the same **MarketFactory-bound caller** validation as `creditExact` (`_assertBoundFactoryCaller`), with the factory namespace passed explicitly so only protocol routers (e.g. `MMPositionManager`) can invoke them.
 
-2. **LCC Detection via Registry**: `_isLCC()` uses `LCCFactory.isLCC()` to validate LCC tokens, ensuring only registered LCCs go through the ERC-6909 settle/take flow.
+2. **Explicit Target Separation**: By splitting deltas by target address (locker vs MMPM), the system explicitly separates takeable balances from settlement obligations. This is safer than relying on implicit balance caps.
 
-3. **ERC-6909 Claim Management**: LCC fee credits are held as ERC-6909 claims on PoolManager. The `_take()` function properly burns claims before taking actual ERC20 tokens, preventing double-spending.
+3. **LCC Detection via Registry**: `_isLCC()` uses `LCCFactory.isLCC()` to validate LCC tokens, ensuring only registered LCCs go through the ERC-6909 settle/take flow.
 
-4. **No Phantom Credit Clearing**: `sync()` only increases delta; it never reduces positive delta. This preserves market liquidity claims on MMPM.
+4. **ERC-6909 Claim Management**: LCC fee credits are held as ERC-6909 claims on PoolManager. The `_take()` function properly burns claims before taking actual ERC20 tokens, preventing double-spending.
 
-5. **Settlement Validation**: The `_settle()` flow includes RFS (Required for Settlement) checks to ensure positions meet settlement requirements before withdrawals.
+5. **No Phantom Credit Clearing**: `sync()` only increases delta; it never reduces positive delta. This preserves market liquidity claims on MMPM.
 
-6. **Delta Consistency**: The `assertNonZeroDeltas` modifier ensures batches complete with all deltas resolved, preventing stuck obligations.
+6. **Settlement Validation**: The `_settle()` flow includes RFS (Required for Settlement) checks to ensure positions meet settlement requirements before withdrawals.
+
+7. **Delta Consistency**: The `assertNonZeroDeltas` modifier ensures batches complete with all deltas resolved, preventing stuck obligations.
+
+8. **MM queue custodian vs Hub queue**: `LiquidityHub` records `settleQueue[lcc][recipient]` without a commitment id. `MMQueueCustodian` holds physical LCC keyed by `(tokenId, lcc, beneficiary)` where `beneficiary` must match the Hub queue recipient chosen in `VTSPositionLib` (the MM batch locker: owner/operator on normal decreases, seizer on seizure). `MMPositionManager._collectAvailableLiquidity` intersects the caller’s Hub queue with that caller’s beneficiary slice so a locker cannot pair their queue with another party’s commit custody.

@@ -7,7 +7,9 @@ import {IMMQueueCustodian} from "./interfaces/IMMQueueCustodian.sol";
 import {Errors} from "./libraries/Errors.sol";
 
 /// @title MMQueueCustodian
-/// @notice Shared custody for queued MM-backed LCC balances, bucketed by commitment token id
+/// @notice Shared custody for queued MM-backed LCC balances, bucketed by commitment token id and beneficiary
+/// @dev Beneficiary-scoped slices prevent cross-composition: Hub queue is per-(lcc, recipient); custody must
+///      align so COLLECT_AVAILABLE_LIQUIDITY cannot spend another recipient's LCC under the same tokenId.
 contract MMQueueCustodian is IMMQueueCustodian {
     using CurrencyTransfer for Currency;
 
@@ -15,9 +17,9 @@ contract MMQueueCustodian is IMMQueueCustodian {
     address public authorisedBinder;
     address public override positionManager;
 
-    // tokenId => lcc => queued custody balance
-    // @note: While LiquidityHub.settleQueue is source of truth, this accounting is specific for queued LCC as a result of MMPositionManager position decrease.
-    mapping(uint256 tokenId => mapping(address lcc => uint256 amount)) private _queuedLcc;
+    // tokenId => lcc => beneficiary => queued custody balance
+    mapping(uint256 tokenId => mapping(address lcc => mapping(address beneficiary => uint256 amount))) private
+        _queuedLcc;
 
     modifier onlyPositionManager() {
         if (msg.sender != positionManager) revert Errors.InvalidSender();
@@ -39,31 +41,36 @@ contract MMQueueCustodian is IMMQueueCustodian {
         authorisedBinder = address(0);
     }
 
-    function record(uint256 tokenId, address lcc, uint256 amount) external override onlyPositionManager {
+    function record(uint256 tokenId, address lcc, address beneficiary, uint256 amount)
+        external
+        override
+        onlyPositionManager
+    {
         if (lcc == address(0)) revert Errors.InvalidAddress(lcc);
+        if (beneficiary == address(0)) revert Errors.InvalidAddress(beneficiary);
         if (amount == 0) return;
-        _queuedLcc[tokenId][lcc] += amount;
+        _queuedLcc[tokenId][lcc][beneficiary] += amount;
     }
 
-    function release(uint256 tokenId, address lcc, address recipient, uint256 maxAmount)
+    function release(uint256 tokenId, address lcc, address beneficiary, uint256 maxAmount)
         external
         override
         onlyPositionManager
         returns (uint256 released)
     {
-        if (recipient == address(0)) revert Errors.InvalidAddress(recipient);
+        if (beneficiary == address(0)) revert Errors.InvalidAddress(beneficiary);
         if (lcc == address(0)) revert Errors.InvalidAddress(lcc);
         if (maxAmount == 0) return 0;
 
-        uint256 available = _queuedLcc[tokenId][lcc];
+        uint256 available = _queuedLcc[tokenId][lcc][beneficiary];
         released = available < maxAmount ? available : maxAmount;
         if (released == 0) return 0;
 
-        _queuedLcc[tokenId][lcc] = available - released;
-        Currency.wrap(lcc).transfer(recipient, released);
+        _queuedLcc[tokenId][lcc][beneficiary] = available - released;
+        Currency.wrap(lcc).transfer(beneficiary, released);
     }
 
-    function queued(uint256 tokenId, address lcc) external view override returns (uint256) {
-        return _queuedLcc[tokenId][lcc];
+    function queued(uint256 tokenId, address lcc, address beneficiary) external view override returns (uint256) {
+        return _queuedLcc[tokenId][lcc][beneficiary];
     }
 }

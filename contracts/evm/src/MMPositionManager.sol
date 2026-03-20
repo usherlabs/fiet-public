@@ -427,6 +427,9 @@ contract MMPositionManager is
     }
 
     /// @notice Collects available liquidity from settlement queue
+    /// @dev Intersects three caps: caller's Hub queue, underlying reserve availability, and this caller's
+    ///      beneficiary-scoped slice in the queue custodian for `tokenId`. Without the beneficiary key, a locker
+    ///      with any queue could pair it with another party's commit custody bucket.
     /// @param lcc The LCC token address
     /// @param tokenId The commitment NFT token ID bucket to collect from
     /// @param maxAmount The maximum amount to collect
@@ -436,7 +439,7 @@ contract MMPositionManager is
 
         if (queued > 0) {
             (, uint256 available) = liquidityHub.reserveOfUnderlyingTuple(lcc);
-            uint256 custodied = queueCustodian.queued(tokenId, lcc);
+            uint256 custodied = queueCustodian.queued(tokenId, lcc, locker);
             uint256 toSettle = Math.min(Math.min(queued, available), Math.min(maxAmount, custodied));
             if (toSettle > 0) {
                 uint256 released = queueCustodian.release(tokenId, lcc, locker, toSettle);
@@ -456,7 +459,7 @@ contract MMPositionManager is
         if (currency == CurrencyLibrary.ADDRESS_ZERO) {
             revert Errors.InvalidAddress(address(0));
         }
-        vtsOrchestrator.sync(currency, address(this), msgSender());
+        vtsOrchestrator.sync(marketFactory, currency, address(this), msgSender());
     }
 
     /// @notice Wraps native ETH to WETH

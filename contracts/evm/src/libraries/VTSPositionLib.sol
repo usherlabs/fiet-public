@@ -1352,6 +1352,9 @@ library VTSPositionLib {
             );
         } else if (p.params.liquidityDelta < 0) {
             // Re-decode hookData to get locker - scoped to free memory
+            // queueRecipient == MM batch locker == LiquidityHub settleQueue recipient for this decrease/seizure.
+            // MMQueueCustodian records the same address as the beneficiary so COLLECT_AVAILABLE_LIQUIDITY can only
+            // release LCC from the slice matching the caller's queue (owner-operated decreases vs seizure use the same encoding).
             address queueRecipient;
             {
                 PositionModificationHookData memory mmData = PositionModificationHookDataLib.decodeCalldata(p.hookData);

@@ -166,9 +166,9 @@ contract MMPositionManagerActionsTest is MarketTestBase, MarketMakerTestBase {
             + ILiquidityHub(liquidityHub).settleQueue(address(lcc1), recipient);
     }
 
-    function _custodySumFor(uint256 tokenId, address custodian) internal view returns (uint256) {
-        return IMMQueueCustodian(custodian).queued(tokenId, address(lcc0))
-            + IMMQueueCustodian(custodian).queued(tokenId, address(lcc1));
+    function _custodySumFor(uint256 tokenId, address custodian, address beneficiary) internal view returns (uint256) {
+        return IMMQueueCustodian(custodian).queued(tokenId, address(lcc0), beneficiary)
+            + IMMQueueCustodian(custodian).queued(tokenId, address(lcc1), beneficiary);
     }
 
     function _walletLccSum(address account) internal view returns (uint256) {
@@ -676,14 +676,14 @@ contract MMPositionManagerActionsTest is MarketTestBase, MarketMakerTestBase {
         address custodian = address(positionManager.queueCustodian());
         uint256 queueBeforeLocker = _queuedSumFor(address(this));
         uint256 queueBeforeCustodianOwner = _queuedSumFor(custodian);
-        uint256 custodyBefore = _custodySumFor(tokenId, custodian);
+        uint256 custodyBefore = _custodySumFor(tokenId, custodian, address(this));
         uint256 walletLccBefore = _walletLccSum(address(this));
 
         MMA.PreparedAction[] memory actions = new MMA.PreparedAction[](1);
         actions[0] = MMA.prepareDecrease(corePoolKey, tokenId, positionIndex, liquidityToDecrease);
         MMA.executeWithUnlock(positionManager, actions, block.timestamp + 3600);
 
-        uint256 custodyDelta = _custodySumFor(tokenId, custodian) - custodyBefore;
+        uint256 custodyDelta = _custodySumFor(tokenId, custodian, address(this)) - custodyBefore;
         uint256 walletLccAfter = _walletLccSum(address(this));
 
         assertGt(custodyDelta, 0, "Expected retained LCC to be recorded in shared custodian");
@@ -693,10 +693,9 @@ contract MMPositionManagerActionsTest is MarketTestBase, MarketMakerTestBase {
     }
 
     function test_seize_routesQueueToLocker_butCustodiesQueuedLccByCommit() public {
-        uint256 tokenId = 1;
         uint256 positionIndex = 0;
 
-        _setupCommittedPosition(
+        (uint256 tokenId,,,) = _setupCommittedPosition(
             positionManager,
             corePoolKey,
             abi.encode(liquiditySignal),
@@ -728,7 +727,7 @@ contract MMPositionManagerActionsTest is MarketTestBase, MarketMakerTestBase {
         address custodian = address(positionManager.queueCustodian());
         uint256 queueBeforeGuarantor = _queuedSumFor(guarantor);
         uint256 queueBeforeOwner = _queuedSumFor(address(this));
-        uint256 custodyBefore = _custodySumFor(tokenId, custodian);
+        uint256 custodyBefore = _custodySumFor(tokenId, custodian, guarantor);
 
         vm.startPrank(guarantor);
         IERC20(lcc0.underlying()).approve(address(positionManager), type(uint256).max);
@@ -741,7 +740,7 @@ contract MMPositionManagerActionsTest is MarketTestBase, MarketMakerTestBase {
         MMA.executeWithUnlock(positionManager, actions, block.timestamp + 3600);
         vm.stopPrank();
 
-        uint256 custodyDelta = _custodySumFor(tokenId, custodian) - custodyBefore;
+        uint256 custodyDelta = _custodySumFor(tokenId, custodian, guarantor) - custodyBefore;
 
         assertGt(custodyDelta, 0, "Seizure retained LCC should be recorded in shared custodian");
         assertGe(
@@ -749,6 +748,89 @@ contract MMPositionManagerActionsTest is MarketTestBase, MarketMakerTestBase {
         );
         assertEq(
             _queuedSumFor(address(this)), queueBeforeOwner, "NFT owner queue should not receive seizure queue amounts"
+        );
+    }
+
+    /// @notice COLLECT_AVAILABLE_LIQUIDITY is a no-op when the locker has no Hub queue, even if beneficiary-scoped custody holds LCC (seizure can retain LCC in custody without mirroring a per-lcc queue entry).
+    function test_seize_whenGuarantorHasNoHubQueue_collectIsNoop_andDoesNotDrainCustody() public {
+        uint256 positionIndex = 0;
+
+        (uint256 tokenId,,,) = _setupCommittedPosition(
+            positionManager,
+            corePoolKey,
+            abi.encode(liquiditySignal),
+            defaultlLiquidityParams,
+            marketVTSConfiguration,
+            address(lcc0),
+            address(lcc1)
+        );
+
+        swapRouter.swap(
+            proxyPoolKey,
+            SwapParams({zeroForOne: true, amountSpecified: -1e18, sqrtPriceLimitX96: ZERO_FOR_ONE_LIMIT}),
+            PoolSwapTest.TestSettings({takeClaims: false, settleUsingBurn: false}),
+            ZERO_BYTES
+        );
+        vm.warp(block.timestamp + 300000 + 1);
+
+        vm.mockCall(
+            address(mv),
+            abi.encodeWithSelector(IMarketVault.dryModifyLiquidities.selector),
+            abi.encode(toBalanceDelta(int128(0), int128(0)))
+        );
+
+        uint256 settleAmount0 = 5_999_709_018_652_707;
+        uint256 settleAmount1 = 5_999_709_018_652_707;
+        IERC20(lcc0.underlying()).transfer(guarantor, settleAmount0);
+        IERC20(lcc1.underlying()).transfer(guarantor, settleAmount1);
+
+        IMMQueueCustodian qc = IMMQueueCustodian(address(positionManager.queueCustodian()));
+        uint256 custodyBefore = _custodySumFor(tokenId, address(qc), guarantor);
+
+        vm.startPrank(guarantor);
+        IERC20(lcc0.underlying()).approve(address(positionManager), type(uint256).max);
+        IERC20(lcc1.underlying()).approve(address(positionManager), type(uint256).max);
+        MMA.PreparedAction[] memory seizeActions = new MMA.PreparedAction[](4);
+        seizeActions[0] = MMA.prepareSeize(corePoolKey, tokenId, positionIndex, settleAmount0, settleAmount1, false);
+        seizeActions[1] = MMA.prepareSettleFromDeltas(corePoolKey, tokenId, positionIndex, true, true);
+        seizeActions[2] = MMA.prepareTake(Currency.wrap(address(lcc0)), guarantor, 0);
+        seizeActions[3] = MMA.prepareTake(Currency.wrap(address(lcc1)), guarantor, 0);
+        MMA.executeWithUnlock(positionManager, seizeActions, block.timestamp + 3600);
+        vm.stopPrank();
+
+        assertEq(
+            ILiquidityHub(liquidityHub).settleQueue(address(lcc0), guarantor),
+            0,
+            "this seizure fixture does not create lcc0 Hub queue on guarantor"
+        );
+        assertEq(
+            ILiquidityHub(liquidityHub).settleQueue(address(lcc1), guarantor),
+            0,
+            "this seizure fixture does not create lcc1 Hub queue on guarantor"
+        );
+        assertGt(
+            _custodySumFor(tokenId, address(qc), guarantor),
+            custodyBefore,
+            "precondition: seizure should increase guarantor-beneficiary custody"
+        );
+
+        uint256 custodyMid = _custodySumFor(tokenId, address(qc), guarantor);
+
+        vm.startPrank(guarantor);
+        {
+            MMA.PreparedAction[] memory c0 = new MMA.PreparedAction[](1);
+            c0[0] = MMA.prepareCollectAvailableLiquidity(address(lcc0), tokenId, type(uint256).max);
+            MMA.executeWithUnlock(positionManager, c0, block.timestamp + 3600);
+        }
+        {
+            MMA.PreparedAction[] memory c1 = new MMA.PreparedAction[](1);
+            c1[0] = MMA.prepareCollectAvailableLiquidity(address(lcc1), tokenId, type(uint256).max);
+            MMA.executeWithUnlock(positionManager, c1, block.timestamp + 3600);
+        }
+        vm.stopPrank();
+
+        assertEq(
+            _custodySumFor(tokenId, address(qc), guarantor), custodyMid, "collect must not debit custody without queue"
         );
     }
 

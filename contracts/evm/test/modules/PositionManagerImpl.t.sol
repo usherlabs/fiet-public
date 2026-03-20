@@ -195,9 +195,13 @@ contract PositionManagerImplHarness is PositionManagerQueueCustodian, PositionMa
         return IMMQueueCustodian(address(this));
     }
 
-    function _forwardQueuedLccToCustodian(Currency currency, uint256 tokenId, uint256 amount) internal override {
+    function _forwardQueuedLccToCustodian(Currency currency, uint256 tokenId, address beneficiary, uint256 amount)
+        internal
+        override
+    {
         currency;
         tokenId;
+        beneficiary;
         amount;
     }
 
@@ -369,7 +373,8 @@ contract PositionManagerImplTest is Test {
         vm.expectCall(
             orch,
             abi.encodeWithSignature(
-                "syncPair(address,address,address,address)",
+                "syncPair(address,address,address,address,address)",
+                address(factory),
                 Currency.unwrap(c0),
                 Currency.unwrap(c1),
                 address(h),
@@ -380,7 +385,8 @@ contract PositionManagerImplTest is Test {
         vm.mockCall(
             orch,
             abi.encodeWithSignature(
-                "syncPair(address,address,address,address)",
+                "syncPair(address,address,address,address,address)",
+                address(factory),
                 Currency.unwrap(c0),
                 Currency.unwrap(c1),
                 address(h),
@@ -452,7 +458,10 @@ contract PositionManagerImplTest is Test {
         poolManager.setModifyLiquidityReturn(callerDelta, BalanceDelta.wrap(0));
 
         // Orchestrator sync is called only for positive deltas AND LCC currencies.
-        vm.expectCall(orch, abi.encodeWithSignature("sync(address,address,address)", lcc1, address(h), locker));
+        vm.expectCall(
+            orch,
+            abi.encodeWithSignature("sync(address,address,address,address)", address(factory), lcc1, address(h), locker)
+        );
         vm.mockCall(
             orch, abi.encodeWithSignature("getFullCredit(address,address)", lcc1, locker), abi.encode(uint256(0))
         );

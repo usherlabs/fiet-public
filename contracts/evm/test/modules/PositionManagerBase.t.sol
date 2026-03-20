@@ -75,7 +75,9 @@ contract PositionManagerBaseTest is Test {
         address token = makeAddr("token");
         Currency c = Currency.wrap(token);
 
-        vm.expectCall(orch, abi.encodeWithSignature("sync(address,address,address)", token, address(h), locker));
+        vm.expectCall(
+            orch, abi.encodeWithSignature("sync(address,address,address,address)", factory, token, address(h), locker)
+        );
         h.exposeSyncBalanceAsCredit(c);
     }
 }

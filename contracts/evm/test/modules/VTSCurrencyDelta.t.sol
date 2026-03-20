@@ -8,12 +8,15 @@ import {BalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
 import {MockERC20} from "../_mocks/MockERC20.sol";
 import {MockLCC} from "../_mocks/MockLCC.sol";
 import {Errors} from "../../src/libraries/Errors.sol";
+import {IMarketFactory} from "../../src/interfaces/IMarketFactory.sol";
 
 /// @title VTSCurrencyDeltaTest
 /// @notice Unit tests for VTSCurrencyDelta module
 /// @dev Tests all public/external functions with various edge cases and branch coverage
 contract VTSCurrencyDeltaTest is Test {
     VTSCurrencyDeltaHarness harness;
+    /// @dev Harness no-ops `_assertBoundFactoryCaller`; any address is accepted as factory namespace.
+    IMarketFactory internal factory = IMarketFactory(makeAddr("factory"));
     MockERC20 token0;
     MockERC20 token1;
     Currency currency0;
@@ -397,7 +400,7 @@ contract VTSCurrencyDeltaTest is Test {
         token0.mint(owner, 100e18);
 
         // Act: sync owner's balance as credit to target
-        harness.sync(currency0, owner, target);
+        harness.sync(factory, currency0, owner, target);
 
         // Assert: target should have credit equal to owner's balance
         assertEq(harness.getDelta(currency0, target), 100e18, "Target should have credit from owner's balance");
@@ -409,7 +412,7 @@ contract VTSCurrencyDeltaTest is Test {
         harness.setDelta(currency0, target, 50e18);
 
         // Act: sync - should increase to match balance
-        harness.sync(currency0, owner, target);
+        harness.sync(factory, currency0, owner, target);
 
         // Assert: target's delta should increase to 150e18
         assertEq(harness.getDelta(currency0, target), 150e18, "Target credit should increase to match balance");
@@ -421,7 +424,7 @@ contract VTSCurrencyDeltaTest is Test {
         harness.setDelta(currency0, target, -100e18);
 
         // Act: sync - should reduce debt by owner's balance
-        harness.sync(currency0, owner, target);
+        harness.sync(factory, currency0, owner, target);
 
         // Assert: debt should be reduced
         assertEq(harness.getDelta(currency0, target), -50e18, "Debt should be reduced by balance amount");
@@ -433,7 +436,7 @@ contract VTSCurrencyDeltaTest is Test {
         harness.setDelta(currency0, target, -50e18);
 
         // Act: sync - should pay off debt (50e18 used)
-        harness.sync(currency0, owner, target);
+        harness.sync(factory, currency0, owner, target);
 
         // Assert: debt should be fully paid, delta becomes 0
         assertEq(harness.getDelta(currency0, target), 0, "Debt should be fully paid off");
@@ -445,7 +448,7 @@ contract VTSCurrencyDeltaTest is Test {
         // owner has 0 balance
 
         // Act
-        harness.sync(currency0, owner, target);
+        harness.sync(factory, currency0, owner, target);
 
         // Assert: no change
         assertEq(harness.getDelta(currency0, target), -50e18, "Delta should remain unchanged with no balance");
@@ -457,7 +460,7 @@ contract VTSCurrencyDeltaTest is Test {
         harness.setDelta(currency0, target, 100e18);
 
         // Act: sync - balance (50) < existing delta (100), no increase
-        harness.sync(currency0, owner, target);
+        harness.sync(factory, currency0, owner, target);
 
         // Assert: delta should remain unchanged (cannot decrease via sync)
         assertEq(harness.getDelta(currency0, target), 100e18, "Credit should not decrease from sync");
@@ -469,7 +472,7 @@ contract VTSCurrencyDeltaTest is Test {
         harness.setDelta(currency0, target, 100e18);
 
         // Act: sync - balance == delta, no change needed
-        harness.sync(currency0, owner, target);
+        harness.sync(factory, currency0, owner, target);
 
         // Assert: delta remains the same
         assertEq(harness.getDelta(currency0, target), 100e18, "Credit should remain unchanged");
@@ -485,7 +488,7 @@ contract VTSCurrencyDeltaTest is Test {
         token1.mint(owner, 200e18);
 
         // Act
-        (int128 change0, int128 change1) = harness.syncPair(currency0, currency1, owner, target);
+        (int128 change0, int128 change1) = harness.syncPair(factory, currency0, currency1, owner, target);
 
         // Assert
         assertEq(change0, 100e18, "Change0 should match balance");
@@ -500,7 +503,7 @@ contract VTSCurrencyDeltaTest is Test {
         // token1 has 0 balance
 
         // Act
-        (int128 change0, int128 change1) = harness.syncPair(currency0, currency1, owner, target);
+        (int128 change0, int128 change1) = harness.syncPair(factory, currency0, currency1, owner, target);
 
         // Assert
         assertEq(change0, 100e18, "Change0 should match balance");
@@ -515,7 +518,7 @@ contract VTSCurrencyDeltaTest is Test {
         harness.setDelta(currency1, target, -30e18);
 
         // Act
-        (int128 change0, int128 change1) = harness.syncPair(currency0, currency1, owner, target);
+        (int128 change0, int128 change1) = harness.syncPair(factory, currency0, currency1, owner, target);
 
         // Assert
         assertEq(change0, 50e18, "Change0 should reduce debt by balance");
@@ -527,7 +530,7 @@ contract VTSCurrencyDeltaTest is Test {
     function test_syncPair_noBalances_noChanges() public {
         // Setup: no balances
         // Act
-        (int128 change0, int128 change1) = harness.syncPair(currency0, currency1, owner, target);
+        (int128 change0, int128 change1) = harness.syncPair(factory, currency0, currency1, owner, target);
 
         // Assert
         assertEq(change0, 0, "Change0 should be zero");
@@ -544,7 +547,7 @@ contract VTSCurrencyDeltaTest is Test {
         harness.setDelta(currency1, target, -100e18);
 
         // Act
-        (int128 change0, int128 change1) = harness.syncPair(currency0, currency1, owner, target);
+        (int128 change0, int128 change1) = harness.syncPair(factory, currency0, currency1, owner, target);
 
         // Assert
         assertEq(change0, 50e18, "Change0 should be difference (100 - 50)");

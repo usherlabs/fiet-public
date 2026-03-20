@@ -124,11 +124,13 @@ abstract contract PositionManagerImpl is PositionManagerBase, ImmutableState {
     function _syncPairBalanceAsCredit(Currency currency0, Currency currency1) internal {
         // owner = address(this) = MMPM (balance holder)
         // target = msgSender() = locker (delta recipient)
-        vtsOrchestrator.syncPair(currency0, currency1, address(this), msgSender());
+        vtsOrchestrator.syncPair(marketFactory, currency0, currency1, address(this), msgSender());
     }
 
-    /// @notice Forwards queued LCC to the queue custodian
-    function _forwardQueuedLccToCustodian(Currency currency, uint256 tokenId, uint256 amount) internal virtual;
+    /// @notice Forwards queued LCC to the queue custodian, recorded for `beneficiary` (Hub queue recipient / locker)
+    function _forwardQueuedLccToCustodian(Currency currency, uint256 tokenId, address beneficiary, uint256 amount)
+        internal
+        virtual;
 
     // ------------------------------------------------------------------------------------------------
     // Liquidity Flow/Modification Handlers
@@ -177,7 +179,7 @@ abstract contract PositionManagerImpl is PositionManagerBase, ImmutableState {
 
         uint256 nonFee = inc > fee ? (inc - fee) : 0;
         if (nonFee > 0) {
-            _forwardQueuedLccToCustodian(currency, tokenId, nonFee);
+            _forwardQueuedLccToCustodian(currency, tokenId, locker, nonFee);
         }
     }
 

@@ -101,7 +101,7 @@ contract MMPositionActionsImpl is
         return IMMPositionManager(address(this)).queueCustodian();
     }
 
-    function _forwardQueuedLccToCustodian(Currency currency, uint256 tokenId, uint256 amount)
+    function _forwardQueuedLccToCustodian(Currency currency, uint256 tokenId, address beneficiary, uint256 amount)
         internal
         override(PositionManagerImpl)
     {
@@ -109,7 +109,7 @@ contract MMPositionActionsImpl is
         if (address(custodian) != address(0) && address(custodian) != address(this)) {
             currency.transfer(address(custodian), amount);
             if (tokenId > 0) {
-                custodian.record(tokenId, Currency.unwrap(currency), amount);
+                custodian.record(tokenId, Currency.unwrap(currency), beneficiary, amount);
             }
         }
     }
