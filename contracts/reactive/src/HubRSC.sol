@@ -44,6 +44,8 @@ contract HubRSC is AbstractReactive {
         bool exists;
     }
 
+    uint256 public immutable maxDispatchItems;
+
     /// @notice The Chain the protocol lives on i.e DestinationContract.sol
     uint256 public immutable protocolChainId;
 
@@ -61,9 +63,6 @@ contract HubRSC is AbstractReactive {
 
     /// @notice Callback gas limit for destination receiver.
     uint64 public constant CALLBACK_GAS_LIMIT = 8000000;
-
-    /// @notice Single bound for both max batch size and max loop scans per dispatch.
-    uint256 public constant MAX_DISPATCH_ITEMS = 20;
 
     /// @notice Recipient -> Spoke mapping (factory behavior).
     mapping(address => address) public spokeForRecipient;
@@ -88,6 +87,7 @@ contract HubRSC is AbstractReactive {
     event DispatchRequested(address indexed lcc, uint256 available, uint256 batchCount, uint256 remaining);
 
     constructor(
+        uint256 _maxDispatchItems,
         uint256 _protocolChainId,
         uint256 _reactChainId,
         address _liquidityHub,
@@ -103,6 +103,7 @@ contract HubRSC is AbstractReactive {
 
         protocolChainId = _protocolChainId;
         reactChainId = _reactChainId;
+        maxDispatchItems = _maxDispatchItems;
         liquidityHub = _liquidityHub;
         hubCallback = _hubCallback;
         destinationReceiverContract = _destinationReceiverContract;
@@ -304,7 +305,7 @@ contract HubRSC is AbstractReactive {
         if (available == 0 || lccQueue.size == 0) return;
 
         uint256 startSize = lccQueue.size;
-        uint256 cap = startSize < MAX_DISPATCH_ITEMS ? startSize : MAX_DISPATCH_ITEMS;
+        uint256 cap = startSize < maxDispatchItems ? startSize : maxDispatchItems;
 
         // Bounded batch payload buffers sized to current queue.
         address[] memory lccs = new address[](cap);
