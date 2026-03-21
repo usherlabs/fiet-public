@@ -43,13 +43,17 @@ contract SpokeRSCTest is Test {
         new SpokeRSC(originChainId, destinationChainId, address(0), hubCallback, destinationReceiverContract, recipient);
 
         vm.expectRevert(abi.encodeWithSelector(SpokeRSC.InvalidConfig.selector));
-        new SpokeRSC(originChainId, destinationChainId, liquidityHub, address(0), destinationReceiverContract, recipient);
+        new SpokeRSC(
+            originChainId, destinationChainId, liquidityHub, address(0), destinationReceiverContract, recipient
+        );
 
         vm.expectRevert(abi.encodeWithSelector(SpokeRSC.InvalidConfig.selector));
         new SpokeRSC(originChainId, destinationChainId, liquidityHub, hubCallback, address(0), recipient);
 
         vm.expectRevert(abi.encodeWithSelector(SpokeRSC.InvalidConfig.selector));
-        new SpokeRSC(originChainId, destinationChainId, liquidityHub, hubCallback, destinationReceiverContract, address(0));
+        new SpokeRSC(
+            originChainId, destinationChainId, liquidityHub, hubCallback, destinationReceiverContract, address(0)
+        );
     }
 
     /// @notice Emits a callback when a matching SettlementQueued log is processed.
@@ -344,12 +348,7 @@ contract SpokeRSCTest is Test {
     function _newSpoke(address recipient) internal returns (SpokeRSC) {
         return SpokeRSC(
             new SpokeRSC(
-                originChainId,
-                destinationChainId,
-                liquidityHub,
-                hubCallback,
-                destinationReceiverContract,
-                recipient
+                originChainId, destinationChainId, liquidityHub, hubCallback, destinationReceiverContract, recipient
             )
         );
     }

@@ -34,7 +34,7 @@ contract HubCallback is AbstractCallback, Ownable {
     /// @notice Tracks the allowed spoke address for each recipient.
     mapping(address => address) public spokeForRecipient;
     mapping(address => mapping(address => uint256)) public totalAmountProcessed;
-    
+
     /// @notice Unordered nonce bitmap: nonceKey => wordIndex => bitmap
     /// @dev Each nonce is mapped to a bit position: word = nonce >> 8, bit = nonce & 0xFF
     mapping(bytes32 => mapping(uint256 => uint256)) public nonceBitmap;
@@ -83,7 +83,7 @@ contract HubCallback is AbstractCallback, Ownable {
         }
         // Use unordered nonce system to prevent duplicates regardless of delivery order
         bytes32 nonceKey = keccak256(abi.encode(spokeRVMId, lcc, recipient));
-        if(!_useUnorderedNonce(nonceKey, nonce)) {
+        if (!_useUnorderedNonce(nonceKey, nonce)) {
             emit DuplicateSettlementIgnored(spokeRVMId, lcc, recipient, nonce);
             return;
         }
@@ -157,10 +157,10 @@ contract HubCallback is AbstractCallback, Ownable {
     /// @param lcc The LCC address.
     /// @param recipient The recipient address.
     /// @return nonceKey The computed nonce key.
-    function computeNonceKey(address spokeRVMId, address lcc, address recipient) 
-        external 
-        pure 
-        returns (bytes32 nonceKey) 
+    function computeNonceKey(address spokeRVMId, address lcc, address recipient)
+        external
+        pure
+        returns (bytes32 nonceKey)
     {
         return keccak256(abi.encode(spokeRVMId, lcc, recipient));
     }
@@ -170,10 +170,10 @@ contract HubCallback is AbstractCallback, Ownable {
     /// @param nonce The nonce to check.
     /// @return used True if the nonce has already been used.
     function isNonceUsed(bytes32 nonceKey, uint256 nonce) external view returns (bool used) {
-        uint256 wordIndex = nonce >> 8;  // nonce / 256
+        uint256 wordIndex = nonce >> 8; // nonce / 256
         uint256 bitIndex = nonce & 0xFF; // nonce % 256
         uint256 bitMask = 1 << bitIndex;
-        
+
         return nonceBitmap[nonceKey][wordIndex] & bitMask != 0;
     }
 
@@ -182,10 +182,10 @@ contract HubCallback is AbstractCallback, Ownable {
     /// @param nonce The nonce to mark as used.
     /// @dev Uses bitmap storage: each nonce maps to word = nonce >> 8, bit = nonce & 0xFF.
     function _useUnorderedNonce(bytes32 nonceKey, uint256 nonce) internal returns (bool) {
-        uint256 wordIndex = nonce >> 8;  // nonce / 256
+        uint256 wordIndex = nonce >> 8; // nonce / 256
         uint256 bitIndex = nonce & 0xFF; // nonce % 256
         uint256 bitMask = 1 << bitIndex; // create bit mask e.g 1 << 8 gives 10000000
-        
+
         uint256 word = nonceBitmap[nonceKey][wordIndex];
         // use a bitwise and to check if the bit is already set
         if (word & bitMask != 0) return false;
