@@ -382,7 +382,9 @@ contract HubRSC is AbstractReactive {
     }
 
     /// @notice Applies authoritative queue decrement and keeps in-flight reservations bounded.
-    function _applyAuthoritativeDecrease(address lcc, address recipient, uint256 amount, bool consumeInFlight) internal {
+    function _applyAuthoritativeDecrease(address lcc, address recipient, uint256 amount, bool consumeInFlight)
+        internal
+    {
         if (amount == 0) return;
         bytes32 key = computeKey(lcc, recipient);
         Pending storage entry = pending[key];
