@@ -335,6 +335,9 @@ library VTSPositionLib {
             uint256 deltaIndex = FullMath.mulDiv(residual, FixedPoint128.Q128, totalSettled);
             uint256 currentIndex = paPool.coveragePerSettledIndexX128.get(tokenIndex);
             paPool.coveragePerSettledIndexX128.set(tokenIndex, currentIndex + deltaIndex);
+            // Match incrementCoverage: socialise the full deferred coverage window into the bonus denominator.
+            uint256 curTotalCISE = paPool.totalCISEExposureSinceLastMod.get(tokenIndex);
+            paPool.totalCISEExposureSinceLastMod.set(tokenIndex, curTotalCISE + residual);
             paPool.coverageResidualCISE.set(tokenIndex, 0);
         }
     }
@@ -772,7 +775,9 @@ library VTSPositionLib {
     }
 
     /// @notice Realise and checkpoint CISE exposure for a single token
-    /// @dev Computes exposure = settled * (indexNow - indexLast) / Q128 and accumulates it
+    /// @dev Computes exposure = settled * (indexNow - indexLast) / Q128 and accumulates it on the position.
+    ///      Pool-wide `totalCISEExposureSinceLastMod` is updated eagerly in `incrementCoverage` and
+    ///      `_flushCISEResidualIfNeeded`, not here, so bonus denominators are not first-mover gamed.
     /// @dev Performed on _settleCoverageUsage to ensure accurate CISE exposure is realised and checkpointed
     /// @param pa The position accounting storage reference
     /// @param paPool The pool accounting storage reference
@@ -794,8 +799,6 @@ library VTSPositionLib {
             uint256 exposure = FullMath.mulDiv(settled, deltaIndex, FixedPoint128.Q128);
             if (exposure > 0) {
                 pa.ciseExposureSinceLastMod.set(tokenIndex, pa.ciseExposureSinceLastMod.get(tokenIndex) + exposure);
-                paPool.totalCISEExposureSinceLastMod
-                    .set(tokenIndex, paPool.totalCISEExposureSinceLastMod.get(tokenIndex) + exposure);
             }
         }
     }

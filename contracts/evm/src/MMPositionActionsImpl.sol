@@ -253,6 +253,37 @@ contract MMPositionActionsImpl is
         }
     }
 
+    /// @notice Applies protocol (MMPM) underlying credits into `settled` via `onMMSettle` without token movement.
+    /// @dev Clamps each side to the position owner's current negative underlying delta (debt). Without this,
+    ///      stale pre-read credit pairs (e.g. from before a liquidity add) could inflate `settled` beyond debt.
+    function _netProtocolCredits(
+        PoolKey calldata poolKey,
+        uint256 tokenId,
+        uint256 positionIndex,
+        uint256 credit0,
+        uint256 credit1,
+        bool isSeizing
+    ) internal {
+        BalanceDelta ownerDelta =
+            vtsOrchestrator.getUnderlyingDeltaPair(address(this), poolKey.currency0, poolKey.currency1);
+        uint256 need0 = ownerDelta.amount0() < 0 ? LiquidityUtils.safeInt128ToUint256(ownerDelta.amount0()) : 0;
+        uint256 need1 = ownerDelta.amount1() < 0 ? LiquidityUtils.safeInt128ToUint256(ownerDelta.amount1()) : 0;
+        if (credit0 > need0) credit0 = need0;
+        if (credit1 > need1) credit1 = need1;
+        if (credit0 == 0 && credit1 == 0) return;
+
+        _callOnMMSettle(
+            SettleCallParams({
+                vault: _getVault(poolKey),
+                factory: marketFactory,
+                tokenId: tokenId,
+                positionIndex: positionIndex,
+                requestedDelta: LiquidityUtils.safeToBalanceDelta(credit0, credit1, true, true),
+                isSeizing: isSeizing
+            })
+        );
+    }
+
     function _settleFromDeltasCredits(
         PoolKey calldata poolKey,
         uint256 tokenId,
@@ -262,17 +293,7 @@ contract MMPositionActionsImpl is
         bool payerIsUser
     ) internal {
         if (payerIsUser) {
-            // since credits exist (and already in market), net settlement for position
-            _callOnMMSettle(
-                SettleCallParams({
-                    vault: _getVault(poolKey),
-                    factory: marketFactory,
-                    tokenId: tokenId,
-                    positionIndex: positionIndex,
-                    requestedDelta: LiquidityUtils.safeToBalanceDelta(credit0, credit1, true, true),
-                    isSeizing: false
-                })
-            );
+            _netProtocolCredits(poolKey, tokenId, positionIndex, credit0, credit1, false);
         } else {
             // Settle into the position the underlying tokens that are owed.
             _settle(poolKey, tokenId, positionIndex, -credit0.toInt128(), -credit1.toInt128(), true);
@@ -683,34 +704,22 @@ contract MMPositionActionsImpl is
                 _settle(poolKey, tokenId, positionIndex, credit0.toInt128(), credit1.toInt128(), !payerIsUser);
                 // if !payerIsUser, balance sync handled in _settle
             } else {
-                // DEPOSIT: Settle credits into position
-                // Net protocol delta via onMMSettle (no token movement) regardless of payerIsUser
-                // Build call params in scoped block to reduce stack depth
-                SettleCallParams memory callParams;
+                // DEPOSIT: Net protocol credits into position via onMMSettle (no token movement).
+                // Clamped to current MMPM underlying debt — same helper as mint/increase-from-deltas.
+                bool isSeizing;
                 {
-                    bool isSeizing;
-                    {
-                        Position memory position;
-                        PositionId positionId;
-                        (position, positionId) = getPosition(tokenId, positionIndex);
-                        MMHelpers.assertPositionForPool(poolKey, position);
-                        isSeizing = _isSeizing(positionId);
-                    }
-
-                    if (!isSeizing) {
-                        MMHelpers.assertApprovedOrOwner(sender, tokenId);
-                    }
-
-                    callParams = SettleCallParams({
-                        vault: _getVault(poolKey),
-                        factory: marketFactory,
-                        tokenId: tokenId,
-                        positionIndex: positionIndex,
-                        requestedDelta: LiquidityUtils.safeToBalanceDelta(credit0, credit1, true, true),
-                        isSeizing: isSeizing
-                    });
+                    Position memory position;
+                    PositionId positionId;
+                    (position, positionId) = getPosition(tokenId, positionIndex);
+                    MMHelpers.assertPositionForPool(poolKey, position);
+                    isSeizing = _isSeizing(positionId);
                 }
-                _callOnMMSettle(callParams);
+
+                if (!isSeizing) {
+                    MMHelpers.assertApprovedOrOwner(sender, tokenId);
+                }
+
+                _netProtocolCredits(poolKey, tokenId, positionIndex, credit0, credit1, isSeizing);
             }
         }
         if (!payerIsUser && !shouldTake) {

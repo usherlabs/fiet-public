@@ -1497,6 +1497,64 @@ contract VTSPositionLibTest is VTSLibTestBase {
         (uint256 residual0After,) = harness.getPoolCoverageResidualCISE(testPoolId);
         assertGt(idx0After, idx0Before, "coveragePerSettledIndexX128 should increase after flush");
         assertEq(residual0After, 0, "coverageResidualCISE should be cleared after flush");
+
+        (uint256 poolCise0,) = harness.getPoolTotalCISEExposure(testPoolId);
+        assertEq(
+            poolCise0,
+            100e18,
+            "eager CISE denominator should include flushed residual before any position growth settle / beneficiary touch"
+        );
+    }
+
+    /// @notice Regression: deferred `coverageResidualCISE` is flushed into the pool index and
+    ///         `totalCISEExposureSinceLastMod` on the first totalSettled 0 -> >0 transition, before
+    ///         `settlePositionGrowths` realises position numerators (no separate fee/beneficiary step).
+    function test_CISE_residualFlush_eagerDenominator_beforeSettlePositionGrowths_fairNumerator() public {
+        _initMarket();
+        PoolId corePoolId = _getDefaultPoolId();
+        harness.setupPool(corePoolId, _createDefaultVTSConfig());
+
+        PositionId posA =
+            _registerHarnessPositionInPool(corePoolId, DEFAULT_OWNER, -60, 60, 1, bytes32(uint256(0xC15E)));
+
+        // Choose residual and deposit0 so residual * Q128 / deposit0 * deposit0 / Q128 == residual (no floor loss).
+        uint256 residual = 8e18;
+        uint256 deposit0 = 4e18;
+
+        harness.setPoolCoverageResidualCISE(corePoolId, residual, 0);
+        harness.setPoolTotalSettled(corePoolId, 0, 0);
+        harness.setCommitmentMax(posA, 1000e18, 1000e18);
+        harness.setSettled(posA, 0, 0);
+        harness.setCISEIndexLastX128(posA, 0, 0);
+
+        harness.updateSettlement(posA, 0, int256(deposit0));
+
+        (uint256 residAfter,) = harness.getPoolCoverageResidualCISE(corePoolId);
+        assertEq(residAfter, 0, "residual must flush when pool totalSettled leaves zero");
+
+        (uint256 poolCise0,) = harness.getPoolTotalCISEExposure(corePoolId);
+        assertEq(poolCise0, residual, "pool totalCISEExposure must include residual before settlePositionGrowths");
+
+        (uint256 idx0After,) = harness.getPoolCoveragePerSettledIndexX128(corePoolId);
+        uint256 expDelta = FullMath.mulDiv(residual, FixedPoint128.Q128, deposit0);
+        assertEq(idx0After, expDelta, "coveragePerSettledIndex should advance by residual/totalSettled at flush");
+
+        (uint256 exp0Before,) = harness.getCISEExposure(posA);
+        assertEq(exp0Before, 0, "position CISE numerator should still be zero before growth settle");
+
+        harness.settlePositionGrowths(manager, posA);
+
+        uint256 expPos = FullMath.mulDiv(deposit0, expDelta, FixedPoint128.Q128);
+        assertEq(expPos, residual);
+
+        (uint256 exp0After,) = harness.getCISEExposure(posA);
+        assertEq(exp0After, residual, "sole LP should realise the full residual window as CISE numerator");
+
+        (uint256 idx0Last,) = harness.getCISEIndexLastX128(posA);
+        assertEq(idx0Last, expDelta, "token0 CISE indexLast should checkpoint to pool index");
+
+        (uint256 poolCiseAfter,) = harness.getPoolTotalCISEExposure(corePoolId);
+        assertEq(poolCiseAfter, residual, "pool CISE denominator unchanged by position-only CISE realisation");
     }
 
     function test_calcRFS_requireClosedRfS_revertsWhenOpen() public {

@@ -174,7 +174,8 @@ struct PoolAccounting {
     TokenPairUint coveragePerSettledIndexX128;
     // CISE: Deferred residual when totalSettled = 0 at exercise time
     TokenPairUint coverageResidualCISE;
-    // CISE: Pool-wide sum of realised exposure since last modification (denominator for allocation)
+    // CISE: Pool-wide bonus denominator window: incremented by coveredAmount on each coverage index step
+    // (and by deferred residual on flush); decremented when bonuses are allocated. Position numerators accrue lazily.
     TokenPairUint totalCISEExposureSinceLastMod;
     // CSI: Spend-per-share index (Q128), advances when bonuses allocated
     TokenPairUint feesSharedSpendIndexX128;

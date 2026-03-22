@@ -681,15 +681,18 @@ contract VTSOrchestrator is
     }
 
     /// @notice Commit a liquidity signal using sender-signed EIP-712 relayer authorisation
+    /// @dev Same factory-bound sender resolution as `commitSignal`: unbound callers may only relay for themselves.
     function commitSignalRelayed(
+        IMarketFactory factory,
         address sender,
         bytes memory liquiditySignal,
         uint256 deadline,
         uint256 authNonce,
         bytes memory authSig
     ) external onlyIfPoolManagerUnlocked onlyIfVRLHandlersRegistered nonReentrant returns (uint256 commitId) {
-        commitId =
-            VTSCommitLib.commitSignalRelayed(s, sender, signalManager, liquiditySignal, deadline, authNonce, authSig);
+        commitId = VTSCommitLib.commitSignalRelayed(
+            s, _resolveSignalSender(factory, sender), signalManager, liquiditySignal, deadline, authNonce, authSig
+        );
     }
 
     /// @notice Extend the grace period for a position
@@ -788,6 +791,9 @@ contract VTSOrchestrator is
 
     /// @notice Validate that the grace period has elapsed for a position (required before seizure)
     /// @dev Called by MMPositionManager before seizing a position. Reverts if grace period has not elapsed.
+    ///      Refreshes stored RFS lane checkpoint from the current snapshot before seizability (so third parties
+    ///      cannot leave stale `openMask` / `openSince` that block seizure). When a stored commitment deficit
+    ///      exists, also recomputes commitment state (`withCommitment=true`) before marking RFS.
     /// @param commitId The commit identifier
     /// @param positionIndex The position index within the commit
     function onSeize(uint256 commitId, uint256 positionIndex) external onlyIfPoolManagerUnlocked nonReentrant {
@@ -802,12 +808,8 @@ contract VTSOrchestrator is
         // before checking seizability so an attacker cannot create durable seize
         // eligibility from a stale or transiently-manipulated checkpoint.
         PositionAccounting storage pa = s.positionAccounting[positionId];
-        if (pa.commitmentDeficit.token0 > 0 || pa.commitmentDeficit.token1 > 0) {
-            // Settle growths first so the refreshed commitment check and the seize
-            // decision both use a coherent position snapshot.
-            VTSPositionLib.settlePositionGrowths(s, poolManager, positionId);
-            VTSCommitLib.checkpointWithCommitment(s, poolManager, oracleHelper, commitId, positionId);
-        }
+        bool hasStoredCommitmentDeficit = pa.commitmentDeficit.token0 > 0 || pa.commitmentDeficit.token1 > 0;
+        _checkpoint(commitId, positionIndex, hasStoredCommitmentDeficit, positionId);
 
         // Validate grace period has elapsed (reverts if not)
         CheckpointLibrary.isSeizable(
@@ -835,7 +837,9 @@ contract VTSOrchestrator is
     }
 
     /// @notice Renew a liquidity signal using sender-signed EIP-712 relayer authorisation
+    /// @dev Same factory-bound sender resolution as `renewSignal`: unbound callers may only relay for themselves.
     function renewSignalRelayed(
+        IMarketFactory factory,
         address sender,
         uint256 commitId,
         bytes memory liquiditySignal,
@@ -845,7 +849,14 @@ contract VTSOrchestrator is
     ) external onlyIfPoolManagerUnlocked onlyIfVRLHandlersRegistered nonReentrant {
         _assertSignalValid(commitId, false);
         VTSCommitLib.renewSignalRelayed(
-            s, sender, signalManager, commitId, liquiditySignal, deadline, authNonce, authSig
+            s,
+            _resolveSignalSender(factory, sender),
+            signalManager,
+            commitId,
+            liquiditySignal,
+            deadline,
+            authNonce,
+            authSig
         );
     }
 
@@ -864,11 +875,16 @@ contract VTSOrchestrator is
         PositionId positionId = getPositionId(commitId, positionIndex);
         _assertPositionValid(positionId, true);
 
+        _checkpoint(commitId, positionIndex, withCommitment, positionId);
+    }
+
+    /// @notice Internal checkpoint: settle growths, optional commitment refresh, then mark RFS lane state
+    /// @dev Callers must have already validated `commitId` and `positionId` (e.g. `_assertSignalValid`, `_assertPositionValid`).
+    function _checkpoint(uint256 commitId, uint256 positionIndex, bool withCommitment, PositionId positionId) internal {
         // Settle growths exactly once up-front so both commitment checks and RFS use the same state snapshot.
         // We intentionally avoid `calcRFS` here because it settles growths internally.
         VTSPositionLib.settlePositionGrowths(s, poolManager, positionId);
 
-        // If commitment checks are requested, validate backing and update deficits
         if (withCommitment) {
             // Commitment backing checks use the stored commit signal state.
             // If the signal is expired, it is treated as 0; callers should renew first if needed.

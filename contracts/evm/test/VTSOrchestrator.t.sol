@@ -236,6 +236,58 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
         );
     }
 
+    function test_revert_commitSignalRelayed_whenUnboundCallerForwardsSender_insideUnlock() public {
+        vm.mockCall(
+            marketFactory,
+            abi.encodeWithSelector(IMarketFactory.bounds.selector, address(unlockCaller)),
+            abi.encode(false)
+        );
+
+        bytes memory signalBytes = abi.encode(liquiditySignal);
+        vm.expectRevert(Errors.InvalidSender.selector);
+        unlockCaller.run(
+            address(vtsOrchestrator),
+            abi.encodeWithSelector(
+                VTSOrchestrator.commitSignalRelayed.selector,
+                IMarketFactory(marketFactory),
+                liquiditySignal.mmState.owner,
+                signalBytes,
+                uint256(0),
+                uint256(0),
+                bytes("")
+            )
+        );
+    }
+
+    function test_revert_renewSignalRelayed_whenUnboundCallerForwardsSender_insideUnlock() public {
+        (uint256 commitId,,,) = _createCommittedPosition();
+
+        vm.mockCall(
+            marketFactory,
+            abi.encodeWithSelector(IMarketFactory.bounds.selector, address(unlockCaller)),
+            abi.encode(false)
+        );
+
+        LiquiditySignal memory sameOwnerRenew = liquiditySignal;
+        sameOwnerRenew.nonce += 1;
+        bytes memory renewSignalBytes = abi.encode(sameOwnerRenew);
+
+        vm.expectRevert(Errors.InvalidSender.selector);
+        unlockCaller.run(
+            address(vtsOrchestrator),
+            abi.encodeWithSelector(
+                VTSOrchestrator.renewSignalRelayed.selector,
+                IMarketFactory(marketFactory),
+                sameOwnerRenew.mmState.advancer,
+                commitId,
+                renewSignalBytes,
+                uint256(0),
+                uint256(0),
+                bytes("")
+            )
+        );
+    }
+
     function test_revert_extendGracePeriod_whenPoolManagerLocked() public {
         (uint256 tokenId,,,) = _createCommittedPosition();
         bytes memory settlementProof = abi.encode(1);
@@ -351,7 +403,20 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
         assertEq(ciseAfter.ciseIndex0, ciseBefore.ciseIndex0, "ciseIndex0 should not change");
         assertEq(ciseAfter.ciseResidual0, ciseBefore.ciseResidual0, "ciseResidual0 should not change");
         assertEq(ciseAfter.totalCISEExposure0, ciseBefore.totalCISEExposure0, "totalCISEExposure0 should not change");
-        assertEq(ciseAfter.totalCISEExposure1, ciseBefore.totalCISEExposure1, "totalCISEExposure1 should not change");
+        // Token1 coverage: when pool totalSettled1 > 0, incrementCoverage eagerly bumps CISE exposure (see VTSCommitLib).
+        if (ciseBefore.totalSettled1 > 0) {
+            assertEq(
+                ciseAfter.totalCISEExposure1,
+                ciseBefore.totalCISEExposure1 + amount1,
+                "totalCISEExposure1 should increase by covered amount when settled1 > 0"
+            );
+        } else {
+            assertEq(
+                ciseAfter.totalCISEExposure1,
+                ciseBefore.totalCISEExposure1,
+                "totalCISEExposure1 should not change when settled1 == 0"
+            );
+        }
 
         // Coverage must land either in the index (if totals > 0) or in residuals (if totals == 0).
         if (diceBefore.totalDeficitPrincipal1 > 0) {
@@ -922,10 +987,18 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
     function test_onSeize_validatesGracePeriod() public {
         (uint256 tokenId,,,) = _createCommittedPosition();
 
-        // Warp beyond grace period
-        vm.warp(block.timestamp + 10000000);
+        // onSeize() always refreshes the RFS checkpoint from live `getRFS` before seizability. A fully settled
+        // position can have closed RFS while storage still reflected an older open lane; only a consistent
+        // open-RFS snapshot + elapsed lane grace (or commitment-deficit bypass) should succeed.
+        _mockLccPrices(1e18, 1e18);
+        _mockSignalUsd(0);
+        unlockCaller.run(
+            address(vtsOrchestrator), abi.encodeWithSelector(VTSOrchestrator.checkpoint.selector, tokenId, 0, true)
+        );
 
-        // Should not revert (grace period elapsed)
+        vm.warp(block.timestamp + 10_000_000);
+
+        // Should not revert (grace / deficit bypass conditions elapsed)
         unlockCaller.run(address(vtsOrchestrator), abi.encodeWithSelector(VTSOrchestrator.onSeize.selector, tokenId, 0));
     }
 

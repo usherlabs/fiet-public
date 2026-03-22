@@ -1041,10 +1041,17 @@ contract MMPositionManagerActionsTest is MarketTestBase, MarketMakerTestBase {
                 position2SettledAmount0Before,
                 "Position2 settled amount0 should increase after increaseFromDeltas"
             );
-            assertGt(
+            // payerIsUser=true deposits are clamped to MMPM negative underlying delta per token; if token1 debt
+            // after the increase is already cleared by credits, token1 settled may legitimately stay flat.
+            assertGe(
                 position2SettledAmount1After,
                 position2SettledAmount1Before,
-                "Position2 settled amount1 should increase after increaseFromDeltas"
+                "Position2 settled amount1 must not decrease after increaseFromDeltas"
+            );
+            assertGt(
+                position2SettledAmount0After + position2SettledAmount1After,
+                position2SettledAmount0Before + position2SettledAmount1Before,
+                "Position2 total settled should increase when liquidity is added from deltas"
             );
         }
     }

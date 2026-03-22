@@ -263,7 +263,9 @@ contract MMPositionManager is
         } else {
             (uint256 deadline, uint256 authNonce, bytes memory authSig) =
                 abi.decode(relayParams, (uint256, uint256, bytes));
-            tokenId = vtsOrchestrator.commitSignalRelayed(msgSender(), liquiditySignal, deadline, authNonce, authSig);
+            tokenId = vtsOrchestrator.commitSignalRelayed(
+                marketFactory, msgSender(), liquiditySignal, deadline, authNonce, authSig
+            );
         }
         _mint(owner, tokenId);
         emit SignalCommitted(tokenId);
@@ -278,7 +280,9 @@ contract MMPositionManager is
         } else {
             (uint256 deadline, uint256 authNonce, bytes memory authSig) =
                 abi.decode(relayParams, (uint256, uint256, bytes));
-            vtsOrchestrator.renewSignalRelayed(msgSender(), tokenId, liquiditySignal, deadline, authNonce, authSig);
+            vtsOrchestrator.renewSignalRelayed(
+                marketFactory, msgSender(), tokenId, liquiditySignal, deadline, authNonce, authSig
+            );
         }
     }
 

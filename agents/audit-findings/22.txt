@@ -1,0 +1,143 @@
+Stale transient no-core-action flag on revert in ProxyHook._beforeSwap causes suppression of direct-core settlement follow-ups within the same transaction
+
+A transient flag introduced to mark proxy-routed swaps (CoreActionFlag) is set at the start of ProxyHook._beforeSwap and only cleared on normal exit. If _beforeSwap reverts after setting the flag, EIP-1153 semantics keep it set for the rest of the transaction, causing subsequent direct-core operations to be misclassified and their best-effort settlement follow-ups to be skipped.
+
+The PR introduced a transient guard (CoreActionFlag via TransientSlots) and applied it in ProxyHook._beforeSwap through the noCoreAction modifier. This flag is stored in EIP-1153 transient storage, which persists for the entire transaction and does not roll back on revert. ProxyHook._beforeSwap contains several revert points after setting the flag. If any revert occurs before the modifier clears the flag, the flag remains set. Later in the same transaction, CoreHook._afterSwap reads the ProxyHook’s transient flag remotely and will misclassify a truly direct-core swap as proxy-routed, skipping the follow-up call to ProxyHook.handleSwap. Similarly, ProxyHook.handleAddLiquidity self-suppresses when the stale flag is set. These follow-ups primarily trigger MarketVault._settleObligations/_settleObligationsForLCC (best-effort mobilization of vault liquidity to LiquidityHub to fulfill queued settlements). Skipping them delays settlement within the current transaction but does not break safety or invariants, and the flag resets at the end of the transaction.
+
+Code Suggestions:
+
+}
+ 
+
+124
+
+ 
+
+    function _afterSwap(address sender, PoolKey calldata key, SwapParams calldata params, BalanceDelta delta, bytes calldata)
+125
+
+126
+
+127
+
+128
+
+129
+
+130
+
+131
+
+132
+
+133
+
+134
+
+135
+
+136
+
+137
+
+138
+
+139
+
+ 
+
+        internal
+ 
+
+        virtual
+ 
+
+        override
+ 
+
+        returns (bytes4, int128)
+ 
+
+    {
+ 
+
+        // Read swap snapshot from transient storage then clear immediately to avoid any same-tx "ghost state"
+ 
+
+        // interactions if future refactors introduce nested/interleaved swaps.
+ 
+
+        uint160 sqrtPBefore = uint160(TransientSlot.asUint256(TransientSlots.SQRTP_BEFORE_SLOT).tload());
+ 
+
+        uint128 liqBefore = uint128(TransientSlot.asUint256(TransientSlots.LIQ_BEFORE_SLOT).tload());
+ 
+
+        TransientSlot.asUint256(TransientSlots.SQRTP_BEFORE_SLOT).tstore(0);
+ 
+
+        TransientSlot.asUint256(TransientSlots.LIQ_BEFORE_SLOT).tstore(0);
+ 
+
+        vtsOrchestrator.afterCoreSwap(key, params, delta, sqrtPBefore, liqBefore);
+ 
+
+ 
+
+        // Check if this is a direct core pool swap, and if it is, notify canonical vault handler.
+ 
+
+        address proxyHook = _getProxyHook(key);
+140
+
+ 
+
+        if (sender != proxyHook) {
+141
+
+142
+
+ 
+
+            _notifyDirectSwap(proxyHook, key, delta);
+ 
+
+        }
+170
+
+171
+
+ 
+
+        // only add direct liquidity if this is not an MM position operation
+ 
+
+        if (!isMMPosition) {
+172
+
+173
+
+174
+
+175
+
+ 
+
+            address proxy = _getProxyHook(key);
+ 
+
+            if (sender != proxy) {
+ 
+
+                IVaultCoreActionHandler(proxy).handleAddLiquidity();
+ 
+
+            }
+176
+
+177
+
+ 
+
+        }
+ 

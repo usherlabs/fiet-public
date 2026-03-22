@@ -1,0 +1,133 @@
+Skipped growth settlement on paused remove-liquidity in CoreHook causes under-attributed VTS growth
+
+When the pool/global VTS is paused, CoreHook now allows remove-liquidity while skipping pre-modification growth settlement and post-removal position processing. Later, VTS settles pre-pause growth using the smaller, post-removal liquidity, permanently under-attributing growth and distorting deficits, coverage indices, and RFS.
+
+This PR changes CoreHook so that during a pause, remove-liquidity proceeds but VTS mutations are frozen: _beforeRemoveLiquidity skips vtsOrchestrator.settlePositionGrowths and _afterRemoveLiquidity returns early, skipping vtsOrchestrator.processPosition. VTS growth settlement (in VTSPositionLib) attributes growth since the last checkpoint by multiplying the inside growth delta by the position’s current liquidity read from PoolManager at settlement time. Thus, any pre-pause growth is later settled using the smaller, post-removal liquidity, permanently under-attributing growth that accrued on the larger pre-removal liquidity. This mis-attribution reduces recorded deficits/inflows, skews DICE/CISE coverage/bonus accounting, and can loosen RFS withdrawal clamps. The behavior is introduced by this PR’s pause-guarded code path in CoreHook’s remove-liquidity hooks.
+
+Code Suggestion:
+
+VTSOrchestrator.sol
+
+
+
+    // Only check for active valid position - as new positions are not yet registered in VTS when this method is called.
+ 
+
+        if (isPositionValid(positionId, true)) {
+538
+
+539
+
+540
+
+541
+
+542
+
+543
+
+544
+
+545
+
+546
+
+547
+
+ 
+
+            PoolId pid = s.positions[positionId].poolId;
+ 
+
+            if (s.isPaused || s.pools[pid].isPaused) {
+ 
+
+                // During pause, allow growth-only settlement strictly from the canonical CoreHook for this pool.
+ 
+
+                Pool memory pool = s.pools[pid];
+ 
+
+                IMarketFactory factory =
+ 
+
+                    liquidityHub.getFactory(Currency.unwrap(pool.currency0), Currency.unwrap(pool.currency1));
+ 
+
+                MarketHandlerLib.assertCoreHook(factory, _msgSender());
+ 
+
+            } else {
+ 
+
+                _notPoolPaused(pid);
+ 
+
+            }
+548
+
+549
+
+ 
+
+            VTSPositionLib.settlePositionGrowths(s, poolManager, positionId);
+ 
+
+        }
+
+-----
+
+CoreHook.sol
+
+
+
+function _beforeRemoveLiquidity(
+ 
+
+        address sender,
+99
+
+ 
+
+        PoolKey calldata,
+100
+
+101
+
+102
+
+ 
+
+        ModifyLiquidityParams calldata params,
+ 
+
+        bytes calldata
+ 
+
+    ) internal override returns (bytes4) {
+103
+
+104
+
+ 
+
+        // Always an existing position; settle growths against pre-modification liquidity
+ 
+
+        vtsOrchestrator.settlePositionGrowths(PositionLibrary.generateId(sender, params));
+ 
+
+ 
+
+ 
+
+105
+
+106
+
+ 
+
+        return this.beforeRemoveLiquidity.selector;
+ 
+
+    }

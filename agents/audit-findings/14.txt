@@ -1,0 +1,111 @@
+```markdown
+# Security Vulnerability Report: Per-(lcc,from,to) Transient Planned-Cancel Without Transfer Linkage
+
+## Overview
+The `VTSPositionLib` and `LiquidityHub` contracts implement a **planned-cancel-with-queue** mechanism using transient storage slots keyed by `(lcc, from, to)`. This design **lacks per-transfer linkage**, leading to **lost or misapplied cancellations** and **stuck/misattributed settlements** during batched liquidity decreases.
+
+This is a **medium-severity design flaw** introduced in PR #135, affecting settlement integrity and accounting correctness — not direct principal loss, due to auto-forwarding and settlement serviceability checks.
+
+---
+
+## Vulnerability Details
+
+### Severity
+- **Severity**: Medium
+- **Likelihood**: Medium
+- **Impact**: Medium
+
+### Affected Contracts
+- `VTSPositionLib.sol`
+- `LiquidityHub.sol`
+
+### Affected Functions
+- `VTSPositionLib._handleLiquidityDecrease`
+- `LiquidityHub.planCancelWithQueue`
+- `LCC._afterTransfer` → `LiquidityHub.executePlannedCancel`
+
+---
+
+## Technical Description
+
+The system schedules cancellation plans via `LiquidityHub.planCancelWithQueue` using `principalDelta` (converted to absolute value), **without verifying whether an actual `PoolManager → MMPM` transfer occurs** in the same call.
+
+This creates three failure modes:
+1. **Stale Plans**: Plans written when `callerDelta.amountX() ≤ 0` (no take) remain unconsumed.
+2. **Overwritten Plans**: Later actions in the same transaction overwrite prior plans for the same `(lcc, from, to)` key.
+3. **Misapplied Consumption**: Later transfers consume stale plans not intended for them, causing misattribution.
+
+Because cancellation is not tied to actual transfer outcomes, **settlement queues become inconsistent**, leading to:
+- Lost cancellations (under-application)
+- Stuck or misattributed settlements
+
+---
+
+## Code Context
+
+### VTSPositionLib.sol — Line 1376–1387
+```solidity
+// @note We cannot cancel directly at this point in the flow,
+// The LCC's are not yet deposited into the MMPM by the poolManager - as we're during modification of liquidity.
+// Therefore, we plan to cancel the LCC's and queue the settlement once this settlement occurs.
+settleableDelta = _handleLiquidityDecrease(
+    ctx, p.owner, p.poolKey, principalDelta, requiredSettlementDelta, queueRecipient
+);
+```
+
+### VTSPositionLib.sol — Line 1473–1491
+```solidity
+function _handleLiquidityDecrease(
+    Context memory ctx,
+    address owner,
+    PoolKey calldata poolKey,
+    BalanceDelta principalDelta,
+    BalanceDelta requiredSettlementDelta,
+    address queueRecipient
+) internal returns (BalanceDelta settleableDelta) {
+    if (LiquidityUtils.isZeroDelta(principalDelta)) {
+        return BalanceDelta.wrap(0);
+    }
+
+    // Only plan for positive principal, and cap by actual take amounts
+    uint256 principalAmount0 = principalDelta.amount0() > 0 ? uint256(int256(principalDelta.amount0())) : 0;
+    uint256 principalAmount1 = principalDelta.amount1() > 0 ? uint256(int256(principalDelta.amount1())) : 0;
+    uint256 takeAmount0 = callerDelta.amount0() > 0 ? uint256(int256(callerDelta.amount0())) : 0;
+    uint256 takeAmount1 = callerDelta.amount1() > 0 ? uint256(int256(callerDelta.amount1())) : 0;
+
+    if (principalAmount0 > takeAmount0) principalAmount0 = takeAmount0;
+    if (principalAmount1 > takeAmount1) principalAmount1 = takeAmount1;
+```
+
+---
+
+## Exploitation Scenario
+
+1. User initiates a batched liquidity decrease with multiple tokens.
+2. For token A, `principalDelta > 0` but `callerDelta ≤ 0` → plan is scheduled but no transfer occurs.
+3. Later in same tx, token B triggers a transfer → consumes stale plan for token A.
+4. Result: Token A’s cancellation is lost; Token B’s settlement is misattributed.
+
+---
+
+## Recommendation
+
+1. **Tie Plans to Transfer Events** — Only schedule cancellation plans when an actual `PoolManager → MMPM` transfer is confirmed in the same call.
+2. **Use Per-Transfer Keys** — Include transaction nonce or transfer ID in transient slot key to prevent overwrites.
+3. **Add Validation** — In `executePlannedCancel`, verify the plan matches the current transfer context.
+4. **Audit Batched Operations** — Ensure all batched liquidity changes properly sequence plan creation and consumption.
+
+---
+
+## Metadata
+- **Project**: usherlabs/fiet-protocol
+- **Target Branch**: `develop`
+- **Commit**: `988cc6b`
+- **PR**: #135
+- **Analysis Run**: 19/03/2026, 01:11:38
+- **Runtime**: 2h 54m 50s
+- **Total Vulnerabilities**: 24
+- **Warnings**: 8
+```
+
+Let me know if you’d like this as a downloadable `.md` file or need additional sections like test cases, remediation code, or risk scoring.

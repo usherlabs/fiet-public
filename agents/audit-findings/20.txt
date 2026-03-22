@@ -1,0 +1,99 @@
+Underlying-level settlement mobilization with per‑LCC event labeling in MarketVault/LiquidityHub/HubRSC causes reactive settlement liveness degradation for the actually indebted LCC
+
+The PR changed MarketVault._settleObligationsForLCC to mobilize reserves using shared-underlying shortfall (unfundedQueueOfUnderlying), but LiquidityHub.confirmTake still emits LiquidityAvailable per LCC and HubRSC dispatches per LCC. When two LCCs share an underlying, this can emit a signal for LCC-A while the real external queues are for LCC-B, so HubRSC scans only A’s queue and does not dispatch for B. Settlement remains permissionless via processSettlementFor, but reactive-driven liveness/fairness can degrade without operator/keeper intervention.
+
+This PR modified MarketVault._settleObligationsForLCC to compute the amount to mobilize based on LiquidityHub.unfundedQueueOfUnderlying(lcc), which aggregates queued shortfall across all LCCs sharing the same underlying. However, LiquidityHub.confirmTake(lcc, ...) still emits LiquidityAvailable for the specific LCC passed and only attempts to settle the Hub’s own queue for that same LCC. HubRSC subscribes to LiquidityAvailable and builds batches per LCC (queueDataByLcc[lcc]), so if LCC-A and LCC-B share the same underlying and only B has external queues, a mobilization from A’s vault will emit LiquidityAvailable(A). HubRSC will then scan only A’s queue (likely empty) and never build a batch for B, delaying reactive-driven settlement for B. This is a liveness/fairness issue introduced by the PR’s switch to underlying-level shortfall in MarketVault while retaining per-LCC event labeling and dispatch. Mitigations exist: settlement is permissionless (anyone can call LiquidityHub.processSettlementFor), and the reactive layer can emit a corrective per-LCC signal (MoreLiquidityAvailable) to drive the correct LCC dispatch. Without such operator/keeper actions, reactive settlement for the actually indebted LCC can be delayed despite the Hub holding sufficient market-derived reserves.
+
+Code Suggestions:
+
+LiquidityHub.sol
+
+ * @param amount The amount of underlying liquidity taken
+ 
+
+     * @param shouldEmit Whether to emit LiquidityAvailable event
+857
+
+858
+
+ 
+
+     * IMPORTANT: LiquidityAvailable is per-LCC while reserves are tracked per underlying.
+ 
+
+     * Off-chain dispatchers should use the 'underlying' argument to build batches for all indebted LCCs sharing it.
+859
+
+860
+
+ 
+
+     */
+ 
+
+    function confirmTake(address lcc, uint256 amount, bool shouldEmit) external onlyIssuer(lcc) {
+
+----
+
+HubRSC.sol
+
+/// @dev Decodes LiquidityAvailable log fields and forwards to shared dispatch logic.
+ 
+
+    function _handleLiquidityAvailable(IReactive.LogRecord calldata log) internal {
+285
+
+286
+
+287
+
+ 
+
+        // TODO (mitigation): Decode 'underlying' from LiquidityAvailable (in log.data) and dispatch by underlying,
+ 
+
+        // scanning pending entries for all LCCs whose underlying matches, not only the single LCC in topic_1.
+ 
+
+        // Optionally subscribe to LCCCreated to maintain an lcc->underlying map for this purpose.
+288
+
+289
+
+ 
+
+        address lcc = address(uint160(log.topic_1));
+ 
+
+        (, uint256 available,) = abi.decode(log.data, (address, uint256, bytes32));
+ 
+----
+
+MarketVault.sol
+
+ */
+ 
+
+    function _settleObligationsForLCC(ILCC lccToken) internal {
+277
+
+278
+
+ 
+
+        // NOTE: Using unfundedQueueOfUnderlying aggregates debt across all LCCs sharing this underlying.
+ 
+
+        // Reactive dispatchers should prefer the 'underlying' parameter from LiquidityAvailable to target indebted LCC(s).
+279
+
+280
+
+ 
+
+        // Compute only the remaining unfunded shortfall for this underlying.
+ 
+
+        // This avoids repeatedly draining vault liquidity when the Hub reserve already covers queued debt.
+
+

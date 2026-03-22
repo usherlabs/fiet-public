@@ -234,7 +234,7 @@ contract VTSFee01QueueVsMaterialisedEchidnaTest {
             return (beforeQueue.protocolFee, beforeQueue.pending, beforeQueue.spendIndex, false);
         }
 
-        uint256 bonus = FullMath.mulDiv(potAvail, sExposure, sTotalExposure);
+        uint256 bonus = FullMath.mulDivRoundingUp(potAvail, sExposure, sTotalExposure);
         if (bonus > potAvail) bonus = potAvail;
         if (bonus == 0) {
             return (beforeQueue.protocolFee, beforeQueue.pending, beforeQueue.spendIndex, false);

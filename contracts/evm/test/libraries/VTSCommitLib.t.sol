@@ -380,6 +380,8 @@ contract VTSCommitLibTest is VTSLibTestBase {
         uint256 rd1Before = harness.getCoverageResidualDICE(poolId, 1);
         uint256 rc0Before = harness.getCoverageResidualCISE(poolId, 0);
         uint256 rc1Before = harness.getCoverageResidualCISE(poolId, 1);
+        uint256 tcise0Before = harness.getTotalCISEExposureSinceLastMod(poolId, 0);
+        uint256 tcise1Before = harness.getTotalCISEExposureSinceLastMod(poolId, 1);
 
         harness.incrementCoverage(poolId, 2, 123e18);
 
@@ -391,6 +393,8 @@ contract VTSCommitLibTest is VTSLibTestBase {
         assertEq(harness.getCoverageResidualDICE(poolId, 1), rd1Before, "token1 DICE residual unchanged");
         assertEq(harness.getCoverageResidualCISE(poolId, 0), rc0Before, "token0 CISE residual unchanged");
         assertEq(harness.getCoverageResidualCISE(poolId, 1), rc1Before, "token1 CISE residual unchanged");
+        assertEq(harness.getTotalCISEExposureSinceLastMod(poolId, 0), tcise0Before, "token0 CISE denominator unchanged");
+        assertEq(harness.getTotalCISEExposureSinceLastMod(poolId, 1), tcise1Before, "token1 CISE denominator unchanged");
     }
 
     function test_incrementCoverage_updatesIndexes_whenTotalsNonZero() public {
@@ -410,6 +414,11 @@ contract VTSCommitLibTest is VTSLibTestBase {
         assertEq(harness.getCoveragePerSettledIndexX128(poolId, 0), expectedCise, "CISE index should advance");
         assertEq(harness.getCoverageResidualDICE(poolId, 0), 0, "no DICE residual");
         assertEq(harness.getCoverageResidualCISE(poolId, 0), 0, "no CISE residual");
+        assertEq(
+            harness.getTotalCISEExposureSinceLastMod(poolId, 0),
+            covered,
+            "CISE bonus denominator should increase by coveredAmount"
+        );
     }
 
     function test_incrementCoverage_updatesResiduals_whenTotalsZero() public {

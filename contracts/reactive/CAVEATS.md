@@ -428,9 +428,161 @@ Alternatively, document the non-zero-key precondition very clearly and ensure ev
 
 ### Change Log
 
-| Date       | Change                                                           |
-| ---------- | ---------------------------------------------------------------- |
+| Date       | Change                                                                                           |
+| ---------- | ------------------------------------------------------------------------------------------------ |
 | 2026-03-17 | Documented vulnerability #64 as a real library defect but unreachable in current `HubRSC` usage |
+
+---
+
+## Vulnerability #65: Missing Deduplication / Ordering Handling for Authoritative Decrease Callbacks
+
+### Summary for #65
+
+**Classification:** Correctness / liveness degradation in automated settlement reconciliation  
+**Severity:** Medium  
+**Status:** Real unless the Reactive callback path guarantees FIFO and exactly-once delivery from `SpokeRSC` through `HubCallback`
+
+---
+
+### Description of the Callback-Leg Risk
+
+The newer authoritative-decrease paths:
+
+- `SettlementProcessedReported(recipient, lcc, amount)`
+- `SettlementAnnulledReported(recipient, lcc, amount)`
+- `SettlementFailedReported(recipient, lcc, maxAmount)`
+
+do not have the same replay and ordering protections as `SettlementReported`.
+
+There is an important qualification:
+
+- duplicate **protocol-chain source logs** are already filtered in `SpokeRSC` by `(chain_id, contract, tx_hash, log_index)`
+- the remaining gap is the **callback delivery leg** from `SpokeRSC` to `HubCallback` to `HubRSC`
+
+If that leg is at-least-once or out of order, `HubRSC` can mis-account its mirrored queue state:
+
+1. a replayed `SettlementProcessedReported` or `SettlementAnnulledReported` can subtract from newly queued pending for the same `(lcc, recipient)`
+2. an early `SettlementProcessedReported` or `SettlementAnnulledReported` can be ignored before the matching `SettlementReported` creates a pending entry
+3. stale pending can then keep being redispatched, causing repeated failed settlement attempts until manual intervention or later corrective events
+
+This is an automation correctness / liveness issue, not a direct principal-loss issue. The canonical queue remains in `LiquidityHub`, and anyone can still call `LiquidityHub.processSettlementFor(...)` manually.
+
+---
+
+### Technical Mechanics for Authoritative Decreases
+
+#### 1. `SettlementReported` has explicit replay protection
+
+`HubCallback.recordSettlement(...)` enforces a strictly increasing nonce per `(spokeRVMId, lcc, recipient)` and only then emits `SettlementReported`.
+
+#### 2. The newer decrease callbacks do not
+
+`HubCallback.recordSettlementAnnulled(...)`, `recordSettlementProcessed(...)`, and `recordSettlementFailed(...)` only validate the expected spoke and non-zero amount, then emit their normalised event directly.
+
+There is:
+
+- no nonce
+- no callback-level deduplication key
+- no buffering for out-of-order delivery
+
+#### 3. `HubRSC` trusts those events immediately
+
+`HubRSC._handleSettlementProcessed(...)` and `_handleSettlementAnnulled(...)` call `_applyAuthoritativeDecrease(...)` directly.
+
+That helper:
+
+- returns immediately if the `(lcc, recipient)` pending entry does not yet exist
+- otherwise decrements `pending[key].amount` by `min(reportedAmount, currentPending)`
+- optionally reduces `inFlightByKey[key]`
+
+So the effect of a callback depends on **current mirrored state**, not on whether the callback has already been seen or whether it is being applied against the intended settlement epoch.
+
+#### 4. `SettlementFailedReported` is also unbuffered
+
+`HubRSC._handleSettlementFailed(...)` releases `inFlightByKey[key]` based only on the current reserved amount. Replayed or reordered failure callbacks can therefore perturb retry timing and reservation accounting even though they do not directly decrement pending principal.
+
+---
+
+### Failure Scenarios for #65
+
+#### Scenario A: Replayed processed / annulled callback erases new pending
+
+1. A legitimate queued amount is dispatched and later reconciled by `SettlementProcessedReported(..., amount = X)`
+2. That callback is delivered again after a fresh `SettlementReported(..., amount = Y)` has created new pending for the same `(lcc, recipient)`
+3. `HubRSC` applies the stale decrease to the new pending entry and subtracts `min(X, Y)`
+4. Valid pending work can be partially or fully erased from the reactive mirror, preventing later automated dispatch
+
+#### Scenario B: Out-of-order decrease arrives before queue creation
+
+1. A settlement is processed or annulled on the protocol chain
+2. The corresponding authoritative decrease callback reaches `HubRSC` before the earlier `SettlementReported`
+3. `_applyAuthoritativeDecrease(...)` returns because no pending entry exists yet
+4. `SettlementReported` arrives later and creates pending
+5. `HubRSC` now believes work is still owed and may repeatedly redispatch against a queue that is already reduced or empty on `LiquidityHub`
+
+#### Scenario C: Repeated failed retries after stale pending
+
+If stale mirrored pending remains after a missed decrease, `BatchProcessSettlement` will keep attempting `LiquidityHub.processSettlementFor(...)`. Once the destination queue is empty, those calls revert and emit `SettlementFailed`, degrading the availability of the automated pipeline and wasting callback budget.
+
+---
+
+### Current Mitigation Assumption for #65
+
+This caveat is only non-issue if the system can rely on all of the following for the callback leg:
+
+- FIFO delivery per `SpokeRSC`
+- no dropped callbacks
+- no replayed callbacks after success
+
+That assumption is stronger than the assumption documented for vulnerability #32, because here the issue concerns the newer authoritative-decrease callback family rather than only `SettlementReported` nonce ordering.
+
+---
+
+### Monitoring and Detection for #65
+
+Signals that suggest this caveat is manifesting in production:
+
+- `LiquidityHub.settleQueue(lcc, recipient)` repeatedly disagrees with `HubRSC.pending(key).amount`
+- `SettlementFailed` events recur for the same `(lcc, recipient, maxAmount)` after prior processed / annulled activity
+- `HubRSC` keeps rebuilding `inFlightByKey` for recipients whose protocol-chain queue has already been reduced to zero
+
+Operationally, compare:
+
+- `LiquidityHub.settleQueue(lcc, recipient)`
+- `HubRSC.pending(HubRSC.computeKey(lcc, recipient)).amount`
+- `HubRSC.inFlightByKey(HubRSC.computeKey(lcc, recipient))`
+
+Persistent divergence indicates callback replay or ordering drift in the reconciliation path.
+
+---
+
+### Recovery Procedures for #65
+
+If the mirrored queue is stale:
+
+1. inspect protocol-chain `SettlementProcessed`, `SettlementAnnulled`, and receiver `SettlementFailed` events for the affected `(lcc, recipient)`
+2. compare the protocol-chain queue to `HubRSC` mirrored state
+3. manually settle via `LiquidityHub.processSettlementFor(lcc, recipient, maxAmount)` where appropriate
+4. investigate whether the Reactive callback transport is replaying or reordering the authoritative decrease callbacks
+
+---
+
+### Recommended Hardening for #65
+
+Long-term mitigations include one of:
+
+- add nonce or unique callback IDs for `SettlementProcessedReported`, `SettlementAnnulledReported`, and `SettlementFailedReported`
+- deduplicate these callbacks in `HubCallback` using a replay key similar to the source-log identity used elsewhere
+- buffer out-of-order decreases in `HubRSC` until the corresponding pending entry exists
+- periodically reconcile `HubRSC` mirrored state against `LiquidityHub.settleQueue(...)` as a source-of-truth repair path
+
+---
+
+### Change Log for #65
+
+| Date       | Change                                                                                                           |
+| ---------- | ---------------------------------------------------------------------------------------------------------------- |
+| 2026-03-20 | Added documentation for missing deduplication / ordering handling on authoritative decrease callbacks            |
 
 ---
 
@@ -462,3 +614,99 @@ The entire automation flow depends on:
 - Transport ordering guarantees (for vulnerability #32)
 
 Operational monitoring should track Spoke/Hub contract balances and event processing latency.
+
+---
+
+## Vulnerability #66: In-Flight Reservation Not Released After Partial Success
+
+### Summary for #66
+
+`HubRSC` reserves the full attempted dispatch amount in `inFlightByKey[key]`, but on partial success it only consumes the portion confirmed by `SettlementProcessedReported`. If the destination call succeeds without fully settling the attempted amount, the unused reservation can remain stuck, causing `dispatchable = pending - reserved` to fall to zero for that `(lcc, recipient)` key. The reactive automation path then stops redispatching that key until manual settlement or explicit repair clears the mismatch.
+
+### Description of the Partial-Success Stall
+
+This issue appears in the in-flight reservation accounting added around the reactive settlement pipeline:
+
+- `HubRSC` builds a bounded batch and increments `inFlightByKey[key]` by the attempted `settleAmount`
+- `BatchProcessSettlement` treats any non-reverting `LiquidityHub.processSettlementFor(...)` call as success
+- `LiquidityHub.processSettlementFor(...)` is allowed to settle less than the attempted `maxAmount`
+- `SpokeRSC` forwards `SettlementProcessed` and `SettlementFailed`, but does not forward the receiver-side `SettlementSucceeded` event
+- `HubRSC` therefore only learns how much was actually settled, not that the attempt has finished with unused reservation remaining
+
+The result is that the mirrored pending amount can shrink while the leftover reservation remains pinned against the key.
+
+### Technical Mechanics for #66
+
+At dispatch time, `HubRSC` computes:
+
+- `reserved = inFlightByKey[key]`
+- `dispatchable = pending.amount > reserved ? pending.amount - reserved : 0`
+- `settleAmount = min(dispatchable, remainingLiquidity)`
+
+It then reserves the attempted amount before emitting the destination callback.
+
+Later, when `SettlementProcessedReported(recipient, lcc, settledAmount)` arrives, `_applyAuthoritativeDecrease(..., true)`:
+
+1. decreases `pending.amount` by `settledAmount`
+2. decreases `inFlightByKey[key]` by at most `settledAmount`
+3. caps `inFlightByKey[key]` down to `pending.amount` if reservation now exceeds pending
+
+That cap prevents reservation from exceeding the mirrored queue, but it does not release the unused portion of the attempt. After a partial success, the state can become:
+
+- original pending: `100`
+- dispatched / reserved: `100`
+- actual settlement processed: `60`
+- resulting pending: `40`
+- resulting reserved: `40`
+
+At that point `dispatchable = 40 - 40 = 0`, so future `LiquidityAvailable` or `MoreLiquidityAvailable` rounds skip the key even though real queue remains on the protocol chain.
+
+### Failure Scenario for #66
+
+One representative sequence is:
+
+1. `SettlementReported` creates `pending[key] = 100`
+2. `HubRSC` receives sufficient liquidity notice and dispatches `100`
+3. `LiquidityHub.processSettlementFor(...)` succeeds but can only settle `60` because it computes `toSettle = min(queued, available, maxAmount, holderBal)`
+4. `SpokeRSC` forwards `SettlementProcessed(60)` to `HubCallback`
+5. `HubRSC` reduces pending to `40` and reservation to `40`
+6. later liquidity becomes available again, but `dispatchable == 0`, so the key is never automatically redispatched
+
+This is a liveness failure rather than a direct loss-of-funds bug: permissionless manual settlement on `LiquidityHub` can still progress the protocol-chain queue, but the automated reactive path stalls for the affected key.
+
+### Current Mitigation Assumption for #66
+
+There is no complete on-chain mitigation in the current reactive flow for this partial-success case.
+
+Existing signals cover only:
+
+- full failure, via receiver `SettlementFailed` -> `SettlementFailedReported`
+- actual queue decrements, via `SettlementProcessed` / `SettlementAnnulled`
+
+What is missing is an authoritative "attempt completed" signal that lets `HubRSC` release any reservation not consumed by the actual settlement amount.
+
+### Monitoring and Detection for #66
+
+Watch for keys where:
+
+- `pending(bytes32).amount > 0`
+- `inFlightByKey(bytes32) == pending(bytes32).amount`
+- repeated `LiquidityAvailable` / `MoreLiquidityAvailable` events occur for the same `lcc`
+- no further `SettlementProcessedReported` events arrive for that `(lcc, recipient)`
+
+Operationally, this presents as a protocol-chain queue that still exists while the reactive mirror shows no dispatchable amount for the same key.
+
+### Recommended Hardening for #66
+
+Long-term mitigations include one of:
+
+- emit and consume an explicit attempt-complete callback carrying both attempted and settled amounts, so `HubRSC` can release the remainder
+- forward receiver-side success metadata through `SpokeRSC` / `HubCallback` and reconcile the unconsumed reservation on completion
+- reserve only the amount proven to have settled, rather than the full attempted amount, if the pipeline can be redesigned safely
+- add a repair path that periodically reconciles `inFlightByKey` against protocol-chain queue reality and clears stranded reservation
+
+### Change Log for #66
+
+| Date       | Change                                                                                  |
+| ---------- | --------------------------------------------------------------------------------------- |
+| 2026-03-20 | Added documentation for partial-success in-flight reservation drift stalling settlement |

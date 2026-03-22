@@ -1,0 +1,38 @@
+Fixed-canonical factory in PositionManagerImpl._afterModifyLiquidity causes unlock-time DoS
+
+PositionManagerImpl now calls the canonical marketFactory.afterModifyLiquidity(key) instead of resolving the correct factory per pool, which can leave the real CoreHook deltas uncleared and cause PoolManager to revert at unlock, DoSing MM liquidity modifications in certain multi-factory deployments.
+
+The PR modifies PositionManagerImpl._afterModifyLiquidity to always call marketFactory.afterModifyLiquidity(key). Previously, it resolved the factory dynamically via LiquidityHub.getFactory for the pool’s LCC pair. In multi-factory or cross-market deployments where MMPositionManager (MMPM) is bound under multiple factories and is used on a pool created by a non-canonical factory, the call targets the wrong factory. Consequently, the actual CoreHook that handled the modifyLiquidity retains non-zero deltas in PoolManager transient storage. At the end of PoolManager.unlock, NonzeroDeltaCount remains non-zero and the transaction reverts with CurrencyNotSettled, resulting in a DoS of the liquidity modification. Before this change, the correct factory (and thus the correct CoreHook) would have been used, so deltas would be cleared properly.
+
+Code Suggestion:
+
+PositionManagerImpl.sol
+
+
+
+        // This ensures feeAdj-based claims are minted/burned to/from the fee pot held by CoreHook
+ 
+
+        // Must be called within PoolManager.unlockCallback, but outside of modifyLiquidity hook
+223
+
+224
+
+225
+
+ 
+
+        IMarketFactory f =
+ 
+
+            liquidityHub.getFactory(Currency.unwrap(key.currency0), Currency.unwrap(key.currency1));
+ 
+
+        f.afterModifyLiquidity(key);
+226
+
+227
+
+ 
+
+    }

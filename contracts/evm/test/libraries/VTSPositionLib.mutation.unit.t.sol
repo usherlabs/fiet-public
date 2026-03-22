@@ -470,7 +470,33 @@ contract VTSPositionLibMutationUnitTest is Test {
         (uint256 exposure0,) = ex.getCISEExposure(id);
         (uint256 poolExposure0,) = ex.getPoolTotalCISEExposure(p);
         assertEq(exposure0, expExposure0, "CISE exposure0 should realise settled * deltaIndex / Q128");
-        assertEq(poolExposure0, expExposure0, "pool total CISE exposure0 should track position exposure");
+        assertEq(poolExposure0, 0, "pool CISE denominator is eager on incrementCoverage/flush, not on position settle");
+    }
+
+    /// @notice Regression: repeated `_settleSettledIndexedCoverageUsage` with an unchanged pool index must not double-count CISE.
+    function test_settleSettledIndexedCoverageUsage_secondCallNoExtraExposureWhenPoolIndexUnchanged() public {
+        VTSPositionLibCISEExpose ex = new VTSPositionLibCISEExpose();
+        PoolId p = PoolId.wrap(bytes32(uint256(0xC15E01)));
+        ex.setupPool(p, _defaultCfg());
+
+        PositionId id = PositionId.wrap(bytes32(uint256(0xB0B02)));
+        ex.setPosition(id, address(0xCAFE), p, 1000);
+
+        uint256 settled0 = 100e18;
+        ex.setSettled(id, settled0, 0);
+
+        uint256 indexLast0 = 2 * FixedPoint128.Q128;
+        uint256 indexNow0 = 5 * FixedPoint128.Q128;
+        ex.setCISEIndexLastX128(id, indexLast0, 0);
+        ex.setPoolCoveragePerSettledIndexX128(p, indexNow0, 0);
+
+        ex.settleSettledIndexedCoverageUsage(id);
+        (uint256 exposureFirst,) = ex.getCISEExposure(id);
+
+        ex.settleSettledIndexedCoverageUsage(id);
+        (uint256 exposureSecond,) = ex.getCISEExposure(id);
+
+        assertEq(exposureSecond, exposureFirst, "second settle with same pool index must not add exposure again");
     }
 
     function test_settlePositionInflowGrowth_positiveAdd0_increasesSettledAndPoolTotalSettled() public {
@@ -1021,6 +1047,11 @@ contract VTSPositionLibMutationUnitTest is Test {
         uint256 expDelta = FullMath.mulDiv(residual, FixedPoint128.Q128, totalSettled);
         assertEq(idxAfter, 7 + expDelta, "CISE index should advance by residual/totalSettled");
         assertEq(residualAfter, 0, "CISE residual should clear after flush");
+        assertEq(
+            residualExpose.getPoolTotalCISEExposureSinceLastMod(p, 1),
+            residual,
+            "flush should add residual to pool CISE bonus denominator"
+        );
     }
 
     function test_flushDICE_residualPositive_principalZero_isNoop() public {
@@ -1297,6 +1328,12 @@ contract VTSPositionLibResidualFlushExpose {
             residual = s.poolAccounting[poolId].coverageResidualCISE.token1;
             totalSettled = s.poolAccounting[poolId].totalSettled.token1;
         }
+    }
+
+    function getPoolTotalCISEExposureSinceLastMod(PoolId poolId, uint8 tokenIndex) external view returns (uint256) {
+        return tokenIndex == 0
+            ? s.poolAccounting[poolId].totalCISEExposureSinceLastMod.token0
+            : s.poolAccounting[poolId].totalCISEExposureSinceLastMod.token1;
     }
 
     function flushCISE(PoolId poolId, uint8 tokenIndex) external {

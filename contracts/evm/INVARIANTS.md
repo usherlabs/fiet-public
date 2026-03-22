@@ -305,6 +305,8 @@ being an informal “should”.
     - **positive** `pendingFeeAdj` funds `slashedPot` (`_fundFeePot`)
     - **negative** `pendingFeeAdj` drains `slashedPot` up to availability (`_drainFeePot`)
   - `src/libraries/VTSFeeLib.sol::_processPositionFees` calls `_finaliseFeeAdjustment` during touch.
+  - Bonus sizing uses `FullMath.mulDivRoundingUp(potAvail, ciseExposure, totalExposure)` (then caps to `potAvail`) so
+    tiny proportional shares are not stranded at zero wei when the position is otherwise eligible.
 
 ### FEE-02: New positions must not receive fee-sharing bonuses on creation
 
@@ -386,6 +388,37 @@ being an informal “should”.
 - **Enforced by**: `src/libraries/DynamicCurrencyDelta.sol::assertNonZeroDeltas` reverts `Errors.CurrencyNotSettled()`.
 - **Practical implication**: Credits do **not** persist across unlock sessions; they are transient and must be consumed
   (eg via `TAKE`, `SYNC`, unwrap flows) within the same batch.
+
+### DELTA-02: `MMPositionManager` residual balances are FCFS dust, not a persisted user entitlement
+
+- **Statement**:
+  - `MMPositionManager` intentionally follows the same broad residual-balance model as Uniswap v4
+    `PositionManager`: if a caller leaves sweepable balance or takeable delta inside the router at the end of their
+    interaction, that residue is **not reserved** for them across transactions.
+  - Residual balances left on `MMPositionManager` are treated as **first-come, first-served dust**. The next caller may
+    sync/take that residue if it remains in the contract.
+  - Therefore, market makers using `MMPositionManager` are responsible for clearing their own dust/deltas inside the same
+    batch / transaction. Leaving residue behind is a caller error or an accepted UX trade-off, not a protocol promise of
+    later exclusivity.
+- **Reference model (Uniswap v4)**:
+  - `lib/v4-periphery/src/PositionManager.sol` exposes public utility actions including `Actions.SWEEP`.
+  - `PositionManager._sweep(currency, to)` transfers the router’s **entire** current balance of `currency` to the
+    recipient, with no caller-specific entitlement tracking.
+  - Fiet adopts the same caller-clears-router-residue philosophy for `MMPositionManager` utility flows, except that
+    Fiet uses explicit delta accounting (`SYNC` / `TAKE`) to net transient credits before batch end.
+- **Enforced / expressed by**:
+  - `src/MMPositionManager.sol::_handleUtilityAction` exposes public utility actions `SYNC` and `TAKE`.
+  - `src/MMPositionManager.sol::_sync` credits the current locker from `address(this)` balance via
+    `VTSOrchestrator.sync(...)`.
+  - `src/modules/PositionManagerEntrypoint.sol::_take` debits the locker’s positive delta and transfers available
+    contract balance to the requested recipient.
+  - `src/modules/PositionManagerEntrypoint.sol::_afterBatch` calls `vtsOrchestrator.assertNonZeroDeltas()`, which
+    forces callers to fully resolve transient credits/debts within the batch or revert.
+- **Scope clarification**:
+  - This FCFS rule applies to **residual dust held by `MMPositionManager` itself**.
+  - It does **not** redefine assets held in explicit custody/accounting domains (for example, queue-custodied balances,
+    Hub reserves, MarketVault balances, or state tracked by commitment/queue accounting) as public dust.
+  - In other words, the invariant is about router residue, not about bypassing the protocol’s actual custody systems.
 
 ## Authorisation, call-surface, and pause invariants
 
