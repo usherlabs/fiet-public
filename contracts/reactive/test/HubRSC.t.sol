@@ -646,7 +646,9 @@ contract HubRSCTest is Test {
 
         // Processed arrives first (out-of-order): should buffer, not drop.
         hub.react(_settlementProcessedLog(hub, lcc, recipient, 30, 0x9301, 1));
-        assertEq(hub.bufferedProcessedDecreaseByKey(key), 30);
+        (uint256 bufferedSettled, uint256 bufferedInFlight) = hub.bufferedProcessedDecreaseByKey(key);
+        assertEq(bufferedSettled, 30);
+        assertEq(bufferedInFlight, 30);
         assertFalse(_pendingExists(hub, lcc, recipient));
 
         // Settlement queue report arrives later: buffered decrease should be applied immediately.
@@ -654,7 +656,9 @@ contract HubRSCTest is Test {
         (,, uint256 remaining, bool exists) = hub.pending(key);
         assertTrue(exists);
         assertEq(remaining, 20);
-        assertEq(hub.bufferedProcessedDecreaseByKey(key), 0);
+        (bufferedSettled, bufferedInFlight) = hub.bufferedProcessedDecreaseByKey(key);
+        assertEq(bufferedSettled, 0);
+        assertEq(bufferedInFlight, 0);
     }
 
     function test_buffersOutOfOrderAnnulledAndAppliesOnQueued() public {
@@ -714,6 +718,34 @@ contract HubRSCTest is Test {
         assertTrue(exists);
         assertEq(remaining, 50); // applied once only
         assertTrue(hub.processedReport(authoritativeReportId));
+    }
+
+    function test_releasesUnusedInFlightReservationOnPartialProcessed() public {
+        _clearSystemContract();
+        HubRSC hub = new HubRSC(
+            DEFAULT_MAX_DISPATCH_ITEMS,
+            originChainId,
+            destinationChainId,
+            liquidityHub,
+            hubCallback,
+            destinationReceiverContract
+        );
+
+        address recipient = makeAddr("recipient");
+        address lcc = makeAddr("lcc");
+        bytes32 key = hub.computeKey(lcc, recipient);
+
+        hub.react(_settlementLog(hub, recipient, lcc, 100, 1, 0x9601, 1));
+        hub.react(liquidityAvailableLog(hub.liquidityHub(), lcc, 100, bytes32("mkt"), 0x9602, 2));
+        assertEq(hub.inFlightByKey(key), 100);
+
+        // Destination succeeded but settled only part of requested amount.
+        hub.react(_settlementProcessedLogWithRequested(hub, lcc, recipient, 60, 100, 0x9603, 3));
+
+        (,, uint256 remaining, bool exists) = hub.pending(key);
+        assertTrue(exists);
+        assertEq(remaining, 40);
+        assertEq(hub.inFlightByKey(key), 0);
     }
 
     function _settlementLog(
@@ -801,7 +833,32 @@ contract HubRSCTest is Test {
             topic_1: uint256(uint160(recipient)),
             topic_2: uint256(uint160(lcc)),
             topic_3: 0,
-            data: abi.encode(amount),
+            data: abi.encode(amount, amount),
+            block_number: 0,
+            op_code: 0,
+            block_hash: 0,
+            tx_hash: txHash,
+            log_index: logIndex
+        });
+    }
+
+    function _settlementProcessedLogWithRequested(
+        HubRSC hub,
+        address lcc,
+        address recipient,
+        uint256 settledAmount,
+        uint256 requestedAmount,
+        uint256 txHash,
+        uint256 logIndex
+    ) internal view returns (IReactive.LogRecord memory) {
+        return IReactive.LogRecord({
+            chain_id: 1,
+            _contract: hub.hubCallback(),
+            topic_0: SETTLEMENT_PROCESSED_REPORTED_TOPIC,
+            topic_1: uint256(uint160(recipient)),
+            topic_2: uint256(uint160(lcc)),
+            topic_3: 0,
+            data: abi.encode(settledAmount, requestedAmount),
             block_number: 0,
             op_code: 0,
             block_hash: 0,

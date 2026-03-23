@@ -173,12 +173,12 @@ contract SpokeRSC is AbstractReactive {
 
     function _forwardSettlementProcessed(IReactive.LogRecord calldata log) internal {
         address lcc = address(uint160(log.topic_1));
-        uint256 amount = abi.decode(log.data, (uint256));
+        (uint256 settledAmount, uint256 requestedAmount) = abi.decode(log.data, (uint256, uint256));
         uint256 eventNonce = _getAndIncrementEventNonce(ReactiveConstants.RECORD_SETTLEMENT_PROCESSED_SELECTOR);
         // while the first parameter is set to address(0), it is automatically set on the receiving contract to the the RVM id of the calling contract
         // i.e it is the rvm id of this contract, and it is derived as the address of the private key used to deploy the contract
         bytes memory payload = abi.encodeWithSelector(
-            ReactiveConstants.RECORD_SETTLEMENT_PROCESSED_SELECTOR, address(0), lcc, recipient, amount, eventNonce
+            ReactiveConstants.RECORD_SETTLEMENT_PROCESSED_SELECTOR, address(0), lcc, recipient, settledAmount, requestedAmount, eventNonce
         );
         emit Callback(reactChainId, hubCallback, GAS_LIMIT, payload);
     }
