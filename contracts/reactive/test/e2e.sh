@@ -26,6 +26,11 @@ export BROADCAST=true
 : "${SPOKE_ONE_PRIVATE_KEY:?SPOKE_ONE_PRIVATE_KEY is required}"
 : "${SPOKE_TWO_PRIVATE_KEY:?SPOKE_TWO_PRIVATE_KEY is required}"
 
+# Expected HubRSC callback origin (RVM id) for receiver auth.
+# Always derived from the deployer private key used by deployreactivehub.sh.
+HUB_RVM_ID="$(cast wallet address --private-key "$PRIVATE_KEY")"
+export HUB_RVM_ID
+
 
 # Reactive VM id maps to the deployer address derived from the deployer private key.
 RVM_ID_ONE="$(cast wallet address --private-key "$SPOKE_ONE_PRIVATE_KEY")"
