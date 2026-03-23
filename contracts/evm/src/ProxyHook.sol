@@ -183,10 +183,10 @@ contract ProxyHook is BaseHook, VaultCoreActionHandler {
         if (sqrtPriceLimitX96 == minValid) return maxValid;
         if (sqrtPriceLimitX96 == maxValid) return minValid;
 
-        uint160 inverted = uint160((uint256(1) << 192) / sqrtPriceLimitX96);
-        if (inverted < minValid) return minValid;
-        if (inverted > maxValid) return maxValid;
-        return inverted;
+        uint256 inverted = (uint256(1) << 192) / uint256(sqrtPriceLimitX96);
+        if (inverted < uint256(minValid)) return minValid;
+        if (inverted > uint256(maxValid)) return maxValid;
+        return uint160(inverted);
     }
 
     /// @dev Handles LCC settlement for zeroForOne swap direction

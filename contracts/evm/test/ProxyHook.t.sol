@@ -1170,6 +1170,13 @@ contract ProxyHookTest is MarketVaultBase {
             "flipped near-MAX should clamp to MIN+1"
         );
 
+        // Flipped tiny non-zero limits should saturate high before the uint160 cast truncates the reciprocal.
+        assertEq(
+            harness.exposed_calcCoreSqrtPriceLimit(1, true, false),
+            TickMath.MAX_SQRT_PRICE - 1,
+            "flipped tiny inputs should clamp to MAX-1 before casting"
+        );
+
         // Flipped zero -> direction-aware defaults.
         assertEq(
             harness.exposed_calcCoreSqrtPriceLimit(0, true, false),
