@@ -710,3 +710,116 @@ Long-term mitigations include one of:
 | Date       | Change                                                                                  |
 | ---------- | --------------------------------------------------------------------------------------- |
 | 2026-03-20 | Added documentation for partial-success in-flight reservation drift stalling settlement |
+
+---
+
+## Vulnerability #17: Missing `callbackOrigin` Validation in `BatchProcessSettlement` Receiver
+
+### Summary for #17
+
+The protocol-chain reactive receiver `src/dest/BatchProcessSettlement.sol` accepts callbacks only from the shared Reactive callback proxy, but it does not validate the `callbackOrigin` parameter that identifies the upstream sender RVM ID. As a result, any Reactive sender that can route through the same proxy can invoke `processSettlements(...)` on this receiver and force batches of `LiquidityHub.processSettlementFor(...)` attempts at the receiver's expense.
+
+This is a receiver-scoped griefing and liveness issue. It does not let an attacker move funds outside `LiquidityHub` invariants, but it can consume callback budget, accumulate proxy debt, and force third parties to call `coverDebt()` against a prefunded receiver.
+
+### Scope Clarification for #17
+
+This finding is specific to the reactive destination receiver surface, not the core abstract batch processor:
+
+- `contracts/evm/src/periphery/BatchProcessSettlement.sol` is a generic internal batching helper with no Reactive-specific trust assumptions
+- `contracts/reactive/src/dest/BatchProcessSettlement.sol` is the external receiver exposed to the callback proxy
+- the missing enforcement is that this receiver ignores the upstream origin identity even though adjacent reactive components do validate expected senders
+
+In particular:
+
+- `HubRSC` emits the destination callback payload as `processSettlements(address,address[],address[],uint256[])`
+- the first argument is intentionally populated by the Reactive transport with the caller RVM ID
+- `BatchProcessSettlement.processSettlements(...)` currently discards that value and proceeds as long as `msg.sender` is the shared callback proxy
+
+### Why the Trust Boundary Is Too Broad
+
+The callback proxy is a shared transport primitive, not a protocol-specific authenticator.
+
+Validating only `authorizedSenderOnly` means the receiver trusts:
+
+- the protocol's own `HubRSC` callbacks
+- any unrelated Reactive sender whose callback is routed through the same proxy
+
+That is broader than the trust model already used elsewhere in the reactive stack:
+
+- `HubCallback.recordSettlement*` validates the expected spoke RVM ID for each recipient
+- `HubCallback.triggerMoreLiquidityAvailable(...)` validates the expected hub RVM ID before emitting follow-on work
+
+The receiver is therefore the outlier. It exposes protocol-funded work execution behind proxy-only authentication, while adjacent components bind execution to protocol-owned upstream origins.
+
+### Impact and Failure Mode for #17
+
+If an unrelated Reactive sender can cause the callback proxy to invoke this receiver:
+
+1. the receiver enters `processSettlements(...)`
+2. it loops over attacker-chosen `(lcc, recipient, maxAmount)` entries up to batch bounds
+3. it calls `LiquidityHub.processSettlementFor(...)` for each entry
+4. each callback consumes receiver-funded execution budget and can increase callback debt to the proxy
+5. anyone can later settle that debt via `coverDebt()` using the receiver's prefunded balance
+
+`LiquidityHub` remains the authority for actual settlement correctness, so this is not a direct unauthorized-fund-movement bug. The issue is that the receiver becomes a protocol-paid work sink for callbacks that did not originate from the intended `HubRSC`.
+
+Operational consequences include:
+
+- draining the receiver's prefunded native balance used to service callback debt
+- reducing or halting liveness of legitimate settlement automation once the receiver runs out of balance
+- forcing operators to repeatedly top up or manually recover the receiver
+
+### Deployment and Configuration Nuance for #17
+
+The current deployment path for the receiver only configures:
+
+- the callback proxy address
+- the destination `LiquidityHub` address
+
+It does not configure an expected `HubRSC` RVM ID for the receiver. That means the missing validation is not merely an omitted runtime check; the deployment/config shape currently provides no place to store the expected upstream origin.
+
+This amplifies the issue because the receiver cannot presently distinguish:
+
+- callbacks emitted by the protocol's own `HubRSC`
+- callbacks emitted by any other Reactive contract sharing the same callback proxy
+
+### Resolution Path for #17
+
+The narrowest safe fix is to bind the receiver to the specific `HubRSC` RVM ID that is allowed to dispatch settlement batches.
+
+Recommended implementation path:
+
+1. add an immutable expected origin field to `contracts/reactive/src/dest/BatchProcessSettlement.sol`, for example `hubRVMId`
+2. update the constructor to accept that expected origin at deployment
+3. reject or ignore `processSettlements(...)` calls where `callbackOrigin != hubRVMId`
+4. update the deployment script to require and pass the configured `HubRVMId`
+5. add receiver tests covering:
+   - valid proxy + valid origin succeeds
+   - valid proxy + invalid origin does not process settlements
+   - direct non-proxy callers still fail as before
+
+The important design constraint is to keep the fix receiver-local. The core batching helper should remain reactive-agnostic, and unrelated receiver hardening should not be bundled into this issue.
+
+### Preferred Enforcement Model for #17
+
+The preferred enforcement model is:
+
+- `msg.sender` must be the chain's authorized callback proxy
+- `callbackOrigin` must equal the protocol's deployed `HubRSC` RVM ID
+
+This is the narrowest model that restores protocol-specific authentication without changing the batching semantics or `LiquidityHub` behavior.
+
+### Interim Monitoring Until Fixed
+
+Until origin validation is added, operators should monitor for:
+
+- unexpected `BatchReceived` events on the receiver that do not line up with legitimate `HubRSC` dispatch activity
+- repeated receiver-side `SettlementFailed` bursts for unrelated `(lcc, recipient)` pairs
+- rising callback debt or repeated need to fund / cover debt on the receiver
+- unexplained depletion of the receiver's prefunded native balance
+
+### Change Log for #17
+
+| Date       | Change                                                                                 |
+| ---------- | -------------------------------------------------------------------------------------- |
+| 2026-03-23 | Added documentation for missing receiver-side `callbackOrigin` enforcement and fix path |
