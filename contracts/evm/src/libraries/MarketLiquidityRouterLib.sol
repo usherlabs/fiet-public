@@ -91,6 +91,7 @@ library MarketLiquidityRouterLib {
 
     function prepareMarketLiquidityIngress(PrepareMarketLiquidityContext memory ctx) internal {
         if (ctx.wrappedAmount == 0 || ctx.handler == address(0)) return;
+        if (!ctx.poolManager.isUnlocked()) return;
 
         address syncedCurrency = poolManagerSyncedCurrency(ctx.poolManager);
         if (syncedCurrency == address(0)) {
