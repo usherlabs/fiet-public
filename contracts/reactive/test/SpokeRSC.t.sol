@@ -5,15 +5,13 @@ import {Test} from "forge-std/Test.sol";
 import {Vm} from "forge-std/Vm.sol";
 import {IReactive} from "reactive-lib/interfaces/IReactive.sol";
 import {SpokeRSC} from "../src/SpokeRSC.sol";
+import {ReactiveConstants} from "../src/libs/ReactiveConstants.sol";
 
 contract SpokeRSCTest is Test {
-    uint256 private constant SETTLEMENT_QUEUED_TOPIC = uint256(keccak256("SettlementQueued(address,address,uint256)"));
-    uint256 private constant SETTLEMENT_ANNULLED_TOPIC =
-        uint256(keccak256("SettlementAnnulled(address,address,uint256)"));
-    uint256 private constant SETTLEMENT_PROCESSED_TOPIC =
-        uint256(keccak256("SettlementProcessed(address,address,uint256)"));
-    uint256 private constant SETTLEMENT_FAILED_TOPIC =
-        uint256(keccak256("SettlementFailed(address,address,uint256,bytes)"));
+    uint256 private constant SETTLEMENT_QUEUED_TOPIC = ReactiveConstants.SETTLEMENT_QUEUED_TOPIC;
+    uint256 private constant SETTLEMENT_ANNULLED_TOPIC = ReactiveConstants.SETTLEMENT_ANNULLED_TOPIC;
+    uint256 private constant SETTLEMENT_PROCESSED_TOPIC = ReactiveConstants.SETTLEMENT_PROCESSED_TOPIC;
+    uint256 private constant SETTLEMENT_FAILED_TOPIC = ReactiveConstants.SETTLEMENT_FAILED_TOPIC;
 
     uint256 private originChainId;
     uint256 private destinationChainId;
@@ -79,8 +77,8 @@ contract SpokeRSCTest is Test {
             log_index: 0
         });
 
-        bytes memory payload = abi.encodeWithSignature(
-            "recordSettlement(address,address,address,uint256,uint256)", address(0), lcc, recipient, amount, 1
+        bytes memory payload = abi.encodeWithSelector(
+            ReactiveConstants.RECORD_SETTLEMENT_QUEUED_SELECTOR, address(0), lcc, recipient, amount, 1
         );
 
         vm.expectEmit(true, true, true, true, address(spoke));
@@ -279,8 +277,8 @@ contract SpokeRSCTest is Test {
             log_index: 1
         });
 
-        bytes memory payload = abi.encodeWithSignature(
-            "recordSettlementAnnulled(address,address,address,uint256)", address(0), lcc, recipient, amount
+        bytes memory payload = abi.encodeWithSelector(
+            ReactiveConstants.RECORD_SETTLEMENT_ANNULLED_SELECTOR, address(0), lcc, recipient, amount, 1
         );
         vm.expectEmit(true, true, true, true, address(spoke));
         emit IReactive.Callback(destinationChainId, hubCallback, 8000000, payload);
@@ -308,8 +306,8 @@ contract SpokeRSCTest is Test {
             log_index: 1
         });
 
-        bytes memory payload = abi.encodeWithSignature(
-            "recordSettlementProcessed(address,address,address,uint256)", address(0), lcc, recipient, amount
+        bytes memory payload = abi.encodeWithSelector(
+            ReactiveConstants.RECORD_SETTLEMENT_PROCESSED_SELECTOR, address(0), lcc, recipient, amount, 1
         );
         vm.expectEmit(true, true, true, true, address(spoke));
         emit IReactive.Callback(destinationChainId, hubCallback, 8000000, payload);
@@ -337,8 +335,8 @@ contract SpokeRSCTest is Test {
             log_index: 1
         });
 
-        bytes memory payload = abi.encodeWithSignature(
-            "recordSettlementFailed(address,address,address,uint256)", address(0), lcc, recipient, maxAmount
+        bytes memory payload = abi.encodeWithSelector(
+            ReactiveConstants.RECORD_SETTLEMENT_FAILED_SELECTOR, address(0), lcc, recipient, maxAmount, 1
         );
         vm.expectEmit(true, true, true, true, address(spoke));
         emit IReactive.Callback(destinationChainId, hubCallback, 8000000, payload);

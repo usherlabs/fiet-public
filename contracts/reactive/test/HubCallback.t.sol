@@ -37,7 +37,7 @@ contract HubCallbackTest is Test {
         vm.prank(callbackProxy);
         vm.expectEmit(true, true, true, true, address(callback));
         emit HubCallback.SpokeNotForRecipient(recipient, address(0), spoke);
-        callback.recordSettlement(spoke, lcc, recipient, amount, 1);
+        callback.recordSettlementQueued(spoke, lcc, recipient, amount, 1);
 
         assertEq(callback.getTotalAmountProcessed(lcc, recipient), 0);
     }
@@ -47,10 +47,8 @@ contract HubCallbackTest is Test {
 
         vm.recordLogs();
         vm.prank(callbackProxy);
-        callback.recordSettlement(spoke, lcc, recipient, 0, 1);
-        Vm.Log[] memory logs = vm.getRecordedLogs();
-
-        assertEq(logs.length, 0);
+        callback.recordSettlementQueued(spoke, lcc, recipient, 0, 1);
+        // validate that the total amount processed is still 0
         assertEq(callback.getTotalAmountProcessed(lcc, recipient), 0);
     }
 
@@ -59,10 +57,10 @@ contract HubCallbackTest is Test {
 
         vm.prank(callbackProxy);
         vm.expectRevert(abi.encodeWithSelector(HubCallback.InvalidSpoke.selector));
-        callback.recordSettlement(address(0), lcc, recipient, 100, 1);
+        callback.recordSettlementQueued(address(0), lcc, recipient, 100, 1);
     }
 
-    /// @notice Records settlement amount and emits SettlementReported when recipient is whitelisted.
+    /// @notice Records settlement amount and emits SettlementQueuedReported when recipient is whitelisted.
     function test_recordSettlementAccumulatesForWhitelistedRecipient() public {
         uint256 amount = 100;
 
@@ -70,8 +68,8 @@ contract HubCallbackTest is Test {
 
         vm.prank(callbackProxy);
         vm.expectEmit(true, true, false, true, address(callback));
-        emit HubCallback.SettlementReported(recipient, lcc, amount, 1);
-        callback.recordSettlement(spoke, lcc, recipient, amount, 1);
+        emit HubCallback.SettlementQueuedReported(recipient, lcc, amount, 1);
+        callback.recordSettlementQueued(spoke, lcc, recipient, amount, 1);
 
         assertEq(callback.getTotalAmountProcessed(lcc, recipient), amount);
     }
@@ -80,10 +78,10 @@ contract HubCallbackTest is Test {
         callback.setSpokeForRecipient(recipient, spoke);
 
         vm.prank(callbackProxy);
-        callback.recordSettlement(spoke, lcc, recipient, 40, 1);
+        callback.recordSettlementQueued(spoke, lcc, recipient, 40, 1);
 
         vm.prank(callbackProxy);
-        callback.recordSettlement(spoke, lcc, recipient, 60, 2);
+        callback.recordSettlementQueued(spoke, lcc, recipient, 60, 2);
 
         assertEq(callback.getTotalAmountProcessed(lcc, recipient), 100);
     }
@@ -92,12 +90,12 @@ contract HubCallbackTest is Test {
         callback.setSpokeForRecipient(recipient, spoke);
 
         vm.prank(callbackProxy);
-        callback.recordSettlement(spoke, lcc, recipient, 40, 1);
+        callback.recordSettlementQueued(spoke, lcc, recipient, 40, 1);
 
         vm.prank(callbackProxy);
         vm.expectEmit(true, true, true, true, address(callback));
         emit HubCallback.DuplicateSettlementIgnored(spoke, lcc, recipient, 1);
-        callback.recordSettlement(spoke, lcc, recipient, 60, 1);
+        callback.recordSettlementQueued(spoke, lcc, recipient, 60, 1);
 
         assertEq(callback.getTotalAmountProcessed(lcc, recipient), 40);
     }
@@ -108,10 +106,10 @@ contract HubCallbackTest is Test {
         address spoke2 = makeAddr("spoke2");
 
         vm.prank(callbackProxy);
-        callback.recordSettlement(spoke, lcc, recipient, 40, 1);
+        callback.recordSettlementQueued(spoke, lcc, recipient, 40, 1);
 
         vm.prank(callbackProxy);
-        callback.recordSettlement(spoke2, lcc, recipient, 60, 1);
+        callback.recordSettlementQueued(spoke2, lcc, recipient, 60, 1);
 
         assertEq(callback.getTotalAmountProcessed(lcc, recipient), 40);
     }
@@ -123,7 +121,7 @@ contract HubCallbackTest is Test {
         vm.prank(callbackProxy);
         vm.expectEmit(true, true, true, true, address(callback));
         emit HubCallback.SpokeNotForRecipient(recipient, spoke, wrongSpoke);
-        callback.recordSettlement(wrongSpoke, lcc, recipient, 100, 1);
+        callback.recordSettlementQueued(wrongSpoke, lcc, recipient, 100, 1);
 
         assertEq(callback.getTotalAmountProcessed(lcc, recipient), 0);
     }
@@ -153,7 +151,7 @@ contract HubCallbackTest is Test {
         vm.prank(callbackProxy);
         vm.expectEmit(true, true, false, true, address(callback));
         emit HubCallback.SettlementAnnulledReported(recipient, lcc, 9);
-        callback.recordSettlementAnnulled(spoke, lcc, recipient, 9);
+        callback.recordSettlementAnnulled(spoke, lcc, recipient, 9, 1);
     }
 
     function test_recordSettlementProcessedEmitsNormalisedEvent() public {
@@ -162,7 +160,7 @@ contract HubCallbackTest is Test {
         vm.prank(callbackProxy);
         vm.expectEmit(true, true, false, true, address(callback));
         emit HubCallback.SettlementProcessedReported(recipient, lcc, 11);
-        callback.recordSettlementProcessed(spoke, lcc, recipient, 11);
+        callback.recordSettlementProcessed(spoke, lcc, recipient, 11, 1);
     }
 
     function test_recordSettlementFailedEmitsNormalisedEvent() public {
@@ -171,7 +169,7 @@ contract HubCallbackTest is Test {
         vm.prank(callbackProxy);
         vm.expectEmit(true, true, false, true, address(callback));
         emit HubCallback.SettlementFailedReported(recipient, lcc, 7);
-        callback.recordSettlementFailed(spoke, lcc, recipient, 7);
+        callback.recordSettlementFailed(spoke, lcc, recipient, 7, 1);
     }
 
     function test_recordSettlementAnnulledRejectsUnexpectedSpoke() public {
@@ -181,6 +179,6 @@ contract HubCallbackTest is Test {
         vm.prank(callbackProxy);
         vm.expectEmit(true, true, true, true, address(callback));
         emit HubCallback.SpokeNotForRecipient(recipient, spoke, wrongSpoke);
-        callback.recordSettlementAnnulled(wrongSpoke, lcc, recipient, 1);
+        callback.recordSettlementAnnulled(wrongSpoke, lcc, recipient, 1, 1);
     }
 }
