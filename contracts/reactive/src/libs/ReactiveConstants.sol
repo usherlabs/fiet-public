@@ -14,7 +14,7 @@ library ReactiveConstants {
     uint256 internal constant SETTLEMENT_ANNULLED_TOPIC =
         uint256(keccak256("SettlementAnnulled(address,address,uint256)"));
     uint256 internal constant SETTLEMENT_PROCESSED_TOPIC =
-        uint256(keccak256("SettlementProcessed(address,address,uint256)"));
+        uint256(keccak256("SettlementProcessed(address,address,uint256,uint256)"));
     uint256 internal constant SETTLEMENT_FAILED_TOPIC =
         uint256(keccak256("SettlementFailed(address,address,uint256,bytes)"));
     uint256 internal constant SETTLEMENT_QUEUED_REPORTED_TOPIC =
@@ -22,7 +22,7 @@ library ReactiveConstants {
     uint256 internal constant SETTLEMENT_ANNULLED_REPORTED_TOPIC =
         uint256(keccak256("SettlementAnnulledReported(address,address,uint256)"));
     uint256 internal constant SETTLEMENT_PROCESSED_REPORTED_TOPIC =
-        uint256(keccak256("SettlementProcessedReported(address,address,uint256)"));
+        uint256(keccak256("SettlementProcessedReported(address,address,uint256,uint256)"));
     uint256 internal constant SETTLEMENT_FAILED_REPORTED_TOPIC =
         uint256(keccak256("SettlementFailedReported(address,address,uint256)"));
 
@@ -32,7 +32,7 @@ library ReactiveConstants {
     bytes4 internal constant RECORD_SETTLEMENT_ANNULLED_SELECTOR =
         bytes4(keccak256("recordSettlementAnnulled(address,address,address,uint256,uint256)"));
     bytes4 internal constant RECORD_SETTLEMENT_PROCESSED_SELECTOR =
-        bytes4(keccak256("recordSettlementProcessed(address,address,address,uint256,uint256)"));
+        bytes4(keccak256("recordSettlementProcessed(address,address,address,uint256,uint256,uint256)"));
     bytes4 internal constant RECORD_SETTLEMENT_FAILED_SELECTOR =
         bytes4(keccak256("recordSettlementFailed(address,address,address,uint256,uint256)"));
     bytes4 internal constant PROCESS_SETTLEMENTS_SELECTOR =

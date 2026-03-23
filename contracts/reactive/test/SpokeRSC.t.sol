@@ -289,7 +289,8 @@ contract SpokeRSCTest is Test {
         address recipient = makeAddr("recipient");
         SpokeRSC spoke = _newSpoke(recipient);
         address lcc = makeAddr("lcc");
-        uint256 amount = 33;
+        uint256 settledAmount = 33;
+        uint256 requestedAmount = 50;
 
         IReactive.LogRecord memory log = IReactive.LogRecord({
             chain_id: originChainId,
@@ -298,7 +299,7 @@ contract SpokeRSCTest is Test {
             topic_1: uint256(uint160(lcc)),
             topic_2: uint256(uint160(recipient)),
             topic_3: 0,
-            data: abi.encode(amount),
+            data: abi.encode(settledAmount, requestedAmount),
             block_number: 0,
             op_code: 0,
             block_hash: 0,
@@ -307,7 +308,13 @@ contract SpokeRSCTest is Test {
         });
 
         bytes memory payload = abi.encodeWithSelector(
-            ReactiveConstants.RECORD_SETTLEMENT_PROCESSED_SELECTOR, address(0), lcc, recipient, amount, 1
+            ReactiveConstants.RECORD_SETTLEMENT_PROCESSED_SELECTOR,
+            address(0),
+            lcc,
+            recipient,
+            settledAmount,
+            requestedAmount,
+            1
         );
         vm.expectEmit(true, true, true, true, address(spoke));
         emit IReactive.Callback(destinationChainId, hubCallback, 8000000, payload);

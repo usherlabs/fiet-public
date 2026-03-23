@@ -39,6 +39,11 @@ contract HubRSC is AbstractReactive {
         bool exists;
     }
 
+    struct BufferedProcessedSettlement {
+        uint256 settledAmount;
+        uint256 inflightAmountToReduce;
+    }
+
     uint256 public immutable maxDispatchItems;
 
     /// @notice The Chain the protocol lives on i.e DestinationContract.sol
@@ -71,7 +76,7 @@ contract HubRSC is AbstractReactive {
     mapping(bytes32 => bool) public processedReport;
 
     /// @notice Buffered authoritative processed decreases awaiting pending creation.
-    mapping(bytes32 => uint256) public bufferedProcessedDecreaseByKey;
+    mapping(bytes32 => BufferedProcessedSettlement) public bufferedProcessedDecreaseByKey;
     /// @notice Buffered authoritative annulled decreases awaiting pending creation.
     mapping(bytes32 => uint256) public bufferedAnnulledDecreaseByKey;
 
@@ -240,7 +245,7 @@ contract HubRSC is AbstractReactive {
             emit PendingIncreased(lcc, recipient, amount);
         }
 
-        // Apply buffered authoritative decreases that arrived before pending existed.
+        // Apply buffered decreases that arrived before pending existed.
         _applyBufferedDecreases(entry, key);
     }
 
@@ -251,9 +256,9 @@ contract HubRSC is AbstractReactive {
 
         address recipient = address(uint160(log.topic_1));
         address lcc = address(uint160(log.topic_2));
-        uint256 settledAmount = abi.decode(log.data, (uint256));
+        (uint256 settledAmount, uint256 requestedAmount) = abi.decode(log.data, (uint256, uint256));
 
-        _applyAuthoritativeDecreaseOrBuffer(lcc, recipient, settledAmount, true);
+        _applyAuthoritativeDecreaseOrBuffer(lcc, recipient, settledAmount, requestedAmount);
     }
 
     /// @notice Reconciles pending amount from authoritative LiquidityHub queue annulments.
@@ -265,7 +270,7 @@ contract HubRSC is AbstractReactive {
         address lcc = address(uint160(log.topic_2));
         uint256 annulledAmount = abi.decode(log.data, (uint256));
 
-        _applyAuthoritativeDecreaseOrBuffer(lcc, recipient, annulledAmount, false);
+        _applyAuthoritativeDecreaseOrBuffer(lcc, recipient, annulledAmount, 0);
     }
 
     /// @notice Releases reserved in-flight amount for failed destination settlements.
@@ -292,29 +297,31 @@ contract HubRSC is AbstractReactive {
     }
 
     /// @notice Applies authoritative decrease immediately when pending exists, otherwise buffers it.
-    function _applyAuthoritativeDecreaseOrBuffer(address lcc, address recipient, uint256 amount, bool consumeInFlight)
+    function _applyAuthoritativeDecreaseOrBuffer(address lcc, address recipient, uint256 settledAmount, uint256 inflightAmountToReduce)
         internal
     {
         // derive the key for the pending entry
-        if (amount == 0) return;
+        if (settledAmount == 0) return;
         bytes32 key = computeKey(lcc, recipient);
         Pending storage entry = pending[key];
 
         // if the pending entry exists, then we can apply the decrease immediately
         if (entry.exists) {
-            _applyAuthoritativeDecrease(lcc, recipient, amount, consumeInFlight);
+            _applyAuthoritativeDecrease(lcc, recipient, settledAmount, inflightAmountToReduce);
             return;
         }
 
+        // this flow 
         // if the consumeInFlight flag is set, then it is a processed decrease
         // i.e a decrease action that arrrived out of order and came before the pending entry was created should be applied now
         // otherwise it is an annulment decrease
         // i.e an annulment action that arrrived out of order and came before the pending entry was created should be applied now
         // so we buffer the decrease accordingly
-        if (consumeInFlight) {
-            bufferedProcessedDecreaseByKey[key] += amount;
+        if (inflightAmountToReduce > 0) {
+            bufferedProcessedDecreaseByKey[key].inflightAmountToReduce += inflightAmountToReduce;
+            bufferedProcessedDecreaseByKey[key].settledAmount += settledAmount;
         } else {
-            bufferedAnnulledDecreaseByKey[key] += amount;
+            bufferedAnnulledDecreaseByKey[key] += settledAmount;
         }
     }
 
@@ -420,22 +427,22 @@ contract HubRSC is AbstractReactive {
     }
 
     /// @notice Applies authoritative queue decrement and keeps in-flight reservations bounded.
-    function _applyAuthoritativeDecrease(address lcc, address recipient, uint256 amount, bool consumeInFlight)
+    function _applyAuthoritativeDecrease(address lcc, address recipient, uint256 settledAmount, uint256 inflightAmountToReduce)
         internal
     {
-        if (amount == 0) return;
+        if (settledAmount == 0 && inflightAmountToReduce == 0) return;
         bytes32 key = computeKey(lcc, recipient);
         Pending storage entry = pending[key];
         if (!entry.exists) return;
 
-        uint256 dec = amount < entry.amount ? amount : entry.amount;
+        uint256 dec = settledAmount < entry.amount ? settledAmount : entry.amount;
         if (dec > 0) {
             entry.amount -= dec;
         }
 
         uint256 reserved = inFlightByKey[key];
-        if (consumeInFlight && dec > 0 && reserved > 0) {
-            uint256 consumed = dec < reserved ? dec : reserved;
+        if (inflightAmountToReduce > 0 && reserved > 0) {
+            uint256 consumed = inflightAmountToReduce < reserved ? inflightAmountToReduce : reserved;
             reserved -= consumed;
             inFlightByKey[key] = reserved;
         }
@@ -450,17 +457,19 @@ contract HubRSC is AbstractReactive {
     function _applyBufferedDecreases(Pending storage entry, bytes32 key) internal {
         // apply buffered processed decreases
         // i.e any decrease action that arrrived out of order and came before the pending entry was created should be applied now
-        uint256 bufferedProcessed = bufferedProcessedDecreaseByKey[key];
-        if (bufferedProcessed != 0) {
-            bufferedProcessedDecreaseByKey[key] = 0;
-            _applyAuthoritativeDecrease(entry.lcc, entry.recipient, bufferedProcessed, true);
+        BufferedProcessedSettlement memory bufferedProcessed = bufferedProcessedDecreaseByKey[key];
+        if (bufferedProcessed.settledAmount > 0 || bufferedProcessed.inflightAmountToReduce > 0) {
+            bufferedProcessedDecreaseByKey[key] = BufferedProcessedSettlement(0, 0);
+            _applyAuthoritativeDecrease(
+                entry.lcc, entry.recipient, bufferedProcessed.settledAmount, bufferedProcessed.inflightAmountToReduce
+            );
         }
         // apply buffered annulled decreases
         // i.e any annulment action that arrrived out of order and came before the pending entry was created should be applied now
         uint256 bufferedAnnulled = bufferedAnnulledDecreaseByKey[key];
         if (bufferedAnnulled != 0) {
             bufferedAnnulledDecreaseByKey[key] = 0;
-            _applyAuthoritativeDecrease(entry.lcc, entry.recipient, bufferedAnnulled, false);
+            _applyAuthoritativeDecrease(entry.lcc, entry.recipient, bufferedAnnulled, 0);
         }
     }
 

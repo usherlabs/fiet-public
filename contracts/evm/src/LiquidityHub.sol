@@ -37,7 +37,9 @@ contract LiquidityHub is BoundRegistry, Ownable, ReentrancyGuardTransient {
     event LiquidityAvailable(address indexed lcc, address underlyingAsset, uint256 amount, bytes32 marketId);
     event SettlementQueued(address indexed lcc, address indexed recipient, uint256 amount);
     event SettlementAnnulled(address indexed lcc, address indexed recipient, uint256 amount);
-    event SettlementProcessed(address indexed lcc, address indexed recipient, uint256 amount);
+    event SettlementProcessed(
+        address indexed lcc, address indexed recipient, uint256 settledAmount, uint256 requestedAmount
+    );
     event LccWrappedWith(address indexed lcc, address indexed withLCC, address from, address to, uint256 amount);
     event LccWrapped(address indexed lcc, address from, address to, uint256 amount);
     event LccUnwrapped(address indexed lcc, address from, address to, uint256 amount);
@@ -949,7 +951,7 @@ contract LiquidityHub is BoundRegistry, Ownable, ReentrancyGuardTransient {
         uint256 queuedAfter = s.settleQueue[lcc][recipient];
         uint256 settled = queuedBefore > queuedAfter ? queuedBefore - queuedAfter : 0;
         if (settled > 0) {
-            emit SettlementProcessed(lcc, recipient, settled);
+            emit SettlementProcessed(lcc, recipient, settled, maxAmount);
         }
     }
 
