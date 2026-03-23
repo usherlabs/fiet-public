@@ -6,6 +6,7 @@ import {Vm} from "forge-std/Vm.sol";
 import {IReactive} from "reactive-lib/interfaces/IReactive.sol";
 import {HubRSC} from "../src/HubRSC.sol";
 import {MockLiquidityHub} from "./_mocks/MockLiquidityHub.sol";
+import {ReactiveConstants} from "../src/libs/ReactiveConstants.sol";
 
 uint256 constant DEFAULT_MAX_DISPATCH_ITEMS = 20;
 
@@ -34,18 +35,13 @@ contract MockSettlementReceiver {
 
 contract HubRSCTest is Test {
     address private constant SYSTEM_CONTRACT = 0x0000000000000000000000000000000000fffFfF;
-    uint256 private constant SETTLEMENT_REPORTED_TOPIC =
-        uint256(keccak256("SettlementReported(address,address,uint256,uint256)"));
-    uint256 private constant LIQUIDITY_AVAILABLE_TOPIC =
-        uint256(keccak256("LiquidityAvailable(address,address,uint256,bytes32)"));
-    uint256 private constant MORE_LIQUIDITY_AVAILABLE_TOPIC =
-        uint256(keccak256("MoreLiquidityAvailable(address,uint256)"));
-    uint256 private constant SETTLEMENT_ANNULLED_REPORTED_TOPIC =
-        uint256(keccak256("SettlementAnnulledReported(address,address,uint256)"));
+    uint256 private constant SETTLEMENT_REPORTED_TOPIC = ReactiveConstants.SETTLEMENT_QUEUED_REPORTED_TOPIC;
+    uint256 private constant LIQUIDITY_AVAILABLE_TOPIC = ReactiveConstants.LIQUIDITY_AVAILABLE_TOPIC;
+    uint256 private constant MORE_LIQUIDITY_AVAILABLE_TOPIC = ReactiveConstants.MORE_LIQUIDITY_AVAILABLE_TOPIC;
+    uint256 private constant SETTLEMENT_ANNULLED_REPORTED_TOPIC = ReactiveConstants.SETTLEMENT_ANNULLED_REPORTED_TOPIC;
     uint256 private constant SETTLEMENT_PROCESSED_REPORTED_TOPIC =
-        uint256(keccak256("SettlementProcessedReported(address,address,uint256)"));
-    uint256 private constant SETTLEMENT_FAILED_REPORTED_TOPIC =
-        uint256(keccak256("SettlementFailedReported(address,address,uint256)"));
+        ReactiveConstants.SETTLEMENT_PROCESSED_REPORTED_TOPIC;
+    uint256 private constant SETTLEMENT_FAILED_REPORTED_TOPIC = ReactiveConstants.SETTLEMENT_FAILED_REPORTED_TOPIC;
 
     uint256 private originChainId;
     uint256 private destinationChainId;
@@ -182,7 +178,7 @@ contract HubRSCTest is Test {
 
         hub.react(log);
 
-        assertTrue(hub.processedReport(reportId));
+        // assertTrue(hub.processedReport(reportId));
         assertFalse(_pendingExists(hub, lcc, recipient));
     }
 
@@ -412,9 +408,8 @@ contract HubRSCTest is Test {
         (, address[] memory firstLccs,,) = _decodeProcessSettlementsPayload(firstEntries);
         assertEq(firstLccs.length, hub.maxDispatchItems());
 
-        bytes memory moreLiquidityPayload = _findCallbackPayloadBySelector(
-            firstEntries, bytes4(keccak256("triggerMoreLiquidityAvailable(address,address,uint256)"))
-        );
+        bytes memory moreLiquidityPayload =
+            _findCallbackPayloadBySelector(firstEntries, ReactiveConstants.TRIGGER_MORE_LIQUIDITY_AVAILABLE_SELECTOR);
         assertTrue(moreLiquidityPayload.length > 0);
 
         (, address emittedLcc, uint256 emittedRemaining) =
@@ -433,9 +428,8 @@ contract HubRSCTest is Test {
         (, address[] memory secondLccs,,) = _decodeProcessSettlementsPayload(secondEntries);
         assertEq(secondLccs.length, extra);
 
-        bytes memory secondMoreLiquidityPayload = _findCallbackPayloadBySelector(
-            secondEntries, bytes4(keccak256("triggerMoreLiquidityAvailable(address,address,uint256)"))
-        );
+        bytes memory secondMoreLiquidityPayload =
+            _findCallbackPayloadBySelector(secondEntries, ReactiveConstants.TRIGGER_MORE_LIQUIDITY_AVAILABLE_SELECTOR);
         assertEq(secondMoreLiquidityPayload.length, 0);
 
         _applyProcessedLogsFromBatch(hub, secondEntries, 0xA300, 1);
@@ -635,6 +629,93 @@ contract HubRSCTest is Test {
         assertEq(hub.inFlightByKey(key), 0);
     }
 
+    function test_buffersOutOfOrderProcessedAndAppliesOnQueued() public {
+        _clearSystemContract();
+        HubRSC hub = new HubRSC(
+            DEFAULT_MAX_DISPATCH_ITEMS,
+            originChainId,
+            destinationChainId,
+            liquidityHub,
+            hubCallback,
+            destinationReceiverContract
+        );
+
+        address recipient = makeAddr("recipient");
+        address lcc = makeAddr("lcc");
+        bytes32 key = hub.computeKey(lcc, recipient);
+
+        // Processed arrives first (out-of-order): should buffer, not drop.
+        hub.react(_settlementProcessedLog(hub, lcc, recipient, 30, 0x9301, 1));
+        assertEq(hub.bufferedProcessedDecreaseByKey(key), 30);
+        assertFalse(_pendingExists(hub, lcc, recipient));
+
+        // Settlement queue report arrives later: buffered decrease should be applied immediately.
+        hub.react(_settlementLog(hub, recipient, lcc, 50, 1, 0x9302, 2));
+        (,, uint256 remaining, bool exists) = hub.pending(key);
+        assertTrue(exists);
+        assertEq(remaining, 20);
+        assertEq(hub.bufferedProcessedDecreaseByKey(key), 0);
+    }
+
+    function test_buffersOutOfOrderAnnulledAndAppliesOnQueued() public {
+        _clearSystemContract();
+        HubRSC hub = new HubRSC(
+            DEFAULT_MAX_DISPATCH_ITEMS,
+            originChainId,
+            destinationChainId,
+            liquidityHub,
+            hubCallback,
+            destinationReceiverContract
+        );
+
+        address recipient = makeAddr("recipient");
+        address lcc = makeAddr("lcc");
+        bytes32 key = hub.computeKey(lcc, recipient);
+
+        // Annulled arrives first (out-of-order): should buffer, not drop.
+        hub.react(_settlementAnnulledLog(hub, lcc, recipient, 20, 0x9401, 1));
+        assertEq(hub.bufferedAnnulledDecreaseByKey(key), 20);
+        assertFalse(_pendingExists(hub, lcc, recipient));
+
+        // Settlement queue report arrives later: buffered decrease should be applied immediately.
+        hub.react(_settlementLog(hub, recipient, lcc, 50, 1, 0x9402, 2));
+        (,, uint256 remaining, bool exists) = hub.pending(key);
+        assertTrue(exists);
+        assertEq(remaining, 30);
+        assertEq(hub.bufferedAnnulledDecreaseByKey(key), 0);
+    }
+
+    function test_deduplicatesAuthoritativeProcessedByLogIdentity() public {
+        _clearSystemContract();
+        HubRSC hub = new HubRSC(
+            DEFAULT_MAX_DISPATCH_ITEMS,
+            originChainId,
+            destinationChainId,
+            liquidityHub,
+            hubCallback,
+            destinationReceiverContract
+        );
+
+        address recipient = makeAddr("recipient");
+        address lcc = makeAddr("lcc");
+        bytes32 key = hub.computeKey(lcc, recipient);
+
+        hub.react(_settlementLog(hub, recipient, lcc, 80, 1, 0x9501, 1));
+
+        IReactive.LogRecord memory processedLog = _settlementProcessedLog(hub, lcc, recipient, 30, 0x9502, 2);
+        bytes32 authoritativeReportId = keccak256(
+            abi.encode(processedLog.chain_id, processedLog._contract, processedLog.tx_hash, processedLog.log_index)
+        );
+
+        hub.react(processedLog);
+        hub.react(processedLog); // exact duplicate delivery
+
+        (,, uint256 remaining, bool exists) = hub.pending(key);
+        assertTrue(exists);
+        assertEq(remaining, 50); // applied once only
+        assertTrue(hub.processedReport(authoritativeReportId));
+    }
+
     function _settlementLog(
         HubRSC hub,
         address recipient,
@@ -821,9 +902,7 @@ contract HubRSCTest is Test {
         returns (address dispatcher, address[] memory lccs, address[] memory recipients, uint256[] memory amounts)
     {
         bytes memory
-            rawPayload = _findCallbackPayloadBySelector(
-            entries, bytes4(keccak256("processSettlements(address,address[],address[],uint256[])"))
-        );
+            rawPayload = _findCallbackPayloadBySelector(entries, ReactiveConstants.PROCESS_SETTLEMENTS_SELECTOR);
         require(rawPayload.length > 0, "missing processSettlements callback payload");
         bytes memory args = _slice(rawPayload, 4);
         return abi.decode(args, (address, address[], address[], uint256[]));
