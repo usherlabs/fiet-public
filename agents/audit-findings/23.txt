@@ -1,0 +1,6 @@
+Transfer-hook-only DEX ingress in LCC combined with LiquidityHub mint-to-DEX causes skipped Hub→Vault settlement
+
+Minting LCC directly to the PoolManager (DEX sink) via LiquidityHub.wrapTo or wrapWithTo bypasses the PR’s transfer-hook-based ingress routing, so no MarketFactory.prepareMarketLiquidity is called and the Vault is not funded; the Hub’s direct reserve increases without matching settlement.
+
+The PR refactored DEX ingress routing to occur exclusively in LCC transfer hooks. In LCC._update, hooks run only when both from and to are nonzero, so mints do not trigger hooks. LiquidityHub._wrap and _wrapWith mint LCC to an arbitrary recipient. If that recipient is the PoolManager (BOUND_DEX), the DEX ingress path (MarketFactory.prepareMarketLiquidity → VaultCoreActionHandler.handleIngress → LiquidityHub.prepareSettle) is never invoked. As a result, the Hub’s per-LCC directSupply and underlying direct reserve can increase while the MarketVault is not funded with corresponding underlying. This creates an operational inconsistency introduced by the PR’s shift to transfer-only ingress, while LiquidityHub still allows minting to arbitrary recipients.
+
