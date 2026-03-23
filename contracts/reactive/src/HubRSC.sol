@@ -297,9 +297,12 @@ contract HubRSC is AbstractReactive {
     }
 
     /// @notice Applies authoritative decrease immediately when pending exists, otherwise buffers it.
-    function _applyAuthoritativeDecreaseOrBuffer(address lcc, address recipient, uint256 settledAmount, uint256 inflightAmountToReduce)
-        internal
-    {
+    function _applyAuthoritativeDecreaseOrBuffer(
+        address lcc,
+        address recipient,
+        uint256 settledAmount,
+        uint256 inflightAmountToReduce
+    ) internal {
         // derive the key for the pending entry
         if (settledAmount == 0) return;
         bytes32 key = computeKey(lcc, recipient);
@@ -311,7 +314,7 @@ contract HubRSC is AbstractReactive {
             return;
         }
 
-        // this flow 
+        // this flow
         // if the consumeInFlight flag is set, then it is a processed decrease
         // i.e a decrease action that arrrived out of order and came before the pending entry was created should be applied now
         // otherwise it is an annulment decrease
@@ -427,9 +430,12 @@ contract HubRSC is AbstractReactive {
     }
 
     /// @notice Applies authoritative queue decrement and keeps in-flight reservations bounded.
-    function _applyAuthoritativeDecrease(address lcc, address recipient, uint256 settledAmount, uint256 inflightAmountToReduce)
-        internal
-    {
+    function _applyAuthoritativeDecrease(
+        address lcc,
+        address recipient,
+        uint256 settledAmount,
+        uint256 inflightAmountToReduce
+    ) internal {
         if (settledAmount == 0 && inflightAmountToReduce == 0) return;
         bytes32 key = computeKey(lcc, recipient);
         Pending storage entry = pending[key];

@@ -112,7 +112,12 @@ contract HubCallback is AbstractCallback, Ownable {
         uint256 nonce
     ) external authorizedSenderOnly {
         if (!_validateEventParameters(
-                spokeRVMId, lcc, recipient, requestedAmount, nonce, ReactiveConstants.RECORD_SETTLEMENT_PROCESSED_SELECTOR
+                spokeRVMId,
+                lcc,
+                recipient,
+                requestedAmount,
+                nonce,
+                ReactiveConstants.RECORD_SETTLEMENT_PROCESSED_SELECTOR
             )) return;
 
         emit SettlementProcessedReported(recipient, lcc, settledAmount, requestedAmount);

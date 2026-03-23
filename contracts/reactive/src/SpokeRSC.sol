@@ -178,7 +178,13 @@ contract SpokeRSC is AbstractReactive {
         // while the first parameter is set to address(0), it is automatically set on the receiving contract to the the RVM id of the calling contract
         // i.e it is the rvm id of this contract, and it is derived as the address of the private key used to deploy the contract
         bytes memory payload = abi.encodeWithSelector(
-            ReactiveConstants.RECORD_SETTLEMENT_PROCESSED_SELECTOR, address(0), lcc, recipient, settledAmount, requestedAmount, eventNonce
+            ReactiveConstants.RECORD_SETTLEMENT_PROCESSED_SELECTOR,
+            address(0),
+            lcc,
+            recipient,
+            settledAmount,
+            requestedAmount,
+            eventNonce
         );
         emit Callback(reactChainId, hubCallback, GAS_LIMIT, payload);
     }

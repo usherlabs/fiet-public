@@ -119,7 +119,9 @@ contract BatchProcessSettlementTest is Test {
         uint256[] memory maxAmount = new uint256[](1);
 
         address wrongOrigin = makeAddr("wrongOrigin");
-        vm.expectRevert(abi.encodeWithSelector(BatchProcessSettlement.InvalidCallbackOrigin.selector, hubRVMId, wrongOrigin));
+        vm.expectRevert(
+            abi.encodeWithSelector(BatchProcessSettlement.InvalidCallbackOrigin.selector, hubRVMId, wrongOrigin)
+        );
         vm.prank(callbackProxy);
         receiver.processSettlements(wrongOrigin, lcc, recipient, maxAmount);
     }
