@@ -13,6 +13,7 @@ import {Math} from "openzeppelin-contracts/contracts/utils/math/Math.sol";
 import {ReentrancyGuardTransient} from "openzeppelin-contracts/contracts/utils/ReentrancyGuardTransient.sol";
 import {Errors} from "./libraries/Errors.sol";
 import {IMarketVault} from "./interfaces/IMarketVault.sol";
+import {IMMQueueCustodian} from "./interfaces/IMMQueueCustodian.sol";
 import {TransientSlots} from "./libraries/TransientSlots.sol";
 import {ILiquidityHub} from "./interfaces/ILiquidityHub.sol";
 import {ILCC} from "./interfaces/ILCC.sol";
@@ -934,6 +935,44 @@ contract LiquidityHub is BoundRegistry, Ownable, ReentrancyGuardTransient {
         nonReentrant
     {
         _processSettlementFor(lcc, recipient, maxAmount);
+    }
+
+    /**
+     * @notice Atomically releases queued MM custody and settles it against the recipient's Hub queue
+     * @dev Best-effort path for MM collection flows. Returns 0 when the queue, reserve, or custody
+     *      currently cannot support settlement, instead of reverting.
+     * @param lcc The LCC token address
+     * @param custodian The MM queue custodian holding beneficiary-scoped queued LCC
+     * @param tokenId The commitment token id bucket to debit in the custodian
+     * @param recipient The queue owner and settlement recipient
+     * @param maxAmount The maximum amount to settle
+     * @return settled The amount actually released from custody and settled
+     */
+    function settleFromCustodian(address lcc, address custodian, uint256 tokenId, address recipient, uint256 maxAmount)
+        external
+        onlyValidLcc(lcc)
+        nonReentrant
+        returns (uint256 settled)
+    {
+        if (recipient == address(0) || custodian == address(0) || maxAmount == 0) {
+            return 0;
+        }
+
+        IMMQueueCustodian queueCustodian = IMMQueueCustodian(custodian);
+        uint256 queued = s.settleQueue[lcc][recipient];
+        if (queued == 0) return 0;
+
+        address underlying = s.lccToUnderlying[lcc];
+        uint256 available = s.reserveOfUnderlying[underlying].marketDerived;
+        uint256 custodied = queueCustodian.queued(tokenId, lcc, recipient);
+
+        settled = Math.min(Math.min(queued, available), Math.min(maxAmount, custodied));
+        if (settled == 0) return 0;
+
+        settled = queueCustodian.release(tokenId, lcc, recipient, settled);
+        if (settled == 0) return 0;
+
+        _processSettlementFor(lcc, recipient, settled);
     }
 
     /**

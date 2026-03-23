@@ -448,22 +448,7 @@ contract MMPositionManager is
     /// @param maxAmount The maximum amount to collect
     function _collectAvailableLiquidity(address lcc, uint256 tokenId, uint256 maxAmount) internal {
         address locker = msgSender();
-        uint256 queued = liquidityHub.settleQueue(lcc, locker);
-
-        // No Hub queue => no collection. Custody may still exist for this locker under `tokenId` from other flows;
-        // that liquidity is not cleared via this queue-settlement helper.
-        if (queued > 0) {
-            (, uint256 available) = liquidityHub.reserveOfUnderlyingTuple(lcc);
-            uint256 custodied = queueCustodian.queued(tokenId, lcc, locker);
-            uint256 toSettle = Math.min(Math.min(queued, available), Math.min(maxAmount, custodied));
-            if (toSettle > 0) {
-                uint256 released = queueCustodian.release(tokenId, lcc, locker, toSettle);
-                if (released > 0) {
-                    // LCC already released from custody to locker for burn/pay.
-                    liquidityHub.processSettlementFor(lcc, locker, released);
-                }
-            }
-        }
+        liquidityHub.settleFromCustodian(lcc, address(queueCustodian), tokenId, locker, maxAmount);
     }
 
     /// @notice Syncs currency balance as credit to delta
