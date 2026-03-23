@@ -128,6 +128,11 @@ abstract contract LiquidityHubTestBase is Test {
         assertEq(marketBal, amount);
     }
 
+    function _setDexBound(address who) internal {
+        vm.prank(factory);
+        liquidityHub.setBoundLevel(who, Bounds.BOUND_DEX);
+    }
+
     /// @notice Helper function to create a settlement queue entry
     function _createSettlementQueueEntry(address lccTokenAddress, address recipient, uint256 amount) public {
         // This helper is used to manufacture a queued settlement deterministically by:
@@ -236,4 +241,3 @@ abstract contract LiquidityHubTestBase is Test {
         vm.stopPrank();
     }
 }
-

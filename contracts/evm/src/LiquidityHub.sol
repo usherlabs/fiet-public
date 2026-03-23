@@ -414,6 +414,12 @@ contract LiquidityHub is BoundRegistry, Ownable, ReentrancyGuardTransient {
         return LCCFactoryLib.balancesOf(lccToken, account);
     }
 
+    function _assertWrapRecipientNotDexSink(address lcc, address to) internal view {
+        if (Bounds.isDex(boundLevel(s.lccToMarket[lcc].factory, to))) {
+            revert Errors.DirectWrapToDexNotAllowed(to);
+        }
+    }
+
     // ============ TRADER FUNCTIONS ============
 
     // DirectLPs and Traders engaging the CorePool directly will need LCC. LCC is 1:1 with the underlying asset.
@@ -427,6 +433,11 @@ contract LiquidityHub is BoundRegistry, Ownable, ReentrancyGuardTransient {
         address from = _msgSender();
         address underlying = s.lccToUnderlying[lcc];
         bool isNativeAsset = underlying == address(0);
+
+        // Mint-time ingress to the DEX sink bypasses LCC transfer hooks.
+        // Reject it until there is a safe settlement path that can run under PoolManager lock constraints.
+        _assertWrapRecipientNotDexSink(lcc, to);
+
         // throw error if the native ETH is insufficient and it is a native ETH backed LCC
         if (isNativeAsset) {
             if (msg.value != amount) {
@@ -490,6 +501,9 @@ contract LiquidityHub is BoundRegistry, Ownable, ReentrancyGuardTransient {
      */
     function _wrapWith(address lcc, address withLCC, address to, uint256 amount) internal onlyValidLcc(lcc) {
         address from = _msgSender();
+
+        // wrapWithTo shares the same mint surface as direct wrap and must not bypass DEX ingress handling.
+        _assertWrapRecipientNotDexSink(lcc, to);
 
         // Performs all necessary validation and preparation
         LiquidityHubLib.WrapWithContext memory ctx = LiquidityHubLib.wrapWithPrepare(s, lcc, withLCC, from, amount);

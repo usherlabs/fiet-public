@@ -343,6 +343,64 @@ contract LiquidityHubWrapTest is LiquidityHubTestBase {
         liquidityHub.wrapWithTo(lccToken3, lccToken1, user2, 0);
     }
 
+    function testWrapToRevertsWhenRecipientIsDexSink() public {
+        address poolManager = makeAddr("poolManager");
+        uint256 wrapAmount = 100;
+
+        _setDexBound(poolManager);
+        underlyingAsset1.mint(user1, wrapAmount);
+
+        vm.startPrank(user1);
+        underlyingAsset1.approve(address(liquidityHub), wrapAmount);
+        vm.expectRevert(abi.encodeWithSelector(Errors.DirectWrapToDexNotAllowed.selector, poolManager));
+        liquidityHub.wrapTo(lccToken1, poolManager, wrapAmount);
+        vm.stopPrank();
+
+        assertEq(underlyingAsset1.balanceOf(user1), wrapAmount, "underlying should stay with sender");
+        assertEq(ILCC(lccToken1).balanceOf(poolManager), 0, "DEX sink should not receive LCC");
+        assertEq(liquidityHub.directSupply(lccToken1), 0, "direct supply should remain unchanged");
+        (uint256 directReserve, uint256 marketReserve) = liquidityHub.reserveOfUnderlyingTuple(lccToken1);
+        assertEq(directReserve, 0, "direct reserve should remain unchanged");
+        assertEq(marketReserve, 0, "market reserve should remain unchanged");
+    }
+
+    function testWrapToWithMarketIdRevertsWhenRecipientIsDexSink() public {
+        address poolManager = makeAddr("poolManager");
+        uint256 wrapAmount = 100;
+
+        _setDexBound(poolManager);
+        underlyingAsset1.mint(user1, wrapAmount);
+
+        vm.startPrank(user1);
+        underlyingAsset1.approve(address(liquidityHub), wrapAmount);
+        vm.expectRevert(abi.encodeWithSelector(Errors.DirectWrapToDexNotAllowed.selector, poolManager));
+        liquidityHub.wrapTo(address(underlyingAsset1), marketId1, poolManager, wrapAmount);
+        vm.stopPrank();
+
+        assertEq(underlyingAsset1.balanceOf(user1), wrapAmount, "underlying should stay with sender");
+        assertEq(ILCC(lccToken1).balanceOf(poolManager), 0, "DEX sink should not receive LCC");
+    }
+
+    function testWrapWithToRevertsWhenRecipientIsDexSink() public {
+        address poolManager = makeAddr("poolManager");
+        uint256 wrapAmount = 100;
+        (address lccToken3,) = _createSecondLCCPair();
+
+        _setDexBound(poolManager);
+        _wrapDirectLCC(user1, lccToken1, wrapAmount);
+
+        vm.startPrank(user1);
+        ILCC(lccToken1).approve(address(liquidityHub), wrapAmount);
+        vm.expectRevert(abi.encodeWithSelector(Errors.DirectWrapToDexNotAllowed.selector, poolManager));
+        liquidityHub.wrapWithTo(lccToken3, lccToken1, poolManager, wrapAmount);
+        vm.stopPrank();
+
+        assertEq(ILCC(lccToken1).balanceOf(user1), wrapAmount, "source LCC should stay with sender");
+        assertEq(ILCC(lccToken3).balanceOf(poolManager), 0, "DEX sink should not receive target LCC");
+        assertEq(liquidityHub.directSupply(lccToken1), wrapAmount, "source direct supply should remain unchanged");
+        assertEq(liquidityHub.directSupply(lccToken3), 0, "target direct supply should remain unchanged");
+    }
+
     // ============ WRAP WITH LCC : EDGE CASE TESTS ============
 
     /// @notice Tests wrapWith with only market-derived balance (zero wrapped)
@@ -585,4 +643,3 @@ contract LiquidityHubWrapTest is LiquidityHubTestBase {
         assertEq(ILCC(lccToken1).balanceOf(user1), 0, "user1 should not have LCC");
     }
 }
-
