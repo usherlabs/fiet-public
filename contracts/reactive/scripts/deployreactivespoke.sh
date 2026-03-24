@@ -18,7 +18,8 @@ extract_deployed_address() {
 }
 
 # Use one deployer key for spoke deployment.
-DEPLOYER_PRIVATE_KEY="${PRIVATE_KEY:-}"
+# Allow override via OVERRIDE_PRIVATE_KEY environment variable
+DEPLOYER_PRIVATE_KEY="${OVERRIDE_PRIVATE_KEY:-${PRIVATE_KEY:-}}"
 RECIPIENT="${1:-${RECIPIENT:-}}"
 
 # Required runtime configuration.
