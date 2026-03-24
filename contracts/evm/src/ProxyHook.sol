@@ -22,6 +22,7 @@ import {MarketHandlerLib} from "./libraries/MarketHandlerLib.sol";
 
 contract ProxyHook is BaseHook, VaultCoreActionHandler {
     using CurrencySettler for Currency;
+    using SafeCast for uint256;
     address internal constant RECIPIENT_LOCKER = address(1);
     address internal constant RECIPIENT_ROUTER = address(2);
 
@@ -183,10 +184,10 @@ contract ProxyHook is BaseHook, VaultCoreActionHandler {
         if (sqrtPriceLimitX96 == minValid) return maxValid;
         if (sqrtPriceLimitX96 == maxValid) return minValid;
 
-        uint256 inverted = (uint256(1) << 192) / uint256(sqrtPriceLimitX96);
-        if (inverted < uint256(minValid)) return minValid;
-        if (inverted > uint256(maxValid)) return maxValid;
-        return uint160(inverted);
+        uint256 inverted = (uint256(1) << 192) / sqrtPriceLimitX96;
+        if (inverted < minValid) return minValid;
+        if (inverted > maxValid) return maxValid;
+        return inverted.toUint160();
     }
 
     /// @dev Handles LCC settlement for zeroForOne swap direction
