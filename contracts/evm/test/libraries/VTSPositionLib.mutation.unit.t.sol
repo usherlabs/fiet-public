@@ -415,13 +415,16 @@ contract VTSPositionLibMutationUnitTest is Test {
         }
 
         {
-            // Fee growth baseline should advance to fg + growthInc (fee token only).
-            uint256 growthInc = FullMath.mulDiv(feesBurn, FixedPoint128.Q128, positionLiquidity);
+            // Fee growth baseline should advance by the full consumed fee entitlement for the exercised window share.
+            uint256 consumedFees = _expectedConsumedFeesToken1(
+                feeGrowthInside1X128, feeGrowthInsideLast1X128, positionLiquidity, cov, ofDelta
+            );
+            uint256 growthInc = FullMath.mulDiv(consumedFees, FixedPoint128.Q128, positionLiquidity);
             (, uint256 fg1After) = harness.getFeeGrowthInsideLast(id);
             assertEq(
                 fg1After,
-                feeGrowthInside1X128 + growthInc,
-                "feeGrowthInsideLast(token1) should be fgInside1X128 + growthInc"
+                feeGrowthInsideLast1X128 + growthInc,
+                "feeGrowthInsideLast(token1) should be lastCheckpoint + growthInc"
             );
         }
     }
@@ -443,6 +446,18 @@ contract VTSPositionLibMutationUnitTest is Test {
         // feesBurn = fees * (burnBase/ofDelta) * bps/10000
         feesBurn = FullMath.mulDiv(fees, burnBase, ofDelta);
         feesBurn = FullMath.mulDiv(feesBurn, DEFAULT_COVERAGE_FEE_SHARE, LiquidityUtils.BPS_DENOMINATOR);
+    }
+
+    function _expectedConsumedFeesToken1(
+        uint256 feeGrowthInside1X128,
+        uint256 feeGrowthInsideLast1X128,
+        uint256 positionLiquidity,
+        uint256 burnBase,
+        uint256 ofDelta
+    ) internal pure returns (uint256 consumedFees) {
+        uint256 feeGrowthDelta1X128 = feeGrowthInside1X128 - feeGrowthInsideLast1X128;
+        uint256 fees = FullMath.mulDiv(feeGrowthDelta1X128, positionLiquidity, FixedPoint128.Q128);
+        consumedFees = FullMath.mulDiv(fees, burnBase, ofDelta);
     }
 
     // ============================================================

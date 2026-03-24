@@ -691,6 +691,9 @@ contract VTSOrchestrator is
 
     /// @notice Commit a liquidity signal using sender-signed EIP-712 relayer authorisation
     /// @dev Same factory-bound sender resolution as `commitSignal`: unbound callers may only relay for themselves.
+    /// @param factory Market factory namespace for `_resolveSignalSender` / bound-caller checks only. Signature
+    ///        verification and replay protection are enforced by `signalManager` (EIP-712 domain bound to
+    ///        `verifyingContract`) and per-sender nonces — not by per-factory validation inside the signed payload.
     function commitSignalRelayed(
         IMarketFactory factory,
         address sender,
@@ -847,6 +850,9 @@ contract VTSOrchestrator is
 
     /// @notice Renew a liquidity signal using sender-signed EIP-712 relayer authorisation
     /// @dev Same factory-bound sender resolution as `renewSignal`: unbound callers may only relay for themselves.
+    /// @param factory Market factory namespace for `_resolveSignalSender` / bound-caller checks only. EIP-712
+    ///        verification remains under `signalManager`; renewals are tied to `commitId` and validated liquidity
+    ///        signal ownership within `VTSCommitLib.renewSignalRelayed`.
     function renewSignalRelayed(
         IMarketFactory factory,
         address sender,

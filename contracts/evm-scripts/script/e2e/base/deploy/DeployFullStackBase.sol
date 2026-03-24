@@ -12,6 +12,7 @@ import {VTSPositionLib} from "src/libraries/VTSPositionLib.sol";
 import {VTSSwapLib} from "src/libraries/VTSSwapLib.sol";
 import {VTSCommitLib} from "src/libraries/VTSCommitLib.sol";
 import {LCCFactoryLinkedLib} from "src/libraries/LCCFactoryLib.sol";
+import {LiquidityHubLinkedLib} from "src/libraries/LiquidityHubLinkedLib.sol";
 import {VTSFeeLinkedLib} from "src/libraries/VTSFeeLib.sol";
 
 /**
@@ -29,6 +30,7 @@ abstract contract DeployFullStackBase is DeployProtocolBase {
         address vtsCommitLib;
         address vtsFeeLinkedLib;
         address lccFactoryLinkedLib;
+        address liquidityHubLinkedLib;
     }
 
     struct ContractAddrs {
@@ -67,6 +69,7 @@ abstract contract DeployFullStackBase is DeployProtocolBase {
     string internal constant VTS_SWAP_LIB = "VTSSwapLib";
     string internal constant VTS_COMMIT_LIB = "VTSCommitLib";
     string internal constant LCC_FACTORY_LINKED_LIB = "LCCFactoryLinkedLib";
+    string internal constant LIQUIDITY_HUB_LINKED_LIB = "LiquidityHubLinkedLib";
     string internal constant VTS_FEE_LINKED_LIB = "VTSFeeLinkedLib";
 
     function _deployLibrary(string memory name, bytes memory creationCode) internal returns (address deployed) {
@@ -86,6 +89,8 @@ abstract contract DeployFullStackBase is DeployProtocolBase {
 
         // ---- Deploy libraries (CREATE3) ----
         out.libs.lccFactoryLinkedLib = _deployLibrary(LCC_FACTORY_LINKED_LIB, type(LCCFactoryLinkedLib).creationCode);
+        out.libs.liquidityHubLinkedLib =
+            _deployLibrary(LIQUIDITY_HUB_LINKED_LIB, type(LiquidityHubLinkedLib).creationCode);
         out.libs.vtsFeeLinkedLib = _deployLibrary(VTS_FEE_LINKED_LIB, type(VTSFeeLinkedLib).creationCode);
         out.libs.vtsCommitLib = _deployLibrary(VTS_COMMIT_LIB, type(VTSCommitLib).creationCode);
         out.libs.vtsSwapLib = _deployLibrary(VTS_SWAP_LIB, type(VTSSwapLib).creationCode);

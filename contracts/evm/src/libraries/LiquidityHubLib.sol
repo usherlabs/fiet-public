@@ -6,6 +6,7 @@ import {LCCFactoryLib} from "./LCCFactoryLib.sol";
 import {Math} from "openzeppelin-contracts/contracts/utils/math/Math.sol";
 import {Errors} from "./Errors.sol";
 import {IMarketFactory} from "../interfaces/IMarketFactory.sol";
+import {IMMQueueCustodian} from "../interfaces/IMMQueueCustodian.sol";
 import {Currency} from "v4-periphery/lib/v4-core/src/types/Currency.sol";
 import {CurrencyTransfer} from "./CurrencyTransfer.sol";
 
@@ -378,6 +379,7 @@ library LiquidityHubLib {
     //#olympix-ignore-reentrancy
     function wrapWithContext(LiquidityHubStorage storage s, address lcc, address withLCC, WrapWithContext memory ctx)
         internal
+        returns (WrapWithContext memory)
     {
         // Execute steps via helper functions (each keeps stack depth minimal)
         ctx = _netAgainstTargetQueue(s, lcc, ctx); // Step 0: Net against target queue
@@ -387,6 +389,7 @@ library LiquidityHubLib {
 
         // Finalise burns and invariant checks
         _finaliseBurns(s, lcc, withLCC, ctx);
+        return ctx;
     }
 
     // ============ CORE LOGIC FUNCTIONS ============
@@ -612,6 +615,118 @@ library LiquidityHubLib {
     ) internal {
         burn(lcc, owner, fromDirect, fromMarket);
         transferUnderlying(s, s.lccToUnderlying[lcc], to, fromDirect, fromMarket);
+    }
+
+    // ============ ISSUER / CUSTODIAN HELPERS (called via LiquidityHubLinkedLib) ============
+
+    /// @dev Snapshot for `confirmTake`: reserve bump and whether `LiquidityAvailable` should emit (before Hub settlement).
+    struct ConfirmTakeContext {
+        uint256 hubQueueBeforeSettlement;
+        address underlying;
+        bytes32 marketId;
+        bool emitLiquidityAvailable;
+    }
+
+    function confirmTakePrepare(LiquidityHubStorage storage s, address lcc, uint256 amount, bool shouldEmit)
+        internal
+        returns (ConfirmTakeContext memory ctx)
+    {
+        ctx.underlying = s.lccToUnderlying[lcc];
+        s.reserveOfUnderlying[ctx.underlying].marketDerived += amount;
+        ctx.hubQueueBeforeSettlement = s.settleQueue[lcc][address(this)];
+        ctx.marketId = s.lccToMarket[lcc].id;
+        ctx.emitLiquidityAvailable = shouldEmit && ctx.hubQueueBeforeSettlement < amount;
+    }
+
+    function confirmTakeBalanceInvariant(LiquidityHubStorage storage s, address underlying) internal view {
+        UnderlyingReserve storage reserveTuple = s.reserveOfUnderlying[underlying];
+        uint256 reserve = reserveTuple.direct + reserveTuple.marketDerived;
+        uint256 actualBalance =
+            underlying == address(0) ? address(this).balance : Currency.wrap(underlying).balanceOf(address(this));
+        if (reserve > actualBalance) revert Errors.InsufficientBalance(actualBalance, reserve);
+    }
+
+    function prepareSettle(LiquidityHubStorage storage s, address lcc, uint256 amount, address issuer) internal {
+        if (amount == 0) revert Errors.InvalidAmount(0, 0);
+
+        address underlying = s.lccToUnderlying[lcc];
+        uint256 reserveDirect = s.reserveOfUnderlying[underlying].direct;
+        uint256 directAvail = s.directSupply[lcc];
+        uint256 maxSettleableDirect = Math.min(reserveDirect, directAvail);
+        if (maxSettleableDirect < amount) {
+            revert Errors.InvalidAmount(amount, maxSettleableDirect);
+        }
+
+        s.reserveOfUnderlying[underlying].direct = reserveDirect - amount;
+        s.directSupply[lcc] = directAvail - amount;
+
+        Currency underlyingCurrency = Currency.wrap(underlying);
+        if (underlyingCurrency.isAddressZero()) {
+            underlyingCurrency.transfer(issuer, amount);
+        } else {
+            underlyingCurrency.approve(issuer, amount);
+        }
+    }
+
+    function settleFromCustodian(
+        LiquidityHubStorage storage s,
+        address lcc,
+        address custodian,
+        uint256 tokenId,
+        address recipient,
+        uint256 maxAmount
+    ) internal returns (uint256 settled) {
+        if (recipient == address(0) || custodian == address(0) || maxAmount == 0) {
+            return 0;
+        }
+        if (custodian.code.length == 0) {
+            return 0;
+        }
+
+        IMMQueueCustodian queueCustodian = IMMQueueCustodian(custodian);
+        uint256 queued = s.settleQueue[lcc][recipient];
+        if (queued == 0) return 0;
+
+        address underlying = s.lccToUnderlying[lcc];
+        uint256 available = s.reserveOfUnderlying[underlying].marketDerived;
+        uint256 custodied;
+        try queueCustodian.queued(tokenId, lcc, recipient) returns (uint256 q) {
+            custodied = q;
+        } catch {
+            return 0;
+        }
+
+        settled = Math.min(Math.min(queued, available), Math.min(maxAmount, custodied));
+        if (settled == 0) return 0;
+
+        try queueCustodian.release(tokenId, lcc, recipient, settled) returns (uint256 released) {
+            settled = released;
+        } catch {
+            return 0;
+        }
+        if (settled == 0) return 0;
+    }
+
+    function annulSettlementBeforeTransfer(
+        LiquidityHubStorage storage s,
+        address lcc,
+        address from,
+        uint256 wrappedBalance,
+        uint256 marketDerivedBalance,
+        uint256 amountToTransfer
+    ) internal returns (uint256 toAnnul) {
+        uint256 queued = s.settleQueue[lcc][from];
+        uint256 liquidBalance = wrappedBalance + marketDerivedBalance;
+        uint256 transferableWithoutQueue = liquidBalance > queued ? (liquidBalance - queued) : 0;
+        if (amountToTransfer > transferableWithoutQueue) {
+            uint256 bleedIntoQueue = amountToTransfer - transferableWithoutQueue;
+            toAnnul = Math.min(bleedIntoQueue, queued);
+            if (toAnnul > 0) {
+                s.settleQueue[lcc][from] -= toAnnul;
+                s.totalQueued[lcc] -= toAnnul;
+                s.queueOfUnderlying[s.lccToUnderlying[lcc]] -= toAnnul;
+            }
+        }
     }
 }
 

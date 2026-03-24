@@ -2508,6 +2508,79 @@ contract VTSPositionLibTest is VTSLibTestBase {
         _assertPositionSettleStateUnchanged(positionId, after1);
     }
 
+    function test_settlePositionGrowths_DICE_settlesBeforeInflowNetting_whenBothOccurSameCycle() public {
+        _initMarket();
+        PoolId corePoolId = _getDefaultPoolId();
+        harness.setupPool(corePoolId, _createDefaultVTSConfig());
+
+        // Seed fee growth on token1 (fee token for token0-deficit burns).
+        _accrueFeeGrowthInCoreRange(true);
+
+        uint128 liq = 1e18;
+        uint256 def0 = 0.5e18;
+        PositionId positionId;
+        int24 tickLower;
+        int24 tickUpper;
+        {
+            (, int24 tickCurrent,,) = StateLibrary.getSlot0(manager, corePoolId);
+            tickLower = tickCurrent - 60;
+            tickUpper = tickCurrent + 60;
+
+            address owner = address(modifyLiquidityRouter);
+            bytes32 salt = bytes32(uint256(9003));
+            ModifyLiquidityParams memory addParams = ModifyLiquidityParams({
+                tickLower: tickLower, tickUpper: tickUpper, liquidityDelta: int256(uint256(liq)), salt: salt
+            });
+            modifyLiquidityRouter.modifyLiquidity(corePoolKey, addParams, ZERO_BYTES);
+
+            harness.registerPosition(owner, corePoolId, addParams);
+            positionId = PositionLibrary.generateId(owner, addParams);
+        }
+
+        // Configure a DICE delta on token0 so coverage burn should run this cycle.
+        harness.setPoolCoveragePerDeficitIndexX128(corePoolId, FixedPoint128.Q128, 0);
+        harness.setCoverageIndexLastX128(positionId, 0, 0);
+
+        // Keep CISE inert for this test.
+        harness.setPoolCoveragePerSettledIndexX128(corePoolId, 0, 0);
+        harness.setCISEIndexLastX128(positionId, 0, 0);
+
+        // Seed token0 deficit principal and outflow window used by burn normalisation.
+        harness.setCumulativeDeficit(positionId, def0, 0);
+        harness.setPoolTotalDeficitPrincipal(corePoolId, def0, 0);
+        harness.setCumulativeOutflows(positionId, 1e18, 0);
+        harness.setOutflowsAtFeeSnap(positionId, 0, 0);
+        harness.setFeeGrowthInsideLast(positionId, 0, 0);
+
+        // No growth-driven deficit this cycle.
+        harness.setDeficitGrowthGlobal(corePoolId, 0, 0);
+        harness.setDeficitGrowthOutside(corePoolId, tickLower, 0, 0);
+        harness.setDeficitGrowthOutside(corePoolId, tickUpper, 0, 0);
+        harness.setDeficitGrowthInsideLast(positionId, 0, 0);
+
+        // Inflow on token0 arrives in the same settle cycle and should net deficit after DICE settlement.
+        harness.setInflowGrowthGlobal(corePoolId, FixedPoint128.Q128, 0);
+        harness.setInflowGrowthOutside(corePoolId, tickLower, 0, 0);
+        harness.setInflowGrowthOutside(corePoolId, tickUpper, 0, 0);
+        harness.setInflowGrowthInsideLast(positionId, 0, 0);
+        harness.setCommitmentMax(positionId, 100e18, 0);
+        harness.setSettled(positionId, 0, 0);
+        harness.setPoolTotalSettled(corePoolId, 0, 0);
+
+        harness.settlePositionGrowths(manager, positionId);
+
+        // DICE burn must apply before inflow nets principal, so slash accounting should be non-zero.
+        (, uint256 poolFee1) = harness.getPoolProtocolFeeAccrued(corePoolId);
+        (, uint256 feesShared1) = harness.getFeesShared(positionId);
+        assertGt(poolFee1, 0, "DICE burn should run before inflow netting principal");
+        assertGt(feesShared1, 0, "feesShared should track that burn on fee token");
+
+        // Inflow still nets deficit and credits the remainder to settled in the same cycle.
+        PositionSettleState memory after1 = _positionSettleState(positionId);
+        assertEq(after1.deficit0, 0, "inflow should net cumulativeDeficit0");
+        assertEq(after1.settled0, uint256(liq) - def0, "remaining inflow should credit settled0");
+    }
+
     // ============================================================
     // Coverage burn maths tests (mutation killers)
     // ============================================================
@@ -2637,6 +2710,48 @@ contract VTSPositionLibTest is VTSLibTestBase {
         harness.applyCoverageBurn(manager, positionId, corePoolId, 0, 40e18, uint128(1e18));
         (uint256 snapAfter2,) = harness.getOutflowsAtFeeSnap(positionId);
         assertEq(snapAfter2, 80e18, "outflowsAtFeeSnap should advance cumulatively across repeated exercises");
+    }
+
+    function test_applyCoverageBurn_partialExercise_sub100bps_doesNotOverslashSingleShotEquivalent() public {
+        _initMarket();
+        PoolId corePoolId = _getDefaultPoolId();
+        MarketVTSConfiguration memory cfg = _createDefaultVTSConfig();
+        cfg.coverageFeeShare = 1000; // 10%
+        harness.setupPool(corePoolId, cfg);
+
+        // Accrue fee growth once; second burn reuses the same historical fee window.
+        _accrueFeeGrowthInCoreRange(true);
+
+        PositionId positionId =
+            _registerHarnessPositionInPool(corePoolId, DEFAULT_OWNER, -60, 60, 1, bytes32(uint256(61)));
+
+        uint256 totalOutflowWindow = 100e18;
+        uint256 exercised = 40e18;
+
+        harness.setCumulativeDeficit(positionId, totalOutflowWindow, 0);
+        harness.setCumulativeOutflows(positionId, totalOutflowWindow, 0);
+        harness.setOutflowsAtFeeSnap(positionId, 0, 0);
+        harness.setFeeGrowthInsideLast(positionId, 0, 0);
+
+        uint128 positionLiquidity = 1e18;
+        uint256 expectedSingleShotBurn;
+        {
+            (, uint256 fg1) = StateLibrary.getFeeGrowthInside(manager, corePoolId, -60, 60);
+            uint256 fees = FullMath.mulDiv(fg1, uint256(positionLiquidity), FixedPoint128.Q128);
+            uint256 consumedFeesSingleShot = FullMath.mulDiv(fees, exercised * 2, totalOutflowWindow);
+            expectedSingleShotBurn =
+                FullMath.mulDiv(consumedFeesSingleShot, cfg.coverageFeeShare, LiquidityUtils.BPS_DENOMINATOR);
+        }
+
+        harness.applyCoverageBurn(manager, positionId, corePoolId, 0, exercised, positionLiquidity);
+        harness.applyCoverageBurn(manager, positionId, corePoolId, 0, exercised, positionLiquidity);
+
+        (, uint256 protocolFeeAccrued1) = harness.getPoolProtocolFeeAccrued(corePoolId);
+        (uint256 snapAfter2,) = harness.getOutflowsAtFeeSnap(positionId);
+
+        // Regression guard: repeated partial burns in one fee window must not over-slash one-shot equivalent.
+        assertLe(protocolFeeAccrued1, expectedSingleShotBurn, "repeated partial burns must not over-slash");
+        assertEq(snapAfter2, exercised * 2, "outflow snap should still advance cumulatively");
     }
 
     function test_applyCoverageBurn_feesPositive_ofDeltaZero_isNoop_andDoesNotRevert() public {

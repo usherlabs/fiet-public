@@ -20,6 +20,12 @@ import {Errors} from "./libraries/Errors.sol";
 contract MMQueueCustodian is IMMQueueCustodian {
     using CurrencyTransfer for Currency;
 
+    /// @notice Beneficiary-scoped custody increased (MM-backed LCC staged for later Hub settlement).
+    event CustodyRecorded(uint256 indexed tokenId, address indexed lcc, address indexed beneficiary, uint256 amount);
+
+    /// @notice Beneficiary-scoped custody decreased and LCC transferred out.
+    event CustodyReleased(uint256 indexed tokenId, address indexed lcc, address indexed beneficiary, uint256 amount);
+
     /// @notice One-time authoriser allowed to bind the position manager.
     address public authorisedBinder;
     address public override positionManager;
@@ -57,6 +63,7 @@ contract MMQueueCustodian is IMMQueueCustodian {
         if (beneficiary == address(0)) revert Errors.InvalidAddress(beneficiary);
         if (amount == 0) return;
         _queuedLcc[tokenId][lcc][beneficiary] += amount;
+        emit CustodyRecorded(tokenId, lcc, beneficiary, amount);
     }
 
     function release(uint256 tokenId, address lcc, address beneficiary, uint256 maxAmount)
@@ -77,6 +84,7 @@ contract MMQueueCustodian is IMMQueueCustodian {
         if (released == 0) return 0;
 
         _queuedLcc[tokenId][lcc][beneficiary] = available - released;
+        emit CustodyReleased(tokenId, lcc, beneficiary, released);
         Currency.wrap(lcc).transfer(beneficiary, released);
     }
 

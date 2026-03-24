@@ -562,6 +562,13 @@ being an informal “should”.
       recipient and **queued for settlement** via `LiquidityHub.queueForTransferRecipient` / `settleQueue` (see
       **HUB-02**, **LCC-02**, **LCC-BACKING-01** Domain B).
 
+  - **Serviceable recipient precondition**: “Resolved” here means the excess/deficit recipient is one that
+    `LiquidityHub.queueForTransferRecipient` (and thus `settleQueue`) will accept for that flow (non-zero recipient,
+    not exempt in ways that block queueing, and with market-derived LCC backing as enforced by the Hub). If the
+    recipient is resolved for routing but **not** serviceable for queueing, the swap must still **revert** with
+    `Errors.InsufficientLiquidity(...)` when immediate underlying cannot cover the full output — the queued-output branch
+    does not apply.
+
 - **Relationship to MKT-05**: This relaxation applies only to **settlement shape** (immediate vs queued). It does **not**
   permit the proxy pool’s own Uniswap v4 curve to execute: `_beforeSwap` must still ensure the proxy-pool swap leg is
   fully neutralised and economically meaningful execution remains on the **core** curve only.

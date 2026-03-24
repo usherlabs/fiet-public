@@ -117,25 +117,28 @@ _settleFromDeltas(payerIsUser=false):
 
 ## Core Operations
 
-### 1. `sync()` — Credit Locker Delta from Balance Increase
+### 1. `sync()` / `syncPair()` — Credit Locker Delta from Balance Increase
 
 **Purpose**: Establishes delta credit on the **locker** when physical token balance increases (e.g., after wrap/unwrap transformations).
+
+**Access control (FIET-695):** `VTSOrchestrator.sync` / `syncPair` require a **MarketFactory-bound caller** (`_assertBoundFactoryCaller`). Arbitrary EOAs cannot call `sync` / `syncPair` directly; they are invoked from protocol routers such as `MMPositionManager` / `PositionManagerBase` that forward the factory namespace.
 
 **Behaviour**:
 
 - **ONLY ADDS** to delta — never reduces existing credits
 - Credits the difference between balance and current delta (when balance > delta)
-- Syncs to **locker** (msgSender), NOT MMPM
+- Credits the **locker** (`target` / `msgSender()` in the MMPM path), not MMPM’s settlement obligation bucket
 - Does NOT affect position-derived claims on MMPM
 
-**Implementation** (`MMPositionManager._syncBalanceToDeltas`):
+**Implementation** (`PositionManagerBase._sync`):
 
 ```solidity
-function _syncBalanceToDeltas(Currency currency) internal {
-    // Sync to locker delta (msgSender), not MMPM
-    vtsOrchestrator.syncFor(currency, msgSender());
+function _sync(Currency currency) internal {
+    vtsOrchestrator.sync(marketFactory, currency, address(this), msgSender());
 }
 ```
+
+Here `owner` is MMPM (balance holder) and `target` is the locker (`msgSender()`), matching the split model described in **Security Considerations** above.
 
 **Why Locker Target**:  
 Balance syncs represent physical tokens held by MMPM that should be takeable by the locker. By targeting the locker's delta, we ensure explicit separation from MMPM's settlement obligations.
@@ -253,7 +256,7 @@ _settle()
                             │
                             ▼
 ┌─────────────────────────────────────────────────────────────┐
-│  3. syncFor(weth, msgSender()) — to LOCKER delta            │
+│  3. sync(factory, weth, MMPM, locker) — factory-bound only    │
 │     - Credits LOCKER's WETH delta from new balance          │
 │     - Locker delta increases to match WETH balance          │
 └─────────────────────────────────────────────────────────────┘
@@ -288,7 +291,7 @@ _settle()
                             │
                             ▼
 ┌─────────────────────────────────────────────────────────────┐
-│  syncFor(native, msgSender()) — to LOCKER delta             │
+│  sync(factory, native, MMPM, locker) — factory-bound only    │
 │  - Credits LOCKER's native delta from new balance           │
 │  - Locker delta increases to match ETH balance              │
 └─────────────────────────────────────────────────────────────┘
@@ -359,7 +362,7 @@ _settle()
                             ▼
 ┌─────────────────────────────────────────────────────────────┐
 │  if (to == address(this)):                                  │
-│    sync(underlying)                                         │
+│    sync(factory, underlying, MMPM, locker) — bound only     │
 │    - Credits underlying delta from new balance              │
 └─────────────────────────────────────────────────────────────┘
 ```
@@ -397,14 +400,15 @@ _settle()
 
 ## Key Invariants
 
-### Invariant 1: `sync()` Targets Locker, Only Credits
+### Invariant 1: `sync()` / `syncPair()` Are Factory-Bound; Target Is Locker; Only Credits
 
 ```
-sync(currency) → syncFor(currency, msgSender())
+sync(factory, currency, owner=MMPM, target=locker)  // via bound PositionManager / MMPM
 deltaChange >= 0
 ```
 
-- Balance syncs always target the **locker** (not MMPM)
+- External callers must be **protocol-bound** in the given `factory` namespace (`_assertBoundFactoryCaller`); this is not a public `syncFor(currency, msgSender())` EOA surface.
+- Balance syncs credit the **locker** (`target`), not MMPM’s settlement-obligation delta
 - Can only increase delta (establish credit from balance increase) or reduce debt
 - NEVER reduces positive delta
 

@@ -140,7 +140,11 @@ contract MockLiquidityHub_Min {
     }
 
     function prepareSettle(address lcc, uint256 amount) external {
-        _reserveDirect[lcc] -= amount;
+        uint256 direct = _reserveDirect[lcc];
+        if (amount > direct) {
+            revert Errors.InsufficientLiquidityToSettle();
+        }
+        _reserveDirect[lcc] = direct - amount;
         if (lcc == _nativeSettleLcc) {
             (bool ok,) = payable(msg.sender).call{value: amount}("");
             require(ok, "native settle transfer failed");
@@ -206,7 +210,11 @@ contract MockLiquidityHub_RejectEth {
     function queueForTransferRecipient(address, address, uint256) external {}
 
     function prepareSettle(address lcc, uint256 amount) external {
-        _reserveDirect[lcc] -= amount;
+        uint256 direct = _reserveDirect[lcc];
+        if (amount > direct) {
+            revert Errors.InsufficientLiquidityToSettle();
+        }
+        _reserveDirect[lcc] = direct - amount;
     }
 
     receive() external payable {
@@ -475,17 +483,21 @@ contract MarketVaultUnitTest is Test {
         hub.setReserve(address(lccNative), 4);
         vm.deal(address(hub), 4);
 
-        vm.expectRevert();
+        vm.expectRevert(Errors.InsufficientLiquidityToSettle.selector);
         vault.exposed_settleUnderlyingToVaultFromHub(ILCC(address(lccNative)), 9);
     }
 
     function test_settleUnderlyingToVaultFromHub_revertsWhenReserveIsZero() public {
         MockLiquidityHub_Min hub = new MockLiquidityHub_Min();
-        (MarketVaultUnitHarness vault,,,,,) = _deployVaultWithHub(address(hub));
+        (MarketVaultUnitHarness vault,, MockMarketFactory_Min mf,, MockLCC lccNative,) =
+            _deployVaultWithHub(address(hub));
 
-        hub.setReserve(address(0xBEEF), 0);
-        vm.expectRevert();
-        vault.exposed_settleUnderlyingToVaultFromHub(ILCC(address(0xBEEF)), 10);
+        mf.setBound(address(hub), true);
+        hub.setNativeSettleLcc(address(lccNative));
+        hub.setReserve(address(lccNative), 0);
+
+        vm.expectRevert(Errors.InsufficientLiquidityToSettle.selector);
+        vault.exposed_settleUnderlyingToVaultFromHub(ILCC(address(lccNative)), 10);
     }
 
     function test_dryModifyLiquidities_adjustsWithdrawalDownToAvailable() public {

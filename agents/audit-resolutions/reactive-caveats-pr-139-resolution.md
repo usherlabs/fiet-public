@@ -8,7 +8,7 @@ This note records the reactive-settlement caveat closures addressed by the incom
 
 The reviewed PR head is `83bbdbcf`, which matches `origin/feature/FIET-674-reactive-contracts-qa` in the local repository.
 
-Against [`contracts/reactive/CAVEATS.md`](https://github.com/usherlabs/fiet-protocol/blob/fix/fiet-695/contracts/reactive/CAVEATS.md), the incoming branch resolves the still-open implementation gaps for:
+Against [`contracts/reactive/CAVEATS.md`](https://github.com/usherlabs/fiet-protocol/blob/d01b7b3ce836326fc16bc56698e70240ef5f653f/contracts/reactive/CAVEATS.md) (commit-pinned to reviewed PR head `83bbdbcf`), the incoming branch resolves the still-open implementation gaps for:
 
 - vulnerability `#17`
 - vulnerability `#32`
@@ -83,7 +83,7 @@ The original failure mode came from `HubCallback` enforcing a strictly increasin
 
 The incoming branch replaces that model with unordered nonce usage:
 
-- `SpokeRSC` now maintains per-callback-family nonces via `nonceByTopic`
+- `SpokeRSC` now maintains per-callback-family nonces via `nonceByRecordSelector` (keyed by `Record_*` selector, not raw log topics)
 - `HubCallback` no longer uses `lastNonce`
 - instead, it records nonce use in a bitmap keyed by `(spokeRVMId, lcc, recipient, selector)`
 - duplicate nonce reuse is ignored regardless of arrival order, but lower unseen nonces are no longer rejected just because a higher nonce arrived first
