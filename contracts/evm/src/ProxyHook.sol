@@ -12,7 +12,7 @@ import {BaseHook} from "v4-periphery/src/utils/BaseHook.sol";
 import {BalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
 import {ModifyLiquidityParams, SwapParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
 import {ILCC} from "./interfaces/ILCC.sol";
-import {SafeCast} from "@uniswap/v4-core/src/libraries/SafeCast.sol";
+import {SafeCast as SafeCastLib} from "openzeppelin-contracts/contracts/utils/math/SafeCast.sol";
 import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
 import {VaultCoreActionHandler} from "./modules/VaultCoreActionHandler.sol";
 import {LiquidityUtils} from "../src/libraries/LiquidityUtils.sol";
@@ -22,7 +22,6 @@ import {MarketHandlerLib} from "./libraries/MarketHandlerLib.sol";
 
 contract ProxyHook is BaseHook, VaultCoreActionHandler {
     using CurrencySettler for Currency;
-    using SafeCast for uint256;
     address internal constant RECIPIENT_LOCKER = address(1);
     address internal constant RECIPIENT_ROUTER = address(2);
 
@@ -187,7 +186,7 @@ contract ProxyHook is BaseHook, VaultCoreActionHandler {
         uint256 inverted = (uint256(1) << 192) / sqrtPriceLimitX96;
         if (inverted < minValid) return minValid;
         if (inverted > maxValid) return maxValid;
-        return inverted.toUint160();
+        return SafeCastLib.toUint160(inverted);
     }
 
     /// @dev Handles LCC settlement for zeroForOne swap direction
@@ -274,8 +273,14 @@ contract ProxyHook is BaseHook, VaultCoreActionHandler {
 
         // Build return delta
         BeforeSwapDelta newDelta = (params.amountSpecified < 0)
-            ? toBeforeSwapDelta(SafeCast.toInt128(amountIn), -SafeCast.toInt128(amountToSettle))
-            : toBeforeSwapDelta(-SafeCast.toInt128(amountToSettle), SafeCast.toInt128(amountIn));
+            ? toBeforeSwapDelta(
+                SafeCastLib.toInt128(SafeCastLib.toInt256(amountIn)),
+                -SafeCastLib.toInt128(SafeCastLib.toInt256(amountToSettle))
+            )
+            : toBeforeSwapDelta(
+                -SafeCastLib.toInt128(SafeCastLib.toInt256(amountToSettle)),
+                SafeCastLib.toInt128(SafeCastLib.toInt256(amountIn))
+            );
 
         return (this.beforeSwap.selector, newDelta, 0);
     }
@@ -304,7 +309,7 @@ contract ProxyHook is BaseHook, VaultCoreActionHandler {
             sqrtPriceLimitX96: ctx.sqrtPriceLimitX96Core
         });
 
-        _assertExactOutputAvailable(params.amountSpecified, maxOutputAvailable);
+        _assertExactOutputAvailable(params.amountSpecified, maxOutputAvailable, recipientResolved);
 
         uint256 amountOut;
         (amountIn, amountOut) = _executeCoreSwap(coreSwapParams, ctx.coreZeroForOne);
@@ -317,18 +322,37 @@ contract ProxyHook is BaseHook, VaultCoreActionHandler {
         address deficitRecipient = recipientResolved ? excessRecipient : address(0);
         amountToSettle = _settleFromCoreSwap(key, params.zeroForOne, ctx, amountIn, amountOut, deficitRecipient);
 
-        if (params.amountSpecified > 0 && amountToSettle != uint256(params.amountSpecified)) {
-            revert Errors.InsufficientLiquidity(uint256(params.amountSpecified), amountToSettle);
+        // Exact-output: strict immediate underlying only when deficit recipient is unresolved. With a resolved
+        // recipient, shortfall is delivered as output-side LCC + queue, matching exact-input deficit UX.
+        if (params.amountSpecified > 0) {
+            uint256 requestedOutput = SafeCastLib.toUint256(params.amountSpecified);
+            if (!recipientResolved && amountToSettle != requestedOutput) {
+                revert Errors.InsufficientLiquidity(requestedOutput, amountToSettle);
+            }
+            // Resolved exact-output allows under-settlement (deficit => queued output-side LCC), but never
+            // over-settlement: if core/settlement returns more than requested, keep exact-output semantics strict.
+            if (recipientResolved && amountToSettle > requestedOutput) {
+                revert Errors.InsufficientLiquidity(requestedOutput, amountToSettle);
+            }
         }
     }
 
-    function _assertExactOutputAvailable(int256 amountSpecified, uint256 maxOutputAvailable) private pure {
-        // Strict exact-output behaviour: if underlying output cannot be delivered in full, revert.
-        if (amountSpecified > 0) {
-            uint256 requestedOutput = uint256(amountSpecified);
-            if (requestedOutput > maxOutputAvailable) {
-                revert Errors.InsufficientLiquidity(requestedOutput, maxOutputAvailable);
-            }
+    /// @dev For exact-output (`amountSpecified > 0`): unresolved recipient requires enough immediate vault liquidity
+    ///      to settle the full requested output; resolved recipient may proceed and queue deficit LCC via
+    ///      `MarketVault._cancelLCCWithDeficit`.
+    function _assertExactOutputAvailable(int256 amountSpecified, uint256 maxOutputAvailable, bool recipientResolved)
+        private
+        pure
+    {
+        if (amountSpecified <= 0) {
+            return;
+        }
+        if (recipientResolved) {
+            return;
+        }
+        uint256 requestedOutput = SafeCastLib.toUint256(amountSpecified);
+        if (requestedOutput > maxOutputAvailable) {
+            revert Errors.InsufficientLiquidity(requestedOutput, maxOutputAvailable);
         }
     }
 

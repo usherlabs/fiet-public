@@ -542,8 +542,29 @@ being an informal “should”.
   - `src/ProxyHook.sol::_beforeSwap` must guarantee that swaps against the proxy pool do not leave a residual
     `amountToSwap` for the proxy pool’s own `Pool.swap` to execute.
   - If the protocol elects to support “partial fills” / liquidity-capped swaps, it must do so without permitting the
-    proxy pool’s AMM state machine to advance (e.g. by reverting when a cap would otherwise leave non-zero residual, or
-    by redesigning the hook accounting so the proxy swap is always fully neutralised).
+    proxy pool’s AMM state machine to advance. For example: liquidity-capped paths must still fully neutralise the
+    proxy-pool swap leg (see **MKT-07** for resolved-recipient exact-output queue semantics), or revert when the hook
+    cannot otherwise guarantee neutralisation.
+
+### MKT-07: Resolved-recipient proxy exact-output may queue output-side deficit LCC (strict when unresolved)
+
+- **Statement**: For a **proxy** swap with **exact output** (`amountSpecified > 0`):
+
+  - If the **deficit / output recipient cannot be resolved** (no `hookData` recipient, or equivalent), the swap must
+    still **revert** when `inMarketBalanceOf(outputUnderlying)` is insufficient to deliver the full requested output
+    immediately (`Errors.InsufficientLiquidity(...)`), consistent with the unresolved exact-input path.
+
+  - If the recipient **is** resolved, the swap may **complete** even when immediate underlying in the market vault is
+    **below** the requested output amount. In that case:
+    - the user’s total entitlement is **`immediateUnderlying + queuedOutputLcc == requestedOutput`** (same underlying
+      denomination); and
+    - the shortfall **`requestedOutput - immediateUnderlying`** is represented as **output-side LCC** minted to the
+      recipient and **queued for settlement** via `LiquidityHub.queueForTransferRecipient` / `settleQueue` (see
+      **HUB-02**, **LCC-02**, **LCC-BACKING-01** Domain B).
+
+- **Relationship to MKT-05**: This relaxation applies only to **settlement shape** (immediate vs queued). It does **not**
+  permit the proxy pool’s own Uniswap v4 curve to execute: `_beforeSwap` must still ensure the proxy-pool swap leg is
+  fully neutralised and economically meaningful execution remains on the **core** curve only.
 
 ### MKT-06: Canonical market pair ordering is core/LCC order (and events must reflect it)
 
