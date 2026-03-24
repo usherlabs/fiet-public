@@ -244,6 +244,96 @@ contract VTSPositionLibTest is VTSLibTestBase {
         assertEq(afterState.deficit1, beforeState.deficit1);
     }
 
+    function _assertDeferredResidualFirstBurnState(PoolId poolId, PositionId positionId, uint128 liq, uint256 residual)
+        internal
+        view
+    {
+        _assertDeferredResidualFirstBurnAccounting(poolId, positionId, liq, residual);
+        _assertDeferredResidualFirstBurnFees(poolId, positionId);
+    }
+
+    function _assertDeferredResidualFirstBurnAccounting(
+        PoolId poolId,
+        PositionId positionId,
+        uint128 liq,
+        uint256 residual
+    ) internal view {
+        (,, uint256 settled0After1,, uint256 deficit0After1,) = harness.getPositionAccounting(positionId);
+        (uint256 out0After1,) = harness.getCumulativeOutflows(positionId);
+        (uint256 snap0After1,) = harness.getOutflowsAtFeeSnap(positionId);
+        (uint256 idx0After1,) = harness.getPoolCoveragePerResidualDeficitIndexX128(poolId);
+        (uint256 residual0After1,) = harness.getPoolCoverageResidualDICE(poolId);
+        (uint256 principal0After1,) = harness.getPoolTotalDeficitPrincipal(poolId);
+        (uint256 bankedBurn0After1,) = harness.getPendingResidualBurnBase(positionId);
+        (uint256 floor0After1,) = harness.getPendingResidualBurnOutflowsFloor(positionId);
+
+        assertEq(settled0After1, 0, "first deficit position should still have no token0 settled balance");
+        assertEq(deficit0After1, uint256(liq), "first realised deficit should equal the tiny fresh outflow window");
+        assertEq(out0After1, uint256(liq), "first settle still opens the tiny first outflow window");
+        assertEq(snap0After1, 0, "residual-derived burn should not consume the same first window");
+        assertEq(residual0After1, 0, "DICE residual must flush on the first realised deficit");
+        assertEq(idx0After1, FixedPoint128.Q128, "residual coverage should be tracked on the residual-only DICE index");
+        assertEq(
+            principal0After1, uint256(liq), "deficit principal remains outstanding until inflow or direct settlement"
+        );
+        assertEq(bankedBurn0After1, residual, "flushed residual coverage should bank for later burn smoothing");
+        assertEq(floor0After1, uint256(liq), "banked residual burn floor should capture current outflow watermark");
+    }
+
+    function _assertDeferredResidualFirstBurnFees(PoolId poolId, PositionId positionId) internal view {
+        (uint256 pf0After1, uint256 pf1After1) = harness.getPoolProtocolFeeAccrued(poolId);
+        (uint256 fs0After1, uint256 fs1After1) = harness.getFeesShared(positionId);
+        (int256 pending0After1, int256 pending1After1) = harness.getPendingFeeAdj(positionId);
+
+        assertEq(pf0After1, 0, "token0 protocol fees should remain unchanged");
+        assertEq(fs0After1, 0, "token0 feesShared should remain unchanged");
+        assertEq(pending0After1, 0, "token0 pending fee adjustment should remain unchanged");
+        assertEq(pf1After1, 0, "first settle should not burn fee token immediately");
+        assertEq(fs1After1, 0, "first settle should not mint feesShared on the fee token");
+        assertEq(pending1After1, 0, "first settle should not queue an immediate slash");
+    }
+
+    function _assertDeferredResidualLaterBurnState(
+        PoolId poolId,
+        PositionId positionId,
+        uint128 liq,
+        uint256 expectedFeesBurn
+    ) internal view {
+        _assertDeferredResidualLaterBurnAccounting(positionId, liq);
+        _assertDeferredResidualLaterBurnFees(poolId, positionId, expectedFeesBurn);
+    }
+
+    function _assertDeferredResidualLaterBurnAccounting(PositionId positionId, uint128 liq) internal view {
+        (uint256 out0After2,) = harness.getCumulativeOutflows(positionId);
+        (uint256 snap0After2,) = harness.getOutflowsAtFeeSnap(positionId);
+        (uint256 bankedBurn0After2,) = harness.getPendingResidualBurnBase(positionId);
+        (uint256 floor0After2,) = harness.getPendingResidualBurnOutflowsFloor(positionId);
+
+        assertEq(out0After2, uint256(liq) * 2, "second deficit settle should add a later outflow window");
+        assertEq(
+            snap0After2,
+            uint256(liq) * 2,
+            "later settle should consume banked residual burn only from the newer eligible window"
+        );
+        assertEq(bankedBurn0After2, 0, "the boundary-case residual should be fully consumed after the later window");
+        assertEq(floor0After2, 0, "outflow floor should clear once banked residual burn is fully consumed");
+    }
+
+    function _assertDeferredResidualLaterBurnFees(PoolId poolId, PositionId positionId, uint256 expectedFeesBurn)
+        internal
+        view
+    {
+        (, uint256 pf1After2) = harness.getPoolProtocolFeeAccrued(poolId);
+        (, uint256 fs1After2) = harness.getFeesShared(positionId);
+        (, int256 pending1After2) = harness.getPendingFeeAdj(positionId);
+
+        assertEq(
+            pf1After2, expectedFeesBurn, "later settle should consume banked residual burn against the larger window"
+        );
+        assertEq(fs1After2, expectedFeesBurn, "feesShared should track the smoothed burn");
+        assertEq(pending1After2, int256(expectedFeesBurn), "smoothed burn should queue the slash later");
+    }
+
     function setUp() public override {
         harness = new VTSPositionLibHarness();
         testPoolId = PoolId.wrap(bytes32(uint256(0xDEAD)));
@@ -2031,6 +2121,87 @@ contract VTSPositionLibTest is VTSLibTestBase {
         (uint256 idx0After, uint256 idx1After) = harness.getCoverageIndexLastX128(positionId);
         assertEq(idx0After, 0, "token0 coverage index should remain unchanged");
         assertEq(idx1After, FixedPoint128.Q128, "token1 coverage indexLast should checkpoint to pool index");
+    }
+
+    function test_settlePositionGrowths_DICE_firstDeficitResidualFlush_requiresNewOutflowWindowBeforeBurn() public {
+        _initMarket();
+        PoolId corePoolId = _getDefaultPoolId();
+
+        MarketVTSConfiguration memory cfg = _createDefaultVTSConfig();
+        cfg.coverageFeeShare = 5000;
+        harness.setupPool(corePoolId, cfg);
+
+        // Create real fee growth on token1, which is the fee token for token0 deficits.
+        _accrueFeeGrowthInCoreRange(true);
+
+        (, int24 tickCurrent,,) = StateLibrary.getSlot0(manager, corePoolId);
+        int24 tickLower = tickCurrent - 60;
+        int24 tickUpper = tickCurrent + 60;
+
+        address owner = address(modifyLiquidityRouter);
+        bytes32 salt = bytes32(uint256(0xD1CE15));
+        uint128 liq = 1e18;
+        ModifyLiquidityParams memory addParams = ModifyLiquidityParams({
+            tickLower: tickLower, tickUpper: tickUpper, liquidityDelta: int256(uint256(liq)), salt: salt
+        });
+        modifyLiquidityRouter.modifyLiquidity(corePoolKey, addParams, ZERO_BYTES);
+
+        harness.registerPosition(owner, corePoolId, addParams);
+        PositionId positionId = PositionLibrary.generateId(owner, addParams);
+
+        uint256 residual = uint256(liq);
+        harness.setPoolCoverageResidualDICE(corePoolId, residual, 0);
+        harness.setPoolCoveragePerDeficitIndexX128(corePoolId, 0, 0);
+        harness.setPoolCoveragePerResidualDeficitIndexX128(corePoolId, 0, 0);
+        harness.setCoverageIndexLastX128(positionId, 0, 0);
+        harness.setResidualCoverageIndexLastX128(positionId, 0, 0);
+        harness.setCISEIndexLastX128(positionId, 0, 0);
+        harness.setPoolTotalDeficitPrincipal(corePoolId, 0, 0);
+        harness.setSettled(positionId, 0, 0);
+        harness.setPoolTotalSettled(corePoolId, 0, 0);
+        harness.setCumulativeOutflows(positionId, 0, 0);
+        harness.setOutflowsAtFeeSnap(positionId, 0, 0);
+        harness.setFeeGrowthInsideLast(positionId, 0, 0);
+        harness.setPendingResidualBurnOutflowsFloor(positionId, 0, 0);
+
+        // Materialise the first tiny token0 deficit in the same settle that flushes the residual.
+        harness.setDeficitGrowthGlobal(corePoolId, FixedPoint128.Q128, 0);
+        harness.setDeficitGrowthOutside(corePoolId, tickLower, 0, 0);
+        harness.setDeficitGrowthOutside(corePoolId, tickUpper, 0, 0);
+        harness.setDeficitGrowthInsideLast(positionId, 0, 0);
+
+        harness.setInflowGrowthGlobal(corePoolId, 0, 0);
+        harness.setInflowGrowthOutside(corePoolId, tickLower, 0, 0);
+        harness.setInflowGrowthOutside(corePoolId, tickUpper, 0, 0);
+        harness.setInflowGrowthInsideLast(positionId, 0, 0);
+
+        uint256 expectedFees;
+        {
+            (, uint256 fg1) = StateLibrary.getFeeGrowthInside(manager, corePoolId, tickLower, tickUpper);
+            expectedFees = FullMath.mulDiv(fg1, uint256(liq), FixedPoint128.Q128);
+        }
+        assertGt(expectedFees, 0, "setup: fee growth on token1 must be positive");
+
+        harness.settlePositionGrowths(manager, positionId);
+        _assertDeferredResidualFirstBurnState(corePoolId, positionId, liq, residual);
+
+        // Public re-settle with no new outflow window must still not burn (critical regression guard).
+        harness.settlePositionGrowths(manager, positionId);
+        _assertDeferredResidualFirstBurnState(corePoolId, positionId, liq, residual);
+
+        // A later outflow window should consume the banked residual burn smoothly.
+        _accrueFeeGrowthInCoreRange(true);
+        harness.setDeficitGrowthGlobal(corePoolId, FixedPoint128.Q128 * 2, 0);
+
+        uint256 expectedFeesBurn;
+        {
+            (, uint256 fg1Later) = StateLibrary.getFeeGrowthInside(manager, corePoolId, tickLower, tickUpper);
+            uint256 totalFees = FullMath.mulDiv(fg1Later, uint256(liq), FixedPoint128.Q128);
+            expectedFeesBurn = FullMath.mulDiv(totalFees, cfg.coverageFeeShare, LiquidityUtils.BPS_DENOMINATOR);
+        }
+
+        harness.settlePositionGrowths(manager, positionId);
+        _assertDeferredResidualLaterBurnState(corePoolId, positionId, liq, expectedFeesBurn);
     }
 
     // ============================================================

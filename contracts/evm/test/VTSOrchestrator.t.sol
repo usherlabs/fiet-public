@@ -515,11 +515,19 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
         vtsOrchestrator.afterCoreSwap(corePoolKey, swapParams, delta, 0, 0);
     }
 
-    function test_revert_settlePositionGrowths_whenPoolPaused() public {
+    function test_revert_settlePositionGrowths_whenPoolPaused_andNotCanonicalCoreHook() public {
         (, PositionId positionId,,) = _createCommittedPosition();
         vtsOrchestrator.pausePool(corePoolKey.toId());
 
-        vm.expectRevert(Errors.EnforcedPause.selector);
+        vm.expectRevert(Errors.InvalidSender.selector);
+        vtsOrchestrator.settlePositionGrowths(positionId);
+    }
+
+    function test_settlePositionGrowths_whenPoolPaused_allowsCanonicalCoreHook() public {
+        (, PositionId positionId,,) = _createCommittedPosition();
+        vtsOrchestrator.pausePool(corePoolKey.toId());
+
+        vm.prank(coreHookAddress);
         vtsOrchestrator.settlePositionGrowths(positionId);
     }
 
@@ -1409,6 +1417,49 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
         assertEq(cd1After, cd1Before, "Partial settlement should not affect token1 deficit");
     }
 
+    function test_pausedRemoveLiquidity_preservesPrePauseGrowthAttribution() public {
+        uint256 liquidity = 1e10;
+        uint256 amountToDecrease = liquidity / 2;
+        (, PositionId controlPositionId,,) = _createCommittedPosition(-60, 60, liquidity);
+        (uint256 pausedTokenId, PositionId pausedPositionId,,) =
+            _createCommittedPosition(renewSignal, -60, 60, liquidity, bytes32(0));
+
+        _swapCore(true, -int256(1e18));
+
+        (bool controlRfsOpenBefore, BalanceDelta controlRfsBefore) = vtsOrchestrator.calcRFS(controlPositionId, false);
+        (uint256 controlDeficit0Before, uint256 controlDeficit1Before) = _cumulativeDeficit(controlPositionId);
+
+        assertTrue(controlDeficit0Before > 0 || controlDeficit1Before > 0, "swap should accrue deficit before pause");
+        assertTrue(controlRfsOpenBefore, "control position should have open RFS after growth settlement");
+
+        vtsOrchestrator.pausePool(corePoolKey.toId());
+        _decreasePosition(pausedTokenId, amountToDecrease);
+        vtsOrchestrator.unpausePool(corePoolKey.toId());
+
+        (bool pausedRfsOpenAfter, BalanceDelta pausedRfsAfter) = vtsOrchestrator.calcRFS(pausedPositionId, false);
+        (uint256 pausedDeficit0After, uint256 pausedDeficit1After) = _cumulativeDeficit(pausedPositionId);
+
+        assertEq(pausedDeficit0After, controlDeficit0Before, "paused removal must preserve token0 deficit growth");
+        assertEq(pausedDeficit1After, controlDeficit1Before, "paused removal must preserve token1 deficit growth");
+        assertEq(
+            pausedRfsOpenAfter, controlRfsOpenBefore, "paused removal should leave the same RFS-open state as control"
+        );
+        assertEq(
+            pausedRfsAfter.amount0(), controlRfsBefore.amount0(), "paused removal must preserve token0 RFS requirement"
+        );
+        assertEq(
+            pausedRfsAfter.amount1(), controlRfsBefore.amount1(), "paused removal must preserve token1 RFS requirement"
+        );
+        if (controlDeficit1Before > 0) {
+            DICEAccounting memory diceAfterPaused = _getPoolDICEAccounting(corePoolKey.toId());
+            assertEq(
+                diceAfterPaused.totalDeficitPrincipal1,
+                controlDeficit1Before * 2,
+                "paused removal must preserve pool deficit principal on token1"
+            );
+        }
+    }
+
     function test_revert_onMMSettle_whenSeizingButCallerNotPositionOwner_insideUnlock() public {
         (uint256 tokenId,,,) = _createCommittedPosition();
         BalanceDelta depositDelta = toBalanceDelta(int128(-1), int128(-1));
@@ -1483,6 +1534,14 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
         assertEq(Currency.unwrap(currency0), Currency.unwrap(corePoolKey.currency0), "Currency0 should match");
         assertEq(Currency.unwrap(currency1), Currency.unwrap(corePoolKey.currency1), "Currency1 should match");
         assertFalse(isPaused, "Pool should not be paused");
+    }
+
+    function _decreasePosition(uint256 tokenId, uint256 amountToDecrease) internal {
+        MMA.PreparedAction[] memory actions = new MMA.PreparedAction[](3);
+        actions[0] = MMA.prepareDecrease(corePoolKey, tokenId, 0, amountToDecrease);
+        actions[1] = MMA.prepareTake(lccCurrency0, address(this), 0);
+        actions[2] = MMA.prepareTake(lccCurrency1, address(this), 0);
+        MMA.executeWithUnlock(positionManager, actions, block.timestamp + 3600);
     }
 }
 

@@ -142,6 +142,12 @@ struct PositionAccounting {
     TokenPairInt pendingFeeAdj;
     // DICE: Coverage index checkpoint per token (snapshot of pool index at last settlement)
     TokenPairUint coverageIndexLastX128;
+    // DICE: Residual-only coverage index checkpoint per token
+    TokenPairUint residualCoverageIndexLastX128;
+    // DICE: Banked residual-derived burn base awaiting a later outflow window
+    TokenPairUint pendingResidualBurnBase;
+    // DICE: Outflow watermark captured when residual burn base is banked
+    TokenPairUint pendingResidualBurnOutflowsFloor;
     // CISE: Position checkpoint of pool coverage-per-settled index (Q128)
     TokenPairUint ciseIndexLastX128;
     // CISE: Banked realised exposure since last bonus allocation
@@ -166,6 +172,8 @@ struct PoolAccounting {
     TokenPairUint totalDeficitPrincipal;
     // DICE: Coverage-per-deficit-unit index (Q128) per token
     TokenPairUint coveragePerDeficitIndexX128;
+    // DICE: Residual-only coverage-per-deficit-unit index (Q128) per token
+    TokenPairUint coveragePerResidualDeficitIndexX128;
     // DICE: Deferred coverage residual (socialised when totalDeficitPrincipal = 0 at exercise time)
     TokenPairUint coverageResidualDICE;
     // CISE: Pool-wide total settled aggregate per token

@@ -241,12 +241,44 @@ contract VTSPositionLibHarness {
         );
     }
 
+    function getPoolCoveragePerResidualDeficitIndexX128(PoolId poolId)
+        external
+        view
+        returns (uint256 idx0, uint256 idx1)
+    {
+        return (
+            s.poolAccounting[poolId].coveragePerResidualDeficitIndexX128.token0,
+            s.poolAccounting[poolId].coveragePerResidualDeficitIndexX128.token1
+        );
+    }
+
     function getCoverageIndexLastX128(PositionId id) external view returns (uint256 idx0, uint256 idx1) {
         return
             (
                 s.positionAccounting[id].coverageIndexLastX128.token0,
                 s.positionAccounting[id].coverageIndexLastX128.token1
             );
+    }
+
+    function getResidualCoverageIndexLastX128(PositionId id) external view returns (uint256 idx0, uint256 idx1) {
+        return (
+            s.positionAccounting[id].residualCoverageIndexLastX128.token0,
+            s.positionAccounting[id].residualCoverageIndexLastX128.token1
+        );
+    }
+
+    function getPendingResidualBurnBase(PositionId id) external view returns (uint256 burn0, uint256 burn1) {
+        return (
+            s.positionAccounting[id].pendingResidualBurnBase.token0,
+            s.positionAccounting[id].pendingResidualBurnBase.token1
+        );
+    }
+
+    function getPendingResidualBurnOutflowsFloor(PositionId id) external view returns (uint256 floor0, uint256 floor1) {
+        return (
+            s.positionAccounting[id].pendingResidualBurnOutflowsFloor.token0,
+            s.positionAccounting[id].pendingResidualBurnOutflowsFloor.token1
+        );
     }
 
     function getCISEIndexLastX128(PositionId id) external view returns (uint256 idx0, uint256 idx1) {
@@ -357,9 +389,29 @@ contract VTSPositionLibHarness {
         s.poolAccounting[poolId].coveragePerDeficitIndexX128.token1 = idx1;
     }
 
+    function setPoolCoveragePerResidualDeficitIndexX128(PoolId poolId, uint256 idx0, uint256 idx1) external {
+        s.poolAccounting[poolId].coveragePerResidualDeficitIndexX128.token0 = idx0;
+        s.poolAccounting[poolId].coveragePerResidualDeficitIndexX128.token1 = idx1;
+    }
+
     function setCoverageIndexLastX128(PositionId id, uint256 idx0, uint256 idx1) external {
         s.positionAccounting[id].coverageIndexLastX128.token0 = idx0;
         s.positionAccounting[id].coverageIndexLastX128.token1 = idx1;
+    }
+
+    function setResidualCoverageIndexLastX128(PositionId id, uint256 idx0, uint256 idx1) external {
+        s.positionAccounting[id].residualCoverageIndexLastX128.token0 = idx0;
+        s.positionAccounting[id].residualCoverageIndexLastX128.token1 = idx1;
+    }
+
+    function setPendingResidualBurnBase(PositionId id, uint256 burn0, uint256 burn1) external {
+        s.positionAccounting[id].pendingResidualBurnBase.token0 = burn0;
+        s.positionAccounting[id].pendingResidualBurnBase.token1 = burn1;
+    }
+
+    function setPendingResidualBurnOutflowsFloor(PositionId id, uint256 floor0, uint256 floor1) external {
+        s.positionAccounting[id].pendingResidualBurnOutflowsFloor.token0 = floor0;
+        s.positionAccounting[id].pendingResidualBurnOutflowsFloor.token1 = floor1;
     }
 
     function setCISEIndexLastX128(PositionId id, uint256 idx0, uint256 idx1) external {

@@ -535,7 +535,16 @@ contract VTSOrchestrator is
     function settlePositionGrowths(PositionId positionId) public {
         // Only check for active valid position - as new positions are not yet registered in VTS when this method is called.
         if (isPositionValid(positionId, true)) {
-            _notPoolPaused(s.positions[positionId].poolId);
+            PoolId poolId = s.positions[positionId].poolId;
+            if (s.isPaused || s.pools[poolId].isPaused) {
+                // During pause, allow growth-only settlement strictly from the canonical CoreHook for this pool.
+                Pool memory pool = s.pools[poolId];
+                IMarketFactory factory =
+                    liquidityHub.getFactory(Currency.unwrap(pool.currency0), Currency.unwrap(pool.currency1));
+                MarketHandlerLib.assertCoreHook(factory, _msgSender());
+            } else {
+                _notPoolPaused(poolId);
+            }
             VTSPositionLib.settlePositionGrowths(s, poolManager, positionId);
         }
     }

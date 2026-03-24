@@ -375,10 +375,12 @@ contract VTSFeeLibIndexTest is VTSOrchestratorFixture {
                 uint256 coverageResidual0,
                 uint256 coverageResidual1
             ) = _testableOrchestrator().getPoolDICEAccounting(corePoolKey.toId());
+            (uint256 residualIndex0,) = _testableOrchestrator().getPoolDICEResidualIndex(corePoolKey.toId());
 
             assertGt(totalDeficitPrincipal0, 0, "DICE: deficit principal must materialise for token0");
             assertEq(coverageResidual0, 0, "DICE: residual must be flushed once principal exists");
-            assertGt(coveragePerDeficitIndex0, 0, "DICE: residual must be socialised into the coverage index");
+            assertEq(coveragePerDeficitIndex0, 0, "DICE: residual flush must not pollute the normal coverage index");
+            assertGt(residualIndex0, 0, "DICE: residual must be socialised into the residual-only DICE index");
 
             // Suppress unused variable warnings
             totalDeficitPrincipal1;
@@ -387,10 +389,10 @@ contract VTSFeeLibIndexTest is VTSOrchestratorFixture {
         }
 
         (, uint256 feeAccruedAfterSettle) = _protocolFeeAccrued(corePoolKey.toId());
-        assertGt(
+        assertEq(
             feeAccruedAfterSettle,
             feeAccruedAfterFirstCoverage,
-            "DICE: protocolFeeAccrued must not decrease after deficit materialises"
+            "DICE: first residual flush should bank burn rather than slash immediately"
         );
     }
 
