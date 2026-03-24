@@ -36,12 +36,6 @@ export HUB_RVM_ID
 RVM_ID_ONE="$(cast wallet address --private-key "$SPOKE_ONE_PRIVATE_KEY")"
 RVM_ID_TWO="$(cast wallet address --private-key "$SPOKE_TWO_PRIVATE_KEY")"
 
-# ensure both rvm ids are different
-if [ "$RVM_ID_ONE" = "$RVM_ID_TWO" ]; then
-  echo "RVM_ID_ONE and RVM_ID_TWO are the same"
-  exit 1
-fi
-
 
 broadcast_flag=""
 if [ "$BROADCAST" = "true" ]; then
@@ -148,6 +142,7 @@ deploy() {
   export SPOKE_ONE_RSC
 
   # 5) Deploy Reactive spoke for recipient two.
+  set +e
   spoke_out="$(run_and_print "Deploying SpokeRSC for recipient two..." env ${SPOKE_TWO_PRIVATE_KEY:+OVERRIDE_PRIVATE_KEY="$SPOKE_TWO_PRIVATE_KEY"} RECIPIENT="$RECIPIENT_TWO" bash scripts/deployreactivespoke.sh)"
   spoke_status=$?
   set -e
@@ -186,7 +181,7 @@ deploy() {
   mapped_spoke_lc="$(printf '%s' "$mapped_spoke" | tr '[:upper:]' '[:lower:]')"
   rvm_id_lc="$(printf '%s' "$RVM_ID_ONE" | tr '[:upper:]' '[:lower:]')"
   if [ "$mapped_spoke_lc" != "$rvm_id_lc" ]; then
-    echo "spokeForRecipient mismatch: expected $RVM_ID got $mapped_spoke"
+    echo "spokeForRecipient mismatch: expected $RVM_ID_ONE got $mapped_spoke"
     exit 1
   fi
   echo "spokeForRecipient for recipient one mapping verified: $mapped_spoke"

@@ -748,6 +748,34 @@ contract HubRSCTest is Test {
         assertEq(hub.inFlightByKey(key), 0);
     }
 
+    function test_releasesInFlightWhenProcessedSettlesZeroButRequestedNonZero() public {
+        _clearSystemContract();
+        HubRSC hub = new HubRSC(
+            DEFAULT_MAX_DISPATCH_ITEMS,
+            originChainId,
+            destinationChainId,
+            liquidityHub,
+            hubCallback,
+            destinationReceiverContract
+        );
+
+        address recipient = makeAddr("recipient");
+        address lcc = makeAddr("lcc");
+        bytes32 key = hub.computeKey(lcc, recipient);
+
+        hub.react(_settlementLog(hub, recipient, lcc, 100, 1, 0x9611, 1));
+        hub.react(liquidityAvailableLog(hub.liquidityHub(), lcc, 100, bytes32("mkt"), 0x9612, 2));
+        assertEq(hub.inFlightByKey(key), 100);
+
+        // Attempt completed with zero settlement, but full requested amount should release reservation.
+        hub.react(_settlementProcessedLogWithRequested(hub, lcc, recipient, 0, 100, 0x9613, 3));
+
+        (,, uint256 remaining, bool exists) = hub.pending(key);
+        assertTrue(exists);
+        assertEq(remaining, 100);
+        assertEq(hub.inFlightByKey(key), 0);
+    }
+
     function _settlementLog(
         HubRSC hub,
         address recipient,

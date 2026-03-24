@@ -304,7 +304,7 @@ contract HubRSC is AbstractReactive {
         uint256 inflightAmountToReduce
     ) internal {
         // derive the key for the pending entry
-        if (settledAmount == 0) return;
+        if (settledAmount == 0 && inflightAmountToReduce == 0) return;
         bytes32 key = computeKey(lcc, recipient);
         Pending storage entry = pending[key];
 

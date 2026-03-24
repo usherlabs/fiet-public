@@ -43,7 +43,7 @@ HUB_CALLBACK_VALUE="${HUB_CALLBACK_VALUE:-1ether}"
 BROADCAST_FLAG="--broadcast"
 
 # 1) Deploy HubCallback on the reactive chain (origin event emitter).
-echo "Deploying HubCallback on protocol chain..."
+echo "Deploying HubCallback on reactive chain..."
 hub_callback_output="$(
   forge create "$BROADCAST_FLAG" \
     --rpc-url "$REACTIVE_RPC" \
@@ -76,7 +76,7 @@ echo "  HUB_CALLBACK=$HUB_CALLBACK"
 echo "  BATCH_RECEIVER=$BATCH_RECEIVER"
 echo "  HUB_RSC_VALUE=$HUB_RSC_VALUE"
 echo "  RVM_ID=$RVM_ID"
-echo "  BATCH_SIZE=$BATCH_SIZE"
+echo "  BATCH_SIZE=${BATCH_SIZE:-20}"
 
 hub_rsc_output="$(
   forge create "$BROADCAST_FLAG" \
