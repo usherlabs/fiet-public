@@ -944,15 +944,13 @@ contract LiquidityHub is BoundRegistry, Ownable, ReentrancyGuardTransient {
      * @param tokenId The commitment token id bucket to debit in the custodian
      * @param recipient The queue owner and settlement recipient
      * @param maxAmount The maximum amount to settle
-     * @return settled The amount actually released from custody and settled
      */
     function settleFromCustodian(address lcc, address custodian, uint256 tokenId, address recipient, uint256 maxAmount)
         external
         onlyValidLcc(lcc)
         nonReentrant
-        returns (uint256 settled)
     {
-        settled = LiquidityHubLinkedLib.settleFromCustodian(s, lcc, custodian, tokenId, recipient, maxAmount);
+        uint256 settled = LiquidityHubLinkedLib.settleFromCustodian(s, lcc, custodian, tokenId, recipient, maxAmount);
         if (settled > 0) {
             _processSettlementFor(lcc, recipient, settled);
         }
