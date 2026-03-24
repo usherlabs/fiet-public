@@ -75,11 +75,9 @@ interface IMinimalLiquidityHub {
      * @param tokenId The commitment token id bucket to debit in the custodian
      * @param recipient The queue owner and settlement recipient
      * @param maxAmount The maximum amount to settle
-     * @return settled The amount actually released from custody and settled
      */
     function settleFromCustodian(address lcc, address custodian, uint256 tokenId, address recipient, uint256 maxAmount)
-        external
-        returns (uint256 settled);
+        external;
 
     /**
      * @notice Gets the LCC token for a given underlying asset in a specific market
