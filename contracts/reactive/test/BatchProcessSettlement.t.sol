@@ -22,11 +22,13 @@ contract BatchProcessSettlementTest is Test {
     MockLiquidityHubForBatch private mockHub;
     BatchProcessSettlement private receiver;
     address private callbackProxy;
+    address private hubRVMId;
 
     function setUp() public {
         mockHub = new MockLiquidityHubForBatch();
         callbackProxy = makeAddr("callbackProxy");
-        receiver = new BatchProcessSettlement(callbackProxy, address(mockHub));
+        hubRVMId = makeAddr("hubRVMId");
+        receiver = new BatchProcessSettlement(callbackProxy, address(mockHub), hubRVMId);
     }
 
     function test_processSettlements_revertsWhenNotAuthorisedSender() public {
@@ -35,7 +37,7 @@ contract BatchProcessSettlementTest is Test {
         uint256[] memory maxAmount = new uint256[](1);
 
         vm.expectRevert("Authorized sender only");
-        receiver.processSettlements(address(0), lcc, recipient, maxAmount);
+        receiver.processSettlements(hubRVMId, lcc, recipient, maxAmount);
     }
 
     /// @notice Reverts when array lengths do not match.
@@ -46,7 +48,7 @@ contract BatchProcessSettlementTest is Test {
 
         vm.expectRevert(AbstractBatchProcessSettlement.InvalidArrayLengths.selector);
         vm.prank(callbackProxy);
-        receiver.processSettlements(address(0), lcc, recipient, maxAmount);
+        receiver.processSettlements(hubRVMId, lcc, recipient, maxAmount);
     }
 
     /// @notice Reverts when batch size exceeds MAX_BATCH_SIZE.
@@ -59,7 +61,7 @@ contract BatchProcessSettlementTest is Test {
 
         vm.expectRevert(abi.encodeWithSelector(AbstractBatchProcessSettlement.BatchTooLarge.selector, len, maxBatch));
         vm.prank(callbackProxy);
-        receiver.processSettlements(address(0), lcc, recipient, maxAmount);
+        receiver.processSettlements(hubRVMId, lcc, recipient, maxAmount);
     }
 
     /// @notice Continues on failure and emits per-item outcomes.
@@ -83,7 +85,7 @@ contract BatchProcessSettlementTest is Test {
 
         vm.recordLogs();
         vm.prank(callbackProxy);
-        receiver.processSettlements(address(0), lcc, recipients, maxAmount);
+        receiver.processSettlements(hubRVMId, lcc, recipients, maxAmount);
         Vm.Log[] memory entries = vm.getRecordedLogs();
 
         bytes32 batchSig = keccak256("BatchReceived(uint256)");
@@ -104,5 +106,23 @@ contract BatchProcessSettlementTest is Test {
         assertTrue(sawBatch);
         assertTrue(sawOk);
         assertTrue(sawFail);
+    }
+
+    function test_constructorRevertsOnZeroHubRVMId() public {
+        vm.expectRevert(BatchProcessSettlement.InvalidHubRVMId.selector);
+        new BatchProcessSettlement(callbackProxy, address(mockHub), address(0));
+    }
+
+    function test_processSettlements_revertsOnInvalidCallbackOrigin() public {
+        address[] memory lcc = new address[](1);
+        address[] memory recipient = new address[](1);
+        uint256[] memory maxAmount = new uint256[](1);
+
+        address wrongOrigin = makeAddr("wrongOrigin");
+        vm.expectRevert(
+            abi.encodeWithSelector(BatchProcessSettlement.InvalidCallbackOrigin.selector, hubRVMId, wrongOrigin)
+        );
+        vm.prank(callbackProxy);
+        receiver.processSettlements(wrongOrigin, lcc, recipient, maxAmount);
     }
 }

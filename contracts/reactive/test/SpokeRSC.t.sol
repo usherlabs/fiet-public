@@ -5,15 +5,13 @@ import {Test} from "forge-std/Test.sol";
 import {Vm} from "forge-std/Vm.sol";
 import {IReactive} from "reactive-lib/interfaces/IReactive.sol";
 import {SpokeRSC} from "../src/SpokeRSC.sol";
+import {ReactiveConstants} from "../src/libs/ReactiveConstants.sol";
 
 contract SpokeRSCTest is Test {
-    uint256 private constant SETTLEMENT_QUEUED_TOPIC = uint256(keccak256("SettlementQueued(address,address,uint256)"));
-    uint256 private constant SETTLEMENT_ANNULLED_TOPIC =
-        uint256(keccak256("SettlementAnnulled(address,address,uint256)"));
-    uint256 private constant SETTLEMENT_PROCESSED_TOPIC =
-        uint256(keccak256("SettlementProcessed(address,address,uint256)"));
-    uint256 private constant SETTLEMENT_FAILED_TOPIC =
-        uint256(keccak256("SettlementFailed(address,address,uint256,bytes)"));
+    uint256 private constant SETTLEMENT_QUEUED_TOPIC = ReactiveConstants.SETTLEMENT_QUEUED_TOPIC;
+    uint256 private constant SETTLEMENT_ANNULLED_TOPIC = ReactiveConstants.SETTLEMENT_ANNULLED_TOPIC;
+    uint256 private constant SETTLEMENT_PROCESSED_TOPIC = ReactiveConstants.SETTLEMENT_PROCESSED_TOPIC;
+    uint256 private constant SETTLEMENT_FAILED_TOPIC = ReactiveConstants.SETTLEMENT_FAILED_TOPIC;
 
     uint256 private originChainId;
     uint256 private destinationChainId;
@@ -43,13 +41,17 @@ contract SpokeRSCTest is Test {
         new SpokeRSC(originChainId, destinationChainId, address(0), hubCallback, destinationReceiverContract, recipient);
 
         vm.expectRevert(abi.encodeWithSelector(SpokeRSC.InvalidConfig.selector));
-        new SpokeRSC(originChainId, destinationChainId, liquidityHub, address(0), destinationReceiverContract, recipient);
+        new SpokeRSC(
+            originChainId, destinationChainId, liquidityHub, address(0), destinationReceiverContract, recipient
+        );
 
         vm.expectRevert(abi.encodeWithSelector(SpokeRSC.InvalidConfig.selector));
         new SpokeRSC(originChainId, destinationChainId, liquidityHub, hubCallback, address(0), recipient);
 
         vm.expectRevert(abi.encodeWithSelector(SpokeRSC.InvalidConfig.selector));
-        new SpokeRSC(originChainId, destinationChainId, liquidityHub, hubCallback, destinationReceiverContract, address(0));
+        new SpokeRSC(
+            originChainId, destinationChainId, liquidityHub, hubCallback, destinationReceiverContract, address(0)
+        );
     }
 
     /// @notice Emits a callback when a matching SettlementQueued log is processed.
@@ -75,8 +77,8 @@ contract SpokeRSCTest is Test {
             log_index: 0
         });
 
-        bytes memory payload = abi.encodeWithSignature(
-            "recordSettlement(address,address,address,uint256,uint256)", address(0), lcc, recipient, amount, 1
+        bytes memory payload = abi.encodeWithSelector(
+            ReactiveConstants.RECORD_SETTLEMENT_QUEUED_SELECTOR, address(0), lcc, recipient, amount, 1
         );
 
         vm.expectEmit(true, true, true, true, address(spoke));
@@ -275,8 +277,8 @@ contract SpokeRSCTest is Test {
             log_index: 1
         });
 
-        bytes memory payload = abi.encodeWithSignature(
-            "recordSettlementAnnulled(address,address,address,uint256)", address(0), lcc, recipient, amount
+        bytes memory payload = abi.encodeWithSelector(
+            ReactiveConstants.RECORD_SETTLEMENT_ANNULLED_SELECTOR, address(0), lcc, recipient, amount, 1
         );
         vm.expectEmit(true, true, true, true, address(spoke));
         emit IReactive.Callback(destinationChainId, hubCallback, 8000000, payload);
@@ -287,7 +289,8 @@ contract SpokeRSCTest is Test {
         address recipient = makeAddr("recipient");
         SpokeRSC spoke = _newSpoke(recipient);
         address lcc = makeAddr("lcc");
-        uint256 amount = 33;
+        uint256 settledAmount = 33;
+        uint256 requestedAmount = 50;
 
         IReactive.LogRecord memory log = IReactive.LogRecord({
             chain_id: originChainId,
@@ -296,7 +299,7 @@ contract SpokeRSCTest is Test {
             topic_1: uint256(uint160(lcc)),
             topic_2: uint256(uint160(recipient)),
             topic_3: 0,
-            data: abi.encode(amount),
+            data: abi.encode(settledAmount, requestedAmount),
             block_number: 0,
             op_code: 0,
             block_hash: 0,
@@ -304,8 +307,14 @@ contract SpokeRSCTest is Test {
             log_index: 1
         });
 
-        bytes memory payload = abi.encodeWithSignature(
-            "recordSettlementProcessed(address,address,address,uint256)", address(0), lcc, recipient, amount
+        bytes memory payload = abi.encodeWithSelector(
+            ReactiveConstants.RECORD_SETTLEMENT_PROCESSED_SELECTOR,
+            address(0),
+            lcc,
+            recipient,
+            settledAmount,
+            requestedAmount,
+            1
         );
         vm.expectEmit(true, true, true, true, address(spoke));
         emit IReactive.Callback(destinationChainId, hubCallback, 8000000, payload);
@@ -333,8 +342,8 @@ contract SpokeRSCTest is Test {
             log_index: 1
         });
 
-        bytes memory payload = abi.encodeWithSignature(
-            "recordSettlementFailed(address,address,address,uint256)", address(0), lcc, recipient, maxAmount
+        bytes memory payload = abi.encodeWithSelector(
+            ReactiveConstants.RECORD_SETTLEMENT_FAILED_SELECTOR, address(0), lcc, recipient, maxAmount, 1
         );
         vm.expectEmit(true, true, true, true, address(spoke));
         emit IReactive.Callback(destinationChainId, hubCallback, 8000000, payload);
@@ -344,12 +353,7 @@ contract SpokeRSCTest is Test {
     function _newSpoke(address recipient) internal returns (SpokeRSC) {
         return SpokeRSC(
             new SpokeRSC(
-                originChainId,
-                destinationChainId,
-                liquidityHub,
-                hubCallback,
-                destinationReceiverContract,
-                recipient
+                originChainId, destinationChainId, liquidityHub, hubCallback, destinationReceiverContract, recipient
             )
         );
     }
