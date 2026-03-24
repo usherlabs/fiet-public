@@ -68,6 +68,24 @@ interface IMinimalLiquidityHub {
     function processSettlementFor(address lcc, address recipient, uint256 maxAmount) external;
 
     /**
+     * @notice Atomically releases queued MM custody and settles it against the recipient's Hub queue.
+     * @dev Best-effort path for MM collection flows. Returns 0 when nothing is currently settleable.
+     * @param lcc The LCC token address
+     * @param custodian The MM queue custodian holding beneficiary-scoped queued LCC
+     * @param tokenId The commitment token id bucket to debit in the custodian
+     * @param recipient The queue owner and settlement recipient
+     * @param maxAmount The maximum amount to settle
+     * @return settled The amount actually released from custody and settled
+     */
+    function settleFromCustodian(
+        address lcc,
+        address custodian,
+        uint256 tokenId,
+        address recipient,
+        uint256 maxAmount
+    ) external returns (uint256 settled);
+
+    /**
      * @notice Gets the LCC token for a given underlying asset in a specific market
      * @param marketId The market ID (corePoolKey -> PoolID -> unwrap() to bytes32)
      * @param underlying The underlying asset address

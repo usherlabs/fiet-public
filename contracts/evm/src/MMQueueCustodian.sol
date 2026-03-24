@@ -4,6 +4,7 @@ pragma solidity ^0.8.26;
 import {Currency} from "v4-periphery/lib/v4-core/src/types/Currency.sol";
 import {CurrencyTransfer} from "./libraries/CurrencyTransfer.sol";
 import {IMMQueueCustodian} from "./interfaces/IMMQueueCustodian.sol";
+import {ILCC} from "./interfaces/ILCC.sol";
 import {Errors} from "./libraries/Errors.sol";
 
 /// @title MMQueueCustodian
@@ -61,11 +62,14 @@ contract MMQueueCustodian is IMMQueueCustodian {
     function release(uint256 tokenId, address lcc, address beneficiary, uint256 maxAmount)
         external
         override
-        onlyPositionManager
         returns (uint256 released)
     {
         if (beneficiary == address(0)) revert Errors.InvalidAddress(beneficiary);
         if (lcc == address(0)) revert Errors.InvalidAddress(lcc);
+        if (msg.sender != positionManager) {
+            (bool ok, bytes memory data) = lcc.staticcall(abi.encodeCall(ILCC.hub, ()));
+            if (!ok || data.length < 32 || msg.sender != abi.decode(data, (address))) revert Errors.InvalidSender();
+        }
         if (maxAmount == 0) return 0;
 
         uint256 available = _queuedLcc[tokenId][lcc][beneficiary];

@@ -1569,6 +1569,92 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
         );
     }
 
+    function test_collectAvailableLiquidity_whenNoReserveAvailable_isNoopAndKeepsCustody() public {
+        address user = makeAddr("user");
+        address lccAddr = address(lcc0);
+        MockERC20 underlying = MockERC20(lcc0.underlying());
+        address custody = address(positionManager.queueCustodian());
+        uint256 tokenId = 17;
+        uint256 amount = 250;
+
+        underlying.mint(address(liquidityHub), amount);
+        vm.prank(address(liquidityHub));
+        ILiquidityHub(liquidityHub).wrap(lccAddr, amount);
+
+        vm.mockCall(
+            marketFactory, abi.encodeWithSelector(IMarketFactory.useMarketLiquidity.selector), abi.encode(uint256(0))
+        );
+        vm.prank(address(vtsOrchestrator));
+        ILiquidityHub(liquidityHub)
+            .planCancelWithQueue(lccAddr, address(liquidityHub), address(positionManager), amount, amount, user);
+        vm.prank(address(liquidityHub));
+        ILCC(lccAddr).transfer(address(positionManager), amount);
+
+        vm.startPrank(address(positionManager));
+        lcc0.transfer(custody, amount);
+        IMMQueueCustodian(custody).record(tokenId, lccAddr, user, amount);
+        vm.stopPrank();
+
+        uint256 userUnderlyingBefore = underlying.balanceOf(user);
+        uint256 userLccBefore = lcc0.balanceOf(user);
+
+        MMA.PreparedAction[] memory prepared = new MMA.PreparedAction[](1);
+        prepared[0] = MMA.prepareCollectAvailableLiquidity(lccAddr, tokenId, type(uint256).max);
+        vm.prank(user);
+        MMA.executeWithUnlock(positionManager, prepared, block.timestamp + 3600);
+
+        assertEq(underlying.balanceOf(user), userUnderlyingBefore, "no reserve => no underlying transferred");
+        assertEq(lcc0.balanceOf(user), userLccBefore, "no reserve => no LCC released to user");
+        assertEq(ILiquidityHub(liquidityHub).settleQueue(lccAddr, user), amount, "queue should remain outstanding");
+        assertEq(IMMQueueCustodian(custody).queued(tokenId, lccAddr, user), amount, "custody should remain intact");
+    }
+
+    function test_collectAvailableLiquidity_whenReservePartiallyAvailable_keepsRemainderCustodied() public {
+        address user = makeAddr("user");
+        address lccAddr = address(lcc0);
+        MockERC20 underlying = MockERC20(lcc0.underlying());
+        address custody = address(positionManager.queueCustodian());
+        uint256 tokenId = 23;
+        uint256 amount = 250;
+        uint256 available = 100;
+
+        underlying.mint(address(liquidityHub), amount);
+        vm.prank(address(liquidityHub));
+        ILiquidityHub(liquidityHub).wrap(lccAddr, amount);
+
+        vm.mockCall(
+            marketFactory, abi.encodeWithSelector(IMarketFactory.useMarketLiquidity.selector), abi.encode(uint256(0))
+        );
+        vm.prank(address(vtsOrchestrator));
+        ILiquidityHub(liquidityHub)
+            .planCancelWithQueue(lccAddr, address(liquidityHub), address(positionManager), amount, amount, user);
+        vm.prank(address(liquidityHub));
+        ILCC(lccAddr).transfer(address(positionManager), amount);
+
+        vm.startPrank(address(positionManager));
+        lcc0.transfer(custody, amount);
+        IMMQueueCustodian(custody).record(tokenId, lccAddr, user, amount);
+        vm.stopPrank();
+
+        underlying.mint(address(liquidityHub), available);
+        vm.prank(address(vtsOrchestrator));
+        ILiquidityHub(liquidityHub).confirmTake(lccAddr, available, false);
+
+        uint256 beforeUnderlying = underlying.balanceOf(user);
+
+        MMA.PreparedAction[] memory prepared = new MMA.PreparedAction[](1);
+        prepared[0] = MMA.prepareCollectAvailableLiquidity(lccAddr, tokenId, type(uint256).max);
+        vm.prank(user);
+        MMA.executeWithUnlock(positionManager, prepared, block.timestamp + 3600);
+
+        assertEq(underlying.balanceOf(user) - beforeUnderlying, available, "should settle only live reserve");
+        assertEq(lcc0.balanceOf(user), 0, "released LCC should be fully burned for settled amount only");
+        assertEq(ILiquidityHub(liquidityHub).settleQueue(lccAddr, user), amount - available, "queue remainder");
+        assertEq(
+            IMMQueueCustodian(custody).queued(tokenId, lccAddr, user), amount - available, "custody remainder intact"
+        );
+    }
+
     function test_collectAvailableLiquidity_commitAware_cannotDrainOtherCommitBucket() public {
         address user = makeAddr("user");
         address lccAddr = address(lcc0);
