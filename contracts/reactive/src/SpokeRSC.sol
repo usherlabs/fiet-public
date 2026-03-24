@@ -31,11 +31,12 @@ contract SpokeRSC is AbstractReactive {
     /// @notice Recipient this Spoke is dedicated to.
     address public immutable recipient;
 
-    /// @notice Monotonic nonce for SettlementReported callbacks.
+    /// @notice Monotonic nonce for SettlementQueued forwards only; mirrors the last queue callback nonce for legacy visibility.
+    ///      It does not count annulled/processed/failed forwards.
     uint256 public nonce;
 
-    /// @notice Dynamis nonce per event type
-    mapping(bytes32 => uint256) public nonceByTopic;
+    /// @notice Per-callback-family nonce keyed by `Record_*` HubCallback selector (bytes32), not by raw `Settlement_*` log topics.
+    mapping(bytes32 => uint256) public nonceByRecordSelector;
 
     /// @notice Deduplicates SettlementQueued logs by log identity.
     mapping(bytes32 => bool) public processedLog;
@@ -134,9 +135,9 @@ contract SpokeRSC is AbstractReactive {
         }
     }
 
-    function _getAndIncrementEventNonce(bytes32 topic) internal returns (uint256) {
-        nonceByTopic[topic] += 1;
-        return nonceByTopic[topic];
+    function _getAndIncrementEventNonce(bytes32 recordSelector) internal returns (uint256) {
+        nonceByRecordSelector[recordSelector] += 1;
+        return nonceByRecordSelector[recordSelector];
     }
 
     function _forwardSettlementQueued(IReactive.LogRecord calldata log) internal {
