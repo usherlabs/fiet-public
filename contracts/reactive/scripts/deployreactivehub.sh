@@ -39,11 +39,11 @@ CALLBACK_PROXY="${REACTIVE_CALLBACK_PROXY}"
 
 # Optional prefunding values for callback and hub deployments.
 HUB_RSC_VALUE="${HUB_RSC_VALUE:-1ether}"
-HUB_CALLBACK_VALUE="${HUB_CALLBACK_VALUE:-0.1ether}"
+HUB_CALLBACK_VALUE="${HUB_CALLBACK_VALUE:-1ether}"
 BROADCAST_FLAG="--broadcast"
 
-# 1) Deploy HubCallback on the protocol chain (origin event emitter).
-echo "Deploying HubCallback on protocol chain..."
+# 1) Deploy HubCallback on the reactive chain (origin event emitter).
+echo "Deploying HubCallback on reactive chain..."
 hub_callback_output="$(
   forge create "$BROADCAST_FLAG" \
     --rpc-url "$REACTIVE_RPC" \
@@ -54,7 +54,7 @@ hub_callback_output="$(
 )"
 echo "$hub_callback_output"
 
-# Parse deployed callback address for use in the reactive-chain hub deployment.
+# Parse deployed callback address for use in the hub reactive contract deployment.
 HUB_CALLBACK="$(extract_deployed_address "$hub_callback_output")"
 if [ -z "${HUB_CALLBACK:-}" ]; then
   echo "Failed to parse HubCallback address from forge output."
@@ -76,6 +76,7 @@ echo "  HUB_CALLBACK=$HUB_CALLBACK"
 echo "  BATCH_RECEIVER=$BATCH_RECEIVER"
 echo "  HUB_RSC_VALUE=$HUB_RSC_VALUE"
 echo "  RVM_ID=$RVM_ID"
+echo "  BATCH_SIZE=${BATCH_SIZE:-20}"
 
 hub_rsc_output="$(
   forge create "$BROADCAST_FLAG" \
@@ -84,6 +85,7 @@ hub_rsc_output="$(
     src/HubRSC.sol:HubRSC \
     --value "$HUB_RSC_VALUE" \
     --constructor-args \
+      "${BATCH_SIZE:-20}" \
       "$PROTOCOL_CHAIN_ID" \
       "$REACTIVE_CHAIN_ID" \
       "$LIQUIDITY_HUB" \

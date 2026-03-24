@@ -4,6 +4,7 @@ pragma solidity ^0.8.26;
 import {AbstractReactive} from "reactive-lib/abstract-base/AbstractReactive.sol";
 import {IReactive} from "reactive-lib/interfaces/IReactive.sol";
 import {LinkedQueue} from "./libs/LinkedQueue.sol";
+import {ReactiveConstants} from "./libs/ReactiveConstants.sol";
 
 /// @notice Hub RSC that aggregates Spoke reports and dispatches settlements.
 contract HubRSC is AbstractReactive {
@@ -13,29 +14,23 @@ contract HubRSC is AbstractReactive {
     error SpokeExists(address recipient);
 
     /// @notice LiquidityAvailable(address indexed lcc, address underlyingAsset, uint256 amount, bytes32 marketId).
-    uint256 public constant LIQUIDITY_AVAILABLE_TOPIC =
-        uint256(keccak256("LiquidityAvailable(address,address,uint256,bytes32)"));
+    uint256 public constant LIQUIDITY_AVAILABLE_TOPIC = ReactiveConstants.LIQUIDITY_AVAILABLE_TOPIC;
 
-    /// @notice SettlementReported(address indexed recipient, address indexed lcc, uint256 amount, uint256 nonce).
+    /// @notice SettlementeQueuedReported(address indexed recipient, address indexed lcc, uint256 amount, uint256 nonce).
     // Indicates that a SettlementQueue event from protocol chain is reported.
-    uint256 public constant SETTLEMENT_REPORTED_TOPIC =
-        uint256(keccak256("SettlementReported(address,address,uint256,uint256)"));
+    uint256 public constant SETTLEMENT_QUEUED_REPORTED_TOPIC = ReactiveConstants.SETTLEMENT_QUEUED_REPORTED_TOPIC;
 
     /// @notice MoreLiquidityAvailable(address indexed lcc, uint256 amountAvailable).
-    uint256 public constant MORE_LIQUIDITY_AVAILABLE_TOPIC =
-        uint256(keccak256("MoreLiquidityAvailable(address,uint256)"));
+    uint256 public constant MORE_LIQUIDITY_AVAILABLE_TOPIC = ReactiveConstants.MORE_LIQUIDITY_AVAILABLE_TOPIC;
 
     /// @notice SettlementAnnulledReported(address indexed recipient, address indexed lcc, uint256 amount).
-    uint256 public constant SETTLEMENT_ANNULLED_REPORTED_TOPIC =
-        uint256(keccak256("SettlementAnnulledReported(address,address,uint256)"));
+    uint256 public constant SETTLEMENT_ANNULLED_REPORTED_TOPIC = ReactiveConstants.SETTLEMENT_ANNULLED_REPORTED_TOPIC;
 
     /// @notice SettlementProcessedReported(address indexed recipient, address indexed lcc, uint256 amount).
-    uint256 public constant SETTLEMENT_PROCESSED_REPORTED_TOPIC =
-        uint256(keccak256("SettlementProcessedReported(address,address,uint256)"));
+    uint256 public constant SETTLEMENT_PROCESSED_REPORTED_TOPIC = ReactiveConstants.SETTLEMENT_PROCESSED_REPORTED_TOPIC;
 
     /// @notice SettlementFailedReported(address indexed recipient, address indexed lcc, uint256 maxAmount).
-    uint256 public constant SETTLEMENT_FAILED_REPORTED_TOPIC =
-        uint256(keccak256("SettlementFailedReported(address,address,uint256)"));
+    uint256 public constant SETTLEMENT_FAILED_REPORTED_TOPIC = ReactiveConstants.SETTLEMENT_FAILED_REPORTED_TOPIC;
 
     struct Pending {
         address lcc;
@@ -43,6 +38,13 @@ contract HubRSC is AbstractReactive {
         uint256 amount;
         bool exists;
     }
+
+    struct BufferedProcessedSettlement {
+        uint256 settledAmount;
+        uint256 inflightAmountToReduce;
+    }
+
+    uint256 public immutable maxDispatchItems;
 
     /// @notice The Chain the protocol lives on i.e DestinationContract.sol
     uint256 public immutable protocolChainId;
@@ -62,9 +64,6 @@ contract HubRSC is AbstractReactive {
     /// @notice Callback gas limit for destination receiver.
     uint64 public constant CALLBACK_GAS_LIMIT = 8000000;
 
-    /// @notice Single bound for both max batch size and max loop scans per dispatch.
-    uint256 public constant MAX_DISPATCH_ITEMS = 20;
-
     /// @notice Recipient -> Spoke mapping (factory behavior).
     mapping(address => address) public spokeForRecipient;
 
@@ -73,8 +72,13 @@ contract HubRSC is AbstractReactive {
     /// @notice Amount reserved for in-flight dispatch by key.
     mapping(bytes32 => uint256) public inFlightByKey;
 
-    /// @notice Deduplicate SettlementReported logs.
+    /// @notice Deduplicate logs.
     mapping(bytes32 => bool) public processedReport;
+
+    /// @notice Buffered authoritative processed decreases awaiting pending creation.
+    mapping(bytes32 => BufferedProcessedSettlement) public bufferedProcessedDecreaseByKey;
+    /// @notice Buffered authoritative annulled decreases awaiting pending creation.
+    mapping(bytes32 => uint256) public bufferedAnnulledDecreaseByKey;
 
     /// @notice Global linked-list queue state for pending keys (compatibility/introspection).
     LinkedQueue.Data private queueData;
@@ -88,6 +92,7 @@ contract HubRSC is AbstractReactive {
     event DispatchRequested(address indexed lcc, uint256 available, uint256 batchCount, uint256 remaining);
 
     constructor(
+        uint256 _maxDispatchItems,
         uint256 _protocolChainId,
         uint256 _reactChainId,
         address _liquidityHub,
@@ -103,6 +108,7 @@ contract HubRSC is AbstractReactive {
 
         protocolChainId = _protocolChainId;
         reactChainId = _reactChainId;
+        maxDispatchItems = _maxDispatchItems;
         liquidityHub = _liquidityHub;
         hubCallback = _hubCallback;
         destinationReceiverContract = _destinationReceiverContract;
@@ -119,7 +125,12 @@ contract HubRSC is AbstractReactive {
             );
             // subscribe to the settlement reported event from the hub callback
             service.subscribe(
-                reactChainId, hubCallback, SETTLEMENT_REPORTED_TOPIC, REACTIVE_IGNORE, REACTIVE_IGNORE, REACTIVE_IGNORE
+                reactChainId,
+                hubCallback,
+                SETTLEMENT_QUEUED_REPORTED_TOPIC,
+                REACTIVE_IGNORE,
+                REACTIVE_IGNORE,
+                REACTIVE_IGNORE
             );
             // subscribe to the more liquidity available event from the hub callback
             service.subscribe(
@@ -166,8 +177,8 @@ contract HubRSC is AbstractReactive {
 
     /// @notice React to origin chain logs (ReactVM only).
     function react(IReactive.LogRecord calldata log) external vmOnly {
-        if (log.topic_0 == SETTLEMENT_REPORTED_TOPIC) {
-            _handleSettlementReported(log);
+        if (log.topic_0 == SETTLEMENT_QUEUED_REPORTED_TOPIC) {
+            _handleSettlementQueued(log);
             return;
         }
 
@@ -200,17 +211,12 @@ contract HubRSC is AbstractReactive {
     /// @notice Ingests a SettlementReported log into pending state.
     /// @dev Deduplicates by log identity, ignores zero amounts, and either creates
     /// or increments a queued pending entry.
-    function _handleSettlementReported(IReactive.LogRecord calldata log) internal {
+    function _handleSettlementQueued(IReactive.LogRecord calldata log) internal {
         address recipient = address(uint160(log.topic_1));
         address lcc = address(uint160(log.topic_2));
         (uint256 amount,) = abi.decode(log.data, (uint256, uint256));
 
-        bytes32 reportId = keccak256(abi.encode(log.chain_id, log._contract, log.tx_hash, log.log_index));
-        if (processedReport[reportId]) {
-            emit DuplicateLogIgnored(reportId);
-            return;
-        }
-        processedReport[reportId] = true;
+        if (!_markLogProcessed(log)) return;
 
         // Ignore no-op updates.
         if (amount == 0) return;
@@ -238,29 +244,40 @@ contract HubRSC is AbstractReactive {
             }
             emit PendingIncreased(lcc, recipient, amount);
         }
+
+        // Apply buffered decreases that arrived before pending existed.
+        _applyBufferedDecreases(entry, key);
     }
 
     /// @notice Reconciles pending amount from authoritative LiquidityHub settlement processing.
     function _handleSettlementProcessed(IReactive.LogRecord calldata log) internal {
         if (log._contract != hubCallback) return;
+        if (!_markLogProcessed(log)) return;
+
         address recipient = address(uint160(log.topic_1));
         address lcc = address(uint160(log.topic_2));
-        uint256 settledAmount = abi.decode(log.data, (uint256));
-        _applyAuthoritativeDecrease(lcc, recipient, settledAmount, true);
+        (uint256 settledAmount, uint256 requestedAmount) = abi.decode(log.data, (uint256, uint256));
+
+        _applyAuthoritativeDecreaseOrBuffer(lcc, recipient, settledAmount, requestedAmount);
     }
 
     /// @notice Reconciles pending amount from authoritative LiquidityHub queue annulments.
     function _handleSettlementAnnulled(IReactive.LogRecord calldata log) internal {
         if (log._contract != hubCallback) return;
+        if (!_markLogProcessed(log)) return;
+
         address recipient = address(uint160(log.topic_1));
         address lcc = address(uint160(log.topic_2));
         uint256 annulledAmount = abi.decode(log.data, (uint256));
-        _applyAuthoritativeDecrease(lcc, recipient, annulledAmount, false);
+
+        _applyAuthoritativeDecreaseOrBuffer(lcc, recipient, annulledAmount, 0);
     }
 
     /// @notice Releases reserved in-flight amount for failed destination settlements.
     function _handleSettlementFailed(IReactive.LogRecord calldata log) internal {
         if (log._contract != hubCallback) return;
+        if (!_markLogProcessed(log)) return;
+
         address recipient = address(uint160(log.topic_1));
         address lcc = address(uint160(log.topic_2));
         uint256 failedAmount = abi.decode(log.data, (uint256));
@@ -276,6 +293,38 @@ contract HubRSC is AbstractReactive {
         Pending storage entry = pending[key];
         if (entry.exists) {
             _pruneIfFullySettled(entry, key);
+        }
+    }
+
+    /// @notice Applies authoritative decrease immediately when pending exists, otherwise buffers it.
+    function _applyAuthoritativeDecreaseOrBuffer(
+        address lcc,
+        address recipient,
+        uint256 settledAmount,
+        uint256 inflightAmountToReduce
+    ) internal {
+        // derive the key for the pending entry
+        if (settledAmount == 0 && inflightAmountToReduce == 0) return;
+        bytes32 key = computeKey(lcc, recipient);
+        Pending storage entry = pending[key];
+
+        // if the pending entry exists, then we can apply the decrease immediately
+        if (entry.exists) {
+            _applyAuthoritativeDecrease(lcc, recipient, settledAmount, inflightAmountToReduce);
+            return;
+        }
+
+        // this flow
+        // if the consumeInFlight flag is set, then it is a processed decrease
+        // i.e a decrease action that arrrived out of order and came before the pending entry was created should be applied now
+        // otherwise it is an annulment decrease
+        // i.e an annulment action that arrrived out of order and came before the pending entry was created should be applied now
+        // so we buffer the decrease accordingly
+        if (inflightAmountToReduce > 0) {
+            bufferedProcessedDecreaseByKey[key].inflightAmountToReduce += inflightAmountToReduce;
+            bufferedProcessedDecreaseByKey[key].settledAmount += settledAmount;
+        } else {
+            bufferedAnnulledDecreaseByKey[key] += settledAmount;
         }
     }
 
@@ -304,7 +353,7 @@ contract HubRSC is AbstractReactive {
         if (available == 0 || lccQueue.size == 0) return;
 
         uint256 startSize = lccQueue.size;
-        uint256 cap = startSize < MAX_DISPATCH_ITEMS ? startSize : MAX_DISPATCH_ITEMS;
+        uint256 cap = startSize < maxDispatchItems ? startSize : maxDispatchItems;
 
         // Bounded batch payload buffers sized to current queue.
         address[] memory lccs = new address[](cap);
@@ -362,8 +411,8 @@ contract HubRSC is AbstractReactive {
         }
         // while the first parameter is set to address(0), it is automatically set on the receiving contract to the the RVM id of the calling contract
         // i.e it is the rvm id of this contract, and it is derived as the address of the private key used to deploy the contract
-        bytes memory payload = abi.encodeWithSignature(
-            "processSettlements(address,address[],address[],uint256[])", address(0), lccs, recipients, amounts
+        bytes memory payload = abi.encodeWithSelector(
+            ReactiveConstants.PROCESS_SETTLEMENTS_SELECTOR, address(0), lccs, recipients, amounts
         );
 
         emit DispatchRequested(lcc, available, batchCount, remainingLiquidity);
@@ -373,28 +422,33 @@ contract HubRSC is AbstractReactive {
         if (remainingLiquidity > 0) {
             // while the first parameter is set to address(0), it is automatically set on the receiving contract to the the RVM id of the calling contract
             // i.e it is the rvm id of this contract, and it is derived as the address of the private key used to deploy the contract
-            bytes memory liquidityPayload = abi.encodeWithSignature(
-                "triggerMoreLiquidityAvailable(address,address,uint256)", address(0), lcc, remainingLiquidity
+            bytes memory liquidityPayload = abi.encodeWithSelector(
+                ReactiveConstants.TRIGGER_MORE_LIQUIDITY_AVAILABLE_SELECTOR, address(0), lcc, remainingLiquidity
             );
             emit Callback(reactChainId, hubCallback, CALLBACK_GAS_LIMIT, liquidityPayload);
         }
     }
 
     /// @notice Applies authoritative queue decrement and keeps in-flight reservations bounded.
-    function _applyAuthoritativeDecrease(address lcc, address recipient, uint256 amount, bool consumeInFlight) internal {
-        if (amount == 0) return;
+    function _applyAuthoritativeDecrease(
+        address lcc,
+        address recipient,
+        uint256 settledAmount,
+        uint256 inflightAmountToReduce
+    ) internal {
+        if (settledAmount == 0 && inflightAmountToReduce == 0) return;
         bytes32 key = computeKey(lcc, recipient);
         Pending storage entry = pending[key];
         if (!entry.exists) return;
 
-        uint256 dec = amount < entry.amount ? amount : entry.amount;
+        uint256 dec = settledAmount < entry.amount ? settledAmount : entry.amount;
         if (dec > 0) {
             entry.amount -= dec;
         }
 
         uint256 reserved = inFlightByKey[key];
-        if (consumeInFlight && dec > 0 && reserved > 0) {
-            uint256 consumed = dec < reserved ? dec : reserved;
+        if (inflightAmountToReduce > 0 && reserved > 0) {
+            uint256 consumed = inflightAmountToReduce < reserved ? inflightAmountToReduce : reserved;
             reserved -= consumed;
             inFlightByKey[key] = reserved;
         }
@@ -403,6 +457,37 @@ contract HubRSC is AbstractReactive {
         }
 
         _pruneIfFullySettled(entry, key);
+    }
+
+    /// @notice Applies buffered authoritative decreases after pending entry creation/increase.
+    function _applyBufferedDecreases(Pending storage entry, bytes32 key) internal {
+        // apply buffered processed decreases
+        // i.e any decrease action that arrrived out of order and came before the pending entry was created should be applied now
+        BufferedProcessedSettlement memory bufferedProcessed = bufferedProcessedDecreaseByKey[key];
+        if (bufferedProcessed.settledAmount > 0 || bufferedProcessed.inflightAmountToReduce > 0) {
+            bufferedProcessedDecreaseByKey[key] = BufferedProcessedSettlement(0, 0);
+            _applyAuthoritativeDecrease(
+                entry.lcc, entry.recipient, bufferedProcessed.settledAmount, bufferedProcessed.inflightAmountToReduce
+            );
+        }
+        // apply buffered annulled decreases
+        // i.e any annulment action that arrrived out of order and came before the pending entry was created should be applied now
+        uint256 bufferedAnnulled = bufferedAnnulledDecreaseByKey[key];
+        if (bufferedAnnulled != 0) {
+            bufferedAnnulledDecreaseByKey[key] = 0;
+            _applyAuthoritativeDecrease(entry.lcc, entry.recipient, bufferedAnnulled, 0);
+        }
+    }
+
+    /// @notice Marks callback log identity as processed; returns false for duplicates.
+    function _markLogProcessed(IReactive.LogRecord calldata log) internal returns (bool) {
+        bytes32 reportId = keccak256(abi.encode(log.chain_id, log._contract, log.tx_hash, log.log_index));
+        if (processedReport[reportId]) {
+            emit DuplicateLogIgnored(reportId);
+            return false;
+        }
+        processedReport[reportId] = true;
+        return true;
     }
 
     /// @notice Removes queue membership once both pending and in-flight amounts are zero.
