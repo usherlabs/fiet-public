@@ -151,6 +151,9 @@ library Errors {
     /// @notice Thrown when a transfer is not allowed
     error TransferNotAllowed();
 
+    /// @notice Thrown when direct wrap minting targets a DEX ingress sink.
+    error DirectWrapToDexNotAllowed(address recipient);
+
     /// @notice Thrown when native ETH transferFrom is attempted from a non-self source
     error NativeTransferFromUnsupported(address from);
 
@@ -244,4 +247,3 @@ library Errors {
     /// @param action The action code that is not supported
     error UnsupportedAction(uint256 action);
 }
-
