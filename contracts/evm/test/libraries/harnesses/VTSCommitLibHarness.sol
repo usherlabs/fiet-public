@@ -152,6 +152,12 @@ contract VTSCommitLibHarness {
             : s.poolAccounting[poolId].coverageResidualCISE.token1;
     }
 
+    function getTotalCISEExposureSinceLastMod(PoolId poolId, uint8 tokenIndex) external view returns (uint256) {
+        return tokenIndex == 0
+            ? s.poolAccounting[poolId].totalCISEExposureSinceLastMod.token0
+            : s.poolAccounting[poolId].totalCISEExposureSinceLastMod.token1;
+    }
+
     function getPositionCommitmentDeficit(PositionId id) external view returns (uint256 deficit0, uint256 deficit1) {
         return (s.positionAccounting[id].commitmentDeficit.token0, s.positionAccounting[id].commitmentDeficit.token1);
     }

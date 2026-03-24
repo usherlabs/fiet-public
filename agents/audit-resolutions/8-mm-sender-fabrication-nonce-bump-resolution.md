@@ -117,14 +117,14 @@ An attacker can no longer observe a victim signal and simply claim:
 
 unless they are already a protocol-bound endpoint for the relevant factory.
 
-### 4) Relayed flows remain unchanged
+### 4) Relayed flows: factory-bound sender resolution (follow-up)
 
-The relayed paths were intentionally left unchanged:
+Relayed entrypoints now mirror non-relayed `commitSignal` / `renewSignal` by taking an explicit `IMarketFactory factory` and resolving the effective sender via `VTSOrchestrator._resolveSignalSender(factory, sender)`. This closes mempool relay front-running where an arbitrary unlock callback could submit a copied EIP-712 payload before the intended protocol-bound caller.
 
-- `commitSignalRelayed(...)`
-- `renewSignalRelayed(...)`
+- `commitSignalRelayed(IMarketFactory factory, address sender, ...)`
+- `renewSignalRelayed(IMarketFactory factory, address sender, ...)`
 
-Those flows already bind `sender` through EIP-712 `SubmitAuth` in `VRLSignalManager`, so the non-relayed sender-hardening change was scoped only to the vulnerable path.
+EIP-712 `RelayAuth` in `VRLSignalManager` continues to bind `sender`, signal bytes, deadline, and nonce.
 
 ## Why the original exploit no longer works
 

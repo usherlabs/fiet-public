@@ -7,6 +7,7 @@ import {MMCalldataDecoder} from "../../src/libraries/MMCalldataDecoder.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {Currency} from "v4-periphery/lib/v4-core/src/types/Currency.sol";
 import {IHooks} from "@uniswap/v4-core/src/interfaces/IHooks.sol";
+import {ActionConstants} from "v4-periphery/src/libraries/ActionConstants.sol";
 
 contract MMCalldataDecoderHarness {
     using MMCalldataDecoder for bytes;
@@ -246,8 +247,22 @@ contract MMCalldataDecoderHarness {
 contract MMCalldataDecoderTest is Test {
     MMCalldataDecoderHarness internal h;
 
+    /// @dev Non-zero bits only above the low 160 (canonical address lives in least-significant 160 bits).
+    uint256 internal constant DIRTY_HIGH = uint256(0xA11CE) << 160;
+
     function setUp() public {
         h = new MMCalldataDecoderHarness();
+    }
+
+    /// @notice Overwrite one 32-byte ABI word in `data` (content region, `wordIndex` 0 = first word after length).
+    function _setAbiWord(bytes memory data, uint256 wordIndex, uint256 word) internal pure {
+        assembly ("memory-safe") {
+            mstore(add(add(data, 0x20), mul(wordIndex, 0x20)), word)
+        }
+    }
+
+    function _dirtyAddressWord(address addr) internal pure returns (uint256) {
+        return DIRTY_HIGH | uint256(uint160(addr));
     }
 
     function _poolKey() internal pure returns (PoolKey memory key) {
@@ -559,6 +574,50 @@ contract MMCalldataDecoderTest is Test {
         bytes memory truncated = new bytes(0x60);
         vm.expectRevert(MMCalldataDecoder.SliceOutOfBounds.selector);
         h.decodeCommitSignalParams(truncated);
+    }
+
+    /// @notice Regression: assembly `calldataload` into typed `address` must not break sentinel resolution
+    ///         (dirty upper 96 bits in the ABI word). Solidity cleans `address` on use; see audit scan #11 / vuln #11 (false positive).
+    function test_decodeCommitSignalParams_dirtyOwnerWord_mapsToCanonicalSentinel() public view {
+        bytes memory params = abi.encode(bytes(""), ActionConstants.MSG_SENDER, bytes(""));
+        _setAbiWord(params, 1, _dirtyAddressWord(ActionConstants.MSG_SENDER));
+        (bytes memory sig, address owner, bytes memory relay) = h.decodeCommitSignalParams(params);
+        assertEq(sig.length, 0);
+        assertEq(relay.length, 0);
+        assertEq(owner, ActionConstants.MSG_SENDER);
+        assertTrue(owner == ActionConstants.MSG_SENDER, "sentinel compare as in BaseActionsRouter._mapRecipient");
+    }
+
+    function test_decodeUnwrapLccParams_dirtyRecipient_mapsToCanonicalSentinel() public view {
+        bytes memory params = abi.encode(address(0x1111), uint256(9), ActionConstants.MSG_SENDER, true);
+        _setAbiWord(params, 2, _dirtyAddressWord(ActionConstants.MSG_SENDER));
+        (address lcc, uint256 amount, address recipient, bool payerIsUser) = h.decodeUnwrapLccParams(params);
+        assertEq(lcc, address(0x1111));
+        assertEq(amount, 9);
+        assertEq(recipient, ActionConstants.MSG_SENDER);
+        assertTrue(recipient == ActionConstants.MSG_SENDER, "sentinel compare as in BaseActionsRouter._mapRecipient");
+        assertTrue(payerIsUser);
+    }
+
+    function test_decodeTakeParams_dirtyRecipient_mapsToCanonicalSentinel() public view {
+        Currency c = Currency.wrap(address(0x1234));
+        bytes memory params = abi.encode(c, ActionConstants.ADDRESS_THIS, uint256(42));
+        _setAbiWord(params, 1, _dirtyAddressWord(ActionConstants.ADDRESS_THIS));
+        (Currency outC, address recipient, uint256 maxAmount) = h.decodeTakeParams(params);
+        assertEq(Currency.unwrap(outC), Currency.unwrap(c));
+        assertEq(recipient, ActionConstants.ADDRESS_THIS);
+        assertTrue(recipient == ActionConstants.ADDRESS_THIS, "sentinel compare as in BaseActionsRouter._mapRecipient");
+        assertEq(maxAmount, 42);
+    }
+
+    function test_decodeCollectLiquidityParams_dirtyLcc_mapsToCanonicalAddress() public view {
+        address lccClean = address(0x1111);
+        bytes memory params = abi.encode(lccClean, uint256(7), uint256(9));
+        _setAbiWord(params, 0, _dirtyAddressWord(lccClean));
+        (address lcc, uint256 tokenId, uint256 maxAmount) = h.decodeCollectLiquidityParams(params);
+        assertEq(lcc, lccClean);
+        assertEq(tokenId, 7);
+        assertEq(maxAmount, 9);
     }
 }
 

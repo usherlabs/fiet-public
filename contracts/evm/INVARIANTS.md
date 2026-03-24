@@ -305,6 +305,8 @@ being an informal “should”.
     - **positive** `pendingFeeAdj` funds `slashedPot` (`_fundFeePot`)
     - **negative** `pendingFeeAdj` drains `slashedPot` up to availability (`_drainFeePot`)
   - `src/libraries/VTSFeeLib.sol::_processPositionFees` calls `_finaliseFeeAdjustment` during touch.
+  - Bonus sizing uses `FullMath.mulDivRoundingUp(potAvail, ciseExposure, totalExposure)` (then caps to `potAvail`) so
+    tiny proportional shares are not stranded at zero wei when the position is otherwise eligible.
 
 ### FEE-02: New positions must not receive fee-sharing bonuses on creation
 
@@ -386,6 +388,65 @@ being an informal “should”.
 - **Enforced by**: `src/libraries/DynamicCurrencyDelta.sol::assertNonZeroDeltas` reverts `Errors.CurrencyNotSettled()`.
 - **Practical implication**: Credits do **not** persist across unlock sessions; they are transient and must be consumed
   (eg via `TAKE`, `SYNC`, unwrap flows) within the same batch.
+
+### DELTA-02: `MMPositionManager` residual balances are FCFS dust, not a persisted user entitlement
+
+- **Statement**:
+  - `MMPositionManager` intentionally follows the same broad residual-balance model as Uniswap v4
+    `PositionManager`: if a caller leaves sweepable balance or takeable delta inside the router at the end of their
+    interaction, that residue is **not reserved** for them across transactions.
+  - Residual balances left on `MMPositionManager` are treated as **first-come, first-served dust**. The next caller may
+    sync/take that residue if it remains in the contract.
+  - Therefore, market makers using `MMPositionManager` are responsible for clearing their own dust/deltas inside the same
+    batch / transaction. Leaving residue behind is a caller error or an accepted UX trade-off, not a protocol promise of
+    later exclusivity.
+- **Reference model (Uniswap v4)**:
+  - `lib/v4-periphery/src/PositionManager.sol` exposes public utility actions including `Actions.SWEEP`.
+  - `PositionManager._sweep(currency, to)` transfers the router’s **entire** current balance of `currency` to the
+    recipient, with no caller-specific entitlement tracking.
+  - Fiet adopts the same caller-clears-router-residue philosophy for `MMPositionManager` utility flows, except that
+    Fiet uses explicit delta accounting (`SYNC` / `TAKE`) to net transient credits before batch end.
+- **Enforced / expressed by**:
+  - `src/MMPositionManager.sol::_handleUtilityAction` exposes public utility actions `SYNC` and `TAKE`.
+  - `src/MMPositionManager.sol::_sync` credits the current locker from `address(this)` balance via
+    `VTSOrchestrator.sync(...)`.
+  - `src/modules/PositionManagerEntrypoint.sol::_take` debits the locker’s positive delta and transfers available
+    contract balance to the requested recipient.
+  - `src/modules/PositionManagerEntrypoint.sol::_afterBatch` calls `vtsOrchestrator.assertNonZeroDeltas()`, which
+    forces callers to fully resolve transient credits/debts within the batch or revert.
+- **Scope clarification**:
+  - This FCFS rule applies to **residual dust held by `MMPositionManager` itself**.
+  - It does **not** redefine assets held in explicit custody/accounting domains (for example, queue-custodied balances,
+    Hub reserves, MarketVault balances, or state tracked by commitment/queue accounting) as public dust.
+  - In other words, the invariant is about router residue, not about bypassing the protocol’s actual custody systems.
+
+### DELTA-03: Planned-cancel transient slots are path-scoped only because they are consumed immediately in the same logical flow
+
+- **Statement**:
+  - `LiquidityHub.planCancel(...)` and `planCancelWithQueue(...)` intentionally key transient intent by
+    `(lcc, from, to)` rather than by a transfer nonce or other per-transfer identifier.
+  - This is safe in the current MM decrease flow only because the plan is created during
+    `PoolManager.modifyLiquidity(...)` hook execution and then consumed by the immediately-following matching LCC
+    transfer in the same logical path and transaction.
+  - The protocol does **not** treat planned-cancel transient storage as a general deferred-intent queue.
+  - Therefore, any future flow that can stage a second plan for the same `(lcc, from, to)` before the first matching
+    transfer consumes it is outside the supported design and must either:
+    - preserve the same immediate-consumption sequencing, or
+    - upgrade the transient key to include per-transfer identity.
+- **Enforced by (current call graph / sequencing invariant)**:
+  - `src/libraries/VTSPositionLib.sol::_handleLiquidityDecrease` stages the planned cancel while the position is still
+    inside `PoolManager.modifyLiquidity(...)`, explicitly because the LCC has not yet been transferred to `MMPM`.
+  - `src/modules/PositionManagerImpl.sol::_modifySyntheticLiquidity` calls `poolManager.modifyLiquidity(...)` and then,
+    before returning to any outer MM action, immediately settles/takes the resulting deltas.
+  - `src/modules/PositionManagerImpl.sol::_takePositiveDeltasAndHandleLcc` performs the matching
+    `PoolManager -> MMPM` LCC take for positive deltas right after `modifyLiquidity(...)` returns.
+  - `src/modules/PositionManagerImpl.sol::_handleLccBalanceIncrease` then forwards non-fee LCC onward to custody,
+    triggering the transfer path on which `LiquidityHub.executePlannedCancel(...)` consumes the plan.
+- **Security consequence**:
+  - The coarse `(lcc, from, to)` key is not, by itself, a uniqueness proof.
+  - Safety currently depends on the adjacent plan-then-transfer sequencing remaining true.
+  - Review any refactor that adds batching, retries, deferred transfer steps, or alternate transfer destinations before
+    reusing this mechanism.
 
 ## Authorisation, call-surface, and pause invariants
 
@@ -481,8 +542,36 @@ being an informal “should”.
   - `src/ProxyHook.sol::_beforeSwap` must guarantee that swaps against the proxy pool do not leave a residual
     `amountToSwap` for the proxy pool’s own `Pool.swap` to execute.
   - If the protocol elects to support “partial fills” / liquidity-capped swaps, it must do so without permitting the
-    proxy pool’s AMM state machine to advance (e.g. by reverting when a cap would otherwise leave non-zero residual, or
-    by redesigning the hook accounting so the proxy swap is always fully neutralised).
+    proxy pool’s AMM state machine to advance. For example: liquidity-capped paths must still fully neutralise the
+    proxy-pool swap leg (see **MKT-07** for resolved-recipient exact-output queue semantics), or revert when the hook
+    cannot otherwise guarantee neutralisation.
+
+### MKT-07: Resolved-recipient proxy exact-output may queue output-side deficit LCC (strict when unresolved)
+
+- **Statement**: For a **proxy** swap with **exact output** (`amountSpecified > 0`):
+
+  - If the **deficit / output recipient cannot be resolved** (no `hookData` recipient, or equivalent), the swap must
+    still **revert** when `inMarketBalanceOf(outputUnderlying)` is insufficient to deliver the full requested output
+    immediately (`Errors.InsufficientLiquidity(...)`), consistent with the unresolved exact-input path.
+
+  - If the recipient **is** resolved, the swap may **complete** even when immediate underlying in the market vault is
+    **below** the requested output amount. In that case:
+    - the user’s total entitlement is **`immediateUnderlying + queuedOutputLcc == requestedOutput`** (same underlying
+      denomination); and
+    - the shortfall **`requestedOutput - immediateUnderlying`** is represented as **output-side LCC** minted to the
+      recipient and **queued for settlement** via `LiquidityHub.queueForTransferRecipient` / `settleQueue` (see
+      **HUB-02**, **LCC-02**, **LCC-BACKING-01** Domain B).
+
+  - **Serviceable recipient precondition**: “Resolved” here means the excess/deficit recipient is one that
+    `LiquidityHub.queueForTransferRecipient` (and thus `settleQueue`) will accept for that flow (non-zero recipient,
+    not exempt in ways that block queueing, and with market-derived LCC backing as enforced by the Hub). If the
+    recipient is resolved for routing but **not** serviceable for queueing, the swap must still **revert** with
+    `Errors.InsufficientLiquidity(...)` when immediate underlying cannot cover the full output — the queued-output branch
+    does not apply.
+
+- **Relationship to MKT-05**: This relaxation applies only to **settlement shape** (immediate vs queued). It does **not**
+  permit the proxy pool’s own Uniswap v4 curve to execute: `_beforeSwap` must still ensure the proxy-pool swap leg is
+  fully neutralised and economically meaningful execution remains on the **core** curve only.
 
 ### MKT-06: Canonical market pair ordering is core/LCC order (and events must reflect it)
 

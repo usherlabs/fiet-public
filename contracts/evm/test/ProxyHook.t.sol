@@ -741,6 +741,8 @@ contract ProxyHookTest is MarketVaultBase {
 
     /**
      * @notice Test exact output swap with limited liquidity (with hookData)
+     * @dev Resolved recipient: proceeds like exact-input deficit path — immediate underlying up to vault
+     *      availability, remainder as output-side LCC + settleQueue (no strict revert).
      */
     function test_swap_exactOutput_zeroForOneOnProxy_withLimitedLiquidity_withHookData() public {
         address recipient = makeAddr("output_recipient");
@@ -749,10 +751,27 @@ contract ProxyHookTest is MarketVaultBase {
         uint256 mockAvailableLiquidity = 50;
         _mockLimitedLiquidity(_currency1, mockAvailableLiquidity);
 
-        // Exact output swap requesting more than available must revert even with explicit recipient.
         uint256 requestedOutput = 100;
-        vm.expectRevert();
+        LiquidityCommitmentCertificate lccOut = _getLCCOut(_currency1);
+
+        (, uint256 fullOutput) = _simulateSwap(corePoolKey, true, int256(requestedOutput));
+        assertEq(fullOutput, requestedOutput, "exact-output core should hit requested output amount");
+
         _executeSwap(proxyPoolKey, true, int256(requestedOutput), abi.encode(recipient));
+
+        uint256 queued = LiquidityHub(payable(liquidityHub)).settleQueue(address(lccOut), recipient);
+        assertEq(
+            fullOutput - queued, mockAvailableLiquidity, "immediate underlying should be capped by vault availability"
+        );
+
+        if (fullOutput > mockAvailableLiquidity) {
+            uint256 expectedDeficit = fullOutput - mockAvailableLiquidity;
+            (, uint256 recipientMarketBalance) = lccOut.balancesOf(recipient);
+            assertEq(recipientMarketBalance, expectedDeficit, "Recipient should receive deficit LCC");
+            assertEq(queued, expectedDeficit, "Deficit should be queued immediately");
+        }
+
+        vm.clearMockedCalls();
     }
 
     function test_swap_exactOutput_oneForZeroOnProxy_withLimitedLiquidity_noHookData() public {
@@ -772,8 +791,26 @@ contract ProxyHookTest is MarketVaultBase {
         _mockLimitedLiquidity(_currency0, mockAvailableLiquidity);
 
         uint256 requestedOutput = 100;
-        vm.expectRevert();
+        LiquidityCommitmentCertificate lccOut = _getLCCOut(_currency0);
+
+        (, uint256 fullOutput) = _simulateSwap(corePoolKey, false, int256(requestedOutput));
+        assertEq(fullOutput, requestedOutput, "exact-output core should hit requested output amount");
+
         _executeSwap(proxyPoolKey, false, int256(requestedOutput), abi.encode(recipient));
+
+        uint256 queued = LiquidityHub(payable(liquidityHub)).settleQueue(address(lccOut), recipient);
+        assertEq(
+            fullOutput - queued, mockAvailableLiquidity, "immediate underlying should be capped by vault availability"
+        );
+
+        if (fullOutput > mockAvailableLiquidity) {
+            uint256 expectedDeficit = fullOutput - mockAvailableLiquidity;
+            (, uint256 recipientMarketBalance) = lccOut.balancesOf(recipient);
+            assertEq(recipientMarketBalance, expectedDeficit, "Recipient should receive deficit LCC");
+            assertEq(queued, expectedDeficit, "Deficit should be queued immediately");
+        }
+
+        vm.clearMockedCalls();
     }
 
     function test_proxySwap_exactInput_revertsOnCoreFillMismatch_dueToTightPriceLimit() public {
@@ -851,17 +888,17 @@ contract ProxyHookTest is MarketVaultBase {
         uint256 swapAmount = 100;
         LiquidityCommitmentCertificate lccOut = _getLCCOut(_currency0);
 
-        (, uint256 fullOutput) = _simulateSwap(corePoolKey, true, -int256(swapAmount));
+        (, uint256 fullOutput) = _simulateSwap(corePoolKey, false, -int256(swapAmount));
 
-        BalanceDelta swapDelta = _executeSwap(
+        _executeSwap(
             proxyPoolKey,
             false, // oneForZero
             -int256(swapAmount),
             abi.encode(recipient)
         );
 
-        (, uint256 actualOutput) = _getSwapDeltas(swapDelta, false);
-        assertEq(actualOutput, mockAvailableLiquidity, "Should execute full swap with recipient");
+        uint256 queuedAfter = LiquidityHub(payable(liquidityHub)).settleQueue(address(lccOut), recipient);
+        assertEq(fullOutput - queuedAfter, mockAvailableLiquidity, "Should execute full swap with recipient");
 
         if (fullOutput > mockAvailableLiquidity) {
             uint256 expectedDeficit = fullOutput - mockAvailableLiquidity;
@@ -887,13 +924,19 @@ contract ProxyHookTest is MarketVaultBase {
         uint256 swapAmount = 100;
         LiquidityCommitmentCertificate lccOut = _getLCCOut(_currency0);
 
-        BalanceDelta swapDelta = _executeSwap(proxyPoolKey, false, -int256(swapAmount), abi.encode(recipient));
-        (, uint256 actualOutput) = _getSwapDeltas(swapDelta, false);
-        assertEq(actualOutput, mockAvailableLiquidity, "Underlying output should be capped by available liquidity");
+        (, uint256 fullOutput) = _simulateSwap(corePoolKey, false, -int256(swapAmount));
+        _executeSwap(proxyPoolKey, false, -int256(swapAmount), abi.encode(recipient));
+
+        uint256 queuedAfter = LiquidityHub(payable(liquidityHub)).settleQueue(address(lccOut), recipient);
+        assertEq(
+            fullOutput - queuedAfter,
+            mockAvailableLiquidity,
+            "Underlying output should be capped by available liquidity"
+        );
 
         (, uint256 deficit) = lccOut.balancesOf(recipient);
         assertGt(deficit, 0, "Expected a deficit to be represented as recipient-held market-derived LCC");
-        assertEq(LiquidityHub(payable(liquidityHub)).settleQueue(address(lccOut), recipient), deficit);
+        assertEq(queuedAfter, deficit);
 
         modifyLiquidityRouter.modifyLiquidity(
             corePoolKey,
@@ -907,6 +950,47 @@ contract ProxyHookTest is MarketVaultBase {
         assertEq(LiquidityHub(payable(liquidityHub)).settleQueue(address(lccOut), recipient), 0);
         assertEq(lccOut.balanceOf(recipient), 0, "Settled amount should burn recipient-held deficit LCC");
         assertEq(_currency0.balanceOf(recipient), deficit, "Recipient should receive the settled underlying amount");
+
+        vm.clearMockedCalls();
+    }
+
+    /// @notice Exact-output with resolved recipient: queue then settle via `processSettlementFor` when liquidity appears.
+    function test_swap_exactOutput_zeroForOne_withRecipient_fullQueueSettlementLifecycle() public {
+        address recipient = makeAddr("exactOut_settle_recipient");
+        _setupRecipient(recipient);
+
+        uint256 mockAvailableLiquidity = 50;
+        _mockLimitedLiquidity(_currency1, mockAvailableLiquidity);
+
+        uint256 requestedOutput = 100;
+        LiquidityCommitmentCertificate lccOut = _getLCCOut(_currency1);
+
+        (, uint256 fullOutput) = _simulateSwap(corePoolKey, true, int256(requestedOutput));
+        _executeSwap(proxyPoolKey, true, int256(requestedOutput), abi.encode(recipient));
+
+        uint256 queuedAfter = LiquidityHub(payable(liquidityHub)).settleQueue(address(lccOut), recipient);
+        assertEq(
+            fullOutput - queuedAfter,
+            mockAvailableLiquidity,
+            "Underlying output should be capped by available liquidity"
+        );
+
+        (, uint256 deficit) = lccOut.balancesOf(recipient);
+        assertGt(deficit, 0, "Expected deficit LCC + queue for exact-output shortfall");
+        assertEq(queuedAfter, deficit);
+
+        modifyLiquidityRouter.modifyLiquidity(
+            corePoolKey,
+            ModifyLiquidityParams({tickLower: -60, tickUpper: 60, liquidityDelta: 1e18, salt: bytes32(0)}),
+            ZERO_BYTES
+        );
+
+        _mockLimitedLiquidity(_currency1, initialLiquidity);
+        LiquidityHub(payable(liquidityHub)).processSettlementFor(address(lccOut), recipient, deficit);
+
+        assertEq(LiquidityHub(payable(liquidityHub)).settleQueue(address(lccOut), recipient), 0);
+        assertEq(lccOut.balanceOf(recipient), 0, "Settled amount should burn recipient-held deficit LCC");
+        assertEq(_currency1.balanceOf(recipient), deficit, "Recipient should receive the settled underlying amount");
 
         vm.clearMockedCalls();
     }
@@ -934,9 +1018,11 @@ contract ProxyHookTest is MarketVaultBase {
         uint256 swapAmount = 100;
         LiquidityCommitmentCertificate lccOut = _getLCCOut(_currency1);
 
-        BalanceDelta swapDelta = _executeSwap(proxyPoolKey, true, -int256(swapAmount), abi.encode(recipient));
-        (, uint256 actualOutput) = _getSwapDeltas(swapDelta, true);
-        assertEq(actualOutput, mockAvailableOutputLiquidity);
+        (, uint256 fullOutput) = _simulateSwap(corePoolKey, true, -int256(swapAmount));
+        _executeSwap(proxyPoolKey, true, -int256(swapAmount), abi.encode(recipient));
+
+        uint256 queued = LiquidityHub(payable(liquidityHub)).settleQueue(address(lccOut), recipient);
+        assertEq(fullOutput - queued, mockAvailableOutputLiquidity);
 
         (, uint256 queuedDeficit) = lccOut.balancesOf(recipient);
         assertGt(queuedDeficit, 0, "Expected queued deficit");
@@ -1168,6 +1254,13 @@ contract ProxyHookTest is MarketVaultBase {
             harness.exposed_calcCoreSqrtPriceLimit(nearMax, true, true),
             TickMath.MIN_SQRT_PRICE + 1,
             "flipped near-MAX should clamp to MIN+1"
+        );
+
+        // Flipped tiny non-zero limits should saturate high before the uint160 cast truncates the reciprocal.
+        assertEq(
+            harness.exposed_calcCoreSqrtPriceLimit(1, true, false),
+            TickMath.MAX_SQRT_PRICE - 1,
+            "flipped tiny inputs should clamp to MAX-1 before casting"
         );
 
         // Flipped zero -> direction-aware defaults.

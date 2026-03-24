@@ -263,7 +263,9 @@ contract MMPositionManager is
         } else {
             (uint256 deadline, uint256 authNonce, bytes memory authSig) =
                 abi.decode(relayParams, (uint256, uint256, bytes));
-            tokenId = vtsOrchestrator.commitSignalRelayed(msgSender(), liquiditySignal, deadline, authNonce, authSig);
+            tokenId = vtsOrchestrator.commitSignalRelayed(
+                marketFactory, msgSender(), liquiditySignal, deadline, authNonce, authSig
+            );
         }
         _mint(owner, tokenId);
         emit SignalCommitted(tokenId);
@@ -278,7 +280,9 @@ contract MMPositionManager is
         } else {
             (uint256 deadline, uint256 authNonce, bytes memory authSig) =
                 abi.decode(relayParams, (uint256, uint256, bytes));
-            vtsOrchestrator.renewSignalRelayed(msgSender(), tokenId, liquiditySignal, deadline, authNonce, authSig);
+            vtsOrchestrator.renewSignalRelayed(
+                marketFactory, msgSender(), tokenId, liquiditySignal, deadline, authNonce, authSig
+            );
         }
     }
 
@@ -427,25 +431,24 @@ contract MMPositionManager is
     }
 
     /// @notice Collects available liquidity from settlement queue
+    /// @dev Intersects three caps: caller's Hub queue, underlying reserve availability, and this caller's
+    ///      beneficiary-scoped slice in the queue custodian for `tokenId`. Without the beneficiary key, a locker
+    ///      with any queue could pair it with another party's commit custody bucket.
+    ///
+    ///      Intended model (queue-gated collect):
+    ///      - This path exists to release custodied LCC and then call `processSettlementFor`, which burns the
+    ///        caller's LCC and clears their Hub `settleQueue` entry. If `settleQueue(lcc, locker) == 0`, this
+    ///        function is a no-op by design — e.g. some flows (including certain seizure shapes) may record LCC
+    ///        in the custodian for the locker without creating a per-LCC queue entry; those are not settled here.
+    ///      - Arbitrary `processSettlementFor` calls cannot drain another party's custody: settlement still
+    ///        requires the recipient's market-derived LCC balance; beneficiary-scoped custody ensures collect
+    ///        only debits the slice matching the caller's queue.
     /// @param lcc The LCC token address
     /// @param tokenId The commitment NFT token ID bucket to collect from
     /// @param maxAmount The maximum amount to collect
     function _collectAvailableLiquidity(address lcc, uint256 tokenId, uint256 maxAmount) internal {
         address locker = msgSender();
-        uint256 queued = liquidityHub.settleQueue(lcc, locker);
-
-        if (queued > 0) {
-            (, uint256 available) = liquidityHub.reserveOfUnderlyingTuple(lcc);
-            uint256 custodied = queueCustodian.queued(tokenId, lcc);
-            uint256 toSettle = Math.min(Math.min(queued, available), Math.min(maxAmount, custodied));
-            if (toSettle > 0) {
-                uint256 released = queueCustodian.release(tokenId, lcc, locker, toSettle);
-                if (released > 0) {
-                    // LCC already released from custody to locker for burn/pay.
-                    liquidityHub.processSettlementFor(lcc, locker, released);
-                }
-            }
-        }
+        liquidityHub.settleFromCustodian(lcc, address(queueCustodian), tokenId, locker, maxAmount);
     }
 
     /// @notice Syncs currency balance as credit to delta
@@ -456,7 +459,7 @@ contract MMPositionManager is
         if (currency == CurrencyLibrary.ADDRESS_ZERO) {
             revert Errors.InvalidAddress(address(0));
         }
-        vtsOrchestrator.sync(currency, address(this), msgSender());
+        vtsOrchestrator.sync(marketFactory, currency, address(this), msgSender());
     }
 
     /// @notice Wraps native ETH to WETH

@@ -400,13 +400,18 @@ contract VTSFeeLibTest is VTSLibTestBase {
         assertFalse(allocated);
     }
 
-    function test_queueBonusForToken_smallExposure_bonusZero_returnsFalse() public {
+    /// @dev With mulDivRoundingUp, any positive potAvail and cise allocates at least 1 wei (no flooring to zero).
+    function test_queueBonusForToken_smallExposure_roundsUp_allocatesOneWei() public {
         harness.setProtocolFeeAccrued(testPoolId, 1, 0);
         harness.setFeesShared(testPositionId, 0, 0);
         harness.setPoolTotalCISEExposure(testPoolId, 0, 1e18);
 
         bool allocated = harness.queueBonusForToken(testPositionId, testPoolId, 0, 1, 1);
-        assertFalse(allocated);
+        assertTrue(allocated);
+        (uint256 pot0After,) = harness.getProtocolFeeAccrued(testPoolId);
+        assertEq(pot0After, 0, "1 wei pot should be fully allocated via rounding up");
+        (int256 pend0After,) = harness.getPendingFeeAdj(testPositionId);
+        assertEq(pend0After, -1, "pending should reflect 1 wei bonus");
     }
 
     function test_queueBonusForToken_smallExposure_nonZeroBonus_allocates() public {
@@ -433,13 +438,17 @@ contract VTSFeeLibTest is VTSLibTestBase {
         assertFalse(allocated);
     }
 
-    function test_queueBonusForToken_roundingToZero_bonusZero_returnsFalse() public {
+    function test_queueBonusForToken_roundingToZero_roundsUp_allocatesOneWei() public {
         harness.setProtocolFeeAccrued(testPoolId, 1, 0);
         harness.setFeesShared(testPositionId, 0, 0);
         harness.setPoolTotalCISEExposure(testPoolId, 0, 1e18);
 
         bool allocated = harness.queueBonusForToken(testPositionId, testPoolId, 0, 1, 2e6);
-        assertFalse(allocated);
+        assertTrue(allocated);
+        (uint256 pot0After,) = harness.getProtocolFeeAccrued(testPoolId);
+        assertEq(pot0After, 0);
+        (int256 pend0After,) = harness.getPendingFeeAdj(testPositionId);
+        assertEq(pend0After, -1);
     }
 
     function test_queueBonusForToken_success_allocates_updatesSpendIndex_andPending() public {
@@ -785,5 +794,133 @@ contract VTSFeeLibTest is VTSLibTestBase {
 
         (uint256 after0,) = harness.getFeesShared(testPositionId);
         assertEq(after0, 750, "Expected 1/4 of shares to be spent when deltaIndex is Q128/4");
+    }
+
+    // ============================================================
+    // CSI / CISE regression (harness): multi-round, ordering, rounding
+    // ============================================================
+
+    /// @notice Regression: after spend-index consumption, a new slash mint adds to remaining shares (not re-spent).
+    /// @dev Mirrors `_applyCoverageBurn`: sync first, then mint onto `feesShared`. New mint must not be implicit in the prior deltaIndex.
+    function test_csi_multiRound_newSlash_afterSpendIndex_sync_usesRemainingPlusMint_harness() public {
+        PositionId slasher = PositionId.wrap(bytes32(uint256(0x51A5E7)));
+        harness.setupPosition(slasher, testPoolId);
+
+        uint256 initialShares = 1000;
+        uint256 deltaSpend = FixedPoint128.Q128 / 4;
+        harness.setFeesShared(slasher, 0, initialShares);
+        harness.setPositionFeesSharedIndexLastX128(slasher, 0, 0);
+        harness.setPoolFeesSharedSpendIndexX128(testPoolId, 0, deltaSpend);
+
+        harness.syncFeesSharedRemainingForToken(slasher, testPoolId, 1);
+        uint256 spent = FullMath.mulDiv(initialShares, deltaSpend, FixedPoint128.Q128);
+        uint256 remaining = initialShares - spent;
+        (, uint256 fsAfterSync) = harness.getFeesShared(slasher);
+        assertEq(fsAfterSync, remaining, "sync should spend down existing shares only");
+
+        harness.syncFeesSharedRemainingForToken(slasher, testPoolId, 1);
+        (, uint256 fsAfterSecondSync) = harness.getFeesShared(slasher);
+        assertEq(fsAfterSecondSync, remaining, "second sync with same index must be a no-op");
+
+        uint256 newMint = 400;
+        harness.setFeesShared(slasher, 0, remaining + newMint);
+        (, uint256 fsFinal) = harness.getFeesShared(slasher);
+        assertEq(fsFinal, remaining + newMint, "post-slash feesShared must equal remaining + newMint");
+    }
+
+    /// @notice Regression: symmetric beneficiaries should extract the same total bonus regardless of touch order.
+    function test_csi_afterTouch_orderIndependent_protocolAndSlashedPot_forSymmetricExposures() public {
+        PositionId posB = PositionId.wrap(bytes32(uint256(0xBEE)));
+        PositionId posC = PositionId.wrap(bytes32(uint256(0xCEE)));
+        harness.setupPosition(posB, testPoolId);
+        harness.setupPosition(posC, testPoolId);
+
+        uint256 pot1 = 1_000_000;
+        uint256 slashFund1 = 10_000_000;
+        uint256 totalCise0 = 1000;
+
+        harness.setProtocolFeeAccrued(testPoolId, 0, pot1);
+        harness.setSlashedPot(testPoolId, 0, slashFund1);
+        harness.setPoolTotalCISEExposure(testPoolId, totalCise0, 0);
+        harness.setCISEExposure(posB, 500, 0);
+        harness.setCISEExposure(posC, 500, 0);
+        harness.setFeesShared(posB, 0, 0);
+        harness.setFeesShared(posC, 0, 0);
+        harness.setPendingFeeAdj(posB, 0, 0);
+        harness.setPendingFeeAdj(posC, 0, 0);
+
+        uint256 snap = vm.snapshotState();
+
+        harness.afterTouchPosition(posB);
+        harness.afterTouchPosition(posC);
+        (, uint256 protAfterBC) = harness.getProtocolFeeAccrued(testPoolId);
+        (, uint256 slashAfterBC) = harness.getSlashedPot(testPoolId);
+
+        assertTrue(vm.revertToState(snap), "revert to snapshot");
+
+        harness.afterTouchPosition(posC);
+        harness.afterTouchPosition(posB);
+        (, uint256 protAfterCB) = harness.getProtocolFeeAccrued(testPoolId);
+        (, uint256 slashAfterCB) = harness.getSlashedPot(testPoolId);
+
+        assertEq(protAfterBC, protAfterCB, "protocolFeeAccrued token1 must be order-independent for symmetric CISE");
+        assertEq(slashAfterBC, slashAfterCB, "slashedPot token1 must be order-independent for symmetric CISE");
+    }
+
+    /// @notice Regression: sequential bonuses with mulDivRoundingUp never drive protocolFeeAccrued below zero.
+    function test_csi_sequentialAfterTouch_mulDivRoundingUp_neverOverdraftsProtocolPot() public {
+        uint256 pot1 = 1000;
+        uint256 total0 = 100;
+        for (uint256 i = 0; i < 5; i++) {
+            PositionId pid = PositionId.wrap(bytes32(uint256(0xF00 + i)));
+            harness.setupPosition(pid, testPoolId);
+            harness.setCISEExposure(pid, 20, 0);
+            harness.setFeesShared(pid, 0, 0);
+            harness.setPendingFeeAdj(pid, 0, 0);
+        }
+        harness.setProtocolFeeAccrued(testPoolId, 0, pot1);
+        harness.setSlashedPot(testPoolId, 0, 1_000_000);
+        harness.setPoolTotalCISEExposure(testPoolId, total0, 0);
+
+        for (uint256 j = 0; j < 5; j++) {
+            harness.afterTouchPosition(PositionId.wrap(bytes32(uint256(0xF00 + j))));
+        }
+
+        (, uint256 protFinal) = harness.getProtocolFeeAccrued(testPoolId);
+        assertGe(protFinal, 0, "protocol fee accrued must not underflow");
+        assertLe(pot1 - protFinal, pot1, "total bonus paid cannot exceed initial pot");
+    }
+
+    /// @notice Regression: potAvail uses synced self `feesShared`, not the pre-slash gross.
+    function test_csi_queueBonus_potAvail_usesPostSync_feesShared_harness() public {
+        PositionId slasher = PositionId.wrap(bytes32(uint256(0x5E1F)));
+        harness.setupPosition(slasher, testPoolId);
+
+        uint256 deltaSpend = FixedPoint128.Q128 / 4;
+        harness.setFeesShared(slasher, 0, 1000);
+        harness.setPositionFeesSharedIndexLastX128(slasher, 0, 0);
+        harness.setPoolFeesSharedSpendIndexX128(testPoolId, 0, deltaSpend);
+        harness.syncFeesSharedRemainingForToken(slasher, testPoolId, 1);
+
+        uint256 remaining = 1000 - FullMath.mulDiv(1000, deltaSpend, FixedPoint128.Q128);
+        (, uint256 fs1) = harness.getFeesShared(slasher);
+        assertEq(fs1, remaining);
+
+        harness.setPoolFeesSharedSpendIndexX128(testPoolId, 0, deltaSpend);
+        harness.setPositionFeesSharedIndexLastX128(slasher, 0, deltaSpend);
+
+        uint256 protocol1 = 10_000;
+        harness.setProtocolFeeAccrued(testPoolId, 0, protocol1);
+        harness.setPoolTotalCISEExposure(testPoolId, 100, 0);
+        harness.setCISEExposure(slasher, 100, 0);
+
+        uint256 potAvail = protocol1 - remaining;
+        uint256 expectedBonus = FullMath.mulDivRoundingUp(potAvail, 100, 100);
+        if (expectedBonus > potAvail) expectedBonus = potAvail;
+
+        bool ok = harness.queueBonusForToken(slasher, testPoolId, 1, 0, 100);
+        assertTrue(ok);
+        (, uint256 protAfter) = harness.getProtocolFeeAccrued(testPoolId);
+        assertEq(protAfter, protocol1 - expectedBonus, "bonus must use potAvail after sync, not full protocol pot");
     }
 }

@@ -86,7 +86,8 @@ abstract contract VTSCurrencyDelta is IVTSCurrencyDelta {
     // ═══════════════════════════════════════════════════════════════════════════
 
     /// @inheritdoc IVTSCurrencyDelta
-    function sync(Currency currency, address owner, address target) external {
+    function sync(IMarketFactory factory, Currency currency, address owner, address target) external {
+        _assertBoundFactoryCaller(factory);
         // Sync owner's balance as credit to target's delta
         // Use case: MMPM receives msg.value (owner=MMPM), credit goes to locker (target=msgSender)
         DynamicCurrencyDelta.syncBalanceAsCredit(currency, owner, target);
@@ -96,16 +97,18 @@ abstract contract VTSCurrencyDelta is IVTSCurrencyDelta {
     /// @dev Only handles balance increases (accumulation), not decreases (consumption).
     ///      Convenience function to sync both currencies of a pool pair in one call.
     ///      Useful after operations that increase multiple currency balances.
+    /// @param factory The market factory namespace used to validate the caller is protocol-bound
     /// @param currency0 The first currency to sync
     /// @param currency1 The second currency to sync
     /// @param owner The address whose balance to check (balance holder)
     /// @param target The address whose delta to credit
     /// @return deltaChange0 The amount by which currency0 delta was adjusted
     /// @return deltaChange1 The amount by which currency1 delta was adjusted
-    function syncPair(Currency currency0, Currency currency1, address owner, address target)
+    function syncPair(IMarketFactory factory, Currency currency0, Currency currency1, address owner, address target)
         external
         returns (int128 deltaChange0, int128 deltaChange1)
     {
+        _assertBoundFactoryCaller(factory);
         deltaChange0 = DynamicCurrencyDelta.syncBalanceAsCredit(currency0, owner, target);
         deltaChange1 = DynamicCurrencyDelta.syncBalanceAsCredit(currency1, owner, target);
     }

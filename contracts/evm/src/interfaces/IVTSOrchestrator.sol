@@ -227,7 +227,9 @@ interface IVTSOrchestrator is IPausableVTS, IVTSCurrencyDelta, IVTSAdmin {
         external
         returns (uint256 commitId);
     /// @notice Commit a liquidity signal using sender-signed EIP-712 relayer authorisation
+    /// @param factory The market factory namespace for caller-bound validation (mirrors non-relayed commit)
     function commitSignalRelayed(
+        IMarketFactory factory,
         address sender,
         bytes memory liquiditySignal,
         uint256 deadline,
@@ -282,7 +284,9 @@ interface IVTSOrchestrator is IPausableVTS, IVTSCurrencyDelta, IVTSAdmin {
     function renewSignal(IMarketFactory factory, address sender, uint256 commitId, bytes memory liquiditySignal)
         external;
     /// @notice Renew a liquidity signal using sender-signed EIP-712 relayer authorisation
+    /// @param factory The market factory namespace for caller-bound validation (mirrors non-relayed renew)
     function renewSignalRelayed(
+        IMarketFactory factory,
         address sender,
         uint256 commitId,
         bytes memory liquiditySignal,

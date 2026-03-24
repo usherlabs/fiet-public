@@ -17,7 +17,7 @@ import {BalanceDelta, toBalanceDelta} from "@uniswap/v4-core/src/types/BalanceDe
 import {ModifyLiquidityParams, SwapParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
 import {IHooks} from "@uniswap/v4-core/src/interfaces/IHooks.sol";
 
-import {PositionId, Position} from "../src/types/Position.sol";
+import {PositionId, Position, PositionLibrary} from "../src/types/Position.sol";
 import {RFSCheckpoint} from "../src/types/Checkpoint.sol";
 import {HookMiner} from "v4-periphery/src/utils/HookMiner.sol";
 import {MarketTestBase} from "./base/MarketTestBase.sol";
@@ -136,6 +136,18 @@ contract CoreHookTest is Test {
         assertEq(BalanceDelta.unwrap(returnedFeeAdj), BalanceDelta.unwrap(feeAdj));
 
         assertEq(spy.calls(), 0, "spy must not be called on remove-liquidity");
+    }
+
+    function test_beforeRemoveLiquidity_settlesGrowths_evenWhenPaused() public {
+        ModifyLiquidityParams memory params = _dummyParams();
+        PositionId expectedId = PositionLibrary.generateId(address(this), params);
+        vts.setPaused(true);
+
+        bytes4 sel = hook.exposed_beforeRemoveLiquidity(address(this), key, params, "");
+
+        assertEq(sel, hook.beforeRemoveLiquidity.selector);
+        assertEq(PositionId.unwrap(vts.lastSettledPositionId()), PositionId.unwrap(expectedId));
+        assertEq(vts.settlePositionGrowthsCalls(), 1, "growth settlement should still run while paused");
     }
 
     // ------------------------------------------------------------
@@ -269,6 +281,15 @@ contract CoreHookHarness is CoreHook {
         return _afterRemoveLiquidity(sender, k, params, delta, feesAccrued, hookData);
     }
 
+    function exposed_beforeRemoveLiquidity(
+        address sender,
+        PoolKey calldata k,
+        ModifyLiquidityParams calldata params,
+        bytes calldata hookData
+    ) external returns (bytes4) {
+        return _beforeRemoveLiquidity(sender, k, params, hookData);
+    }
+
     function exposed_afterSwap(
         address sender,
         PoolKey calldata k,
@@ -375,13 +396,20 @@ contract ProxyHookSpy {
 contract MockVTSOrchestrator {
     BalanceDelta internal _feeAdj;
     bool internal _isMM;
+    bool internal _paused;
 
     uint160 internal _lastSqrtPBefore;
     uint128 internal _lastLiqBefore;
+    PositionId internal _lastSettledPositionId;
+    uint256 internal _settlePositionGrowthsCalls;
 
     function setReturn(BalanceDelta feeAdj, bool isMMPosition) external {
         _feeAdj = feeAdj;
         _isMM = isMMPosition;
+    }
+
+    function setPaused(bool paused) external {
+        _paused = paused;
     }
 
     function processPosition(
@@ -417,12 +445,25 @@ contract MockVTSOrchestrator {
         _lastLiqBefore = liqBefore;
     }
 
+    function settlePositionGrowths(PositionId positionId) external {
+        _lastSettledPositionId = positionId;
+        _settlePositionGrowthsCalls++;
+    }
+
     function lastSqrtPBefore() external view returns (uint160) {
         return _lastSqrtPBefore;
     }
 
     function lastLiqBefore() external view returns (uint128) {
         return _lastLiqBefore;
+    }
+
+    function lastSettledPositionId() external view returns (PositionId) {
+        return _lastSettledPositionId;
+    }
+
+    function settlePositionGrowthsCalls() external view returns (uint256) {
+        return _settlePositionGrowthsCalls;
     }
 
     function isPoolPaused(PoolId) external pure returns (bool) {
@@ -433,8 +474,8 @@ contract MockVTSOrchestrator {
         return false;
     }
 
-    function isPoolOrGlobalPaused(PoolId) external pure returns (bool) {
-        return false;
+    function isPoolOrGlobalPaused(PoolId) external view returns (bool) {
+        return _paused;
     }
 }
 

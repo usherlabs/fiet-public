@@ -7,6 +7,7 @@ import {MockOracleHelper} from "./mocks/MockOracleHelper.sol";
 import {MockERC20Transferable} from "./mocks/MockERC20Transferable.sol";
 import {Bounds} from "../../src/libraries/Bounds.sol";
 import {LCCFactoryLinkedLib} from "../../src/libraries/LCCFactoryLib.sol";
+import {LiquidityHubLinkedLib} from "../../src/libraries/LiquidityHubLinkedLib.sol";
 
 /// @notice Echidna harness for LiquidityHub/LCC backing invariants (Domains A/B + transfer semantics).
 ///
@@ -22,9 +23,6 @@ import {LCCFactoryLinkedLib} from "../../src/libraries/LCCFactoryLib.sol";
 /// - Add Domain B: `LiquidityHub.issue` (issuer-gated) and bucket constraints.
 /// - Add wrapWith conversion and conservation checks (moved to separate harness).
 contract LiquidityHubLCCBackingEchidnaTest {
-    // Must match `--solc-args --libraries ...` in `scripts/echidna.sh`.
-    address internal constant LCC_FACTORY_LINKED_LIB = 0xE2B5401952dC4c9059b7eDE3a1742bF2BC17EBAd;
-
     LiquidityHub internal hub;
     LiquidityCommitmentCertificate internal lccNative;
     LiquidityCommitmentCertificate internal lccERC20;
@@ -117,16 +115,26 @@ contract LiquidityHubLCCBackingEchidnaTest {
     }
 
     function _deployLinkedLib() internal {
-        // Deploy the linked library via CREATE2 from Echidna's harness address (deterministic).
-        // The address is pinned via solc linking and must match `LCC_FACTORY_LINKED_LIB`.
-        bytes32 salt = keccak256("echidna.LCCFactoryLinkedLib");
-        bytes memory libInitCode = type(LCCFactoryLinkedLib).creationCode;
-        address lib;
+        bytes32 saltLcc = keccak256("echidna.LCCFactoryLinkedLib");
+        bytes32 saltLh = keccak256("echidna.LiquidityHubLinkedLib");
+        bytes memory initLcc = type(LCCFactoryLinkedLib).creationCode;
+        bytes memory initLh = type(LiquidityHubLinkedLib).creationCode;
+        address expectedLcc = address(
+            uint160(uint256(keccak256(abi.encodePacked(bytes1(0xff), address(this), saltLcc, keccak256(initLcc)))))
+        );
+        address expectedLh = address(
+            uint160(uint256(keccak256(abi.encodePacked(bytes1(0xff), address(this), saltLh, keccak256(initLh)))))
+        );
+        address lcc;
+        address lhl;
         assembly {
-            lib := create2(0, add(libInitCode, 0x20), mload(libInitCode), salt)
+            lcc := create2(0, add(initLcc, 0x20), mload(initLcc), saltLcc)
+            lhl := create2(0, add(initLh, 0x20), mload(initLh), saltLh)
         }
-        require(lib != address(0), "LCCFactoryLinkedLib deploy failed");
-        require(lib == LCC_FACTORY_LINKED_LIB, "LCCFactoryLinkedLib addr mismatch");
+        require(lcc != address(0), "LCCFactoryLinkedLib deploy failed");
+        require(lhl != address(0), "LiquidityHubLinkedLib deploy failed");
+        require(lcc == expectedLcc, "LCCFactoryLinkedLib addr mismatch");
+        require(lhl == expectedLh, "LiquidityHubLinkedLib addr mismatch");
     }
 
     constructor() {

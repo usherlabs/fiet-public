@@ -225,7 +225,8 @@ contract VTSCoverageBurnCOV01EchidnaTest {
             return (false, true);
         }
 
-        uint256 feesBurn = _computeFeesBurn();
+        uint256 consumedFees = _computeConsumedFees();
+        uint256 feesBurn = _computeFeesBurn(consumedFees);
         Snap memory afterSnap = _snapshot(sTokenIndex, sFeeTokenIndex);
 
         if (feesBurn == 0) {
@@ -233,7 +234,7 @@ contract VTSCoverageBurnCOV01EchidnaTest {
                 && (afterSnap.pending == beforeSnap.pending) && (afterSnap.snap == beforeSnap.snap)
                 && (afterSnap.fg == beforeSnap.fg);
         } else {
-            uint256 growthInc = FullMath.mulDiv(feesBurn, FixedPoint128.Q128, sLiq);
+            uint256 growthInc = FullMath.mulDiv(consumedFees, FixedPoint128.Q128, sLiq);
             ok = (afterSnap.poolFee == beforeSnap.poolFee + feesBurn)
                 && (afterSnap.shared == beforeSnap.shared + feesBurn)
                 && (afterSnap.pending == beforeSnap.pending + int256(feesBurn))
@@ -243,12 +244,19 @@ contract VTSCoverageBurnCOV01EchidnaTest {
         return (true, ok);
     }
 
-    function _computeFeesBurn() internal view returns (uint256 feesBurn) {
+    function _computeConsumedFees() internal view returns (uint256 consumedFees) {
         if (sBurnBase == 0) {
             return 0;
         }
         uint256 fees = sLiq;
-        feesBurn = FullMath.mulDiv(fees, sBurnBase, sOfDelta);
+        consumedFees = FullMath.mulDiv(fees, sBurnBase, sOfDelta);
+    }
+
+    function _computeFeesBurn(uint256 consumedFees) internal view returns (uint256 feesBurn) {
+        if (consumedFees == 0) {
+            return 0;
+        }
+        feesBurn = consumedFees;
         feesBurn = FullMath.mulDiv(feesBurn, sBps, LiquidityUtils.BPS_DENOMINATOR);
     }
 

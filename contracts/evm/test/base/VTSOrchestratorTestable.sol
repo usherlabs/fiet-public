@@ -100,6 +100,16 @@ contract VTSOrchestratorTestable is VTSOrchestrator {
         );
     }
 
+    /// @notice Get pool residual-only DICE index for debugging
+    function getPoolDICEResidualIndex(PoolId poolId)
+        external
+        view
+        returns (uint256 residualIndex0, uint256 residualIndex1)
+    {
+        PoolAccounting storage paPool = s.poolAccounting[poolId];
+        return (paPool.coveragePerResidualDeficitIndexX128.token0, paPool.coveragePerResidualDeficitIndexX128.token1);
+    }
+
     /// @notice Get position's DICE coverage index checkpoint for debugging
     /// @param positionId The position identifier
     /// @return coverageIndexLast0 Last coverage index checkpoint for token0

@@ -140,7 +140,7 @@ abi.encode(bytes liquiditySignal, address owner, bytes relayParams)
 Behaviour:
 
 - if `relayParams.length == 0`: calls `VTSOrchestrator.commitSignal(sender, liquiditySignal)`
-- else: decodes `(deadline, authNonce, authSig)` and calls `VTSOrchestrator.commitSignalRelayed(sender, liquiditySignal, deadline, authNonce, authSig)`
+- else: decodes `(deadline, authNonce, authSig)` and calls `VTSOrchestrator.commitSignalRelayed(marketFactory, sender, liquiditySignal, deadline, authNonce, authSig)`
 
 ### RENEW_SIGNAL params
 
@@ -153,7 +153,7 @@ abi.encode(uint256 tokenId, bytes liquiditySignal, bytes relayParams)
 Behaviour:
 
 - if `relayParams.length == 0`: calls `VTSOrchestrator.renewSignal(sender, tokenId, liquiditySignal)`
-- else: decodes `(deadline, authNonce, authSig)` and calls `VTSOrchestrator.renewSignalRelayed(sender, tokenId, liquiditySignal, deadline, authNonce, authSig)`
+- else: decodes `(deadline, authNonce, authSig)` and calls `VTSOrchestrator.renewSignalRelayed(marketFactory, sender, tokenId, liquiditySignal, deadline, authNonce, authSig)`
 
 ## Operational checklist
 

@@ -117,25 +117,28 @@ _settleFromDeltas(payerIsUser=false):
 
 ## Core Operations
 
-### 1. `sync()` — Credit Locker Delta from Balance Increase
+### 1. `sync()` / `syncPair()` — Credit Locker Delta from Balance Increase
 
 **Purpose**: Establishes delta credit on the **locker** when physical token balance increases (e.g., after wrap/unwrap transformations).
+
+**Access control (FIET-695):** `VTSOrchestrator.sync` / `syncPair` require a **MarketFactory-bound caller** (`_assertBoundFactoryCaller`). Arbitrary EOAs cannot call `sync` / `syncPair` directly; they are invoked from protocol routers such as `MMPositionManager` / `PositionManagerBase` that forward the factory namespace.
 
 **Behaviour**:
 
 - **ONLY ADDS** to delta — never reduces existing credits
 - Credits the difference between balance and current delta (when balance > delta)
-- Syncs to **locker** (msgSender), NOT MMPM
+- Credits the **locker** (`target` / `msgSender()` in the MMPM path), not MMPM’s settlement obligation bucket
 - Does NOT affect position-derived claims on MMPM
 
-**Implementation** (`MMPositionManager._syncBalanceToDeltas`):
+**Implementation** (`PositionManagerBase._sync`):
 
 ```solidity
-function _syncBalanceToDeltas(Currency currency) internal {
-    // Sync to locker delta (msgSender), not MMPM
-    vtsOrchestrator.syncFor(currency, msgSender());
+function _sync(Currency currency) internal {
+    vtsOrchestrator.sync(marketFactory, currency, address(this), msgSender());
 }
 ```
+
+Here `owner` is MMPM (balance holder) and `target` is the locker (`msgSender()`), matching the split model described in **Security Considerations** above.
 
 **Why Locker Target**:  
 Balance syncs represent physical tokens held by MMPM that should be takeable by the locker. By targeting the locker's delta, we ensure explicit separation from MMPM's settlement obligations.
@@ -253,7 +256,7 @@ _settle()
                             │
                             ▼
 ┌─────────────────────────────────────────────────────────────┐
-│  3. syncFor(weth, msgSender()) — to LOCKER delta            │
+│  3. sync(factory, weth, MMPM, locker) — factory-bound only    │
 │     - Credits LOCKER's WETH delta from new balance          │
 │     - Locker delta increases to match WETH balance          │
 └─────────────────────────────────────────────────────────────┘
@@ -288,7 +291,7 @@ _settle()
                             │
                             ▼
 ┌─────────────────────────────────────────────────────────────┐
-│  syncFor(native, msgSender()) — to LOCKER delta             │
+│  sync(factory, native, MMPM, locker) — factory-bound only    │
 │  - Credits LOCKER's native delta from new balance           │
 │  - Locker delta increases to match ETH balance              │
 └─────────────────────────────────────────────────────────────┘
@@ -359,7 +362,7 @@ _settle()
                             ▼
 ┌─────────────────────────────────────────────────────────────┐
 │  if (to == address(this)):                                  │
-│    sync(underlying)                                         │
+│    sync(factory, underlying, MMPM, locker) — bound only     │
 │    - Credits underlying delta from new balance              │
 └─────────────────────────────────────────────────────────────┘
 ```
@@ -397,14 +400,15 @@ _settle()
 
 ## Key Invariants
 
-### Invariant 1: `sync()` Targets Locker, Only Credits
+### Invariant 1: `sync()` / `syncPair()` Are Factory-Bound; Target Is Locker; Only Credits
 
 ```
-sync(currency) → syncFor(currency, msgSender())
+sync(factory, currency, owner=MMPM, target=locker)  // via bound PositionManager / MMPM
 deltaChange >= 0
 ```
 
-- Balance syncs always target the **locker** (not MMPM)
+- External callers must be **protocol-bound** in the given `factory` namespace (`_assertBoundFactoryCaller`); this is not a public `syncFor(currency, msgSender())` EOA surface.
+- Balance syncs credit the **locker** (`target`), not MMPM’s settlement-obligation delta
 - Can only increase delta (establish credit from balance increase) or reduce debt
 - NEVER reduces positive delta
 
@@ -552,14 +556,18 @@ take(lcc, recipient, 150):
 
 ## Security Considerations
 
-1. **Explicit Target Separation**: By splitting deltas by target address (locker vs MMPM), the system explicitly separates takeable balances from settlement obligations. This is safer than relying on implicit balance caps.
+1. **`sync` / `syncPair` access control**: These entrypoints credit a `target` delta from an `owner` balance and must not be callable by arbitrary EOAs. They require the same **MarketFactory-bound caller** validation as `creditExact` (`_assertBoundFactoryCaller`), with the factory namespace passed explicitly so only protocol routers (e.g. `MMPositionManager`) can invoke them.
 
-2. **LCC Detection via Registry**: `_isLCC()` uses `LCCFactory.isLCC()` to validate LCC tokens, ensuring only registered LCCs go through the ERC-6909 settle/take flow.
+2. **Explicit Target Separation**: By splitting deltas by target address (locker vs MMPM), the system explicitly separates takeable balances from settlement obligations. This is safer than relying on implicit balance caps.
 
-3. **ERC-6909 Claim Management**: LCC fee credits are held as ERC-6909 claims on PoolManager. The `_take()` function properly burns claims before taking actual ERC20 tokens, preventing double-spending.
+3. **LCC Detection via Registry**: `_isLCC()` uses `LCCFactory.isLCC()` to validate LCC tokens, ensuring only registered LCCs go through the ERC-6909 settle/take flow.
 
-4. **No Phantom Credit Clearing**: `sync()` only increases delta; it never reduces positive delta. This preserves market liquidity claims on MMPM.
+4. **ERC-6909 Claim Management**: LCC fee credits are held as ERC-6909 claims on PoolManager. The `_take()` function properly burns claims before taking actual ERC20 tokens, preventing double-spending.
 
-5. **Settlement Validation**: The `_settle()` flow includes RFS (Required for Settlement) checks to ensure positions meet settlement requirements before withdrawals.
+5. **No Phantom Credit Clearing**: `sync()` only increases delta; it never reduces positive delta. This preserves market liquidity claims on MMPM.
 
-6. **Delta Consistency**: The `assertNonZeroDeltas` modifier ensures batches complete with all deltas resolved, preventing stuck obligations.
+6. **Settlement Validation**: The `_settle()` flow includes RFS (Required for Settlement) checks to ensure positions meet settlement requirements before withdrawals.
+
+7. **Delta Consistency**: The `assertNonZeroDeltas` modifier ensures batches complete with all deltas resolved, preventing stuck obligations.
+
+8. **MM queue custodian vs Hub queue**: `LiquidityHub` records `settleQueue[lcc][recipient]` without a commitment id. `MMQueueCustodian` holds physical LCC keyed by `(tokenId, lcc, beneficiary)` where `beneficiary` must match the Hub queue recipient chosen in `VTSPositionLib` (the MM batch locker: owner/operator on normal decreases, seizer on seizure). `MMPositionManager._collectAvailableLiquidity` intersects the caller’s Hub queue with that caller’s beneficiary slice so a locker cannot pair their queue with another party’s commit custody.

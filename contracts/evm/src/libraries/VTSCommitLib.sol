@@ -180,6 +180,10 @@ library VTSCommitLib {
             uint256 deltaIndexCISE = FullMath.mulDiv(coveredAmount, FixedPoint128.Q128, totalSettled);
             uint256 currentIndexCISE = paPool.coveragePerSettledIndexX128.get(tokenIndex);
             paPool.coveragePerSettledIndexX128.set(tokenIndex, currentIndexCISE + deltaIndexCISE);
+            // Eager bonus denominator: sum_i (settled_i * deltaIndex / Q128) == coveredAmount when pool totalSettled
+            // matches the sum of position settled amounts. Realising exposure on touch only updates numerators.
+            uint256 curTotalCISE = paPool.totalCISEExposureSinceLastMod.get(tokenIndex);
+            paPool.totalCISEExposureSinceLastMod.set(tokenIndex, curTotalCISE + coveredAmount);
         } else {
             // No settled liquidity: defer to CISE residual (socialised when settled becomes non-zero)
             uint256 currentResidualCISE = paPool.coverageResidualCISE.get(tokenIndex);

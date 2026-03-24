@@ -96,15 +96,13 @@ contract CoreHook is BaseHook, ImmutableMarketState, ImmutableVTSState, ICoreHoo
 
     function _beforeRemoveLiquidity(
         address sender,
-        PoolKey calldata key,
+        PoolKey calldata,
         ModifyLiquidityParams calldata params,
         bytes calldata
     ) internal override returns (bytes4) {
-        // During pause, removals are still allowed but VTS mutations are frozen.
-        if (!_isPoolOrGlobalPaused(key)) {
-            // Always an existing position; settle growths against pre-modification liquidity
-            vtsOrchestrator.settlePositionGrowths(PositionLibrary.generateId(sender, params));
-        }
+        // Always an existing position; settle growths against pre-modification liquidity
+        // so pre-pause accruals cannot be attributed to post-removal liquidity.
+        vtsOrchestrator.settlePositionGrowths(PositionLibrary.generateId(sender, params));
         return this.beforeRemoveLiquidity.selector;
     }
 

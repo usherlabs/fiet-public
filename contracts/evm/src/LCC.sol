@@ -234,7 +234,9 @@ contract LiquidityCommitmentCertificate is ERC20, ILCC {
             wrappedBalances[to] += fromWrapped;
         } else if (amount > 0 && Bounds.isDex(toLevel)) {
             // DEX ingress sinks (e.g. PoolManager) are ingress boundaries.
-            // Report wrapped ingress slice to MarketFactory for immediate Hub -> vault settlement.
+            // Immediate-consistency: only the wrapped (direct-backed) slice triggers Hub->Vault settlement via
+            // prepareMarketLiquidity. Market-derived-only movement (fromWrapped == 0) does not; that slice is
+            // already accounted for under market-liquidity rules and does not require this direct-reserve path.
             IMarketFactory(factory).prepareMarketLiquidity(address(this), fromWrapped);
         }
     }
@@ -283,7 +285,7 @@ contract LiquidityCommitmentCertificate is ERC20, ILCC {
             wrappedBalances[to] += fromWrapped;
         } else if (amount > 0 && Bounds.isDex(toLevel)) {
             // Protocol -> bucket-exempt transfers can source wrapped balance from non-exempt protocols.
-            // Report wrapped movement only; market-derived movement must not trigger Hub -> vault settlement.
+            // Same immediate-consistency rule as non-protocol -> DEX: only wrapped slice triggers prepareMarketLiquidity.
             IMarketFactory(factory).prepareMarketLiquidity(address(this), fromWrapped);
         }
     }

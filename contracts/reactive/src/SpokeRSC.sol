@@ -5,22 +5,11 @@ pragma solidity ^0.8.26;
 import {AbstractReactive} from "reactive-lib/abstract-base/AbstractReactive.sol";
 import {IReactive} from "reactive-lib/interfaces/IReactive.sol";
 import {ISystemContract} from "reactive-lib/interfaces/ISystemContract.sol";
+import {ReactiveConstants} from "./libs/ReactiveConstants.sol";
 
 /// @notice Spoke RSC that listens for SettlementQueued and reports to HubCallback.
 contract SpokeRSC is AbstractReactive {
     error InvalidConfig();
-
-    /// @notice SettlementQueued(address indexed lcc, address indexed recipient, uint256 amount).
-    uint256 public constant SETTLEMENT_QUEUED_TOPIC = uint256(keccak256("SettlementQueued(address,address,uint256)"));
-    /// @notice SettlementAnnulled(address indexed lcc, address indexed recipient, uint256 amount).
-    uint256 public constant SETTLEMENT_ANNULLED_TOPIC =
-        uint256(keccak256("SettlementAnnulled(address,address,uint256)"));
-    /// @notice SettlementProcessed(address indexed lcc, address indexed recipient, uint256 amount).
-    uint256 public constant SETTLEMENT_PROCESSED_TOPIC =
-        uint256(keccak256("SettlementProcessed(address,address,uint256)"));
-    /// @notice SettlementFailed(address indexed lcc, address indexed recipient, uint256 maxAmount, bytes reason).
-    uint256 public constant SETTLEMENT_FAILED_TOPIC =
-        uint256(keccak256("SettlementFailed(address,address,uint256,bytes)"));
 
     uint64 private constant GAS_LIMIT = 8000000;
 
@@ -42,8 +31,13 @@ contract SpokeRSC is AbstractReactive {
     /// @notice Recipient this Spoke is dedicated to.
     address public immutable recipient;
 
-    /// @notice Monotonic nonce for SettlementReported callbacks.
+    /// @notice Monotonic nonce for SettlementQueued forwards only; mirrors the last queue callback nonce for legacy visibility.
+    ///      It does not count annulled/processed/failed forwards.
     uint256 public nonce;
+
+    /// @notice Per-callback-family nonce keyed by `Record_*` HubCallback selector (bytes32), not by raw `Settlement_*` log topics.
+    mapping(bytes32 => uint256) public nonceByRecordSelector;
+
     /// @notice Deduplicates SettlementQueued logs by log identity.
     mapping(bytes32 => bool) public processedLog;
 
@@ -77,7 +71,7 @@ contract SpokeRSC is AbstractReactive {
             service.subscribe(
                 protocolChainId,
                 liquidityHub,
-                SETTLEMENT_QUEUED_TOPIC,
+                ReactiveConstants.SETTLEMENT_QUEUED_TOPIC,
                 REACTIVE_IGNORE,
                 uint256(uint160(recipient)),
                 REACTIVE_IGNORE
@@ -86,7 +80,7 @@ contract SpokeRSC is AbstractReactive {
             service.subscribe(
                 protocolChainId,
                 liquidityHub,
-                SETTLEMENT_ANNULLED_TOPIC,
+                ReactiveConstants.SETTLEMENT_ANNULLED_TOPIC,
                 REACTIVE_IGNORE,
                 uint256(uint160(recipient)),
                 REACTIVE_IGNORE
@@ -95,7 +89,7 @@ contract SpokeRSC is AbstractReactive {
             service.subscribe(
                 protocolChainId,
                 liquidityHub,
-                SETTLEMENT_PROCESSED_TOPIC,
+                ReactiveConstants.SETTLEMENT_PROCESSED_TOPIC,
                 REACTIVE_IGNORE,
                 uint256(uint160(recipient)),
                 REACTIVE_IGNORE
@@ -104,7 +98,7 @@ contract SpokeRSC is AbstractReactive {
             service.subscribe(
                 protocolChainId,
                 destinationReceiverContract,
-                SETTLEMENT_FAILED_TOPIC,
+                ReactiveConstants.SETTLEMENT_FAILED_TOPIC,
                 REACTIVE_IGNORE,
                 uint256(uint160(recipient)),
                 REACTIVE_IGNORE
@@ -124,33 +118,40 @@ contract SpokeRSC is AbstractReactive {
         if (processedLog[logId]) return;
         processedLog[logId] = true;
 
-        if (log._contract == liquidityHub && log.topic_0 == SETTLEMENT_QUEUED_TOPIC) {
+        if (log._contract == liquidityHub && log.topic_0 == ReactiveConstants.SETTLEMENT_QUEUED_TOPIC) {
             _forwardSettlementQueued(log);
             return;
         }
-        if (log._contract == liquidityHub && log.topic_0 == SETTLEMENT_ANNULLED_TOPIC) {
+        if (log._contract == liquidityHub && log.topic_0 == ReactiveConstants.SETTLEMENT_ANNULLED_TOPIC) {
             _forwardSettlementAnnulled(log);
             return;
         }
-        if (log._contract == liquidityHub && log.topic_0 == SETTLEMENT_PROCESSED_TOPIC) {
+        if (log._contract == liquidityHub && log.topic_0 == ReactiveConstants.SETTLEMENT_PROCESSED_TOPIC) {
             _forwardSettlementProcessed(log);
             return;
         }
-        if (log._contract == destinationReceiverContract && log.topic_0 == SETTLEMENT_FAILED_TOPIC) {
+        if (log._contract == destinationReceiverContract && log.topic_0 == ReactiveConstants.SETTLEMENT_FAILED_TOPIC) {
             _forwardSettlementFailed(log);
         }
+    }
+
+    function _getAndIncrementEventNonce(bytes32 recordSelector) internal returns (uint256) {
+        nonceByRecordSelector[recordSelector] += 1;
+        return nonceByRecordSelector[recordSelector];
     }
 
     function _forwardSettlementQueued(IReactive.LogRecord calldata log) internal {
         address lcc = address(uint160(log.topic_1));
         uint256 amount = abi.decode(log.data, (uint256));
 
-        nonce += 1;
+        uint256 eventNonce = _getAndIncrementEventNonce(ReactiveConstants.RECORD_SETTLEMENT_QUEUED_SELECTOR);
+        // Preserve legacy visibility for queue callback nonce progression.
+        nonce = eventNonce;
 
         // while the first parameter is set to address(0), it is automatically set on the receiving contract to the the RVM id of the calling contract
         // i.e it is the rvm id of this contract, and it is derived as the address of the private key used to deploy the contract
-        bytes memory payload = abi.encodeWithSignature(
-            "recordSettlement(address,address,address,uint256,uint256)", address(0), lcc, recipient, amount, nonce
+        bytes memory payload = abi.encodeWithSelector(
+            ReactiveConstants.RECORD_SETTLEMENT_QUEUED_SELECTOR, address(0), lcc, recipient, amount, eventNonce
         );
 
         // Emit the callback to the HubCallback
@@ -161,17 +162,30 @@ contract SpokeRSC is AbstractReactive {
     function _forwardSettlementAnnulled(IReactive.LogRecord calldata log) internal {
         address lcc = address(uint160(log.topic_1));
         uint256 amount = abi.decode(log.data, (uint256));
-        bytes memory payload = abi.encodeWithSignature(
-            "recordSettlementAnnulled(address,address,address,uint256)", address(0), lcc, recipient, amount
+        uint256 eventNonce = _getAndIncrementEventNonce(ReactiveConstants.RECORD_SETTLEMENT_ANNULLED_SELECTOR);
+
+        // while the first parameter is set to address(0), it is automatically set on the receiving contract to the the RVM id of the calling contract
+        // i.e it is the rvm id of this contract, and it is derived as the address of the private key used to deploy the contract
+        bytes memory payload = abi.encodeWithSelector(
+            ReactiveConstants.RECORD_SETTLEMENT_ANNULLED_SELECTOR, address(0), lcc, recipient, amount, eventNonce
         );
         emit Callback(reactChainId, hubCallback, GAS_LIMIT, payload);
     }
 
     function _forwardSettlementProcessed(IReactive.LogRecord calldata log) internal {
         address lcc = address(uint160(log.topic_1));
-        uint256 amount = abi.decode(log.data, (uint256));
-        bytes memory payload = abi.encodeWithSignature(
-            "recordSettlementProcessed(address,address,address,uint256)", address(0), lcc, recipient, amount
+        (uint256 settledAmount, uint256 requestedAmount) = abi.decode(log.data, (uint256, uint256));
+        uint256 eventNonce = _getAndIncrementEventNonce(ReactiveConstants.RECORD_SETTLEMENT_PROCESSED_SELECTOR);
+        // while the first parameter is set to address(0), it is automatically set on the receiving contract to the the RVM id of the calling contract
+        // i.e it is the rvm id of this contract, and it is derived as the address of the private key used to deploy the contract
+        bytes memory payload = abi.encodeWithSelector(
+            ReactiveConstants.RECORD_SETTLEMENT_PROCESSED_SELECTOR,
+            address(0),
+            lcc,
+            recipient,
+            settledAmount,
+            requestedAmount,
+            eventNonce
         );
         emit Callback(reactChainId, hubCallback, GAS_LIMIT, payload);
     }
@@ -179,8 +193,11 @@ contract SpokeRSC is AbstractReactive {
     function _forwardSettlementFailed(IReactive.LogRecord calldata log) internal {
         address lcc = address(uint160(log.topic_1));
         (uint256 maxAmount,) = abi.decode(log.data, (uint256, bytes));
-        bytes memory payload = abi.encodeWithSignature(
-            "recordSettlementFailed(address,address,address,uint256)", address(0), lcc, recipient, maxAmount
+        uint256 eventNonce = _getAndIncrementEventNonce(ReactiveConstants.RECORD_SETTLEMENT_FAILED_SELECTOR);
+        // while the first parameter is set to address(0), it is automatically set on the receiving contract to the the RVM id of the calling contract
+        // i.e it is the rvm id of this contract, and it is derived as the address of the private key used to deploy the contract
+        bytes memory payload = abi.encodeWithSelector(
+            ReactiveConstants.RECORD_SETTLEMENT_FAILED_SELECTOR, address(0), lcc, recipient, maxAmount, eventNonce
         );
         emit Callback(reactChainId, hubCallback, GAS_LIMIT, payload);
     }

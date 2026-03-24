@@ -330,6 +330,7 @@ contract MarketLiquidityRouterLibTest is Test {
 
     function test_prepareMarketLiquidityIngress_noActiveSync_callsHandleIngress() public {
         MockLCC_RouterLib lcc = new MockLCC_RouterLib(address(0x1111));
+        poolManager.setLocked(false);
 
         h.prepareMarketLiquidityIngress(IPoolManager(address(poolManager)), address(ingressHandler), address(lcc), 4);
 
@@ -339,9 +340,18 @@ contract MarketLiquidityRouterLibTest is Test {
         assertEq(gotAmount, 4);
     }
 
+    function test_prepareMarketLiquidityIngress_lockedPoolManager_reverts() public {
+        MockLCC_RouterLib lcc = new MockLCC_RouterLib(address(0x1111));
+        poolManager.setLocked(true);
+
+        vm.expectRevert(Errors.PoolManagerMustBeUnlocked.selector);
+        h.prepareMarketLiquidityIngress(IPoolManager(address(poolManager)), address(ingressHandler), address(lcc), 4);
+    }
+
     function test_prepareMarketLiquidityIngress_revertsWhenDifferentCurrencyInFlight() public {
         MockLCC_RouterLib lcc = new MockLCC_RouterLib(address(0x1111));
         address otherCurrency = address(0xDEAD);
+        poolManager.setLocked(false);
         poolManager.setExttload(MarketLiquidityRouterLib.CURRENCY_SLOT, bytes32(uint256(uint160(otherCurrency))));
 
         vm.expectRevert(
@@ -352,6 +362,7 @@ contract MarketLiquidityRouterLibTest is Test {
 
     function test_prepareMarketLiquidityIngress_revertsWhenUnpaidIngressAlreadyExists() public {
         MockLCC_RouterLib lcc = new MockLCC_RouterLib(address(0x1111));
+        poolManager.setLocked(false);
         lcc.mint(address(poolManager), 100);
         poolManager.sync(Currency.wrap(address(lcc)));
         lcc.mint(address(this), 1);
@@ -363,6 +374,7 @@ contract MarketLiquidityRouterLibTest is Test {
 
     function test_prepareMarketLiquidityIngress_revertsWhenSnapshotInvalid() public {
         MockLCC_RouterLib lcc = new MockLCC_RouterLib(address(0x1111));
+        poolManager.setLocked(false);
         lcc.mint(address(poolManager), 100);
         poolManager.sync(Currency.wrap(address(lcc)));
         vm.prank(address(poolManager));
@@ -375,6 +387,7 @@ contract MarketLiquidityRouterLibTest is Test {
     function test_prepareMarketLiquidityIngress_sameLccSync_restoresAfterNestedErc20Sync() public {
         MockLCC_RouterLib lcc0 = new MockLCC_RouterLib(address(0x1111));
         MockLCC_RouterLib lcc1 = new MockLCC_RouterLib(address(0x2222));
+        poolManager.setLocked(false);
         lcc0.mint(address(poolManager), 50);
         poolManager.sync(Currency.wrap(address(lcc0)));
         ingressHandler.setNestedSync(address(lcc1), true);
@@ -387,6 +400,7 @@ contract MarketLiquidityRouterLibTest is Test {
 
     function test_prepareMarketLiquidityIngress_sameLccSync_nativeUnderlying_clearsAndRestores() public {
         MockLCC_RouterLib lcc = new MockLCC_RouterLib(address(0));
+        poolManager.setLocked(false);
         lcc.mint(address(poolManager), 12);
         poolManager.sync(Currency.wrap(address(lcc)));
         ingressHandler.setNestedSync(address(0), true);

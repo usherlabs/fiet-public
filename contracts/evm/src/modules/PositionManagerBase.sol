@@ -58,7 +58,7 @@ abstract contract PositionManagerBase is ImmutableVTSState {
     function _syncBalanceAsCredit(Currency currency) internal {
         // owner = address(this) = MMPM (balance holder)
         // target = msgSender() = locker (delta recipient)
-        vtsOrchestrator.sync(currency, address(this), msgSender());
+        vtsOrchestrator.sync(marketFactory, currency, address(this), msgSender());
     }
 
     /// @notice Credits an exact known amount to the locker's delta

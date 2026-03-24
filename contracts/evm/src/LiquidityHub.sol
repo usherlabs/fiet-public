@@ -6,6 +6,7 @@ import {IOracleHelper} from "./interfaces/IOracleHelper.sol";
 import {IMarketFactory} from "./interfaces/IMarketFactory.sol";
 import {LCCFactoryLib, LCCFactoryLinkedLib} from "./libraries/LCCFactoryLib.sol";
 import {LiquidityHubLib} from "./libraries/LiquidityHubLib.sol";
+import {LiquidityHubLinkedLib} from "./libraries/LiquidityHubLinkedLib.sol";
 import {LiquidityHubStorage, Market, UnderlyingReserve} from "./types/Liquidity.sol";
 import {CurrencyTransfer} from "./libraries/CurrencyTransfer.sol";
 import {Currency} from "v4-periphery/lib/v4-core/src/types/Currency.sol";
@@ -37,7 +38,9 @@ contract LiquidityHub is BoundRegistry, Ownable, ReentrancyGuardTransient {
     event LiquidityAvailable(address indexed lcc, address underlyingAsset, uint256 amount, bytes32 marketId);
     event SettlementQueued(address indexed lcc, address indexed recipient, uint256 amount);
     event SettlementAnnulled(address indexed lcc, address indexed recipient, uint256 amount);
-    event SettlementProcessed(address indexed lcc, address indexed recipient, uint256 amount);
+    event SettlementProcessed(
+        address indexed lcc, address indexed recipient, uint256 settledAmount, uint256 requestedAmount
+    );
     event LccWrappedWith(address indexed lcc, address indexed withLCC, address from, address to, uint256 amount);
     event LccWrapped(address indexed lcc, address from, address to, uint256 amount);
     event LccUnwrapped(address indexed lcc, address from, address to, uint256 amount);
@@ -414,6 +417,12 @@ contract LiquidityHub is BoundRegistry, Ownable, ReentrancyGuardTransient {
         return LCCFactoryLib.balancesOf(lccToken, account);
     }
 
+    function _assertWrapRecipientNotDexSink(address lcc, address to) internal view {
+        if (Bounds.isDex(boundLevel(s.lccToMarket[lcc].factory, to))) {
+            revert Errors.DirectWrapToDexNotAllowed(to);
+        }
+    }
+
     // ============ TRADER FUNCTIONS ============
 
     // DirectLPs and Traders engaging the CorePool directly will need LCC. LCC is 1:1 with the underlying asset.
@@ -427,6 +436,11 @@ contract LiquidityHub is BoundRegistry, Ownable, ReentrancyGuardTransient {
         address from = _msgSender();
         address underlying = s.lccToUnderlying[lcc];
         bool isNativeAsset = underlying == address(0);
+
+        // Mint-time ingress to the DEX sink bypasses LCC transfer hooks.
+        // Reject it until there is a safe settlement path that can run under PoolManager lock constraints.
+        _assertWrapRecipientNotDexSink(lcc, to);
+
         // throw error if the native ETH is insufficient and it is a native ETH backed LCC
         if (isNativeAsset) {
             if (msg.value != amount) {
@@ -491,12 +505,16 @@ contract LiquidityHub is BoundRegistry, Ownable, ReentrancyGuardTransient {
     function _wrapWith(address lcc, address withLCC, address to, uint256 amount) internal onlyValidLcc(lcc) {
         address from = _msgSender();
 
+        // wrapWithTo shares the same mint surface as direct wrap and must not bypass DEX ingress handling.
+        _assertWrapRecipientNotDexSink(lcc, to);
+
         // Performs all necessary validation and preparation
-        LiquidityHubLib.WrapWithContext memory ctx = LiquidityHubLib.wrapWithPrepare(s, lcc, withLCC, from, amount);
+        LiquidityHubLib.WrapWithContext memory ctx =
+            LiquidityHubLinkedLib.wrapWithPrepare(s, lcc, withLCC, from, amount);
         // Pull backing LCC from caller into the Hub first.
         Currency.wrap(withLCC).transferFrom(from, address(this), ctx.originalAmount);
         // Executes the full wrap-with operation using the provided context
-        LiquidityHubLib.wrapWithContext(s, lcc, withLCC, ctx);
+        ctx = LiquidityHubLinkedLib.wrapWithContext(s, lcc, withLCC, ctx);
         // Extract return values.
         // Note: wrapWithContext is designed to conserve amounts. Any mismatch is a logic bug in the library.
         uint256 directToMint = ctx.directToMint;
@@ -555,7 +573,7 @@ contract LiquidityHub is BoundRegistry, Ownable, ReentrancyGuardTransient {
         }
 
         (uint256 directUnwrapped, uint256 marketUnwrapped, uint256 queuedShortfall) =
-            LiquidityHubLib.unwrapInternalLogic(s, lcc, queueTo, amount, wrappedBalance, marketDerivedBalance);
+            LiquidityHubLinkedLib.unwrapInternalLogic(s, lcc, queueTo, amount, wrappedBalance, marketDerivedBalance);
 
         // `unwrapInternalLogic` updates queue state directly in library storage.
         // Queue owner shape is validated at write time; present settleability is enforced on settlement.
@@ -667,6 +685,8 @@ contract LiquidityHub is BoundRegistry, Ownable, ReentrancyGuardTransient {
      */
     function issue(address lcc, address to, uint256 amount) external onlyIssuer(lcc) nonReentrant {
         // Note: LCC mint path reverts on zero (direct+market) amount.
+        // Minting market-derived LCC directly to the DEX sink bypasses transfer hooks and ingress settlement.
+        _assertWrapRecipientNotDexSink(lcc, to);
         _mint(lcc, to, 0, amount);
     }
 
@@ -801,7 +821,10 @@ contract LiquidityHub is BoundRegistry, Ownable, ReentrancyGuardTransient {
 
     /**
      * @notice Plans a cancel operation to be executed on a specific transfer path
-     * @dev Stores cancellation parameters in transient storage, keyed by transfer path (lcc, from, to)
+     * @dev Stores cancellation parameters in transient storage, keyed by transfer path (lcc, from, to).
+     *      This path-keyed store is safe only because current callers stage the plan and then
+     *      immediately drive the matching transfer in the same logical path/transaction.
+     *      It must not be treated as a general deferred queue across unrelated intermediate logic.
      * @param lcc The LCC token address
      * @param sender The expected sender of the transfer (e.g., poolManager)
      * @param cancelFromRecipient The expected recipient of the transfer (e.g., MMPM owner)
@@ -822,7 +845,10 @@ contract LiquidityHub is BoundRegistry, Ownable, ReentrancyGuardTransient {
 
     /**
      * @notice Plans a cancel with queue operation to be executed on a specific transfer path
-     * @dev Stores cancellation parameters in transient storage, keyed by transfer path (lcc, from, to)
+     * @dev Stores cancellation parameters in transient storage, keyed by transfer path (lcc, from, to).
+     *      Current MM decrease flows rely on the matching transfer happening immediately after
+     *      `modifyLiquidity(...)` returns; if a future flow can stage the same key twice before
+     *      consumption, this helper is no longer sufficient.
      * @param lcc The LCC token address
      * @param sender The expected sender of the transfer (e.g., poolManager)
      * @param cancelFromRecipient The expected recipient of the transfer (e.g., MMPM owner)
@@ -862,29 +888,22 @@ contract LiquidityHub is BoundRegistry, Ownable, ReentrancyGuardTransient {
         // We therefore DO NOT apply `nonReentrant` here; instead, we enforce a strict balance-backed invariant
         // so callers cannot "fabricate" reserves via re-entrancy.
 
-        address underlying = s.lccToUnderlying[lcc];
-
-        // Track total underlying asset supply (must remain <= actual underlying balance held by this hub).
-        s.reserveOfUnderlying[underlying].marketDerived += amount;
+        LiquidityHubLib.ConfirmTakeContext memory ctx =
+            LiquidityHubLinkedLib.confirmTakePrepare(s, lcc, amount, shouldEmit);
 
         // Best-effort: settle Hub queue up to the newly available amount
-        uint256 hubQueue = s.settleQueue[lcc][address(this)];
-        if (hubQueue > 0) {
+        if (ctx.hubQueueBeforeSettlement > 0) {
             _processSettlementFor(lcc, address(this), amount);
         }
 
-        if (shouldEmit && hubQueue < amount) {
+        if (ctx.emitLiquidityAvailable) {
             // Only emit if there is new liquidity available and not consumed greedily by the Hub
-            emit LiquidityAvailable(lcc, underlying, amount, s.lccToMarket[lcc].id);
+            emit LiquidityAvailable(lcc, ctx.underlying, amount, ctx.marketId);
         }
 
         // Balance-backed invariant: reserve accounting must never exceed actual hub holdings.
         // This protects against re-entrancy and any accidental/malicious unbacked `confirmTake` calls.
-        UnderlyingReserve storage reserveTuple = s.reserveOfUnderlying[underlying];
-        uint256 reserve = reserveTuple.direct + reserveTuple.marketDerived;
-        uint256 actualBalance =
-            underlying == address(0) ? address(this).balance : Currency.wrap(underlying).balanceOf(address(this));
-        if (reserve > actualBalance) revert Errors.InsufficientBalance(actualBalance, reserve);
+        LiquidityHubLinkedLib.confirmTakeBalanceInvariant(s, ctx.underlying);
     }
 
     /**
@@ -894,27 +913,7 @@ contract LiquidityHub is BoundRegistry, Ownable, ReentrancyGuardTransient {
      *      in the same tx.
      */
     function prepareSettle(address lcc, uint256 amount) external onlyIssuer(lcc) nonReentrant {
-        if (amount == 0) revert Errors.InvalidAmount(0, 0);
-
-        address underlying = s.lccToUnderlying[lcc];
-        uint256 reserveDirect = s.reserveOfUnderlying[underlying].direct;
-        uint256 directAvail = s.directSupply[lcc];
-        uint256 maxSettleableDirect = Math.min(reserveDirect, directAvail);
-        if (maxSettleableDirect < amount) {
-            revert Errors.InvalidAmount(amount, maxSettleableDirect);
-        }
-
-        s.reserveOfUnderlying[underlying].direct = reserveDirect - amount;
-        s.directSupply[lcc] = directAvail - amount;
-
-        Currency underlyingCurrency = Currency.wrap(underlying);
-        if (underlyingCurrency.isAddressZero()) {
-            // For native, transfer ETH to MarketVault so it can settle to PoolManager
-            underlyingCurrency.transfer(_msgSender(), amount);
-        } else {
-            // Approve MarketVault to pull the ERC20 from the Hub and settle to PoolManager
-            underlyingCurrency.approve(_msgSender(), amount);
-        }
+        LiquidityHubLinkedLib.prepareSettle(s, lcc, amount, _msgSender());
     }
 
     /**
@@ -937,6 +936,27 @@ contract LiquidityHub is BoundRegistry, Ownable, ReentrancyGuardTransient {
     }
 
     /**
+     * @notice Atomically releases queued MM custody and settles it against the recipient's Hub queue
+     * @dev Best-effort path for MM collection flows. Returns 0 when the queue, reserve, or custody
+     *      currently cannot support settlement, instead of reverting.
+     * @param lcc The LCC token address
+     * @param custodian The MM queue custodian holding beneficiary-scoped queued LCC
+     * @param tokenId The commitment token id bucket to debit in the custodian
+     * @param recipient The queue owner and settlement recipient
+     * @param maxAmount The maximum amount to settle
+     */
+    function settleFromCustodian(address lcc, address custodian, uint256 tokenId, address recipient, uint256 maxAmount)
+        external
+        onlyValidLcc(lcc)
+        nonReentrant
+    {
+        uint256 settled = LiquidityHubLinkedLib.settleFromCustodian(s, lcc, custodian, tokenId, recipient, maxAmount);
+        if (settled > 0) {
+            _processSettlementFor(lcc, recipient, settled);
+        }
+    }
+
+    /**
      * @notice Internal function to process settlement for a specific recipient
      * @dev Delegates to LiquidityHubLib.processSettlementLogic
      * @param lcc The LCC token address
@@ -945,11 +965,11 @@ contract LiquidityHub is BoundRegistry, Ownable, ReentrancyGuardTransient {
      */
     function _processSettlementFor(address lcc, address recipient, uint256 maxAmount) internal {
         uint256 queuedBefore = s.settleQueue[lcc][recipient];
-        LiquidityHubLib.processSettlementLogic(s, lcc, recipient, maxAmount);
+        LiquidityHubLinkedLib.processSettlementLogic(s, lcc, recipient, maxAmount);
         uint256 queuedAfter = s.settleQueue[lcc][recipient];
         uint256 settled = queuedBefore > queuedAfter ? queuedBefore - queuedAfter : 0;
         if (settled > 0) {
-            emit SettlementProcessed(lcc, recipient, settled);
+            emit SettlementProcessed(lcc, recipient, settled, maxAmount);
         }
     }
 
@@ -958,6 +978,9 @@ contract LiquidityHub is BoundRegistry, Ownable, ReentrancyGuardTransient {
     // -----------------------------------
 
     /// @notice Called by LCC on transfer to execute any planned cancellations
+    /// @dev Assumes at most one live plan per `(lcc, sender, recipient)` path at consumption time.
+    ///      The current call graph preserves this by staging the plan immediately before the
+    ///      matching transfer; this function does not independently disambiguate multiple same-key plans.
     function executePlannedCancel(address sender, address cancelFromRecipient) external onlyValidLcc(_msgSender()) {
         address lcc = _msgSender();
 
@@ -988,25 +1011,13 @@ contract LiquidityHub is BoundRegistry, Ownable, ReentrancyGuardTransient {
     ) external onlyValidLcc(_msgSender()) {
         address lcc = _msgSender();
 
-        uint256 queued = s.settleQueue[lcc][from];
-        // Even if queued == 0 or amountToTransfer == 0, the logic below is a no-op.
+        // Even if queued == 0 or amountToTransfer == 0, the library path is a no-op.
         // We intentionally avoid an early return here to keep the control flow simpler and more auditable.
-
-        uint256 liquidBalance = wrappedBalance + marketDerivedBalance;
-
-        // Otherwise, if amountToTransfer > (liquidBalance - queued), it bleeds into queue
-        // Compute max transferable without touching queue
-        uint256 transferableWithoutQueue = liquidBalance > queued ? (liquidBalance - queued) : 0;
-        if (amountToTransfer > transferableWithoutQueue) {
-            uint256 bleedIntoQueue = amountToTransfer - transferableWithoutQueue;
-            uint256 toAnnul = Math.min(bleedIntoQueue, queued);
-            // Safe: toAnnul <= queued and subtracting 0 is a no-op.
-            s.settleQueue[lcc][from] -= toAnnul;
-            s.totalQueued[lcc] -= toAnnul;
-            s.queueOfUnderlying[s.lccToUnderlying[lcc]] -= toAnnul;
-            if (toAnnul > 0) {
-                emit SettlementAnnulled(lcc, from, toAnnul);
-            }
+        uint256 toAnnul = LiquidityHubLinkedLib.annulSettlementBeforeTransfer(
+            s, lcc, from, wrappedBalance, marketDerivedBalance, amountToTransfer
+        );
+        if (toAnnul > 0) {
+            emit SettlementAnnulled(lcc, from, toAnnul);
         }
     }
 
@@ -1021,7 +1032,7 @@ contract LiquidityHub is BoundRegistry, Ownable, ReentrancyGuardTransient {
      * @param fromMarket The amount of LCC to burn from market-derived supply
      */
     function _pay(address lcc, address owner, address to, uint256 fromDirect, uint256 fromMarket) internal {
-        LiquidityHubLib.pay(s, lcc, owner, to, fromDirect, fromMarket);
+        LiquidityHubLinkedLib.pay(s, lcc, owner, to, fromDirect, fromMarket);
     }
 
     /**
@@ -1071,7 +1082,7 @@ contract LiquidityHub is BoundRegistry, Ownable, ReentrancyGuardTransient {
      */
     function _queueSettlement(address lcc, address recipient, uint256 amount) internal {
         if (amount == 0) return;
-        LiquidityHubLib.queueSettlement(s, lcc, recipient, amount);
+        LiquidityHubLinkedLib.queueSettlement(s, lcc, recipient, amount);
         emit SettlementQueued(lcc, recipient, amount);
     }
 

@@ -63,14 +63,14 @@ library VTSFeeLib {
 
         if (potAvail == 0) return false;
 
-        // CISE: Use totalCISEExposureSinceLastMod from coverageTokenIndex as denominator
+        // CISE: Denominator is the pool-wide coverage window (eager on incrementCoverage / CISE residual flush),
+        // decremented on allocation; not lazily summed from per-touch position realisations.
         uint256 totalExposure = paPool.totalCISEExposureSinceLastMod.get(coverageTokenIndex);
         if (totalExposure == 0) return false;
 
-        // bonus = potAvail * ciseExposure / totalExposure
-        uint256 bonus = FullMath.mulDiv(potAvail, ciseExposure, totalExposure);
+        // bonus = potAvail * ciseExposure / totalExposure (round up so dust does not strand eligible exposure)
+        uint256 bonus = FullMath.mulDivRoundingUp(potAvail, ciseExposure, totalExposure);
         if (bonus > potAvail) bonus = potAvail;
-        // Banked exposure: if rounding yields 0, do not clear windows so it can be allocated later.
         if (bonus == 0) return false;
 
         // CSI: Advance spend index (spend down the pot across all remaining contribution shares).

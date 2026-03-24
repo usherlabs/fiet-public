@@ -82,16 +82,20 @@ interface IVTSCurrencyDelta {
      * @dev Only handles balance increases (accumulation), not decreases (consumption).
      *      Checks owner's balance and credits target's delta.
      *      Use case: MMPM receives msg.value (owner=MMPM), credit goes to locker (target=msgSender).
+     *      Restricted to protocol-bound callers in the provided factory namespace (same as `creditExact`).
+     * @param factory The market factory namespace used to validate the caller is protocol-bound
      * @param currency The currency to sync
      * @param owner The address whose balance to check (balance holder)
      * @param target The address whose delta to credit
      */
-    function sync(Currency currency, address owner, address target) external;
+    function sync(IMarketFactory factory, Currency currency, address owner, address target) external;
 
     /**
      * @notice Syncs owner's balance as credit to target's delta for multiple currencies
      * @dev Only handles balance increases (accumulation), not decreases (consumption).
      *      Convenience function to sync both currencies of a pool pair in one call.
+     *      Restricted to protocol-bound callers in the provided factory namespace (same as `creditExact`).
+     * @param factory The market factory namespace used to validate the caller is protocol-bound
      * @param currency0 The first currency to sync
      * @param currency1 The second currency to sync
      * @param owner The address whose balance to check (balance holder)
@@ -99,7 +103,7 @@ interface IVTSCurrencyDelta {
      * @return deltaChange0 The amount by which currency0 delta was adjusted
      * @return deltaChange1 The amount by which currency1 delta was adjusted
      */
-    function syncPair(Currency currency0, Currency currency1, address owner, address target)
+    function syncPair(IMarketFactory factory, Currency currency0, Currency currency1, address owner, address target)
         external
         returns (int128 deltaChange0, int128 deltaChange1);
 

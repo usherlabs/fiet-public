@@ -10,6 +10,7 @@ import {VTSPositionLib} from "src/libraries/VTSPositionLib.sol";
 import {VTSSwapLib} from "src/libraries/VTSSwapLib.sol";
 import {VTSCommitLib} from "src/libraries/VTSCommitLib.sol";
 import {LCCFactoryLinkedLib} from "src/libraries/LCCFactoryLib.sol";
+import {LiquidityHubLinkedLib} from "src/libraries/LiquidityHubLinkedLib.sol";
 import {VTSFeeLinkedLib} from "src/libraries/VTSFeeLib.sol";
 
 /**
@@ -22,12 +23,15 @@ import {VTSFeeLinkedLib} from "src/libraries/VTSFeeLib.sol";
  *      - VTSCommitLib (used by VTSOrchestrator, VTSPositionLib)
  *      - VTSFeeLinkedLib (used by VTSPositionLib)
  *      - LCCFactoryLinkedLib (used by LiquidityHub)
+ *      - LiquidityHubLinkedLib (used by LiquidityHub)
  *
- *      Note: VTSFeeLib (internal-only), LiquidityHubLib, and LCCFactoryLib only have internal functions
+ *      Note: VTSFeeLib (internal-only) and LCCFactoryLib only have internal functions
  *      and are inlined at compile time, so they don't require separate deployment.
+ *      LiquidityHubLib remains internal-only; LiquidityHubLinkedLib exposes external entrypoints.
  *
  * Deployment Order:
  * 1. Deploy LCCFactoryLinkedLib (no dependencies on VTS libs)
+ * 1b. Deploy LiquidityHubLinkedLib (no dependencies on VTS libs)
  * 2. Deploy VTSFeeLinkedLib (no dependencies on other VTS libs)
  * 3. Deploy VTSCommitLib (no dependencies on other VTS libs)
  * 4. Deploy VTSSwapLib (no dependencies on other VTS libs)
@@ -54,12 +58,14 @@ contract DeployLibraries is CREATE3Script, NetworkConfig {
     address public vtsCommitLib;
     address public vtsFeeLinkedLib;
     address public lccFactoryLinkedLib;
+    address public liquidityHubLinkedLib;
 
     // Library names for salt generation
     string constant VTS_POSITION_LIB = "VTSPositionLib";
     string constant VTS_SWAP_LIB = "VTSSwapLib";
     string constant VTS_COMMIT_LIB = "VTSCommitLib";
     string constant LCC_FACTORY_LINKED_LIB = "LCCFactoryLinkedLib";
+    string constant LIQUIDITY_HUB_LINKED_LIB = "LiquidityHubLinkedLib";
     string constant VTS_FEE_LINKED_LIB = "VTSFeeLinkedLib";
 
     constructor() CREATE3Script("1") {}
@@ -82,6 +88,10 @@ contract DeployLibraries is CREATE3Script, NetworkConfig {
         console.log("\n=== Step 1: Deploying LCCFactoryLinkedLib ===");
         lccFactoryLinkedLib = _deployLibrary(LCC_FACTORY_LINKED_LIB, type(LCCFactoryLinkedLib).creationCode);
         console.log("LCCFactoryLinkedLib deployed at:", lccFactoryLinkedLib);
+
+        console.log("\n=== Step 1b: Deploying LiquidityHubLinkedLib ===");
+        liquidityHubLinkedLib = _deployLibrary(LIQUIDITY_HUB_LINKED_LIB, type(LiquidityHubLinkedLib).creationCode);
+        console.log("LiquidityHubLinkedLib deployed at:", liquidityHubLinkedLib);
 
         // Step 2: Deploy VTSFeeLinkedLib (no dependencies)
         console.log("\n=== Step 2: Deploying VTSFeeLinkedLib ===");
@@ -135,6 +145,7 @@ contract DeployLibraries is CREATE3Script, NetworkConfig {
     function _logPredictedAddresses() internal view {
         console.log("\n=== Predicted Addresses ===");
         console.log("LCCFactoryLinkedLib:", getCreate3Contract(LCC_FACTORY_LINKED_LIB));
+        console.log("LiquidityHubLinkedLib:", getCreate3Contract(LIQUIDITY_HUB_LINKED_LIB));
         console.log("VTSFeeLinkedLib:", getCreate3Contract(VTS_FEE_LINKED_LIB));
         console.log("VTSCommitLib:", getCreate3Contract(VTS_COMMIT_LIB));
         console.log("VTSSwapLib:", getCreate3Contract(VTS_SWAP_LIB));
@@ -151,6 +162,7 @@ contract DeployLibraries is CREATE3Script, NetworkConfig {
         writeAddress("vtsCommitLib", vtsCommitLib);
         writeAddress("vtsFeeLinkedLib", vtsFeeLinkedLib);
         writeAddress("lccFactoryLinkedLib", lccFactoryLinkedLib);
+        writeAddress("liquidityHubLinkedLib", liquidityHubLinkedLib);
 
         console.log("\nDeployment addresses written to deployments/%s_libraries_deployments.json", networkName);
     }
@@ -166,6 +178,7 @@ contract DeployLibraries is CREATE3Script, NetworkConfig {
         console.log('  "src/libraries/VTSCommitLib.sol:VTSCommitLib:%s",', vtsCommitLib);
         console.log('  "src/libraries/VTSFeeLib.sol:VTSFeeLinkedLib:%s",', vtsFeeLinkedLib);
         console.log('  "src/libraries/LCCFactoryLib.sol:LCCFactoryLinkedLib:%s",', lccFactoryLinkedLib);
+        console.log('  "src/libraries/LiquidityHubLinkedLib.sol:LiquidityHubLinkedLib:%s",', liquidityHubLinkedLib);
         console.log("]");
     }
 
@@ -175,12 +188,20 @@ contract DeployLibraries is CREATE3Script, NetworkConfig {
     function getLibraryAddresses()
         external
         view
-        returns (address positionLib, address swapLib, address commitLib, address feeLinkedLib, address lccFactoryLib)
+        returns (
+            address positionLib,
+            address swapLib,
+            address commitLib,
+            address feeLinkedLib,
+            address lccFactoryLib,
+            address liquidityHubLib
+        )
     {
         positionLib = getCreate3Contract(VTS_POSITION_LIB);
         swapLib = getCreate3Contract(VTS_SWAP_LIB);
         commitLib = getCreate3Contract(VTS_COMMIT_LIB);
         feeLinkedLib = getCreate3Contract(VTS_FEE_LINKED_LIB);
         lccFactoryLib = getCreate3Contract(LCC_FACTORY_LINKED_LIB);
+        liquidityHubLib = getCreate3Contract(LIQUIDITY_HUB_LINKED_LIB);
     }
 }

@@ -4,20 +4,35 @@ pragma solidity ^0.8.26;
 import {Currency} from "v4-periphery/lib/v4-core/src/types/Currency.sol";
 import {CurrencyTransfer} from "./libraries/CurrencyTransfer.sol";
 import {IMMQueueCustodian} from "./interfaces/IMMQueueCustodian.sol";
+import {ILCC} from "./interfaces/ILCC.sol";
 import {Errors} from "./libraries/Errors.sol";
 
 /// @title MMQueueCustodian
-/// @notice Shared custody for queued MM-backed LCC balances, bucketed by commitment token id
+/// @notice Shared custody for queued MM-backed LCC balances, bucketed by commitment token id and beneficiary
+/// @dev Beneficiary-scoped slices prevent cross-composition: Hub queue is per-(lcc, recipient); custody must
+///      align so COLLECT_AVAILABLE_LIQUIDITY cannot spend another recipient's LCC under the same tokenId.
+///
+///      Intended model:
+///      - `beneficiary` is always the MM batch locker whose `LiquidityHub.settleQueue(lcc, beneficiary)` entry
+///        was created for that staged principal (see `VTSPositionLib` queue recipient == hook `locker`).
+///      - Normal decreases: locker is the authorised party acting on the commitment (typically owner or approved operator).
+///      - Seizure decreases: locker is the seizer. Custody and queue (when present) both attribute to that locker.
 contract MMQueueCustodian is IMMQueueCustodian {
     using CurrencyTransfer for Currency;
+
+    /// @notice Beneficiary-scoped custody increased (MM-backed LCC staged for later Hub settlement).
+    event CustodyRecorded(uint256 indexed tokenId, address indexed lcc, address indexed beneficiary, uint256 amount);
+
+    /// @notice Beneficiary-scoped custody decreased and LCC transferred out.
+    event CustodyReleased(uint256 indexed tokenId, address indexed lcc, address indexed beneficiary, uint256 amount);
 
     /// @notice One-time authoriser allowed to bind the position manager.
     address public authorisedBinder;
     address public override positionManager;
 
-    // tokenId => lcc => queued custody balance
-    // @note: While LiquidityHub.settleQueue is source of truth, this accounting is specific for queued LCC as a result of MMPositionManager position decrease.
-    mapping(uint256 tokenId => mapping(address lcc => uint256 amount)) private _queuedLcc;
+    // tokenId => lcc => beneficiary => queued custody balance
+    mapping(uint256 tokenId => mapping(address lcc => mapping(address beneficiary => uint256 amount))) private
+        _queuedLcc;
 
     modifier onlyPositionManager() {
         if (msg.sender != positionManager) revert Errors.InvalidSender();
@@ -39,31 +54,41 @@ contract MMQueueCustodian is IMMQueueCustodian {
         authorisedBinder = address(0);
     }
 
-    function record(uint256 tokenId, address lcc, uint256 amount) external override onlyPositionManager {
-        if (lcc == address(0)) revert Errors.InvalidAddress(lcc);
-        if (amount == 0) return;
-        _queuedLcc[tokenId][lcc] += amount;
-    }
-
-    function release(uint256 tokenId, address lcc, address recipient, uint256 maxAmount)
+    function record(uint256 tokenId, address lcc, address beneficiary, uint256 amount)
         external
         override
         onlyPositionManager
+    {
+        if (lcc == address(0)) revert Errors.InvalidAddress(lcc);
+        if (beneficiary == address(0)) revert Errors.InvalidAddress(beneficiary);
+        if (amount == 0) return;
+        _queuedLcc[tokenId][lcc][beneficiary] += amount;
+        emit CustodyRecorded(tokenId, lcc, beneficiary, amount);
+    }
+
+    function release(uint256 tokenId, address lcc, address beneficiary, uint256 maxAmount)
+        external
+        override
         returns (uint256 released)
     {
-        if (recipient == address(0)) revert Errors.InvalidAddress(recipient);
+        if (beneficiary == address(0)) revert Errors.InvalidAddress(beneficiary);
         if (lcc == address(0)) revert Errors.InvalidAddress(lcc);
+        if (msg.sender != positionManager) {
+            (bool ok, bytes memory data) = lcc.staticcall(abi.encodeCall(ILCC.hub, ()));
+            if (!ok || data.length < 32 || msg.sender != abi.decode(data, (address))) revert Errors.InvalidSender();
+        }
         if (maxAmount == 0) return 0;
 
-        uint256 available = _queuedLcc[tokenId][lcc];
+        uint256 available = _queuedLcc[tokenId][lcc][beneficiary];
         released = available < maxAmount ? available : maxAmount;
         if (released == 0) return 0;
 
-        _queuedLcc[tokenId][lcc] = available - released;
-        Currency.wrap(lcc).transfer(recipient, released);
+        _queuedLcc[tokenId][lcc][beneficiary] = available - released;
+        emit CustodyReleased(tokenId, lcc, beneficiary, released);
+        Currency.wrap(lcc).transfer(beneficiary, released);
     }
 
-    function queued(uint256 tokenId, address lcc) external view override returns (uint256) {
-        return _queuedLcc[tokenId][lcc];
+    function queued(uint256 tokenId, address lcc, address beneficiary) external view override returns (uint256) {
+        return _queuedLcc[tokenId][lcc][beneficiary];
     }
 }

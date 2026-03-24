@@ -236,6 +236,58 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
         );
     }
 
+    function test_revert_commitSignalRelayed_whenUnboundCallerForwardsSender_insideUnlock() public {
+        vm.mockCall(
+            marketFactory,
+            abi.encodeWithSelector(IMarketFactory.bounds.selector, address(unlockCaller)),
+            abi.encode(false)
+        );
+
+        bytes memory signalBytes = abi.encode(liquiditySignal);
+        vm.expectRevert(Errors.InvalidSender.selector);
+        unlockCaller.run(
+            address(vtsOrchestrator),
+            abi.encodeWithSelector(
+                VTSOrchestrator.commitSignalRelayed.selector,
+                IMarketFactory(marketFactory),
+                liquiditySignal.mmState.owner,
+                signalBytes,
+                uint256(0),
+                uint256(0),
+                bytes("")
+            )
+        );
+    }
+
+    function test_revert_renewSignalRelayed_whenUnboundCallerForwardsSender_insideUnlock() public {
+        (uint256 commitId,,,) = _createCommittedPosition();
+
+        vm.mockCall(
+            marketFactory,
+            abi.encodeWithSelector(IMarketFactory.bounds.selector, address(unlockCaller)),
+            abi.encode(false)
+        );
+
+        LiquiditySignal memory sameOwnerRenew = liquiditySignal;
+        sameOwnerRenew.nonce += 1;
+        bytes memory renewSignalBytes = abi.encode(sameOwnerRenew);
+
+        vm.expectRevert(Errors.InvalidSender.selector);
+        unlockCaller.run(
+            address(vtsOrchestrator),
+            abi.encodeWithSelector(
+                VTSOrchestrator.renewSignalRelayed.selector,
+                IMarketFactory(marketFactory),
+                sameOwnerRenew.mmState.advancer,
+                commitId,
+                renewSignalBytes,
+                uint256(0),
+                uint256(0),
+                bytes("")
+            )
+        );
+    }
+
     function test_revert_extendGracePeriod_whenPoolManagerLocked() public {
         (uint256 tokenId,,,) = _createCommittedPosition();
         bytes memory settlementProof = abi.encode(1);
@@ -351,7 +403,20 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
         assertEq(ciseAfter.ciseIndex0, ciseBefore.ciseIndex0, "ciseIndex0 should not change");
         assertEq(ciseAfter.ciseResidual0, ciseBefore.ciseResidual0, "ciseResidual0 should not change");
         assertEq(ciseAfter.totalCISEExposure0, ciseBefore.totalCISEExposure0, "totalCISEExposure0 should not change");
-        assertEq(ciseAfter.totalCISEExposure1, ciseBefore.totalCISEExposure1, "totalCISEExposure1 should not change");
+        // Token1 coverage: when pool totalSettled1 > 0, incrementCoverage eagerly bumps CISE exposure (see VTSCommitLib).
+        if (ciseBefore.totalSettled1 > 0) {
+            assertEq(
+                ciseAfter.totalCISEExposure1,
+                ciseBefore.totalCISEExposure1 + amount1,
+                "totalCISEExposure1 should increase by covered amount when settled1 > 0"
+            );
+        } else {
+            assertEq(
+                ciseAfter.totalCISEExposure1,
+                ciseBefore.totalCISEExposure1,
+                "totalCISEExposure1 should not change when settled1 == 0"
+            );
+        }
 
         // Coverage must land either in the index (if totals > 0) or in residuals (if totals == 0).
         if (diceBefore.totalDeficitPrincipal1 > 0) {
@@ -450,11 +515,19 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
         vtsOrchestrator.afterCoreSwap(corePoolKey, swapParams, delta, 0, 0);
     }
 
-    function test_revert_settlePositionGrowths_whenPoolPaused() public {
+    function test_revert_settlePositionGrowths_whenPoolPaused_andNotCanonicalCoreHook() public {
         (, PositionId positionId,,) = _createCommittedPosition();
         vtsOrchestrator.pausePool(corePoolKey.toId());
 
-        vm.expectRevert(Errors.EnforcedPause.selector);
+        vm.expectRevert(Errors.InvalidSender.selector);
+        vtsOrchestrator.settlePositionGrowths(positionId);
+    }
+
+    function test_settlePositionGrowths_whenPoolPaused_allowsCanonicalCoreHook() public {
+        (, PositionId positionId,,) = _createCommittedPosition();
+        vtsOrchestrator.pausePool(corePoolKey.toId());
+
+        vm.prank(coreHookAddress);
         vtsOrchestrator.settlePositionGrowths(positionId);
     }
 
@@ -922,10 +995,18 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
     function test_onSeize_validatesGracePeriod() public {
         (uint256 tokenId,,,) = _createCommittedPosition();
 
-        // Warp beyond grace period
-        vm.warp(block.timestamp + 10000000);
+        // onSeize() always refreshes the RFS checkpoint from live `getRFS` before seizability. A fully settled
+        // position can have closed RFS while storage still reflected an older open lane; only a consistent
+        // open-RFS snapshot + elapsed lane grace (or commitment-deficit bypass) should succeed.
+        _mockLccPrices(1e18, 1e18);
+        _mockSignalUsd(0);
+        unlockCaller.run(
+            address(vtsOrchestrator), abi.encodeWithSelector(VTSOrchestrator.checkpoint.selector, tokenId, 0, true)
+        );
 
-        // Should not revert (grace period elapsed)
+        vm.warp(block.timestamp + 10_000_000);
+
+        // Should not revert (grace / deficit bypass conditions elapsed)
         unlockCaller.run(address(vtsOrchestrator), abi.encodeWithSelector(VTSOrchestrator.onSeize.selector, tokenId, 0));
     }
 
@@ -1336,6 +1417,49 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
         assertEq(cd1After, cd1Before, "Partial settlement should not affect token1 deficit");
     }
 
+    function test_pausedRemoveLiquidity_preservesPrePauseGrowthAttribution() public {
+        uint256 liquidity = 1e10;
+        uint256 amountToDecrease = liquidity / 2;
+        (, PositionId controlPositionId,,) = _createCommittedPosition(-60, 60, liquidity);
+        (uint256 pausedTokenId, PositionId pausedPositionId,,) =
+            _createCommittedPosition(renewSignal, -60, 60, liquidity, bytes32(0));
+
+        _swapCore(true, -int256(1e18));
+
+        (bool controlRfsOpenBefore, BalanceDelta controlRfsBefore) = vtsOrchestrator.calcRFS(controlPositionId, false);
+        (uint256 controlDeficit0Before, uint256 controlDeficit1Before) = _cumulativeDeficit(controlPositionId);
+
+        assertTrue(controlDeficit0Before > 0 || controlDeficit1Before > 0, "swap should accrue deficit before pause");
+        assertTrue(controlRfsOpenBefore, "control position should have open RFS after growth settlement");
+
+        vtsOrchestrator.pausePool(corePoolKey.toId());
+        _decreasePosition(pausedTokenId, amountToDecrease);
+        vtsOrchestrator.unpausePool(corePoolKey.toId());
+
+        (bool pausedRfsOpenAfter, BalanceDelta pausedRfsAfter) = vtsOrchestrator.calcRFS(pausedPositionId, false);
+        (uint256 pausedDeficit0After, uint256 pausedDeficit1After) = _cumulativeDeficit(pausedPositionId);
+
+        assertEq(pausedDeficit0After, controlDeficit0Before, "paused removal must preserve token0 deficit growth");
+        assertEq(pausedDeficit1After, controlDeficit1Before, "paused removal must preserve token1 deficit growth");
+        assertEq(
+            pausedRfsOpenAfter, controlRfsOpenBefore, "paused removal should leave the same RFS-open state as control"
+        );
+        assertEq(
+            pausedRfsAfter.amount0(), controlRfsBefore.amount0(), "paused removal must preserve token0 RFS requirement"
+        );
+        assertEq(
+            pausedRfsAfter.amount1(), controlRfsBefore.amount1(), "paused removal must preserve token1 RFS requirement"
+        );
+        if (controlDeficit1Before > 0) {
+            DICEAccounting memory diceAfterPaused = _getPoolDICEAccounting(corePoolKey.toId());
+            assertEq(
+                diceAfterPaused.totalDeficitPrincipal1,
+                controlDeficit1Before * 2,
+                "paused removal must preserve pool deficit principal on token1"
+            );
+        }
+    }
+
     function test_revert_onMMSettle_whenSeizingButCallerNotPositionOwner_insideUnlock() public {
         (uint256 tokenId,,,) = _createCommittedPosition();
         BalanceDelta depositDelta = toBalanceDelta(int128(-1), int128(-1));
@@ -1410,6 +1534,14 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
         assertEq(Currency.unwrap(currency0), Currency.unwrap(corePoolKey.currency0), "Currency0 should match");
         assertEq(Currency.unwrap(currency1), Currency.unwrap(corePoolKey.currency1), "Currency1 should match");
         assertFalse(isPaused, "Pool should not be paused");
+    }
+
+    function _decreasePosition(uint256 tokenId, uint256 amountToDecrease) internal {
+        MMA.PreparedAction[] memory actions = new MMA.PreparedAction[](3);
+        actions[0] = MMA.prepareDecrease(corePoolKey, tokenId, 0, amountToDecrease);
+        actions[1] = MMA.prepareTake(lccCurrency0, address(this), 0);
+        actions[2] = MMA.prepareTake(lccCurrency1, address(this), 0);
+        MMA.executeWithUnlock(positionManager, actions, block.timestamp + 3600);
     }
 }
 

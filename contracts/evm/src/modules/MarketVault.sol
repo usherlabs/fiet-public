@@ -185,25 +185,22 @@ abstract contract MarketVault is IMarketVault, ImmutableState, ImmutableMarketSt
     }
 
     /**
-     * @dev Settle underlying asset to the vault from the Hub
+     * @dev Settle underlying from Hub to vault (DEX ingress path).
      * @notice For ERC20: Hub approves MarketVault and we pull from Hub. For native: Hub transfers ETH to MarketVault and we settle from self.
-     *         This path is intentionally best-effort for direct-core reactions: reserve competition must not force swap/LP reverts.
-     *         Settlement is capped to currently available Hub reserve for this LCC's underlying.
+     *         Must fully fund `amount` in this transaction; `LiquidityHub.prepareSettle` reverts if direct reserve cannot cover the full amount.
      */
     function _settleUnderlyingToVaultFromHub(ILCC lccToken, uint256 amount) internal {
-        (uint256 available,) = liquidityHub.reserveOfUnderlyingTuple(address(lccToken));
-        uint256 toSettle = Math.min(amount, available);
-        if (toSettle == 0) {
+        if (amount == 0) {
             return;
         }
 
-        liquidityHub.prepareSettle(address(lccToken), toSettle);
+        liquidityHub.prepareSettle(address(lccToken), amount);
 
         Currency uaCurrency = Currency.wrap(lccToken.underlying());
         // For native ETH, LiquidityHub transfers ETH to this vault first, so settle from self.
         // For ERC20, pull from LiquidityHub after prepareSettle approval.
         address payer = uaCurrency.isAddressZero() ? address(this) : address(liquidityHub);
-        _settleUnderlyingToVaultFromSender(uaCurrency, payer, toSettle);
+        _settleUnderlyingToVaultFromSender(uaCurrency, payer, amount);
     }
 
     /**
@@ -417,11 +414,12 @@ abstract contract MarketVault is IMarketVault, ImmutableState, ImmutableMarketSt
         if (recipient == address(liquidityHub)) {
             int128 used0 = usedDelta.amount0();
             if (used0 > 0) {
-                liquidityHub.confirmTake(address(lccToken0), LiquidityUtils.safeInt128ToUint256(used0), false);
+                // Market-to-Hub withdrawals should wake reactive settlement dispatch.
+                liquidityHub.confirmTake(address(lccToken0), LiquidityUtils.safeInt128ToUint256(used0), true);
             }
             int128 used1 = usedDelta.amount1();
             if (used1 > 0) {
-                liquidityHub.confirmTake(address(lccToken1), LiquidityUtils.safeInt128ToUint256(used1), false);
+                liquidityHub.confirmTake(address(lccToken1), LiquidityUtils.safeInt128ToUint256(used1), true);
             }
         }
     }
