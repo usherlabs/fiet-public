@@ -287,6 +287,7 @@ just deploy-mock-liquidity-hub
 Required env vars:
 
 - `LIQUIDITY_HUB` (deployed LiquidityHub address on protocol chain)
+- `HUB_RVM_ID` (deployed HubRSC RVM id allowed as `callbackOrigin`)
 
 ```bash
 just deploy-receiver
