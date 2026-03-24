@@ -340,13 +340,12 @@ contract MarketLiquidityRouterLibTest is Test {
         assertEq(gotAmount, 4);
     }
 
-    function test_prepareMarketLiquidityIngress_lockedPoolManager_skipsIngress() public {
+    function test_prepareMarketLiquidityIngress_lockedPoolManager_reverts() public {
         MockLCC_RouterLib lcc = new MockLCC_RouterLib(address(0x1111));
         poolManager.setLocked(true);
 
+        vm.expectRevert(Errors.PoolManagerMustBeUnlocked.selector);
         h.prepareMarketLiquidityIngress(IPoolManager(address(poolManager)), address(ingressHandler), address(lcc), 4);
-
-        assertEq(ingressHandler.calls(), 0);
     }
 
     function test_prepareMarketLiquidityIngress_revertsWhenDifferentCurrencyInFlight() public {

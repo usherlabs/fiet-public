@@ -401,6 +401,16 @@ contract LiquidityHubWrapTest is LiquidityHubTestBase {
         assertEq(liquidityHub.directSupply(lccToken3), 0, "target direct supply should remain unchanged");
     }
 
+    /// @notice Issuer mint to DEX sink bypasses LCC transfer hooks; reject for immediate-consistency with wrap-to-DEX.
+    function testIssueRevertsWhenRecipientIsDexSink() public {
+        address poolManager = makeAddr("poolManager");
+        _setDexBound(poolManager);
+
+        vm.prank(proxyHook);
+        vm.expectRevert(abi.encodeWithSelector(Errors.DirectWrapToDexNotAllowed.selector, poolManager));
+        liquidityHub.issue(lccToken1, poolManager, 100);
+    }
+
     // ============ WRAP WITH LCC : EDGE CASE TESTS ============
 
     /// @notice Tests wrapWith with only market-derived balance (zero wrapped)

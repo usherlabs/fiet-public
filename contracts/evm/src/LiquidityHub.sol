@@ -682,6 +682,8 @@ contract LiquidityHub is BoundRegistry, Ownable, ReentrancyGuardTransient {
      */
     function issue(address lcc, address to, uint256 amount) external onlyIssuer(lcc) nonReentrant {
         // Note: LCC mint path reverts on zero (direct+market) amount.
+        // Minting market-derived LCC directly to the DEX sink bypasses transfer hooks and ingress settlement.
+        _assertWrapRecipientNotDexSink(lcc, to);
         _mint(lcc, to, 0, amount);
     }
 
@@ -816,7 +818,10 @@ contract LiquidityHub is BoundRegistry, Ownable, ReentrancyGuardTransient {
 
     /**
      * @notice Plans a cancel operation to be executed on a specific transfer path
-     * @dev Stores cancellation parameters in transient storage, keyed by transfer path (lcc, from, to)
+     * @dev Stores cancellation parameters in transient storage, keyed by transfer path (lcc, from, to).
+     *      This path-keyed store is safe only because current callers stage the plan and then
+     *      immediately drive the matching transfer in the same logical path/transaction.
+     *      It must not be treated as a general deferred queue across unrelated intermediate logic.
      * @param lcc The LCC token address
      * @param sender The expected sender of the transfer (e.g., poolManager)
      * @param cancelFromRecipient The expected recipient of the transfer (e.g., MMPM owner)
@@ -837,7 +842,10 @@ contract LiquidityHub is BoundRegistry, Ownable, ReentrancyGuardTransient {
 
     /**
      * @notice Plans a cancel with queue operation to be executed on a specific transfer path
-     * @dev Stores cancellation parameters in transient storage, keyed by transfer path (lcc, from, to)
+     * @dev Stores cancellation parameters in transient storage, keyed by transfer path (lcc, from, to).
+     *      Current MM decrease flows rely on the matching transfer happening immediately after
+     *      `modifyLiquidity(...)` returns; if a future flow can stage the same key twice before
+     *      consumption, this helper is no longer sufficient.
      * @param lcc The LCC token address
      * @param sender The expected sender of the transfer (e.g., poolManager)
      * @param cancelFromRecipient The expected recipient of the transfer (e.g., MMPM owner)
@@ -1011,6 +1019,9 @@ contract LiquidityHub is BoundRegistry, Ownable, ReentrancyGuardTransient {
     // -----------------------------------
 
     /// @notice Called by LCC on transfer to execute any planned cancellations
+    /// @dev Assumes at most one live plan per `(lcc, sender, recipient)` path at consumption time.
+    ///      The current call graph preserves this by staging the plan immediately before the
+    ///      matching transfer; this function does not independently disambiguate multiple same-key plans.
     function executePlannedCancel(address sender, address cancelFromRecipient) external onlyValidLcc(_msgSender()) {
         address lcc = _msgSender();
 

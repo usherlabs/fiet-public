@@ -157,6 +157,10 @@ abstract contract PositionManagerImpl is PositionManagerBase, ImmutableState {
         address locker,
         uint256 tokenId
     ) internal {
+        // Planned-cancel safety depends on adjacency:
+        // this handler runs immediately after the matching PoolManager -> MMPM take and before
+        // control returns to any outer MM action, so path-keyed planned cancels are consumed
+        // in the same logical flow that staged them.
         // Sync LCC fee balance ONLY increases as credit to locker
         // After taking from PoolManager, MMPM now holds LCC as ERC20 - sync as takeable credit to locker
         // However, MMPM can hold LCCs queued after _decrease, therefore we extract feesAccrued from the balance change
@@ -196,6 +200,8 @@ abstract contract PositionManagerImpl is PositionManagerBase, ImmutableState {
     ) internal {
         // Take positive deltas: receive tokens owed from PoolManager (LP is withdrawing)
         // Queued principal is then forwarded to the queue custodian, where planned cancel executes on the MMPM -> custodian transfer.
+        // This immediate post-modify take is the sequencing invariant that makes LiquidityHub's
+        // path-keyed planned-cancel transient slots safe in the current MM decrease flow.
         if (delta0 > 0) {
             uint256 balance0Before = key.currency0.balanceOfSelf();
             key.currency0.take(poolManager, self, LiquidityUtils.safeInt128ToUint256(delta0), false);
@@ -233,6 +239,8 @@ abstract contract PositionManagerImpl is PositionManagerBase, ImmutableState {
     ///      2. Calls poolManager.modifyLiquidity (triggers CoreHook -> VTSOrchestrator.touchAndProcessPosition)
     ///      3. Reads resulting deltas
     ///      4. Settles/takes tokens with PoolManager
+    ///      For MM decreases, step (4) is the immediate follow-up that consumes the path-keyed
+    ///      planned cancel staged during hook execution in `VTSPositionLib`.
     ///
     ///      All delta management (fees, LCCs, settlement accounting) is handled by VTSOrchestrator
     ///      via the hook callback, so this function only needs to handle the PoolManager settlement.

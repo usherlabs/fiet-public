@@ -1071,6 +1071,7 @@ contract MarketFactoryUnitTest is Test {
 
     function test_prepareMarketLiquidity_withoutActiveSync_forwardsIngress() public {
         (MockLCC_MarketFactory lcc0,,) = _prepareMarketWithMockLcc(address(0x100), address(0x200));
+        poolManager.setExttload(Lock.IS_UNLOCKED_SLOT, bytes32(uint256(1)));
 
         vm.prank(address(lcc0));
         factory.prepareMarketLiquidity(address(lcc0), 7);
@@ -1084,6 +1085,7 @@ contract MarketFactoryUnitTest is Test {
     function test_prepareMarketLiquidity_sameLccSync_restoresAfterNestedErc20Sync() public {
         (MockLCC_MarketFactory lcc0, MockLCC_MarketFactory lcc1,) =
             _prepareMarketWithMockLcc(address(0x100), address(0x200));
+        poolManager.setExttload(Lock.IS_UNLOCKED_SLOT, bytes32(uint256(1)));
         lcc0.mint(address(poolManager), 100);
         poolManager.sync(Currency.wrap(address(lcc0)));
         proxyHook.setNestedIngressSync(address(lcc1), true);
@@ -1097,6 +1099,7 @@ contract MarketFactoryUnitTest is Test {
 
     function test_prepareMarketLiquidity_sameLccSync_revertsWhenUnpaidIngressAlreadyExists() public {
         (MockLCC_MarketFactory lcc0,,) = _prepareMarketWithMockLcc(address(0x100), address(0x200));
+        poolManager.setExttload(Lock.IS_UNLOCKED_SLOT, bytes32(uint256(1)));
         lcc0.mint(address(poolManager), 100);
         poolManager.sync(Currency.wrap(address(lcc0)));
         lcc0.mint(address(this), 1);
@@ -1109,6 +1112,7 @@ contract MarketFactoryUnitTest is Test {
 
     function test_prepareMarketLiquidity_sameLccSync_revertsWhenSyncSnapshotInvalid() public {
         (MockLCC_MarketFactory lcc0,,) = _prepareMarketWithMockLcc(address(0x100), address(0x200));
+        poolManager.setExttload(Lock.IS_UNLOCKED_SLOT, bytes32(uint256(1)));
         lcc0.mint(address(poolManager), 100);
         poolManager.sync(Currency.wrap(address(lcc0)));
 
@@ -1122,6 +1126,7 @@ contract MarketFactoryUnitTest is Test {
 
     function test_prepareMarketLiquidity_revertsWhenDifferentCurrencyInFlight() public {
         (MockLCC_MarketFactory lcc0,,) = _prepareMarketWithMockLcc(address(0x100), address(0x200));
+        poolManager.setExttload(Lock.IS_UNLOCKED_SLOT, bytes32(uint256(1)));
         address otherCurrency = address(0xDEAD);
         poolManager.setExttload(CURRENCY_SLOT, bytes32(uint256(uint160(otherCurrency))));
 
@@ -1134,6 +1139,7 @@ contract MarketFactoryUnitTest is Test {
 
     function test_prepareMarketLiquidity_sameLccSync_nativeUnderlying_clearsAndRestores() public {
         (MockLCC_MarketFactory lcc0,,) = _prepareMarketWithMockLcc(address(0), address(0x200));
+        poolManager.setExttload(Lock.IS_UNLOCKED_SLOT, bytes32(uint256(1)));
         lcc0.mint(address(poolManager), 40);
         poolManager.sync(Currency.wrap(address(lcc0)));
         proxyHook.setNestedIngressSync(address(0), true);

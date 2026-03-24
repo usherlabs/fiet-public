@@ -420,6 +420,34 @@ being an informal “should”.
     Hub reserves, MarketVault balances, or state tracked by commitment/queue accounting) as public dust.
   - In other words, the invariant is about router residue, not about bypassing the protocol’s actual custody systems.
 
+### DELTA-03: Planned-cancel transient slots are path-scoped only because they are consumed immediately in the same logical flow
+
+- **Statement**:
+  - `LiquidityHub.planCancel(...)` and `planCancelWithQueue(...)` intentionally key transient intent by
+    `(lcc, from, to)` rather than by a transfer nonce or other per-transfer identifier.
+  - This is safe in the current MM decrease flow only because the plan is created during
+    `PoolManager.modifyLiquidity(...)` hook execution and then consumed by the immediately-following matching LCC
+    transfer in the same logical path and transaction.
+  - The protocol does **not** treat planned-cancel transient storage as a general deferred-intent queue.
+  - Therefore, any future flow that can stage a second plan for the same `(lcc, from, to)` before the first matching
+    transfer consumes it is outside the supported design and must either:
+    - preserve the same immediate-consumption sequencing, or
+    - upgrade the transient key to include per-transfer identity.
+- **Enforced by (current call graph / sequencing invariant)**:
+  - `src/libraries/VTSPositionLib.sol::_handleLiquidityDecrease` stages the planned cancel while the position is still
+    inside `PoolManager.modifyLiquidity(...)`, explicitly because the LCC has not yet been transferred to `MMPM`.
+  - `src/modules/PositionManagerImpl.sol::_modifySyntheticLiquidity` calls `poolManager.modifyLiquidity(...)` and then,
+    before returning to any outer MM action, immediately settles/takes the resulting deltas.
+  - `src/modules/PositionManagerImpl.sol::_takePositiveDeltasAndHandleLcc` performs the matching
+    `PoolManager -> MMPM` LCC take for positive deltas right after `modifyLiquidity(...)` returns.
+  - `src/modules/PositionManagerImpl.sol::_handleLccBalanceIncrease` then forwards non-fee LCC onward to custody,
+    triggering the transfer path on which `LiquidityHub.executePlannedCancel(...)` consumes the plan.
+- **Security consequence**:
+  - The coarse `(lcc, from, to)` key is not, by itself, a uniqueness proof.
+  - Safety currently depends on the adjacent plan-then-transfer sequencing remaining true.
+  - Review any refactor that adds batching, retries, deferred transfer steps, or alternate transfer destinations before
+    reusing this mechanism.
+
 ## Authorisation, call-surface, and pause invariants
 
 ### AUTH-01: Only owner/approved can settle/burn/modify MM Commit NFTs, except in seizure context

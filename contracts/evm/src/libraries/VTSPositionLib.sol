@@ -1488,6 +1488,8 @@ library VTSPositionLib {
                 // @note We cannot cancel directly at this point in the flow,
                 // The LCC's are not yet deposited into the MMPM by the poolManager - as we're during modification of liquidity.
                 // Therefore, we plan to cancel the LCC's and queue the settlement once this settlement occurs.
+                // This relies on the current MM path immediately performing the matching PoolManager -> MMPM take
+                // once modifyLiquidity(...) returns, before any same-key planned cancel can be restaged.
                 settleableDelta = _handleLiquidityDecrease(
                     ctx, p.owner, p.poolKey, principalDelta, requiredSettlementDelta, queueRecipient
                 );
@@ -1573,6 +1575,9 @@ library VTSPositionLib {
     }
 
     /// @notice Handle liquidity decrease (remove liquidity or burn) - cancels LCCs
+    /// @dev Stages path-keyed planned cancels for the subsequent PoolManager -> MMPM LCC transfer.
+    ///      This helper is correct only because the surrounding MM decrease flow immediately
+    ///      performs that transfer after `modifyLiquidity(...)` returns.
     /// @param ctx The position context
     /// @param owner The position owner
     /// @param poolKey The pool key

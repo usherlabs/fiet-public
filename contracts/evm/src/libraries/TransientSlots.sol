@@ -57,7 +57,11 @@ library TransientSlots {
     // Planned Cancel helpers
     // ------------------------------
 
-    /// @dev Computes a dynamic slot for planned cancel keyed by (lcc, from, to)
+    /// @dev Computes a dynamic slot for planned cancel keyed by (lcc, from, to).
+    ///      This is intentionally a path key, not a per-transfer identity key.
+    ///      Safety relies on current call sites staging the plan and then immediately
+    ///      executing the matching transfer in the same logical path/transaction.
+    ///      Do not reuse this helper as a generic deferred-intent store.
     function _computePlannedCancelSlot(address lcc, address from, address to, bytes32 namespaceSlot)
         internal
         pure

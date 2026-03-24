@@ -1344,11 +1344,12 @@ contract VTSPositionLibResidualFlushExpose {
         if (tokenIndex == 0) {
             s.poolAccounting[poolId].coverageResidualDICE.token0 = residual;
             s.poolAccounting[poolId].totalDeficitPrincipal.token0 = principal;
-            s.poolAccounting[poolId].coveragePerDeficitIndexX128.token0 = indexNow;
+            // `_flushCoverageResidualIfNeeded` advances `coveragePerResidualDeficitIndexX128`, not `coveragePerDeficitIndexX128`.
+            s.poolAccounting[poolId].coveragePerResidualDeficitIndexX128.token0 = indexNow;
         } else {
             s.poolAccounting[poolId].coverageResidualDICE.token1 = residual;
             s.poolAccounting[poolId].totalDeficitPrincipal.token1 = principal;
-            s.poolAccounting[poolId].coveragePerDeficitIndexX128.token1 = indexNow;
+            s.poolAccounting[poolId].coveragePerResidualDeficitIndexX128.token1 = indexNow;
         }
     }
 
@@ -1358,11 +1359,11 @@ contract VTSPositionLibResidualFlushExpose {
         returns (uint256 indexNow, uint256 residual, uint256 principal)
     {
         if (tokenIndex == 0) {
-            indexNow = s.poolAccounting[poolId].coveragePerDeficitIndexX128.token0;
+            indexNow = s.poolAccounting[poolId].coveragePerResidualDeficitIndexX128.token0;
             residual = s.poolAccounting[poolId].coverageResidualDICE.token0;
             principal = s.poolAccounting[poolId].totalDeficitPrincipal.token0;
         } else {
-            indexNow = s.poolAccounting[poolId].coveragePerDeficitIndexX128.token1;
+            indexNow = s.poolAccounting[poolId].coveragePerResidualDeficitIndexX128.token1;
             residual = s.poolAccounting[poolId].coverageResidualDICE.token1;
             principal = s.poolAccounting[poolId].totalDeficitPrincipal.token1;
         }
