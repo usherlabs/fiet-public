@@ -13,7 +13,9 @@ import {Errors} from "../src/libraries/Errors.sol";
  *      due to insufficient liquidity, and processes them when liquidity becomes available.
  */
 contract LiquidityHubSettlementTest is LiquidityHubTestBase {
-    event SettlementProcessed(address indexed lcc, address indexed recipient, uint256 amount);
+    event SettlementProcessed(
+        address indexed lcc, address indexed recipient, uint256 settledAmount, uint256 requestedAmount
+    );
 
     // ============ SETTLEMENT QUEUE TESTS ============
 
