@@ -44,5 +44,7 @@ contract EchidnaLibAddrCompute is Test {
         console.log("LiquidityHubLinkedLib", lhl);
         LiquidityHubWrapWithEchidnaTest h = new LiquidityHubWrapWithEchidnaTest();
         assertEq(address(h), harness, "harness addr mismatch (nonce?)");
+        assertGt(lcc.code.length, 0, "LCCFactoryLinkedLib missing at predicted address");
+        assertGt(lhl.code.length, 0, "LiquidityHubLinkedLib missing at predicted address");
     }
 }

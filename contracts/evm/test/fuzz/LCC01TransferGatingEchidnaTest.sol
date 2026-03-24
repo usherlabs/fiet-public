@@ -12,10 +12,6 @@ import {LiquidityHubLinkedLib} from "../../src/libraries/LiquidityHubLinkedLib.s
 /// @notice Echidna harness for LCC-01 transfer gating:
 ///         non-protocol ↔ non-protocol transfers must revert unless one endpoint is protocol-bound.
 contract LCC01TransferGatingEchidnaTest {
-    // Must match `foundry.toml` profile `echidna` hard-links (CREATE2 from this contract's address).
-    address internal constant LCC_FACTORY_LINKED_LIB = 0x2b35bC0520Ae7df66275319Be6eeAac23Ae37055;
-    address internal constant LIQUIDITY_HUB_LINKED_LIB = 0xaCed0A9de56C869F03980B37a16A1C1F9e6bC6B7;
-
     LiquidityHub internal hub;
     LiquidityCommitmentCertificate internal lccNative;
 
@@ -48,6 +44,12 @@ contract LCC01TransferGatingEchidnaTest {
         bytes32 saltLh = keccak256("echidna.LiquidityHubLinkedLib");
         bytes memory initLcc = type(LCCFactoryLinkedLib).creationCode;
         bytes memory initLh = type(LiquidityHubLinkedLib).creationCode;
+        address expectedLcc = address(
+            uint160(uint256(keccak256(abi.encodePacked(bytes1(0xff), address(this), saltLcc, keccak256(initLcc)))))
+        );
+        address expectedLh = address(
+            uint160(uint256(keccak256(abi.encodePacked(bytes1(0xff), address(this), saltLh, keccak256(initLh)))))
+        );
         address lcc;
         address lhl;
         assembly {
@@ -56,8 +58,8 @@ contract LCC01TransferGatingEchidnaTest {
         }
         require(lcc != address(0), "LCCFactoryLinkedLib deploy failed");
         require(lhl != address(0), "LiquidityHubLinkedLib deploy failed");
-        require(lcc == LCC_FACTORY_LINKED_LIB, "LCCFactoryLinkedLib addr mismatch");
-        require(lhl == LIQUIDITY_HUB_LINKED_LIB, "LiquidityHubLinkedLib addr mismatch");
+        require(lcc == expectedLcc, "LCCFactoryLinkedLib addr mismatch");
+        require(lhl == expectedLh, "LiquidityHubLinkedLib addr mismatch");
     }
 
     constructor() {
