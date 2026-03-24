@@ -3,6 +3,8 @@ pragma solidity ^0.8.26;
 
 /// @notice Intrusive doubly-linked queue for bytes32 keys.
 library LinkedQueue {
+    error ZeroKeyNotAllowed();
+
     /// @notice Queue storage.
     struct Data {
         mapping(bytes32 => bytes32) next;
@@ -16,6 +18,7 @@ library LinkedQueue {
 
     /// @notice Append key to tail if not already present.
     function enqueue(Data storage self, bytes32 key) internal {
+        if (key == bytes32(0)) revert ZeroKeyNotAllowed();
         if (self.inQueue[key]) return;
 
         if (self.tail == bytes32(0)) {
