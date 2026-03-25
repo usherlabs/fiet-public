@@ -689,6 +689,122 @@ contract HubRSCTest is Test {
         assertEq(hub.bufferedAnnulledDecreaseByKey(key), 0);
     }
 
+    /// @dev Annulled can arrive before multiple SettlementQueued deltas; excess must not be discarded at first apply.
+    function test_buffersAnnulledLargerThanFirstQueued_carriesRemainderAcrossLaterQueueAdds() public {
+        _clearSystemContract();
+        HubRSC hub = new HubRSC(
+            DEFAULT_MAX_DISPATCH_ITEMS,
+            originChainId,
+            destinationChainId,
+            liquidityHub,
+            hubCallback,
+            destinationReceiverContract
+        );
+
+        address recipient = makeAddr("recipient");
+        address lcc = makeAddr("lcc");
+        bytes32 key = hub.computeKey(lcc, recipient);
+
+        hub.react(_settlementAnnulledLog(hub, lcc, recipient, 120, 0x9411, 1));
+        assertEq(hub.bufferedAnnulledDecreaseByKey(key), 120);
+        assertFalse(_pendingExists(hub, lcc, recipient));
+
+        hub.react(_settlementLog(hub, recipient, lcc, 100, 1, 0x9412, 2));
+        (,, uint256 remaining, bool exists) = hub.pending(key);
+        // Fully netted against the first queue increment; entry pruned while remainder stays buffered.
+        assertFalse(exists);
+        assertEq(remaining, 0);
+        assertEq(hub.bufferedAnnulledDecreaseByKey(key), 20);
+
+        hub.react(_settlementLog(hub, recipient, lcc, 50, 1, 0x9413, 3));
+        (,, remaining, exists) = hub.pending(key);
+        assertTrue(exists);
+        assertEq(remaining, 30);
+        assertEq(hub.bufferedAnnulledDecreaseByKey(key), 0);
+    }
+
+    /// @dev Processed-before-queue can exceed the first mirrored queue increment; settled remainder must carry forward.
+    function test_buffersProcessedLargerThanFirstQueued_carriesSettledRemainder() public {
+        _clearSystemContract();
+        HubRSC hub = new HubRSC(
+            DEFAULT_MAX_DISPATCH_ITEMS,
+            originChainId,
+            destinationChainId,
+            liquidityHub,
+            hubCallback,
+            destinationReceiverContract
+        );
+
+        address recipient = makeAddr("recipient");
+        address lcc = makeAddr("lcc");
+        bytes32 key = hub.computeKey(lcc, recipient);
+
+        hub.react(_settlementProcessedLogWithRequested(hub, lcc, recipient, 80, 80, 0x9421, 1));
+        (uint256 bufSettled, uint256 bufInflight) = hub.bufferedProcessedDecreaseByKey(key);
+        assertEq(bufSettled, 80);
+        assertEq(bufInflight, 80);
+        assertFalse(_pendingExists(hub, lcc, recipient));
+
+        hub.react(_settlementLog(hub, recipient, lcc, 50, 1, 0x9422, 2));
+        (,, uint256 remaining, bool exists) = hub.pending(key);
+        assertFalse(exists);
+        assertEq(remaining, 0);
+        (bufSettled, bufInflight) = hub.bufferedProcessedDecreaseByKey(key);
+        assertEq(bufSettled, 30);
+        assertEq(bufInflight, 0);
+
+        hub.react(_settlementLog(hub, recipient, lcc, 40, 1, 0x9423, 3));
+        (,, remaining, exists) = hub.pending(key);
+        assertTrue(exists);
+        assertEq(remaining, 10);
+        (bufSettled, bufInflight) = hub.bufferedProcessedDecreaseByKey(key);
+        assertEq(bufSettled, 0);
+        assertEq(bufInflight, 0);
+    }
+
+    /// @dev When pending absorbs all settled principal, excess requested over in-flight reservation must not be
+    /// buffered; a later queue add would otherwise apply it against a fresh dispatch reservation.
+    function test_doesNotBufferPureInflightRemainderWhenSettledFullyAbsorbsPending() public {
+        _clearSystemContract();
+        HubRSC hub = new HubRSC(
+            DEFAULT_MAX_DISPATCH_ITEMS,
+            originChainId,
+            destinationChainId,
+            liquidityHub,
+            hubCallback,
+            destinationReceiverContract
+        );
+
+        address recipient = makeAddr("recipient");
+        address lcc = makeAddr("lcc");
+        bytes32 key = hub.computeKey(lcc, recipient);
+
+        hub.react(_settlementLog(hub, recipient, lcc, 200, 1, 0x9711, 1));
+        hub.react(liquidityAvailableLog(hub.liquidityHub(), lcc, 100, bytes32("mkt"), 0x9712, 2));
+        assertEq(hub.inFlightByKey(key), 100);
+
+        hub.react(_settlementProcessedLogWithRequested(hub, lcc, recipient, 150, 150, 0x9713, 3));
+        (,, uint256 remaining, bool exists) = hub.pending(key);
+        assertTrue(exists);
+        assertEq(remaining, 50);
+        assertEq(hub.inFlightByKey(key), 0);
+        (uint256 bufSettled, uint256 bufInflight) = hub.bufferedProcessedDecreaseByKey(key);
+        assertEq(bufSettled, 0);
+        assertEq(bufInflight, 0);
+
+        hub.react(liquidityAvailableLog(hub.liquidityHub(), lcc, 50, bytes32("mkt"), 0x9714, 4));
+        assertEq(hub.inFlightByKey(key), 50);
+        (,, remaining, exists) = hub.pending(key);
+        assertTrue(exists);
+        assertEq(remaining, 50);
+
+        hub.react(_settlementLog(hub, recipient, lcc, 10, 1, 0x9715, 5));
+        assertEq(hub.inFlightByKey(key), 50);
+        (,, remaining, exists) = hub.pending(key);
+        assertTrue(exists);
+        assertEq(remaining, 60);
+    }
+
     function test_deduplicatesAuthoritativeProcessedByLogIdentity() public {
         _clearSystemContract();
         HubRSC hub = new HubRSC(
