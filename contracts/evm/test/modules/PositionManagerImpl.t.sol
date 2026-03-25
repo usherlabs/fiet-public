@@ -16,6 +16,7 @@ import {BalanceDelta, toBalanceDelta} from "v4-periphery/lib/v4-core/src/types/B
 import {ModifyLiquidityParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
 import {Position} from "v4-periphery/lib/v4-core/src/libraries/Position.sol";
 import {IMarketFactory} from "../../src/interfaces/IMarketFactory.sol";
+import {IVTSCurrencyDelta} from "../../src/interfaces/IVTSCurrencyDelta.sol";
 
 contract MockERC20 {
     mapping(address => uint256) public balanceOf;
@@ -201,14 +202,32 @@ contract MockOrchestratorHandleLcc {
     uint256 public lastTakeAmount;
     uint256 public syncCallCount;
 
+    address public lastSyncFactory;
+    address public lastSyncCurrency;
+    address public lastSyncBalanceHolder;
+    address public lastSyncLocker;
+
+    address public lastTakeCurrency;
+    address public lastTakeLocker;
+
     function resetCredit() external {
         credit = 0;
         lastTakeAmount = 0;
         syncCallCount = 0;
+        lastSyncFactory = address(0);
+        lastSyncCurrency = address(0);
+        lastSyncBalanceHolder = address(0);
+        lastSyncLocker = address(0);
+        lastTakeCurrency = address(0);
+        lastTakeLocker = address(0);
     }
 
-    function sync(IMarketFactory, Currency, address, address) external {
+    function sync(IMarketFactory factory, Currency currency, address balanceHolder, address locker_) external {
         syncCallCount++;
+        lastSyncFactory = address(factory);
+        lastSyncCurrency = Currency.unwrap(currency);
+        lastSyncBalanceHolder = balanceHolder;
+        lastSyncLocker = locker_;
         credit = 100;
     }
 
@@ -216,7 +235,9 @@ contract MockOrchestratorHandleLcc {
         return credit;
     }
 
-    function take(Currency, address, uint256 maxAmount) external returns (uint256) {
+    function take(Currency currency, address locker_, uint256 maxAmount) external returns (uint256) {
+        lastTakeCurrency = Currency.unwrap(currency);
+        lastTakeLocker = locker_;
         lastTakeAmount = maxAmount;
         return maxAmount;
     }
@@ -293,6 +314,8 @@ contract PositionManagerImplHarness is PositionManagerQueueCustodian, PositionMa
 }
 
 contract PositionManagerImplRecordingHarness is PositionManagerImplHarness {
+    uint256 public forwardCallCount;
+
     Currency public lastFwdCurrency;
     uint256 public lastFwdTokenId;
     address public lastFwdBeneficiary;
@@ -306,6 +329,7 @@ contract PositionManagerImplRecordingHarness is PositionManagerImplHarness {
         internal
         override
     {
+        forwardCallCount++;
         lastFwdCurrency = currency;
         lastFwdTokenId = tokenId;
         lastFwdBeneficiary = beneficiary;
@@ -616,16 +640,34 @@ contract PositionManagerHandleLccHardeningTest is Test {
         orch.resetCredit();
         poolManager.setHookCurrencyDelta(hooksAddr, Currency.wrap(lcc0), int256(10));
 
+        vm.expectCall(address(orch), abi.encodeCall(IVTSCurrencyDelta.getFullCredit, (Currency.wrap(lcc0), locker)));
+        vm.expectCall(
+            address(orch),
+            abi.encodeCall(
+                IVTSCurrencyDelta.sync, (IMarketFactory(address(factory)), Currency.wrap(lcc0), address(h), locker)
+            )
+        );
+        vm.expectCall(address(orch), abi.encodeCall(IVTSCurrencyDelta.getFullCredit, (Currency.wrap(lcc0), locker)));
+        vm.expectCall(address(orch), abi.encodeCall(IVTSCurrencyDelta.take, (Currency.wrap(lcc0), locker, uint256(80))));
+
         h.exposeHandleLccBalanceIncrease(key, Currency.wrap(lcc0), 0, 100, int128(30), locker, 7);
 
         // fee = max(30 - 10, 0) = 20; nonFee = 100 - 20 = 80
+        assertEq(h.forwardCallCount(), 1);
         assertEq(h.lastFwdAmount(), 80);
         assertEq(h.lastFwdTokenId(), 7);
         assertEq(h.lastFwdBeneficiary(), locker);
         assertEq(Currency.unwrap(h.lastFwdCurrency()), lcc0);
 
+        assertEq(orch.lastSyncFactory(), address(factory));
+        assertEq(orch.lastSyncCurrency(), lcc0);
+        assertEq(orch.lastSyncBalanceHolder(), address(h));
+        assertEq(orch.lastSyncLocker(), locker);
+
         // credit after sync = 100; extra = 100 - 20 = 80
         assertEq(orch.lastTakeAmount(), 80);
+        assertEq(orch.lastTakeCurrency(), lcc0);
+        assertEq(orch.lastTakeLocker(), locker);
     }
 
     /// @notice When `inc <= fee`, `nonFee` is zero and no forward occurs.
@@ -641,8 +683,19 @@ contract PositionManagerHandleLccHardeningTest is Test {
         orch.resetCredit();
         poolManager.setHookCurrencyDelta(hooksAddr, Currency.wrap(lcc0), int256(0));
 
+        vm.expectCall(address(orch), abi.encodeCall(IVTSCurrencyDelta.getFullCredit, (Currency.wrap(lcc0), locker)));
+        vm.expectCall(
+            address(orch),
+            abi.encodeCall(
+                IVTSCurrencyDelta.sync, (IMarketFactory(address(factory)), Currency.wrap(lcc0), address(h), locker)
+            )
+        );
+        vm.expectCall(address(orch), abi.encodeCall(IVTSCurrencyDelta.getFullCredit, (Currency.wrap(lcc0), locker)));
+        vm.expectCall(address(orch), abi.encodeCall(IVTSCurrencyDelta.take, (Currency.wrap(lcc0), locker, uint256(50))));
+
         h.exposeHandleLccBalanceIncrease(key, Currency.wrap(lcc0), 0, 50, int128(50), locker, 1);
 
+        assertEq(h.forwardCallCount(), 0);
         assertEq(h.lastFwdAmount(), 0);
     }
 }
