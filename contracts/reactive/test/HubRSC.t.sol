@@ -762,6 +762,49 @@ contract HubRSCTest is Test {
         assertEq(bufInflight, 0);
     }
 
+    /// @dev When pending absorbs all settled principal, excess requested over in-flight reservation must not be
+    /// buffered; a later queue add would otherwise apply it against a fresh dispatch reservation.
+    function test_doesNotBufferPureInflightRemainderWhenSettledFullyAbsorbsPending() public {
+        _clearSystemContract();
+        HubRSC hub = new HubRSC(
+            DEFAULT_MAX_DISPATCH_ITEMS,
+            originChainId,
+            destinationChainId,
+            liquidityHub,
+            hubCallback,
+            destinationReceiverContract
+        );
+
+        address recipient = makeAddr("recipient");
+        address lcc = makeAddr("lcc");
+        bytes32 key = hub.computeKey(lcc, recipient);
+
+        hub.react(_settlementLog(hub, recipient, lcc, 200, 1, 0x9711, 1));
+        hub.react(liquidityAvailableLog(hub.liquidityHub(), lcc, 100, bytes32("mkt"), 0x9712, 2));
+        assertEq(hub.inFlightByKey(key), 100);
+
+        hub.react(_settlementProcessedLogWithRequested(hub, lcc, recipient, 150, 150, 0x9713, 3));
+        (,, uint256 remaining, bool exists) = hub.pending(key);
+        assertTrue(exists);
+        assertEq(remaining, 50);
+        assertEq(hub.inFlightByKey(key), 0);
+        (uint256 bufSettled, uint256 bufInflight) = hub.bufferedProcessedDecreaseByKey(key);
+        assertEq(bufSettled, 0);
+        assertEq(bufInflight, 0);
+
+        hub.react(liquidityAvailableLog(hub.liquidityHub(), lcc, 50, bytes32("mkt"), 0x9714, 4));
+        assertEq(hub.inFlightByKey(key), 50);
+        (,, remaining, exists) = hub.pending(key);
+        assertTrue(exists);
+        assertEq(remaining, 50);
+
+        hub.react(_settlementLog(hub, recipient, lcc, 10, 1, 0x9715, 5));
+        assertEq(hub.inFlightByKey(key), 50);
+        (,, remaining, exists) = hub.pending(key);
+        assertTrue(exists);
+        assertEq(remaining, 60);
+    }
+
     function test_deduplicatesAuthoritativeProcessedByLogIdentity() public {
         _clearSystemContract();
         HubRSC hub = new HubRSC(
