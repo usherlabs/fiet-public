@@ -1074,5 +1074,21 @@ contract MockSettleCustodian is IMMQueueCustodian {
             emit LiquidityHub.SettlementProcessed(lccToken1, user1, q, q);
             liquidityHub.processSettlementFor(lccToken1, user1, q);
         }
+
+        /// @notice When `maxAmount` is below the queued amount, `settled` matches the actual reduction and the event’s
+        ///         fourth argument is the caller-supplied cap (not the full queue).
+        function test_processSettlementFor_emitsSettlementProcessed_partialWhenMaxAmountCaps() public {
+            uint256 queuedBefore = 100;
+            uint256 maxAmount = 30;
+            _createSettlementQueueEntry(lccToken1, user1, queuedBefore);
+            underlyingAsset1.mint(address(liquidityHub), queuedBefore);
+            _setMarketReserveOfUnderlying(address(underlyingAsset1), queuedBefore);
+
+            vm.expectEmit(true, true, false, true, address(liquidityHub));
+            emit LiquidityHub.SettlementProcessed(lccToken1, user1, maxAmount, maxAmount);
+            liquidityHub.processSettlementFor(lccToken1, user1, maxAmount);
+
+            assertEq(liquidityHub.settleQueue(lccToken1, user1), queuedBefore - maxAmount);
+        }
     }
 
