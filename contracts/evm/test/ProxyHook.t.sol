@@ -32,6 +32,8 @@ import {SwapSimulator} from "./utils/SwapSimulator.sol";
 import {BaseHook} from "v4-periphery/src/utils/BaseHook.sol";
 import {StateLibrary} from "@uniswap/v4-core/src/libraries/StateLibrary.sol";
 import {IMsgSender} from "v4-periphery/src/interfaces/IMsgSender.sol";
+import {IERC20Minimal} from "@uniswap/v4-core/src/interfaces/external/IERC20Minimal.sol";
+import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
 
 /**
  * 22nd October 2025 - ProxyHookTest.sol
@@ -39,6 +41,28 @@ import {IMsgSender} from "v4-periphery/src/interfaces/IMsgSender.sol";
  *     - The remaining Proxy swap test reverts are thrown by ProxyHook, likely on deficit recipient or flow guards. But the error selector in the latest runs shows generic revert without decoded custom error. We'll address them next by ensuring the excess-recipient hookData is valid or by letting swaps operate without overflow. Given determineExcessRecipient returns address(0) by default, ProxyHook's logic already guards to not emit and not set deficit recipient. The more likely culprit is insufficient available inMarket balances causing internal steps to underflow flow constraints.
  *     - We already mocked proxyHookToCurrencyPair correctly and MarketVault is active; next fix is to ensure balances in ProxyHook's MarketVault are sufficient before proxy swaps. In these tests, initial inMarket balances exist via initial core LP providing LCC backing and on-direct LP path; however, ProxyHook's settlement path first calls settleFromLCCToVault on direct LP events only. The proxy swap tests don't perform direct LP and rely on pre-seeded inMarket balances from the setup. The harness has lcc0.wrap/lcc1.wrap(initialLiquidity) followed by core pool add-liquidity and ProxyHook._onDirectLP crediting vault from LCC on direct LP. That flow is working for "core" swap tests (they pass), but proxy swap is still reverting.
  */
+
+/// @dev Unwrap must run under `PoolManager.unlock` when the manager is already locked (same as MarketVault tests).
+contract UnwrapInUnlockRunner {
+    IPoolManager internal immutable pm;
+    address internal immutable hub;
+
+    constructor(IPoolManager pm_, address hub_) {
+        pm = pm_;
+        hub = hub_;
+    }
+
+    function run(address lcc, uint256 amt) external {
+        pm.unlock(abi.encode(lcc, amt));
+    }
+
+    function unlockCallback(bytes calldata data) external returns (bytes memory) {
+        (address lcc, uint256 amt) = abi.decode(data, (address, uint256));
+        LiquidityHub(payable(hub)).unwrap(lcc, amt);
+        return bytes("");
+    }
+}
+
 contract ProxyHookTest is MarketVaultBase {
     using PoolIdLibrary for PoolId;
     using CurrencyLibrary for Currency;
@@ -1196,6 +1220,235 @@ contract ProxyHookTest is MarketVaultBase {
             TickMath.MIN_SQRT_PRICE + 1,
             "core zeroForOne default should be MIN+1"
         );
+    }
+
+    // -------------------------------------------------------------------------
+    // Liveness: prior legitimate vault consumers vs proxy swap (see CAVEATS.md)
+    // -------------------------------------------------------------------------
+
+    /// @dev Market-derived LCC on `runner` via bucket-exempt proxyHook transfer (same pattern as MarketVault tests).
+    function _fundRunnerWithMarketDerivedLCC(
+        UnwrapInUnlockRunner runner,
+        LiquidityCommitmentCertificate lcc,
+        uint256 amount
+    ) internal {
+        address ua = lcc.underlying();
+        require(ua != address(0), "liveness tests require ERC20 underlyings");
+        IERC20Minimal(ua).transfer(address(proxyHook), amount);
+        vm.startPrank(address(proxyHook));
+        IERC20Minimal(ua).approve(liquidityHub, amount);
+        LiquidityHub(payable(liquidityHub)).wrap(address(lcc), amount);
+        lcc.transfer(address(runner), amount);
+        vm.stopPrank();
+    }
+
+    /// @dev Unwrap market-derived LCC inside PoolManager.unlock; withdraws underlying from the market vault.
+    function _unwrapMarketDerivedFromVault(LiquidityCommitmentCertificate lcc, uint256 amount) internal {
+        UnwrapInUnlockRunner runner = new UnwrapInUnlockRunner(IPoolManager(address(manager)), liquidityHub);
+        _fundRunnerWithMarketDerivedLCC(runner, lcc, amount);
+        runner.run(address(lcc), amount);
+    }
+
+    /// @dev LCC whose underlying matches `currency` (proxy pool uses underlying currencies).
+    function _lccForUnderlyingCurrency(Currency currency) internal view returns (LiquidityCommitmentCertificate) {
+        address u = Currency.unwrap(currency);
+        if (lcc0.underlying() == u) return lcc0;
+        if (lcc1.underlying() == u) return lcc1;
+        revert("underlying not in market");
+    }
+
+    /**
+     * @notice Prior unwrap on the proxy output lane depletes vault; later proxy exact-output fails closed.
+     * @dev Lane-matched: unwrap drains `proxyPoolKey.currency1` (zeroForOne output), then exact-output needs more than remains.
+     */
+    function test_proxyLiveness_priorUnwrapDrainsOutputLane_exactOutputReverts() public {
+        Currency currencyOut = proxyPoolKey.currency1;
+        LiquidityCommitmentCertificate lccOut = _lccForUnderlyingCurrency(currencyOut);
+
+        uint256 beforeVault = mv.inMarketBalanceOf(currencyOut);
+        assertGt(beforeVault, 100, "pre: need vault liquidity on proxy output lane");
+
+        uint256 requestedOut = beforeVault / 2;
+        if (requestedOut == 0) {
+            requestedOut = 1;
+        }
+        uint256 drain = (beforeVault * 3) / 4;
+        if (drain == 0) {
+            drain = 1;
+        }
+        assertLt(beforeVault - drain, requestedOut, "pre: drain should leave less than requested exact output");
+
+        _unwrapMarketDerivedFromVault(lccOut, drain);
+
+        uint256 afterVault = mv.inMarketBalanceOf(currencyOut);
+        assertLt(afterVault, requestedOut, "post: vault must be short vs requested exact output");
+
+        vm.expectRevert();
+        _executeSwap(proxyPoolKey, true, int256(requestedOut), ZERO_BYTES);
+    }
+
+    /**
+     * @notice Prior unwrap on the non-output lane does not block a proxy exact-output that only needs the other underlying.
+     * @dev Lane-mismatched: drain `currency0` only, then zeroForOne proxy (output `currency1`) should still succeed.
+     */
+    function test_proxyLiveness_priorUnwrapOtherLane_exactOutputStillSucceeds() public {
+        Currency currencyOut = proxyPoolKey.currency1;
+        Currency currencyInLane = proxyPoolKey.currency0;
+        LiquidityCommitmentCertificate lccOther = _lccForUnderlyingCurrency(currencyInLane);
+
+        uint256 beforeOut = mv.inMarketBalanceOf(currencyOut);
+        uint256 beforeInLane = mv.inMarketBalanceOf(currencyInLane);
+        assertGt(beforeOut, 10, "pre: need output-lane liquidity");
+        assertGt(beforeInLane, 10, "pre: need non-output lane to drain");
+
+        uint256 drainOther = (beforeInLane * 3) / 4;
+        if (drainOther == 0) {
+            drainOther = 1;
+        }
+        _unwrapMarketDerivedFromVault(lccOther, drainOther);
+
+        uint256 requestedOut = beforeOut / 4;
+        if (requestedOut == 0) {
+            requestedOut = 1;
+        }
+        assertLt(requestedOut, mv.inMarketBalanceOf(currencyOut), "output lane should still cover small exact output");
+
+        _executeSwap(proxyPoolKey, true, int256(requestedOut), ZERO_BYTES);
+    }
+
+    /**
+     * @notice After draining the output lane, exact-input with unresolved recipient reverts; resolved recipient can queue deficit.
+     */
+    function test_proxyLiveness_priorUnwrapDrainsOutputLane_exactInputUnresolvedReverts_resolvedQueues() public {
+        Currency currencyOut = proxyPoolKey.currency1;
+        LiquidityCommitmentCertificate lccOut = _lccForUnderlyingCurrency(currencyOut);
+        address recipient = makeAddr("liveness_recipient");
+        _setupRecipient(recipient);
+
+        uint256 beforeVault = mv.inMarketBalanceOf(currencyOut);
+        assertGt(beforeVault, 10_000, "pre: need vault liquidity");
+
+        uint256 leaveInVault = 1000;
+        uint256 drain = beforeVault > leaveInVault ? beforeVault - leaveInVault : 0;
+        assertGt(drain, 0, "pre: need drainable vault balance");
+        _unwrapMarketDerivedFromVault(lccOut, drain);
+
+        uint256 afterVault = mv.inMarketBalanceOf(currencyOut);
+        assertLe(afterVault, leaveInVault, "post: output lane should be nearly depleted");
+
+        // Keep exact-input size within a range the core pool can fully fill (see Option A swap tests); very large
+        // amounts can stop short of the requested input and trip `exact-input core fill mismatch`.
+        uint256 swapAmount = 1e18;
+        (, uint256 expectedOutput) = _simulateCoreSwapAsProxy(proxyPoolKey, true, -int256(swapAmount));
+        assertGt(expectedOutput, afterVault, "pre: simulated core output should exceed remaining vault");
+
+        vm.expectRevert();
+        _executeSwap(proxyPoolKey, true, -int256(swapAmount), ZERO_BYTES);
+
+        _executeSwap(proxyPoolKey, true, -int256(swapAmount), abi.encode(recipient));
+        assertGt(LiquidityHub(payable(liquidityHub)).settleQueue(address(lccOut), recipient), 0);
+    }
+
+    /// @dev Queue-backed obligation settlement on direct core swap can drain the victim output underlying before a proxy swap.
+    function test_proxyLiveness_directCoreWithUnfundedQueue_drainsOutputLane_thenExactOutputReverts() public {
+        Currency currencyOut = proxyPoolKey.currency1;
+        LiquidityCommitmentCertificate lccOut = _lccForUnderlyingCurrency(currencyOut);
+        address uaOut = Currency.unwrap(currencyOut);
+        if (uaOut == address(0)) {
+            return;
+        }
+
+        uint256 qAmt = 500e18;
+        address user = makeAddr("queue_user");
+        IERC20Minimal(uaOut).transfer(user, qAmt);
+        vm.startPrank(user);
+        IERC20Minimal(uaOut).approve(liquidityHub, qAmt);
+        LiquidityHub(payable(liquidityHub)).wrap(address(lccOut), qAmt);
+        vm.stopPrank();
+
+        _mockLCCBalances(lccOut, user, 0, qAmt);
+        _mockLimitedMarketLiquidity(address(lccOut), PoolId.unwrap(corePoolKey.toId()), 0);
+        vm.prank(user);
+        LiquidityHub(payable(liquidityHub)).unwrap(address(lccOut), qAmt);
+        vm.clearMockedCalls();
+
+        assertGt(LiquidityHub(payable(liquidityHub)).unfundedQueueOfUnderlying(address(lccOut)), 0);
+
+        uint256 beforeVault = mv.inMarketBalanceOf(currencyOut);
+        uint256 requestedOut = beforeVault / 4;
+        assertGt(requestedOut, 0, "pre: need non-zero requested exact output");
+
+        bool coreOneForZero = address(lccOut) == Currency.unwrap(corePoolKey.currency1);
+
+        PoolSwapTest.TestSettings memory settings =
+            PoolSwapTest.TestSettings({takeClaims: false, settleUsingBurn: false});
+        if (coreOneForZero) {
+            swapRouter.swap(
+                corePoolKey,
+                SwapParams({
+                    zeroForOne: false,
+                    amountSpecified: -int256(requestedOut / 10 + 1),
+                    sqrtPriceLimitX96: ONE_FOR_ZERO_LIMIT
+                }),
+                settings,
+                ZERO_BYTES
+            );
+        } else {
+            swapRouter.swap(
+                corePoolKey,
+                SwapParams({
+                    zeroForOne: true,
+                    amountSpecified: -int256(requestedOut / 10 + 1),
+                    sqrtPriceLimitX96: ZERO_FOR_ONE_LIMIT
+                }),
+                settings,
+                ZERO_BYTES
+            );
+        }
+
+        uint256 afterVault = mv.inMarketBalanceOf(currencyOut);
+        assertLt(afterVault, beforeVault, "direct core + queue settlement should reduce vault on that lane");
+
+        assertLt(afterVault, requestedOut, "post: vault too low for strict exact-output proxy swap");
+
+        vm.expectRevert();
+        _executeSwap(proxyPoolKey, true, int256(requestedOut), ZERO_BYTES);
+    }
+
+    /// @dev With no unfunded queue, direct core swap should not pull underlying via handleSwap obligation path.
+    function test_proxyLiveness_directCore_noUnfundedQueue_vaultUnchangedOnHandleSwapLane() public {
+        Currency currencyOut = proxyPoolKey.currency1;
+        LiquidityCommitmentCertificate lccLane = Currency.unwrap(currencyOut) == lcc0.underlying() ? lcc0 : lcc1;
+        if (lccLane.underlying() == address(0)) {
+            return;
+        }
+
+        assertEq(LiquidityHub(payable(liquidityHub)).unfundedQueueOfUnderlying(address(lccLane)), 0);
+
+        uint256 beforeVault = mv.inMarketBalanceOf(currencyOut);
+
+        PoolSwapTest.TestSettings memory settings =
+            PoolSwapTest.TestSettings({takeClaims: false, settleUsingBurn: false});
+        bool coreOneForZero = address(lccLane) == Currency.unwrap(corePoolKey.currency1);
+        if (coreOneForZero) {
+            swapRouter.swap(
+                corePoolKey,
+                SwapParams({zeroForOne: false, amountSpecified: -int256(1e15), sqrtPriceLimitX96: ONE_FOR_ZERO_LIMIT}),
+                settings,
+                ZERO_BYTES
+            );
+        } else {
+            swapRouter.swap(
+                corePoolKey,
+                SwapParams({zeroForOne: true, amountSpecified: -int256(1e15), sqrtPriceLimitX96: ZERO_FOR_ONE_LIMIT}),
+                settings,
+                ZERO_BYTES
+            );
+        }
+
+        uint256 afterVault = mv.inMarketBalanceOf(currencyOut);
+        uint256 diff = beforeVault > afterVault ? beforeVault - afterVault : afterVault - beforeVault;
+        assertLt(diff, 1e18, "swap may nudge vault; obligation path must not move large liquidity without queue");
     }
 
     // More tests can be added for onDirectLP, unlockCallback, etc.
