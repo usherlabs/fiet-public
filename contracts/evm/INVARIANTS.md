@@ -300,7 +300,12 @@ being an informal “should”.
   - The remainder is **invalid** if `positionLiquidity` changes: `touchPosition` clears `feeBurnGrowthRemainder` whenever
     `liquidityDelta != 0` for an existing position. New positions initialise both fee snapshots and remainders in
     `_initFeeSnapshot`.
-- **Enforced by**: `src/libraries/VTSPositionLib.sol::_applyBurnBase`, `_initFeeSnapshot`, `touchPosition`.
+  - If Uniswap position liquidity changes **without** `touchPosition` (for example paused remove-liquidity in
+    `CoreHook._afterRemoveLiquidity`), `settlePositionGrowths` detects a mismatch between stored `Position.liquidity`
+    and `StateLibrary.getPositionLiquidity` and clears `feeBurnGrowthRemainder` so carry is never applied under a stale
+    denominator. The next `touchPosition` continues to be the canonical place that updates the stored liquidity mirror.
+- **Enforced by**: `src/libraries/VTSPositionLib.sol::_applyBurnBase`, `_initFeeSnapshot`, `touchPosition`,
+  `_reconcileLiquidityMirrorAndFeeBurnRemainder`, `settlePositionGrowths`.
 
 ### FEE-01: Queued slashes vs materialised slashed pot
 

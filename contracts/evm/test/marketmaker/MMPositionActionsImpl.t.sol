@@ -1524,7 +1524,7 @@ contract MMPositionManagerActionsTest is MarketTestBase, MarketMakerTestBase {
         actions[0] = MMA.prepareDecrease(corePoolKey, tokenId, positionIndex, 1_000_000_000);
         actions[1] = MMA.prepareIncreaseFromDeltas(corePoolKey, tokenId, positionIndex, 0, 0, true);
 
-        vm.expectRevert();
+        vm.expectRevert(abi.encodeWithSelector(Errors.MaximumAmountExceeded.selector, uint128(0), uint128(5_999_710)));
         MMA.executeWithUnlock(positionManager, actions, block.timestamp + 3600);
     }
 
@@ -1551,7 +1551,7 @@ contract MMPositionManagerActionsTest is MarketTestBase, MarketMakerTestBase {
             corePoolKey, tokenId, defaultlLiquidityParams.tickLower, defaultlLiquidityParams.tickUpper, 0, 0, true
         );
 
-        vm.expectRevert();
+        vm.expectRevert(abi.encodeWithSelector(Errors.MaximumAmountExceeded.selector, uint128(0), uint128(5_999_710)));
         MMA.executeWithUnlock(positionManager, actions, block.timestamp + 3600);
     }
 

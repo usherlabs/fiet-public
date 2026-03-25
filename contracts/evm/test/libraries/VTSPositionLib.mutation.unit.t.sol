@@ -1385,6 +1385,64 @@ contract VTSPositionLibMutationUnitTest is Test {
         assertEq(s1, cm1, "token1 settled should equal commitmentMax after non-MM increase");
         _assertPoolTotalSettled(pId, cm0, cm1);
     }
+
+    /// @notice Regression: `commitmentDeficitBps` clears only when both token deficits are zero (VTSPositionLib ~266-269).
+    function test_updateSettlement_clearsCommitmentDeficitBps_whenBothCommitmentDeficitsCured() public {
+        (PositionId id,) = _register(bytes32(uint256(51)), 1);
+        harness.setCommitmentMax(id, 100e18, 100e18);
+        harness.setSettled(id, 0, 0);
+        harness.setPoolTotalSettled(poolId, 0, 0);
+        harness.setCumulativeDeficit(id, 0, 0);
+        harness.setCommitmentDeficit(id, 10e18, 5e18);
+        harness.setCommitmentDeficitBps(id, 1234);
+
+        harness.updateSettlement(id, 0, 10e18);
+        assertEq(harness.getCommitmentDeficitBps(id), 1234);
+
+        harness.updateSettlement(id, 1, 5e18);
+        assertEq(harness.getCommitmentDeficitBps(id), 0);
+    }
+
+    /// @notice Regression: curing token0 commitment deficit clears `commitmentDeficitSince` for that side (VTSPositionLib ~257-259).
+    function test_updateSettlement_clearsCommitmentDeficitSince_whenTokenDeficitFullyCured() public {
+        (PositionId id,) = _register(bytes32(uint256(52)), 1);
+        harness.setCommitmentMax(id, 100e18, 100e18);
+        harness.setSettled(id, 0, 0);
+        harness.setPoolTotalSettled(poolId, 0, 0);
+        harness.setCumulativeDeficit(id, 0, 0);
+        harness.setCommitmentDeficit(id, 10e18, 0);
+        harness.setCommitmentDeficitSince(id, 12345, 0);
+
+        harness.updateSettlement(id, 0, 10e18);
+        (uint256 since0,) = harness.getCommitmentDeficitSince(id);
+        assertEq(since0, 0);
+    }
+
+    /// @notice Regression: live PoolManager liquidity can change without touchPosition (e.g. paused remove); remainder must clear.
+    function test_settlePositionGrowths_reconcilesStaleLiquidityMirror_clearsFeeBurnRemainder() public {
+        (PositionId id,) = _register(bytes32(uint256(0xD1F7)), 1000);
+        _pmSetSlot0Tick(poolId, 0);
+        _pmSetPositionLiquidity(poolId, PositionId.unwrap(id), 500);
+        harness.setPositionLiquidityMirror(id, 1000);
+        harness.setFeeBurnGrowthRemainder(id, 123, 456);
+
+        harness.setCoverageIndexLastX128(id, 0, 0);
+        harness.setCISEIndexLastX128(id, 0, 0);
+        harness.setPoolCoveragePerDeficitIndexX128(poolId, 0, 0);
+        harness.setPoolCoveragePerSettledIndexX128(poolId, 0, 0);
+        harness.setDeficitGrowthGlobal(poolId, 0, 0);
+        harness.setInflowGrowthGlobal(poolId, 0, 0);
+        harness.setDeficitGrowthInsideLast(id, 0, 0);
+        harness.setInflowGrowthInsideLast(id, 0, 0);
+
+        harness.settlePositionGrowths(IPoolManager(address(pm)), id);
+
+        // Remainder must clear when mirror != live L; stored `pos.liquidity` is updated on `touchPosition`, not here.
+        assertEq(harness.getPosition(id).liquidity, 1000);
+        (uint256 r0, uint256 r1) = harness.getFeeBurnGrowthRemainder(id);
+        assertEq(r0, 0);
+        assertEq(r1, 0);
+    }
 }
 
 /// @notice Exposes internal VTSPositionLib pure helper for truth-table tests.

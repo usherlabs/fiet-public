@@ -17,7 +17,7 @@
       "ticker": "USDT",
       "asset": "0xfd086bc7cd5c481dcc9c85ebe478a1c0b69fcbb9",
       "feed": "0x3f3f5dF88dC9F13eac63DF89EC16ef6e7E25DdE7",
-      "maxStalePeriod": 3600,
+      "maxStalePeriod": 86400,
       "cachingEnabled": true,
       "enableMain": true,
       "enablePivot": false,

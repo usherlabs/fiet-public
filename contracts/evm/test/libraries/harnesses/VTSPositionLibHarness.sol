@@ -168,6 +168,11 @@ contract VTSPositionLibHarness {
         return s.positions[id];
     }
 
+    /// @notice TEST-ONLY: desynchronise stored liquidity from PoolManager (simulates paused remove without touchPosition)
+    function setPositionLiquidityMirror(PositionId id, uint128 liquidity) external {
+        s.positions[id].liquidity = liquidity;
+    }
+
     function getCommitmentDeficit(PositionId id) external view returns (uint256 cd0, uint256 cd1) {
         return (s.positionAccounting[id].commitmentDeficit.token0, s.positionAccounting[id].commitmentDeficit.token1);
     }
@@ -350,6 +355,26 @@ contract VTSPositionLibHarness {
     function setCommitmentDeficit(PositionId id, uint256 cd0, uint256 cd1) external {
         s.positionAccounting[id].commitmentDeficit.token0 = cd0;
         s.positionAccounting[id].commitmentDeficit.token1 = cd1;
+    }
+
+    function setCommitmentDeficitBps(PositionId id, uint16 bps) external {
+        s.positionAccounting[id].commitmentDeficitBps = bps;
+    }
+
+    function getCommitmentDeficitBps(PositionId id) external view returns (uint16) {
+        return s.positionAccounting[id].commitmentDeficitBps;
+    }
+
+    function setCommitmentDeficitSince(PositionId id, uint256 s0, uint256 s1) external {
+        s.positionAccounting[id].commitmentDeficitSince.token0 = s0;
+        s.positionAccounting[id].commitmentDeficitSince.token1 = s1;
+    }
+
+    function getCommitmentDeficitSince(PositionId id) external view returns (uint256, uint256) {
+        return (
+            s.positionAccounting[id].commitmentDeficitSince.token0,
+            s.positionAccounting[id].commitmentDeficitSince.token1
+        );
     }
 
     /// @notice Sets CISE exposure for a position
