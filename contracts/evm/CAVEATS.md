@@ -99,3 +99,31 @@ This is a known caveat, not an accidental relaxation of safety checks.
 Proxy swaps intentionally prioritise invariant safety over universal liveness. If shared vault liquidity is not
 available at execution time, the protocol reverts rather than under-settling exact-output or allowing the proxy pool
 AMM to execute.
+
+## Examples
+
+### Direct-core pre-drain grief on proxy swaps (edge case)
+
+A narrower grief vector can arise when a **prior transaction** in the same block runs a **direct core swap** whose
+follow-up settles obligations for the **input LCC lane** (`handleSwap(lccIn)` → `_settleObligationsForLCC(lccIn)`),
+moving underlying from the market vault to the Hub. That reduces `inMarketBalanceOf(outputUnderlying)` **before** a later
+proxy swap runs.
+
+For this edge case to be reachable, **all** of the following must hold:
+
+- **Unfunded queue on the targeted lane.** `unfundedQueueOfUnderlying(lccIn) > 0` so obligation settlement actually pulls
+  vault liquidity (otherwise `handleSwap` is a no-op for settlement).
+- **Lane alignment.** The attacker’s direct core swap uses an input LCC whose underlying is the same asset the victim’s
+  proxy swap needs on the **output** side (the grief targets the output underlying, not an arbitrary lane).
+- **Vault liquidity to drain.** The vault must hold enough of that underlying for `_settleObligationsForLCC` to move a
+  non-zero amount to the Hub (capped by `min(unfunded, inMarketBalanceOf)`).
+- **Victim swap shape.** The victim’s proxy swap must be one that **fails closed** on short immediate output liquidity:
+  exact-output, or exact-input with an unresolved recipient (paths that revert when output cannot be fully settled
+  immediately under `ProxyHook`’s checks).
+- **Transaction ordering.** The direct core swap must execute **before** the proxy swap in the block (or bundle). This is
+  typical of mempool-based front-running or private relay ordering; it is not an intra-transaction race inside a single
+  user transaction.
+
+Under those conditions, the proxy swap may revert with `InsufficientLiquidity` even though the core pool would still
+price the trade. This is a **conditional liveness / ordering** concern, not a loss of funds or a break of the core price
+curve itself.
