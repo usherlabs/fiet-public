@@ -429,6 +429,89 @@ contract VTSPositionLibMutationUnitTest is Test {
         }
     }
 
+    /// @dev Two partial fee-burn baseline steps with carry must match a single floor on the sum of consumed fees.
+    function test_feeBurnGrowthRemainder_twoStepsEqualsSingleShotFloor() public pure {
+        uint256 L = 1003;
+        uint256 a1 = 100;
+        uint256 a2 = 200;
+        uint256 carry = 0;
+        uint256 totalGrowth;
+        uint256 g1;
+        uint256 g2;
+        (g1, carry) = LiquidityUtils.feeBurnGrowthIncWithRemainder(a1, L, carry);
+        totalGrowth += g1;
+        (g2, carry) = LiquidityUtils.feeBurnGrowthIncWithRemainder(a2, L, carry);
+        totalGrowth += g2;
+        uint256 expected = FullMath.mulDiv(a1 + a2, FixedPoint128.Q128, L);
+        assertEq(totalGrowth, expected, "carried remainder should close Q128/L dust vs two independent floors");
+        assertLt(carry, L, "final remainder must be < L");
+    }
+
+    function test_touchPosition_liquidityIncrease_clearsFeeBurnGrowthRemainder() public {
+        MockLCC lcc0 = new MockLCC(address(0xC0));
+        MockLCC lcc1 = new MockLCC(address(0xC1));
+        PoolKey memory key = PoolKey({
+            currency0: Currency.wrap(address(lcc0)),
+            currency1: Currency.wrap(address(lcc1)),
+            fee: 0,
+            tickSpacing: 60,
+            hooks: IHooks(address(0))
+        });
+        PoolId pId = key.toId();
+        harness.setupPool(pId, _defaultCfg());
+
+        ModifyLiquidityParams memory reg = ModifyLiquidityParams({
+            tickLower: TICK_LOWER,
+            tickUpper: TICK_UPPER,
+            liquidityDelta: int256(uint256(1000)),
+            salt: bytes32(uint256(0xFEE))
+        });
+        harness.registerPosition(owner, pId, reg);
+        PositionId id = PositionLibrary.generateId(owner, reg);
+
+        harness.setFeeBurnGrowthRemainder(id, 123, 456);
+        (uint256 r0, uint256 r1) = harness.getFeeBurnGrowthRemainder(id);
+        assertEq(r0, 123);
+        assertEq(r1, 456);
+
+        harness.setCommitmentMax(id, 10e18, 20e18);
+        harness.setSettled(id, 3e18, 4e18);
+        harness.setPoolTotalSettled(pId, 3e18, 4e18);
+        harness.setCumulativeDeficit(id, 0, 0);
+        harness.setCommitmentDeficit(id, 0, 0);
+
+        _pmSetSlot0Tick(pId, 0);
+        _pmSetPositionLiquidity(pId, PositionId.unwrap(id), 1000);
+
+        uint128 liqAdded = 200;
+        TouchPositionParams memory tp = TouchPositionParams({
+            owner: owner,
+            poolKey: key,
+            params: ModifyLiquidityParams({
+                tickLower: reg.tickLower,
+                tickUpper: reg.tickUpper,
+                liquidityDelta: int256(uint256(liqAdded)),
+                salt: reg.salt
+            }),
+            callerDelta: toBalanceDelta(0, 0),
+            feesAccrued: toBalanceDelta(0, 0),
+            hookData: ""
+        });
+
+        PositionContext memory ctx = PositionContext({
+            poolManager: IPoolManager(address(pm)),
+            liquidityHub: ILiquidityHub(address(0)),
+            oracleHelper: IOracleHelper(address(0)),
+            marketVault: IMarketVault(address(0))
+        });
+
+        harness.touchPosition(ctx, tp);
+
+        (r0, r1) = harness.getFeeBurnGrowthRemainder(id);
+        assertEq(r0, 0, "liquidity change must reset fee-burn remainder token0");
+        assertEq(r1, 0, "liquidity change must reset fee-burn remainder token1");
+    }
+
     function _expectedFeesBurnToken1(
         uint256 feeGrowthInside1X128,
         uint256 feeGrowthInsideLast1X128,

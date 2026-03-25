@@ -432,6 +432,21 @@ contract VTSPositionLibHarness {
     function setFeeGrowthInsideLast(PositionId id, uint256 fg0, uint256 fg1) external {
         s.positionAccounting[id].feeGrowthInsideLast.token0 = fg0;
         s.positionAccounting[id].feeGrowthInsideLast.token1 = fg1;
+        s.positionAccounting[id].feeBurnGrowthRemainder.token0 = 0;
+        s.positionAccounting[id].feeBurnGrowthRemainder.token1 = 0;
+    }
+
+    /// @notice TEST-ONLY: set fee-burn remainder (used to assert touchPosition clears it on liquidity change)
+    function setFeeBurnGrowthRemainder(PositionId id, uint256 r0, uint256 r1) external {
+        s.positionAccounting[id].feeBurnGrowthRemainder.token0 = r0;
+        s.positionAccounting[id].feeBurnGrowthRemainder.token1 = r1;
+    }
+
+    function getFeeBurnGrowthRemainder(PositionId id) external view returns (uint256 r0, uint256 r1) {
+        return (
+            s.positionAccounting[id].feeBurnGrowthRemainder.token0,
+            s.positionAccounting[id].feeBurnGrowthRemainder.token1
+        );
     }
 
     function setCommitExpiresAt(uint256 commitId, uint256 expiresAt) external {

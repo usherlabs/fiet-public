@@ -309,7 +309,7 @@ contract ProxyHook is BaseHook, VaultCoreActionHandler {
             sqrtPriceLimitX96: ctx.sqrtPriceLimitX96Core
         });
 
-        _assertExactOutputAvailable(params.amountSpecified, maxOutputAvailable, recipientResolved);
+        _assertExactOutputAvailable(params.amountSpecified, maxOutputAvailable);
 
         uint256 amountOut;
         (amountIn, amountOut) = _executeCoreSwap(coreSwapParams, ctx.coreZeroForOne);
@@ -322,37 +322,20 @@ contract ProxyHook is BaseHook, VaultCoreActionHandler {
         address deficitRecipient = recipientResolved ? excessRecipient : address(0);
         amountToSettle = _settleFromCoreSwap(key, params.zeroForOne, ctx, amountIn, amountOut, deficitRecipient);
 
-        // Exact-output: strict immediate underlying only when deficit recipient is unresolved. With a resolved
-        // recipient, shortfall is delivered as output-side LCC + queue, matching exact-input deficit UX.
-        if (params.amountSpecified > 0) {
-            uint256 requestedOutput = SafeCastLib.toUint256(params.amountSpecified);
-            if (!recipientResolved && amountToSettle != requestedOutput) {
-                revert Errors.InsufficientLiquidity(requestedOutput, amountToSettle);
-            }
-            // Resolved exact-output allows under-settlement (deficit => queued output-side LCC), but never
-            // over-settlement: if core/settlement returns more than requested, keep exact-output semantics strict.
-            if (recipientResolved && amountToSettle > requestedOutput) {
-                revert Errors.InsufficientLiquidity(requestedOutput, amountToSettle);
-            }
+        // Strict exact-output: settlement must match requested output (MKT-05 requires hook delta to cancel full
+        // `amountSpecified`; queued-deficit exact-output is not supported on the proxy pool).
+        if (params.amountSpecified > 0 && amountToSettle != uint256(params.amountSpecified)) {
+            revert Errors.InsufficientLiquidity(uint256(params.amountSpecified), amountToSettle);
         }
     }
 
-    /// @dev For exact-output (`amountSpecified > 0`): unresolved recipient requires enough immediate vault liquidity
-    ///      to settle the full requested output; resolved recipient may proceed and queue deficit LCC via
-    ///      `MarketVault._cancelLCCWithDeficit`.
-    function _assertExactOutputAvailable(int256 amountSpecified, uint256 maxOutputAvailable, bool recipientResolved)
-        private
-        pure
-    {
-        if (amountSpecified <= 0) {
-            return;
-        }
-        if (recipientResolved) {
-            return;
-        }
-        uint256 requestedOutput = SafeCastLib.toUint256(amountSpecified);
-        if (requestedOutput > maxOutputAvailable) {
-            revert Errors.InsufficientLiquidity(requestedOutput, maxOutputAvailable);
+    /// @dev Strict exact-output: if underlying output cannot be delivered in full per vault availability, revert.
+    function _assertExactOutputAvailable(int256 amountSpecified, uint256 maxOutputAvailable) private pure {
+        if (amountSpecified > 0) {
+            uint256 requestedOutput = SafeCastLib.toUint256(amountSpecified);
+            if (requestedOutput > maxOutputAvailable) {
+                revert Errors.InsufficientLiquidity(requestedOutput, maxOutputAvailable);
+            }
         }
     }
 

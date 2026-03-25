@@ -70,6 +70,43 @@ contract ProxyHookMutationHardeningTest is MarketVaultBase {
         }
     }
 
+    /// @notice Strict exact-output even when hookData resolves a deficit recipient (regression: MKT-05).
+    function test_proxySwap_exactOutput_revertsWhenInsufficientLiquidity_zeroForOne_withResolvedRecipient() public {
+        address recipient = makeAddr("mkt05_exact_out_recipient");
+        _mockLimitedLiquidity(proxyPoolKey.currency1, 50);
+        bytes memory expectedReason =
+            abi.encodeWithSelector(Errors.InsufficientLiquidity.selector, uint256(100), uint256(50));
+
+        try swapRouter.swap(
+            proxyPoolKey,
+            SwapParams({zeroForOne: true, amountSpecified: int256(100), sqrtPriceLimitX96: ZERO_FOR_ONE_LIMIT}),
+            _getSwapSettings(),
+            abi.encode(recipient)
+        ) {
+            fail();
+        } catch (bytes memory data) {
+            _assertWrappedReason(data, expectedReason);
+        }
+    }
+
+    function test_proxySwap_exactOutput_revertsWhenInsufficientLiquidity_oneForZero_withResolvedRecipient() public {
+        address recipient = makeAddr("mkt05_exact_out_recipient_ofz");
+        _mockLimitedLiquidity(proxyPoolKey.currency0, 50);
+        bytes memory expectedReason =
+            abi.encodeWithSelector(Errors.InsufficientLiquidity.selector, uint256(100), uint256(50));
+
+        try swapRouter.swap(
+            proxyPoolKey,
+            SwapParams({zeroForOne: false, amountSpecified: int256(100), sqrtPriceLimitX96: ONE_FOR_ZERO_LIMIT}),
+            _getSwapSettings(),
+            abi.encode(recipient)
+        ) {
+            fail();
+        } catch (bytes memory data) {
+            _assertWrappedReason(data, expectedReason);
+        }
+    }
+
     function test_proxySwap_exactInput_revertsOnCoreFillMismatch_withTightPriceLimit() public {
         // Avoid insufficiency-related reverts and isolate the exact-input fill-mismatch guard.
         _mockLimitedLiquidity(proxyPoolKey.currency0, type(uint256).max);

@@ -710,8 +710,13 @@ library VTSPositionLib {
 
         // Advance fee growth baseline by the full consumed fee entitlement for this exercised outflow share.
         // This keeps remaining fee entitlement aligned with the remaining outflow window across partial burns.
+        // Carry remainder across burns so floor(consumedFees * Q128 / L) does not lose dust per event.
         if (positionLiquidity > 0) {
-            uint256 growthInc = FullMath.mulDiv(consumedFees, FixedPoint128.Q128, uint256(positionLiquidity));
+            uint256 L = uint256(positionLiquidity);
+            uint256 carryIn = pa.feeBurnGrowthRemainder.get(feeTokenIndex);
+            (uint256 growthInc, uint256 newCarry) =
+                LiquidityUtils.feeBurnGrowthIncWithRemainder(consumedFees, L, carryIn);
+            pa.feeBurnGrowthRemainder.set(feeTokenIndex, newCarry);
             pa.feeGrowthInsideLast.set(feeTokenIndex, pa.feeGrowthInsideLast.get(feeTokenIndex) + growthInc);
         }
 
@@ -1109,6 +1114,8 @@ library VTSPositionLib {
         (uint256 fg0, uint256 fg1) = StateLibrary.getFeeGrowthInside(poolManager, sp.poolId, sp.tickLower, sp.tickUpper);
         pa.feeGrowthInsideLast.token0 = fg0;
         pa.feeGrowthInsideLast.token1 = fg1;
+        pa.feeBurnGrowthRemainder.token0 = 0;
+        pa.feeBurnGrowthRemainder.token1 = 0;
     }
 
     /// @dev Initialise DICE coverage index snapshot
@@ -1391,6 +1398,12 @@ library VTSPositionLib {
             // Update position liquidity
             int256 newLiquidity = SafeCast.toInt256(uint256(posStorage.liquidity)) + p.params.liquidityDelta;
             posStorage.liquidity = newLiquidity < 0 ? 0 : SafeCast.toUint128(uint256(newLiquidity));
+            // Remainder is defined for a fixed liquidity denominator; reset on any liquidity change.
+            if (p.params.liquidityDelta != 0) {
+                PositionAccounting storage paRem = s.positionAccounting[result.id];
+                paRem.feeBurnGrowthRemainder.token0 = 0;
+                paRem.feeBurnGrowthRemainder.token1 = 0;
+            }
         }
 
         _updateActiveStatus(s, posStorage, initialLiquidity, liq);

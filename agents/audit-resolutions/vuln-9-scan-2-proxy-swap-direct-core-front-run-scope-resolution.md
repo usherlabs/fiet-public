@@ -1,6 +1,6 @@
 # Vuln #9 Scan #2: Direct-core front-running can only grief proxy swaps in a lane-matched, queue-dependent ordering edge case (resolution)
 
-Last updated: 2026-03-24
+Last updated: 2026-03-25
 
 ## Summary
 
@@ -36,8 +36,7 @@ The relevant follow-up path is:
 2. `VaultCoreActionHandler.handleSwap(lccTokenIn)` is called for the **input** lane of that direct core swap.
 3. `MarketVault._settleObligationsForLCC(lccTokenIn)` may move underlying from the vault to the Hub.
 4. A later proxy swap reads the reduced `inMarketBalanceOf(outputUnderlying)` and may:
-   - revert, for **unresolved-recipient** exact-output; or
-   - **queue** output-side deficit LCC for **resolved-recipient** exact-output (immediate underlying + queued claim); or
+   - revert, for **exact-output** proxy swaps when immediate output underlying is insufficient (strict exact-output, including when a deficit recipient is resolved via `hookData`); or
    - revert when the recipient cannot be resolved, for exact-input; or
    - produce output-side queued excess / deficit LCC for a resolved exact-input recipient.
 
@@ -75,9 +74,7 @@ If there is no unfunded queue for that underlying, the direct core swap does not
 
 The later proxy swap outcome depends on swap shape:
 
-- **Exact-output with unresolved recipient**: still reverts when immediate output underlying is insufficient.
-- **Exact-output with resolved recipient**: can succeed with **immediate underlying up to availability** plus **queued
-  output-side LCC** for the shortfall (same deficit-queue primitive as exact-input).
+- **Exact-output**: reverts when immediate output underlying in the vault cannot cover the full requested output (`Errors.InsufficientLiquidity(...)`), regardless of whether `hookData` resolves a deficit recipient. Queued-deficit exact-output on the proxy pool is not supported: **MKT-05** requires the hook’s specified delta to cancel the full `amountSpecified`, which is incompatible with under-settling immediate underlying while still completing the Uniswap swap leg.
 - **Exact-input with unresolved recipient**: still reverts when the immediate output cannot be fully settled into underlying.
 - **Exact-input with resolved recipient**: can succeed with queued output-side excess / deficit LCC rather than reverting immediately.
 
@@ -91,16 +88,8 @@ That is the right starting point for resolution analysis, severity assessment, a
 
 ## Resolution (mitigation)
 
-**Exact-output queueing (resolved recipient):** Proxy **exact-output** swaps with a **resolved** output/deficit recipient
-no longer **strict-revert** solely because `inMarketBalanceOf(outputUnderlying)` is temporarily below the requested
-output. Behaviour matches the existing **exact-input** deficit UX: deliver **immediate underlying up to vault
-availability**, mint **output-side LCC** for the remainder, and **queue** settlement via `LiquidityHub` (see
-`MarketVault._cancelLCCWithDeficit` / `queueForTransferRecipient`). Core-curve-only execution and **MKT-05**
-(neutralising the proxy pool’s own AMM leg) are unchanged.
+**Exact-output:** Proxy **exact-output** swaps use **strict** semantics: if `inMarketBalanceOf(outputUnderlying)` is below the requested output, the swap **reverts**, including when `hookData` resolves a deficit recipient. A prior attempt to relax this for resolved recipients was **reverted** because it left a non-zero proxy-pool `amountToSwap` (breaking **MKT-05**).
 
-**Residual strict path (narrowed):** **Unresolved-recipient** proxy exact-output still reverts on insufficient immediate
-output liquidity. The **lane-matched, queue-dependent, ordering** grief from a prior direct-core swap therefore
-remains applicable only where that strict path still applies; for resolved recipients, the issue is reduced to a
-**temporary immediate-liquidity shortfall** with a **queued output-side claim**, not a hard revert.
+**Exact-input (resolved recipient):** Unchanged — deficit can still be represented as output-side LCC + queue where the settlement path supports it.
 
-**Documentation:** See `contracts/evm/INVARIANTS.md` (**MKT-07**) for the explicit invariant statement.
+**Documentation:** See `contracts/evm/INVARIANTS.md` (**MKT-05**) for proxy-pool neutralisation requirements.
