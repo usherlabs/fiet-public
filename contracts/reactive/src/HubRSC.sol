@@ -317,7 +317,12 @@ contract HubRSC is AbstractReactive {
             if (remainingSettled > 0 || remainingInflight > 0) {
                 if (isProcessedCallback) {
                     bufferedProcessedDecreaseByKey[key].settledAmount += remainingSettled;
-                    bufferedProcessedDecreaseByKey[key].inflightAmountToReduce += remainingInflight;
+                    // If `settledAmount` was fully absorbed into `entry.amount`, any leftover
+                    // `requestedAmount` is not backed by a queued deficit on this key. Buffering
+                    // that inflight remainder would later apply against an unrelated reservation.
+                    if (remainingSettled > 0) {
+                        bufferedProcessedDecreaseByKey[key].inflightAmountToReduce += remainingInflight;
+                    }
                 } else {
                     bufferedAnnulledDecreaseByKey[key] += remainingSettled;
                 }
