@@ -5,6 +5,7 @@ import "forge-std/Test.sol";
 
 import {PositionManagerEntrypoint} from "../../src/modules/PositionManagerEntrypoint.sol";
 import {Currency} from "v4-periphery/lib/v4-core/src/types/Currency.sol";
+import {Errors} from "../../src/libraries/Errors.sol";
 
 contract MockERC20 {
     string public name;
@@ -191,6 +192,13 @@ contract PositionManagerEntrypointTest is Test {
         // maxAmount=10 and balance=100 => trueMaxAmount=10
         h.exposeTake(Currency.wrap(address(token)), address(h), 10);
         assertEq(token.balanceOf(address(h)), 100);
+    }
+
+    function test_constructor_revertsWhenActionsImplHasNoContractCode() public {
+        address badImpl = makeAddr("badActionsImpl");
+        vm.etch(badImpl, hex"");
+        vm.expectRevert(abi.encodeWithSelector(Errors.InvalidAddress.selector, badImpl));
+        new PositionManagerEntrypointHarness(factory, orch, badImpl, locker);
     }
 }
 

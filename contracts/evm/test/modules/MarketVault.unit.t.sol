@@ -303,6 +303,9 @@ contract MarketVaultUnitHarness is MarketVault {
 }
 
 contract MarketVaultUnitTest is Test {
+    /// @dev Native `PoolManager.take` paths pay ETH to `msg.sender` (this test contract).
+    receive() external payable {}
+
     function _deployVaultWithHub(address hub)
         internal
         returns (
@@ -379,6 +382,9 @@ contract MarketVaultUnitTest is Test {
         pm.setClaimBalance(address(vault), c, amount);
         ua.mint(address(pm), amount);
 
+        vm.expectEmit(true, true, true, true, address(vault));
+        emit MarketVault.LiquidityTakenFromVault(address(this), recipient, address(ua), amount);
+
         vault.exposed_takeUnderlyingFromVaultToRecipient(c, recipient, amount);
 
         assertEq(ua.balanceOf(recipient), amount);
@@ -446,6 +452,10 @@ contract MarketVaultUnitTest is Test {
         ua.approve(address(vault), amount);
 
         Currency c = Currency.wrap(address(ua));
+
+        vm.expectEmit(true, true, true, true, address(vault));
+        emit MarketVault.LiquidityAddedToVault(address(this), sender, address(ua), amount);
+
         vault.exposed_settleUnderlyingToVaultFromSender(c, sender, amount);
 
         assertEq(pm.balanceOf(address(vault), c.toId()), amount);
@@ -502,29 +512,74 @@ contract MarketVaultUnitTest is Test {
 
     function test_dryModifyLiquidities_adjustsWithdrawalDownToAvailable() public {
         MockLiquidityHub_Min hub = new MockLiquidityHub_Min();
-        (MarketVaultUnitHarness vault, MockPoolManager_Min pm,,,, MockERC20 ua) = _deployVaultWithHub(address(hub));
+        (MarketVaultUnitHarness vault, MockPoolManager_Min pm, MockMarketFactory_Min mf,,, MockERC20 ua) =
+            _deployVaultWithHub(address(hub));
+
+        mf.setBound(address(this), true);
 
         Currency c0 = Currency.wrap(address(ua));
         pm.setClaimBalance(address(vault), c0, 5);
+        ua.mint(address(pm), 5);
+        uint256 id0 = c0.toId();
+        assertEq(pm.balanceOf(address(vault), id0), 5);
 
-        BalanceDelta requested = toBalanceDelta(int128(9), int128(0));
-        BalanceDelta used = vault.dryModifyLiquidities(requested);
+        // Same clamp as `dryModifyLiquidities`; assert persistent claim burn on PoolManager, not transient deltas.
+        vault.tryModifyLiquidities(toBalanceDelta(int128(9), int128(0)));
 
-        assertEq(used.amount0(), int128(5));
-        assertEq(used.amount1(), int128(0));
+        assertEq(pm.balanceOf(address(vault), id0), 0);
     }
 
     function test_dryModifyLiquidities_keepsWithdrawalWhenSufficient() public {
         MockLiquidityHub_Min hub = new MockLiquidityHub_Min();
-        (MarketVaultUnitHarness vault, MockPoolManager_Min pm,,,, MockERC20 ua) = _deployVaultWithHub(address(hub));
+        (MarketVaultUnitHarness vault, MockPoolManager_Min pm, MockMarketFactory_Min mf,,, MockERC20 ua) =
+            _deployVaultWithHub(address(hub));
+
+        mf.setBound(address(this), true);
 
         Currency c0 = Currency.wrap(address(ua));
         pm.setClaimBalance(address(vault), c0, 10);
+        ua.mint(address(pm), 9);
+        uint256 id0 = c0.toId();
 
-        BalanceDelta requested = toBalanceDelta(int128(9), int128(0));
-        BalanceDelta used = vault.dryModifyLiquidities(requested);
+        vault.tryModifyLiquidities(toBalanceDelta(int128(9), int128(0)));
 
-        assertEq(used.amount0(), int128(9));
+        assertEq(pm.balanceOf(address(vault), id0), 1);
+    }
+
+    function test_dryModifyLiquidities_clampsToken1WithdrawalToAvailable() public {
+        MockLiquidityHub_Min hub = new MockLiquidityHub_Min();
+        (MarketVaultUnitHarness vault, MockPoolManager_Min pm, MockMarketFactory_Min mf,,,) =
+            _deployVaultWithHub(address(hub));
+
+        mf.setBound(address(this), true);
+
+        Currency nativeC = Currency.wrap(address(0));
+        uint256 idN = nativeC.toId();
+        pm.setClaimBalance(address(vault), nativeC, 5);
+        assertEq(pm.balanceOf(address(vault), idN), 5);
+        vm.deal(address(pm), 5);
+
+        vault.tryModifyLiquidities(toBalanceDelta(int128(0), int128(9)));
+
+        assertEq(pm.balanceOf(address(vault), idN), 0);
+    }
+
+    function test_modifyLiquidities_depositToken1_settlesObligationsForNativeLcc() public {
+        MockLiquidityHub_Min hub = new MockLiquidityHub_Min();
+        (MarketVaultUnitHarness vault,, MockMarketFactory_Min mf,, MockLCC lccNative,) =
+            _deployVaultWithHub(address(hub));
+
+        mf.setBound(address(this), true);
+
+        hub.setTotalQueued(address(lccNative), 15);
+        vm.deal(address(vault), 15);
+
+        vault.modifyLiquidities(toBalanceDelta(int128(0), int128(-15)));
+
+        assertEq(hub.lastConfirmLcc(), address(lccNative));
+        assertEq(hub.lastConfirmAmount(), 15);
+        assertTrue(hub.lastConfirmShouldEmit());
+        assertEq(address(hub).balance, 15);
     }
 
     function test_tryModifyLiquidities_revertsWhenCallerNotBound() public {
@@ -536,14 +591,41 @@ contract MarketVaultUnitTest is Test {
         vault.tryModifyLiquidities(toBalanceDelta(int128(0), int128(0)));
     }
 
-    function test_tryModifyLiquidities_succeedsWhenCallerBound() public {
+    function test_modifyLiquidities_revertsWhenCallerNotBound() public {
         MockLiquidityHub_Min hub = new MockLiquidityHub_Min();
         (MarketVaultUnitHarness vault,, MockMarketFactory_Min mf,,,) = _deployVaultWithHub(address(hub));
 
+        mf.setBound(address(this), false);
+        vm.expectRevert(Errors.InvalidSender.selector);
+        vault.modifyLiquidities(toBalanceDelta(int128(0), int128(0)));
+    }
+
+    function test_tryModifyLiquiditiesWithRecipient_revertsWhenCallerNotBound() public {
+        MockLiquidityHub_Min hub = new MockLiquidityHub_Min();
+        (MarketVaultUnitHarness vault,, MockMarketFactory_Min mf,,,) = _deployVaultWithHub(address(hub));
+
+        mf.setBound(address(this), false);
+        vm.expectRevert(Errors.InvalidSender.selector);
+        vault.tryModifyLiquiditiesWithRecipient(toBalanceDelta(int128(0), int128(0)), makeAddr("recipient"));
+    }
+
+    function test_tryModifyLiquidities_succeedsWhenCallerBound() public {
+        MockLiquidityHub_Min hub = new MockLiquidityHub_Min();
+        (MarketVaultUnitHarness vault, MockPoolManager_Min pm, MockMarketFactory_Min mf,,, MockERC20 ua) =
+            _deployVaultWithHub(address(hub));
+
         mf.setBound(address(this), true);
-        BalanceDelta used = vault.tryModifyLiquidities(toBalanceDelta(int128(0), int128(0)));
-        assertEq(used.amount0(), int128(0));
-        assertEq(used.amount1(), int128(0));
+
+        Currency c0 = Currency.wrap(address(ua));
+        Currency c1 = Currency.wrap(address(0));
+        uint256 b0Before = pm.balanceOf(address(vault), c0.toId());
+        uint256 b1Before = pm.balanceOf(address(vault), c1.toId());
+
+        vault.tryModifyLiquidities(toBalanceDelta(int128(0), int128(0)));
+
+        assertEq(pm.balanceOf(address(vault), c0.toId()), b0Before);
+        assertEq(pm.balanceOf(address(vault), c1.toId()), b1Before);
+        assertEq(hub.confirmCalls(), 0);
     }
 
     function test_tryModifyLiquiditiesWithRecipient_toLiquidityHub_restoresLiquiditySignal() public {
@@ -562,10 +644,8 @@ contract MarketVaultUnitTest is Test {
         pm.setClaimBalance(address(vault), Currency.wrap(address(ua)), available);
         ua.mint(address(pm), available);
 
-        BalanceDelta used = vault.tryModifyLiquiditiesWithRecipient(toBalanceDelta(int128(10), int128(0)), address(hub));
+        vault.tryModifyLiquiditiesWithRecipient(toBalanceDelta(int128(10), int128(0)), address(hub));
 
-        assertEq(used.amount0(), int128(uint128(available)));
-        assertEq(used.amount1(), int128(0));
         assertEq(hub.lastConfirmLcc(), address(lccErc20));
         assertEq(hub.lastConfirmAmount(), available);
         assertTrue(hub.lastConfirmShouldEmit());
@@ -659,12 +739,19 @@ contract MarketVaultUnitTest is Test {
             keccak256("reversed-market-2")
         );
 
-        pm.setClaimBalance(address(vault), Currency.wrap(coreUnderlying0), 7);
-        pm.setClaimBalance(address(vault), Currency.wrap(coreUnderlying1), 0);
+        mf.setBound(address(this), true);
 
-        BalanceDelta used = vault.dryModifyLiquidities(toBalanceDelta(int128(12), int128(0)));
-        assertEq(used.amount0(), int128(7));
-        assertEq(used.amount1(), int128(0));
+        Currency cu0 = Currency.wrap(coreUnderlying0);
+        pm.setClaimBalance(address(vault), cu0, 7);
+        pm.setClaimBalance(address(vault), Currency.wrap(coreUnderlying1), 0);
+        MockERC20(coreUnderlying0).mint(address(pm), 7);
+
+        uint256 id0 = cu0.toId();
+        assertEq(pm.balanceOf(address(vault), id0), 7);
+
+        vault.tryModifyLiquidities(toBalanceDelta(int128(12), int128(0)));
+
+        assertEq(pm.balanceOf(address(vault), id0), 0);
     }
 
     function test_settleObligationsForLCC_earlyReturnsWhenNothingQueued() public {

@@ -12,6 +12,8 @@ import {LiquidityUtils} from "../../src/libraries/LiquidityUtils.sol";
 import {SwapSimulator} from "../utils/SwapSimulator.sol";
 import {IMarketFactory} from "../../src/interfaces/IMarketFactory.sol";
 import {ILCC} from "../../src/interfaces/ILCC.sol";
+import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
+import {SafeCast as SafeCastLib} from "openzeppelin-contracts/contracts/utils/math/SafeCast.sol";
 
 /**
  * @title MarketVaultBase
@@ -121,6 +123,70 @@ abstract contract MarketVaultBase is MarketTestBase {
             return lcc1;
         }
         revert("Currency not found in LCC pair");
+    }
+
+    /**
+     * @notice Maps proxy pool `paramsZeroForOne` to the core pool `zeroForOne` flag used by ProxyHook.
+     * @dev Mirrors `ProxyHook._buildSwapContext` — proxy currencies are underlyings and may be ordered
+     *      opposite to the sorted core LCC pair, which flips the core swap direction.
+     */
+    function _coreZeroForOneForProxySwap(PoolKey memory proxyKey, bool paramsZeroForOne) internal view returns (bool) {
+        ILCC coreLccToken0 = ILCC(Currency.unwrap(corePoolKey.currency0));
+        ILCC coreLccToken1 = ILCC(Currency.unwrap(corePoolKey.currency1));
+        return (Currency.unwrap(proxyKey.currency0) == coreLccToken0.underlying()
+                    && Currency.unwrap(proxyKey.currency1) == coreLccToken1.underlying())
+            ? paramsZeroForOne
+            : !paramsZeroForOne;
+    }
+
+    /// @dev Mirrors `ProxyHook._calcCoreSqrtPriceLimit` for faithful core-leg simulation.
+    function _proxyHookCalcCoreSqrtPriceLimit(uint160 sqrtPriceLimitX96, bool flipped, bool coreZeroForOne)
+        internal
+        pure
+        returns (uint160)
+    {
+        if (!flipped) return sqrtPriceLimitX96;
+
+        uint160 minValid = TickMath.MIN_SQRT_PRICE + 1;
+        uint160 maxValid = TickMath.MAX_SQRT_PRICE - 1;
+
+        if (sqrtPriceLimitX96 == 0) return coreZeroForOne ? minValid : maxValid;
+
+        if (sqrtPriceLimitX96 == minValid) return maxValid;
+        if (sqrtPriceLimitX96 == maxValid) return minValid;
+
+        uint256 inverted = (uint256(1) << 192) / uint256(sqrtPriceLimitX96);
+        if (inverted < minValid) return minValid;
+        if (inverted > maxValid) return maxValid;
+        return SafeCastLib.toUint160(inverted);
+    }
+
+    /**
+     * @notice Simulate the core pool leg of a proxy-routed swap (matches ProxyHook direction + sqrt limit mapping).
+     */
+    function _simulateCoreSwapAsProxy(PoolKey memory proxyKey, bool proxyZeroForOne, int256 amountSpecified)
+        internal
+        view
+        returns (uint256 expectedInput, uint256 expectedOutput)
+    {
+        bool coreZfO = _coreZeroForOneForProxySwap(proxyKey, proxyZeroForOne);
+        uint160 proxyLimit = proxyZeroForOne ? ZERO_FOR_ONE_LIMIT : ONE_FOR_ZERO_LIMIT;
+        bool flipped = proxyZeroForOne != coreZfO;
+        uint160 coreLimit = _proxyHookCalcCoreSqrtPriceLimit(proxyLimit, flipped, coreZfO);
+
+        (BalanceDelta simulatedSwapDelta,,,) = SwapSimulator.simulateSwap(
+            manager,
+            corePoolKey,
+            SwapParams({zeroForOne: coreZfO, amountSpecified: amountSpecified, sqrtPriceLimitX96: coreLimit})
+        );
+
+        if (coreZfO) {
+            expectedInput = LiquidityUtils.safeInt128ToUint256(-simulatedSwapDelta.amount0());
+            expectedOutput = LiquidityUtils.safeInt128ToUint256(simulatedSwapDelta.amount1());
+        } else {
+            expectedInput = LiquidityUtils.safeInt128ToUint256(-simulatedSwapDelta.amount1());
+            expectedOutput = LiquidityUtils.safeInt128ToUint256(simulatedSwapDelta.amount0());
+        }
     }
 
     /**

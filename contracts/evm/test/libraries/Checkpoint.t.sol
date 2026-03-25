@@ -320,6 +320,34 @@ contract CheckpointLibraryTest is Test {
         assertTrue(h.isSeizable(COMMIT_ID, POSITION_INDEX, false));
     }
 
+    function test_isSeizable_commitmentDeficitBypassTime_token1_notElapsed_blocksBypass() public {
+        uint256 t0 = 1_000_000;
+        vm.warp(t0);
+        PoolKey memory key = _defaultPoolKey();
+        PoolId poolId = key.toId();
+        h.setPosition(PID, poolId);
+        h.setUnbackedCommitmentGraceBypassBps(poolId, 500);
+        h.setUnbackedCommitmentGraceBypassConfig(poolId, 0, 100, 0, 0);
+        h.setCommitmentDeficit(PID, 0, 1);
+        h.setCommitmentDeficitBps(PID, 600);
+        h.setCommitmentDeficitSince(PID, 0, t0 - 99);
+        assertFalse(h.isSeizable(COMMIT_ID, POSITION_INDEX, false));
+    }
+
+    function test_isSeizable_commitmentDeficitBypassTime_token1_elapsed_allowsBypass() public {
+        uint256 t0 = 1_000_000;
+        vm.warp(t0);
+        PoolKey memory key = _defaultPoolKey();
+        PoolId poolId = key.toId();
+        h.setPosition(PID, poolId);
+        h.setUnbackedCommitmentGraceBypassBps(poolId, 500);
+        h.setUnbackedCommitmentGraceBypassConfig(poolId, 0, 100, 0, 0);
+        h.setCommitmentDeficit(PID, 0, 1);
+        h.setCommitmentDeficitBps(PID, 600);
+        h.setCommitmentDeficitSince(PID, 0, t0 - 100);
+        assertTrue(h.isSeizable(COMMIT_ID, POSITION_INDEX, false));
+    }
+
     function test_isSeizable_returnsFalseWhenRfsClosed_andDoesNotRevertWhenRevertOnFalseFalse() public {
         h.setCheckpoint(PID, block.timestamp, false, 0, 0);
         assertFalse(h.isSeizable(COMMIT_ID, POSITION_INDEX, false));

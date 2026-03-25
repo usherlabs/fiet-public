@@ -710,8 +710,13 @@ library VTSPositionLib {
 
         // Advance fee growth baseline by the full consumed fee entitlement for this exercised outflow share.
         // This keeps remaining fee entitlement aligned with the remaining outflow window across partial burns.
+        // Carry remainder across burns so floor(consumedFees * Q128 / L) does not lose dust per event.
         if (positionLiquidity > 0) {
-            uint256 growthInc = FullMath.mulDiv(consumedFees, FixedPoint128.Q128, uint256(positionLiquidity));
+            uint256 L = uint256(positionLiquidity);
+            uint256 carryIn = pa.feeBurnGrowthRemainder.get(feeTokenIndex);
+            (uint256 growthInc, uint256 newCarry) =
+                LiquidityUtils.feeBurnGrowthIncWithRemainder(consumedFees, L, carryIn);
+            pa.feeBurnGrowthRemainder.set(feeTokenIndex, newCarry);
             pa.feeGrowthInsideLast.set(feeTokenIndex, pa.feeGrowthInsideLast.get(feeTokenIndex) + growthInc);
         }
 
@@ -950,12 +955,34 @@ library VTSPositionLib {
         _settleCISEForToken(s.positionAccounting[positionId], s.poolAccounting[poolId], 1);
     }
 
+    /// @dev If Uniswap position liquidity changed without `touchPosition` (e.g. paused remove-liquidity in CoreHook),
+    ///      `feeBurnGrowthRemainder` is invalid for the new denominator; clear it.
+    ///      We do not overwrite `pos.liquidity` here: harness-only setups may diverge from PoolManager reads; the next
+    ///      `touchPosition` still updates the mirror. DICE/coverage burn uses `StateLibrary.getPositionLiquidity` for L.
+    function _reconcileLiquidityMirrorAndFeeBurnRemainder(
+        VTSStorage storage s,
+        IPoolManager poolManager,
+        PositionId positionId
+    ) private {
+        Position storage pos = s.positions[positionId];
+        if (pos.owner == address(0)) return;
+
+        uint128 liqLive = StateLibrary.getPositionLiquidity(poolManager, pos.poolId, PositionId.unwrap(positionId));
+        if (uint256(pos.liquidity) != uint256(liqLive)) {
+            PositionAccounting storage pa = s.positionAccounting[positionId];
+            pa.feeBurnGrowthRemainder.token0 = 0;
+            pa.feeBurnGrowthRemainder.token1 = 0;
+        }
+    }
+
     /// @notice Settle both deficit, inflow, and coverage growth for a position
     /// @param s The central VTS storage
     /// @param poolManager The pool manager contract
     /// @param positionId The position ID
     //#olympix-ignore-reentrancy
     function settlePositionGrowths(VTSStorage storage s, IPoolManager poolManager, PositionId positionId) public {
+        _reconcileLiquidityMirrorAndFeeBurnRemainder(s, poolManager, positionId);
+
         _settleSettledIndexedCoverageUsage(s, positionId);
 
         _settlePositionDeficitGrowth(s, poolManager, positionId);
@@ -1109,6 +1136,8 @@ library VTSPositionLib {
         (uint256 fg0, uint256 fg1) = StateLibrary.getFeeGrowthInside(poolManager, sp.poolId, sp.tickLower, sp.tickUpper);
         pa.feeGrowthInsideLast.token0 = fg0;
         pa.feeGrowthInsideLast.token1 = fg1;
+        pa.feeBurnGrowthRemainder.token0 = 0;
+        pa.feeBurnGrowthRemainder.token1 = 0;
     }
 
     /// @dev Initialise DICE coverage index snapshot
@@ -1391,6 +1420,12 @@ library VTSPositionLib {
             // Update position liquidity
             int256 newLiquidity = SafeCast.toInt256(uint256(posStorage.liquidity)) + p.params.liquidityDelta;
             posStorage.liquidity = newLiquidity < 0 ? 0 : SafeCast.toUint128(uint256(newLiquidity));
+            // Remainder is defined for a fixed liquidity denominator; reset on any liquidity change.
+            if (p.params.liquidityDelta != 0) {
+                PositionAccounting storage paRem = s.positionAccounting[result.id];
+                paRem.feeBurnGrowthRemainder.token0 = 0;
+                paRem.feeBurnGrowthRemainder.token1 = 0;
+            }
         }
 
         _updateActiveStatus(s, posStorage, initialLiquidity, liq);

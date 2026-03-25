@@ -103,6 +103,133 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
     }
 
     // ============================================================
+    // Guard Tests - onlyIfVRLHandlersRegistered
+    // ============================================================
+
+    function test_revert_commitSignal_whenVrlHandlersNotRegistered_insideUnlock() public {
+        _testableOrchestrator().testOnly_clearVRLHandlers();
+        bytes memory signalBytes = abi.encode(liquiditySignal);
+        vm.expectRevert(abi.encodeWithSelector(Errors.InvalidAddress.selector, address(0)));
+        unlockCaller.run(
+            address(vtsOrchestrator),
+            abi.encodeWithSelector(
+                VTSOrchestrator.commitSignal.selector,
+                IMarketFactory(marketFactory),
+                liquiditySignal.mmState.owner,
+                signalBytes
+            )
+        );
+    }
+
+    function test_revert_commitSignalRelayed_whenVrlHandlersNotRegistered_insideUnlock() public {
+        _testableOrchestrator().testOnly_clearVRLHandlers();
+        bytes memory signalBytes = abi.encode(liquiditySignal);
+        vm.expectRevert(abi.encodeWithSelector(Errors.InvalidAddress.selector, address(0)));
+        unlockCaller.run(
+            address(vtsOrchestrator),
+            abi.encodeWithSelector(
+                VTSOrchestrator.commitSignalRelayed.selector,
+                IMarketFactory(marketFactory),
+                liquiditySignal.mmState.owner,
+                signalBytes,
+                uint256(0),
+                uint256(0),
+                bytes("")
+            )
+        );
+    }
+
+    function test_revert_extendGracePeriod_whenVrlHandlersNotRegistered_insideUnlock() public {
+        (uint256 tokenId,,,) = _createCommittedPosition();
+        bytes memory settlementProof = abi.encode(1);
+        _testableOrchestrator().testOnly_clearVRLHandlers();
+        vm.expectRevert(abi.encodeWithSelector(Errors.InvalidAddress.selector, address(0)));
+        unlockCaller.run(
+            address(vtsOrchestrator),
+            abi.encodeWithSelector(
+                VTSOrchestrator.extendGracePeriod.selector,
+                IMarketFactory(marketFactory),
+                corePoolKey,
+                tokenId,
+                uint256(0),
+                uint8(0),
+                uint32(0),
+                settlementProof
+            )
+        );
+    }
+
+    function test_revert_renewSignal_whenVrlHandlersNotRegistered_insideUnlock() public {
+        bytes memory signalBytes = abi.encode(liquiditySignal);
+        uint256 commitId = abi.decode(
+            unlockCaller.run(
+                address(vtsOrchestrator),
+                abi.encodeWithSelector(
+                    VTSOrchestrator.commitSignal.selector,
+                    IMarketFactory(marketFactory),
+                    liquiditySignal.mmState.owner,
+                    signalBytes
+                )
+            ),
+            (uint256)
+        );
+        assertEq(commitId, 1);
+
+        LiquiditySignal memory sameOwnerRenew = liquiditySignal;
+        sameOwnerRenew.nonce += 1;
+        bytes memory renewSignalBytes = abi.encode(sameOwnerRenew);
+
+        _testableOrchestrator().testOnly_clearVRLHandlers();
+        vm.expectRevert(abi.encodeWithSelector(Errors.InvalidAddress.selector, address(0)));
+        unlockCaller.run(
+            address(vtsOrchestrator),
+            abi.encodeWithSelector(
+                bytes4(keccak256("renewSignal(address,address,uint256,bytes)")),
+                IMarketFactory(marketFactory),
+                sameOwnerRenew.mmState.advancer,
+                commitId,
+                renewSignalBytes
+            )
+        );
+    }
+
+    function test_revert_renewSignalRelayed_whenVrlHandlersNotRegistered_insideUnlock() public {
+        bytes memory signalBytes = abi.encode(liquiditySignal);
+        uint256 commitId = abi.decode(
+            unlockCaller.run(
+                address(vtsOrchestrator),
+                abi.encodeWithSelector(
+                    VTSOrchestrator.commitSignal.selector,
+                    IMarketFactory(marketFactory),
+                    liquiditySignal.mmState.owner,
+                    signalBytes
+                )
+            ),
+            (uint256)
+        );
+
+        LiquiditySignal memory sameOwnerRenew = liquiditySignal;
+        sameOwnerRenew.nonce += 1;
+        bytes memory renewSignalBytes = abi.encode(sameOwnerRenew);
+
+        _testableOrchestrator().testOnly_clearVRLHandlers();
+        vm.expectRevert(abi.encodeWithSelector(Errors.InvalidAddress.selector, address(0)));
+        unlockCaller.run(
+            address(vtsOrchestrator),
+            abi.encodeWithSelector(
+                VTSOrchestrator.renewSignalRelayed.selector,
+                IMarketFactory(marketFactory),
+                sameOwnerRenew.mmState.advancer,
+                commitId,
+                renewSignalBytes,
+                uint256(0),
+                uint256(0),
+                bytes("")
+            )
+        );
+    }
+
+    // ============================================================
     // Storage inspection helpers (via VTSOrchestratorTestable)
     // ============================================================
 

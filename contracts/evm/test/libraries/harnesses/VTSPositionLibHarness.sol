@@ -168,6 +168,11 @@ contract VTSPositionLibHarness {
         return s.positions[id];
     }
 
+    /// @notice TEST-ONLY: desynchronise stored liquidity from PoolManager (simulates paused remove without touchPosition)
+    function setPositionLiquidityMirror(PositionId id, uint128 liquidity) external {
+        s.positions[id].liquidity = liquidity;
+    }
+
     function getCommitmentDeficit(PositionId id) external view returns (uint256 cd0, uint256 cd1) {
         return (s.positionAccounting[id].commitmentDeficit.token0, s.positionAccounting[id].commitmentDeficit.token1);
     }
@@ -352,6 +357,26 @@ contract VTSPositionLibHarness {
         s.positionAccounting[id].commitmentDeficit.token1 = cd1;
     }
 
+    function setCommitmentDeficitBps(PositionId id, uint16 bps) external {
+        s.positionAccounting[id].commitmentDeficitBps = bps;
+    }
+
+    function getCommitmentDeficitBps(PositionId id) external view returns (uint16) {
+        return s.positionAccounting[id].commitmentDeficitBps;
+    }
+
+    function setCommitmentDeficitSince(PositionId id, uint256 s0, uint256 s1) external {
+        s.positionAccounting[id].commitmentDeficitSince.token0 = s0;
+        s.positionAccounting[id].commitmentDeficitSince.token1 = s1;
+    }
+
+    function getCommitmentDeficitSince(PositionId id) external view returns (uint256, uint256) {
+        return (
+            s.positionAccounting[id].commitmentDeficitSince.token0,
+            s.positionAccounting[id].commitmentDeficitSince.token1
+        );
+    }
+
     /// @notice Sets CISE exposure for a position
     function setCISEExposure(PositionId id, uint256 exposure0, uint256 exposure1) external {
         s.positionAccounting[id].ciseExposureSinceLastMod.token0 = exposure0;
@@ -432,6 +457,21 @@ contract VTSPositionLibHarness {
     function setFeeGrowthInsideLast(PositionId id, uint256 fg0, uint256 fg1) external {
         s.positionAccounting[id].feeGrowthInsideLast.token0 = fg0;
         s.positionAccounting[id].feeGrowthInsideLast.token1 = fg1;
+        s.positionAccounting[id].feeBurnGrowthRemainder.token0 = 0;
+        s.positionAccounting[id].feeBurnGrowthRemainder.token1 = 0;
+    }
+
+    /// @notice TEST-ONLY: set fee-burn remainder (used to assert touchPosition clears it on liquidity change)
+    function setFeeBurnGrowthRemainder(PositionId id, uint256 r0, uint256 r1) external {
+        s.positionAccounting[id].feeBurnGrowthRemainder.token0 = r0;
+        s.positionAccounting[id].feeBurnGrowthRemainder.token1 = r1;
+    }
+
+    function getFeeBurnGrowthRemainder(PositionId id) external view returns (uint256 r0, uint256 r1) {
+        return (
+            s.positionAccounting[id].feeBurnGrowthRemainder.token0,
+            s.positionAccounting[id].feeBurnGrowthRemainder.token1
+        );
     }
 
     function setCommitExpiresAt(uint256 commitId, uint256 expiresAt) external {

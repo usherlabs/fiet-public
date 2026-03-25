@@ -154,6 +154,9 @@ struct PositionAccounting {
     TokenPairUint ciseExposureSinceLastMod;
     // CSI: Position checkpoint of pool spend index (Q128)
     TokenPairUint feesSharedIndexLastX128;
+    // Remainder numerator for coverage fee-burn baseline checkpoint (see VTSPositionLib._applyBurnBase).
+    // Appended for storage-layout compatibility on upgrade.
+    TokenPairUint feeBurnGrowthRemainder;
 }
 
 /// @notice Per-pool accounting data (mirrors VTSManager per-pool mappings)

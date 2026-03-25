@@ -5,6 +5,8 @@ import {VTSOrchestrator} from "../../src/VTSOrchestrator.sol";
 import {PositionAccounting, PoolAccounting} from "../../src/types/VTS.sol";
 import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {PositionId} from "../../src/types/Position.sol";
+import {IVRLSignalManager} from "../../src/interfaces/IVRLSignalManager.sol";
+import {IVRLSettlementObserver} from "../../src/interfaces/IVRLSettlementObserver.sol";
 
 // ============================================================
 // Testable VTSOrchestrator with Debug View Functions
@@ -17,6 +19,12 @@ contract VTSOrchestratorTestable is VTSOrchestrator {
     constructor(address _poolManager, address _oracleHelper, address _liquidityHub, address _owner)
         VTSOrchestrator(_poolManager, _oracleHelper, _liquidityHub, _owner)
     {}
+
+    /// @dev TEST-ONLY: clears VRL handler pointers so tests can assert `onlyIfVRLHandlersRegistered` on entrypoints.
+    function testOnly_clearVRLHandlers() external {
+        signalManager = IVRLSignalManager(address(0));
+        settlementObserver = IVRLSettlementObserver(address(0));
+    }
 
     /// @notice Get position accounting details for debugging
     /// @param positionId The position identifier
