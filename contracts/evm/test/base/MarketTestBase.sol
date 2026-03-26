@@ -22,6 +22,7 @@ import {LiquidityUtils} from "../../src/libraries/LiquidityUtils.sol";
 import {HookFlags} from "../../src/libraries/HookFlags.sol";
 import {HookMiner} from "v4-periphery/src/utils/HookMiner.sol";
 import {MMPositionManager} from "../../src/MMPositionManager.sol";
+import {MMQueueCustodian} from "../../src/MMQueueCustodian.sol";
 import {ECDSASignatureSignalVerifier} from "../../src/verifiers/ECDSASignatureSignalVerifier.sol";
 import {StubSignalVerifier} from "../../src/verifiers/StubSignalVerifier.sol";
 import {WETH} from "@uniswap/v4-core/lib/solmate/src/tokens/WETH.sol";
@@ -73,6 +74,7 @@ abstract contract MarketTestBase is Test, Deployers, DeployPermit2 {
     address marketFactory;
     address payable liquidityHub;
     address coreHookAddress;
+    address queueCustodian;
 
     address resilientOracle = makeAddr("ResilientOracleAddr");
     ECDSASignatureSignalVerifier icVerifier;
@@ -172,11 +174,6 @@ abstract contract MarketTestBase is Test, Deployers, DeployPermit2 {
         // Deploy verifies and the signal manager which will use the verifiers to verify the signals
         icVerifier = new ECDSASignatureSignalVerifier(makeAddr("signatureVerifier"));
         stubSignalVerifier = new StubSignalVerifier();
-        signalManager = new VRLSignalManager(address(stubSignalVerifier), signalExpiryInSeconds, testOwner);
-
-        // deploy the settlement observer
-        settlementObserver = new VRLSettlementObserver(testOwner);
-        settlementObserver.addVerifier(address(new StubSettlementVerifier()));
 
         // deploy commitment descriptor
         address commitmentDescriptor = address(new MMPCommitmentDescriptor());
@@ -185,14 +182,17 @@ abstract contract MarketTestBase is Test, Deployers, DeployPermit2 {
         liquidityHub = payable(address(new LiquidityHub(address(oracleHelper), "Ether", "ETH", 18, testOwner)));
 
         // Deploy VTSOrchestrator (virtual to allow test overrides)
-        vtsOrchestrator = _deployVTSOrchestrator(
-            address(manager),
-            address(signalManager),
-            address(oracleHelper),
-            address(liquidityHub),
-            address(settlementObserver),
-            testOwner
+        vtsOrchestrator =
+            _deployVTSOrchestrator(address(manager), address(oracleHelper), address(liquidityHub), testOwner);
+
+        signalManager = new VRLSignalManager(
+            address(stubSignalVerifier), signalExpiryInSeconds, address(vtsOrchestrator), testOwner
         );
+
+        // deploy the settlement observer
+        settlementObserver = new VRLSettlementObserver(address(vtsOrchestrator), testOwner);
+        settlementObserver.addVerifier(address(new StubSettlementVerifier()));
+        vtsOrchestrator.registerVRLProofHandlers(address(signalManager), address(settlementObserver));
 
         // Deploy Permit2 at the canonical address using vm.etch()
         // This deploys the bytecode at 0x000000000022D473030F116dDEE9F6B43aC78BA3
@@ -203,29 +203,7 @@ abstract contract MarketTestBase is Test, Deployers, DeployPermit2 {
         uniPositionDescriptor = new MockPositionDescriptor(manager, address(weth9), bytes32("ETH"));
         uniPositionManager = new PositionManager(manager, permit2, 500_000, uniPositionDescriptor, weth9);
 
-        // Deploy MMPositionActionsImpl first
-        MMPositionActionsImpl actionsImpl =
-            new MMPositionActionsImpl(address(manager), address(liquidityHub), address(vtsOrchestrator));
-
-        // Deploy MMPositionManager
-        mmPositionManager = address(
-            new MMPositionManager(
-                address(manager),
-                address(liquidityHub),
-                address(vtsOrchestrator),
-                commitmentDescriptor,
-                weth9,
-                permit2,
-                address(actionsImpl)
-            )
-        );
-
-        // Deploy DirectLP delta resolver subscriber (will be protocol-bound after MarketFactory deployment).
-        directLPDeltaResolver =
-            new DirectLPDeltaResolver(IPositionManager(address(uniPositionManager)), ILiquidityHub(liquidityHub));
-
-        // Deploy MarketFactory (after MMPositionManager so it can be included as an initial protocol bound)
-        // Mirrors production deployment (see DeployContracts.s.sol): MMPositionManager is protocol-bound.
+        // Deploy MarketFactory before MM integrations so MMPM can be factory-bound.
         marketFactory = address(
             new MarketFactory(
                 address(manager), address(liquidityHub), address(oracleHelper), address(vtsOrchestrator), testOwner
@@ -234,6 +212,30 @@ abstract contract MarketTestBase is Test, Deployers, DeployPermit2 {
 
         // After market factory is deployed, set the factory in the liquidity hub
         LiquidityHub(payable(liquidityHub)).setFactory(marketFactory, true);
+
+        // Deploy MMPositionActionsImpl first
+        MMPositionActionsImpl actionsImpl =
+            new MMPositionActionsImpl(address(manager), address(marketFactory), address(vtsOrchestrator));
+        queueCustodian = address(new MMQueueCustodian(address(this)));
+
+        // Deploy MMPositionManager
+        mmPositionManager = address(
+            new MMPositionManager(
+                address(manager),
+                address(marketFactory),
+                address(vtsOrchestrator),
+                commitmentDescriptor,
+                weth9,
+                permit2,
+                address(actionsImpl),
+                queueCustodian
+            )
+        );
+        MMQueueCustodian(queueCustodian).setPositionManager(mmPositionManager);
+
+        // Deploy DirectLP delta resolver subscriber (will be protocol-bound after MarketFactory deployment).
+        directLPDeltaResolver =
+            new DirectLPDeltaResolver(IPositionManager(address(uniPositionManager)), ILiquidityHub(liquidityHub));
     }
 
     // Mine the corehook address and Deploy the core hook
@@ -249,9 +251,10 @@ abstract contract MarketTestBase is Test, Deployers, DeployPermit2 {
         require(address(coreDeployed) == coreHookAddress, "CoreHook deployed at unexpected address");
 
         // Initialise market factory after core hook deployment
-        address[] memory initialBounds = new address[](2);
+        address[] memory initialBounds = new address[](3);
         initialBounds[0] = mmPositionManager;
-        initialBounds[1] = address(directLPDeltaResolver);
+        initialBounds[1] = queueCustodian;
+        initialBounds[2] = address(directLPDeltaResolver);
         MarketFactory(marketFactory).initialise(coreHookAddress, initialBounds);
     }
 
@@ -395,16 +398,11 @@ abstract contract MarketTestBase is Test, Deployers, DeployPermit2 {
 
     /// @notice Deploy VTSOrchestrator - virtual to allow test overrides for testable versions
     /// @dev Override this in test contracts to deploy a VTSOrchestratorTestable with debug view functions
-    function _deployVTSOrchestrator(
-        address _poolManager,
-        address _signalManager,
-        address _oracleHelper,
-        address _liquidityHub,
-        address _settlementObserver,
-        address _owner
-    ) internal virtual returns (VTSOrchestrator) {
-        return new VTSOrchestrator(
-            _poolManager, _signalManager, _oracleHelper, _liquidityHub, _settlementObserver, _owner
-        );
+    function _deployVTSOrchestrator(address _poolManager, address _oracleHelper, address _liquidityHub, address _owner)
+        internal
+        virtual
+        returns (VTSOrchestrator)
+    {
+        return new VTSOrchestrator(_poolManager, _oracleHelper, _liquidityHub, _owner);
     }
 }

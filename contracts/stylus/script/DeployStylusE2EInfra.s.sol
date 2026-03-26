@@ -190,11 +190,9 @@ contract MockVTSOrchestrator {
             address currency0,
             address currency1,
             uint256 token0GracePeriodTime,
-            uint256 token0SeizureUnlockTime,
             uint256 token0BaseVTSRate,
             uint256 token0MaxGracePeriodTime,
             uint256 token1GracePeriodTime,
-            uint256 token1SeizureUnlockTime,
             uint256 token1BaseVTSRate,
             uint256 token1MaxGracePeriodTime,
             uint256 coverageFeeShare,
@@ -206,7 +204,7 @@ contract MockVTSOrchestrator {
         // Default grace periods (seconds)
         uint256 g0 = c.grace0 == 0 ? 3600 : c.grace0;
         uint256 g1 = c.grace1 == 0 ? 3600 : c.grace1;
-        return (poolId, address(0), address(0), g0, 0, 0, g0, g1, 0, 0, g1, 0, 0, c.isPaused);
+        return (poolId, address(0), address(0), g0, 0, g0, g1, 0, g1, 0, 0, c.isPaused);
     }
 }
 

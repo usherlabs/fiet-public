@@ -7,10 +7,11 @@ import {LiquidityUtils} from "./LiquidityUtils.sol";
 
 /// @title OracleUtils
 /// @notice Utility functions for oracle price calculations with proper decimal handling
-/// @dev Oracle prices are already normalised to 18 decimals by ResilientOracle (eg. oracles/ChainlinkOracle):
-///      `uint256 decimalDelta = 18 - decimals; return price * (10 ** decimalDelta);`
-///      When multiplying price (18d) by amount (18d), we get 36 decimals.
-///      All value functions divide by 1e18 to return results in 18 decimals.
+/// @dev Venus oracle semantics: ResilientOracle (via ChainlinkOracle) returns prices scaled based on token decimals
+///      so that USD valuation can be computed as:
+///      `valueUsdWad = (priceScaled * amountRaw) / 1e18`,
+///      where `amountRaw` is in the asset's native decimals (e.g. USDC has 6 decimals).
+///      For a token with `d` decimals, `priceScaled` is effectively scaled to \(10^(36 - d)\).
 library OracleUtils {
     address public constant PROTOCOL_NATIVE_TOKEN_ADDR = address(0);
     // Value originates from: https://github.com/VenusProtocol/oracle/blob/develop/contracts/ResilientOracle.sol#L85
@@ -31,14 +32,14 @@ library OracleUtils {
 
     /**
      * @notice Calculates the USD value of a pair of LCC amounts
-     * @dev Oracle prices are pre-normalised to 18 decimals by ResilientOracle (eg. oracles/ChainlinkOracle).
-     *      Formula: value = (price_18d * amount_18d) / 1e18 = value_18d
+     * @dev Venus oracle semantics:
+     *      valueUsdWad = (priceScaled0 * amount0Raw) / 1e18 + (priceScaled1 * amount1Raw) / 1e18
      *      Uses FullMath.mulDiv to prevent overflow and maintain precision.
      * @param oracleHelper The oracle helper contract
      * @param lcc0 The address of the first LCC token
-     * @param a0 The amount of the first LCC (in token units, 18 decimals)
+     * @param a0 The amount of the first LCC in raw token units (LCC decimals match underlying)
      * @param lcc1 The address of the second LCC token
-     * @param a1 The amount of the second LCC (in token units, 18 decimals)
+     * @param a1 The amount of the second LCC in raw token units (LCC decimals match underlying)
      * @return The total USD value of both LCC amounts (18 decimals)
      */
     function lccPairValue(IOracleHelper oracleHelper, address lcc0, uint256 a0, address lcc1, uint256 a1)
@@ -47,25 +48,25 @@ library OracleUtils {
         returns (uint256)
     {
         (uint256 p0, uint256 p1) = oracleHelper.getPricesForLccPair(lcc0, lcc1);
-        // Oracle returns prices in 18 decimals. Amounts are in 18 decimals.
-        // Multiply then divide by WAD to normalise result to 18 decimals.
+        // Venus semantics: prices are scaled for token decimals; amounts are raw token units.
+        // Divide by 1e18 to return 18-decimal USD WAD.
         return FullMath.mulDiv(p0, a0, LiquidityUtils.ONE_WAD) + FullMath.mulDiv(p1, a1, LiquidityUtils.ONE_WAD);
     }
 
     /**
      * @notice Calculates the USD value of a single LCC amount
-     * @dev Oracle prices are pre-normalised to 18 decimals by ResilientOracle (eg. oracles/ChainlinkOracle).
-     *      Formula: value = (price_18d * amount_18d) / 1e18 = value_18d
+     * @dev Venus oracle semantics:
+     *      valueUsdWad = (priceScaled * amountRaw) / 1e18
      *      Uses FullMath.mulDiv to prevent overflow and maintain precision.
      * @param oracleHelper The oracle helper contract
      * @param lcc The address of the LCC token
-     * @param a The amount of the LCC (in token units, 18 decimals)
+     * @param a The amount of the LCC in raw token units (LCC decimals match underlying)
      * @return The USD value of the LCC amount (18 decimals)
      */
     function lccValue(IOracleHelper oracleHelper, address lcc, uint256 a) internal view returns (uint256) {
         uint256 p = oracleHelper.getPriceForLcc(lcc);
-        // Oracle returns price in 18 decimals. Amount is in 18 decimals.
-        // Multiply then divide by LiquidityUtils.ONE_WAD to normalise result to 18 decimals.
+        // Venus semantics: price is scaled for token decimals; amount is raw token units.
+        // Divide by 1e18 to return 18-decimal USD WAD.
         return FullMath.mulDiv(p, a, LiquidityUtils.ONE_WAD);
     }
 }

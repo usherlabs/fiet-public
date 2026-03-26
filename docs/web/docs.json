@@ -11,7 +11,12 @@
   "navigation": {
     "tabs": [
       {
-        "tab": "Business API",
+        "tab": "Start",
+        "icon": "star",
+        "pages": ["start", "solutions"]
+      },
+      {
+        "tab": "Trading API",
         "icon": "money-bill-transfer",
         "groups": [
           {
@@ -50,32 +55,36 @@
         ]
       },
       {
-        "tab": "Protocol Documentation",
+        "tab": "Protocol",
         "icon": "book",
         "groups": [
           {
             "group": "Introduction",
-            "pages": ["overview", "use-cases", "roles"]
+            "pages": [
+              "protocol/overview",
+              "protocol/use-cases",
+              "protocol/roles"
+            ]
           },
           {
             "group": "Concepts",
             "pages": [
-              "concepts/markets",
-              "concepts/verified-reserve-liquidity",
-              "concepts/liquidity-commitment-certificates",
-              "concepts/value-to-signal",
-              "concepts/oracle",
-              "concepts/settlements",
-              "concepts/rewards"
+              "protocol/concepts/markets",
+              "protocol/concepts/verified-reserve-liquidity",
+              "protocol/concepts/liquidity-commitment-certificates",
+              "protocol/concepts/value-to-signal",
+              "protocol/concepts/oracle",
+              "protocol/concepts/settlements",
+              "protocol/concepts/rewards"
             ]
           },
           {
             "group": "Resources",
             "pages": [
-              "resources/diagrams",
-              "resources/technical-specification",
-              "resources/cryptography",
-              "resources/glossary"
+              "protocol/resources/diagrams",
+              "protocol/resources/technical-specification",
+              "protocol/resources/cryptography",
+              "protocol/resources/glossary"
             ]
           }
         ]
@@ -144,5 +153,26 @@
       "source": "/fonts/geologica/Geologica-Light.woff2"
     }
   },
-  "redirects": []
+  "redirects": [
+    {
+      "source": "/overview",
+      "destination": "/protocol/overview"
+    },
+    {
+      "source": "/use-cases",
+      "destination": "/protocol/use-cases"
+    },
+    {
+      "source": "/roles",
+      "destination": "/protocol/roles"
+    },
+    {
+      "source": "/concepts/:slug*",
+      "destination": "/protocol/concepts/:slug*"
+    },
+    {
+      "source": "/resources/:slug*",
+      "destination": "/protocol/resources/:slug*"
+    }
+  ]
 }

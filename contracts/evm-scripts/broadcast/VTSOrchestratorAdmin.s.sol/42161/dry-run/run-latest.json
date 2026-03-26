@@ -1,0 +1,39 @@
+{
+  "transactions": [
+    {
+      "hash": null,
+      "transactionType": "CALL",
+      "contractName": null,
+      "contractAddress": "0xe0b42df543e04bc1a5e92d74ab352799187f0980",
+      "function": "proxyCall(address,bytes)",
+      "arguments": [
+        "0x8fc5936b144b74051d199ea067f0c75F467D4AC5",
+        "0x69a6b3db0000000000000000000000000000000000000000000000000000000000000001"
+      ],
+      "transaction": {
+        "from": "0x93af6d19a1738e52295014ac0103b005048df388",
+        "to": "0xe0b42df543e04bc1a5e92d74ab352799187f0980",
+        "gas": "0x117c3",
+        "value": "0x0",
+        "input": "0x2a31f6b40000000000000000000000008fc5936b144b74051d199ea067f0c75f467d4ac50000000000000000000000000000000000000000000000000000000000000040000000000000000000000000000000000000000000000000000000000000002469a6b3db000000000000000000000000000000000000000000000000000000000000000100000000000000000000000000000000000000000000000000000000",
+        "nonce": "0xc8",
+        "chainId": "0xa4b1"
+      },
+      "additionalContracts": [],
+      "isFixedGasLimit": false
+    }
+  ],
+  "receipts": [],
+  "libraries": [
+    "../evm/src/libraries/LCCFactoryLib.sol:LCCFactoryLinkedLib:0x42B8987753996202F071f1598Eef6B2a7F82299B",
+    "../evm/src/libraries/VTSCommitLib.sol:VTSCommitLib:0x97D09b290896136360857499EA8f6d6F98c3Fb1B",
+    "../evm/src/libraries/VTSFeeLib.sol:VTSFeeLinkedLib:0x203f4945f3cf29f34743306d1A33366Da3771bD2",
+    "../evm/src/libraries/VTSPositionLib.sol:VTSPositionLib:0x26e024F42D5F766b562fc35701f13B2d5e01A5C2",
+    "../evm/src/libraries/VTSSwapLib.sol:VTSSwapLib:0x62ef223B345cF2bCc9c9097F093202c5f8C88f31"
+  ],
+  "pending": [],
+  "returns": {},
+  "timestamp": 1773918339735,
+  "chain": 42161,
+  "commit": "7480930e"
+}

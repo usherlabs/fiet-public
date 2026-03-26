@@ -8,7 +8,7 @@ import {EfficientHashLib} from "solady/utils/EfficientHashLib.sol";
 library TransientSlots {
     using TransientSlot for *;
 
-    bytes32 internal constant PROXY_SWAP_FLAG_SLOT = keccak256("PROXY_SWAP_FLAG");
+    bytes32 internal constant CORE_ACTION_FLAG_SLOT = keccak256("CORE_ACTION_FLAG");
     bytes32 internal constant SQRTP_BEFORE_SLOT = keccak256("SQRTP_BEFORE");
     bytes32 internal constant LIQ_BEFORE_SLOT = keccak256("LIQ_BEFORE");
     bytes32 internal constant NATIVE_VALUE_READ_SLOT = keccak256("NATIVE_VALUE_READ");
@@ -28,6 +28,11 @@ library TransientSlots {
             TransientSlot.asBoolean(TransientSlots.NATIVE_VALUE_READ_SLOT).tstore(true);
             return msg.value;
         }
+    }
+
+    /// @dev Clears the native msg.value read guard to keep it scoped to a single batch.
+    function clearMsgValueRead() internal {
+        TransientSlot.asBoolean(TransientSlots.NATIVE_VALUE_READ_SLOT).tstore(false);
     }
 
     // ------------------------------
@@ -52,7 +57,11 @@ library TransientSlots {
     // Planned Cancel helpers
     // ------------------------------
 
-    /// @dev Computes a dynamic slot for planned cancel keyed by (lcc, from, to)
+    /// @dev Computes a dynamic slot for planned cancel keyed by (lcc, from, to).
+    ///      This is intentionally a path key, not a per-transfer identity key.
+    ///      Safety relies on current call sites staging the plan and then immediately
+    ///      executing the matching transfer in the same logical path/transaction.
+    ///      Do not reuse this helper as a generic deferred-intent store.
     function _computePlannedCancelSlot(address lcc, address from, address to, bytes32 namespaceSlot)
         internal
         pure

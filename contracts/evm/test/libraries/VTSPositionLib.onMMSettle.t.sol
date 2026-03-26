@@ -12,6 +12,7 @@ import {ModifyLiquidityParams} from "@uniswap/v4-core/src/types/PoolOperation.so
 import {IPoolManager} from "v4-periphery/lib/v4-core/src/interfaces/IPoolManager.sol";
 import {LiquidityUtils} from "../../src/libraries/LiquidityUtils.sol";
 import {DynamicCurrencyDelta} from "../../src/libraries/DynamicCurrencyDelta.sol";
+import {ILCC} from "../../src/interfaces/ILCC.sol";
 
 contract VTSPositionLibOnMMSettleTest is VTSLibTestBase {
     VTSPositionLibHarness harness;
@@ -41,9 +42,10 @@ contract VTSPositionLibOnMMSettleTest is VTSLibTestBase {
         lccCurrency0 = _currency2;
         lccCurrency1 = _currency3;
 
-        // Get underlying currencies (_currency0 and _currency1 are underlying)
-        underlyingCurrency0 = _currency0;
-        underlyingCurrency1 = _currency1;
+        // Derive underlying currencies directly from the sorted LCC pair used in settlement.
+        // This avoids relying on deployment-address ordering between underlying and LCC tokens.
+        underlyingCurrency0 = Currency.wrap(ILCC(Currency.unwrap(lccCurrency0)).underlying());
+        underlyingCurrency1 = Currency.wrap(ILCC(Currency.unwrap(lccCurrency1)).underlying());
     }
 
     // ============================================================
@@ -341,17 +343,26 @@ contract VTSPositionLibOnMMSettleTest is VTSLibTestBase {
         assertEq(settlementDelta.amount1(), 60e18, "token1 should use dry cap");
     }
 
-    function test_onMMSettle_active_invalidCommitmentMax_reverts() public {
+    function test_onMMSettle_active_oneSidedCommitmentMax_doesNotRevert() public {
         _initMarket();
         PositionId positionId = _registerActivePosition();
 
-        // Active position with a zero commitment max is invalid in _settleActive.
+        // Active position with a one-sided zero commitment max should remain settleable.
         harness.setCommitmentMax(positionId, 0, 1000e18);
         harness.setSettled(positionId, 0, 0);
         harness.setPositionActive(positionId, true);
 
-        vm.expectRevert("VTSPositionLib: Invalid position");
-        harness.onMMSettle(manager, mockVault, positionId, lccCurrency0, lccCurrency1, toBalanceDelta(-1e18, 0), false);
+        (, bool rfsOpen,) = harness.onMMSettle(
+            manager, mockVault, positionId, lccCurrency0, lccCurrency1, toBalanceDelta(-1e18, 0), false
+        );
+
+        // token0 deposit is clamped by commitmentMax(0), while token1 still reports open RFS.
+        assertTrue(rfsOpen, "RFS should remain open due to unmet token1 requirement");
+
+        // Assert persistent accounting state (not transient deltas).
+        (,, uint256 settled0, uint256 settled1,,) = harness.getPositionAccounting(positionId);
+        assertEq(settled0, 0, "token0 settled should remain unchanged");
+        assertEq(settled1, 0, "token1 settled should remain unchanged");
     }
 
     function test_onMMSettle_withdrawals_positiveCurrencyDelta_isReducedByClearance() public {

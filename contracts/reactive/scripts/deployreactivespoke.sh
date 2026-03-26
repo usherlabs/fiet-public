@@ -18,7 +18,8 @@ extract_deployed_address() {
 }
 
 # Use one deployer key for spoke deployment.
-DEPLOYER_PRIVATE_KEY="${PRIVATE_KEY:-}"
+# Allow override via OVERRIDE_PRIVATE_KEY environment variable
+DEPLOYER_PRIVATE_KEY="${OVERRIDE_PRIVATE_KEY:-${PRIVATE_KEY:-}}"
 RECIPIENT="${1:-${RECIPIENT:-}}"
 
 # Required runtime configuration.
@@ -28,6 +29,7 @@ RECIPIENT="${1:-${RECIPIENT:-}}"
 : "${REACTIVE_CHAIN_ID:?REACTIVE_CHAIN_ID is required}"
 : "${LIQUIDITY_HUB:?LIQUIDITY_HUB is required}"
 : "${HUB_CALLBACK:?HUB_CALLBACK is required}"
+: "${BATCH_RECEIVER:?BATCH_RECEIVER is required}"
 : "${RECIPIENT:?RECIPIENT is required}"
 
 # Optional prefunding for the spoke deployment.
@@ -39,6 +41,7 @@ echo "  PROTOCOL_CHAIN_ID=$PROTOCOL_CHAIN_ID"
 echo "  REACTIVE_CHAIN_ID=$REACTIVE_CHAIN_ID"
 echo "  LIQUIDITY_HUB=$LIQUIDITY_HUB"
 echo "  HUB_CALLBACK=$HUB_CALLBACK"
+echo "  BATCH_RECEIVER=$BATCH_RECEIVER"
 echo "  RECIPIENT=$RECIPIENT"
 echo "  SPOKE_VALUE=$SPOKE_VALUE"
 
@@ -54,6 +57,7 @@ spoke_output="$(
       "$REACTIVE_CHAIN_ID" \
       "$LIQUIDITY_HUB" \
       "$HUB_CALLBACK" \
+      "$BATCH_RECEIVER" \
       "$RECIPIENT" 2>&1
 )"
 forge_status=$?

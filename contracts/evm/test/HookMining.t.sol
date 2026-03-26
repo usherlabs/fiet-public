@@ -12,12 +12,12 @@ import {MarketFactory} from "../src/MarketFactory.sol";
 import {HookFlags} from "../src/libraries/HookFlags.sol";
 import {MMPositionManager} from "../src/MMPositionManager.sol";
 import {MMPositionActionsImpl} from "../src/MMPositionActionsImpl.sol";
+import {MMQueueCustodian} from "../src/MMQueueCustodian.sol";
 import {WETH} from "@uniswap/v4-core/lib/solmate/src/tokens/WETH.sol";
 import {IWETH9} from "v4-periphery/src/interfaces/external/IWETH9.sol";
 import {IAllowanceTransfer} from "permit2/src/interfaces/IAllowanceTransfer.sol";
 import {VTSOrchestrator} from "../src/VTSOrchestrator.sol";
 import {VRLSettlementObserver} from "../src/VRLSettlementObserver.sol";
-import {IVRLSettlementObserver} from "../src/interfaces/IVRLSettlementObserver.sol";
 
 contract HookTest is Test, Deployers {
     IPoolManager poolManager;
@@ -30,28 +30,19 @@ contract HookTest is Test, Deployers {
 
     function setUp() public {
         poolManager = IPoolManager(makeAddr("poolManager"));
-        // Deploy VRLSettlementObserver
-        vm.prank(owner);
-        IVRLSettlementObserver settlementObserver = new VRLSettlementObserver(owner);
-
+        address liquidityHubAddr = makeAddr("liquidityHub");
+        address oracleHelperAddr = makeAddr("OracleHelper");
         // Deploy VTSOrchestrator
         vm.prank(owner);
-        vtsOrchestrator = new VTSOrchestrator(
-            address(poolManager),
-            makeAddr("signalManager"),
-            address(makeAddr("OracleHelper")),
-            address(makeAddr("liquidityHub")),
-            address(settlementObserver),
-            owner
-        );
+        vtsOrchestrator = new VTSOrchestrator(address(poolManager), oracleHelperAddr, liquidityHubAddr, owner);
+
+        // Deploy VRLSettlementObserver
+        vm.prank(owner);
+        new VRLSettlementObserver(address(vtsOrchestrator), owner);
 
         vm.prank(owner);
         factory = new MarketFactory(
-            address(poolManager),
-            address(makeAddr("liquidityHub")),
-            address(makeAddr("OracleHelper")),
-            address(vtsOrchestrator),
-            owner
+            address(poolManager), liquidityHubAddr, oracleHelperAddr, address(vtsOrchestrator), owner
         );
         IWETH9 weth9 = IWETH9(address(new WETH()));
         IAllowanceTransfer permit2 = IAllowanceTransfer(makeAddr("permit2"));
@@ -59,6 +50,7 @@ contract HookTest is Test, Deployers {
         // Deploy MMPositionActionsImpl first
         MMPositionActionsImpl actionsImpl =
             new MMPositionActionsImpl(address(poolManager), address(factory), address(vtsOrchestrator));
+        MMQueueCustodian queueCustodian = new MMQueueCustodian(address(this));
 
         mmPositionManager = new MMPositionManager(
             address(poolManager),
@@ -67,8 +59,10 @@ contract HookTest is Test, Deployers {
             makeAddr("descriptor"),
             weth9,
             permit2,
-            address(actionsImpl)
+            address(actionsImpl),
+            address(queueCustodian)
         );
+        queueCustodian.setPositionManager(address(mmPositionManager));
 
         // Compute flags for CoreHook
         uint160 coreFlags = HookFlags.CORE_HOOK_FLAGS;

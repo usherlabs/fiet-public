@@ -39,7 +39,7 @@ library MMActions {
     uint256 internal constant SETTLE_POSITION_FROM_DELTAS = 0x09;
 
     // ═══════════════════════════════════════════════════════════════════════════
-    // COMMITMENT OPERATIONS (0x20-0x23) - Handled in MMPositionManager
+    // COMMITMENT OPERATIONS (0x20-0x24) - Handled in MMPositionManager
     // ═══════════════════════════════════════════════════════════════════════════
 
     /// @notice Commit a new liquidity signal and mint commitment NFT

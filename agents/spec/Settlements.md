@@ -146,3 +146,7 @@ This 10,000 USD profit incentivises MM B’s intervention, reflecting the base c
 ### Incentive Mechanism
 
 The base collateral acts as an incentive for guarantors (e.g., MM B) to settle on behalf of a failing MM (e.g., MM A), as the seized liquidity position’s value (55,000 USD) exceeds the settlement cost (45,000 USD), yielding a profit proportional to the failing MM’s exposure. This ensures market liquidity and operational stability.
+
+## Related Queue/Safety Notes
+
+For LiquidityHub queue ownership semantics, settlement-time serviceability enforcement, and retriable settlement behaviour, see `agents/spec/Settlement Queue Semantics.md`.

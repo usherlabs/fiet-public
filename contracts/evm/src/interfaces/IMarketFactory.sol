@@ -136,6 +136,14 @@ interface IMarketFactory {
     function corePoolToCurrencyPair(PoolId corePoolId) external view returns (address[2] memory);
 
     /**
+     * @notice Checks if a vault is the canonical proxy hook for a given market
+     * @param marketId The market ID (core PoolId as bytes32)
+     * @param vault The vault/proxy hook address to validate
+     * @return True if the vault is canonical for the market
+     */
+    function isCanonicalVault(bytes32 marketId, address vault) external view returns (bool);
+
+    /**
      * @notice Gets the market liquidity for a given underlying asset in a market
      * @param underlyingAsset The underlying asset address
      * @param marketId The market ID
@@ -157,4 +165,12 @@ interface IMarketFactory {
      * @param key The pool key for the currencies to settle
      */
     function afterModifyLiquidity(PoolKey calldata key) external;
+
+    /**
+     * @notice Records wrapped ingress facts emitted by LCC during protocol transfers to bucket-exempt sinks.
+     * @dev MarketFactory validates canonical market scope and forwards ingress settlement to the canonical vault handler.
+     * @param lcc The LCC lane where ingress occurred
+     * @param wrappedAmount Wrapped-only component for this transfer slice
+     */
+    function prepareMarketLiquidity(address lcc, uint256 wrappedAmount) external;
 }

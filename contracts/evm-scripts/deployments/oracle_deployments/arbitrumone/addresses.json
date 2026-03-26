@@ -1,0 +1,11 @@
+{
+  "AccessControlManager": "0xf738a943e140315Ac9B2a09FE2f709ED7B0dcF83",
+  "VAI": "",
+  "DefaultProxyAdmin": "0x51b426819f988837e06eF80D67605fc3d19b6BEE",
+  "BoundValidator_Implementation": "0x9C202bc66fF1219b0f6a6C04217BBC393A326F55",
+  "BoundValidator_Proxy": "0x4535B26EeA5ec9aD573248c3A5c0abfF43078804",
+  "ResilientOracle_Implementation": "0xDd2dA3102A141af80F334ABE99676cAC02f86020",
+  "ResilientOracle_Proxy": "0xee9F85a6128182D83d7f27492f515A89BEc0C13b",
+  "ChainlinkOracle_Implementation": "0x2Eb198E523D6fe7dEAFB45CDA797Cb4938bd1572",
+  "ChainlinkOracle_Proxy": "0x34e24c8b1B5413A3031248Eb079a4b5DB353245b"
+}

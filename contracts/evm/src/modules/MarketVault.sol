@@ -185,15 +185,22 @@ abstract contract MarketVault is IMarketVault, ImmutableState, ImmutableMarketSt
     }
 
     /**
-     * @dev Settle underlying asset to the vault from the Hub
+     * @dev Settle underlying from Hub to vault (DEX ingress path).
      * @notice For ERC20: Hub approves MarketVault and we pull from Hub. For native: Hub transfers ETH to MarketVault and we settle from self.
+     *         Must fully fund `amount` in this transaction; `LiquidityHub.prepareSettle` reverts if direct reserve cannot cover the full amount.
      */
     function _settleUnderlyingToVaultFromHub(ILCC lccToken, uint256 amount) internal {
+        if (amount == 0) {
+            return;
+        }
+
         liquidityHub.prepareSettle(address(lccToken), amount);
 
         Currency uaCurrency = Currency.wrap(lccToken.underlying());
-        // CurrencySettler handles transfer of native ETH from address(this), assuming LiquidityHub conducts native transfer to this first.
-        _settleUnderlyingToVaultFromSender(uaCurrency, address(liquidityHub), amount);
+        // For native ETH, LiquidityHub transfers ETH to this vault first, so settle from self.
+        // For ERC20, pull from LiquidityHub after prepareSettle approval.
+        address payer = uaCurrency.isAddressZero() ? address(this) : address(liquidityHub);
+        _settleUnderlyingToVaultFromSender(uaCurrency, payer, amount);
     }
 
     /**
@@ -264,16 +271,17 @@ abstract contract MarketVault is IMarketVault, ImmutableState, ImmutableMarketSt
      * @param lccToken The LCC token contract to settle obligations for
      */
     function _settleObligationsForLCC(ILCC lccToken) internal {
-        // Check how much total pending settlement is queued for this LCC
-        uint256 totalPendingSettlement = liquidityHub.totalQueued(address(lccToken));
-        if (totalPendingSettlement == 0) return; // No pending settlements to fulfill
+        // Compute only the remaining unfunded shortfall for this underlying.
+        // This avoids repeatedly draining vault liquidity when the Hub reserve already covers queued debt.
+        uint256 unfunded = liquidityHub.unfundedQueueOfUnderlying(address(lccToken));
+        if (unfunded == 0) return;
 
         // Check how much underlying liquidity is available in the vault for this LCC's underlying asset
         Currency uaCurrency = Currency.wrap(lccToken.underlying());
         uint256 availableLiquidity = inMarketBalanceOf(uaCurrency);
 
         // Calculate how much we can actually settle (limited by available liquidity)
-        uint256 amountToSettle = Math.min(totalPendingSettlement, availableLiquidity);
+        uint256 amountToSettle = Math.min(unfunded, availableLiquidity);
         if (amountToSettle == 0) return; // No liquidity available to fulfill obligations
 
         // Transfer liquidity from vault to Hub and emit event
@@ -406,11 +414,12 @@ abstract contract MarketVault is IMarketVault, ImmutableState, ImmutableMarketSt
         if (recipient == address(liquidityHub)) {
             int128 used0 = usedDelta.amount0();
             if (used0 > 0) {
-                liquidityHub.confirmTake(address(lccToken0), LiquidityUtils.safeInt128ToUint256(used0), false);
+                // Market-to-Hub withdrawals should wake reactive settlement dispatch.
+                liquidityHub.confirmTake(address(lccToken0), LiquidityUtils.safeInt128ToUint256(used0), true);
             }
             int128 used1 = usedDelta.amount1();
             if (used1 > 0) {
-                liquidityHub.confirmTake(address(lccToken1), LiquidityUtils.safeInt128ToUint256(used1), false);
+                liquidityHub.confirmTake(address(lccToken1), LiquidityUtils.safeInt128ToUint256(used1), true);
             }
         }
     }

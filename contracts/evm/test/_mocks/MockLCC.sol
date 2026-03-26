@@ -25,6 +25,16 @@ contract MockLCC is ERC20, ILCC {
     }
 
     /// @inheritdoc ILCC
+    function factory() external pure override returns (address) {
+        return address(0);
+    }
+
+    /// @inheritdoc ILCC
+    function hub() external pure override returns (address) {
+        return address(0);
+    }
+
+    /// @inheritdoc ILCC
     function underlying() external view override returns (address) {
         return _underlying;
     }

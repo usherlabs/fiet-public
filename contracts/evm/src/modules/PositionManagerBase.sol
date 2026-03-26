@@ -5,6 +5,7 @@ import {ImmutableVTSState} from "./ImmutableVTSState.sol";
 import {Currency} from "v4-periphery/lib/v4-core/src/types/Currency.sol";
 import {ILCC} from "../interfaces/ILCC.sol";
 import {ILiquidityHub} from "../interfaces/ILiquidityHub.sol";
+import {IMarketFactory} from "../interfaces/IMarketFactory.sol";
 
 /**
  * @title PositionManagerBase
@@ -14,9 +15,11 @@ import {ILiquidityHub} from "../interfaces/ILiquidityHub.sol";
  */
 abstract contract PositionManagerBase is ImmutableVTSState {
     ILiquidityHub internal immutable liquidityHub;
+    IMarketFactory internal immutable marketFactory;
 
-    constructor(address _liquidityHub, address _vtsOrchestrator) ImmutableVTSState(_vtsOrchestrator) {
-        liquidityHub = ILiquidityHub(_liquidityHub);
+    constructor(address _marketFactory, address _vtsOrchestrator) ImmutableVTSState(_vtsOrchestrator) {
+        marketFactory = IMarketFactory(_marketFactory);
+        liquidityHub = marketFactory.liquidityHub();
     }
 
     // ------------------------------------------------------------------------------------------------
@@ -55,6 +58,13 @@ abstract contract PositionManagerBase is ImmutableVTSState {
     function _syncBalanceAsCredit(Currency currency) internal {
         // owner = address(this) = MMPM (balance holder)
         // target = msgSender() = locker (delta recipient)
-        vtsOrchestrator.sync(currency, address(this), msgSender());
+        vtsOrchestrator.sync(marketFactory, currency, address(this), msgSender());
+    }
+
+    /// @notice Credits an exact known amount to the locker's delta
+    /// @param currency The currency to credit
+    /// @param amount The exact amount to credit
+    function _creditExact(Currency currency, uint256 amount) internal {
+        vtsOrchestrator.creditExact(marketFactory, currency, msgSender(), amount);
     }
 }

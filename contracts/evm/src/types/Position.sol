@@ -5,6 +5,7 @@ import {ModifyLiquidityParams} from "v4-periphery/lib/v4-core/src/types/PoolOper
 import {Position as UniPosition} from "v4-periphery/lib/v4-core/src/libraries/Position.sol";
 import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {RFSCheckpoint} from "./Checkpoint.sol";
+import {Errors} from "../libraries/Errors.sol";
 import {EfficientHashLib} from "solady/utils/EfficientHashLib.sol";
 
 type PositionId is bytes32;
@@ -49,7 +50,7 @@ struct PositionModificationHookData {
     /// @notice The position index within the commit
     uint256 positionIndex;
     /// @notice The locker address (msgSender who initiated the operation via MMPM)
-    /// @dev Used for settlement queue attribution; address(0) defaults to position owner
+    /// @dev Required for MM settlement queue attribution and advancer authorisation
     address locker;
     /// @notice Seizure-related data (only populated during seizure operations)
     SeizureData seizure;
@@ -138,16 +139,14 @@ library PositionModificationHookDataLib {
         return data.commitId > 0;
     }
 
-    /// @notice Gets the effective locker address, defaulting to fallback if not set
+    /// @notice Gets the required locker address for MM operations
     /// @param data The decoded hook data
-    /// @param fallbackAddress The fallback address to use if locker is not set
-    /// @return The effective locker address
-    function getLocker(PositionModificationHookData memory data, address fallbackAddress)
-        internal
-        pure
-        returns (address)
-    {
-        return data.locker != address(0) ? data.locker : fallbackAddress;
+    /// @return The required locker address
+    function getLocker(PositionModificationHookData memory data) internal pure returns (address) {
+        if (data.locker == address(0)) {
+            revert Errors.InvariantViolated("MM Operation: locker must be passed into hookdata");
+        }
+        return data.locker;
     }
 }
 

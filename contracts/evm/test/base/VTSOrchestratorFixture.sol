@@ -87,9 +87,18 @@ abstract contract VTSOrchestratorFixture is MarketTestBase, MarketMakerTestBase 
     function setUp() public virtual {
         _setupMarket();
         _setUpMM();
+        // Commit creation is now restricted to `owner || advancer`.
+        // Fixture-driven commits are initiated by this test contract via MMPositionManager.
+        liquiditySignal.mmState.advancer = address(this);
+        renewSignal.mmState.advancer = address(this);
 
         // Deploy unlock caller helper
         unlockCaller = new UnlockCaller(manager);
+        vm.mockCall(
+            marketFactory,
+            abi.encodeWithSelector(IMarketFactory.bounds.selector, address(unlockCaller)),
+            abi.encode(true)
+        );
 
         // Cache references
         positionManager = MMPositionManager(payable(mmPositionManager));

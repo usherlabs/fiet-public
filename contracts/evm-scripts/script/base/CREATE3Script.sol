@@ -52,6 +52,8 @@ abstract contract CREATE3Script is Script {
     // For fresh devnets (eg, Nitro), you may instead deploy a CREATE3Factory and set
     // `CREATE3_FACTORY=<deployed address>` when running scripts.
     address internal constant DEFAULT_CREATE3_FACTORY = 0x9fBB3DF7C40Da2e5A0dE984fFE2CCB7C47cd0ABf;
+    uint256 internal constant ARBITRUM_SEPOLIA_CHAIN_ID = 421614;
+    address internal constant DEFAULT_CREATE3_FACTORY_ARBITRUM_SEPOLIA = 0x0EC3715467915Cbd7355A6B111510e4a09D9ccC0;
     ICREATE3Factory internal create3;
 
     string internal version;
@@ -62,7 +64,9 @@ abstract contract CREATE3Script is Script {
         try vm.envAddress("CREATE3_FACTORY") returns (address a) {
             factory = a;
         } catch {
-            factory = DEFAULT_CREATE3_FACTORY;
+            factory = (block.chainid == ARBITRUM_SEPOLIA_CHAIN_ID)
+                ? DEFAULT_CREATE3_FACTORY_ARBITRUM_SEPOLIA
+                : DEFAULT_CREATE3_FACTORY;
         }
         create3 = ICREATE3Factory(factory);
     }
@@ -86,7 +90,7 @@ abstract contract CREATE3Script is Script {
     }
 
     function getCreate3ContractSalt(string memory name) internal view virtual returns (bytes32) {
-        return keccak256(bytes(string.concat(name, "-v", version)));
+        return keccak256(bytes(_buildCreate3SaltSeed(name, version)));
     }
 
     function getCreate3ContractSalt(string memory name, string memory _version)
@@ -95,7 +99,19 @@ abstract contract CREATE3Script is Script {
         virtual
         returns (bytes32)
     {
-        return keccak256(bytes(string.concat(name, "-v", _version)));
+        return keccak256(bytes(_buildCreate3SaltSeed(name, _version)));
+    }
+
+    /// @dev Builds the CREATE3 salt seed from contract name, version, and optional CREATE3_SALT env suffix.
+    ///      This preserves unique salts per contract name while allowing deterministic namespace rotation.
+    function _buildCreate3SaltSeed(string memory name, string memory _version) internal view returns (string memory) {
+        string memory baseSeed = string.concat(name, "-v", _version);
+        try vm.envString("CREATE3_SALT") returns (string memory envSaltSuffix) {
+            if (bytes(envSaltSuffix).length > 0) {
+                return string.concat(baseSeed, "-", envSaltSuffix);
+            }
+        } catch {}
+        return baseSeed;
     }
 
     function getCreate3SaltFromEnv(string memory name) internal view virtual returns (bytes32) {

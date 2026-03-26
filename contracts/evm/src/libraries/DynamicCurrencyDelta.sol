@@ -38,6 +38,17 @@ library DynamicCurrencyDelta {
         }
     }
 
+    /// @notice Credits an exact amount for a currency and target
+    /// @dev Use this when the credited amount is known from a trusted source (e.g. msg.value, unwrap output).
+    /// @param currency The currency to credit
+    /// @param target The address receiving credit
+    /// @param amount The exact amount to credit
+    function creditExact(Currency currency, address target, uint256 amount) internal returns (int128 deltaChange) {
+        if (amount == 0) return 0;
+        deltaChange = SafeCast.toInt128(amount);
+        accountDelta(currency, deltaChange, target);
+    }
+
     /// @notice Gets the full positive delta (credit) for a currency and target
     /// @param currency The currency to check
     /// @param target The target address to check delta for

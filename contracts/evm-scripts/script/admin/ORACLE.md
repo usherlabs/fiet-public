@@ -15,7 +15,7 @@ When you run `just deploy-oracle`, it will:
 
 - Write `.env` entries:
   - `RESILIENT_ORACLE_ADDRESS`
-  - `ACCESS_CONTROL_MANAGER`
+  - `ACCESS_CONTROL_MANAGER` (also resolvable from `RESILIENT_ORACLE_ADDRESS`)
 - Copy the Hardhat deployment JSON files into:
   - `deployments/oracle_deployments/<oracle-network>/`
 - Write a single address book:
@@ -57,6 +57,12 @@ ACCOUNT_TO_PERMIT="$GLOBALCONFIG_ADDRESS" \
 RESILIENT_ORACLE_ADDRESS="$RESILIENT_ORACLE_ADDRESS" \
 TARGET_ADDRESS="$MAIN_ORACLE_ADDRESS" \
 FUNCTION_SIG="setTokenConfig(TokenConfig)" \
+just admin-oracle-acm-give-call-permission
+
+ACCOUNT_TO_PERMIT="$GLOBALCONFIG_ADDRESS" \
+RESILIENT_ORACLE_ADDRESS="$RESILIENT_ORACLE_ADDRESS" \
+TARGET_ADDRESS="$MAIN_ORACLE_ADDRESS" \
+FUNCTION_SIG="setTokenConfig((address,address,uint256))" \
 just admin-oracle-acm-give-call-permission
 
 # 2) Allow GlobalConfig to configure bounds
@@ -125,10 +131,10 @@ Conceptually, it validates a ratio band per asset:
 
 1. **Pivot price is fetched first** (if enabled), then:
 2. **MAIN vs PIVOT**:
-  a. If MAIN validates against PIVOT, ResilientOracle returns **MAIN**.
+   a. If MAIN validates against PIVOT, ResilientOracle returns **MAIN**.
 3. **FALLBACK vs PIVOT**:
-  a. If MAIN failed validation, and FALLBACK validates against PIVOT, ResilientOracle returns **FALLBACK**.
+   a. If MAIN failed validation, and FALLBACK validates against PIVOT, ResilientOracle returns **FALLBACK**.
 4. **MAIN vs FALLBACK** (last resort):
-  a. If neither validated against PIVOT, but both MAIN and FALLBACK exist, ResilientOracle validates MAIN vs FALLBACK.
-  b. If valid, it returns **MAIN**.
+   a. If neither validated against PIVOT, but both MAIN and FALLBACK exist, ResilientOracle validates MAIN vs FALLBACK.
+   b. If valid, it returns **MAIN**.
 5. Otherwise, it reverts with `"invalid resilient oracle price"`.

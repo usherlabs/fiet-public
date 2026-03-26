@@ -140,6 +140,7 @@ contract LiquidityHubMutationHardeningTest is LiquidityHubTestBase {
         // Give user1 market-derived LCC and force unwrap to queue (no market liquidity).
         uint256 amount = 25;
         _wrapMarketDerivedLCC(user1, lccToken1, amount);
+        _wrapMarketDerivedLCC(user3, lccToken1, amount);
 
         vm.mockCall(
             factory,
@@ -264,6 +265,7 @@ contract LiquidityHubMutationHardeningTest is LiquidityHubTestBase {
 
     function test_cancelWithQueue_emitsSettlementQueued_whenQueuePositive() public {
         _wrapMarketDerivedLCC(user1, lccToken1, 10);
+        _wrapMarketDerivedLCC(user2, lccToken1, 3);
 
         vm.recordLogs();
         vm.prank(vtsOrchestrator);

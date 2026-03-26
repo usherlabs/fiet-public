@@ -13,6 +13,10 @@ import {Errors} from "../src/libraries/Errors.sol";
  *      due to insufficient liquidity, and processes them when liquidity becomes available.
  */
 contract LiquidityHubSettlementTest is LiquidityHubTestBase {
+    event SettlementProcessed(
+        address indexed lcc, address indexed recipient, uint256 settledAmount, uint256 requestedAmount
+    );
+
     // ============ SETTLEMENT QUEUE TESTS ============
 
     /// @notice Tests queuing a settlement when unwrapping with remaining deficit amounts due to insufficient liquidity
@@ -168,6 +172,8 @@ contract LiquidityHubSettlementTest is LiquidityHubTestBase {
         uint256 hubLccBalanceBefore = lcc.balanceOf(address(liquidityHub));
 
         // Process settlement for the Hub (isForHub = true path)
+        vm.expectEmit(true, true, false, true, address(liquidityHub));
+        emit SettlementProcessed(lccToken1, address(liquidityHub), queuedAmount, queuedAmount);
         liquidityHub.processSettlementFor(lccToken1, address(liquidityHub), queuedAmount);
 
         // Assertions for Hub path (isForHub = true):
@@ -213,6 +219,8 @@ contract LiquidityHubSettlementTest is LiquidityHubTestBase {
         uint256 hubUnderlyingBefore = underlyingAsset1.balanceOf(address(liquidityHub));
 
         // Step 3: Call processSettlementFor
+        vm.expectEmit(true, true, false, true, address(liquidityHub));
+        emit SettlementProcessed(lccToken1, user1, queueAmount, queueAmount);
         liquidityHub.processSettlementFor(lccToken1, user1, queueAmount);
 
         // Assertions for external user path:

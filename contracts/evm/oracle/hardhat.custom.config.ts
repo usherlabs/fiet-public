@@ -33,6 +33,16 @@ extendConfig((config: HardhatConfig) => {
   }
 });
 
+// Purpose: increase HTTP timeouts for public/slow RPCs.
+// Operation: Hardhat will wait longer before failing JSON-RPC calls, which mitigates
+// transient `UND_ERR_HEADERS_TIMEOUT` errors from undici on congested endpoints.
+//
+// Override: set HARDHAT_HTTP_TIMEOUT_MS to customise.
+const httpTimeoutMs = process.env.HARDHAT_HTTP_TIMEOUT_MS ? Number(process.env.HARDHAT_HTTP_TIMEOUT_MS) : 120000;
+
+// NOTE: Keep this config self-contained. Deploy logic lives under `contracts/evm/oracle/deploy`
+// and is loaded via `paths.deploy` so we don't mutate vendored deployment scripts at runtime.
+
 
 
 const config: HardhatUserConfig = {
@@ -101,6 +111,7 @@ const config: HardhatUserConfig = {
       live: true,
       tags: ["testnet"],
       accounts: process.env.PRIVATE_KEY ? [process.env.PRIVATE_KEY] : [],
+      timeout: httpTimeoutMs,
     },
     arbitrumsepolia: {
       url:
@@ -110,12 +121,14 @@ const config: HardhatUserConfig = {
       live: true,
       tags: ["testnet"],
       accounts: process.env.PRIVATE_KEY ? [process.env.PRIVATE_KEY] : [],
+      timeout: httpTimeoutMs,
     },
     arbitrumone: {
       url: process.env.ARB_MAINNET_RPC_URL || "https://arb1.arbitrum.io/rpc",
       chainId: 42161,
       live: true,
       accounts: process.env.PRIVATE_KEY ? [process.env.PRIVATE_KEY] : [],
+      timeout: httpTimeoutMs,
     },
   },
   etherscan: {
@@ -152,8 +165,9 @@ const config: HardhatUserConfig = {
     ],
   },
   paths: {
+    deploy: "../../oracle/deploy",
     tests: "./test",
-    deployments: "../../deployments/oracle_deployments",
+    deployments: "../../../evm-scripts/deployments/oracle_deployments",
   },
   dependencyCompiler: {
     paths: [

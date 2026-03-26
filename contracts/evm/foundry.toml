@@ -58,7 +58,8 @@ ffi = true
 test = "test/fuzz"
 out = "out-echidna"
 libraries = [
-  "src/libraries/LCCFactoryLib.sol:LCCFactoryLinkedLib:0xE2B5401952dC4c9059b7eDE3a1742bF2BC17EBAd",
+  "src/libraries/LCCFactoryLib.sol:LCCFactoryLinkedLib:0x2b35bC0520Ae7df66275319Be6eeAac23Ae37055",
+  "src/libraries/LiquidityHubLinkedLib.sol:LiquidityHubLinkedLib:0xaCed0A9de56C869F03980B37a16A1C1F9e6bC6B7",
   # Prevent HEVM crashes by eliminating unlinked placeholders in unrelated contracts (e.g. VTSOrchestrator).
   # Deterministic CREATE2 address deployed by the SIG-BACKING harness (avoids any RPC fetch attempts).
   "src/libraries/VTSCommitLib.sol:VTSCommitLib:0x08f6e330612797F445209Bfee166c949cfd0BF4F",
@@ -71,7 +72,7 @@ libraries = [
 [profile.prod]
 # ! Production deployments will adopt the Profile in contracts/evm-scripts/foundry.toml
 # ! This profile is only used for production builds in local development, and testing.
-optimizer_runs = 20000
+optimizer_runs = 10000
 optimizer = true
 via_ir = true
 ffi = true

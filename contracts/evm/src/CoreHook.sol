@@ -8,30 +8,29 @@ import {BaseHook} from "v4-periphery/src/utils/BaseHook.sol";
 import {BalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
 import {ModifyLiquidityParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
 
-import {ProxyHook} from "./ProxyHook.sol";
 import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
 import {CurrencySettler} from "@uniswap/v4-core/test/utils/CurrencySettler.sol";
 import {SwapParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
-import {Exttload} from "v4-periphery/lib/v4-core/src/Exttload.sol";
 import {TransientSlots} from "./libraries/TransientSlots.sol";
 import {TransientSlot} from "openzeppelin-contracts/contracts/utils/TransientSlot.sol";
 import {PositionLibrary} from "./types/Position.sol";
 import {StateLibrary} from "@uniswap/v4-core/src/libraries/StateLibrary.sol";
 import {BeforeSwapDelta, BeforeSwapDeltaLibrary} from "@uniswap/v4-core/src/types/BeforeSwapDelta.sol";
 import {SafeCast} from "openzeppelin-contracts/contracts/utils/math/SafeCast.sol";
-import {ProxySwapFlag} from "./libraries/ProxySwapFlag.sol";
+import {CoreActionFlag} from "./libraries/CoreActionFlag.sol";
 import {ImmutableMarketState} from "./modules/ImmutableMarketState.sol";
 import {ImmutableVTSState} from "./modules/ImmutableVTSState.sol";
 import {MarketHandlerLib} from "./libraries/MarketHandlerLib.sol";
 import {TransientStateLibrary} from "@uniswap/v4-core/src/libraries/TransientStateLibrary.sol";
 import {ICoreHook} from "./interfaces/ICoreHook.sol";
+import {IVaultCoreActionHandler} from "./interfaces/IVaultCoreActionHandler.sol";
 
 /**
  * Core Pool should be aware of Positions.
  * This way it can calculate and manage Liquidity Commitments (C_A(r)) for each Position.
  * Furthermore, we need to know when Direct LP occurs, as this determines whether the underlying native tokens are settled to the Pool Manager.
  */
-contract CoreHook is BaseHook, Exttload, ImmutableMarketState, ImmutableVTSState, ICoreHook {
+contract CoreHook is BaseHook, ImmutableMarketState, ImmutableVTSState, ICoreHook {
     using TransientSlot for *;
     using CurrencySettler for Currency;
     using SafeCast for int256;
@@ -102,6 +101,7 @@ contract CoreHook is BaseHook, Exttload, ImmutableMarketState, ImmutableVTSState
         bytes calldata
     ) internal override returns (bytes4) {
         // Always an existing position; settle growths against pre-modification liquidity
+        // so pre-pause accruals cannot be attributed to post-removal liquidity.
         vtsOrchestrator.settlePositionGrowths(PositionLibrary.generateId(sender, params));
         return this.beforeRemoveLiquidity.selector;
     }
@@ -133,10 +133,10 @@ contract CoreHook is BaseHook, Exttload, ImmutableMarketState, ImmutableVTSState
         TransientSlot.asUint256(TransientSlots.LIQ_BEFORE_SLOT).tstore(0);
         vtsOrchestrator.afterCoreSwap(key, params, delta, sqrtPBefore, liqBefore);
 
-        // Check if this is a direct core pool swap, and if it is, call the proxy hook
+        // Check if this is a direct core pool swap, and if it is, notify canonical vault handler.
         address proxyHook = _getProxyHook(key);
-        if (ProxySwapFlag.isDirectSwap(proxyHook)) {
-            ProxyHook(payable(proxyHook)).onCorePoolDirectSwap(delta);
+        if (CoreActionFlag.isDirectCoreAction(proxyHook)) {
+            _notifyDirectSwap(proxyHook, key, delta);
         }
 
         return (this.afterSwap.selector, 0);
@@ -167,9 +167,7 @@ contract CoreHook is BaseHook, Exttload, ImmutableMarketState, ImmutableVTSState
 
         // only add direct liquidity if this is not an MM position operation
         if (!isMMPosition) {
-            // Forward effective caller delta including fee adjustment (Uniswap will apply callerDelta - hookDelta)
-            BalanceDelta effective = delta - feeAdj; //  equivalent to doing (delta1.amount0 + delta2.amount0, delta1.amount1 + delta2.amount1)
-            ProxyHook(payable(_getProxyHook(key))).onDirectLP(effective); // Only direct-LP adds require vault settlement.
+            IVaultCoreActionHandler(_getProxyHook(key)).handleAddLiquidity();
         }
 
         return (this.afterAddLiquidity.selector, feeAdj);
@@ -193,6 +191,10 @@ contract CoreHook is BaseHook, Exttload, ImmutableMarketState, ImmutableVTSState
         BalanceDelta feesAccrued,
         bytes calldata hookData
     ) internal virtual override returns (bytes4, BalanceDelta) {
+        if (_isPoolOrGlobalPaused(key)) {
+            return (this.afterRemoveLiquidity.selector, BalanceDelta.wrap(0));
+        }
+
         // Update VTS position state with registration/update based on actual pool id
         // Pass callerDelta and feesAccrued for consolidated delta management
         (,, BalanceDelta feeAdj,) = vtsOrchestrator.processPosition(sender, key, params, delta, feesAccrued, hookData);
@@ -206,6 +208,17 @@ contract CoreHook is BaseHook, Exttload, ImmutableMarketState, ImmutableVTSState
     // Helper function to get the proxy hook address from the core pool key
     function _getProxyHook(PoolKey calldata corePoolKey) internal view returns (address) {
         return MarketHandlerLib.getProxyHook(marketFactory, corePoolKey);
+    }
+
+    function _isPoolOrGlobalPaused(PoolKey calldata key) internal view returns (bool) {
+        return vtsOrchestrator.isPoolOrGlobalPaused(key.toId());
+    }
+
+    /// @dev Emits direct swap lane fact to canonical vault handler for obligation follow-up.
+    function _notifyDirectSwap(address proxyHook, PoolKey calldata key, BalanceDelta delta) internal {
+        bool isZeroForOne = delta.amount0() < 0;
+        address lccTokenIn = isZeroForOne ? Currency.unwrap(key.currency0) : Currency.unwrap(key.currency1);
+        IVaultCoreActionHandler(proxyHook).handleSwap(lccTokenIn);
     }
 
     /// @notice Settle hook deltas to fee pot by minting/burning ERC6909 claims

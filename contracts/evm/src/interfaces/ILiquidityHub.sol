@@ -74,7 +74,9 @@ interface ILiquidityHub is IBoundRegistry, IMinimalLiquidityHub {
     /**
      * @notice Queues settlement for a recipient after issuer-side deficit transfer.
      * @dev Intended for issuer flows where the recipient already received market-derived LCC and
-     *      queue ownership must match that recipient.
+     *      queue ownership must match that recipient. This path performs strict serviceability
+     *      checks up front, unlike generic queue accounting paths that defer settleability checks
+     *      to `processSettlementFor(...)`.
      * @param lccToken The LCC token address
      * @param recipient The queue owner / eventual settlement recipient
      * @param amount The amount to queue

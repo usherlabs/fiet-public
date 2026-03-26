@@ -5,6 +5,9 @@
   "../reactive/lib/reactive-lib": {
     "rev": "f6990ce3526928d039fec78855b2004ff8d65c9f"
   },
+  "../stylus/lib/kernel": {
+    "rev": "6a098bc8f9a7001fe7ae801368e96a5ee635ddb1"
+  },
   "contracts/evm/lib/forge-std": {
     "rev": "77041d2ce690e692d6e03cc812b57d1ddaa4d505"
   },

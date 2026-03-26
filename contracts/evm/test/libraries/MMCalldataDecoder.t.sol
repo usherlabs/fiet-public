@@ -7,6 +7,7 @@ import {MMCalldataDecoder} from "../../src/libraries/MMCalldataDecoder.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {Currency} from "v4-periphery/lib/v4-core/src/types/Currency.sol";
 import {IHooks} from "@uniswap/v4-core/src/interfaces/IHooks.sol";
+import {ActionConstants} from "v4-periphery/src/libraries/ActionConstants.sol";
 
 contract MMCalldataDecoderHarness {
     using MMCalldataDecoder for bytes;
@@ -100,10 +101,17 @@ contract MMCalldataDecoderHarness {
     function decodeIncreaseFromDeltasParams(bytes calldata params)
         external
         pure
-        returns (PoolKey memory poolKey, uint256 tokenId, uint256 positionIndex, bool payerIsUser)
+        returns (
+            PoolKey memory poolKey,
+            uint256 tokenId,
+            uint256 positionIndex,
+            uint128 amount0Max,
+            uint128 amount1Max,
+            bool payerIsUser
+        )
     {
         PoolKey calldata pk;
-        (pk, tokenId, positionIndex, payerIsUser) = params.decodeIncreaseFromDeltasParams();
+        (pk, tokenId, positionIndex, amount0Max, amount1Max, payerIsUser) = params.decodeIncreaseFromDeltasParams();
         poolKey = PoolKey({
             currency0: pk.currency0, currency1: pk.currency1, fee: pk.fee, tickSpacing: pk.tickSpacing, hooks: pk.hooks
         });
@@ -112,10 +120,18 @@ contract MMCalldataDecoderHarness {
     function decodeMintFromDeltasParams(bytes calldata params)
         external
         pure
-        returns (PoolKey memory poolKey, uint256 tokenId, int24 tickLower, int24 tickUpper, bool payerIsUser)
+        returns (
+            PoolKey memory poolKey,
+            uint256 tokenId,
+            int24 tickLower,
+            int24 tickUpper,
+            uint128 amount0Max,
+            uint128 amount1Max,
+            bool payerIsUser
+        )
     {
         PoolKey calldata pk;
-        (pk, tokenId, tickLower, tickUpper, payerIsUser) = params.decodeMintFromDeltasParams();
+        (pk, tokenId, tickLower, tickUpper, amount0Max, amount1Max, payerIsUser) = params.decodeMintFromDeltasParams();
         poolKey = PoolKey({
             currency0: pk.currency0, currency1: pk.currency1, fee: pk.fee, tickSpacing: pk.tickSpacing, hooks: pk.hooks
         });
@@ -162,17 +178,25 @@ contract MMCalldataDecoderHarness {
     function decodeCommitSignalParams(bytes calldata params)
         external
         pure
-        returns (bytes memory liquiditySignal, address owner)
+        returns (bytes memory liquiditySignal, address owner, bytes memory relayParams)
     {
         bytes calldata sig;
-        (sig, owner) = params.decodeCommitSignalParams();
+        bytes calldata relay;
+        (sig, owner, relay) = params.decodeCommitSignalParams();
         liquiditySignal = sig;
+        relayParams = relay;
     }
 
-    function decodeTokenIdAndBytes(bytes calldata params) external pure returns (uint256 tokenId, bytes memory data) {
+    function decodeTokenIdAndBytes(bytes calldata params)
+        external
+        pure
+        returns (uint256 tokenId, bytes memory data, bytes memory relayParams)
+    {
         bytes calldata cd;
-        (tokenId, cd) = params.decodeTokenIdAndBytes();
+        bytes calldata relay;
+        (tokenId, cd, relay) = params.decodeTokenIdAndBytes();
         data = cd;
+        relayParams = relay;
     }
 
     function decodeCheckpointParams(bytes calldata params)
@@ -194,9 +218,9 @@ contract MMCalldataDecoderHarness {
     function decodeCollectLiquidityParams(bytes calldata params)
         external
         pure
-        returns (address lcc, uint256 maxAmount)
+        returns (address lcc, uint256 tokenId, uint256 maxAmount)
     {
-        (lcc, maxAmount) = params.decodeCollectLiquidityParams();
+        (lcc, tokenId, maxAmount) = params.decodeCollectLiquidityParams();
     }
 
     function decodeUint256AndBool(bytes calldata params) external pure returns (uint256 amount, bool payerIsUser) {
@@ -223,8 +247,22 @@ contract MMCalldataDecoderHarness {
 contract MMCalldataDecoderTest is Test {
     MMCalldataDecoderHarness internal h;
 
+    /// @dev Non-zero bits only above the low 160 (canonical address lives in least-significant 160 bits).
+    uint256 internal constant DIRTY_HIGH = uint256(0xA11CE) << 160;
+
     function setUp() public {
         h = new MMCalldataDecoderHarness();
+    }
+
+    /// @notice Overwrite one 32-byte ABI word in `data` (content region, `wordIndex` 0 = first word after length).
+    function _setAbiWord(bytes memory data, uint256 wordIndex, uint256 word) internal pure {
+        assembly ("memory-safe") {
+            mstore(add(add(data, 0x20), mul(wordIndex, 0x20)), word)
+        }
+    }
+
+    function _dirtyAddressWord(address addr) internal pure returns (uint256) {
+        return DIRTY_HIGH | uint256(uint160(addr));
     }
 
     function _poolKey() internal pure returns (PoolKey memory key) {
@@ -310,20 +348,26 @@ contract MMCalldataDecoderTest is Test {
 
     function test_decodeIncreaseFromDeltasParams_ok() public view {
         PoolKey memory key = _poolKey();
-        bytes memory params = abi.encode(key, uint256(10), uint256(2), true);
-        (, uint256 tokenId, uint256 positionIndex, bool payerIsUser) = h.decodeIncreaseFromDeltasParams(params);
+        bytes memory params = abi.encode(key, uint256(10), uint256(2), uint128(11), uint128(12), true);
+        (, uint256 tokenId, uint256 positionIndex, uint128 amount0Max, uint128 amount1Max, bool payerIsUser) =
+            h.decodeIncreaseFromDeltasParams(params);
         assertEq(tokenId, 10);
         assertEq(positionIndex, 2);
+        assertEq(amount0Max, 11);
+        assertEq(amount1Max, 12);
         assertTrue(payerIsUser);
     }
 
     function test_decodeMintFromDeltasParams_ok() public view {
         PoolKey memory key = _poolKey();
-        bytes memory params = abi.encode(key, uint256(10), int24(-1), int24(1), false);
-        (, uint256 tokenId, int24 tl, int24 tu, bool payerIsUser) = h.decodeMintFromDeltasParams(params);
+        bytes memory params = abi.encode(key, uint256(10), int24(-1), int24(1), uint128(21), uint128(22), false);
+        (, uint256 tokenId, int24 tl, int24 tu, uint128 amount0Max, uint128 amount1Max, bool payerIsUser) =
+            h.decodeMintFromDeltasParams(params);
         assertEq(tokenId, 10);
         assertEq(tl, -1);
         assertEq(tu, 1);
+        assertEq(amount0Max, 21);
+        assertEq(amount1Max, 22);
         assertFalse(payerIsUser);
     }
 
@@ -367,18 +411,22 @@ contract MMCalldataDecoderTest is Test {
     function test_decodeCommitSignalParams_ok() public view {
         bytes memory sig = hex"deadbeef";
         address owner = address(0xBEEF);
-        bytes memory params = abi.encode(sig, owner);
-        (bytes memory outSig, address outOwner) = h.decodeCommitSignalParams(params);
+        bytes memory relay = abi.encode(uint256(123), uint256(1), bytes("auth"));
+        bytes memory params = abi.encode(sig, owner, relay);
+        (bytes memory outSig, address outOwner, bytes memory outRelay) = h.decodeCommitSignalParams(params);
         assertEq(outOwner, owner);
         assertEq(keccak256(outSig), keccak256(sig));
+        assertEq(keccak256(outRelay), keccak256(relay));
     }
 
     function test_decodeTokenIdAndBytes_ok() public view {
         bytes memory data = "hello";
-        bytes memory params = abi.encode(uint256(55), data);
-        (uint256 tokenId, bytes memory out) = h.decodeTokenIdAndBytes(params);
+        bytes memory relay = abi.encode(uint256(456), uint256(2), bytes("sig"));
+        bytes memory params = abi.encode(uint256(55), data, relay);
+        (uint256 tokenId, bytes memory out, bytes memory outRelay) = h.decodeTokenIdAndBytes(params);
         assertEq(tokenId, 55);
         assertEq(keccak256(out), keccak256(data));
+        assertEq(keccak256(outRelay), keccak256(relay));
     }
 
     function test_decodeCheckpointParams_ok() public view {
@@ -399,9 +447,10 @@ contract MMCalldataDecoderTest is Test {
     }
 
     function test_decodeCollectLiquidityParams_ok() public view {
-        bytes memory params = abi.encode(address(0x1111), uint256(9));
-        (address lcc, uint256 maxAmount) = h.decodeCollectLiquidityParams(params);
+        bytes memory params = abi.encode(address(0x1111), uint256(7), uint256(9));
+        (address lcc, uint256 tokenId, uint256 maxAmount) = h.decodeCollectLiquidityParams(params);
         assertEq(lcc, address(0x1111));
+        assertEq(tokenId, 7);
         assertEq(maxAmount, 9);
     }
 
@@ -521,10 +570,54 @@ contract MMCalldataDecoderTest is Test {
 
     function test_decodeCommitSignalParams_revertsOnTruncatedHead() public {
         // Prior to the fix, a truncated head/tail could silently default `owner = address(0)` and decode an empty bytes.
-        // The minimum valid length (even for empty bytes) is 0x60.
-        bytes memory truncated = new bytes(0x40);
+        // The minimum valid length (even for empty bytes fields) is 0xa0.
+        bytes memory truncated = new bytes(0x60);
         vm.expectRevert(MMCalldataDecoder.SliceOutOfBounds.selector);
         h.decodeCommitSignalParams(truncated);
+    }
+
+    /// @notice Regression: assembly `calldataload` into typed `address` must not break sentinel resolution
+    ///         (dirty upper 96 bits in the ABI word). Solidity cleans `address` on use; see audit scan #11 / vuln #11 (false positive).
+    function test_decodeCommitSignalParams_dirtyOwnerWord_mapsToCanonicalSentinel() public view {
+        bytes memory params = abi.encode(bytes(""), ActionConstants.MSG_SENDER, bytes(""));
+        _setAbiWord(params, 1, _dirtyAddressWord(ActionConstants.MSG_SENDER));
+        (bytes memory sig, address owner, bytes memory relay) = h.decodeCommitSignalParams(params);
+        assertEq(sig.length, 0);
+        assertEq(relay.length, 0);
+        assertEq(owner, ActionConstants.MSG_SENDER);
+        assertTrue(owner == ActionConstants.MSG_SENDER, "sentinel compare as in BaseActionsRouter._mapRecipient");
+    }
+
+    function test_decodeUnwrapLccParams_dirtyRecipient_mapsToCanonicalSentinel() public view {
+        bytes memory params = abi.encode(address(0x1111), uint256(9), ActionConstants.MSG_SENDER, true);
+        _setAbiWord(params, 2, _dirtyAddressWord(ActionConstants.MSG_SENDER));
+        (address lcc, uint256 amount, address recipient, bool payerIsUser) = h.decodeUnwrapLccParams(params);
+        assertEq(lcc, address(0x1111));
+        assertEq(amount, 9);
+        assertEq(recipient, ActionConstants.MSG_SENDER);
+        assertTrue(recipient == ActionConstants.MSG_SENDER, "sentinel compare as in BaseActionsRouter._mapRecipient");
+        assertTrue(payerIsUser);
+    }
+
+    function test_decodeTakeParams_dirtyRecipient_mapsToCanonicalSentinel() public view {
+        Currency c = Currency.wrap(address(0x1234));
+        bytes memory params = abi.encode(c, ActionConstants.ADDRESS_THIS, uint256(42));
+        _setAbiWord(params, 1, _dirtyAddressWord(ActionConstants.ADDRESS_THIS));
+        (Currency outC, address recipient, uint256 maxAmount) = h.decodeTakeParams(params);
+        assertEq(Currency.unwrap(outC), Currency.unwrap(c));
+        assertEq(recipient, ActionConstants.ADDRESS_THIS);
+        assertTrue(recipient == ActionConstants.ADDRESS_THIS, "sentinel compare as in BaseActionsRouter._mapRecipient");
+        assertEq(maxAmount, 42);
+    }
+
+    function test_decodeCollectLiquidityParams_dirtyLcc_mapsToCanonicalAddress() public view {
+        address lccClean = address(0x1111);
+        bytes memory params = abi.encode(lccClean, uint256(7), uint256(9));
+        _setAbiWord(params, 0, _dirtyAddressWord(lccClean));
+        (address lcc, uint256 tokenId, uint256 maxAmount) = h.decodeCollectLiquidityParams(params);
+        assertEq(lcc, lccClean);
+        assertEq(tokenId, 7);
+        assertEq(maxAmount, 9);
     }
 }
 

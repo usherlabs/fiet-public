@@ -25,6 +25,28 @@ import {CurrencySortHelper} from "./libraries/CurrencySortHelper.sol";
 import {IMarketFactory} from "src/interfaces/IMarketFactory.sol";
 import {ILiquidityHub} from "src/interfaces/ILiquidityHub.sol";
 
+/**
+ * @notice Adds liquidity to an existing market’s **core** (LCC) pool via Uniswap v4 PositionManager.
+ *
+ * Env vars
+ * - REQUIRED:
+ *   - `PRIVATE_KEY`: Deployer key (used for local-only setup flows)
+ *   - `LP_PRIVATE_KEY`: LP key that will hold the position NFT and fund/approve tokens
+ *   - `CORE_POOL_ID`: Market core pool id (`bytes32`, as printed by `CreateMarketScript`)
+ * - OPTIONAL (network/market selection):
+ *   - `NETWORK`: e.g. `sepolia`, `arbitrum`, `ethsepolia` (defaults come from `NetworkConfig`)
+ *   - `MODE`: `LOCAL` enables local-fallback behaviour (default: treated as local if unset)
+ *   - `UNDERLYING_ASSET_0`, `UNDERLYING_ASSET_1`: underlying token addresses (required on non-local networks)
+ *   - `CORE_POOL_FEE`: default `0`
+ *   - `TICK_SPACING`: default `60`
+ * - OPTIONAL (amounts):
+ *   - Preferred: `UNDERLYING_ASSET_0_AMOUNT`, `UNDERLYING_ASSET_1_AMOUNT` (amounts in underlying token base units)
+ *   - Back-compat aliases: `UA_0_AMOUNT`, `UA_1_AMOUNT` (must match the preferred vars if both set)
+ *   - Core-lane mode (LCC units): `CORE_0_AMOUNT`/`CORE_1_AMOUNT` (aliases: `LCC_0_AMOUNT`/`LCC_1_AMOUNT`)
+ *   - Do not mix UNDERLYING/UA amounts with CORE/LCC amounts.
+ * - OPTIONAL (range):
+ *   - `RANGE_WIDTH`: `0` (default) = near full-range; `>0` = `currentTick ± RANGE_WIDTH`
+ */
 contract AddLiquidityScript is NetworkConfig {
     using StateLibrary for IPoolManager;
     using PoolIdLibrary for PoolKey;
@@ -53,6 +75,34 @@ contract AddLiquidityScript is NetworkConfig {
     PoolKey proxyPoolKey;
 
     bool public isSepolia;
+
+    function _readOptionalEnvUint(string memory primary, string memory legacy)
+        internal
+        view
+        returns (bool exists, uint256 value)
+    {
+        bool hasPrimary = vm.envExists(primary);
+        bool hasLegacy = vm.envExists(legacy);
+        if (hasPrimary && hasLegacy) {
+            uint256 v1 = vm.envUint(primary);
+            uint256 v2 = vm.envUint(legacy);
+            require(v1 == v2, string.concat("Conflicting env values: ", primary, " vs ", legacy));
+            return (true, v1);
+        }
+        if (hasPrimary) return (true, vm.envUint(primary));
+        if (hasLegacy) return (true, vm.envUint(legacy));
+        return (false, 0);
+    }
+
+    function _amount1FromAmount0(uint256 amt0, uint160 sqrtPriceX96) internal pure returns (uint256) {
+        uint256 temp = FullMath.mulDiv(amt0, sqrtPriceX96, 1 << 96);
+        return FullMath.mulDiv(temp, sqrtPriceX96, 1 << 96);
+    }
+
+    function _amount0FromAmount1(uint256 amt1, uint160 sqrtPriceX96) internal pure returns (uint256) {
+        uint256 temp = FullMath.mulDiv(amt1, 1 << 96, sqrtPriceX96);
+        return FullMath.mulDiv(temp, 1 << 96, sqrtPriceX96);
+    }
 
     function run() external {
         uint256 deployerPrivateKey = uint256(vm.envBytes32("PRIVATE_KEY"));
@@ -238,17 +288,45 @@ contract AddLiquidityScript is NetworkConfig {
         address coreToken0 = Currency.unwrap(corePoolKey.currency0);
         address coreToken1 = Currency.unwrap(corePoolKey.currency1);
 
-        console.log("Token0:", coreToken0);
-        console.log("Token1:", coreToken1);
-
         string memory symbol0 = IERC20Metadata(token0).symbol();
         string memory symbol1 = IERC20Metadata(token1).symbol();
 
-        console.log("Symbol for Core Pool currency0 underlying:", coreToken0 == address(lcc0) ? symbol0 : symbol1);
-        console.log("Symbol for Core Pool currency1 underlying:", coreToken0 == address(lcc0) ? symbol1 : symbol0);
+        address underlyingCore0 = LiquidityCommitmentCertificate(coreToken0).underlying();
+        address underlyingCore1 = LiquidityCommitmentCertificate(coreToken1).underlying();
 
-        bool hasUa0 = vm.envExists("UA_0_AMOUNT");
-        bool hasUa1 = vm.envExists("UA_1_AMOUNT");
+        console.log("Core currency0 (LCC):", coreToken0);
+        console.log("  underlying:", underlyingCore0);
+        console.log("Core currency1 (LCC):", coreToken1);
+        console.log("  underlying:", underlyingCore1);
+
+        console.log("Underlying asset 0:", token0);
+        console.log("  symbol:", symbol0);
+        console.log("Underlying asset 1:", token1);
+        console.log("  symbol:", symbol1);
+
+        bool underlying0IsCurrency0 = (underlyingCore0 == token0);
+        bool underlying0IsCurrency1 = (underlyingCore1 == token0);
+        bool underlying1IsCurrency0 = (underlyingCore0 == token1);
+        bool underlying1IsCurrency1 = (underlyingCore1 == token1);
+        require(underlying0IsCurrency0 || underlying0IsCurrency1, "UNDERLYING_ASSET_0 does not match this CORE_POOL_ID");
+        require(underlying1IsCurrency0 || underlying1IsCurrency1, "UNDERLYING_ASSET_1 does not match this CORE_POOL_ID");
+
+        console.log("UNDERLYING_ASSET_0 maps to core currency0:", underlying0IsCurrency0);
+        console.log("UNDERLYING_ASSET_0 maps to core currency1:", underlying0IsCurrency1);
+        console.log("UNDERLYING_ASSET_1 maps to core currency0:", underlying1IsCurrency0);
+        console.log("UNDERLYING_ASSET_1 maps to core currency1:", underlying1IsCurrency1);
+
+        (bool hasUa0, uint256 ua0Amt) = _readOptionalEnvUint("UNDERLYING_ASSET_0_AMOUNT", "UA_0_AMOUNT");
+        (bool hasUa1, uint256 ua1Amt) = _readOptionalEnvUint("UNDERLYING_ASSET_1_AMOUNT", "UA_1_AMOUNT");
+        (bool hasCore0, uint256 core0Amt) = _readOptionalEnvUint("CORE_0_AMOUNT", "LCC_0_AMOUNT");
+        (bool hasCore1, uint256 core1Amt) = _readOptionalEnvUint("CORE_1_AMOUNT", "LCC_1_AMOUNT");
+
+        bool usingUnderlyingAmounts = hasUa0 || hasUa1;
+        bool usingCoreAmounts = hasCore0 || hasCore1;
+        require(
+            !(usingUnderlyingAmounts && usingCoreAmounts),
+            "Specify either UNDERLYING_ASSET_*_AMOUNT (or UA_*_AMOUNT) OR CORE_*_AMOUNT (or LCC_*_AMOUNT), not both"
+        );
 
         uint8 dec0 = IERC20Metadata(coreToken0).decimals();
         uint8 dec1 = IERC20Metadata(coreToken1).decimals();
@@ -258,41 +336,63 @@ contract AddLiquidityScript is NetworkConfig {
         console.log("Token1:", dec1);
         console.log(" ");
 
-        bool isUa0Currency0 = (address(lcc0) == coreToken0);
-
-        if (hasUa0 && hasUa1) {
-            uint256 ua0Amt = vm.envUint("UA_0_AMOUNT");
-            uint256 ua1Amt = vm.envUint("UA_1_AMOUNT");
-            if (isUa0Currency0) {
-                amount0Desired = ua0Amt;
-                amount1Desired = ua1Amt;
-            } else {
-                amount0Desired = ua1Amt;
-                amount1Desired = ua0Amt;
-            }
-        } else if (hasUa0) {
-            uint256 ua0Amt = vm.envUint("UA_0_AMOUNT");
+        if (usingCoreAmounts) {
             require(sqrtPriceX96 != 0, "Pool not initialized");
-            if (isUa0Currency0) {
-                amount0Desired = ua0Amt;
-                uint256 temp = FullMath.mulDiv(amount0Desired, sqrtPriceX96, 1 << 96);
-                amount1Desired = FullMath.mulDiv(temp, sqrtPriceX96, 1 << 96);
-            } else {
-                amount1Desired = ua0Amt;
-                uint256 temp = FullMath.mulDiv(amount1Desired, 1 << 96, sqrtPriceX96);
-                amount0Desired = FullMath.mulDiv(temp, 1 << 96, sqrtPriceX96);
+            if (hasCore0 && hasCore1) {
+                amount0Desired = core0Amt;
+                amount1Desired = core1Amt;
+            } else if (hasCore0) {
+                amount0Desired = core0Amt;
+                amount1Desired = _amount1FromAmount0(amount0Desired, sqrtPriceX96);
+                require(amount1Desired > 0, "Derived CORE_1 amount is 0; specify both CORE_0_AMOUNT and CORE_1_AMOUNT");
+            } else if (hasCore1) {
+                amount1Desired = core1Amt;
+                amount0Desired = _amount0FromAmount1(amount1Desired, sqrtPriceX96);
+                require(amount0Desired > 0, "Derived CORE_0 amount is 0; specify both CORE_0_AMOUNT and CORE_1_AMOUNT");
             }
-        } else if (hasUa1) {
-            uint256 ua1Amt = vm.envUint("UA_1_AMOUNT");
-            require(sqrtPriceX96 != 0, "Pool not initialized");
-            if (isUa0Currency0) {
-                amount1Desired = ua1Amt;
-                uint256 temp = FullMath.mulDiv(amount1Desired, 1 << 96, sqrtPriceX96);
-                amount0Desired = FullMath.mulDiv(temp, 1 << 96, sqrtPriceX96);
-            } else {
-                amount0Desired = ua1Amt;
-                uint256 temp = FullMath.mulDiv(amount0Desired, sqrtPriceX96, 1 << 96);
-                amount1Desired = FullMath.mulDiv(temp, sqrtPriceX96, 1 << 96);
+        } else if (usingUnderlyingAmounts) {
+            if (hasUa0 && hasUa1) {
+                if (underlying0IsCurrency0) {
+                    amount0Desired = ua0Amt;
+                    amount1Desired = ua1Amt;
+                } else {
+                    amount0Desired = ua1Amt;
+                    amount1Desired = ua0Amt;
+                }
+            } else if (hasUa0) {
+                require(sqrtPriceX96 != 0, "Pool not initialized");
+                if (underlying0IsCurrency0) {
+                    amount0Desired = ua0Amt;
+                    amount1Desired = _amount1FromAmount0(amount0Desired, sqrtPriceX96);
+                    require(
+                        amount1Desired > 0,
+                        "Derived amount is 0; specify both UNDERLYING_ASSET_0_AMOUNT and UNDERLYING_ASSET_1_AMOUNT"
+                    );
+                } else {
+                    amount1Desired = ua0Amt;
+                    amount0Desired = _amount0FromAmount1(amount1Desired, sqrtPriceX96);
+                    require(
+                        amount0Desired > 0,
+                        "Derived amount is 0; specify both UNDERLYING_ASSET_0_AMOUNT and UNDERLYING_ASSET_1_AMOUNT"
+                    );
+                }
+            } else if (hasUa1) {
+                require(sqrtPriceX96 != 0, "Pool not initialized");
+                if (underlying1IsCurrency0) {
+                    amount0Desired = ua1Amt;
+                    amount1Desired = _amount1FromAmount0(amount0Desired, sqrtPriceX96);
+                    require(
+                        amount1Desired > 0,
+                        "Derived amount is 0; specify both UNDERLYING_ASSET_0_AMOUNT and UNDERLYING_ASSET_1_AMOUNT"
+                    );
+                } else {
+                    amount1Desired = ua1Amt;
+                    amount0Desired = _amount0FromAmount1(amount1Desired, sqrtPriceX96);
+                    require(
+                        amount0Desired > 0,
+                        "Derived amount is 0; specify both UNDERLYING_ASSET_0_AMOUNT and UNDERLYING_ASSET_1_AMOUNT"
+                    );
+                }
             }
         } else {
             amount0Desired = DEFAULT_AMOUNT * (10 ** dec0);
@@ -377,6 +477,10 @@ contract AddLiquidityScript is NetworkConfig {
             amount1Desired
         );
         console.log("liquidity: ", liquidity);
+        require(
+            liquidity > 0,
+            "Liquidity computed as 0 (empty position). Specify both amounts, or adjust range so price is outside the range."
+        );
 
         bytes memory actions = abi.encodePacked(uint8(Actions.MINT_POSITION), uint8(Actions.SETTLE_PAIR));
         bytes[] memory params = new bytes[](2);

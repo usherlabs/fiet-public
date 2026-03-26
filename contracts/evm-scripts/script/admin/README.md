@@ -146,16 +146,38 @@ That means **the transaction signer must be the `GlobalConfig` owner** for most 
 
 ### `just admin-oracle-transfer-to-globalconfig`
 
-- **What it does**: hands over Venus `ResilientOracle` ownership to `GlobalConfig` and asserts it succeeded.
+- **What it does**: hands over Venus oracle ownership/admin surfaces to `GlobalConfig`:
+  - `ResilientOracle` ownership (with `acceptOwnership()` via `GlobalConfig.proxyCall`)
+  - optional ACM `DEFAULT_ADMIN_ROLE` migration to `GlobalConfig`
+  - optional ownership handoff for `BoundValidator`, main oracle proxy, and `DefaultProxyAdmin`
 - **On-chain calls**:
   - `AccessControlManager.grantRole(DEFAULT_ADMIN_ROLE, GlobalConfig)` (direct)
   - `AccessControlManager.revokeRole(DEFAULT_ADMIN_ROLE, OLD_ADMIN)` (direct)
   - `ResilientOracle.transferOwnership(GlobalConfig)` (direct)
   - `GlobalConfig.proxyCall(ResilientOracle, acceptOwnership())`
   - `require(ResilientOracle.owner() == GlobalConfig)`
-- **Script**: `ResilientOracleOwnership.s.sol:ResilientOracleTransferToGlobalConfigScript`
+- **Script**: `OracleStackOwnership.s.sol:OracleStackTransferToGlobalConfigScript`
 - **Env**:
-  - `RESILIENT_ORACLE_ADDRESS`: address
+  - `RESILIENT_ORACLE_ADDRESS`: address (recommended)
+  - `BOUND_VALIDATOR_ADDRESS`: optional
+  - `MAIN_ORACLE_ADDRESS`: optional
+  - `DEFAULT_PROXY_ADMIN_ADDRESS`: optional
+
+### `just admin-oracle-transfer-stack-to-globalconfig`
+
+- **What it does**: transfers the rest of the Venus oracle ownership surface to `GlobalConfig`:
+  - `BoundValidator`
+  - main oracle proxy (`ChainlinkOracle` / `SequencerChainlinkOracle`)
+  - `DefaultProxyAdmin` (upgrade admin owner)
+- **On-chain calls**:
+  - `target.transferOwnership(GlobalConfig)` (direct, when signer is current owner)
+  - `GlobalConfig.proxyCall(target, acceptOwnership())` (for `Ownable2Step` targets)
+  - `require(target.owner() == GlobalConfig)`
+- **Script**: `OracleStackOwnership.s.sol:OracleStackTransferToGlobalConfigScript`
+- **Env**:
+  - `BOUND_VALIDATOR_ADDRESS` (optional)
+  - `MAIN_ORACLE_ADDRESS` (optional)
+  - `DEFAULT_PROXY_ADMIN_ADDRESS` (optional)
 
 ### `just admin-oracle-acm-give-call-permission`
 
@@ -178,8 +200,10 @@ That means **the transaction signer must be the `GlobalConfig` owner** for most 
   - (optional) `AccessControlManager.revokeRole(DEFAULT_ADMIN_ROLE, OLD_ADMIN)`
 - **Script**: `AccessControlManagerAdmin.s.sol:AccessControlManagerTransferAdminToGlobalConfigScript`
 - **Env**:
-  - `ACCESS_CONTROL_MANAGER`: address
+  - `ACCESS_CONTROL_MANAGER`: (optional) address
     - If you ran `just deploy-oracle`, this is auto-populated into `.env` for you.
+    - If omitted, you may provide `RESILIENT_ORACLE_ADDRESS` and the ACM will be resolved from it.
+  - `RESILIENT_ORACLE_ADDRESS`: (optional) address (used only to resolve the ACM)
   - `OLD_ADMIN` (optional): address
 
 ### `just admin-oracle-configure-assets`
@@ -199,7 +223,7 @@ The Venus oracle stack under `contracts/evm/lib/oracle/` has **two separate admi
 
 If your goal is **GlobalConfig as the single admin** for *all* administrative operations in `lib/oracle`, you generally need **both**:
 
-- **`ResilientOracleOwnership.s.sol`** (`just admin-oracle-transfer-to-globalconfig`): makes `GlobalConfig` the `ResilientOracle` owner (and, as part of that flow, also transfers the ACM `DEFAULT_ADMIN_ROLE` to `GlobalConfig` and revokes it from the deployer).
+- **`OracleStackOwnership.s.sol`** (`just admin-oracle-transfer-to-globalconfig` / `just admin-oracle-transfer-stack-to-globalconfig`): makes `GlobalConfig` the `ResilientOracle` owner (and, optionally, transfers ACM admin and other oracle-stack ownership surfaces).
 - **`ResilientOracleACMPermissions.s.sol`** (`just admin-oracle-acm-give-call-permission`): grants ACM call permissions for whichever `ResilientOracle` function signatures you intend to run via `GlobalConfig` (and you should ensure no other accounts retain those permissions).
 
 `AccessControlManagerAdmin.s.sol` (`just admin-acm-transfer-admin-to-globalconfig`) is **not sufficient on its own**: it only transfers the ACM `DEFAULT_ADMIN_ROLE` to `GlobalConfig`. You still need the ownership handover (and, depending on which oracle admin functions you want to exercise, the ACM call permissions as well).

@@ -18,8 +18,10 @@ being an informal “should”.
 - **Position (positionId)**: a VTS-tracked liquidity position keyed like Uniswap positions.
 - **RfS / RFS**: “Required for Settlement”; when open, withdrawals are restricted.
 - **Deficits**:
-  - **cumulativeDeficit**: swap-driven outflow shortfall accumulated per position.
-  - **commitmentDeficit**: position-level insolvency gate derived from commitment backing checks.
+  - **cumulativeDeficit**: swap-driven outflow shortfall accumulated per position; this is the DICE principal used for
+    coverage-index attribution and fee-slash accounting.
+  - **commitmentDeficit**: position-level insolvency gate derived from commitment backing checks; this is used for
+    RFS/seizability hardening and is not part of DICE principal (`totalDeficitPrincipal`).
 
 ## LCC backing and liquidity domains
 
@@ -94,6 +96,32 @@ being an informal “should”.
   - `src/LiquidityHub.sol::annulSettlementBeforeTransfer` adjusts `settleQueue` / `totalQueued` if a transfer would
     implicitly consume queued claims.
 
+### LCC-03: Nested ingress settlement preserves canonical `sync(lcc) -> transfer -> settle()` windows
+
+- **Statement**:
+  - During `LCC -> PoolManager` ingress reporting, `MarketFactory.prepareMarketLiquidity(...)` must not leave the active
+    PoolManager sync context corrupted for the outer payment flow.
+  - If `prepareMarketLiquidity` executes while the active synced currency is this same `lcc`, it must:
+    - allow only the first unpaid ingress transfer in that sync window, and
+    - restore `sync(lcc)` after nested settlement side-effects.
+  - For native-underlying lanes, the temporary clear of ERC20 sync context (native reset) is allowed only inside this
+    controlled same-`lcc` branch, followed by restoring `sync(lcc)`.
+- **Enforced by**:
+  - `src/MarketFactory.sol::prepareMarketLiquidity`
+    - Reads PoolManager transient slots (`Currency`, `ReservesOf`) through `exttload`.
+    - Reverts when sync currency is different (`Errors.NestedIngressSyncCurrencyMismatch`).
+    - Reverts when a prior unpaid ingress already exists (`Errors.NestedIngressUnpaidTransferExists`).
+    - Reverts on invalid snapshot ordering (`Errors.NestedIngressInvalidSyncSnapshot`).
+    - Re-syncs `lcc` after nested ingress handling.
+- **Supported payment shape**:
+  - Canonical Uniswap v4 ERC20 settlement window:
+    - `sync(lcc)`
+    - one `LCC -> PoolManager` transfer
+    - `settle()`
+- **Non-goal**:
+  - Non-canonical flows that perform multiple unpaid `LCC -> PoolManager` transfers inside one active `sync(lcc)`
+    window are unsupported and intentionally revert.
+
 ### HUB-01: Wrapping mints 1:1 and increases Hub reserves
 
 - **Statement**: `wrap`/`wrapTo` must:
@@ -137,6 +165,25 @@ being an informal “should”.
     `useMarketLiquidity → ... → confirmTake()` callback patterns.
   - The balance-backed check ensures this flexibility cannot be abused to “mint” reserves via re-entrancy.
 
+### HUB-06: `prepareSettle` must preserve direct-liquidity accounting consistency
+
+- **Statement**: Preparing direct liquidity for vault settlement must reduce both:
+  - shared-underlying direct reserve (`reserveOfUnderlying[underlying].direct`), and
+  - per-LCC direct inventory (`directSupply[lcc]`),
+    by the same `amount`.
+
+  This prevents a drift where `directSupply[lcc]` overstates immediately serviceable direct liquidity after a settle
+  preparation step.
+- **Enforced by**:
+  - `src/LiquidityHub.sol::prepareSettle` computes `maxSettleableDirect = min(reserveDirect, directSupply[lcc])`,
+    reverts `Errors.InvalidAmount(amount, maxSettleableDirect)` when exceeded, then decrements both counters by
+    `amount`.
+- **Why**:
+  - `unwrap` direct-path eligibility uses `directSupply[lcc]` (`LiquidityHubLib.unwrapInternalLogic`), while payout
+    direct serviceability enforces direct reserve availability (`LiquidityHubLib.transferUnderlying`).
+  - Keeping these counters synchronised avoids invalid intermediate states where direct unwrap appears available but is
+    not currently payable.
+
 ## Swap attribution and growth accounting (economic correctness)
 
 ### VTS-01: “Settle growths before modify liquidity” (no retroactive accrual capture)
@@ -164,6 +211,8 @@ being an informal “should”.
 - **Statement**: Swaps accrue:
   - **deficit growth** on the output token per segment, and
   - **inflow growth** on the input token net of fees per segment.
+  - Settled against positions, this flow updates `cumulativeDeficit` (swap-incurred principal). It does not create
+    `commitmentDeficit`, which is only checkpoint/backing derived.
 - **Enforced by**:
   - `src/VTSOrchestrator.sol::afterCoreSwap` → `src/libraries/VTSSwapLib.sol::processSwap`
   - `VTSSwapLib._accrueSegmentGrowth`, `_accrueDeficitGlobalGrowth`, `_accrueInflowGlobalGrowth`.
@@ -179,7 +228,7 @@ being an informal “should”.
 ### SIG-02: Signal verification must succeed (or revert when requested)
 
 - **Statement**: When a call requests revert-on-invalid, an invalid proof must revert.
-- **Enforced by**: `src/VRLSignalManager.sol::verifyLiquiditySignal(bytes,bool)` reverts `Errors.InvalidProof()` when
+- **Enforced by**: `src/VRLSignalManager.sol::verifyLiquiditySignal(address,bytes,bool)` reverts `Errors.InvalidProof()` when
   `revertOnInvalid && !ok`.
 
 ### COMMIT-01: Commitment backing must satisfy `issuedUsd <= settledUsd + signalUsd` (per-position, per-commit)
@@ -197,7 +246,10 @@ being an informal “should”.
 - **Statement**: A commitment checkpoint must set (or reduce/clear) `PositionAccounting.commitmentDeficit` in token
   units based on the USD backing shortfall.
 - **Enforced by**: `src/libraries/VTSCommitLib.sol::checkpointWithCommitment`.
-- **Consequence**: Positions with non-zero `commitmentDeficit` are **immediately seizable** (see `SEIZE-01`).
+- **Consequence**: Positions with non-zero `commitmentDeficit` can bypass normal grace only when the configured
+  token-lane bypass age/severity gates in `SEIZE-01` are satisfied.
+- **Separation invariant**: `commitmentDeficit` is a checkpoint-derived solvency gate and is not the pool DICE
+  principal. DICE denominator (`totalDeficitPrincipal`) tracks swap-incurred `cumulativeDeficit` only.
 
 ### COMMIT-03: “Advancer” binding for checkpoint-with-commitment must hold
 
@@ -212,14 +264,20 @@ being an informal “should”.
 ### COV-01: Coverage burn is bounded by `(deficit + settled)`; fee burn is capped by deficit
 
 - **Statement**:
-  - Effective coverage usage must satisfy \(cov\_{eff} = \min(cov, deficit + settled)\).
-  - Burn base must satisfy \(burnBase = \min(cov\_{eff}, deficit)\).
+  - Effective coverage usage must satisfy \(cov\_{eff} = \min(cov, cumulativeDeficit + settled)\).
+  - Burn base must satisfy \(burnBase = \min(cov\_{eff}, cumulativeDeficit)\).
+  - `commitmentDeficit` is not used as slash principal in this burn path.
 - **Enforced by**: `src/libraries/VTSPositionLib.sol::_applyCoverageBurn`.
 
 ### COV-02: Coverage is applied before position modification to preserve economic integrity
 
 - **Statement**: Coverage burns must be settled before liquidity modification to prevent “cover then avoid burn in same
   call” games.
+- **Ordering requirement**: Settlement netting order is:
+  1. `cumulativeDeficit` first,
+  2. then `commitmentDeficit`,
+  3. then `settled` increases.
+  Only the `cumulativeDeficit` leg mutates DICE principal (`totalDeficitPrincipal`).
 - **Enforced by**:
   - `src/libraries/VTSPositionLib.sol::settlePositionGrowths` calls `_settleDeficitIndexedCoverageUsage` after settling
     deficit/inflow growths, and is invoked by `CoreHook` _before_ modifies.
@@ -228,9 +286,26 @@ being an informal “should”.
 
 - **Statement**: Coverage index increments are conditional:
   - If `totalDeficitPrincipal > 0`, increment DICE index; else accrue to residual.
+    (`totalDeficitPrincipal` is the pool sum of outstanding `cumulativeDeficit`, excluding `commitmentDeficit`.)
   - If `totalSettled > 0`, increment CISE index; else accrue to residual.
 - **Enforced by**: `src/libraries/VTSCommitLib.sol::incrementCoverage`.
 - **Practical implication**: Tests should not assume “arbitrary coverage” will always produce burns or index movement.
+
+### COV-04: Fee-burn baseline remainder carry and liquidity resets
+
+- **Statement**:
+  - When applying a coverage fee burn, the position checkpoints `feeGrowthInsideLast` on the fee token by advancing
+    Q128 growth in a way that **carries** the `(consumedFees * Q128) mod positionLiquidity` remainder across successive
+    burns at fixed liquidity, so repeated partial burns do not lose one wei of growth per event to independent flooring.
+  - The remainder is **invalid** if `positionLiquidity` changes: `touchPosition` clears `feeBurnGrowthRemainder` whenever
+    `liquidityDelta != 0` for an existing position. New positions initialise both fee snapshots and remainders in
+    `_initFeeSnapshot`.
+  - If Uniswap position liquidity changes **without** `touchPosition` (for example paused remove-liquidity in
+    `CoreHook._afterRemoveLiquidity`), `settlePositionGrowths` detects a mismatch between stored `Position.liquidity`
+    and `StateLibrary.getPositionLiquidity` and clears `feeBurnGrowthRemainder` so carry is never applied under a stale
+    denominator. The next `touchPosition` continues to be the canonical place that updates the stored liquidity mirror.
+- **Enforced by**: `src/libraries/VTSPositionLib.sol::_applyBurnBase`, `_initFeeSnapshot`, `touchPosition`,
+  `_reconcileLiquidityMirrorAndFeeBurnRemainder`, `settlePositionGrowths`.
 
 ### FEE-01: Queued slashes vs materialised slashed pot
 
@@ -246,6 +321,8 @@ being an informal “should”.
     - **positive** `pendingFeeAdj` funds `slashedPot` (`_fundFeePot`)
     - **negative** `pendingFeeAdj` drains `slashedPot` up to availability (`_drainFeePot`)
   - `src/libraries/VTSFeeLib.sol::_processPositionFees` calls `_finaliseFeeAdjustment` during touch.
+  - Bonus sizing uses `FullMath.mulDivRoundingUp(potAvail, ciseExposure, totalExposure)` (then caps to `potAvail`) so
+    tiny proportional shares are not stranded at zero wei when the position is otherwise eligible.
 
 ### FEE-02: New positions must not receive fee-sharing bonuses on creation
 
@@ -271,15 +348,31 @@ being an informal “should”.
 
 - **Statement**: During seizure, deposits/withdrawals must be clamped to prevent over-settling or extracting value
   outside allowed bounds.
+- **Protocol rule**:
+  - Token-lane granularity does **not** alter the settlement mechanics once a seizure is under way.
+  - After seizure has been authorised, settlement remains position-wide: any token-side settlement performed by the
+    seizing party is processed under the seizure clamps for that position.
+  - This is intentional because settlement on one side is economically incentivised by the collateralisation of assets
+    in the counterpart token within the same position.
 - **Enforced by**: `src/libraries/VTSPositionLib.sol::_settleSeizing` (deposit clamp uses positive RFS; withdrawal clamp
   uses `positionRequiredSettlementDelta`).
 
-### SEIZE-01: A position is seizable if (commitment deficit exists) OR (RFS open AND grace elapsed)
+### SEIZE-01: Seizability is token-lane scoped and aggregated at position level
 
 - **Statement**:
-  - If `commitmentDeficit.token0 > 0 || commitmentDeficit.token1 > 0`, seizure is immediately permitted.
-  - Otherwise, seizure requires an open checkpoint and elapsed grace period for at least one token (including proof
-    extensions).
+  - Commitment-deficit bypass is evaluated per token lane using token-specific deficit age and thresholds.
+  - `commitmentDeficit` bypass is distinct from swap-incurred `cumulativeDeficit` accounting:
+    - `commitmentDeficit` hardens solvency enforcement (RFS/seizability),
+    - `cumulativeDeficit` drives DICE slash attribution and pool deficit principal.
+  - Normal grace-path seizability is evaluated only for token lanes currently marked open in the checkpoint mask.
+  - Position-level seizability is true when at least one token lane is currently eligible.
+  - Explicit protocol rule: token-lane behaviour is specific to seizability and bypass-gate mechanics only.
+  - Once any eligible lane authorises seizure, the position may enter a position-level seizure flow.
+  - Underlying seizure mechanics remain position-wide: settlement need not stay confined to the triggering lane, and
+    liquidity can be slashed proportionally to the intervening party's realised settlement contribution across the
+    position.
+  - This position-wide consequence is intentional because a seizer who settles one token side is economically protected
+    by the collateralisation of assets on the counterpart side of the same position.
 - **Enforced by**: `src/libraries/Checkpoint.sol::isSeizable`, called by `src/VTSOrchestrator.sol::onSeize`.
 
 ### SEIZE-02: Grace period extensions require an allowed verifier for the settlement token
@@ -311,6 +404,65 @@ being an informal “should”.
 - **Enforced by**: `src/libraries/DynamicCurrencyDelta.sol::assertNonZeroDeltas` reverts `Errors.CurrencyNotSettled()`.
 - **Practical implication**: Credits do **not** persist across unlock sessions; they are transient and must be consumed
   (eg via `TAKE`, `SYNC`, unwrap flows) within the same batch.
+
+### DELTA-02: `MMPositionManager` residual balances are FCFS dust, not a persisted user entitlement
+
+- **Statement**:
+  - `MMPositionManager` intentionally follows the same broad residual-balance model as Uniswap v4
+    `PositionManager`: if a caller leaves sweepable balance or takeable delta inside the router at the end of their
+    interaction, that residue is **not reserved** for them across transactions.
+  - Residual balances left on `MMPositionManager` are treated as **first-come, first-served dust**. The next caller may
+    sync/take that residue if it remains in the contract.
+  - Therefore, market makers using `MMPositionManager` are responsible for clearing their own dust/deltas inside the same
+    batch / transaction. Leaving residue behind is a caller error or an accepted UX trade-off, not a protocol promise of
+    later exclusivity.
+- **Reference model (Uniswap v4)**:
+  - `lib/v4-periphery/src/PositionManager.sol` exposes public utility actions including `Actions.SWEEP`.
+  - `PositionManager._sweep(currency, to)` transfers the router’s **entire** current balance of `currency` to the
+    recipient, with no caller-specific entitlement tracking.
+  - Fiet adopts the same caller-clears-router-residue philosophy for `MMPositionManager` utility flows, except that
+    Fiet uses explicit delta accounting (`SYNC` / `TAKE`) to net transient credits before batch end.
+- **Enforced / expressed by**:
+  - `src/MMPositionManager.sol::_handleUtilityAction` exposes public utility actions `SYNC` and `TAKE`.
+  - `src/MMPositionManager.sol::_sync` credits the current locker from `address(this)` balance via
+    `VTSOrchestrator.sync(...)`.
+  - `src/modules/PositionManagerEntrypoint.sol::_take` debits the locker’s positive delta and transfers available
+    contract balance to the requested recipient.
+  - `src/modules/PositionManagerEntrypoint.sol::_afterBatch` calls `vtsOrchestrator.assertNonZeroDeltas()`, which
+    forces callers to fully resolve transient credits/debts within the batch or revert.
+- **Scope clarification**:
+  - This FCFS rule applies to **residual dust held by `MMPositionManager` itself**.
+  - It does **not** redefine assets held in explicit custody/accounting domains (for example, queue-custodied balances,
+    Hub reserves, MarketVault balances, or state tracked by commitment/queue accounting) as public dust.
+  - In other words, the invariant is about router residue, not about bypassing the protocol’s actual custody systems.
+
+### DELTA-03: Planned-cancel transient slots are path-scoped only because they are consumed immediately in the same logical flow
+
+- **Statement**:
+  - `LiquidityHub.planCancel(...)` and `planCancelWithQueue(...)` intentionally key transient intent by
+    `(lcc, from, to)` rather than by a transfer nonce or other per-transfer identifier.
+  - This is safe in the current MM decrease flow only because the plan is created during
+    `PoolManager.modifyLiquidity(...)` hook execution and then consumed by the immediately-following matching LCC
+    transfer in the same logical path and transaction.
+  - The protocol does **not** treat planned-cancel transient storage as a general deferred-intent queue.
+  - Therefore, any future flow that can stage a second plan for the same `(lcc, from, to)` before the first matching
+    transfer consumes it is outside the supported design and must either:
+    - preserve the same immediate-consumption sequencing, or
+    - upgrade the transient key to include per-transfer identity.
+- **Enforced by (current call graph / sequencing invariant)**:
+  - `src/libraries/VTSPositionLib.sol::_handleLiquidityDecrease` stages the planned cancel while the position is still
+    inside `PoolManager.modifyLiquidity(...)`, explicitly because the LCC has not yet been transferred to `MMPM`.
+  - `src/modules/PositionManagerImpl.sol::_modifySyntheticLiquidity` calls `poolManager.modifyLiquidity(...)` and then,
+    before returning to any outer MM action, immediately settles/takes the resulting deltas.
+  - `src/modules/PositionManagerImpl.sol::_takePositiveDeltasAndHandleLcc` performs the matching
+    `PoolManager -> MMPM` LCC take for positive deltas right after `modifyLiquidity(...)` returns.
+  - `src/modules/PositionManagerImpl.sol::_handleLccBalanceIncrease` then forwards non-fee LCC onward to custody,
+    triggering the transfer path on which `LiquidityHub.executePlannedCancel(...)` consumes the plan.
+- **Security consequence**:
+  - The coarse `(lcc, from, to)` key is not, by itself, a uniqueness proof.
+  - Safety currently depends on the adjacent plan-then-transfer sequencing remaining true.
+  - Review any refactor that adds batching, retries, deferred transfer steps, or alternate transfer destinations before
+    reusing this mechanism.
 
 ## Authorisation, call-surface, and pause invariants
 
@@ -407,7 +559,10 @@ being an informal “should”.
     `amountToSwap` for the proxy pool’s own `Pool.swap` to execute.
   - If the protocol elects to support “partial fills” / liquidity-capped swaps, it must do so without permitting the
     proxy pool’s AMM state machine to advance (e.g. by reverting when a cap would otherwise leave non-zero residual, or
-    by redesigning the hook accounting so the proxy swap is always fully neutralised).
+    by redesigning the hook accounting so the proxy swap is always fully neutralised). Proxy **exact-output**
+    (`amountSpecified > 0`) remains **strict**: insufficient immediate vault liquidity reverts even when a deficit
+    recipient is resolved via `hookData` — queued-deficit exact-output on the proxy pool is not supported because it
+    would break the specified-delta cancellation required for **MKT-05**.
 
 ### MKT-06: Canonical market pair ordering is core/LCC order (and events must reflect it)
 

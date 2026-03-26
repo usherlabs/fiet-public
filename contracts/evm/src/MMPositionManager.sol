@@ -18,6 +18,7 @@ import {IMMActionsImpl} from "./interfaces/IMMActionsImpl.sol";
 import {Errors} from "./libraries/Errors.sol";
 import {ILCC} from "./interfaces/ILCC.sol";
 import {PositionManagerBase} from "./modules/PositionManagerBase.sol";
+import {PositionManagerQueueCustodian} from "./modules/PositionManagerQueueCustodian.sol";
 import {PositionManagerEntrypoint} from "./modules/PositionManagerEntrypoint.sol";
 import {Permit2Forwarder} from "v4-periphery/src/base/Permit2Forwarder.sol";
 import {IAllowanceTransfer} from "permit2/src/interfaces/IAllowanceTransfer.sol";
@@ -29,6 +30,9 @@ import {Math} from "openzeppelin-contracts/contracts/utils/math/Math.sol";
 import {StateLibrary} from "v4-periphery/lib/v4-core/src/libraries/StateLibrary.sol";
 import {TransientStateLibrary} from "v4-periphery/lib/v4-core/src/libraries/TransientStateLibrary.sol";
 import {CurrencyTransfer} from "./libraries/CurrencyTransfer.sol";
+import {IMMQueueCustodian} from "./interfaces/IMMQueueCustodian.sol";
+import {IMarketFactory} from "./interfaces/IMarketFactory.sol";
+import {ILiquidityHub} from "./interfaces/ILiquidityHub.sol";
 
 /// @title MMPositionManager
 /// @notice Entry point for VRL commitment position management
@@ -42,7 +46,8 @@ contract MMPositionManager is
     Permit2Forwarder,
     BaseActionsRouter,
     FietNativeWrapper,
-    PositionManagerEntrypoint
+    PositionManagerEntrypoint,
+    PositionManagerQueueCustodian
 {
     using MMCalldataDecoder for bytes;
     using CurrencyTransfer for Currency;
@@ -62,6 +67,8 @@ contract MMPositionManager is
 
     /// @notice The implementation contract for position operations
     address public immutable commitmentDescriptor;
+    /// @notice Shared custodian that holds queued MM-backed LCC by commit bucket
+    IMMQueueCustodian public immutable queueCustodian;
 
     // ═══════════════════════════════════════════════════════════════════════════
     // Constructor
@@ -69,20 +76,25 @@ contract MMPositionManager is
 
     constructor(
         address _manager,
-        address _liquidityHub,
+        address _marketFactory,
         address _vtsOrchestrator,
         address _descriptor,
         IWETH9 _weth9,
         IAllowanceTransfer _permit2,
-        address _actionsImpl
+        address _actionsImpl,
+        address _queueCustodianAddr
     )
         ERC721Permit_v4("Fiet VRL Commitment Positions Manager", "FIET-VRL-MMP")
         BaseActionsRouter(IPoolManager(_manager))
         Permit2Forwarder(_permit2)
         FietNativeWrapper(_weth9)
-        PositionManagerEntrypoint(_liquidityHub, _vtsOrchestrator, _actionsImpl)
+        PositionManagerEntrypoint(_marketFactory, _vtsOrchestrator, _actionsImpl)
     {
+        if (_queueCustodianAddr == address(0) || _queueCustodianAddr.code.length == 0) {
+            revert Errors.InvalidAddress(_queueCustodianAddr);
+        }
         commitmentDescriptor = _descriptor;
+        queueCustodian = IMMQueueCustodian(_queueCustodianAddr);
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
@@ -115,6 +127,21 @@ contract MMPositionManager is
     /// @inheritdoc BaseActionsRouter
     function msgSender() public view override(BaseActionsRouter, PositionManagerBase) returns (address) {
         return _getLocker();
+    }
+
+    /// @inheritdoc PositionManagerQueueCustodian
+    function _queueCustodian() internal view override(PositionManagerQueueCustodian) returns (IMMQueueCustodian) {
+        return queueCustodian;
+    }
+
+    /// @inheritdoc FietNativeWrapper
+    function _canonicalMarketFactory() internal view override returns (IMarketFactory) {
+        return marketFactory;
+    }
+
+    /// @inheritdoc FietNativeWrapper
+    function _liquidityHub() internal view override returns (ILiquidityHub) {
+        return liquidityHub;
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
@@ -187,13 +214,15 @@ contract MMPositionManager is
     /// @param params The encoded parameters for the action
     function _handleCommitmentAction(uint256 action, bytes calldata params) internal {
         if (action == MMActions.COMMIT_SIGNAL) {
-            (bytes calldata liquiditySignal, address owner) = params.decodeCommitSignalParams();
-            _commitSignal(liquiditySignal, _mapRecipient(owner));
+            (bytes calldata liquiditySignal, address owner, bytes calldata relayParams) =
+                params.decodeCommitSignalParams();
+            _commitSignal(liquiditySignal, _mapRecipient(owner), relayParams);
             return;
         }
         if (action == MMActions.RENEW_SIGNAL) {
-            (uint256 tokenId, bytes calldata liquiditySignal) = params.decodeTokenIdAndBytes();
-            _renewSignal(tokenId, liquiditySignal);
+            (uint256 tokenId, bytes calldata liquiditySignal, bytes calldata relayParams) =
+                params.decodeTokenIdAndBytes();
+            _renewSignal(tokenId, liquiditySignal, relayParams);
             return;
         }
         if (action == MMActions.DECOMMIT_SIGNAL) {
@@ -225,8 +254,19 @@ contract MMPositionManager is
     /// @param liquiditySignal The ABI-encoded LiquiditySignal to verify and record
     /// @param owner The address to receive the commitment NFT
     /// @return tokenId The commitment NFT id created
-    function _commitSignal(bytes calldata liquiditySignal, address owner) internal returns (uint256 tokenId) {
-        tokenId = vtsOrchestrator.commitSignal(liquiditySignal);
+    function _commitSignal(bytes calldata liquiditySignal, address owner, bytes calldata relayParams)
+        internal
+        returns (uint256 tokenId)
+    {
+        if (relayParams.length == 0) {
+            tokenId = vtsOrchestrator.commitSignal(marketFactory, msgSender(), liquiditySignal);
+        } else {
+            (uint256 deadline, uint256 authNonce, bytes memory authSig) =
+                abi.decode(relayParams, (uint256, uint256, bytes));
+            tokenId = vtsOrchestrator.commitSignalRelayed(
+                marketFactory, msgSender(), liquiditySignal, deadline, authNonce, authSig
+            );
+        }
         _mint(owner, tokenId);
         emit SignalCommitted(tokenId);
     }
@@ -234,8 +274,16 @@ contract MMPositionManager is
     /// @notice Renews an existing signal with new parameters
     /// @param tokenId The commitment NFT token ID
     /// @param liquiditySignal The new liquidity signal
-    function _renewSignal(uint256 tokenId, bytes calldata liquiditySignal) internal {
-        vtsOrchestrator.renewSignal(msgSender(), tokenId, liquiditySignal);
+    function _renewSignal(uint256 tokenId, bytes calldata liquiditySignal, bytes calldata relayParams) internal {
+        if (relayParams.length == 0) {
+            vtsOrchestrator.renewSignal(marketFactory, msgSender(), tokenId, liquiditySignal);
+        } else {
+            (uint256 deadline, uint256 authNonce, bytes memory authSig) =
+                abi.decode(relayParams, (uint256, uint256, bytes));
+            vtsOrchestrator.renewSignalRelayed(
+                marketFactory, msgSender(), tokenId, liquiditySignal, deadline, authNonce, authSig
+            );
+        }
     }
 
     /// @notice Decommits a signal and burns the commitment NFT
@@ -278,7 +326,7 @@ contract MMPositionManager is
     ) internal {
         MMHelpers.assertApprovedOrOwner(msgSender(), tokenId);
         vtsOrchestrator.extendGracePeriod(
-            poolKey, tokenId, positionIndex, settlementTokenIndex, verifierIndex, settlementProof
+            marketFactory, poolKey, tokenId, positionIndex, settlementTokenIndex, verifierIndex, settlementProof
         );
     }
 
@@ -312,8 +360,8 @@ contract MMPositionManager is
             return;
         }
         if (action == MMActions.COLLECT_AVAILABLE_LIQUIDITY) {
-            (address lcc, uint256 maxAmount) = params.decodeCollectLiquidityParams();
-            _collectAvailableLiquidity(lcc, maxAmount);
+            (address lcc, uint256 tokenId, uint256 maxAmount) = params.decodeCollectLiquidityParams();
+            _collectAvailableLiquidity(lcc, tokenId, maxAmount);
             return;
         }
         if (action == MMActions.SYNC) {
@@ -329,8 +377,9 @@ contract MMPositionManager is
         ILCC lcc = ILCC(lccAddr);
         Currency lccCurrency = Currency.wrap(lccAddr);
         address underlying = lcc.underlying();
+        bool isNativeUnderlying = underlying == address(0);
 
-        uint256 beforeBal = IERC20(underlying).balanceOf(to);
+        uint256 beforeBal = isNativeUnderlying ? to.balance : IERC20(underlying).balanceOf(to);
         uint256 toUnwrap = vtsOrchestrator.take(lccCurrency, msgSender(), requested);
 
         if (toUnwrap > 0) {
@@ -338,10 +387,15 @@ contract MMPositionManager is
             liquidityHub.unwrapTo(lccAddr, to, queueTo, toUnwrap);
         }
 
-        unwrapped = IERC20(underlying).balanceOf(to) - beforeBal;
+        uint256 afterBal = isNativeUnderlying ? to.balance : IERC20(underlying).balanceOf(to);
+        unwrapped = afterBal - beforeBal;
 
         if (to == address(this) && unwrapped > 0) {
-            _syncBalanceAsCredit(Currency.wrap(underlying));
+            if (isNativeUnderlying) {
+                _creditExact(CurrencyLibrary.ADDRESS_ZERO, unwrapped);
+            } else {
+                _syncBalanceAsCredit(Currency.wrap(underlying));
+            }
         }
     }
 
@@ -350,6 +404,7 @@ contract MMPositionManager is
         ILCC lcc = ILCC(lccAddr);
         Currency lccCurrency = Currency.wrap(lccAddr);
         address underlying = lcc.underlying();
+        bool isNativeUnderlying = underlying == address(0);
 
         address payer = msgSender();
         uint256 toUnwrap = lcc.balanceOf(payer);
@@ -357,42 +412,54 @@ contract MMPositionManager is
             toUnwrap = Math.min(toUnwrap, requested);
         }
 
-        uint256 beforeBal = IERC20(underlying).balanceOf(to);
+        uint256 beforeBal = isNativeUnderlying ? to.balance : IERC20(underlying).balanceOf(to);
         if (toUnwrap > 0) {
             // Pull only from the locker/user (never arbitrary third parties).
             lccCurrency.transferFrom(payer, address(this), toUnwrap);
             liquidityHub.unwrapTo(lccAddr, to, payer, toUnwrap);
         }
 
-        unwrapped = IERC20(underlying).balanceOf(to) - beforeBal;
+        uint256 afterBal = isNativeUnderlying ? to.balance : IERC20(underlying).balanceOf(to);
+        unwrapped = afterBal - beforeBal;
         if (to == address(this) && unwrapped > 0) {
-            _syncBalanceAsCredit(Currency.wrap(underlying));
+            if (isNativeUnderlying) {
+                _creditExact(CurrencyLibrary.ADDRESS_ZERO, unwrapped);
+            } else {
+                _syncBalanceAsCredit(Currency.wrap(underlying));
+            }
         }
     }
 
     /// @notice Collects available liquidity from settlement queue
+    /// @dev Intersects three caps: caller's Hub queue, underlying reserve availability, and this caller's
+    ///      beneficiary-scoped slice in the queue custodian for `tokenId`. Without the beneficiary key, a locker
+    ///      with any queue could pair it with another party's commit custody bucket.
+    ///
+    ///      Intended model (queue-gated collect):
+    ///      - This path exists to release custodied LCC and then call `processSettlementFor`, which burns the
+    ///        caller's LCC and clears their Hub `settleQueue` entry. If `settleQueue(lcc, locker) == 0`, this
+    ///        function is a no-op by design — e.g. some flows (including certain seizure shapes) may record LCC
+    ///        in the custodian for the locker without creating a per-LCC queue entry; those are not settled here.
+    ///      - Arbitrary `processSettlementFor` calls cannot drain another party's custody: settlement still
+    ///        requires the recipient's market-derived LCC balance; beneficiary-scoped custody ensures collect
+    ///        only debits the slice matching the caller's queue.
     /// @param lcc The LCC token address
+    /// @param tokenId The commitment NFT token ID bucket to collect from
     /// @param maxAmount The maximum amount to collect
-    function _collectAvailableLiquidity(address lcc, uint256 maxAmount) internal {
-        address sender = msgSender();
-        uint256 queued = liquidityHub.settleQueue(lcc, sender);
-
-        if (queued > 0) {
-            Currency lccCurrency = Currency.wrap(lcc);
-            uint256 available = liquidityHub.reserveOfUnderlying(lcc);
-            uint256 toSettle = Math.min(queued, Math.min(maxAmount, available));
-            if (toSettle > 0) {
-                lccCurrency.transfer(sender, toSettle); // transfer LCC to sender for burn/pay
-                liquidityHub.processSettlementFor(lcc, sender, toSettle);
-            }
-        }
+    function _collectAvailableLiquidity(address lcc, uint256 tokenId, uint256 maxAmount) internal {
+        address locker = msgSender();
+        liquidityHub.settleFromCustodian(lcc, address(queueCustodian), tokenId, locker, maxAmount);
     }
 
     /// @notice Syncs currency balance as credit to delta
     /// @param currency The currency to sync
     /// @dev owner is always address(this) (MMPM) and target is always msgSender() (locker)
     function _sync(Currency currency) internal {
-        vtsOrchestrator.sync(currency, address(this), msgSender());
+        // Native ETH sync must be source-aware (exact amount) and is handled by dedicated flows.
+        if (currency == CurrencyLibrary.ADDRESS_ZERO) {
+            revert Errors.InvalidAddress(address(0));
+        }
+        vtsOrchestrator.sync(marketFactory, currency, address(this), msgSender());
     }
 
     /// @notice Wraps native ETH to WETH
@@ -437,7 +504,7 @@ contract MMPositionManager is
             }
         }
         _unwrap(amount);
-        _syncBalanceAsCredit(CurrencyLibrary.ADDRESS_ZERO);
+        _creditExact(CurrencyLibrary.ADDRESS_ZERO, amount);
     }
 
     // ═══════════════════════════════════════════════════════════════════════════

@@ -7,6 +7,7 @@ import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
 import {BalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
 import {DynamicCurrencyDelta} from "../../../src/libraries/DynamicCurrencyDelta.sol";
 import {CurrencyDelta} from "v4-periphery/lib/v4-core/src/libraries/CurrencyDelta.sol";
+import {IMarketFactory} from "../../../src/interfaces/IMarketFactory.sol";
 
 /// @title VTSCurrencyDeltaHarness
 /// @notice Exposes VTSCurrencyDelta functions for unit testing
@@ -21,6 +22,9 @@ contract VTSCurrencyDeltaHarness is VTSCurrencyDelta {
     function _vtsStorage() internal view override returns (VTSStorage storage) {
         return s;
     }
+
+    /// @inheritdoc VTSCurrencyDelta
+    function _assertBoundFactoryCaller(IMarketFactory) internal view override {}
 
     // ============ Test Setup Helpers ============
 

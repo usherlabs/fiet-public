@@ -29,6 +29,7 @@ contract DeployE2E is DeployFullStackBase {
         console.log("VTSCommitLib:", stack.libs.vtsCommitLib);
         console.log("VTSFeeLinkedLib:", stack.libs.vtsFeeLinkedLib);
         console.log("LCCFactoryLinkedLib:", stack.libs.lccFactoryLinkedLib);
+        console.log("LiquidityHubLinkedLib:", stack.libs.liquidityHubLinkedLib);
 
         console.log("--- Contracts ---");
         console.log("GlobalConfig:", stack.contracts.globalConfig);
@@ -42,6 +43,7 @@ contract DeployE2E is DeployFullStackBase {
         console.log("CommitmentDescriptor:", stack.contracts.commitmentDescriptor);
         console.log("ActionsImpl:", stack.contracts.actionsImpl);
         console.log("MMPositionManager:", stack.contracts.mmPositionManager);
+        console.log("MMQueueCustodian:", stack.contracts.queueCustodian);
         console.log("DirectLPDeltaResolver:", stack.contracts.directLPDeltaResolver);
         console.log("MarketFactory:", stack.contracts.marketFactory);
         console.log("CoreHook:", stack.contracts.coreHook);

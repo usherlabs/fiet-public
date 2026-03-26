@@ -6,10 +6,12 @@ import {TokenConfiguration} from "./VTS.sol";
 /// The checkpoint of the RFS for a position
 // forge-lint: disable-next-line(pascal-case-struct)
 struct RFSCheckpoint {
-    // the time of the open or close of the RFS for this position
-    uint256 timeOfLastTransition;
-    // whether the RFS is open or close
-    bool isOpen;
+    // bitmask of currently open RFS lanes: bit0=token0, bit1=token1
+    uint8 openMask;
+    // timestamp when token0 lane last transitioned from closed->open
+    uint256 openSince0;
+    // timestamp when token1 lane last transitioned from closed->open
+    uint256 openSince1;
     // the grace period extension
     uint256 gracePeriodExtension0;
     // the grace period extension for token1
@@ -18,21 +20,47 @@ struct RFSCheckpoint {
 
 using RFSCheckpointLibrary for RFSCheckpoint global;
 
-// initially the checkpoint wouls be set to (0,false)
-// and it can remain that way until the first transition(change from false to true or true to false for `rfsopen`) occurs
+// initially the checkpoint starts with all lanes closed (openMask = 0)
+// and each lane gets its own open timestamp when it opens.
 // forge-lint: disable-next-line(pascal-case-struct)
 library RFSCheckpointLibrary {
-    // this function is used to mark the checkpoint of the RFS for a position
-    // if the RFS is already in the same state as the `isOpen` parameter, it does nothing
-    // if the RFS is in the opposite state as the `isOpen` parameter, it updates the checkpoint to the current timestamp and the new state
-    function mark(RFSCheckpoint storage self, bool isOpen) internal {
-        if (self.isOpen != isOpen) {
-            self.timeOfLastTransition = block.timestamp;
-            self.isOpen = isOpen;
-            // reset the grace period when RFS state opens or closes
-            self.gracePeriodExtension0 = 0;
-            self.gracePeriodExtension1 = 0;
+    uint8 internal constant TOKEN0_OPEN_MASK = 1;
+    uint8 internal constant TOKEN1_OPEN_MASK = 2;
+    uint8 internal constant BOTH_OPEN_MASK = TOKEN0_OPEN_MASK | TOKEN1_OPEN_MASK;
+
+    function _isTokenOpen(uint8 openMask, uint8 tokenIndex) private pure returns (bool) {
+        if (tokenIndex == 0) {
+            return (openMask & TOKEN0_OPEN_MASK) != 0;
         }
+        if (tokenIndex == 1) {
+            return (openMask & TOKEN1_OPEN_MASK) != 0;
+        }
+        return false;
+    }
+
+    // this function is used to mark the token-lane checkpoint mask for a position
+    // it updates lane-local open timestamps and resets lane-local grace extensions
+    // only when the specific lane opens or closes
+    function mark(RFSCheckpoint storage self, uint8 openMask) internal {
+        uint8 maskedOpen = openMask & BOTH_OPEN_MASK;
+        uint8 prevOpen = self.openMask;
+        if (prevOpen == maskedOpen) return;
+
+        bool wasToken0Open = (prevOpen & TOKEN0_OPEN_MASK) != 0;
+        bool wasToken1Open = (prevOpen & TOKEN1_OPEN_MASK) != 0;
+        bool isToken0Open = (maskedOpen & TOKEN0_OPEN_MASK) != 0;
+        bool isToken1Open = (maskedOpen & TOKEN1_OPEN_MASK) != 0;
+
+        if (wasToken0Open != isToken0Open) {
+            self.gracePeriodExtension0 = 0;
+            self.openSince0 = isToken0Open ? block.timestamp : 0;
+        }
+        if (wasToken1Open != isToken1Open) {
+            self.gracePeriodExtension1 = 0;
+            self.openSince1 = isToken1Open ? block.timestamp : 0;
+        }
+
+        self.openMask = maskedOpen;
     }
 
     // this function is used to extend the grace period for a position
@@ -42,6 +70,10 @@ library RFSCheckpointLibrary {
         TokenConfiguration memory tokenConfiguration,
         uint8 tokenIndex
     ) internal {
+        if (!_isTokenOpen(self.openMask, tokenIndex)) {
+            return;
+        }
+
         // Defensive: avoid underflow if configuration is invalid (max < grace).
         // In that case, the extension is effectively disabled (caps to 0) rather than reverting.
         uint256 maxGracePeriodExtension = 0;

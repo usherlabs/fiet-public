@@ -1,22 +1,22 @@
 {
   "contracts": {
-    "resilientOracle": "0x731c8103f5e39e7241f6833F68617c4da4ec31Cb",
-    "mainOracle": "0xc1ec8B65bb137602963f88eb063fa7236f4744f2",
-    "boundValidator": "0xf5dC296F38B10cF65E2702a69E1d56d55d520e91",
+    "resilientOracle": "0x5f90732D4eb22cAd3048376e43a42fF34BB27985",
+    "mainOracle": "0xe86012c763Bec27a47305faD5C382deE850505aB",
+    "boundValidator": "0xB0875BDeE983c4a4a9cc85753D249d2Eff8Fa13F",
     "pivotOracle": "0x0000000000000000000000000000000000000000",
     "fallbackOracle": "0x0000000000000000000000000000000000000000"
   },
   "defaults": {
     "cachingEnabled": false,
     "enableMain": true,
-    "enablePivot": true,
+    "enablePivot": false,
     "enableFallback": false
   },
   "assets": [
     {
       "ticker": "ETH",
-      "asset": "0x0000000000000000000000000000000000000001",
-      "feed": "0x0000000000000000000000000000000000000001",
+      "asset": "0x0000000000000000000000000000000000000000",
+      "feed": "0x694AA1769357215DE4FAC081bf1f309aDC325306",
       "maxStalePeriod": 3600,
       "cachingEnabled": true,
       "enableMain": true,
@@ -25,10 +25,25 @@
       "pivotOracle": "0x0000000000000000000000000000000000000000",
       "fallbackOracle": "0x0000000000000000000000000000000000000000",
       "bounds": {
-        "upperBoundRatio": "1050000000000000000",
-        "lowerBoundRatio": "950000000000000000"
+        "upperBoundRatio": "0",
+        "lowerBoundRatio": "0"
+      }
+    },
+    {
+      "ticker": "USDC",
+      "asset": "0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238",
+      "feed": "0xA2F78ab2355fe2f984D808B5CeE7FD0A93D5270E",
+      "maxStalePeriod": 86400,
+      "cachingEnabled": true,
+      "enableMain": true,
+      "enablePivot": false,
+      "enableFallback": false,
+      "pivotOracle": "0x0000000000000000000000000000000000000000",
+      "fallbackOracle": "0x0000000000000000000000000000000000000000",
+      "bounds": {
+        "upperBoundRatio": "0",
+        "lowerBoundRatio": "0"
       }
     }
   ]
 }
-

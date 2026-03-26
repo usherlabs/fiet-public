@@ -1,21 +1,18 @@
 // SPDX-License-Identifier: BUSL-1.1
 pragma solidity ^0.8.26;
 
-import {IPoolManager} from "v4-periphery/lib/v4-core/src/interfaces/IPoolManager.sol";
 import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
 import {SqrtPriceMath} from "@uniswap/v4-core/src/libraries/SqrtPriceMath.sol";
 import {FullMath} from "@uniswap/v4-core/src/libraries/FullMath.sol";
+import {FixedPoint128} from "v4-periphery/lib/v4-core/src/libraries/FixedPoint128.sol";
 import {SafeCast} from "v4-periphery/lib/v4-core/src/libraries/SafeCast.sol";
 import {StateLibrary} from "v4-periphery/lib/v4-core/src/libraries/StateLibrary.sol";
-import {TransientStateLibrary} from "v4-periphery/lib/v4-core/src/libraries/TransientStateLibrary.sol";
 import {BalanceDelta, toBalanceDelta, BalanceDeltaLibrary} from "v4-periphery/lib/v4-core/src/types/BalanceDelta.sol";
 import {SafeCast as SafeCastLib} from "@openzeppelin/contracts/utils/math/SafeCast.sol";
 
 /// @notice Library for liquidity utility functions
 library LiquidityUtils {
     using SafeCast for *;
-    using StateLibrary for IPoolManager;
-    using TransientStateLibrary for IPoolManager;
 
     /**
      * @notice Enum defining different types of liquidity actions
@@ -116,6 +113,33 @@ library LiquidityUtils {
         // product of two bps values -> scale back to bps once, then to units
         uint256 fracBps = FullMath.mulDivRoundingUp(exposureBps_, settleOfRfsBps_, BPS_DENOMINATOR);
         return FullMath.mulDivRoundingUp(liquidityUnits, fracBps, BPS_DENOMINATOR);
+    }
+
+    /**
+     * @notice Q128 fee-growth increment and remainder for coverage fee-burn baseline checkpointing (VTS).
+     * @dev Computes `num = consumedFees * Q128 + carryIn` without overflow, then:
+     *      - `growthInc = num / positionLiquidity`
+     *      - `newCarry = num % positionLiquidity`
+     *      Decomposition (equivalent for all uint256 inputs):
+     *      - `q0 = floor(consumedFees * Q128 / L)`, `r0 = mulmod(consumedFees, Q128, L)`
+     *      - `growthInc = q0 + (r0 + carryIn) / L`, `newCarry = (r0 + carryIn) % L`
+     * @param consumedFees Fee-token amount attributed to this burn (before coverageFeeShare bps)
+     * @param positionLiquidity Position liquidity L; must be > 0
+     * @param carryIn Remainder carried from the prior burn; invariant `carryIn < L` when used correctly
+     * @return growthInc Q128-scaled growth to add to `feeGrowthInsideLast` on the fee token
+     * @return newCarry Remainder to store for the next burn; `newCarry < positionLiquidity`
+     */
+    function feeBurnGrowthIncWithRemainder(uint256 consumedFees, uint256 positionLiquidity, uint256 carryIn)
+        internal
+        pure
+        returns (uint256 growthInc, uint256 newCarry)
+    {
+        uint256 L = positionLiquidity;
+        uint256 q0 = FullMath.mulDiv(consumedFees, FixedPoint128.Q128, L);
+        uint256 r0 = mulmod(consumedFees, FixedPoint128.Q128, L);
+        uint256 sum = r0 + carryIn;
+        growthInc = q0 + sum / L;
+        newCarry = sum % L;
     }
 
     /**

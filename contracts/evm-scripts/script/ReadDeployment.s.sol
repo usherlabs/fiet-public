@@ -8,6 +8,10 @@ import {FileHelper} from "./base/FileHelper.sol";
  * @title ReadDeploymentScript
  * @notice Script to read deployment addresses from JSON file
  * @dev Useful for other scripts that need to reference deployed contracts
+ *
+ * Env vars
+ * - OPTIONAL:
+ *   - `NETWORK`: deployment namespace (default: `sepolia`)
  */
 contract ReadDeploymentScript is FileHelper {
     string public networkName;

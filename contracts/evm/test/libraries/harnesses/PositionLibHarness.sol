@@ -63,12 +63,8 @@ contract PositionLibHarness {
         return PositionModificationHookDataLib.isMMOperation(data);
     }
 
-    function getLocker(PositionModificationHookData memory data, address fallbackAddress)
-        external
-        pure
-        returns (address)
-    {
-        return PositionModificationHookDataLib.getLocker(data, fallbackAddress);
+    function getLocker(PositionModificationHookData memory data) external pure returns (address) {
+        return PositionModificationHookDataLib.getLocker(data);
     }
 }
 

@@ -48,7 +48,6 @@ contract VTSPositionLibMutationUnitTest is Test {
 
     // Default VTS configuration (mirrors VTSLibTestBase defaults, but without inheriting it)
     uint256 internal constant DEFAULT_GRACE_PERIOD = 1 hours;
-    uint256 internal constant DEFAULT_SEIZURE_UNLOCK = 24 hours;
     uint256 internal constant DEFAULT_BASE_VTS_RATE = 500; // 5% in bps
     uint256 internal constant DEFAULT_MAX_GRACE_PERIOD = 7 days;
     uint16 internal constant DEFAULT_COVERAGE_FEE_SHARE = 1000; // 10% in bps
@@ -93,18 +92,17 @@ contract VTSPositionLibMutationUnitTest is Test {
     function _defaultCfg() internal pure returns (MarketVTSConfiguration memory) {
         TokenConfiguration memory tokenCfg = TokenConfiguration({
             gracePeriodTime: DEFAULT_GRACE_PERIOD,
-            seizureUnlockTime: DEFAULT_SEIZURE_UNLOCK,
             baseVTSRate: DEFAULT_BASE_VTS_RATE,
-            maxGracePeriodTime: DEFAULT_MAX_GRACE_PERIOD
+            maxGracePeriodTime: DEFAULT_MAX_GRACE_PERIOD,
+            unbackedCommitmentGraceBypassTime: 0,
+            unbackedCommitmentGraceBypassThreshold: 0
         });
         return MarketVTSConfiguration({
             token0: tokenCfg,
             token1: tokenCfg,
             coverageFeeShare: DEFAULT_COVERAGE_FEE_SHARE,
             minResidualUnits: DEFAULT_MIN_RESIDUAL_UNITS,
-            unbackedCommitmentGraceBypassBps: 500,
-            unbackedCommitmentGraceBypassThreshold0: 0,
-            unbackedCommitmentGraceBypassThreshold1: 0
+            unbackedCommitmentGraceBypassBps: 500
         });
     }
 
@@ -417,15 +415,101 @@ contract VTSPositionLibMutationUnitTest is Test {
         }
 
         {
-            // Fee growth baseline should advance to fg + growthInc (fee token only).
-            uint256 growthInc = FullMath.mulDiv(feesBurn, FixedPoint128.Q128, positionLiquidity);
+            // Fee growth baseline should advance by the full consumed fee entitlement for the exercised window share.
+            uint256 consumedFees = _expectedConsumedFeesToken1(
+                feeGrowthInside1X128, feeGrowthInsideLast1X128, positionLiquidity, cov, ofDelta
+            );
+            uint256 growthInc = FullMath.mulDiv(consumedFees, FixedPoint128.Q128, positionLiquidity);
             (, uint256 fg1After) = harness.getFeeGrowthInsideLast(id);
             assertEq(
                 fg1After,
-                feeGrowthInside1X128 + growthInc,
-                "feeGrowthInsideLast(token1) should be fgInside1X128 + growthInc"
+                feeGrowthInsideLast1X128 + growthInc,
+                "feeGrowthInsideLast(token1) should be lastCheckpoint + growthInc"
             );
         }
+    }
+
+    /// @dev Two partial fee-burn baseline steps with carry must match a single floor on the sum of consumed fees.
+    function test_feeBurnGrowthRemainder_twoStepsEqualsSingleShotFloor() public pure {
+        uint256 L = 1003;
+        uint256 a1 = 100;
+        uint256 a2 = 200;
+        uint256 carry = 0;
+        uint256 totalGrowth;
+        uint256 g1;
+        uint256 g2;
+        (g1, carry) = LiquidityUtils.feeBurnGrowthIncWithRemainder(a1, L, carry);
+        totalGrowth += g1;
+        (g2, carry) = LiquidityUtils.feeBurnGrowthIncWithRemainder(a2, L, carry);
+        totalGrowth += g2;
+        uint256 expected = FullMath.mulDiv(a1 + a2, FixedPoint128.Q128, L);
+        assertEq(totalGrowth, expected, "carried remainder should close Q128/L dust vs two independent floors");
+        assertLt(carry, L, "final remainder must be < L");
+    }
+
+    function test_touchPosition_liquidityIncrease_clearsFeeBurnGrowthRemainder() public {
+        MockLCC lcc0 = new MockLCC(address(0xC0));
+        MockLCC lcc1 = new MockLCC(address(0xC1));
+        PoolKey memory key = PoolKey({
+            currency0: Currency.wrap(address(lcc0)),
+            currency1: Currency.wrap(address(lcc1)),
+            fee: 0,
+            tickSpacing: 60,
+            hooks: IHooks(address(0))
+        });
+        PoolId pId = key.toId();
+        harness.setupPool(pId, _defaultCfg());
+
+        ModifyLiquidityParams memory reg = ModifyLiquidityParams({
+            tickLower: TICK_LOWER,
+            tickUpper: TICK_UPPER,
+            liquidityDelta: int256(uint256(1000)),
+            salt: bytes32(uint256(0xFEE))
+        });
+        harness.registerPosition(owner, pId, reg);
+        PositionId id = PositionLibrary.generateId(owner, reg);
+
+        harness.setFeeBurnGrowthRemainder(id, 123, 456);
+        (uint256 r0, uint256 r1) = harness.getFeeBurnGrowthRemainder(id);
+        assertEq(r0, 123);
+        assertEq(r1, 456);
+
+        harness.setCommitmentMax(id, 10e18, 20e18);
+        harness.setSettled(id, 3e18, 4e18);
+        harness.setPoolTotalSettled(pId, 3e18, 4e18);
+        harness.setCumulativeDeficit(id, 0, 0);
+        harness.setCommitmentDeficit(id, 0, 0);
+
+        _pmSetSlot0Tick(pId, 0);
+        _pmSetPositionLiquidity(pId, PositionId.unwrap(id), 1000);
+
+        uint128 liqAdded = 200;
+        TouchPositionParams memory tp = TouchPositionParams({
+            owner: owner,
+            poolKey: key,
+            params: ModifyLiquidityParams({
+                tickLower: reg.tickLower,
+                tickUpper: reg.tickUpper,
+                liquidityDelta: int256(uint256(liqAdded)),
+                salt: reg.salt
+            }),
+            callerDelta: toBalanceDelta(0, 0),
+            feesAccrued: toBalanceDelta(0, 0),
+            hookData: ""
+        });
+
+        PositionContext memory ctx = PositionContext({
+            poolManager: IPoolManager(address(pm)),
+            liquidityHub: ILiquidityHub(address(0)),
+            oracleHelper: IOracleHelper(address(0)),
+            marketVault: IMarketVault(address(0))
+        });
+
+        harness.touchPosition(ctx, tp);
+
+        (r0, r1) = harness.getFeeBurnGrowthRemainder(id);
+        assertEq(r0, 0, "liquidity change must reset fee-burn remainder token0");
+        assertEq(r1, 0, "liquidity change must reset fee-burn remainder token1");
     }
 
     function _expectedFeesBurnToken1(
@@ -445,6 +529,18 @@ contract VTSPositionLibMutationUnitTest is Test {
         // feesBurn = fees * (burnBase/ofDelta) * bps/10000
         feesBurn = FullMath.mulDiv(fees, burnBase, ofDelta);
         feesBurn = FullMath.mulDiv(feesBurn, DEFAULT_COVERAGE_FEE_SHARE, LiquidityUtils.BPS_DENOMINATOR);
+    }
+
+    function _expectedConsumedFeesToken1(
+        uint256 feeGrowthInside1X128,
+        uint256 feeGrowthInsideLast1X128,
+        uint256 positionLiquidity,
+        uint256 burnBase,
+        uint256 ofDelta
+    ) internal pure returns (uint256 consumedFees) {
+        uint256 feeGrowthDelta1X128 = feeGrowthInside1X128 - feeGrowthInsideLast1X128;
+        uint256 fees = FullMath.mulDiv(feeGrowthDelta1X128, positionLiquidity, FixedPoint128.Q128);
+        consumedFees = FullMath.mulDiv(fees, burnBase, ofDelta);
     }
 
     // ============================================================
@@ -472,7 +568,33 @@ contract VTSPositionLibMutationUnitTest is Test {
         (uint256 exposure0,) = ex.getCISEExposure(id);
         (uint256 poolExposure0,) = ex.getPoolTotalCISEExposure(p);
         assertEq(exposure0, expExposure0, "CISE exposure0 should realise settled * deltaIndex / Q128");
-        assertEq(poolExposure0, expExposure0, "pool total CISE exposure0 should track position exposure");
+        assertEq(poolExposure0, 0, "pool CISE denominator is eager on incrementCoverage/flush, not on position settle");
+    }
+
+    /// @notice Regression: repeated `_settleSettledIndexedCoverageUsage` with an unchanged pool index must not double-count CISE.
+    function test_settleSettledIndexedCoverageUsage_secondCallNoExtraExposureWhenPoolIndexUnchanged() public {
+        VTSPositionLibCISEExpose ex = new VTSPositionLibCISEExpose();
+        PoolId p = PoolId.wrap(bytes32(uint256(0xC15E01)));
+        ex.setupPool(p, _defaultCfg());
+
+        PositionId id = PositionId.wrap(bytes32(uint256(0xB0B02)));
+        ex.setPosition(id, address(0xCAFE), p, 1000);
+
+        uint256 settled0 = 100e18;
+        ex.setSettled(id, settled0, 0);
+
+        uint256 indexLast0 = 2 * FixedPoint128.Q128;
+        uint256 indexNow0 = 5 * FixedPoint128.Q128;
+        ex.setCISEIndexLastX128(id, indexLast0, 0);
+        ex.setPoolCoveragePerSettledIndexX128(p, indexNow0, 0);
+
+        ex.settleSettledIndexedCoverageUsage(id);
+        (uint256 exposureFirst,) = ex.getCISEExposure(id);
+
+        ex.settleSettledIndexedCoverageUsage(id);
+        (uint256 exposureSecond,) = ex.getCISEExposure(id);
+
+        assertEq(exposureSecond, exposureFirst, "second settle with same pool index must not add exposure again");
     }
 
     function test_settlePositionInflowGrowth_positiveAdd0_increasesSettledAndPoolTotalSettled() public {
@@ -1023,6 +1145,11 @@ contract VTSPositionLibMutationUnitTest is Test {
         uint256 expDelta = FullMath.mulDiv(residual, FixedPoint128.Q128, totalSettled);
         assertEq(idxAfter, 7 + expDelta, "CISE index should advance by residual/totalSettled");
         assertEq(residualAfter, 0, "CISE residual should clear after flush");
+        assertEq(
+            residualExpose.getPoolTotalCISEExposureSinceLastMod(p, 1),
+            residual,
+            "flush should add residual to pool CISE bonus denominator"
+        );
     }
 
     function test_flushDICE_residualPositive_principalZero_isNoop() public {
@@ -1258,6 +1385,64 @@ contract VTSPositionLibMutationUnitTest is Test {
         assertEq(s1, cm1, "token1 settled should equal commitmentMax after non-MM increase");
         _assertPoolTotalSettled(pId, cm0, cm1);
     }
+
+    /// @notice Regression: `commitmentDeficitBps` clears only when both token deficits are zero (VTSPositionLib ~266-269).
+    function test_updateSettlement_clearsCommitmentDeficitBps_whenBothCommitmentDeficitsCured() public {
+        (PositionId id,) = _register(bytes32(uint256(51)), 1);
+        harness.setCommitmentMax(id, 100e18, 100e18);
+        harness.setSettled(id, 0, 0);
+        harness.setPoolTotalSettled(poolId, 0, 0);
+        harness.setCumulativeDeficit(id, 0, 0);
+        harness.setCommitmentDeficit(id, 10e18, 5e18);
+        harness.setCommitmentDeficitBps(id, 1234);
+
+        harness.updateSettlement(id, 0, 10e18);
+        assertEq(harness.getCommitmentDeficitBps(id), 1234);
+
+        harness.updateSettlement(id, 1, 5e18);
+        assertEq(harness.getCommitmentDeficitBps(id), 0);
+    }
+
+    /// @notice Regression: curing token0 commitment deficit clears `commitmentDeficitSince` for that side (VTSPositionLib ~257-259).
+    function test_updateSettlement_clearsCommitmentDeficitSince_whenTokenDeficitFullyCured() public {
+        (PositionId id,) = _register(bytes32(uint256(52)), 1);
+        harness.setCommitmentMax(id, 100e18, 100e18);
+        harness.setSettled(id, 0, 0);
+        harness.setPoolTotalSettled(poolId, 0, 0);
+        harness.setCumulativeDeficit(id, 0, 0);
+        harness.setCommitmentDeficit(id, 10e18, 0);
+        harness.setCommitmentDeficitSince(id, 12345, 0);
+
+        harness.updateSettlement(id, 0, 10e18);
+        (uint256 since0,) = harness.getCommitmentDeficitSince(id);
+        assertEq(since0, 0);
+    }
+
+    /// @notice Regression: live PoolManager liquidity can change without touchPosition (e.g. paused remove); remainder must clear.
+    function test_settlePositionGrowths_reconcilesStaleLiquidityMirror_clearsFeeBurnRemainder() public {
+        (PositionId id,) = _register(bytes32(uint256(0xD1F7)), 1000);
+        _pmSetSlot0Tick(poolId, 0);
+        _pmSetPositionLiquidity(poolId, PositionId.unwrap(id), 500);
+        harness.setPositionLiquidityMirror(id, 1000);
+        harness.setFeeBurnGrowthRemainder(id, 123, 456);
+
+        harness.setCoverageIndexLastX128(id, 0, 0);
+        harness.setCISEIndexLastX128(id, 0, 0);
+        harness.setPoolCoveragePerDeficitIndexX128(poolId, 0, 0);
+        harness.setPoolCoveragePerSettledIndexX128(poolId, 0, 0);
+        harness.setDeficitGrowthGlobal(poolId, 0, 0);
+        harness.setInflowGrowthGlobal(poolId, 0, 0);
+        harness.setDeficitGrowthInsideLast(id, 0, 0);
+        harness.setInflowGrowthInsideLast(id, 0, 0);
+
+        harness.settlePositionGrowths(IPoolManager(address(pm)), id);
+
+        // Remainder must clear when mirror != live L; stored `pos.liquidity` is updated on `touchPosition`, not here.
+        assertEq(harness.getPosition(id).liquidity, 1000);
+        (uint256 r0, uint256 r1) = harness.getFeeBurnGrowthRemainder(id);
+        assertEq(r0, 0);
+        assertEq(r1, 0);
+    }
 }
 
 /// @notice Exposes internal VTSPositionLib pure helper for truth-table tests.
@@ -1301,6 +1486,12 @@ contract VTSPositionLibResidualFlushExpose {
         }
     }
 
+    function getPoolTotalCISEExposureSinceLastMod(PoolId poolId, uint8 tokenIndex) external view returns (uint256) {
+        return tokenIndex == 0
+            ? s.poolAccounting[poolId].totalCISEExposureSinceLastMod.token0
+            : s.poolAccounting[poolId].totalCISEExposureSinceLastMod.token1;
+    }
+
     function flushCISE(PoolId poolId, uint8 tokenIndex) external {
         VTSPositionLib._flushCISEResidualIfNeeded(s, poolId, tokenIndex);
     }
@@ -1309,11 +1500,12 @@ contract VTSPositionLibResidualFlushExpose {
         if (tokenIndex == 0) {
             s.poolAccounting[poolId].coverageResidualDICE.token0 = residual;
             s.poolAccounting[poolId].totalDeficitPrincipal.token0 = principal;
-            s.poolAccounting[poolId].coveragePerDeficitIndexX128.token0 = indexNow;
+            // `_flushCoverageResidualIfNeeded` advances `coveragePerResidualDeficitIndexX128`, not `coveragePerDeficitIndexX128`.
+            s.poolAccounting[poolId].coveragePerResidualDeficitIndexX128.token0 = indexNow;
         } else {
             s.poolAccounting[poolId].coverageResidualDICE.token1 = residual;
             s.poolAccounting[poolId].totalDeficitPrincipal.token1 = principal;
-            s.poolAccounting[poolId].coveragePerDeficitIndexX128.token1 = indexNow;
+            s.poolAccounting[poolId].coveragePerResidualDeficitIndexX128.token1 = indexNow;
         }
     }
 
@@ -1323,11 +1515,11 @@ contract VTSPositionLibResidualFlushExpose {
         returns (uint256 indexNow, uint256 residual, uint256 principal)
     {
         if (tokenIndex == 0) {
-            indexNow = s.poolAccounting[poolId].coveragePerDeficitIndexX128.token0;
+            indexNow = s.poolAccounting[poolId].coveragePerResidualDeficitIndexX128.token0;
             residual = s.poolAccounting[poolId].coverageResidualDICE.token0;
             principal = s.poolAccounting[poolId].totalDeficitPrincipal.token0;
         } else {
-            indexNow = s.poolAccounting[poolId].coveragePerDeficitIndexX128.token1;
+            indexNow = s.poolAccounting[poolId].coveragePerResidualDeficitIndexX128.token1;
             residual = s.poolAccounting[poolId].coverageResidualDICE.token1;
             principal = s.poolAccounting[poolId].totalDeficitPrincipal.token1;
         }
@@ -1495,7 +1687,7 @@ contract VTSPositionLibCISEExpose {
             isActive: true,
             salt: bytes32(0),
             checkpoint: RFSCheckpoint({
-                timeOfLastTransition: block.timestamp, isOpen: false, gracePeriodExtension0: 0, gracePeriodExtension1: 0
+                openMask: 0, openSince0: 0, openSince1: 0, gracePeriodExtension0: 0, gracePeriodExtension1: 0
             })
         });
     }
@@ -1558,7 +1750,7 @@ contract VTSPositionLibDICEExpose {
             isActive: true,
             salt: bytes32(0),
             checkpoint: RFSCheckpoint({
-                timeOfLastTransition: block.timestamp, isOpen: false, gracePeriodExtension0: 0, gracePeriodExtension1: 0
+                openMask: 0, openSince0: 0, openSince1: 0, gracePeriodExtension0: 0, gracePeriodExtension1: 0
             })
         });
     }

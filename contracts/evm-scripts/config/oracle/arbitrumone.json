@@ -1,0 +1,49 @@
+{
+  "contracts": {
+    "resilientOracle": "0xee9F85a6128182D83d7f27492f515A89BEc0C13b",
+    "mainOracle": "0x34e24c8b1B5413A3031248Eb079a4b5DB353245b",
+    "boundValidator": "0x4535B26EeA5ec9aD573248c3A5c0abfF43078804",
+    "pivotOracle": "0x0000000000000000000000000000000000000000",
+    "fallbackOracle": "0x0000000000000000000000000000000000000000"
+  },
+  "defaults": {
+    "cachingEnabled": false,
+    "enableMain": true,
+    "enablePivot": false,
+    "enableFallback": false
+  },
+  "assets": [
+    {
+      "ticker": "USDT",
+      "asset": "0xfd086bc7cd5c481dcc9c85ebe478a1c0b69fcbb9",
+      "feed": "0x3f3f5dF88dC9F13eac63DF89EC16ef6e7E25DdE7",
+      "maxStalePeriod": 86400,
+      "cachingEnabled": true,
+      "enableMain": true,
+      "enablePivot": false,
+      "enableFallback": false,
+      "pivotOracle": "0x0000000000000000000000000000000000000000",
+      "fallbackOracle": "0x0000000000000000000000000000000000000000",
+      "bounds": {
+        "upperBoundRatio": "0",
+        "lowerBoundRatio": "0"
+      }
+    },
+    {
+      "ticker": "ARB",
+      "asset": "0x912ce59144191c1204e64559fe8253a0e49e6548",
+      "feed": "0xb2A824043730FE05F3DA2efaFa1CBbe83fa548D6",
+      "maxStalePeriod": 3600,
+      "cachingEnabled": true,
+      "enableMain": true,
+      "enablePivot": false,
+      "enableFallback": false,
+      "pivotOracle": "0x0000000000000000000000000000000000000000",
+      "fallbackOracle": "0x0000000000000000000000000000000000000000",
+      "bounds": {
+        "upperBoundRatio": "0",
+        "lowerBoundRatio": "0"
+      }
+    }
+  ]
+}

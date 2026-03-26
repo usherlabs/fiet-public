@@ -10,8 +10,7 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {Token} from "../../setup/MockERC20.s.sol";
 import {MarketFactory} from "src/MarketFactory.sol";
 import {GlobalConfig} from "src/GlobalConfig.sol";
-import {VTSConfigs} from "src/libraries/VTSConfigs.sol";
-import {MarketVTSConfiguration} from "src/types/VTS.sol";
+import {MarketVTSConfiguration, TokenConfiguration} from "src/types/VTS.sol";
 import {IResilientOracle} from "src/interfaces/IResilientOracle.sol";
 import {HookMiner} from "v4-periphery/src/utils/HookMiner.sol";
 import {HookFlags} from "src/libraries/HookFlags.sol";
@@ -54,6 +53,15 @@ abstract contract E2EBase is DeployFullStackBase {
         address underlying1;
         address lcc0;
         address lcc1;
+    }
+
+    struct CoreMintParams {
+        PoolKey key;
+        address lp;
+        int24 tickLower;
+        int24 tickUpper;
+        uint128 liquidity;
+        uint256 amountMaxPerAsset;
     }
 
     function _requireEnvBytes32(string memory key, string memory err) internal view returns (bytes32) {
@@ -126,7 +134,7 @@ abstract contract E2EBase is DeployFullStackBase {
                 abi.encodeWithSignature("registerTicker(string,address)", "USDT", m.underlying1)
             );
 
-        MarketVTSConfiguration memory cfg = VTSConfigs.getDefaultConfig();
+        MarketVTSConfiguration memory cfg = _defaultE2EVTSConfig();
         // IMPORTANT: ProxyHook is deployed via CREATE2 from `MarketVaultDeployer`.
         // BaseHook validates the deployed hook address encodes the expected hook flags, so we must mine a salt.
         address marketVaultDeployer = MarketFactory(m.stack.contracts.marketFactory).marketVaultDeployer();
@@ -165,6 +173,30 @@ abstract contract E2EBase is DeployFullStackBase {
         require(m.lcc0 != address(0) && m.lcc1 != address(0), "market: LCCs not created");
 
         vm.stopBroadcast();
+    }
+
+    function _defaultE2EVTSConfig() internal pure returns (MarketVTSConfiguration memory cfg) {
+        TokenConfiguration memory token0 = TokenConfiguration({
+            gracePeriodTime: 1800,
+            baseVTSRate: 1000,
+            maxGracePeriodTime: 3600,
+            unbackedCommitmentGraceBypassTime: 0,
+            unbackedCommitmentGraceBypassThreshold: 0
+        });
+        TokenConfiguration memory token1 = TokenConfiguration({
+            gracePeriodTime: 1800,
+            baseVTSRate: 1000,
+            maxGracePeriodTime: 36000,
+            unbackedCommitmentGraceBypassTime: 0,
+            unbackedCommitmentGraceBypassThreshold: 0
+        });
+        cfg = MarketVTSConfiguration({
+            token0: token0,
+            token1: token1,
+            coverageFeeShare: 5000,
+            minResidualUnits: 1,
+            unbackedCommitmentGraceBypassBps: 500
+        });
     }
 
     /// @dev Approve + wrap a single underlying into its LCC, minting the LCC to `to`.
@@ -216,33 +248,59 @@ abstract contract E2EBase is DeployFullStackBase {
         uint256 amountMaxPerAsset
     ) internal returns (uint256 tokenId) {
         address lp = vm.addr(lpPk);
-        ILiquidityHub hub = ILiquidityHub(m.stack.contracts.liquidityHub);
-        IPoolManager poolManager = IPoolManager(config.poolManager);
         IPositionManager positionManager = IPositionManager(payable(config.positionManager));
-        IPermit2 permit2 = IPermit2(config.permit2);
-
-        PoolKey memory key = _corePoolKey(m);
 
         vm.startBroadcast(lpPk);
+        {
+            ILiquidityHub hub = ILiquidityHub(m.stack.contracts.liquidityHub);
+            IPoolManager poolManager = IPoolManager(config.poolManager);
+            IPermit2 permit2 = IPermit2(config.permit2);
+            PoolKey memory key = _corePoolKey(m);
 
-        // Wrap underlying -> LCC so LP has pool currencies.
-        _wrapAndMintLccPair(hub, m, lp, wrapAmountPerAsset);
+            // Wrap underlying -> LCC so LP has pool currencies.
+            _wrapAndMintLccPair(hub, m, lp, wrapAmountPerAsset);
+            _approveCorePairForPositionManager(key, positionManager, permit2);
+            (int24 tickLower, int24 tickUpper, uint128 liquidity) =
+                _computeFullRangeLiquidity(poolManager, key, amountMaxPerAsset);
+            CoreMintParams memory mintParams = CoreMintParams({
+                key: key,
+                lp: lp,
+                tickLower: tickLower,
+                tickUpper: tickUpper,
+                liquidity: liquidity,
+                amountMaxPerAsset: amountMaxPerAsset
+            });
+            tokenId = _mintCoreFullRangePosition(positionManager, mintParams);
+        }
 
-        // Permit2 approvals for PositionManager pulls (via Permit2).
+        // Subscribe delta resolver so burn clears deltas inside unlock.
+        positionManager.subscribe(tokenId, m.stack.contracts.directLPDeltaResolver, "");
+
+        vm.stopBroadcast();
+    }
+
+    function _approveCorePairForPositionManager(PoolKey memory key, IPositionManager positionManager, IPermit2 permit2)
+        internal
+    {
         IERC20(Currency.unwrap(key.currency0)).approve(address(permit2), type(uint256).max);
         IERC20(Currency.unwrap(key.currency1)).approve(address(permit2), type(uint256).max);
         uint48 deadline = uint48(block.timestamp + 1 days);
         permit2.approve(Currency.unwrap(key.currency0), address(positionManager), type(uint160).max, deadline);
         permit2.approve(Currency.unwrap(key.currency1), address(positionManager), type(uint160).max, deadline);
+    }
 
-        // Full range ticks.
-        int24 tickLower = (TickMath.MIN_TICK / key.tickSpacing) * key.tickSpacing;
-        int24 tickUpper = (TickMath.MAX_TICK / key.tickSpacing) * key.tickSpacing;
+    function _computeFullRangeLiquidity(IPoolManager poolManager, PoolKey memory key, uint256 amountMaxPerAsset)
+        internal
+        view
+        returns (int24 tickLower, int24 tickUpper, uint128 liquidity)
+    {
+        tickLower = (TickMath.MIN_TICK / key.tickSpacing) * key.tickSpacing;
+        tickUpper = (TickMath.MAX_TICK / key.tickSpacing) * key.tickSpacing;
 
         (uint160 sqrtPriceX96,,,) = poolManager.getSlot0(key.toId());
         require(sqrtPriceX96 != 0, "core pool not initialized");
 
-        uint128 liquidity = LiquidityAmounts.getLiquidityForAmounts(
+        liquidity = LiquidityAmounts.getLiquidityForAmounts(
             sqrtPriceX96,
             TickMath.getSqrtPriceAtTick(tickLower),
             TickMath.getSqrtPriceAtTick(tickUpper),
@@ -250,18 +308,20 @@ abstract contract E2EBase is DeployFullStackBase {
             amountMaxPerAsset
         );
         require(liquidity > 0, "computed liquidity is 0");
+    }
 
+    function _mintCoreFullRangePosition(IPositionManager positionManager, CoreMintParams memory p)
+        internal
+        returns (uint256 tokenId)
+    {
         tokenId = positionManager.nextTokenId();
         bytes memory actions = abi.encodePacked(uint8(Actions.MINT_POSITION), uint8(Actions.SETTLE_PAIR));
         bytes[] memory params = new bytes[](2);
-        params[0] = abi.encode(key, tickLower, tickUpper, liquidity, amountMaxPerAsset, amountMaxPerAsset, lp, "");
-        params[1] = abi.encode(key.currency0, key.currency1);
+        params[0] = abi.encode(
+            p.key, p.tickLower, p.tickUpper, p.liquidity, p.amountMaxPerAsset, p.amountMaxPerAsset, p.lp, ""
+        );
+        params[1] = abi.encode(p.key.currency0, p.key.currency1);
         positionManager.modifyLiquidities(abi.encode(actions, params), block.timestamp + 300);
-
-        // Subscribe delta resolver so burn clears deltas inside unlock.
-        positionManager.subscribe(tokenId, m.stack.contracts.directLPDeltaResolver, "");
-
-        vm.stopBroadcast();
     }
 
     /// @dev Executes an exact-output single-hop swap on the core pool via UniversalRouter V4_SWAP.
@@ -279,53 +339,12 @@ abstract contract E2EBase is DeployFullStackBase {
         address trader = vm.addr(traderPk);
         PoolKey memory key = _corePoolKey(m);
 
-        IUniversalRouter router = IUniversalRouter(payable(config.universalRouter));
-        IPermit2 permit2 = IPermit2(config.permit2);
-
         tokenIn = zeroForOne ? Currency.unwrap(key.currency0) : Currency.unwrap(key.currency1);
         tokenOut = zeroForOne ? Currency.unwrap(key.currency1) : Currency.unwrap(key.currency0);
 
         uint256 inBefore = IERC20(tokenIn).balanceOf(trader);
         uint256 outBefore = IERC20(tokenOut).balanceOf(trader);
-
-        vm.startBroadcast(traderPk);
-
-        // Approve Permit2 + Permit2->UniversalRouter for the input token.
-        IERC20(tokenIn).approve(address(permit2), type(uint256).max);
-        uint48 deadline = uint48(block.timestamp + 1 days);
-        permit2.approve(tokenIn, address(router), type(uint160).max, deadline);
-
-        // V4 exact output swap plan.
-        IV4Router.ExactOutputSingleParams memory swapParams = IV4Router.ExactOutputSingleParams({
-            poolKey: key,
-            zeroForOne: zeroForOne,
-            amountOut: amountOut,
-            amountInMaximum: uint128(expectedAmountIn),
-            hookData: ""
-        });
-
-        bytes memory commands = abi.encodePacked(uint8(Commands.V4_SWAP));
-        bytes memory actions =
-            abi.encodePacked(uint8(Actions.SWAP_EXACT_OUT_SINGLE), uint8(Actions.SETTLE_ALL), uint8(Actions.TAKE_ALL));
-
-        bytes[] memory rParams = new bytes[](3);
-        rParams[0] = abi.encode(swapParams);
-        if (zeroForOne) {
-            // token0 in, token1 out
-            rParams[1] = abi.encode(key.currency0, expectedAmountIn);
-            rParams[2] = abi.encode(key.currency1, amountOut);
-        } else {
-            // token1 in, token0 out
-            rParams[1] = abi.encode(key.currency1, expectedAmountIn);
-            rParams[2] = abi.encode(key.currency0, amountOut);
-        }
-
-        bytes[] memory inputs = new bytes[](1);
-        inputs[0] = abi.encode(actions, rParams);
-
-        router.execute(commands, inputs, block.timestamp + 300);
-
-        vm.stopBroadcast();
+        _executeExactOutputSwap(traderPk, key, zeroForOne, amountOut, expectedAmountIn);
 
         uint256 inAfter = IERC20(tokenIn).balanceOf(trader);
         uint256 outAfter = IERC20(tokenOut).balanceOf(trader);
@@ -346,54 +365,107 @@ abstract contract E2EBase is DeployFullStackBase {
         address trader = vm.addr(traderPk);
         PoolKey memory key = _corePoolKey(m);
 
-        IUniversalRouter router = IUniversalRouter(payable(config.universalRouter));
-        IPermit2 permit2 = IPermit2(config.permit2);
-
         tokenIn = zeroForOne ? Currency.unwrap(key.currency0) : Currency.unwrap(key.currency1);
         tokenOut = zeroForOne ? Currency.unwrap(key.currency1) : Currency.unwrap(key.currency0);
 
         uint256 inBefore = IERC20(tokenIn).balanceOf(trader);
         uint256 outBefore = IERC20(tokenOut).balanceOf(trader);
-
-        vm.startBroadcast(traderPk);
-
-        // Approve Permit2 + Permit2->UniversalRouter for the input token.
-        IERC20(tokenIn).approve(address(permit2), type(uint256).max);
-        uint48 deadline = uint48(block.timestamp + 1 days);
-        permit2.approve(tokenIn, address(router), type(uint160).max, deadline);
-
-        IV4Router.ExactInputSingleParams memory swapParams = IV4Router.ExactInputSingleParams({
-            poolKey: key, zeroForOne: zeroForOne, amountIn: amountIn, amountOutMinimum: amountOutMinimum, hookData: ""
-        });
-
-        bytes memory commands = abi.encodePacked(uint8(Commands.V4_SWAP));
-        bytes memory actions =
-            abi.encodePacked(uint8(Actions.SWAP_EXACT_IN_SINGLE), uint8(Actions.SETTLE_ALL), uint8(Actions.TAKE_ALL));
-
-        bytes[] memory rParams = new bytes[](3);
-        rParams[0] = abi.encode(swapParams);
-        if (zeroForOne) {
-            // token0 in, token1 out
-            rParams[1] = abi.encode(key.currency0, amountIn);
-            rParams[2] = abi.encode(key.currency1, amountOutMinimum);
-        } else {
-            // token1 in, token0 out
-            rParams[1] = abi.encode(key.currency1, amountIn);
-            rParams[2] = abi.encode(key.currency0, amountOutMinimum);
-        }
-
-        bytes[] memory inputs = new bytes[](1);
-        inputs[0] = abi.encode(actions, rParams);
-
-        router.execute(commands, inputs, block.timestamp + 300);
-
-        vm.stopBroadcast();
+        _executeExactInputSwap(traderPk, key, zeroForOne, amountIn, amountOutMinimum);
 
         uint256 inAfter = IERC20(tokenIn).balanceOf(trader);
         uint256 outAfter = IERC20(tokenOut).balanceOf(trader);
 
         spent = inBefore - inAfter;
         received = outAfter - outBefore;
+    }
+
+    function _approvePermit2ForRouter(address tokenIn, IUniversalRouter router, IPermit2 permit2) internal {
+        IERC20(tokenIn).approve(address(permit2), type(uint256).max);
+        permit2.approve(tokenIn, address(router), type(uint160).max, uint48(block.timestamp + 1 days));
+    }
+
+    function _executeExactOutputSwap(
+        uint256 traderPk,
+        PoolKey memory key,
+        bool zeroForOne,
+        uint128 amountOut,
+        uint256 expectedAmountIn
+    ) internal {
+        IUniversalRouter router = IUniversalRouter(payable(config.universalRouter));
+        IPermit2 permit2 = IPermit2(config.permit2);
+        address tokenIn = zeroForOne ? Currency.unwrap(key.currency0) : Currency.unwrap(key.currency1);
+
+        vm.startBroadcast(traderPk);
+        _approvePermit2ForRouter(tokenIn, router, permit2);
+
+        bytes memory commands = abi.encodePacked(uint8(Commands.V4_SWAP));
+        bytes memory actions =
+            abi.encodePacked(uint8(Actions.SWAP_EXACT_OUT_SINGLE), uint8(Actions.SETTLE_ALL), uint8(Actions.TAKE_ALL));
+
+        bytes[] memory rParams = new bytes[](3);
+        rParams[0] = abi.encode(
+            IV4Router.ExactOutputSingleParams({
+                poolKey: key,
+                zeroForOne: zeroForOne,
+                amountOut: amountOut,
+                amountInMaximum: uint128(expectedAmountIn),
+                hookData: ""
+            })
+        );
+        if (zeroForOne) {
+            rParams[1] = abi.encode(key.currency0, expectedAmountIn);
+            rParams[2] = abi.encode(key.currency1, amountOut);
+        } else {
+            rParams[1] = abi.encode(key.currency1, expectedAmountIn);
+            rParams[2] = abi.encode(key.currency0, amountOut);
+        }
+
+        bytes[] memory inputs = new bytes[](1);
+        inputs[0] = abi.encode(actions, rParams);
+        router.execute(commands, inputs, block.timestamp + 300);
+        vm.stopBroadcast();
+    }
+
+    function _executeExactInputSwap(
+        uint256 traderPk,
+        PoolKey memory key,
+        bool zeroForOne,
+        uint128 amountIn,
+        uint128 amountOutMinimum
+    ) internal {
+        IUniversalRouter router = IUniversalRouter(payable(config.universalRouter));
+        IPermit2 permit2 = IPermit2(config.permit2);
+        address tokenIn = zeroForOne ? Currency.unwrap(key.currency0) : Currency.unwrap(key.currency1);
+
+        vm.startBroadcast(traderPk);
+        _approvePermit2ForRouter(tokenIn, router, permit2);
+
+        bytes memory commands = abi.encodePacked(uint8(Commands.V4_SWAP));
+        bytes memory actions =
+            abi.encodePacked(uint8(Actions.SWAP_EXACT_IN_SINGLE), uint8(Actions.SETTLE_ALL), uint8(Actions.TAKE_ALL));
+
+        bytes[] memory rParams = new bytes[](3);
+        rParams[0] = abi.encode(
+            IV4Router.ExactInputSingleParams({
+                poolKey: key,
+                zeroForOne: zeroForOne,
+                amountIn: amountIn,
+                amountOutMinimum: amountOutMinimum,
+                hookData: ""
+            })
+        );
+        if (zeroForOne) {
+            rParams[1] = abi.encode(key.currency0, amountIn);
+            rParams[2] = abi.encode(key.currency1, amountOutMinimum);
+        } else {
+            rParams[1] = abi.encode(key.currency1, amountIn);
+            rParams[2] = abi.encode(key.currency0, amountOutMinimum);
+        }
+
+        bytes[] memory inputs = new bytes[](1);
+        inputs[0] = abi.encode(actions, rParams);
+        router.execute(commands, inputs, block.timestamp + 300);
+        vm.stopBroadcast();
     }
 
     function _deployQuoter() internal returns (IV4Quoter quoter) {

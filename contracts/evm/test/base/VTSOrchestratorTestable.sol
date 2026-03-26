@@ -5,6 +5,8 @@ import {VTSOrchestrator} from "../../src/VTSOrchestrator.sol";
 import {PositionAccounting, PoolAccounting} from "../../src/types/VTS.sol";
 import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {PositionId} from "../../src/types/Position.sol";
+import {IVRLSignalManager} from "../../src/interfaces/IVRLSignalManager.sol";
+import {IVRLSettlementObserver} from "../../src/interfaces/IVRLSettlementObserver.sol";
 
 // ============================================================
 // Testable VTSOrchestrator with Debug View Functions
@@ -14,14 +16,15 @@ import {PositionId} from "../../src/types/Position.sol";
 /// @notice Extends VTSOrchestrator with debug view functions for testing
 /// @dev Only used in test files - keeps production VTSOrchestrator clean
 contract VTSOrchestratorTestable is VTSOrchestrator {
-    constructor(
-        address _poolManager,
-        address _signalManager,
-        address _oracleHelper,
-        address _liquidityHub,
-        address _settlementObserver,
-        address _owner
-    ) VTSOrchestrator(_poolManager, _signalManager, _oracleHelper, _liquidityHub, _settlementObserver, _owner) {}
+    constructor(address _poolManager, address _oracleHelper, address _liquidityHub, address _owner)
+        VTSOrchestrator(_poolManager, _oracleHelper, _liquidityHub, _owner)
+    {}
+
+    /// @dev TEST-ONLY: clears VRL handler pointers so tests can assert `onlyIfVRLHandlersRegistered` on entrypoints.
+    function testOnly_clearVRLHandlers() external {
+        signalManager = IVRLSignalManager(address(0));
+        settlementObserver = IVRLSettlementObserver(address(0));
+    }
 
     /// @notice Get position accounting details for debugging
     /// @param positionId The position identifier
@@ -62,6 +65,18 @@ contract VTSOrchestratorTestable is VTSOrchestrator {
         pa.commitmentMax.token1 = commitmentMax1;
     }
 
+    /// @notice TEST-ONLY: set commitment deficit values directly
+    /// @dev This is intentionally unsafe and should only be used in tests.
+    function _setCommitmentDeficit(PositionId positionId, uint256 commitmentDeficit0, uint256 commitmentDeficit1)
+        external
+    {
+        PositionAccounting storage pa = s.positionAccounting[positionId];
+        pa.commitmentDeficit.token0 = commitmentDeficit0;
+        pa.commitmentDeficit.token1 = commitmentDeficit1;
+        if (commitmentDeficit0 == 0) pa.commitmentDeficitSince.token0 = 0;
+        if (commitmentDeficit1 == 0) pa.commitmentDeficitSince.token1 = 0;
+    }
+
     /// @notice Get pool DICE (Deficit-Indexed Coverage Exercise) accounting for debugging
     /// @param poolId The pool identifier
     /// @return totalDeficitPrincipal0 Total deficit principal for token0
@@ -91,6 +106,16 @@ contract VTSOrchestratorTestable is VTSOrchestrator {
             paPool.coverageResidualDICE.token0,
             paPool.coverageResidualDICE.token1
         );
+    }
+
+    /// @notice Get pool residual-only DICE index for debugging
+    function getPoolDICEResidualIndex(PoolId poolId)
+        external
+        view
+        returns (uint256 residualIndex0, uint256 residualIndex1)
+    {
+        PoolAccounting storage paPool = s.poolAccounting[poolId];
+        return (paPool.coveragePerResidualDeficitIndexX128.token0, paPool.coveragePerResidualDeficitIndexX128.token1);
     }
 
     /// @notice Get position's DICE coverage index checkpoint for debugging

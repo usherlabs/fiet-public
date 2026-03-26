@@ -59,21 +59,21 @@ contract VTSSettle01RFSOpenEchidnaTest {
         MarketVTSConfiguration memory config = MarketVTSConfiguration({
             token0: TokenConfiguration({
                 gracePeriodTime: 7 days,
-                seizureUnlockTime: 30 days,
                 baseVTSRate: 1000, // 10% in bps
-                maxGracePeriodTime: 30 days
+                maxGracePeriodTime: 30 days,
+                unbackedCommitmentGraceBypassTime: 0,
+                unbackedCommitmentGraceBypassThreshold: 0
             }),
             token1: TokenConfiguration({
                 gracePeriodTime: 7 days,
-                seizureUnlockTime: 30 days,
                 baseVTSRate: 1000, // 10% in bps
-                maxGracePeriodTime: 30 days
+                maxGracePeriodTime: 30 days,
+                unbackedCommitmentGraceBypassTime: 0,
+                unbackedCommitmentGraceBypassThreshold: 0
             }),
             coverageFeeShare: 5000, // 50%
             minResidualUnits: 1000,
-            unbackedCommitmentGraceBypassBps: 500,
-            unbackedCommitmentGraceBypassThreshold0: 0,
-            unbackedCommitmentGraceBypassThreshold1: 0
+            unbackedCommitmentGraceBypassBps: 500
         });
         harness.setupPool(POOL_ID, config);
 

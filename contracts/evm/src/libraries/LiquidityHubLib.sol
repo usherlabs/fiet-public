@@ -1,11 +1,12 @@
 // SPDX-License-Identifier: BUSL-1.1
 pragma solidity ^0.8.26;
 
-import {LiquidityHubStorage, Market} from "../types/Liquidity.sol";
+import {LiquidityHubStorage, Market, UnderlyingReserve} from "../types/Liquidity.sol";
 import {LCCFactoryLib} from "./LCCFactoryLib.sol";
 import {Math} from "openzeppelin-contracts/contracts/utils/math/Math.sol";
 import {Errors} from "./Errors.sol";
 import {IMarketFactory} from "../interfaces/IMarketFactory.sol";
+import {IMMQueueCustodian} from "../interfaces/IMMQueueCustodian.sol";
 import {Currency} from "v4-periphery/lib/v4-core/src/types/Currency.sol";
 import {CurrencyTransfer} from "./CurrencyTransfer.sol";
 
@@ -37,6 +38,8 @@ library LiquidityHubLib {
         uint256 backingToBurn;
         /// Remaining amount to process after netting
         uint256 remainingAmount;
+        /// Amount queued as settlement shortfall during residual unwrap
+        uint256 queuedShortfall;
     }
 
     // ============ ADAPTER FUNCTIONS ============
@@ -148,10 +151,12 @@ library LiquidityHubLib {
             }
         }
 
-        // Update storage and context
-        // Netting: burn target LCC from queue, burn backing LCC, mint target LCC as market-derived
+        // Update storage and context.
+        // Netting: burn target LCC from queue, burn backing LCC, mint target LCC as market-derived.
+        // Keep both per-LCC and per-underlying queue aggregates in sync.
         s.settleQueue[lcc][address(this)] = targetQueue - netTarget;
         s.totalQueued[lcc] -= netTarget;
+        s.queueOfUnderlying[s.lccToUnderlying[lcc]] -= netTarget;
         ctx.targetToBurn = netTarget;
         ctx.backingToBurn += netTarget;
         ctx.marketToMint += netTarget;
@@ -259,7 +264,7 @@ library LiquidityHubLib {
         }
 
         // Unwrap: consumes directSupply first, then market liquidity, queues shortfall if any
-        (uint256 directUnwrapped, uint256 marketUnwrapped) = unwrapInternalLogic(
+        (uint256 directUnwrapped, uint256 marketUnwrapped, uint256 queuedShortfall) = unwrapInternalLogic(
             s, withLCC, address(this), remainingAfterNet, residualWrappedForUnwrap, ctx.fromMarketDerivedAmount
         );
 
@@ -277,6 +282,7 @@ library LiquidityHubLib {
         //   exposure", not "market liquidity actually redeemed now"). By contrast, `ctx.backingToBurn` only burns what was
         //   actually redeemed now (direct + market), and the queued portion is burned lazily during settlement processing.
         ctx.marketToMint += (remainingAfterNet - directUnwrapped);
+        ctx.queuedShortfall += queuedShortfall;
 
         return ctx;
     }
@@ -373,6 +379,7 @@ library LiquidityHubLib {
     //#olympix-ignore-reentrancy
     function wrapWithContext(LiquidityHubStorage storage s, address lcc, address withLCC, WrapWithContext memory ctx)
         internal
+        returns (WrapWithContext memory)
     {
         // Execute steps via helper functions (each keeps stack depth minimal)
         ctx = _netAgainstTargetQueue(s, lcc, ctx); // Step 0: Net against target queue
@@ -382,6 +389,7 @@ library LiquidityHubLib {
 
         // Finalise burns and invariant checks
         _finaliseBurns(s, lcc, withLCC, ctx);
+        return ctx;
     }
 
     // ============ CORE LOGIC FUNCTIONS ============
@@ -399,6 +407,7 @@ library LiquidityHubLib {
      * @param marketDerivedBalance The market-derived balance of the account
      * @return directUnwrapped The amount unwrapped from direct supply
      * @return marketUnwrapped The amount unwrapped from market liquidity
+     * @return queuedShortfall The amount queued due to insufficient immediate liquidity
      */
     //#olympix-ignore-reentrancy
     function unwrapInternalLogic(
@@ -408,7 +417,7 @@ library LiquidityHubLib {
         uint256 amount,
         uint256 wrappedBalance,
         uint256 marketDerivedBalance
-    ) internal returns (uint256 directUnwrapped, uint256 marketUnwrapped) {
+    ) internal returns (uint256 directUnwrapped, uint256 marketUnwrapped, uint256 queuedShortfall) {
         // 1) Consume directSupply[lcc] if available
         if (wrappedBalance > 0) {
             uint256 directAvail = s.directSupply[lcc];
@@ -434,6 +443,7 @@ library LiquidityHubLib {
         // 3) Queue any shortfall for later processing
         if (remainingToUnwrap > 0) {
             queueSettlement(s, lcc, queueTo, remainingToUnwrap);
+            queuedShortfall = remainingToUnwrap;
         }
     }
 
@@ -453,9 +463,12 @@ library LiquidityHubLib {
 
     /**
      * @notice Queues a settlement request for later processing
-     * @dev Adds a settlement amount to the queue for a specific recipient.
-     *      The settlement will be processed when liquidity becomes available.
-     *      Note: Events are emitted by the calling contract, not this library.
+     * @dev Pure queue accounting helper: this function intentionally only mutates queue state.
+     *      It does not assert immediate recipient serviceability, because queue ownership can be
+     *      decoupled from current LCC custody in protocol flows (for example MM custody release).
+     *      Runtime settleability is enforced by processSettlementLogic at redemption time.
+     *      Updates both per-LCC queue totals and shared-underlying queue totals.
+     *      Note: events are emitted by the calling contract, not this library.
      * @param s The liquidity hub storage
      * @param lcc The LCC token address
      * @param recipient The recipient address for the settlement
@@ -464,6 +477,7 @@ library LiquidityHubLib {
     function queueSettlement(LiquidityHubStorage storage s, address lcc, address recipient, uint256 amount) internal {
         s.settleQueue[lcc][recipient] += amount;
         s.totalQueued[lcc] += amount;
+        s.queueOfUnderlying[s.lccToUnderlying[lcc]] += amount;
         // Event will be emitted by the calling contract
     }
 
@@ -483,6 +497,10 @@ library LiquidityHubLib {
     ///      - Transfers underlying assets to recipient
     ///      - Decrements reserveOfUnderlying
     ///
+    ///      Important: this is the canonical runtime enforcement point for settleability.
+    ///      Queue creation may be valid even when claims are not executable yet. In those cases
+    ///      this function can revert (or no-op for Hub path) until reserves/custody reconcile.
+    ///
     /// @param s The liquidity hub storage
     /// @param lcc The LCC token address
     /// @param recipient The recipient address to settle for (address(this) for Hub's own queue)
@@ -495,7 +513,7 @@ library LiquidityHubLib {
         if (queued == 0) revert Errors.InvalidAmount(0, 0);
 
         address underlying = s.lccToUnderlying[lcc];
-        uint256 available = s.reserveOfUnderlying[underlying];
+        uint256 available = s.reserveOfUnderlying[underlying].marketDerived;
 
         uint256 holderBal = 0;
         if (isForHub) {
@@ -518,9 +536,10 @@ library LiquidityHubLib {
             return;
         }
 
-        // Update queue
+        // Update queue state at both LCC and shared-underlying scopes.
         s.settleQueue[lcc][recipient] -= toSettle;
         s.totalQueued[lcc] -= toSettle;
+        s.queueOfUnderlying[underlying] -= toSettle;
 
         if (isForHub) {
             // Reconcile lazy netting from wrapWith Step 2.
@@ -558,15 +577,23 @@ library LiquidityHubLib {
     /// @param s The liquidity hub storage
     /// @param underlying The underlying asset address
     /// @param account The account to transfer the underlying assets to
-    /// @param amount The amount of underlying assets to transfer
-    function transferUnderlying(LiquidityHubStorage storage s, address underlying, address account, uint256 amount)
-        internal
-    {
-        // confirm the amount is valid and not greater than the uaSupply
-        if (amount == 0 || amount > s.reserveOfUnderlying[underlying]) {
-            revert Errors.InvalidAmount(amount, s.reserveOfUnderlying[underlying]);
+    /// @param directAmount The direct reserve amount to transfer
+    /// @param marketDerivedAmount The market-derived reserve amount to transfer
+    function transferUnderlying(
+        LiquidityHubStorage storage s,
+        address underlying,
+        address account,
+        uint256 directAmount,
+        uint256 marketDerivedAmount
+    ) internal {
+        uint256 amount = directAmount + marketDerivedAmount;
+        UnderlyingReserve storage reserve = s.reserveOfUnderlying[underlying];
+        if (amount == 0 || directAmount > reserve.direct || marketDerivedAmount > reserve.marketDerived) {
+            uint256 totalReserve = reserve.direct + reserve.marketDerived;
+            revert Errors.InvalidAmount(amount, totalReserve);
         }
-        s.reserveOfUnderlying[underlying] -= amount;
+        reserve.direct -= directAmount;
+        reserve.marketDerived -= marketDerivedAmount;
 
         Currency.wrap(underlying).transfer(account, amount);
     }
@@ -587,7 +614,119 @@ library LiquidityHubLib {
         uint256 fromMarket
     ) internal {
         burn(lcc, owner, fromDirect, fromMarket);
-        transferUnderlying(s, s.lccToUnderlying[lcc], to, fromDirect + fromMarket);
+        transferUnderlying(s, s.lccToUnderlying[lcc], to, fromDirect, fromMarket);
+    }
+
+    // ============ ISSUER / CUSTODIAN HELPERS (called via LiquidityHubLinkedLib) ============
+
+    /// @dev Snapshot for `confirmTake`: reserve bump and whether `LiquidityAvailable` should emit (before Hub settlement).
+    struct ConfirmTakeContext {
+        uint256 hubQueueBeforeSettlement;
+        address underlying;
+        bytes32 marketId;
+        bool emitLiquidityAvailable;
+    }
+
+    function confirmTakePrepare(LiquidityHubStorage storage s, address lcc, uint256 amount, bool shouldEmit)
+        internal
+        returns (ConfirmTakeContext memory ctx)
+    {
+        ctx.underlying = s.lccToUnderlying[lcc];
+        s.reserveOfUnderlying[ctx.underlying].marketDerived += amount;
+        ctx.hubQueueBeforeSettlement = s.settleQueue[lcc][address(this)];
+        ctx.marketId = s.lccToMarket[lcc].id;
+        ctx.emitLiquidityAvailable = shouldEmit && ctx.hubQueueBeforeSettlement < amount;
+    }
+
+    function confirmTakeBalanceInvariant(LiquidityHubStorage storage s, address underlying) internal view {
+        UnderlyingReserve storage reserveTuple = s.reserveOfUnderlying[underlying];
+        uint256 reserve = reserveTuple.direct + reserveTuple.marketDerived;
+        uint256 actualBalance =
+            underlying == address(0) ? address(this).balance : Currency.wrap(underlying).balanceOf(address(this));
+        if (reserve > actualBalance) revert Errors.InsufficientBalance(actualBalance, reserve);
+    }
+
+    function prepareSettle(LiquidityHubStorage storage s, address lcc, uint256 amount, address issuer) internal {
+        if (amount == 0) revert Errors.InvalidAmount(0, 0);
+
+        address underlying = s.lccToUnderlying[lcc];
+        uint256 reserveDirect = s.reserveOfUnderlying[underlying].direct;
+        uint256 directAvail = s.directSupply[lcc];
+        uint256 maxSettleableDirect = Math.min(reserveDirect, directAvail);
+        if (maxSettleableDirect < amount) {
+            revert Errors.InvalidAmount(amount, maxSettleableDirect);
+        }
+
+        s.reserveOfUnderlying[underlying].direct = reserveDirect - amount;
+        s.directSupply[lcc] = directAvail - amount;
+
+        Currency underlyingCurrency = Currency.wrap(underlying);
+        if (underlyingCurrency.isAddressZero()) {
+            underlyingCurrency.transfer(issuer, amount);
+        } else {
+            underlyingCurrency.approve(issuer, amount);
+        }
+    }
+
+    function settleFromCustodian(
+        LiquidityHubStorage storage s,
+        address lcc,
+        address custodian,
+        uint256 tokenId,
+        address recipient,
+        uint256 maxAmount
+    ) internal returns (uint256 settled) {
+        if (recipient == address(0) || custodian == address(0) || maxAmount == 0) {
+            return 0;
+        }
+        if (custodian.code.length == 0) {
+            return 0;
+        }
+
+        IMMQueueCustodian queueCustodian = IMMQueueCustodian(custodian);
+        uint256 queued = s.settleQueue[lcc][recipient];
+        if (queued == 0) return 0;
+
+        address underlying = s.lccToUnderlying[lcc];
+        uint256 available = s.reserveOfUnderlying[underlying].marketDerived;
+        uint256 custodied;
+        try queueCustodian.queued(tokenId, lcc, recipient) returns (uint256 q) {
+            custodied = q;
+        } catch {
+            return 0;
+        }
+
+        settled = Math.min(Math.min(queued, available), Math.min(maxAmount, custodied));
+        if (settled == 0) return 0;
+
+        try queueCustodian.release(tokenId, lcc, recipient, settled) returns (uint256 released) {
+            settled = released;
+        } catch {
+            return 0;
+        }
+        if (settled == 0) return 0;
+    }
+
+    function annulSettlementBeforeTransfer(
+        LiquidityHubStorage storage s,
+        address lcc,
+        address from,
+        uint256 wrappedBalance,
+        uint256 marketDerivedBalance,
+        uint256 amountToTransfer
+    ) internal returns (uint256 toAnnul) {
+        uint256 queued = s.settleQueue[lcc][from];
+        uint256 liquidBalance = wrappedBalance + marketDerivedBalance;
+        uint256 transferableWithoutQueue = liquidBalance > queued ? (liquidBalance - queued) : 0;
+        if (amountToTransfer > transferableWithoutQueue) {
+            uint256 bleedIntoQueue = amountToTransfer - transferableWithoutQueue;
+            toAnnul = Math.min(bleedIntoQueue, queued);
+            if (toAnnul > 0) {
+                s.settleQueue[lcc][from] -= toAnnul;
+                s.totalQueued[lcc] -= toAnnul;
+                s.queueOfUnderlying[s.lccToUnderlying[lcc]] -= toAnnul;
+            }
+        }
     }
 }
 

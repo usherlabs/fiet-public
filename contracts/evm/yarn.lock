@@ -8060,9 +8060,6 @@ __metadata:
   dependencies:
     husky: ^9.1.7
     solhint: ^4.0.0
-  dependenciesMeta:
-    "@venusprotocol/oracle":
-      built: false
   languageName: unknown
   linkType: soft
 

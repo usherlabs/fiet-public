@@ -17,7 +17,7 @@ import {BalanceDelta, toBalanceDelta} from "@uniswap/v4-core/src/types/BalanceDe
 import {ModifyLiquidityParams, SwapParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
 import {IHooks} from "@uniswap/v4-core/src/interfaces/IHooks.sol";
 
-import {PositionId, Position} from "../src/types/Position.sol";
+import {PositionId, Position, PositionLibrary} from "../src/types/Position.sol";
 import {RFSCheckpoint} from "../src/types/Checkpoint.sol";
 import {HookMiner} from "v4-periphery/src/utils/HookMiner.sol";
 import {MarketTestBase} from "./base/MarketTestBase.sol";
@@ -100,7 +100,8 @@ contract CoreHookTest is Test {
     // ------------------------------------------------------------
 
     function test_afterAddLiquidity_forwardsEffectiveDelta_minusFeeAdj_whenNotMM() public {
-        BalanceDelta delta = toBalanceDelta(int128(10), int128(20));
+        // Add-liquidity caller legs are negative deltas.
+        BalanceDelta delta = toBalanceDelta(int128(-10), int128(-20));
         BalanceDelta feeAdj = toBalanceDelta(int128(3), int128(5));
 
         vts.setReturn(feeAdj, false);
@@ -110,11 +111,7 @@ contract CoreHookTest is Test {
         assertEq(sel, hook.afterAddLiquidity.selector);
         assertEq(BalanceDelta.unwrap(returnedFeeAdj), BalanceDelta.unwrap(feeAdj));
 
-        BalanceDelta expectedEffective = delta - feeAdj;
         assertEq(spy.calls(), 1, "spy should be called once");
-        assertEq(
-            BalanceDelta.unwrap(spy.lastDelta()), BalanceDelta.unwrap(expectedEffective), "effective delta mismatch"
-        );
     }
 
     function test_afterRemoveLiquidity_doesNotForward_whenMM() public {
@@ -139,6 +136,18 @@ contract CoreHookTest is Test {
         assertEq(BalanceDelta.unwrap(returnedFeeAdj), BalanceDelta.unwrap(feeAdj));
 
         assertEq(spy.calls(), 0, "spy must not be called on remove-liquidity");
+    }
+
+    function test_beforeRemoveLiquidity_settlesGrowths_evenWhenPaused() public {
+        ModifyLiquidityParams memory params = _dummyParams();
+        PositionId expectedId = PositionLibrary.generateId(address(this), params);
+        vts.setPaused(true);
+
+        bytes4 sel = hook.exposed_beforeRemoveLiquidity(address(this), key, params, "");
+
+        assertEq(sel, hook.beforeRemoveLiquidity.selector);
+        assertEq(PositionId.unwrap(vts.lastSettledPositionId()), PositionId.unwrap(expectedId));
+        assertEq(vts.settlePositionGrowthsCalls(), 1, "growth settlement should still run while paused");
     }
 
     // ------------------------------------------------------------
@@ -193,12 +202,12 @@ contract CoreHookTest is Test {
     }
 
     // ------------------------------------------------------------
-    // Mutant: ProxySwapFlag.isDirectSwap(proxyHook) forced true in CoreHook._afterSwap
+    // Mutant: CoreActionFlag.isDirectCoreAction(proxyHook) forced true in CoreHook._afterSwap
     // ------------------------------------------------------------
 
-    function test_afterSwap_doesNotNotifyProxyHook_whenProxySwapFlagIsSet() public {
+    function test_afterSwap_doesNotNotifyProxyHook_whenNoCoreActionFlagIsSet() public {
         // Simulate proxy swap in progress: direct-swap detection must be false, so no notification.
-        spy.setProxySwapFlag(true);
+        spy.setNoCoreActionFlag(true);
 
         SwapParams memory sp = SwapParams({zeroForOne: true, amountSpecified: int256(1), sqrtPriceLimitX96: 0});
         hook.exposed_afterSwap(address(this), key, sp, toBalanceDelta(int128(-1), int128(1)), bytes(""));
@@ -272,6 +281,15 @@ contract CoreHookHarness is CoreHook {
         return _afterRemoveLiquidity(sender, k, params, delta, feesAccrued, hookData);
     }
 
+    function exposed_beforeRemoveLiquidity(
+        address sender,
+        PoolKey calldata k,
+        ModifyLiquidityParams calldata params,
+        bytes calldata hookData
+    ) external returns (bytes4) {
+        return _beforeRemoveLiquidity(sender, k, params, hookData);
+    }
+
     function exposed_afterSwap(
         address sender,
         PoolKey calldata k,
@@ -318,65 +336,80 @@ contract MockMarketFactory {
     function proxyToHook(PoolId proxyPoolId) external view returns (address) {
         return _proxyToHook[PoolId.unwrap(proxyPoolId)];
     }
+
+    function sequenceDirectSwap(PoolKey calldata key, address lccTokenIn) external {
+        address hook = _proxyToHook[PoolId.unwrap(key.toId())];
+        if (hook != address(0)) {
+            ProxyHookSpy(hook).handleSwap(lccTokenIn);
+        }
+    }
+
+    function sequenceDirectAddLiquidity(PoolKey calldata key) external {
+        address hook = _proxyToHook[PoolId.unwrap(key.toId())];
+        if (hook != address(0)) {
+            ProxyHookSpy(hook).handleAddLiquidity();
+        }
+    }
 }
 
 contract ProxyHookSpy {
     uint256 internal _calls;
-    BalanceDelta internal _lastDelta;
 
-    function onDirectLP(BalanceDelta delta) external {
+    function handleAddLiquidity() external {
         _calls++;
-        _lastDelta = delta;
     }
 
-    // ---- direct swap spy + exttload hook for ProxySwapFlag.isDirectSwap(proxyHook) ----
+    // ---- direct swap spy + exttload hook for CoreActionFlag.isDirectCoreAction(proxyHook) ----
 
     uint256 internal _swapCalls;
-    BalanceDelta internal _lastSwapDelta;
+    address internal _lastSwapLcc;
     bytes32 internal _proxySwapFlag;
 
-    function setProxySwapFlag(bool on) external {
+    function setNoCoreActionFlag(bool on) external {
         _proxySwapFlag = on ? bytes32(uint256(1)) : bytes32(0);
     }
 
     function exttload(bytes32) external view returns (bytes32) {
-        // CoreHook checks direct swaps via ProxySwapFlag.isDirectSwap(proxyHook),
+        // CoreHook checks direct swaps via CoreActionFlag.isDirectCoreAction(proxyHook),
         // which reads PROXY_SWAP_FLAG_SLOT from the proxy hook via IExttload.exttload.
         return _proxySwapFlag;
     }
 
-    function onCorePoolDirectSwap(BalanceDelta delta) external {
+    function handleSwap(address lccTokenIn) external {
         _swapCalls++;
-        _lastSwapDelta = delta;
+        _lastSwapLcc = lccTokenIn;
     }
 
     function calls() external view returns (uint256) {
         return _calls;
     }
 
-    function lastDelta() external view returns (BalanceDelta) {
-        return _lastDelta;
-    }
-
     function swapCalls() external view returns (uint256) {
         return _swapCalls;
     }
 
-    function lastSwapDelta() external view returns (BalanceDelta) {
-        return _lastSwapDelta;
+    function lastSwapLcc() external view returns (address) {
+        return _lastSwapLcc;
     }
 }
 
 contract MockVTSOrchestrator {
     BalanceDelta internal _feeAdj;
     bool internal _isMM;
+    bool internal _paused;
 
     uint160 internal _lastSqrtPBefore;
     uint128 internal _lastLiqBefore;
+    PositionId internal _lastSettledPositionId;
+    uint256 internal _settlePositionGrowthsCalls;
 
     function setReturn(BalanceDelta feeAdj, bool isMMPosition) external {
         _feeAdj = feeAdj;
         _isMM = isMMPosition;
+    }
+
+    function setPaused(bool paused) external {
+        _paused = paused;
     }
 
     function processPosition(
@@ -397,7 +430,7 @@ contract MockVTSOrchestrator {
             isActive: false,
             salt: bytes32(0),
             checkpoint: RFSCheckpoint({
-                timeOfLastTransition: 0, isOpen: false, gracePeriodExtension0: 0, gracePeriodExtension1: 0
+                openMask: 0, openSince0: 0, openSince1: 0, gracePeriodExtension0: 0, gracePeriodExtension1: 0
             })
         });
         id = PositionId.wrap(bytes32(0));
@@ -412,12 +445,37 @@ contract MockVTSOrchestrator {
         _lastLiqBefore = liqBefore;
     }
 
+    function settlePositionGrowths(PositionId positionId) external {
+        _lastSettledPositionId = positionId;
+        _settlePositionGrowthsCalls++;
+    }
+
     function lastSqrtPBefore() external view returns (uint160) {
         return _lastSqrtPBefore;
     }
 
     function lastLiqBefore() external view returns (uint128) {
         return _lastLiqBefore;
+    }
+
+    function lastSettledPositionId() external view returns (PositionId) {
+        return _lastSettledPositionId;
+    }
+
+    function settlePositionGrowthsCalls() external view returns (uint256) {
+        return _settlePositionGrowthsCalls;
+    }
+
+    function isPoolPaused(PoolId) external pure returns (bool) {
+        return false;
+    }
+
+    function isPaused() external pure returns (bool) {
+        return false;
+    }
+
+    function isPoolOrGlobalPaused(PoolId) external view returns (bool) {
+        return _paused;
     }
 }
 

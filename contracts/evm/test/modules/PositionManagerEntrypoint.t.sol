@@ -5,6 +5,7 @@ import "forge-std/Test.sol";
 
 import {PositionManagerEntrypoint} from "../../src/modules/PositionManagerEntrypoint.sol";
 import {Currency} from "v4-periphery/lib/v4-core/src/types/Currency.sol";
+import {Errors} from "../../src/libraries/Errors.sol";
 
 contract MockERC20 {
     string public name;
@@ -56,7 +57,9 @@ contract PositionManagerEntrypointHarness is PositionManagerEntrypoint {
     // Used to validate delegatecall writes to the caller's storage.
     uint256 public x;
 
-    constructor(address hub, address orch, address impl, address locker) PositionManagerEntrypoint(hub, orch, impl) {
+    constructor(address factory, address orch, address impl, address locker)
+        PositionManagerEntrypoint(factory, orch, impl)
+    {
         _locker = locker;
     }
 
@@ -81,22 +84,37 @@ contract PositionManagerEntrypointHarness is PositionManagerEntrypoint {
     }
 }
 
+contract BeforeAfterBatchCaller {
+    function callZeroThenOne(PositionManagerEntrypointHarness harness) external payable {
+        if (msg.value != 1) revert();
+        harness.exposeBeforeBatch{value: 0}();
+        harness.exposeAfterBatch();
+        harness.exposeBeforeBatch{value: 1}();
+    }
+}
+
 contract PositionManagerEntrypointTest is Test {
     PositionManagerEntrypointHarness internal h;
     DelegationImpl internal impl;
+    BeforeAfterBatchCaller internal caller;
 
     address internal hub;
+    address internal factory;
     address internal orch;
     address internal locker;
 
     function setUp() public {
         hub = makeAddr("hub");
+        factory = makeAddr("factory");
         orch = makeAddr("vtsOrchestrator");
         locker = makeAddr("locker");
         // Foundry reverts on interface calls to EOAs ("call to non-contract address").
+        vm.etch(factory, hex"00");
+        vm.mockCall(factory, abi.encodeWithSignature("liquidityHub()"), abi.encode(hub));
         vm.etch(orch, hex"00");
         impl = new DelegationImpl();
-        h = new PositionManagerEntrypointHarness(hub, orch, address(impl), locker);
+        h = new PositionManagerEntrypointHarness(factory, orch, address(impl), locker);
+        caller = new BeforeAfterBatchCaller();
     }
 
     function test_delegateToImpl_success() public {
@@ -115,8 +133,29 @@ contract PositionManagerEntrypointTest is Test {
     }
 
     function test_beforeBatch_nonZeroValue_syncsNativeAsCredit() public {
-        vm.expectCall(orch, abi.encodeWithSignature("sync(address,address,address)", address(0), address(h), locker));
+        vm.mockCall(
+            orch,
+            abi.encodeWithSignature("creditExact(address,address,address,uint256)", factory, address(0), locker, 1),
+            abi.encode(int128(1))
+        );
+        vm.expectCall(
+            orch,
+            abi.encodeWithSignature("creditExact(address,address,address,uint256)", factory, address(0), locker, 1)
+        );
         h.exposeBeforeBatch{value: 1}();
+    }
+
+    function test_beforeBatch_zeroThenNonZero_afterBatchClearsReadGuard_andCreditsSecondCall() public {
+        vm.mockCall(
+            orch,
+            abi.encodeWithSignature("creditExact(address,address,address,uint256)", factory, address(0), locker, 1),
+            abi.encode(int128(1))
+        );
+        vm.expectCall(
+            orch,
+            abi.encodeWithSignature("creditExact(address,address,address,uint256)", factory, address(0), locker, 1)
+        );
+        caller.callZeroThenOne{value: 1}(h);
     }
 
     function test_afterBatch_callsAssertNonZeroDeltas() public {
@@ -153,6 +192,13 @@ contract PositionManagerEntrypointTest is Test {
         // maxAmount=10 and balance=100 => trueMaxAmount=10
         h.exposeTake(Currency.wrap(address(token)), address(h), 10);
         assertEq(token.balanceOf(address(h)), 100);
+    }
+
+    function test_constructor_revertsWhenActionsImplHasNoContractCode() public {
+        address badImpl = makeAddr("badActionsImpl");
+        vm.etch(badImpl, hex"");
+        vm.expectRevert(abi.encodeWithSelector(Errors.InvalidAddress.selector, badImpl));
+        new PositionManagerEntrypointHarness(factory, orch, badImpl, locker);
     }
 }
 
