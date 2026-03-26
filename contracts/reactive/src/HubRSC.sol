@@ -394,9 +394,9 @@ contract HubRSC is AbstractReactive {
     /// @notice Dispatches liquidity for a given LCC.
     /// @dev Checks if the LCC has a registered underlying and dispatches liquidity accordingly.
     function _dispatchLiquidity(address lcc, uint256 available) internal {
-        bool hasUnderlying = hasUnderlyingForLcc[lcc];
+        bool liquidityLccHasUnderlying = hasUnderlyingForLcc[lcc];
         LinkedQueue.Data storage scanQueue =
-            hasUnderlying ? queueDataByUnderlying[underlyingByLcc[lcc]] : queueDataByLcc[lcc];
+            liquidityLccHasUnderlying ? queueDataByUnderlying[underlyingByLcc[lcc]] : queueDataByLcc[lcc];
         if (available == 0 || scanQueue.size == 0) return;
 
         uint256 startSize = scanQueue.size;
@@ -414,6 +414,9 @@ contract HubRSC is AbstractReactive {
             bytes32 key = state.cursor;
             state.cursor = scanQueue.nextOrHead(key);
             Pending storage entry = pending[key];
+            // if both the liquidity LCC and the pending entry LCC have underlying assets, then check if the underlying assets are the same
+            // otherwise, check if the LCCs are the same
+            bool lccMatches = liquidityLccHasUnderlying && hasUnderlyingForLcc[entry.lcc] ? _matchesUnderlying(entry.lcc, lcc) : entry.lcc == lcc;
 
             if (!scanQueue.inQueue[key] || !entry.exists) {
                 scanQueue.remove(key);
