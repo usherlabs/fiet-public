@@ -1,6 +1,6 @@
 openapi: 3.1.0
 info:
-  title: Fiet Business API (Core)
+  title: Fiet Trading API (Core)
   version: 0.1.0
   description: |
     Hosted control-plane API for the Fiet Interface.
@@ -283,7 +283,7 @@ paths:
       x-mint:
         content: |
           <Note>
-          See the [Introduction](/business/introduction) for a quick overview of how the Business API fits into your integration.
+          See the [Introduction](/business/introduction) for a quick overview of how the Trading API fits into your integration.
           </Note>
       responses:
         "200":

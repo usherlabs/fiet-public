@@ -12,10 +12,10 @@ description: Self-hosted execution-plane for signing and broadcasting transactio
 
 The Client Node is a self-hosted service you run in your own infrastructure.
 
-It mirrors the Business API’s `/v1/*` surface but adds an `executionMode` parameter:
+It mirrors the Trading API’s `/v1/*` surface but adds an `executionMode` parameter:
 
 - `executionMode=plan`: return instructions and plans only (no signing or broadcasting)
-- `executionMode=execute`: fetch a plan from the Business API, then **sign and broadcast locally**, returning execution receipts
+- `executionMode=execute`: fetch a plan from the Trading API, then **sign and broadcast locally**, returning execution receipts
 
 ## Execution receipts
 
@@ -38,7 +38,7 @@ The Client Node exposes `/relay/*` for operator-level operations such as:
 
 The Client Node is designed as a single service with a single configuration file:
 
-- Business API base URL and credentials
+- Trading API base URL and credentials
 - local signing configuration and runtime settings
 
 ## Architecture preview
