@@ -47,6 +47,13 @@ contract HubRSC is AbstractReactive {
         uint256 inflightAmountToReduce;
     }
 
+    struct DispatchState {
+        uint256 remainingLiquidity;
+        uint256 batchCount;
+        uint256 scanned;
+        bytes32 cursor;
+    }
+
     uint256 public immutable maxDispatchItems;
 
     /// @notice The Chain the protocol lives on i.e DestinationContract.sol
@@ -92,6 +99,7 @@ contract HubRSC is AbstractReactive {
     /// @notice Canonical underlying lookup for each LCC (from LiquidityHub `LCCCreated`).
     mapping(address => address) public underlyingByLcc;
     /// @notice Whether an LCC has been registered with a canonical underlying.
+    /// @notice It is important to track using a second variable because underlyingByLcc[lcc] can be 0x for lccs with native underlying assets
     mapping(address => bool) public hasUnderlyingForLcc;
 
     event SpokeCreated(address indexed recipient, address indexed spoke);
@@ -372,7 +380,7 @@ contract HubRSC is AbstractReactive {
         address lcc = address(uint160(log.topic_1));
         (address underlying, uint256 available,) = abi.decode(log.data, (address, uint256, bytes32));
         _registerLccUnderlying(lcc, underlying);
-        _routeLiquidityDispatch(lcc, available);
+        _dispatchLiquidity(lcc, available);
     }
 
     /// @notice Handles follow-up liquidity notices emitted via HubCallback.
@@ -380,33 +388,15 @@ contract HubRSC is AbstractReactive {
     function _handleMoreLiquidityAvailable(IReactive.LogRecord calldata log) internal {
         address lcc = address(uint160(log.topic_1));
         uint256 available = abi.decode(log.data, (uint256));
-        _routeLiquidityDispatch(lcc, available);
+        _dispatchLiquidity(lcc, available);
     }
 
-    /// @notice Chooses shared-underlying queue scan when metadata exists, otherwise per-LCC dispatch.
-    function _routeLiquidityDispatch(address triggerLcc, uint256 available) internal {
-        if (hasUnderlyingForLcc[triggerLcc]) {
-            _dispatchSettlementBatch(triggerLcc, available, true, underlyingByLcc[triggerLcc]);
-        } else {
-            _dispatchSettlementBatch(triggerLcc, available, false, address(0));
-        }
-    }
-
-    /// @notice Bounded batch dispatch: either all LCCs sharing an underlying, or a single LCC lane.
-    /// @param sharedUnderlying When true, `underlying` is the shared bucket; when false, `triggerLcc` selects the per-LCC queue.
-    function _dispatchSettlementBatch(address triggerLcc, uint256 available, bool sharedUnderlying, address underlying)
-        internal
-    {
-        if (sharedUnderlying) {
-            _dispatchForSharedUnderlying(triggerLcc, available, underlying);
-        } else {
-            _dispatchForPerLcc(triggerLcc, available);
-        }
-    }
-
-    /// @dev Split from `_dispatchSettlementBatch` to avoid stack-too-deep in solc.
-    function _dispatchForSharedUnderlying(address triggerLcc, uint256 available, address underlying) internal {
-        LinkedQueue.Data storage scanQueue = queueDataByUnderlying[underlying];
+    /// @notice Dispatches liquidity for a given LCC.
+    /// @dev Checks if the LCC has a registered underlying and dispatches liquidity accordingly.
+    function _dispatchLiquidity(address lcc, uint256 available) internal {
+        bool hasUnderlying = hasUnderlyingForLcc[lcc];
+        LinkedQueue.Data storage scanQueue =
+            hasUnderlying ? queueDataByUnderlying[underlyingByLcc[lcc]] : queueDataByLcc[lcc];
         if (available == 0 || scanQueue.size == 0) return;
 
         uint256 startSize = scanQueue.size;
@@ -416,101 +406,49 @@ contract HubRSC is AbstractReactive {
         address[] memory recipients = new address[](cap);
         uint256[] memory amounts = new uint256[](cap);
 
-        uint256 remainingLiquidity = available;
-        uint256 batchCount = 0;
-        uint256 scanned = 0;
-        bytes32 cursor = scanQueue.currentCursor();
+        DispatchState memory state = DispatchState({
+            remainingLiquidity: available, batchCount: 0, scanned: 0, cursor: scanQueue.currentCursor()
+        });
 
-        while (scanned < cap && remainingLiquidity > 0) {
-            bytes32 key = cursor;
-            cursor = scanQueue.nextOrHead(key);
-            Pending storage entry = pending[key];
-
-            if (!scanQueue.inQueue[key] || !entry.exists) {
-                scanQueue.remove(key);
-                queueDataByLcc[entry.lcc].remove(key);
-                queueData.remove(key);
-            } else if (_matchesUnderlying(entry.lcc, underlying)) {
-                uint256 reserved = inFlightByKey[key];
-                uint256 dispatchable = entry.amount > reserved ? (entry.amount - reserved) : 0;
-                if (entry.amount == 0 && reserved == 0) {
-                    _pruneIfFullySettled(entry, key);
-                    scanned++;
-                    continue;
-                }
-                if (dispatchable == 0) {
-                    scanned++;
-                    continue;
-                }
-                uint256 settleAmount = dispatchable <= remainingLiquidity ? dispatchable : remainingLiquidity;
-
-                inFlightByKey[key] = reserved + settleAmount;
-                remainingLiquidity -= settleAmount;
-
-                lccs[batchCount] = entry.lcc;
-                recipients[batchCount] = entry.recipient;
-                amounts[batchCount] = settleAmount;
-                batchCount++;
-            }
-            scanned++;
-        }
-
-        scanQueue.cursor = cursor;
-        _finalizeLiquidityDispatch(triggerLcc, available, batchCount, remainingLiquidity, lccs, recipients, amounts);
-    }
-
-    /// @dev Split from `_dispatchSettlementBatch` to avoid stack-too-deep in solc.
-    function _dispatchForPerLcc(address triggerLcc, uint256 available) internal {
-        LinkedQueue.Data storage scanQueue = queueDataByLcc[triggerLcc];
-        if (available == 0 || scanQueue.size == 0) return;
-
-        uint256 startSize = scanQueue.size;
-        uint256 cap = startSize < maxDispatchItems ? startSize : maxDispatchItems;
-
-        address[] memory lccs = new address[](cap);
-        address[] memory recipients = new address[](cap);
-        uint256[] memory amounts = new uint256[](cap);
-
-        uint256 remainingLiquidity = available;
-        uint256 batchCount = 0;
-        uint256 scanned = 0;
-        bytes32 cursor = scanQueue.currentCursor();
-
-        while (scanned < cap && remainingLiquidity > 0) {
-            bytes32 key = cursor;
-            cursor = scanQueue.nextOrHead(key);
+        while (state.scanned < cap && state.remainingLiquidity > 0) {
+            bytes32 key = state.cursor;
+            state.cursor = scanQueue.nextOrHead(key);
             Pending storage entry = pending[key];
 
             if (!scanQueue.inQueue[key] || !entry.exists) {
                 scanQueue.remove(key);
                 queueData.remove(key);
-            } else if (entry.lcc == triggerLcc) {
+            } else if (hasUnderlying ? _matchesUnderlying(entry.lcc, lcc) : entry.lcc == lcc) {
                 uint256 reserved = inFlightByKey[key];
                 uint256 dispatchable = entry.amount > reserved ? (entry.amount - reserved) : 0;
                 if (entry.amount == 0 && reserved == 0) {
                     _pruneIfFullySettled(entry, key);
-                    scanned++;
+                    state.scanned++;
                     continue;
                 }
                 if (dispatchable == 0) {
-                    scanned++;
+                    state.scanned++;
                     continue;
                 }
-                uint256 settleAmount = dispatchable <= remainingLiquidity ? dispatchable : remainingLiquidity;
+                uint256 settleAmount =
+                    dispatchable <= state.remainingLiquidity ? dispatchable : state.remainingLiquidity;
 
                 inFlightByKey[key] = reserved + settleAmount;
-                remainingLiquidity -= settleAmount;
+                state.remainingLiquidity -= settleAmount;
 
-                lccs[batchCount] = entry.lcc;
-                recipients[batchCount] = entry.recipient;
-                amounts[batchCount] = settleAmount;
-                batchCount++;
+                lccs[state.batchCount] = entry.lcc;
+                recipients[state.batchCount] = entry.recipient;
+                amounts[state.batchCount] = settleAmount;
+                state.batchCount++;
             }
-            scanned++;
+            state.scanned++;
         }
 
-        scanQueue.cursor = cursor;
-        _finalizeLiquidityDispatch(triggerLcc, available, batchCount, remainingLiquidity, lccs, recipients, amounts);
+        scanQueue.cursor = state.cursor;
+
+        _finalizeLiquidityDispatch(
+            lcc, available, state.batchCount, state.remainingLiquidity, lccs, recipients, amounts
+        );
     }
 
     /// @dev Shrink batch arrays, emit destination callback, and optionally request more liquidity on the callback chain.
@@ -580,8 +518,9 @@ contract HubRSC is AbstractReactive {
         queueDataByUnderlying[underlyingByLcc[lcc]].enqueue(key);
     }
 
-    function _matchesUnderlying(address lcc, address underlying) internal view returns (bool) {
-        return hasUnderlyingForLcc[lcc] && underlyingByLcc[lcc] == underlying;
+    /// @notice Checks if the pending entry matches the underlying of the given LCC.
+    function _matchesUnderlying(address lcc1, address lcc2) internal view returns (bool) {
+        return underlyingByLcc[lcc1] == underlyingByLcc[lcc2];
     }
 
     /// @notice Applies authoritative queue decrement and keeps in-flight reservations bounded.
