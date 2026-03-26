@@ -1,0 +1,109 @@
+---
+title: Settlements
+description: Understand how settlements ensure liquidity delivery in Fiet’s DeFi markets while managing risks.
+---
+
+Settlements in the Fiet Protocol ensure market makers deliver liquidity to AMM pools to meet trading demand, maintaining market stability. A **Request for Settlement (RfS)** triggers when additional liquidity is needed, guided by the Value-to-Signal (VTS) model. Given settlement risk concerns, Fiet employs mechanisms — collateralisation, guarantors, and proof of settlement — to mitigate risks and protect user funds, ensuring traders’ assets remain secure in a non-custodial environment.
+
+<Card icon="shield-halved" horizontal>
+Settlements balance liquidity delivery with safeguards to protect traders and minimise risks.
+</Card>
+
+## How Settlements Work
+
+An RfS is triggered when the VTS ratio for a currency falls below its target, indicating a liquidity shortfall. Market makers must settle the required amount, proportional to their VRL commitment, within a fixed grace period (set at market deployment, e.g., based on bank transfer times). If they fail, settlement guarantors — other market makers or bots — can settle on their behalf, seizing the failing market maker’s collateral or liquidity position as profit. This incentivises timely delivery while ensuring market continuity.
+
+## Managing Settlement Risk
+
+Fiet mitigates settlement risk through multiple safeguards:
+- **Collateralisation**: Market makers deposit a base VTS collateral (e.g., 2% of their commitment) on-chain, securing their obligations and incentivising guarantors to intervene if needed.
+- **Seizure Mechanism**: After the grace period, a failing market maker’s position is seizable on a linear scale (e.g., fully seizable after an hour), ensuring guarantors act swiftly to restore liquidity.
+- **Proof of Settlement**: Market makers can submit zkTLS-verified proof of pending settlements (e.g., a bank transfer) to extend the grace period, reducing seizure risk during delays.
+- **Looping**: Guarantors with smaller reserves can partially settle and seize proportional positions, iterating until the RfS is fulfilled, broadening participation.
+
+<Tip>
+Fiet’s collateral and guarantor system ensures liquidity delivery, even if a market maker faces delays.
+</Tip>
+
+## Protecting User Funds
+
+Traders’ funds are protected by Fiet’s non-custodial design and protocol-bound LCCs:
+- **Non-Custodial**: Traders retain control of their assets, swapping LCCs in the DEX without Fiet holding funds.
+- **LCC Restrictions**: LCCs are non-transferable, locked to Fiet’s DEX, preventing misuse or external risks.
+- **Guarantor Backstop**: If a market maker fails, guarantors deliver liquidity, ensuring traders receive their swapped assets.
+- **Collateral Buffer**: The base VTS collateral absorbs potential shortfalls, protecting traders from losses.
+
+For example, in a USDC/ETH market, if a trader swaps \$100,000 USDC for ETH and the market maker fails to settle, guarantors cover the ETH, seizing the market maker’s \$2,000+ collateral, ensuring the trader’s ETH is delivered.
+
+<Note>
+Fiet’s non-custodial design and guarantor system safeguard user funds against settlement failures.
+</Note>
+
+## Sequence Diagram
+
+<Frame caption="Fiet Market Maker Sequence Diagram">
+  <img src="/images/Fiet-for-Market-Makers---Sequence-Diagram.jpg" alt="Fiet for Market Makers Sequence Diagram" width="100%" height="auto" />
+</Frame>
+
+## Guarantor Incentive Structure
+
+<Info>
+The following scenario offers a breakdown of the incentive structure that guarantees settlements to Fiet Markets.
+</Info>
+
+### Context
+
+In an AMM pool with virtual and realised liquidity, MMs deposit a base collateral equal to 2% of their committed liquidity per currency.
+
+Consider a USDC/XYZ pool, with $C_{\text{total}}$ = $1,000,000, at a 1:1 exchange rate in a 50/50 pool — *using a constant sum invariant price algorithm for the sake of simplicity.* 
+
+The pool initially holds:
+
+- **Realised Liquidity**: \$10,000 USDC and \$10,000 XYZ.
+- **Virtual Liquidity**: \$980,000 USD (\$1,000,000 total from MMs’ commitments minus realised liquidity)
+
+A trader swaps \$100,000 USDC for \$100,000 XYZ.
+
+The swap requires \$100,000 XYZ, but the pool initially holds only \$10,000 XYZ in realised liquidity, leaving a shortfall of \$90,000 XYZ that MMs must settle proportionally to their commitments. 
+
+If MM A holds 50% of the pool ($C_{\text{MM}_A}$ = \$500,000), their settlement obligation is \$45,000 XYZ ($a_{\text{MM}_A}$ = 0.5 $\cdot$ \$90,000). If MM A fails to settle, another MM (e.g., MM B) can settle the \$45,000 XYZ on MM A’s behalf and seize MM A’s liquidity position.
+
+### Calculations
+
+- **Trader’s Action**: Deposits \$100,000 USDC, withdraws \$100,000 XYZ.
+- **Pool’s Realised Liquidity Before Settlement**:
+    - USDC: \$10,000 + \$100,000 = \$110,000
+    - XYZ: \$10,000 - \$10,000 = \$0 (pool provides its \$10,000 XYZ to trader, shortfall remains \$90,000 XYZ)
+- **MM Settlement**: MMs collectively settle \$90,000 XYZ
+- **Realised Liquidity After Settlement**
+    - **to Pool**: \$110,000 USDC, \$90,000 XYZ
+    - **to Trader**: \$110,000 USDC, \$0 XYZ
+
+### MM A’s Liquidity Position
+
+MM A’s 50% share of the pool’s realised liquidity post-swap is \$55,000 USDC (0.5 $\cdot$ \$110,000)
+
+Since the pool has \$0 XYZ post-settlement, MM A’s position is valued at \$55,000 USDC.
+
+### Guarantor’s Profit
+
+If MM B settles MM A’s \$45,000 XYZ obligation:
+
+- MM B seizes MM A’s position: \$55,000 USDC.
+- Profit = \$55,000 USDC - \$45,000 XYZ = \$10,000 (assuming 1:1 value).
+
+This \$10,000 profit equals half of MM A’s base collateral (\$5,000 USDC + \$5,000 XYZ = \$10,000), incentivising MM B’s intervention.
+
+### Incentive Mechanism
+
+The base collateral acts as an incentive for guarantors (e.g., MM B) to settle on behalf of a failing MM (e.g., MM A), as the seized liquidity position’s value (\$55,000 USDC) exceeds the settlement cost (\$45,000 XYZ), yielding a profit equal to the failing MM’s proportional collateral. This ensures market liquidity and operational stability.
+
+## Learn More
+
+Explore related concepts and details:
+
+- **[Value-to-Signal](/concepts/value-to-signal)**: See how VTS triggers RfS.
+- **[Liquidity Commitment Certificates](/concepts/liquidity-commitment-certificates)**: Understand LCCs’ role in settlements.
+- **[Markets](/concepts/markets)**: Learn about AMM pools requiring settlements.
+- **[Technical Specification](/resources/technical-specification)**: Review settlement mechanics.
+- **[Join the Community](https://go.usher.so/discord)**: Discuss settlement risks on Discord.
