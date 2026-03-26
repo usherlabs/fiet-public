@@ -124,12 +124,7 @@ contract HubRSC is AbstractReactive {
 
         if (!vm) {
             service.subscribe(
-                protocolChainId,
-                liquidityHub,
-                LCC_CREATED_TOPIC,
-                REACTIVE_IGNORE,
-                REACTIVE_IGNORE,
-                REACTIVE_IGNORE
+                protocolChainId, liquidityHub, LCC_CREATED_TOPIC, REACTIVE_IGNORE, REACTIVE_IGNORE, REACTIVE_IGNORE
             );
             // subscribe to the liquidity hub event for when there is new liquidity available
             service.subscribe(
