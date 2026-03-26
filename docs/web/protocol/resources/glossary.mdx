@@ -1,0 +1,31 @@
+---
+title: 'Glossary'
+description: 'Key terms and definitions used throughout the Fiet Protocol documentation'
+---
+
+| Term | Definition |
+|------|------------|
+| **Automated Market Maker (AMM)** | A smart contract facilitating token swaps in a decentralised exchange using predefined price curve algorithms, supported by liquidity pools. |
+| **Blockchain** | A decentralised, tamper-resistant digital ledger for recording transactions across a distributed network, ensuring security and transparency. |
+| **Cryptographic Proofs** | Verifiable computations, such as zero-knowledge proofs or MPC-TLS proofs, ensuring data integrity and privacy in Fiet's operations, like VRL verification or settlement intent. |
+| **Data Portability** | The ability to securely transfer verified data, such as VRL state, across Market Chains using cryptographic signatures (e.g., tECDSA). |
+| **Decentralised Exchange (DEX)** | A peer-to-peer trading platform for digital assets, operating without intermediaries and typically powered by AMMs. |
+| **Fiet DAO** | The planned decentralised governance body for the Fiet Protocol, managing technical parameters and treasury post-(FIET) token launch. |
+| **Fiet Markets** | AMM-based trading pools in the Fiet Protocol, pairing LCCs to facilitate secure and efficient token swaps. |
+| **Fiet Prover** | A zkTLS Prover, built with Verity, that generates zkTLS proofs for data verification, supporting VRL, VTS, and settlements. |
+| **Impermanent Loss** | Losses faced by liquidity providers in AMM pools due to price volatility and pool rebalancing, impacting returns. |
+| **Liquidity Commitment Certificate (LCC)** | A synthetic, non-transferable asset in Fiet Markets representing MMs' VRL commitments, traded exclusively on Fiet's DEX. |
+| **Market Maker (MM)** | A participant facilitating liquidity for Fiet Markets, committing VRL and managing settlements, incentivised by rewards and fees. |
+| **Market Chain** | A blockchain network integrated with Fiet Markets, where VRL state is syndicated and verified for cross-chain operations. |
+| **Merkle Tree** | A cryptographic data structure organising VRL state in a verifiable compute environment, enabling efficient validation across Market Chains. |
+| **Proof of Settlement** | A cryptographic proof demonstrating an MM's intent to settle liquidity, used to extend grace periods during RfS processes. |
+| **Request for Settlement (RfS)** | A condition triggered when additional liquidity is needed, managed by Fiet's VTS manager. |
+| **Rehypothecation** | The reuse of committed liquidity across multiple markets or platforms, adapted in Fiet to optimise capital efficiency while managing settlement risks. |
+| **Settlement Guarantor** | A participant (MM or bot) settling an MM's RfS obligation, seizing their liquidity position for profit, incentivised by collateral. |
+| **Threshold-ECDSA (tECDSA) Signatures** | Decentralised signatures in zkTLS system, signing VRL state updates for secure cross-chain syndication. |
+| **Universal Rewards Distributor (URD)** | A Fiet Protocol component enabling weekly reward claims for user activities (e.g., market making, trading). |
+| **Value-to-Signal (VTS) Model** | A mechanism calculating the ratio of settled to committed liquidity, driving settlement triggers. |
+| **Verifiable Compute Environment** | A secure platform, such as the Internet Computer, processing zkTLS proofs and managing VRL state in Fiet. |
+| **Verified Reserve Liquidity (VRL)** | Off-chain liquidity committed by MMs, verified via Verity's zkTLS system, enabling capital-efficient market making. |
+| **Zero-Knowledge Proofs** | Cryptographic methods allowing data verification (e.g., reserve liquidity) without revealing sensitive details, ensuring privacy and security. |
+| **zkTLS** | Zero-knowledge Transport Layer Security proofs, verifying private financial data for Fiet's operations. |

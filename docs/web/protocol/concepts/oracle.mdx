@@ -1,0 +1,56 @@
+---
+title: Oracles
+---
+
+Oracles are smart contracts that deliver external data, particularly price information, to the Fiet Protocol. They provide price data to determine the relative value of currencies, such as calculating how many USDC one BTC is worth at a given moment.
+
+## Oracles in Fiet
+
+Oracles in the Fiet Protocol provide price data to:
+
+1. Calculate the value of signal currencies relative to committed currencies in VTS ratio computations.
+2. Assess MM solvency for settlement obligations.
+3. Trigger incentives for Settlement Guarantors in risk management processes.
+
+When the signal currency matches the settlement currency, oracles are bypassed, reducing external data dependencies.
+
+## Implementation
+
+The Fiet Protocol adopts an **oracle-agnostic approach**, allowing LCC creators to select price feed mechanisms tailored to specific market requirements. Each LCC specifies its oracle via parameters, ensuring flexibility in implementation.
+
+Oracles in Fiet Markets implement the [`IOracle` interface](https://docs.morpho.org/overview/resources/contracts/oracles#price), adopted from the Morpho Blue protocol, defined as:
+
+```rust
+function price() external view returns (uint256);
+```
+
+This function returns the price of one unit of signal currency quoted in the settlement currency, scaled to account for decimal differences between currencies.
+
+## Types of Oracles Compatible
+
+Fiet Markets support various oracle implementations:
+
+1. **Price Feed Oracles**: Leverage external price feeds from providers like Chainlink, Redstone, ChainSight, or Pyth to compute asset exchange rates.
+2. **Exchange Rate Oracles**: Designed for wrapped or rebasing tokens (e.g., wstETH/stETH) with deterministic exchange rates.
+3. **Fixed-Price Oracles**: Applied to assets with stable or predefined exchange rates, such as stablecoins pegged to the same value.
+
+## Key Oracle Characteristics
+
+1. **Purpose-Built**: Each oracle delivers the exchange rate between a signal currency and a settlement currency for a specific market.
+2. **Immutable**: Oracle addresses are fixed upon market deployment, ensuring data source consistency.
+3. **Independent**: Oracles operate autonomously, using distinct pricing sources to enhance reliability.
+4. **Flexible Implementation**: LCC creators can select varied data sources while adhering to the standardised interface.
+
+<Note>
+Oracles enhance trust by delivering verifiable price data to Fiet’s markets.
+</Note>
+
+## Learn More
+
+Explore related concepts and details:
+
+- **[Value-to-Signal](/concepts/value-to-signal)**: See how oracles support VTS calculations.
+- **[Liquidity Commitment Certificates](/concepts/liquidity-commitment-certificates)**: Understand LCC oracle specifications.
+- **[Markets](/concepts/markets)**: Learn about AMM pools using oracles.
+- **[Technical Specification](/resources/technical-specification)**: Review oracle mechanics.
+- **[Join the Community](https://go.usher.so/discord)**: Discuss oracles on Discord.
