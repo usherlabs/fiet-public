@@ -5,7 +5,7 @@ description: What your integration experience looks like with swaps, payments, a
 
 ## System overview (public view)
 
-The Business API is a single product surface. It provides quotes, instructions, and plans. **Execution** (signing and broadcasting) happens in your infrastructure.
+The Trading API is a single product surface. It provides quotes, instructions, and plans. **Execution** (signing and broadcasting) happens in your infrastructure.
 
 Digital Collect includes a **recipient-facing web experience**: recipients open an email link, choose where they want to receive funds, and provide the required details (wallet, bank, or eMoney).
 
@@ -17,7 +17,7 @@ graph TB
     end
 
     subgraph fietPlatform["FietPlatform"]
-        BusinessApi["FietBusinessAPI"]
+        BusinessApi["FietBusinessTradingAPI"]
         DigitalCollectUi["DigitalCollectUI"]
     end
 
@@ -43,7 +43,7 @@ graph TB
 sequenceDiagram
     autonumber
     participant App as YourApplication
-    participant BA as FietBusinessAPI
+    participant BA as FietBusinessTradingAPI
 
     Note over App,BA: Market discovery (optional but recommended)
     App->>BA: GET /v1/markets/chains
@@ -73,7 +73,7 @@ sequenceDiagram
     autonumber
     participant App as YourApplication
     participant CN as ClientNode
-    participant BA as FietBusinessAPI
+    participant BA as FietBusinessTradingAPI
     participant Chain as EvmNetwork
 
     Note over App,CN: plan mode (instructions only)
@@ -101,7 +101,7 @@ sequenceDiagram
     autonumber
     participant ERP as YourERP
     participant CN as ClientNode
-    participant BA as FietBusinessAPI
+    participant BA as FietBusinessTradingAPI
     participant Cust as CustodianOrIssuer
     participant Chain as EvmNetwork
 
@@ -136,7 +136,7 @@ sequenceDiagram
     autonumber
     participant App as YourApplication
     participant CN as ClientNode
-    participant BA as FietBusinessAPI
+    participant BA as FietBusinessTradingAPI
     participant Email as RecipientEmail
     participant Ui as DigitalCollectUI
     participant Recip as Recipient
@@ -171,5 +171,5 @@ sequenceDiagram
 
 ## Who executes?
 
-- **Direct integration:** you call the Business API and receive instructions and plans; you sign and broadcast using your own infrastructure.
-- **Client Node (coming soon):** you call your self-hosted Client Node; it fetches plans from the Business API and executes locally, returning receipts.
+- **Direct integration:** you call the Trading API and receive instructions and plans; you sign and broadcast using your own infrastructure.
+- **Client Node (coming soon):** you call your self-hosted Client Node; it fetches plans from the Trading API and executes locally, returning receipts.
