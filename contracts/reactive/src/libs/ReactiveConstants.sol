@@ -8,6 +8,9 @@ library ReactiveConstants {
         uint256(keccak256("LiquidityAvailable(address,address,uint256,bytes32)"));
     uint256 internal constant MORE_LIQUIDITY_AVAILABLE_TOPIC =
         uint256(keccak256("MoreLiquidityAvailable(address,uint256)"));
+    /// @notice LCCCreated(address indexed underlyingAsset, address indexed lccToken, bytes32 marketId).
+    uint256 internal constant LCC_CREATED_TOPIC =
+        uint256(keccak256("LCCCreated(address,address,bytes32)"));
 
     // Protocol-chain events observed by SpokeRSC.
     uint256 internal constant SETTLEMENT_QUEUED_TOPIC = uint256(keccak256("SettlementQueued(address,address,uint256)"));
