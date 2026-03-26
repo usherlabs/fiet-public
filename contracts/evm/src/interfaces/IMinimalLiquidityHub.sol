@@ -20,6 +20,8 @@ interface IMinimalLiquidityHub {
      *         while queueing any unfulfilled portion to a separate settlement queue owner.
      * @dev If available liquidity is insufficient to fulfil `amount`, the shortfall is queued under `queueTo` and can be
      *      permissionlessly processed later via `processSettlementFor(lcc, queueTo, maxAmount)` when reserves become available.
+     *      Queue creation validates owner shape (for example non-zero and non-exempt unless Hub), while present settleability is
+     *      enforced at `processSettlementFor` time and may require a later retry after reconciliation.
      *
      *      This overload exists for protocol flows where "who receives underlying now" differs from "who owns the
      *      settlement claim".
@@ -39,6 +41,8 @@ interface IMinimalLiquidityHub {
      *         immediately-available underlying to `to`, while queueing any unfulfilled portion to `queueTo`.
      * @dev If available liquidity is insufficient to fulfil `amount`, the shortfall is queued under `queueTo` and can be
      *      permissionlessly processed later via `processSettlementFor(lcc, queueTo, maxAmount)`.
+     *      Queue creation validates owner shape (for example non-zero and non-exempt unless Hub), while present settleability is
+     *      enforced at `processSettlementFor` time and may require a later retry after reconciliation.
      *
      *      This overload exists for protocol flows where the settlement queue owner must differ from the immediate
      *      payout recipient.
@@ -55,12 +59,25 @@ interface IMinimalLiquidityHub {
 
     /**
      * @notice Process settlement for a specific recipient using reserveOfUnderlying
-     * @dev Permissionless function that allows anyone to process settlements when liquidity is available
+     * @dev Permissionless function that allows anyone to process settlements when liquidity is available.
+     *      Reverts for external recipients are retriable and indicate reserves/custody are not yet reconciled.
      * @param lcc The LCC token address
      * @param recipient The recipient address to settle for
      * @param maxAmount The maximum amount to settle (caller can limit to avoid large gas costs)
      */
     function processSettlementFor(address lcc, address recipient, uint256 maxAmount) external;
+
+    /**
+     * @notice Atomically releases queued MM custody and settles it against the recipient's Hub queue.
+     * @dev Best-effort path for MM collection flows. Returns 0 when nothing is currently settleable.
+     * @param lcc The LCC token address
+     * @param custodian The MM queue custodian holding beneficiary-scoped queued LCC
+     * @param tokenId The commitment token id bucket to debit in the custodian
+     * @param recipient The queue owner and settlement recipient
+     * @param maxAmount The maximum amount to settle
+     */
+    function settleFromCustodian(address lcc, address custodian, uint256 tokenId, address recipient, uint256 maxAmount)
+        external;
 
     /**
      * @notice Gets the LCC token for a given underlying asset in a specific market
@@ -100,11 +117,34 @@ interface IMinimalLiquidityHub {
     function totalQueued(address lcc) external view returns (uint256);
 
     /**
+     * @notice Gets the total queued settlement debt for the underlying backing a given LCC
+     * @param lcc The LCC token address
+     * @return The aggregated queued debt across all LCCs sharing the same underlying
+     */
+    function queueOfUnderlying(address lcc) external view returns (uint256);
+
+    /**
+     * @notice Gets the unfunded queued settlement debt for the underlying backing a given LCC
+     * @dev Returns `max(queueOfUnderlying - marketDerivedReserveOfUnderlying, 0)` at underlying scope.
+     * @param lcc The LCC token address
+     * @return The remaining underlying shortfall that still needs mobilisation
+     */
+    function unfundedQueueOfUnderlying(address lcc) external view returns (uint256);
+
+    /**
      * @notice Gets the LCC's reserve of underlying assets
      * @param lcc The LCC token address
      * @return The reserve of underlying
      */
     function reserveOfUnderlying(address lcc) external view returns (uint256);
+
+    /**
+     * @notice Gets the split underlying reserve tuple for a given LCC
+     * @param lcc The LCC token address
+     * @return direct The reserve backing direct/wrapped supply
+     * @return marketDerived The reserve mobilised from market-derived flows
+     */
+    function reserveOfUnderlyingTuple(address lcc) external view returns (uint256 direct, uint256 marketDerived);
 
     /**
      * @notice Returns the direct supply (wrapped underlying) for a given LCC token

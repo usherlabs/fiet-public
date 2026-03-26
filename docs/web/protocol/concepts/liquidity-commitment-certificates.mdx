@@ -1,0 +1,56 @@
+---
+title: Liquidity Commitment Certificates
+---
+
+Liquidity Commitment Certificates (LCCs) are protocol-bound non-transferable assets in the Fiet Protocol that represent market makers’ verified reserve liquidity (VRL) committed to trading pools. Traded only in Fiet’s integrated DEXs, LCCs enable low-slippage swaps while keeping market makers’ reserves flexible.
+
+<Card icon="ticket" horizontal>
+LCCs combine the trust of a bank guarantee with the tradability of a warehouse receipt.
+</Card>
+
+## How LCCs Work
+
+Market makers commit VRL to a Fiet Market, creating LCCs (e.g., lcc-USDC for USDC, lcc-ETH for ETH, lcc-AUDD for AUDD, etc.) that represent on-chain collateral (e.g., 2% of the commitment) and verified reserves. Traders use LCCs to swap assets in the DEX and can redeem them for the underlying currency when needed. LCCs are protocol-bound, ensuring regulatory compliance.
+
+## Traditional Finance Analogy
+
+LCCs are a hybrid of a *standby letter of credit* and a *warehouse receipt*. In traditional finance, a standby letter of credit is a bank’s promise to cover funds if a seller cannot deliver, providing buyer confidence. A warehouse receipt proves ownership of stored goods, like grain, tradable in markets. Similarly, LCCs use zkTLS to verify reserve liquidity (e.g., USDC in a bank), ensuring availability without moving funds on-chain. Traders can trade LCCs like receipts, accessing liquidity with the trust of a bank-backed guarantee.
+
+<Tip>
+LCCs let traders tap into verified liquidity, like trading a receipt for stored goods, without locking funds.
+</Tip>
+
+## User Experience
+
+Fiet integrates with next-generation AMMs like Uniswap v4 to abstract LCCs from users. **Proxy pools** route trades from standard asset pairs (e.g., USDC/AUDD) to LCC-based pools (e.g., lcc-USDC/lcc-AUDD), simplifying the user experience. For larger trades, if settled liquidity is insufficient, LCCs may temporarily appear in a trader’s wallet until market makers deliver the underlying capital, which automatically replaces the LCCs.
+
+<Note>
+Proxy pools make LCCs invisible to users where possible, but large trades may show LCCs briefly until settlement.
+</Note>
+
+## Key Features
+
+- **Fungibility**: LCCs for the same currency (e.g., Icc-USDC) are interchangeable.
+- **Collateralisation**: A small on-chain deposit secures commitments.
+- **Non-Transferable**: LCCs are restricted to Fiet’s DEX.
+- **Automatic Creation**: Committing VRL instantly generates LCCs.
+
+<Note>
+LCCs are distinct from stablecoins, designed as bookkeeping units for Fiet’s integrated DEXs.
+</Note>
+
+## Sequence Diagram
+
+<Frame caption="Fiet Market Structure">
+  <img src="/images/Fiet-for-Traders---Sequence-Diagram.jpg" alt="Fiet for Traders Sequence Diagram" width="100%" height="auto" />
+</Frame>
+
+## Learn More
+
+Explore related concepts and details:
+
+- **[Markets](/concepts/markets)**: See how LCCs power AMM pools.
+- **[Verified Reserve Liquidity](/concepts/verified-reserve-liquidity)**: Understand VRL verification.
+- **[Value-to-Signal](/concepts/value-to-signal)**: Learn how LCCs adjust to demand.
+- **[Technical Specification](/resources/technical-specification)**: Review LCC mechanics.
+- **[Join the Community](https://go.usher.so/discord)**: Discuss LCC trading on Discord.
