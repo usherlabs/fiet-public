@@ -10,7 +10,7 @@ description: Generate swap instructions (calldata + constraints) for client-side
 - a fresh derived `quote`
 - an ordered list of `instructions[]` to execute on-chain
 
-The Business API produces instructions only. It does **not** sign or broadcast transactions.
+The Trading API produces instructions only. It does **not** sign or broadcast transactions.
 
 ## Request parameters
 
@@ -39,8 +39,8 @@ In many same-chain swaps, `instructions[]` contains exactly one item. Future upg
 
 ## Who executes?
 
-- **Direct integration (core):** you call the Business API and receive `instructions[]`. You sign and broadcast using your own wallet infrastructure.
-- **Client Node (coming soon):** you call your self-hosted Client Node with `executionMode=execute`. It fetches the swap plan from the Business API, then signs and broadcasts locally, returning execution receipts (such as `txHash`).
+- **Direct integration (core):** you call the Trading API and receive `instructions[]`. You sign and broadcast using your own wallet infrastructure.
+- **Client Node (coming soon):** you call your self-hosted Client Node with `executionMode=execute`. It fetches the swap plan from the Trading API, then signs and broadcasts locally, returning execution receipts (such as `txHash`).
 
 See [Architecture and workflows](/business/architecture) for the end-to-end diagrams.
 
