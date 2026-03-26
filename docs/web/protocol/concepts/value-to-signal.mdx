@@ -1,0 +1,40 @@
+---
+title: Value-to-Signal Model
+---
+
+The Value-to-Signal (VTS) model in the Fiet Protocol dynamically adjusts how much liquidity market makers settle in AMM pools based on trading demand. By tracking the ratio of settled to committed liquidity, VTS ensures markets remain liquid without requiring market makers to lock excessive funds on-chain.
+
+<Card icon="scale-balanced" horizontal>
+VTS acts like a thermostat, balancing liquidity supply with market demand.
+</Card>
+
+## How VTS Works
+
+Each currency in a Fiet Market has a VTS ratio, comparing settled liquidity (on-chain funds) to committed VRL. A **target VTS** sets the desired settlement level, starting at a base rate (e.g., 2% for USDC). As traders demand a currency, the **target VTS** rises, prompting market makers to settle more funds. When demand falls, excess liquidity can be withdrawn, maintaining efficiency.
+
+## Key Features
+
+- **Dynamic Adjustment**: VTS responds to trade volume, increasing settlements during high demand.
+- **Collateralisation**: A base VTS ensures market makers always have some on-chain funds.
+- **Proportional Obligations**: Larger commitments mean higher settlement responsibilities.
+- **Efficiency**: Allows market makers to settle only what’s needed, reducing capital lockup.
+
+<Note>
+VTS adjustments are driven by trades, ensuring real-time alignment with market conditions.
+</Note>
+
+## Sequence Diagram
+
+<Frame caption="Fiet Market Maker Sequence Diagram">
+  <img src="/images/Fiet-for-Market-Makers---Sequence-Diagram.jpg" alt="Fiet for Market Makers Sequence Diagram" width="100%" height="auto" />
+</Frame>
+
+## Learn More
+
+Explore related concepts and details:
+
+- **[Liquidity Commitment Certificates](/concepts/liquidity-commitment-certificates)**: See how VTS governs LCC settlements.
+- **[Settlements](/concepts/settlements)**: Understand how VTS triggers liquidity delivery.
+- **[Markets](/concepts/markets)**: Learn about AMM pools using VTS.
+- **[Technical Specification](/resources/technical-specification)**: Review VTS mechanics.
+- **[Join the Community](https://go.usher.so/discord)**: Discuss VTS strategies on Discord.

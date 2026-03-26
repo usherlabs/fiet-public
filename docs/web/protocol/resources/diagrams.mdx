@@ -1,0 +1,111 @@
+---
+title: Diagrams
+---
+
+## Protocol Architecture
+
+The Fiet Protocol is built on a sophisticated architecture that seamlessly bridges traditional finance and decentralised finance (DeFi). This page provides a comprehensive overview of the protocol's architectural components, data flows, and system interactions.
+
+Fiet's architecture is designed around three primary pillars: **verification**, **commitment**, and **settlement**. The protocol uses zero-knowledge proofs (zkTLS) to verify off-chain liquidity while maintaining privacy and security.
+
+<Frame caption="Fiet Protocol - Protocol Architecture Diagram">
+  <img src="/images/Fiet-Protocol---Visual-Component-Architecture.jpg" alt="Fiet Protocol Protocol Architecture Diagram" width="100%" height="auto" />
+</Frame>
+
+---
+
+<Frame caption="Fiet Protocol - Component Diagram">
+  <img src="/images/Fiet-Protocol---Component-Diagram.jpg" alt="Fiet Protocol Component Diagram" width="100%" height="auto" />
+</Frame>
+
+## Commitments Architecture
+
+Liquidity Commitment Certificates (LCCs) form the backbone of Fiet's liquidity infrastructure. This architecture shows how commitments are created, verified, and managed:
+
+<Frame caption="Fiet Protocol Commitments Architecture">
+  <img src="/images/Fiet-Protocol---Commitments-Architecture.jpg" alt="Fiet Protocol Commitments Architecture" width="100%" height="auto" />
+</Frame>
+
+## Liquidity Flow
+
+Understanding how liquidity flows through the protocol is crucial for participants. This annotated diagram shows the complete liquidity lifecycle:
+
+<Frame caption="Fiet Protocol Liquidity Flow (Annotated)">
+  <img src="/images/Fiet-Protocol---Simple-Liquidity-Flow-Annotated.jpg" alt="Fiet Protocol Liquidity Flow Annotated" width="100%" height="auto" />
+</Frame>
+
+## Participant Workflows
+
+### Market Makers
+
+Market makers follow a specific sequence to provide liquidity to the protocol:
+
+<Frame caption="Fiet for Market Makers - Sequence Diagram">
+  <img src="/images/Fiet-for-Market-Makers---Sequence-Diagram.jpg" alt="Fiet for Market Makers Sequence Diagram" width="100%" height="auto" />
+</Frame>
+
+### Traders
+
+Traders interact with the protocol through a streamlined process:
+
+<Frame caption="Fiet for Traders - Sequence Diagram">
+  <img src="/images/Fiet-for-Traders---Sequence-Diagram.jpg" alt="Fiet for Traders Sequence Diagram" width="100%" height="auto" />
+</Frame>
+
+### Provers
+
+Provers play a crucial role in verifying liquidity commitments:
+
+<Frame caption="Fiet for Provers - Sequence Diagram">
+  <img src="/images/Fiet-for-Provers---Sequence-Diagram.jpg" alt="Fiet for Provers Sequence Diagram" width="100%" height="auto" />
+</Frame>
+
+## Key Architectural Principles
+
+### 1. **Zero-Knowledge Verification**
+- Uses zkTLS to verify liquidity without exposing sensitive financial data
+- Maintains privacy while ensuring trust and transparency
+- Enables verification of off-chain assets
+
+### 2. **Dynamic Liquidity Management**
+- Liquidity is committed but not locked until settlement
+- Market makers retain flexibility while providing market depth
+- Settlement occurs only when market demand requires it
+
+### 3. **Guaranteed Continuity**
+- Settlement Guarantors ensure market stability
+- Automatic fallback mechanisms prevent market disruption
+- Risk mitigation through multiple layers of protection
+
+### 4. **Scalable Infrastructure**
+- Built on Arbitrum for cost efficiency and speed
+- Designed for cross-chain expansion
+- Modular architecture supports future enhancements
+
+## Technical Stack
+
+- **Blockchain**: Arbitrum (with cross-chain expansion planned)
+- **Zero-Knowledge Proofs**: Usher Labs' Verity zkTLS for liquidity verification
+- **Smart Contracts**: Solidity- and Rust-based protocol logic
+- **Oracle Integration**: Real-time market data and settlement triggers
+- **DEX Integration**: Seamless trading through integrated decentralised exchanges
+
+## Security Architecture
+
+The protocol implements multiple security layers:
+
+1. **Cryptographic Security**: zkTLS ensures mathematical proof of liquidity
+2. **Smart Contract Security**: Audited contracts (pending formal verification)
+3. **Economic Security**: Settlement guarantees and risk management
+4. **Operational Security**: Cryptography infrastructure for secure controls and governance mechanisms
+
+<Note>
+The Fiet Protocol architecture is designed to be both secure and scalable, enabling the creation of deep, liquid markets while maintaining the flexibility and efficiency that participants require.
+</Note>
+
+## Next Steps
+
+- **[Technical Specification](/resources/technical-specification)**: Dive deeper into the technical implementation details
+- **[Cryptography](/resources/cryptography)**: Learn about the cryptographic foundations
+- **[Use Cases](/use-cases)**: See how the architecture enables specific use cases
+- **[Glossary](/resources/glossary)**: Understand key architectural terms and concepts
