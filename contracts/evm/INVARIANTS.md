@@ -23,6 +23,34 @@ being an informal “should”.
   - **commitmentDeficit**: position-level insolvency gate derived from commitment backing checks; this is used for
     RFS/seizability hardening and is not part of DICE principal (`totalDeficitPrincipal`).
 
+## Supported underlying asset model
+
+- **Protocol assumption / listing precondition**:
+  - Direct protocol underlyings are assumed to have **deterministic transfer semantics** for protocol accounting
+    windows:
+    - transferring `amount` to the Hub / vault / settlement path must result in the receiver controlling `amount`,
+    - transfers must not silently burn / tax / skim value in-flight, and
+    - balances must not rebase unpredictably during accounting-critical flows.
+  - Therefore, raw **fee-on-transfer / transfer-tax / deflationary** tokens are **not supported directly** as
+    underlyings.
+  - Raw **rebasing** assets are also **not preferred direct underlyings** where their balance model would break
+    amount-based accounting assumptions across Hub / vault / settlement flows.
+- **Support model for non-standard assets**:
+  - If the protocol wishes to support such assets, it should do so via a **deterministic wrapper/share token** whose
+    own transfer semantics are standard and whose deposit/withdraw path internalises the non-standard behaviour.
+  - In practice this means the protocol should treat the **wrapper/share token** as the underlying (for example an
+    ERC-4626-style share token, or a `wstETH`-style non-rebasing wrapper), rather than the raw fee-on-transfer or
+    rebasing asset itself.
+- **Why this matters**:
+  - Large parts of `LiquidityHub`, `MarketVault`, and settlement accounting are **amount-based**, not
+    balance-delta-measured on every hop.
+  - Making only `wrap()` actual-received-aware would not by itself make fee-on-transfer assets safe, because
+    subsequent Hub ↔ vault / issuer / settlement transfers could still lose value and desynchronise reserves.
+- **Current code status**:
+  - Native ETH ingress is explicitly exact (`msg.value == amount`).
+  - ERC20 ingress currently assumes standard ERC20 transfer behaviour; this assumption should be treated as part of the
+    market-listing policy unless and until explicit on-chain rejection / normalisation is added.
+
 ## LCC backing and liquidity domains
 
 ### LCC-BACKING-01: Every LCC mint must correspond to a specific backing domain (no “free mint”)
@@ -129,7 +157,16 @@ being an informal “should”.
   - increment `directSupply[lcc]` and `reserveOfUnderlying[underlying]` by `amount`, and
   - mint `amount` LCC to the recipient.
 - **Enforced by**: `src/LiquidityHub.sol::_wrap`.
-- **Notable guard**: native-asset wrap requires `msg.value == amount`, otherwise `Errors.InvalidAmount`.
+- **Notable guard**:
+  - native-asset wrap requires `msg.value == amount`, otherwise `Errors.InvalidAmount`.
+  - ERC20-backed wrap requires `msg.value == 0`, otherwise `Errors.InvalidAmount`.
+- **Asset-model assumption**:
+  - For ERC20 underlyings, this invariant assumes the listed underlying is a **standard, transfer-conservative token**
+    whose received amount equals the nominal transfer amount.
+  - Raw fee-on-transfer / transfer-tax / deflationary tokens are therefore outside the supported direct-underlying
+    model for this invariant.
+  - If support is needed for a non-standard asset, the supported route is to list a deterministic wrapper/share token
+    as the underlying and let that wrapper absorb the raw asset's non-standard deposit / withdrawal semantics.
 
 ### HUB-02: Unwrapping cannot exceed liquid (bucketed) balance; shortfalls are explicitly queued
 
@@ -474,6 +511,27 @@ being an informal “should”.
   - `src/MMPositionActionsImpl.sol::_settle` calls `MMHelpers.assertApprovedOrOwner` unless `_isSeizing(positionId)`.
   - `src/MMPositionActionsImpl.sol::_seizePosition` explicitly forbids owner/approved from seizing and forbids seizing
     inactive positions.
+
+### AUTH-01A: Seizure context is intentionally same-position and batch-scoped
+
+- **Statement**:
+  - After a successful `SEIZE_POSITION`, the transient seized-position context may remain live for the remainder of the
+    current unlock/batch so the guarantor can complete follow-on settlement / take flows for that **same** seized
+    position.
+  - This is not a general approval bypass: the context is valid only when the queried `positionId` exactly matches the
+    transient seized ID.
+  - The seizure context must be cleared at batch end so it cannot leak into a later batch / unlock session.
+- **Enforced by**:
+  - `src/MMPositionActionsImpl.sol::_isSeizing` compares the queried `positionId` against
+    `TransientSlots.getSeizedPositionId()`.
+  - `src/MMPositionActionsImpl.sol::_seizePosition` sets the transient seized-position ID only after
+    `VTSOrchestrator.onSeize(...)` validates seizability.
+  - `src/modules/PositionManagerEntrypoint.sol::_afterBatch` clears `TransientSlots.clearSeizedPositionId()`.
+- **Intended flow consequence**:
+  - Batched follow-on actions such as `SEIZE_POSITION -> SETTLE_POSITION_FROM_DELTAS -> TAKE` on the same position are
+    part of the supported seizure execution model.
+  - Reusing the context for a different position, or allowing it to persist after batch finalisation, would violate this
+    invariant.
 
 ### AUTH-02: Commitment NFTs cannot be transferred mid-batch
 

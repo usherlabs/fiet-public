@@ -445,6 +445,9 @@ contract LiquidityHub is BoundRegistry, Ownable, ReentrancyGuardTransient {
                 revert Errors.InvalidAmount(0, 0);
             }
         } else {
+            if (msg.value != 0) {
+                revert Errors.InvalidAmount(0, 0);
+            }
             // Use CurrencyTransfer which has Permit2 fallback for ERC20 transfers
             Currency.wrap(underlying).transferFrom(from, address(this), amount);
         }
