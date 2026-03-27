@@ -63,7 +63,8 @@
             "pages": [
               "protocol/overview",
               "protocol/use-cases",
-              "protocol/roles"
+              "protocol/roles",
+              "protocol/vs-rfq"
             ]
           },
           {
