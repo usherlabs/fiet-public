@@ -1,0 +1,31 @@
+4.2.9. Subscriber Dos On Modify Liquidity
+Unit Name: PositionManager
+Location: contracts/evm/lib/v4-periphery/src/PositionManager.sol _modifyLiquidity function;
+contracts/evm/lib/v4-periphery/src/base/Notifier.sol _notifyModifyLiquidity and _call
+functions
+Description: The _modifyLiquidity function calls _notifyModifyLiquidity when a position has a
+subscriber ( info.hasSubscriber() is true). The _notifyModifyLiquidity function in Notifier.sol
+invokes the subscriber's notifyModifyLiquidity callback via _call() , which uses a low-level
+call(gas(), target, 0, ...) that forwards ALL remaining gas to the subscriber with no gas
+limit. If the subscriber's callback reverts, _notifyModifyLiquidity calls bubbleUpAndRevertWith with
+ModifyLiquidityNotificationReverted , reverting the entire liquidity modification transaction.
+This creates a DoS vector aﬀecting _increase (INCREASE_LIQUIDITY), _increaseFromDeltas
+(INCREASE_LIQUIDITY_FROM_DELTAS), and _decrease (DECREASE_LIQUIDITY) — all of which
+route through _modifyLiquidity . These are the most commonly-used liquidity operations,
+making this a higher-impact DoS surface than the already-identified burn DoS.
+In the Fiet protocol, the subscriber is DirectLPDeltaResolver , whose notifyModifyLiquidity calls
+_afterModifyLiquidity(tokenId) , which in turn calls factory.afterModifyLiquidity(poolKey) . Inside
+MarketFactory.afterModifyLiquidity , there is a Bounds.isEndpoint() check that reverts with
+Errors.InvalidSender() if the DirectLPDeltaResolver is not a registered endpoint. If the factory's
+bounds are revoked, the factory is replaced, or CoreHook.settleHookDeltasToPot(key) reverts, ALL
+subscribed positions in that pool become unable to perform any liquidity modifications.
+A workaround exists: position owners can call unsubscribe(tokenId) first (which uses gas-
+limited try/catch and will succeed even if the subscriber is broken), then perform the
+liquidity modification. This can be done atomically via multicall([unsubscribe(tokenId),
+modifyLiquidities(data, deadline)]) . However, this requires knowledge of the workaround,
+causes loss of the subscriber relationship (and thus loss of DirectLPDeltaResolver accounting
+integration), and adds operational complexity.
+This is distinct from the previously identified subscriber_dos_on_burn finding, which covers the
+_removeSubscriberAndNotifyBurn path used during _burn . This finding covers the
+_notifyModifyLiquidity path used during all other liquidity operations.
+User Verdict: True Positive

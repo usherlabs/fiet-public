@@ -1,0 +1,23 @@
+4.2.10. Missing Source Contract Validation
+Unit Name: HubRSC
+Location: contracts/reactive/src/HubRSC.sol — _handleSettlementQueued,
+_handleLiquidityAvailable, _handleMoreLiquidityAvailable
+Description: Three of the six log handlers in HubRSC lack log._contract validation, while the
+other three ( _handleSettlementProcessed, _handleSettlementAnnulled, _handleSettlementFailed )
+consistently verify log._contract != hubCallback before processing. Specifically:
+_handleSettlementQueued does not check log._contract == hubCallback
+_handleLiquidityAvailable does not check log._contract == liquidityHub
+_handleMoreLiquidityAvailable does not check log._contract == hubCallback
+This is inconsistent with the pattern used in SpokeRSC , which validates log._contract on every
+handler. While the Reactive Network subscription mechanism should filter logs by source
+contract, the _markLogProcessed deduplication key includes log._contract , meaning a spoofed
+log from a diﬀerent contract would generate a diﬀerent dedup key and pass deduplication.
+If the Reactive VM delivers a log from any contract on the subscribed chain that happens to
+emit an event with a matching topic_0 (topic hash collision), the following impacts are
+possible:
+1. _handleSettlementQueued : An attacker could inject phantom pending entries, inflating
+queue state and triggering dispatch of non-existent settlements.
+2. _handleLiquidityAvailable / _handleMoreLiquidityAvailable : Forged liquidity events could
+trigger premature dispatch of real pending settlements with incorrect or non-
+existent liquidity backing, leading to settlement failures.
+User Verdict: True Positive

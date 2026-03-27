@@ -1,0 +1,19 @@
+4.2.5. Defensive Clamping Unbacked Supply
+Unit Name: LiquidityHub
+Location: contracts/evm/src/libraries/LiquidityHubLib.sol — _finaliseBurns private function
+Description: In the _finaliseBurns function (called at the end of wrapWithContext ), burn
+amounts are defensively clamped to the Hub's current balance: uint256 targetToBurn =
+Math.min(ctx.targetToBurn, balanceOf(lcc, address(this))) and uint256 backingToBurn =
+Math.min(ctx.backingToBurn, balanceOf(withLCC, address(this))).
+If the Hub's held balance is less than the expected burn amount (e.g., due to concurrent
+operations, reentrancy, or an unexpected state change between wrapWithContext steps and
+_finaliseBurns ), the clamped burn will be less than the mint. Since _wrapWith already
+calculated directToMint and marketToMint based on the unclamped burn amounts and
+proceeds to mint LCCFactoryLib.mint(lcc, to, directToMint, marketToMint) , the minted LCC exceeds
+the burned amount. This creates unbacked LCC supply, violating the value conservation
+invariant for wrapWith operations.
+While the code comment states "Based on the logical call flow, this should never happen,"
+the defensive clamping itself is evidence that the developers considered this scenario
+possible. The silent clamping masks what should be an invariant violation rather than
+reverting the transaction.
+User Verdict: True Positive

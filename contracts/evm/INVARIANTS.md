@@ -516,6 +516,36 @@ being an informal “should”.
   - `src/LiquidityHub.sol::issue`, `cancel`, `cancelWithQueue`, `planCancel*`, `confirmTake`, `prepareSettle` are issuer
     gated (revert `Errors.NotApproved(...)` via `_onlyIssuer`).
 
+### MKT-04A: `BOUND_EXEMPT` and `BOUND_DEX` are bootstrap-only roles; post-bootstrap admin may only manage `BOUND_NONE <-> BOUND_ENDPOINT`
+
+- **Statement**:
+  - `BOUND_EXEMPT` and `BOUND_DEX` are reserved for factory-controlled bootstrap paths and must not be assigned by
+    routine post-bootstrap bounds administration.
+  - Once a `(factory, who)` pair has been assigned `BOUND_EXEMPT` or `BOUND_DEX`, that role is immutable.
+  - After bootstrap, the only mutable bounds lifecycle is `BOUND_NONE <-> BOUND_ENDPOINT`.
+- **Enforced by**:
+  - `src/modules/BoundRegistry.sol::_setBoundLevel` reverts `Errors.InvalidBoundLevelTransition(oldLevel, newLevel)` when:
+    - `oldLevel` is `BOUND_EXEMPT` or `BOUND_DEX` and `newLevel` differs (immutable tier), or
+    - `newLevel` is `BOUND_EXEMPT` or `BOUND_DEX` but `oldLevel` is not `BOUND_NONE` (bootstrap-only assignment), or
+    - `newLevel` is `BOUND_NONE` or `BOUND_ENDPOINT` but `oldLevel` is neither `BOUND_NONE` nor `BOUND_ENDPOINT`.
+  - Factory entrypoints `src/LiquidityHub.sol::setBoundLevel` / `setBoundLevels` delegate to `_setBoundLevel` with
+    `factory = msg.sender` (registered market factory only).
+- **Bootstrap paths (current design)**:
+  - `src/MarketFactory.sol::initialise` assigns:
+    - `poolManager -> BOUND_DEX`
+    - `liquidityHub -> BOUND_EXEMPT`
+    - factory-owned transfer endpoints / `initialBounds -> BOUND_ENDPOINT`
+  - `src/MarketFactory.sol::createMarket` assigns each newly deployed `proxyHook -> BOUND_EXEMPT`.
+- **Post-bootstrap admin surface**:
+  - `src/MarketFactory.sol::addBounds` may only assign `BOUND_ENDPOINT`.
+  - `src/MarketFactory.sol::removeBounds` may only assign `BOUND_NONE`.
+- **Why**:
+  - Crossing the exempt boundary after balances or queues already exist is a governance footgun:
+    - `EXEMPT -> tracked` can strand bucketless exempt-era balances and break the assumptions behind `LCC-02`.
+    - `tracked -> EXEMPT` can make queue-backed settlement non-serviceable until roles/ownership are reconciled.
+  - This lifecycle rule is therefore a structural precondition for `LCC-01` and `LCC-02`, rather than a separate
+    economic policy.
+
 ### MKT-05: Proxy pool AMM price curve must never be utilised (core-curve-only execution)
 
 - **Statement**: A swap submitted against the **proxy pool** must never execute against the proxy pool’s own Uniswap v4
@@ -593,5 +623,8 @@ being an informal “should”.
 - Many invariants above are **batch-scoped** (PoolManager unlock sessions) rather than “global over time”.
 - When writing tests that exercise settlement/credit paths, prefer asserting on **balance deltas** and **explicit revert
   selectors** (eg `Errors.CurrencyNotSettled()`, `Errors.TransferNotAllowed()`, `DelegateCallGuard.OnlyDelegateCall()`).
+- Bound-level tests should respect **MKT-04A**: do not flip `BOUND_EXEMPT` / `BOUND_DEX` after assignment; to obtain an
+  exempt bucket holder mid-suite, use `BOUND_NONE -> BOUND_EXEMPT` (or rely on bootstrap defaults) rather than
+  `BOUND_ENDPOINT -> BOUND_EXEMPT`.
 - Do not assume “LCC supply == hub reserves”; supply spans multiple domains and is constrained by **backing checks**
   and **explicit queue mechanics** instead of a single equality.

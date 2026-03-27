@@ -1,0 +1,28 @@
+4.2.8. Transient Storage Seized Flag Leakage
+Unit Name: MMPositionActionsImpl
+Location: contracts/evm/src/MMPositionActionsImpl.sol - _seizePosition function, _isSeizing
+function, and _settle function
+Description: In _seizePosition, TransientSlots.setSeizedPositionId(positionId) is called to mark
+the position as being seized, but this transient storage flag is never cleared within the
+function itself. It is only cleared in PositionManagerEntrypoint._afterBatch() , which runs after ALL
+actions in a batch have completed.
+This means that within a single batch submitted to modifyLiquidities or
+modifyLiquiditiesWithoutUnlock , a seizer can sequence SEIZE_POSITION as one action followed by
+additional actions (such as SETTLE_POSITION, SETTLE_POSITION_FROM_DELTAS ) targeting the same
+position. Since _isSeizing(positionId) reads from transient storage and returns true for the
+entire remainder of the batch, the assertApprovedOrOwner(msgSender(), tokenId) check in _settle
+and the equivalent check in _settleFromDeltas are bypassed.
+An attacker who is eligible to seize a position can exploit this by batching:
+[SEIZE_POSITION, SETTLE_POSITION_FROM_DELTAS(shouldTake=true)]. The first action
+performs the legitimate seizure and sets the transient flag. The second action bypasses
+owner authorization because _isSeizing returns true, and calls vtsOrchestrator.onMMSettle with
+isSeizing=true , triggering seizure-specific settlement logic a second time. Depending on VTS
+orchestrator state after the first seizure, this could allow additional value extraction from
+the position through repeated seizure settlements or manipulation of settlement
+parameters.
+The vtsOrchestrator.onMMSettle re-validates seizability via CheckpointLibrary.isSeizable , which
+provides a secondary defense. However, the access control bypass in MMPositionActionsImpl
+itself violates the invariant that only the position owner/approved can perform settlement
+operations, and the secondary seizability check may pass if the position remains in a
+seizable state after partial seizure.
+User Verdict: True Positive

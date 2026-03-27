@@ -25,6 +25,11 @@ library Errors {
     /// @notice Thrown when the caller is not approved or is not the owner
     error NotApproved(address caller);
 
+    /// @notice Thrown when a bound level transition is disallowed (immutable EXEMPT/DEX, or EXEMPT/DEX only from NONE)
+    /// @param oldLevel The current bound level before the attempted update
+    /// @param newLevel The requested bound level
+    error InvalidBoundLevelTransition(uint8 oldLevel, uint8 newLevel);
+
     /// @notice Thrown when ETH is sent from an unauthorised sender (e.g., not from authorised protocol contracts)
     error InvalidEthSender();
 

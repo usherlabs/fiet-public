@@ -139,6 +139,7 @@ view.
 | **MKT-02**                  | P3       | No              | Not started           | —                                                                                                                                              | Write-once property; easy to review, still worth testing.                                                 |
 | **MKT-03**                  | P3       | No              | Not started           | —                                                                                                                                              | “Core pool cannot be created twice” is largely structural.                                                |
 | **MKT-04**                  | P3       | No              | Not started           | —                                                                                                                                              | Factory/issuer boundaries are structural; still good to keep coverage.                                    |
+| **MKT-04A**                 | **P3**   | No              | Not started           | —                                                                                                                                              | Bound-role lifecycle: `BOUND_EXEMPT`/`BOUND_DEX` are bootstrap-only and immutable; post-bootstrap admin is limited to `BOUND_NONE <-> BOUND_ENDPOINT`.  |
 
 ## Implemented Echidna checks (test-check IDs)
 

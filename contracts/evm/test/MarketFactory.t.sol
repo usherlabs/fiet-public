@@ -1214,7 +1214,7 @@ contract MarketFactoryUnitTest is Test {
 
     function test_afterModifyLiquidity_succeedsWhenUnlockedAndSenderBound() public {
         poolManager.setExttload(Lock.IS_UNLOCKED_SLOT, bytes32(uint256(1)));
-        liquidityHub.setBoundLevel(address(poolManager), 2);
+        // `initialise` already sets poolManager to BOUND_DEX; that is sufficient for `afterModifyLiquidity` sender checks.
 
         PoolKey memory key = PoolKey({
             currency0: Currency.wrap(address(0x100)),

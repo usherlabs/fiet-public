@@ -92,16 +92,14 @@ contract LiquidityHub is BoundRegistry, Ownable, ReentrancyGuardTransient {
 
     /// Override from BoundRegistry
     function setBoundLevel(address who, uint8 level) external override onlyFactory {
-        // Administrative constraint:
-        // callers must not move `who` into an exempt role while that address owns queued settlements.
-        // We intentionally do not enforce this on-chain with additional queue indexing state.
+        // EXEMPT/DEX immutability and bootstrap-only assignment are enforced in `BoundRegistry._setBoundLevel`.
+        // Queue-owner safety when moving an address into exempt remains an operational concern (not indexed on-chain).
         _setBoundLevel(msg.sender, who, level);
     }
 
     /// Override from BoundRegistry
     function setBoundLevels(address[] calldata who, uint8 level) external override onlyFactory {
         for (uint256 i = 0; i < who.length; i++) {
-            // Same operational constraint as setBoundLevel(...): queue-owner checks are governance/admin enforced.
             _setBoundLevel(msg.sender, who[i], level);
         }
     }

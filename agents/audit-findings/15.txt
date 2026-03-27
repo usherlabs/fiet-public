@@ -1,0 +1,26 @@
+4.3.1. Unrecorded Token Transfer To Custodian
+Unit Name: MMPositionActionsImpl
+Location: contracts/evm/src/MMPositionActionsImpl.sol - _forwardQueuedLccToCustodian
+function
+Description: In _forwardQueuedLccToCustodian , when tokenId == 0 , tokens are transferred to the
+custodian but custodian.record() is not called:
+``
+function _forwardQueuedLccToCustodian(Currency currency, uint256 tokenId, address beneficiary, uint256
+amount) internal {
+IMMQueueCustodian custodian = _queueCustodian();
+if (address(custodian) != address(0) && address(custodian) != address(this)) {
+currency.transfer(address(custodian), amount);
+if (tokenId > 0) {
+custodian.record(tokenId, Currency.unwrap(currency), beneficiary, amount);
+}
+}
+}
+`
+The function is called from _handleLccBalanceIncrease (via
+_takePositiveDeltasAndHandleLcc → _modifySyntheticLiquidity ) with the tokenId from the
+liquidity modification context. While ERC721 token IDs are typically non-zero and the callers always pass
+valid commitment token IDs, the missing validation creates a risk: if tokenId == 0` were ever
+passed (e.g., through a future code path or misconfiguration), LCC tokens would be
+irreversibly transferred to the custodian contract with no accounting record, making them
+unrecoverable since the custodian has no mechanism to track or return unrecorded tokens.
+User Verdict: True Positive

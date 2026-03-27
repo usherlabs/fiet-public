@@ -1059,7 +1059,9 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
         MockERC20 underlying = MockERC20(lcc0.underlying());
         uint256 amount = 500;
 
-        // Make MMPM bucket-exempt for this factory (level 2).
+        // Make MMPM bucket-exempt: must clear ENDPOINT from bootstrap first (EXEMPT only assignable from NONE).
+        vm.prank(marketFactory);
+        ILiquidityHub(liquidityHub).setBoundLevel(address(positionManager), Bounds.BOUND_NONE);
         vm.prank(marketFactory);
         ILiquidityHub(liquidityHub).setBoundLevel(address(positionManager), Bounds.BOUND_EXEMPT);
 
