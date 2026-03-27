@@ -34,14 +34,36 @@ By improving market infrastructure and liquidity management, Fiet aligns incenti
 
 ## How Fiet compares
 
-| Feature             | **Fiet**                                                           | Existing Blockchain Markets                     | Traditional Markets               |
-| ------------------- | ------------------------------------------------------------------ | ----------------------------------------------- | --------------------------------- |
-| Liquidity           | 24/7 deep liquidity                                                | Shallow passive liquidity                       | Limited hours (T+2)               |
-| Custody             | Institutional integration for self-custody (Fireblocks and others) | Complex self-custody                            | Centralised                       |
-| Market Creation     | Zero-cost permissionless listing. Markets made professionally      | Permissionless, bootstrap liquidity providers   | High cost and subject to approval |
-| Compliance          | Fully decentralised, direct market access                          | Fully decentralised, direct market access       | Rigid permissioned systems        |
-| Capital lockup      | Settle on-demand                                                   | Suffer impermanent loss                         | Custodial by nature               |
-| Currency Settlement | Single bank transfer by global network of regulated custodians     | Moderate fees, subject to on/off-ramp providers | High fees, legacy currency rails  |
+Each row lists **Fiet** first; use the tabs to compare against **existing blockchain markets** or **traditional markets**.
+
+<Tabs>
+  <Tab title="Existing blockchain markets">
+
+| Feature             | **Fiet**                                                                                                                             | Existing blockchain markets                                                                                           |
+| ------------------- | ------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------- |
+| Liquidity           | 24/7 deep liquidity                                                                                                                  | Shallow passive liquidity                                                                                             |
+| Custody             | Institutional integration for self-custody (Fireblocks and others)                                                                   | Complex self-custody                                                                                                  |
+| Market Creation     | Zero-cost permissionless listing. Markets made professionally                                                                        | Permissionless, bootstrap liquidity providers                                                                         |
+| Compliance          | Fully decentralised, direct market access                                                                                            | Fully decentralised, direct market access                                                                             |
+| Capital lockup      | Settle on-demand                                                                                                                     | Suffer impermanent loss on traditional AMMs                                                                           |
+| Quote Integrity     | **Upfront on-chain quotes** validated before order. Atomic execution via Uniswap v4 with no divergence between quote and settlement. | Upfront quote → execution on traditional AMMs; systematic divergence between quoted and executed price (propAMMs/RFQ) |
+| Currency Settlement | Single bank transfer by global network of regulated custodians                                                                       | Moderate fees, subject to on/off-ramp providers                                                                       |
+
+  </Tab>
+  <Tab title="Traditional markets">
+
+| Feature             | **Fiet**                                                                                                                             | Traditional markets               |
+| ------------------- | ------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------- |
+| Liquidity           | 24/7 deep liquidity                                                                                                                  | Limited hours (T+2)               |
+| Custody             | Institutional integration for self-custody (Fireblocks and others)                                                                   | Centralised                       |
+| Market Creation     | Zero-cost permissionless listing. Markets made professionally                                                                        | High cost and subject to approval |
+| Compliance          | Fully decentralised, direct market access                                                                                            | Rigid permissioned systems        |
+| Capital lockup      | Settle on-demand                                                                                                                     | Custodial by nature               |
+| Quote Integrity     | **Upfront on-chain quotes** validated before order. Atomic execution via Uniswap v4 with no divergence between quote and settlement. | Relies on trusted intermediaries  |
+| Currency Settlement | Single bank transfer by global network of regulated custodians                                                                       | High fees, legacy currency rails  |
+
+  </Tab>
+</Tabs>
 
 ## View our solutions
 

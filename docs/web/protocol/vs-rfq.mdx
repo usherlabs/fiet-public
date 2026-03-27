@@ -1,0 +1,73 @@
+---
+title: Fiet vs RFQ
+description: How Fiet delivers guaranteed execution using upfront, verifiable on-chain quotes versus divergences in RFQ / propAMM models.
+---
+
+Fiet combines the **capital efficiency** of RFQ models — where market makers can manage capital with utmost flexibility and without permanent lockup — with the **transparency and security** of traditional AMM paradigms, where quotes are upfront, on-chain, and traders can validate the atomic state of any market before submitting an order. This guarantees that quoted prices are correct and will be honoured upon execution.
+
+In contrast, many blockchain RFQ systems — particularly propAMMs — suffer from systematic divergence between the price shown to aggregators and the price at which trades actually settle.
+
+## What is RFQ?
+
+A **Request for Quote (RFQ)** system allows traders to request a price from liquidity providers for a specific trade size and direction. The provider responds with a firm quote that is valid for a short window. This model is widely used in traditional finance for large OTC trades because it provides price certainty.
+
+In theory, RFQ should protect traders from slippage. In practice, on blockchains the model has been gamed.
+
+## RFQ Model on Blockchains
+
+On blockchains, traditional RFQ systems have evolved into sophisticated **propAMMs** (proprietary Automated Market Makers). These are essentially programmable smart contracts that act as highly responsive liquidity providers.
+Unlike passive AMMs (such as early Uniswap versions), propAMMs use off-chain predictive price models to actively update prices on-chain. Market makers must constantly adjust quotes to avoid being picked off by informed traders. PropAMMs make this economically viable by updating a minimal amount of data (often a single price value) rather than managing many individual orders.
+In this model, propAMMs function as an **on-chain form of RFQ**: aggregators request quotes, the propAMM contract evaluates current market conditions, trade metadata, and volatility, then returns a price. These systems are designed to compete aggressively on quoted price to win routing volume from decentralised exchange aggregators.
+However, because quotes are generated and settled in discrete blocks, a window exists between when an aggregator snapshots a price and when the trader’s transaction is included. This per-block timing creates opportunities for divergence between the quoted price and the executed price.
+
+## Problems with Blockchain RFQ Systems
+
+The issues with propAMMs and similar RFQ-style systems were documented in detail by 0x in their March 2026 analysis [“PropAMM Shenanigans”](https://0x.org/post/propamm-shenanigans). Three main patterns of execution degradation were identified:
+
+### 1. Quote Spoofing
+
+PropAMM operators publish attractive, tight spreads to win routing decisions. They then adjust prices adversely before the trader’s transaction settles. This can occur due to the natural latency between quote generation and block inclusion.
+
+- Typical impact: **5–10 basis points** worse execution.
+- The statistical signature is often inverted price variance (greater variance within blocks than between blocks).
+
+### 2. Random Spread Fluctuations
+
+A tight spread wins the route, only for the spread to widen significantly (e.g. from ~2 bps to 8–16 bps) before settlement. These changes frequently do not correlate with underlying market volatility.
+
+### 3. Phantom Liquidity
+
+Liquidity is added to appear deep at quote time and withdrawn shortly after, causing trades to execute against much shallower liquidity than anticipated.
+These behaviours create a prisoner’s dilemma for aggregators: those who tolerate them win on quoted price comparisons, while those who police them appear less competitive.
+
+## Lazy Settlement without the Problems
+
+Fiet takes a fundamentally different approach. Rather than relying on continuous price updates and transient on-chain state, Fiet uses **verified lazy settlement** backed by enforceable commitments.
+
+### How Fiet Guarantees Execution
+
+- **Upfront, Transparent On-Chain Quotes** — Traders can inspect the atomic state of the market before submitting an order. The quoted price is derived from verified liquidity commitments, not manipulable pool state.
+- **Verified Reserve Liquidity** — Market makers commit capital using **zkTLS proofs**. These commitments are cryptographically proven and cannot be altered between quote and settlement.
+- **Liquidity Commitment Certificates (LCCs)** — Non-transferable, protocol-bound tokens that represent committed liquidity. Settlement occurs only when required, guided by the Value-to-Signal (VTS) model.
+- **Settlement Guarantors** — Independent parties that step in and enforce settlement if a market maker fails to deliver, protecting traders.
+- **Self-Custodial Execution** — The Fiet Trading API provides quotes and instructions. You retain full control over signing and broadcasting transactions.
+
+Because the quote reflects a **verifiable atomic state** that is backed by enforceable off-chain commitments, the divergence between quoted and executed price that plagues RFQ/propAMM systems is eliminated.
+
+This model retains the capital efficiency of lazy settlement (no permanent capital lockup) while removing the ability for liquidity providers to game the system.
+
+### Comparison Summary
+
+| Aspect              | Traditional RFQ / propAMM           | **Fiet**                                     |
+| ------------------- | ----------------------------------- | -------------------------------------------- |
+| Quote Type          | Transient, easily repriced          | Upfront, verifiable atomic state             |
+| Liquidity Backing   | On-chain state or Flashblock timing | zkTLS-verified reserves + LCCs               |
+| Execution Guarantee | Slippage tolerance                  | Settlement Guarantors + protocol enforcement |
+| Capital Requirement | Often requires lockup or gaming     | No upfront on-chain lockup                   |
+| Trader Protection   | Limited                             | Cryptographic proof + guarantors             |
+
+## Compatibility with RFQ Aggregators
+
+While this page presents a comparative view between traditional RFQ/propAMM systems and Fiet, the two approaches are not mutually exclusive.
+
+Fiet markets can be incorporated into existing RFQ-style aggregator systems. Because **Fiet is built on Uniswap v4**, it inherits Uniswap’s asset exchange interface and pool dynamics. As such, Fiet eliminates the divergence between the quoted price and the executed price. Fiet provides **immediately verifiable on-chain quotes** backed by enforceable liquidity commitments, so both the quote and the resulting order execute atomically with guaranteed execution.
