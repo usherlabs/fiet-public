@@ -101,6 +101,8 @@ contract HubRSC is AbstractReactive {
     /// @notice Whether an LCC has been registered with a canonical underlying.
     /// @notice It is important to track using a second variable because underlyingByLcc[lcc] can be 0x for lccs with native underlying assets
     mapping(address => bool) public hasUnderlyingForLcc;
+    /// @notice One-shot retry flag for zero-batch scans on a shared dispatch lane.
+    mapping(address => bool) public zeroBatchRetryByUnderlying;
 
     event SpokeCreated(address indexed recipient, address indexed spoke);
     event PendingAdded(address indexed lcc, address indexed recipient, uint256 amount);
@@ -377,6 +379,8 @@ contract HubRSC is AbstractReactive {
     /// @notice Builds and dispatches a bounded settlement batch when liquidity is available.
     /// @dev Decodes LiquidityAvailable log fields, registers `lcc -> underlying`, then routes dispatch.
     function _handleLiquidityAvailable(IReactive.LogRecord calldata log) internal {
+        if (log._contract != liquidityHub) return;
+        if (!_markLogProcessed(log)) return;
         address lcc = address(uint160(log.topic_1));
         (address underlying, uint256 available,) = abi.decode(log.data, (address, uint256, bytes32));
         _registerLccUnderlying(lcc, underlying);
@@ -386,6 +390,8 @@ contract HubRSC is AbstractReactive {
     /// @notice Handles follow-up liquidity notices emitted via HubCallback.
     /// @dev Decodes MoreLiquidityAvailable log fields and forwards to shared dispatch logic.
     function _handleMoreLiquidityAvailable(IReactive.LogRecord calldata log) internal {
+        if (log._contract != hubCallback) return;
+        if (!_markLogProcessed(log)) return;
         address lcc = address(uint160(log.topic_1));
         uint256 available = abi.decode(log.data, (uint256));
         _dispatchLiquidity(lcc, available);
@@ -394,9 +400,14 @@ contract HubRSC is AbstractReactive {
     /// @notice Dispatches liquidity for a given LCC.
     /// @dev Checks if the LCC has a registered underlying and dispatches liquidity accordingly.
     function _dispatchLiquidity(address lcc, uint256 available) internal {
-        bool liquidityLccHasUnderlying = hasUnderlyingForLcc[lcc];
+        address underlying = underlyingByLcc[lcc];
+        // Registration metadata alone is not enough to safely choose the shared-underlying lane:
+        // historical backlog may still exist only in the per-LCC queue.
+        bool useSharedUnderlying = hasUnderlyingForLcc[lcc] && queueDataByUnderlying[underlying].size > 0;
+        address dispatchLane = useSharedUnderlying ? underlying : lcc;
+
         LinkedQueue.Data storage scanQueue =
-            liquidityLccHasUnderlying ? queueDataByUnderlying[underlyingByLcc[lcc]] : queueDataByLcc[lcc];
+            useSharedUnderlying ? queueDataByUnderlying[dispatchLane] : queueDataByLcc[lcc];
         if (available == 0 || scanQueue.size == 0) return;
 
         uint256 startSize = scanQueue.size;
@@ -414,14 +425,11 @@ contract HubRSC is AbstractReactive {
             bytes32 key = state.cursor;
             state.cursor = scanQueue.nextOrHead(key);
             Pending storage entry = pending[key];
-            // if both the liquidity LCC and the pending entry LCC have underlying assets, then check if the underlying assets are the same
-            // otherwise, check if the LCCs are the same
-            bool lccMatches = liquidityLccHasUnderlying && hasUnderlyingForLcc[entry.lcc] ? _matchesUnderlying(entry.lcc, lcc) : entry.lcc == lcc;
 
             if (!scanQueue.inQueue[key] || !entry.exists) {
                 scanQueue.remove(key);
                 queueData.remove(key);
-            } else if (hasUnderlying ? _matchesUnderlying(entry.lcc, lcc) : entry.lcc == lcc) {
+            } else if (_entryMatchesDispatchLane(entry.lcc, lcc, useSharedUnderlying)) {
                 uint256 reserved = inFlightByKey[key];
                 uint256 dispatchable = entry.amount > reserved ? (entry.amount - reserved) : 0;
                 if (entry.amount == 0 && reserved == 0) {
@@ -449,9 +457,71 @@ contract HubRSC is AbstractReactive {
 
         scanQueue.cursor = state.cursor;
 
+        // if the batchsize is zero then we need to check if there is more liquidity and more items
+        if (_handleZeroBatchRetry(dispatchLane, lcc, state.batchCount, state.remainingLiquidity)) return;
+
+        // if the batchsize is greater than zero
         _finalizeLiquidityDispatch(
             lcc, available, state.batchCount, state.remainingLiquidity, lccs, recipients, amounts
         );
+    }
+
+    /// @notice Handles the "zero-batch but liquidity remains" continuation case.
+    /// @dev "Zero-batch" means the bounded scan found no dispatchable entries (`batchCount == 0`)
+    /// while `remainingLiquidity > 0`, usually because the scanned window contained only
+    /// reserved or otherwise temporarily non-dispatchable entries.
+    ///
+    /// The function emits at most one retry callback per dispatch lane so the next pass can
+    /// resume from the advanced cursor without creating an infinite retry loop.
+    ///
+    /// The "dispatch lane" is the queue scope currently being scanned:
+    /// - the shared underlying key for underlying-aware dispatch, or
+    /// - the triggering LCC itself for per-LCC fallback dispatch.
+    function _handleZeroBatchRetry(
+        address dispatchLane,
+        address triggerLcc,
+        uint256 batchCount,
+        uint256 remainingLiquidity
+    ) internal returns (bool shouldReturn) {
+        if (batchCount == 0 && remainingLiquidity > 0) {
+            if (!zeroBatchRetryByUnderlying[dispatchLane]) {
+                zeroBatchRetryByUnderlying[dispatchLane] = true;
+                emit Callback(
+                    reactChainId,
+                    hubCallback,
+                    CALLBACK_GAS_LIMIT,
+                    abi.encodeWithSelector(
+                        ReactiveConstants.TRIGGER_MORE_LIQUIDITY_AVAILABLE_SELECTOR,
+                        address(0),
+                        triggerLcc,
+                        remainingLiquidity
+                    )
+                );
+                return true;
+            }
+
+            zeroBatchRetryByUnderlying[dispatchLane] = false;
+        }
+
+        if (batchCount > 0) {
+            zeroBatchRetryByUnderlying[dispatchLane] = false;
+        }
+
+        return false;
+    }
+
+    /// @notice Checks whether a pending entry belongs to the current dispatch lane.
+    /// @dev Shared-underlying routing only matches entries whose LCC has registered metadata
+    /// and shares the same underlying as the triggering LCC; otherwise dispatch falls back
+    /// to strict per-LCC matching.
+    function _entryMatchesDispatchLane(address entryLcc, address triggerLcc, bool useSharedUnderlying)
+        internal
+        view
+        returns (bool)
+    {
+        return useSharedUnderlying && hasUnderlyingForLcc[entryLcc]
+            ? underlyingByLcc[entryLcc] == underlyingByLcc[triggerLcc]
+            : entryLcc == triggerLcc;
     }
 
     /// @dev Shrink batch arrays, emit destination callback, and optionally request more liquidity on the callback chain.
@@ -491,7 +561,6 @@ contract HubRSC is AbstractReactive {
         if (hasUnderlyingForLcc[lcc]) return;
         underlyingByLcc[lcc] = underlying;
         hasUnderlyingForLcc[lcc] = true;
-        _backfillUnderlyingQueueForLcc(lcc, underlying);
     }
 
     function _backfillUnderlyingQueueForLcc(address lcc, address underlying) internal {
@@ -519,11 +588,6 @@ contract HubRSC is AbstractReactive {
     function _enqueueUnderlyingKey(address lcc, bytes32 key) internal {
         if (!hasUnderlyingForLcc[lcc]) return;
         queueDataByUnderlying[underlyingByLcc[lcc]].enqueue(key);
-    }
-
-    /// @notice Checks if the pending entry matches the underlying of the given LCC.
-    function _matchesUnderlying(address lcc1, address lcc2) internal view returns (bool) {
-        return underlyingByLcc[lcc1] == underlyingByLcc[lcc2];
     }
 
     /// @notice Applies authoritative queue decrement and keeps in-flight reservations bounded.
