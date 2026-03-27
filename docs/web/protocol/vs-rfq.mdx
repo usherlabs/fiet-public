@@ -15,10 +15,9 @@ In theory, RFQ should protect traders from slippage. In practice, on blockchains
 
 ## RFQ Model on Blockchains
 
-On blockchains, traditional RFQ systems have evolved into sophisticated **propAMMs** (proprietary Automated Market Makers). These are essentially programmable smart contracts that act as highly responsive liquidity providers.
-Unlike passive AMMs (such as early Uniswap versions), propAMMs use off-chain predictive price models to actively update prices on-chain. Market makers must constantly adjust quotes to avoid being picked off by informed traders. PropAMMs make this economically viable by updating a minimal amount of data (often a single price value) rather than managing many individual orders.
-In this model, propAMMs function as an **on-chain form of RFQ**: aggregators request quotes, the propAMM contract evaluates current market conditions, trade metadata, and volatility, then returns a price. These systems are designed to compete aggressively on quoted price to win routing volume from decentralised exchange aggregators.
-However, because quotes are generated and settled in discrete blocks, a window exists between when an aggregator snapshots a price and when the trader’s transaction is included. This per-block timing creates opportunities for divergence between the quoted price and the executed price.
+On blockchains, traditional RFQ systems have evolved into sophisticated **propAMMs** (proprietary Automated Market Makers). These are essentially programmable smart contracts that act as highly responsive liquidity providers.  
+Unlike passive AMMs (such as early Uniswap versions), propAMMs use off-chain predictive price models to actively update prices on-chain. Market makers must constantly adjust quotes to avoid being picked off by informed traders. PropAMMs make this economically viable by updating a minimal amount of data (often a single price value) rather than managing many individual orders.  
+In this model, propAMMs function as an **on-chain form of RFQ**: aggregators request quotes, the propAMM contract evaluates current market conditions, trade metadata, and volatility, then returns a price. These systems are designed to compete aggressively on quoted price to win routing volume from decentralised exchange aggregators. However, because quotes are generated and settled in discrete blocks, a window exists between when an aggregator snapshots a price and when the trader’s transaction is included. This per-block timing creates opportunities for divergence between the quoted price and the executed price.
 
 ## Problems with Blockchain RFQ Systems
 
