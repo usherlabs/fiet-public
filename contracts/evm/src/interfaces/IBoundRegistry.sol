@@ -11,8 +11,10 @@ interface IBoundRegistry {
     /**
      * @notice Returns the bound level for an address within a factory namespace.
      * @dev 0 = none, 1 = transfer endpoint (bucket-tracked), 2 = bucket-exempt endpoint, 3 = DEX ingress sink.
-     *      `BOUND_EXEMPT` and `BOUND_DEX` are bootstrap-only and immutable once set; `BOUND_NONE` <-> `BOUND_ENDPOINT`
-     *      is the only mutable admin path (see `BoundRegistry._setBoundLevel`).
+     *      At the registry layer, `BOUND_EXEMPT` and `BOUND_DEX` are immutable once set and may only be first-assigned
+     *      from `BOUND_NONE`; `BOUND_NONE` <-> `BOUND_ENDPOINT` is the only mutable admin path. Any market-specific
+     *      `MarketFactory` is expected to hardcode the stronger policy that EXEMPT/DEX only arise from setup /
+     *      integration paths, and those factory contracts are trusted for that policy.
      */
     function boundLevel(address factory, address who) external view returns (uint8);
 
@@ -33,7 +35,8 @@ interface IBoundRegistry {
 
     /**
      * @notice Sets a bound level for a single address within the caller's factory namespace (factory only).
-     * @dev Reverts `Errors.InvalidBoundLevelTransition` on disallowed transitions (immutable EXEMPT/DEX or bootstrap-only rules).
+     * @dev Reverts `Errors.InvalidBoundLevelTransition` on disallowed transitions (immutable EXEMPT/DEX or assigning them
+     *      after the first `BOUND_NONE` state).
      */
     function setBoundLevel(address who, uint8 level) external;
 

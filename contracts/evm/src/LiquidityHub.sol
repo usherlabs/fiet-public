@@ -92,7 +92,9 @@ contract LiquidityHub is BoundRegistry, Ownable, ReentrancyGuardTransient {
 
     /// Override from BoundRegistry
     function setBoundLevel(address who, uint8 level) external override onlyFactory {
-        // EXEMPT/DEX immutability and bootstrap-only assignment are enforced in `BoundRegistry._setBoundLevel`.
+        // `BoundRegistry._setBoundLevel` enforces EXEMPT/DEX immutability and first-assignment-from-NONE.
+        // The stronger policy that EXEMPT/DEX only arise from hardcoded setup / integration paths must be expressed by
+        // the specific `MarketFactory` implementation using this hub; registered factories are trusted for that setup policy.
         // Queue-owner safety when moving an address into exempt remains an operational concern (not indexed on-chain).
         _setBoundLevel(msg.sender, who, level);
     }

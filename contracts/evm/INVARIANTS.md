@@ -574,27 +574,36 @@ being an informal “should”.
   - `src/LiquidityHub.sol::issue`, `cancel`, `cancelWithQueue`, `planCancel*`, `confirmTake`, `prepareSettle` are issuer
     gated (revert `Errors.NotApproved(...)` via `_onlyIssuer`).
 
-### MKT-04A: `BOUND_EXEMPT` and `BOUND_DEX` are bootstrap-only roles; post-bootstrap admin may only manage `BOUND_NONE <-> BOUND_ENDPOINT`
+### MKT-04A: Any market-specific `MarketFactory` must hardcode EXEMPT/DEX setup policy; routine admin may only manage `BOUND_NONE <-> BOUND_ENDPOINT`
 
 - **Statement**:
-  - `BOUND_EXEMPT` and `BOUND_DEX` are reserved for factory-controlled bootstrap paths and must not be assigned by
-    routine post-bootstrap bounds administration.
-  - Once a `(factory, who)` pair has been assigned `BOUND_EXEMPT` or `BOUND_DEX`, that role is immutable.
-  - After bootstrap, the only mutable bounds lifecycle is `BOUND_NONE <-> BOUND_ENDPOINT`.
+  - Any market-specific `MarketFactory` integrated with `LiquidityHub` must hardcode the policy for `BOUND_EXEMPT` /
+    `BOUND_DEX` assignment in its own setup / integration surface, rather than exposing those roles through routine
+    owner/admin bound management.
+  - Such `MarketFactory` contracts are part of the trusted setup / integration boundary for the protocol.
+  - Routine owner/admin surfaces should only manage `BOUND_NONE <-> BOUND_ENDPOINT`.
+  - At the generic registry layer, once a `(factory, who)` pair has been assigned `BOUND_EXEMPT` or `BOUND_DEX`,
+    that role is immutable, and tiers at or above `BOUND_EXEMPT` may only be first-assigned from `BOUND_NONE`.
 - **Enforced by**:
-  - `src/modules/BoundRegistry.sol::_setBoundLevel` reverts `Errors.InvalidBoundLevelTransition(oldLevel, newLevel)` when:
-    - `oldLevel` is `BOUND_EXEMPT` or `BOUND_DEX` and `newLevel` differs (immutable tier), or
-    - `newLevel` is `BOUND_EXEMPT` or `BOUND_DEX` but `oldLevel` is not `BOUND_NONE` (bootstrap-only assignment), or
-    - `newLevel` is `BOUND_NONE` or `BOUND_ENDPOINT` but `oldLevel` is neither `BOUND_NONE` nor `BOUND_ENDPOINT`.
-  - Factory entrypoints `src/LiquidityHub.sol::setBoundLevel` / `setBoundLevels` delegate to `_setBoundLevel` with
-    `factory = msg.sender` (registered market factory only).
-- **Bootstrap paths (current design)**:
+  - Trusted `MarketFactory` integration surface:
+    - `src/MarketFactory.sol::addBounds` may only assign `BOUND_ENDPOINT`.
+    - `src/MarketFactory.sol::removeBounds` may only assign `BOUND_NONE`.
+    - `src/MarketFactory.sol::initialise` assigns fixed setup roles (`poolManager -> BOUND_DEX`,
+      `liquidityHub -> BOUND_EXEMPT`, factory / `initialBounds -> BOUND_ENDPOINT`).
+    - `src/MarketFactory.sol::createMarket` assigns each newly deployed `proxyHook -> BOUND_EXEMPT`.
+  - Generic registry layer:
+    - `src/modules/BoundRegistry.sol::_setBoundLevel` reverts `Errors.InvalidBoundLevelTransition(oldLevel, newLevel)` when:
+      - `oldLevel >= BOUND_EXEMPT` and `newLevel` differs (immutable tier), or
+      - `newLevel >= BOUND_EXEMPT` but `oldLevel` is not `BOUND_NONE` (first-assignment-only at registry layer).
+    - `src/LiquidityHub.sol::setBoundLevel` / `setBoundLevels` are `onlyFactory` entrypoints; which addresses may ever
+      receive EXEMPT/DEX as part of setup is a trusted property of the specific registered `MarketFactory`.
+- **Current `MarketFactory` example**:
   - `src/MarketFactory.sol::initialise` assigns:
     - `poolManager -> BOUND_DEX`
     - `liquidityHub -> BOUND_EXEMPT`
     - factory-owned transfer endpoints / `initialBounds -> BOUND_ENDPOINT`
   - `src/MarketFactory.sol::createMarket` assigns each newly deployed `proxyHook -> BOUND_EXEMPT`.
-- **Post-bootstrap admin surface**:
+- **Routine admin surface (current `MarketFactory`)**:
   - `src/MarketFactory.sol::addBounds` may only assign `BOUND_ENDPOINT`.
   - `src/MarketFactory.sol::removeBounds` may only assign `BOUND_NONE`.
 - **Why**:
@@ -681,8 +690,8 @@ being an informal “should”.
 - Many invariants above are **batch-scoped** (PoolManager unlock sessions) rather than “global over time”.
 - When writing tests that exercise settlement/credit paths, prefer asserting on **balance deltas** and **explicit revert
   selectors** (eg `Errors.CurrencyNotSettled()`, `Errors.TransferNotAllowed()`, `DelegateCallGuard.OnlyDelegateCall()`).
-- Bound-level tests should respect **MKT-04A**: do not flip `BOUND_EXEMPT` / `BOUND_DEX` after assignment; to obtain an
-  exempt bucket holder mid-suite, use `BOUND_NONE -> BOUND_EXEMPT` (or rely on bootstrap defaults) rather than
+- Bound-level tests should respect **MKT-04A**: do not flip `BOUND_EXEMPT` / `BOUND_DEX` after assignment; if a test
+  needs an exempt bucket holder, prefer canonical setup fixtures or `BOUND_NONE -> BOUND_EXEMPT` rather than
   `BOUND_ENDPOINT -> BOUND_EXEMPT`.
 - Do not assume “LCC supply == hub reserves”; supply spans multiple domains and is constrained by **backing checks**
   and **explicit queue mechanics** instead of a single equality.
