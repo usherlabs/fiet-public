@@ -92,16 +92,16 @@ contract LiquidityHub is BoundRegistry, Ownable, ReentrancyGuardTransient {
 
     /// Override from BoundRegistry
     function setBoundLevel(address who, uint8 level) external override onlyFactory {
-        // Administrative constraint:
-        // callers must not move `who` into an exempt role while that address owns queued settlements.
-        // We intentionally do not enforce this on-chain with additional queue indexing state.
+        // `BoundRegistry._setBoundLevel` enforces EXEMPT/DEX immutability and first-assignment-from-NONE.
+        // The stronger policy that EXEMPT/DEX only arise from hardcoded setup / integration paths must be expressed by
+        // the specific `MarketFactory` implementation using this hub; registered factories are trusted for that setup policy.
+        // Queue-owner safety when moving an address into exempt remains an operational concern (not indexed on-chain).
         _setBoundLevel(msg.sender, who, level);
     }
 
     /// Override from BoundRegistry
     function setBoundLevels(address[] calldata who, uint8 level) external override onlyFactory {
         for (uint256 i = 0; i < who.length; i++) {
-            // Same operational constraint as setBoundLevel(...): queue-owner checks are governance/admin enforced.
             _setBoundLevel(msg.sender, who[i], level);
         }
     }
@@ -447,6 +447,9 @@ contract LiquidityHub is BoundRegistry, Ownable, ReentrancyGuardTransient {
                 revert Errors.InvalidAmount(0, 0);
             }
         } else {
+            if (msg.value != 0) {
+                revert Errors.InvalidAmount(0, 0);
+            }
             // Use CurrencyTransfer which has Permit2 fallback for ERC20 transfers
             Currency.wrap(underlying).transferFrom(from, address(this), amount);
         }

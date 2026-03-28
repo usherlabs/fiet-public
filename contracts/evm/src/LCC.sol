@@ -142,7 +142,8 @@ contract LiquidityCommitmentCertificate is ERC20, ILCC {
         }
         _mint(to, amount);
         // Bucket bookkeeping is skipped only for bucket-exempt protocol endpoints.
-        // Bucket-tracked endpoints and users must populate bucket maps; otherwise
+        // Bound-role changes across the exempt boundary are restricted on-chain (see `BoundRegistry._setBoundLevel` / MKT-04A);
+        // bucket-tracked endpoints and users must populate bucket maps; otherwise
         // the recipient becomes "bucketless with nonzero ERC20 balance" and cannot correctly transfer/unwrap.
         // In standard MarketFactory, only VTSO and ProxyHook/MarketVault are issuers. VTSO mints to MMPM for new positions, where PoolManager is exempt, and triggers burn on PoolManager -> MMPM (after) transfer
         if (Bounds.isExempt(ILiquidityHub(hub).boundLevel(factory, to))) return;

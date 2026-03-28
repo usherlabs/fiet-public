@@ -42,11 +42,31 @@ abstract contract BoundRegistry is IBoundRegistry {
         return (_boundLevel[factory][a], _boundLevel[factory][b]);
     }
 
-    /// @dev Internal setter with validation + event emission.
+    /// @dev Internal setter with validation + event emission. Lifecycle: `BOUND_EXEMPT` and `BOUND_DEX` are immutable once
+    ///      assigned, and may only be first-assigned from `BOUND_NONE`; routine admin may only mutate
+    ///      `BOUND_NONE` <-> `BOUND_ENDPOINT`. Any market-specific `MarketFactory` is expected to hardcode the stronger
+    ///      policy that EXEMPT/DEX only arise from its setup / integration paths; that trust assumption is not proven
+    ///      generically at this registry layer.
     function _setBoundLevel(address factory, address who, uint8 level) internal {
         if (level > Bounds.BOUND_DEX) {
             revert Errors.InvalidAmount(level, Bounds.BOUND_DEX);
         }
+
+        uint8 oldLevel = _boundLevel[factory][who];
+        if (oldLevel == level) {
+            return;
+        }
+
+        // Immutable at or above EXEMPT tier (EXEMPT, DEX, and any future tier using the same ordering as `Bounds.isExempt`).
+        if (oldLevel >= Bounds.BOUND_EXEMPT) {
+            revert Errors.InvalidBoundLevelTransition(oldLevel, level);
+        }
+
+        // Tiers at or above EXEMPT may only be first-assigned from NONE.
+        if (level >= Bounds.BOUND_EXEMPT && oldLevel != Bounds.BOUND_NONE) {
+            revert Errors.InvalidBoundLevelTransition(oldLevel, level);
+        }
+
         _boundLevel[factory][who] = level;
         emit BoundLevelSet(factory, who, level);
     }
