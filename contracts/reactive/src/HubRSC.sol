@@ -486,17 +486,7 @@ contract HubRSC is AbstractReactive {
         if (batchCount == 0 && remainingLiquidity > 0) {
             if (!zeroBatchRetryByUnderlying[dispatchLane]) {
                 zeroBatchRetryByUnderlying[dispatchLane] = true;
-                emit Callback(
-                    reactChainId,
-                    hubCallback,
-                    CALLBACK_GAS_LIMIT,
-                    abi.encodeWithSelector(
-                        ReactiveConstants.TRIGGER_MORE_LIQUIDITY_AVAILABLE_SELECTOR,
-                        address(0),
-                        triggerLcc,
-                        remainingLiquidity
-                    )
-                );
+                _triggerMoreLiquidityAvailable(triggerLcc, remainingLiquidity);
                 return true;
             }
 
@@ -550,19 +540,29 @@ contract HubRSC is AbstractReactive {
         emit Callback(protocolChainId, destinationReceiverContract, CALLBACK_GAS_LIMIT, payload);
 
         if (remainingLiquidity > 0) {
-            bytes memory liquidityPayload = abi.encodeWithSelector(
-                ReactiveConstants.TRIGGER_MORE_LIQUIDITY_AVAILABLE_SELECTOR, address(0), triggerLcc, remainingLiquidity
-            );
-            emit Callback(reactChainId, hubCallback, CALLBACK_GAS_LIMIT, liquidityPayload);
+            _triggerMoreLiquidityAvailable(triggerLcc, remainingLiquidity);
         }
     }
 
+    /// @notice Triggers a more liquidity available callback.
+    /// @dev Encodes the more liquidity available selector and emits a callback.
+    function _triggerMoreLiquidityAvailable(address triggerLcc, uint256 remainingLiquidity) internal {
+        bytes memory liquidityPayload = abi.encodeWithSelector(
+            ReactiveConstants.TRIGGER_MORE_LIQUIDITY_AVAILABLE_SELECTOR, address(0), triggerLcc, remainingLiquidity
+        );
+        emit Callback(reactChainId, hubCallback, CALLBACK_GAS_LIMIT, liquidityPayload);
+    }
+
+    /// @notice Registers a LCC underlying.
+    /// @dev Registers a LCC underlying and sets the hasUnderlyingForLcc flag to true.
     function _registerLccUnderlying(address lcc, address underlying) internal {
         if (hasUnderlyingForLcc[lcc]) return;
         underlyingByLcc[lcc] = underlying;
         hasUnderlyingForLcc[lcc] = true;
     }
 
+    /// @notice Backfills the underlying queue for a given LCC.
+    /// @dev Backfills the underlying queue for a given LCC.
     function _backfillUnderlyingQueueForLcc(address lcc, address underlying) internal {
         LinkedQueue.Data storage lccQueue = queueDataByLcc[lcc];
         if (lccQueue.size == 0) return;
@@ -585,6 +585,8 @@ contract HubRSC is AbstractReactive {
         }
     }
 
+    /// @notice Enqueues a key into the underlying queue for a given LCC.
+    /// @dev Enqueues a key into the underlying queue for a given LCC.
     function _enqueueUnderlyingKey(address lcc, bytes32 key) internal {
         if (!hasUnderlyingForLcc[lcc]) return;
         queueDataByUnderlying[underlyingByLcc[lcc]].enqueue(key);
