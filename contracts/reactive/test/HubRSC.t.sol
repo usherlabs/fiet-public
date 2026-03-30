@@ -1534,9 +1534,13 @@ contract HubRSCTest is Test {
         }
     }
 
-    function _queueReservedEntries(HubRSC hub, address lcc, uint256 recipientOffset, uint256 txHashBase, uint256 nonceBase)
-        internal
-    {
+    function _queueReservedEntries(
+        HubRSC hub,
+        address lcc,
+        uint256 recipientOffset,
+        uint256 txHashBase,
+        uint256 nonceBase
+    ) internal {
         for (uint256 i = 0; i < hub.maxDispatchItems(); i++) {
             address recipient = address(uint160(recipientOffset + i + 1));
             hub.react(_settlementLog(hub, recipient, lcc, 1, nonceBase + i, txHashBase + i, i + 1));
