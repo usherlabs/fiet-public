@@ -858,6 +858,61 @@ contract HubRSCTest is Test {
         assertFalse(hub.zeroBatchRetryByUnderlying(underlying));
     }
 
+    /// @notice A stale shared-underlying retry bit is cleared if the follow-up callback later falls back to per-LCC routing.
+    function test_clearsStaleSharedRetryFlagWhenFollowupFallsBackToPerLcc() public {
+        _clearSystemContract();
+        HubRSC hub = new HubRSC(
+            DEFAULT_MAX_DISPATCH_ITEMS,
+            originChainId,
+            destinationChainId,
+            liquidityHub,
+            hubCallback,
+            destinationReceiverContract
+        );
+
+        address underlying = makeAddr("underlying");
+        address lccA = makeAddr("lccA");
+        address lccB = makeAddr("lccB");
+
+        hub.react(_lccCreatedLog(hub, underlying, lccA, bytes32("mktA"), 0x8610, 1));
+        hub.react(_lccCreatedLog(hub, underlying, lccB, bytes32("mktB"), 0x8611, 2));
+
+        // First pass: shared-underlying zero-batch sets the retry bit on the underlying lane.
+        _queueReservedEntries(hub, lccB, 0, 0x8612, 1);
+
+        vm.recordLogs();
+        hub.react(liquidityAvailableLog(hub.liquidityHub(), lccA, underlying, 100, bytes32("mktA"), 0x8620, 1));
+        Vm.Log[] memory firstEntries = vm.getRecordedLogs();
+
+        bytes memory firstMoreLiquidityPayload =
+            _findCallbackPayloadBySelector(firstEntries, ReactiveConstants.TRIGGER_MORE_LIQUIDITY_AVAILABLE_SELECTOR);
+        assertTrue(firstMoreLiquidityPayload.length > 0);
+        assertTrue(hub.zeroBatchRetryByUnderlying(underlying));
+
+        // Drain the shared queue before the follow-up callback arrives, forcing the replay to route per-LCC.
+        _drainQueuedEntries(hub, lccB, 0, 0x8630);
+        assertEq(hub.queueSize(), 0);
+        assertTrue(hub.zeroBatchRetryByUnderlying(underlying));
+
+        vm.recordLogs();
+        hub.react(_moreLiquidityAvailableLog(hub, lccA, 100, 0x8640, 1));
+        Vm.Log[] memory fallbackEntries = vm.getRecordedLogs();
+        assertEq(_callbackCount(fallbackEntries), 0);
+        assertFalse(hub.zeroBatchRetryByUnderlying(underlying));
+
+        // A later shared-underlying zero-batch should still be able to emit a fresh retry.
+        _queueReservedEntries(hub, lccB, 100, 0x8650, 101);
+
+        vm.recordLogs();
+        hub.react(liquidityAvailableLog(hub.liquidityHub(), lccA, underlying, 100, bytes32("mktA"), 0x8660, 1));
+        Vm.Log[] memory secondEntries = vm.getRecordedLogs();
+
+        bytes memory secondMoreLiquidityPayload =
+            _findCallbackPayloadBySelector(secondEntries, ReactiveConstants.TRIGGER_MORE_LIQUIDITY_AVAILABLE_SELECTOR);
+        assertTrue(secondMoreLiquidityPayload.length > 0);
+        assertTrue(hub.zeroBatchRetryByUnderlying(underlying));
+    }
+
     /// @notice Partial processed release on shared-underlying dispatch prunes in-flight the same as the per-LCC lane.
     function test_sharedUnderlyingPartialInFlightReleaseMatchesPerLccSemantics() public {
         _clearSystemContract();
@@ -1476,6 +1531,25 @@ contract HubRSCTest is Test {
             hub.react(
                 _settlementProcessedLog(hub, lccs[i], recipients[i], amounts[i], txHashBase + i, logIndexBase + i)
             );
+        }
+    }
+
+    function _queueReservedEntries(HubRSC hub, address lcc, uint256 recipientOffset, uint256 txHashBase, uint256 nonceBase)
+        internal
+    {
+        for (uint256 i = 0; i < hub.maxDispatchItems(); i++) {
+            address recipient = address(uint160(recipientOffset + i + 1));
+            hub.react(_settlementLog(hub, recipient, lcc, 1, nonceBase + i, txHashBase + i, i + 1));
+
+            bytes32 key = hub.computeKey(lcc, recipient);
+            stdstore.target(address(hub)).sig("inFlightByKey(bytes32)").with_key(key).checked_write(uint256(1));
+        }
+    }
+
+    function _drainQueuedEntries(HubRSC hub, address lcc, uint256 recipientOffset, uint256 txHashBase) internal {
+        for (uint256 i = 0; i < hub.maxDispatchItems(); i++) {
+            address recipient = address(uint160(recipientOffset + i + 1));
+            hub.react(_settlementProcessedLogWithRequested(hub, lcc, recipient, 1, 1, txHashBase + i, i + 1));
         }
     }
 
