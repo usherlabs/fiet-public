@@ -44,6 +44,22 @@
         "upperBoundRatio": "0",
         "lowerBoundRatio": "0"
       }
+    },
+    {
+      "ticker": "WETH",
+      "asset": "0x82aF49447D8a07e3bd95BD0d56f35241523fBab1",
+      "feed": "0x639Fe6ab55C921f74e7fac1ee960C0B6293ba612",
+      "maxStalePeriod": 86400,
+      "cachingEnabled": true,
+      "enableMain": true,
+      "enablePivot": false,
+      "enableFallback": false,
+      "pivotOracle": "0x0000000000000000000000000000000000000000",
+      "fallbackOracle": "0x0000000000000000000000000000000000000000",
+      "bounds": {
+        "upperBoundRatio": "0",
+        "lowerBoundRatio": "0"
+      }
     }
   ]
 }
