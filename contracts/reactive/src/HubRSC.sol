@@ -405,6 +405,7 @@ contract HubRSC is AbstractReactive {
         // historical backlog may still exist only in the per-LCC queue.
         bool useSharedUnderlying = hasUnderlyingForLcc[lcc] && queueDataByUnderlying[underlying].size > 0;
         address dispatchLane = useSharedUnderlying ? underlying : lcc;
+        _clearInactiveZeroBatchRetryFlag(lcc, underlying, useSharedUnderlying);
 
         LinkedQueue.Data storage scanQueue =
             useSharedUnderlying ? queueDataByUnderlying[dispatchLane] : queueDataByLcc[lcc];
@@ -551,6 +552,20 @@ contract HubRSC is AbstractReactive {
             ReactiveConstants.TRIGGER_MORE_LIQUIDITY_AVAILABLE_SELECTOR, address(0), triggerLcc, remainingLiquidity
         );
         emit Callback(reactChainId, hubCallback, CALLBACK_GAS_LIMIT, liquidityPayload);
+    }
+
+    /// @dev Retry flags are keyed by the lane that was actually scanned. If later routing for the
+    /// same trigger LCC falls back to the other lane, clear the inactive lane's stale retry bit so
+    /// it cannot suppress the next legitimate zero-batch continuation.
+    function _clearInactiveZeroBatchRetryFlag(address lcc, address underlying, bool useSharedUnderlying) internal {
+        if (useSharedUnderlying) {
+            zeroBatchRetryByUnderlying[lcc] = false;
+            return;
+        }
+
+        if (hasUnderlyingForLcc[lcc]) {
+            zeroBatchRetryByUnderlying[underlying] = false;
+        }
     }
 
     /// @notice Registers a LCC underlying.
