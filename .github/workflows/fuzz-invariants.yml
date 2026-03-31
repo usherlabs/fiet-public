@@ -84,10 +84,14 @@ jobs:
           echidna-test --version || true
 
       - name: Select fuzz mode
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_REF: ${{ github.base_ref }}
+          HEAD_REF: ${{ github.head_ref }}
         shell: bash
         run: |
           set -euo pipefail
-          if [[ "${{ github.event_name }}" == "pull_request" && "${{ github.base_ref }}" == "main" && "${{ github.head_ref }}" == "develop" ]]; then
+          if [[ "$EVENT_NAME" == "pull_request" && "$BASE_REF" == "main" && "$HEAD_REF" == "develop" ]]; then
             echo "FUZZ_COMMAND=just --justfile Justfile fuzz-deep && just --justfile Justfile invariant-evidence-foundry" >> "$GITHUB_ENV"
             echo "Selected deep suite for develop -> main PR"
           else

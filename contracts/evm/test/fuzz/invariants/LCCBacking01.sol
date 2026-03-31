@@ -20,6 +20,7 @@ import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
 contract LCCBacking01 {
     uint256 internal constant INITIAL_MARKET_BALANCE = 1e18;
     uint256 internal constant MAX_ACTION_AMOUNT = 1e24;
+    error WrapWithFailed();
 
     // Dummy currencies for VRL commitment gate evaluation (oracle mock ignores addresses).
     address internal constant COMMITMENT_LCC0 = address(0x1000000000000000000000000000000000000001);
@@ -435,7 +436,9 @@ contract LCCBacking01 {
 
         hub.issue(address(backing), address(holder), amt);
         holder.approve(address(backing), address(hub));
-        holder.wrapWith(address(hub), address(target), address(backing), amt);
+        if (!holder.wrapWith(address(hub), address(target), address(backing), amt)) {
+            revert WrapWithFailed();
+        }
     }
 
     // ================================================================

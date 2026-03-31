@@ -19,6 +19,9 @@ import {EchidnaLinkedLibs} from "../base/EchidnaLinkedLibs.sol";
 /// @notice Echidna harness for SETTLE-02: seizure settlement clamps deposit/withdraw bounds.
 /// @dev Exercises the production `VTSPositionLib.onMMSettle` seizing branch via harness wrapper.
 contract SETTLE02 {
+    uint256 internal constant MAX_NON_VACUOUS_ATTEMPTS = 24;
+    uint256 internal constant MIN_CHECKS_PER_SIDE = 3;
+
     VTSPositionLibEchidnaHarness internal harness;
     MockPoolManager internal poolManager;
     MockMarketVault internal vault;
@@ -173,10 +176,11 @@ contract SETTLE02 {
 
     // forge-lint: disable-next-line(mixed-case-function)
     function echidna_settle_02_seizing_clamps_hold() external view returns (bool) {
-        // Wait until each side has exercised below/equal/above once.
-        if (depositChecks < 3 || withdrawChecks < 3) {
+        uint256 totalAttempts = depositChecks + withdrawChecks;
+        if (totalAttempts < MAX_NON_VACUOUS_ATTEMPTS) {
             return true;
         }
+        if (depositChecks < MIN_CHECKS_PER_SIDE || withdrawChecks < MIN_CHECKS_PER_SIDE) return false;
         return depositAllOk && withdrawAllOk;
     }
 

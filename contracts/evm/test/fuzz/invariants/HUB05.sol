@@ -36,8 +36,10 @@ contract HUB05 {
     uint256 internal modelReserveNative;
 
     // Action/result: valid confirmTake increases reserve correctly.
-    bool internal checkedValidTake;
-    bool internal lastValidTakeOk;
+    bool internal checkedValidTakeErc20;
+    bool internal lastValidTakeOkErc20;
+    bool internal checkedValidTakeNative;
+    bool internal lastValidTakeOkNative;
 
     // Action/result: over-balance confirmTake must revert.
     bool internal checkedOverBalanceTake;
@@ -94,8 +96,8 @@ contract HUB05 {
         hub.confirmTake(address(lccErc20), fundAmt, false);
         uint256 reserveAfter = hub.reserveOfUnderlying(address(lccErc20));
 
-        checkedValidTake = true;
-        lastValidTakeOk = (reserveAfter - reserveBefore == fundAmt);
+        checkedValidTakeErc20 = true;
+        lastValidTakeOkErc20 = (reserveAfter - reserveBefore == fundAmt);
         modelReserveErc20 = reserveAfter;
 
         // Seed over-balance guard: try to confirmTake more than the slack.
@@ -199,8 +201,8 @@ contract HUB05 {
         uint256 reserveAfter = hub.reserveOfUnderlying(address(lccErc20));
         modelReserveErc20 += amt;
 
-        checkedValidTake = true;
-        lastValidTakeOk = (reserveAfter - reserveBefore == amt);
+        checkedValidTakeErc20 = true;
+        lastValidTakeOkErc20 = (reserveAfter - reserveBefore == amt);
     }
 
     /// @dev Valid native confirmTake: send native value, then confirm within the deposited amount.
@@ -216,8 +218,8 @@ contract HUB05 {
 
         uint256 reserveAfter = hub.reserveOfUnderlying(address(lccNative));
         modelReserveNative += msg.value;
-        checkedValidTake = true;
-        lastValidTakeOk = (reserveAfter - reserveBefore == msg.value);
+        checkedValidTakeNative = true;
+        lastValidTakeOkNative = (reserveAfter - reserveBefore == msg.value);
     }
 
     /// @dev Over-balance confirmTake: amount exceeding slack must revert.
@@ -261,7 +263,9 @@ contract HUB05 {
     /// @dev Valid confirmTake must increase reserve by exactly the confirmed amount.
     // forge-lint: disable-next-line(mixed-case-function)
     function echidna_hub_05_valid_take_increments_correctly() external view returns (bool) {
-        return !checkedValidTake || lastValidTakeOk;
+        bool erc20Ok = !checkedValidTakeErc20 || lastValidTakeOkErc20;
+        bool nativeOk = !checkedValidTakeNative || lastValidTakeOkNative;
+        return erc20Ok && nativeOk;
     }
 
     /// @dev confirmTake exceeding slack must always revert.
