@@ -79,6 +79,7 @@ contract ProxyHook is BaseHook, VaultCoreActionHandler {
     function setCorePoolKey(PoolKey calldata newCorePoolKey) external onlyFactory {
         // An uninitialised PoolKey encodes to a non-zero id via keccak256,
         // and valid vanilla pools may use hooks = address(0). Use currency0 as the write-once sentinel instead.
+        // Core Pool Currencies can never be zero address - must be LCCs (ERC20s).
         if (Currency.unwrap(corePoolKey.currency0) != address(0)) {
             revert Errors.CorePoolKeyAlreadySet();
         }
