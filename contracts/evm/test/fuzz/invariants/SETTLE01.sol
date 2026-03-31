@@ -211,8 +211,8 @@ contract SETTLE01 {
         (uint256 baseReq0, uint256 baseReq1) = LiquidityUtils.getBaseSettlementAmounts(c0, c1, 1000, 1000);
         uint256 def0 = baseReq0 / 2;
         uint256 def1 = baseReq1 / 2;
-        uint256 req0 = baseReq0 > def0 ? baseReq0 : def0;
-        uint256 req1 = baseReq1 > def1 ? baseReq1 : def1;
+        uint256 req0 = baseReq0;
+        uint256 req1 = baseReq1;
         harness.setSettled(positionId, req0, req1);
         harness.setCumulativeDeficit(positionId, def0, def1);
         harness.setPoolTotalDeficitPrincipal(POOL_ID, def0, def1);

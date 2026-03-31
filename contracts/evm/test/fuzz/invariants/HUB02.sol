@@ -203,7 +203,8 @@ contract HUB02 {
     function action_hub_02_unwrap_over_balance(uint256 delta) external {
         uint256 bal = lcc.balanceOf(address(holder));
         uint256 excess = (delta % MAX_AMOUNT) + 1;
-        bool ok = holder.tryUnwrapTo(address(hub), address(lcc), bal + excess);
+        uint256 overAmount = bal >= type(uint256).max - excess ? type(uint256).max : bal + excess;
+        bool ok = holder.tryUnwrapTo(address(hub), address(lcc), overAmount);
         checkedOverBalanceGuard = true;
         lastOverBalanceGuardOk = !ok;
     }

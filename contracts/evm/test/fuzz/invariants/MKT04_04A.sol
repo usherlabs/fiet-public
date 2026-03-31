@@ -14,14 +14,15 @@ contract MKT04_04A {
     uint256 internal constant MAX_VACUOUS_ATTEMPTS = 14;
     LiquidityHub internal hub;
     LiquidityCommitmentCertificate internal lcc;
+    MockERC20Transferable internal underlying0;
     MKT04Actor internal actor;
     BoundRegistryHarness internal registryHarness;
 
-    bool internal checked;
-    bool internal lastOk;
     uint256 internal attempts;
     uint256 internal mkt04Checks;
     uint256 internal mkt04aChecks;
+    bool internal mkt04AllOk = true;
+    bool internal mkt04aAllOk = true;
 
     constructor() {
         EchidnaLinkedLibs.deployLCCFactoryLinkedLib();
@@ -35,12 +36,13 @@ contract MKT04_04A {
 
         address[] memory issuers = new address[](1);
         issuers[0] = address(this);
-        MockERC20Transferable u0 = new MockERC20Transferable();
+        underlying0 = new MockERC20Transferable();
         MockERC20Transferable u1 = new MockERC20Transferable();
         bytes memory marketRef = abi.encodePacked(address(this));
-        (address l0, address l1) = hub.createLCCPair(marketRef, address(u0), address(u1), "MKT04", issuers);
+        (address l0, address l1) = hub.createLCCPair(marketRef, address(underlying0), address(u1), "MKT04", issuers);
         hub.initialize(l0, l1, bytes32(uint256(1)), marketRef);
         lcc = LiquidityCommitmentCertificate(l0);
+        underlying0.approve(address(hub), type(uint256).max);
     }
 
     // forge-lint: disable-next-line(mixed-case-function)
@@ -48,9 +50,8 @@ contract MKT04_04A {
         unchecked {
             attempts++;
         }
-        checked = false;
-        lastOk = true;
         uint256 amount = uint256(amountRaw % 1e18) + 1;
+        _seedHappyPath(amount);
 
         bool nonFactoryCreate = actor.tryCreatePair(address(hub));
         bool nonIssuerIssue = actor.tryIssue(address(hub), address(lcc), amount);
@@ -64,9 +65,8 @@ contract MKT04_04A {
             factoryIssueOk = false;
         }
 
-        checked = true;
         mkt04Checks++;
-        lastOk = !nonFactoryCreate && !nonIssuerIssue && !nonIssuerCancel && !nonIssuerCancelWithQueue
+        mkt04AllOk = mkt04AllOk && !nonFactoryCreate && !nonIssuerIssue && !nonIssuerCancel && !nonIssuerCancelWithQueue
             && !nonIssuerPrepareSettle && !nonIssuerConfirmTake && factoryIssueOk;
     }
 
@@ -75,18 +75,17 @@ contract MKT04_04A {
         unchecked {
             attempts++;
         }
-        checked = false;
-        lastOk = true;
         if (who == address(0)) who = address(0xBEEF);
+        registryHarness.forceReset(who);
         bool noneToEndpoint = registryHarness.trySet(who, Bounds.BOUND_ENDPOINT);
         bool endpointToExempt = registryHarness.trySet(who, Bounds.BOUND_EXEMPT);
         bool endpointToNone = registryHarness.trySet(who, Bounds.BOUND_NONE);
         bool noneToExempt = registryHarness.trySet(who, Bounds.BOUND_EXEMPT);
         bool exemptToEndpoint = registryHarness.trySet(who, Bounds.BOUND_ENDPOINT);
 
-        checked = true;
         mkt04aChecks++;
-        lastOk = noneToEndpoint && !endpointToExempt && endpointToNone && noneToExempt && !exemptToEndpoint;
+        mkt04aAllOk =
+            mkt04aAllOk && noneToEndpoint && !endpointToExempt && endpointToNone && noneToExempt && !exemptToEndpoint;
     }
 
     // forge-lint: disable-next-line(mixed-case-function)
@@ -94,13 +93,20 @@ contract MKT04_04A {
         if (mkt04Checks == 0 || mkt04aChecks == 0) {
             return attempts < MAX_VACUOUS_ATTEMPTS;
         }
-        return !checked || lastOk;
+        return mkt04AllOk && mkt04aAllOk;
     }
 
     /// @dev No-liquidity callback for LiquidityHub issuer path.
     function useMarketLiquidity(address, bytes32, uint256) external view returns (uint256) {
         if (msg.sender != address(hub)) revert();
         return 0;
+    }
+
+    function _seedHappyPath(uint256 amount) internal {
+        hub.issue(address(lcc), address(actor), amount);
+        underlying0.mint(address(this), amount);
+        hub.wrap(address(lcc), amount);
+        underlying0.mint(address(hub), amount);
     }
 }
 
@@ -175,6 +181,10 @@ contract BoundRegistryHarness is BoundRegistry {
         } catch {
             ok = false;
         }
+    }
+
+    function forceReset(address who) external {
+        _boundLevel[FACTORY][who] = Bounds.BOUND_NONE;
     }
 }
 

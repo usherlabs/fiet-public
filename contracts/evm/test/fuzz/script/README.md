@@ -14,7 +14,7 @@ Regenerate addresses when:
 
 If Echidna fails with:
 
-```
+```text
 Error("EchidnaLinkedLibs: LCCFactoryLinkedLib addr mismatch")
 Error("EchidnaLinkedLibs: VTSCommitLib addr mismatch")
 Error("EchidnaLinkedLibs: VTSPositionLib addr mismatch")

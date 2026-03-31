@@ -20,6 +20,7 @@ import {EchidnaLinkedLibs} from "../base/EchidnaLinkedLibs.sol";
 ///   5. Valid confirmTake increases reserve by exactly the confirmed amount (action/result)
 contract HUB05 {
     uint256 internal constant MAX_AMOUNT = 1e24;
+    uint256 internal constant MAX_CALLBACK_VACUOUS_ATTEMPTS = 16;
 
     LiquidityHub internal hub;
 
@@ -44,6 +45,7 @@ contract HUB05 {
 
     // Tracks that the callback path was exercised at least once.
     bool internal callbackExercised;
+    uint256 internal callbackTriggerAttempts;
 
     // ================================================================
     // Constructor
@@ -133,6 +135,14 @@ contract HUB05 {
         erc20Underlying.mint(address(hub), amt);
     }
 
+    /// @dev Fund hub with native underlying so native confirmTake paths become reachable.
+    // forge-lint: disable-next-line(mixed-case-function)
+    function action_hub_05_fund_native() external payable {
+        if (msg.value == 0) return;
+        (bool ok,) = address(hub).call{value: msg.value}("");
+        require(ok, "native fund failed");
+    }
+
     /// @dev Wrap ERC20 to build both reserve and actual balance together.
     // forge-lint: disable-next-line(mixed-case-function)
     function action_hub_05_wrap_erc20(uint256 amount) external {
@@ -151,6 +161,9 @@ contract HUB05 {
     /// @dev Issue market-derived LCC and unwrap to trigger the callback path.
     // forge-lint: disable-next-line(mixed-case-function)
     function action_hub_05_trigger_callback_via_unwrap(uint256 amount) external {
+        unchecked {
+            callbackTriggerAttempts++;
+        }
         uint256 amt = (amount % MAX_AMOUNT) + 1;
         hub.issue(address(lccErc20), address(this), amt);
         // Low-level to handle reverts gracefully.
@@ -161,6 +174,7 @@ contract HUB05 {
                 )
             );
         ok;
+        modelReserveErc20 = hub.reserveOfUnderlying(address(lccErc20));
     }
 
     // ================================================================
@@ -185,6 +199,23 @@ contract HUB05 {
 
         checkedValidTake = true;
         lastValidTakeOk = (reserveAfter - reserveBefore == amt);
+    }
+
+    /// @dev Valid native confirmTake: send native value, then confirm within the deposited amount.
+    // forge-lint: disable-next-line(mixed-case-function)
+    function action_hub_05_valid_confirmTake_native() external payable {
+        if (msg.value == 0) return;
+
+        uint256 reserveBefore = hub.reserveOfUnderlying(address(lccNative));
+        (bool ok,) = address(hub).call{value: msg.value}("");
+        require(ok, "native deposit failed");
+
+        hub.confirmTake(address(lccNative), msg.value, false);
+
+        uint256 reserveAfter = hub.reserveOfUnderlying(address(lccNative));
+        modelReserveNative += msg.value;
+        checkedValidTake = true;
+        lastValidTakeOk = (reserveAfter - reserveBefore == msg.value);
     }
 
     /// @dev Over-balance confirmTake: amount exceeding slack must revert.
@@ -235,6 +266,12 @@ contract HUB05 {
     // forge-lint: disable-next-line(mixed-case-function)
     function echidna_hub_05_over_balance_take_reverts() external view returns (bool) {
         return !checkedOverBalanceTake || lastOverBalanceTakeOk;
+    }
+
+    /// @dev The nested callback path must be exercised after enough explicit trigger attempts.
+    // forge-lint: disable-next-line(mixed-case-function)
+    function echidna_hub_05_callback_path_exercised() external view returns (bool) {
+        return callbackExercised || callbackTriggerAttempts < MAX_CALLBACK_VACUOUS_ATTEMPTS;
     }
 
     receive() external payable {}

@@ -38,6 +38,7 @@ contract LCC03 {
         }
         checked = false;
         lastOk = true;
+        ingressHandler.setNestedSync(address(0), false);
         address lcc = useNative ? address(lccNative) : address(lccErc20);
         uint256 wrappedAmount = uint256(wrappedAmountRaw % 1e18);
         if (wrappedAmount == 0) wrappedAmount = 1;
@@ -124,6 +125,7 @@ contract LCC03 {
         ingressHandler.setNestedSync(nestedNative ? address(0) : address(lccErc20), true);
 
         _prepare(address(lcc), 2);
+        ingressHandler.setNestedSync(address(0), false);
 
         checked = true;
         syncChecks++;

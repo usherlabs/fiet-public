@@ -121,7 +121,7 @@ contract DeltaDesignStatementsTest is MarketTestBase, MarketMakerTestBase {
 
     function _mintErc20To(address token, address to, uint256 amount) internal {
         (bool ok,) = token.call(abi.encodeWithSignature("mint(address,uint256)", to, amount));
-        ok;
+        require(ok, "mint failed");
     }
 }
 

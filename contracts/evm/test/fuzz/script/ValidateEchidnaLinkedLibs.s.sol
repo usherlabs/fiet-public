@@ -15,7 +15,7 @@ contract ValidateEchidnaLinkedLibs is Script {
     /// Echidna's default deployer address (the harness contract is deployed here).
     address internal constant ECHIDNA_DEPLOYER = 0x00a329c0648769A73afAc7F9381E08FB43dBEA72;
 
-    function run() external pure {
+    function run() external view {
         uint256 failures = 0;
         console2.log("Validating Echidna linked library addresses...");
 

@@ -42,10 +42,18 @@ contract MockPoolManager {
         }
     }
 
+    /// @notice Stores mocked liquidity for a pool/position pair.
+    /// @param poolId The pool identifier.
+    /// @param positionId The position identifier.
+    /// @param liquidity The mocked liquidity amount.
     function setPositionLiquidity(PoolId poolId, bytes32 positionId, uint128 liquidity) external {
         positionLiquidity[keccak256(abi.encodePacked(PoolId.unwrap(poolId), positionId))] = liquidity;
     }
 
+    /// @notice Returns mocked liquidity for a pool/position pair.
+    /// @param poolId The pool identifier.
+    /// @param positionId The position identifier.
+    /// @return liquidity The mocked liquidity amount.
     function getPositionLiquidity(PoolId poolId, bytes32 positionId) external view returns (uint128 liquidity) {
         return positionLiquidity[keccak256(abi.encodePacked(PoolId.unwrap(poolId), positionId))];
     }

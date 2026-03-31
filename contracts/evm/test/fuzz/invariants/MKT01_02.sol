@@ -132,7 +132,7 @@ contract ProxyHookMktHarness is ProxyHook {
     }
 
     function isCorePoolKeySet() external view returns (bool) {
-        return address(corePoolKey.hooks) != address(0);
+        return Currency.unwrap(corePoolKey.currency0) != address(0);
     }
 }
 

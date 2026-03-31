@@ -25,8 +25,10 @@ contract SEIZE01_02 {
     uint256 internal constant POSITION_INDEX = 0;
     PositionId internal constant PID = PositionId.wrap(bytes32(uint256(123)));
 
-    bool internal checked;
-    bool internal lastOk;
+    bool internal checked01;
+    bool internal lastOk01;
+    bool internal checked02;
+    bool internal lastOk02;
     uint256 internal attempts;
     uint256 internal seize01Checks;
     uint256 internal seize02Checks;
@@ -64,25 +66,23 @@ contract SEIZE01_02 {
         unchecked {
             attempts++;
         }
-        checked = false;
-        lastOk = true;
+        checked01 = false;
+        lastOk01 = true;
+        uint256 age0 = uint256(since0) % (block.timestamp + 1);
+        uint256 age1 = uint256(since1) % (block.timestamp + 1);
         h.setCheckpoint(PID, block.timestamp, false, 0, 0);
         h.setCommitmentDeficit(PID, uint256(deficit0), uint256(deficit1));
         h.setCommitmentDeficitBps(PID, deficitBps);
-        h.setCommitmentDeficitSince(PID, block.timestamp - uint256(since0), block.timestamp - uint256(since1));
+        h.setCommitmentDeficitSince(PID, block.timestamp - age0, block.timestamp - age1);
         h.setUnbackedCommitmentGraceBypassBps(poolId, bypassBps);
         h.setBypassTokenParams(poolId, bypassTime0, bypassTime1, uint256(threshold0), uint256(threshold1));
-        checked = true;
-        bool bpsBypass = deficitBps >= bypassBps;
-        bool token0AgeMet = bypassTime0 == 0 || uint256(since0) >= uint256(bypassTime0);
-        bool token1AgeMet = bypassTime1 == 0 || uint256(since1) >= uint256(bypassTime1);
-        bool token0Threshold = uint256(threshold0) > 0 && uint256(deficit0) >= uint256(threshold0);
-        bool token1Threshold = uint256(threshold1) > 0 && uint256(deficit1) >= uint256(threshold1);
-        bool expectedTrue = (deficit0 > 0 && token0AgeMet && (bpsBypass || token0Threshold))
-            || (deficit1 > 0 && token1AgeMet && (bpsBypass || token1Threshold));
+        checked01 = true;
+        bool expectedTrue = _expectedCommitmentBypass(
+            deficitBps, deficit0, deficit1, age0, age1, bypassBps, bypassTime0, bypassTime1, threshold0, threshold1
+        );
         bool got = h.isSeizable(COMMIT_ID, POSITION_INDEX, false);
         seize01Checks++;
-        lastOk = got == expectedTrue;
+        lastOk01 = got == expectedTrue;
     }
 
     // forge-lint: disable-next-line(mixed-case-function)
@@ -96,21 +96,23 @@ contract SEIZE01_02 {
         unchecked {
             attempts++;
         }
-        checked = false;
-        lastOk = true;
+        checked01 = false;
+        lastOk01 = true;
         uint256 nowTs = block.timestamp;
+        uint256 age0 = uint256(since0) % (nowTs + 1);
+        uint256 age1 = uint256(since1) % (nowTs + 1);
         h.setGracePeriods(poolId, grace0, grace1, 10_000, 10_000);
-        h.setCheckpointMask(PID, openMask & 3, nowTs - uint256(since0), nowTs - uint256(since1), 0, 0);
+        h.setCheckpointMask(PID, openMask & 3, nowTs - age0, nowTs - age1, 0, 0);
         h.setCommitmentDeficit(PID, 0, 0);
         h.setCommitmentDeficitBps(PID, 0);
 
-        bool lane0Eligible = (openMask & 1) != 0 && uint256(since0) >= uint256(grace0);
-        bool lane1Eligible = (openMask & 2) != 0 && uint256(since1) >= uint256(grace1);
+        bool lane0Eligible = (openMask & 1) != 0 && age0 >= uint256(grace0);
+        bool lane1Eligible = (openMask & 2) != 0 && age1 >= uint256(grace1);
         bool expectedTrue = lane0Eligible || lane1Eligible;
         bool got = h.isSeizable(COMMIT_ID, POSITION_INDEX, false);
-        checked = true;
+        checked01 = true;
         seize01Checks++;
-        lastOk = got == expectedTrue;
+        lastOk01 = got == expectedTrue;
     }
 
     // forge-lint: disable-next-line(mixed-case-function)
@@ -123,8 +125,8 @@ contract SEIZE01_02 {
         unchecked {
             attempts++;
         }
-        checked = false;
-        lastOk = true;
+        checked02 = false;
+        lastOk02 = true;
         uint8 tokenIndex = settlementTokenIndex % 2;
         h.setCheckpointMask(PID, tokenIndex == 0 ? 1 : 2, block.timestamp, block.timestamp, 0, 0);
         observer.setValidity(validProof);
@@ -141,10 +143,10 @@ contract SEIZE01_02 {
             reverted = true;
         }
 
-        checked = true;
+        checked02 = true;
         bool shouldSucceed = validProof && tokenAllowed && verifierActive;
         seize02Checks++;
-        lastOk = shouldSucceed ? !reverted : reverted;
+        lastOk02 = shouldSucceed ? !reverted : reverted;
     }
 
     // forge-lint: disable-next-line(mixed-case-function)
@@ -152,8 +154,8 @@ contract SEIZE01_02 {
         unchecked {
             attempts++;
         }
-        checked = false;
-        lastOk = true;
+        checked02 = false;
+        lastOk02 = true;
         if (badTokenIndex <= 1) {
             badTokenIndex = 2;
         }
@@ -167,9 +169,9 @@ contract SEIZE01_02 {
         } catch {
             reverted = true;
         }
-        checked = true;
+        checked02 = true;
         seize02Checks++;
-        lastOk = reverted;
+        lastOk02 = reverted;
     }
 
     // forge-lint: disable-next-line(mixed-case-function)
@@ -177,8 +179,8 @@ contract SEIZE01_02 {
         unchecked {
             attempts++;
         }
-        checked = false;
-        lastOk = true;
+        checked02 = false;
+        lastOk02 = true;
         uint8 tokenIndex = settlementTokenIndex % 2;
         // Open the opposite lane only.
         h.setCheckpointMask(PID, tokenIndex == 0 ? 2 : 1, block.timestamp, block.timestamp, 0, 0);
@@ -192,9 +194,9 @@ contract SEIZE01_02 {
         } catch {
             reverted = true;
         }
-        checked = true;
+        checked02 = true;
         seize02Checks++;
-        lastOk = reverted;
+        lastOk02 = reverted;
     }
 
     // forge-lint: disable-next-line(mixed-case-function)
@@ -202,7 +204,7 @@ contract SEIZE01_02 {
         if (seize01Checks == 0) {
             return attempts < MAX_VACUOUS_ATTEMPTS;
         }
-        return !checked || lastOk;
+        return !checked01 || lastOk01;
     }
 
     // forge-lint: disable-next-line(mixed-case-function)
@@ -210,7 +212,28 @@ contract SEIZE01_02 {
         if (seize02Checks == 0) {
             return attempts < MAX_VACUOUS_ATTEMPTS;
         }
-        return !checked || lastOk;
+        return !checked02 || lastOk02;
+    }
+
+    function _expectedCommitmentBypass(
+        uint16 deficitBps,
+        uint96 deficit0,
+        uint96 deficit1,
+        uint256 age0,
+        uint256 age1,
+        uint16 bypassBps,
+        uint32 bypassTime0,
+        uint32 bypassTime1,
+        uint96 threshold0,
+        uint96 threshold1
+    ) internal pure returns (bool expectedTrue) {
+        bool bpsBypass = deficitBps >= bypassBps;
+        bool token0AgeMet = bypassTime0 == 0 || age0 >= uint256(bypassTime0);
+        bool token1AgeMet = bypassTime1 == 0 || age1 >= uint256(bypassTime1);
+        bool token0Threshold = uint256(threshold0) > 0 && uint256(deficit0) >= uint256(threshold0);
+        bool token1Threshold = uint256(threshold1) > 0 && uint256(deficit1) >= uint256(threshold1);
+        return (deficit0 > 0 && token0AgeMet && (bpsBypass || token0Threshold))
+            || (deficit1 > 0 && token1AgeMet && (bpsBypass || token1Threshold));
     }
 }
 

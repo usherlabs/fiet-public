@@ -103,12 +103,11 @@ contract LCC02 {
         hub.issue(address(lcc), address(seedHolder), total);
         if (!seedHolder.unwrapToQueue(address(hub), address(lcc), q)) return;
 
-        // After queuing 40, balance is 60. Transfer the remaining 60 to protocol.
-        // The annul logic: liquidBalance=60, queue=40, transferableWithoutQueue=20.
-        // bleed = 60 - 20 = 40, annulled = min(40, 40) = 40. Queue should go to 0.
         uint256 remaining = total - q;
+        (uint256 wrappedBefore, uint256 marketBefore) = lcc.balancesOf(address(seedHolder));
         uint256 queueBefore = hub.settleQueue(address(lcc), address(seedHolder));
         uint256 totalQueuedBefore = hub.totalQueued(address(lcc));
+        uint256 expectedAnnul = _expectedAnnulment(wrappedBefore, marketBefore, queueBefore, remaining);
 
         if (!seedHolder.transfer(address(lcc), address(hub), remaining)) return;
 
@@ -116,7 +115,8 @@ contract LCC02 {
         uint256 totalQueuedAfter = hub.totalQueued(address(lcc));
 
         checkedTransferAnnuls = true;
-        lastTransferAnnulsOk = (queueBefore == q) && (queueAfter == 0) && (totalQueuedAfter == totalQueuedBefore - q);
+        lastTransferAnnulsOk = (queueBefore == q) && (queueAfter == queueBefore - expectedAnnul)
+            && (totalQueuedAfter == totalQueuedBefore - expectedAnnul);
     }
 
     /// @dev Deterministic no-liquidity factory callback.

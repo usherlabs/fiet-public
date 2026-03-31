@@ -571,6 +571,8 @@ contract LCCBacking01 {
 
 contract LCCBacking01Holder {
     function approve(address token, address spender) external {
+        // Intentionally ignore the return value here for harness simplicity; callers that need the success bit use
+        // the `ok` result from `unwrapToQueue()` / `wrapWith()` instead.
         token.call(abi.encodeWithSignature("approve(address,uint256)", spender, type(uint256).max));
     }
 

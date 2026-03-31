@@ -60,6 +60,10 @@ contract MockSettlementObserver is IVRLSettlementObserver {
             if (revertOnInvalid) revert Errors.InvalidVerifier();
             return false;
         }
+        if (settlementTokenIndex > 1) {
+            if (revertOnInvalid) revert Errors.InvalidVerifier();
+            return false;
+        }
         address token = settlementTokenIndex == 0 ? Currency.unwrap(key.currency0) : Currency.unwrap(key.currency1);
         if (!allowedTokenForVerifier[verifierIndex][token]) {
             if (revertOnInvalid) revert Errors.InvalidVerifier();

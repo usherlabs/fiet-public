@@ -17,6 +17,7 @@ import {EchidnaLinkedLibs} from "../base/EchidnaLinkedLibs.sol";
 
 /// @notice Echidna harness for COMMIT-02: Checkpointing with commitment updates `commitmentDeficit` as an insolvency gate.
 contract COMMIT02 {
+    uint256 internal constant MAX_VACUOUS_ATTEMPTS = 16;
     MockOracleHelper internal oracle;
     VTSCommitLibHarness internal commitHarness;
     MockPoolManager internal poolManager;
@@ -30,6 +31,8 @@ contract COMMIT02 {
 
     bool internal checked;
     bool internal lastOk;
+    uint256 internal checkpointAttempts;
+    uint256 internal checkpointSuccesses;
 
     uint160 internal sqrtPriceX96;
     int24 internal currentTick;
@@ -82,12 +85,12 @@ contract COMMIT02 {
     // -------------------------------------------------------------------------
 
     // forge-lint: disable-next-line(mixed-case-function)
-    function action_set_slot0(uint160 sp, int24 tick) external {
+    function action_set_slot0(uint160 sp, int24 _tick) external {
         if (sp == 0) return;
         if (sp <= TickMath.MIN_SQRT_PRICE) sp = TickMath.MIN_SQRT_PRICE + 1;
         if (sp >= TickMath.MAX_SQRT_PRICE) sp = TickMath.MAX_SQRT_PRICE - 1;
         sqrtPriceX96 = sp;
-        tick;
+        _tick; // Tick is derived from sqrtPriceX96 to keep slot0 internally consistent.
         currentTick = TickMath.getTickAtSqrtPrice(sqrtPriceX96);
         poolManager.setSlot0(poolId, sqrtPriceX96, currentTick, 0, 0);
     }
@@ -130,6 +133,9 @@ contract COMMIT02 {
 
     // forge-lint: disable-next-line(mixed-case-function)
     function action_checkpoint_with_commitment() external {
+        unchecked {
+            checkpointAttempts++;
+        }
         checked = false;
         lastOk = true;
 
@@ -151,6 +157,9 @@ contract COMMIT02 {
         try commitHarness.checkpoint(IPoolManager(address(poolManager)), oracle, COMMIT_ID, positionId) {}
         catch {
             return;
+        }
+        unchecked {
+            checkpointSuccesses++;
         }
 
         (uint256 eff0, uint256 eff1) = LiquidityUtils.calculateEffectiveTokenAmounts(
@@ -174,7 +183,10 @@ contract COMMIT02 {
 
     // forge-lint: disable-next-line(mixed-case-function)
     function echidna_commit_02_checkpoint_deficit_math_correct() external view returns (bool) {
-        return !checked || lastOk;
+        if (!checked) {
+            return checkpointSuccesses > 0 || checkpointAttempts < MAX_VACUOUS_ATTEMPTS;
+        }
+        return lastOk;
     }
 
     // forge-lint: disable-next-line(mixed-case-function)

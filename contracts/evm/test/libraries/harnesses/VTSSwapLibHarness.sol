@@ -13,10 +13,21 @@ contract VTSSwapLibHarness {
 
     // ========= Exposed VTSSwapLib internals =========
 
+    /// @notice Flips the stored outside-growth state for a tick in the harness storage.
+    /// @param poolId The pool whose accounting is being exercised.
+    /// @param tick The tick whose outside-growth snapshot is flipped.
+    /// @param tokenIndex The token lane to update.
+    /// @param growthType The growth accumulator family to flip.
     function flipOutside(PoolId poolId, int24 tick, uint8 tokenIndex, uint8 growthType) external {
         VTSSwapLib._flipOutside(s, poolId, tick, tokenIndex, growthType);
     }
 
+    /// @notice Accrues segment growth into the harness storage using VTSSwapLib.
+    /// @param poolId The pool whose growth accumulators are updated.
+    /// @param zeroForOne The swap direction for the accrued segment.
+    /// @param sqrtCurrent The segment start price.
+    /// @param sqrtTarget The segment end price.
+    /// @param liquidity The in-range liquidity used for the accrual.
     function accrueSegmentGrowth(
         PoolId poolId,
         bool zeroForOne,

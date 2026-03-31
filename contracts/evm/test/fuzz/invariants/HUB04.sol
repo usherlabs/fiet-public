@@ -160,7 +160,7 @@ contract HUB04 {
         if (ok && ret.length >= 32) factory = abi.decode(ret, (address));
 
         checkedSameMarket = true;
-        lastSameMarketOk = ok && (factory == address(this));
+        lastSameMarketOk = lastSameMarketOk && ok && (factory == address(this));
     }
 
     /// @dev getFactory with both LCCs from Market B must succeed and return factory B.
@@ -175,7 +175,7 @@ contract HUB04 {
         if (ok && ret.length >= 32) factory = abi.decode(ret, (address));
 
         checkedSameMarket = true;
-        lastSameMarketOk = ok && (factory == address(factoryB));
+        lastSameMarketOk = lastSameMarketOk && ok && (factory == address(factoryB));
     }
 
     // ================================================================

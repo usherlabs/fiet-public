@@ -33,8 +33,10 @@ contract SEIZE03_04 {
     PoolKey internal poolKey;
     PoolId internal constant POOL_ID = PoolId.wrap(bytes32(uint256(0x5E7034)));
 
-    bool internal checked;
-    bool internal lastOk;
+    bool internal checked03;
+    bool internal lastOk03;
+    bool internal checked04;
+    bool internal lastOk04;
 
     constructor() {
         EchidnaLinkedLibs.deployVTSPositionLib();
@@ -82,8 +84,8 @@ contract SEIZE03_04 {
     function action_seize_03_no_lcc_issue_during_seizure(int24 tickLower, int24 tickUpper, uint96 liqRaw, bytes32 salt)
         external
     {
-        checked = false;
-        lastOk = true;
+        checked03 = false;
+        lastOk03 = true;
         (int24 tl, int24 tu) = _clampTicks(tickLower, tickUpper);
         uint256 liq = uint256(liqRaw % 1e10) + 1;
         ModifyLiquidityParams memory params =
@@ -91,16 +93,16 @@ contract SEIZE03_04 {
         bytes memory hookData = PositionModificationHookDataLib.encodeSeizure(1, 0, address(this), 0, 0);
 
         bool reverted = _touchReverts(address(this), params, hookData);
-        checked = true;
-        lastOk = reverted;
+        checked03 = true;
+        lastOk03 = reverted;
     }
 
     // forge-lint: disable-next-line(mixed-case-function)
     function action_seize_04_commit_id_must_match(uint256 storedCommitId, uint256 providedCommitId, bytes32 salt)
         external
     {
-        checked = false;
-        lastOk = true;
+        checked04 = false;
+        lastOk04 = true;
 
         uint256 stored = (storedCommitId % 1e6) + 1;
         uint256 provided = (providedCommitId % 1e6) + 1;
@@ -116,18 +118,18 @@ contract SEIZE03_04 {
 
         bytes memory hookData = PositionModificationHookDataLib.encode(provided, 0, address(this));
         bool reverted = _touchReverts(address(this), params, hookData);
-        checked = true;
-        lastOk = reverted;
+        checked04 = true;
+        lastOk04 = reverted;
     }
 
     // forge-lint: disable-next-line(mixed-case-function)
     function echidna_seize_03_no_lcc_issue_during_seizure() external view returns (bool) {
-        return !checked || lastOk;
+        return !checked03 || lastOk03;
     }
 
     // forge-lint: disable-next-line(mixed-case-function)
     function echidna_seize_04_commit_identity_fixed() external view returns (bool) {
-        return !checked || lastOk;
+        return !checked04 || lastOk04;
     }
 
     function _touchReverts(address owner, ModifyLiquidityParams memory params, bytes memory hookData)

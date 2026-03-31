@@ -122,9 +122,10 @@ contract SIG01_02 {
                     "verifyLiquiditySignal(address,bytes,bool)", MM_OWNER, _makeSignal(MM_OWNER, ADVANCER, 2), false
                 )
             );
+        checkedInvalidProofNoRevert = true;
+        lastInvalidProofNoRevertOk = false;
         if (ok && ret.length >= 64) {
             (bool proofOk,) = abi.decode(ret, (bool, uint256));
-            checkedInvalidProofNoRevert = true;
             lastInvalidProofNoRevertOk = !proofOk;
         }
 
@@ -228,9 +229,10 @@ contract SIG01_02 {
                 )
             );
 
+        checkedInvalidProofNoRevert = true;
+        lastInvalidProofNoRevertOk = false;
         if (callOk && ret.length >= 64) {
             (bool proofOk,) = abi.decode(ret, (bool, uint256));
-            checkedInvalidProofNoRevert = true;
             lastInvalidProofNoRevertOk = !proofOk;
         }
 

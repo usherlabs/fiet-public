@@ -20,6 +20,7 @@ contract HUB03 {
 
     LiquidityHub internal hub;
     LiquidityCommitmentCertificate internal lcc;
+    MockERC20Transferable internal underlying;
 
     // Non-issuer actor whose calls must be rejected.
     HUB03Actor internal nonIssuer;
@@ -55,7 +56,7 @@ contract HUB03 {
         address[] memory issuers = new address[](1);
         issuers[0] = address(this);
 
-        MockERC20Transferable underlying = new MockERC20Transferable();
+        underlying = new MockERC20Transferable();
         MockERC20Transferable other = new MockERC20Transferable();
         bytes memory marketRef = abi.encodePacked(address(this));
         (address l0, address l1) = hub.createLCCPair(marketRef, address(underlying), address(other), "TEST", issuers);
@@ -133,6 +134,7 @@ contract HUB03 {
     // forge-lint: disable-next-line(mixed-case-function)
     function action_hub_03_non_issuer_cancel(uint256 amount) external {
         uint256 amt = (amount % MAX_AMOUNT) + 1;
+        hub.issue(address(lcc), address(nonIssuer), amt);
         bool ok = nonIssuer.tryCancel(address(hub), address(lcc), address(nonIssuer), amt);
         checkedNonIssuer = true;
         lastNonIssuerOk = lastNonIssuerOk && !ok;
@@ -142,6 +144,7 @@ contract HUB03 {
     // forge-lint: disable-next-line(mixed-case-function)
     function action_hub_03_non_issuer_confirmTake(uint256 amount) external {
         uint256 amt = (amount % MAX_AMOUNT) + 1;
+        underlying.mint(address(hub), amt);
         bool ok = nonIssuer.tryConfirmTake(address(hub), address(lcc), amt);
         checkedNonIssuer = true;
         lastNonIssuerOk = lastNonIssuerOk && !ok;

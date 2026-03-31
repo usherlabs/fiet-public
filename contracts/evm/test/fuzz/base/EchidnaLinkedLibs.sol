@@ -62,6 +62,5 @@ library EchidnaLinkedLibs {
             lib := create2(0, add(initCode, 0x20), mload(initCode), salt)
         }
         if (lib == address(0)) revert DeployFailed();
-        return lib;
     }
 }

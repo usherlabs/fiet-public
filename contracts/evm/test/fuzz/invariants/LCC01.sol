@@ -31,6 +31,7 @@ contract LCC01 {
     LCC01Actor internal userB;
     // Endpoint: BOUND_ENDPOINT (bucket-tracked protocol address).
     LCC01Actor internal endpoint;
+    LCC01Actor internal endpointB;
 
     // ----- Action/result caches -----
 
@@ -103,13 +104,16 @@ contract LCC01 {
         userA = new LCC01Actor();
         userB = new LCC01Actor();
         endpoint = new LCC01Actor();
+        endpointB = new LCC01Actor();
 
-        // Register endpoint as BOUND_ENDPOINT so it is protocol-bound but bucket-tracked.
+        // Register endpoints as BOUND_ENDPOINT so protocol -> protocol can exercise endpoint -> endpoint directly.
         hub.setBoundLevel(address(endpoint), Bounds.BOUND_ENDPOINT);
+        hub.setBoundLevel(address(endpointB), Bounds.BOUND_ENDPOINT);
 
         // Seed balances so transfer actions can execute immediately.
         hub.issue(address(lcc), address(userA), SEED_BALANCE);
         hub.issue(address(lcc), address(endpoint), SEED_BALANCE);
+        hub.issue(address(lcc), address(endpointB), SEED_BALANCE);
 
         // Grant approvals for transferFrom paths: userA approves userB as spender.
         userA.approve(address(lcc), address(userB));
@@ -135,9 +139,9 @@ contract LCC01 {
         checkedEndpointToUser = true;
         lastEndpointToUserOk = endpoint.tryTransfer(address(lcc), address(userA), 1);
 
-        // endpoint → endpoint: must succeed (endpoint → hub exempt)
+        // endpoint → endpoint: must succeed
         checkedEndpointToEndpoint = true;
-        lastEndpointToEndpointOk = endpoint.tryTransfer(address(lcc), address(hub), 1);
+        lastEndpointToEndpointOk = endpoint.tryTransfer(address(lcc), address(endpointB), 1);
 
         // transferFrom user → user via spender: must fail
         checkedApprovedUserToUser = true;
@@ -158,7 +162,7 @@ contract LCC01 {
         hub.issue(address(lcc), address(userA), _boundAmount(amount));
     }
 
-    /// @dev Mint market-derived LCC into endpoint for protocol→user actions.
+    /// @dev Mint market-derived LCC into endpoint for protocol-bound transfer actions.
     // forge-lint: disable-next-line(mixed-case-function)
     function action_lcc_01_seed_endpoint(uint256 amount) external {
         hub.issue(address(lcc), address(endpoint), _boundAmount(amount));
@@ -226,7 +230,7 @@ contract LCC01 {
         if (!valid) return;
 
         checkedEndpointToEndpoint = true;
-        lastEndpointToEndpointOk = endpoint.tryTransfer(address(lcc), address(hub), amt);
+        lastEndpointToEndpointOk = endpoint.tryTransfer(address(lcc), address(endpointB), amt);
     }
 
     // ================================================================
