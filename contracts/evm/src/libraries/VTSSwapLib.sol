@@ -138,7 +138,7 @@ library VTSSwapLib {
         uint160 sqrtCurrent,
         uint160 sqrtTarget,
         uint128 liquidity
-    ) private {
+    ) internal {
         // AmountOut per segment from price delta and liquidity
         // See reference: https://github.com/Uniswap/v4-core/blob/0f17b65aa61edee384d5129b7ea080f22905faa0/src/libraries/SwapMath.sol#L88
         uint256 outSeg = zeroForOne

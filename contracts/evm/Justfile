@@ -52,6 +52,17 @@ fuzz:
     @just echidna-vts-03
     @just echidna-delta-01
     @just echidna-settle-01
+    @just echidna-settle-02
+    @just echidna-lcc-03
+    @just echidna-vts-01
+    @just echidna-seize-01-02
+    @just echidna-seize-03-04
+    @just echidna-pause-01
+    @just echidna-mkt-01-02
+    @just echidna-mkt-03-06
+    @just echidna-mkt-04-04a
+    @just echidna-mkt-05
+    @just echidna-auth-01-01a-02
 
 # Longer invariant campaigns (uses `echidna.deep.config.yml`).
 fuzz-deep:
@@ -79,6 +90,36 @@ fuzz-deep:
     @just echidna-vts-03 echidna.deep.config.yml
     @just echidna-delta-01 echidna.deep.config.yml
     @just echidna-settle-01 echidna.deep.config.yml
+    @just echidna-settle-02 echidna.deep.config.yml
+    @just echidna-lcc-03 echidna.deep.config.yml
+    @just echidna-vts-01 echidna.deep.config.yml
+    @just echidna-seize-01-02 echidna.deep.config.yml
+    @just echidna-seize-03-04 echidna.deep.config.yml
+    @just echidna-pause-01 echidna.deep.config.yml
+    @just echidna-mkt-01-02 echidna.deep.config.yml
+    @just echidna-mkt-03-06 echidna.deep.config.yml
+    @just echidna-mkt-04-04a echidna.deep.config.yml
+    @just echidna-mkt-05 echidna.deep.config.yml
+    @just echidna-auth-01-01a-02 echidna.deep.config.yml
+
+# Full invariant suite entrypoint for CI:
+# - all Echidna invariant harnesses
+# - Foundry evidence tests referenced in fuzz README
+fuzz-invariants:
+    @just fuzz
+    @just invariant-evidence-foundry
+
+invariant-evidence-foundry:
+    FOUNDRY_PROFILE=debug forge test -vvv --match-path test/DeltaDesignStatements.t.sol
+    FOUNDRY_PROFILE=debug forge test -vvv --match-path test/AuthSeizeInvariants.t.sol
+    FOUNDRY_PROFILE=debug forge test -vvv --match-path test/VTSOrchestratorInvariantRegressions.t.sol
+    FOUNDRY_PROFILE=debug forge test -vvv --match-path test/MarketFactory.t.sol --match-test testFuzz_prepareMarketLiquidity_revertsWhenDifferentCurrencyInFlight
+    FOUNDRY_PROFILE=debug forge test -vvv --match-path test/MarketFactory.t.sol --match-test test_prepareMarketLiquidity_sameLccSync_restoresAfterNestedErc20Sync
+    FOUNDRY_PROFILE=debug forge test -vvv --match-path test/MarketFactory.t.sol --match-test test_prepareMarketLiquidity_sameLccSync_nativeUnderlying_clearsAndRestores
+    FOUNDRY_PROFILE=debug forge test -vvv --match-path test/MarketFactory.t.sol --match-test testFuzz_createMarket_corePairOrderingMatchesStored
+    FOUNDRY_PROFILE=debug forge test -vvv --match-path test/MarketFactory.t.sol --match-test testFuzz_createMarket_revertsWhenCorePoolAlreadyExists
+    FOUNDRY_PROFILE=debug forge test -vvv --match-path test/ProxyHook.t.sol --match-test 'testFuzz_swap_exactOutput_.*_revertsWhenRequestedExceedsImmediateLiquidity'
+    FOUNDRY_PROFILE=debug forge test -vvv --match-path test/ProxyHook.t.sol --match-test test_proxySwap_exactInput_keepsProxySlot0Unchanged
 
 echidna-lcc-backing config="echidna.config.yml":
     @just echidna test/fuzz/invariants/LCCBacking01.sol LCCBacking01 {{ config }} -- --disable-slither
@@ -151,6 +192,39 @@ echidna-delta-01 config="echidna.config.yml":
 
 echidna-settle-01 config="echidna.config.yml":
     @just echidna test/fuzz/invariants/SETTLE01.sol SETTLE01 {{ config }} -- --disable-slither
+
+echidna-settle-02 config="echidna.config.yml":
+    @just echidna test/fuzz/invariants/SETTLE02.sol SETTLE02 {{ config }} -- --disable-slither
+
+echidna-lcc-03 config="echidna.config.yml":
+    @just echidna test/fuzz/invariants/LCC03.sol LCC03 {{ config }} -- --disable-slither
+
+echidna-vts-01 config="echidna.config.yml":
+    @just echidna test/fuzz/invariants/VTS01.sol VTS01 {{ config }} -- --disable-slither
+
+echidna-seize-01-02 config="echidna.config.yml":
+    @just echidna test/fuzz/invariants/SEIZE01_02.sol SEIZE01_02 {{ config }} -- --disable-slither
+
+echidna-seize-03-04 config="echidna.config.yml":
+    @just echidna test/fuzz/invariants/SEIZE03_04.sol SEIZE03_04 {{ config }} -- --disable-slither
+
+echidna-pause-01 config="echidna.config.yml":
+    @just echidna test/fuzz/invariants/PAUSE01.sol PAUSE01 {{ config }} -- --disable-slither
+
+echidna-mkt-01-02 config="echidna.config.yml":
+    @just echidna test/fuzz/invariants/MKT01_02.sol MKT01_02 {{ config }} -- --disable-slither
+
+echidna-mkt-03-06 config="echidna.config.yml":
+    @just echidna test/fuzz/invariants/MKT03_06.sol MKT03_06 {{ config }} -- --disable-slither
+
+echidna-mkt-04-04a config="echidna.config.yml":
+    @just echidna test/fuzz/invariants/MKT04_04A.sol MKT04_04A {{ config }} -- --disable-slither
+
+echidna-mkt-05 config="echidna.config.yml":
+    @just echidna test/fuzz/invariants/MKT05.sol MKT05 {{ config }} -- --disable-slither
+
+echidna-auth-01-01a-02 config="echidna.config.yml":
+    @just echidna test/fuzz/invariants/AUTH01_01A_02.sol AUTH01_01A_02 {{ config }} -- --disable-slither
 
 echidna-wrapwith config="echidna.config.yml":
     @just echidna test/fuzz/LiquidityHubWrapWithEchidnaTest.sol LiquidityHubWrapWithEchidnaTest {{ config }} -- --disable-slither

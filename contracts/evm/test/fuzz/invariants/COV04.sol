@@ -4,11 +4,12 @@ pragma solidity ^0.8.26;
 import {LiquidityUtils} from "../../../src/libraries/LiquidityUtils.sol";
 import {FullMath} from "v4-periphery/lib/v4-core/src/libraries/FullMath.sol";
 
-/// @notice Echidna harness for COV-04: Fee-burn baseline remainder carry and liquidity resets.
+/// @notice Echidna utility harness for COV-04 fee-burn remainder maths.
 /// @dev Tests the pure math in `LiquidityUtils.feeBurnGrowthIncWithRemainder`:
 ///   - Repeated partial burns with carry must accumulate the same total growthInc as a single-shot burn.
 ///   - Carry is always < positionLiquidity.
 ///   - Changing liquidity invalidates carry (reset to 0 required).
+/// @dev This is utility-level evidence and does not execute the full `VTSPositionLib` integration path.
 ///
 /// Properties tested:
 ///   1. carry < positionLiquidity (always-on after each burn)
@@ -18,6 +19,7 @@ import {FullMath} from "v4-periphery/lib/v4-core/src/libraries/FullMath.sol";
 contract COV04 {
     uint256 internal constant MAX_FEES = 1e30;
     uint256 internal constant MAX_LIQ = type(uint128).max;
+    uint256 internal constant MAX_VACUOUS_ATTEMPTS = 16;
 
     // Accumulated model: simulate sequential burns at fixed liquidity.
     uint256 internal modelCarry;
@@ -27,6 +29,7 @@ contract COV04 {
 
     // Property: carry < liquidity (always-on).
     bool internal hasLiquidity;
+    uint256 internal attempts;
 
     // Property: two-part split equals single-shot.
     bool internal checkedSplit;
@@ -78,6 +81,9 @@ contract COV04 {
     /// @dev Apply a burn of `fees` at the current model liquidity with carry.
     // forge-lint: disable-next-line(mixed-case-function)
     function action_cov_04_burn(uint256 fees) external {
+        unchecked {
+            attempts++;
+        }
         if (modelLiquidity == 0) return;
         uint256 f = (fees % MAX_FEES) + 1;
         _accumulateBurn(f);
@@ -86,6 +92,9 @@ contract COV04 {
     /// @dev Split a total into two parts and verify the sum matches single-shot.
     // forge-lint: disable-next-line(mixed-case-function)
     function action_cov_04_split_burn(uint256 total, uint256 splitPoint) external {
+        unchecked {
+            attempts++;
+        }
         if (modelLiquidity == 0) return;
         uint256 t = (total % MAX_FEES) + 1;
         uint256 a = splitPoint % (t + 1);
@@ -103,6 +112,9 @@ contract COV04 {
     /// @dev Change liquidity, which must reset carry to 0.
     // forge-lint: disable-next-line(mixed-case-function)
     function action_cov_04_change_liquidity(uint256 newLiq) external {
+        unchecked {
+            attempts++;
+        }
         uint256 nl = (newLiq % MAX_LIQ) + 1;
         if (nl == modelLiquidity) return;
 
@@ -120,6 +132,9 @@ contract COV04 {
     /// @dev Apply zero-fee burn: growthInc must be 0 and carry must be preserved.
     // forge-lint: disable-next-line(mixed-case-function)
     function action_cov_04_zero_burn() external {
+        unchecked {
+            attempts++;
+        }
         if (modelLiquidity == 0) return;
         uint256 L = modelLiquidity;
         uint256 carryBefore = modelCarry;
@@ -143,19 +158,22 @@ contract COV04 {
     /// @dev Two-part split must equal single-shot (no dust loss from independent flooring).
     // forge-lint: disable-next-line(mixed-case-function)
     function echidna_cov_04_split_equals_single() external view returns (bool) {
-        return !checkedSplit || lastSplitOk;
+        if (!checkedSplit) return attempts < MAX_VACUOUS_ATTEMPTS;
+        return lastSplitOk;
     }
 
     /// @dev Accumulated N burns must match single-shot for total fees.
     // forge-lint: disable-next-line(mixed-case-function)
     function echidna_cov_04_accumulated_matches_single() external view returns (bool) {
-        return !checkedAccum || lastAccumOk;
+        if (!checkedAccum) return attempts < MAX_VACUOUS_ATTEMPTS;
+        return lastAccumOk;
     }
 
     /// @dev Zero-fee burn must not change carry and must produce zero growth.
     // forge-lint: disable-next-line(mixed-case-function)
     function echidna_cov_04_zero_fees_preserves_carry() external view returns (bool) {
-        return !checkedZeroFees || lastZeroFeesOk;
+        if (!checkedZeroFees) return attempts < MAX_VACUOUS_ATTEMPTS;
+        return lastZeroFeesOk;
     }
 
     // ================================================================

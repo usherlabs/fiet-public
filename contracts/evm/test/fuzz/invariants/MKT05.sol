@@ -92,6 +92,8 @@ contract MKT05 is HookMinerBase {
 
     uint256 internal attempts;
     uint256 internal successes;
+    uint256 internal exactInputSuccesses;
+    uint256 internal exactOutputSuccesses;
     uint256 internal constant MAX_VACUOUS_ATTEMPTS = 10;
 
     constructor() {
@@ -158,16 +160,19 @@ contract MKT05 is HookMinerBase {
         // Use an explicit non-sentinel recipient so `_determineExcessRecipient` resolves without locker introspection.
         bytes memory hookData = abi.encode(address(0xBEEF));
 
-        try manager.callBeforeSwap(hook, address(0xCAFE), proxyKey, params, hookData) returns (BeforeSwapDelta delta) {
+        try manager.callBeforeSwap(hook, address(0xCAFE), proxyKey, params, hookData) returns (
+            BeforeSwapDelta delta, bool residualWasZero
+        ) {
             lastAmountSpecified = params.amountSpecified;
             lastDelta = delta;
             checked = true;
             unchecked {
                 successes++;
+                exactInputSuccesses++;
             }
 
             int256 specifiedDelta = int256(BeforeSwapDeltaLibrary.getSpecifiedDelta(delta));
-            lastOk = lastAmountSpecified + specifiedDelta == 0;
+            lastOk = lastAmountSpecified + specifiedDelta == 0 && residualWasZero;
             allOk = allOk && lastOk;
         } catch {
             // If the execution path reverts under a particular input, treat it as "not checked" for this action.
@@ -188,16 +193,19 @@ contract MKT05 is HookMinerBase {
             SwapParams({zeroForOne: zeroForOne, amountSpecified: int256(amountOut), sqrtPriceLimitX96: 0});
         bytes memory hookData = abi.encode(address(0xBEEF));
 
-        try manager.callBeforeSwap(hook, address(0xCAFE), proxyKey, params, hookData) returns (BeforeSwapDelta delta) {
+        try manager.callBeforeSwap(hook, address(0xCAFE), proxyKey, params, hookData) returns (
+            BeforeSwapDelta delta, bool residualWasZero
+        ) {
             lastAmountSpecified = params.amountSpecified;
             lastDelta = delta;
             checked = true;
             unchecked {
                 successes++;
+                exactOutputSuccesses++;
             }
 
             int256 specifiedDelta = int256(BeforeSwapDeltaLibrary.getSpecifiedDelta(delta));
-            lastOk = lastAmountSpecified + specifiedDelta == 0;
+            lastOk = lastAmountSpecified + specifiedDelta == 0 && residualWasZero;
             allOk = allOk && lastOk;
         } catch {
             checked = false;
@@ -210,6 +218,9 @@ contract MKT05 is HookMinerBase {
         // Prevent vacuous passes if all fuzzed actions keep reverting:
         // after some attempts, we require at least one successful checked run.
         if (successes == 0) {
+            return attempts < MAX_VACUOUS_ATTEMPTS;
+        }
+        if (exactInputSuccesses == 0 || exactOutputSuccesses == 0) {
             return attempts < MAX_VACUOUS_ATTEMPTS;
         }
         return allOk;
@@ -284,8 +295,17 @@ contract MockPoolManager {
         PoolKey calldata key,
         SwapParams calldata params,
         bytes calldata hookData
-    ) external returns (BeforeSwapDelta delta) {
+    ) external returns (BeforeSwapDelta delta, bool residualWasZero) {
         (, delta,) = h.beforeSwap(sender, key, params, hookData);
+        int256 specifiedDelta = int256(BeforeSwapDeltaLibrary.getSpecifiedDelta(delta));
+        int256 residual = params.amountSpecified + specifiedDelta;
+        residualWasZero = residual == 0;
+        if (!residualWasZero) {
+            // Simulate the PoolManager residual proxy swap path that MKT-05 forbids.
+            SwapParams memory residualParams =
+                SwapParams({zeroForOne: params.zeroForOne, amountSpecified: residual, sqrtPriceLimitX96: 0});
+            this.swap(key, residualParams, bytes(""));
+        }
     }
 }
 

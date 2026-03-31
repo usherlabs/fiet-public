@@ -800,6 +800,30 @@ contract ProxyHookTest is MarketVaultBase {
         _executeSwap(proxyPoolKey, false, int256(requestedOutput), abi.encode(recipient));
     }
 
+    function testFuzz_swap_exactOutput_zeroForOneOnProxy_revertsWhenRequestedExceedsImmediateLiquidity(
+        uint96 availableRaw,
+        uint96 requestedRaw
+    ) public {
+        uint256 available = bound(uint256(availableRaw), 1, 1e18);
+        uint256 requested = bound(uint256(requestedRaw), available + 1, available + 1e18);
+        _mockLimitedLiquidity(_currency1, available);
+
+        vm.expectRevert();
+        _executeSwap(proxyPoolKey, true, int256(requested), ZERO_BYTES);
+    }
+
+    function testFuzz_swap_exactOutput_oneForZeroOnProxy_revertsWhenRequestedExceedsImmediateLiquidity(
+        uint96 availableRaw,
+        uint96 requestedRaw
+    ) public {
+        uint256 available = bound(uint256(availableRaw), 1, 1e18);
+        uint256 requested = bound(uint256(requestedRaw), available + 1, available + 1e18);
+        _mockLimitedLiquidity(_currency0, available);
+
+        vm.expectRevert();
+        _executeSwap(proxyPoolKey, false, int256(requested), ZERO_BYTES);
+    }
+
     function test_proxySwap_exactInput_revertsOnCoreFillMismatch_dueToTightPriceLimit() public {
         // Ensure maxOutputAvailable won't be the reason for reverting.
         _mockLimitedLiquidity(proxyPoolKey.currency0, type(uint256).max);

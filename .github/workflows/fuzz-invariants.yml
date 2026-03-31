@@ -1,0 +1,52 @@
+name: Fuzz Invariants
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop, audit/*]
+  workflow_dispatch:
+
+jobs:
+  fuzz-invariants:
+    name: Fuzz Invariant Suite
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install Foundry
+        uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: "v1.4.2"
+
+      - name: Install Just and Python tooling
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y just python3-pip
+          python3 -m pip install --user --upgrade crytic-compile
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Show tool versions
+        working-directory: contracts/evm
+        run: |
+          forge --version
+          just --version
+          python3 -m pip --version
+          crytic-compile --version
+
+      - name: Run full invariant suite
+        working-directory: contracts/evm
+        env:
+          FOUNDRY_PROFILE: echidna
+          ECHIDNA_COMPILE: foundry
+          FOUNDRY_OUT_DIR: out-echidna
+        run: |
+          # CI environments may not resolve an uppercase Justfile by default.
+          ln -sf Justfile justfile
+          just fuzz-invariants
