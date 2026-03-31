@@ -1,6 +1,9 @@
 #!/usr/bin/env sh
 set -eu
 
+# -----------------------------------------------------------------------------
+# Purpose and high-level behavior
+# -----------------------------------------------------------------------------
 # Generic Echidna runner for this repo.
 #
 # Native-first: if `echidna`/`echidna-test` is installed locally, we use it.
@@ -14,12 +17,18 @@ if [ -d "contracts/evm" ]; then
   cd "contracts/evm"
 fi
 
+# -----------------------------------------------------------------------------
+# Default CLI/config values
+# -----------------------------------------------------------------------------
 FILE=""
 CONTRACT=""
 CONFIG="echidna.config.yml"
 
 COMPILE_BACKEND="${ECHIDNA_COMPILE:-solc}" # solc | foundry
 
+# -----------------------------------------------------------------------------
+# Parse script arguments
+# -----------------------------------------------------------------------------
 while [ $# -gt 0 ]; do
   case "$1" in
     --file)
@@ -49,14 +58,23 @@ while [ $# -gt 0 ]; do
   esac
 done
 
+# -----------------------------------------------------------------------------
+# Preserve extra Echidna args for passthrough
+# -----------------------------------------------------------------------------
 EXTRA_ARGS="$*"
 
+# -----------------------------------------------------------------------------
+# Validate required inputs
+# -----------------------------------------------------------------------------
 if [ -z "$FILE" ] || [ -z "$CONTRACT" ]; then
   echo "error: missing --file or --contract" 1>&2
-  echo "example: just echidna file=test/fuzz/LiquidityHubLCCBackingEchidnaTest.sol contract=LiquidityHubLCCBackingEchidnaTest" 1>&2
+  echo "example: just echidna file=test/fuzz/HUB01Fuzz.sol contract=HUB01Fuzz" 1>&2
   exit 2
 fi
 
+# -----------------------------------------------------------------------------
+# Build crytic-compile arguments based on selected backend
+# -----------------------------------------------------------------------------
 # Compute default CryticCompile args so local and Docker runs behave the same.
 OUT_DIR="${FOUNDRY_OUT_DIR:-out}"
 if [ "$COMPILE_BACKEND" = "foundry" ]; then
@@ -66,6 +84,9 @@ else
   CRYTIC_ARGS="${ECHIDNA_CRYTIC_ARGS:---compile-force-framework solc --solc-remaps @openzeppelin/=lib/openzeppelin-contracts/ --solc-remaps openzeppelin-contracts/=lib/openzeppelin-contracts/ --solc-remaps v4-periphery/=lib/v4-periphery/ --solc-remaps @uniswap/v4-core/=lib/v4-periphery/lib/v4-core/ --solc-remaps v4-core/=lib/v4-periphery/lib/v4-core/src/}"
 fi
 
+# -----------------------------------------------------------------------------
+# Select Echidna compilation target format
+# -----------------------------------------------------------------------------
 # CryticCompile's Foundry platform expects a *project directory* target, not a single Solidity file.
 # In foundry mode, we compile from the repo root and select the harness via --contract.
 ECHIDNA_TARGET="$FILE"
@@ -73,6 +94,9 @@ if [ "$COMPILE_BACKEND" = "foundry" ]; then
   ECHIDNA_TARGET="."
 fi
 
+# -----------------------------------------------------------------------------
+# Discover local Echidna binary (unless Docker is forced)
+# -----------------------------------------------------------------------------
 ECHIDNA_BIN=""
 if command -v echidna-test >/dev/null 2>&1; then
   ECHIDNA_BIN="echidna-test"
@@ -84,6 +108,9 @@ if [ "${FORCE_DOCKER:-}" != "" ]; then
   ECHIDNA_BIN=""
 fi
 
+# -----------------------------------------------------------------------------
+# Native execution path (preferred)
+# -----------------------------------------------------------------------------
 if [ -n "$ECHIDNA_BIN" ]; then
   # shellcheck disable=SC2086
   "$ECHIDNA_BIN" "$ECHIDNA_TARGET" --contract "$CONTRACT" --config "$CONFIG" \
@@ -92,6 +119,9 @@ if [ -n "$ECHIDNA_BIN" ]; then
   exit 0
 fi
 
+# -----------------------------------------------------------------------------
+# Docker fallback path
+# -----------------------------------------------------------------------------
 if command -v docker >/dev/null 2>&1; then
   IMAGE="${ECHIDNA_IMAGE:-trailofbits/eth-security-toolbox}"
 
@@ -119,6 +149,8 @@ if command -v docker >/dev/null 2>&1; then
   exit 0
 fi
 
+# -----------------------------------------------------------------------------
+# Hard failure when no execution backend is available
+# -----------------------------------------------------------------------------
 echo "error: no local echidna binary (echidna/echidna-test) found, and docker not available" 1>&2
 exit 1
-

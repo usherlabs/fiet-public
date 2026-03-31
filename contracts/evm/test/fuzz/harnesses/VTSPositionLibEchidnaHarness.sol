@@ -18,24 +18,10 @@ import {IMarketVault} from "../../../src/interfaces/IMarketVault.sol";
 contract VTSPositionLibEchidnaHarness {
     VTSStorage internal s;
 
-    // Hard-linked library address (see `foundry.toml` `[profile.echidna].libraries`).
-    address internal constant VTS_POSITION_LIB = 0xa05ceC1A8F8639C0432Fa44FDd62d77bBcA4d211;
-
     constructor() {
-        _deployVTSPositionLib();
-    }
-
-    function _deployVTSPositionLib() internal {
-        // Deploy VTSPositionLib via CREATE2 to the hard-linked address.
-        // This prevents Echidna/HEVM from trying to RPC-fetch code for `VTS_POSITION_LIB`.
-        bytes32 salt = keccak256("echidna.VTSPositionLib");
-        bytes memory initCode = type(VTSPositionLib).creationCode;
-        address deployed;
-        assembly {
-            deployed := create2(0, add(initCode, 0x20), mload(initCode), salt)
-        }
-        require(deployed != address(0), "VTSPositionLib deploy failed");
-        require(deployed == VTS_POSITION_LIB, "VTSPositionLib addr mismatch");
+        // VTSPositionLib must already be deployed at the EchidnaLinkedLibs address before
+        // this harness is constructed. Callers should call EchidnaLinkedLibs.deployVTSPositionLib()
+        // before `new VTSPositionLibEchidnaHarness()`.
     }
 
     // -------------------------------------------------------------------------

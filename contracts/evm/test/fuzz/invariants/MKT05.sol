@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.26;
 
-import {HookMinerBase} from "./base/HookMinerBase.sol";
-import {HookFlags} from "../../src/libraries/HookFlags.sol";
-import {ProxyHook} from "../../src/ProxyHook.sol";
+import {HookMinerBase} from "../base/HookMinerBase.sol";
+import {HookFlags} from "../../../src/libraries/HookFlags.sol";
+import {ProxyHook} from "../../../src/ProxyHook.sol";
 
 import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
@@ -15,7 +15,7 @@ import {BeforeSwapDeltaLibrary} from "@uniswap/v4-core/src/types/BeforeSwapDelta
 import {IHooks} from "@uniswap/v4-core/src/interfaces/IHooks.sol";
 import {IERC20Minimal} from "@uniswap/v4-core/src/interfaces/external/IERC20Minimal.sol";
 
-import {ILiquidityHub} from "../../src/interfaces/ILiquidityHub.sol";
+import {ILiquidityHub} from "../../../src/interfaces/ILiquidityHub.sol";
 
 /// @notice Echidna harness for **MKT-05** that drives the *real* `ProxyHook.beforeSwap` execution path.
 ///
@@ -69,7 +69,7 @@ import {ILiquidityHub} from "../../src/interfaces/ILiquidityHub.sol";
 /// - invariants that require a real PoolManager implementation.
 ///
 /// Those are covered (or should be covered) elsewhere via Foundry integration/unit tests and other harnesses.
-contract ProxySwapMKT05LiveEchidnaTest is HookMinerBase {
+contract MKT05 is HookMinerBase {
     // Minimal protocol/environment stubs.
     MockPoolManager internal manager;
     MockLiquidityHub internal hub;
@@ -289,7 +289,7 @@ contract MockPoolManager {
     }
 }
 
-/// @dev Minimal LiquidityHub stub for `issue/cancel/totalQueued` used in proxy swap settlement.
+/// @dev Minimal LiquidityHub stub for `issue/cancel/totalQueued/unfundedQueueOfUnderlying` used in proxy swap settlement.
 contract MockLiquidityHub {
     function totalQueued(address) external pure returns (uint256) {
         return 0;
@@ -441,4 +441,3 @@ contract MockLCC is MockERC20 {
         _burn(from, amount);
     }
 }
-

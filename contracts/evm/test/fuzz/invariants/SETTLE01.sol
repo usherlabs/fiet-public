@@ -1,25 +1,25 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.26;
 
-import {VTSPositionLibEchidnaHarness} from "./harnesses/VTSPositionLibEchidnaHarness.sol";
-import {MockPoolManager} from "./mocks/MockPoolManager.sol";
-import {MockMarketVault} from "../_mocks/MockMarketVault.sol";
-import {MockLCC} from "../_mocks/MockLCC.sol";
-import {MarketVTSConfiguration, TokenConfiguration, PositionContext} from "../../src/types/VTS.sol";
-import {PositionId, PositionLibrary} from "../../src/types/Position.sol";
+import {VTSPositionLibEchidnaHarness} from "../harnesses/VTSPositionLibEchidnaHarness.sol";
+import {MockPoolManager} from "../mocks/MockPoolManager.sol";
+import {MockMarketVault} from "../../_mocks/MockMarketVault.sol";
+import {MockLCC} from "../../_mocks/MockLCC.sol";
+import {MarketVTSConfiguration, TokenConfiguration, PositionContext} from "../../../src/types/VTS.sol";
+import {PositionId, PositionLibrary} from "../../../src/types/Position.sol";
 import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
 import {BalanceDelta, toBalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
 import {IPoolManager} from "v4-periphery/lib/v4-core/src/interfaces/IPoolManager.sol";
 import {ModifyLiquidityParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
 import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
-import {LiquidityUtils} from "../../src/libraries/LiquidityUtils.sol";
-import {DynamicCurrencyDelta} from "../../src/libraries/DynamicCurrencyDelta.sol";
-import {EchidnaLinkedLibs} from "./base/EchidnaLinkedLibs.sol";
+import {LiquidityUtils} from "../../../src/libraries/LiquidityUtils.sol";
+import {DynamicCurrencyDelta} from "../../../src/libraries/DynamicCurrencyDelta.sol";
+import {EchidnaLinkedLibs} from "../base/EchidnaLinkedLibs.sol";
 
 /// @notice Echidna harness for SETTLE-01: Withdrawals from active positions are disallowed while RFS is open.
 ///         Tests that withdrawals revert when RFS is open (unless seizing).
-contract VTSSettle01RFSOpenEchidnaTest {
+contract SETTLE01 {
     VTSPositionLibEchidnaHarness internal harness;
     MockPoolManager internal poolManager;
     MockMarketVault internal vault;
