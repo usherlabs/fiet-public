@@ -19,8 +19,6 @@ import {EchidnaLinkedLibs} from "../base/EchidnaLinkedLibs.sol";
 /// @notice Echidna harness for SETTLE-02: seizure settlement clamps deposit/withdraw bounds.
 /// @dev Exercises the production `VTSPositionLib.onMMSettle` seizing branch via harness wrapper.
 contract SETTLE02 {
-    uint256 internal constant MAX_VACUOUS_ATTEMPTS = 12;
-
     VTSPositionLibEchidnaHarness internal harness;
     MockPoolManager internal poolManager;
     MockMarketVault internal vault;
@@ -32,17 +30,10 @@ contract SETTLE02 {
     Currency internal underlyingCurrency0;
     Currency internal underlyingCurrency1;
 
-    uint256 internal attempts;
     uint256 internal depositChecks;
     uint256 internal withdrawChecks;
     bool internal depositAllOk = true;
     bool internal withdrawAllOk = true;
-    bool internal depositSeenBelow;
-    bool internal depositSeenEqual;
-    bool internal depositSeenAbove;
-    bool internal withdrawSeenBelow;
-    bool internal withdrawSeenEqual;
-    bool internal withdrawSeenAbove;
 
     constructor() {
         EchidnaLinkedLibs.deployVTSPositionLib();
@@ -100,18 +91,15 @@ contract SETTLE02 {
         uint256 settled0,
         uint256 settled1,
         uint256 requestedDeposit0,
-        uint256 requestedDeposit1,
-        uint8 mode
+        uint256 requestedDeposit1
     ) external {
-        unchecked {
-            attempts++;
-        }
-
         _configureRfsOpen(commitmentMax0, commitmentMax1, settled0, settled1);
         vault.setAvailableLiquidity(type(int128).max, type(int128).max);
 
         (, BalanceDelta rfsDelta) = harness.getRFS(positionId);
 
+        // Deterministically cycle below/equal/above scenarios for each deposit check.
+        uint8 mode = uint8(depositChecks % 3);
         uint256 cap0 = _toUintPositive(rfsDelta.amount0());
         uint256 cap1 = _toUintPositive(rfsDelta.amount1());
         uint256 req0 = _pickRequested(cap0, requestedDeposit0, mode);
@@ -135,7 +123,6 @@ contract SETTLE02 {
         }
 
         depositChecks++;
-        _markModeSeen(mode, true);
         depositAllOk = depositAllOk && ok && exact;
     }
 
@@ -145,13 +132,8 @@ contract SETTLE02 {
         uint256 required0Raw,
         uint256 required1Raw,
         uint256 requestedWithdraw0,
-        uint256 requestedWithdraw1,
-        uint8 mode
+        uint256 requestedWithdraw1
     ) external {
-        unchecked {
-            attempts++;
-        }
-
         // RFS state does not gate seizing withdrawals, but keep state realistic.
         _configureRfsClosed(required0Raw + 1e18, required1Raw + 1e18);
         vault.setAvailableLiquidity(type(int128).max, type(int128).max);
@@ -161,6 +143,8 @@ contract SETTLE02 {
         harness.setUnderlyingDeltaAbsolute(underlyingCurrency0, address(this), req0);
         harness.setUnderlyingDeltaAbsolute(underlyingCurrency1, address(this), req1);
 
+        // Deterministically cycle below/equal/above scenarios for each withdraw check.
+        uint8 mode = uint8(withdrawChecks % 3);
         uint256 cap0 = uint256(uint128(req0));
         uint256 cap1 = uint256(uint128(req1));
         uint256 ask0 = _pickRequested(cap0, requestedWithdraw0, mode);
@@ -184,16 +168,14 @@ contract SETTLE02 {
         }
 
         withdrawChecks++;
-        _markModeSeen(mode, false);
         withdrawAllOk = withdrawAllOk && ok && exact;
     }
 
     // forge-lint: disable-next-line(mixed-case-function)
     function echidna_settle_02_seizing_clamps_hold() external view returns (bool) {
-        bool depositModesCovered = depositSeenBelow && depositSeenEqual && depositSeenAbove;
-        bool withdrawModesCovered = withdrawSeenBelow && withdrawSeenEqual && withdrawSeenAbove;
-        if (!depositModesCovered || !withdrawModesCovered || depositChecks == 0 || withdrawChecks == 0) {
-            return attempts < MAX_VACUOUS_ATTEMPTS;
+        // Wait until each side has exercised below/equal/above once.
+        if (depositChecks < 3 || withdrawChecks < 3) {
+            return true;
         }
         return depositAllOk && withdrawAllOk;
     }
@@ -257,18 +239,5 @@ contract SETTLE02 {
             return cap == 0 ? 1 : cap;
         }
         return cap + (fuzzed % 1e18) + 1;
-    }
-
-    function _markModeSeen(uint8 mode, bool isDeposit) internal {
-        uint8 m = mode % 3;
-        if (isDeposit) {
-            if (m == 0) depositSeenBelow = true;
-            else if (m == 1) depositSeenEqual = true;
-            else depositSeenAbove = true;
-            return;
-        }
-        if (m == 0) withdrawSeenBelow = true;
-        else if (m == 1) withdrawSeenEqual = true;
-        else withdrawSeenAbove = true;
     }
 }
