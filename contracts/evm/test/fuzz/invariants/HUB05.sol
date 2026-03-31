@@ -16,17 +16,16 @@ import {EchidnaLinkedLibs} from "../base/EchidnaLinkedLibs.sol";
 ///   1. reserve <= actual hub balance for ERC20 underlying (always-on)
 ///   2. reserve <= actual hub balance for native underlying (always-on)
 ///   3. confirmTake with amount exceeding slack (balance - reserve) must revert (action/result)
-///   4. confirmTake reachable via useMarketLiquidity callback still preserves invariant (always-on)
+///   4. Deterministic market-derived unwrap path reaches the callback (action/result)
 ///   5. Valid confirmTake increases reserve by exactly the confirmed amount (action/result)
 contract HUB05 {
     uint256 internal constant MAX_AMOUNT = 1e24;
-    uint256 internal constant MAX_CALLBACK_VACUOUS_ATTEMPTS = 16;
-
     LiquidityHub internal hub;
 
     LiquidityCommitmentCertificate internal lccErc20;
     LiquidityCommitmentCertificate internal lccNative;
     MockERC20Transferable internal erc20Underlying;
+    HUB05Holder internal callbackHolder;
 
     // Fuzz-controlled callback take amount for reentrant path.
     uint256 internal callbackTakeAmount;
@@ -44,10 +43,8 @@ contract HUB05 {
     // Action/result: over-balance confirmTake must revert.
     bool internal checkedOverBalanceTake;
     bool internal lastOverBalanceTakeOk;
-
-    // Tracks that the callback path was exercised at least once.
-    bool internal callbackExercised;
-    uint256 internal callbackTriggerAttempts;
+    bool internal callbackExpected;
+    bool internal callbackSeen;
 
     // ================================================================
     // Constructor
@@ -80,6 +77,7 @@ contract HUB05 {
         (address n0, address n1) = hub.createLCCPair(nativeRef, address(0), address(otherNative), "NAT", issuers);
         hub.initialize(n0, n1, bytes32(uint256(2)), nativeRef);
         lccNative = LiquidityCommitmentCertificate(hub.getUnderlying(n0) == address(0) ? n0 : n1);
+        callbackHolder = new HUB05Holder();
 
         // Approve hub for ERC20 wrapping.
         erc20Underlying.approve(address(hub), type(uint256).max);
@@ -111,9 +109,9 @@ contract HUB05 {
     ///      This is the reentrant path HUB-05 is specifically designed to protect against.
     function useMarketLiquidity(address, bytes32, uint256) external returns (uint256 used) {
         if (msg.sender != address(hub)) revert();
+        callbackSeen = true;
 
         if (callbackTakeAmount > 0) {
-            callbackExercised = true;
             // Low-level call so reverts don't abort the unwrap flow.
             (bool ok,) = address(hub)
                 .call(
@@ -160,23 +158,14 @@ contract HUB05 {
         callbackTakeAmount = amount % MAX_AMOUNT;
     }
 
-    /// @dev Issue market-derived LCC and unwrap to trigger the callback path.
+    /// @dev Deterministically drives unwrap through market-liquidity callback path:
+    ///      callbackHolder has only market-derived balance (no wrapped direct supply bucket).
     // forge-lint: disable-next-line(mixed-case-function)
     function action_hub_05_trigger_callback_via_unwrap(uint256 amount) external {
-        if (callbackTakeAmount > 0) {
-            unchecked {
-                callbackTriggerAttempts++;
-            }
-        }
         uint256 amt = (amount % MAX_AMOUNT) + 1;
-        hub.issue(address(lccErc20), address(this), amt);
-        // Low-level to handle reverts gracefully.
-        (bool ok,) = address(hub)
-            .call(
-                abi.encodeWithSignature(
-                    "unwrapTo(address,address,address,uint256)", address(lccErc20), address(this), address(this), amt
-                )
-            );
+        callbackExpected = true;
+        hub.issue(address(lccErc20), address(callbackHolder), amt);
+        bool ok = callbackHolder.unwrapTo(address(hub), address(lccErc20), amt);
         ok;
         modelReserveErc20 = hub.reserveOfUnderlying(address(lccErc20));
     }
@@ -260,6 +249,12 @@ contract HUB05 {
     // Properties — action/result
     // ================================================================
 
+    /// @dev If the deterministic market-derived unwrap action executed, callback must be reached.
+    // forge-lint: disable-next-line(mixed-case-function)
+    function echidna_hub_05_callback_path_reached_when_expected() external view returns (bool) {
+        return !callbackExpected || callbackSeen;
+    }
+
     /// @dev Valid confirmTake must increase reserve by exactly the confirmed amount.
     // forge-lint: disable-next-line(mixed-case-function)
     function echidna_hub_05_valid_take_increments_correctly() external view returns (bool) {
@@ -274,11 +269,15 @@ contract HUB05 {
         return !checkedOverBalanceTake || lastOverBalanceTakeOk;
     }
 
-    /// @dev The nested callback path must be exercised after enough explicit trigger attempts.
-    // forge-lint: disable-next-line(mixed-case-function)
-    function echidna_hub_05_callback_path_exercised() external view returns (bool) {
-        return callbackExercised || callbackTriggerAttempts < MAX_CALLBACK_VACUOUS_ATTEMPTS;
-    }
-
     receive() external payable {}
+}
+
+contract HUB05Holder {
+    function unwrapTo(address hub, address lcc, uint256 amount) external returns (bool ok) {
+        (ok,) = hub.call(
+            abi.encodeWithSignature(
+                "unwrapTo(address,address,address,uint256)", lcc, address(this), address(this), amount
+            )
+        );
+    }
 }

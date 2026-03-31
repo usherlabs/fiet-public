@@ -373,6 +373,22 @@ contract ProxyHookTest is MarketVaultBase {
         assertEq(tickAfter, tickBefore, "proxy tick should remain unchanged");
     }
 
+    function test_proxySwap_exactInput_oneForZero_keepsProxySlot0Unchanged() public {
+        (uint160 sqrtBefore, int24 tickBefore,,) = StateLibrary.getSlot0(manager, proxyPoolKey.toId());
+        _executeSwap(proxyPoolKey, false, -int256(1e18), ZERO_BYTES);
+        (uint160 sqrtAfter, int24 tickAfter,,) = StateLibrary.getSlot0(manager, proxyPoolKey.toId());
+        assertEq(sqrtAfter, sqrtBefore, "proxy sqrtPrice should remain unchanged");
+        assertEq(tickAfter, tickBefore, "proxy tick should remain unchanged");
+    }
+
+    function test_proxySwap_exactOutput_oneForZero_keepsProxySlot0Unchanged() public {
+        (uint160 sqrtBefore, int24 tickBefore,,) = StateLibrary.getSlot0(manager, proxyPoolKey.toId());
+        _executeSwap(proxyPoolKey, false, int256(100), ZERO_BYTES);
+        (uint160 sqrtAfter, int24 tickAfter,,) = StateLibrary.getSlot0(manager, proxyPoolKey.toId());
+        assertEq(sqrtAfter, sqrtBefore, "proxy sqrtPrice should remain unchanged");
+        assertEq(tickAfter, tickBefore, "proxy tick should remain unchanged");
+    }
+
     // Tests that after a direct swap on the underlying liquidity of the lcc tokens are moved accordingly
     function test_swap_exactOutput_zeroForOneOnCore() public {
         console.log("====== test_swap_exactOutput_zeroForOneOnCore =======");

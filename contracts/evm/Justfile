@@ -61,7 +61,6 @@ fuzz:
     @just echidna-mkt-01-02
     @just echidna-mkt-03-06
     @just echidna-mkt-04-04a
-    @just echidna-mkt-05
     @just echidna-auth-01-01a-02
     @just fuzz-regressions
 
@@ -71,6 +70,9 @@ fuzz-regressions:
     @just echidna-wrapwith
     @just echidna-lcc-queue-netting
     @just echidna-confirmtake-callback
+    # MKT-05 remains authoritatively gated by `invariant-evidence-foundry`;
+    # this Echidna target is retained as a lightweight regression/drift check.
+    @just echidna-mkt-05
 
 # Longer invariant campaigns (uses `echidna.deep.config.yml`).
 fuzz-deep:
@@ -107,7 +109,6 @@ fuzz-deep:
     @just echidna-mkt-01-02 echidna.deep.config.yml
     @just echidna-mkt-03-06 echidna.deep.config.yml
     @just echidna-mkt-04-04a echidna.deep.config.yml
-    @just echidna-mkt-05 echidna.deep.config.yml
     @just echidna-auth-01-01a-02 echidna.deep.config.yml
 
 # Full invariant suite entrypoint for CI:
@@ -128,6 +129,9 @@ invariant-evidence-foundry:
     FOUNDRY_PROFILE=debug forge test -vvv --match-path test/MarketFactory.t.sol --match-test testFuzz_createMarket_revertsWhenCorePoolAlreadyExists
     FOUNDRY_PROFILE=debug forge test -vvv --match-path test/ProxyHook.t.sol --match-test 'testFuzz_swap_exactOutput_.*_revertsWhenRequestedExceedsImmediateLiquidity'
     FOUNDRY_PROFILE=debug forge test -vvv --match-path test/ProxyHook.t.sol --match-test test_proxySwap_exactInput_keepsProxySlot0Unchanged
+    FOUNDRY_PROFILE=debug forge test -vvv --match-path test/ProxyHook.t.sol --match-test test_proxySwap_exactOutput_keepsProxySlot0Unchanged
+    FOUNDRY_PROFILE=debug forge test -vvv --match-path test/ProxyHook.t.sol --match-test test_proxySwap_exactInput_oneForZero_keepsProxySlot0Unchanged
+    FOUNDRY_PROFILE=debug forge test -vvv --match-path test/ProxyHook.t.sol --match-test test_proxySwap_exactOutput_oneForZero_keepsProxySlot0Unchanged
 
 echidna-lcc-backing config="echidna.config.yml":
     @just echidna test/fuzz/invariants/LCCBacking01.sol LCCBacking01 {{ config }} -- --disable-slither
