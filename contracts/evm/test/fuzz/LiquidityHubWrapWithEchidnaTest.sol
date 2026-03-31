@@ -9,8 +9,10 @@ import {Bounds} from "../../src/libraries/Bounds.sol";
 import {LCCFactoryLinkedLib} from "../../src/libraries/LCCFactoryLib.sol";
 import {LiquidityHubLinkedLib} from "../../src/libraries/LiquidityHubLinkedLib.sol";
 
-/// @notice Micro-harness focused on `LiquidityHub.wrapWith` invariants (Domain conversion).
-/// @dev This isolates `wrapWith` behaviour from the larger Hub/LCC backing harness so expectations stay deterministic.
+/// @notice Regression harness focused on `LiquidityHub.wrapWith` behaviour (Domain conversion).
+/// @dev This is intentionally scoped as a targeted regression suite for wrapWith-specific
+///      semantics. Canonical invariant coverage lives under `test/fuzz/invariants/*`.
+///      We keep this harness to continuously exercise historical wrapWith edge cases.
 contract LiquidityHubWrapWithEchidnaTest {
     LiquidityHub internal hub;
     LiquidityCommitmentCertificate internal lccA;

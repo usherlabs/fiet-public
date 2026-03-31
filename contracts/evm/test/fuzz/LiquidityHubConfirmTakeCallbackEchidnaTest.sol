@@ -15,6 +15,8 @@ import {LiquidityHubLinkedLib} from "../../src/libraries/LiquidityHubLinkedLib.s
 ///      reserve accounting must never exceed actual Hub underlying balance.
 ///      This harness forces `confirmTake` to be reachable from within the unwrap call chain:
 ///      `unwrap` -> `useMarketLiquidity` (factory callback) -> `confirmTake`.
+///      It is retained as a targeted regression harness for callback-path behaviour;
+///      canonical invariant coverage remains in `test/fuzz/invariants/*`.
 contract LiquidityHubConfirmTakeCallbackEchidnaTest {
     LiquidityHub internal hub;
     LiquidityCommitmentCertificate internal lccNative;

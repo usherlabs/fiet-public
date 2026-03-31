@@ -193,7 +193,7 @@ contract LCCBacking01 {
         });
     }
 
-    /// @dev Dual-mode commitment gate check (mirrors VTSCommit01SigBackingEchidnaTest).
+    /// @dev Dual-mode commitment gate check (ported from the legacy commitment-only harness).
     ///      Returns true when the library's soft-mode and hard-mode results are consistent
     ///      AND the returned signal value matches our independently tracked model variable.
     function _evaluateCommitmentGate() internal view returns (bool ok) {
@@ -313,7 +313,7 @@ contract LCCBacking01 {
         hub.issue(address(lccTracked), address(this), INITIAL_MARKET_BALANCE);
         expectedMarketDerived = INITIAL_MARKET_BALANCE;
 
-        // VRL commitment gate harness (same pattern as VTSCommit01SigBackingEchidnaTest).
+        // VRL commitment gate harness (same pattern as the legacy commitment-only harness).
         commitOracle = new MockOracleHelper(address(0));
         commitOracle.setPrices(1e18, 1e18);
         vrlSignalUsd = 1e36;

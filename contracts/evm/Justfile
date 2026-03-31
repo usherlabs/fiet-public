@@ -63,6 +63,14 @@ fuzz:
     @just echidna-mkt-04-04a
     @just echidna-mkt-05
     @just echidna-auth-01-01a-02
+    @just fuzz-regressions
+
+# Targeted regression harnesses that complement canonical `test/fuzz/invariants/*`
+# coverage. These focus on specific behavioural paths and historical bug surfaces.
+fuzz-regressions:
+    @just echidna-wrapwith
+    @just echidna-lcc-queue-netting
+    @just echidna-confirmtake-callback
 
 # Longer invariant campaigns (uses `echidna.deep.config.yml`).
 fuzz-deep:
