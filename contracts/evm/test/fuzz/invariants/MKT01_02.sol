@@ -13,6 +13,7 @@ import {Errors} from "../../../src/libraries/Errors.sol";
 contract MKT01_02 {
     uint256 internal constant MAX_VACUOUS_ATTEMPTS = 12;
 
+    MockMarketFactoryMkt internal factory;
     ProxyHookMktHarness internal hook;
     PoolKey internal key;
 
@@ -23,7 +24,8 @@ contract MKT01_02 {
     bool internal writeAllOk = true;
 
     constructor() {
-        hook = new ProxyHookMktHarness(address(0x1234), address(this));
+        factory = new MockMarketFactoryMkt();
+        hook = new ProxyHookMktHarness(address(0x1234), address(factory));
         key = PoolKey({
             currency0: Currency.wrap(address(0x100)),
             currency1: Currency.wrap(address(0x200)),
@@ -86,12 +88,12 @@ contract MKT01_02 {
 
         bool wasSet = hook.isCorePoolKeySet();
         bool firstOk = true;
-        try hook.setCorePoolKey(coreKey) {}
+        try factory.callSetCorePoolKey(hook, coreKey) {}
         catch {
             firstOk = false;
         }
         bool secondRevertedWithExpectedSelector = false;
-        try hook.setCorePoolKey(altKey) {
+        try factory.callSetCorePoolKey(hook, altKey) {
             secondRevertedWithExpectedSelector = false;
         } catch (bytes memory data) {
             secondRevertedWithExpectedSelector = _selector(data) == Errors.CorePoolKeyAlreadySet.selector;
@@ -116,6 +118,16 @@ contract MKT01_02 {
         assembly {
             sel := mload(add(data, 32))
         }
+    }
+}
+
+contract MockMarketFactoryMkt {
+    function liquidityHub() external pure returns (address) {
+        return address(0x1234);
+    }
+
+    function callSetCorePoolKey(ProxyHookMktHarness hook, PoolKey calldata coreKey) external {
+        hook.setCorePoolKey(coreKey);
     }
 }
 

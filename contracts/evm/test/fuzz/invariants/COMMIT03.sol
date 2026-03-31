@@ -217,9 +217,10 @@ contract COMMIT03 {
         address newAdvancer =
             currentAdvancer == address(advancerActorA) ? address(advancerActorB) : address(advancerActorA);
 
-        COMMIT03Actor currentActor = _actorForAdvancer();
+        COMMIT03Actor oldActor = _actorForAdvancer();
+        COMMIT03Actor newActor = newAdvancer == address(advancerActorA) ? advancerActorA : advancerActorB;
         checkedRotation = true;
-        bool ok = currentActor.tryRenewSignal(
+        bool ok = newActor.tryRenewSignal(
             harness, IVRLSignalManager(address(sigMgr)), commitId, _makeSignal(MM_OWNER, newAdvancer)
         );
         if (!ok) {
@@ -230,13 +231,11 @@ contract COMMIT03 {
         currentAdvancer = newAdvancer;
 
         // After rotation, the OLD advancer must be rejected.
-        COMMIT03Actor oldActor = currentAdvancer == address(advancerActorA) ? advancerActorB : advancerActorA;
         bool oldOk = oldActor.tryRenewSignal(
             harness, IVRLSignalManager(address(sigMgr)), commitId, _makeSignal(MM_OWNER, currentAdvancer)
         );
 
         // New advancer must succeed.
-        COMMIT03Actor newActor = _actorForAdvancer();
         bool newOk = newActor.tryRenewSignal(
             harness, IVRLSignalManager(address(sigMgr)), commitId, _makeSignal(MM_OWNER, currentAdvancer)
         );

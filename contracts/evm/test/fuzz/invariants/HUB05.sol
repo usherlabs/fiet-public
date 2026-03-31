@@ -161,8 +161,10 @@ contract HUB05 {
     /// @dev Issue market-derived LCC and unwrap to trigger the callback path.
     // forge-lint: disable-next-line(mixed-case-function)
     function action_hub_05_trigger_callback_via_unwrap(uint256 amount) external {
-        unchecked {
-            callbackTriggerAttempts++;
+        if (callbackTakeAmount > 0) {
+            unchecked {
+                callbackTriggerAttempts++;
+            }
         }
         uint256 amt = (amount % MAX_AMOUNT) + 1;
         hub.issue(address(lccErc20), address(this), amt);
