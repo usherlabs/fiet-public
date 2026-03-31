@@ -138,7 +138,9 @@ contract SETTLE02 {
         uint256 requestedWithdraw1
     ) external {
         // RFS state does not gate seizing withdrawals, but keep state realistic.
-        _configureRfsClosed(required0Raw + 1e18, required1Raw + 1e18);
+        uint256 boundedRequired0 = required0Raw % 1e24;
+        uint256 boundedRequired1 = required1Raw % 1e24;
+        _configureRfsClosed(boundedRequired0 + 1e18, boundedRequired1 + 1e18);
         vault.setAvailableLiquidity(type(int128).max, type(int128).max);
 
         int128 req0 = int128(uint128((required0Raw % 1e18) + 1));
