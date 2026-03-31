@@ -127,10 +127,10 @@ contract COMMIT01 {
         int24 tl = tickLower;
         int24 tu = tickUpper;
         int24 ct = currentTick;
-        if (tl < -887272) tl = -887272;
-        if (tu > 887272) tu = 887272;
-        if (ct < -887272) ct = -887272;
-        if (ct > 887272) ct = 887272;
+        if (tl < TickMath.MIN_TICK) tl = TickMath.MIN_TICK;
+        if (tu > TickMath.MAX_TICK) tu = TickMath.MAX_TICK;
+        if (ct < TickMath.MIN_TICK) ct = TickMath.MIN_TICK;
+        if (ct > TickMath.MAX_TICK) ct = TickMath.MAX_TICK;
         if (tl >= tu) {
             tl = -60;
             tu = 60;

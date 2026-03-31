@@ -8,6 +8,7 @@ import {MockPoolManager} from "../mocks/MockPoolManager.sol";
 import {PositionId} from "../../../src/types/Position.sol";
 import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
+import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
 import {IPoolManager} from "v4-periphery/lib/v4-core/src/interfaces/IPoolManager.sol";
 import {OracleUtils} from "../../../src/libraries/OracleUtils.sol";
 import {LiquidityUtils} from "../../../src/libraries/LiquidityUtils.sol";
@@ -97,8 +98,8 @@ contract COMMIT02 {
 
     // forge-lint: disable-next-line(mixed-case-function)
     function action_set_position(int24 tl, int24 tu, uint128 liq) external {
-        if (tl < -887272) tl = -887272;
-        if (tu > 887272) tu = 887272;
+        if (tl < TickMath.MIN_TICK) tl = TickMath.MIN_TICK;
+        if (tu > TickMath.MAX_TICK) tu = TickMath.MAX_TICK;
         if (tl >= tu) {
             tl = -60;
             tu = 60;
