@@ -101,8 +101,13 @@ contract HubRSC is AbstractReactive {
     /// @notice Whether an LCC has been registered with a canonical underlying.
     /// @notice It is important to track using a second variable because underlyingByLcc[lcc] can be 0x for lccs with native underlying assets
     mapping(address => bool) public hasUnderlyingForLcc;
-    /// @notice One-shot retry flag for zero-batch scans on a shared dispatch lane.
-    mapping(address => bool) public zeroBatchRetryByUnderlying;
+    /// @notice Remaining zero-batch retry callbacks allowed for a dispatch lane (see `_handleZeroBatchRetry`).
+    mapping(address => uint256) public zeroBatchRetryCreditsRemaining;
+
+    /// @dev Upper bound on how many consecutive zero-batch windows we will chain per liquidity amount.
+    uint256 private constant MAX_ZERO_BATCH_RETRY_WINDOWS = 256;
+    /// @dev Source marker for the in-flight dispatch call (`true` only for LiquidityHub callbacks).
+    bool private bootstrapZeroBatchRetry;
 
     event SpokeCreated(address indexed recipient, address indexed spoke);
     event PendingAdded(address indexed lcc, address indexed recipient, uint256 amount);
@@ -384,7 +389,9 @@ contract HubRSC is AbstractReactive {
         address lcc = address(uint160(log.topic_1));
         (address underlying, uint256 available,) = abi.decode(log.data, (address, uint256, bytes32));
         _registerLccUnderlying(lcc, underlying);
+        bootstrapZeroBatchRetry = true;
         _dispatchLiquidity(lcc, available);
+        bootstrapZeroBatchRetry = false;
     }
 
     /// @notice Handles follow-up liquidity notices emitted via HubCallback.
@@ -405,7 +412,7 @@ contract HubRSC is AbstractReactive {
         // historical backlog may still exist only in the per-LCC queue.
         bool useSharedUnderlying = hasUnderlyingForLcc[lcc] && queueDataByUnderlying[underlying].size > 0;
         address dispatchLane = useSharedUnderlying ? underlying : lcc;
-        _clearInactiveZeroBatchRetryFlag(lcc, underlying, useSharedUnderlying);
+        _clearInactiveZeroBatchRetryCredits(lcc, underlying, useSharedUnderlying);
 
         LinkedQueue.Data storage scanQueue =
             useSharedUnderlying ? queueDataByUnderlying[dispatchLane] : queueDataByLcc[lcc];
@@ -459,7 +466,7 @@ contract HubRSC is AbstractReactive {
         scanQueue.cursor = state.cursor;
 
         // if the batchsize is zero then we need to check if there is more liquidity and more items
-        if (_handleZeroBatchRetry(dispatchLane, lcc, state.batchCount, state.remainingLiquidity)) return;
+        if (_handleZeroBatchRetry(dispatchLane, lcc, state.batchCount, state.remainingLiquidity, startSize)) return;
 
         // if the batchsize is greater than zero
         _finalizeLiquidityDispatch(
@@ -472,8 +479,8 @@ contract HubRSC is AbstractReactive {
     /// while `remainingLiquidity > 0`, usually because the scanned window contained only
     /// reserved or otherwise temporarily non-dispatchable entries.
     ///
-    /// The function emits at most one retry callback per dispatch lane so the next pass can
-    /// resume from the advanced cursor without creating an infinite retry loop.
+    /// Emits chained `MoreLiquidityAvailable` callbacks (bounded by `MAX_ZERO_BATCH_RETRY_WINDOWS`)
+    /// so the cursor can advance across multiple reserved-only windows without stalling.
     ///
     /// The "dispatch lane" is the queue scope currently being scanned:
     /// - the shared underlying key for underlying-aware dispatch, or
@@ -482,20 +489,27 @@ contract HubRSC is AbstractReactive {
         address dispatchLane,
         address triggerLcc,
         uint256 batchCount,
-        uint256 remainingLiquidity
+        uint256 remainingLiquidity,
+        uint256 queueSizeAtStart
     ) internal returns (bool shouldReturn) {
         if (batchCount == 0 && remainingLiquidity > 0) {
-            if (!zeroBatchRetryByUnderlying[dispatchLane]) {
-                zeroBatchRetryByUnderlying[dispatchLane] = true;
+            uint256 credits = zeroBatchRetryCreditsRemaining[dispatchLane];
+            if (credits == 0 && bootstrapZeroBatchRetry) {
+                uint256 maxWindows = (queueSizeAtStart + maxDispatchItems - 1) / maxDispatchItems;
+                if (maxWindows == 0) maxWindows = 1;
+                if (maxWindows > MAX_ZERO_BATCH_RETRY_WINDOWS) maxWindows = MAX_ZERO_BATCH_RETRY_WINDOWS;
+                credits = maxWindows;
+            }
+            if (credits > 0) {
+                zeroBatchRetryCreditsRemaining[dispatchLane] = credits - 1;
                 _triggerMoreLiquidityAvailable(triggerLcc, remainingLiquidity);
                 return true;
             }
-
-            zeroBatchRetryByUnderlying[dispatchLane] = false;
+            zeroBatchRetryCreditsRemaining[dispatchLane] = 0;
         }
 
         if (batchCount > 0) {
-            zeroBatchRetryByUnderlying[dispatchLane] = false;
+            zeroBatchRetryCreditsRemaining[dispatchLane] = 0;
         }
 
         return false;
@@ -554,17 +568,17 @@ contract HubRSC is AbstractReactive {
         emit Callback(reactChainId, hubCallback, CALLBACK_GAS_LIMIT, liquidityPayload);
     }
 
-    /// @dev Retry flags are keyed by the lane that was actually scanned. If later routing for the
-    /// same trigger LCC falls back to the other lane, clear the inactive lane's stale retry bit so
+    /// @dev Zero-batch retry credits are keyed by the lane that was actually scanned. If later routing for the
+    /// same trigger LCC falls back to the other lane, clear the inactive lane's stale credits so
     /// it cannot suppress the next legitimate zero-batch continuation.
-    function _clearInactiveZeroBatchRetryFlag(address lcc, address underlying, bool useSharedUnderlying) internal {
+    function _clearInactiveZeroBatchRetryCredits(address lcc, address underlying, bool useSharedUnderlying) internal {
         if (useSharedUnderlying) {
-            zeroBatchRetryByUnderlying[lcc] = false;
+            zeroBatchRetryCreditsRemaining[lcc] = 0;
             return;
         }
 
         if (hasUnderlyingForLcc[lcc]) {
-            zeroBatchRetryByUnderlying[underlying] = false;
+            zeroBatchRetryCreditsRemaining[underlying] = 0;
         }
     }
 
