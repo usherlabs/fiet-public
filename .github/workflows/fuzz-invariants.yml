@@ -1,0 +1,116 @@
+name: Fuzz Invariants
+
+on:
+  push:
+    branches: [main, develop]
+    paths:
+      - "contracts/evm/**"
+      - ".github/workflows/fuzz-invariants.yml"
+  pull_request:
+    branches: [main, develop, audit/*]
+    paths:
+      - "contracts/evm/**"
+      - ".github/workflows/fuzz-invariants.yml"
+  workflow_dispatch:
+
+jobs:
+  fuzz-invariants:
+    name: Fuzz Invariant Suite
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: contracts/evm
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install Foundry
+        uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: "v1.4.2"
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      - name: Install just
+        uses: taiki-e/install-action@just
+
+      - name: Install crytic-compile
+        shell: bash
+        run: |
+          sudo apt-get update
+          python -m pip install --upgrade pip
+          python -m pip install crytic-compile
+          crytic-compile --version
+
+      - name: Install Echidna (native)
+        shell: bash
+        run: |
+          set -euo pipefail
+          ECHIDNA_VERSION="v2.2.7"
+          ARCHIVE="echidna-${ECHIDNA_VERSION#v}-x86_64-linux.tar.gz"
+          URL="https://github.com/crytic/echidna/releases/download/${ECHIDNA_VERSION}/${ARCHIVE}"
+
+          curl -fsSL "$URL" -o /tmp/echidna.tar.gz
+          rm -rf /tmp/echidna-bin
+          mkdir -p /tmp/echidna-bin
+          tar -xzf /tmp/echidna.tar.gz -C /tmp/echidna-bin
+
+          if [ -x /tmp/echidna-bin/echidna ]; then
+            sudo install -m 0755 /tmp/echidna-bin/echidna /usr/local/bin/echidna
+          elif [ -x /tmp/echidna-bin/bin/echidna ]; then
+            sudo install -m 0755 /tmp/echidna-bin/bin/echidna /usr/local/bin/echidna
+          else
+            echo "echidna binary not found in release archive"
+            exit 1
+          fi
+
+          if [ -x /tmp/echidna-bin/echidna-test ]; then
+            sudo install -m 0755 /tmp/echidna-bin/echidna-test /usr/local/bin/echidna-test
+          elif [ -x /tmp/echidna-bin/bin/echidna-test ]; then
+            sudo install -m 0755 /tmp/echidna-bin/bin/echidna-test /usr/local/bin/echidna-test
+          else
+            sudo ln -sf /usr/local/bin/echidna /usr/local/bin/echidna-test
+          fi
+
+          echidna --version
+          echidna-test --version || true
+
+      - name: Select fuzz mode
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_REF: ${{ github.base_ref }}
+          HEAD_REF: ${{ github.head_ref }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "$EVENT_NAME" == "pull_request" && "$BASE_REF" == "main" && "$HEAD_REF" == "develop" ]]; then
+            echo "FUZZ_COMMAND=just --justfile Justfile fuzz-deep && just --justfile Justfile invariant-evidence-foundry" >> "$GITHUB_ENV"
+            echo "Selected deep suite for develop -> main PR"
+          else
+            echo "FUZZ_COMMAND=just --justfile Justfile fuzz-invariants" >> "$GITHUB_ENV"
+            echo "Selected default suite"
+          fi
+
+      - name: Show tool versions
+        run: |
+          forge --version
+          just --version
+          python -m pip --version
+          crytic-compile --version
+          echidna --version
+
+      - name: Run full invariant suite
+        env:
+          FOUNDRY_PROFILE: echidna
+          ECHIDNA_COMPILE: foundry
+          FOUNDRY_OUT_DIR: out-echidna
+        run: |
+          bash -lc "$FUZZ_COMMAND"

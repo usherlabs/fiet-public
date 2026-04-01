@@ -4,6 +4,13 @@ pragma solidity ^0.8.26;
 import {VTSStorage, MarketVTSConfiguration} from "../../../src/types/VTS.sol";
 import {PositionId, Position} from "../../../src/types/Position.sol";
 import {Pool} from "../../../src/types/Pool.sol";
+import {
+    SettleParams,
+    SettleResult,
+    PositionContext,
+    TouchPositionParams,
+    TouchPositionResult
+} from "../../../src/types/VTS.sol";
 import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
 import {BalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
@@ -12,30 +19,18 @@ import {ModifyLiquidityParams} from "@uniswap/v4-core/src/types/PoolOperation.so
 import {VTSPositionLib} from "../../../src/libraries/VTSPositionLib.sol";
 import {DynamicCurrencyDelta} from "../../../src/libraries/DynamicCurrencyDelta.sol";
 import {IMarketVault} from "../../../src/interfaces/IMarketVault.sol";
+import {ILiquidityHub} from "../../../src/interfaces/ILiquidityHub.sol";
+import {IOracleHelper} from "../../../src/interfaces/IOracleHelper.sol";
 
 /// @notice Minimal Echidna-oriented harness that avoids calling `public`/`external` functions on `VTSPositionLib`.
 ///         This prevents linked-library DELEGATECALLs that cause Echidna/HEVM to attempt RPC bytecode fetches.
 contract VTSPositionLibEchidnaHarness {
     VTSStorage internal s;
 
-    // Hard-linked library address (see `foundry.toml` `[profile.echidna].libraries`).
-    address internal constant VTS_POSITION_LIB = 0xa05ceC1A8F8639C0432Fa44FDd62d77bBcA4d211;
-
     constructor() {
-        _deployVTSPositionLib();
-    }
-
-    function _deployVTSPositionLib() internal {
-        // Deploy VTSPositionLib via CREATE2 to the hard-linked address.
-        // This prevents Echidna/HEVM from trying to RPC-fetch code for `VTS_POSITION_LIB`.
-        bytes32 salt = keccak256("echidna.VTSPositionLib");
-        bytes memory initCode = type(VTSPositionLib).creationCode;
-        address deployed;
-        assembly {
-            deployed := create2(0, add(initCode, 0x20), mload(initCode), salt)
-        }
-        require(deployed != address(0), "VTSPositionLib deploy failed");
-        require(deployed == VTS_POSITION_LIB, "VTSPositionLib addr mismatch");
+        // VTSPositionLib must already be deployed at the EchidnaLinkedLibs address before
+        // this harness is constructed. Callers should call EchidnaLinkedLibs.deployVTSPositionLib()
+        // before `new VTSPositionLibEchidnaHarness()`.
     }
 
     // -------------------------------------------------------------------------
@@ -87,8 +82,60 @@ contract VTSPositionLibEchidnaHarness {
         s.positions[id].isActive = active;
     }
 
+    function setPositionCommitId(PositionId id, uint256 commitId) external {
+        s.positions[id].commitId = commitId;
+    }
+
+    function setPositionOwner(PositionId id, address owner) external {
+        s.positions[id].owner = owner;
+    }
+
+    function setPositionLiquidity(PositionId id, uint128 liquidity) external {
+        s.positions[id].liquidity = liquidity;
+    }
+
+    function setCommitmentDeficit(PositionId id, uint256 deficit0, uint256 deficit1) external {
+        s.positionAccounting[id].commitmentDeficit.token0 = deficit0;
+        s.positionAccounting[id].commitmentDeficit.token1 = deficit1;
+    }
+
+    function setCommitmentDeficitSince(PositionId id, uint256 since0, uint256 since1) external {
+        s.positionAccounting[id].commitmentDeficitSince.token0 = since0;
+        s.positionAccounting[id].commitmentDeficitSince.token1 = since1;
+    }
+
     function setUnderlyingDelta(Currency currency, address target, int128 delta) external {
         DynamicCurrencyDelta.accountDelta(currency, delta, target);
+    }
+
+    function setUnderlyingDeltaAbsolute(Currency currency, address target, int128 desired) external {
+        int128 current = getUnderlyingDeltaSigned(currency, target);
+        int256 diff = int256(desired) - int256(current);
+        if (diff > type(int128).max) diff = type(int128).max;
+        if (diff < type(int128).min) diff = type(int128).min;
+        if (diff != 0) {
+            DynamicCurrencyDelta.accountDelta(currency, int128(diff), target);
+        }
+    }
+
+    function getUnderlyingDeltaSigned(Currency currency, address target) public view returns (int128) {
+        uint256 credit = DynamicCurrencyDelta.getFullCredit(currency, target);
+        if (credit > 0) {
+            return credit >= uint256(uint128(type(int128).max)) ? type(int128).max : int128(uint128(credit));
+        }
+        uint256 debt = DynamicCurrencyDelta.getFullDebt(currency, target);
+        if (debt == 0) return 0;
+        if (debt >= uint256(uint128(type(int128).max))) return type(int128).min;
+        return -int128(uint128(debt));
+    }
+
+    function getPositionCommitId(PositionId id) external view returns (uint256) {
+        return s.positions[id].commitId;
+    }
+
+    function getSettled(PositionId id) external view returns (uint256 token0, uint256 token1) {
+        token0 = s.positionAccounting[id].settled.token0;
+        token1 = s.positionAccounting[id].settled.token1;
     }
 
     // -------------------------------------------------------------------------
@@ -102,30 +149,50 @@ contract VTSPositionLibEchidnaHarness {
     }
 
     // -------------------------------------------------------------------------
-    // Minimal settle entrypoint for SETTLE-01 fuzzing
+    // MM settle entrypoint (production VTSPositionLib path)
     // -------------------------------------------------------------------------
 
     function onMMSettle(
-        IPoolManager, // poolManager (unused in this minimal harness)
-        IMarketVault, // vault (unused)
+        IPoolManager poolManager,
+        IMarketVault vault,
         PositionId positionId,
-        Currency, // lccCurrency0 (unused)
-        Currency, // lccCurrency1 (unused)
+        Currency lccCurrency0,
+        Currency lccCurrency1,
         BalanceDelta delta,
         bool isSeizing
     ) external returns (BalanceDelta settlementDelta, bool rfsOpen, uint256 seizedLiquidityUnits) {
         Position memory pos = s.positions[positionId];
         if (pos.owner == address(0)) revert("VTSPositionLib: Invalid position");
 
-        (rfsOpen,) = VTSPositionLib.getRFS(s, positionId);
+        SettleParams memory p = SettleParams({
+            vault: vault,
+            positionId: positionId,
+            lccCurrency0: lccCurrency0,
+            lccCurrency1: lccCurrency1,
+            delta: delta,
+            isSeizing: isSeizing
+        });
+        SettleResult memory result = VTSPositionLib.onMMSettle(s, poolManager, p);
+        return (result.settlementDelta, result.rfsOpen, result.seizedLiquidityUnits);
+    }
 
-        // For SETTLE-01 we only care that withdrawals revert while RFS is open (unless seizing).
-        bool isWithdrawal = (delta.amount0() > 0) || (delta.amount1() > 0);
-        if (pos.isActive && !isSeizing && rfsOpen && isWithdrawal) {
-            revert("VTSPositionLibEchidnaHarness: RFS open");
-        }
+    function touchPosition(PositionContext calldata ctx, TouchPositionParams calldata params)
+        external
+        returns (Position memory pos, PositionId id, BalanceDelta feeAdj)
+    {
+        TouchPositionResult memory out = VTSPositionLib.touchPosition(s, ctx, params);
+        return (out.pos, out.id, out.feeAdj);
+    }
 
-        return (delta, rfsOpen, 0);
+    function buildPositionContext(
+        IPoolManager poolManager,
+        ILiquidityHub liquidityHub,
+        IOracleHelper oracleHelper,
+        IMarketVault marketVault
+    ) external pure returns (PositionContext memory ctx) {
+        ctx = PositionContext({
+            poolManager: poolManager, liquidityHub: liquidityHub, oracleHelper: oracleHelper, marketVault: marketVault
+        });
     }
 }
 

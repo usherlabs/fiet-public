@@ -1,30 +1,28 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.26;
 
-import {VTSCommitLib} from "../../src/libraries/VTSCommitLib.sol";
-import {VTSCommitLibHarness} from "../libraries/harnesses/VTSCommitLibHarness.sol";
-import {MockOracleHelper} from "./mocks/MockOracleHelper.sol";
-import {PositionId} from "../../src/types/Position.sol";
+import {VTSCommitLib} from "../../../src/libraries/VTSCommitLib.sol";
+import {VTSCommitLibHarness} from "../../libraries/harnesses/VTSCommitLibHarness.sol";
+import {MockOracleHelper} from "../mocks/MockOracleHelper.sol";
+import {MockPoolManager} from "../mocks/MockPoolManager.sol";
+import {PositionId} from "../../../src/types/Position.sol";
 import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
+import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
 import {IPoolManager} from "v4-periphery/lib/v4-core/src/interfaces/IPoolManager.sol";
-import {OracleUtils} from "../../src/libraries/OracleUtils.sol";
-import {LiquidityUtils} from "../../src/libraries/LiquidityUtils.sol";
+import {OracleUtils} from "../../../src/libraries/OracleUtils.sol";
+import {LiquidityUtils} from "../../../src/libraries/LiquidityUtils.sol";
 import {FullMath} from "v4-periphery/lib/v4-core/src/libraries/FullMath.sol";
 import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
-import {MockPoolManager} from "./mocks/MockPoolManager.sol";
+import {EchidnaLinkedLibs} from "../base/EchidnaLinkedLibs.sol";
 
 /// @notice Echidna harness for COMMIT-02: Checkpointing with commitment updates `commitmentDeficit` as an insolvency gate.
-///         Checkpointing updates `commitmentDeficit` as the insolvency gate derived from backing shortfall.
-contract VTSCommit02CheckpointEchidnaTest {
+contract COMMIT02 {
+    uint256 internal constant MAX_VACUOUS_ATTEMPTS = 16;
     MockOracleHelper internal oracle;
     VTSCommitLibHarness internal commitHarness;
     MockPoolManager internal poolManager;
 
-    // Must match `foundry.toml` profile `echidna` hard-link for `VTSCommitLib`.
-    address internal constant VTS_COMMIT_LIB = 0x08f6e330612797F445209Bfee166c949cfd0BF4F;
-
-    // Two dummy LCCs (addresses only, used for pricing).
     address internal constant LCC0 = address(0x1000000000000000000000000000000000000001);
     address internal constant LCC1 = address(0x1000000000000000000000000000000000000002);
 
@@ -34,8 +32,9 @@ contract VTSCommit02CheckpointEchidnaTest {
 
     bool internal checked;
     bool internal lastOk;
+    uint256 internal checkpointAttempts;
+    uint256 internal checkpointSuccesses;
 
-    // Cached inputs (set via small actions to avoid stack-too-deep in a single mega-action).
     uint160 internal sqrtPriceX96;
     int24 internal currentTick;
     int24 internal tickLower;
@@ -48,22 +47,10 @@ contract VTSCommit02CheckpointEchidnaTest {
     uint256 internal prevDeficit1;
     bool internal signalLive;
 
-    function _deployVTSCommitLib() internal {
-        bytes32 salt = keccak256("echidna.VTSCommitLib");
-        bytes memory initCode = type(VTSCommitLib).creationCode;
-        address deployed;
-        assembly {
-            deployed := create2(0, add(initCode, 0x20), mload(initCode), salt)
-        }
-        require(deployed != address(0), "VTSCommitLib deploy failed");
-        require(deployed == VTS_COMMIT_LIB, "VTSCommitLib addr mismatch");
-    }
-
     constructor() {
-        _deployVTSCommitLib();
+        EchidnaLinkedLibs.deployVTSCommitLib();
 
         oracle = new MockOracleHelper(address(0));
-        // Keep USD math simple: 1 USD per token unit (18d), so values are sum of token amounts.
         oracle.setPrices(1e18, 1e18);
         oracle.setTotalValue(0);
 
@@ -75,7 +62,6 @@ contract VTSCommit02CheckpointEchidnaTest {
 
         commitHarness.setupPool(poolId, Currency.wrap(LCC0), Currency.wrap(LCC1));
 
-        // Default position + pool slot0 (nonzero sqrt price).
         tickLower = -60;
         tickUpper = 60;
         liquidity = 1e6;
@@ -92,7 +78,6 @@ contract VTSCommit02CheckpointEchidnaTest {
         signalUsd = 0;
         signalLive = true;
 
-        // Keep the commit "live" by default so signalUsd is read from oracle.getTotalValue.
         commitHarness.setCommitExpiresAt(COMMIT_ID, block.timestamp + 365 days);
     }
 
@@ -100,27 +85,21 @@ contract VTSCommit02CheckpointEchidnaTest {
     // Actions
     // -------------------------------------------------------------------------
 
-    /// @notice Set PoolManager slot0 inputs used for issued-value computation during checkpointing.
-    /// @dev Clamps to Uniswap bounds for fuzz stability.
     // forge-lint: disable-next-line(mixed-case-function)
-    function action_set_slot0(uint160 sp, int24 tick) external {
+    function action_set_slot0(uint160 sp, int24 _tick) external {
         if (sp == 0) return;
         if (sp <= TickMath.MIN_SQRT_PRICE) sp = TickMath.MIN_SQRT_PRICE + 1;
         if (sp >= TickMath.MAX_SQRT_PRICE) sp = TickMath.MAX_SQRT_PRICE - 1;
         sqrtPriceX96 = sp;
-        // Keep tick consistent with sqrtPrice to avoid exploring impossible slot0 states that tend to revert.
-        // (Echidna can still explore extreme prices via `sp`.)
-        tick; // ignore fuzzed tick
+        _tick; // Tick is derived from sqrtPriceX96 to keep slot0 internally consistent.
         currentTick = TickMath.getTickAtSqrtPrice(sqrtPriceX96);
         poolManager.setSlot0(poolId, sqrtPriceX96, currentTick, 0, 0);
     }
 
-    /// @notice Set position tick range and liquidity used for checkpoint issued-value computation.
-    /// @dev Ticks are clamped to Uniswap min/max tick bounds.
     // forge-lint: disable-next-line(mixed-case-function)
     function action_set_position(int24 tl, int24 tu, uint128 liq) external {
-        if (tl < -887272) tl = -887272;
-        if (tu > 887272) tu = 887272;
+        if (tl < TickMath.MIN_TICK) tl = TickMath.MIN_TICK;
+        if (tu > TickMath.MAX_TICK) tu = TickMath.MAX_TICK;
         if (tl >= tu) {
             tl = -60;
             tu = 60;
@@ -131,7 +110,6 @@ contract VTSCommit02CheckpointEchidnaTest {
         commitHarness.setupPosition(positionId, poolId, COMMIT_ID, tickLower, tickUpper, liquidity);
     }
 
-    /// @notice Set the position's settled amounts (token units, 18 decimals).
     // forge-lint: disable-next-line(mixed-case-function)
     function action_set_settled(uint256 s0, uint256 s1) external {
         settled0 = s0 > 1e36 ? 1e36 : s0;
@@ -139,7 +117,6 @@ contract VTSCommit02CheckpointEchidnaTest {
         commitHarness.setPositionSettled(positionId, settled0, settled1);
     }
 
-    /// @notice Set the pre-existing `commitmentDeficit` (used to exercise deficit reduction logic when backing recovers).
     // forge-lint: disable-next-line(mixed-case-function)
     function action_set_prev_deficit(uint256 d0, uint256 d1) external {
         prevDeficit0 = d0 > 1e36 ? 1e36 : d0;
@@ -147,8 +124,6 @@ contract VTSCommit02CheckpointEchidnaTest {
         commitHarness.setPositionCommitmentDeficit(positionId, prevDeficit0, prevDeficit1);
     }
 
-    /// @notice Set the commit's signal backing (USD, 18 decimals) and whether the signal is live.
-    /// @dev If not live, `checkpointWithCommitment` treats signal backing as zero (expiry path).
     // forge-lint: disable-next-line(mixed-case-function)
     function action_set_signal(uint256 sig, bool live) external {
         signalUsd = sig > 1e36 ? 1e36 : sig;
@@ -157,13 +132,14 @@ contract VTSCommit02CheckpointEchidnaTest {
         commitHarness.setCommitExpiresAt(COMMIT_ID, signalLive ? (block.timestamp + 365 days) : 0);
     }
 
-    /// @notice Run checkpointWithCommitment and verify commitmentDeficit matches the library math.
     // forge-lint: disable-next-line(mixed-case-function)
     function action_checkpoint_with_commitment() external {
+        unchecked {
+            checkpointAttempts++;
+        }
         checked = false;
         lastOk = true;
 
-        // Clamp into a valid regime so we don't skip checkpointing.
         if (sqrtPriceX96 == 0) {
             sqrtPriceX96 = uint160(1) << 96;
         }
@@ -172,20 +148,19 @@ contract VTSCommit02CheckpointEchidnaTest {
             tickUpper = 60;
         }
 
-        // Ensure the pool slot0 matches our cached state.
         poolManager.setSlot0(poolId, sqrtPriceX96, currentTick, 0, 0);
 
-        // Ensure harness storage matches our cached state.
         commitHarness.setupPosition(positionId, poolId, COMMIT_ID, tickLower, tickUpper, liquidity);
         commitHarness.setPositionSettled(positionId, settled0, settled1);
         commitHarness.setPositionCommitmentDeficit(positionId, prevDeficit0, prevDeficit1);
         commitHarness.setCommitExpiresAt(COMMIT_ID, signalLive ? (block.timestamp + 365 days) : 0);
 
-        try commitHarness.checkpoint(IPoolManager(address(poolManager)), oracle, COMMIT_ID, positionId) {
-        // ok
-        }
+        try commitHarness.checkpoint(IPoolManager(address(poolManager)), oracle, COMMIT_ID, positionId) {}
         catch {
             return;
+        }
+        unchecked {
+            checkpointSuccesses++;
         }
 
         (uint256 eff0, uint256 eff1) = LiquidityUtils.calculateEffectiveTokenAmounts(
@@ -209,10 +184,12 @@ contract VTSCommit02CheckpointEchidnaTest {
 
     // forge-lint: disable-next-line(mixed-case-function)
     function echidna_commit_02_checkpoint_deficit_math_correct() external view returns (bool) {
-        return !checked || lastOk;
+        if (!checked) {
+            return checkpointSuccesses > 0 || checkpointAttempts < MAX_VACUOUS_ATTEMPTS;
+        }
+        return lastOk;
     }
 
-    // Keep a second trivial property to avoid rare Echidna instability with single-property targets.
     // forge-lint: disable-next-line(mixed-case-function)
     function echidna_commit_02_smoke() external pure returns (bool) {
         return true;
@@ -246,11 +223,9 @@ contract VTSCommit02CheckpointEchidnaTest {
             return (prev0 - reduce0, prev1 - reduce1);
         }
 
-        // Insufficient backing: derive deficit in token units using deficit BPS.
         uint256 deficitUsd = issuedUsd - backingUsd;
         uint256 deficitBps = FullMath.mulDiv(deficitUsd, LiquidityUtils.BPS_DENOMINATOR, issuedUsd);
         exp0 = FullMath.mulDiv(eff0, deficitBps, LiquidityUtils.BPS_DENOMINATOR);
         exp1 = FullMath.mulDiv(eff1, deficitBps, LiquidityUtils.BPS_DENOMINATOR);
     }
 }
-

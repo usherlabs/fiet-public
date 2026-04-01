@@ -898,6 +898,32 @@ contract MarketFactoryUnitTest is Test {
         );
     }
 
+    function testFuzz_createMarket_revertsWhenCorePoolAlreadyExists(address ua0Raw, address ua1Raw) public {
+        address ua0 = ua0Raw;
+        address ua1 = ua1Raw;
+        vm.assume(ua0 != address(0) && ua1 != address(0) && ua0 != ua1);
+        uint160 initial = 79228162514264337593543950336;
+        _createMarket(ua0, ua1, initial);
+
+        vm.prank(owner);
+        vm.expectRevert(Errors.CorePoolAlreadyExists.selector);
+        factory.createMarket(ua0, ua1, 3000, 60, initial, keccak256("salt-fuzz"), VTSConfigs.getDefaultConfig());
+    }
+
+    function testFuzz_createMarket_corePairOrderingMatchesStored(address ua0Raw, address ua1Raw) public {
+        address ua0 = ua0Raw;
+        address ua1 = ua1Raw;
+        vm.assume(ua0 != address(0) && ua1 != address(0) && ua0 != ua1);
+        uint160 initial = 79228162514264337593543950336;
+        (PoolId coreId,) = _createMarket(ua0, ua1, initial);
+        address[2] memory pair = factory.corePoolToCurrencyPair(coreId);
+
+        // Stored pair must be canonical sorted LCC pair order.
+        (address expected0, address expected1) = _sortAddrs(address(0x3000), address(0x4000));
+        assertEq(pair[0], expected0);
+        assertEq(pair[1], expected1);
+    }
+
     function test_addBounds_revertsForNonOwner() public {
         address[] memory b = new address[](1);
         b[0] = makeAddr("b");
@@ -1135,6 +1161,20 @@ contract MarketFactoryUnitTest is Test {
             abi.encodeWithSelector(Errors.NestedIngressSyncCurrencyMismatch.selector, otherCurrency, address(lcc0))
         );
         factory.prepareMarketLiquidity(address(lcc0), 1);
+    }
+
+    function testFuzz_prepareMarketLiquidity_revertsWhenDifferentCurrencyInFlight(uint96 wrappedRaw) public {
+        (MockLCC_MarketFactory lcc0,,) = _prepareMarketWithMockLcc(address(0x100), address(0x200));
+        poolManager.setExttload(Lock.IS_UNLOCKED_SLOT, bytes32(uint256(1)));
+        address otherCurrency = address(0xDEAD);
+        poolManager.setExttload(CURRENCY_SLOT, bytes32(uint256(uint160(otherCurrency))));
+        uint256 wrapped = bound(uint256(wrappedRaw), 1, 1e18);
+
+        vm.prank(address(lcc0));
+        vm.expectRevert(
+            abi.encodeWithSelector(Errors.NestedIngressSyncCurrencyMismatch.selector, otherCurrency, address(lcc0))
+        );
+        factory.prepareMarketLiquidity(address(lcc0), wrapped);
     }
 
     function test_prepareMarketLiquidity_sameLccSync_nativeUnderlying_clearsAndRestores() public {

@@ -7,7 +7,7 @@ This file contains internal references and documentation links that are not inte
 ```
 fiet-protocol/
 ├── contracts/evm/             # Fiet Protocol on EVM: Uniswap V4 hooks and AMM contracts
-├── contracts/evm-scripts/     # Administrative and Developer scripts for EVM deployments 
+├── contracts/evm-scripts/     # Administrative and Developer scripts for EVM deployments
 ├── contracts/stylus/          # Core protocol contracts (Rust/WASM)
 ├── tests/                     # Integration tests
 ├── scripts/                   # Deployment scripts
@@ -43,6 +43,17 @@ See [contracts/evm/README.md](contracts/evm/README.md) for comprehensive Solidit
 - The `evm-scripts` folder is a standalone Foundry project and is not included in the main contract compilation (such as when running with `--via-IR=false`, e.g. for coverage reports).
 - For the best developer experience and to minimise risk of version incompatibilities, use Foundry version **1.4.2** (the same version as used in CI).
 - All contracts should be formatted with the default forge fmt config. Run forge fmt.
+
+#### Codex Security Cloud
+
+For Codex Cloud containers targeting `contracts/evm`, use the checked-in bootstrap scripts:
+
+- Setup script for new containers:
+  `bash contracts/evm/scripts/codex-setup.sh`
+- Maintenance script for cached/resumed containers after branch checkout:
+  `bash contracts/evm/scripts/codex-maintenance.sh`
+
+These scripts mirror the current EVM CI toolchain assumptions, including recursive submodules, Foundry `v1.4.2`, Yarn `3.2.0`, `just`, `crytic-compile`, Echidna `v2.2.7`, and a warm `FOUNDRY_PROFILE=ci forge build`.
 
 ## Documentation
 

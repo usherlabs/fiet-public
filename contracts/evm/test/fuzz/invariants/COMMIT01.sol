@@ -1,12 +1,13 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.26;
 
-import {VTSCommitLib} from "../../src/libraries/VTSCommitLib.sol";
-import {PositionId} from "../../src/types/Position.sol";
-import {MockOracleHelper} from "./mocks/MockOracleHelper.sol";
-import {VTSCommitLibHarness} from "../libraries/harnesses/VTSCommitLibHarness.sol";
+import {VTSCommitLib} from "../../../src/libraries/VTSCommitLib.sol";
+import {PositionId} from "../../../src/types/Position.sol";
+import {MockOracleHelper} from "../mocks/MockOracleHelper.sol";
+import {VTSCommitLibHarness} from "../../libraries/harnesses/VTSCommitLibHarness.sol";
 import {Currency} from "v4-periphery/lib/v4-core/src/types/Currency.sol";
 import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
+import {EchidnaLinkedLibs} from "../base/EchidnaLinkedLibs.sol";
 
 /// @notice Echidna harness for COMMIT-01 / SIG-BACKING-01 (Domain C):
 /// the gate `issuedUsd <= settledUsd + signalUsd` enforced by `VTSCommitLib.validateLiquidityDelta`.
@@ -18,27 +19,20 @@ import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
 ///
 /// And we execute production code via `VTSCommitLibHarness`, which calls `VTSCommitLib` directly
 /// using its own isolated `VTSStorage`.
-contract VTSCommit01SigBackingEchidnaTest {
+contract COMMIT01 {
     MockOracleHelper internal oracle;
     VTSCommitLibHarness internal commitHarness;
 
-    // Must match `foundry.toml` profile `echidna` hard-link for `VTSCommitLib`.
-    address internal constant VTS_COMMIT_LIB = 0x08f6e330612797F445209Bfee166c949cfd0BF4F;
-
-    // Two dummy currencies for the computation; they never need to be real tokens in this harness.
     address internal constant LCC0 = address(0x1000000000000000000000000000000000000001);
     address internal constant LCC1 = address(0x1000000000000000000000000000000000000002);
 
     uint256 internal constant COMMIT_ID = 1;
     PositionId internal positionId;
 
-    // Tracking for property
     bool internal checked;
     bool internal lastOk;
 
-    function _primeGate() internal {
-        // Prime COMMIT-01 once without calling external actions.
-        // Keep parameters small + valid to avoid unrelated maths reverts.
+    function _seedAll() internal {
         uint160 sp = uint160(1) << 96;
         int24 ct = 0;
         int24 tl = -60;
@@ -68,7 +62,6 @@ contract VTSCommit01SigBackingEchidnaTest {
             settledUsd = stUsd;
             signalUsd = siUsd;
         } catch {
-            // If this ever reverts, treat it as a harness failure.
             checked = true;
             lastOk = false;
             return;
@@ -79,48 +72,36 @@ contract VTSCommit01SigBackingEchidnaTest {
         lastOk = (success == shouldPass);
     }
 
-    function _deployVTSCommitLib() internal {
-        // Deploy VTSCommitLib via CREATE2 to the hard-linked address.
-        bytes32 salt = keccak256("echidna.VTSCommitLib");
-        bytes memory initCode = type(VTSCommitLib).creationCode;
-        address deployed;
-        assembly {
-            deployed := create2(0, add(initCode, 0x20), mload(initCode), salt)
-        }
-        require(deployed != address(0), "VTSCommitLib deploy failed");
-        require(deployed == VTS_COMMIT_LIB, "VTSCommitLib addr mismatch");
-    }
-
     constructor() {
-        _deployVTSCommitLib();
+        EchidnaLinkedLibs.deployVTSCommitLib();
 
         oracle = new MockOracleHelper(address(0));
         oracle.setPrices(1e18, 1e18);
         oracle.setTotalValue(0);
 
-        // Stable position id.
         positionId = PositionId.wrap(keccak256("echidna.sig-backing-01"));
 
         commitHarness = new VTSCommitLibHarness();
 
-        _primeGate();
+        _seedAll();
     }
 
     // ===== actions to mutate backing inputs =====
 
+    // forge-lint: disable-next-line(mixed-case-function)
     function action_set_prices(uint256 p0, uint256 p1) external {
-        // clamp to reasonable 18d range
         uint256 c0 = p0 == 0 ? 1 : (p0 > 1e30 ? 1e30 : p0);
         uint256 c1 = p1 == 0 ? 1 : (p1 > 1e30 ? 1e30 : p1);
         oracle.setPrices(c0, c1);
     }
 
+    // forge-lint: disable-next-line(mixed-case-function)
     function action_set_signal(uint256 signalUsd) external {
         oracle.setTotalValue(signalUsd > 1e36 ? 1e36 : signalUsd);
     }
 
+    // forge-lint: disable-next-line(mixed-case-function)
     function action_set_settled(uint256 settled0, uint256 settled1) external {
-        // Settled token units are 18d in this system; clamp to keep math bounded.
         uint256 a0 = settled0 > 1e36 ? 1e36 : settled0;
         uint256 a1 = settled1 > 1e36 ? 1e36 : settled1;
         commitHarness.setPositionSettled(positionId, a0, a1);
@@ -128,6 +109,7 @@ contract VTSCommit01SigBackingEchidnaTest {
 
     /// @notice Executes the gate in non-reverting mode so we can observe
     /// (success, issuedUsd, settledUsd, signalUsd) for any input.
+    // forge-lint: disable-next-line(mixed-case-function)
     function action_validate_liquidity_delta(
         uint160 sqrtPriceX96,
         int24 currentTick,
@@ -138,27 +120,22 @@ contract VTSCommit01SigBackingEchidnaTest {
         checked = true;
         lastOk = true;
 
-        // Clamp inputs into a valid regime so we actually exercise the backing gate
-        // instead of bailing out on unrelated maths edge cases.
         uint160 sp = sqrtPriceX96;
         if (sp <= TickMath.MIN_SQRT_PRICE) sp = TickMath.MIN_SQRT_PRICE + 1;
         if (sp >= TickMath.MAX_SQRT_PRICE) sp = TickMath.MAX_SQRT_PRICE - 1;
 
-        // Clamp ticks to Uniswap bounds to avoid unrelated math edge reverts.
         int24 tl = tickLower;
         int24 tu = tickUpper;
         int24 ct = currentTick;
-        if (tl < -887272) tl = -887272;
-        if (tu > 887272) tu = 887272;
-        if (ct < -887272) ct = -887272;
-        if (ct > 887272) ct = 887272;
+        if (tl < TickMath.MIN_TICK) tl = TickMath.MIN_TICK;
+        if (tu > TickMath.MAX_TICK) tu = TickMath.MAX_TICK;
+        if (ct < TickMath.MIN_TICK) ct = TickMath.MIN_TICK;
+        if (ct > TickMath.MAX_TICK) ct = TickMath.MAX_TICK;
         if (tl >= tu) {
-            // Provide a small-but-valid range instead of skipping.
             tl = -60;
             tu = 60;
         }
 
-        // Force a positive, bounded liquidity delta (the production gate is only meaningful on increases).
         uint256 absL;
         if (liquidityDelta == type(int256).min) {
             absL = 1;
@@ -190,35 +167,23 @@ contract VTSCommit01SigBackingEchidnaTest {
             settledUsd = stUsd;
             signalUsd = siUsd;
         } catch {
-            // In non-reverting mode (`revertIfInsufficientBacking=false`), a revert is unexpected and
-            // indicates a maths/edge-case bug (or a harness modelling issue). Treat it as a failure
-            // so we do not pass vacuously.
             lastOk = false;
             return;
         }
 
-        // Basic self-consistency: library's success must match inequality.
         bool shouldPass = issuedUsd <= (settledUsd + signalUsd);
-        bool ok = (success == shouldPass);
-
-        lastOk = ok;
+        lastOk = (success == shouldPass);
     }
 
-    // ===== property =====
+    // ===== properties =====
 
     // forge-lint: disable-next-line(mixed-case-function)
-    function echidna_sig_backing_01_gate_correct() external view returns (bool) {
+    function echidna_commit_01_gate_correct() external view returns (bool) {
         return !checked || lastOk;
     }
 
-    // Echidna sometimes crashes internally when there is only a single property in the target contract.
-    // Keep a second trivial property to stabilize the runner (does not weaken the real invariant).
     // forge-lint: disable-next-line(mixed-case-function)
-    function echidna_sig_backing_01_smoke() external pure returns (bool) {
+    function echidna_commit_01_smoke() external pure returns (bool) {
         return true;
     }
-
-    // ===== internals =====
-    // NOTE: we intentionally do not test the reverting-mode behavior here to keep this harness minimal.
 }
-
