@@ -47,6 +47,8 @@ contract LCCBacking01 {
     uint256 internal expectedHolderMarketDerived;
     uint256 internal expectedHolderQueued;
     uint256 internal expectedMarketReserve;
+    // settlement-model divergence is surfaced as an invariant failure instead
+    bool internal settlementModelMismatch;
 
     // ----- VRL commitment backing gate (issuedUsd <= settledUsd + signalUsd) -----
     MockOracleHelper internal commitOracle;
@@ -420,6 +422,11 @@ contract LCCBacking01 {
 
         uint256 queuedAfter = hub.settleQueue(address(lccTracked), address(queueHolder));
         uint256 settled = queuedBefore - queuedAfter;
+        if (settled > expectedHolderQueued || settled > expectedHolderMarketDerived || settled > expectedMarketReserve)
+        {
+            settlementModelMismatch = true;
+            return;
+        }
         expectedHolderQueued -= settled;
         expectedHolderMarketDerived -= settled;
         expectedMarketReserve -= settled;
@@ -537,6 +544,7 @@ contract LCCBacking01 {
     /// @dev Queued external claims stay represented as both queue debt and holder market-derived balance.
     // forge-lint: disable-next-line(mixed-case-function)
     function echidna_lcc_backing_01_settle_queue_matches_model() external view returns (bool) {
+        if (settlementModelMismatch) return false;
         if (hub.settleQueue(address(lccTracked), address(queueHolder)) != expectedHolderQueued) return false;
         if (hub.totalQueued(address(lccTracked)) != expectedHolderQueued) return false;
         if (hub.queueOfUnderlying(address(lccTracked)) != expectedHolderQueued) return false;
