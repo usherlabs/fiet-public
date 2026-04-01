@@ -89,36 +89,19 @@ function _enqueueUnderlyingKey(address lcc, bytes32 key) internal {
 }
 ```
 
-### Backfill for Historical Entries
+### Registration Behaviour
 
-When an LCC is first registered with an underlying, any existing entries in its per-LCC queue are backfilled into the underlying queue:
+Registering an LCC with an underlying only records the shared routing relationship:
 
 ```solidity
-function _backfillUnderlyingQueueForLcc(address lcc, address underlying) internal {
-    LinkedQueue.Data storage lccQueue = queueDataByLcc[lcc];
-    if (lccQueue.size == 0) return;
-
-    uint256 remaining = lccQueue.size;
-    bytes32 cursor = lccQueue.currentCursor();
-    while (remaining > 0) {
-        bytes32 key = cursor;
-        cursor = lccQueue.nextOrHead(key);
-        
-        if (queueDataByUnderlying[underlying].inQueue[key]) {
-            remaining--;
-            continue;
-        }
-
-        Pending storage entry = pending[key];
-        if (entry.exists && entry.lcc == lcc) {
-            queueDataByUnderlying[underlying].enqueue(key);
-        }
-        remaining--;
-    }
+function _registerLccUnderlying(address lcc, address underlying) internal {
+    if (hasUnderlyingForLcc[lcc]) return;
+    underlyingByLcc[lcc] = underlying;
+    hasUnderlyingForLcc[lcc] = true;
 }
 ```
 
-This ensures that even settlements that arrived **before** the LCC was associated with an underlying are correctly moved into the shared queue.
+There is currently no historical backfill step. Shared-underlying routing only applies to entries enqueued after the association exists, via `_enqueueUnderlyingKey(...)`.
 
 ## Entry Matching During Dispatch
 
@@ -164,15 +147,15 @@ This prevents a stale retry flag from one routing path from suppressing a legiti
 ## Summary of Mechanics
 
 **Benefits of underlying/LCC mechanics:**
+
 - Reduces callback overhead when multiple LCCs share the same underlying asset
 - Maintains FIFO ordering within each underlying
-- Safely handles historical backlog via backfill
 - Prevents incorrect cross-LCC dispatch through `_entryMatchesDispatchLane`
 - Gracefully handles routing changes via stale credit clearing
 
 **Safety invariants:**
+
 - Never dispatch an entry from the wrong LCC
-- Never lose historical entries during registration
 - Correctly clear retry credits when switching between routing modes
 - Maintain separate queue views for per-LCC vs shared-underlying dispatch
 

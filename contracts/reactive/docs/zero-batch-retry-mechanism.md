@@ -10,7 +10,7 @@ Without this mechanism, a single `LiquidityAvailable` event could scan a window 
 
 Consider this queue state (simplified):
 
-```
+```text
 Head → [R1, R2, ..., R20, D1] ← Tail
        ^                     ^
    reserved (in-flight)   dispatchable
