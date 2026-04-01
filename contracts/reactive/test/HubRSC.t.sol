@@ -999,7 +999,7 @@ contract HubRSCTest is Test {
         // LiquidityAvailable path must not manufacture a speculative retry callback.
         assertEq(
             _findCallbackPayloadBySelector(firstEntries, ReactiveConstants.TRIGGER_MORE_LIQUIDITY_AVAILABLE_SELECTOR)
-                .length,
+            .length,
             0
         );
         assertEq(hub.zeroBatchRetryCreditsRemaining(underlying), 0);
