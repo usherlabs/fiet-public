@@ -795,7 +795,8 @@ contract HubRSCTest is Test {
         assertTrue(_pendingExists(hub, lccUnregistered, recipient));
     }
 
-    /// @notice Reserved-only head windows get chained retries so later dispatchable siblings are not stalled.
+    /// @notice Reserved-only head windows still retry later unseen siblings, but a single remaining window consumes
+    /// the only retry credit immediately.
     function test_zeroBatchSharedUnderlyingScanEmitsRetryThenDispatchesNextWindow() public {
         _clearSystemContract();
         HubRSC hub = new HubRSC(
@@ -840,7 +841,9 @@ contract HubRSCTest is Test {
         bytes memory firstMoreLiquidityPayload =
             _findCallbackPayloadBySelector(firstEntries, ReactiveConstants.TRIGGER_MORE_LIQUIDITY_AVAILABLE_SELECTOR);
         assertTrue(firstMoreLiquidityPayload.length > 0);
-        assertGt(hub.zeroBatchRetryCreditsRemaining(underlying), 0);
+        // The implementation now seeds credits only for windows that remain *after* the current scan.
+        // Here there is exactly one unseen window, so emitting this retry also spends the only credit.
+        assertEq(hub.zeroBatchRetryCreditsRemaining(underlying), 0);
 
         vm.recordLogs();
         hub.react(_moreLiquidityAvailableLog(hub, lccA, 100, 0x8602, 2));
@@ -856,6 +859,46 @@ contract HubRSCTest is Test {
         assertEq(recipients[0], laterRecipient);
         assertEq(amounts[0], 1);
         assertEq(hub.zeroBatchRetryCreditsRemaining(underlying), 0);
+    }
+
+    /// @notice Historical per-LCC backlog queued before `LCCCreated` is backfilled into the shared underlying lane.
+    function test_backfillsPreRegistrationBacklogIntoSharedUnderlyingQueue() public {
+        _clearSystemContract();
+
+        MockLiquidityHub liq = new MockLiquidityHub();
+        MockSettlementReceiver receiver = new MockSettlementReceiver(address(liq));
+        HubRSC hub = new HubRSC(
+            DEFAULT_MAX_DISPATCH_ITEMS, originChainId, destinationChainId, address(liq), hubCallback, address(receiver)
+        );
+
+        address underlying = makeAddr("underlying");
+        address lccA = makeAddr("lccA");
+        address lccB = makeAddr("lccB");
+        address recipientB = makeAddr("recipientB");
+
+        // Queue work for `lccB` before any underlying registration exists.
+        hub.react(_settlementLog(hub, recipientB, lccB, 40, 1, 0x8525, 1));
+        assertTrue(_pendingExists(hub, lccB, recipientB));
+
+        // Register both sibling LCCs afterwards; `lccB` registration must backfill the historical key.
+        // Without that backfill, sibling liquidity on `lccA` would switch to the shared lane and strand this
+        // older per-LCC entry where the dispatcher can no longer see it.
+        hub.react(_lccCreatedLog(hub, underlying, lccA, bytes32("mktA"), 0x8526, 2));
+        hub.react(_lccCreatedLog(hub, underlying, lccB, bytes32("mktB"), 0x8527, 3));
+
+        vm.recordLogs();
+        hub.react(liquidityAvailableLog(address(liq), lccA, underlying, 40, bytes32("mktA"), 0x8528, 4));
+        Vm.Log[] memory entries = vm.getRecordedLogs();
+
+        (address dispatcher, address[] memory lccs, address[] memory recipients, uint256[] memory amounts) =
+            _decodeProcessSettlementsPayload(entries);
+        assertEq(dispatcher, address(0));
+        assertEq(lccs.length, 1);
+        assertEq(recipients.length, 1);
+        assertEq(amounts.length, 1);
+        assertEq(lccs[0], lccB);
+        assertEq(recipients[0], recipientB);
+        assertEq(amounts[0], 40);
     }
 
     /// @notice A reserved prefix longer than one scan window still reaches a trailing dispatchable entry after multiple retries.
@@ -926,7 +969,7 @@ contract HubRSCTest is Test {
         assertEq(hub.zeroBatchRetryCreditsRemaining(underlying), 0);
     }
 
-    /// @notice Exhausted zero-batch credits on a follow-up callback must not be re-seeded.
+    /// @notice A fully scanned reserved window emits no retry, and a manual follow-up still cannot re-seed credits.
     function test_zeroBatchRetryCreditsDoNotReseedOnFollowupWhenAllReserved() public {
         _clearSystemContract();
         HubRSC hub = new HubRSC(
@@ -952,20 +995,25 @@ contract HubRSCTest is Test {
         hub.react(liquidityAvailableLog(hub.liquidityHub(), lccA, underlying, 100, bytes32("mktA"), 0x9720, 1));
         Vm.Log[] memory firstEntries = vm.getRecordedLogs();
         assertEq(_findCallbackPayloadBySelector(firstEntries, ReactiveConstants.PROCESS_SETTLEMENTS_SELECTOR).length, 0);
-        assertTrue(
+        // A single full reserved window leaves no unseen windows behind the current scan, so the initial
+        // LiquidityAvailable path must not manufacture a speculative retry callback.
+        assertEq(
             _findCallbackPayloadBySelector(firstEntries, ReactiveConstants.TRIGGER_MORE_LIQUIDITY_AVAILABLE_SELECTOR)
-            .length > 0
+                .length,
+            0
         );
         assertEq(hub.zeroBatchRetryCreditsRemaining(underlying), 0);
 
         vm.recordLogs();
         hub.react(_moreLiquidityAvailableLog(hub, lccA, 100, 0x9721, 2));
         Vm.Log[] memory secondEntries = vm.getRecordedLogs();
+        // Follow-up callbacks run with `bootstrapZeroBatchRetry == false`, so once credits are exhausted a
+        // later replay cannot re-seed them and restart the retry chain.
         assertEq(_callbackCount(secondEntries), 0);
         assertEq(hub.zeroBatchRetryCreditsRemaining(underlying), 0);
     }
 
-    /// @notice A stale shared-underlying retry bit is cleared if the follow-up callback later falls back to per-LCC routing.
+    /// @notice A stale shared-underlying retry credit is cleared if the follow-up callback later falls back to per-LCC routing.
     function test_clearsStaleSharedRetryFlagWhenFollowupFallsBackToPerLcc() public {
         _clearSystemContract();
         HubRSC hub = new HubRSC(
@@ -984,8 +1032,15 @@ contract HubRSCTest is Test {
         hub.react(_lccCreatedLog(hub, underlying, lccA, bytes32("mktA"), 0x8610, 1));
         hub.react(_lccCreatedLog(hub, underlying, lccB, bytes32("mktB"), 0x8611, 2));
 
-        // First pass: shared-underlying zero-batch sets the retry bit on the underlying lane.
-        _queueReservedEntries(hub, lccB, 0, 0x8612, 1);
+        uint256 m = hub.maxDispatchItems();
+        // First pass: a long shared-underlying reserved prefix leaves one stale credit on the underlying lane.
+        for (uint256 i = 0; i < 2 * m + 1; i++) {
+            address recipient = address(uint160(i + 1));
+            hub.react(_settlementLog(hub, recipient, lccB, 1, i + 1, 0x8612 + i, i + 1));
+
+            bytes32 key = hub.computeKey(lccB, recipient);
+            stdstore.target(address(hub)).sig("inFlightByKey(bytes32)").with_key(key).checked_write(uint256(1));
+        }
 
         vm.recordLogs();
         hub.react(liquidityAvailableLog(hub.liquidityHub(), lccA, underlying, 100, bytes32("mktA"), 0x8620, 1));
@@ -994,21 +1049,30 @@ contract HubRSCTest is Test {
         bytes memory firstMoreLiquidityPayload =
             _findCallbackPayloadBySelector(firstEntries, ReactiveConstants.TRIGGER_MORE_LIQUIDITY_AVAILABLE_SELECTOR);
         assertTrue(firstMoreLiquidityPayload.length > 0);
-        assertEq(hub.zeroBatchRetryCreditsRemaining(underlying), 0);
+        // `2 * maxDispatchItems + 1` reserved entries leave one additional unseen reserved window after the
+        // first scan, so the shared-underlying lane should retain one stale credit until routing changes.
+        assertGt(hub.zeroBatchRetryCreditsRemaining(underlying), 0);
 
         // Drain the shared queue before the follow-up callback arrives, forcing the replay to route per-LCC.
-        _drainQueuedEntries(hub, lccB, 0, 0x8630);
+        for (uint256 i = 0; i < 2 * m + 1; i++) {
+            address recipient = address(uint160(i + 1));
+            hub.react(_settlementProcessedLogWithRequested(hub, lccB, recipient, 1, 1, 0x8630 + i, i + 1));
+        }
         assertEq(hub.queueSize(), 0);
-        assertEq(hub.zeroBatchRetryCreditsRemaining(underlying), 0);
+        assertGt(hub.zeroBatchRetryCreditsRemaining(underlying), 0);
 
         vm.recordLogs();
         hub.react(_moreLiquidityAvailableLog(hub, lccA, 100, 0x8640, 1));
         Vm.Log[] memory fallbackEntries = vm.getRecordedLogs();
+        // The shared queue is now empty, so routing falls back to the per-LCC lane; that transition must clear
+        // the stale shared-lane credit or a future shared retry could be incorrectly suppressed.
         assertEq(_callbackCount(fallbackEntries), 0);
         assertEq(hub.zeroBatchRetryCreditsRemaining(underlying), 0);
 
         // A later shared-underlying zero-batch should still be able to emit a fresh retry.
         _queueReservedEntries(hub, lccB, 100, 0x8650, 101);
+        address laterRecipient = address(uint160(m + 101));
+        hub.react(_settlementLog(hub, laterRecipient, lccB, 1, m + 101, 0x8661, m + 101));
 
         vm.recordLogs();
         hub.react(liquidityAvailableLog(hub.liquidityHub(), lccA, underlying, 100, bytes32("mktA"), 0x8660, 1));
@@ -1016,6 +1080,8 @@ contract HubRSCTest is Test {
 
         bytes memory secondMoreLiquidityPayload =
             _findCallbackPayloadBySelector(secondEntries, ReactiveConstants.TRIGGER_MORE_LIQUIDITY_AVAILABLE_SELECTOR);
+        // After the fallback cleared the stale shared credit, a brand new shared-lane zero-batch should be free
+        // to emit its own retry again.
         assertTrue(secondMoreLiquidityPayload.length > 0);
         assertEq(hub.zeroBatchRetryCreditsRemaining(underlying), 0);
     }
