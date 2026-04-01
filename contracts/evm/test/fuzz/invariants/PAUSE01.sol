@@ -11,54 +11,109 @@ contract PAUSE01 {
     uint256 internal constant MAX_VACUOUS_ATTEMPTS = 12;
 
     PausableHarness internal h;
-    uint256 internal attempts;
-    uint256 internal checks;
-    bool internal allOk = true;
-    bool internal sawBlocked;
-    bool internal sawUnblocked;
-    bool internal sawActive;
-    bool internal sawInactive;
+    uint256 internal procSwapAttempts;
+    uint256 internal procSwapChecks;
+    bool internal procSwapAllOk = true;
+    uint256 internal activeSettleAttempts;
+    uint256 internal activeSettleChecks;
+    bool internal activeSettleAllOk = true;
+    uint256 internal inactiveSettleAttempts;
+    uint256 internal inactiveSettleChecks;
+    bool internal inactiveSettleAllOk = true;
 
     constructor() {
         h = new PausableHarness();
     }
 
     // forge-lint: disable-next-line(mixed-case-function)
-    function action_pause_01_entrypoints_guarded(
-        bool globalPaused,
-        bool poolPaused,
-        uint256 poolSeed,
-        bool activeSettlement
-    ) external {
+    function action_pause_01_proc_swap_guarded(bool globalPaused, bool poolPaused, uint256 poolSeed) external {
         unchecked {
-            attempts++;
+            procSwapAttempts++;
         }
+        (globalPaused, poolPaused) = _pauseCase(procSwapAttempts, globalPaused, poolPaused);
         PoolId poolId = PoolId.wrap(bytes32(poolSeed));
 
         h.configurePause(poolId, globalPaused, poolPaused);
 
         bool proc = h.tryProcessPosition(poolId);
         bool swap = h.tryAfterCoreSwap(poolId);
-        bool settle = h.trySettlePositionGrowths(poolId, activeSettlement);
 
         bool blockedPool = globalPaused || poolPaused;
         bool expectedProcSwap = !blockedPool;
-        bool expectedSettle = activeSettlement ? !blockedPool : !globalPaused;
 
-        checks++;
-        if (blockedPool || globalPaused) sawBlocked = true;
-        if (!blockedPool && !globalPaused) sawUnblocked = true;
-        if (activeSettlement) sawActive = true;
-        else sawInactive = true;
-        allOk = allOk && proc == expectedProcSwap && swap == expectedProcSwap && settle == expectedSettle;
+        procSwapChecks++;
+        procSwapAllOk = procSwapAllOk && proc == expectedProcSwap && swap == expectedProcSwap;
     }
 
     // forge-lint: disable-next-line(mixed-case-function)
-    function echidna_pause_01_guards_hold() external view returns (bool) {
-        if (checks == 0 || !sawBlocked || !sawUnblocked || !sawActive || !sawInactive) {
-            return attempts < MAX_VACUOUS_ATTEMPTS;
+    function action_pause_01_active_settle_guarded(bool globalPaused, bool poolPaused, uint256 poolSeed) external {
+        unchecked {
+            activeSettleAttempts++;
         }
-        return allOk;
+        (globalPaused, poolPaused) = _pauseCase(activeSettleAttempts, globalPaused, poolPaused);
+        PoolId poolId = PoolId.wrap(bytes32(poolSeed));
+
+        h.configurePause(poolId, globalPaused, poolPaused);
+
+        bool settle = h.trySettlePositionGrowths(poolId, true);
+        bool expectedSettle = !(globalPaused || poolPaused);
+
+        activeSettleChecks++;
+        activeSettleAllOk = activeSettleAllOk && settle == expectedSettle;
+    }
+
+    // forge-lint: disable-next-line(mixed-case-function)
+    function action_pause_01_inactive_settle_guarded(bool globalPaused, bool poolPaused, uint256 poolSeed) external {
+        unchecked {
+            inactiveSettleAttempts++;
+        }
+        (globalPaused, poolPaused) = _pauseCase(inactiveSettleAttempts, globalPaused, poolPaused);
+        PoolId poolId = PoolId.wrap(bytes32(poolSeed));
+
+        h.configurePause(poolId, globalPaused, poolPaused);
+
+        bool settle = h.trySettlePositionGrowths(poolId, false);
+        bool expectedSettle = !globalPaused;
+
+        inactiveSettleChecks++;
+        inactiveSettleAllOk = inactiveSettleAllOk && settle == expectedSettle;
+    }
+
+    // forge-lint: disable-next-line(mixed-case-function)
+    function echidna_pause_01_proc_swap_guards_hold() external view returns (bool) {
+        if (procSwapChecks == 0) {
+            return procSwapAttempts < MAX_VACUOUS_ATTEMPTS;
+        }
+        return procSwapAllOk;
+    }
+
+    // forge-lint: disable-next-line(mixed-case-function)
+    function echidna_pause_01_active_settle_guard_holds() external view returns (bool) {
+        if (activeSettleChecks == 0) {
+            return activeSettleAttempts < MAX_VACUOUS_ATTEMPTS;
+        }
+        return activeSettleAllOk;
+    }
+
+    // forge-lint: disable-next-line(mixed-case-function)
+    function echidna_pause_01_inactive_settle_guard_holds() external view returns (bool) {
+        if (inactiveSettleChecks == 0) {
+            return inactiveSettleAttempts < MAX_VACUOUS_ATTEMPTS;
+        }
+        return inactiveSettleAllOk;
+    }
+
+    function _pauseCase(uint256 attempt, bool globalPaused, bool poolPaused) internal pure returns (bool, bool) {
+        uint256 mode = (attempt - 1) % 3;
+        if (mode == 0) {
+            return (false, false);
+        }
+        if (mode == 1) {
+            return (false, true);
+        }
+        globalPaused = true;
+        poolPaused = false;
+        return (globalPaused, poolPaused);
     }
 }
 
