@@ -1,4 +1,4 @@
-# MM Atomic Re-Validation Mechanism
+# MM Atomic Re-Validation
 
 ## Vulnerability
 
@@ -343,3 +343,72 @@ function addLiquidityWithRevalidation(
 **Created:** 2024-03-12  
 **Status:** Planning  
 **Owner:** Protocol Engineering
+
+---
+
+## Trader-Side Atomic Revalidation (Market Agnostic Extension)
+
+### Context from 0x RFQ Research
+
+As detailed in the Fiet vs RFQ analysis (`docs/web/protocol/vs-rfq.mdx`), which references 0x's March 2026 "PropAMM Shenanigans" research, traditional blockchain RFQ/propAMM systems suffer from systematic divergence between quoted prices and executed prices. Key issues include:
+
+- **Quote Spoofing**: Attractive quotes are published to win routing, then adversely adjusted before settlement (5–10 bps impact).
+- **Random Spread Fluctuations**: Spreads widen significantly post-quote without correlating to market volatility.
+- **Phantom Liquidity**: Liquidity appears deep at quote time but is withdrawn before execution.
+
+Fiet counters this with **upfront, transparent on-chain quotes** derived from verifiable atomic state (zkTLS-backed LCCs, VTS model, and enforceable commitments). Traders can inspect the market's atomic state before submitting orders, materially reducing quote/execution divergence when paired with atomic revalidation.
+
+However, even with Fiet's superior design, there remains a potential timing window between quote inspection and transaction inclusion. **Atomic revalidation should therefore be a trader tool too** — agnostic to market side (MM vs trader).
+
+### Opportunity / Requirement
+
+The existing 7702-based atomic re-validation mechanism (currently scoped to MM add-liquidity to mitigate front-run griefing on issuance validation) should be generalised to support trader execution flows.
+
+This makes the re-validation policy **market-side agnostic**, allowing both liquidity providers and takers to protect their transactions using the same infrastructure.
+
+### Proposed Extensions
+
+1. **Generalised Validation Opcode** (e.g. `VALIDATE_ATOMIC_STATE` or extend `VALIDATE_LIQUIDITY_DELTA`):
+   - Validate quote parameters (effective price, available liquidity depth, commitment backing signals) against current on-chain state.
+   - Support trader-specific params: swap amount, direction, expected execution price bounds, minimum liquidity for the trade size.
+   - Include tolerance for acceptable slippage or state deviation.
+
+2. **Trader Validation Bundle**:
+   - Similar to MMValidationBundle but for swap/execute intents.
+   - Atomic bundling of: state validation → quote verification → execution.
+   - Ensure no adverse state changes (price moves, liquidity removal) between validation and trade execution.
+
+3. **Integration Points**:
+   - Extend the intent policy evaluator and fact system to support swap-related facts (e.g. `CurrentPoolStateFact`, `QuoteValidityFact`).
+   - Update trader-facing tooling (Fiet Trading API, client SDKs) to optionally wrap trades in revalidation bundles.
+   - Add support in `MMPositionManager` or dedicated `TraderRouter` for 7702-protected execution paths.
+
+4. **Test Scenarios**:
+   - Simulate quote spoofing / adverse price move post-quote but pre-inclusion.
+   - Verify revalidation rejects the trade if atomic state no longer matches quoted state.
+   - Measure UX impact (gas overhead) and false-positive rates with realistic tolerances.
+
+### Alignment with Fiet Principles
+
+- Reinforces the core differentiator vs RFQ: **verifiable atomic state** at both quote _and_ execution time.
+- Provides symmetric protection: MMs protected from griefing on liquidity ops; traders protected from execution degradation.
+- Maintains capital efficiency and lazy settlement model while adding cryptographic pre-execution safeguards.
+- Leverages existing EIP-7702 policy framework — minimal new protocol changes.
+
+### Implementation Notes
+
+- Prioritise after MM-side implementation to reuse shared components.
+- Ensure validation logic reuses core VTS/Oracle/LiquidityUtils where possible for consistency.
+- Document tolerances carefully: too strict risks failed trades in volatile markets; too loose reduces protection.
+- Consider aggregator compatibility: RFQ aggregators could optionally request revalidation-wrapped routes from Fiet.
+
+### Related References
+
+- `docs/web/protocol/vs-rfq.mdx` — primary source for RFQ divergence patterns and Fiet's atomic quote guarantees.
+- 0x, ["PropAMM Shenanigans"](https://0x.org/post/propamm-shenanigans), March 2026.
+- Existing Atomic Re-Validation section above (MM-focused).
+- `contracts/evm/src/libraries/VTSPositionLib.sol`, `CoreHook.sol`, and Stylus policy crates.
+
+**Note Added:** 2026-03-27  
+**Based on:** 0x RFQ research via vs-rfq.mdx  
+**Rationale:** Atomic revalidation must be trader tool too — market agnostic.
