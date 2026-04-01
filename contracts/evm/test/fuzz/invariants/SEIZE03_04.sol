@@ -14,7 +14,7 @@ import {
     TouchPositionParams
 } from "../../../src/types/VTS.sol";
 import {Position, PositionId, PositionLibrary, PositionModificationHookDataLib} from "../../../src/types/Position.sol";
-import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
+import {PoolId, PoolIdLibrary} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
 import {ModifyLiquidityParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
@@ -28,11 +28,13 @@ import {Errors} from "../../../src/libraries/Errors.sol";
 
 /// @notice Echidna harness for SEIZE-03 and SEIZE-04 using the real `VTSPositionLib.touchPosition` path.
 contract SEIZE03_04 {
+    using PoolIdLibrary for PoolKey;
+
     VTSPositionLibEchidnaHarness internal harness;
     MockPoolManager internal poolManager;
     MockMarketVault internal vault;
     PoolKey internal poolKey;
-    PoolId internal constant POOL_ID = PoolId.wrap(bytes32(uint256(0x5E7034)));
+    PoolId internal poolId;
 
     bool internal checked03;
     bool internal lastOk03;
@@ -69,9 +71,6 @@ contract SEIZE03_04 {
             minResidualUnits: 1000,
             unbackedCommitmentGraceBypassBps: 500
         });
-        harness.setupPool(POOL_ID, config);
-        poolManager.setSlot0(POOL_ID, TickMath.getSqrtPriceAtTick(0), 0, 0, 0);
-
         poolKey = PoolKey({
             currency0: Currency.wrap(address(lcc0)),
             currency1: Currency.wrap(address(lcc1)),
@@ -79,8 +78,16 @@ contract SEIZE03_04 {
             tickSpacing: 60,
             hooks: IHooks(address(0))
         });
+        poolId = poolKey.toId();
+        harness.setupPool(poolId, config);
+        poolManager.setSlot0(poolId, TickMath.getSqrtPriceAtTick(0), 0, 0, 0);
     }
 
+    /// @notice Exercise seizure-path touch logic and require the specific invariant revert.
+    /// @param tickLower Proposed lower tick, clamped into valid bounds.
+    /// @param tickUpper Proposed upper tick, clamped into valid bounds.
+    /// @param liqRaw Fuzzed liquidity magnitude for the attempted seizure modification.
+    /// @param salt Position salt used in the touched liquidity params.
     // forge-lint: disable-next-line(mixed-case-function)
     function action_seize_03_no_lcc_issue_during_seizure(int24 tickLower, int24 tickUpper, uint96 liqRaw, bytes32 salt)
         external
@@ -98,6 +105,10 @@ contract SEIZE03_04 {
         lastOk03 = reverted && selector == Errors.InvariantViolated.selector;
     }
 
+    /// @notice Verify that touching an existing MM position with a mismatched commit id reverts.
+    /// @param storedCommitId Commit id stored on the position before the touch.
+    /// @param providedCommitId Commit id supplied in hook data for the touch.
+    /// @param salt Position salt used to derive the deterministic test position id.
     // forge-lint: disable-next-line(mixed-case-function)
     function action_seize_04_commit_id_must_match(uint256 storedCommitId, uint256 providedCommitId, bytes32 salt)
         external
@@ -114,7 +125,7 @@ contract SEIZE03_04 {
         ModifyLiquidityParams memory params =
             ModifyLiquidityParams({tickLower: -60, tickUpper: 60, liquidityDelta: 0, salt: salt});
         PositionId id = PositionLibrary.generateId(address(this), params);
-        harness.registerPosition(address(this), POOL_ID, params);
+        harness.registerPosition(address(this), poolId, params);
         harness.setPositionCommitId(id, stored);
 
         bytes memory hookData = PositionModificationHookDataLib.encode(provided, 0, address(this));
@@ -123,11 +134,13 @@ contract SEIZE03_04 {
         lastOk04 = reverted && selector == Errors.InvariantViolated.selector;
     }
 
+    /// @notice Invariant: seizure flow must not permit LCC issuance during a touch.
     // forge-lint: disable-next-line(mixed-case-function)
     function echidna_seize_03_no_lcc_issue_during_seizure() external view returns (bool) {
         return !checked03 || lastOk03;
     }
 
+    /// @notice Invariant: an existing MM position keeps a fixed commit identity during touch.
     // forge-lint: disable-next-line(mixed-case-function)
     function echidna_seize_04_commit_identity_fixed() external view returns (bool) {
         return !checked04 || lastOk04;

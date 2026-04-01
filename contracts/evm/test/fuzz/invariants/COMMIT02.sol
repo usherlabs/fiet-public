@@ -84,6 +84,9 @@ contract COMMIT02 {
     // Actions
     // -------------------------------------------------------------------------
 
+    /// @notice Set the mocked slot0 price input and derive a consistent current tick from it.
+    /// @param sp Proposed sqrt price in Q96 format, clamped within TickMath bounds.
+    /// @param _tick Unused fuzz input retained to preserve action signature stability.
     // forge-lint: disable-next-line(mixed-case-function)
     function action_set_slot0(uint160 sp, int24 _tick) external {
         if (sp == 0) return;
@@ -131,6 +134,7 @@ contract COMMIT02 {
         commitHarness.setCommitExpiresAt(COMMIT_ID, signalLive ? (block.timestamp + 365 days) : 0);
     }
 
+    /// @notice Run the commitment-aware checkpoint path and compare stored deficit output with the harness model.
     // forge-lint: disable-next-line(mixed-case-function)
     function action_checkpoint_with_commitment() external {
         unchecked {
@@ -181,6 +185,8 @@ contract COMMIT02 {
     // Properties
     // -------------------------------------------------------------------------
 
+    /// @notice Invariant: successful checkpoint runs must match the independently modelled deficit math.
+    /// @return True when the most recent successful checkpoint matched the expected deficit values.
     // forge-lint: disable-next-line(mixed-case-function)
     function echidna_commit_02_checkpoint_deficit_math_correct() external view returns (bool) {
         if (!checked) {

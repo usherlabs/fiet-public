@@ -21,6 +21,8 @@ import {EchidnaLinkedLibs} from "../base/EchidnaLinkedLibs.sol";
 ///   6. Balance after unwrap decreases by exactly the paid-out (non-queued) portion
 contract HUB02 {
     uint256 internal constant MAX_AMOUNT = 1e24;
+    uint256 internal constant MAX_VACUOUS_ATTEMPTS = 12;
+    uint256 internal constant BPS_SCALE = 10_000;
 
     LiquidityHub internal hub;
     LiquidityCommitmentCertificate internal lcc;
@@ -48,6 +50,10 @@ contract HUB02 {
     // Action/result: balance decreases by exactly the paid-out (non-queued) portion.
     bool internal checkedBalanceDelta;
     bool internal lastBalanceDeltaOk;
+
+    // Non-vacuity and callback shape controls.
+    uint256 internal unwrapAttempts;
+    uint256 internal marketLiquidityBps;
 
     // ================================================================
     // Constructor
@@ -77,10 +83,10 @@ contract HUB02 {
         // Give holder some initial balance for immediate exercisability.
         hub.issue(address(lcc), address(holder), 500e18);
 
-        _seedAll();
+        _seedGuards();
     }
 
-    function _seedAll() internal {
+    function _seedGuards() internal {
         // Seed zero-amount guard.
         bool ok = holder.tryUnwrapTo(address(hub), address(lcc), 0);
         checkedZeroGuard = true;
@@ -91,46 +97,16 @@ contract HUB02 {
         ok = holder.tryUnwrapTo(address(hub), address(lcc), bal + 1);
         checkedOverBalanceGuard = true;
         lastOverBalanceGuardOk = !ok;
-
-        // Seed a valid unwrap that goes entirely to queue (no direct reserve, no market liquidity).
-        uint256 amt = 10;
-        uint256 queueBefore = hub.settleQueue(address(lcc), address(holder));
-        uint256 totalQueuedBefore = hub.totalQueued(address(lcc));
-        uint256 balBefore = lcc.balanceOf(address(holder));
-
-        ok = holder.tryUnwrapTo(address(hub), address(lcc), amt);
-        if (!ok) {
-            _markUnwrapAttemptFailed();
-            return;
-        }
-
-        uint256 queueAfter = hub.settleQueue(address(lcc), address(holder));
-        uint256 totalQueuedAfter = hub.totalQueued(address(lcc));
-        uint256 balAfter = lcc.balanceOf(address(holder));
-
-        if (queueAfter < queueBefore || totalQueuedAfter < totalQueuedBefore || balAfter > balBefore) {
-            _markUnwrapAttemptFailed();
-            return;
-        }
-
-        uint256 queueIncrease = queueAfter - queueBefore;
-        uint256 paidOut = amt - queueIncrease;
-
-        checkedDecomposition = true;
-        lastDecompositionOk = (paidOut + queueIncrease == amt);
-
-        // Only the paid-out portion is burned; queued shortfall LCC stays with the holder.
-        checkedBalanceDelta = true;
-        lastBalanceDeltaOk = (balBefore - balAfter == paidOut);
-
-        modelHolderQueued = queueAfter;
-        modelTotalQueued = totalQueuedAfter;
     }
 
-    /// @dev No-liquidity factory callback — forces all unwraps to queue.
-    function useMarketLiquidity(address, bytes32, uint256) external view returns (uint256 used) {
+    /// @dev Configurable factory callback — allows zero, partial, or full market-liquidity fulfilment.
+    function useMarketLiquidity(address lccAddr, bytes32, uint256 amount) external returns (uint256 used) {
         if (msg.sender != address(hub)) revert();
-        return 0;
+        used = (amount * marketLiquidityBps) / BPS_SCALE;
+        if (used == 0) return 0;
+
+        underlying.mint(address(hub), used);
+        hub.confirmTake(lccAddr, used, false);
     }
 
     // ================================================================
@@ -144,18 +120,37 @@ contract HUB02 {
         hub.issue(address(lcc), address(holder), amt);
     }
 
+    /// @dev Mint underlying to this harness and wrap it to the holder as direct liquidity.
+    // forge-lint: disable-next-line(mixed-case-function)
+    function action_hub_02_wrap_direct(uint256 amount) external {
+        uint256 amt = (amount % MAX_AMOUNT) + 1;
+        underlying.mint(address(this), amt);
+        underlying.approve(address(hub), amt);
+        hub.wrapTo(address(lcc), address(holder), amt);
+    }
+
+    /// @dev Configure how much of requested market liquidity the factory callback fulfils.
+    // forge-lint: disable-next-line(mixed-case-function)
+    function action_hub_02_set_market_liquidity_bps(uint16 bps) external {
+        marketLiquidityBps = uint256(bps) % (BPS_SCALE + 1);
+    }
+
     /// @dev Fund direct reserve and process queued settlement.
     // forge-lint: disable-next-line(mixed-case-function)
     function action_hub_02_process_settlement(uint256 amount) external {
         uint256 queued = hub.settleQueue(address(lcc), address(holder));
         if (queued == 0) return;
         uint256 amt = (amount % queued) + 1;
+        uint256 lccBefore = lcc.balanceOf(address(holder));
+        uint256 underlyingBefore = underlying.balanceOf(address(holder));
 
         underlying.mint(address(hub), amt);
         hub.confirmTake(address(lcc), amt, false);
         hub.processSettlementFor(address(lcc), address(holder), amt);
 
         uint256 queuedAfter = hub.settleQueue(address(lcc), address(holder));
+        uint256 lccAfter = lcc.balanceOf(address(holder));
+        uint256 underlyingAfter = underlying.balanceOf(address(holder));
         if (queuedAfter > queued || queuedAfter > modelHolderQueued || queuedAfter > modelTotalQueued) {
             modelHolderQueued = hub.settleQueue(address(lcc), address(holder));
             modelTotalQueued = hub.totalQueued(address(lcc));
@@ -167,6 +162,18 @@ contract HUB02 {
         }
 
         uint256 settled = queued - queuedAfter;
+        bool settlementEffectsOk = lccAfter <= lccBefore && underlyingAfter >= underlyingBefore
+            && lccBefore - lccAfter == settled && underlyingAfter - underlyingBefore == settled;
+        if (!settlementEffectsOk) {
+            modelHolderQueued = hub.settleQueue(address(lcc), address(holder));
+            modelTotalQueued = hub.totalQueued(address(lcc));
+            checkedDecomposition = true;
+            checkedBalanceDelta = true;
+            lastDecompositionOk = false;
+            lastBalanceDeltaOk = false;
+            return;
+        }
+
         modelHolderQueued -= settled;
         modelTotalQueued -= settled;
     }
@@ -178,6 +185,9 @@ contract HUB02 {
     /// @dev Valid unwrap: exercises decomposition and queue accounting.
     // forge-lint: disable-next-line(mixed-case-function)
     function action_hub_02_unwrap(uint256 amount) external {
+        unchecked {
+            unwrapAttempts++;
+        }
         uint256 bal = lcc.balanceOf(address(holder));
         if (bal == 0) return;
         uint256 amt = (amount % bal) + 1;
@@ -185,6 +195,7 @@ contract HUB02 {
         uint256 queueBefore = hub.settleQueue(address(lcc), address(holder));
         uint256 totalQueuedBefore = hub.totalQueued(address(lcc));
         uint256 balBefore = bal;
+        uint256 underlyingBefore = underlying.balanceOf(address(holder));
 
         if (!holder.tryUnwrapTo(address(hub), address(lcc), amt)) {
             _markUnwrapAttemptFailed();
@@ -194,14 +205,18 @@ contract HUB02 {
         uint256 queueAfter = hub.settleQueue(address(lcc), address(holder));
         uint256 totalQueuedAfter = hub.totalQueued(address(lcc));
         uint256 balAfter = lcc.balanceOf(address(holder));
+        uint256 underlyingAfter = underlying.balanceOf(address(holder));
 
-        if (queueAfter < queueBefore || totalQueuedAfter < totalQueuedBefore || balAfter > balBefore) {
+        if (
+            queueAfter < queueBefore || totalQueuedAfter < totalQueuedBefore || balAfter > balBefore
+                || underlyingAfter < underlyingBefore
+        ) {
             _markUnwrapAttemptFailed();
             return;
         }
 
         uint256 queueIncrease = queueAfter - queueBefore;
-        uint256 paidOut = amt - queueIncrease;
+        uint256 paidOut = underlyingAfter - underlyingBefore;
 
         // Decomposition: paid-out + queued == requested amount.
         checkedDecomposition = true;
@@ -274,13 +289,15 @@ contract HUB02 {
     /// @dev paid-out + queued shortfall == requested amount for every valid unwrap.
     // forge-lint: disable-next-line(mixed-case-function)
     function echidna_hub_02_unwrap_decomposition_holds() external view returns (bool) {
-        return !checkedDecomposition || lastDecompositionOk;
+        if (!checkedDecomposition) return unwrapAttempts < MAX_VACUOUS_ATTEMPTS;
+        return lastDecompositionOk;
     }
 
     /// @dev LCC balance decreases by exactly the paid-out (non-queued) portion.
     // forge-lint: disable-next-line(mixed-case-function)
     function echidna_hub_02_balance_decreases_by_paidout() external view returns (bool) {
-        return !checkedBalanceDelta || lastBalanceDeltaOk;
+        if (!checkedBalanceDelta) return unwrapAttempts < MAX_VACUOUS_ATTEMPTS;
+        return lastBalanceDeltaOk;
     }
 
     function _markUnwrapAttemptFailed() internal {

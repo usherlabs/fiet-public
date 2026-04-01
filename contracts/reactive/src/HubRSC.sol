@@ -495,8 +495,8 @@ contract HubRSC is AbstractReactive {
         if (batchCount == 0 && remainingLiquidity > 0) {
             uint256 credits = zeroBatchRetryCreditsRemaining[dispatchLane];
             if (credits == 0 && bootstrapZeroBatchRetry) {
-                uint256 maxWindows = (queueSizeAtStart + maxDispatchItems - 1) / maxDispatchItems;
-                if (maxWindows == 0) maxWindows = 1;
+                uint256 remaining = queueSizeAtStart > maxDispatchItems ? queueSizeAtStart - maxDispatchItems : 0;
+                uint256 maxWindows = remaining == 0 ? 0 : (remaining + maxDispatchItems - 1) / maxDispatchItems;
                 if (maxWindows > MAX_ZERO_BATCH_RETRY_WINDOWS) maxWindows = MAX_ZERO_BATCH_RETRY_WINDOWS;
                 credits = maxWindows;
             }
@@ -588,6 +588,27 @@ contract HubRSC is AbstractReactive {
         if (hasUnderlyingForLcc[lcc]) return;
         underlyingByLcc[lcc] = underlying;
         hasUnderlyingForLcc[lcc] = true;
+        _backfillUnderlyingQueueForLcc(lcc, underlying);
+    }
+
+    /// @notice Backfills historical per-LCC entries into the shared underlying lane.
+    /// @dev This runs only on first registration, and `enqueue()` keeps the operation idempotent per key.
+    function _backfillUnderlyingQueueForLcc(address lcc, address underlying) internal {
+        LinkedQueue.Data storage lccQueue = queueDataByLcc[lcc];
+        if (lccQueue.size == 0) return;
+
+        uint256 remaining = lccQueue.size;
+        bytes32 cursor = lccQueue.currentCursor();
+        while (remaining > 0) {
+            bytes32 key = cursor;
+            cursor = lccQueue.nextOrHead(key);
+
+            Pending storage entry = pending[key];
+            if (entry.exists && entry.lcc == lcc) {
+                queueDataByUnderlying[underlying].enqueue(key);
+            }
+            remaining--;
+        }
     }
 
     /// @notice Enqueues a key into the underlying queue for a given LCC.

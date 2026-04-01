@@ -159,14 +159,16 @@ contract LCCBacking01 {
             tu = 60;
         }
 
+        bool negative = _liquidityDelta < 0;
         uint256 absL;
         if (_liquidityDelta == type(int256).min) {
             absL = 1;
         } else {
-            int256 v = _liquidityDelta < 0 ? -_liquidityDelta : _liquidityDelta;
+            int256 v = negative ? -_liquidityDelta : _liquidityDelta;
             absL = uint256(v);
         }
-        ld = int256((absL % 1e18) + 1);
+        int256 magnitude = int256((absL % 1e18) + 1);
+        ld = negative ? -magnitude : magnitude;
     }
 
     function _setPositionShape(
@@ -549,8 +551,10 @@ contract LCCBacking01 {
         uint256 totalSupply = lccConvA.totalSupply() + lccConvB.totalSupply();
         uint256 hubHeld = lccConvA.balanceOf(address(hub)) + lccConvB.balanceOf(address(hub));
         uint256 totalQueued = hub.totalQueued(address(lccConvA)) + hub.totalQueued(address(lccConvB));
-        (uint256 directReserve, uint256 marketReserve) = hub.reserveOfUnderlyingTuple(address(lccConvA));
-        return totalSupply == hubHeld + totalQueued && directReserve == 0 && marketReserve == 0;
+        (uint256 directReserveA, uint256 marketReserveA) = hub.reserveOfUnderlyingTuple(address(lccConvA));
+        (uint256 directReserveB, uint256 marketReserveB) = hub.reserveOfUnderlyingTuple(address(lccConvB));
+        return totalSupply == hubHeld + totalQueued && directReserveA == 0 && marketReserveA == 0 && directReserveB == 0
+            && marketReserveB == 0;
     }
 
     // ================================================================
@@ -576,7 +580,10 @@ contract LCCBacking01Holder {
     function approve(address token, address spender) external {
         // Intentionally ignore the return value here for harness simplicity; callers that need the success bit use
         // the `ok` result from `unwrapToQueue()` / `wrapWith()` instead.
-        token.call(abi.encodeWithSignature("approve(address,uint256)", spender, type(uint256).max));
+        (bool success, bytes memory data) =
+            token.call(abi.encodeWithSignature("approve(address,uint256)", spender, type(uint256).max));
+        success;
+        data;
     }
 
     function unwrapToQueue(address hub, address lcc, uint256 amount) external returns (bool ok) {

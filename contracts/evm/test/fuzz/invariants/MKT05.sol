@@ -99,6 +99,8 @@ contract MKT05 is HookMinerBase {
     uint256 internal attempts;
     uint256 internal successes;
     uint256 internal exactInputSuccesses;
+    uint256 internal exactOutputAttempts;
+    uint256 internal exactOutputReverts;
     uint256 internal constant MAX_VACUOUS_ATTEMPTS = 10;
     uint8 internal constant FAIL_NONE = 0;
     uint8 internal constant FAIL_NONZERO_RESIDUAL = 1;
@@ -195,6 +197,9 @@ contract MKT05 is HookMinerBase {
     // forge-lint: disable-next-line(mixed-case-function)
     function action_proxy_beforeSwap_exactOutput(bool zeroForOne, uint96 amountOutRaw) external {
         if (!zeroForOne) return;
+        unchecked {
+            exactOutputAttempts++;
+        }
         // Exact-output behaviour is exercised here for reachability only.
         // Authoritative exact-output MKT-05 assertions are covered in ProxyHook.t.sol first-take regressions.
 
@@ -207,7 +212,11 @@ contract MKT05 is HookMinerBase {
 
         try manager.callBeforeSwap(hook, address(0xCAFE), proxyKey, params, hookData) returns (BeforeSwapDelta delta) {
             lastDelta = delta;
-        } catch {}
+        } catch {
+            unchecked {
+                exactOutputReverts++;
+            }
+        }
     }
 
     /// @notice MKT-05 live-path property: ProxyHook returns a specified-delta that cancels `amountSpecified`.
@@ -234,6 +243,8 @@ contract MKT05 is HookMinerBase {
 /// @dev Minimal PoolManager stub sufficient for driving `ProxyHook.beforeSwap` and claim-balance reads.
 ///      It implements only the selectors actually exercised by the hook and `CurrencySettler`.
 contract MockPoolManager {
+    error InsufficientClaimBalance(address account, uint256 id, uint256 requested, uint256 available);
+
     mapping(address owner => mapping(uint256 id => uint256 bal)) internal _claim;
 
     function balanceOf(address owner, uint256 id) external view returns (uint256) {
@@ -248,7 +259,7 @@ contract MockPoolManager {
 
     function burn(address from, uint256 id, uint256 amount) external {
         uint256 cur = _claim[from][id];
-        require(cur >= amount, "MockPoolManager: insufficient balance");
+        if (cur < amount) revert InsufficientClaimBalance(from, id, amount, cur);
         unchecked {
             _claim[from][id] = cur - amount;
         }

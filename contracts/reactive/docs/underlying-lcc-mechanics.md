@@ -89,19 +89,38 @@ function _enqueueUnderlyingKey(address lcc, bytes32 key) internal {
 }
 ```
 
-### Registration Behaviour
+### Backfill for Historical Entries
 
-Registering an LCC with an underlying only records the shared routing relationship:
+When an LCC is first registered with an underlying, any existing entries in its per-LCC queue are backfilled into the underlying queue:
 
 ```solidity
 function _registerLccUnderlying(address lcc, address underlying) internal {
     if (hasUnderlyingForLcc[lcc]) return;
     underlyingByLcc[lcc] = underlying;
     hasUnderlyingForLcc[lcc] = true;
+    _backfillUnderlyingQueueForLcc(lcc, underlying);
+}
+
+function _backfillUnderlyingQueueForLcc(address lcc, address underlying) internal {
+    LinkedQueue.Data storage lccQueue = queueDataByLcc[lcc];
+    if (lccQueue.size == 0) return;
+
+    uint256 remaining = lccQueue.size;
+    bytes32 cursor = lccQueue.currentCursor();
+    while (remaining > 0) {
+        bytes32 key = cursor;
+        cursor = lccQueue.nextOrHead(key);
+
+        Pending storage entry = pending[key];
+        if (entry.exists && entry.lcc == lcc) {
+            queueDataByUnderlying[underlying].enqueue(key);
+        }
+        remaining--;
+    }
 }
 ```
 
-There is currently no historical backfill step. Shared-underlying routing only applies to entries enqueued after the association exists, via `_enqueueUnderlyingKey(...)`.
+This ensures shared-underlying scans can still see backlog that was queued before the underlying association existed.
 
 ## Entry Matching During Dispatch
 
@@ -150,12 +169,14 @@ This prevents a stale retry flag from one routing path from suppressing a legiti
 
 - Reduces callback overhead when multiple LCCs share the same underlying asset
 - Maintains FIFO ordering within each underlying
+- Safely handles historical backlog via one-time registration backfill
 - Prevents incorrect cross-LCC dispatch through `_entryMatchesDispatchLane`
 - Gracefully handles routing changes via stale credit clearing
 
 **Safety invariants:**
 
 - Never dispatch an entry from the wrong LCC
+- Never orphan pre-registration queue entries when switching to shared-underlying routing
 - Correctly clear retry credits when switching between routing modes
 - Maintain separate queue views for per-LCC vs shared-underlying dispatch
 
