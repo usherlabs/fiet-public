@@ -18,6 +18,7 @@ import {EchidnaLinkedLibs} from "../base/EchidnaLinkedLibs.sol";
 /// @notice Echidna harness for COMMIT-02: Checkpointing with commitment updates `commitmentDeficit` as an insolvency gate.
 contract COMMIT02 {
     uint256 internal constant MAX_VACUOUS_ATTEMPTS = 16;
+    uint128 internal constant MAX_CHECKPOINT_LIQUIDITY = uint128(type(int128).max);
     MockOracleHelper internal oracle;
     VTSCommitLibHarness internal commitHarness;
     MockPoolManager internal poolManager;
@@ -108,7 +109,8 @@ contract COMMIT02 {
         }
         tickLower = tl;
         tickUpper = tu;
-        liquidity = liq;
+        // Keep fuzzed positions inside the checkpoint path's reachable liquidity domain.
+        liquidity = liq > MAX_CHECKPOINT_LIQUIDITY ? MAX_CHECKPOINT_LIQUIDITY : liq;
         commitHarness.setupPosition(positionId, poolId, COMMIT_ID, tickLower, tickUpper, liquidity);
     }
 
