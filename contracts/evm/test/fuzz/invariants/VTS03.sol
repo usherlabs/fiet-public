@@ -1,25 +1,28 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.26;
 
-import {VTSSwapLibHarness} from "../libraries/harnesses/VTSSwapLibHarness.sol";
+import {VTSSwapLibHarness} from "../../libraries/harnesses/VTSSwapLibHarness.sol";
 import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {SqrtPriceMath} from "@uniswap/v4-core/src/libraries/SqrtPriceMath.sol";
 import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
 import {FullMath} from "v4-periphery/lib/v4-core/src/libraries/FullMath.sol";
 import {FixedPoint128} from "v4-periphery/lib/v4-core/src/libraries/FixedPoint128.sol";
 
-/// @notice Echidna harness for VTS-03: Swap outcomes must be reflected via segment-based deficit/inflow growth.
-///         Segment-based deficit/inflow growth must accrue to the correct token
-///         based on swap direction and price segment boundaries.
-///         This sets initial globals, accrues a single segment, and checks the
-///         expected per-token growth deltas computed from the same swap math.
-contract VTSSwapVTS03SegmentGrowthEchidnaTest {
+/// @notice Echidna harness for VTS-03 segment-growth accounting.
+/// @dev Uses `VTSSwapLibHarness` wrappers over real VTSSwapLib internals (`_accrueSegmentGrowth`, `_flipOutside`).
+///      This is still narrower than full `afterCoreSwap -> processSwap` integration but now anchors assertions
+///      to the production growth update helpers instead of a duplicated local implementation.
+contract VTS03 {
+    uint256 internal constant MAX_VACUOUS_ATTEMPTS = 10;
+
     VTSSwapLibHarness internal swapHarness;
 
     PoolId internal constant POOL_ID = PoolId.wrap(bytes32(uint256(0x5A03)));
 
-    bool internal checked;
-    bool internal lastOk;
+    uint256 internal segmentAttempts;
+    uint256 internal segmentChecks;
+    bool internal segmentAllOk = true;
+    uint256 internal flipAttempts;
 
     bool internal sZeroForOne;
     uint160 internal sSqrtCurrent;
@@ -39,6 +42,13 @@ contract VTSSwapVTS03SegmentGrowthEchidnaTest {
 
     GrowthSnap internal beforeSnap;
     GrowthSnap internal afterSnap;
+    bool internal checkedFlip;
+    bool internal lastFlipOk;
+    int24 internal expectedFlipTick;
+    uint256 internal expectedDefAfter0;
+    uint256 internal expectedDefAfter1;
+    uint256 internal expectedInfAfter0;
+    uint256 internal expectedInfAfter1;
 
     constructor() {
         swapHarness = new VTSSwapLibHarness();
@@ -56,19 +66,73 @@ contract VTSSwapVTS03SegmentGrowthEchidnaTest {
         uint256 inf0Raw,
         uint256 inf1Raw
     ) external {
-        checked = false;
-        lastOk = true;
+        unchecked {
+            segmentAttempts++;
+        }
         // Cache/clamp inputs for deterministic price segment and liquidity.
         _cacheInputs(zeroForOne, sqrtCurrentRaw, sqrtTargetRaw, liquidityRaw, def0Raw, def1Raw, inf0Raw, inf1Raw);
         // Apply a single segment accrual and compare against expected deltas.
         bool ok = _applyAndCheck();
-        checked = true;
-        lastOk = ok;
+        segmentChecks++;
+        segmentAllOk = segmentAllOk && ok;
+    }
+
+    /// @notice Cross a tick and assert outside growth flips as `outside := global - outside`.
+    // forge-lint: disable-next-line(mixed-case-function)
+    function action_tick_cross_flip(
+        int24 tickRaw,
+        uint256 defGlobal0,
+        uint256 defGlobal1,
+        uint256 infGlobal0,
+        uint256 infGlobal1,
+        uint256 defOutside0,
+        uint256 defOutside1,
+        uint256 infOutside0,
+        uint256 infOutside1
+    ) external {
+        unchecked {
+            flipAttempts++;
+        }
+        int24 tick = tickRaw;
+        uint256 defOut0 = defGlobal0 == 0 ? 0 : defOutside0 % (defGlobal0 + 1);
+        uint256 defOut1 = defGlobal1 == 0 ? 0 : defOutside1 % (defGlobal1 + 1);
+        uint256 infOut0 = infGlobal0 == 0 ? 0 : infOutside0 % (infGlobal0 + 1);
+        uint256 infOut1 = infGlobal1 == 0 ? 0 : infOutside1 % (infGlobal1 + 1);
+
+        swapHarness.setDeficitGrowthGlobal(POOL_ID, defGlobal0, defGlobal1);
+        swapHarness.setInflowGrowthGlobal(POOL_ID, infGlobal0, infGlobal1);
+        swapHarness.setDeficitGrowthOutside(POOL_ID, tick, defOut0, defOut1);
+        swapHarness.setInflowGrowthOutside(POOL_ID, tick, infOut0, infOut1);
+        expectedFlipTick = tick;
+        expectedDefAfter0 = defGlobal0 - defOut0;
+        expectedDefAfter1 = defGlobal1 - defOut1;
+        expectedInfAfter0 = infGlobal0 - infOut0;
+        expectedInfAfter1 = infGlobal1 - infOut1;
+
+        swapHarness.flipOutside(POOL_ID, tick, 0, 0);
+        swapHarness.flipOutside(POOL_ID, tick, 1, 0);
+        swapHarness.flipOutside(POOL_ID, tick, 0, 1);
+        swapHarness.flipOutside(POOL_ID, tick, 1, 1);
+
+        checkedFlip = true;
+        lastFlipOk = _flipMatchesExpected();
     }
 
     // forge-lint: disable-next-line(mixed-case-function)
     function echidna_vts_03_segment_growth_accounting() external view returns (bool) {
-        return !checked || lastOk;
+        if (segmentChecks == 0) {
+            return segmentAttempts < MAX_VACUOUS_ATTEMPTS;
+        }
+        return segmentAllOk;
+    }
+
+    // Auxiliary flip identity check retained in this harness so flip calls don't become unverified.
+    // forge-lint: disable-next-line(mixed-case-function)
+    function echidna_vts_03_aux_flip_identity() external view returns (bool) {
+        if (!checkedFlip) {
+            return flipAttempts < MAX_VACUOUS_ATTEMPTS;
+        }
+        return lastFlipOk;
     }
 
     // Keep a second trivial property to avoid rare Echidna instability with single-property targets.
@@ -159,5 +223,12 @@ contract VTSSwapVTS03SegmentGrowthEchidnaTest {
         // Read deficit/inflow global growth accumulators for both tokens.
         (snap.def0, snap.def1) = swapHarness.getDeficitGrowthGlobal(POOL_ID);
         (snap.inf0, snap.inf1) = swapHarness.getInflowGrowthGlobal(POOL_ID);
+    }
+
+    function _flipMatchesExpected() internal view returns (bool) {
+        (uint256 defOut0After, uint256 defOut1After) = swapHarness.getDeficitGrowthOutside(POOL_ID, expectedFlipTick);
+        (uint256 infOut0After, uint256 infOut1After) = swapHarness.getInflowGrowthOutside(POOL_ID, expectedFlipTick);
+        return defOut0After == expectedDefAfter0 && defOut1After == expectedDefAfter1
+            && infOut0After == expectedInfAfter0 && infOut1After == expectedInfAfter1;
     }
 }

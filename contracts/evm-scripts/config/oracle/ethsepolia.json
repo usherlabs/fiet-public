@@ -17,7 +17,7 @@
       "ticker": "ETH",
       "asset": "0x0000000000000000000000000000000000000000",
       "feed": "0x694AA1769357215DE4FAC081bf1f309aDC325306",
-      "maxStalePeriod": 3600,
+      "maxStalePeriod": 86400,
       "cachingEnabled": true,
       "enableMain": true,
       "enablePivot": false,
@@ -33,6 +33,22 @@
       "ticker": "USDC",
       "asset": "0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238",
       "feed": "0xA2F78ab2355fe2f984D808B5CeE7FD0A93D5270E",
+      "maxStalePeriod": 86400,
+      "cachingEnabled": true,
+      "enableMain": true,
+      "enablePivot": false,
+      "enableFallback": false,
+      "pivotOracle": "0x0000000000000000000000000000000000000000",
+      "fallbackOracle": "0x0000000000000000000000000000000000000000",
+      "bounds": {
+        "upperBoundRatio": "0",
+        "lowerBoundRatio": "0"
+      }
+    },
+    {
+      "ticker": "WETH",
+      "asset": "0xfFf9976782d46CC05630D1f6eBAb18b2324d6B14",
+      "feed": "0x694AA1769357215DE4FAC081bf1f309aDC325306",
       "maxStalePeriod": 86400,
       "cachingEnabled": true,
       "enableMain": true,

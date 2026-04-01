@@ -373,6 +373,22 @@ contract ProxyHookTest is MarketVaultBase {
         assertEq(tickAfter, tickBefore, "proxy tick should remain unchanged");
     }
 
+    function test_proxySwap_exactInput_oneForZero_keepsProxySlot0Unchanged() public {
+        (uint160 sqrtBefore, int24 tickBefore,,) = StateLibrary.getSlot0(manager, proxyPoolKey.toId());
+        _executeSwap(proxyPoolKey, false, -int256(1e18), ZERO_BYTES);
+        (uint160 sqrtAfter, int24 tickAfter,,) = StateLibrary.getSlot0(manager, proxyPoolKey.toId());
+        assertEq(sqrtAfter, sqrtBefore, "proxy sqrtPrice should remain unchanged");
+        assertEq(tickAfter, tickBefore, "proxy tick should remain unchanged");
+    }
+
+    function test_proxySwap_exactOutput_oneForZero_keepsProxySlot0Unchanged() public {
+        (uint160 sqrtBefore, int24 tickBefore,,) = StateLibrary.getSlot0(manager, proxyPoolKey.toId());
+        _executeSwap(proxyPoolKey, false, int256(100), ZERO_BYTES);
+        (uint160 sqrtAfter, int24 tickAfter,,) = StateLibrary.getSlot0(manager, proxyPoolKey.toId());
+        assertEq(sqrtAfter, sqrtBefore, "proxy sqrtPrice should remain unchanged");
+        assertEq(tickAfter, tickBefore, "proxy tick should remain unchanged");
+    }
+
     // Tests that after a direct swap on the underlying liquidity of the lcc tokens are moved accordingly
     function test_swap_exactOutput_zeroForOneOnCore() public {
         console.log("====== test_swap_exactOutput_zeroForOneOnCore =======");
@@ -798,6 +814,30 @@ contract ProxyHookTest is MarketVaultBase {
         uint256 requestedOutput = 100;
         vm.expectRevert();
         _executeSwap(proxyPoolKey, false, int256(requestedOutput), abi.encode(recipient));
+    }
+
+    function testFuzz_swap_exactOutput_zeroForOneOnProxy_revertsWhenRequestedExceedsImmediateLiquidity(
+        uint96 availableRaw,
+        uint96 requestedRaw
+    ) public {
+        uint256 available = bound(uint256(availableRaw), 1, 1e18);
+        uint256 requested = bound(uint256(requestedRaw), available + 1, available + 1e18);
+        _mockLimitedLiquidity(_currency1, available);
+
+        vm.expectRevert();
+        _executeSwap(proxyPoolKey, true, int256(requested), ZERO_BYTES);
+    }
+
+    function testFuzz_swap_exactOutput_oneForZeroOnProxy_revertsWhenRequestedExceedsImmediateLiquidity(
+        uint96 availableRaw,
+        uint96 requestedRaw
+    ) public {
+        uint256 available = bound(uint256(availableRaw), 1, 1e18);
+        uint256 requested = bound(uint256(requestedRaw), available + 1, available + 1e18);
+        _mockLimitedLiquidity(_currency0, available);
+
+        vm.expectRevert();
+        _executeSwap(proxyPoolKey, false, int256(requested), ZERO_BYTES);
     }
 
     function test_proxySwap_exactInput_revertsOnCoreFillMismatch_dueToTightPriceLimit() public {

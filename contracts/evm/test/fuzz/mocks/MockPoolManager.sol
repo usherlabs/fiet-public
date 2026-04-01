@@ -10,6 +10,7 @@ contract MockPoolManager {
     bytes32 internal constant POOLS_SLOT = bytes32(uint256(6));
 
     mapping(bytes32 => bytes32) internal slot;
+    mapping(bytes32 => uint128) internal positionLiquidity;
 
     /// @notice Set an arbitrary storage slot (StateLibrary layout).
     function setSlot(bytes32 s, bytes32 value) external {
@@ -39,6 +40,22 @@ contract MockPoolManager {
         for (uint256 i = 0; i < nSlots; i++) {
             data[i] = slot[bytes32(uint256(s) + i)];
         }
+    }
+
+    /// @notice Stores mocked liquidity for a pool/position pair.
+    /// @param poolId The pool identifier.
+    /// @param positionId The position identifier.
+    /// @param liquidity The mocked liquidity amount.
+    function setPositionLiquidity(PoolId poolId, bytes32 positionId, uint128 liquidity) external {
+        positionLiquidity[keccak256(abi.encodePacked(PoolId.unwrap(poolId), positionId))] = liquidity;
+    }
+
+    /// @notice Returns mocked liquidity for a pool/position pair.
+    /// @param poolId The pool identifier.
+    /// @param positionId The position identifier.
+    /// @return liquidity The mocked liquidity amount.
+    function getPositionLiquidity(PoolId poolId, bytes32 positionId) external view returns (uint128 liquidity) {
+        return positionLiquidity[keccak256(abi.encodePacked(PoolId.unwrap(poolId), positionId))];
     }
 }
 

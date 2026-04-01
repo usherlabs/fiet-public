@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.26;
 
-import {VTSCurrencyDeltaHarness} from "../libraries/harnesses/VTSCurrencyDeltaHarness.sol";
+import {VTSCurrencyDeltaHarness} from "../../libraries/harnesses/VTSCurrencyDeltaHarness.sol";
 import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
 
 /// @notice Echidna harness for DELTA-01: Deltas must net to zero per unlock/batch.
 ///         Any non-zero currency delta at end-of-batch must cause CurrencyNotSettled().
-contract VTSCurrencyDelta01EchidnaTest {
+contract DELTA01 {
     VTSCurrencyDeltaHarness internal deltaHarness;
 
     Currency internal constant C0 = Currency.wrap(address(0x1000));

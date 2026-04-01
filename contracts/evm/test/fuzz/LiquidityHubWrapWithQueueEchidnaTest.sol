@@ -9,7 +9,10 @@ import {Bounds} from "../../src/libraries/Bounds.sol";
 import {LCCFactoryLinkedLib} from "../../src/libraries/LCCFactoryLib.sol";
 import {LiquidityHubLinkedLib} from "../../src/libraries/LiquidityHubLinkedLib.sol";
 
-/// @notice Echidna harness for wrapWith + queue/transfer semantics (Domain conversion).
+/// @notice Regression harness for wrapWith + queue/transfer semantics (Domain conversion).
+/// @dev This file is maintained as a targeted regression suite for queue interactions
+///      around wrapWith and transfer flows. Canonical invariant coverage is under
+///      `test/fuzz/invariants/*`.
 contract LiquidityHubWrapWithQueueEchidnaTest {
     LiquidityHub internal hub;
     LiquidityCommitmentCertificate internal lccNative;

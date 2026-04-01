@@ -4,21 +4,30 @@ pragma solidity ^0.8.26;
 import {VTSStorage, PoolAccounting, GrowthPair} from "../../../src/types/VTS.sol";
 import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {VTSSwapLib} from "../../../src/libraries/VTSSwapLib.sol";
-import {SqrtPriceMath} from "@uniswap/v4-core/src/libraries/SqrtPriceMath.sol";
-import {FullMath} from "@uniswap/v4-core/src/libraries/FullMath.sol";
-import {FixedPoint128} from "v4-periphery/lib/v4-core/src/libraries/FixedPoint128.sol";
 
 /// @title VTSSwapLibHarness
-/// @notice Exposes internal VTSSwapLib functions for testing with an isolated VTSStorage
+/// @notice Utility harness exposing selected VTSSwapLib-style maths over isolated storage.
+/// @dev Used for narrow segment-growth property checks, not full swap integration.
 contract VTSSwapLibHarness {
     VTSStorage internal s;
 
     // ========= Exposed VTSSwapLib internals =========
 
+    /// @notice Flips the stored outside-growth state for a tick in the harness storage.
+    /// @param poolId The pool whose accounting is being exercised.
+    /// @param tick The tick whose outside-growth snapshot is flipped.
+    /// @param tokenIndex The token lane to update.
+    /// @param growthType The growth accumulator family to flip.
     function flipOutside(PoolId poolId, int24 tick, uint8 tokenIndex, uint8 growthType) external {
         VTSSwapLib._flipOutside(s, poolId, tick, tokenIndex, growthType);
     }
 
+    /// @notice Accrues segment growth into the harness storage using VTSSwapLib.
+    /// @param poolId The pool whose growth accumulators are updated.
+    /// @param zeroForOne The swap direction for the accrued segment.
+    /// @param sqrtCurrent The segment start price.
+    /// @param sqrtTarget The segment end price.
+    /// @param liquidity The in-range liquidity used for the accrual.
     function accrueSegmentGrowth(
         PoolId poolId,
         bool zeroForOne,
@@ -26,32 +35,7 @@ contract VTSSwapLibHarness {
         uint160 sqrtTarget,
         uint128 liquidity
     ) external {
-        // Inline the segment-growth logic to avoid touching core library visibility.
-        if (liquidity == 0 || sqrtTarget == sqrtCurrent) return;
-
-        uint256 outSeg = zeroForOne
-            ? SqrtPriceMath.getAmount1Delta(sqrtTarget, sqrtCurrent, liquidity, false)
-            : SqrtPriceMath.getAmount0Delta(sqrtCurrent, sqrtTarget, liquidity, false);
-        if (outSeg > 0) {
-            uint256 deltaG = FullMath.mulDiv(outSeg, FixedPoint128.Q128, uint256(liquidity));
-            if (zeroForOne) {
-                s.poolAccounting[poolId].deficitGrowthGlobal.token1 += deltaG;
-            } else {
-                s.poolAccounting[poolId].deficitGrowthGlobal.token0 += deltaG;
-            }
-        }
-
-        uint256 inNoFee = zeroForOne
-            ? SqrtPriceMath.getAmount0Delta(sqrtCurrent, sqrtTarget, liquidity, true)
-            : SqrtPriceMath.getAmount1Delta(sqrtTarget, sqrtCurrent, liquidity, true);
-        if (inNoFee > 0) {
-            uint256 deltaG = FullMath.mulDiv(inNoFee, FixedPoint128.Q128, uint256(liquidity));
-            if (zeroForOne) {
-                s.poolAccounting[poolId].inflowGrowthGlobal.token0 += deltaG;
-            } else {
-                s.poolAccounting[poolId].inflowGrowthGlobal.token1 += deltaG;
-            }
-        }
+        VTSSwapLib._accrueSegmentGrowth(s, poolId, zeroForOne, sqrtCurrent, sqrtTarget, liquidity);
     }
 
     // ========= Storage setters =========

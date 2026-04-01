@@ -146,8 +146,6 @@ contract MarketFactory is IMarketFactory, Ownable, ImmutableState, ImmutableVTSS
         liquidityHub.setBoundLevel(address(liquidityHub), Bounds.BOUND_EXEMPT);
 
         // Transfer endpoints (bucket-tracked).
-        // // LiquidityHub performs unwraps within wrapWith functions, and therefore must be BOUND_ENDPOINT to preserve bucket accounting from users.
-        // liquidityHub.setBoundLevel(address(liquidityHub), Bounds.BOUND_ENDPOINT);
         liquidityHub.setBoundLevel(address(this), Bounds.BOUND_ENDPOINT);
         if (initialBounds.length > 0) {
             liquidityHub.setBoundLevels(initialBounds, Bounds.BOUND_ENDPOINT);

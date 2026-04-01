@@ -1,29 +1,29 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.26;
 
-import {VTSPositionLibHarness} from "../libraries/harnesses/VTSPositionLibHarness.sol";
-import {MockPoolManager} from "./mocks/MockPoolManager.sol";
-import {MarketVTSConfiguration, TokenConfiguration} from "../../src/types/VTS.sol";
-import {PositionId, PositionLibrary} from "../../src/types/Position.sol";
+import {VTSPositionLibHarness} from "../../libraries/harnesses/VTSPositionLibHarness.sol";
+import {MockPoolManager} from "../mocks/MockPoolManager.sol";
+import {MarketVTSConfiguration, TokenConfiguration} from "../../../src/types/VTS.sol";
+import {PositionId, PositionLibrary} from "../../../src/types/Position.sol";
 import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {ModifyLiquidityParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
 import {IPoolManager} from "v4-periphery/lib/v4-core/src/interfaces/IPoolManager.sol";
 import {FullMath} from "v4-periphery/lib/v4-core/src/libraries/FullMath.sol";
 import {FixedPoint128} from "v4-periphery/lib/v4-core/src/libraries/FixedPoint128.sol";
-import {LiquidityUtils} from "../../src/libraries/LiquidityUtils.sol";
+import {LiquidityUtils} from "../../../src/libraries/LiquidityUtils.sol";
 
 interface IPoolManagerMockSlot0 {
     function setSlot(bytes32 s, bytes32 value) external;
     function setSlot0(PoolId poolId, uint160 sqrtPriceX96, int24 tick, uint24 protocolFee, uint24 lpFee) external;
     function extsload(bytes32 s) external view returns (bytes32);
-    function extsload(bytes32 s, uint256 nSlots) external view returns (bytes32[] memory data);
+    function extsload(bytes32 s, uint256 nSlots) external view returns (bytes32[] memory);
 }
 
 /// @notice Echidna harness for COV-01: Coverage burn is bounded by `(deficit + settled)`; fee burn is capped by deficit.
 ///         Clamps inputs, seeds a deterministic fee-growth window, applies coverage burn,
 ///         then asserts the burn is bounded by min(cov, deficit + settled) and the outflow
 ///         snap/fee deltas advance exactly by the bounded burnBase on the correct token.
-contract VTSCoverageBurnCOV01EchidnaTest {
+contract COV01 {
     VTSPositionLibHarness internal harness;
     IPoolManagerMockSlot0 internal poolManager;
 
@@ -238,7 +238,7 @@ contract VTSCoverageBurnCOV01EchidnaTest {
             ok = (afterSnap.poolFee == beforeSnap.poolFee + feesBurn)
                 && (afterSnap.shared == beforeSnap.shared + feesBurn)
                 && (afterSnap.pending == beforeSnap.pending + int256(feesBurn))
-                && (afterSnap.snap == beforeSnap.snap + sBurnBase) && (afterSnap.fg == sFg + growthInc);
+                && (afterSnap.snap == beforeSnap.snap + sBurnBase) && (afterSnap.fg == beforeSnap.fg + growthInc);
         }
 
         return (true, ok);

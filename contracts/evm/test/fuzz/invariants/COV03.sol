@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.26;
 
-import {VTSCommitLib} from "../../src/libraries/VTSCommitLib.sol";
-import {VTSCommitLibHarness} from "../libraries/harnesses/VTSCommitLibHarness.sol";
+import {VTSCommitLib} from "../../../src/libraries/VTSCommitLib.sol";
+import {VTSCommitLibHarness} from "../../libraries/harnesses/VTSCommitLibHarness.sol";
+import {EchidnaLinkedLibs} from "../base/EchidnaLinkedLibs.sol";
 import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {FullMath} from "v4-periphery/lib/v4-core/src/libraries/FullMath.sol";
 import {FixedPoint128} from "v4-periphery/lib/v4-core/src/libraries/FixedPoint128.sol";
@@ -11,11 +12,8 @@ import {FixedPoint128} from "v4-periphery/lib/v4-core/src/libraries/FixedPoint12
 ///         Exercises VTSCommitLib.incrementCoverage and asserts the conditional routing:
 ///         - DICE: if totalDeficitPrincipal > 0, bump coveragePerDeficitIndexX128; else add to coverageResidualDICE.
 ///         - CISE: if totalSettled > 0, bump coveragePerSettledIndexX128; else add to coverageResidualCISE.
-contract VTSCoverageBurnCOV03EchidnaTest {
+contract COV03 {
     VTSCommitLibHarness internal commitHarness;
-
-    // Must match `foundry.toml` profile `echidna` hard-link for `VTSCommitLib`.
-    address internal constant VTS_COMMIT_LIB = 0x08f6e330612797F445209Bfee166c949cfd0BF4F;
 
     PoolId internal constant POOL_ID = PoolId.wrap(bytes32(uint256(0xC0C03)));
     uint256 internal constant MAX_UNITS = 1e36;
@@ -39,7 +37,7 @@ contract VTSCoverageBurnCOV03EchidnaTest {
     Snap internal afterSnap;
 
     constructor() {
-        _deployVTSCommitLib();
+        EchidnaLinkedLibs.deployVTSCommitLib();
         commitHarness = new VTSCommitLibHarness();
     }
 
@@ -136,16 +134,5 @@ contract VTSCoverageBurnCOV03EchidnaTest {
         snap.dResidual = commitHarness.getCoverageResidualDICE(POOL_ID, sTokenIndex);
         snap.sIndex = commitHarness.getCoveragePerSettledIndexX128(POOL_ID, sTokenIndex);
         snap.sResidual = commitHarness.getCoverageResidualCISE(POOL_ID, sTokenIndex);
-    }
-
-    function _deployVTSCommitLib() internal {
-        bytes32 salt = keccak256("echidna.VTSCommitLib");
-        bytes memory initCode = type(VTSCommitLib).creationCode;
-        address deployed;
-        assembly {
-            deployed := create2(0, add(initCode, 0x20), mload(initCode), salt)
-        }
-        require(deployed != address(0), "VTSCommitLib deploy failed");
-        require(deployed == VTS_COMMIT_LIB, "VTSCommitLib addr mismatch");
     }
 }

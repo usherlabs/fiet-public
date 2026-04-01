@@ -23,6 +23,34 @@ being an informal “should”.
   - **commitmentDeficit**: position-level insolvency gate derived from commitment backing checks; this is used for
     RFS/seizability hardening and is not part of DICE principal (`totalDeficitPrincipal`).
 
+## Supported underlying asset model
+
+- **Protocol assumption / listing precondition**:
+  - Direct protocol underlyings are assumed to have **deterministic transfer semantics** for protocol accounting
+    windows:
+    - transferring `amount` to the Hub / vault / settlement path must result in the receiver controlling `amount`,
+    - transfers must not silently burn / tax / skim value in-flight, and
+    - balances must not rebase unpredictably during accounting-critical flows.
+  - Therefore, raw **fee-on-transfer / transfer-tax / deflationary** tokens are **not supported directly** as
+    underlyings.
+  - Raw **rebasing** assets are also **not preferred direct underlyings** where their balance model would break
+    amount-based accounting assumptions across Hub / vault / settlement flows.
+- **Support model for non-standard assets**:
+  - If the protocol wishes to support such assets, it should do so via a **deterministic wrapper/share token** whose
+    own transfer semantics are standard and whose deposit/withdraw path internalises the non-standard behaviour.
+  - In practice this means the protocol should treat the **wrapper/share token** as the underlying (for example an
+    ERC-4626-style share token, or a `wstETH`-style non-rebasing wrapper), rather than the raw fee-on-transfer or
+    rebasing asset itself.
+- **Why this matters**:
+  - Large parts of `LiquidityHub`, `MarketVault`, and settlement accounting are **amount-based**, not
+    balance-delta-measured on every hop.
+  - Making only `wrap()` actual-received-aware would not by itself make fee-on-transfer assets safe, because
+    subsequent Hub ↔ vault / issuer / settlement transfers could still lose value and desynchronise reserves.
+- **Current code status**:
+  - Native ETH ingress is explicitly exact (`msg.value == amount`).
+  - ERC20 ingress currently assumes standard ERC20 transfer behaviour; this assumption should be treated as part of the
+    market-listing policy unless and until explicit on-chain rejection / normalisation is added.
+
 ## LCC backing and liquidity domains
 
 ### LCC-BACKING-01: Every LCC mint must correspond to a specific backing domain (no “free mint”)
@@ -129,7 +157,16 @@ being an informal “should”.
   - increment `directSupply[lcc]` and `reserveOfUnderlying[underlying]` by `amount`, and
   - mint `amount` LCC to the recipient.
 - **Enforced by**: `src/LiquidityHub.sol::_wrap`.
-- **Notable guard**: native-asset wrap requires `msg.value == amount`, otherwise `Errors.InvalidAmount`.
+- **Notable guard**:
+  - native-asset wrap requires `msg.value == amount`, otherwise `Errors.InvalidAmount`.
+  - ERC20-backed wrap requires `msg.value == 0`, otherwise `Errors.InvalidAmount`.
+- **Asset-model assumption**:
+  - For ERC20 underlyings, this invariant assumes the listed underlying is a **standard, transfer-conservative token**
+    whose received amount equals the nominal transfer amount.
+  - Raw fee-on-transfer / transfer-tax / deflationary tokens are therefore outside the supported direct-underlying
+    model for this invariant.
+  - If support is needed for a non-standard asset, the supported route is to list a deterministic wrapper/share token
+    as the underlying and let that wrapper absorb the raw asset's non-standard deposit / withdrawal semantics.
 
 ### HUB-02: Unwrapping cannot exceed liquid (bucketed) balance; shortfalls are explicitly queued
 
@@ -475,6 +512,27 @@ being an informal “should”.
   - `src/MMPositionActionsImpl.sol::_seizePosition` explicitly forbids owner/approved from seizing and forbids seizing
     inactive positions.
 
+### AUTH-01A: Seizure context is intentionally same-position and batch-scoped
+
+- **Statement**:
+  - After a successful `SEIZE_POSITION`, the transient seized-position context may remain live for the remainder of the
+    current unlock/batch so the guarantor can complete follow-on settlement / take flows for that **same** seized
+    position.
+  - This is not a general approval bypass: the context is valid only when the queried `positionId` exactly matches the
+    transient seized ID.
+  - The seizure context must be cleared at batch end so it cannot leak into a later batch / unlock session.
+- **Enforced by**:
+  - `src/MMPositionActionsImpl.sol::_isSeizing` compares the queried `positionId` against
+    `TransientSlots.getSeizedPositionId()`.
+  - `src/MMPositionActionsImpl.sol::_seizePosition` sets the transient seized-position ID only after
+    `VTSOrchestrator.onSeize(...)` validates seizability.
+  - `src/modules/PositionManagerEntrypoint.sol::_afterBatch` clears `TransientSlots.clearSeizedPositionId()`.
+- **Intended flow consequence**:
+  - Batched follow-on actions such as `SEIZE_POSITION -> SETTLE_POSITION_FROM_DELTAS -> TAKE` on the same position are
+    part of the supported seizure execution model.
+  - Reusing the context for a different position, or allowing it to persist after batch finalisation, would violate this
+    invariant.
+
 ### AUTH-02: Commitment NFTs cannot be transferred mid-batch
 
 - **Statement**: Commitment NFT transfers must not occur while a PoolManager unlock session is active.
@@ -515,6 +573,45 @@ being an informal “should”.
   - `src/LiquidityHub.sol::createLCCPair` and `initialize` are `onlyFactory` (revert `Errors.InvalidSender()`).
   - `src/LiquidityHub.sol::issue`, `cancel`, `cancelWithQueue`, `planCancel*`, `confirmTake`, `prepareSettle` are issuer
     gated (revert `Errors.NotApproved(...)` via `_onlyIssuer`).
+
+### MKT-04A: Any market-specific `MarketFactory` must hardcode EXEMPT/DEX setup policy; routine admin may only manage `BOUND_NONE <-> BOUND_ENDPOINT`
+
+- **Statement**:
+  - Any market-specific `MarketFactory` integrated with `LiquidityHub` must hardcode the policy for `BOUND_EXEMPT` /
+    `BOUND_DEX` assignment in its own setup / integration surface, rather than exposing those roles through routine
+    owner/admin bound management.
+  - Such `MarketFactory` contracts are part of the trusted setup / integration boundary for the protocol.
+  - Routine owner/admin surfaces should only manage `BOUND_NONE <-> BOUND_ENDPOINT`.
+  - At the generic registry layer, once a `(factory, who)` pair has been assigned `BOUND_EXEMPT` or `BOUND_DEX`,
+    that role is immutable, and tiers at or above `BOUND_EXEMPT` may only be first-assigned from `BOUND_NONE`.
+- **Enforced by**:
+  - Trusted `MarketFactory` integration surface:
+    - `src/MarketFactory.sol::addBounds` may only assign `BOUND_ENDPOINT`.
+    - `src/MarketFactory.sol::removeBounds` may only assign `BOUND_NONE`.
+    - `src/MarketFactory.sol::initialise` assigns fixed setup roles (`poolManager -> BOUND_DEX`,
+      `liquidityHub -> BOUND_EXEMPT`, factory / `initialBounds -> BOUND_ENDPOINT`).
+    - `src/MarketFactory.sol::createMarket` assigns each newly deployed `proxyHook -> BOUND_EXEMPT`.
+  - Generic registry layer:
+    - `src/modules/BoundRegistry.sol::_setBoundLevel` reverts `Errors.InvalidBoundLevelTransition(oldLevel, newLevel)` when:
+      - `oldLevel >= BOUND_EXEMPT` and `newLevel` differs (immutable tier), or
+      - `newLevel >= BOUND_EXEMPT` but `oldLevel` is not `BOUND_NONE` (first-assignment-only at registry layer).
+    - `src/LiquidityHub.sol::setBoundLevel` / `setBoundLevels` are `onlyFactory` entrypoints; which addresses may ever
+      receive EXEMPT/DEX as part of setup is a trusted property of the specific registered `MarketFactory`.
+- **Current `MarketFactory` example**:
+  - `src/MarketFactory.sol::initialise` assigns:
+    - `poolManager -> BOUND_DEX`
+    - `liquidityHub -> BOUND_EXEMPT`
+    - factory-owned transfer endpoints / `initialBounds -> BOUND_ENDPOINT`
+  - `src/MarketFactory.sol::createMarket` assigns each newly deployed `proxyHook -> BOUND_EXEMPT`.
+- **Routine admin surface (current `MarketFactory`)**:
+  - `src/MarketFactory.sol::addBounds` may only assign `BOUND_ENDPOINT`.
+  - `src/MarketFactory.sol::removeBounds` may only assign `BOUND_NONE`.
+- **Why**:
+  - Crossing the exempt boundary after balances or queues already exist is a governance footgun:
+    - `EXEMPT -> tracked` can strand bucketless exempt-era balances and break the assumptions behind `LCC-02`.
+    - `tracked -> EXEMPT` can make queue-backed settlement non-serviceable until roles/ownership are reconciled.
+  - This lifecycle rule is therefore a structural precondition for `LCC-01` and `LCC-02`, rather than a separate
+    economic policy.
 
 ### MKT-05: Proxy pool AMM price curve must never be utilised (core-curve-only execution)
 
@@ -593,5 +690,8 @@ being an informal “should”.
 - Many invariants above are **batch-scoped** (PoolManager unlock sessions) rather than “global over time”.
 - When writing tests that exercise settlement/credit paths, prefer asserting on **balance deltas** and **explicit revert
   selectors** (eg `Errors.CurrencyNotSettled()`, `Errors.TransferNotAllowed()`, `DelegateCallGuard.OnlyDelegateCall()`).
+- Bound-level tests should respect **MKT-04A**: do not flip `BOUND_EXEMPT` / `BOUND_DEX` after assignment; if a test
+  needs an exempt bucket holder, prefer canonical setup fixtures or `BOUND_NONE -> BOUND_EXEMPT` rather than
+  `BOUND_ENDPOINT -> BOUND_EXEMPT`.
 - Do not assume “LCC supply == hub reserves”; supply spans multiple domains and is constrained by **backing checks**
   and **explicit queue mechanics** instead of a single equality.

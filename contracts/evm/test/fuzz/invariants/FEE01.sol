@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.26;
 
-import {VTSFeeLibHarness} from "../libraries/harnesses/VTSFeeLibHarness.sol";
+import {VTSFeeLibHarness} from "../../libraries/harnesses/VTSFeeLibHarness.sol";
 import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
-import {PositionId} from "../../src/types/Position.sol";
-import {MarketVTSConfiguration, TokenConfiguration} from "../../src/types/VTS.sol";
+import {PositionId} from "../../../src/types/Position.sol";
+import {MarketVTSConfiguration, TokenConfiguration} from "../../../src/types/VTS.sol";
 import {FullMath} from "v4-periphery/lib/v4-core/src/libraries/FullMath.sol";
 import {FixedPoint128} from "v4-periphery/lib/v4-core/src/libraries/FixedPoint128.sol";
 
@@ -14,7 +14,7 @@ import {FixedPoint128} from "v4-periphery/lib/v4-core/src/libraries/FixedPoint12
 ///         This is split into two actions:
 ///         - queueBonus: moves protocolFeeAccrued/pending (queue) while pot stays fixed.
 ///         - finalise: moves slashedPot while protocolFeeAccrued stays fixed.
-contract VTSFee01QueueVsMaterialisedEchidnaTest {
+contract FEE01 {
     VTSFeeLibHarness internal feeHarness;
 
     PoolId internal constant POOL_ID = PoolId.wrap(bytes32(uint256(0xFEE01)));

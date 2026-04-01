@@ -159,5 +159,86 @@ contract BoundsRegistryTest is Test {
         registry.setLccMarket(lcc, bytes32(0), factory);
         assertEq(registry.boundLevelOfLcc(lcc, who), Bounds.BOUND_NONE);
     }
+
+    // --- Bound lifecycle: EXEMPT/DEX bootstrap-only and immutable; NONE <-> ENDPOINT mutable ---
+
+    function test_boundLifecycle_none_to_endpoint_to_none() public {
+        address factory = makeAddr("factoryLifecycle");
+        address who = makeAddr("whoLifecycle");
+
+        vm.startPrank(factory);
+        registry.setBoundLevel(who, Bounds.BOUND_ENDPOINT);
+        assertEq(registry.boundLevel(factory, who), Bounds.BOUND_ENDPOINT);
+        registry.setBoundLevel(who, Bounds.BOUND_NONE);
+        assertEq(registry.boundLevel(factory, who), Bounds.BOUND_NONE);
+        vm.stopPrank();
+    }
+
+    function test_boundLifecycle_none_to_exempt_then_immutable() public {
+        address factory = makeAddr("factoryExempt");
+        address who = makeAddr("whoExempt");
+
+        vm.startPrank(factory);
+        registry.setBoundLevel(who, Bounds.BOUND_EXEMPT);
+        assertEq(registry.boundLevel(factory, who), Bounds.BOUND_EXEMPT);
+
+        vm.expectRevert(
+            abi.encodeWithSelector(Errors.InvalidBoundLevelTransition.selector, Bounds.BOUND_EXEMPT, Bounds.BOUND_NONE)
+        );
+        registry.setBoundLevel(who, Bounds.BOUND_NONE);
+
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                Errors.InvalidBoundLevelTransition.selector, Bounds.BOUND_EXEMPT, Bounds.BOUND_ENDPOINT
+            )
+        );
+        registry.setBoundLevel(who, Bounds.BOUND_ENDPOINT);
+        vm.stopPrank();
+    }
+
+    function test_boundLifecycle_none_to_dex_then_immutable() public {
+        address factory = makeAddr("factoryDex");
+        address who = makeAddr("whoDex");
+
+        vm.startPrank(factory);
+        registry.setBoundLevel(who, Bounds.BOUND_DEX);
+        assertEq(registry.boundLevel(factory, who), Bounds.BOUND_DEX);
+
+        vm.expectRevert(
+            abi.encodeWithSelector(Errors.InvalidBoundLevelTransition.selector, Bounds.BOUND_DEX, Bounds.BOUND_NONE)
+        );
+        registry.setBoundLevel(who, Bounds.BOUND_NONE);
+        vm.stopPrank();
+    }
+
+    function test_boundLifecycle_reverts_exempt_from_endpoint() public {
+        address factory = makeAddr("factoryEpToEx");
+        address who = makeAddr("whoEpToEx");
+
+        vm.startPrank(factory);
+        registry.setBoundLevel(who, Bounds.BOUND_ENDPOINT);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                Errors.InvalidBoundLevelTransition.selector, Bounds.BOUND_ENDPOINT, Bounds.BOUND_EXEMPT
+            )
+        );
+        registry.setBoundLevel(who, Bounds.BOUND_EXEMPT);
+        vm.stopPrank();
+    }
+
+    function test_boundLifecycle_sameLevel_is_noop() public {
+        address factory = makeAddr("factoryNoop");
+        address who = makeAddr("whoNoop");
+
+        vm.startPrank(factory);
+        registry.setBoundLevel(who, Bounds.BOUND_ENDPOINT);
+        vm.recordLogs();
+        registry.setBoundLevel(who, Bounds.BOUND_ENDPOINT);
+        Vm.Log[] memory logs = vm.getRecordedLogs();
+        vm.stopPrank();
+
+        // Second identical call should not emit BoundLevelSet (early return).
+        assertEq(logs.length, 0);
+    }
 }
 
