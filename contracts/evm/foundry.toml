@@ -58,14 +58,14 @@ ffi = true
 test = "test/fuzz"
 out = "out-echidna"
 libraries = [
-  "src/libraries/LCCFactoryLib.sol:LCCFactoryLinkedLib:0x2b35bC0520Ae7df66275319Be6eeAac23Ae37055",
-  "src/libraries/LiquidityHubLinkedLib.sol:LiquidityHubLinkedLib:0xaCed0A9de56C869F03980B37a16A1C1F9e6bC6B7",
+  "src/libraries/LCCFactoryLib.sol:LCCFactoryLinkedLib:0xd8e0e4b777dd88d05ae366996599a7b1e111aa09",
+  "src/libraries/LiquidityHubLinkedLib.sol:LiquidityHubLinkedLib:0xb3a02cd6d8fb5b8fe16dd569edf8be35a87bd0fa",
   # Prevent HEVM crashes by eliminating unlinked placeholders in unrelated contracts (e.g. VTSOrchestrator).
   # Deterministic CREATE2 address deployed by the SIG-BACKING harness (avoids any RPC fetch attempts).
-  "src/libraries/VTSCommitLib.sol:VTSCommitLib:0x08f6e330612797F445209Bfee166c949cfd0BF4F",
+  "src/libraries/VTSCommitLib.sol:VTSCommitLib:0x7642a5fddf1c8c0424f0bbecbbc41f74dd583046",
   # Deterministic CREATE2 address deployed by `VTSPositionLibEchidnaHarness` (avoids Echidna RPC fetch attempts).
-  "src/libraries/VTSPositionLib.sol:VTSPositionLib:0xa05ceC1A8F8639C0432Fa44FDd62d77bBcA4d211",
-  "src/libraries/VTSSwapLib.sol:VTSSwapLib:0x8AF1433f3d2b0547A63f7004B9dA9C5953fD522D",
+  "src/libraries/VTSPositionLib.sol:VTSPositionLib:0x1072f36983964faf6d5efc92c0a3f2cd11943222",
+  "src/libraries/VTSSwapLib.sol:VTSSwapLib:0x1111111111111111111111111111111111111112",
   "src/libraries/VTSFeeLib.sol:VTSFeeLinkedLib:0x1111111111111111111111111111111111111111",
 ]
 
