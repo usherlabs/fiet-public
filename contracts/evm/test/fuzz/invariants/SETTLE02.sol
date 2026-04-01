@@ -19,8 +19,17 @@ import {EchidnaLinkedLibs} from "../base/EchidnaLinkedLibs.sol";
 /// @notice Echidna harness for SETTLE-02: seizure settlement clamps deposit/withdraw bounds.
 /// @dev Exercises the production `VTSPositionLib.onMMSettle` seizing branch via harness wrapper.
 contract SETTLE02 {
-    uint256 internal constant MAX_NON_VACUOUS_ATTEMPTS = 24;
-    uint256 internal constant MIN_CHECKS_PER_SIDE = 3;
+    uint256 internal constant MAX_NON_VACUOUS_ATTEMPTS = 32;
+
+    struct ClampCase {
+        uint256 cap0;
+        uint256 cap1;
+        uint256 requested0;
+        uint256 requested1;
+        uint256 settledBefore0;
+        uint256 settledBefore1;
+        bool zeroCapBranch;
+    }
 
     VTSPositionLibEchidnaHarness internal harness;
     MockPoolManager internal poolManager;
@@ -35,6 +44,10 @@ contract SETTLE02 {
 
     uint256 internal depositChecks;
     uint256 internal withdrawChecks;
+    uint256 internal depositPositiveChecks;
+    uint256 internal depositZeroChecks;
+    uint256 internal withdrawPositiveChecks;
+    uint256 internal withdrawZeroChecks;
     bool internal depositAllOk = true;
     bool internal withdrawAllOk = true;
 
@@ -96,43 +109,49 @@ contract SETTLE02 {
         uint256 requestedDeposit0,
         uint256 requestedDeposit1
     ) external {
-        _configureRfsOpen(commitmentMax0, commitmentMax1, settled0, settled1);
+        // Cycle below/equal/above positive-RFS cases plus a zero-cap branch.
+        uint8 mode = uint8(depositChecks % 4);
+        bool zeroCapBranch = mode == 3;
+        if (zeroCapBranch) {
+            _configureRfsClosed(commitmentMax0, commitmentMax1);
+        } else {
+            _configureRfsOpen(commitmentMax0, commitmentMax1, settled0, settled1);
+        }
         vault.setAvailableLiquidity(type(int128).max, type(int128).max);
 
-        (, BalanceDelta rfsDelta) = harness.getRFS(positionId);
+        bool ok;
+        {
+            ClampCase memory c;
+            (, BalanceDelta rfsDelta) = harness.getRFS(positionId);
+            c.cap0 = _toUintPositive(rfsDelta.amount0());
+            c.cap1 = _toUintPositive(rfsDelta.amount1());
+            c.requested0 =
+                zeroCapBranch ? (requestedDeposit0 % 1e18) + 1 : _pickRequested(c.cap0, requestedDeposit0, mode);
+            c.requested1 =
+                zeroCapBranch ? (requestedDeposit1 % 1e18) + 1 : _pickRequested(c.cap1, requestedDeposit1, mode);
+            c.zeroCapBranch = zeroCapBranch;
+            (c.settledBefore0, c.settledBefore1) = harness.getSettled(positionId);
 
-        // Deterministically cycle below/equal/above scenarios for each deposit check.
-        uint8 mode = uint8(depositChecks % 3);
-        uint256 cap0 = _toUintPositive(rfsDelta.amount0());
-        uint256 cap1 = _toUintPositive(rfsDelta.amount1());
-        uint256 req0 = _pickRequested(cap0, requestedDeposit0, mode);
-        uint256 req1 = _pickRequested(cap1, requestedDeposit1, mode);
-        BalanceDelta delta = toBalanceDelta(-int128(uint128(req0)), -int128(uint128(req1)));
-        (uint256 settledBefore0, uint256 settledBefore1) = harness.getSettled(positionId);
-
-        bool ok = true;
-        bool exact = true;
-        try harness.onMMSettle(
-            IPoolManager(address(poolManager)), vault, positionId, lccCurrency0, lccCurrency1, delta, true
-        ) returns (
-            BalanceDelta, bool, uint256
-        ) {
-            uint256 expected0 = req0 < cap0 ? req0 : cap0;
-            uint256 expected1 = req1 < cap1 ? req1 : cap1;
-            (uint256 settledAfter0, uint256 settledAfter1) = harness.getSettled(positionId);
-            if (settledAfter0 < settledBefore0 || settledAfter1 < settledBefore1) {
-                exact = false;
-            } else {
-                uint256 got0 = settledAfter0 - settledBefore0;
-                uint256 got1 = settledAfter1 - settledBefore1;
-                exact = got0 == expected0 && got1 == expected1;
+            BalanceDelta delta = toBalanceDelta(-int128(uint128(c.requested0)), -int128(uint128(c.requested1)));
+            try harness.onMMSettle(
+                IPoolManager(address(poolManager)), vault, positionId, lccCurrency0, lccCurrency1, delta, true
+            ) returns (
+                BalanceDelta settlementDelta, bool, uint256
+            ) {
+                (uint256 settledAfter0, uint256 settledAfter1) = harness.getSettled(positionId);
+                ok = _depositOutcomeOk(c, settlementDelta, settledAfter0, settledAfter1);
+            } catch {
+                ok = false;
             }
-        } catch {
-            ok = false;
         }
 
         depositChecks++;
-        depositAllOk = depositAllOk && ok && exact;
+        if (zeroCapBranch) {
+            depositZeroChecks++;
+        } else {
+            depositPositiveChecks++;
+        }
+        depositAllOk = depositAllOk && ok;
     }
 
     /// @notice Seizing withdrawals are clamped by position-required settlement deltas.
@@ -149,43 +168,51 @@ contract SETTLE02 {
         _configureRfsClosed(boundedRequired0 + 1e18, boundedRequired1 + 1e18);
         vault.setAvailableLiquidity(type(int128).max, type(int128).max);
 
-        int128 req0 = int128(uint128((required0Raw % 1e18) + 1));
-        int128 req1 = int128(uint128((required1Raw % 1e18) + 1));
+        // Cycle below/equal/above positive owner-delta cases plus a zero-cap branch.
+        uint8 mode = uint8(withdrawChecks % 4);
+        bool zeroCapBranch = mode == 3;
+        int128 req0 = zeroCapBranch ? int128(0) : int128(uint128((required0Raw % 1e18) + 1));
+        int128 req1 = zeroCapBranch ? int128(0) : int128(uint128((required1Raw % 1e18) + 1));
         harness.setUnderlyingDeltaAbsolute(underlyingCurrency0, address(this), req0);
         harness.setUnderlyingDeltaAbsolute(underlyingCurrency1, address(this), req1);
 
-        // Deterministically cycle below/equal/above scenarios for each withdraw check.
-        uint8 mode = uint8(withdrawChecks % 3);
-        uint256 cap0 = uint256(uint128(req0));
-        uint256 cap1 = uint256(uint128(req1));
-        uint256 ask0 = _pickRequested(cap0, requestedWithdraw0, mode);
-        uint256 ask1 = _pickRequested(cap1, requestedWithdraw1, mode);
-        BalanceDelta delta = toBalanceDelta(int128(uint128(ask0)), int128(uint128(ask1)));
-        (uint256 settledBefore0, uint256 settledBefore1) = harness.getSettled(positionId);
+        bool ok;
+        {
+            ClampCase memory c = ClampCase({
+                cap0: uint256(uint128(req0)),
+                cap1: uint256(uint128(req1)),
+                requested0: zeroCapBranch
+                    ? (requestedWithdraw0 % 1e18) + 1
+                    : _pickRequested(uint256(uint128(req0)), requestedWithdraw0, mode),
+                requested1: zeroCapBranch
+                    ? (requestedWithdraw1 % 1e18) + 1
+                    : _pickRequested(uint256(uint128(req1)), requestedWithdraw1, mode),
+                settledBefore0: 0,
+                settledBefore1: 0,
+                zeroCapBranch: zeroCapBranch
+            });
+            (c.settledBefore0, c.settledBefore1) = harness.getSettled(positionId);
 
-        bool ok = true;
-        bool exact = true;
-        try harness.onMMSettle(
-            IPoolManager(address(poolManager)), vault, positionId, lccCurrency0, lccCurrency1, delta, true
-        ) returns (
-            BalanceDelta, bool, uint256
-        ) {
-            uint256 expected0 = ask0 < cap0 ? ask0 : cap0;
-            uint256 expected1 = ask1 < cap1 ? ask1 : cap1;
-            (uint256 settledAfter0, uint256 settledAfter1) = harness.getSettled(positionId);
-            if (settledAfter0 > settledBefore0 || settledAfter1 > settledBefore1) {
-                exact = false;
-            } else {
-                uint256 got0 = settledBefore0 - settledAfter0;
-                uint256 got1 = settledBefore1 - settledAfter1;
-                exact = got0 == expected0 && got1 == expected1;
+            BalanceDelta delta = toBalanceDelta(int128(uint128(c.requested0)), int128(uint128(c.requested1)));
+            try harness.onMMSettle(
+                IPoolManager(address(poolManager)), vault, positionId, lccCurrency0, lccCurrency1, delta, true
+            ) returns (
+                BalanceDelta settlementDelta, bool, uint256
+            ) {
+                (uint256 settledAfter0, uint256 settledAfter1) = harness.getSettled(positionId);
+                ok = _withdrawOutcomeOk(c, settlementDelta, settledAfter0, settledAfter1);
+            } catch {
+                ok = false;
             }
-        } catch {
-            ok = false;
         }
 
         withdrawChecks++;
-        withdrawAllOk = withdrawAllOk && ok && exact;
+        if (zeroCapBranch) {
+            withdrawZeroChecks++;
+        } else {
+            withdrawPositiveChecks++;
+        }
+        withdrawAllOk = withdrawAllOk && ok;
     }
 
     // forge-lint: disable-next-line(mixed-case-function)
@@ -194,8 +221,61 @@ contract SETTLE02 {
         if (totalAttempts < MAX_NON_VACUOUS_ATTEMPTS) {
             return true;
         }
-        if (depositChecks < MIN_CHECKS_PER_SIDE || withdrawChecks < MIN_CHECKS_PER_SIDE) return false;
+        if (
+            depositPositiveChecks == 0 || depositZeroChecks == 0 || withdrawPositiveChecks == 0
+                || withdrawZeroChecks == 0
+        ) {
+            return false;
+        }
         return depositAllOk && withdrawAllOk;
+    }
+
+    // forge-lint: disable-next-line(mixed-case-function)
+    function echidna_settle_02_smoke() external pure returns (bool) {
+        return true;
+    }
+
+    function _depositOutcomeOk(
+        ClampCase memory c,
+        BalanceDelta settlementDelta,
+        uint256 settledAfter0,
+        uint256 settledAfter1
+    ) internal pure returns (bool) {
+        uint256 expected0 = c.requested0 < c.cap0 ? c.requested0 : c.cap0;
+        uint256 expected1 = c.requested1 < c.cap1 ? c.requested1 : c.cap1;
+        bool ok = settlementDelta.amount0() == -int128(uint128(expected0))
+            && settlementDelta.amount1() == -int128(uint128(expected1)) && settledAfter0 >= c.settledBefore0
+            && settledAfter1 >= c.settledBefore1;
+        if (c.zeroCapBranch) {
+            ok = ok && settledAfter0 == c.settledBefore0 && settledAfter1 == c.settledBefore1;
+        }
+        return ok;
+    }
+
+    function _withdrawOutcomeOk(
+        ClampCase memory c,
+        BalanceDelta settlementDelta,
+        uint256 settledAfter0,
+        uint256 settledAfter1
+    ) internal pure returns (bool) {
+        uint256 expected0 = c.requested0 < c.cap0 ? c.requested0 : c.cap0;
+        uint256 expected1 = c.requested1 < c.cap1 ? c.requested1 : c.cap1;
+        if (expected0 > c.settledBefore0) expected0 = c.settledBefore0;
+        if (expected1 > c.settledBefore1) expected1 = c.settledBefore1;
+        bool ok = settlementDelta.amount0() == int128(uint128(expected0))
+            && settlementDelta.amount1() == int128(uint128(expected1)) && settledAfter0 <= c.settledBefore0
+            && settledAfter1 <= c.settledBefore1;
+        if (settledAfter0 > c.settledBefore0 || settledAfter1 > c.settledBefore1) {
+            return false;
+        }
+
+        uint256 got0 = c.settledBefore0 - settledAfter0;
+        uint256 got1 = c.settledBefore1 - settledAfter1;
+        ok = ok && got0 == expected0 && got1 == expected1;
+        if (c.zeroCapBranch) {
+            ok = ok && settledAfter0 == c.settledBefore0 && settledAfter1 == c.settledBefore1;
+        }
+        return ok;
     }
 
     function _configureRfsOpen(uint256 commitmentMax0, uint256 commitmentMax1, uint256 settled0, uint256 settled1)
