@@ -248,7 +248,10 @@ contract MockPoolManager {
 
     function burn(address from, uint256 id, uint256 amount) external {
         uint256 cur = _claim[from][id];
-        _claim[from][id] = amount >= cur ? 0 : (cur - amount);
+        require(cur >= amount, "MockPoolManager: insufficient balance");
+        unchecked {
+            _claim[from][id] = cur - amount;
+        }
     }
 
     function sync(Currency) external pure {}

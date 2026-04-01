@@ -72,11 +72,11 @@ contract PausableHarness is PausableVTS {
     }
 
     function configurePause(PoolId poolId, bool globalPaused, bool poolPaused) external {
-        this.setGlobalPause(globalPaused);
+        s.isPaused = globalPaused;
         if (poolPaused) {
-            if (!s.pools[poolId].isPaused) this.pausePool(poolId);
+            s.pools[poolId].isPaused = true;
         } else if (s.pools[poolId].isPaused) {
-            this.unpausePool(poolId);
+            s.pools[poolId].isPaused = false;
         }
     }
 

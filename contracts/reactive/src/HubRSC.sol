@@ -590,30 +590,6 @@ contract HubRSC is AbstractReactive {
         hasUnderlyingForLcc[lcc] = true;
     }
 
-    /// @notice Backfills the underlying queue for a given LCC.
-    /// @dev Backfills the underlying queue for a given LCC.
-    function _backfillUnderlyingQueueForLcc(address lcc, address underlying) internal {
-        LinkedQueue.Data storage lccQueue = queueDataByLcc[lcc];
-        if (lccQueue.size == 0) return;
-
-        uint256 remaining = lccQueue.size;
-        bytes32 cursor = lccQueue.currentCursor();
-        while (remaining > 0) {
-            bytes32 key = cursor;
-            cursor = lccQueue.nextOrHead(key);
-            if (queueDataByUnderlying[underlying].inQueue[key]) {
-                remaining--;
-                continue;
-            }
-
-            Pending storage entry = pending[key];
-            if (entry.exists && entry.lcc == lcc) {
-                queueDataByUnderlying[underlying].enqueue(key);
-            }
-            remaining--;
-        }
-    }
-
     /// @notice Enqueues a key into the underlying queue for a given LCC.
     /// @dev Enqueues a key into the underlying queue for a given LCC.
     function _enqueueUnderlyingKey(address lcc, bytes32 key) internal {

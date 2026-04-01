@@ -149,6 +149,8 @@ contract COMMIT03 {
         );
         checkedNonAdvancer = true;
         lastNonAdvancerOk = !ok;
+
+        _rotateAdvancerAndCheck();
     }
 
     // ================================================================
@@ -214,6 +216,10 @@ contract COMMIT03 {
     ///      must then be the only one who can renew.
     // forge-lint: disable-next-line(mixed-case-function)
     function action_commit_03_rotate_advancer() external {
+        _rotateAdvancerAndCheck();
+    }
+
+    function _rotateAdvancerAndCheck() internal {
         address newAdvancer =
             currentAdvancer == address(advancerActorA) ? address(advancerActorB) : address(advancerActorA);
 

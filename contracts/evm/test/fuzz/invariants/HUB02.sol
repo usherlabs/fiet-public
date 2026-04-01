@@ -99,24 +99,32 @@ contract HUB02 {
         uint256 balBefore = lcc.balanceOf(address(holder));
 
         ok = holder.tryUnwrapTo(address(hub), address(lcc), amt);
-        if (ok) {
-            uint256 queueAfter = hub.settleQueue(address(lcc), address(holder));
-            uint256 totalQueuedAfter = hub.totalQueued(address(lcc));
-            uint256 balAfter = lcc.balanceOf(address(holder));
-
-            uint256 queueIncrease = queueAfter - queueBefore;
-            uint256 paidOut = amt - queueIncrease;
-
-            checkedDecomposition = true;
-            lastDecompositionOk = (paidOut + queueIncrease == amt);
-
-            // Only the paid-out portion is burned; queued shortfall LCC stays with the holder.
-            checkedBalanceDelta = true;
-            lastBalanceDeltaOk = (balBefore - balAfter == paidOut);
-
-            modelHolderQueued = queueAfter;
-            modelTotalQueued = totalQueuedAfter;
+        if (!ok) {
+            _markUnwrapAttemptFailed();
+            return;
         }
+
+        uint256 queueAfter = hub.settleQueue(address(lcc), address(holder));
+        uint256 totalQueuedAfter = hub.totalQueued(address(lcc));
+        uint256 balAfter = lcc.balanceOf(address(holder));
+
+        if (queueAfter < queueBefore || totalQueuedAfter < totalQueuedBefore || balAfter > balBefore) {
+            _markUnwrapAttemptFailed();
+            return;
+        }
+
+        uint256 queueIncrease = queueAfter - queueBefore;
+        uint256 paidOut = amt - queueIncrease;
+
+        checkedDecomposition = true;
+        lastDecompositionOk = (paidOut + queueIncrease == amt);
+
+        // Only the paid-out portion is burned; queued shortfall LCC stays with the holder.
+        checkedBalanceDelta = true;
+        lastBalanceDeltaOk = (balBefore - balAfter == paidOut);
+
+        modelHolderQueued = queueAfter;
+        modelTotalQueued = totalQueuedAfter;
     }
 
     /// @dev No-liquidity factory callback — forces all unwraps to queue.
@@ -148,6 +156,16 @@ contract HUB02 {
         hub.processSettlementFor(address(lcc), address(holder), amt);
 
         uint256 queuedAfter = hub.settleQueue(address(lcc), address(holder));
+        if (queuedAfter > queued || queuedAfter > modelHolderQueued || queuedAfter > modelTotalQueued) {
+            modelHolderQueued = hub.settleQueue(address(lcc), address(holder));
+            modelTotalQueued = hub.totalQueued(address(lcc));
+            checkedDecomposition = true;
+            checkedBalanceDelta = true;
+            lastDecompositionOk = false;
+            lastBalanceDeltaOk = false;
+            return;
+        }
+
         uint256 settled = queued - queuedAfter;
         modelHolderQueued -= settled;
         modelTotalQueued -= settled;
@@ -168,11 +186,19 @@ contract HUB02 {
         uint256 totalQueuedBefore = hub.totalQueued(address(lcc));
         uint256 balBefore = bal;
 
-        if (!holder.tryUnwrapTo(address(hub), address(lcc), amt)) return;
+        if (!holder.tryUnwrapTo(address(hub), address(lcc), amt)) {
+            _markUnwrapAttemptFailed();
+            return;
+        }
 
         uint256 queueAfter = hub.settleQueue(address(lcc), address(holder));
         uint256 totalQueuedAfter = hub.totalQueued(address(lcc));
         uint256 balAfter = lcc.balanceOf(address(holder));
+
+        if (queueAfter < queueBefore || totalQueuedAfter < totalQueuedBefore || balAfter > balBefore) {
+            _markUnwrapAttemptFailed();
+            return;
+        }
 
         uint256 queueIncrease = queueAfter - queueBefore;
         uint256 paidOut = amt - queueIncrease;
@@ -255,6 +281,13 @@ contract HUB02 {
     // forge-lint: disable-next-line(mixed-case-function)
     function echidna_hub_02_balance_decreases_by_paidout() external view returns (bool) {
         return !checkedBalanceDelta || lastBalanceDeltaOk;
+    }
+
+    function _markUnwrapAttemptFailed() internal {
+        checkedDecomposition = true;
+        checkedBalanceDelta = true;
+        lastDecompositionOk = false;
+        lastBalanceDeltaOk = false;
     }
 }
 

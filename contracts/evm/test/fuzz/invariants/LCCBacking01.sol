@@ -561,7 +561,7 @@ contract LCCBacking01 {
     ///      and the returned signal value must match our independently tracked VRL signal.
     // forge-lint: disable-next-line(mixed-case-function)
     function echidna_lcc_backing_01_commitment_gate_consistent() external view returns (bool) {
-        return !commitGateChecked || commitGateLastOk;
+        return !commitGateChecked || _evaluateCommitmentGate();
     }
 
     /// @dev Always-on boundary: with zero backing our model predicts rejection,

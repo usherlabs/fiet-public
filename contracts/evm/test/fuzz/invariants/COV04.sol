@@ -54,9 +54,9 @@ contract COV04 {
         uint256 L = 1e18;
         (uint256 g1, uint256 c1) = LiquidityUtils.feeBurnGrowthIncWithRemainder(60, L, 0);
         (uint256 g2, uint256 c2) = LiquidityUtils.feeBurnGrowthIncWithRemainder(40, L, c1);
-        (uint256 gAll,) = LiquidityUtils.feeBurnGrowthIncWithRemainder(100, L, 0);
+        (uint256 gAll, uint256 cAll) = LiquidityUtils.feeBurnGrowthIncWithRemainder(100, L, 0);
         checkedSplit = true;
-        lastSplitOk = (g1 + g2 == gAll);
+        lastSplitOk = (g1 + g2 == gAll) && (c2 == cAll);
 
         // Seed carry < L.
         // c2 from above must be < L.
@@ -102,11 +102,11 @@ contract COV04 {
         uint256 L = modelLiquidity;
 
         (uint256 g1, uint256 c1) = LiquidityUtils.feeBurnGrowthIncWithRemainder(a, L, 0);
-        (uint256 g2,) = LiquidityUtils.feeBurnGrowthIncWithRemainder(b, L, c1);
-        (uint256 gAll,) = LiquidityUtils.feeBurnGrowthIncWithRemainder(t, L, 0);
+        (uint256 g2, uint256 c2) = LiquidityUtils.feeBurnGrowthIncWithRemainder(b, L, c1);
+        (uint256 gAll, uint256 cAll) = LiquidityUtils.feeBurnGrowthIncWithRemainder(t, L, 0);
 
         checkedSplit = true;
-        lastSplitOk = (g1 + g2 == gAll);
+        lastSplitOk = (g1 + g2 == gAll) && (c2 == cAll);
     }
 
     /// @dev Change liquidity, which must reset carry to 0.
@@ -193,8 +193,8 @@ contract COV04 {
     function _verifyAccumulated() internal {
         if (modelTotalFees == 0) return;
         uint256 L = modelLiquidity;
-        (uint256 gSingle,) = LiquidityUtils.feeBurnGrowthIncWithRemainder(modelTotalFees, L, 0);
+        (uint256 gSingle, uint256 cSingle) = LiquidityUtils.feeBurnGrowthIncWithRemainder(modelTotalFees, L, 0);
         checkedAccum = true;
-        lastAccumOk = (modelTotalGrowth == gSingle);
+        lastAccumOk = (modelTotalGrowth == gSingle) && (modelCarry == cSingle);
     }
 }

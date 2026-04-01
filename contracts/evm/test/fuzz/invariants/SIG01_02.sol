@@ -79,15 +79,17 @@ contract SIG01_02 {
     function _seedAll() internal {
         // Seed SIG-01 valid: submit nonce=1, should succeed.
         verifier.setProofValid(true);
-        (bool ok,) = address(sigMgr)
+        bool ok;
+        bytes memory ret;
+        (ok, ret) = address(sigMgr)
             .call(
                 abi.encodeWithSignature(
                     "verifyLiquiditySignal(address,bytes,bool)", MM_OWNER, _makeSignal(MM_OWNER, ADVANCER, 1), false
                 )
             );
         checkedValidSignal = true;
-        lastValidSignalOk = ok;
-        if (ok) {
+        lastValidSignalOk = _decodeProofResult(ok, ret);
+        if (lastValidSignalOk) {
             modelNonce = 1;
             highWaterNonce = 1;
         }
@@ -115,7 +117,6 @@ contract SIG01_02 {
 
         // Seed SIG-02 invalid proof + revertOnInvalid=false: should return ok=false.
         verifier.setProofValid(false);
-        bytes memory ret;
         (ok, ret) = address(sigMgr)
             .call(
                 abi.encodeWithSignature(
@@ -143,7 +144,7 @@ contract SIG01_02 {
         verifier.setProofValid(true);
         uint256 newNonce = modelNonce + (delta % 1000) + 1;
 
-        (bool ok,) = address(sigMgr)
+        (bool ok, bytes memory ret) = address(sigMgr)
             .call(
                 abi.encodeWithSignature(
                     "verifyLiquiditySignal(address,bytes,bool)",
@@ -154,9 +155,9 @@ contract SIG01_02 {
             );
 
         checkedValidSignal = true;
-        lastValidSignalOk = ok;
+        lastValidSignalOk = _decodeProofResult(ok, ret);
 
-        if (ok) {
+        if (lastValidSignalOk) {
             modelNonce = newNonce;
             uint256 onChainNonce = sigMgr.mmNonce(MM_OWNER);
             if (onChainNonce > highWaterNonce) highWaterNonce = onChainNonce;
@@ -276,6 +277,11 @@ contract SIG01_02 {
     // ================================================================
     // Helpers
     // ================================================================
+
+    function _decodeProofResult(bool callOk, bytes memory ret) internal pure returns (bool proofOk) {
+        if (!callOk || ret.length < 64) return false;
+        (proofOk,) = abi.decode(ret, (bool, uint256));
+    }
 
     function _makeSignal(address owner, address adv, uint256 nonce) internal pure returns (bytes memory) {
         MarketMaker.Reserve[] memory reserves = new MarketMaker.Reserve[](0);

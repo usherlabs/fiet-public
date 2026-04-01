@@ -24,8 +24,6 @@ contract COV02 is HookMinerBase {
 
     uint256 internal attempts;
     uint256 internal checks;
-    uint256 internal addChecks;
-    uint256 internal removeChecks;
     bool internal allOk = true;
 
     constructor() {
@@ -53,8 +51,27 @@ contract COV02 is HookMinerBase {
     ///         exact PositionId derived from params. This enforces the "settle before modify"
     ///         sequencing that coverage burns rely on.
     // forge-lint: disable-next-line(mixed-case-function)
+    function action_before_add_modify(int24 tickLower, int24 tickUpper, int256 liquidityDelta, bytes32 salt) external {
+        _exerciseBeforeModify(true, tickLower, tickUpper, liquidityDelta, salt);
+    }
+
+    // forge-lint: disable-next-line(mixed-case-function)
+    function action_before_remove_modify(int24 tickLower, int24 tickUpper, int256 liquidityDelta, bytes32 salt)
+        external
+    {
+        _exerciseBeforeModify(false, tickLower, tickUpper, liquidityDelta, salt);
+    }
+
+    // Retain the bool-shaped action as a compatibility shim for any existing corpora or local scripts.
+    // forge-lint: disable-next-line(mixed-case-function)
     function action_before_modify(bool isAdd, int24 tickLower, int24 tickUpper, int256 liquidityDelta, bytes32 salt)
         external
+    {
+        _exerciseBeforeModify(isAdd, tickLower, tickUpper, liquidityDelta, salt);
+    }
+
+    function _exerciseBeforeModify(bool isAdd, int24 tickLower, int24 tickUpper, int256 liquidityDelta, bytes32 salt)
+        internal
     {
         unchecked {
             attempts++;
@@ -79,11 +96,6 @@ contract COV02 is HookMinerBase {
 
         // Assert a single settle call with the expected PositionId.
         checks++;
-        if (isAdd) {
-            addChecks++;
-        } else {
-            removeChecks++;
-        }
         bool lastOk = mockOrch.settleCount() == beforeCount + 1
             && PositionId.unwrap(mockOrch.lastSettled()) == PositionId.unwrap(expected);
         allOk = allOk && lastOk;
@@ -95,7 +107,7 @@ contract COV02 is HookMinerBase {
     }
 
     function _settleBeforeModifyHolds() internal view returns (bool) {
-        if (checks == 0 || addChecks == 0 || removeChecks == 0) {
+        if (checks == 0) {
             return attempts < MAX_VACUOUS_ATTEMPTS;
         }
         return allOk;

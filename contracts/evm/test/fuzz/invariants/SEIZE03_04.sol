@@ -24,6 +24,7 @@ import {IPoolManager} from "v4-periphery/lib/v4-core/src/interfaces/IPoolManager
 import {IHooks} from "@uniswap/v4-core/src/interfaces/IHooks.sol";
 import {ILiquidityHub} from "../../../src/interfaces/ILiquidityHub.sol";
 import {IOracleHelper} from "../../../src/interfaces/IOracleHelper.sol";
+import {Errors} from "../../../src/libraries/Errors.sol";
 
 /// @notice Echidna harness for SEIZE-03 and SEIZE-04 using the real `VTSPositionLib.touchPosition` path.
 contract SEIZE03_04 {
@@ -92,9 +93,9 @@ contract SEIZE03_04 {
             ModifyLiquidityParams({tickLower: tl, tickUpper: tu, liquidityDelta: int256(liq), salt: salt});
         bytes memory hookData = PositionModificationHookDataLib.encodeSeizure(1, 0, address(this), 0, 0);
 
-        bool reverted = _touchReverts(address(this), params, hookData);
+        (bool reverted, bytes4 selector) = _touchReverts(address(this), params, hookData);
         checked03 = true;
-        lastOk03 = reverted;
+        lastOk03 = reverted && selector == Errors.InvariantViolated.selector;
     }
 
     // forge-lint: disable-next-line(mixed-case-function)
@@ -117,9 +118,9 @@ contract SEIZE03_04 {
         harness.setPositionCommitId(id, stored);
 
         bytes memory hookData = PositionModificationHookDataLib.encode(provided, 0, address(this));
-        bool reverted = _touchReverts(address(this), params, hookData);
+        (bool reverted, bytes4 selector) = _touchReverts(address(this), params, hookData);
         checked04 = true;
-        lastOk04 = reverted;
+        lastOk04 = reverted && selector == Errors.InvariantViolated.selector;
     }
 
     // forge-lint: disable-next-line(mixed-case-function)
@@ -134,7 +135,7 @@ contract SEIZE03_04 {
 
     function _touchReverts(address owner, ModifyLiquidityParams memory params, bytes memory hookData)
         internal
-        returns (bool reverted)
+        returns (bool reverted, bytes4 selector)
     {
         PositionContext memory ctx = PositionContext({
             poolManager: IPoolManager(address(poolManager)),
@@ -152,8 +153,9 @@ contract SEIZE03_04 {
         });
         try harness.touchPosition(ctx, tp) returns (Position memory, PositionId, BalanceDelta) {
             reverted = false;
-        } catch {
+        } catch (bytes memory reason) {
             reverted = true;
+            selector = _selectorOf(reason);
         }
     }
 
@@ -165,6 +167,13 @@ contract SEIZE03_04 {
         if (tl >= tu) {
             tl = -60;
             tu = 60;
+        }
+    }
+
+    function _selectorOf(bytes memory reason) internal pure returns (bytes4 selector) {
+        if (reason.length < 4) return bytes4(0);
+        assembly {
+            selector := mload(add(reason, 32))
         }
     }
 }

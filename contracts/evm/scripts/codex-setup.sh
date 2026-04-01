@@ -115,37 +115,39 @@ ensure_python_tools() {
 ensure_echidna() {
   local archive="echidna-${ECHIDNA_VERSION#v}-x86_64-linux.tar.gz"
   local url="https://github.com/crytic/echidna/releases/download/${ECHIDNA_VERSION}/${archive}"
-  local tmp_dir
 
   add_path_now "$LOCAL_BIN"
   persist_path "$LOCAL_BIN"
 
-  if command -v echidna >/dev/null 2>&1 && echidna --version 2>/dev/null | grep -q "${ECHIDNA_VERSION}"; then
+  if command -v echidna >/dev/null 2>&1 && echidna --version 2>/dev/null | grep -q "${ECHIDNA_VERSION#v}"; then
     return
   fi
 
-  tmp_dir="$(mktemp -d)"
-  trap 'rm -rf "$tmp_dir"' EXIT
+  (
+    local tmp_dir
+    tmp_dir="$(mktemp -d)"
+    trap 'rm -rf "$tmp_dir"' EXIT
 
-  curl -fsSL "$url" -o "$tmp_dir/echidna.tar.gz"
-  tar -xzf "$tmp_dir/echidna.tar.gz" -C "$tmp_dir"
+    curl -fsSL "$url" -o "$tmp_dir/echidna.tar.gz"
+    tar -xzf "$tmp_dir/echidna.tar.gz" -C "$tmp_dir"
 
-  if [ -x "$tmp_dir/echidna" ]; then
-    install -m 0755 "$tmp_dir/echidna" "$LOCAL_BIN/echidna"
-  elif [ -x "$tmp_dir/bin/echidna" ]; then
-    install -m 0755 "$tmp_dir/bin/echidna" "$LOCAL_BIN/echidna"
-  else
-    echo "echidna binary not found in release archive" >&2
-    exit 1
-  fi
+    if [ -x "$tmp_dir/echidna" ]; then
+      install -m 0755 "$tmp_dir/echidna" "$LOCAL_BIN/echidna"
+    elif [ -x "$tmp_dir/bin/echidna" ]; then
+      install -m 0755 "$tmp_dir/bin/echidna" "$LOCAL_BIN/echidna"
+    else
+      echo "echidna binary not found in release archive" >&2
+      exit 1
+    fi
 
-  if [ -x "$tmp_dir/echidna-test" ]; then
-    install -m 0755 "$tmp_dir/echidna-test" "$LOCAL_BIN/echidna-test"
-  elif [ -x "$tmp_dir/bin/echidna-test" ]; then
-    install -m 0755 "$tmp_dir/bin/echidna-test" "$LOCAL_BIN/echidna-test"
-  else
-    ln -sf "$LOCAL_BIN/echidna" "$LOCAL_BIN/echidna-test"
-  fi
+    if [ -x "$tmp_dir/echidna-test" ]; then
+      install -m 0755 "$tmp_dir/echidna-test" "$LOCAL_BIN/echidna-test"
+    elif [ -x "$tmp_dir/bin/echidna-test" ]; then
+      install -m 0755 "$tmp_dir/bin/echidna-test" "$LOCAL_BIN/echidna-test"
+    else
+      ln -sf "$LOCAL_BIN/echidna" "$LOCAL_BIN/echidna-test"
+    fi
+  )
 }
 
 sync_repo() {

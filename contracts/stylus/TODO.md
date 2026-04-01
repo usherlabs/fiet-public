@@ -356,7 +356,7 @@ As detailed in the Fiet vs RFQ analysis (`docs/web/protocol/vs-rfq.mdx`), which 
 - **Random Spread Fluctuations**: Spreads widen significantly post-quote without correlating to market volatility.
 - **Phantom Liquidity**: Liquidity appears deep at quote time but is withdrawn before execution.
 
-Fiet counters this with **upfront, transparent on-chain quotes** derived from verifiable atomic state (zkTLS-backed LCCs, VTS model, and enforceable commitments). Traders can inspect the market's atomic state before submitting orders, guaranteeing that quoted prices will be honoured.
+Fiet counters this with **upfront, transparent on-chain quotes** derived from verifiable atomic state (zkTLS-backed LCCs, VTS model, and enforceable commitments). Traders can inspect the market's atomic state before submitting orders, materially reducing quote/execution divergence when paired with atomic revalidation.
 
 However, even with Fiet's superior design, there remains a potential timing window between quote inspection and transaction inclusion. **Atomic revalidation should therefore be a trader tool too** — agnostic to market side (MM vs trader).
 
@@ -404,9 +404,8 @@ This makes the re-validation policy **market-side agnostic**, allowing both liqu
 
 ### Related References
 
-
 - `docs/web/protocol/vs-rfq.mdx` — primary source for RFQ divergence patterns and Fiet's atomic quote guarantees.
-- 0x "PropAMM Shenanigans" (March 2026).
+- 0x, ["PropAMM Shenanigans"](https://0x.org/post/propamm-shenanigans), March 2026.
 - Existing Atomic Re-Validation section above (MM-focused).
 - `contracts/evm/src/libraries/VTSPositionLib.sol`, `CoreHook.sol`, and Stylus policy crates.
 

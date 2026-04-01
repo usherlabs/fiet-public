@@ -62,6 +62,7 @@ function _markLogProcessed(IReactive.LogRecord calldata log) internal returns (b
 ```
 
 This is called at the beginning of every major handler:
+
 - `_handleLiquidityAvailable`
 - `_handleMoreLiquidityAvailable`
 - `_handleSettlementQueued`
@@ -84,11 +85,9 @@ This is called at the beginning of every major handler:
 
 ## Comparison of Approaches
 
-| Layer           | Uses                  | Purpose                              | Scope             |
-|-----------------|-----------------------|--------------------------------------|-------------------|
-| SpokeRSC        | `processedLog`        | Filter duplicate raw logs per spoke  | Per-recipient     |
-| HubCallback     | nonce + bitmap        | Prevent replay of same callback      | Per-spoke/recipient |
-| HubRSC          | `processedReport`     | Deduplicate all incoming reports     | Global            |
+- `SpokeRSC`: uses `processedLog` to filter duplicate raw logs per spoke, with per-recipient scope.
+- `HubCallback`: uses nonce + bitmap to prevent replay of the same callback, with per-spoke/recipient scope.
+- `HubRSC`: uses `processedReport` to deduplicate all incoming reports, with global scope.
 
 ## Test Coverage
 
@@ -101,7 +100,7 @@ These tests verify that duplicate logs are ignored while distinct logical events
 
 ## Summary
 
-The deduplication strategy is deliberately **log-identity based** rather than purely nonce-based. This provides strong protection against redelivery while still allowing multiple distinct settlements for the same (lcc, recipient) pair.
+The deduplication strategy is deliberately **log-identity-based** rather than purely nonce-based. This provides strong protection against redelivery while still allowing multiple distinct settlements for the same (lcc, recipient) pair.
 
 The combination of per-spoke filtering, HubCallback validation, and HubRSC-level deduplication creates a robust, observable, and replay-safe settlement pipeline.
 

@@ -7,6 +7,7 @@ import {VTSOrchestrator} from "../src/VTSOrchestrator.sol";
 import {Errors} from "../src/libraries/Errors.sol";
 import {PositionId} from "../src/types/Position.sol";
 import {MMActionAdapter as MMA} from "./utils/MMActionAdapter.sol";
+import {CustomRevert} from "v4-periphery/lib/v4-core/src/libraries/CustomRevert.sol";
 
 contract VTSOrchestratorInvariantRegressionsTest is VTSOrchestratorFixture {
     function _deployVTSOrchestrator(address _poolManager, address _oracleHelper, address _liquidityHub, address _owner)
@@ -35,6 +36,10 @@ contract VTSOrchestratorInvariantRegressionsTest is VTSOrchestratorFixture {
         MMA.executeWithUnlock(positionManager, actions, block.timestamp + 3600);
     }
 
+    function increasePositionExternal(uint256 tokenId, uint256 amountToIncrease) external {
+        _increasePosition(tokenId, amountToIncrease);
+    }
+
     function test_vts01_cov02_directDecrease_matchesPokeThenDecrease_afterGrowthAccrual() public {
         (uint256 tokenA, PositionId posA,,) = _createCommittedPosition();
         (uint256 tokenB, PositionId posB,,) = _createCommittedPosition(renewSignal, -60, 60, 1e10, bytes32(0));
@@ -56,12 +61,35 @@ contract VTSOrchestratorInvariantRegressionsTest is VTSOrchestratorFixture {
         (uint256 tokenId, PositionId positionId,,) = _createCommittedPosition();
 
         vtsOrchestrator.pausePool(corePoolKey.toId());
-        vm.expectRevert();
-        _increasePosition(tokenId, 1);
+        try this.increasePositionExternal(tokenId, 1) {
+            revert("expected paused MM modify to revert");
+        } catch (bytes memory reason) {
+            _assertWrappedReason(reason, abi.encodeWithSelector(Errors.EnforcedPause.selector));
+        }
 
         vtsOrchestrator.unpausePool(corePoolKey.toId());
-        _decreasePosition(tokenId, 1e6);
+        _increasePosition(tokenId, 1);
         assertTrue(vtsOrchestrator.isPositionValid(positionId, true), "position should remain valid after unpause flow");
+    }
+
+    function _assertWrappedReason(bytes memory revertData, bytes memory expectedReason) internal pure {
+        assertGe(revertData.length, 4, "missing wrapped error selector");
+
+        bytes4 sel;
+        assembly ("memory-safe") {
+            sel := mload(add(revertData, 0x20))
+        }
+        assertEq(sel, CustomRevert.WrappedError.selector, "expected WrappedError selector");
+
+        (,, bytes memory reason,) = abi.decode(_stripSelector(revertData), (address, bytes4, bytes, bytes));
+        assertEq(keccak256(reason), keccak256(expectedReason), "unexpected wrapped revert reason");
+    }
+
+    function _stripSelector(bytes memory revertData) internal pure returns (bytes memory tail) {
+        tail = new bytes(revertData.length - 4);
+        for (uint256 i = 0; i < tail.length; i++) {
+            tail[i] = revertData[i + 4];
+        }
     }
 
     function test_vts03_swapThenSettle_mutatesPositionAccounting_zeroForOne() public {

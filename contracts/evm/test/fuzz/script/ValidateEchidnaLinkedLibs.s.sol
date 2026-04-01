@@ -14,6 +14,8 @@ import {EchidnaLinkedLibs} from "../base/EchidnaLinkedLibs.sol";
 contract ValidateEchidnaLinkedLibs is Script {
     /// Echidna's default deployer address (the harness contract is deployed here).
     address internal constant ECHIDNA_DEPLOYER = 0x00a329c0648769A73afAc7F9381E08FB43dBEA72;
+    address internal constant VTSSWAPLIB_PLACEHOLDER = 0x1111111111111111111111111111111111111112;
+    address internal constant VTSFEE_LINKEDLIB_PLACEHOLDER = 0x1111111111111111111111111111111111111111;
 
     function run() external view {
         uint256 failures = 0;
@@ -106,8 +108,9 @@ contract ValidateEchidnaLinkedLibs is Script {
                 _compute(type(VTSPositionLib).creationCode, "echidna.VTSPositionLib")
             )
         );
-        console2.log('  "src/libraries/VTSSwapLib.sol:VTSSwapLib:0x1111111111111111111111111111111111111112",');
-        console2.log('  "src/libraries/VTSFeeLib.sol:VTSFeeLinkedLib:0x1111111111111111111111111111111111111111",');
+        console2.log("  # Intentional placeholders for libs that are not CREATE2-validated by this script.");
+        console2.log(_libraryEntry("src/libraries/VTSSwapLib.sol:VTSSwapLib", VTSSWAPLIB_PLACEHOLDER));
+        console2.log(_libraryEntry("src/libraries/VTSFeeLib.sol:VTSFeeLinkedLib", VTSFEE_LINKEDLIB_PLACEHOLDER));
         console2.log("]");
     }
 

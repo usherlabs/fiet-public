@@ -108,19 +108,25 @@ contract SETTLE02 {
         uint256 req0 = _pickRequested(cap0, requestedDeposit0, mode);
         uint256 req1 = _pickRequested(cap1, requestedDeposit1, mode);
         BalanceDelta delta = toBalanceDelta(-int128(uint128(req0)), -int128(uint128(req1)));
+        (uint256 settledBefore0, uint256 settledBefore1) = harness.getSettled(positionId);
 
         bool ok = true;
         bool exact = true;
         try harness.onMMSettle(
             IPoolManager(address(poolManager)), vault, positionId, lccCurrency0, lccCurrency1, delta, true
         ) returns (
-            BalanceDelta settlementDelta, bool, uint256
+            BalanceDelta, bool, uint256
         ) {
-            uint256 got0 = _absNeg(settlementDelta.amount0());
-            uint256 got1 = _absNeg(settlementDelta.amount1());
             uint256 expected0 = req0 < cap0 ? req0 : cap0;
             uint256 expected1 = req1 < cap1 ? req1 : cap1;
-            exact = got0 == expected0 && got1 == expected1;
+            (uint256 settledAfter0, uint256 settledAfter1) = harness.getSettled(positionId);
+            if (settledAfter0 < settledBefore0 || settledAfter1 < settledBefore1) {
+                exact = false;
+            } else {
+                uint256 got0 = settledAfter0 - settledBefore0;
+                uint256 got1 = settledAfter1 - settledBefore1;
+                exact = got0 == expected0 && got1 == expected1;
+            }
         } catch {
             ok = false;
         }
@@ -155,19 +161,25 @@ contract SETTLE02 {
         uint256 ask0 = _pickRequested(cap0, requestedWithdraw0, mode);
         uint256 ask1 = _pickRequested(cap1, requestedWithdraw1, mode);
         BalanceDelta delta = toBalanceDelta(int128(uint128(ask0)), int128(uint128(ask1)));
+        (uint256 settledBefore0, uint256 settledBefore1) = harness.getSettled(positionId);
 
         bool ok = true;
         bool exact = true;
         try harness.onMMSettle(
             IPoolManager(address(poolManager)), vault, positionId, lccCurrency0, lccCurrency1, delta, true
         ) returns (
-            BalanceDelta settlementDelta, bool, uint256
+            BalanceDelta, bool, uint256
         ) {
-            uint256 got0 = _toUintNonNegative(settlementDelta.amount0());
-            uint256 got1 = _toUintNonNegative(settlementDelta.amount1());
             uint256 expected0 = ask0 < cap0 ? ask0 : cap0;
             uint256 expected1 = ask1 < cap1 ? ask1 : cap1;
-            exact = got0 == expected0 && got1 == expected1;
+            (uint256 settledAfter0, uint256 settledAfter1) = harness.getSettled(positionId);
+            if (settledAfter0 > settledBefore0 || settledAfter1 > settledBefore1) {
+                exact = false;
+            } else {
+                uint256 got0 = settledBefore0 - settledAfter0;
+                uint256 got1 = settledBefore1 - settledAfter1;
+                exact = got0 == expected0 && got1 == expected1;
+            }
         } catch {
             ok = false;
         }
@@ -221,19 +233,9 @@ contract SETTLE02 {
         harness.setPositionActive(positionId, true);
     }
 
-    function _toUintNonNegative(int128 value) internal pure returns (uint256) {
-        if (value <= 0) return 0;
-        return uint256(int256(value));
-    }
-
     function _toUintPositive(int128 value) internal pure returns (uint256) {
         if (value <= 0) return 0;
         return uint256(uint128(value));
-    }
-
-    function _absNeg(int128 value) internal pure returns (uint256) {
-        if (value >= 0) return 0;
-        return uint256(uint128(-value));
     }
 
     function _pickRequested(uint256 cap, uint256 fuzzed, uint8 mode) internal pure returns (uint256) {

@@ -53,21 +53,23 @@ In the `[profile.echidna]` section, update the `libraries` array (lines ~62–71
 
 ```toml
 libraries = [
-  "src/libraries/LCCFactoryLib.sol:LCCFactoryLinkedLib:0x...",   # update this address
-  "src/libraries/VTSCommitLib.sol:VTSCommitLib:0x...",            # update this address
-  "src/libraries/VTSPositionLib.sol:VTSPositionLib:0x...",      # update this address
-  "src/libraries/VTSSwapLib.sol:VTSSwapLib:0x...",
-  "src/libraries/VTSFeeLib.sol:VTSFeeLinkedLib:0x...",
+  "src/libraries/LCCFactoryLib.sol:LCCFactoryLinkedLib:0x...",             # validated by script
+  "src/libraries/LiquidityHubLinkedLib.sol:LiquidityHubLinkedLib:0x...",   # validated by script
+  "src/libraries/VTSCommitLib.sol:VTSCommitLib:0x...",                     # validated by script
+  "src/libraries/VTSPositionLib.sol:VTSPositionLib:0x...",                 # validated by script
+  "src/libraries/VTSSwapLib.sol:VTSSwapLib:0x...",                         # placeholder, not validated
+  "src/libraries/VTSFeeLib.sol:VTSFeeLinkedLib:0x...",                     # placeholder, not validated
 ]
 ```
 
-Only the first three entries are validated by the current script.
+Only the first four entries are validated by the current script.
 
 ## Scope
 
 Current validation covers:
 
 - `LCCFactoryLinkedLib`
+- `LiquidityHubLinkedLib`
 - `VTSCommitLib`
 - `VTSPositionLib`
 
