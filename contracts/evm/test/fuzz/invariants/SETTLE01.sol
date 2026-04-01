@@ -35,7 +35,8 @@ contract SETTLE01 {
     Currency internal underlyingCurrency0;
     Currency internal underlyingCurrency1;
 
-    uint256 internal attempts;
+    uint256 internal openAttempts;
+    uint256 internal closedAttempts;
     uint256 internal openChecks;
     uint256 internal closedChecks;
     bool internal openAllOk = true;
@@ -106,7 +107,7 @@ contract SETTLE01 {
         uint256 amount1
     ) external {
         unchecked {
-            attempts++;
+            openAttempts++;
         }
 
         _configureRfsOpen(commitmentMax0, commitmentMax1, settled0, settled1);
@@ -144,7 +145,7 @@ contract SETTLE01 {
         uint256 amount1
     ) external {
         unchecked {
-            attempts++;
+            closedAttempts++;
         }
 
         _configureRfsClosed(commitmentMax0, commitmentMax1);
@@ -174,10 +175,18 @@ contract SETTLE01 {
     /// @notice Property: non-seizing withdrawals revert while RFS is open, and succeed when RFS is closed.
     // forge-lint: disable-next-line(mixed-case-function)
     function echidna_settle_01_withdraw_reverts_when_rfs_open() external view returns (bool) {
-        if (openChecks == 0 || closedChecks == 0) {
-            return attempts < MAX_VACUOUS_ATTEMPTS;
+        if (openChecks == 0) {
+            return openAttempts < MAX_VACUOUS_ATTEMPTS;
         }
-        return openAllOk && closedAllOk;
+        return openAllOk;
+    }
+
+    // forge-lint: disable-next-line(mixed-case-function)
+    function echidna_settle_01_aux_withdraw_succeeds_when_rfs_closed() external view returns (bool) {
+        if (closedChecks == 0) {
+            return closedAttempts < MAX_VACUOUS_ATTEMPTS;
+        }
+        return closedAllOk;
     }
 
     function _eq(string memory a, string memory b) internal pure returns (bool) {

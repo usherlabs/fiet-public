@@ -18,7 +18,8 @@ contract MKT04_04A {
     MKT04Actor internal actor;
     BoundRegistryHarness internal registryHarness;
 
-    uint256 internal attempts;
+    uint256 internal mkt04Attempts;
+    uint256 internal mkt04aAttempts;
     uint256 internal mkt04Checks;
     uint256 internal mkt04aChecks;
     bool internal mkt04AllOk = true;
@@ -48,7 +49,7 @@ contract MKT04_04A {
     // forge-lint: disable-next-line(mixed-case-function)
     function action_mkt_04_factory_and_issuer_gating(uint96 amountRaw) external {
         unchecked {
-            attempts++;
+            mkt04Attempts++;
         }
         uint256 amount = uint256(amountRaw % 1e18) + 1;
         _seedHappyPath(amount);
@@ -73,7 +74,7 @@ contract MKT04_04A {
     // forge-lint: disable-next-line(mixed-case-function)
     function action_mkt_04a_bound_lifecycle(address who) external {
         unchecked {
-            attempts++;
+            mkt04aAttempts++;
         }
         if (who == address(0)) who = address(0xBEEF);
         registryHarness.forceReset(who);
@@ -89,11 +90,19 @@ contract MKT04_04A {
     }
 
     // forge-lint: disable-next-line(mixed-case-function)
-    function echidna_mkt_04_04a_hold() external view returns (bool) {
-        if (mkt04Checks == 0 || mkt04aChecks == 0) {
-            return attempts < MAX_VACUOUS_ATTEMPTS;
+    function echidna_mkt_04_factory_and_issuer_gating() external view returns (bool) {
+        if (mkt04Checks == 0) {
+            return mkt04Attempts < MAX_VACUOUS_ATTEMPTS;
         }
-        return mkt04AllOk && mkt04aAllOk;
+        return mkt04AllOk;
+    }
+
+    // forge-lint: disable-next-line(mixed-case-function)
+    function echidna_mkt_04a_bound_lifecycle() external view returns (bool) {
+        if (mkt04aChecks == 0) {
+            return mkt04aAttempts < MAX_VACUOUS_ATTEMPTS;
+        }
+        return mkt04aAllOk;
     }
 
     /// @dev No-liquidity callback for LiquidityHub issuer path.

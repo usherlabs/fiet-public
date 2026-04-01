@@ -17,9 +17,12 @@ contract LCC03 {
     MockLCCIngress internal lccErc20;
     MockLCCIngress internal lccNative;
 
-    bool internal checked;
-    bool internal lastOk;
-    uint256 internal attempts;
+    bool internal checkedSync;
+    bool internal lastSyncOk;
+    bool internal checkedRevert;
+    bool internal lastRevertOk;
+    uint256 internal syncAttempts;
+    uint256 internal revertAttempts;
     uint256 internal syncChecks;
     uint256 internal revertChecks;
 
@@ -34,10 +37,10 @@ contract LCC03 {
     // forge-lint: disable-next-line(mixed-case-function)
     function action_lcc03_no_active_sync(uint96 wrappedAmountRaw, bool useNative) external {
         unchecked {
-            attempts++;
+            syncAttempts++;
         }
-        checked = false;
-        lastOk = true;
+        checkedSync = false;
+        lastSyncOk = true;
         ingressHandler.setNestedSync(address(0), false);
         address lcc = useNative ? address(lccNative) : address(lccErc20);
         uint256 wrappedAmount = uint256(wrappedAmountRaw % 1e18);
@@ -47,36 +50,36 @@ contract LCC03 {
         uint256 beforeCalls = ingressHandler.calls();
         _prepare(lcc, wrappedAmount);
 
-        checked = true;
+        checkedSync = true;
         syncChecks++;
         (address gotLcc, uint256 gotAmount) = ingressHandler.lastCall();
-        lastOk = ingressHandler.calls() == beforeCalls + 1 && gotLcc == lcc && gotAmount == wrappedAmount;
+        lastSyncOk = ingressHandler.calls() == beforeCalls + 1 && gotLcc == lcc && gotAmount == wrappedAmount;
     }
 
     // forge-lint: disable-next-line(mixed-case-function)
     function action_lcc03_revert_on_currency_mismatch(address other) external {
         unchecked {
-            attempts++;
+            revertAttempts++;
         }
-        checked = false;
-        lastOk = true;
+        checkedRevert = false;
+        lastRevertOk = true;
         if (other == address(0) || other == address(lccErc20)) {
             other = address(0xDEAD);
         }
         poolManager.setExttload(MarketLiquidityRouterLib.CURRENCY_SLOT, bytes32(uint256(uint160(other))));
         bool reverted = _prepareCatch(address(lccErc20), 1);
-        checked = true;
+        checkedRevert = true;
         revertChecks++;
-        lastOk = reverted;
+        lastRevertOk = reverted;
     }
 
     // forge-lint: disable-next-line(mixed-case-function)
     function action_lcc03_revert_on_unpaid_transfer(uint96 syncedRaw, uint96 extraRaw) external {
         unchecked {
-            attempts++;
+            revertAttempts++;
         }
-        checked = false;
-        lastOk = true;
+        checkedRevert = false;
+        lastRevertOk = true;
 
         uint256 synced = uint256(syncedRaw % 1e18) + 10;
         uint256 extra = uint256(extraRaw % 1e17) + 1;
@@ -85,18 +88,18 @@ contract LCC03 {
         poolManager.setExttload(MarketLiquidityRouterLib.RESERVES_OF_SLOT, bytes32(synced));
 
         bool reverted = _prepareCatch(address(lccErc20), 1);
-        checked = true;
+        checkedRevert = true;
         revertChecks++;
-        lastOk = reverted;
+        lastRevertOk = reverted;
     }
 
     // forge-lint: disable-next-line(mixed-case-function)
     function action_lcc03_revert_on_invalid_snapshot(uint96 syncedRaw, uint96 balRaw) external {
         unchecked {
-            attempts++;
+            revertAttempts++;
         }
-        checked = false;
-        lastOk = true;
+        checkedRevert = false;
+        lastRevertOk = true;
 
         uint256 synced = uint256(syncedRaw % 1e18) + 2;
         uint256 bal = uint256(balRaw % (synced - 1)) + 1;
@@ -105,18 +108,18 @@ contract LCC03 {
         poolManager.setExttload(MarketLiquidityRouterLib.RESERVES_OF_SLOT, bytes32(synced));
 
         bool reverted = _prepareCatch(address(lccErc20), 1);
-        checked = true;
+        checkedRevert = true;
         revertChecks++;
-        lastOk = reverted;
+        lastRevertOk = reverted;
     }
 
     // forge-lint: disable-next-line(mixed-case-function)
     function action_lcc03_restore_sync_after_nested(bool nestedNative) external {
         unchecked {
-            attempts++;
+            syncAttempts++;
         }
-        checked = false;
-        lastOk = true;
+        checkedSync = false;
+        lastSyncOk = true;
 
         MockLCCIngress lcc = nestedNative ? lccNative : lccErc20;
         lcc.mint(address(poolManager), 25);
@@ -127,19 +130,27 @@ contract LCC03 {
         _prepare(address(lcc), 2);
         ingressHandler.setNestedSync(address(0), false);
 
-        checked = true;
+        checkedSync = true;
         syncChecks++;
         address restored = address(uint160(uint256(poolManager.extttloadCurrency())));
         uint256 reserves = poolManager.extttloadReserves();
-        lastOk = restored == address(lcc) && reserves == 25;
+        lastSyncOk = restored == address(lcc) && reserves == 25;
     }
 
     // forge-lint: disable-next-line(mixed-case-function)
-    function echidna_lcc_03_nested_ingress_windows_hold() external view returns (bool) {
-        if (syncChecks == 0 || revertChecks == 0) {
-            return attempts < MAX_VACUOUS_ATTEMPTS;
+    function echidna_lcc_03_sync_windows_hold() external view returns (bool) {
+        if (syncChecks == 0) {
+            return syncAttempts < MAX_VACUOUS_ATTEMPTS;
         }
-        return !checked || lastOk;
+        return !checkedSync || lastSyncOk;
+    }
+
+    // forge-lint: disable-next-line(mixed-case-function)
+    function echidna_lcc_03_revert_guards_hold() external view returns (bool) {
+        if (revertChecks == 0) {
+            return revertAttempts < MAX_VACUOUS_ATTEMPTS;
+        }
+        return !checkedRevert || lastRevertOk;
     }
 
     // forge-lint: disable-next-line(mixed-case-function)

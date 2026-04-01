@@ -17,7 +17,8 @@ contract MKT01_02 {
     ProxyHookMktHarness internal hook;
     PoolKey internal key;
 
-    uint256 internal attempts;
+    uint256 internal addAttempts;
+    uint256 internal writeAttempts;
     uint256 internal addChecks;
     uint256 internal writeChecks;
     bool internal addAllOk = true;
@@ -40,7 +41,7 @@ contract MKT01_02 {
         external
     {
         unchecked {
-            attempts++;
+            addAttempts++;
         }
         ModifyLiquidityParams memory p = ModifyLiquidityParams({
             tickLower: tickLower, tickUpper: tickUpper, liquidityDelta: liquidityDelta, salt: 0
@@ -58,7 +59,7 @@ contract MKT01_02 {
     // forge-lint: disable-next-line(mixed-case-function)
     function action_mkt_02_core_pool_key_write_once(address c0, address c1) external {
         unchecked {
-            attempts++;
+            writeAttempts++;
         }
         if (c0 == c1 || c0 == address(0) || c1 == address(0)) {
             c0 = address(0x100);
@@ -106,11 +107,19 @@ contract MKT01_02 {
     }
 
     // forge-lint: disable-next-line(mixed-case-function)
-    function echidna_mkt_01_02_guards_hold() external view returns (bool) {
-        if (addChecks == 0 || writeChecks == 0) {
-            return attempts < MAX_VACUOUS_ATTEMPTS;
+    function echidna_mkt_01_proxy_rejects_add_liquidity() external view returns (bool) {
+        if (addChecks == 0) {
+            return addAttempts < MAX_VACUOUS_ATTEMPTS;
         }
-        return addAllOk && writeAllOk;
+        return addAllOk;
+    }
+
+    // forge-lint: disable-next-line(mixed-case-function)
+    function echidna_mkt_02_core_pool_key_write_once() external view returns (bool) {
+        if (writeChecks == 0) {
+            return writeAttempts < MAX_VACUOUS_ATTEMPTS;
+        }
+        return writeAllOk;
     }
 
     function _selector(bytes memory data) internal pure returns (bytes4 sel) {

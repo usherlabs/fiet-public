@@ -4,7 +4,8 @@ pragma solidity ^0.8.26;
 /// @notice Echidna harness for MKT-03 and MKT-06 structural market ordering constraints.
 contract MKT03_06 {
     uint256 internal constant MAX_VACUOUS_ATTEMPTS = 14;
-    uint256 internal attempts;
+    uint256 internal uniqAttempts;
+    uint256 internal orderAttempts;
     uint256 internal uniqChecks;
     uint256 internal orderChecks;
     bool internal uniqAllOk = true;
@@ -15,7 +16,7 @@ contract MKT03_06 {
     // forge-lint: disable-next-line(mixed-case-function)
     function action_mkt_03_core_pool_unique(bytes32 corePoolId, address c0, address c1) external {
         unchecked {
-            attempts++;
+            uniqAttempts++;
         }
         if (c0 == c1 || c0 == address(0) || c1 == address(0)) {
             c0 = address(0x100);
@@ -31,7 +32,7 @@ contract MKT03_06 {
     // forge-lint: disable-next-line(mixed-case-function)
     function action_mkt_06_core_order_canonical(bytes32 corePoolId, address c0, address c1) external {
         unchecked {
-            attempts++;
+            orderAttempts++;
         }
         if (c0 == c1 || c0 == address(0) || c1 == address(0)) {
             c0 = address(0x1111);
@@ -46,11 +47,19 @@ contract MKT03_06 {
     }
 
     // forge-lint: disable-next-line(mixed-case-function)
-    function echidna_mkt_03_06_hold() external view returns (bool) {
-        if (uniqChecks == 0 || orderChecks == 0) {
-            return attempts < MAX_VACUOUS_ATTEMPTS;
+    function echidna_mkt_03_core_pool_unique() external view returns (bool) {
+        if (uniqChecks == 0) {
+            return uniqAttempts < MAX_VACUOUS_ATTEMPTS;
         }
-        return uniqAllOk && orderAllOk;
+        return uniqAllOk;
+    }
+
+    // forge-lint: disable-next-line(mixed-case-function)
+    function echidna_mkt_06_core_order_canonical() external view returns (bool) {
+        if (orderChecks == 0) {
+            return orderAttempts < MAX_VACUOUS_ATTEMPTS;
+        }
+        return orderAllOk;
     }
 
     function _canonicalPair(address c0, address c1) internal pure returns (address expected0, address expected1) {

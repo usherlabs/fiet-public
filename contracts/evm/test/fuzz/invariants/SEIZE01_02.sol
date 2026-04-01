@@ -29,7 +29,8 @@ contract SEIZE01_02 {
     bool internal lastOk01;
     bool internal checked02;
     bool internal lastOk02;
-    uint256 internal attempts;
+    uint256 internal seize01Attempts;
+    uint256 internal seize02Attempts;
     uint256 internal seize01Checks;
     uint256 internal seize02Checks;
 
@@ -64,7 +65,7 @@ contract SEIZE01_02 {
         uint96 threshold1
     ) external {
         unchecked {
-            attempts++;
+            seize01Attempts++;
         }
         checked01 = false;
         lastOk01 = true;
@@ -94,7 +95,7 @@ contract SEIZE01_02 {
         uint16 grace1
     ) external {
         unchecked {
-            attempts++;
+            seize01Attempts++;
         }
         checked01 = false;
         lastOk01 = true;
@@ -123,7 +124,7 @@ contract SEIZE01_02 {
         bool verifierActive
     ) external {
         unchecked {
-            attempts++;
+            seize02Attempts++;
         }
         checked02 = false;
         lastOk02 = true;
@@ -152,7 +153,7 @@ contract SEIZE01_02 {
     // forge-lint: disable-next-line(mixed-case-function)
     function action_seize_02_invalid_token_index_reverts(uint8 badTokenIndex) external {
         unchecked {
-            attempts++;
+            seize02Attempts++;
         }
         checked02 = false;
         lastOk02 = true;
@@ -177,7 +178,7 @@ contract SEIZE01_02 {
     // forge-lint: disable-next-line(mixed-case-function)
     function action_seize_02_closed_lane_reverts(uint8 settlementTokenIndex) external {
         unchecked {
-            attempts++;
+            seize02Attempts++;
         }
         checked02 = false;
         lastOk02 = true;
@@ -202,7 +203,7 @@ contract SEIZE01_02 {
     // forge-lint: disable-next-line(mixed-case-function)
     function echidna_seize_01_token_lane_scoped_and_aggregated() external view returns (bool) {
         if (seize01Checks == 0) {
-            return attempts < MAX_VACUOUS_ATTEMPTS;
+            return seize01Attempts < MAX_VACUOUS_ATTEMPTS;
         }
         return !checked01 || lastOk01;
     }
@@ -210,7 +211,7 @@ contract SEIZE01_02 {
     // forge-lint: disable-next-line(mixed-case-function)
     function echidna_seize_02_valid_verifier_required() external view returns (bool) {
         if (seize02Checks == 0) {
-            return attempts < MAX_VACUOUS_ATTEMPTS;
+            return seize02Attempts < MAX_VACUOUS_ATTEMPTS;
         }
         return !checked02 || lastOk02;
     }
