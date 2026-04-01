@@ -19,9 +19,10 @@ contract VTS03 {
 
     PoolId internal constant POOL_ID = PoolId.wrap(bytes32(uint256(0x5A03)));
 
-    uint256 internal attempts;
-    uint256 internal checks;
-    bool internal allOk = true;
+    uint256 internal segmentAttempts;
+    uint256 internal segmentChecks;
+    bool internal segmentAllOk = true;
+    uint256 internal flipAttempts;
 
     bool internal sZeroForOne;
     uint160 internal sSqrtCurrent;
@@ -66,14 +67,14 @@ contract VTS03 {
         uint256 inf1Raw
     ) external {
         unchecked {
-            attempts++;
+            segmentAttempts++;
         }
         // Cache/clamp inputs for deterministic price segment and liquidity.
         _cacheInputs(zeroForOne, sqrtCurrentRaw, sqrtTargetRaw, liquidityRaw, def0Raw, def1Raw, inf0Raw, inf1Raw);
         // Apply a single segment accrual and compare against expected deltas.
         bool ok = _applyAndCheck();
-        checks++;
-        allOk = allOk && ok;
+        segmentChecks++;
+        segmentAllOk = segmentAllOk && ok;
     }
 
     /// @notice Cross a tick and assert outside growth flips as `outside := global - outside`.
@@ -90,7 +91,7 @@ contract VTS03 {
         uint256 infOutside1
     ) external {
         unchecked {
-            attempts++;
+            flipAttempts++;
         }
         int24 tick = tickRaw;
         uint256 defOut0 = defGlobal0 == 0 ? 0 : defOutside0 % (defGlobal0 + 1);
@@ -115,15 +116,23 @@ contract VTS03 {
 
         checkedFlip = true;
         lastFlipOk = _flipMatchesExpected();
-        allOk = allOk && lastFlipOk;
     }
 
     // forge-lint: disable-next-line(mixed-case-function)
     function echidna_vts_03_segment_growth_accounting() external view returns (bool) {
-        if (checks == 0 || !checkedFlip) {
-            return attempts < MAX_VACUOUS_ATTEMPTS;
+        if (segmentChecks == 0) {
+            return segmentAttempts < MAX_VACUOUS_ATTEMPTS;
         }
-        return allOk && lastFlipOk;
+        return segmentAllOk;
+    }
+
+    // Auxiliary flip identity check retained in this harness so flip calls don't become unverified.
+    // forge-lint: disable-next-line(mixed-case-function)
+    function echidna_vts_03_aux_flip_identity() external view returns (bool) {
+        if (!checkedFlip) {
+            return flipAttempts < MAX_VACUOUS_ATTEMPTS;
+        }
+        return lastFlipOk;
     }
 
     // Keep a second trivial property to avoid rare Echidna instability with single-property targets.
