@@ -1317,6 +1317,49 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
         assertEq(rfsOpen, rfsOpenExpected, "rfsOpen should match calcRFS result");
     }
 
+    function test_onMMSettle_refreshesCheckpointFromFinalRfsState() public {
+        (uint256 tokenId, PositionId positionId,,) = _createCommittedPosition();
+        address advancer = liquiditySignal.mmState.advancer;
+
+        bytes memory signalBytes = abi.encode(liquiditySignal);
+        vm.mockCall(
+            address(signalManager),
+            abi.encodeWithSelector(
+                bytes4(keccak256("verifyLiquiditySignal(address,bytes,bool)")),
+                liquiditySignal.mmState.owner,
+                signalBytes,
+                true
+            ),
+            abi.encode(true, 10)
+        );
+        _mockLccPrices(1e18, 1e18);
+        _mockSignalUsd(0);
+
+        vm.prank(advancer);
+        unlockCaller.run(
+            address(vtsOrchestrator), abi.encodeWithSelector(VTSOrchestrator.checkpoint.selector, tokenId, 0, true)
+        );
+
+        RFSCheckpoint memory checkpointBefore = vtsOrchestrator.positionToCheckpoint(positionId);
+        assertTrue(checkpointBefore.openMask != 0, "checkpoint should start with at least one open RFS lane");
+
+        (uint256 cd0Before, uint256 cd1Before) = _commitmentDeficit(positionId);
+        _mmSettle(tokenId, 0, _negInt128Capped(cd0Before), _negInt128Capped(cd1Before));
+
+        (bool rfsOpenAfter, BalanceDelta rfsDeltaAfter) = vtsOrchestrator.calcRFS(positionId, false);
+        RFSCheckpoint memory checkpointAfter = vtsOrchestrator.positionToCheckpoint(positionId);
+        uint8 expectedOpenMask = _expectedOpenMask(rfsDeltaAfter);
+
+        assertEq(checkpointAfter.openMask, expectedOpenMask, "checkpoint openMask should match final RFS lanes");
+        assertEq(rfsOpenAfter, expectedOpenMask != 0, "final rfsOpen should match final RFS lanes");
+        if ((expectedOpenMask & 1) == 0) {
+            assertEq(checkpointAfter.openSince0, 0, "token0 openSince should clear when token0 RFS closes");
+        }
+        if ((expectedOpenMask & 2) == 0) {
+            assertEq(checkpointAfter.openSince1, 0, "token1 openSince should clear when token1 RFS closes");
+        }
+    }
+
     function test_checkpoint_withCommitment_validatesBacking() public {
         (uint256 tokenId,,,) = _createCommittedPosition();
         address advancer = liquiditySignal.mmState.advancer;
@@ -1669,6 +1712,11 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
         actions[1] = MMA.prepareTake(lccCurrency0, address(this), 0);
         actions[2] = MMA.prepareTake(lccCurrency1, address(this), 0);
         MMA.executeWithUnlock(positionManager, actions, block.timestamp + 3600);
+    }
+
+    function _expectedOpenMask(BalanceDelta delta) internal pure returns (uint8 openMask) {
+        if (delta.amount0() > 0) openMask |= 1;
+        if (delta.amount1() > 0) openMask |= 2;
     }
 }
 

@@ -124,6 +124,14 @@ contract VTSFeeLibHarness {
         );
     }
 
+    function getPoolFeesSharedEpoch(PoolId poolId) external view returns (uint256 epoch0, uint256 epoch1) {
+        return (s.poolAccounting[poolId].feesSharedEpoch.token0, s.poolAccounting[poolId].feesSharedEpoch.token1);
+    }
+
+    function getPositionFeesSharedEpoch(PositionId id) external view returns (uint256 epoch0, uint256 epoch1) {
+        return (s.positionAccounting[id].feesSharedEpoch.token0, s.positionAccounting[id].feesSharedEpoch.token1);
+    }
+
     // ============ Storage Setters (for test setup) ============
 
     /// @notice Sets up a pool with VTS configuration
@@ -197,5 +205,15 @@ contract VTSFeeLibHarness {
     function setPositionFeesSharedIndexLastX128(PositionId id, uint256 index0, uint256 index1) external {
         s.positionAccounting[id].feesSharedIndexLastX128.token0 = index0;
         s.positionAccounting[id].feesSharedIndexLastX128.token1 = index1;
+    }
+
+    function setPoolFeesSharedEpoch(PoolId poolId, uint256 epoch0, uint256 epoch1) external {
+        s.poolAccounting[poolId].feesSharedEpoch.token0 = epoch0;
+        s.poolAccounting[poolId].feesSharedEpoch.token1 = epoch1;
+    }
+
+    function setPositionFeesSharedEpoch(PositionId id, uint256 epoch0, uint256 epoch1) external {
+        s.positionAccounting[id].feesSharedEpoch.token0 = epoch0;
+        s.positionAccounting[id].feesSharedEpoch.token1 = epoch1;
     }
 }

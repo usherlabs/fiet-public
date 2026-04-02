@@ -80,6 +80,9 @@ abstract contract MarketVault is IMarketVault, ImmutableState, ImmutableMarketSt
     }
 
     function _onlyProtocolBounds() internal view {
+        // Trust is intentionally delegated to the MarketFactory bound namespace rather than to a narrower
+        // hard-coded caller set. That makes this a governance / integration boundary: if governance binds the
+        // wrong endpoint it can misuse vault liquidity, but unbound external callers still have no access.
         if (!marketFactory.bounds(msg.sender)) {
             revert Errors.InvalidSender();
         }

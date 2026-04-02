@@ -18,6 +18,9 @@ contract VRLSignalManager is Ownable, EIP712, IVRLSignalManager {
     using MarketMaker for MarketMaker.State;
     using ECDSA for bytes32;
 
+    event MMNonceSeeded(address indexed marketMaker, uint256 previousNonce, uint256 newNonce);
+    event SubmitAuthNonceSeeded(address indexed sender, uint256 previousNonce, uint256 newNonce);
+
     ISignalVerifier internal verifier;
 
     /**
@@ -37,6 +40,8 @@ contract VRLSignalManager is Ownable, EIP712, IVRLSignalManager {
      * Example: If VRL nonce is 5, MM A can submit nonce 5 even if MM B has already submitted
      * nonce 5, but MM A cannot submit nonce 4 if they've already submitted nonce 5.
      */
+    // Replacement deployments reset storage, so owner can seed continuity before re-registering a new handler.
+    // Seeders may only move these replay guards forwards; they can never lower an already-recorded nonce.
     mapping(address => uint256) public mmNonce;
     mapping(address => uint256) public submitAuthNonce;
     uint256 public signalExpiryInSeconds;
@@ -92,6 +97,30 @@ contract VRLSignalManager is Ownable, EIP712, IVRLSignalManager {
         uint256 _oldSignalExpiryInSeconds = signalExpiryInSeconds;
         signalExpiryInSeconds = _signalExpiryInSeconds;
         emit SignalExpiryInSecondsChanged(_oldSignalExpiryInSeconds, _signalExpiryInSeconds);
+    }
+
+    /// @notice Seed the minimum accepted MM nonce on a replacement deployment before re-registering the handler.
+    /// @dev Owner may only move the stored nonce forwards, preserving monotonic replay protection across redeploys.
+    function seedMMNonce(address marketMaker, uint256 minimumNonce) external onlyOwner {
+        uint256 previousNonce = mmNonce[marketMaker];
+        if (minimumNonce < previousNonce) {
+            revert Errors.InvalidNonce(minimumNonce, previousNonce);
+        }
+        if (minimumNonce == previousNonce) return;
+        mmNonce[marketMaker] = minimumNonce;
+        emit MMNonceSeeded(marketMaker, previousNonce, minimumNonce);
+    }
+
+    /// @notice Seed the next relayed authorisation nonce on a replacement deployment before re-registering.
+    /// @dev Owner may only move the stored nonce forwards, preserving monotonic replay protection across redeploys.
+    function seedSubmitAuthNonce(address sender, uint256 minimumNonce) external onlyOwner {
+        uint256 previousNonce = submitAuthNonce[sender];
+        if (minimumNonce < previousNonce) {
+            revert Errors.InvalidNonce(minimumNonce, previousNonce);
+        }
+        if (minimumNonce == previousNonce) return;
+        submitAuthNonce[sender] = minimumNonce;
+        emit SubmitAuthNonceSeeded(sender, previousNonce, minimumNonce);
     }
 
     function _assertSenderAuthorised(LiquiditySignal memory signal, address sender) internal pure {

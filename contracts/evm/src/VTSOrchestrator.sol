@@ -529,7 +529,11 @@ contract VTSOrchestrator is
     // --------------------------------------------------
 
     /// @notice Settle position growths before liquidity modifications
-    /// @dev Called by CoreHook to settle position growths before adding or removing liquidity.
+    /// @dev This entrypoint intentionally stays public while unpaused so growth crystallisation is permissionless:
+    ///      anyone may refresh fee / deficit / coverage accounting without gaining authority to add liquidity,
+    ///      remove liquidity, or swap on behalf of the owner.
+    ///      During pause we narrow the caller back to the canonical CoreHook for the pool so remove-liquidity flows
+    ///      can still preserve pre-pause attribution, while add-liquidity and swaps remain halted.
     ///      Only processes valid, active positions.
     /// @param positionId The position identifier
     function settlePositionGrowths(PositionId positionId) public {
@@ -537,7 +541,9 @@ contract VTSOrchestrator is
         if (isPositionValid(positionId, true)) {
             PoolId poolId = s.positions[positionId].poolId;
             if (s.isPaused || s.pools[poolId].isPaused) {
-                // During pause, allow growth-only settlement strictly from the canonical CoreHook for this pool.
+                // Pause keeps the settlement path available only for canonical remove-liquidity bookkeeping.
+                // This is intentional: growth must be settled against the pre-removal position even while all other
+                // mutation surfaces that expand risk (swaps, adds, arbitrary third-party refreshes) stay shut.
                 Pool memory pool = s.pools[poolId];
                 IMarketFactory factory =
                     liquidityHub.getFactory(Currency.unwrap(pool.currency0), Currency.unwrap(pool.currency1));

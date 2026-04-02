@@ -285,6 +285,56 @@ contract VRLSettlementObserverTest is Test {
         observer.verifySettlementProof(poolKey, 0, 0, settlementProof, true);
     }
 
+    function test_seedUsedProofHashes_preservesReplayProtectionAcrossReplacementDeployment() public {
+        address token = makeAddr("token");
+        address[] memory tokens = new address[](1);
+        tokens[0] = token;
+
+        vm.prank(owner);
+        observer.allowVerifierForTokens(0, tokens);
+
+        PoolKey memory poolKey = PoolKey({
+            currency0: Currency.wrap(token),
+            currency1: Currency.wrap(makeAddr("token1")),
+            fee: 3000,
+            tickSpacing: 60,
+            hooks: IHooks(address(0))
+        });
+
+        bytes memory settlementProof = "proof";
+        bytes32[] memory proofHashes = new bytes32[](1);
+        proofHashes[0] = EfficientHashLib.hash(settlementProof);
+
+        vm.prank(owner);
+        observer.seedUsedProofHashes(proofHashes);
+        assertTrue(observer.usedProofHashes(proofHashes[0]));
+
+        vm.expectRevert(abi.encodeWithSelector(Errors.InvalidProof.selector));
+        vm.prank(submitter);
+        observer.verifySettlementProof(poolKey, 0, 0, settlementProof, true);
+    }
+
+    function test_seedUsedProofHashes_isIdempotent() public {
+        bytes32[] memory proofHashes = new bytes32[](1);
+        proofHashes[0] = EfficientHashLib.hash(bytes("proof"));
+
+        vm.startPrank(owner);
+        observer.seedUsedProofHashes(proofHashes);
+        observer.seedUsedProofHashes(proofHashes);
+        vm.stopPrank();
+
+        assertTrue(observer.usedProofHashes(proofHashes[0]));
+    }
+
+    function test_seedUsedProofHashes_revertsForNonOwner() public {
+        bytes32[] memory proofHashes = new bytes32[](1);
+        proofHashes[0] = EfficientHashLib.hash(bytes("proof"));
+
+        vm.prank(nonOwner);
+        vm.expectRevert(abi.encodeWithSelector(Ownable.OwnableUnauthorizedAccount.selector, nonOwner));
+        observer.seedUsedProofHashes(proofHashes);
+    }
+
     function test_VerifySettlementProof_ValidProof_DoesNotRevert_WhenRevertOnInvalidTrue() public {
         // This specifically targets the `revertOnInvalid && !isProofValid` gate: valid proofs must not revert,
         // even when revertOnInvalid=true.

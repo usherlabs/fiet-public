@@ -724,6 +724,9 @@ library VTSPositionLib {
         {
             PoolAccounting storage paPool = s.poolAccounting[p];
 
+            // CSI epochs allow a fully-spent contribution set to reset cleanly when fresh slashes are minted later.
+            VTSFeeLib._beginFeesSharedEpochIfNeeded(paPool, feeTokenIndex);
+
             // CSI: Sync remaining shares BEFORE minting new shares (critical ordering)
             VTSFeeLib._syncFeesSharedRemainingForToken(pa, paPool, feeTokenIndex);
 
@@ -1927,7 +1930,9 @@ library VTSPositionLib {
         // PHASE 5: Touch ups
         // ========================================
 
-        // Mark RFS checkpoint for the position
+        // Recompute from final stored settlement state so the returned RFS view and persisted checkpoint do not lag
+        // one settlement behind when `_updateSettlement` or shortfall rollback changed the lane-open state.
+        (result.rfsOpen, rfsDelta) = getRFS(s, p.positionId);
         CheckpointLibrary.markCheckpoint(s, p.positionId, _rfsOpenMask(rfsDelta));
     }
 

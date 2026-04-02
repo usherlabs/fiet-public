@@ -11,9 +11,15 @@ import {Errors} from "./libraries/Errors.sol";
 import {EfficientHashLib} from "solady/utils/EfficientHashLib.sol";
 
 contract VRLSettlementObserver is Ownable, IVRLSettlementObserver {
+    event SettlementProofHashSeeded(bytes32 indexed proofHash);
+
     mapping(uint32 => address) public verifiers;
     uint32 public nextVerifierIndex;
+    // Allowlisting is token-scoped by design: the proof attests that the specific settlement token lane for this pool
+    // is being advanced. Reviewers should not read this as "market-wide verifier selection" or as a weak-verifier mix.
     mapping(address => mapping(uint32 => bool)) public allowedVerifiersForToken;
+    // Replacement deployments reset storage, so owner can pre-seed consumed proof hashes before re-registering
+    // a new observer and reopening settlement-proof acceptance.
     mapping(bytes32 => bool) public usedProofHashes;
     address public immutable submitter;
 
@@ -71,6 +77,17 @@ contract VRLSettlementObserver is Ownable, IVRLSettlementObserver {
         }
     }
 
+    /// @notice Seed proof hashes consumed by a previous observer deployment before re-registering this observer.
+    /// @dev Already-seeded hashes are ignored so the migration step remains idempotent.
+    function seedUsedProofHashes(bytes32[] calldata proofHashes) external onlyOwner {
+        for (uint256 i = 0; i < proofHashes.length; i++) {
+            bytes32 proofHash = proofHashes[i];
+            if (usedProofHashes[proofHash]) continue;
+            usedProofHashes[proofHash] = true;
+            emit SettlementProofHashSeeded(proofHash);
+        }
+    }
+
     /**
      * @dev This function is used to verify the settlement proof and return the grace period extension
      * @param poolKey The pool key of the pool to verify the settlement proof for
@@ -101,6 +118,7 @@ contract VRLSettlementObserver is Ownable, IVRLSettlementObserver {
             revert Errors.InvalidVerifier();
         }
 
+        // Verifier permissioning is keyed to the token being settled because grace extension is lane-specific.
         if (!allowedVerifiersForToken[token][verifierIndex]) {
             revert Errors.InvalidVerifier();
         }
@@ -111,7 +129,8 @@ contract VRLSettlementObserver is Ownable, IVRLSettlementObserver {
             revert Errors.InvalidProof();
         }
 
-        // Verify the settlement proof
+        // The verifier only attests the settlement proof for `(poolId, tokenIndex)`.
+        // Grace extension sizing remains protocol policy in `CheckpointLibrary` / `TokenConfiguration`.
         ISettlementVerifier verifier = ISettlementVerifier(verifierAddress);
         isProofValid = verifier.verifySettlementProof(settlementProof, abi.encode(poolId, tokenIndex));
 

@@ -144,10 +144,13 @@ library CheckpointLibrary {
         }
         MarketVTSConfiguration memory vtsConfiguration = s.pools[poolKey.toId()].vtsConfig;
 
-        // verify the settlement proof and get the grace period extension
+        // Proof verification is token-lane scoped: the verifier proves settlement for the lane being extended, not a
+        // broader market-wide claim. The verifier authorises "this lane is settling"; protocol configuration still
+        // decides how much grace to add, so verifier output cannot unilaterally widen the extension window.
         settlementObserver.verifySettlementProof(poolKey, settlementTokenIndex, verifierIndex, settlementProof, true);
 
-        // extend the grace period for the position
+        // Extension magnitude is capped by protocol policy from TokenConfiguration. If future designs want verifier-
+        // specific sizing, that should be introduced as a bounded suggestion layered on top of these caps.
         TokenConfiguration memory tokenConfiguration =
             settlementTokenIndex == 0 ? vtsConfiguration.token0 : vtsConfiguration.token1;
         bool tokenLaneOpen = settlementTokenIndex == 0

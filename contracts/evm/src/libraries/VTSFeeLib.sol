@@ -73,14 +73,9 @@ library VTSFeeLib {
         if (bonus > potAvail) bonus = potAvail;
         if (bonus == 0) return false;
 
-        // CSI: Advance spend index (spend down the pot across all remaining contribution shares).
+        // CSI: Update the cumulative remaining-share factor for this epoch.
         // Note: Under consistent accounting, total remaining shares == current pot (pre-spend).
-        if (pot > 0) {
-            uint256 deltaIndex = FullMath.mulDiv(bonus, FixedPoint128.Q128, pot);
-            uint256 currentIndex = paPool.feesSharedSpendIndexX128.get(feeTokenIndex);
-            // The spend index is a accumulator tracking how much of the pot, comprised of all positions' feesShared, has been spent.
-            paPool.feesSharedSpendIndexX128.set(feeTokenIndex, currentIndex + deltaIndex);
-        }
+        if (pot > 0) _advanceFeesSharedFactor(paPool, feeTokenIndex, pot, bonus);
 
         // Deduct from pot (accounting)
         paPool.protocolFeeAccrued.set(feeTokenIndex, pot - bonus);
@@ -116,7 +111,7 @@ library VTSFeeLib {
     // --------------------------------------------------
 
     /// @dev Sync a position's remaining feesShared (self-contribution still embedded in the pot)
-    ///      against the pool spend index.
+    ///      against the pool remaining-share factor for the current spend epoch.
     /// @notice Must be called BEFORE incrementing feesShared (slash) or reading selfRemaining (bonus)
     /// @param pa The position accounting storage reference
     /// @param paPool The pool accounting storage reference
@@ -126,22 +121,91 @@ library VTSFeeLib {
         PoolAccounting storage paPool,
         uint8 tokenIndex
     ) internal {
-        uint256 indexNow = paPool.feesSharedSpendIndexX128.get(tokenIndex);
-        uint256 indexLast = pa.feesSharedIndexLastX128.get(tokenIndex);
+        uint256 epochNow = _currentFeesSharedEpoch(paPool, tokenIndex);
+        if (epochNow == 0) return;
 
-        // Always checkpoint index (even if no consumption to apply)
-        if (indexNow != indexLast) {
-            pa.feesSharedIndexLastX128.set(tokenIndex, indexNow);
+        uint256 epochLast = pa.feesSharedEpoch.get(tokenIndex);
+        uint256 indexNow = paPool.feesSharedSpendIndexX128.get(tokenIndex);
+
+        // Legacy positions from pre-epoch storage are treated as belonging to epoch 1 so outstanding shares remain
+        // valid after this upgrade. Later epoch changes only happen after a full spend-down, so stale shares are 0.
+        if (epochLast == 0 && epochNow == 1) {
+            epochLast = 1;
         }
 
-        uint256 deltaIndex = indexNow - indexLast;
-        if (deltaIndex > 0) {
-            uint256 sharesRemaining = pa.feesShared.get(tokenIndex);
-            uint256 spent = FullMath.mulDiv(sharesRemaining, deltaIndex, FixedPoint128.Q128);
-            if (spent > 0) {
-                pa.feesShared.set(tokenIndex, spent >= sharesRemaining ? 0 : (sharesRemaining - spent));
+        if (epochLast != epochNow) {
+            if (pa.feesShared.get(tokenIndex) != 0) {
+                pa.feesShared.set(tokenIndex, 0);
+            }
+            pa.feesSharedEpoch.set(tokenIndex, epochNow);
+            pa.feesSharedIndexLastX128.set(tokenIndex, indexNow);
+            return;
+        }
+
+        uint256 indexLast = pa.feesSharedIndexLastX128.get(tokenIndex);
+        if (indexNow == indexLast) return;
+
+        uint256 sharesRemaining = pa.feesShared.get(tokenIndex);
+        if (sharesRemaining > 0) {
+            uint256 updatedShares;
+            if (indexLast == 0) {
+                // No spend had been realised against this position in the current epoch yet. A zero pool factor is still
+                // the identity state until the first bonus allocation stores a non-zero remaining-share factor.
+                updatedShares =
+                    indexNow == 0 ? sharesRemaining : FullMath.mulDiv(sharesRemaining, indexNow, FixedPoint128.Q128);
+            } else {
+                updatedShares = indexNow == 0 ? 0 : FullMath.mulDiv(sharesRemaining, indexNow, indexLast);
+            }
+
+            if (updatedShares != sharesRemaining) {
+                pa.feesShared.set(tokenIndex, updatedShares);
             }
         }
+
+        pa.feesSharedEpoch.set(tokenIndex, epochNow);
+        pa.feesSharedIndexLastX128.set(tokenIndex, indexNow);
+    }
+
+    function _currentFeesSharedEpoch(PoolAccounting storage paPool, uint8 tokenIndex)
+        private
+        view
+        returns (uint256 epoch)
+    {
+        epoch = paPool.feesSharedEpoch.get(tokenIndex);
+        if (epoch == 0) {
+            uint256 factor = paPool.feesSharedSpendIndexX128.get(tokenIndex);
+            uint256 protocolPot = paPool.protocolFeeAccrued.get(tokenIndex);
+            if (factor != 0 || protocolPot != 0) {
+                return 1;
+            }
+        }
+    }
+
+    function _beginFeesSharedEpochIfNeeded(PoolAccounting storage paPool, uint8 tokenIndex) internal {
+        uint256 epoch = paPool.feesSharedEpoch.get(tokenIndex);
+        if (epoch == 0) {
+            paPool.feesSharedEpoch.set(tokenIndex, 1);
+            return;
+        }
+
+        uint256 factor = paPool.feesSharedSpendIndexX128.get(tokenIndex);
+        uint256 protocolPot = paPool.protocolFeeAccrued.get(tokenIndex);
+        if (factor == 0 && protocolPot == 0) {
+            paPool.feesSharedEpoch.set(tokenIndex, epoch + 1);
+        }
+    }
+
+    function _advanceFeesSharedFactor(PoolAccounting storage paPool, uint8 tokenIndex, uint256 pot, uint256 bonus)
+        private
+    {
+        if (paPool.feesSharedEpoch.get(tokenIndex) == 0) {
+            paPool.feesSharedEpoch.set(tokenIndex, 1);
+        }
+
+        uint256 currentFactor = paPool.feesSharedSpendIndexX128.get(tokenIndex);
+        uint256 factorBase = currentFactor == 0 ? FixedPoint128.Q128 : currentFactor;
+        uint256 nextFactor = FullMath.mulDivRoundingUp(factorBase, pot - bonus, pot);
+        paPool.feesSharedSpendIndexX128.set(tokenIndex, nextFactor);
     }
 
     // --------------------------------------------------

@@ -100,8 +100,9 @@ contract CoreHook is BaseHook, ImmutableMarketState, ImmutableVTSState, ICoreHoo
         ModifyLiquidityParams calldata params,
         bytes calldata
     ) internal override returns (bytes4) {
-        // Always an existing position; settle growths against pre-modification liquidity
-        // so pre-pause accruals cannot be attributed to post-removal liquidity.
+        // Removal must settle growths against pre-modification liquidity first so already-earned accrual is not
+        // reweighted onto the smaller post-removal position. This still applies during pause: remove-liquidity stays
+        // available, but only through the canonical hook path that VTSOrchestrator accepts while paused.
         vtsOrchestrator.settlePositionGrowths(PositionLibrary.generateId(sender, params));
         return this.beforeRemoveLiquidity.selector;
     }
@@ -192,6 +193,9 @@ contract CoreHook is BaseHook, ImmutableMarketState, ImmutableVTSState, ICoreHoo
         bytes calldata hookData
     ) internal virtual override returns (bytes4, BalanceDelta) {
         if (_isPoolOrGlobalPaused(key)) {
+            // When paused, `_beforeRemoveLiquidity` already settled growths through the canonical hook path.
+            // We intentionally skip post-remove VTS mutation here so pause remains an unwind-only mode rather than
+            // reopening full position processing.
             return (this.afterRemoveLiquidity.selector, BalanceDelta.wrap(0));
         }
 
