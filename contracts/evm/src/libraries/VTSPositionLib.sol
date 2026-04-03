@@ -78,16 +78,6 @@ library VTSPositionLib {
         bool isInflow;
     }
 
-    /// @dev Internal struct to keep fee-burn helper signatures below stack-too-deep thresholds.
-    struct FeesBurnParams {
-        PoolId poolId;
-        uint8 deficitTokenIndex;
-        uint8 feeTokenIndex;
-        uint256 burnBase;
-        uint128 positionLiquidity;
-        uint256 outflowFloor;
-    }
-
     // Maximum positive magnitude representable in int128
     uint256 internal constant INT128_MAX_U = uint256(type(uint128).max) >> 1;
 
@@ -592,171 +582,6 @@ library VTSPositionLib {
         }
     }
 
-    /// @notice Calculate fees and checkpoint snapshots for coverage burn
-    /// @dev Extracted to reduce stack depth in _applyCoverageBurn
-    /// @param s The central VTS storage
-    /// @param poolManager The pool manager contract
-    /// @param id The position ID
-    /// @param params The packed fee-burn parameters
-    /// @return feesBurn The calculated fees burn amount
-    /// @return consumedBurnBase The portion of burn base consumed in the current eligible window
-    /// @return consumedFees The fee entitlement consumed by that outflow share before applying fee-share bps
-    function _calculateFeesBurn(
-        VTSStorage storage s,
-        IPoolManager poolManager,
-        PositionId id,
-        FeesBurnParams memory params
-    ) private returns (uint256 feesBurn, uint256 consumedBurnBase, uint256 consumedFees) {
-        PositionAccounting storage pa = s.positionAccounting[id];
-        uint256 fees;
-        uint256 fg;
-
-        // Scoped block: Read fee growth and calculate fees
-        {
-            Position memory pos = s.positions[id];
-            (uint256 fg0, uint256 fg1) =
-                StateLibrary.getFeeGrowthInside(poolManager, params.poolId, pos.tickLower, pos.tickUpper);
-            fg = params.feeTokenIndex == 0 ? fg0 : fg1;
-
-            uint256 lastFeeGrowth = pa.feeGrowthInsideLast.get(params.feeTokenIndex);
-            if (params.positionLiquidity > 0 && fg > lastFeeGrowth) {
-                fees = FullMath.mulDiv(fg - lastFeeGrowth, uint256(params.positionLiquidity), FixedPoint128.Q128);
-            }
-        }
-
-        // Read outflow window (deficit token) since last burn checkpoint.
-        // IMPORTANT:
-        // - `fees` are on `feeTokenIndex` (input/counterparty token)
-        // - `burnBase` and `ofDelta` are on `tokenIndex` (deficit/output token)
-        // We must NOT checkpoint the outflow window to `cf` for partial exercises; otherwise future
-        // coverage exercises against the same historical outflows would see `ofDelta == 0` and burn nothing.
-        //
-        // Instead, we advance `outflowsAtFeeSnap` by the amount of outflows actually "consumed" by this burn
-        // (i.e. exercised deficit, capped by the current `ofDelta`), and only when a non-zero burn occurs.
-        uint256 cf = pa.cumulativeOutflows.get(params.deficitTokenIndex);
-        uint256 snap = pa.outflowsAtFeeSnap.get(params.deficitTokenIndex);
-        // For banked residual burn, only windows newer than outflowFloor are eligible.
-        if (params.outflowFloor > snap) {
-            snap = params.outflowFloor;
-        }
-        uint256 ofDelta = cf >= snap ? (cf - snap) : 0; // outflows since effective burn checkpoint.
-
-        if (fees == 0 || ofDelta == 0) {
-            return (0, 0, 0);
-        }
-
-        return _finaliseFeesBurn(s, pa, params, fees, ofDelta, snap);
-    }
-
-    /// @dev Finalise fees burn maths and update outflow checkpoints for the consumed window share.
-    function _finaliseFeesBurn(
-        VTSStorage storage s,
-        PositionAccounting storage pa,
-        FeesBurnParams memory params,
-        uint256 fees,
-        uint256 ofDelta,
-        uint256 snap
-    ) private returns (uint256, uint256, uint256) {
-        uint256 bps = s.pools[params.poolId].vtsConfig.coverageFeeShare;
-        if (bps == 0) {
-            return (0, 0, 0);
-        }
-        // Clamp to 100% to make behaviour explicit and avoid redundant runtime clamps later.
-        if (bps > LiquidityUtils.BPS_DENOMINATOR) {
-            bps = LiquidityUtils.BPS_DENOMINATOR;
-        }
-
-        // Never allow the exercised share to exceed 100% of the current outflow window.
-        uint256 consumedBurnBase = params.burnBase <= ofDelta ? params.burnBase : ofDelta;
-
-        // Consume fee entitlement proportional to the exercised outflow share, then apply fee-share bps.
-        uint256 consumedFees = FullMath.mulDiv(fees, consumedBurnBase, ofDelta);
-        uint256 feesBurn = FullMath.mulDiv(consumedFees, bps, LiquidityUtils.BPS_DENOMINATOR);
-
-        // Only advance burn checkpoints if a non-zero burn is actually applied.
-        // - Fee growth baseline is advanced later via `lastFeeGrowthBefore + growthInc` in _applyBurnBase.
-        // - Outflow snapshot is advanced here by the exercised outflow share to support repeated exercises.
-        if (feesBurn > 0) {
-            // This says: "we have just exercised consumedBurnBase worth of the remaining outflow window, so
-            // reduce the remaining window by that amount".
-            pa.outflowsAtFeeSnap.set(params.deficitTokenIndex, snap + consumedBurnBase);
-        }
-
-        return (feesBurn, consumedBurnBase, consumedFees);
-    }
-
-    /// @notice Apply a precomputed burn base for a position and return the consumed outflow share
-    function _applyBurnBase(
-        VTSStorage storage s,
-        IPoolManager poolManager,
-        PositionId id,
-        PoolId p,
-        uint8 tokenIndex,
-        uint256 burnBase,
-        uint128 positionLiquidity,
-        uint256 outflowFloor
-    ) private returns (uint256 consumedBurnBase) {
-        if (burnBase == 0) return 0;
-
-        PositionAccounting storage pa = s.positionAccounting[id];
-        uint8 feeTokenIndex = tokenIndex == 0 ? 1 : 0; // Fee token is opposite of deficit token
-        uint256 feesBurn;
-        uint256 consumedFees;
-        (feesBurn, consumedBurnBase, consumedFees) = _calculateFeesBurnForApply(
-            s, poolManager, id, p, tokenIndex, feeTokenIndex, burnBase, positionLiquidity, outflowFloor
-        );
-
-        if (feesBurn == 0) return 0;
-
-        // Advance fee growth baseline by the full consumed fee entitlement for this exercised outflow share.
-        // This keeps remaining fee entitlement aligned with the remaining outflow window across partial burns.
-        // Carry remainder across burns so floor(consumedFees * Q128 / L) does not lose dust per event.
-        if (positionLiquidity > 0) {
-            uint256 L = uint256(positionLiquidity);
-            uint256 carryIn = pa.feeBurnGrowthRemainder.get(feeTokenIndex);
-            (uint256 growthInc, uint256 newCarry) =
-                LiquidityUtils.feeBurnGrowthIncWithRemainder(consumedFees, L, carryIn);
-            pa.feeBurnGrowthRemainder.set(feeTokenIndex, newCarry);
-            pa.feeGrowthInsideLast.set(feeTokenIndex, pa.feeGrowthInsideLast.get(feeTokenIndex) + growthInc);
-        }
-
-        // Update accounting in scoped block (for the fee token)
-        {
-            PoolAccounting storage paPool = s.poolAccounting[p];
-
-            // Prepare CSI state before minting new shares so self-exclusion only applies to the pre-existing pot.
-            VTSFeeLinkedLib.beforeFeeShareMint(pa, paPool, feeTokenIndex);
-
-            paPool.protocolFeeAccrued.set(feeTokenIndex, paPool.protocolFeeAccrued.get(feeTokenIndex) + feesBurn);
-            pa.feesShared.set(feeTokenIndex, pa.feesShared.get(feeTokenIndex) + feesBurn);
-
-            pa.pendingFeeAdj.set(feeTokenIndex, pa.pendingFeeAdj.get(feeTokenIndex) + feesBurn.toInt256());
-        }
-    }
-
-    /// @dev Keep `_applyBurnBase` below stack-too-deep threshold for non-via-ir builds.
-    function _calculateFeesBurnForApply(
-        VTSStorage storage s,
-        IPoolManager poolManager,
-        PositionId id,
-        PoolId p,
-        uint8 tokenIndex,
-        uint8 feeTokenIndex,
-        uint256 burnBase,
-        uint128 positionLiquidity,
-        uint256 outflowFloor
-    ) private returns (uint256 feesBurn, uint256 consumedBurnBase, uint256 consumedFees) {
-        FeesBurnParams memory params = FeesBurnParams({
-            poolId: p,
-            deficitTokenIndex: tokenIndex,
-            feeTokenIndex: feeTokenIndex,
-            burnBase: burnBase,
-            positionLiquidity: positionLiquidity,
-            outflowFloor: outflowFloor
-        });
-        return _calculateFeesBurn(s, poolManager, id, params);
-    }
-
     /// @notice Apply banked residual-derived DICE burn against later outflow windows only
     function _applyBankedResidualBurn(
         VTSStorage storage s,
@@ -771,8 +596,9 @@ library VTSPositionLib {
         if (pendingBurnBase == 0) return;
 
         uint256 outflowFloor = pa.pendingResidualBurnOutflowsFloor.get(tokenIndex);
-        uint256 consumedBurnBase =
-            _applyBurnBase(s, poolManager, id, p, tokenIndex, pendingBurnBase, positionLiquidity, outflowFloor);
+        uint256 consumedBurnBase = VTSFeeLinkedLib.applyBurnBase(
+            s, poolManager, id, p, tokenIndex, pendingBurnBase, positionLiquidity, outflowFloor
+        );
         if (consumedBurnBase > 0) {
             pa.pendingResidualBurnBase.set(tokenIndex, pendingBurnBase - consumedBurnBase);
             if (pendingBurnBase == consumedBurnBase) {
@@ -824,7 +650,7 @@ library VTSPositionLib {
             if (burnBase == 0) return;
         }
 
-        _applyBurnBase(s, poolManager, id, p, tokenIndex, burnBase, positionLiquidity, 0);
+        VTSFeeLinkedLib.applyBurnBase(s, poolManager, id, p, tokenIndex, burnBase, positionLiquidity, 0);
     }
 
     /// @notice Settle coverage for a single token using DICE accounting
@@ -2192,7 +2018,11 @@ library VTSPositionLib {
             if (cfg.token0.baseVTSRate > e0bps) e0bps = cfg.token0.baseVTSRate;
             if (cfg.token1.baseVTSRate > e1bps) e1bps = cfg.token1.baseVTSRate;
 
-            // 2) Determine a portion of the seizure exposure proportional to settled / RfS amount
+            // 2) Determine a portion of the seizure exposure proportional to settled / RfS amount.
+            // Protocol design note: once any currently-open lane has aged past grace, the position becomes seizable.
+            // Seizure reward is then sized against the still-open position exposure, so settlement on either positive-RFS
+            // lane can contribute to the seized amount. Grace is the trigger for seizure rights, not a per-lane cap on
+            // which settlement currency may count once seizure is live.
             uint256 p0bps = LiquidityUtils.settleOfRfsBps(s0, r0);
             uint256 p1bps = LiquidityUtils.settleOfRfsBps(s1, r1);
 

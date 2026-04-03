@@ -1,0 +1,39 @@
+Early-return on paused remove-liquidity in CoreHook causes stale VTS state and misallocation of fee-pot bonuses
+
+When the market is paused, CoreHook skips VTS position processing on remove-liquidity, leaving VTS state stale. Coverage indices can advance during the pause, and upon unpause the next add-liquidity realises exposure using the stale settled baseline, allocating outsized fee-pot bonuses to the attacker and diluting other LPs’ yields.
+
+During pause, CoreHook._afterRemoveLiquidity returns early and does not call VTSOrchestrator.processPosition. As a result, VTSPositionLib._touchExistingDecrease is never executed, so the position’s commitment maxima, settled amounts, and active flag are not reconciled with the actual Uniswap position after liquidity is removed. Meanwhile, coverage-per-settled (CISE) indices can continue to advance via MarketFactory.useMarketLiquidity calling VTSOrchestrator.incrementCoverage. Additionally, calcRFS(PositionId) remains callable and internally settles growths using VTSPositionLib.settlePositionGrowths, which can realise exposure even during pause. When the market unpauses, the next add-liquidity touch runs settlePositionGrowths and realises ciseExposureSinceLastMod based on the stale settled baseline. VTSFeeLib._processPositionFees then allocates fee-pot bonuses proportional to this inflated exposure and materialises payout, causing a misallocation of fees that dilutes other LPs’ shares.
+
+Code Suggestions:
+
+CoreHook.sol
+
+if (_isPoolOrGlobalPaused(key)) {
+ 
+
+            // When paused, `_beforeRemoveLiquidity` already settled growths through the canonical hook path.
+197
+
+198
+
+199
+
+ 
+
+            // TODO(security): Invoke a paused-only downward reconciliation on VTS (e.g., reconcileAfterPausedRemove)
+ 
+
+            // to clamp settled/commitment maxima and update active status from live Uniswap liquidity before returning.
+ 
+
+            // This prevents stale settled-based exposure and fee misallocation during pause windows.
+200
+
+201
+
+ 
+
+            // We intentionally skip post-remove VTS mutation here so pause remains an unwind-only mode rather than
+ 
+
+            // reopening full position processing.

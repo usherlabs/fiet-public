@@ -114,17 +114,17 @@ contract LiquidityCommitmentCertificate is ERC20, ILCC {
      * @return marketDerived The market-derived balance
      */
     function balancesOf(address account) public view virtual returns (uint256 wrapped, uint256 marketDerived) {
-        // Handle protocol addresses: they don't accumulate balance buckets but may hold ERC20 balance
-        // If balance buckets are 0 but ERC20 balance exists, treat all as wrapped balance
-
-        // Important for settlement semantics: external queue settlement burns market-derived only.
-        // Therefore exempt/bucketless holders can have nonzero ERC20 balance yet remain not currently
-        // serviceable on external processSettlementFor() until bucket state is reconciled.
+        // Only bucket-exempt protocol endpoints are allowed to hold ERC20 balance without bucket accounting.
+        // Bucket-tracked holders must keep `wrappedBalances + marketDerivedBalances` in sync with ERC20 balance;
+        // otherwise unwrap/settlement can misclassify an unbacked holder as directly wrapped liquidity.
         uint256 balanceSum = wrappedBalances[account] + marketDerivedBalances[account];
         uint256 fullBalance = balanceOf(account);
-        if ((balanceSum == 0 && fullBalance > 0) || Bounds.isExempt(ILiquidityHub(hub).boundLevel(factory, account))) {
+        if (Bounds.isExempt(ILiquidityHub(hub).boundLevel(factory, account))) {
             // Bucket-exempt protocol address holding tokens: treat all balance as wrapped
             return (fullBalance, 0);
+        }
+        if (balanceSum == 0 && fullBalance > 0) {
+            revert Errors.InvalidBucketState(account, fullBalance);
         }
         return (wrappedBalances[account], marketDerivedBalances[account]);
     }

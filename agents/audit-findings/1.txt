@@ -1,0 +1,201 @@
+Incompatible CSI index reinterpretation without migration in VTSFeeLib upgrade causes unfair fee allocation and self-bonus recapture
+
+The PR changes CSI accounting from an additive spent index to a multiplicative remaining-share factor but reuses existing storage without migration. On state-preserving upgrades, legacy indices are misinterpreted, understating or overstating positions’ selfRemaining shares, enabling positions to claim bonuses from pots that still include their own slashed contributions and distorting future allocations.
+
+Pre-PR, feesSharedSpendIndexX128 and feesSharedIndexLastX128 stored an additive “spent-per-share” accumulator; positions burned remaining self-shares by subtracting sharesRemaining * (indexNow - indexLast) / Q128. The PR redefines these fields to a multiplicative “remaining-share factor” and introduces feesSharedEpoch, but does not migrate legacy values. In _syncFeesSharedRemainingForToken, epochLast is coerced to 1 (to bypass epoch mismatch), and indexNow/indexLast are applied as multiplicative factors even though they still hold old additive values. This mis-scales selfRemaining: for indexLast==0, a legacy 0.2*Q128 (20% spent) is treated as 20% remaining; when both indices are nonzero, shares can be incorrectly increased via indexNow/indexLast > 1. _advanceFeesSharedFactor also uses the old additive index as factorBase, anchoring the new epoch’s factor to the wrong baseline and propagating distortion. Because bonus eligibility excludes a position’s own contribution via potAvail = pot - selfRemaining, understated selfRemaining lets a position reclaim from a pot that still embeds its own slashed contributions. VTSFeeLinkedLib.beforeFeeShareMint is called before increasing feesShared and protocolFeeAccrued, ensuring the first post-upgrade sync applies the new math to legacy values. This yields unfair fee payouts (draining slashedPot) and persistent misallocation after upgrade.
+
+Code Suggestions:
+In VTSFeeLib,
+
+
+        epoch = paPool.feesSharedEpoch.get(tokenIndex);
+ 
+
+        if (epoch == 0) {
+176
+
+ 
+
+            return 0;
+ 
+
+ 
+
+ 
+
+ 
+
+177
+
+178
+
+179
+
+180
+
+181
+
+182
+
+183
+
+ 
+
+        }
+ 
+
+    }
+ 
+
+ 
+
+    function _beginFeesSharedEpochIfNeeded(PoolAccounting storage paPool, uint8 tokenIndex) internal {
+ 
+
+        uint256 epoch = paPool.feesSharedEpoch.get(tokenIndex);
+ 
+
+        if (epoch == 0) {
+ 
+
+            paPool.feesSharedEpoch.set(tokenIndex, 1);
+184
+
+ 
+
+            paPool.feesSharedSpendIndexX128.set(tokenIndex, FixedPoint128.Q128);
+185
+
+186
+
+187
+
+188
+
+189
+
+190
+
+191
+
+192
+
+193
+
+194
+
+195
+
+196
+
+197
+
+198
+
+199
+
+ 
+
+            return;
+ 
+
+        }
+ 
+
+ 
+
+        uint256 factor = paPool.feesSharedSpendIndexX128.get(tokenIndex);
+ 
+
+        uint256 protocolPot = paPool.protocolFeeAccrued.get(tokenIndex);
+ 
+
+        if (factor == 0 && protocolPot == 0) {
+ 
+
+            paPool.feesSharedEpoch.set(tokenIndex, epoch + 1);
+ 
+
+        }
+ 
+
+    }
+ 
+
+ 
+
+    function _advanceFeesSharedFactor(PoolAccounting storage paPool, uint8 tokenIndex, uint256 pot, uint256 bonus)
+ 
+
+        private
+ 
+
+    {
+ 
+
+        if (paPool.feesSharedEpoch.get(tokenIndex) == 0) {
+ 
+
+            paPool.feesSharedEpoch.set(tokenIndex, 1);
+200
+
+201
+
+202
+
+203
+
+ 
+
+            paPool.feesSharedSpendIndexX128.set(
+ 
+
+                tokenIndex, FullMath.mulDivRoundingUp(FixedPoint128.Q128, pot - bonus, pot)
+ 
+
+            );
+ 
+
+            return;
+204
+
+205
+
+206
+
+207
+
+ 
+
+        }
+ 
+
+ 
+
+        uint256 currentFactor = paPool.feesSharedSpendIndexX128.get(tokenIndex);
+ 
+
+        uint256 factorBase = currentFactor == 0 ? FixedPoint128.Q128 : currentFactor;
+208
+
+209
+
+210
+
+ 
+
+        paPool.feesSharedSpendIndexX128.set(
+ 
+
+            tokenIndex, FullMath.mulDivRoundingUp(factorBase, pot - bonus, pot)
+ 
+
+        );
+211
+
+212
+
+ 
+
+    }
+ 

@@ -1,0 +1,58 @@
+Multiplicative remaining-share factor with per-position floor in VTSFeeLib (CSI) causes premature self-exclusion collapse and misallocated bonus payouts
+
+The PR’s new CSI model in VTSFeeLib advances a pool-wide remaining-share factor and floors per-position updates, while the fee pot is tracked exactly and no pool-level dust sink exists. Tiny self-shares round to zero too early, so positions can claim from the pot funded by their own still-present contributions, reducing honest LPs’ fees.
+
+This PR changes CSI from an additive spend-index to a multiplicative ‘remaining-share factor + epoch’ in VTSFeeLib. When a bonus is allocated, _advanceFeesSharedFactor updates a pool factor using ceil(factorBase*(pot - bonus)/pot). Each position later runs _syncFeesSharedRemainingForToken, which applies floor(sharesRemaining * factorRatio), while protocolFeeAccrued (the pot) remains exact and there is no pool-level counter for total remaining self-shares. As a result, small per-position self-shares (e.g., 1) are floored to zero after any partial spend, even though the pot still contains those contributions. Then _queueBonusForToken computes potAvail = protocolFeeAccrued - pa.feesShared (per-position), which becomes the entire pot for that position, allowing it to receive bonuses funded by its own lingering contributions (subject to exposure). CISE exposure accrues passively and persists until used, and materialization via _finaliseFeeAdjustment funds slashedPot for +pendings and drains it for -pendings, not correcting the mis-gating. Epoching only advances when factor == 0 and protocolPot == 0, and does not mitigate mid-epoch rounding dust. This undermines CSI self-exclusion fairness and can be amplified by splitting contributions into many micro positions.
+
+Code Suggestions:
+
+VTSFeeLib.sol
+
+152
+
+153
+
+ 
+
+                // No spend had been realised against this position in the current epoch yet. A zero pool factor is still
+ 
+
+                // the identity state until the first bonus allocation stores a non-zero remaining-share factor.
+154
+
+ 
+
+                // Use rounding-up to preserve self-exclusion for micro-shares (avoid premature floor-to-zero).
+155
+
+ 
+
+                updatedShares =
+156
+
+ 
+
+                    indexNow == 0 ? sharesRemaining : FullMath.mulDivRoundingUp(sharesRemaining, indexNow, FixedPoint128.Q128);
+157
+
+ 
+
+            } else {
+158
+
+159
+
+ 
+
+                // Use rounding-up to avoid under-exclusion from per-position floor rounding.
+ 
+
+                updatedShares = indexNow == 0 ? 0 : FullMath.mulDivRoundingUp(sharesRemaining, indexNow, indexLast);
+160
+
+161
+
+ 
+
+            }
+ 

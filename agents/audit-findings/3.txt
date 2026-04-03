@@ -1,0 +1,137 @@
+Missing checkpoint refresh in VTSOrchestrator.onSeize for normal RFS path causes premature seizure (principal loss)
+
+After a PR change, VTSOrchestrator.onSeize no longer refreshes RFS checkpoints for ordinary RFS-based seizures. Seizability is then evaluated against stale checkpoint timestamps, allowing a seizer to bypass the intended grace window and seize a victim’s liquidity early.
+
+The PR modified VTSOrchestrator.onSeize so it it only refreshes checkpoints when a stored commitmentDeficit exists. On the normal RFS/grace path (no commitment deficit), onSeize now calls CheckpointLibrary.isSeizable directly on the stored checkpoint without first refreshing it. Because growth settlement is lazy, a position’s RFS can close and later reopen without the stored checkpoint being updated (settlePositionGrowths updates accounting but does not mark checkpoints). CheckpointLibrary.isSeizable relies solely on the stored checkpoint (openMask/openSince*/extensions) for the normal path. As a result, an old openSince from a previous RFS episode can remain in storage and appear to have passed grace, authorizing seizure even though the current reopened episode’s grace has not elapsed. The onMMSettle path repeats the same pre-settlement isSeizable check (still stale) and only afterwards settles growths and marks the checkpoint; it does not re-check grace after settlement. This enables premature, unintended seizure of a victim’s liquidity. The issue is introduced by the PR’s change to conditional checkpointing in onSeize for the normal RFS path.
+
+Code Suggestions:
+
+VTSOrchestrator.sol
+
+/// @param commitId The commit identifier
+ 
+
+    /// @param positionIndex The position index within the commit
+822
+
+823
+
+824
+
+825
+
+826
+
+ 
+
+    // NOTE(seize gating hardening):
+ 
+
+    // For normal RFS-based seizure (no stored commitment deficit), a stale checkpoint can carry an old `openSince`
+ 
+
+    // and prematurely authorize seizure. A complete fix should (1) maintain live RFS episode timing during
+ 
+
+    // `settlePositionGrowths` and reconcile it in `markCheckpoint`, and (2) refresh via `_checkpoint(..., withCommitment=hasStoredCommitmentDeficit)`
+ 
+
+    // immediately before calling `CheckpointLibrary.isSeizable`.
+827
+
+828
+
+ 
+
+    function onSeize(uint256 commitId, uint256 positionIndex) external onlyIfPoolManagerUnlocked nonReentrant {
+ 
+
+        // Validate commit exists (but don't require live signal - expired signals can be seized)
+ 
+
+VTSPositionLib.sol
+
+
+980
+
+981
+
+ 
+
+    /// @param poolManager The pool manager contract
+ 
+
+    /// @param positionId The position ID
+ 
+
+ 
+
+ 
+
+ 
+
+ 
+
+ 
+
+982
+
+983
+
+ 
+
+    //#olympix-ignore-reentrancy
+ 
+
+    function settlePositionGrowths(VTSStorage storage s, IPoolManager poolManager, PositionId positionId) public {
+ 
+980
+
+981
+
+ 
+
+    /// @param poolManager The pool manager contract
+ 
+
+    /// @param positionId The position ID
+982
+
+983
+
+984
+
+985
+
+986
+
+987
+
+ 
+
+    // NOTE(live RFS episode tracking):
+ 
+
+    // To ensure seizure grace is evaluated on current episode timing, capture the live RFS lane-open state and
+ 
+
+    // per-lane `openSince` here after settlement (using `getRFS` + `_rfsOpenMask`). Persist them in PositionAccounting
+ 
+
+    // (e.g., `rfsOpenMaskLive` and `rfsOpenSinceLive{0,1}`) with inheritance across one-lane rotations mirroring
+ 
+
+    // `RFSCheckpoint.mark`. `CheckpointLibrary.markCheckpoint` can then reconcile stored checkpoint timestamps from
+ 
+
+    // these live values so `isSeizable` evaluates against up-to-date `openSince*`.
+988
+
+989
+
+ 
+
+    //#olympix-ignore-reentrancy
+ 
+
+    function settlePositionGrowths(VTSStorage storage s, IPoolManager poolManager, PositionId positionId) public {

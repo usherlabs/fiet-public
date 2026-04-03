@@ -1,0 +1,57 @@
+Non-appended field insertion in PositionAccounting under storage-preserving upgrade causes self-exclusion loss and fee misallocation
+
+The PR inserts feesSharedEpoch immediately before feeBurnGrowthRemainder in the persisted PositionAccounting struct. In a storage-preserving upgrade, this reinterprets old feeBurnGrowthRemainder values as feesSharedEpoch and resets the true remainder to zero. As a result, legacy positions have their self-exclusion (feesShared) zeroed during CSI sync and can receive bonuses funded by their own prior contributions; additionally, the fee-burn growth baseline remainder continuity is lost.
+
+This PR introduces the new field feesSharedEpoch inside PositionAccounting (types/VTS.sol) but places it directly before the existing feeBurnGrowthRemainder instead of truly appending it. In a storage-preserving upgrade, the old feeBurnGrowthRemainder content is misread as feesSharedEpoch while the new feeBurnGrowthRemainder slot starts at zero. During fee processing, VTSFeeLib._syncFeesSharedRemainingForToken compares the misread epochLast against the pool’s current epoch and, seeing a mismatch, zeroes pa.feesShared. Since pa.feesShared is used to self-exclude a position from receiving bonuses funded by its own past fee-share contributions, zeroing it lets the position receive allocations from the entire pot (including its own contributions). Separately, the real feeBurnGrowthRemainder carry is lost, creating a one-off fee-burn growth baseline discontinuity. The issue is introduced by this PR’s field insertion combined with CSI epoch logic that claims legacy compatibility but relies on correct storage layout.
+
+Code Suggestions:
+
+VTS.sol
+
+155
+
+156
+
+ 
+
+    // CSI: Position checkpoint of pool spend index (Q128)
+ 
+
+    TokenPairUint feesSharedIndexLastX128;
+ 
+
+ 
+
+157
+
+158
+
+159
+
+ 
+
+    // Remainder numerator for coverage fee-burn baseline checkpoint (see VTSPositionLib._applyBurnBase).
+ 
+
+    // Appended for storage-layout compatibility on upgrade.
+ 
+
+    TokenPairUint feeBurnGrowthRemainder;
+160
+
+161
+
+ 
+
+    // CSI: Position checkpoint of the pool spend epoch. Appended for upgrade compatibility.
+ 
+
+    TokenPairUint feesSharedEpoch;
+162
+
+163
+
+ 
+
+}
+ 

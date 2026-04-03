@@ -239,6 +239,9 @@ library Errors {
     /// @notice Thrown when an invariant is violated
     error InvariantViolated(string message);
 
+    /// @notice Thrown when a bucket-tracked holder has ERC20 balance but no bucket accounting
+    error InvalidBucketState(address account, uint256 balance);
+
     // ============ VTS ORCHESTRATOR ERRORS ============
     // Errors related to the VTS Orchestrator
 

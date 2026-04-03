@@ -1,0 +1,93 @@
+Inherited openSince on second-lane opens (01->11/10->11) in RFSCheckpointLibrary.mark causes premature position seizure
+
+A PR change makes a newly opened RFS lane inherit the opposite lane’s prior openSince when that opposite lane is already open, including on 01->11/10->11 transitions. Since seizability checks are OR-based per-lane with lane-local grace, an attacker can create a fresh shortfall on the short-grace lane, permissionlessly checkpoint to inherit an older openSince, immediately pass grace on that fresh lane, and seize the position while funding deposits largely on the opposite lane with higher exposure.
+
+contracts/evm/src/types/Checkpoint.sol (RFSCheckpointLibrary.mark) now sets a newly opened lane’s openSince to the opposite lane’s previous openSince if the opposite lane was already open. This applies to opening a second lane (01->11 or 10->11), not just pure rotations. Lane-specific grace extensions reset on lane toggles. Seizability (contracts/evm/src/libraries/Checkpoint.sol) is OR-based across lanes using lane-local grace windows; there is no minimum-age gating on the normal RFS path. Attackers can (a) induce a fresh RFS requirement on the short-grace lane via swaps, (b) call VTSOrchestrator.checkpoint() (permissionless) to mark lanes so the fresh lane inherits the older openSince, immediately satisfying its grace, then (c) call the MMPositionManager seizure path (third-party seizers are allowed for active positions). During settlement, VTSPositionLib._calcSeizure adds exposure from both lanes, so the attacker can deposit predominantly on the opposite lane with high RFS to seize significant liquidity. onSeize uses the stored checkpoint for normal RFS (no recompute unless a stored commitment deficit exists), so the attacker-controlled checkpointed state is honored. Before this PR, a newly opened lane would start openSince at block.timestamp, preventing immediate seizure on a fresh lane.
+
+Code Suggestions:
+Checkpoint.sol
+
+              // instead of restarting grace from "now". This preserves elapsed grace across lane flips where the
+ 
+
+                // position never actually returned to a fully-closed RFS state.
+63
+
+ 
+
+                uint256 inheritedOpenSince0 = (wasToken1Open && !isToken1Open) ? prevOpenSince1 : 0;
+64
+
+65
+
+66
+
+67
+
+68
+
+69
+
+70
+
+71
+
+72
+
+73
+
+74
+
+75
+
+ 
+
+                self.openSince0 = inheritedOpenSince0 != 0 ? inheritedOpenSince0 : block.timestamp;
+ 
+
+            } else {
+ 
+
+                self.openSince0 = 0;
+ 
+
+            }
+ 
+
+        }
+ 
+
+        if (wasToken1Open != isToken1Open) {
+ 
+
+            self.gracePeriodExtension1 = 0;
+ 
+
+            if (isToken1Open) {
+ 
+
+                // Symmetric to token0 above: when the open requirement migrates from token0 to token1 without an
+ 
+
+                // intervening fully-closed checkpoint, keep the canonical "RFS opened at" timestamp by inheriting the
+ 
+
+                // other lane's timer. This means `openSince*` tracks the continuous RFS episode, not merely the latest
+ 
+
+                // lane that happens to be carrying the open balance.
+76
+
+ 
+
+                uint256 inheritedOpenSince1 = (wasToken0Open && !isToken0Open) ? prevOpenSince0 : 0;
+77
+
+78
+
+ 
+
+                self.openSince1 = inheritedOpenSince1 != 0 ? inheritedOpenSince1 : block.timestamp;
+ 
+
+            } else {
