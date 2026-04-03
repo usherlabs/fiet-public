@@ -37,7 +37,7 @@ import {
 import {Pool} from "../types/Pool.sol";
 import {LiquidityUtils} from "./LiquidityUtils.sol";
 import {Errors} from "./Errors.sol";
-import {VTSFeeLinkedLib, VTSFeeLib} from "./VTSFeeLib.sol";
+import {VTSFeeLinkedLib} from "./VTSFeeLib.sol";
 import {DynamicCurrencyDelta} from "./DynamicCurrencyDelta.sol";
 import {VTSCommitLib} from "./VTSCommitLib.sol";
 import {CheckpointLibrary} from "./Checkpoint.sol";
@@ -724,11 +724,8 @@ library VTSPositionLib {
         {
             PoolAccounting storage paPool = s.poolAccounting[p];
 
-            // CSI epochs allow a fully-spent contribution set to reset cleanly when fresh slashes are minted later.
-            VTSFeeLib._beginFeesSharedEpochIfNeeded(paPool, feeTokenIndex);
-
-            // CSI: Sync remaining shares BEFORE minting new shares (critical ordering)
-            VTSFeeLib._syncFeesSharedRemainingForToken(pa, paPool, feeTokenIndex);
+            // Prepare CSI state before minting new shares so self-exclusion only applies to the pre-existing pot.
+            VTSFeeLinkedLib.beforeFeeShareMint(pa, paPool, feeTokenIndex);
 
             paPool.protocolFeeAccrued.set(feeTokenIndex, paPool.protocolFeeAccrued.get(feeTokenIndex) + feesBurn);
             pa.feesShared.set(feeTokenIndex, pa.feesShared.get(feeTokenIndex) + feesBurn);

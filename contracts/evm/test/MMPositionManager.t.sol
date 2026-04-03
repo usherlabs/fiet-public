@@ -311,7 +311,6 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
         // extend the grace period of the commitment
         bytes memory settlementProof = abi.encode(1);
         uint8 settlementTokenIndex0 = 0;
-        uint8 settlementTokenIndex1 = 1;
         uint32 verifierIndex = 0;
 
         // mock the call made to the settlement observer to verify the settlement proof
@@ -323,15 +322,21 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
 
         PositionId positionId = vtsOrchestrator.getPositionId(tokenId, positionIndex);
 
+        // Open a live settlement lane, then persist that checkpoint state before requesting a grace extension.
+        swapRouter.swap(
+            proxyPoolKey,
+            SwapParams({zeroForOne: true, amountSpecified: -1e18, sqrtPriceLimitX96: ZERO_FOR_ONE_LIMIT}),
+            PoolSwapTest.TestSettings({takeClaims: false, settleUsingBurn: false}),
+            ZERO_BYTES
+        );
+        positionManager.checkpoint(tokenId, positionIndex, false);
+
         // get the checkpoint of the position
         RFSCheckpoint memory checkpointBefore = vtsOrchestrator.positionToCheckpoint(positionId);
 
-        // extend the grace period of both tokens in the market
+        // extend the grace period of the open settlement lane
         MMA.extendGracePeriod(
             positionManager, corePoolKey, tokenId, positionIndex, settlementTokenIndex0, verifierIndex, settlementProof
-        );
-        MMA.extendGracePeriod(
-            positionManager, corePoolKey, tokenId, positionIndex, settlementTokenIndex1, verifierIndex, settlementProof
         );
 
         // validate the extension
@@ -343,7 +348,6 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
         console.log("gracePeriodExtension0After", checkpointAfter.gracePeriodExtension0);
         console.log("gracePeriodExtension1After", checkpointAfter.gracePeriodExtension1);
         assertGt(checkpointAfter.gracePeriodExtension0, checkpointBefore.gracePeriodExtension0);
-        assertGt(checkpointAfter.gracePeriodExtension1, checkpointBefore.gracePeriodExtension1);
     }
 
     function test_extendGracePeriod_revertsForNonOwnerNonApproved() public {

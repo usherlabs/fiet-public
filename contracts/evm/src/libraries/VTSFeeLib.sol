@@ -362,6 +362,19 @@ library VTSFeeLib {
 /// @notice Library for VTS fee processing
 /// @dev Operates on VTSStorage storage struct via storage pointers
 library VTSFeeLinkedLib {
+    /// @notice Prepares CSI state before minting fresh fee-share contributions for a position
+    /// @dev Advances the spend epoch if needed, then syncs the position's remaining self-share
+    ///      against the current pool factor before the caller increases `protocolFeeAccrued` and `feesShared`.
+    /// @param pa The position accounting storage reference
+    /// @param paPool The pool accounting storage reference
+    /// @param feeTokenIndex The fee token index receiving the newly minted contribution
+    function beforeFeeShareMint(PositionAccounting storage pa, PoolAccounting storage paPool, uint8 feeTokenIndex)
+        external
+    {
+        VTSFeeLib._beginFeesSharedEpochIfNeeded(paPool, feeTokenIndex);
+        VTSFeeLib._syncFeesSharedRemainingForToken(pa, paPool, feeTokenIndex);
+    }
+
     /// @notice Processes the fees for a position after touch
     /// @dev Updates accounting state only. Actual ERC6909 mint/burn is handled by CoreHook.settleHookDeltasToPot
     /// @param s The VTS storage

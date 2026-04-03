@@ -489,7 +489,7 @@ contract VTSPositionLibOnMMSettleTest is VTSLibTestBase {
                 true // isSeizing
             );
 
-        assertTrue(rfsOpen, "RFS should be open before seizure deposit");
+        assertFalse(rfsOpen, "RFS should close after seizure deposit satisfies the open requirement");
         // Clamped to RfS requirement (50 each)
         assertEq(settlementDelta.amount0(), -50e18, "Seizing deposit0 clamped by RfS");
         assertEq(settlementDelta.amount1(), -50e18, "Seizing deposit1 clamped by RfS");

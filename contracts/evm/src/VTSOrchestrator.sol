@@ -738,6 +738,12 @@ contract VTSOrchestrator is
         // Validate factory is registered and caller is authorized
         _assertBoundFactoryCaller(factory);
 
+        // Refresh lane-open checkpoint state from the current settlement snapshot before extension checks.
+        // Without this, proofs can target a lane that is live-open but still appears closed in stale storage.
+        VTSPositionLib.settlePositionGrowths(s, poolManager, positionId);
+        (, BalanceDelta rfsDelta) = VTSPositionLib.getRFS(s, positionId);
+        CheckpointLibrary.markCheckpoint(s, positionId, VTSPositionLib._rfsOpenMask(rfsDelta));
+
         // Use the RFSCheckpoint module to extend the grace period
         CheckpointLibrary.extendGracePeriod(
             s, settlementObserver, poolKey, positionId, settlementTokenIndex, verifierIndex, settlementProof
@@ -809,9 +815,8 @@ contract VTSOrchestrator is
 
     /// @notice Validate that the grace period has elapsed for a position (required before seizure)
     /// @dev Called by MMPositionManager before seizing a position. Reverts if grace period has not elapsed.
-    ///      Refreshes stored RFS lane checkpoint from the current snapshot before seizability (so third parties
-    ///      cannot leave stale `openMask` / `openSince` that block seizure). When a stored commitment deficit
-    ///      exists, also recomputes commitment state (`withCommitment=true`) before marking RFS.
+    ///      When a stored commitment deficit exists, recomputes commitment-backed checkpoint state
+    ///      (`withCommitment=true`) before seizability to avoid stale bypass eligibility.
     /// @param commitId The commit identifier
     /// @param positionIndex The position index within the commit
     function onSeize(uint256 commitId, uint256 positionIndex) external onlyIfPoolManagerUnlocked nonReentrant {
@@ -821,13 +826,14 @@ contract VTSOrchestrator is
         PositionId positionId = getPositionId(commitId, positionIndex);
         _assertPositionValid(positionId, true);
 
-        // Hardening: do not trust previously stored commitment-deficit state on its
-        // own. If a deficit exists, recompute it from the latest backing snapshot
-        // before checking seizability so an attacker cannot create durable seize
-        // eligibility from a stale or transiently-manipulated checkpoint.
+        // Hardening: only refresh commitment-backed checkpoint state when a stored
+        // commitment deficit exists. This preserves lane-grace timing semantics on
+        // the normal RFS path while still preventing stale commitment-deficit bypass.
         PositionAccounting storage pa = s.positionAccounting[positionId];
         bool hasStoredCommitmentDeficit = pa.commitmentDeficit.token0 > 0 || pa.commitmentDeficit.token1 > 0;
-        _checkpoint(commitId, positionIndex, hasStoredCommitmentDeficit, positionId);
+        if (hasStoredCommitmentDeficit) {
+            _checkpoint(commitId, positionIndex, true, positionId);
+        }
 
         // Validate grace period has elapsed (reverts if not)
         CheckpointLibrary.isSeizable(

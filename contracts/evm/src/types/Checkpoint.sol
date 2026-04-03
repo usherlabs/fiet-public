@@ -50,14 +50,34 @@ library RFSCheckpointLibrary {
         bool wasToken1Open = (prevOpen & TOKEN1_OPEN_MASK) != 0;
         bool isToken0Open = (maskedOpen & TOKEN0_OPEN_MASK) != 0;
         bool isToken1Open = (maskedOpen & TOKEN1_OPEN_MASK) != 0;
+        uint256 prevOpenSince0 = self.openSince0;
+        uint256 prevOpenSince1 = self.openSince1;
 
         if (wasToken0Open != isToken0Open) {
             self.gracePeriodExtension0 = 0;
-            self.openSince0 = isToken0Open ? block.timestamp : 0;
+            if (isToken0Open) {
+                // Treat a one-lane rotation as a continuation of the same canonical RFS-open episode. If token1 was
+                // already open and token0 becomes the newly-open lane in the same mark, inherit token1's `openSince`
+                // instead of restarting grace from "now". This preserves elapsed grace across lane flips where the
+                // position never actually returned to a fully-closed RFS state.
+                uint256 inheritedOpenSince0 = wasToken1Open ? prevOpenSince1 : 0;
+                self.openSince0 = inheritedOpenSince0 != 0 ? inheritedOpenSince0 : block.timestamp;
+            } else {
+                self.openSince0 = 0;
+            }
         }
         if (wasToken1Open != isToken1Open) {
             self.gracePeriodExtension1 = 0;
-            self.openSince1 = isToken1Open ? block.timestamp : 0;
+            if (isToken1Open) {
+                // Symmetric to token0 above: when the open requirement migrates from token0 to token1 without an
+                // intervening fully-closed checkpoint, keep the canonical "RFS opened at" timestamp by inheriting the
+                // other lane's timer. This means `openSince*` tracks the continuous RFS episode, not merely the latest
+                // lane that happens to be carrying the open balance.
+                uint256 inheritedOpenSince1 = wasToken0Open ? prevOpenSince0 : 0;
+                self.openSince1 = inheritedOpenSince1 != 0 ? inheritedOpenSince1 : block.timestamp;
+            } else {
+                self.openSince1 = 0;
+            }
         }
 
         self.openMask = maskedOpen;

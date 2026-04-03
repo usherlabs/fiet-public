@@ -1079,6 +1079,12 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
         (uint256 tokenId,,,) = _createCommittedPosition();
         PositionId positionId = vtsOrchestrator.getPositionId(tokenId, 0);
 
+        _mockLccPrices(1e18, 1e18);
+        _mockSignalUsd(0);
+        unlockCaller.run(
+            address(vtsOrchestrator), abi.encodeWithSelector(VTSOrchestrator.checkpoint.selector, tokenId, 0, true)
+        );
+
         RFSCheckpoint memory checkpointBefore = vtsOrchestrator.positionToCheckpoint(positionId);
 
         bytes memory settlementProof = abi.encode(1);
@@ -1122,9 +1128,8 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
     function test_onSeize_validatesGracePeriod() public {
         (uint256 tokenId,,,) = _createCommittedPosition();
 
-        // onSeize() always refreshes the RFS checkpoint from live `getRFS` before seizability. A fully settled
-        // position can have closed RFS while storage still reflected an older open lane; only a consistent
-        // open-RFS snapshot + elapsed lane grace (or commitment-deficit bypass) should succeed.
+        // Establish the checkpointed RFS state up-front. Normal seizure grace is measured from stored checkpoint
+        // timing, while commitment-deficit bypass remains refreshable inside `onSeize()`.
         _mockLccPrices(1e18, 1e18);
         _mockSignalUsd(0);
         unlockCaller.run(
@@ -1183,8 +1188,6 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
         (uint256 tokenId,,,) = _createCommittedPosition();
         PositionId positionId = vtsOrchestrator.getPositionId(tokenId, 0);
 
-        RFSCheckpoint memory checkpointBefore = vtsOrchestrator.positionToCheckpoint(positionId);
-
         // Set the block timestamp
         vm.warp(block.timestamp + 10000000);
 
@@ -1196,11 +1199,16 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
         );
 
         RFSCheckpoint memory checkpointAfter = vtsOrchestrator.positionToCheckpoint(positionId);
-        // Checkpoint lane-open state should be refreshed from current RFS.
-        bool stateChanged = checkpointAfter.openMask != checkpointBefore.openMask
-            || checkpointAfter.openSince0 != checkpointBefore.openSince0
-            || checkpointAfter.openSince1 != checkpointBefore.openSince1;
-        assertTrue(stateChanged, "Checkpoint lane-open state should be updated");
+        (, BalanceDelta rfsDeltaAfter) = vtsOrchestrator.calcRFS(positionId, false);
+        uint8 expectedOpenMask = _expectedOpenMask(rfsDeltaAfter);
+
+        assertEq(checkpointAfter.openMask, expectedOpenMask, "Checkpoint openMask should match current RFS lanes");
+        if ((expectedOpenMask & 1) == 0) {
+            assertEq(checkpointAfter.openSince0, 0, "token0 openSince should clear when token0 RFS closes");
+        }
+        if ((expectedOpenMask & 2) == 0) {
+            assertEq(checkpointAfter.openSince1, 0, "token1 openSince should clear when token1 RFS closes");
+        }
     }
 
     // ============================================================
