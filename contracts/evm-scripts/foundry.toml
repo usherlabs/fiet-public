@@ -65,7 +65,7 @@ libraries = [
   "src/libraries/VTSPositionLib.sol:VTSPositionLib:0x26e024F42D5F766b562fc35701f13B2d5e01A5C2",
   "src/libraries/VTSSwapLib.sol:VTSSwapLib:0x62ef223B345cF2bCc9c9097F093202c5f8C88f31",
   "src/libraries/VTSCommitLib.sol:VTSCommitLib:0x97D09b290896136360857499EA8f6d6F98c3Fb1B",
-  "src/libraries/VTSLifecycleLinkedLib.sol:VTSLifecycleLinkedLib:0x1111111111111111111111111111111111111113",
+  "src/libraries/VTSLifecycleLinkedLib.sol:VTSLifecycleLinkedLib:0x4f564C280e60CF5c5d11Ce3eB9aED1eCC0B62839",
   "src/libraries/VTSFeeLib.sol:VTSFeeLinkedLib:0x203f4945f3cf29f34743306d1A33366Da3771bD2",
   "src/libraries/LCCFactoryLib.sol:LCCFactoryLinkedLib:0x42B8987753996202F071f1598Eef6B2a7F82299B",
   "src/libraries/LiquidityHubLinkedLib.sol:LiquidityHubLinkedLib:0x43B8987753996202F071f1598Eef6B2a7F82299B",
@@ -76,9 +76,7 @@ additional_compiler_profiles = [
   { name = "script_ir", via_ir = true },
   { name = "e2e_non_ir", via_ir = false },
 ]
-compilation_restrictions = [
-  { paths = "script/e2e/**", via_ir = false },
-]
+compilation_restrictions = [{ paths = "script/e2e/**", via_ir = false }]
 
 [profile.ci]
 # Mirrors `profile.deploy`: library addresses are generated using Anvil account 0
@@ -101,7 +99,7 @@ libraries = [
   "src/libraries/VTSPositionLib.sol:VTSPositionLib:0x2C95130C4DE0504c82f4688C657c9A4CC01761EF",
   "src/libraries/VTSSwapLib.sol:VTSSwapLib:0x8AF1433f3d2b0547A63f7004B9dA9C5953fD522D",
   "src/libraries/VTSCommitLib.sol:VTSCommitLib:0x6EBB20A904a9CA505e7d4A253c7FbF72DF5a777b",
-  "src/libraries/VTSLifecycleLinkedLib.sol:VTSLifecycleLinkedLib:0x1111111111111111111111111111111111111113",
+  "src/libraries/VTSLifecycleLinkedLib.sol:VTSLifecycleLinkedLib:0x4f564C280e60CF5c5d11Ce3eB9aED1eCC0B62839",
   "src/libraries/VTSFeeLib.sol:VTSFeeLinkedLib:0xF99a25421b798087e7eE2E3fD78268CC961dEbf6",
   "src/libraries/LCCFactoryLib.sol:LCCFactoryLinkedLib:0x3209860215dB283218CBc8f0D5acf57Ae8874C85",
   "src/libraries/LiquidityHubLinkedLib.sol:LiquidityHubLinkedLib:0x8c51807d9598086bD05901377e98996d0d7E6691",

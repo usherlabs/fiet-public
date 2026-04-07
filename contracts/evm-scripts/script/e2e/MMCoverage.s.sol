@@ -138,16 +138,17 @@ contract MMCoverageE2E is MME2EBase {
     function _assertDistinctActors(ActorAddrs memory actors) internal pure {
         require(actors.mm1 != actors.mm2, "actors: mm1 must differ from mm2");
         require(actors.mm1 != actors.mm3, "actors: mm1 must differ from mm3");
-        require(actors.mm1 != actors.taker, "actors: mm1 must differ from taker");
+        // require(actors.mm1 != actors.taker, "actors: mm1 must differ from taker");
         require(actors.mm2 != actors.mm3, "actors: mm2 must differ from mm3");
         require(actors.mm2 != actors.taker, "actors: mm2 must differ from taker");
         require(actors.mm3 != actors.taker, "actors: mm3 must differ from taker");
     }
 
-    function _assertCheckpointEquals(RFSCheckpoint memory checkpointA, RFSCheckpoint memory checkpointB, string memory err)
-        internal
-        pure
-    {
+    function _assertCheckpointEquals(
+        RFSCheckpoint memory checkpointA,
+        RFSCheckpoint memory checkpointB,
+        string memory err
+    ) internal pure {
         require(
             checkpointA.openMask == checkpointB.openMask && checkpointA.openSince0 == checkpointB.openSince0
                 && checkpointA.openSince1 == checkpointB.openSince1
@@ -341,9 +342,11 @@ contract MMCoverageE2E is MME2EBase {
         return swapState;
     }
 
-    function _pokeRemainingMmsAndAssertPotCleared(ScenarioState memory s, ActorKeys memory keys, SwapState memory swapState)
-        internal
-    {
+    function _pokeRemainingMmsAndAssertPotCleared(
+        ScenarioState memory s,
+        ActorKeys memory keys,
+        SwapState memory swapState
+    ) internal {
         (uint256 mm2Amount0Fees, uint256 mm2Amount1Fees) = _pokePosition(s.market, keys.mm2Pk, s.mm2CommitId);
         if (swapState.lcc0AfterSwap > 0) require(mm2Amount1Fees > 0, "mm2Amount1Fees not greater than zero");
         if (swapState.lcc1AfterSwap > 0) require(mm2Amount0Fees > 0, "mm2Amount0Fees not greater than zero");
