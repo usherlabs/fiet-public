@@ -64,7 +64,7 @@ libraries = [
   # Deterministic CREATE2 address deployed by the SIG-BACKING harness (avoids any RPC fetch attempts).
   "src/libraries/VTSCommitLib.sol:VTSCommitLib:0x7642a5fddf1c8c0424f0bbecbbc41f74dd583046",
   # Deterministic CREATE2 address deployed by `VTSPositionLibEchidnaHarness` (avoids Echidna RPC fetch attempts).
-  "src/libraries/VTSPositionLib.sol:VTSPositionLib:0x1072F36983964FAf6D5Efc92c0a3f2cD11943222",
+  "src/libraries/VTSPositionLib.sol:VTSPositionLib:0x786b7eef5ee0ab7d361364e0620f474dff2211ae",
   # Intentional placeholders for libs that are not CREATE2-validated by this script.
   "src/libraries/VTSLifecycleLinkedLib.sol:VTSLifecycleLinkedLib:0x1111111111111111111111111111111111111113",
   "src/libraries/VTSSwapLib.sol:VTSSwapLib:0x1111111111111111111111111111111111111112",

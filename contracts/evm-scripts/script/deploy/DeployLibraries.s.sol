@@ -52,6 +52,7 @@ import {VTSFeeLinkedLib} from "src/libraries/VTSFeeLib.sol";
  *     "src/libraries/VTSLifecycleLinkedLib.sol:VTSLifecycleLinkedLib:<address>",
  *     "src/libraries/VTSFeeLib.sol:VTSFeeLinkedLib:<address>",
  *     "src/libraries/LCCFactoryLib.sol:LCCFactoryLinkedLib:<address>",
+ *     "src/libraries/LiquidityHubLinkedLib.sol:LiquidityHubLinkedLib:<address>",
  *   ]
  */
 contract DeployLibraries is CREATE3Script, NetworkConfig {

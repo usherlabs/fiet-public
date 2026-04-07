@@ -1128,8 +1128,9 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
     function test_onSeize_validatesGracePeriod() public {
         (uint256 tokenId,,,) = _createCommittedPosition();
 
-        // Establish the checkpointed RFS state up-front. Normal seizure grace is measured from stored checkpoint
-        // timing, while commitment-deficit bypass remains refreshable inside `onSeize()`.
+        // Snapshot commitment + RFS with `checkpoint(..., true)`. `_mockSignalUsd(0)` can yield a non-zero
+        // commitmentDeficit, so after a long warp `onSeize` may succeed via commitment-deficit bypass and/or
+        // checkpointed grace depending on the resulting `isSeizable` branches — not exclusively the normal RFS path.
         _mockLccPrices(1e18, 1e18);
         _mockSignalUsd(0);
         unlockCaller.run(
@@ -1138,7 +1139,7 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
 
         vm.warp(block.timestamp + 10_000_000);
 
-        // Should not revert (grace / deficit bypass conditions elapsed)
+        // Should not revert once seizability preconditions (per `CheckpointLibrary.isSeizable`) are satisfied.
         unlockCaller.run(address(vtsOrchestrator), abi.encodeWithSelector(VTSOrchestrator.onSeize.selector, tokenId, 0));
     }
 

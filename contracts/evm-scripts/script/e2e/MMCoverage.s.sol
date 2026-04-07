@@ -138,7 +138,7 @@ contract MMCoverageE2E is MME2EBase {
     function _assertDistinctActors(ActorAddrs memory actors) internal pure {
         require(actors.mm1 != actors.mm2, "actors: mm1 must differ from mm2");
         require(actors.mm1 != actors.mm3, "actors: mm1 must differ from mm3");
-        // require(actors.mm1 != actors.taker, "actors: mm1 must differ from taker");
+        // NOTE: mm1 may equal taker when the scenario reuses the same key for both roles.
         require(actors.mm2 != actors.mm3, "actors: mm2 must differ from mm3");
         require(actors.mm2 != actors.taker, "actors: mm2 must differ from taker");
         require(actors.mm3 != actors.taker, "actors: mm3 must differ from taker");
@@ -250,7 +250,6 @@ contract MMCoverageE2E is MME2EBase {
 
         RFSCheckpoint memory checkpointAfter = s.vtsLens.positionToCheckpoint(s.mm1PosId);
         require(checkpointAfter.openMask == expectedOpenMask, "mm1: checkpoint openMask mismatch");
-        require((checkpointAfter.openMask != 0) == (expectedOpenMask != 0), "mm1: checkpoint open state mismatch");
     }
 
     function _runSwapAndPreSettlementChecks(ScenarioState memory s, ActorKeys memory keys)

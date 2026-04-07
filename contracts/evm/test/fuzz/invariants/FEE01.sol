@@ -242,9 +242,11 @@ contract FEE01 {
 
         expProtocolFee = pot - bonus;
         expPending = beforeQueue.pending - int256(bonus);
+        // Mirror VTSFeeLib._advanceFeesSharedFactor: multiplicative remaining-share factor, not additive delta.
         if (pot > 0) {
-            uint256 deltaFactor = FullMath.mulDiv(bonus, FixedPoint128.Q128, pot);
-            expSpendIndex = beforeQueue.spendIndex + deltaFactor;
+            uint256 currentFactor = beforeQueue.spendIndex;
+            uint256 factorBase = currentFactor == 0 ? FixedPoint128.Q128 : currentFactor;
+            expSpendIndex = FullMath.mulDivRoundingUp(factorBase, pot - bonus, pot);
         } else {
             expSpendIndex = beforeQueue.spendIndex;
         }
