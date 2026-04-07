@@ -67,6 +67,15 @@ contract VTSPositionLibHarness {
         VTSPositionLib.settlePositionGrowths(s, poolManager, positionId);
     }
 
+    /// @notice Exposes paused-remove reconciliation helper
+    function reconcileAfterPausedRemove(
+        IPoolManager poolManager,
+        PositionId positionId,
+        ModifyLiquidityParams calldata params
+    ) external {
+        VTSPositionLib.reconcileAfterPausedRemove(s, poolManager, positionId, params);
+    }
+
     /// @notice Exposes calcRFS
     function calcRFS(IPoolManager poolManager, PositionId id, bool requireClosedRfS)
         external

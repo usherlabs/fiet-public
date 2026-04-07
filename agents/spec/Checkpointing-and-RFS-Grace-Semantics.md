@@ -26,8 +26,11 @@ The protocol does **not** continuously persist RFS timing on every state change.
 Instead, it uses explicit checkpointing to materialise a canonical stored view of:
 
 - which RFS lanes are open (`openMask`);
-- when the currently-open RFS episode began (`openSince0/openSince1`);
+- when the currently-open **position-level** RFS episode began (`openSince0/openSince1`);
 - any lane-local grace extension that has been granted.
+
+`openSince0/openSince1` are lane-addressable fields, but they represent a shared canonical episode timer.
+When both lanes are open, each open lane may hold the same canonical episode timestamp.
 
 This means the protocol has two related but distinct concepts:
 
@@ -84,7 +87,7 @@ So the checkpoint is not merely a cache. It is the protocol's canonical memory o
 The intended meaning of `openSince*` is:
 
 - **not** "the most recent time this exact token lane became open in isolation";
-- **but** "the canonical time at which the current RFS-open episode began, as represented in checkpoint storage".
+- **but** "the canonical time at which the current **position-level** RFS-open episode began, as represented in checkpoint storage".
 
 The implementation therefore follows three rules.
 
@@ -96,19 +99,33 @@ If checkpoint A and checkpoint B have the same `openMask`, the position is treat
 
 This preserves grace continuity across repeated checkpointing while the stored open state remains the same.
 
-### 4.2 If the open requirement rotates between lanes without fully closing, inherit the prior timer
+### 4.2 If the open requirement changes lanes without fully closing, inherit the prior timer
 
-If the position was already checkpointed as open, and the open RFS requirement migrates from token0 to token1 or vice versa **without an intervening fully-closed checkpoint**, the newly-open lane inherits the previous lane's `openSince`.
+If the position was already checkpointed as open, and the open RFS requirement changes lane composition **without an intervening fully-closed checkpoint**, the newly-open lane inherits the canonical prior timer.
+
+This includes:
+
+- `01 -> 11`
+- `10 -> 11`
+- `11 -> 01`
+- `11 -> 10`
 
 That is intentional.
 
-The protocol treats this as one continuous RFS-open episode rather than two unrelated grace windows. In other words, the grace timer should not reset merely because the positive required-settlement balance moved from one token lane to the other.
+The protocol treats this as one continuous position-level RFS-open episode rather than unrelated lane-specific grace windows. In other words, the grace timer should not reset merely because the positive required-settlement balance moved onto a different currently-open lane.
 
 ### 4.3 Only a genuine closed -> open transition starts a fresh timer
 
-If the checkpointed state was fully closed (`openMask == 0`) and later becomes open, that is a new stored RFS episode.
+If the checkpointed state was fully closed (`openMask == 0`) and later becomes open, that is a new stored position-level RFS episode.
 
-In that case, `openSince*` is set to `block.timestamp`.
+In that case, `openSince*` is set to `block.timestamp` for lanes that open in that transition.
+
+### 4.4 Lane-local grace extension remains lane-local
+
+The canonical `openSince*` episode timer is position-level in meaning, but grace extension remains lane-local.
+
+So a lane transition can preserve canonical episode age while still resetting the extension attached to the lane that
+opened or closed. This is intentional: elapsed episode time and extension entitlements are separate dimensions.
 
 ---
 

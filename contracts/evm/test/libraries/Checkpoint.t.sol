@@ -477,6 +477,22 @@ contract CheckpointLibraryTest is Test {
         assertTrue(h.isSeizable(COMMIT_ID, POSITION_INDEX, false));
     }
 
+    function test_isSeizable_secondLaneOpen_canUseCanonicalEpisodeTimestampByDesign() public {
+        PoolKey memory key = _defaultPoolKey();
+        PoolId poolId = key.toId();
+        h.setPosition(PID, poolId);
+        h.setGracePeriods(poolId, 10_000, 100, 20_000, 1_000);
+
+        uint256 tEpisode = 2_000;
+        // By design, when checkpoint state moved through a same-episode lane composition change (eg 01 -> 11),
+        // the newly-open lane carries the canonical episode timer instead of a fresh per-lane birth time.
+        h.setCheckpointMask(PID, 3, tEpisode, tEpisode, 0, 0);
+
+        vm.warp(tEpisode + 100);
+        // token1 grace elapsed; token0 grace not elapsed. Position is seizable because checks are lane-scoped and OR-aggregated.
+        assertTrue(h.isSeizable(COMMIT_ID, POSITION_INDEX, false));
+    }
+
     function test_extendGracePeriod_revertsOnInvalidTokenIndex() public {
         PoolKey memory key = _defaultPoolKey();
         vm.expectRevert(abi.encodeWithSelector(Errors.InvalidTokenIndex.selector, uint8(2)));

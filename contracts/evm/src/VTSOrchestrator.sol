@@ -555,6 +555,28 @@ contract VTSOrchestrator is
         }
     }
 
+    /// @notice Reconcile downward-only bookkeeping after paused remove-liquidity.
+    /// @dev This preserves pause as unwind-only mode while preventing stale settled/commitment/liquidity mirrors.
+    ///      Intended to be called by CoreHook in `_afterRemoveLiquidity` only when pool/global pause is active.
+    function reconcileAfterPausedRemove(PositionId positionId, ModifyLiquidityParams calldata params) external {
+        if (!isPositionValid(positionId, false)) {
+            return;
+        }
+        Position memory pos = s.positions[positionId];
+        PoolId poolId = pos.poolId;
+        Pool memory pool = s.pools[poolId];
+
+        IMarketFactory factory =
+            liquidityHub.getFactory(Currency.unwrap(pool.currency0), Currency.unwrap(pool.currency1));
+        MarketHandlerLib.assertCoreHook(factory, _msgSender());
+
+        if (!(s.isPaused || s.pools[poolId].isPaused)) {
+            revert Errors.ExpectedPause();
+        }
+
+        VTSPositionLib.reconcileAfterPausedRemove(s, poolManager, positionId, params);
+    }
+
     /// @notice Called by CoreHook after add/remove liquidity to update position state and process fees
     /// @dev Consolidates all delta management for both MM and DirectLP positions.
     ///      For MM positions: handles fee accounting, LCC issuance/cancellation, position linking, and delta accounting.
@@ -827,8 +849,9 @@ contract VTSOrchestrator is
         _assertPositionValid(positionId, true);
 
         // Hardening: only refresh commitment-backed checkpoint state when a stored
-        // commitment deficit exists. This preserves lane-grace timing semantics on
-        // the normal RFS path while still preventing stale commitment-deficit bypass.
+        // commitment deficit exists. This preserves canonical checkpointed position-level
+        // RFS episode timing semantics on the normal grace path while still preventing
+        // stale commitment-deficit bypass.
         PositionAccounting storage pa = s.positionAccounting[positionId];
         bool hasStoredCommitmentDeficit = pa.commitmentDeficit.token0 > 0 || pa.commitmentDeficit.token1 > 0;
         if (hasStoredCommitmentDeficit) {

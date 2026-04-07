@@ -211,6 +211,16 @@ When a position is touched for fee processing:
 - the bonus reduces `protocolFeeAccrued`;
 - the bonus queues negative `pendingFeeAdj`.
 
+#### CSI micro-share guardrail
+
+`_syncFeesSharedRemainingForToken(...)` must keep self-exclusion conservative for tiny balances.
+
+- for partial spend (`indexNow > 0`), remaining shares are synchronised with rounding-up;
+- this prevents 1-wei style `feesShared` from flooring to zero mid-epoch while the pool still has unspent value;
+- full clear to zero still happens when the lane is fully spent (`indexNow == 0`) or on genuine epoch mismatch.
+
+This preserves the security property from the CSI spec: no free self-reclaim from still-self-attributable pot.
+
 ### 4.3 Materialisation
 
 Allocation is accounting-only.

@@ -53,6 +53,11 @@ contract VTSFeeLibHarness {
         );
     }
 
+    /// @notice Exposes VTSFeeLib._prepareFeeShareMint
+    function prepareFeeShareMint(PositionId positionId, PoolId poolId, uint8 feeTokenIndex) external {
+        VTSFeeLib._prepareFeeShareMint(s.positionAccounting[positionId], s.poolAccounting[poolId], feeTokenIndex);
+    }
+
     /// @notice Exposes VTSFeeLib._queueBonusForToken
     function queueBonusForToken(
         PositionId positionId,
@@ -110,17 +115,25 @@ contract VTSFeeLibHarness {
         );
     }
 
-    function getPoolFeesSharedSpendIndexX128(PoolId poolId) external view returns (uint256 index0, uint256 index1) {
+    function getPoolFeesSharedRemainingFactorX128(PoolId poolId)
+        external
+        view
+        returns (uint256 factor0, uint256 factor1)
+    {
         return (
-            s.poolAccounting[poolId].feesSharedSpendIndexX128.token0,
-            s.poolAccounting[poolId].feesSharedSpendIndexX128.token1
+            s.poolAccounting[poolId].feesSharedRemainingFactorX128.token0,
+            s.poolAccounting[poolId].feesSharedRemainingFactorX128.token1
         );
     }
 
-    function getPositionFeesSharedIndexLastX128(PositionId id) external view returns (uint256 index0, uint256 index1) {
+    function getPositionFeesSharedRemainingFactorLastX128(PositionId id)
+        external
+        view
+        returns (uint256 factor0, uint256 factor1)
+    {
         return (
-            s.positionAccounting[id].feesSharedIndexLastX128.token0,
-            s.positionAccounting[id].feesSharedIndexLastX128.token1
+            s.positionAccounting[id].feesSharedRemainingFactorLastX128.token0,
+            s.positionAccounting[id].feesSharedRemainingFactorLastX128.token1
         );
     }
 
@@ -159,6 +172,8 @@ contract VTSFeeLibHarness {
                 openMask: 0, openSince0: 0, openSince1: 0, gracePeriodExtension0: 0, gracePeriodExtension1: 0
             })
         });
+        s.positionAccounting[id].feesSharedEpoch.token0 = s.poolAccounting[poolId].feesSharedEpoch.token0;
+        s.positionAccounting[id].feesSharedEpoch.token1 = s.poolAccounting[poolId].feesSharedEpoch.token1;
     }
 
     /// @notice Sets pending fee adjustment for a position
@@ -197,14 +212,14 @@ contract VTSFeeLibHarness {
         s.poolAccounting[poolId].totalCISEExposureSinceLastMod.token1 = exposure1;
     }
 
-    function setPoolFeesSharedSpendIndexX128(PoolId poolId, uint256 index0, uint256 index1) external {
-        s.poolAccounting[poolId].feesSharedSpendIndexX128.token0 = index0;
-        s.poolAccounting[poolId].feesSharedSpendIndexX128.token1 = index1;
+    function setPoolFeesSharedRemainingFactorX128(PoolId poolId, uint256 factor0, uint256 factor1) external {
+        s.poolAccounting[poolId].feesSharedRemainingFactorX128.token0 = factor0;
+        s.poolAccounting[poolId].feesSharedRemainingFactorX128.token1 = factor1;
     }
 
-    function setPositionFeesSharedIndexLastX128(PositionId id, uint256 index0, uint256 index1) external {
-        s.positionAccounting[id].feesSharedIndexLastX128.token0 = index0;
-        s.positionAccounting[id].feesSharedIndexLastX128.token1 = index1;
+    function setPositionFeesSharedRemainingFactorLastX128(PositionId id, uint256 factor0, uint256 factor1) external {
+        s.positionAccounting[id].feesSharedRemainingFactorLastX128.token0 = factor0;
+        s.positionAccounting[id].feesSharedRemainingFactorLastX128.token1 = factor1;
     }
 
     function setPoolFeesSharedEpoch(PoolId poolId, uint256 epoch0, uint256 epoch1) external {

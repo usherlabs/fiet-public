@@ -397,11 +397,20 @@ being an informal “should”.
 ### SEIZE-01: Seizability is token-lane scoped and aggregated at position level
 
 - **Statement**:
+  - Checkpointed RFS openness is modelled as a continuous **position-level** episode, represented with lane-addressable
+    storage:
+    - `openMask` identifies currently open lanes,
+    - `openSince*` stores the canonical checkpointed episode start timestamp mirrored on open lanes.
+  - Lane-composition changes that do not pass through a fully-closed checkpoint state preserve the same canonical episode
+    timer (for example `01 -> 11`, `10 -> 11`, `11 -> 01`, `11 -> 10`).
+  - Only a genuine checkpoint transition through `openMask == 0` begins a fresh episode timer.
   - Commitment-deficit bypass is evaluated per token lane using token-specific deficit age and thresholds.
   - `commitmentDeficit` bypass is distinct from swap-incurred `cumulativeDeficit` accounting:
     - `commitmentDeficit` hardens solvency enforcement (RFS/seizability),
     - `cumulativeDeficit` drives DICE slash attribution and pool deficit principal.
   - Normal grace-path seizability is evaluated only for token lanes currently marked open in the checkpoint mask.
+  - For normal grace-path checks, open-lane eligibility uses each lane's configured grace plus lane-local extension
+    against the canonical checkpointed episode timestamp on that lane.
   - Position-level seizability is true when at least one token lane is currently eligible.
   - Explicit protocol rule: token-lane behaviour is specific to seizability and bypass-gate mechanics only.
   - Once any eligible lane authorises seizure, the position may enter a position-level seizure flow.

@@ -33,7 +33,9 @@ library CheckpointLibrary {
      *         - token-specific minimum deficit age is met, and
      *         - `commitmentDeficitBps >= unbackedCommitmentGraceBypassBps`, or
      *         - optional per-token thresholds (when set > 0) are breached
-     *      2. Normal RFS path: checkpoint has open lane(s) AND lane-local grace period elapsed
+     *      2. Normal RFS path: checkpoint has open lane(s) and at least one open lane is grace-eligible
+     *         using the canonical checkpointed RFS-open episode timer (`openSince*`) plus lane-local extension.
+     *         `openSince*` is intentionally inherited across lane-composition changes unless checkpoint state fully closes.
      * @param s The VTS storage struct
      * @param commitId The token ID to check
      * @param positionIndex The position index to check
@@ -89,7 +91,8 @@ library CheckpointLibrary {
             }
         }
 
-        // Normal RFS path: check checkpoint + grace period
+        // Normal RFS path: check checkpoint + grace period.
+        // Seizability is lane-scoped for currently-open lanes and position-aggregated via OR.
         RFSCheckpoint memory checkpoint = getCheckpoint(s, positionId);
 
         if (checkpoint.openMask == 0) {

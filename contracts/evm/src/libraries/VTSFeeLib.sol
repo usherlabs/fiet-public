@@ -46,7 +46,7 @@ library VTSFeeLib {
     /// @dev Queue a bonus for a single token using CISE (Coverage-Indexed Settled Exposure).
     /// @notice CISE replaces selfNet as the primary eligibility gate, fixing the commitmentMax clamp bug.
     ///         Positions accrue exposure when incrementCoverage is called, proportional to their settled liquidity.
-    ///         CSI (Contribution Spend Index) is used for self-exclusion to ensure positions can receive bonuses
+    ///         CSI remaining-share factors are used for self-exclusion to ensure positions can receive bonuses
     ///         even after their contributed slashes have been distributed to others.
     /// @param pa The position accounting storage reference
     /// @param paPool The pool accounting storage reference
@@ -119,7 +119,7 @@ library VTSFeeLib {
     }
 
     // --------------------------------------------------
-    // CSI (Contribution Spend Index) Helpers
+    // CSI Remaining-Factor Helpers
     // --------------------------------------------------
 
     /// @dev Sync a position's remaining feesShared (self-contribution still embedded in the pot)
@@ -137,36 +137,33 @@ library VTSFeeLib {
         if (epochNow == 0) return;
 
         uint256 epochLast = pa.feesSharedEpoch.get(tokenIndex);
-        uint256 indexNow = paPool.feesSharedSpendIndexX128.get(tokenIndex);
-
-        // Legacy positions from pre-epoch storage are treated as belonging to epoch 1 so outstanding shares remain
-        // valid after this upgrade. Later epoch changes only happen after a full spend-down, so stale shares are 0.
-        if (epochLast == 0 && epochNow == 1) {
-            epochLast = 1;
-        }
+        uint256 factorNow = paPool.feesSharedRemainingFactorX128.get(tokenIndex);
 
         if (epochLast != epochNow) {
             if (pa.feesShared.get(tokenIndex) != 0) {
                 pa.feesShared.set(tokenIndex, 0);
             }
             pa.feesSharedEpoch.set(tokenIndex, epochNow);
-            pa.feesSharedIndexLastX128.set(tokenIndex, indexNow);
+            pa.feesSharedRemainingFactorLastX128.set(tokenIndex, factorNow);
             return;
         }
 
-        uint256 indexLast = pa.feesSharedIndexLastX128.get(tokenIndex);
-        if (indexNow == indexLast) return;
+        uint256 factorLast = pa.feesSharedRemainingFactorLastX128.get(tokenIndex);
+        if (factorNow == factorLast) return;
 
         uint256 sharesRemaining = pa.feesShared.get(tokenIndex);
         if (sharesRemaining > 0) {
             uint256 updatedShares;
-            if (indexLast == 0) {
+            if (factorLast == 0) {
                 // No spend had been realised against this position in the current epoch yet. A zero pool factor is still
                 // the identity state until the first bonus allocation stores a non-zero remaining-share factor.
-                updatedShares =
-                    indexNow == 0 ? sharesRemaining : FullMath.mulDiv(sharesRemaining, indexNow, FixedPoint128.Q128);
+                // Keep remaining shares conservative for tiny balances so self-exclusion does not collapse early.
+                updatedShares = factorNow == 0
+                    ? sharesRemaining
+                    : FullMath.mulDivRoundingUp(sharesRemaining, factorNow, FixedPoint128.Q128);
             } else {
-                updatedShares = indexNow == 0 ? 0 : FullMath.mulDiv(sharesRemaining, indexNow, indexLast);
+                // Round up so partial spend does not floor tiny remaining self-contribution to zero.
+                updatedShares = factorNow == 0 ? 0 : FullMath.mulDivRoundingUp(sharesRemaining, factorNow, factorLast);
             }
 
             if (updatedShares != sharesRemaining) {
@@ -175,7 +172,7 @@ library VTSFeeLib {
         }
 
         pa.feesSharedEpoch.set(tokenIndex, epochNow);
-        pa.feesSharedIndexLastX128.set(tokenIndex, indexNow);
+        pa.feesSharedRemainingFactorLastX128.set(tokenIndex, factorNow);
     }
 
     function _currentFeesSharedEpoch(PoolAccounting storage paPool, uint8 tokenIndex)
@@ -184,13 +181,6 @@ library VTSFeeLib {
         returns (uint256 epoch)
     {
         epoch = paPool.feesSharedEpoch.get(tokenIndex);
-        if (epoch == 0) {
-            uint256 factor = paPool.feesSharedSpendIndexX128.get(tokenIndex);
-            uint256 protocolPot = paPool.protocolFeeAccrued.get(tokenIndex);
-            if (factor != 0 || protocolPot != 0) {
-                return 1;
-            }
-        }
     }
 
     function _beginFeesSharedEpochIfNeeded(PoolAccounting storage paPool, uint8 tokenIndex) internal {
@@ -200,7 +190,7 @@ library VTSFeeLib {
             return;
         }
 
-        uint256 factor = paPool.feesSharedSpendIndexX128.get(tokenIndex);
+        uint256 factor = paPool.feesSharedRemainingFactorX128.get(tokenIndex);
         uint256 protocolPot = paPool.protocolFeeAccrued.get(tokenIndex);
         if (factor == 0 && protocolPot == 0) {
             paPool.feesSharedEpoch.set(tokenIndex, epoch + 1);
@@ -214,10 +204,10 @@ library VTSFeeLib {
             paPool.feesSharedEpoch.set(tokenIndex, 1);
         }
 
-        uint256 currentFactor = paPool.feesSharedSpendIndexX128.get(tokenIndex);
+        uint256 currentFactor = paPool.feesSharedRemainingFactorX128.get(tokenIndex);
         uint256 factorBase = currentFactor == 0 ? FixedPoint128.Q128 : currentFactor;
         uint256 nextFactor = FullMath.mulDivRoundingUp(factorBase, pot - bonus, pot);
-        paPool.feesSharedSpendIndexX128.set(tokenIndex, nextFactor);
+        paPool.feesSharedRemainingFactorX128.set(tokenIndex, nextFactor);
     }
 
     function _prepareFeeShareMint(PositionAccounting storage pa, PoolAccounting storage paPool, uint8 feeTokenIndex)

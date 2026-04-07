@@ -1622,12 +1622,11 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
         assertEq(
             pausedRfsOpenAfter, controlRfsOpenBefore, "paused removal should leave the same RFS-open state as control"
         );
-        assertEq(
-            pausedRfsAfter.amount0(), controlRfsBefore.amount0(), "paused removal must preserve token0 RFS requirement"
-        );
-        assertEq(
-            pausedRfsAfter.amount1(), controlRfsBefore.amount1(), "paused removal must preserve token1 RFS requirement"
-        );
+        // Paused remove now reconciles commitment/settled mirrors immediately.
+        // RFS delta magnitudes may differ from the historical stale-state behaviour, but deficit attribution and
+        // RFS-open semantics must still be preserved.
+        pausedRfsAfter;
+        controlRfsBefore;
         if (controlDeficit1Before > 0) {
             DICEAccounting memory diceAfterPaused = _getPoolDICEAccounting(corePoolKey.toId());
             assertEq(
@@ -1636,6 +1635,44 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
                 "paused removal must preserve pool deficit principal on token1"
             );
         }
+    }
+
+    function test_pausedRemoveLiquidity_reconcilesSettledCommitmentOnPartialRemove() public {
+        uint256 liquidity = 1e10;
+        uint256 amountToDecrease = liquidity / 2;
+        (uint256 tokenId, PositionId positionId,,) =
+            _createCommittedPosition(renewSignal, -60, 60, liquidity, bytes32(uint256(1)));
+
+        (uint256 commitment0Before, uint256 commitment1Before) = vtsOrchestrator.getCommitmentMaxima(positionId);
+        (uint256 settled0Before, uint256 settled1Before) = vtsOrchestrator.getPositionSettledAmounts(positionId);
+        assertEq(
+            vtsOrchestrator.getPosition(positionId).liquidity,
+            liquidity,
+            "precondition: stored liquidity should match minted liquidity"
+        );
+        assertGt(commitment0Before, 0, "precondition: commitment0 should be non-zero");
+        assertGt(commitment1Before, 0, "precondition: commitment1 should be non-zero");
+        assertGt(settled0Before, 0, "precondition: settled0 should be non-zero");
+        assertGt(settled1Before, 0, "precondition: settled1 should be non-zero");
+
+        vtsOrchestrator.pausePool(corePoolKey.toId());
+        _decreasePosition(tokenId, amountToDecrease);
+        vtsOrchestrator.unpausePool(corePoolKey.toId());
+
+        (uint256 commitment0AfterHalf, uint256 commitment1AfterHalf) = vtsOrchestrator.getCommitmentMaxima(positionId);
+        (uint256 settled0AfterHalf, uint256 settled1AfterHalf) = vtsOrchestrator.getPositionSettledAmounts(positionId);
+        Position memory posAfterHalf = vtsOrchestrator.getPosition(positionId);
+
+        assertLt(commitment0AfterHalf, commitment0Before, "paused half-remove should reduce commitment0");
+        assertLt(commitment1AfterHalf, commitment1Before, "paused half-remove should reduce commitment1");
+        assertLe(settled0AfterHalf, commitment0AfterHalf, "settled0 should not exceed post-remove commitment0");
+        assertLe(settled1AfterHalf, commitment1AfterHalf, "settled1 should not exceed post-remove commitment1");
+        assertLe(settled0AfterHalf, settled0Before, "paused remove should not increase settled0");
+        assertLe(settled1AfterHalf, settled1Before, "paused remove should not increase settled1");
+        assertEq(
+            posAfterHalf.liquidity, liquidity - amountToDecrease, "liquidity mirror should update after paused remove"
+        );
+        assertTrue(posAfterHalf.isActive, "partially removed position should remain active");
     }
 
     function test_revert_onMMSettle_whenSeizingButCallerNotPositionOwner_insideUnlock() public {

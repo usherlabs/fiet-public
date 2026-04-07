@@ -152,12 +152,11 @@ struct PositionAccounting {
     TokenPairUint ciseIndexLastX128;
     // CISE: Banked realised exposure since last bonus allocation
     TokenPairUint ciseExposureSinceLastMod;
-    // CSI: Position checkpoint of pool spend index (Q128)
-    TokenPairUint feesSharedIndexLastX128;
-    // CSI: Position checkpoint of the pool spend epoch. Appended for upgrade compatibility.
+    // CSI: Position checkpoint of the pool remaining-share factor (Q128).
+    TokenPairUint feesSharedRemainingFactorLastX128;
+    // CSI: Position checkpoint of the pool spend epoch.
     TokenPairUint feesSharedEpoch;
     // Remainder numerator for coverage fee-burn baseline checkpoint (see VTSPositionLib._applyBurnBase).
-    // Appended for storage-layout compatibility on upgrade.
     TokenPairUint feeBurnGrowthRemainder;
 }
 
@@ -192,7 +191,7 @@ struct PoolAccounting {
     TokenPairUint totalCISEExposureSinceLastMod;
     // CSI: Pool-wide remaining-share factor (Q128). Zero means either "no spend this epoch yet" or
     // "epoch fully spent"; `feesSharedEpoch` disambiguates replacement epochs.
-    TokenPairUint feesSharedSpendIndexX128;
+    TokenPairUint feesSharedRemainingFactorX128;
     // CSI: Pool-wide spend epoch, incremented when a fully-spent epoch is replaced by fresh contributions.
     TokenPairUint feesSharedEpoch;
 }

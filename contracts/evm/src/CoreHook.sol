@@ -194,8 +194,9 @@ contract CoreHook is BaseHook, ImmutableMarketState, ImmutableVTSState, ICoreHoo
     ) internal virtual override returns (bytes4, BalanceDelta) {
         if (_isPoolOrGlobalPaused(key)) {
             // When paused, `_beforeRemoveLiquidity` already settled growths through the canonical hook path.
-            // We intentionally skip post-remove VTS mutation here so pause remains an unwind-only mode rather than
-            // reopening full position processing.
+            // Reconcile only downward bookkeeping from the now-applied remove-liquidity change without
+            // reopening full processPosition/MM/fee mutation while pause remains active.
+            vtsOrchestrator.reconcileAfterPausedRemove(PositionLibrary.generateId(sender, params), params);
             return (this.afterRemoveLiquidity.selector, BalanceDelta.wrap(0));
         }
 

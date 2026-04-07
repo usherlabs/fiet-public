@@ -1137,31 +1137,45 @@ library VTSPositionLib {
         _trackCommitment(s, positionId, params);
 
         PositionAccounting storage pa = s.positionAccounting[positionId];
-        uint256 s0 = pa.settled.token0;
-        uint256 s1 = pa.settled.token1;
-        uint256 excess0;
-        uint256 excess1;
-
-        if (currentLiq == 0) {
-            excess0 = s0;
-            excess1 = s1;
-        } else {
-            TokenPairUint memory commitmentMaxima = pa.commitmentMax;
-            excess0 = s0 > commitmentMaxima.token0 ? s0 - commitmentMaxima.token0 : 0;
-            excess1 = s1 > commitmentMaxima.token1 ? s1 - commitmentMaxima.token1 : 0;
-        }
+        (uint256 excess0, uint256 excess1) = _computeSettledExcessAgainstCommitmentMax(pa, currentLiq);
 
         if (hookData.isMMOperation) {
             requiredSettlementDelta = LiquidityUtils.safeToBalanceDelta(excess0, excess1, false, false);
         } else {
-            if (excess0 > 0) {
-                _sUpdateSettlement(s, positionId, 0, -SafeCast.toInt256(excess0));
-            }
-            if (excess1 > 0) {
-                _sUpdateSettlement(s, positionId, 1, -SafeCast.toInt256(excess1));
-            }
+            _applySettlementClampFromExcess(s, positionId, excess0, excess1);
             requiredSettlementDelta = BalanceDelta.wrap(0);
         }
+    }
+
+    /// @notice Reconcile downward-only position bookkeeping after paused remove-liquidity.
+    /// @dev Must only be called from the canonical paused remove hook path after
+    ///      `_beforeRemoveLiquidity` has already settled pre-remove growths.
+    ///      This helper intentionally avoids full touch/fee/MM processing.
+    function reconcileAfterPausedRemove(
+        VTSStorage storage s,
+        IPoolManager poolManager,
+        PositionId positionId,
+        ModifyLiquidityParams calldata params
+    ) public {
+        Position storage posStorage = s.positions[positionId];
+        if (posStorage.owner == address(0)) return;
+        if (params.liquidityDelta >= 0) {
+            revert Errors.InvariantViolated("Paused remove reconcile requires negative liquidity delta");
+        }
+
+        uint256 initialLiquidity = posStorage.liquidity;
+        uint128 liqLive =
+            StateLibrary.getPositionLiquidity(poolManager, posStorage.poolId, PositionId.unwrap(positionId));
+
+        // Mirror the normal decrease path's commitment tracking and settled clamp, but without
+        // running full processPosition side-effects while pause is active.
+        _trackCommitment(s, positionId, params);
+
+        PositionAccounting storage pa = s.positionAccounting[positionId];
+        (uint256 excess0, uint256 excess1) = _computeSettledExcessAgainstCommitmentMax(pa, liqLive);
+        _applySettlementClampFromExcess(s, positionId, excess0, excess1);
+
+        _applyLiquidityMirrorTransition(s, pa, posStorage, initialLiquidity, liqLive);
     }
 
     /// @notice Handles existing position increase and returns required settlement delta
@@ -1211,13 +1225,14 @@ library VTSPositionLib {
 
         result.id = PositionLibrary.generateId(p.owner, p.params);
         Position storage posStorage = s.positions[result.id];
+        bool isNewPosition = posStorage.owner == address(0);
         uint256 initialLiquidity = posStorage.liquidity;
         uint128 liq = ctx.poolManager.getPositionLiquidity(poolId, PositionId.unwrap(result.id));
 
         TouchPositionHookData memory hookData = _decodeHookData(p.hookData);
         BalanceDelta requiredSettlementDelta;
 
-        if (posStorage.owner == address(0)) {
+        if (isNewPosition) {
             // NEW POSITION
             requiredSettlementDelta =
                 _touchNewPosition(s, ctx.poolManager, poolId, p.owner, p.params, result.id, hookData);
@@ -1245,16 +1260,15 @@ library VTSPositionLib {
 
             // Update position liquidity
             int256 newLiquidity = SafeCast.toInt256(uint256(posStorage.liquidity)) + p.params.liquidityDelta;
-            posStorage.liquidity = newLiquidity < 0 ? 0 : SafeCast.toUint128(uint256(newLiquidity));
-            // Remainder is defined for a fixed liquidity denominator; reset on any liquidity change.
-            if (p.params.liquidityDelta != 0) {
-                PositionAccounting storage paRem = s.positionAccounting[result.id];
-                paRem.feeBurnGrowthRemainder.token0 = 0;
-                paRem.feeBurnGrowthRemainder.token1 = 0;
-            }
+            PositionAccounting storage paRem = s.positionAccounting[result.id];
+            _applyLiquidityMirrorTransition(
+                s, paRem, posStorage, initialLiquidity, newLiquidity < 0 ? 0 : SafeCast.toUint128(uint256(newLiquidity))
+            );
         }
 
-        _updateActiveStatus(s, posStorage, initialLiquidity, liq);
+        if (isNewPosition) {
+            _updateActiveStatus(s, posStorage, initialLiquidity, liq);
+        }
 
         result.feeAdj = VTSFeeLinkedLib.afterTouchPosition(s, result.id);
 
@@ -1290,6 +1304,55 @@ library VTSPositionLib {
                 s.commits[commitId].activePositionCount++;
             }
         }
+    }
+
+    /// @dev Compute settled excess over current commitment maxima after a decrease.
+    ///      If live liquidity is zero, all settled is excess.
+    function _computeSettledExcessAgainstCommitmentMax(PositionAccounting storage pa, uint128 currentLiq)
+        internal
+        view
+        returns (uint256 excess0, uint256 excess1)
+    {
+        uint256 s0 = pa.settled.token0;
+        uint256 s1 = pa.settled.token1;
+        if (currentLiq == 0) {
+            return (s0, s1);
+        }
+        TokenPairUint memory commitmentMaxima = pa.commitmentMax;
+        excess0 = s0 > commitmentMaxima.token0 ? s0 - commitmentMaxima.token0 : 0;
+        excess1 = s1 > commitmentMaxima.token1 ? s1 - commitmentMaxima.token1 : 0;
+    }
+
+    /// @dev Clamp settled balances downward by precomputed excess values.
+    function _applySettlementClampFromExcess(
+        VTSStorage storage s,
+        PositionId positionId,
+        uint256 excess0,
+        uint256 excess1
+    ) internal {
+        if (excess0 > 0) {
+            _sUpdateSettlement(s, positionId, 0, -SafeCast.toInt256(excess0));
+        }
+        if (excess1 > 0) {
+            _sUpdateSettlement(s, positionId, 1, -SafeCast.toInt256(excess1));
+        }
+    }
+
+    /// @dev Apply the shared liquidity mirror transition logic used by touch/reconcile.
+    function _applyLiquidityMirrorTransition(
+        VTSStorage storage s,
+        PositionAccounting storage pa,
+        Position storage posStorage,
+        uint256 initialLiquidity,
+        uint128 nextLiquidity
+    ) internal {
+        posStorage.liquidity = nextLiquidity;
+        if (initialLiquidity != uint256(nextLiquidity)) {
+            // Remainder is defined for a fixed liquidity denominator; reset on liquidity changes.
+            pa.feeBurnGrowthRemainder.token0 = 0;
+            pa.feeBurnGrowthRemainder.token1 = 0;
+        }
+        _updateActiveStatus(s, posStorage, initialLiquidity, nextLiquidity);
     }
 
     /// @notice Process MM-specific operations (LCC management, deltas, checkpoints)

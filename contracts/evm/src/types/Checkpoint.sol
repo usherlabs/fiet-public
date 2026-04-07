@@ -8,9 +8,9 @@ import {TokenConfiguration} from "./VTS.sol";
 struct RFSCheckpoint {
     // bitmask of currently open RFS lanes: bit0=token0, bit1=token1
     uint8 openMask;
-    // timestamp when token0 lane last transitioned from closed->open
+    // canonical checkpointed start time of the current position-level RFS-open episode, mirrored on token0 when open
     uint256 openSince0;
-    // timestamp when token1 lane last transitioned from closed->open
+    // canonical checkpointed start time of the current position-level RFS-open episode, mirrored on token1 when open
     uint256 openSince1;
     // the grace period extension
     uint256 gracePeriodExtension0;
@@ -20,8 +20,8 @@ struct RFSCheckpoint {
 
 using RFSCheckpointLibrary for RFSCheckpoint global;
 
-// initially the checkpoint starts with all lanes closed (openMask = 0)
-// and each lane gets its own open timestamp when it opens.
+// initially the checkpoint starts with all lanes closed (openMask = 0).
+// openSince* encodes a canonical position-level RFS-open episode timer, addressable per open lane.
 // forge-lint: disable-next-line(pascal-case-struct)
 library RFSCheckpointLibrary {
     uint8 internal constant TOKEN0_OPEN_MASK = 1;
@@ -38,9 +38,9 @@ library RFSCheckpointLibrary {
         return false;
     }
 
-    // this function is used to mark the token-lane checkpoint mask for a position
-    // it updates lane-local open timestamps and resets lane-local grace extensions
-    // only when the specific lane opens or closes
+    // this function marks lane-open state for a position.
+    // it preserves a canonical position-level episode timer across lane-composition changes unless the checkpoint
+    // fully closes, while still resetting lane-local grace extensions when that specific lane toggles.
     function mark(RFSCheckpoint storage self, uint8 openMask) internal {
         uint8 maskedOpen = openMask & BOTH_OPEN_MASK;
         uint8 prevOpen = self.openMask;
@@ -56,10 +56,9 @@ library RFSCheckpointLibrary {
         if (wasToken0Open != isToken0Open) {
             self.gracePeriodExtension0 = 0;
             if (isToken0Open) {
-                // Treat a one-lane rotation as a continuation of the same canonical RFS-open episode. If token1 was
-                // already open and token0 becomes the newly-open lane in the same mark, inherit token1's `openSince`
-                // instead of restarting grace from "now". This preserves elapsed grace across lane flips where the
-                // position never actually returned to a fully-closed RFS state.
+                // Preserve the same position-level RFS-open episode on lane-composition changes (eg 01->11 or 11->10):
+                // if token1 is currently open in the previous checkpoint, token0 inherits the canonical timer.
+                // Only a genuine fully-closed checkpoint episode (openMask == 0) should restart this timer.
                 uint256 inheritedOpenSince0 = wasToken1Open ? prevOpenSince1 : 0;
                 self.openSince0 = inheritedOpenSince0 != 0 ? inheritedOpenSince0 : block.timestamp;
             } else {
@@ -69,10 +68,8 @@ library RFSCheckpointLibrary {
         if (wasToken1Open != isToken1Open) {
             self.gracePeriodExtension1 = 0;
             if (isToken1Open) {
-                // Symmetric to token0 above: when the open requirement migrates from token0 to token1 without an
-                // intervening fully-closed checkpoint, keep the canonical "RFS opened at" timestamp by inheriting the
-                // other lane's timer. This means `openSince*` tracks the continuous RFS episode, not merely the latest
-                // lane that happens to be carrying the open balance.
+                // Symmetric to token0 above: preserve the shared canonical episode timer across lane-composition changes.
+                // This intentionally tracks continuous position-level checkpointed openness rather than per-lane birth time.
                 uint256 inheritedOpenSince1 = wasToken0Open ? prevOpenSince0 : 0;
                 self.openSince1 = inheritedOpenSince1 != 0 ? inheritedOpenSince1 : block.timestamp;
             } else {

@@ -597,6 +597,82 @@ contract VTSPositionLibMutationUnitTest is Test {
         assertEq(exposureSecond, exposureFirst, "second settle with same pool index must not add exposure again");
     }
 
+    function test_reconcileAfterPausedRemove_clampsSettledBeforeLaterCISESettlement() public {
+        uint128 liqBefore = 1000;
+        uint128 liqAfter = 500;
+        (PositionId id, ModifyLiquidityParams memory addParams) = _register(bytes32(uint256(0xAA55E)), liqBefore);
+
+        (uint256 c0Before, uint256 c1Before) =
+            LiquidityUtils.calculateCommitmentMaxima(TICK_LOWER, TICK_UPPER, liqBefore);
+        harness.setCommitmentMax(id, c0Before, c1Before);
+        harness.setSettled(id, c0Before, c1Before);
+        harness.setPoolTotalSettled(poolId, c0Before, c1Before);
+
+        // Coverage advanced while paused; we intentionally defer realisation until after reconciliation.
+        harness.setCISEIndexLastX128(id, 0, 0);
+        harness.setPoolCoveragePerSettledIndexX128(poolId, FixedPoint128.Q128, 0);
+
+        _pmSetSlot0Tick(poolId, 0);
+        _pmSetPositionLiquidity(poolId, PositionId.unwrap(id), liqAfter);
+        harness.setPositionLiquidityMirror(id, liqBefore);
+
+        ModifyLiquidityParams memory removeParams = ModifyLiquidityParams({
+            tickLower: addParams.tickLower,
+            tickUpper: addParams.tickUpper,
+            liquidityDelta: -int256(uint256(liqBefore - liqAfter)),
+            salt: addParams.salt
+        });
+        harness.reconcileAfterPausedRemove(IPoolManager(address(pm)), id, removeParams);
+
+        (uint256 c0After,, uint256 s0After,,,) = harness.getPositionAccounting(id);
+        assertLt(c0After, c0Before, "commitment max should decrease after paused remove reconcile");
+        assertEq(s0After, c0After, "settled should clamp to the post-remove commitment max");
+
+        Position memory posAfter = harness.getPosition(id);
+        assertEq(posAfter.liquidity, liqAfter, "liquidity mirror should match live PoolManager liquidity");
+        assertTrue(posAfter.isActive, "partially removed position should remain active");
+
+        harness.settlePositionGrowths(IPoolManager(address(pm)), id);
+        (uint256 exposure0,) = harness.getCISEExposure(id);
+        assertEq(exposure0, s0After, "CISE exposure should realise from clamped settled baseline");
+    }
+
+    function test_reconcileAfterPausedRemove_fullRemove_zeroesSettledAndMarksInactive() public {
+        uint128 liqBefore = 1000;
+        (PositionId id, ModifyLiquidityParams memory addParams) = _register(bytes32(uint256(0xAA55F)), liqBefore);
+
+        (uint256 c0Before, uint256 c1Before) =
+            LiquidityUtils.calculateCommitmentMaxima(TICK_LOWER, TICK_UPPER, liqBefore);
+        harness.setCommitmentMax(id, c0Before, c1Before);
+        harness.setSettled(id, c0Before, c1Before);
+        harness.setPoolTotalSettled(poolId, c0Before, c1Before);
+
+        _pmSetSlot0Tick(poolId, 0);
+        _pmSetPositionLiquidity(poolId, PositionId.unwrap(id), 0);
+        harness.setPositionLiquidityMirror(id, liqBefore);
+
+        ModifyLiquidityParams memory removeParams = ModifyLiquidityParams({
+            tickLower: addParams.tickLower,
+            tickUpper: addParams.tickUpper,
+            liquidityDelta: -int256(uint256(liqBefore)),
+            salt: addParams.salt
+        });
+        harness.reconcileAfterPausedRemove(IPoolManager(address(pm)), id, removeParams);
+
+        (uint256 c0After, uint256 c1After, uint256 s0After, uint256 s1After,,) = harness.getPositionAccounting(id);
+        Position memory posAfter = harness.getPosition(id);
+        (uint256 poolTotal0After, uint256 poolTotal1After) = harness.getPoolTotalSettled(poolId);
+
+        assertEq(c0After, 0, "full remove should clear commitment max token0");
+        assertEq(c1After, 0, "full remove should clear commitment max token1");
+        assertEq(s0After, 0, "full remove should clear settled token0");
+        assertEq(s1After, 0, "full remove should clear settled token1");
+        assertEq(poolTotal0After, 0, "pool totalSettled token0 should be reduced");
+        assertEq(poolTotal1After, 0, "pool totalSettled token1 should be reduced");
+        assertEq(posAfter.liquidity, 0, "liquidity mirror should be zero after full remove");
+        assertFalse(posAfter.isActive, "full remove should mark position inactive");
+    }
+
     function test_settlePositionInflowGrowth_positiveAdd0_increasesSettledAndPoolTotalSettled() public {
         (PositionId id, ModifyLiquidityParams memory p) = _register(bytes32(uint256(13)), 1);
 

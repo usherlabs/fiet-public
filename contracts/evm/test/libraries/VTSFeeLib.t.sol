@@ -49,8 +49,8 @@ contract VTSFeeLibTest is VTSLibTestBase {
         (s.pot0, s.pot1) = harness.getSlashedPot(poolId);
         (s.exp0, s.exp1) = harness.getCISEExposure(positionId);
         (s.poolExp0, s.poolExp1) = harness.getPoolTotalCISEExposure(poolId);
-        (s.spendIdx0, s.spendIdx1) = harness.getPoolFeesSharedSpendIndexX128(poolId);
-        (s.idxLast0, s.idxLast1) = harness.getPositionFeesSharedIndexLastX128(positionId);
+        (s.spendIdx0, s.spendIdx1) = harness.getPoolFeesSharedRemainingFactorX128(poolId);
+        (s.idxLast0, s.idxLast1) = harness.getPositionFeesSharedRemainingFactorLastX128(positionId);
     }
 
     function _assertAfterTouchPositionStateUnchanged(
@@ -70,10 +70,14 @@ contract VTSFeeLibTest is VTSLibTestBase {
         assertEq(afterState.exp1, beforeState.exp1, "position exposure1 must not change when fee sharing disabled");
         assertEq(afterState.poolExp0, beforeState.poolExp0, "pool exposure0 must not change when fee sharing disabled");
         assertEq(afterState.poolExp1, beforeState.poolExp1, "pool exposure1 must not change when fee sharing disabled");
-        assertEq(afterState.spendIdx0, beforeState.spendIdx0, "spend index0 must not change when fee sharing disabled");
-        assertEq(afterState.spendIdx1, beforeState.spendIdx1, "spend index1 must not change when fee sharing disabled");
-        assertEq(afterState.idxLast0, beforeState.idxLast0, "indexLast0 must not change when fee sharing disabled");
-        assertEq(afterState.idxLast1, beforeState.idxLast1, "indexLast1 must not change when fee sharing disabled");
+        assertEq(
+            afterState.spendIdx0, beforeState.spendIdx0, "remaining factor0 must not change when fee sharing disabled"
+        );
+        assertEq(
+            afterState.spendIdx1, beforeState.spendIdx1, "remaining factor1 must not change when fee sharing disabled"
+        );
+        assertEq(afterState.idxLast0, beforeState.idxLast0, "factorLast0 must not change when fee sharing disabled");
+        assertEq(afterState.idxLast1, beforeState.idxLast1, "factorLast1 must not change when fee sharing disabled");
     }
 
     function setUp() public override {
@@ -83,10 +87,12 @@ contract VTSFeeLibTest is VTSLibTestBase {
 
         // Setup default pool in harness
         harness.setupPool(testPoolId, _createDefaultVTSConfig());
+        harness.setPoolFeesSharedEpoch(testPoolId, 1, 1);
 
         // Generate a test position ID
         testPositionId = _generatePositionId(DEFAULT_OWNER, DEFAULT_TICK_LOWER, DEFAULT_TICK_UPPER, DEFAULT_SALT);
         harness.setupPosition(testPositionId, testPoolId);
+        harness.setPositionFeesSharedEpoch(testPositionId, 1, 1);
     }
 
     // ============================================================
@@ -281,38 +287,38 @@ contract VTSFeeLibTest is VTSLibTestBase {
 
     function test_syncFeesSharedRemaining_indexUnchanged_noop() public {
         harness.setFeesShared(testPositionId, 123, 456);
-        harness.setPoolFeesSharedSpendIndexX128(testPoolId, 111, 222);
-        harness.setPositionFeesSharedIndexLastX128(testPositionId, 111, 222);
+        harness.setPoolFeesSharedRemainingFactorX128(testPoolId, 111, 222);
+        harness.setPositionFeesSharedRemainingFactorLastX128(testPositionId, 111, 222);
 
         harness.syncFeesSharedRemainingForToken(testPositionId, testPoolId, 0);
         harness.syncFeesSharedRemainingForToken(testPositionId, testPoolId, 1);
 
         (uint256 after0, uint256 after1) = harness.getFeesShared(testPositionId);
-        (uint256 idxLast0, uint256 idxLast1) = harness.getPositionFeesSharedIndexLastX128(testPositionId);
+        (uint256 idxLast0, uint256 idxLast1) = harness.getPositionFeesSharedRemainingFactorLastX128(testPositionId);
         assertEq(after0, 123);
         assertEq(after1, 456);
         assertEq(idxLast0, 111);
         assertEq(idxLast1, 222);
     }
 
-    function test_syncFeesSharedRemaining_deltaIndex_spentZero_onlyCheckpointsIndex() public {
+    function test_syncFeesSharedRemaining_deltaFactor_spentZero_onlyCheckpointsFactor() public {
         // Remaining-share factor is almost unchanged, so the proportional spend rounds to 0.
         harness.setFeesShared(testPositionId, 1e18, 0);
-        harness.setPoolFeesSharedSpendIndexX128(testPoolId, FixedPoint128.Q128 - 1, 0);
-        harness.setPositionFeesSharedIndexLastX128(testPositionId, 0, 0);
+        harness.setPoolFeesSharedRemainingFactorX128(testPoolId, FixedPoint128.Q128 - 1, 0);
+        harness.setPositionFeesSharedRemainingFactorLastX128(testPositionId, 0, 0);
 
         harness.syncFeesSharedRemainingForToken(testPositionId, testPoolId, 0);
 
         (uint256 after0,) = harness.getFeesShared(testPositionId);
-        (uint256 idxLast0,) = harness.getPositionFeesSharedIndexLastX128(testPositionId);
-        assertEq(after0, 1e18 - 1, "remaining shares should reflect the smallest non-zero proportional spend");
-        assertEq(idxLast0, FixedPoint128.Q128 - 1, "indexLast should checkpoint even when spend rounds to 0");
+        (uint256 idxLast0,) = harness.getPositionFeesSharedRemainingFactorLastX128(testPositionId);
+        assertEq(after0, 1e18, "remaining shares should be conservative when proportional spend is sub-wei");
+        assertEq(idxLast0, FixedPoint128.Q128 - 1, "factorLast should checkpoint even when spend rounds to 0");
     }
 
     function test_syncFeesSharedRemaining_spentPartial_reducesRemaining() public {
         harness.setFeesShared(testPositionId, 1000, 0);
-        harness.setPoolFeesSharedSpendIndexX128(testPoolId, FixedPoint128.Q128 / 2, 0);
-        harness.setPositionFeesSharedIndexLastX128(testPositionId, 0, 0);
+        harness.setPoolFeesSharedRemainingFactorX128(testPoolId, FixedPoint128.Q128 / 2, 0);
+        harness.setPositionFeesSharedRemainingFactorLastX128(testPositionId, 0, 0);
 
         harness.syncFeesSharedRemainingForToken(testPositionId, testPoolId, 0);
 
@@ -323,8 +329,8 @@ contract VTSFeeLibTest is VTSLibTestBase {
     function test_syncFeesSharedRemaining_spentAll_setsZero() public {
         harness.setFeesShared(testPositionId, 1000, 0);
         harness.setPoolFeesSharedEpoch(testPoolId, 1, 0);
-        harness.setPoolFeesSharedSpendIndexX128(testPoolId, 0, 0);
-        harness.setPositionFeesSharedIndexLastX128(testPositionId, FixedPoint128.Q128, 0);
+        harness.setPoolFeesSharedRemainingFactorX128(testPoolId, 0, 0);
+        harness.setPositionFeesSharedRemainingFactorLastX128(testPositionId, FixedPoint128.Q128, 0);
 
         harness.syncFeesSharedRemainingForToken(testPositionId, testPoolId, 0);
 
@@ -332,17 +338,88 @@ contract VTSFeeLibTest is VTSLibTestBase {
         assertEq(after0, 0, "all shares should be spent");
     }
 
+    function test_syncFeesSharedRemaining_microShare_factorLastZero_staysNonZeroAfterPartialSpend() public {
+        harness.setFeesShared(testPositionId, 1, 0);
+        harness.setPoolFeesSharedRemainingFactorX128(testPoolId, FixedPoint128.Q128 / 2, 0);
+        harness.setPositionFeesSharedRemainingFactorLastX128(testPositionId, 0, 0);
+
+        harness.syncFeesSharedRemainingForToken(testPositionId, testPoolId, 0);
+
+        (uint256 after0,) = harness.getFeesShared(testPositionId);
+        assertEq(after0, 1, "1-wei self-share must not collapse to zero after partial spend");
+    }
+
+    function test_syncFeesSharedRemaining_microShare_factorLastNonZero_staysNonZeroAfterPartialSpend() public {
+        harness.setFeesShared(testPositionId, 1, 0);
+        harness.setPoolFeesSharedRemainingFactorX128(testPoolId, FixedPoint128.Q128 / 3, 0);
+        harness.setPositionFeesSharedRemainingFactorLastX128(testPositionId, FixedPoint128.Q128 / 2, 0);
+
+        harness.syncFeesSharedRemainingForToken(testPositionId, testPoolId, 0);
+
+        (uint256 after0,) = harness.getFeesShared(testPositionId);
+        assertEq(after0, 1, "1-wei self-share must remain excluded until full spend-down");
+    }
+
+    function test_syncFeesSharedRemaining_microShare_multiSpendBeforeTouch_staysNonZeroUntilExhausted() public {
+        harness.setFeesShared(testPositionId, 1, 0);
+        harness.setPositionFeesSharedRemainingFactorLastX128(testPositionId, 0, 0);
+
+        harness.setPoolFeesSharedRemainingFactorX128(testPoolId, (FixedPoint128.Q128 * 3) / 4, 0);
+        harness.syncFeesSharedRemainingForToken(testPositionId, testPoolId, 0);
+        (uint256 afterFirstSpend,) = harness.getFeesShared(testPositionId);
+        assertEq(afterFirstSpend, 1, "micro-share must remain non-zero after first partial spend");
+
+        harness.setPoolFeesSharedRemainingFactorX128(testPoolId, FixedPoint128.Q128 / 4, 0);
+        harness.syncFeesSharedRemainingForToken(testPositionId, testPoolId, 0);
+        (uint256 afterSecondSpend,) = harness.getFeesShared(testPositionId);
+        assertEq(afterSecondSpend, 1, "micro-share must remain non-zero while pool factor is positive");
+
+        harness.setPoolFeesSharedRemainingFactorX128(testPoolId, 0, 0);
+        harness.syncFeesSharedRemainingForToken(testPositionId, testPoolId, 0);
+        (uint256 afterFullSpend,) = harness.getFeesShared(testPositionId);
+        assertEq(afterFullSpend, 0, "micro-share can clear only when the epoch is fully spent");
+    }
+
+    function test_prepareFeeShareMint_freshLane_initialisesEpoch() public {
+        PoolId freshPoolId = PoolId.wrap(bytes32(uint256(0xABCD)));
+        PositionId freshPositionId = PositionId.wrap(bytes32(uint256(0xDCBA)));
+        harness.setupPool(freshPoolId, _createDefaultVTSConfig());
+        harness.setupPosition(freshPositionId, freshPoolId);
+
+        harness.prepareFeeShareMint(freshPositionId, freshPoolId, 0);
+
+        (uint256 epoch0,) = harness.getPoolFeesSharedEpoch(freshPoolId);
+        assertEq(epoch0, 1, "fresh lane should start at epoch 1 on first mint");
+    }
+
+    function test_syncFeesSharedRemaining_epochBaseline_factorLastQ128_noImmediateSpend() public {
+        harness.setPoolFeesSharedEpoch(testPoolId, 1, 1);
+        harness.setPoolFeesSharedRemainingFactorX128(testPoolId, FixedPoint128.Q128, 0);
+        harness.setFeesShared(testPositionId, 1000, 0);
+        harness.setPositionFeesSharedEpoch(testPositionId, 1, 0);
+        harness.setPositionFeesSharedRemainingFactorLastX128(testPositionId, FixedPoint128.Q128, 0);
+
+        harness.syncFeesSharedRemainingForToken(testPositionId, testPoolId, 0);
+        (uint256 afterSync,) = harness.getFeesShared(testPositionId);
+        assertEq(afterSync, 1000, "rebased checkpoint should not apply retroactive spend");
+
+        harness.setPoolFeesSharedRemainingFactorX128(testPoolId, FixedPoint128.Q128 / 2, 0);
+        harness.syncFeesSharedRemainingForToken(testPositionId, testPoolId, 0);
+        (uint256 afterSpend,) = harness.getFeesShared(testPositionId);
+        assertEq(afterSpend, 500, "post-baseline spend should apply multiplicative factor");
+    }
+
     // ============================================================
     // _queueBonusForToken + _cleanupAfterAllocationForToken Tests (CISE + CSI)
     // ============================================================
 
     /// @dev Mutation-killer: if the `ciseExposure == 0` early return is removed, the function could still return false
-    ///      later in the flow, but it would incorrectly checkpoint CSI indexLast via `_syncFeesSharedRemainingForToken`.
+    ///      later in the flow, but it would incorrectly checkpoint CSI factorLast via `_syncFeesSharedRemainingForToken`.
     function test_queueBonusForToken_ciseExposureZero_doesNotCheckpointCSIIndexLast() public {
-        // Arrange: make CSI spend index non-zero and indexLast zero so checkpointing is observable.
+        // Arrange: make CSI remaining factor non-zero and factorLast zero so checkpointing is observable.
         harness.setFeesShared(testPositionId, 1000, 0);
-        harness.setPoolFeesSharedSpendIndexX128(testPoolId, FixedPoint128.Q128 / 2, 0);
-        harness.setPositionFeesSharedIndexLastX128(testPositionId, 0, 0);
+        harness.setPoolFeesSharedRemainingFactorX128(testPoolId, FixedPoint128.Q128 / 2, 0);
+        harness.setPositionFeesSharedRemainingFactorLastX128(testPositionId, 0, 0);
 
         // Provide a pot and exposure denominators (should be irrelevant due to ciseExposure == 0 early return).
         harness.setProtocolFeeAccrued(testPoolId, 1000, 0);
@@ -353,8 +430,8 @@ contract VTSFeeLibTest is VTSLibTestBase {
 
         // Assert: no allocation, and critically, no checkpointing.
         assertFalse(allocated);
-        (uint256 idxLast0,) = harness.getPositionFeesSharedIndexLastX128(testPositionId);
-        assertEq(idxLast0, 0, "CSI: indexLast must not checkpoint when ciseExposure == 0");
+        (uint256 idxLast0,) = harness.getPositionFeesSharedRemainingFactorLastX128(testPositionId);
+        assertEq(idxLast0, 0, "CSI: factorLast must not checkpoint when ciseExposure == 0");
     }
 
     /// @dev Mutation-killer: if `_syncFeesSharedRemainingForToken` is deleted, `potAvail` can remain 0 and block allocation.
@@ -365,8 +442,8 @@ contract VTSFeeLibTest is VTSLibTestBase {
         harness.setFeesShared(testPositionId, 100, 0);
 
         // Spend half the remaining shares via CSI index delta.
-        harness.setPoolFeesSharedSpendIndexX128(testPoolId, FixedPoint128.Q128 / 2, 0);
-        harness.setPositionFeesSharedIndexLastX128(testPositionId, 0, 0);
+        harness.setPoolFeesSharedRemainingFactorX128(testPoolId, FixedPoint128.Q128 / 2, 0);
+        harness.setPositionFeesSharedRemainingFactorLastX128(testPositionId, 0, 0);
 
         // Exposure + denominator for bonus calculation.
         harness.setPoolTotalCISEExposure(testPoolId, 0, 2e6);
@@ -457,7 +534,7 @@ contract VTSFeeLibTest is VTSLibTestBase {
         harness.setFeesShared(testPositionId, 0, 0);
         harness.setPoolTotalCISEExposure(testPoolId, 0, 4e6);
 
-        (uint256 idx0Before,) = harness.getPoolFeesSharedSpendIndexX128(testPoolId);
+        (uint256 idx0Before,) = harness.getPoolFeesSharedRemainingFactorX128(testPoolId);
         bool allocated = harness.queueBonusForToken(testPositionId, testPoolId, 0, 1, 2e6);
         assertTrue(allocated);
 
@@ -470,8 +547,8 @@ contract VTSFeeLibTest is VTSLibTestBase {
         assertEq(pend0After, -int256(500_000), "pending should be negative by the allocated bonus");
 
         // Remaining-share factor should move away from the zero/identity sentinel after allocation.
-        (uint256 idx0After,) = harness.getPoolFeesSharedSpendIndexX128(testPoolId);
-        assertGt(idx0After, idx0Before, "spend index should advance");
+        (uint256 idx0After,) = harness.getPoolFeesSharedRemainingFactorX128(testPoolId);
+        assertGt(idx0After, idx0Before, "remaining factor should advance");
     }
 
     /// @dev Mutation-killer: ensures pot accounting uses subtraction (pot - bonus), not pot % bonus.
@@ -503,6 +580,35 @@ contract VTSFeeLibTest is VTSLibTestBase {
 
         (uint256 pot0After,) = harness.getProtocolFeeAccrued(testPoolId);
         assertEq(pot0After, 0, "capped bonus should fully spend the small pot");
+    }
+
+    function test_queueBonusForToken_splitMicroContributors_cannotReclaimOwnResidualPot() public {
+        PositionId microA = PositionId.wrap(bytes32(uint256(0xA11CE)));
+        PositionId microB = PositionId.wrap(bytes32(uint256(0xB0B)));
+        PositionId beneficiary = PositionId.wrap(bytes32(uint256(0xCAFE)));
+        harness.setupPosition(microA, testPoolId);
+        harness.setupPosition(microB, testPoolId);
+        harness.setupPosition(beneficiary, testPoolId);
+        harness.setPositionFeesSharedEpoch(microA, 1, 1);
+        harness.setPositionFeesSharedEpoch(microB, 1, 1);
+        harness.setPositionFeesSharedEpoch(beneficiary, 1, 1);
+
+        // Two micro contributors fund the pot with 1 wei each.
+        harness.setFeesShared(microA, 1, 0);
+        harness.setFeesShared(microB, 1, 0);
+        harness.setProtocolFeeAccrued(testPoolId, 2, 0);
+
+        // A beneficiary consumes part of the pot, creating a partial-spend factor.
+        harness.setPoolTotalCISEExposure(testPoolId, 0, 3);
+        bool allocatedBeneficiary = harness.queueBonusForToken(beneficiary, testPoolId, 0, 1, 1);
+        assertTrue(allocatedBeneficiary, "beneficiary must consume a partial bonus from the shared pot");
+
+        // Micro contributor should remain self-excluded while factor is still positive.
+        bool allocatedMicroA = harness.queueBonusForToken(microA, testPoolId, 0, 1, 1);
+        assertFalse(allocatedMicroA, "micro contributor must not reclaim from still-self-attributable residual pot");
+
+        (uint256 microAFeesShared,) = harness.getFeesShared(microA);
+        assertEq(microAFeesShared, 1, "micro contributor self-share must remain non-zero after partial spend");
     }
 
     function test_cleanupAfterAllocationForToken_clampsPoolExposure() public {
@@ -563,8 +669,10 @@ contract VTSFeeLibTest is VTSLibTestBase {
         harness.setProtocolFeeAccrued(testPoolId, 1000, 2000);
         harness.setSlashedPot(testPoolId, 1000, 2000);
         harness.setPendingFeeAdj(testPositionId, 123, -456);
-        harness.setPoolFeesSharedSpendIndexX128(testPoolId, FixedPoint128.Q128 / 2, FixedPoint128.Q128 / 3);
-        harness.setPositionFeesSharedIndexLastX128(testPositionId, FixedPoint128.Q128 / 4, FixedPoint128.Q128 / 5);
+        harness.setPoolFeesSharedRemainingFactorX128(testPoolId, FixedPoint128.Q128 / 2, FixedPoint128.Q128 / 3);
+        harness.setPositionFeesSharedRemainingFactorLastX128(
+            testPositionId, FixedPoint128.Q128 / 4, FixedPoint128.Q128 / 5
+        );
 
         // Snapshot state.
         AfterTouchPositionState memory beforeState = _snapshotAfterTouchPositionState(testPositionId, testPoolId);
@@ -785,18 +893,23 @@ contract VTSFeeLibTest is VTSLibTestBase {
         assertEq(actualPot1, pot1, "Pot1 should match set value");
     }
 
-    /// @dev Mutation-killer: ensures non-zero `indexLast` scales by the ratio `indexNow / indexLast`.
-    function test_syncFeesSharedRemaining_nonZeroIndexLast_spendsExpectedAmount() public {
+    /// @dev Mutation-killer: ensures non-zero `factorLast` scales by the ratio `factorNow / factorLast`.
+    ///      We intentionally round remaining shares up during partial spend so self-exclusion stays conservative.
+    function test_syncFeesSharedRemaining_nonZeroFactorLast_spendsExpectedAmount() public {
         harness.setFeesShared(testPositionId, 1000, 0);
-        harness.setPoolFeesSharedSpendIndexX128(testPoolId, FixedPoint128.Q128 / 2, 0);
-        harness.setPositionFeesSharedIndexLastX128(testPositionId, (FixedPoint128.Q128 * 3) / 4, 0);
+        harness.setPoolFeesSharedRemainingFactorX128(testPoolId, FixedPoint128.Q128 / 2, 0);
+        harness.setPositionFeesSharedRemainingFactorLastX128(testPositionId, (FixedPoint128.Q128 * 3) / 4, 0);
 
         harness.syncFeesSharedRemainingForToken(testPositionId, testPoolId, 0);
 
         (uint256 after0,) = harness.getFeesShared(testPositionId);
-        assertEq(after0, 666, "Expected shares to scale by the current remaining-share ratio");
+        assertEq(
+            after0, 667, "Expected shares to scale by the current remaining-share ratio with conservative rounding"
+        );
     }
 
+    /// @dev Conservative rounding may strand bounded exclusion dust in `protocolFeeAccrued`.
+    ///      We accept that trade-off because the value remains in pool accounting and avoids under-excluding self-shares.
     function test_csi_multiSpendBeforeTouch_matchesStepwiseReference_harness() public {
         PositionId contributor = PositionId.wrap(bytes32(uint256(0xC0117)));
         PositionId beneficiary = PositionId.wrap(bytes32(uint256(0xB0117)));
@@ -819,10 +932,15 @@ contract VTSFeeLibTest is VTSLibTestBase {
         (, uint256 protocolFeeRemaining) = harness.getProtocolFeeAccrued(testPoolId);
 
         assertEq(protocolFeeRemaining, 810, "two queued 10% bonuses should leave 810 in the pool pot");
-        assertEq(
+        assertGe(
             contributorRemaining,
             protocolFeeRemaining,
-            "untouched contributor shares should match the stepwise remaining pot after multiple spends"
+            "untouched contributor shares should remain at least as large as the remaining pot under conservative exclusion"
+        );
+        assertEq(
+            contributorRemaining - protocolFeeRemaining,
+            1,
+            "conservative rounding should strand only bounded exclusion dust in this two-spend reference case"
         );
     }
 
@@ -830,17 +948,17 @@ contract VTSFeeLibTest is VTSLibTestBase {
     // CSI / CISE regression (harness): multi-round, ordering, rounding
     // ============================================================
 
-    /// @notice Regression: after spend-index consumption, a new slash mint adds to remaining shares (not re-spent).
-    /// @dev Mirrors `_applyCoverageBurn`: sync first, then mint onto `feesShared`. New mint must not be implicit in the prior deltaIndex.
-    function test_csi_multiRound_newSlash_afterSpendIndex_sync_usesRemainingPlusMint_harness() public {
+    /// @notice Regression: after remaining-factor consumption, a new slash mint adds to remaining shares (not re-spent).
+    /// @dev Mirrors `_applyCoverageBurn`: sync first, then mint onto `feesShared`. New mint must not be implicit in the prior deltaFactor.
+    function test_csi_multiRound_newSlash_afterRemainingFactor_sync_usesRemainingPlusMint_harness() public {
         PositionId slasher = PositionId.wrap(bytes32(uint256(0x51A5E7)));
         harness.setupPosition(slasher, testPoolId);
 
         uint256 initialShares = 1000;
         uint256 deltaSpend = FixedPoint128.Q128 / 4;
         harness.setFeesShared(slasher, 0, initialShares);
-        harness.setPositionFeesSharedIndexLastX128(slasher, 0, 0);
-        harness.setPoolFeesSharedSpendIndexX128(testPoolId, 0, deltaSpend);
+        harness.setPositionFeesSharedRemainingFactorLastX128(slasher, 0, 0);
+        harness.setPoolFeesSharedRemainingFactorX128(testPoolId, 0, deltaSpend);
 
         harness.syncFeesSharedRemainingForToken(slasher, testPoolId, 1);
         uint256 remaining = FullMath.mulDiv(initialShares, deltaSpend, FixedPoint128.Q128);
@@ -927,16 +1045,16 @@ contract VTSFeeLibTest is VTSLibTestBase {
 
         uint256 deltaSpend = FixedPoint128.Q128 / 4;
         harness.setFeesShared(slasher, 0, 1000);
-        harness.setPositionFeesSharedIndexLastX128(slasher, 0, 0);
-        harness.setPoolFeesSharedSpendIndexX128(testPoolId, 0, deltaSpend);
+        harness.setPositionFeesSharedRemainingFactorLastX128(slasher, 0, 0);
+        harness.setPoolFeesSharedRemainingFactorX128(testPoolId, 0, deltaSpend);
         harness.syncFeesSharedRemainingForToken(slasher, testPoolId, 1);
 
         uint256 remaining = FullMath.mulDiv(1000, deltaSpend, FixedPoint128.Q128);
         (, uint256 fs1) = harness.getFeesShared(slasher);
         assertEq(fs1, remaining);
 
-        harness.setPoolFeesSharedSpendIndexX128(testPoolId, 0, deltaSpend);
-        harness.setPositionFeesSharedIndexLastX128(slasher, 0, deltaSpend);
+        harness.setPoolFeesSharedRemainingFactorX128(testPoolId, 0, deltaSpend);
+        harness.setPositionFeesSharedRemainingFactorLastX128(slasher, 0, deltaSpend);
 
         uint256 protocol1 = 10_000;
         harness.setProtocolFeeAccrued(testPoolId, 0, protocol1);

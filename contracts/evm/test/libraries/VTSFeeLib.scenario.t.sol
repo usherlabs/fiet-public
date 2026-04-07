@@ -1056,7 +1056,7 @@ contract VTSFeeLibScenarioTest is VTSOrchestratorFixture {
     ///        increases `protocolFeeAccrued` (accounting pot), but does NOT yet fund `slashedPot`.
     ///      - CISE exposure accrues ONLY at `incrementCoverage` (not on swaps), so we must ensure a post-existence coverage
     ///        event creates positive exposure for the beneficiary.
-    ///      - CSI: bonus allocation can be QUEUED against `protocolFeeAccrued` (pendingFeeAdj < 0, spend index advances)
+    ///      - CSI: bonus allocation can be QUEUED against `protocolFeeAccrued` (pendingFeeAdj < 0, remaining factor advances)
     ///        even while `slashedPot == 0` (materialisation is separate).
     ///      - Materialisation happens only after the slasher is fee-processed (e.g. `_pokeMM`) which funds `slashedPot`.
     function test_bonusAllocatedBeforeSlashMaterialised_whenBeneficiaryPokesFirst() public {
@@ -1125,7 +1125,7 @@ contract VTSFeeLibScenarioTest is VTSOrchestratorFixture {
             assertGt(slasherPending1Before, 0, "Precondition: slasher must have pendingFeeAdj1 > 0");
 
             // ? At this point, the slashed pot is still 0, but protocolFeeAccrued > 0 AND slasher pendingFeeAdj > 0 (queued slash).
-            (, uint256 spendIndex1Before) = _testableOrchestrator().getPoolCSIAccounting(corePoolKey.toId());
+            (, uint256 remainingFactor1Before) = _testableOrchestrator().getPoolCSIAccounting(corePoolKey.toId());
 
             // Beneficiary processes fees FIRST:
             // Under CISE, this will realise exposure and CAN queue a bonus against protocolFeeAccrued,
@@ -1155,9 +1155,13 @@ contract VTSFeeLibScenarioTest is VTSOrchestratorFixture {
                 mm1Pending1After, 0, "Beneficiary should queue a bonus (pendingFeeAdj1 < 0) even while slashedPot is 0"
             );
 
-            // CSI spend index should advance when a bonus is allocated (queued)
-            (, uint256 spendIndex1After) = _testableOrchestrator().getPoolCSIAccounting(corePoolKey.toId());
-            assertGt(spendIndex1After, spendIndex1Before, "CSI: spend index must advance when bonus is allocated");
+            // CSI remaining factor should advance when a bonus is allocated (queued)
+            (, uint256 remainingFactor1After) = _testableOrchestrator().getPoolCSIAccounting(corePoolKey.toId());
+            assertGt(
+                remainingFactor1After,
+                remainingFactor1Before,
+                "CSI: remaining factor must advance when bonus is allocated"
+            );
 
             // Now poke slasher: this should fund the pot from its +pendingFeeAdj
             _pokeMM(tokenId, 0);
