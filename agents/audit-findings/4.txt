@@ -1,57 +1,77 @@
-Non-appended field insertion in PositionAccounting under storage-preserving upgrade causes self-exclusion loss and fee misallocation
+Paused remove-liquidity reconcile path omits MM side-effects in CoreHook/VTSOrchestrator causes principal LCC stuck in custodian and missing settlement deltas
 
-The PR inserts feesSharedEpoch immediately before feeBurnGrowthRemainder in the persisted PositionAccounting struct. In a storage-preserving upgrade, this reinterprets old feeBurnGrowthRemainder values as feesSharedEpoch and resets the true remainder to zero. As a result, legacy positions have their self-exclusion (feesShared) zeroed during CSI sync and can receive bonuses funded by their own prior contributions; additionally, the fee-burn growth baseline remainder continuity is lost.
+When a market is paused, CoreHook routes remove-liquidity to VTSOrchestrator.reconcileAfterPausedRemove, which calls VTSPositionLib.reconcileAfterPausedRemove. This helper intentionally avoids MM bookkeeping (no LiquidityHub.planCancelWithQueue and no DynamicCurrencyDelta), but MMPositionManager still takes LCC from PoolManager and forwards principal to the queue custodian. Because no Hub queue is created, LiquidityHub.settleFromCustodian cannot release funds, leaving principal LCC stuck. DynamicCurrencyDelta is also not recorded, degrading later settlement flows.
 
-This PR introduces the new field feesSharedEpoch inside PositionAccounting (types/VTS.sol) but places it directly before the existing feeBurnGrowthRemainder instead of truly appending it. In a storage-preserving upgrade, the old feeBurnGrowthRemainder content is misread as feesSharedEpoch while the new feeBurnGrowthRemainder slot starts at zero. During fee processing, VTSFeeLib._syncFeesSharedRemainingForToken compares the misread epochLast against the pool’s current epoch and, seeing a mismatch, zeroes pa.feesShared. Since pa.feesShared is used to self-exclude a position from receiving bonuses funded by its own past fee-share contributions, zeroing it lets the position receive allocations from the entire pot (including its own contributions). Separately, the real feeBurnGrowthRemainder carry is lost, creating a one-off fee-burn growth baseline discontinuity. The issue is introduced by this PR’s field insertion combined with CSI epoch logic that claims legacy compatibility but relies on correct storage layout.
+This PR introduced a paused-only removal path: CoreHook.afterRemoveLiquidity, when a pool or the protocol is paused, calls VTSOrchestrator.reconcileAfterPausedRemove and returns immediately with a zero hook delta. VTSOrchestrator delegates to VTSPositionLib.reconcileAfterPausedRemove, which only tracks commitment changes, clamps settled amounts against updated commitment maxima, and mirrors liquidity; it explicitly avoids running the normal MM processing. In the unpaused path, VTSPositionLib._processMMOperations/_handleLiquidityDecrease stages LiquidityHub.planCancelWithQueue before the immediate post-modify PoolManager → MMPM transfer, and records DynamicCurrencyDelta for underlying settlement. In the new paused path, neither happens. MMPositionManager still performs the post-modify take, and LCC._afterTransfer attempts to consume a planned cancel, but none exists. The non-fee LCC increase is forwarded to the MMQueueCustodian (beneficiary = locker). Later, LiquidityHub.settleFromCustodian requires a Hub queue entry (settleQueue[lcc][locker] > 0) to settle; since no planned cancel created such a queue, it returns 0 and custody remains orphaned. There is no practical rescue path via existing role-gated entrypoints (issuers do not expose helpers; LiquidityHub is not an issuer; settleFromCustodian cannot proceed without a queue). Additionally, DynamicCurrencyDelta is not recorded for the paused decrease, which can mis-size or block subsequent settlement/seizure operations. This behavior is introduced by this PR because previously processPosition was guarded with notPoolPaused (so remove-liquidity under pause did not proceed), whereas now reconcileAfterPausedRemove runs under pause but omits required MM side-effects.
 
 Code Suggestions:
 
-VTS.sol
+CoreHook:
 
-155
+mport {TransientStateLibrary} from "@uniswap/v4-core/src/libraries/TransientStateLibrary.sol";
+ 
 
-156
+import {ICoreHook} from "./interfaces/ICoreHook.sol";
+26
+
+27
 
  
 
-    // CSI: Position checkpoint of pool spend index (Q128)
+import {PositionModificationHookData, PositionModificationHookDataLib} from "./types/Position.sol";
  
 
-    TokenPairUint feesSharedIndexLastX128;
- 
+import {Errors} from "./libraries/Errors.sol";
+28
 
- 
-
-157
-
-158
-
-159
+29
 
  
 
-    // Remainder numerator for coverage fee-burn baseline checkpoint (see VTSPositionLib._applyBurnBase).
+import {IVaultCoreActionHandler} from "./interfaces/IVaultCoreActionHandler.sol";
  
 
-    // Appended for storage-layout compatibility on upgrade.
- 
+196
 
-    TokenPairUint feeBurnGrowthRemainder;
-160
-
-161
+197
 
  
 
-    // CSI: Position checkpoint of the pool spend epoch. Appended for upgrade compatibility.
+    ) internal virtual override returns (bytes4, BalanceDelta) {
  
 
-    TokenPairUint feesSharedEpoch;
-162
+        if (_isPoolOrGlobalPaused(key)) {
+198
 
-163
+199
+
+200
+
+201
+
+202
 
  
 
-}
+            // Disallow MM remove-liquidity while paused to avoid orphaned custody and missing settlement deltas.
  
+
+            if (
+ 
+
+                PositionModificationHookDataLib.isMMOperation(PositionModificationHookDataLib.decodeCalldata(hookData))
+ 
+
+            ) revert Errors.InvariantViolated("MM remove-liquidity disabled while paused");
+ 
+
+203
+
+204
+
+ 
+
+            // When paused, `_beforeRemoveLiquidity` already settled growths through the canonical hook path.
+ 
+
+            // Reconcile only downward bookkeeping from the now-applied remove-liquidity change without

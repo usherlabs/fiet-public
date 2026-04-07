@@ -13,6 +13,7 @@ import {Errors} from "../src/libraries/Errors.sol";
 import {ISettlementVerifier} from "../src/interfaces/ISettlementVerifier.sol";
 import {PoolId, PoolIdLibrary} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {EfficientHashLib} from "solady/utils/EfficientHashLib.sol";
+import {PositionId} from "../src/types/Position.sol";
 
 contract FalseSettlementVerifier is ISettlementVerifier {
     function verifySettlementProof(bytes memory, bytes memory) external pure returns (bool) {
@@ -21,24 +22,29 @@ contract FalseSettlementVerifier is ISettlementVerifier {
 }
 
 /// @dev A verifier that expects the settlementProof to *carry* the expected context.
-///      This lets us validate `poolIdAndTokenIndex` strictly while keeping the verifier `pure`.
+///      This lets us validate `settlementContext` strictly while keeping the verifier `pure`.
 contract ContextCheckingSettlementVerifier is ISettlementVerifier {
-    function verifySettlementProof(bytes memory settlementProof, bytes memory poolIdAndTokenIndex)
+    function verifySettlementProof(bytes memory settlementProof, bytes memory settlementContext)
         external
         pure
         returns (bool)
     {
-        (bytes32 expectedPoolId, uint8 expectedTokenIndex, bytes memory expectedTag) =
-            abi.decode(settlementProof, (bytes32, uint8, bytes));
-        (bytes32 actualPoolId, uint8 actualTokenIndex) = abi.decode(poolIdAndTokenIndex, (bytes32, uint8));
+        (bytes32 expectedPoolId, uint8 expectedTokenIndex, bytes32 expectedPositionId, bytes memory expectedTag) =
+            abi.decode(settlementProof, (bytes32, uint8, bytes32, bytes));
+        (bytes32 actualPoolId, uint8 actualTokenIndex, bytes32 actualPositionId) =
+            abi.decode(settlementContext, (bytes32, uint8, bytes32));
 
         // Tag is just an extra sanity check that we're decoding the intended format.
         if (keccak256(expectedTag) != keccak256(bytes("VRL"))) return false;
-        return expectedPoolId == actualPoolId && expectedTokenIndex == actualTokenIndex;
+        return expectedPoolId == actualPoolId && expectedTokenIndex == actualTokenIndex
+            && expectedPositionId == actualPositionId;
     }
 }
 
 contract VRLSettlementObserverTest is Test {
+    /// @dev Default position id for tests using stub verifiers (no position binding in proof).
+    PositionId internal constant STUB_POSITION_ID = PositionId.wrap(bytes32(uint256(1)));
+
     VRLSettlementObserver public observer;
     StubSettlementVerifier public stubVerifier;
     FalseSettlementVerifier public falseVerifier;
@@ -231,7 +237,9 @@ contract VRLSettlementObserverTest is Test {
 
         // Verify the proof (should succeed since stub verifier always returns true)
         vm.prank(submitter);
-        bool isValid = observer.verifySettlementProof(poolKey, tokenIndex, verifierIndex, settlementProof, false);
+        bool isValid = observer.verifySettlementProof(
+            poolKey, tokenIndex, verifierIndex, STUB_POSITION_ID, settlementProof, false
+        );
         assertTrue(isValid);
     }
 
@@ -253,7 +261,7 @@ contract VRLSettlementObserverTest is Test {
 
         vm.prank(nonOwner);
         vm.expectRevert(abi.encodeWithSelector(Errors.InvalidSender.selector));
-        observer.verifySettlementProof(poolKey, 0, 0, "proof", false);
+        observer.verifySettlementProof(poolKey, 0, 0, STUB_POSITION_ID, "proof", false);
     }
 
     function test_VerifySettlementProof_MarksProofHashUsed_AndRejectsReplay() public {
@@ -277,12 +285,12 @@ contract VRLSettlementObserverTest is Test {
 
         assertEq(observer.usedProofHashes(proofHash), false);
         vm.prank(submitter);
-        assertTrue(observer.verifySettlementProof(poolKey, 0, 0, settlementProof, true));
+        assertTrue(observer.verifySettlementProof(poolKey, 0, 0, STUB_POSITION_ID, settlementProof, true));
         assertEq(observer.usedProofHashes(proofHash), true);
 
         vm.expectRevert(abi.encodeWithSelector(Errors.InvalidProof.selector));
         vm.prank(submitter);
-        observer.verifySettlementProof(poolKey, 0, 0, settlementProof, true);
+        observer.verifySettlementProof(poolKey, 0, 0, STUB_POSITION_ID, settlementProof, true);
     }
 
     function test_seedUsedProofHashes_preservesReplayProtectionAcrossReplacementDeployment() public {
@@ -311,7 +319,7 @@ contract VRLSettlementObserverTest is Test {
 
         vm.expectRevert(abi.encodeWithSelector(Errors.InvalidProof.selector));
         vm.prank(submitter);
-        observer.verifySettlementProof(poolKey, 0, 0, settlementProof, true);
+        observer.verifySettlementProof(poolKey, 0, 0, STUB_POSITION_ID, settlementProof, true);
     }
 
     function test_seedUsedProofHashes_isIdempotent() public {
@@ -354,7 +362,7 @@ contract VRLSettlementObserverTest is Test {
         });
 
         vm.prank(submitter);
-        bool isValid = observer.verifySettlementProof(poolKey, 0, 0, "proof", true);
+        bool isValid = observer.verifySettlementProof(poolKey, 0, 0, STUB_POSITION_ID, "proof", true);
         assertTrue(isValid);
     }
 
@@ -377,7 +385,7 @@ contract VRLSettlementObserverTest is Test {
         bytes memory emptyProof = "";
         vm.expectRevert(abi.encodeWithSelector(Errors.InvalidProof.selector));
         vm.prank(submitter);
-        observer.verifySettlementProof(poolKey, 0, 0, emptyProof, false);
+        observer.verifySettlementProof(poolKey, 0, 0, STUB_POSITION_ID, emptyProof, false);
     }
 
     function test_VerifySettlementProof_VerifierNotAllowed() public {
@@ -394,7 +402,7 @@ contract VRLSettlementObserverTest is Test {
         // Verifier not allowed for this token
         vm.expectRevert(abi.encodeWithSelector(Errors.InvalidVerifier.selector));
         vm.prank(submitter);
-        observer.verifySettlementProof(poolKey, 0, 0, settlementProof, false);
+        observer.verifySettlementProof(poolKey, 0, 0, STUB_POSITION_ID, settlementProof, false);
     }
 
     function test_VerifySettlementProof_InvalidVerifierIndex() public {
@@ -410,7 +418,7 @@ contract VRLSettlementObserverTest is Test {
         bytes memory settlementProof = "proof";
         vm.expectRevert(abi.encodeWithSelector(Errors.InvalidVerifier.selector));
         vm.prank(submitter);
-        observer.verifySettlementProof(poolKey, 0, 999, settlementProof, false);
+        observer.verifySettlementProof(poolKey, 0, 999, STUB_POSITION_ID, settlementProof, false);
     }
 
     function test_VerifySettlementProof_InvalidTokenIndex() public {
@@ -427,7 +435,7 @@ contract VRLSettlementObserverTest is Test {
         // tokenIndex must be 0 or 1
         vm.expectRevert(abi.encodeWithSelector(Errors.InvalidTokenIndex.selector, uint8(2)));
         vm.prank(submitter);
-        observer.verifySettlementProof(poolKey, 2, 0, settlementProof, false);
+        observer.verifySettlementProof(poolKey, 2, 0, STUB_POSITION_ID, settlementProof, false);
     }
 
     function test_VerifySettlementProof_RevertOnInvalid() public {
@@ -446,7 +454,7 @@ contract VRLSettlementObserverTest is Test {
         // Should revert with InvalidVerifier, not InvalidProof
         vm.expectRevert(abi.encodeWithSelector(Errors.InvalidVerifier.selector));
         vm.prank(submitter);
-        observer.verifySettlementProof(poolKey, 0, 999, settlementProof, true);
+        observer.verifySettlementProof(poolKey, 0, 999, STUB_POSITION_ID, settlementProof, true);
     }
 
     function test_VerifySettlementProof_ReturnsFalse_WhenInvalidAndRevertOnInvalidFalse() public {
@@ -469,7 +477,7 @@ contract VRLSettlementObserverTest is Test {
         });
 
         vm.prank(submitter);
-        bool isValid = observer.verifySettlementProof(poolKey, 0, idx, "proof", false);
+        bool isValid = observer.verifySettlementProof(poolKey, 0, idx, STUB_POSITION_ID, "proof", false);
         assertEq(isValid, false);
     }
 
@@ -494,7 +502,7 @@ contract VRLSettlementObserverTest is Test {
 
         vm.expectRevert(abi.encodeWithSelector(Errors.InvalidProof.selector));
         vm.prank(submitter);
-        observer.verifySettlementProof(poolKey, 0, idx, "proof", true);
+        observer.verifySettlementProof(poolKey, 0, idx, STUB_POSITION_ID, "proof", true);
     }
 
     function test_VerifySettlementProof_TokenIndex1_UsesCurrency1_ForVerifierAllowlist() public {
@@ -519,12 +527,12 @@ contract VRLSettlementObserverTest is Test {
         });
 
         vm.prank(submitter);
-        bool isValid = observer.verifySettlementProof(poolKey, 1, idx, "proof", false);
+        bool isValid = observer.verifySettlementProof(poolKey, 1, idx, STUB_POSITION_ID, "proof", false);
         assertTrue(isValid);
     }
 
     function test_VerifySettlementProof_PassesCorrectContext_ToVerifier_ForToken0And1() public {
-        // Hardens the API boundary: verifier must receive abi.encode(poolId, tokenIndex) exactly.
+        // Hardens the API boundary: verifier must receive abi.encode(poolId, tokenIndex, positionId) exactly.
         address token0 = makeAddr("token0");
         address token1 = makeAddr("token1");
 
@@ -545,16 +553,18 @@ contract VRLSettlementObserverTest is Test {
         });
 
         bytes32 poolId = PoolId.unwrap(PoolIdLibrary.toId(poolKey));
+        bytes32 ctxPos = bytes32(uint256(0xbeef));
+        PositionId ctxPid = PositionId.wrap(ctxPos);
 
         // tokenIndex=0
-        bytes memory proof0 = abi.encode(poolId, uint8(0), bytes("VRL"));
+        bytes memory proof0 = abi.encode(poolId, uint8(0), ctxPos, bytes("VRL"));
         vm.prank(submitter);
-        assertTrue(observer.verifySettlementProof(poolKey, 0, idx, proof0, true));
+        assertTrue(observer.verifySettlementProof(poolKey, 0, idx, ctxPid, proof0, true));
 
         // tokenIndex=1
-        bytes memory proof1 = abi.encode(poolId, uint8(1), bytes("VRL"));
+        bytes memory proof1 = abi.encode(poolId, uint8(1), ctxPos, bytes("VRL"));
         vm.prank(submitter);
-        assertTrue(observer.verifySettlementProof(poolKey, 1, idx, proof1, true));
+        assertTrue(observer.verifySettlementProof(poolKey, 1, idx, ctxPid, proof1, true));
     }
 
     function test_VerifySettlementProof_ContextMismatch_ReturnsFalseOrReverts_DependingOnFlag() public {
@@ -579,18 +589,53 @@ contract VRLSettlementObserverTest is Test {
         });
 
         bytes32 poolId = PoolId.unwrap(PoolIdLibrary.toId(poolKey));
+        bytes32 ctxPos = bytes32(uint256(0xc0ffee));
+        PositionId ctxPid = PositionId.wrap(ctxPos);
 
         // Supply a proof that claims the wrong tokenIndex for this call (mismatch => verifier returns false).
-        bytes memory mismatchedProof = abi.encode(poolId, uint8(1), bytes("VRL"));
+        bytes memory mismatchedProof = abi.encode(poolId, uint8(1), ctxPos, bytes("VRL"));
 
         // revertOnInvalid=false => returns false (no revert)
         vm.prank(submitter);
-        assertEq(observer.verifySettlementProof(poolKey, 0, idx, mismatchedProof, false), false);
+        assertEq(observer.verifySettlementProof(poolKey, 0, idx, ctxPid, mismatchedProof, false), false);
 
         // revertOnInvalid=true => reverts InvalidProof
         vm.expectRevert(abi.encodeWithSelector(Errors.InvalidProof.selector));
         vm.prank(submitter);
-        observer.verifySettlementProof(poolKey, 0, idx, mismatchedProof, true);
+        observer.verifySettlementProof(poolKey, 0, idx, ctxPid, mismatchedProof, true);
+    }
+
+    function test_VerifySettlementProof_PositionIdMismatch_ReturnsFalseOrReverts() public {
+        address token0 = makeAddr("token0");
+        address token1 = makeAddr("token1");
+
+        vm.startPrank(owner);
+        uint32 idx = observer.addVerifier(verifierContext);
+        address[] memory tokens = new address[](2);
+        tokens[0] = token0;
+        tokens[1] = token1;
+        observer.allowVerifierForTokens(idx, tokens);
+        vm.stopPrank();
+
+        PoolKey memory poolKey = PoolKey({
+            currency0: Currency.wrap(token0),
+            currency1: Currency.wrap(token1),
+            fee: 3000,
+            tickSpacing: 60,
+            hooks: IHooks(address(0))
+        });
+
+        bytes32 poolId = PoolId.unwrap(PoolIdLibrary.toId(poolKey));
+        bytes32 proofPos = bytes32(uint256(0x1111));
+        PositionId otherPid = PositionId.wrap(bytes32(uint256(0x2222)));
+        bytes memory proof = abi.encode(poolId, uint8(0), proofPos, bytes("VRL"));
+
+        vm.prank(submitter);
+        assertEq(observer.verifySettlementProof(poolKey, 0, idx, otherPid, proof, false), false);
+
+        vm.expectRevert(abi.encodeWithSelector(Errors.InvalidProof.selector));
+        vm.prank(submitter);
+        observer.verifySettlementProof(poolKey, 0, idx, otherPid, proof, true);
     }
 
     function test_OnlyOwnerCanAddVerifier() public {

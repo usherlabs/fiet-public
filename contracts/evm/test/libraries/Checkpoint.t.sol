@@ -42,7 +42,7 @@ contract VRLSettlementObserverMock is IVRLSettlementObserver {
         return _SUBMITTER;
     }
 
-    function verifySettlementProof(PoolKey memory, uint8, uint32, bytes memory, bool revertOnInvalid)
+    function verifySettlementProof(PoolKey memory, uint8, uint32, PositionId, bytes memory, bool revertOnInvalid)
         external
         view
         returns (bool isProofValid)

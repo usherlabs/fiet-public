@@ -9,6 +9,7 @@ import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {Currency} from "v4-periphery/lib/v4-core/src/types/Currency.sol";
 import {Errors} from "./libraries/Errors.sol";
 import {EfficientHashLib} from "solady/utils/EfficientHashLib.sol";
+import {PositionId} from "./types/Position.sol";
 
 contract VRLSettlementObserver is Ownable, IVRLSettlementObserver {
     event SettlementProofHashSeeded(bytes32 indexed proofHash);
@@ -101,6 +102,7 @@ contract VRLSettlementObserver is Ownable, IVRLSettlementObserver {
         PoolKey memory poolKey,
         uint8 tokenIndex,
         uint32 verifierIndex,
+        PositionId positionId,
         bytes memory settlementProof,
         bool revertOnInvalid
     ) public onlySubmitter returns (bool isProofValid) {
@@ -129,17 +131,20 @@ contract VRLSettlementObserver is Ownable, IVRLSettlementObserver {
             revert Errors.InvalidProof();
         }
 
-        // The verifier only attests the settlement proof for `(poolId, tokenIndex)`.
-        // Grace extension sizing remains protocol policy in `CheckpointLibrary` / `TokenConfiguration`.
+        // The verifier attests the settlement proof for `(poolId, tokenIndex, positionId)` so proofs cannot be
+        // replayed across different positions in the same lane. Grace extension sizing remains protocol policy in
+        // `CheckpointLibrary` / `TokenConfiguration`.
         ISettlementVerifier verifier = ISettlementVerifier(verifierAddress);
-        isProofValid = verifier.verifySettlementProof(settlementProof, abi.encode(poolId, tokenIndex));
+        bytes32 positionIdUnwrapped = PositionId.unwrap(positionId);
+        isProofValid =
+            verifier.verifySettlementProof(settlementProof, abi.encode(poolId, tokenIndex, positionIdUnwrapped));
 
         if (revertOnInvalid && !isProofValid) {
             revert Errors.InvalidProof();
         }
         if (isProofValid) {
             usedProofHashes[proofHash] = true;
-            emit SettlementProofMarkedUsed(proofHash, poolKey.toId(), verifierIndex, tokenIndex);
+            emit SettlementProofMarkedUsed(proofHash, poolKey.toId(), verifierIndex, tokenIndex, positionId);
         }
     }
 }

@@ -1,58 +1,114 @@
-Multiplicative remaining-share factor with per-position floor in VTSFeeLib (CSI) causes premature self-exclusion collapse and misallocated bonus payouts
+Paused remove-liquidity skips fee materialization in CoreHook causes slash/fee adjustment evasion and slashed-pot underfunding
 
-The PR’s new CSI model in VTSFeeLib advances a pool-wide remaining-share factor and floors per-position updates, while the fee pot is tracked exactly and no pool-level dust sink exists. Tiny self-shares round to zero too early, so positions can claim from the pot funded by their own still-present contributions, reducing honest LPs’ fees.
+When the market is paused, CoreHook’s remove-liquidity flow returns zero hook delta and skips VTS fee materialization, while still settling growths that create positive pending slashes. Because Uniswap v4 nets the hook delta into callerDelta, removing during pause lets the remover avoid the immediate fee adjustment that would otherwise reduce their proceeds, and the corresponding slashed-pot funding is never materialized if the position is abandoned.
 
-This PR changes CSI from an additive spend-index to a multiplicative ‘remaining-share factor + epoch’ in VTSFeeLib. When a bonus is allocated, _advanceFeesSharedFactor updates a pool factor using ceil(factorBase*(pot - bonus)/pot). Each position later runs _syncFeesSharedRemainingForToken, which applies floor(sharesRemaining * factorRatio), while protocolFeeAccrued (the pot) remains exact and there is no pool-level counter for total remaining self-shares. As a result, small per-position self-shares (e.g., 1) are floored to zero after any partial spend, even though the pot still contains those contributions. Then _queueBonusForToken computes potAvail = protocolFeeAccrued - pa.feesShared (per-position), which becomes the entire pot for that position, allowing it to receive bonuses funded by its own lingering contributions (subject to exposure). CISE exposure accrues passively and persists until used, and materialization via _finaliseFeeAdjustment funds slashedPot for +pendings and drains it for -pendings, not correcting the mis-gating. Epoching only advances when factor == 0 and protocolPot == 0, and does not mitigate mid-epoch rounding dust. This undermines CSI self-exclusion fairness and can be amplified by splitting contributions into many micro positions.
+Under pause, CoreHook._beforeRemoveLiquidity still calls VTSOrchestrator.settlePositionGrowths, which triggers VTSPositionLib.settlePositionGrowths and DICE coverage burns via VTSFeeLib._applyBurnBase. This increases protocolFeeAccrued, per-position feesShared, and per-position pendingFeeAdj (a positive slash). However, CoreHook._afterRemoveLiquidity in pause mode skips VTSOrchestrator.processPosition (which normally calls VTSFeeLib._finaliseFeeAdjustment to materialize pending slashes) and returns a zero hook delta. Uniswap v4 returns callerDelta already net of the hook delta; with zero hook delta, the remover’s callerDelta is not reduced in that call. The positive pending slash remains on the position and is only materialized by a later position touch (processPosition); if the position is abandoned, those slashes remain unmaterialized indefinitely. This deprives the slashed/bonus pot and shifts fee value to the remover compared to the unpaused baseline. Pre-PR, all removes went through processPosition and could not skip fee materialization.
+
 
 Code Suggestions:
 
-VTSFeeLib.sol
+CoreHook.sol
 
-152
+// SPDX-License-Identifier: BUSL-1.1
+ 
 
-153
+pragma solidity ^0.8.26;
+ 
 
  
 
-                // No spend had been realised against this position in the current epoch yet. A zero pool factor is still
+import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
  
 
-                // the identity state until the first bonus allocation stores a non-zero remaining-share factor.
-154
-
+import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
  
 
-                // Use rounding-up to preserve self-exclusion for micro-shares (avoid premature floor-to-zero).
-155
-
+import {Hooks} from "@uniswap/v4-core/src/libraries/Hooks.sol";
  
 
-                updatedShares =
-156
+import {BaseHook} from "v4-periphery/src/utils/BaseHook.sol";
+8
 
  
 
-                    indexNow == 0 ? sharesRemaining : FullMath.mulDivRoundingUp(sharesRemaining, indexNow, FixedPoint128.Q128);
-157
+import {BalanceDelta, toBalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
+9
+
+10
 
  
 
-            } else {
-158
+import {ModifyLiquidityParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
+ 
 
-159
+197
+
+198
 
  
 
-                // Use rounding-up to avoid under-exclusion from per-position floor rounding.
+            // Reconcile only downward bookkeeping from the now-applied remove-liquidity change without
  
 
-                updatedShares = indexNow == 0 ? 0 : FullMath.mulDivRoundingUp(sharesRemaining, indexNow, indexLast);
-160
-
-161
+            // reopening full processPosition/MM/fee mutation while pause remains active.
+199
 
  
 
-            }
+            (,, int256 p0, int256 p1) = vtsOrchestrator.getPositionFeeAccounting(PositionLibrary.generateId(sender, params));
+200
+
  
+
+            vtsOrchestrator.reconcileAfterPausedRemove(PositionLibrary.generateId(sender, params), params);
+201
+
+ 
+
+            return (this.afterRemoveLiquidity.selector, toBalanceDelta(p0 > 0 ? SafeCast.toInt128(p0) : int128(0), p1 > 0 ? SafeCast.toInt128(p1) : int128(0)));
+202
+
+203
+
+ 
+
+        }
+ 
+
+
+VTSOrchestrator.sol
+
+
+            revert Errors.ExpectedPause();
+ 
+
+        }
+534
+
+535
+
+536
+
+537
+
+ 
+
+        // Materialise only positive pending slashes during paused remove; bonuses remain pending.
+ 
+
+        PositionAccounting storage pa = s.positionAccounting[positionId];
+ 
+
+        if (pa.pendingFeeAdj.token0 > 0) { VTSFeeLib._fundFeePot(s, poolId, 0, uint256(pa.pendingFeeAdj.token0)); pa.pendingFeeAdj.token0 = 0; }
+ 
+
+        if (pa.pendingFeeAdj.token1 > 0) { VTSFeeLib._fundFeePot(s, poolId, 1, uint256(pa.pendingFeeAdj.token1)); pa.pendingFeeAdj.token1 = 0; }
+538
+
+539
+
+ 
+
+ 
+
+        VTSPositionLib.reconcileAfterPausedRemove(s, poolManager, positionId, params);

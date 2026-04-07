@@ -1,39 +1,60 @@
-Early-return on paused remove-liquidity in CoreHook causes stale VTS state and misallocation of fee-pot bonuses
+Stale commitmentDeficitSince preserved in paused remove-liquidity reconcile causes premature seizure eligibility
 
-When the market is paused, CoreHook skips VTS position processing on remove-liquidity, leaving VTS state stale. Coverage indices can advance during the pause, and upon unpause the next add-liquidity realises exposure using the stale settled baseline, allocating outsized fee-pot bonuses to the attacker and diluting other LPs’ yields.
+A new paused-mode remove-liquidity path reconciles positions without running a commitment checkpoint, preserving an old commitmentDeficitSince across an inactive interval. When the position is later reactivated and remains underbacked, the preserved age allows immediate grace-bypass seizure.
 
-During pause, CoreHook._afterRemoveLiquidity returns early and does not call VTSOrchestrator.processPosition. As a result, VTSPositionLib._touchExistingDecrease is never executed, so the position’s commitment maxima, settled amounts, and active flag are not reconciled with the actual Uniswap position after liquidity is removed. Meanwhile, coverage-per-settled (CISE) indices can continue to advance via MarketFactory.useMarketLiquidity calling VTSOrchestrator.incrementCoverage. Additionally, calcRFS(PositionId) remains callable and internally settles growths using VTSPositionLib.settlePositionGrowths, which can realise exposure even during pause. When the market unpauses, the next add-liquidity touch runs settlePositionGrowths and realises ciseExposureSinceLastMod based on the stale settled baseline. VTSFeeLib._processPositionFees then allocates fee-pot bonuses proportional to this inflated exposure and materialises payout, causing a misallocation of fees that dilutes other LPs’ shares.
+This PR adds a paused-mode removal branch (CoreHook._afterRemoveLiquidity -> VTSOrchestrator.reconcileAfterPausedRemove -> VTSPositionLib.reconcileAfterPausedRemove) that mirrors Uniswap’s live removal (including to zero liquidity), reduces commitment maxima, and clamps settled, but never runs VTSCommitLib.checkpointWithCommitment. If a position was underbacked before removal, pa.commitmentDeficit and pa.commitmentDeficitSince remain stored while the position becomes inactive, and cannot be checkpointed away because checkpoint requires an active position. On later reactivation, VTSLifecycleLinkedLib.validateSeize recomputes the deficit with checkpointWithCommitment only when a stored deficit exists; when prev>0 and next>0, VTSCommitLib._writeCommitmentDeficitToken preserves the old commitmentDeficitSince. CheckpointLibrary.isSeizable then treats the new underbacked episode as already aged past unbackedCommitmentGraceBypassTime, enabling immediate or premature seizure once severity thresholds are met. Before this PR, removal during pause was blocked and non-seizing decreases required RFS-closed, so reaching this stale-age-across-inactive state was significantly harder. The PR newly enables an unwind-only path during pause that bypasses RFS-closed gating and skips commitment checkpointing at the inactive boundary.
+
 
 Code Suggestions:
 
-CoreHook.sol
+VTSPositionLib.sol
 
-if (_isPoolOrGlobalPaused(key)) {
+         pa.feeBurnGrowthRemainder.token0 = 0;
  
 
-            // When paused, `_beforeRemoveLiquidity` already settled growths through the canonical hook path.
-197
+            pa.feeBurnGrowthRemainder.token1 = 0;
+1354
 
-198
+1355
 
-199
+1356
 
- 
+1357
 
-            // TODO(security): Invoke a paused-only downward reconciliation on VTS (e.g., reconcileAfterPausedRemove)
- 
+1358
 
-            // to clamp settled/commitment maxima and update active status from live Uniswap liquidity before returning.
- 
+1359
 
-            // This prevents stale settled-based exposure and fee misallocation during pause windows.
-200
-
-201
+1360
 
  
 
-            // We intentionally skip post-remove VTS mutation here so pause remains an unwind-only mode rather than
+            // Clear commitment-deficit age on full deactivation so deficit-bypass grace cannot
  
 
-            // reopening full position processing.
+            // count across zero-liquidity intervals (issued commitment = 0 while inactive).
+ 
+
+            if (initialLiquidity > 0 && nextLiquidity == 0) {
+ 
+
+                pa.commitmentDeficitSince.token0 = 0;
+ 
+
+                pa.commitmentDeficitSince.token1 = 0;
+ 
+
+                pa.commitmentDeficitBps = 0;
+ 
+
+            }
+1361
+
+1362
+
+ 
+
+        }
+ 
+
+        _updateActiveStatus(s, posStorage, initialLiquidity, nextLiquidity);

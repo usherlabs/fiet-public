@@ -429,7 +429,8 @@ being an informal “should”.
 ### SEIZE-02: Grace period extensions require an allowed verifier for the settlement token
 
 - **Statement**: A settlement proof must be verified by an indexed verifier that is both registered and allowlisted for
-  the relevant token.
+  the relevant token. Verifiers receive `abi.encode(poolId, tokenIndex, positionId)` so attestations can be bound to the
+  extension target position (same lane, different positions cannot reuse another position’s proof bytes).
 - **Enforced by**: `src/VRLSettlementObserver.sol::verifySettlementProof` (reverts `Errors.InvalidVerifier` /
   `Errors.InvalidProof`).
 - **Applied by**: `src/libraries/Checkpoint.sol::extendGracePeriod` and `src/VTSOrchestrator.sol::extendGracePeriod`.

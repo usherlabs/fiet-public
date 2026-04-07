@@ -1,44 +1,145 @@
-Incompatible CSI index reinterpretation without migration in VTSFeeLib upgrade causes unfair fee allocation and self-bonus recapture
+Global one‑use settlement proof‑by‑hash in VRLSettlementObserver (lane‑scoped verification) causes frontrunnable denial of grace extension and potential position seizure
 
-The PR changes CSI accounting from an additive spent index to a multiplicative remaining-share factor but reuses existing storage without migration. On state-preserving upgrades, legacy indices are misinterpreted, understating or overstating positions’ selfRemaining shares, enabling positions to claim bonuses from pots that still include their own slashed contributions and distorting future allocations.
+VRLSettlementObserver verifies settlement proofs only against (poolId, tokenIndex) but consumes them globally by hash on first use. An attacker with a dust position in the same lane can copy a victim’s proof from the mempool and consume it first, causing the victim’s grace extension to revert. With the PR’s checkpoint semantics (inherited openSince and lane‑local extension reset on toggles), this can immediately enable seizure and loss of the victim’s liquidity.
 
-Pre-PR, feesSharedSpendIndexX128 and feesSharedIndexLastX128 stored an additive “spent-per-share” accumulator; positions burned remaining self-shares by subtracting sharesRemaining * (indexNow - indexLast) / Q128. The PR redefines these fields to a multiplicative “remaining-share factor” and introduces feesSharedEpoch, but does not migrate legacy values. In _syncFeesSharedRemainingForToken, epochLast is coerced to 1 (to bypass epoch mismatch), and indexNow/indexLast are applied as multiplicative factors even though they still hold old additive values. This mis-scales selfRemaining: for indexLast==0, a legacy 0.2*Q128 (20% spent) is treated as 20% remaining; when both indices are nonzero, shares can be incorrectly increased via indexNow/indexLast > 1. _advanceFeesSharedFactor also uses the old additive index as factorBase, anchoring the new epoch’s factor to the wrong baseline and propagating distortion. Because bonus eligibility excludes a position’s own contribution via potAvail = pot - selfRemaining, understated selfRemaining lets a position reclaim from a pot that still embeds its own slashed contributions. VTSFeeLinkedLib.beforeFeeShareMint is called before increasing feesShared and protocolFeeAccrued, ensuring the first post-upgrade sync applies the new math to legacy values. This yields unfair fee payouts (draining slashedPot) and persistent misallocation after upgrade.
+The settlement observer computes proofHash = hash(settlementProof) and, upon successful verification against (poolId, tokenIndex), sets usedProofHashes[proofHash] = true. Subsequent attempts with the same bytes revert as InvalidProof. Because the verifier attests only the lane (poolId, tokenIndex) and no position identifier is provided on-chain, identical proof bytes can be valid for multiple positions in the same lane. VTSOrchestrator.extendGracePeriod is callable by bound endpoints (e.g., MMPositionManager). An attacker who holds a dust position in the same lane can front-run the victim by submitting an extend call for their own position with the victim’s proof bytes, thereby consuming the proof globally. The victim’s later extend attempt then reverts with InvalidProof. The PR’s checkpoint semantics increase impact: on lane toggles, lane-local grace extensions reset to zero while a canonical openSince is inherited across lane-composition changes, so a position may already be near or past base grace when extension is denied. After grace elapses, anyone can initiate seizure, causing a direct reduction of the victim’s liquidity units.
 
 Code Suggestions:
-In VTSFeeLib,
 
+VRLSettlementObserver:
 
-        epoch = paPool.feesSharedEpoch.get(tokenIndex);
+// a new observer and reopening settlement-proof acceptance.
  
 
-        if (epoch == 0) {
-176
-
- 
-
-            return 0;
- 
+    mapping(bytes32 => bool) public usedProofHashes;
+24
 
  
 
+    mapping(bytes32 => mapping(bytes32 => bool)) public usedProofByPosition;
+25
+
+26
+
+ 
+
+    address public immutable submitter;
+ 
+
+101
+
+102
+
+ 
+
+    function verifySettlementProof(
+ 
+
+        PoolKey memory poolKey,
+103
+
+ 
+
+        bytes32 positionId,
+104
+
+105
+
+ 
+
+        uint8 tokenIndex,
+ 
+
+        uint32 verifierIndex,
+128
+
+129
+
+ 
+
+        bytes32 poolId = PoolId.unwrap(poolKey.toId());
+ 
+
+        bytes32 proofHash = EfficientHashLib.hash(settlementProof); // cannot replay settlement proof across market chain.
+130
+
+ 
+
+        if (usedProofByPosition[proofHash][positionId]) {
+131
+
+132
+
+133
+
+134
+
+135
+
+136
+
+137
+
+138
+
+139
+
+140
+
+141
+
+142
+
+ 
+
+            revert Errors.InvalidProof();
+ 
+
+        }
  
 
  
 
-177
+        // The verifier only attests the settlement proof for `(poolId, tokenIndex)`.
+ 
 
-178
+        // Grace extension sizing remains protocol policy in `CheckpointLibrary` / `TokenConfiguration`.
+ 
 
-179
+        ISettlementVerifier verifier = ISettlementVerifier(verifierAddress);
+ 
 
-180
+        isProofValid = verifier.verifySettlementProof(settlementProof, abi.encode(poolId, tokenIndex));
+ 
 
-181
+ 
 
-182
+        if (revertOnInvalid && !isProofValid) {
+ 
 
-183
+            revert Errors.InvalidProof();
+ 
 
+        }
+ 
+
+        if (isProofValid) {
+143
+
+ 
+
+            usedProofByPosition[proofHash][positionId] = true;
+144
+
+145
+
+146
+
+147
+
+ 
+
+            emit SettlementProofMarkedUsed(proofHash, poolKey.toId(), verifierIndex, tokenIndex);
  
 
         }
@@ -47,155 +148,5 @@ In VTSFeeLib,
     }
  
 
- 
+}
 
-    function _beginFeesSharedEpochIfNeeded(PoolAccounting storage paPool, uint8 tokenIndex) internal {
- 
-
-        uint256 epoch = paPool.feesSharedEpoch.get(tokenIndex);
- 
-
-        if (epoch == 0) {
- 
-
-            paPool.feesSharedEpoch.set(tokenIndex, 1);
-184
-
- 
-
-            paPool.feesSharedSpendIndexX128.set(tokenIndex, FixedPoint128.Q128);
-185
-
-186
-
-187
-
-188
-
-189
-
-190
-
-191
-
-192
-
-193
-
-194
-
-195
-
-196
-
-197
-
-198
-
-199
-
- 
-
-            return;
- 
-
-        }
- 
-
- 
-
-        uint256 factor = paPool.feesSharedSpendIndexX128.get(tokenIndex);
- 
-
-        uint256 protocolPot = paPool.protocolFeeAccrued.get(tokenIndex);
- 
-
-        if (factor == 0 && protocolPot == 0) {
- 
-
-            paPool.feesSharedEpoch.set(tokenIndex, epoch + 1);
- 
-
-        }
- 
-
-    }
- 
-
- 
-
-    function _advanceFeesSharedFactor(PoolAccounting storage paPool, uint8 tokenIndex, uint256 pot, uint256 bonus)
- 
-
-        private
- 
-
-    {
- 
-
-        if (paPool.feesSharedEpoch.get(tokenIndex) == 0) {
- 
-
-            paPool.feesSharedEpoch.set(tokenIndex, 1);
-200
-
-201
-
-202
-
-203
-
- 
-
-            paPool.feesSharedSpendIndexX128.set(
- 
-
-                tokenIndex, FullMath.mulDivRoundingUp(FixedPoint128.Q128, pot - bonus, pot)
- 
-
-            );
- 
-
-            return;
-204
-
-205
-
-206
-
-207
-
- 
-
-        }
- 
-
- 
-
-        uint256 currentFactor = paPool.feesSharedSpendIndexX128.get(tokenIndex);
- 
-
-        uint256 factorBase = currentFactor == 0 ? FixedPoint128.Q128 : currentFactor;
-208
-
-209
-
-210
-
- 
-
-        paPool.feesSharedSpendIndexX128.set(
- 
-
-            tokenIndex, FullMath.mulDivRoundingUp(factorBase, pot - bonus, pot)
- 
-
-        );
-211
-
-212
-
- 
-
-    }
- 

@@ -1,0 +1,33 @@
+Double-ceiling rounding in CSI remaining-share factor in VTSFeeLib causes dust-level unallocatable protocolFeeAccrued remainder
+
+The PR’s new CSI remaining-share model in VTSFeeLib applies ceiling rounding both when advancing the pool-wide factor and when syncing per-position selfRemaining. In narrow small-integer boundary states, every remaining contributor can see potAvail = 0 while protocolFeeAccrued > 0, temporarily stranding a tiny remainder until further activity.
+
+VTSFeeLib advances the pool’s remaining-share factor with FullMath.mulDivRoundingUp (nextFactor = ceil(factorBase · (pot − bonus) / pot)) and then syncs each position’s remaining self-share with FullMath.mulDivRoundingUp (updatedShares = ceil(shares · factorNow / denom)). Bonus eligibility is gated by potAvail = protocolFeeAccrued − selfRemaining. In specific small-integer boundary states (e.g., two equal contributors and pot reduced to 2 units), the double-ceiling can make selfRemaining equal to the remaining pot for each contributor, so potAvail = 0 for all of them while the pot is still positive. No other path reduces protocolFeeAccrued except successful allocations, so the tiny remainder can persist until new contributions or an eligible LP with zero selfRemaining appears. With ≥3 contributors or skewed shares, at least one LP will have potAvail > 0. The effect is inherently bounded to dust-level base units and does not aggregate into material loss.
+
+Code Suggestions:
+
+207
+
+208
+
+ 
+
+        uint256 currentFactor = paPool.feesSharedRemainingFactorX128.get(tokenIndex);
+ 
+
+        uint256 factorBase = currentFactor == 0 ? FixedPoint128.Q128 : currentFactor;
+209
+
+ 
+
+        uint256 nextFactor = FullMath.mulDiv(factorBase, pot - bonus, pot);
+210
+
+211
+
+ 
+
+        paPool.feesSharedRemainingFactorX128.set(tokenIndex, nextFactor);
+ 
+
+    }
