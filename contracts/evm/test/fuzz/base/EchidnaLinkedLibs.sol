@@ -10,10 +10,10 @@ import {VTSPositionLib} from "../../../src/libraries/VTSPositionLib.sol";
 /// @dev Addresses must match `foundry.toml [profile.echidna].libraries`.
 ///      When library bytecode changes, recompute with `ComputeAddr.sol` and update here + foundry.toml.
 library EchidnaLinkedLibs {
-    address internal constant LCC_FACTORY_LINKED_LIB = 0xd8E0e4b777DD88D05ae366996599A7b1e111AA09;
+    address internal constant LCC_FACTORY_LINKED_LIB = 0x5f98CaDc4827507463Dd1C10Fb618299e8661736;
     address internal constant LIQUIDITY_HUB_LINKED_LIB = 0xB3A02cd6d8fB5B8Fe16DD569EdF8BE35a87bD0FA;
     address internal constant VTS_COMMIT_LIB = 0x7642a5fddF1c8C0424f0BBecBbc41F74dD583046;
-    address internal constant VTS_POSITION_LIB = 0x1072F36983964FAf6D5Efc92c0a3f2cD11943222;
+    address internal constant VTS_POSITION_LIB = 0x786B7EEF5Ee0Ab7d361364E0620F474dFf2211Ae;
     address internal constant VTS_LIFECYCLE_LINKED_LIB = 0x1111111111111111111111111111111111111113;
 
     error LCCFactoryLinkedLibAddrMismatch();
