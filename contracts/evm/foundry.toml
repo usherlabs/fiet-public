@@ -58,7 +58,7 @@ ffi = true
 test = "test/fuzz"
 out = "out-echidna"
 libraries = [
-  "src/libraries/LCCFactoryLib.sol:LCCFactoryLinkedLib:0x5f98cadc4827507463dd1c10fb618299e8661736",
+  "src/libraries/LCCFactoryLib.sol:LCCFactoryLinkedLib:0x5a3842f9d1b0f96003669a36ec4a09165bc7de54",
   "src/libraries/LiquidityHubLinkedLib.sol:LiquidityHubLinkedLib:0xb3a02cd6d8fb5b8fe16dd569edf8be35a87bd0fa",
   # Prevent HEVM crashes by eliminating unlinked placeholders in unrelated contracts (e.g. VTSOrchestrator).
   # Deterministic CREATE2 address deployed by the SIG-BACKING harness (avoids any RPC fetch attempts).
