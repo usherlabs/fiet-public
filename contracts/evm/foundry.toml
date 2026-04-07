@@ -65,6 +65,8 @@ libraries = [
   "src/libraries/VTSCommitLib.sol:VTSCommitLib:0x7642a5fddf1c8c0424f0bbecbbc41f74dd583046",
   # Deterministic CREATE2 address deployed by `VTSPositionLibEchidnaHarness` (avoids Echidna RPC fetch attempts).
   "src/libraries/VTSPositionLib.sol:VTSPositionLib:0x1072f36983964faf6d5efc92c0a3f2cd11943222",
+  # Intentional placeholders for orchestrator-linked wrappers not CREATE2-validated in Echidna helpers.
+  "src/libraries/VTSLifecycleLinkedLib.sol:VTSLifecycleLinkedLib:0x1111111111111111111111111111111111111113",
   "src/libraries/VTSSwapLib.sol:VTSSwapLib:0x1111111111111111111111111111111111111112",
   "src/libraries/VTSFeeLib.sol:VTSFeeLinkedLib:0x1111111111111111111111111111111111111111",
 ]

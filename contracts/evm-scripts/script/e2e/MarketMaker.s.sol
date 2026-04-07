@@ -36,33 +36,34 @@ contract MarketMakerE2E is MME2EBase {
     uint256 internal constant WRAP_FOR_SWAPS = 50_000e18;
     uint128 internal constant BIG_SWAP_AMOUNT_IN = 5_000e18;
 
+    function _loadMmPrivateKey() internal view returns (uint256 mmPk) {
+        mmPk = uint256(
+            _requireEnvBytes32("LP_PRIVATE_KEY", "Missing LP_PRIVATE_KEY env var (anvil keys can be used directly)")
+        );
+    }
+
+    function _runTradingPhase(StandaloneMarket memory m, uint256 mmPk, uint256 commitId) internal {
+        uint256 takerPk = _getDeployerPrivateKey();
+        _swapBothDirections(m, takerPk, WRAP_FOR_SWAPS, BIG_SWAP_AMOUNT_IN);
+        _pokePosition(m, mmPk, commitId);
+    }
+
+    function _runExitPhase(StandaloneMarket memory m, uint256 mmPk, uint256 commitId) internal {
+        _closeRfsBurnDecommitAndTakeAllLccs(m, mmPk, commitId);
+        _unwrapAllLccsAndAssert(m, mmPk, 0, true);
+    }
+
     function run() external {
         console.log("=== E2E: MarketMaker ===");
         _initNetwork();
 
-        uint256 mmPk = uint256(
-            _requireEnvBytes32("LP_PRIVATE_KEY", "Missing LP_PRIVATE_KEY env var (anvil keys can be used directly)")
-        );
-        address mm = vm.addr(mmPk);
-
-        CoreDeployment memory d = _deployCoreContracts();
-        StandaloneMarket memory m = _createMarket(d, mm, CORE_POOL_FEE);
-
-        // Create the MM position (commit → mint → settle).
+        uint256 mmPk = _loadMmPrivateKey();
+        StandaloneMarket memory m = _deployAndCreateMarket(vm.addr(mmPk), CORE_POOL_FEE);
         uint256 commitId = _createMmPosition(m, mmPk, TICK_LOWER, TICK_UPPER, LIQUIDITY);
         console.log("OK: position created");
         console.log("commitId:", commitId);
 
-        // Generate fee growth by swapping against the core pool.
-        uint256 takerPk = _getDeployerPrivateKey();
-        _swapBothDirections(m, takerPk, WRAP_FOR_SWAPS, BIG_SWAP_AMOUNT_IN);
-
-        // Realise fee adjustments and withdraw any LCC credits to wallet.
-        _pokePosition(m, mmPk, commitId);
-
-        // Exit / unwind.
-        _closeRfsBurnDecommitAndTakeAllLccs(m, mmPk, commitId);
-        _unwrapAllLccsAndAssert(m, mmPk, 0, true);
+        _runTradingPhase(m, mmPk, commitId);
+        _runExitPhase(m, mmPk, commitId);
     }
 }
-

@@ -9,6 +9,7 @@ import {NetworkConfig} from "../base/NetworkConfig.sol";
 import {VTSPositionLib} from "src/libraries/VTSPositionLib.sol";
 import {VTSSwapLib} from "src/libraries/VTSSwapLib.sol";
 import {VTSCommitLib} from "src/libraries/VTSCommitLib.sol";
+import {VTSLifecycleLinkedLib} from "src/libraries/VTSLifecycleLinkedLib.sol";
 import {LCCFactoryLinkedLib} from "src/libraries/LCCFactoryLib.sol";
 import {LiquidityHubLinkedLib} from "src/libraries/LiquidityHubLinkedLib.sol";
 import {VTSFeeLinkedLib} from "src/libraries/VTSFeeLib.sol";
@@ -21,6 +22,7 @@ import {VTSFeeLinkedLib} from "src/libraries/VTSFeeLib.sol";
  *      - VTSPositionLib (used by VTSOrchestrator)
  *      - VTSSwapLib (used by VTSOrchestrator)
  *      - VTSCommitLib (used by VTSOrchestrator, VTSPositionLib)
+ *      - VTSLifecycleLinkedLib (used by VTSOrchestrator)
  *      - VTSFeeLinkedLib (used by VTSPositionLib)
  *      - LCCFactoryLinkedLib (used by LiquidityHub)
  *      - LiquidityHubLinkedLib (used by LiquidityHub)
@@ -36,7 +38,7 @@ import {VTSFeeLinkedLib} from "src/libraries/VTSFeeLib.sol";
  * 3. Deploy VTSCommitLib (no dependencies on other VTS libs)
  * 4. Deploy VTSSwapLib (no dependencies on other VTS libs)
  * 5. Deploy VTSPositionLib (uses VTSCommitLib, VTSFeeLinkedLib)
- *
+ * 6. Deploy VTSLifecycleLinkedLib (uses VTSPositionLib, VTSCommitLib)
  * Usage:
  *   PRIVATE_KEY=<key> forge script script/deploy/DeployLibraries.s.sol \
  *     --rpc-url $RPC_URL --broadcast --verify
@@ -47,6 +49,7 @@ import {VTSFeeLinkedLib} from "src/libraries/VTSFeeLib.sol";
  *     "src/libraries/VTSPositionLib.sol:VTSPositionLib:<address>",
  *     "src/libraries/VTSSwapLib.sol:VTSSwapLib:<address>",
  *     "src/libraries/VTSCommitLib.sol:VTSCommitLib:<address>",
+ *     "src/libraries/VTSLifecycleLinkedLib.sol:VTSLifecycleLinkedLib:<address>",
  *     "src/libraries/VTSFeeLib.sol:VTSFeeLinkedLib:<address>",
  *     "src/libraries/LCCFactoryLib.sol:LCCFactoryLinkedLib:<address>",
  *   ]
@@ -56,6 +59,7 @@ contract DeployLibraries is CREATE3Script, NetworkConfig {
     address public vtsPositionLib;
     address public vtsSwapLib;
     address public vtsCommitLib;
+    address public vtsLifecycleLinkedLib;
     address public vtsFeeLinkedLib;
     address public lccFactoryLinkedLib;
     address public liquidityHubLinkedLib;
@@ -64,6 +68,7 @@ contract DeployLibraries is CREATE3Script, NetworkConfig {
     string constant VTS_POSITION_LIB = "VTSPositionLib";
     string constant VTS_SWAP_LIB = "VTSSwapLib";
     string constant VTS_COMMIT_LIB = "VTSCommitLib";
+    string constant VTS_LIFECYCLE_LINKED_LIB = "VTSLifecycleLinkedLib";
     string constant LCC_FACTORY_LINKED_LIB = "LCCFactoryLinkedLib";
     string constant LIQUIDITY_HUB_LINKED_LIB = "LiquidityHubLinkedLib";
     string constant VTS_FEE_LINKED_LIB = "VTSFeeLinkedLib";
@@ -115,6 +120,11 @@ contract DeployLibraries is CREATE3Script, NetworkConfig {
         vtsPositionLib = _deployLibrary(VTS_POSITION_LIB, type(VTSPositionLib).creationCode);
         console.log("VTSPositionLib deployed at:", vtsPositionLib);
 
+        console.log("\n=== Step 6: Deploying VTSLifecycleLinkedLib ===");
+        vtsLifecycleLinkedLib =
+            _deployLibrary(VTS_LIFECYCLE_LINKED_LIB, type(VTSLifecycleLinkedLib).creationCode);
+        console.log("VTSLifecycleLinkedLib deployed at:", vtsLifecycleLinkedLib);
+
         vm.stopBroadcast();
 
         // Write deployment addresses and foundry.toml config
@@ -150,6 +160,7 @@ contract DeployLibraries is CREATE3Script, NetworkConfig {
         console.log("VTSCommitLib:", getCreate3Contract(VTS_COMMIT_LIB));
         console.log("VTSSwapLib:", getCreate3Contract(VTS_SWAP_LIB));
         console.log("VTSPositionLib:", getCreate3Contract(VTS_POSITION_LIB));
+        console.log("VTSLifecycleLinkedLib:", getCreate3Contract(VTS_LIFECYCLE_LINKED_LIB));
     }
 
     /**
@@ -160,6 +171,7 @@ contract DeployLibraries is CREATE3Script, NetworkConfig {
         writeAddress("vtsPositionLib", vtsPositionLib);
         writeAddress("vtsSwapLib", vtsSwapLib);
         writeAddress("vtsCommitLib", vtsCommitLib);
+        writeAddress("vtsLifecycleLinkedLib", vtsLifecycleLinkedLib);
         writeAddress("vtsFeeLinkedLib", vtsFeeLinkedLib);
         writeAddress("lccFactoryLinkedLib", lccFactoryLinkedLib);
         writeAddress("liquidityHubLinkedLib", liquidityHubLinkedLib);
@@ -176,6 +188,7 @@ contract DeployLibraries is CREATE3Script, NetworkConfig {
         console.log('  "src/libraries/VTSPositionLib.sol:VTSPositionLib:%s",', vtsPositionLib);
         console.log('  "src/libraries/VTSSwapLib.sol:VTSSwapLib:%s",', vtsSwapLib);
         console.log('  "src/libraries/VTSCommitLib.sol:VTSCommitLib:%s",', vtsCommitLib);
+        console.log('  "src/libraries/VTSLifecycleLinkedLib.sol:VTSLifecycleLinkedLib:%s",', vtsLifecycleLinkedLib);
         console.log('  "src/libraries/VTSFeeLib.sol:VTSFeeLinkedLib:%s",', vtsFeeLinkedLib);
         console.log('  "src/libraries/LCCFactoryLib.sol:LCCFactoryLinkedLib:%s",', lccFactoryLinkedLib);
         console.log('  "src/libraries/LiquidityHubLinkedLib.sol:LiquidityHubLinkedLib:%s",', liquidityHubLinkedLib);
@@ -192,6 +205,7 @@ contract DeployLibraries is CREATE3Script, NetworkConfig {
             address positionLib,
             address swapLib,
             address commitLib,
+            address lifecycleLinkedLib,
             address feeLinkedLib,
             address lccFactoryLib,
             address liquidityHubLib
@@ -200,6 +214,7 @@ contract DeployLibraries is CREATE3Script, NetworkConfig {
         positionLib = getCreate3Contract(VTS_POSITION_LIB);
         swapLib = getCreate3Contract(VTS_SWAP_LIB);
         commitLib = getCreate3Contract(VTS_COMMIT_LIB);
+        lifecycleLinkedLib = getCreate3Contract(VTS_LIFECYCLE_LINKED_LIB);
         feeLinkedLib = getCreate3Contract(VTS_FEE_LINKED_LIB);
         lccFactoryLib = getCreate3Contract(LCC_FACTORY_LINKED_LIB);
         liquidityHubLib = getCreate3Contract(LIQUIDITY_HUB_LINKED_LIB);

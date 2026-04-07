@@ -126,6 +126,37 @@ contract MMCoverageE2E is MME2EBase {
         return uint256(x < 0 ? -x : x);
     }
 
+    function _expectedOpenMask(BalanceDelta delta) internal pure returns (uint8 openMask) {
+        if (delta.amount0() > 0) {
+            openMask |= 1;
+        }
+        if (delta.amount1() > 0) {
+            openMask |= 2;
+        }
+    }
+
+    function _assertDistinctActors(ActorAddrs memory actors) internal pure {
+        require(actors.mm1 != actors.mm2, "actors: mm1 must differ from mm2");
+        require(actors.mm1 != actors.mm3, "actors: mm1 must differ from mm3");
+        require(actors.mm1 != actors.taker, "actors: mm1 must differ from taker");
+        require(actors.mm2 != actors.mm3, "actors: mm2 must differ from mm3");
+        require(actors.mm2 != actors.taker, "actors: mm2 must differ from taker");
+        require(actors.mm3 != actors.taker, "actors: mm3 must differ from taker");
+    }
+
+    function _assertCheckpointEquals(RFSCheckpoint memory checkpointA, RFSCheckpoint memory checkpointB, string memory err)
+        internal
+        pure
+    {
+        require(
+            checkpointA.openMask == checkpointB.openMask && checkpointA.openSince0 == checkpointB.openSince0
+                && checkpointA.openSince1 == checkpointB.openSince1
+                && checkpointA.gracePeriodExtension0 == checkpointB.gracePeriodExtension0
+                && checkpointA.gracePeriodExtension1 == checkpointB.gracePeriodExtension1,
+            err
+        );
+    }
+
     function _settleRfsRequired(StandaloneMarket memory m, uint256 mmPk, uint256 commitId, int128 need0, int128 need1)
         internal
     {
@@ -180,6 +211,8 @@ contract MMCoverageE2E is MME2EBase {
     }
 
     function _setupScenario(ActorKeys memory keys, ActorAddrs memory actors) internal returns (ScenarioState memory s) {
+        _assertDistinctActors(actors);
+
         CoreDeployment memory d = _deployCoreContracts();
         s.market = _createMarket(d, actors.mm1, CORE_POOL_FEE);
         s.vts = IVTSOrchestrator(s.market.stack.contracts.vtsOrchestrator);
@@ -211,9 +244,12 @@ contract MMCoverageE2E is MME2EBase {
         require(mm2Settled0After > mm2Settled0Before && mm2Settled1After > mm2Settled1Before, "mm2: settled not up");
     }
 
-    function _assertMm1CheckpointMatchesRfs(ScenarioState memory s, bool mm1RfsOpen) internal view {
-        bool checkpointOpen = s.vtsLens.positionToCheckpoint(s.mm1PosId).openMask != 0;
-        require(checkpointOpen == mm1RfsOpen, "mm1: checkpoint mismatch");
+    function _assertMm1CheckpointPersistsRfs(ScenarioState memory s, uint256 mm1Pk, uint8 expectedOpenMask) internal {
+        _checkpointPosition(s.market, mm1Pk, s.mm1CommitId, 0, hex"01");
+
+        RFSCheckpoint memory checkpointAfter = s.vtsLens.positionToCheckpoint(s.mm1PosId);
+        require(checkpointAfter.openMask == expectedOpenMask, "mm1: checkpoint openMask mismatch");
+        require((checkpointAfter.openMask != 0) == (expectedOpenMask != 0), "mm1: checkpoint open state mismatch");
     }
 
     function _runSwapAndPreSettlementChecks(ScenarioState memory s, ActorKeys memory keys)
@@ -235,11 +271,16 @@ contract MMCoverageE2E is MME2EBase {
         console.log("lcc1After Swap:", swapState.lcc1AfterSwap);
 
         {
+            RFSCheckpoint memory checkpointBefore = s.vtsLens.positionToCheckpoint(s.mm1PosId);
             (, bool mm1RfsOpen, BalanceDelta mm1RfsDelta) = s.vts.calcRFS(s.mm1CommitId, 0, false);
+            RFSCheckpoint memory checkpointAfterCalc = s.vtsLens.positionToCheckpoint(s.mm1PosId);
             int128 need0 = mm1RfsDelta.amount0();
             int128 need1 = mm1RfsDelta.amount1();
             require(mm1RfsOpen && (need0 > 0 || need1 > 0), "mm1: expected RFS>0 after swaps");
-            _assertMm1CheckpointMatchesRfs(s, mm1RfsOpen);
+            _assertCheckpointEquals(
+                checkpointAfterCalc, checkpointBefore, "mm1: calcRFS should not mutate stored checkpoint"
+            );
+            _assertMm1CheckpointPersistsRfs(s, keys.mm1Pk, _expectedOpenMask(mm1RfsDelta));
         }
         s.vts.calcRFS(s.mm2CommitId, 0, true);
         s.vts.calcRFS(s.mm3CommitId, 0, true);

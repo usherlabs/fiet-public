@@ -27,6 +27,7 @@ contract DeployE2E is DeployFullStackBase {
         console.log("VTSPositionLib:", stack.libs.vtsPositionLib);
         console.log("VTSSwapLib:", stack.libs.vtsSwapLib);
         console.log("VTSCommitLib:", stack.libs.vtsCommitLib);
+        console.log("VTSLifecycleLinkedLib:", stack.libs.vtsLifecycleLinkedLib);
         console.log("VTSFeeLinkedLib:", stack.libs.vtsFeeLinkedLib);
         console.log("LCCFactoryLinkedLib:", stack.libs.lccFactoryLinkedLib);
         console.log("LiquidityHubLinkedLib:", stack.libs.liquidityHubLinkedLib);

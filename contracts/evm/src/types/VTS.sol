@@ -7,6 +7,8 @@ import {PositionId, Position} from "./Position.sol";
 import {Pool} from "./Pool.sol";
 import {ILiquidityHub} from "../interfaces/ILiquidityHub.sol";
 import {IOracleHelper} from "../interfaces/IOracleHelper.sol";
+import {IVRLSignalManager} from "../interfaces/IVRLSignalManager.sol";
+import {IVRLSettlementObserver} from "../interfaces/IVRLSettlementObserver.sol";
 import {IPoolManager} from "v4-periphery/lib/v4-core/src/interfaces/IPoolManager.sol";
 import {IMarketVault} from "../interfaces/IMarketVault.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
@@ -52,6 +54,27 @@ struct PositionContext {
     IOracleHelper oracleHelper;
     // Market vault address for settlement clamping
     IMarketVault marketVault;
+}
+
+/// @notice Lightweight orchestrator context for lifecycle library paths
+struct VTSLifecycleContext {
+    IPoolManager poolManager;
+    ILiquidityHub liquidityHub;
+    IOracleHelper oracleHelper;
+    IVRLSettlementObserver settlementObserver;
+}
+
+/// @notice CoreHook processing context before market-vault resolution
+struct VTSCoreHookContext {
+    IPoolManager poolManager;
+    ILiquidityHub liquidityHub;
+    IOracleHelper oracleHelper;
+}
+
+/// @notice Routing context for commit/renew entrypoints
+struct VTSCommitRouterContext {
+    ILiquidityHub liquidityHub;
+    IVRLSignalManager signalManager;
 }
 
 /// @notice Parameters for touchPosition to reduce stack pressure

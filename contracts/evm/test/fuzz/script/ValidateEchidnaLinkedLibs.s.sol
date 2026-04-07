@@ -16,6 +16,7 @@ contract ValidateEchidnaLinkedLibs is Script {
     address internal constant ECHIDNA_DEPLOYER = 0x00a329c0648769A73afAc7F9381E08FB43dBEA72;
     address internal constant VTSSWAPLIB_PLACEHOLDER = 0x1111111111111111111111111111111111111112;
     address internal constant VTSFEE_LINKEDLIB_PLACEHOLDER = 0x1111111111111111111111111111111111111111;
+    address internal constant VTSLIFECYCLE_LINKEDLIB_PLACEHOLDER = 0x1111111111111111111111111111111111111113;
 
     function run() external view {
         uint256 failures = 0;
@@ -109,6 +110,11 @@ contract ValidateEchidnaLinkedLibs is Script {
             )
         );
         console2.log("  # Intentional placeholders for libs that are not CREATE2-validated by this script.");
+        console2.log(
+            _libraryEntry(
+                "src/libraries/VTSLifecycleLinkedLib.sol:VTSLifecycleLinkedLib", VTSLIFECYCLE_LINKEDLIB_PLACEHOLDER
+            )
+        );
         console2.log(_libraryEntry("src/libraries/VTSSwapLib.sol:VTSSwapLib", VTSSWAPLIB_PLACEHOLDER));
         console2.log(_libraryEntry("src/libraries/VTSFeeLib.sol:VTSFeeLinkedLib", VTSFEE_LINKEDLIB_PLACEHOLDER));
         console2.log("]");
@@ -133,6 +139,7 @@ contract ValidateEchidnaLinkedLibs is Script {
         console2.log(
             _constantEntry("VTS_POSITION_LIB", _compute(type(VTSPositionLib).creationCode, "echidna.VTSPositionLib"))
         );
+        console2.log(_constantEntry("VTS_LIFECYCLE_LINKED_LIB", VTSLIFECYCLE_LINKEDLIB_PLACEHOLDER));
     }
 
     function _libraryEntry(string memory path, address lib) internal pure returns (string memory) {

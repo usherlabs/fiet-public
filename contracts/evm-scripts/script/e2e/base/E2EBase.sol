@@ -96,15 +96,31 @@ abstract contract E2EBase is DeployFullStackBase {
         d.stack = _deployAll();
     }
 
+    /// @dev Deploy full stack and create a standalone market in one call (no intermediate `CoreDeployment`).
+    function _deployAndCreateMarket(address lp, uint24 corePoolFee)
+        internal
+        returns (StandaloneMarket memory m)
+    {
+        return _createMarketFromStack(_deployAll(), lp, corePoolFee);
+    }
+
     /// @dev Create market (deploy underlyings + configure oracle + mine ProxyHook salt + createMarket + resolve LCCs).
     function _createMarket(CoreDeployment memory d, address lp, uint24 corePoolFee)
+        internal
+        returns (StandaloneMarket memory m)
+    {
+        return _createMarketFromStack(d.stack, lp, corePoolFee);
+    }
+
+    /// @dev Same as `_createMarket` but takes an already-deployed `FullStack` (single copy on the deploy+create path).
+    function _createMarketFromStack(FullStack memory stack, address lp, uint24 corePoolFee)
         internal
         returns (StandaloneMarket memory m)
     {
         // Create market via GlobalConfig.proxyCall (MarketFactory is owned by GlobalConfig).
         vm.startBroadcast(_getDeployerPrivateKey());
 
-        m.stack = d.stack;
+        m.stack = stack;
         m.corePoolFee = corePoolFee;
 
         // Deploy two mock underlyings and mint to LP.
