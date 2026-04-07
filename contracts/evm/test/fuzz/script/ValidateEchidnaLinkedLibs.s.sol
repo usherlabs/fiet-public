@@ -18,7 +18,7 @@ contract ValidateEchidnaLinkedLibs is Script {
     address internal constant VTSFEE_LINKEDLIB_PLACEHOLDER = 0x1111111111111111111111111111111111111111;
     address internal constant VTSLIFECYCLE_LINKEDLIB_PLACEHOLDER = 0x1111111111111111111111111111111111111113;
 
-    function run() external view {
+    function run() external pure {
         uint256 failures = 0;
         console2.log("Validating Echidna linked library addresses...");
 

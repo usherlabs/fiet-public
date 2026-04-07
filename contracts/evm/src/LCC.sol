@@ -123,7 +123,7 @@ contract LiquidityCommitmentCertificate is ERC20, ILCC {
             // Bucket-exempt protocol address holding tokens: treat all balance as wrapped
             return (fullBalance, 0);
         }
-        if (balanceSum == 0 && fullBalance > 0) {
+        if (balanceSum != fullBalance) {
             revert Errors.InvalidBucketState(account, fullBalance);
         }
         return (wrappedBalances[account], marketDerivedBalances[account]);

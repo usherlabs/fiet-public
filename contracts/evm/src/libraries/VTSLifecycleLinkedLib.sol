@@ -70,7 +70,7 @@ library VTSLifecycleLinkedLib {
         Commit storage commit = s.commits[commitId];
         if (commit.expiresAt == 0) return false;
 
-        MarketMaker.State memory mmState = commit.mmState;
+        MarketMaker.State storage mmState = commit.mmState;
         if (mmState.owner == address(0)) return false;
         if (mmState.reserves.length == 0) return false;
 

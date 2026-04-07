@@ -204,6 +204,19 @@ contract LiquidityCommitmentCertificateTest is Test {
         lcc.balancesOf(bucketless);
     }
 
+    /// @dev Bucket sum must match `balanceOf` for non-exempt holders (not only the bucketless case).
+    function test_balancesOf_bucketSumMismatchNonExempt_revertsInvalidBucketState() public {
+        lcc.mint(alice, 5, 5);
+        assertEq(lcc.balanceOf(alice), 10);
+
+        // `wrappedBalances` storage slot from `forge inspect ... storage-layout` (ERC20 uses slots 0–4).
+        bytes32 wrappedEntry = keccak256(abi.encode(alice, uint256(5)));
+        vm.store(address(lcc), wrappedEntry, bytes32(uint256(3))); // 3 + 5 != 10
+
+        vm.expectRevert(abi.encodeWithSelector(Errors.InvalidBucketState.selector, alice, uint256(10)));
+        lcc.balancesOf(alice);
+    }
+
     function test_burn_revertsWhenAmountIsZero() public {
         vm.expectRevert(abi.encodeWithSelector(Errors.InvalidAmount.selector, uint256(0), uint256(0)));
         lcc.burn(alice, 0, 0);

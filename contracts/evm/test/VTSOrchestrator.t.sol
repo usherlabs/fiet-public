@@ -1131,6 +1131,7 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
         // Snapshot commitment + RFS with `checkpoint(..., true)`. `_mockSignalUsd(0)` can yield a non-zero
         // commitmentDeficit, so after a long warp `onSeize` may succeed via commitment-deficit bypass and/or
         // checkpointed grace depending on the resulting `isSeizable` branches — not exclusively the normal RFS path.
+        // For an isolated normal RFS grace exercise, see `test_onSeize_validatesGracePeriod_normalRfsPath_isolated`.
         _mockLccPrices(1e18, 1e18);
         _mockSignalUsd(0);
         unlockCaller.run(
@@ -1140,6 +1141,37 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
         vm.warp(block.timestamp + 10_000_000);
 
         // Should not revert once seizability preconditions (per `CheckpointLibrary.isSeizable`) are satisfied.
+        unlockCaller.run(address(vtsOrchestrator), abi.encodeWithSelector(VTSOrchestrator.onSeize.selector, tokenId, 0));
+    }
+
+    /// @dev Open RFS from swap-driven deficit while the liquidity signal stays fully backed, so seizure after grace
+    ///      uses the checkpointed RFS path rather than commitment-deficit bypass.
+    function test_onSeize_validatesGracePeriod_normalRfsPath_isolated() public {
+        _mockLccPrices(1e18, 1e18);
+        _mockSignalUsd(1e30);
+
+        (uint256 tokenId, PositionId positionId,,) = _createCommittedPosition();
+
+        (uint256 cd0, uint256 cd1) = _commitmentDeficit(positionId);
+        assertEq(cd0, 0, "setup: no commitment deficit with backed signal");
+        assertEq(cd1, 0, "setup: no commitment deficit with backed signal");
+
+        _swapCore(false, -int256(50e18));
+        vtsOrchestrator.settlePositionGrowths(positionId);
+
+        (cd0, cd1) = _commitmentDeficit(positionId);
+        assertEq(cd0, 0, "post-swap: still no commitment deficit");
+        assertEq(cd1, 0, "post-swap: still no commitment deficit");
+
+        unlockCaller.run(
+            address(vtsOrchestrator), abi.encodeWithSelector(VTSOrchestrator.checkpoint.selector, tokenId, 0, false)
+        );
+
+        RFSCheckpoint memory cp = vtsOrchestrator.positionToCheckpoint(positionId);
+        assertTrue(cp.openMask != 0, "checkpoint must record open RFS for grace measurement");
+
+        vm.warp(block.timestamp + 10_000_000);
+
         unlockCaller.run(address(vtsOrchestrator), abi.encodeWithSelector(VTSOrchestrator.onSeize.selector, tokenId, 0));
     }
 
