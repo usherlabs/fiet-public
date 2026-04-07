@@ -14,6 +14,9 @@ import {FixedPoint128} from "v4-periphery/lib/v4-core/src/libraries/FixedPoint12
 ///         This is split into two actions:
 ///         - queueBonus: moves protocolFeeAccrued/pending (queue) while pot stays fixed.
 ///         - finalise: moves slashedPot while protocolFeeAccrued stays fixed.
+///
+/// @dev Each action resets CSI epoch / remaining-factor state so expectations match `VTSFeeLib._queueBonusForToken`
+///      without implicit carry-over from prior fuzz steps (Echidna reuses one contract instance).
 contract FEE01 {
     VTSFeeLibHarness internal feeHarness;
 
@@ -92,6 +95,8 @@ contract FEE01 {
         int256 pending = pendingRaw;
         uint256 slashedPot = _clamp(slashedPotRaw);
         uint256 protocolFee = _clamp(protocolFeeAccruedRaw);
+
+        _resetFeeShareIsolationBaseline();
 
         // Seed pending adjustment and pot state for the selected token.
         _setPending(tokenIndex, pending);
@@ -188,6 +193,8 @@ contract FEE01 {
     }
 
     function _setupQueueState() internal {
+        _resetFeeShareIsolationBaseline();
+
         // Seed queue state: pot, self-remaining shares, and exposure windows.
         _setProtocolFee(sFeeTokenIndex, sPot);
         _setFeesShared(sFeeTokenIndex, sSelfRemaining);
@@ -196,6 +203,19 @@ contract FEE01 {
         } else {
             feeHarness.setPoolTotalCISEExposure(POOL_ID, 0, sTotalExposure);
         }
+        feeHarness.setPoolFeesSharedRemainingFactorX128(POOL_ID, 0, 0);
+        feeHarness.setPositionFeesSharedRemainingFactorLastX128(POSITION_ID, 0, 0);
+    }
+
+    /// @notice Clears cross-action CSI state so each fuzz action matches a fresh `VTSFeeLib` baseline.
+    function _resetFeeShareIsolationBaseline() internal {
+        feeHarness.setProtocolFeeAccrued(POOL_ID, 0, 0);
+        feeHarness.setSlashedPot(POOL_ID, 0, 0);
+        feeHarness.setPendingFeeAdj(POSITION_ID, 0, 0);
+        feeHarness.setFeesShared(POSITION_ID, 0, 0);
+        feeHarness.setPoolTotalCISEExposure(POOL_ID, 0, 0);
+        feeHarness.setPoolFeesSharedEpoch(POOL_ID, 0, 0);
+        feeHarness.setPositionFeesSharedEpoch(POSITION_ID, 0, 0);
         feeHarness.setPoolFeesSharedRemainingFactorX128(POOL_ID, 0, 0);
         feeHarness.setPositionFeesSharedRemainingFactorLastX128(POSITION_ID, 0, 0);
     }

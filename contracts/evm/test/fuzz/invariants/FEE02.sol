@@ -10,6 +10,9 @@ import {MarketVTSConfiguration, TokenConfiguration} from "../../../src/types/VTS
 ///         New positions (zero CISE exposure) must not receive bonuses on creation.
 ///         This checks that touching a fresh position cannot allocate bonuses or
 ///         mutate pot/protocolFee/pending state without prior exposure.
+///
+/// @dev Each action resets CSI epoch / remaining-factor baseline so prior fuzz steps cannot desynchronise
+///      harness expectations from `VTSFeeLib` (Echidna reuses one contract instance).
 contract FEE02 {
     VTSFeeLibHarness internal feeHarness;
 
@@ -34,6 +37,8 @@ contract FEE02 {
 
         uint256 protocolFee = _clamp(protocolFeeAccruedRaw);
         uint256 totalExposure = _clamp(totalExposureRaw);
+
+        _resetFeeShareIsolationBaseline();
 
         // Seed a pot and pool exposure so the only gating factor is the position's zero exposure.
         feeHarness.setProtocolFeeAccrued(POOL_ID, protocolFee, protocolFee);
@@ -69,6 +74,18 @@ contract FEE02 {
     // forge-lint: disable-next-line(mixed-case-function)
     function echidna_fee_02_smoke() external pure returns (bool) {
         return true;
+    }
+
+    function _resetFeeShareIsolationBaseline() internal {
+        feeHarness.setProtocolFeeAccrued(POOL_ID, 0, 0);
+        feeHarness.setSlashedPot(POOL_ID, 0, 0);
+        feeHarness.setPendingFeeAdj(POSITION_ID, 0, 0);
+        feeHarness.setFeesShared(POSITION_ID, 0, 0);
+        feeHarness.setPoolTotalCISEExposure(POOL_ID, 0, 0);
+        feeHarness.setPoolFeesSharedEpoch(POOL_ID, 0, 0);
+        feeHarness.setPositionFeesSharedEpoch(POSITION_ID, 0, 0);
+        feeHarness.setPoolFeesSharedRemainingFactorX128(POOL_ID, 0, 0);
+        feeHarness.setPositionFeesSharedRemainingFactorLastX128(POSITION_ID, 0, 0);
     }
 
     function _clamp(uint256 value) internal pure returns (uint256) {

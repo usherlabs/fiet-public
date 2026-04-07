@@ -469,6 +469,51 @@ contract VTSFeeLibTest is VTSLibTestBase {
         assertFalse(allocated);
     }
 
+    /// @notice Regression for Echidna `FEE01`: without per-action CSI baseline reset, a second `queueBonusForToken`
+    ///         can allocate after `_syncFeesSharedRemainingForToken` clears seeded `feesShared` on epoch mismatch.
+    /// @dev Mirrors shrunk counterexample `action_queue_bonus(0,1,0,1,1)` then `(0,1,266,1,1)` on a reused harness.
+    function test_queueBonusForToken_FEE01_staleEpoch_secondCall_allocates_isolatedBaseline_prevents() public {
+        harness.setPoolFeesSharedEpoch(testPoolId, 0, 0);
+        harness.setPositionFeesSharedEpoch(testPositionId, 0, 0);
+        harness.setPoolFeesSharedRemainingFactorX128(testPoolId, 0, 0);
+        harness.setPositionFeesSharedRemainingFactorLastX128(testPositionId, 0, 0);
+
+        harness.setProtocolFeeAccrued(testPoolId, 1, 0);
+        harness.setFeesShared(testPositionId, 0, 0);
+        harness.setPendingFeeAdj(testPositionId, 0, 0);
+        harness.setPoolTotalCISEExposure(testPoolId, 0, 1);
+        assertTrue(harness.queueBonusForToken(testPositionId, testPoolId, 0, 1, 1), "first 1-wei allocation");
+
+        // Stale carry-over: pool epoch is now 1; seeded selfRemaining is cleared by sync → potAvail becomes 1 again.
+        harness.setProtocolFeeAccrued(testPoolId, 1, 0);
+        harness.setFeesShared(testPositionId, 266, 0);
+        harness.setPoolTotalCISEExposure(testPoolId, 0, 1);
+        harness.setPendingFeeAdj(testPositionId, -1, 0);
+        assertTrue(
+            harness.queueBonusForToken(testPositionId, testPoolId, 0, 1, 1),
+            "without baseline reset, second call should still allocate (model mismatch vs naive potAvail)"
+        );
+
+        // Full per-action isolation (fixed `FEE01` harness): potAvail = 1 - 266 => 0 → no allocation.
+        harness.setProtocolFeeAccrued(testPoolId, 0, 0);
+        harness.setSlashedPot(testPoolId, 0, 0);
+        harness.setPendingFeeAdj(testPositionId, 0, 0);
+        harness.setFeesShared(testPositionId, 0, 0);
+        harness.setPoolTotalCISEExposure(testPoolId, 0, 0);
+        harness.setPoolFeesSharedEpoch(testPoolId, 0, 0);
+        harness.setPositionFeesSharedEpoch(testPositionId, 0, 0);
+        harness.setPoolFeesSharedRemainingFactorX128(testPoolId, 0, 0);
+        harness.setPositionFeesSharedRemainingFactorLastX128(testPositionId, 0, 0);
+
+        harness.setProtocolFeeAccrued(testPoolId, 1, 0);
+        harness.setFeesShared(testPositionId, 266, 0);
+        harness.setPoolTotalCISEExposure(testPoolId, 0, 1);
+        assertFalse(
+            harness.queueBonusForToken(testPositionId, testPoolId, 0, 1, 1),
+            "isolated baseline: potAvail=0 must not allocate"
+        );
+    }
+
     function test_queueBonusForToken_potAvailZero_returnsFalse() public {
         harness.setProtocolFeeAccrued(testPoolId, 100, 0);
         harness.setFeesShared(testPositionId, 100, 0);
