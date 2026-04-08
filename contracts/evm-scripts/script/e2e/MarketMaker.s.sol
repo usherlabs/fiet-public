@@ -53,6 +53,9 @@ contract MarketMakerE2E is MME2EBase {
         _unwrapAllLccsAndAssert(m, mmPk, 0, true);
     }
 
+    /// @notice Runs the end-to-end market-maker happy path on the configured network.
+    /// @dev Initialises network state, loads the MM key, deploys and creates the market, opens the MM position,
+    ///      executes the trading phase, and then runs the exit phase assertions.
     function run() external {
         console.log("=== E2E: MarketMaker ===");
         _initNetwork();

@@ -1074,6 +1074,30 @@ library VTSPositionLib {
         _initFeeSnapshot(poolManager, pa, sp);
     }
 
+    /// @notice Rebase zero-principal settlement snapshots during inactive-position reactivation.
+    /// @dev Only lanes with no current settled / deficit principal are checkpointed to current pool indices.
+    ///      Non-zero lanes keep their historical checkpoints so previously-earned DICE / CISE state is preserved.
+    function _checkpointZeroPrincipalSettlementSnapshots(VTSStorage storage s, PositionId id) internal {
+        Position memory pos = s.positions[id];
+        PositionAccounting storage pa = s.positionAccounting[id];
+        PoolAccounting storage paPool = s.poolAccounting[pos.poolId];
+
+        if (pa.cumulativeDeficit.token0 == 0) {
+            pa.coverageIndexLastX128.token0 = paPool.coveragePerDeficitIndexX128.token0;
+            pa.residualCoverageIndexLastX128.token0 = paPool.coveragePerResidualDeficitIndexX128.token0;
+        }
+        if (pa.cumulativeDeficit.token1 == 0) {
+            pa.coverageIndexLastX128.token1 = paPool.coveragePerDeficitIndexX128.token1;
+            pa.residualCoverageIndexLastX128.token1 = paPool.coveragePerResidualDeficitIndexX128.token1;
+        }
+        if (pa.settled.token0 == 0) {
+            pa.ciseIndexLastX128.token0 = paPool.coveragePerSettledIndexX128.token0;
+        }
+        if (pa.settled.token1 == 0) {
+            pa.ciseIndexLastX128.token1 = paPool.coveragePerSettledIndexX128.token1;
+        }
+    }
+
     /**
      * @notice Initializes the snapshots for a position. Prevents new positions from inheriting historical tick-indexed growths.
      * @param s The central VTS storage
@@ -1289,6 +1313,7 @@ library VTSPositionLib {
                     // the newly reactivated liquidity.
                     if (!posStorage.isActive) {
                         _checkpointTickIndexedSnapshots(s, ctx.poolManager, result.id);
+                        _checkpointZeroPrincipalSettlementSnapshots(s, result.id);
                     }
                     requiredSettlementDelta = _touchExistingIncrease(s, poolId, result.id, p.params, hookData);
                 } else {

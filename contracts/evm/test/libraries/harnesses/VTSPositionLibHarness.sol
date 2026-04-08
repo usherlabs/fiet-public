@@ -199,6 +199,8 @@ contract VTSPositionLibHarness {
         return (s.poolAccounting[poolId].protocolFeeAccrued.token0, s.poolAccounting[poolId].protocolFeeAccrued.token1);
     }
 
+    /// @notice TEST-ONLY: sets `protocolFeeAccrued` for both pool fee-token lanes.
+    /// @dev TEST-ONLY helper that writes storage directly for unit-test scenario setup.
     function setPoolProtocolFeeAccrued(PoolId poolId, uint256 fee0, uint256 fee1) external {
         s.poolAccounting[poolId].protocolFeeAccrued.token0 = fee0;
         s.poolAccounting[poolId].protocolFeeAccrued.token1 = fee1;

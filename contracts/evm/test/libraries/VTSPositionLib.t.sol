@@ -903,7 +903,7 @@ contract VTSPositionLibTest is VTSLibTestBase {
         harness.touchPosition(_mkCtx(), tp);
     }
 
-    function test_touchPosition_increaseOnInactive_rebasesTickIndexedSnapshots() public {
+    function test_touchPosition_increaseOnInactive_checkpointsZeroPrincipalSettlementSnapshots() public {
         _initMarket();
         PoolId corePoolId = _getDefaultPoolId();
         harness.setupPool(corePoolId, _createDefaultVTSConfig());
@@ -923,11 +923,11 @@ contract VTSPositionLibTest is VTSLibTestBase {
         harness.setFeeGrowthInsideLast(positionId, 5, 6);
         harness.setFeeBurnGrowthRemainder(positionId, 7, 8);
         harness.setCoverageIndexLastX128(positionId, 901, 902);
+        harness.setResidualCoverageIndexLastX128(positionId, 911, 912);
         harness.setCISEIndexLastX128(positionId, 903, 904);
-
-        // Pool `totalSettled` must not transition 0 -> >0 on this touch, or `_checkpointFirstPostZeroSettlerCISE`
-        // overwrites `ciseIndexLastX128` to the post-flush pool index (breaking the "preserve CISE index" checks).
-        harness.setPoolTotalSettled(corePoolId, 1, 1);
+        harness.setPoolCoveragePerDeficitIndexX128(corePoolId, 1001, 1002);
+        harness.setPoolCoveragePerResidualDeficitIndexX128(corePoolId, 1011, 1012);
+        harness.setPoolCoveragePerSettledIndexX128(corePoolId, 1003, 1004);
 
         (uint256 feeGrowth0, uint256 feeGrowth1) =
             _getFeeGrowthInside(corePoolId, DEFAULT_TICK_LOWER, DEFAULT_TICK_UPPER);
@@ -970,16 +970,107 @@ contract VTSPositionLibTest is VTSLibTestBase {
 
         {
             (uint256 coverageIdx0, uint256 coverageIdx1) = harness.getCoverageIndexLastX128(positionId);
+            (uint256 residualIdx0, uint256 residualIdx1) = harness.getResidualCoverageIndexLastX128(positionId);
             (uint256 ciseIdx0, uint256 ciseIdx1) = harness.getCISEIndexLastX128(positionId);
-            assertEq(coverageIdx0, 901, "reactivation should not reset DICE coverage index token0");
-            assertEq(coverageIdx1, 902, "reactivation should not reset DICE coverage index token1");
-            assertEq(ciseIdx0, 903, "reactivation should not reset CISE index token0");
-            assertEq(ciseIdx1, 904, "reactivation should not reset CISE index token1");
+            assertEq(coverageIdx0, 1001, "zero-principal DICE lane should checkpoint to current coverage index token0");
+            assertEq(coverageIdx1, 1002, "zero-principal DICE lane should checkpoint to current coverage index token1");
+            assertEq(
+                residualIdx0,
+                1011,
+                "zero-principal DICE lane should checkpoint to current residual coverage index token0"
+            );
+            assertEq(
+                residualIdx1,
+                1012,
+                "zero-principal DICE lane should checkpoint to current residual coverage index token1"
+            );
+            assertEq(ciseIdx0, 1003, "zero-principal CISE lane should checkpoint to current settled index token0");
+            assertEq(ciseIdx1, 1004, "zero-principal CISE lane should checkpoint to current settled index token1");
         }
 
         Position memory posAfter = harness.getPosition(positionId);
         assertTrue(posAfter.isActive, "increase should reactivate the position");
         assertEq(posAfter.liquidity, 1, "increase should restore live liquidity from zero");
+    }
+
+    function test_touchPosition_increaseOnInactive_preservesNonZeroSettlementSnapshots() public {
+        _initMarket();
+        PoolId corePoolId = _getDefaultPoolId();
+        harness.setupPool(corePoolId, _createDefaultVTSConfig());
+
+        PositionId positionId = _registerHarnessPositionInPool(
+            corePoolId, DEFAULT_OWNER, DEFAULT_TICK_LOWER, DEFAULT_TICK_UPPER, 1, DEFAULT_SALT
+        );
+
+        harness.setPositionActive(positionId, false);
+        harness.setPositionLiquidityMirror(positionId, 0);
+
+        harness.setDeficitGrowthGlobal(corePoolId, 111, 222);
+        harness.setInflowGrowthGlobal(corePoolId, 333, 444);
+
+        harness.setDeficitGrowthInsideLast(positionId, 1, 2);
+        harness.setInflowGrowthInsideLast(positionId, 3, 4);
+        harness.setFeeGrowthInsideLast(positionId, 5, 6);
+        harness.setFeeBurnGrowthRemainder(positionId, 7, 8);
+        harness.setCoverageIndexLastX128(positionId, 901, 902);
+        harness.setResidualCoverageIndexLastX128(positionId, 911, 912);
+        harness.setCISEIndexLastX128(positionId, 903, 904);
+        harness.setCumulativeDeficit(positionId, 10, 20);
+        harness.setSettled(positionId, 30, 40);
+        harness.setPoolCoveragePerDeficitIndexX128(corePoolId, 1001, 1002);
+        harness.setPoolCoveragePerResidualDeficitIndexX128(corePoolId, 1011, 1012);
+        harness.setPoolCoveragePerSettledIndexX128(corePoolId, 1003, 1004);
+
+        (uint256 feeGrowth0, uint256 feeGrowth1) =
+            _getFeeGrowthInside(corePoolId, DEFAULT_TICK_LOWER, DEFAULT_TICK_UPPER);
+
+        ModifyLiquidityParams memory params = ModifyLiquidityParams({
+            tickLower: DEFAULT_TICK_LOWER,
+            tickUpper: DEFAULT_TICK_UPPER,
+            liquidityDelta: int256(uint256(1)),
+            salt: DEFAULT_SALT
+        });
+
+        TouchPositionParams memory tp = TouchPositionParams({
+            owner: DEFAULT_OWNER,
+            poolKey: _mkPoolKey(),
+            params: params,
+            callerDelta: toBalanceDelta(0, 0),
+            feesAccrued: toBalanceDelta(0, 0),
+            hookData: _mkHookData(false, false, 0)
+        });
+
+        harness.touchPosition(_mkCtx(), tp);
+
+        {
+            (uint256 deficit0, uint256 deficit1) = harness.getDeficitGrowthInsideLast(positionId);
+            (uint256 inflow0, uint256 inflow1) = harness.getInflowGrowthInsideLast(positionId);
+            assertEq(deficit0, 111, "inactive reactivation should checkpoint current deficit growth token0");
+            assertEq(deficit1, 222, "inactive reactivation should checkpoint current deficit growth token1");
+            assertEq(inflow0, 333, "inactive reactivation should checkpoint current inflow growth token0");
+            assertEq(inflow1, 444, "inactive reactivation should checkpoint current inflow growth token1");
+        }
+
+        {
+            (uint256 fee0, uint256 fee1) = harness.getFeeGrowthInsideLast(positionId);
+            (uint256 remainder0, uint256 remainder1) = harness.getFeeBurnGrowthRemainder(positionId);
+            assertEq(fee0, feeGrowth0, "inactive reactivation should checkpoint current fee growth token0");
+            assertEq(fee1, feeGrowth1, "inactive reactivation should checkpoint current fee growth token1");
+            assertEq(remainder0, 0, "inactive reactivation should clear fee burn remainder token0");
+            assertEq(remainder1, 0, "inactive reactivation should clear fee burn remainder token1");
+        }
+
+        {
+            (uint256 coverageIdx0, uint256 coverageIdx1) = harness.getCoverageIndexLastX128(positionId);
+            (uint256 residualIdx0, uint256 residualIdx1) = harness.getResidualCoverageIndexLastX128(positionId);
+            (uint256 ciseIdx0, uint256 ciseIdx1) = harness.getCISEIndexLastX128(positionId);
+            assertEq(coverageIdx0, 901, "non-zero DICE lane should preserve historical coverage index token0");
+            assertEq(coverageIdx1, 902, "non-zero DICE lane should preserve historical coverage index token1");
+            assertEq(residualIdx0, 911, "non-zero DICE lane should preserve residual coverage index token0");
+            assertEq(residualIdx1, 912, "non-zero DICE lane should preserve residual coverage index token1");
+            assertEq(ciseIdx0, 903, "non-zero CISE lane should preserve historical settled index token0");
+            assertEq(ciseIdx1, 904, "non-zero CISE lane should preserve historical settled index token1");
+        }
     }
 
     function test_touchPosition_increaseWhileSeizing_reverts() public {
@@ -1284,6 +1375,7 @@ contract VTSPositionLibTest is VTSLibTestBase {
         });
 
         harness.touchPosition(ctx, tp);
+        assertEq(hub.planCancelCalls(), 1, "seizing MM decrease should still plan exactly one cancellation");
     }
 
     function test_touchPosition_mmNoOp_marksCheckpointWhenRFSOpens() public {

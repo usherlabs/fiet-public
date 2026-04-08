@@ -145,6 +145,10 @@ contract VTSOrchestratorTestable is VTSOrchestrator {
     }
 
     /// @notice Commitment-deficit bypass timer fields (for integration tests)
+    /// @param positionId The PositionId whose commitment-deficit timing fields are being inspected.
+    /// @return since0 The `commitmentDeficitSince.token0` timestamp for the position.
+    /// @return since1 The `commitmentDeficitSince.token1` timestamp for the position.
+    /// @return deficitBps The stored commitment-deficit severity in basis points.
     function getCommitmentDeficitAgeFields(PositionId positionId)
         external
         view

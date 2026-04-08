@@ -700,8 +700,13 @@ contract VTSFeeLibIndexTest is VTSOrchestratorFixture {
             vtsOrchestrator.incrementCoverage(corePoolKey.toId(), 2e18, 0);
             vtsOrchestrator.settlePositionGrowths(posIdA);
 
-            (uint256 aFeesShared1First,) = _csiFeesShared1AndFactorLast1(posIdA);
+            (uint256 aFeesShared1First, uint256 factorLast1First) = _csiFeesShared1AndFactorLast1(posIdA);
             assertGt(aFeesShared1First, 0, "A should have fees shared after first slash");
+            assertEq(
+                factorLast1First,
+                0,
+                "A should still hold the baseline matching-epoch CSI factor before any bonus spend is synced"
+            );
 
             uint256 lcc1BalanceBefore = _selfLccBalance(lccCurrency1);
             (, uint256 pot1BeforeBonus) = _protocolFeeAccrued(corePoolKey.toId());

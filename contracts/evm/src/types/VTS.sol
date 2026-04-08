@@ -176,9 +176,10 @@ struct PositionAccounting {
     // CISE: Banked realised exposure since last bonus allocation
     TokenPairUint ciseExposureSinceLastMod;
     // CSI: Position checkpoint of the pool remaining-share factor (Q128), last synced from pool for this position.
-    // Interpret with `feesSharedEpoch` on the same token lane: when the position epoch matches the pool spend epoch,
-    // `factor == 0` means fully spent this epoch; when the position epoch lags the pool, the position has not yet
-    // adopted the current epoch’s spend state (sync on next touch).
+    // Interpret `feesSharedRemainingFactorLastX128` together with `feesSharedEpoch` on the same token lane:
+    // when the position epoch matches the pool epoch, `factor == 0` is the baseline sentinel meaning "no prior
+    // remaining-share checkpoint in this epoch yet" and the next sync should adopt the pool factor, not treat the
+    // position as fully spent. Fully spent state is represented by `feesShared == 0`, not by a zero factor alone.
     TokenPairUint feesSharedRemainingFactorLastX128;
     // CSI: Position checkpoint of the pool spend epoch (per token), advanced with the pool on sync / setup.
     TokenPairUint feesSharedEpoch;
