@@ -64,8 +64,7 @@ contract LiquidityProvisionE2E is E2EBase {
     function _swapAndAssert(StandaloneMarket memory m, uint256 lpPk, PoolKey memory corePoolKey) internal {
         IPoolManager poolManager = IPoolManager(config.poolManager);
         (uint160 sqrtPriceX96BeforeSwap,,,) = poolManager.getSlot0(corePoolKey.toId());
-        uint256 expectedAmountIn =
-            _quoteExactOutputSingle(_deployQuoter(), corePoolKey, ZERO_FOR_ONE, SWAP_AMOUNT_OUT);
+        uint256 expectedAmountIn = _quoteExactOutputSingle(_deployQuoter(), corePoolKey, ZERO_FOR_ONE, SWAP_AMOUNT_OUT);
         (address tokenIn, address tokenOut, uint256 swapSpent, uint256 swapReceived) =
             _swapExactOutputSingle(m, lpPk, ZERO_FOR_ONE, SWAP_AMOUNT_OUT, expectedAmountIn);
         require(tokenIn == Currency.unwrap(corePoolKey.currency0), "swap tokenIn mismatch");

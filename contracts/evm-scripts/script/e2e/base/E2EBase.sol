@@ -97,10 +97,7 @@ abstract contract E2EBase is DeployFullStackBase {
     }
 
     /// @dev Deploy full stack and create a standalone market in one call (no intermediate `CoreDeployment`).
-    function _deployAndCreateMarket(address lp, uint24 corePoolFee)
-        internal
-        returns (StandaloneMarket memory m)
-    {
+    function _deployAndCreateMarket(address lp, uint24 corePoolFee) internal returns (StandaloneMarket memory m) {
         return _createMarketFromStack(_deployAll(), lp, corePoolFee);
     }
 

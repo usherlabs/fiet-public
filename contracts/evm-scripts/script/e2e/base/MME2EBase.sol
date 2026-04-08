@@ -54,7 +54,8 @@ abstract contract MME2EBase is E2EBase {
         }
 
         require(
-            underlyingDelta + queueAfter == lccSpent + queueBefore - predictedAnnulledQueue, "unwrap: redemption mismatch"
+            underlyingDelta + queueAfter == lccSpent + queueBefore - predictedAnnulledQueue,
+            "unwrap: redemption mismatch"
         );
     }
 
@@ -107,7 +108,9 @@ abstract contract MME2EBase is E2EBase {
             // IMPORTANT: The unlock batch must end with no residual deltas, so we TAKE both currencies after touching.
             MMPositionManager mmpm = MMPositionManager(payable(m.stack.contracts.mmPositionManager));
             bytes memory actions = abi.encodePacked(
-                bytes1(uint8(MMActions.INCREASE_LIQUIDITY)), bytes1(uint8(MMActions.TAKE)), bytes1(uint8(MMActions.TAKE))
+                bytes1(uint8(MMActions.INCREASE_LIQUIDITY)),
+                bytes1(uint8(MMActions.TAKE)),
+                bytes1(uint8(MMActions.TAKE))
             );
             bytes[] memory params = new bytes[](3);
             params[0] = abi.encode(corePoolKey, commitId, 0, 0);
@@ -243,11 +246,7 @@ abstract contract MME2EBase is E2EBase {
         int24 tickLower,
         int24 tickUpper,
         uint128 liq
-    )
-        internal
-        view
-        returns (uint256 settle0, uint256 settle1)
-    {
+    ) internal view returns (uint256 settle0, uint256 settle1) {
         IVTSOrchestrator vts = IVTSOrchestrator(vtsOrchestratorAddr);
         MarketVTSConfiguration memory vtsCfg = vts.getMarketVTSConfiguration(key.toId());
         (uint256 c0, uint256 c1) = LiquidityUtils.calculateCommitmentMaxima(tickLower, tickUpper, liq);
@@ -274,8 +273,7 @@ abstract contract MME2EBase is E2EBase {
         bytes[] memory params = new bytes[](3);
         params[0] = abi.encode(liquiditySignalBytes, ActionConstants.MSG_SENDER, bytes(""));
         params[1] = abi.encode(key, commitId, tickLower, tickUpper, liq);
-        params[2] =
-            abi.encode(key, commitId, 0, -int128(int256(settle0)), -int128(int256(settle1)), false);
+        params[2] = abi.encode(key, commitId, 0, -int128(int256(settle0)), -int128(int256(settle1)), false);
         _executeMMActions(mmpm, actions, params, block.timestamp + 3600);
     }
 

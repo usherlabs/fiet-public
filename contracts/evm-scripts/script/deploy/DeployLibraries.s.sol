@@ -122,8 +122,7 @@ contract DeployLibraries is CREATE3Script, NetworkConfig {
         console.log("VTSPositionLib deployed at:", vtsPositionLib);
 
         console.log("\n=== Step 6: Deploying VTSLifecycleLinkedLib ===");
-        vtsLifecycleLinkedLib =
-            _deployLibrary(VTS_LIFECYCLE_LINKED_LIB, type(VTSLifecycleLinkedLib).creationCode);
+        vtsLifecycleLinkedLib = _deployLibrary(VTS_LIFECYCLE_LINKED_LIB, type(VTSLifecycleLinkedLib).creationCode);
         console.log("VTSLifecycleLinkedLib deployed at:", vtsLifecycleLinkedLib);
 
         vm.stopBroadcast();
