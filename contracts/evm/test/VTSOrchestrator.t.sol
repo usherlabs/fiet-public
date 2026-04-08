@@ -1954,7 +1954,7 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
             address(signalManager),
             abi.encodeWithSelector(
                 bytes4(keccak256("verifyLiquiditySignal(address,bytes,bool)")),
-                renewSignal.mmState.owner,
+                sameOwnerRenew.mmState.advancer,
                 renewSignalBytes,
                 true
             ),

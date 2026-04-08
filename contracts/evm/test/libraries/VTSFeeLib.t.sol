@@ -92,7 +92,9 @@ contract VTSFeeLibTest is VTSLibTestBase {
         // Generate a test position ID
         testPositionId = _generatePositionId(DEFAULT_OWNER, DEFAULT_TICK_LOWER, DEFAULT_TICK_UPPER, DEFAULT_SALT);
         harness.setupPosition(testPositionId, testPoolId);
-        harness.setPositionFeesSharedEpoch(testPositionId, 1, 1);
+        (uint256 posEpoch0, uint256 posEpoch1) = harness.getPositionFeesSharedEpoch(testPositionId);
+        assertEq(posEpoch0, 1, "setupPosition should inherit pool feesSharedEpoch token0");
+        assertEq(posEpoch1, 1, "setupPosition should inherit pool feesSharedEpoch token1");
     }
 
     // ============================================================

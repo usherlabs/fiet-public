@@ -175,9 +175,12 @@ struct PositionAccounting {
     TokenPairUint ciseIndexLastX128;
     // CISE: Banked realised exposure since last bonus allocation
     TokenPairUint ciseExposureSinceLastMod;
-    // CSI: Position checkpoint of the pool remaining-share factor (Q128).
+    // CSI: Position checkpoint of the pool remaining-share factor (Q128), last synced from pool for this position.
+    // Interpret with `feesSharedEpoch` on the same token lane: when the position epoch matches the pool spend epoch,
+    // `factor == 0` means fully spent this epoch; when the position epoch lags the pool, the position has not yet
+    // adopted the current epoch’s spend state (sync on next touch).
     TokenPairUint feesSharedRemainingFactorLastX128;
-    // CSI: Position checkpoint of the pool spend epoch.
+    // CSI: Position checkpoint of the pool spend epoch (per token), advanced with the pool on sync / setup.
     TokenPairUint feesSharedEpoch;
     // Remainder numerator for coverage fee-burn baseline checkpoint (see VTSPositionLib._applyBurnBase).
     TokenPairUint feeBurnGrowthRemainder;

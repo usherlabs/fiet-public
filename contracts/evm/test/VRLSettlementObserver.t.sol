@@ -314,12 +314,17 @@ contract VRLSettlementObserverTest is Test {
         proofHashes[0] = EfficientHashLib.hash(settlementProof);
 
         vm.prank(owner);
-        observer.seedUsedProofHashes(proofHashes);
-        assertTrue(observer.usedProofHashes(proofHashes[0]));
+        VRLSettlementObserver replacement = new VRLSettlementObserver(submitter, owner);
+        vm.startPrank(owner);
+        replacement.addVerifier(verifier1);
+        replacement.allowVerifierForTokens(0, tokens);
+        replacement.seedUsedProofHashes(proofHashes);
+        vm.stopPrank();
+        assertTrue(replacement.usedProofHashes(proofHashes[0]));
 
         vm.expectRevert(abi.encodeWithSelector(Errors.InvalidProof.selector));
         vm.prank(submitter);
-        observer.verifySettlementProof(poolKey, 0, 0, STUB_POSITION_ID, settlementProof, true);
+        replacement.verifySettlementProof(poolKey, 0, 0, STUB_POSITION_ID, settlementProof, true);
     }
 
     function test_seedUsedProofHashes_isIdempotent() public {

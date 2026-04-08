@@ -643,8 +643,10 @@ contract VTSOrchestrator is
         PositionId positionId = getPositionId(commitId, positionIndex);
         _assertPositionValid(positionId, true, poolKey.toId());
 
-        // Validate factory is registered and caller is authorized
-        _assertBoundFactoryCaller(factory);
+        IMarketFactory canonicalFactory =
+            liquidityHub.getFactory(Currency.unwrap(poolKey.currency0), Currency.unwrap(poolKey.currency1));
+        if (address(factory) != address(canonicalFactory)) revert Errors.InvalidSender();
+        _assertBoundFactoryCaller(canonicalFactory);
 
         RFSCheckpoint memory checkpointOut = VTSLifecycleLinkedLib.extendGracePeriod(
             s, _lifecycleContext(), poolKey, positionId, settlementTokenIndex, verifierIndex, settlementProof

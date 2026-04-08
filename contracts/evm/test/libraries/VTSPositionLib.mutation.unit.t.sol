@@ -671,6 +671,45 @@ contract VTSPositionLibMutationUnitTest is Test {
         assertEq(exposure0, s0After, "CISE exposure should realise from clamped settled baseline");
     }
 
+    function test_reconcileAfterPausedRemove_clampsSettledBeforeLaterCISESettlement_token1() public {
+        uint128 liqBefore = 1000;
+        uint128 liqAfter = 500;
+        (PositionId id, ModifyLiquidityParams memory addParams) = _register(bytes32(uint256(0xAA560)), liqBefore);
+
+        (uint256 c0Before, uint256 c1Before) =
+            LiquidityUtils.calculateCommitmentMaxima(TICK_LOWER, TICK_UPPER, liqBefore);
+        harness.setCommitmentMax(id, c0Before, c1Before);
+        harness.setSettled(id, c0Before, c1Before);
+        harness.setPoolTotalSettled(poolId, c0Before, c1Before);
+
+        harness.setCISEIndexLastX128(id, 0, 0);
+        harness.setPoolCoveragePerSettledIndexX128(poolId, 0, FixedPoint128.Q128);
+
+        _pmSetSlot0Tick(poolId, 0);
+        _pmSetPositionLiquidity(poolId, PositionId.unwrap(id), liqAfter);
+        harness.setPositionLiquidityMirror(id, liqBefore);
+
+        ModifyLiquidityParams memory removeParams = ModifyLiquidityParams({
+            tickLower: addParams.tickLower,
+            tickUpper: addParams.tickUpper,
+            liquidityDelta: -int256(uint256(liqBefore - liqAfter)),
+            salt: addParams.salt
+        });
+        harness.touchPosition(_defaultPositionContext(), _directRemoveTouchParams(removeParams));
+
+        (, uint256 c1After,, uint256 s1After,,) = harness.getPositionAccounting(id);
+        assertLt(c1After, c1Before, "commitment max token1 should decrease after paused remove reconcile");
+        assertEq(s1After, c1After, "settled token1 should clamp to the post-remove commitment max");
+
+        Position memory posAfter = harness.getPosition(id);
+        assertEq(posAfter.liquidity, liqAfter, "liquidity mirror should match live PoolManager liquidity");
+        assertTrue(posAfter.isActive, "partially removed position should remain active");
+
+        harness.settlePositionGrowths(IPoolManager(address(pm)), id);
+        (, uint256 exposure1) = harness.getCISEExposure(id);
+        assertEq(exposure1, s1After, "CISE exposure token1 should realise from clamped settled baseline");
+    }
+
     function test_reconcileAfterPausedRemove_fullRemove_zeroesSettledAndMarksInactive() public {
         uint128 liqBefore = 1000;
         (PositionId id, ModifyLiquidityParams memory addParams) = _register(bytes32(uint256(0xAA55F)), liqBefore);

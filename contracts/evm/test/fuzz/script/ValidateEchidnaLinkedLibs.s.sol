@@ -46,6 +46,13 @@ contract ValidateEchidnaLinkedLibs is Script {
                 _compute(type(VTSPositionLib).creationCode, "echidna.VTSPositionLib")
             )) failures++;
 
+        // Intentional placeholder: must stay aligned with `EchidnaLinkedLibs.VTS_LIFECYCLE_LINKED_LIB` and foundry.toml.
+        if (!_check(
+                "VTSLifecycleLinkedLib (Echidna placeholder)",
+                VTSLIFECYCLE_LINKEDLIB_PLACEHOLDER,
+                EchidnaLinkedLibs.expectedVTSLifecycleLinkedLib()
+            )) failures++;
+
         if (failures != 0) {
             console2.log("Echidna linked library mismatches:", failures);
             console2.log("update the addresses in the foundry.toml file and the EchidnaLinkedLibs.sol file");

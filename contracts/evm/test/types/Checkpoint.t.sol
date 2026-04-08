@@ -186,8 +186,11 @@ contract CheckpointTypeTest is Test {
 
     function test_mark_fullCloseThenOpen_startsFreshEpisodeTimestamp() public {
         vm.warp(4_500);
-        h.mark(1);
-        assertEq(h.get().openSince0, 4_500);
+        h.mark(3);
+        RFSCheckpoint memory opened = h.get();
+        assertEq(opened.openMask, 3);
+        assertEq(opened.openSince0, 4_500);
+        assertEq(opened.openSince1, 4_500);
 
         vm.warp(4_800);
         h.mark(0);

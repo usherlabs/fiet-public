@@ -261,6 +261,15 @@ contract VTSLifecycleLinkedLibTest is Test {
         );
     }
 
+    function test_commitSignalRelayed_succeedsWhenBoundCallerForwardsMMOwner() public {
+        factory.setBound(boundCaller, true);
+        uint256 id = harness.commitSignalRelayed(
+            _routerCtx(), IMarketFactory(address(factory)), boundCaller, mmOwner, _encodedSignal(), 0, 0, bytes("")
+        );
+        assertEq(id, 1);
+        assertEq(harness.getCommitMMOwner(1), mmOwner);
+    }
+
     function test_renewSignal_revertsWhenUnboundCallerForwardsDifferentSender() public {
         factory.setBound(boundCaller, true);
         harness.commitSignal(_routerCtx(), IMarketFactory(address(factory)), boundCaller, mmOwner, _encodedSignal());
@@ -300,6 +309,28 @@ contract VTSLifecycleLinkedLibTest is Test {
             0,
             bytes("")
         );
+    }
+
+    function test_renewSignalRelayed_succeedsWhenBoundCallerForwardsAdvancer() public {
+        factory.setBound(boundCaller, true);
+        harness.commitSignalRelayed(
+            _routerCtx(), IMarketFactory(address(factory)), boundCaller, mmOwner, _encodedSignal(), 0, 0, bytes("")
+        );
+
+        uint256 expBefore = harness.getCommitExpiresAt(1);
+        vm.warp(block.timestamp + 100);
+        harness.renewSignalRelayed(
+            _routerCtx(),
+            IMarketFactory(address(factory)),
+            boundCaller,
+            advancer,
+            1,
+            _renewSignalBytes(2),
+            0,
+            0,
+            bytes("")
+        );
+        assertGt(harness.getCommitExpiresAt(1), expBefore);
     }
 
     // --- validateMMOperation ---

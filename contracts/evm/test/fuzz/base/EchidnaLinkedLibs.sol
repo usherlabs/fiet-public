@@ -14,6 +14,8 @@ library EchidnaLinkedLibs {
     address internal constant LIQUIDITY_HUB_LINKED_LIB = 0xB3A02cd6d8fB5B8Fe16DD569EdF8BE35a87bD0FA;
     address internal constant VTS_COMMIT_LIB = 0x7642a5fddF1c8C0424f0BBecBbc41F74dD583046;
     address internal constant VTS_POSITION_LIB = 0x305c1E76f393dFee72D31652b023ae2265D0773C;
+    /// @dev Deterministic placeholder only: not CREATE2-validated by `ValidateEchidnaLinkedLibs` (see script + foundry.toml
+    ///      `[profile.echidna].libraries`). No `deployVTSLifecycleLinkedLib` helper — lifecycle is linked for compile only.
     address internal constant VTS_LIFECYCLE_LINKED_LIB = 0x1111111111111111111111111111111111111113;
 
     error LCCFactoryLinkedLibAddrMismatch();
