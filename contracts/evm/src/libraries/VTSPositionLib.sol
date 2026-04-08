@@ -1394,8 +1394,15 @@ library VTSPositionLib {
             pa.feeBurnGrowthRemainder.token0 = 0;
             pa.feeBurnGrowthRemainder.token1 = 0;
         }
-        // Full deactivation: do not carry commitment-deficit age across zero-liquidity intervals (seizure grace bypass).
+        // Full deactivation: reset the entire commitment-deficit snapshot (amounts, age, severity).
+        // Issued commitment is zero once liquidity is fully unwound, so there is nothing left to be insolvent for.
+        // Clearing token amounts avoids stale `commitmentDeficit` with `commitmentDeficitSince == 0` after a prior
+        // partial reset, which would otherwise block age-gated deficit bypass in `CheckpointLibrary.isSeizable`.
+        // Non-seizure MM liquidity changes remain blocked while deficit is non-zero (`CommitmentDeficitBlocksLiquidityChange`);
+        // this reset is the semantic cleanup once deactivation is actually reached (including non-MM and seizure paths).
         if (initialLiquidity > 0 && nextLiquidity == 0) {
+            pa.commitmentDeficit.set(0, 0);
+            pa.commitmentDeficit.set(1, 0);
             pa.commitmentDeficitSince.token0 = 0;
             pa.commitmentDeficitSince.token1 = 0;
             pa.commitmentDeficitBps = 0;

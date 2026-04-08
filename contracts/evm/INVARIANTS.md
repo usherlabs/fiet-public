@@ -298,6 +298,16 @@ being an informal “should”.
   state. MM no-ops (`liquidityDelta == 0`) and settlement / checkpoint paths remain available to cure or formalise
   backing.
 
+### COMMIT-02B: Full liquidity mirror deactivation clears commitment-deficit storage
+
+- **Statement**: When `positionLiquidityMirror` transitions from a value `> 0` to `0`, `commitmentDeficit` (both
+  tokens), `commitmentDeficitSince`, and `commitmentDeficitBps` are reset to zero.
+- **Enforced by**: `src/libraries/VTSPositionLib.sol::_applyLiquidityMirrorTransition`.
+- **Rationale**: Issued commitment is zero after a full unwind; retaining token deficit amounts without a coherent age
+  vector would be stale and could interact badly with deficit-age bypass logic. **COMMIT-02A** remains in force: MM still
+  cannot change liquidity while deficit is non-zero, so this reset is not a way to “MM-remove past” the gate—it is the
+  bookkeeping cleanup once deactivation is actually reached (including non-MM and seizure paths).
+
 ### COMMIT-03: “Advancer” binding for checkpoint-with-commitment must hold
 
 - **Statement**: A checkpoint-with-commitment must only accept signals where:

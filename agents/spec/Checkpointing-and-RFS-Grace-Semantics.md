@@ -241,6 +241,21 @@ insolvency gate (e.g. `checkpoint(..., withCommitment=true)` with sufficient bac
 - **Seizure** decreases (`isSeizing == true` in hook data);
 - `onMMSettle` / ordinary settlement paths that improve backing without changing pool liquidity through this gate.
 
+### 8.2 Full deactivation clears the entire commitment-deficit snapshot
+
+When the position liquidity mirror transitions from **strictly positive** to **zero** (full deactivation),
+`VTSPositionLib` resets `commitmentDeficit` (both token legs), `commitmentDeficitSince`, and `commitmentDeficitBps`.
+
+**Rationale:** With no remaining issued commitment (liquidity is fully unwound), there is no economic object for the
+insolvency gate to describe. Clearing token amounts avoids a pathological stored shape where `commitmentDeficit` is
+non-zero but `commitmentDeficitSince` was previously zeroed without clearing amounts, which would incorrectly block
+age-gated deficit bypass in `CheckpointLibrary.isSeizable`.
+
+This semantic cleanup is **orthogonal** to §8.1: non-seizure MM `liquidityDelta != 0` remains blocked while stored
+deficit is non-zero (defence in depth). MM therefore still cannot rely on “remove to wipe deficit” without first curing
+or using the seizure path; non-MM and seizure paths can reach full deactivation and then receive a consistent zeroed
+deficit snapshot.
+
 See also:
 
 - `agents/spec/Unbacked-Commitment-Declaration.md`
@@ -305,6 +320,7 @@ The checkpointing paradigm is:
 - checkpointing is an open maintenance action that economically interested parties may call, including owners who want a persisted closed state;
 - commitment-deficit bypass is special and may be force-refreshed because stale deficit storage is itself a security risk;
 - non-seizure MM liquidity resizing is blocked while stored `commitmentDeficit` is non-zero, independent of whether live RFS is closed;
+- full mirror deactivation (liquidity to zero) clears all commitment-deficit storage fields for a consistent post-unwind state;
 - grace extension refreshes lane-open state first so valid proofs are not blocked by stale checkpoint storage.
 
 This design intentionally prefers **stable, explicit stored timing semantics** over trying to reconstruct historical openness from live state at the moment of seizure or proof submission.

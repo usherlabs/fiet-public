@@ -806,8 +806,8 @@ contract VTSPositionLibMutationUnitTest is Test {
         assertFalse(posAfter.isActive, "full remove should mark position inactive");
     }
 
-    /// @notice Regression (finding 5): full deactivation must not preserve commitment-deficit age for later reactivation.
-    function test_reconcileAfterPausedRemove_fullRemove_clearsCommitmentDeficitAge() public {
+    /// @notice Regression (finding 5): full deactivation clears all commitment-deficit fields (semantic cleanup).
+    function test_reconcileAfterPausedRemove_fullRemove_clearsCommitmentDeficitState() public {
         uint128 liqBefore = 1000;
         (PositionId id, ModifyLiquidityParams memory addParams) = _register(bytes32(uint256(0xAA60)), liqBefore);
 
@@ -817,6 +817,7 @@ contract VTSPositionLibMutationUnitTest is Test {
         harness.setSettled(id, c0Before, c1Before);
         harness.setPoolTotalSettled(poolId, c0Before, c1Before);
 
+        harness.setCommitmentDeficit(id, 42, 99);
         harness.setCommitmentDeficitSince(id, 12345, 67890);
         harness.setCommitmentDeficitBps(id, 500);
 
@@ -832,6 +833,9 @@ contract VTSPositionLibMutationUnitTest is Test {
         });
         harness.touchPosition(_defaultPositionContext(), _directRemoveTouchParams(removeParams));
 
+        (uint256 cd0, uint256 cd1) = harness.getCommitmentDeficit(id);
+        assertEq(cd0, 0, "full remove should clear commitmentDeficit token0");
+        assertEq(cd1, 0, "full remove should clear commitmentDeficit token1");
         (uint256 since0, uint256 since1) = harness.getCommitmentDeficitSince(id);
         assertEq(since0, 0, "full remove should clear commitmentDeficitSince0");
         assertEq(since1, 0, "full remove should clear commitmentDeficitSince1");

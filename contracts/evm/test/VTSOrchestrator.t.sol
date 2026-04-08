@@ -1792,8 +1792,8 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
         assertTrue(posAfterHalf.isActive, "partially removed position should remain active");
     }
 
-    /// @notice E2E (finding 5): paused full remove clears deficit-age fields; after reactivation a new underbacking
-    ///         episode restarts the commitment-deficit bypass clock (non-zero `unbackedCommitmentGraceBypassTime`).
+    /// @notice E2E (finding 5): paused full remove clears commitment-deficit storage (amounts, since, bps); after
+    ///         reactivation a new underbacking episode restarts the commitment-deficit bypass clock.
     function test_e2e_pausedFullRemove_resetsCommitmentDeficitAge_beforeReactivation() public {
         (uint256 tokenId, PositionId positionId, uint256 bypassSecs) = _e2eFinding5_setupMarketAndCommittedPosition();
         address advancer = renewSignal.mmState.advancer;
@@ -1861,8 +1861,9 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
         // Paused remove requires closed RFS; iteratively settle calcRFS shortfall until lanes close.
         _e2eFinding5_closeRfsBySettlingShortfall(tokenId, positionId);
 
-        // Non-seizure MM liquidity changes are frozen while stored commitmentDeficit is non-zero.
-        // Cure the insolvency gate via a strong backing signal before any remove/add may proceed.
+        // Non-seizure MM liquidity changes are frozen while stored commitmentDeficit is non-zero (COMMIT-02A).
+        // Full deactivation clears token deficit amounts as well as age fields (COMMIT-02B), but MM cannot reach
+        // remove until this gate is zero—cure via a strong backing signal before any MM liquidity change.
         _mockLccPrices(1e18, 1e18);
         _mockSignalUsd(1e30);
         vm.prank(advancer);
@@ -1913,6 +1914,9 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
         assertEq(since0Cleared, 0, "full deactivation should clear commitmentDeficitSince token0");
         assertEq(since1Cleared, 0, "full deactivation should clear commitmentDeficitSince token1");
         assertEq(bpsCleared, 0, "full deactivation should clear commitmentDeficitBps");
+        (uint256 cd0Cleared, uint256 cd1Cleared) = _commitmentDeficit(positionId);
+        assertEq(cd0Cleared, 0, "full deactivation should clear commitmentDeficit token0");
+        assertEq(cd1Cleared, 0, "full deactivation should clear commitmentDeficit token1");
 
         Position memory posAfterRemove = vtsOrchestrator.getPosition(positionId);
         assertEq(posAfterRemove.liquidity, 0, "position should be fully unwound");
