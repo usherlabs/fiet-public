@@ -67,6 +67,16 @@ contract ValidateEchidnaLinkedLibs is Script {
         console2.log("Echidna linked library addresses are up to date.");
     }
 
+    /// @notice Prints the current fuzz-context CREATE2 outputs and copy-pasteable updates.
+    /// @dev Use this after linked-library bytecode changes to regenerate the source-of-truth values.
+    function printComputed() external pure {
+        console2.log("Computed Echidna linked library addresses for the current fuzz build:");
+        console2.log("foundry.toml [profile.echidna].libraries block:");
+        _printFoundryTomlLibrariesBlock();
+        console2.log("EchidnaLinkedLibs.sol constants:");
+        _printEchidnaLinkedLibsConstants();
+    }
+
     function _check(string memory name, address expected, address computed) internal pure returns (bool) {
         if (expected == computed) return true;
         console2.log(name, "expected:", expected);

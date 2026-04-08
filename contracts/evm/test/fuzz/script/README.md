@@ -1,4 +1,4 @@
-# Validating CREATE2 Addresses for Echidna Fuzz Tests
+# Maintaining Echidna Linked-Library Wiring
 
 Echidna fuzz harnesses use **hard-linked library addresses** so that Foundry's linker and HEVM can resolve `DELEGATECALL` targets deterministically. These addresses are computed via CREATE2 from a fixed deployer and salt. When library bytecode changes (e.g. after a refactor or dependency update), the CREATE2 addresses change and must be recomputed.
 
@@ -12,7 +12,7 @@ Regenerate addresses when:
 
 ### If You See the Mismatch Error
 
-If Echidna fails with:
+If `just recompute-fuzz-lib-addrs` or a harness constructor fails with:
 
 ```text
 Error("EchidnaLinkedLibs: LCCFactoryLinkedLib addr mismatch")
@@ -31,9 +31,30 @@ Copy-paste (from repo root):
 cd contracts/evm && just validate-fuzz-libs
 ```
 
-This runs `ValidateEchidnaLinkedLibs.s.sol` under `FOUNDRY_PROFILE=echidna` so the computed addresses match Echidna build settings.
+This is a fast preflight for the fuzz suite. It validates that:
 
-## If Validation Fails
+- `test/fuzz/base/EchidnaLinkedLibs.sol`
+- `foundry.toml` `[profile.echidna].libraries`
+
+stay in sync for the hard-linked Echidna libraries, and then smokes the linked-library deployment helpers that the harness constructors rely on.
+
+## How to Recompute Addresses
+
+When linked-library bytecode changes, recompute the deterministic CREATE2 outputs with:
+
+```bash
+cd contracts/evm && just recompute-fuzz-lib-addrs
+```
+
+This runs `ValidateEchidnaLinkedLibs.s.sol` under `FOUNDRY_PROFILE=echidna` and prints the addresses that should be copied into both source-of-truth files.
+
+If you only want the generated values without thinking about validation semantics, use:
+
+```bash
+cd contracts/evm && just print-fuzz-lib-addrs
+```
+
+## If Recompute Fails
 
 Update **exactly two** places with the recomputed addresses:
 
@@ -62,7 +83,7 @@ libraries = [
 ]
 ```
 
-Only the first four entries are validated by the current script.
+`just validate-fuzz-libs` checks all entries defined in `EchidnaLinkedLibs.sol`, including the intentional lifecycle placeholder.
 
 ## Scope
 

@@ -8,12 +8,12 @@ import {VTSPositionLib} from "../../../src/libraries/VTSPositionLib.sol";
 
 /// @notice Single source of truth for Echidna hard-linked library addresses and CREATE2 deploy helpers.
 /// @dev Addresses must match `foundry.toml [profile.echidna].libraries`.
-///      When library bytecode changes, recompute with `ComputeAddr.sol` and update here + foundry.toml.
+///      When linked-library bytecode changes, run `just recompute-fuzz-lib-addrs` and update here + foundry.toml.
 library EchidnaLinkedLibs {
     address internal constant LCC_FACTORY_LINKED_LIB = 0x5A3842F9D1B0F96003669A36Ec4a09165bc7de54;
     address internal constant LIQUIDITY_HUB_LINKED_LIB = 0xB3A02cd6d8fB5B8Fe16DD569EdF8BE35a87bD0FA;
     address internal constant VTS_COMMIT_LIB = 0x7642a5fddF1c8C0424f0BBecBbc41F74dD583046;
-    address internal constant VTS_POSITION_LIB = 0x305c1E76f393dFee72D31652b023ae2265D0773C;
+    address internal constant VTS_POSITION_LIB = 0x0C03712814aEa7b87bf40d36223bED49DAa3B15b;
     /// @dev Deterministic placeholder only: not CREATE2-validated by `ValidateEchidnaLinkedLibs` (see script + foundry.toml
     ///      `[profile.echidna].libraries`). No `deployVTSLifecycleLinkedLib` helper — lifecycle is linked for compile only.
     address internal constant VTS_LIFECYCLE_LINKED_LIB = 0x1111111111111111111111111111111111111113;

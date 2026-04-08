@@ -244,8 +244,19 @@ echidna-wrapwith config="echidna.config.yml":
 echidna-confirmtake-callback config="echidna.config.yml":
     @just echidna test/fuzz/LiquidityHubConfirmTakeCallbackEchidnaTest.sol LiquidityHubConfirmTakeCallbackEchidnaTest {{ config }} -- --disable-slither
 
-# Validate hard-linked Echidna library addresses are up to date.
+# Validate Echidna linked-library wiring and deployment preconditions.
 validate-fuzz-libs:
+  python3 scripts/validate_fuzz_lib_config.py
+  FOUNDRY_PROFILE=echidna forge script \
+    test/fuzz/script/SmokeEchidnaLinkedLibs.s.sol:SmokeEchidnaLinkedLibs \
+    --sig "run()"
+
+# Recompute deterministic CREATE2 addresses after linked-library bytecode changes.
+recompute-fuzz-lib-addrs:
+  @just print-fuzz-lib-addrs
+
+# Print the current fuzz-context CREATE2 outputs for linked libraries.
+print-fuzz-lib-addrs:
   FOUNDRY_PROFILE=echidna forge script \
     test/fuzz/script/ValidateEchidnaLinkedLibs.s.sol:ValidateEchidnaLinkedLibs \
-    --sig "run()"
+    --sig "printComputed()"
