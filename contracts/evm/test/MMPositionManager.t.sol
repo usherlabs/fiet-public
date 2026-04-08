@@ -1787,6 +1787,176 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
         );
     }
 
+    /// @notice Paused MM remove with a starved vault must still call `LiquidityHub.planCancelWithQueue` and create Hub queue entries (regression: finding 4).
+    /// @dev When `dryModifyLiquidities` returns zero, the entire MM `requiredSettlementDelta` is treated as shortfall, so `settleableDelta == 0` and
+    ///      `DynamicCurrencyDelta.accountUnderlyingSettlementDelta` is not invoked — queue + `planCancelWithQueue` are still the critical invariants.
+    ///      Calldata matches `FOUNDRY_PROFILE=debug forge test ... -vvvv` on `test_collectAvailableLiquidity_noSwap` (full decrease, starved vault).
+    function test_pausedMMRemove_starvedVault_invokesPlanCancelWithQueue_andQueuesSettlement() public {
+        vm.mockCall(
+            marketFactory,
+            abi.encodeWithSelector(IMarketFactory.bounds.selector, address(positionManager)),
+            abi.encode(true)
+        );
+
+        ModifyLiquidityParams memory liquidityParams =
+            ModifyLiquidityParams({tickLower: -60, tickUpper: 60, liquidityDelta: 1e10, salt: bytes32(0)});
+
+        (uint256 tokenId,, uint256 requiredSettlementAmount0, uint256 requiredSettlementAmount1) = _setupCommittedPosition(
+            positionManager,
+            corePoolKey,
+            abi.encode(liquiditySignal),
+            liquidityParams,
+            marketVTSConfiguration,
+            address(lcc0),
+            address(lcc1)
+        );
+
+        (,, uint256 commitPositionCount,) = positionManager.commitOf(tokenId);
+        uint256 positionIndex = commitPositionCount - 1;
+
+        vm.mockCall(
+            address(mv),
+            abi.encodeWithSelector(IMarketVault.dryModifyLiquidities.selector),
+            abi.encode(toBalanceDelta(0, 0))
+        );
+        vm.mockCall(
+            marketFactory, abi.encodeWithSelector(IMarketFactory.useMarketLiquidity.selector), abi.encode(uint256(0))
+        );
+
+        address locker = address(this);
+        uint256 q0Before = ILiquidityHub(liquidityHub).settleQueue(Currency.unwrap(corePoolKey.currency0), locker);
+        uint256 q1Before = ILiquidityHub(liquidityHub).settleQueue(Currency.unwrap(corePoolKey.currency1), locker);
+
+        vtsOrchestrator.pausePool(corePoolKey.toId());
+
+        uint256 principalPerSide = 29_953_549;
+        uint256 queuePerSide = 5_999_710;
+
+        vm.expectCall(
+            liquidityHub,
+            abi.encodeWithSelector(
+                ILiquidityHub.planCancelWithQueue.selector,
+                Currency.unwrap(corePoolKey.currency0),
+                address(manager),
+                address(positionManager),
+                principalPerSide,
+                queuePerSide,
+                locker
+            )
+        );
+        vm.expectCall(
+            liquidityHub,
+            abi.encodeWithSelector(
+                ILiquidityHub.planCancelWithQueue.selector,
+                Currency.unwrap(corePoolKey.currency1),
+                address(manager),
+                address(positionManager),
+                principalPerSide,
+                queuePerSide,
+                locker
+            )
+        );
+
+        uint256 amountToDecrease = uint256(liquidityParams.liquidityDelta);
+        MMA.PreparedAction[] memory actions = new MMA.PreparedAction[](3);
+        actions[0] = MMA.prepareDecrease(corePoolKey, tokenId, positionIndex, amountToDecrease);
+        actions[1] = MMA.prepareTake(corePoolKey.currency0, locker, 0);
+        actions[2] = MMA.prepareTake(corePoolKey.currency1, locker, 0);
+        MMA.executeWithUnlock(positionManager, actions, block.timestamp + 3600);
+
+        assertGt(
+            ILiquidityHub(liquidityHub).settleQueue(Currency.unwrap(corePoolKey.currency0), locker),
+            q0Before,
+            "settleQueue token0 must grow after paused starved decrease"
+        );
+        assertGt(
+            ILiquidityHub(liquidityHub).settleQueue(Currency.unwrap(corePoolKey.currency1), locker),
+            q1Before,
+            "settleQueue token1 must grow after paused starved decrease"
+        );
+        assertEq(
+            ILiquidityHub(liquidityHub).settleQueue(Currency.unwrap(corePoolKey.currency0), locker),
+            requiredSettlementAmount0,
+            "token0 queued amount should match required settlement shortfall"
+        );
+        assertEq(
+            ILiquidityHub(liquidityHub).settleQueue(Currency.unwrap(corePoolKey.currency1), locker),
+            requiredSettlementAmount1,
+            "token1 queued amount should match required settlement shortfall"
+        );
+    }
+
+    /// @notice Paused full MM remove (live vault) still stages `planCancelWithQueue`; combined with settle, MMPM underlying deltas can return to the pre-remove snapshot.
+    /// @dev `DynamicCurrencyDelta.accountUnderlyingSettlementDelta` runs during the hook for non-zero `settleableDelta`; the follow-up `SETTLE` action nets locker/MMPM state.
+    ///      We assert the hook path via `vm.expectCall` to `planCancelWithQueue` (queueAmount == 0) rather than requiring `getUnderlyingDeltaPair(MMPM)` to differ after a balanced settle batch.
+    function test_pausedMMRemove_liveVault_invokesPlanCancelWithQueue() public {
+        vm.mockCall(
+            marketFactory,
+            abi.encodeWithSelector(IMarketFactory.bounds.selector, address(positionManager)),
+            abi.encode(true)
+        );
+
+        ModifyLiquidityParams memory liquidityParams =
+            ModifyLiquidityParams({tickLower: -60, tickUpper: 60, liquidityDelta: 1e10, salt: bytes32(uint256(42))});
+
+        (uint256 tokenId,, uint256 requiredSettlementAmount0, uint256 requiredSettlementAmount1) = _setupCommittedPosition(
+            positionManager,
+            corePoolKey,
+            abi.encode(liquiditySignal),
+            liquidityParams,
+            marketVTSConfiguration,
+            address(lcc0),
+            address(lcc1)
+        );
+
+        (,, uint256 commitPositionCount,) = positionManager.commitOf(tokenId);
+        uint256 positionIndex = commitPositionCount - 1;
+
+        vtsOrchestrator.pausePool(corePoolKey.toId());
+
+        uint256 principalPerSide = 29_953_549;
+        uint256 queuePerSide = 0;
+        address locker = address(this);
+
+        vm.expectCall(
+            liquidityHub,
+            abi.encodeWithSelector(
+                ILiquidityHub.planCancelWithQueue.selector,
+                Currency.unwrap(corePoolKey.currency0),
+                address(manager),
+                address(positionManager),
+                principalPerSide,
+                queuePerSide,
+                locker
+            )
+        );
+        vm.expectCall(
+            liquidityHub,
+            abi.encodeWithSelector(
+                ILiquidityHub.planCancelWithQueue.selector,
+                Currency.unwrap(corePoolKey.currency1),
+                address(manager),
+                address(positionManager),
+                principalPerSide,
+                queuePerSide,
+                locker
+            )
+        );
+
+        uint256 amountToDecrease = uint256(liquidityParams.liquidityDelta);
+        MMA.PreparedAction[] memory actions = new MMA.PreparedAction[](2);
+        actions[0] = MMA.prepareDecrease(corePoolKey, tokenId, positionIndex, amountToDecrease);
+        actions[1] = MMA.prepareSettle(
+            corePoolKey,
+            tokenId,
+            positionIndex,
+            requiredSettlementAmount0.toInt128(),
+            requiredSettlementAmount1.toInt128(),
+            false
+        );
+        MMA.executeWithUnlock(positionManager, actions, block.timestamp + 3600);
+    }
+
     /// @notice Mutation-killer: when `recipient == address(this)`, COLLECT_AVAILABLE_LIQUIDITY must sync underlying credit.
     /// @dev Practical tip: verify the sync by immediately doing a `TAKE(underlying)` to an external recipient.
     function test_collectAvailableLiquidity_noSwap() public {

@@ -144,6 +144,16 @@ contract VTSOrchestratorTestable is VTSOrchestrator {
         return (pa.commitmentDeficit.token0, pa.commitmentDeficit.token1);
     }
 
+    /// @notice Commitment-deficit bypass timer fields (for integration tests)
+    function getCommitmentDeficitAgeFields(PositionId positionId)
+        external
+        view
+        returns (uint256 since0, uint256 since1, uint16 deficitBps)
+    {
+        PositionAccounting storage pa = s.positionAccounting[positionId];
+        return (pa.commitmentDeficitSince.token0, pa.commitmentDeficitSince.token1, pa.commitmentDeficitBps);
+    }
+
     /// @notice Get bonus weighting inputs for a position (CISE-only)
     /// @dev Bonus eligibility uses CISE exposure (coverage-indexed settled exposure).
     /// @param positionId The position identifier
