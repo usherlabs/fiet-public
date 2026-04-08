@@ -1,0 +1,29 @@
+Partial reset of commitment-deficit state on full deactivation in VTSPositionLib causes deficit-based seizure bypass to be permanently blocked
+
+On full deactivation, the position’s commitment-deficit age (since) and bps are cleared but the deficit amounts are not. Because the deficit “since” timestamp is only written when the previous deficit was zero, a later checkpoint after reactivation can keep since == 0 while deficit amounts remain > 0, blocking age-gated deficit-based seizure bypass. If RFS is also closed, neither seizure path is available, weakening enforcement against persistent under-backing.
+
+The PR introduces _applyLiquidityMirrorTransition in VTSPositionLib that, on full deactivation (liquidity transitions to zero), clears commitmentDeficitSince.* and commitmentDeficitBps but does not clear commitmentDeficit.token0/token1 amounts. VTSCommitLib._writeCommitmentDeficitToken only sets commitmentDeficitSince when the previous deficit was zero; otherwise it leaves it unchanged. After reactivation and a commitment checkpoint, if nextDeficit > 0 and prevDeficit > 0 (carried across from deactivation), commitmentDeficitSince remains 0. CheckpointLibrary.isSeizable’s deficit path requires a positive age (since > 0 and elapsed), so the deficit-based bypass is never eligible. When RFS is also closed (e.g., settled equals commitment maxima), neither path to seizure is available, allowing persistent under-backing to evade intended enforcement. Public checkpointing requires the position to be active, so you cannot zero the carried deficit via checkpoint while inactive. The MM can also avoid deposits/inflows that would net the carried deficit to zero, keeping prevDeficit > 0 so that since is never re-established.
+
+Code Suggestions:
+
+VTSCommitLib.sol
+
+    if (nextDeficit == 0) {
+ 
+
+            pa.commitmentDeficitSince.set(tokenIndex, 0);
+68
+
+ 
+
+        } else if (prevDeficit == 0 || pa.commitmentDeficitSince.get(tokenIndex) == 0) {
+69
+
+70
+
+ 
+
+            pa.commitmentDeficitSince.set(tokenIndex, block.timestamp);
+ 
+
+        }

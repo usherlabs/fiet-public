@@ -288,6 +288,16 @@ being an informal “should”.
 - **Separation invariant**: `commitmentDeficit` is a checkpoint-derived solvency gate and is not the pool DICE
   principal. DICE denominator (`totalDeficitPrincipal`) tracks swap-incurred `cumulativeDeficit` only.
 
+### COMMIT-02A: Non-seizure MM liquidity changes blocked while `commitmentDeficit` is non-zero
+
+- **Statement**: If `PositionAccounting.commitmentDeficit` is non-zero on either token, any MM `touchPosition` with
+  `liquidityDelta != 0` must revert unless the operation is a seizure (`hookData.seizure.isSeizing == true`).
+- **Enforced by**: `src/libraries/VTSPositionLib.sol::touchPosition` reverts `Errors.CommitmentDeficitBlocksLiquidityChange`.
+- **Rationale**: Closing live RFS (via settlement) does not necessarily clear stored `commitmentDeficit`; allowing MM
+  add/remove while the insolvency gate persists would desynchronise commitment context from checkpoint-derived deficit
+  state. MM no-ops (`liquidityDelta == 0`) and settlement / checkpoint paths remain available to cure or formalise
+  backing.
+
 ### COMMIT-03: “Advancer” binding for checkpoint-with-commitment must hold
 
 - **Statement**: A checkpoint-with-commitment must only accept signals where:

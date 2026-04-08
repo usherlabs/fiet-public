@@ -1,0 +1,34 @@
+Missing growth-snapshot refresh on reactivation in VTSLifecycleLinkedLib.processPosition / VTSPositionLib.touchPosition causes retroactive growth attribution and unfair withdrawals
+
+When an existing inactive position is reactivated by adding liquidity, per-position tick-indexed growth snapshots are not refreshed before the add. Because settlement runs only for active positions, the next growth settlement multiplies the entire growth delta since the last snapshot (which includes time with zero liquidity) by the newly added liquidity, misattributing historical growth and potentially enabling unfair withdrawals or obligation relief.
+
+CoreHook.beforeAddLiquidity calls VTSOrchestrator.settlePositionGrowths, but settlePositionGrowths only runs for active positions. The PR introduces VTSLifecycleLinkedLib.processPosition, which validates existing positions with requireActive=false and forwards to VTSPositionLib.touchPosition. touchPosition explicitly allows re-activating an inactive position by adding liquidity, yet does not refresh the position’s deficit/inflow/fee growth snapshots for existing positions on reactivation (only new positions run _initPositionSnapshots). As a result, no pre-add settlement or snapshot refresh occurs for inactive positions. Later, when settlePositionGrowths runs (e.g., before a subsequent remove), VTSPositionLib._deltaAndCheckpointGrowth computes growthInside delta since the last snapshot and multiplies it by the current live liquidity (from StateLibrary.getPositionLiquidity), attributing historical growth (accrued while the position had zero liquidity) to the reactivated, now-large liquidity. This distorts settled/deficit accounting and RFS, which can produce unjustified withdrawals from the vault, avoidance of seizure, or misallocation of coverage/fees.
+
+Code Suggestions:
+
+VTSOrchestrator.sol
+
+ /// @param positionId The position identifier
+ 
+
+    function settlePositionGrowths(PositionId positionId) public {
+498
+
+499
+
+ 
+
+        // Process existing positions (active or inactive). New/unregistered positions are ignored (owner == 0).
+ 
+
+        if (isPositionValid(positionId, false)) {
+500
+
+501
+
+ 
+
+            PoolId poolId = s.positions[positionId].poolId;
+ 
+
+            if (s.isPaused || s.pools[poolId].isPaused) {

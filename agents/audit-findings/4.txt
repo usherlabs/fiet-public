@@ -1,0 +1,82 @@
+Stale RFS checkpoint usage in seizure validation allows premature seizure
+
+The PR removed the pre-seizure checkpoint refresh for the normal RFS path, causing CheckpointLibrary.isSeizable to rely on a stale checkpoint (openSince/openMask) rather than live RFS state. This can allow seizure before a fresh grace period has elapsed after RFS recently re-opened.
+
+Prior to the PR, onSeize always refreshed from live state (settled growths, optional commitment checks, computed getRFS, and marked the checkpoint) before evaluating seizability. The PR introduced VTSLifecycleLinkedLib.validateSeize and refactored onSeize/onMMSettle prechecks so that, when there is no stored commitmentDeficit, they no longer refresh and re-mark the checkpoint before calling CheckpointLibrary.isSeizable. Since public settlePositionGrowths and calcRFS can change live RFS status without marking the checkpoint, a position can be checkpointed 'open since T0', then live RFS close, and later re-open at T2 without updating the checkpoint. In this case, isSeizable uses the stale openSince T0 and may allow immediate seizure even though the new RFS episode at T2 has not aged through grace.
+
+Code Suggestions:
+
+VTSOrchestrator.sol
+
+ 
+
+        if (isSeizing) {
+688
+
+ 
+
+            VTSLifecycleLinkedLib.validateSeize(s, _lifecycleContext(), commitId, positionIndex, positionId);
+689
+
+690
+
+ 
+
+        }
+
+VTSLifecycleLinkedLib.sol
+
+  bool hasStoredCommitmentDeficit = s.positionAccounting[positionId].commitmentDeficit.token0 > 0
+ 
+
+            || s.positionAccounting[positionId].commitmentDeficit.token1 > 0;
+200
+
+201
+
+ 
+
+        // Always refresh live growths before evaluating seizability; only refresh commitment deficit state if present.
+ 
+
+        VTSPositionLib.settlePositionGrowths(s, ctx.poolManager, positionId);
+202
+
+ 
+
+        if (hasStoredCommitmentDeficit) {
+ 
+
+203
+
+ 
+
+            VTSCommitLib.checkpointWithCommitment(s, ctx.poolManager, ctx.oracleHelper, commitId, positionId);
+ 
+
+ 
+
+204
+
+ 
+
+        }
+205
+
+206
+
+ 
+
+        (, BalanceDelta rfsDelta) = VTSPositionLib.getRFS(s, positionId);
+ 
+
+        CheckpointLibrary.markCheckpoint(s, positionId, VTSPositionLib._rfsOpenMask(rfsDelta));
+207
+
+208
+
+ 
+
+ 
+
+        CheckpointLibrary.isSeizable(s, commitId, positionIndex, true);

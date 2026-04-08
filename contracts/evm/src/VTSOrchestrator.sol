@@ -492,11 +492,12 @@ contract VTSOrchestrator is
     ///      remove liquidity, or swap on behalf of the owner.
     ///      During pause we narrow the caller back to the canonical CoreHook for the pool so remove-liquidity flows
     ///      can still preserve pre-pause attribution, while add-liquidity and swaps remain halted.
-    ///      Only processes valid, active positions.
+    ///      Only processes valid registered positions; inactive positions are checkpointed with zero live liquidity so
+    ///      stale growth cannot be inherited on later reactivation.
     /// @param positionId The position identifier
     function settlePositionGrowths(PositionId positionId) public {
-        // Only check for active valid position - as new positions are not yet registered in VTS when this method is called.
-        if (isPositionValid(positionId, true)) {
+        // Only check for a registered valid position - as new positions are not yet registered in VTS when this method is called.
+        if (isPositionValid(positionId, false)) {
             PoolId poolId = s.positions[positionId].poolId;
             if (s.isPaused || s.pools[poolId].isPaused) {
                 // Pause keeps the settlement path available only for canonical remove-liquidity bookkeeping.

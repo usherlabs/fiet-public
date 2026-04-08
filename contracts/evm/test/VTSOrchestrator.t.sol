@@ -931,6 +931,19 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
         vtsOrchestrator.settlePositionGrowths(positionId);
     }
 
+    function test_settlePositionGrowths_inactivePosition_stillSettles() public {
+        (uint256 tokenId, PositionId positionId,,) = _createCommittedPosition();
+        Position memory posBeforeRemove = vtsOrchestrator.getPosition(positionId);
+        _decreasePosition(tokenId, posBeforeRemove.liquidity);
+
+        Position memory posAfterRemove = vtsOrchestrator.getPosition(positionId);
+        assertFalse(posAfterRemove.isActive, "precondition: position should be inactive after full remove");
+
+        bytes4 extsload1 = bytes4(keccak256("extsload(bytes32)"));
+        vm.expectCall(address(manager), abi.encodeWithSelector(extsload1));
+        vtsOrchestrator.settlePositionGrowths(positionId);
+    }
+
     function test_getCommitmentMaxima_returnsNonZero() public {
         (, PositionId positionId,,) = _createCommittedPosition();
 
@@ -1847,10 +1860,23 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
 
         // Paused remove requires closed RFS; iteratively settle calcRFS shortfall until lanes close.
         _e2eFinding5_closeRfsBySettlingShortfall(tokenId, positionId);
+
+        // Non-seizure MM liquidity changes are frozen while stored commitmentDeficit is non-zero.
+        // Cure the insolvency gate via a strong backing signal before any remove/add may proceed.
+        _mockLccPrices(1e18, 1e18);
+        _mockSignalUsd(1e30);
+        vm.prank(advancer);
+        unlockCaller.run(
+            address(vtsOrchestrator), abi.encodeWithSelector(VTSOrchestrator.checkpoint.selector, tokenId, 0, true)
+        );
+        (cd0, cd1) = _commitmentDeficit(positionId);
+        assertEq(cd0, 0, "e2e finding5: must clear token0 commitmentDeficit before MM liquidity change");
+        assertEq(cd1, 0, "e2e finding5: must clear token1 commitmentDeficit before MM liquidity change");
     }
 
     /// @dev After a commitment checkpoint reveals deficit, RFS is open; pay deposits matching `calcRFS` deltas
-    ///      until `calcRFS` reports closed so MM remove-liquidity can proceed.
+    ///      until `calcRFS` reports closed. Closing RFS alone does not clear stored commitmentDeficit; callers
+    ///      must still cure deficit (e.g. checkpoint with sufficient signal) before non-seizure MM removes.
     function _e2eFinding5_closeRfsBySettlingShortfall(uint256 tokenId, PositionId positionId) internal {
         for (uint256 i = 0; i < 12; i++) {
             (bool open, BalanceDelta d) = vtsOrchestrator.calcRFS(positionId, false);

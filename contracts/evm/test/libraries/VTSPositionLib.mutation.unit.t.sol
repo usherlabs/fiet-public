@@ -232,6 +232,66 @@ contract VTSPositionLibMutationUnitTest is Test {
         assertEq(poolTotalAfterOut, 125e18, "pool totalSettled should decrease on withdrawal");
     }
 
+    function test_updateSettlement_firstPostZeroSettlerCannotCaptureHistoricalCISEExposureOrBonus() public {
+        uint128 liquidity = 1e18;
+        uint256 settledAmount = 100e18;
+        uint256 residual = 40e18;
+
+        (PositionId id, ModifyLiquidityParams memory p) = _register(bytes32(uint256(0xC15E)), liquidity);
+
+        harness.setCommitmentMax(id, settledAmount, 0);
+        harness.setPoolCoverageResidualCISE(poolId, residual, 0);
+
+        _pmSetSlot0Tick(poolId, 0);
+        _pmSetPositionLiquidity(poolId, PositionId.unwrap(id), liquidity);
+
+        uint256 expectedDeltaIndex = FullMath.mulDiv(residual, FixedPoint128.Q128, settledAmount);
+
+        int256 applied = harness.updateSettlement(id, 0, int256(settledAmount));
+        assertEq(applied, int256(settledAmount), "deposit should settle the triggering position");
+
+        (uint256 totalSettled0,) = harness.getPoolTotalSettled(poolId);
+        assertEq(totalSettled0, settledAmount, "pool totalSettled should reflect the first depositor");
+
+        (uint256 residualAfter0,) = harness.getPoolCoverageResidualCISE(poolId);
+        assertEq(residualAfter0, 0, "CISE residual should flush on the 0->>0 transition");
+
+        (uint256 poolIndex0,) = harness.getPoolCoveragePerSettledIndexX128(poolId);
+        assertEq(poolIndex0, expectedDeltaIndex, "pool CISE index should advance by the deferred residual");
+
+        (uint256 poolExposure0,) = harness.getPoolTotalCISEExposure(poolId);
+        assertEq(poolExposure0, residual, "pool CISE denominator should include the flushed residual");
+
+        (uint256 ciseIndexLast0,) = harness.getCISEIndexLastX128(id);
+        assertEq(
+            ciseIndexLast0, expectedDeltaIndex, "first post-zero settler must checkpoint to the post-flush CISE index"
+        );
+
+        harness.setPoolProtocolFeeAccrued(poolId, 0, 777e18);
+
+        harness.settlePositionGrowths(IPoolManager(address(pm)), id);
+
+        {
+            (uint256 ciseExposure0, uint256 ciseExposure1) = harness.getCISEExposure(id);
+            assertEq(ciseExposure0, 0, "settling growths must not realise historical residual exposure");
+            assertEq(ciseExposure1, 0, "unaffected token should remain without exposure");
+        }
+
+        ModifyLiquidityParams memory pokeParams =
+            ModifyLiquidityParams({tickLower: TICK_LOWER, tickUpper: TICK_UPPER, liquidityDelta: 0, salt: p.salt});
+        TouchPositionResult memory pokeResult =
+            harness.touchPosition(_defaultPositionContext(), _directRemoveTouchParams(pokeParams));
+
+        assertEq(pokeResult.feeAdj.amount0(), 0, "attacker poke should not materialise any token0 bonus");
+        assertEq(pokeResult.feeAdj.amount1(), 0, "attacker poke should not materialise any token1 bonus");
+
+        (, uint256 protocolFeeAfter1) = harness.getPoolProtocolFeeAccrued(poolId);
+        assertEq(protocolFeeAfter1, 777e18, "queued fee pot must remain untouched");
+
+        (, int256 pending1) = harness.getPendingFeeAdj(id);
+        assertEq(pending1, 0, "touch must not queue a negative pending bonus");
+    }
+
     // ============================================================
     // _registerPosition: kill already-registered guard mutant (855)
     // ============================================================
@@ -1483,6 +1543,72 @@ contract VTSPositionLibMutationUnitTest is Test {
             -int256(expectedExcess1),
             "underlying delta1 should equal (base - settled)"
         );
+    }
+
+    /// @notice Non-seizure MM increases revert while stored commitmentDeficit is non-zero.
+    function test_touchPosition_mmIncrease_revertsWhenCommitmentDeficit_nonZero() public {
+        MockLCC lcc0 = new MockLCC(address(0xB0));
+        MockLCC lcc1 = new MockLCC(address(0xB1));
+        address lcc0Addr = address(lcc0);
+        address lcc1Addr = address(lcc1);
+        PoolKey memory key = PoolKey({
+            currency0: Currency.wrap(lcc0Addr),
+            currency1: Currency.wrap(lcc1Addr),
+            fee: 0,
+            tickSpacing: 60,
+            hooks: IHooks(address(0))
+        });
+        PoolId pId = key.toId();
+        harness.setupPool(pId, _defaultCfg());
+
+        ModifyLiquidityParams memory reg = ModifyLiquidityParams({
+            tickLower: TICK_LOWER,
+            tickUpper: TICK_UPPER,
+            liquidityDelta: int256(uint256(1000)),
+            salt: bytes32(uint256(42))
+        });
+        harness.registerPosition(owner, pId, reg);
+        PositionId id = PositionLibrary.generateId(owner, reg);
+
+        harness.setCommitmentMax(id, 100e18, 100e18);
+        harness.setSettled(id, 2e18, 2e18);
+        harness.setPoolTotalSettled(pId, 2e18, 2e18);
+        harness.setCumulativeDeficit(id, 0, 0);
+        harness.setCommitmentDeficit(id, 1, 0);
+
+        _pmSetSlot0Tick(pId, 0);
+        _pmSetPositionLiquidity(pId, PositionId.unwrap(id), 1000);
+        _pmSetFeeGrowthGlobals(pId, 0, 0);
+        _pmSetTickFeeGrowthOutside(pId, TICK_LOWER, 0, 0);
+        _pmSetTickFeeGrowthOutside(pId, TICK_UPPER, 0, 0);
+
+        uint256 commitId = 2;
+        harness.setPositionCommitId(id, commitId);
+        harness.setCommitActivePositionCount(commitId, 1);
+
+        MockLiquidityHubRecorder hub = new MockLiquidityHubRecorder(lcc0Addr, lcc1Addr);
+        MockMarketVaultPassthrough vault = new MockMarketVaultPassthrough();
+
+        PositionContext memory ctx = PositionContext({
+            poolManager: IPoolManager(address(pm)),
+            liquidityHub: ILiquidityHub(address(hub)),
+            oracleHelper: IOracleHelper(address(0)),
+            marketVault: IMarketVault(address(vault))
+        });
+
+        TouchPositionParams memory tp = TouchPositionParams({
+            owner: owner,
+            poolKey: key,
+            params: ModifyLiquidityParams({
+                tickLower: reg.tickLower, tickUpper: reg.tickUpper, liquidityDelta: int256(uint256(100)), salt: reg.salt
+            }),
+            callerDelta: toBalanceDelta(0, 0),
+            feesAccrued: toBalanceDelta(0, 0),
+            hookData: PositionModificationHookDataLib.encode(commitId, 0, owner)
+        });
+
+        vm.expectRevert(abi.encodeWithSelector(Errors.CommitmentDeficitBlocksLiquidityChange.selector, id));
+        harness.touchPosition(ctx, tp);
     }
 
     // ============================================================

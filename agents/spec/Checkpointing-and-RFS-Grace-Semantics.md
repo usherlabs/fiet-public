@@ -114,11 +114,13 @@ That is intentional.
 
 The protocol treats this as one continuous position-level RFS-open episode rather than unrelated lane-specific grace windows. In other words, the grace timer should not reset merely because the positive required-settlement balance moved onto a different currently-open lane.
 
-### 4.3 Only a genuine closed -> open transition starts a fresh timer
+### 4.3 Only a checkpointed closed -> open transition starts a fresh timer
 
-If the checkpointed state was fully closed (`openMask == 0`) and later becomes open, that is a new stored position-level RFS episode.
+If the checkpointed state was fully closed (`openMask == 0`) and a later checkpoint marks it open, that is a new stored position-level RFS episode.
 
 In that case, `openSince*` is set to `block.timestamp` for lanes that open in that transition.
+
+Importantly, this refers to the persisted checkpoint timeline, not any uncheckpointed live economic interval. Live RFS may close and later reopen without restarting stored grace if storage was never checkpointed closed in between.
 
 ### 4.4 Lane-local grace extension remains lane-local
 
@@ -141,6 +143,8 @@ So:
 - if no prior open checkpoint exists, checkpoint B necessarily creates the first stored open episode.
 
 This is why "live RFS has been open for a while" and "stored checkpoint grace has been running for a while" are related but not identical concepts.
+
+The converse also matters: "live RFS briefly closed and reopened" does **not** imply that stored grace restarted. A restart requires a checkpointed fully-closed state, not merely an economically closed interval that nobody persisted.
 
 ---
 
@@ -168,6 +172,20 @@ In short:
 
 - **normal RFS grace path**: preserve stored timer semantics;
 - **commitment-deficit bypass path**: refresh stale backing state before trusting bypass.
+
+### 6.1 Incentive model: why ordinary seizure does not refresh the checkpoint
+
+`checkpoint(...)` is intentionally an open, callable maintenance action rather than something reserved to the eventual seizer.
+
+Different actors have different incentives:
+
+- a position owner (or another friendly actor) is incentivised to checkpoint when live RFS has become closed, because a persisted closed checkpoint clears stored ordinary-grace continuity;
+- a potential seizer is incentivised to act when the position is economically vulnerable, ie. while live RFS is open and seizure may be profitable;
+- a potential seizer is **not** intended to receive a special ability to first checkpoint under new ordinary-RFS conditions and thereby manufacture a fresh grace start or reset immediately before testing seizure.
+
+That asymmetry is deliberate. Ordinary seizure gating consumes the best previously-persisted checkpoint state; it does not give the seizing party a privileged "refresh-then-test" path for lane-grace semantics.
+
+Said differently: the protocol expects checkpoint storage to be shaped by open participation from economically motivated parties over time, not by granting the final seizer a one-shot right to rewrite the relevant ordinary-grace episode at the moment of seizure.
 
 ---
 
@@ -209,6 +227,20 @@ When present, it affects both:
 
 Unlike ordinary lane grace, stale `commitmentDeficit` state is dangerous in the direction of false seizure eligibility. That is why the bypass path is refreshed inside `onSeize(...)`, while the ordinary lane-grace path is not.
 
+### 8.1 Insolvency freeze on MM liquidity changes
+
+While `commitmentDeficit.token0 > 0` or `commitmentDeficit.token1 > 0`, **non-seizure** MM position modifications with
+`liquidityDelta != 0` revert (`Errors.CommitmentDeficitBlocksLiquidityChange`). This is stricter than “RFS closed”:
+settling enough to close live RFS does not, by itself, clear stored `commitmentDeficit`; the MM must cure or clear the
+insolvency gate (e.g. `checkpoint(..., withCommitment=true)` with sufficient backing, settlement netting via
+`_updateSettlement`, or similar) before resizing liquidity.
+
+**Still allowed** while deficit is non-zero:
+
+- MM **no-op** touches (`liquidityDelta == 0`) that only refresh checkpoints / fees;
+- **Seizure** decreases (`isSeizing == true` in hook data);
+- `onMMSettle` / ordinary settlement paths that improve backing without changing pool liquidity through this gate.
+
 See also:
 
 - `agents/spec/Unbacked-Commitment-Declaration.md`
@@ -223,6 +255,22 @@ A swap or accounting change can make live RFS open immediately.
 
 That does **not** mean `openSince*` has already been persisted unless a checkpointing path has materialised it.
 
+### 9.1A Do not assume live close -> reopen implies stored grace restarted
+
+A reviewer may observe:
+
+1. checkpointed open state at `T0`;
+2. a later live economic close;
+3. a later live reopen at `T2`;
+
+and conclude that seizure before `T2 + grace` must be invalid.
+
+Under this design, that conclusion is not automatically correct.
+
+If nobody persisted a fully-closed checkpoint between those live states, storage still represents one continuous checkpointed open episode. Ordinary seizure therefore continues to use the existing stored `openSince*` timer.
+
+This is intentional and should not be reported as a bug unless the intended semantics themselves are being challenged.
+
 ### 9.2 If a test intends to measure grace elapsed, it must establish a stored open checkpoint first
 
 Typical pattern:
@@ -236,6 +284,12 @@ Typical pattern:
 
 `onMMSettle(...)` recomputes and persists the final RFS checkpoint after settlement, so its returned `rfsOpen` is the **post-settlement** state, not the pre-settlement state.
 
+### 9.4 MM remove/add tests must respect the commitment-deficit freeze
+
+If a scenario leaves `commitmentDeficit` non-zero, a later non-seizure MM `liquidityDelta != 0` will revert even when
+`getRFS(...)` is closed. Establish a zero stored deficit (or use the seizure path) before asserting paused or normal MM
+removes.
+
 ---
 
 ## 10. Summary
@@ -244,9 +298,13 @@ The checkpointing paradigm is:
 
 - checkpointing is the protocol's canonical memory of an RFS-open episode;
 - `openSince*` tracks the continuous checkpointed RFS episode, not merely the latest lane transition in isolation;
+- only a checkpointed fully-closed interval resets ordinary grace; an unpersisted live close/reopen does not;
 - lane rotations inherit the prior timer if the position never fully closed;
 - unconditional checkpoint refresh during seizure would incorrectly restart ordinary grace when storage had not yet recorded the episode;
+- ordinary seizure intentionally does not let the seizing party checkpoint under new lane-grace conditions before testing eligibility;
+- checkpointing is an open maintenance action that economically interested parties may call, including owners who want a persisted closed state;
 - commitment-deficit bypass is special and may be force-refreshed because stale deficit storage is itself a security risk;
+- non-seizure MM liquidity resizing is blocked while stored `commitmentDeficit` is non-zero, independent of whether live RFS is closed;
 - grace extension refreshes lane-open state first so valid proofs are not blocked by stale checkpoint storage.
 
 This design intentionally prefers **stable, explicit stored timing semantics** over trying to reconstruct historical openness from live state at the moment of seizure or proof submission.

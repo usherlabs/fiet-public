@@ -903,6 +903,85 @@ contract VTSPositionLibTest is VTSLibTestBase {
         harness.touchPosition(_mkCtx(), tp);
     }
 
+    function test_touchPosition_increaseOnInactive_rebasesTickIndexedSnapshots() public {
+        _initMarket();
+        PoolId corePoolId = _getDefaultPoolId();
+        harness.setupPool(corePoolId, _createDefaultVTSConfig());
+
+        PositionId positionId = _registerHarnessPositionInPool(
+            corePoolId, DEFAULT_OWNER, DEFAULT_TICK_LOWER, DEFAULT_TICK_UPPER, 1, DEFAULT_SALT
+        );
+
+        harness.setPositionActive(positionId, false);
+        harness.setPositionLiquidityMirror(positionId, 0);
+
+        harness.setDeficitGrowthGlobal(corePoolId, 111, 222);
+        harness.setInflowGrowthGlobal(corePoolId, 333, 444);
+
+        harness.setDeficitGrowthInsideLast(positionId, 1, 2);
+        harness.setInflowGrowthInsideLast(positionId, 3, 4);
+        harness.setFeeGrowthInsideLast(positionId, 5, 6);
+        harness.setFeeBurnGrowthRemainder(positionId, 7, 8);
+        harness.setCoverageIndexLastX128(positionId, 901, 902);
+        harness.setCISEIndexLastX128(positionId, 903, 904);
+
+        // Pool `totalSettled` must not transition 0 -> >0 on this touch, or `_checkpointFirstPostZeroSettlerCISE`
+        // overwrites `ciseIndexLastX128` to the post-flush pool index (breaking the "preserve CISE index" checks).
+        harness.setPoolTotalSettled(corePoolId, 1, 1);
+
+        (uint256 feeGrowth0, uint256 feeGrowth1) =
+            _getFeeGrowthInside(corePoolId, DEFAULT_TICK_LOWER, DEFAULT_TICK_UPPER);
+
+        ModifyLiquidityParams memory params = ModifyLiquidityParams({
+            tickLower: DEFAULT_TICK_LOWER,
+            tickUpper: DEFAULT_TICK_UPPER,
+            liquidityDelta: int256(uint256(1)),
+            salt: DEFAULT_SALT
+        });
+
+        TouchPositionParams memory tp = TouchPositionParams({
+            owner: DEFAULT_OWNER,
+            poolKey: _mkPoolKey(),
+            params: params,
+            callerDelta: toBalanceDelta(0, 0),
+            feesAccrued: toBalanceDelta(0, 0),
+            hookData: _mkHookData(false, false, 0)
+        });
+
+        harness.touchPosition(_mkCtx(), tp);
+
+        {
+            (uint256 deficit0, uint256 deficit1) = harness.getDeficitGrowthInsideLast(positionId);
+            (uint256 inflow0, uint256 inflow1) = harness.getInflowGrowthInsideLast(positionId);
+            assertEq(deficit0, 111, "inactive reactivation should checkpoint current deficit growth token0");
+            assertEq(deficit1, 222, "inactive reactivation should checkpoint current deficit growth token1");
+            assertEq(inflow0, 333, "inactive reactivation should checkpoint current inflow growth token0");
+            assertEq(inflow1, 444, "inactive reactivation should checkpoint current inflow growth token1");
+        }
+
+        {
+            (uint256 fee0, uint256 fee1) = harness.getFeeGrowthInsideLast(positionId);
+            (uint256 remainder0, uint256 remainder1) = harness.getFeeBurnGrowthRemainder(positionId);
+            assertEq(fee0, feeGrowth0, "inactive reactivation should checkpoint current fee growth token0");
+            assertEq(fee1, feeGrowth1, "inactive reactivation should checkpoint current fee growth token1");
+            assertEq(remainder0, 0, "inactive reactivation should clear fee burn remainder token0");
+            assertEq(remainder1, 0, "inactive reactivation should clear fee burn remainder token1");
+        }
+
+        {
+            (uint256 coverageIdx0, uint256 coverageIdx1) = harness.getCoverageIndexLastX128(positionId);
+            (uint256 ciseIdx0, uint256 ciseIdx1) = harness.getCISEIndexLastX128(positionId);
+            assertEq(coverageIdx0, 901, "reactivation should not reset DICE coverage index token0");
+            assertEq(coverageIdx1, 902, "reactivation should not reset DICE coverage index token1");
+            assertEq(ciseIdx0, 903, "reactivation should not reset CISE index token0");
+            assertEq(ciseIdx1, 904, "reactivation should not reset CISE index token1");
+        }
+
+        Position memory posAfter = harness.getPosition(positionId);
+        assertTrue(posAfter.isActive, "increase should reactivate the position");
+        assertEq(posAfter.liquidity, 1, "increase should restore live liquidity from zero");
+    }
+
     function test_touchPosition_increaseWhileSeizing_reverts() public {
         PositionId positionId =
             _registerHarnessPosition(DEFAULT_OWNER, DEFAULT_TICK_LOWER, DEFAULT_TICK_UPPER, 1000, DEFAULT_SALT);
@@ -1121,6 +1200,92 @@ contract VTSPositionLibTest is VTSLibTestBase {
         assertEq(hub.lastQueued0(), 0, "queued0 should be 0 when vault reports full availability");
     }
 
+    /// @notice Non-seizure MM decreases are blocked while commitmentDeficit is non-zero, even if RFS is closed.
+    function test_touchPosition_mmDecrease_nonSeizing_revertsWhenCommitmentDeficit_nonZero() public {
+        _initMarket();
+        PoolId corePoolId = _getDefaultPoolId();
+        harness.setupPool(corePoolId, _createDefaultVTSConfig());
+
+        bytes32 salt = bytes32(uint256(407));
+        PositionId positionId = _registerHarnessPositionInPool(corePoolId, DEFAULT_OWNER, -60, 60, 1, salt);
+        harness.setPositionActive(positionId, true);
+
+        uint256 commitId = 789;
+        harness.setPositionCommitId(positionId, commitId);
+        harness.setCommitActivePositionCount(commitId, 1);
+
+        // RFS closed: settled meets inflated requirement (base + small commitmentDeficit).
+        harness.setCommitmentMax(positionId, 1000e18, 0);
+        harness.setSettled(positionId, 1000e18, 0);
+        harness.setCumulativeDeficit(positionId, 0, 0);
+        harness.setCommitmentDeficit(positionId, 1e18, 0);
+
+        VTSPositionLibTest_LiquidityHubCapture hub = new VTSPositionLibTest_LiquidityHubCapture();
+        IMarketVault vault = new VTSPositionLibTest_VaultNoop();
+        PositionContext memory ctx = PositionContext({
+            poolManager: manager,
+            liquidityHub: ILiquidityHub(address(hub)),
+            oracleHelper: IOracleHelper(address(0)),
+            marketVault: vault
+        });
+
+        ModifyLiquidityParams memory decParams =
+            ModifyLiquidityParams({tickLower: -60, tickUpper: 60, liquidityDelta: -int256(uint256(1)), salt: salt});
+        TouchPositionParams memory tp = TouchPositionParams({
+            owner: DEFAULT_OWNER,
+            poolKey: _mkPoolKey(),
+            params: decParams,
+            callerDelta: toBalanceDelta(int128(int256(100)), 0),
+            feesAccrued: toBalanceDelta(0, 0),
+            hookData: _mkHookData(true, false, commitId)
+        });
+
+        vm.expectRevert(abi.encodeWithSelector(Errors.CommitmentDeficitBlocksLiquidityChange.selector, positionId));
+        harness.touchPosition(ctx, tp);
+    }
+
+    /// @notice Seizure MM decreases bypass the insolvency freeze on non-seizure liquidity changes.
+    function test_touchPosition_mmDecrease_seizing_allowedWhenCommitmentDeficit_nonZero() public {
+        _initMarket();
+        PoolId corePoolId = _getDefaultPoolId();
+        harness.setupPool(corePoolId, _createDefaultVTSConfig());
+
+        bytes32 salt = bytes32(uint256(408));
+        PositionId positionId = _registerHarnessPositionInPool(corePoolId, DEFAULT_OWNER, -60, 60, 1, salt);
+        harness.setPositionActive(positionId, true);
+
+        uint256 commitId = 790;
+        harness.setPositionCommitId(positionId, commitId);
+        harness.setCommitActivePositionCount(commitId, 1);
+
+        harness.setCommitmentMax(positionId, 1000e18, 0);
+        harness.setSettled(positionId, 1000e18, 0);
+        harness.setCumulativeDeficit(positionId, 0, 0);
+        harness.setCommitmentDeficit(positionId, 50e18, 0);
+
+        VTSPositionLibTest_LiquidityHubCapture hub = new VTSPositionLibTest_LiquidityHubCapture();
+        IMarketVault vault = new VTSPositionLibTest_VaultNoop();
+        PositionContext memory ctx = PositionContext({
+            poolManager: manager,
+            liquidityHub: ILiquidityHub(address(hub)),
+            oracleHelper: IOracleHelper(address(0)),
+            marketVault: vault
+        });
+
+        ModifyLiquidityParams memory decParams =
+            ModifyLiquidityParams({tickLower: -60, tickUpper: 60, liquidityDelta: -int256(uint256(1)), salt: salt});
+        TouchPositionParams memory tp = TouchPositionParams({
+            owner: DEFAULT_OWNER,
+            poolKey: _mkPoolKey(),
+            params: decParams,
+            callerDelta: toBalanceDelta(int128(int256(100)), 0),
+            feesAccrued: toBalanceDelta(0, 0),
+            hookData: _mkHookData(true, true, commitId)
+        });
+
+        harness.touchPosition(ctx, tp);
+    }
+
     function test_touchPosition_mmNoOp_marksCheckpointWhenRFSOpens() public {
         // Targets the MM checkpoint marking path:
         //   CheckpointLibrary.markCheckpoint(s, result.id, rfsOpen);
@@ -1183,6 +1348,57 @@ contract VTSPositionLibTest is VTSLibTestBase {
         assertEq(afterCp.openSince1, 0, "token1 should remain closed");
         assertEq(afterCp.gracePeriodExtension0, 0, "grace extensions should reset on transition");
         assertEq(afterCp.gracePeriodExtension1, 0, "grace extensions should reset on transition");
+    }
+
+    /// @notice MM no-op (liquidityDelta == 0) remains allowed while commitmentDeficit is non-zero.
+    function test_touchPosition_mmNoOp_allowedWhenCommitmentDeficit_nonZero() public {
+        _initMarket();
+        PoolId corePoolId = _getDefaultPoolId();
+        harness.setupPool(corePoolId, _createDefaultVTSConfig());
+
+        address owner = address(modifyLiquidityRouter);
+        bytes32 salt = bytes32(uint256(304));
+
+        ModifyLiquidityParams memory addParams =
+            ModifyLiquidityParams({tickLower: -60, tickUpper: 60, liquidityDelta: int256(uint256(1e18)), salt: salt});
+        modifyLiquidityRouter.modifyLiquidity(corePoolKey, addParams, ZERO_BYTES);
+
+        harness.registerPosition(owner, corePoolId, addParams);
+        PositionId positionId = PositionLibrary.generateId(owner, addParams);
+        harness.setPositionActive(positionId, true);
+
+        uint256 commitId = 78;
+        harness.setPositionCommitId(positionId, commitId);
+
+        harness.setCommitmentMax(positionId, 1000e18, 0);
+        harness.setSettled(positionId, 0, 0);
+        harness.setCumulativeDeficit(positionId, 0, 0);
+        harness.setCommitmentDeficit(positionId, 100, 0);
+
+        vm.warp(200);
+        RFSCheckpoint memory cp = harness.getRFSCheckpoint(positionId);
+        cp.openMask = 0;
+        cp.openSince0 = 0;
+        cp.openSince1 = 0;
+        harness.setRFSCheckpoint(positionId, cp);
+        vm.warp(block.timestamp + 1);
+
+        ModifyLiquidityParams memory pokeParams =
+            ModifyLiquidityParams({tickLower: -60, tickUpper: 60, liquidityDelta: 0, salt: salt});
+
+        TouchPositionParams memory tp = TouchPositionParams({
+            owner: owner,
+            poolKey: _mkPoolKey(),
+            params: pokeParams,
+            callerDelta: toBalanceDelta(0, 0),
+            feesAccrued: toBalanceDelta(0, 0),
+            hookData: _mkHookData(true, false, commitId)
+        });
+
+        harness.touchPosition(_mkCtx(), tp);
+
+        RFSCheckpoint memory afterCp = harness.getRFSCheckpoint(positionId);
+        assertEq(afterCp.openMask, 1, "checkpoint should still mark token0 lane open when RFS is open");
     }
 
     // ============================================================
@@ -1638,7 +1854,9 @@ contract VTSPositionLibTest is VTSLibTestBase {
         assertEq(expPos, residual);
 
         (uint256 exp0After,) = harness.getCISEExposure(posA);
-        assertEq(exp0After, residual, "sole LP should realise the full residual window as CISE numerator");
+        // First post-zero settler is checkpointed to the post-flush pool index in `_updatePoolAccounting`, so there is
+        // no remaining index delta for `_settleCISEForToken` to realise on the next `settlePositionGrowths`.
+        assertEq(exp0After, 0, "first settler should not double-count flushed residual via CISE numerator");
 
         (uint256 idx0Last,) = harness.getCISEIndexLastX128(posA);
         assertEq(idx0Last, expDelta, "token0 CISE indexLast should checkpoint to pool index");

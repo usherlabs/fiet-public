@@ -176,6 +176,7 @@ library VTSPositionLib {
             uint256 newTotalSettled = paPool.totalSettled.get(tokenIndex);
             if (wasZero && newTotalSettled > 0) {
                 _flushCISEResidualIfNeeded(s, pos.poolId, tokenIndex);
+                _checkpointFirstPostZeroSettlerCISE(s, id, paPool, tokenIndex);
             }
         }
 
@@ -183,6 +184,27 @@ library VTSPositionLib {
         // Deposits (positive delta to _updateSettlement): returns positive value
         // Withdrawals (negative delta to _updateSettlement): returns negative value (0 + negative settledDelta)
         applied = cumulativeDeficitCoverage.toInt256() + settledDelta;
+    }
+
+    /// @dev Security rationale:
+    ///      If deferred CISE residual is flushed exactly when pool `totalSettled` goes from 0 to >0,
+    ///      the position causing that transition would otherwise have:
+    ///      1) a pre-flush `ciseIndexLastX128`,
+    ///      2) a post-deposit positive `settled` balance, and
+    ///      3) permissionless access to `settlePositionGrowths`.
+    ///
+    ///      That combination lets the first post-zero settler realise historical residual coverage as if it were
+    ///      their own exposure, then potentially queue or materialise an outsized bonus against `protocolFeeAccrued`
+    ///      on a later touch. We checkpoint them to the post-flush index immediately so only future coverage is eligible.
+    function _checkpointFirstPostZeroSettlerCISE(
+        VTSStorage storage s,
+        PositionId id,
+        PoolAccounting storage paPool,
+        uint8 tokenIndex
+    ) private {
+        // The first post-zero settler must not inherit historical residual exposure that accrued while
+        // the pool had no settled liquidity. Checkpoint them to the post-flush index immediately.
+        s.positionAccounting[id].ciseIndexLastX128.set(tokenIndex, paPool.coveragePerSettledIndexX128.get(tokenIndex));
     }
 
     /// @notice "Silent" update settlement helper wrapper for contexts where we deliberately don't need the applied return value
@@ -1035,13 +1057,10 @@ library VTSPositionLib {
         s.inflowGrowthOutside[poolId][tick].token1 = paPool.inflowGrowthGlobal.token1;
     }
 
-    /**
-     * @notice Initializes the snapshots for a position. Prevents new positions from inheriting historical tick-indexed growths.
-     * @param s The central VTS storage
-     * @param poolManager The pool manager contract
-     * @param id The id of the position
-     */
-    function _initPositionSnapshots(VTSStorage storage s, IPoolManager poolManager, PositionId id) internal {
+    /// @notice Checkpoint the tick-indexed growth snapshots at the current pool state.
+    /// @dev Used for both first-time registration and inactive-position reactivation so zero-liquidity intervals
+    ///      cannot be retroactively attributed to freshly added liquidity.
+    function _checkpointTickIndexedSnapshots(VTSStorage storage s, IPoolManager poolManager, PositionId id) internal {
         Position memory pos = s.positions[id];
         PoolId p = pos.poolId;
         PositionAccounting storage pa = s.positionAccounting[id];
@@ -1053,6 +1072,25 @@ library VTSPositionLib {
         _initDeficitSnapshot(s, pa, sp);
         _initInflowSnapshot(s, pa, sp);
         _initFeeSnapshot(poolManager, pa, sp);
+    }
+
+    /**
+     * @notice Initializes the snapshots for a position. Prevents new positions from inheriting historical tick-indexed growths.
+     * @param s The central VTS storage
+     * @param poolManager The pool manager contract
+     * @param id The id of the position
+     */
+    function _initPositionSnapshots(VTSStorage storage s, IPoolManager poolManager, PositionId id) internal {
+        PositionAccounting storage pa = s.positionAccounting[id];
+
+        _checkpointTickIndexedSnapshots(s, poolManager, id);
+
+        Position memory pos = s.positions[id];
+        PoolId p = pos.poolId;
+        (, int24 tickCurrent,,) = StateLibrary.getSlot0(poolManager, p);
+        SnapshotParams memory sp =
+            SnapshotParams({poolId: p, tickLower: pos.tickLower, tickUpper: pos.tickUpper, tickCurrent: tickCurrent});
+
         _initCoverageSnapshot(s, pa, sp);
         _initCISESnapshot(s, pa, sp);
     }
@@ -1227,6 +1265,15 @@ library VTSPositionLib {
                 revert Errors.InvariantViolated("Invalid operation: Commit ID mismatch");
             }
 
+            // Insolvency freeze: do not allow non-seizure MM liquidity changes while commitment deficit persists.
+            // Settlement, checkpoint(withCommitment), and seizure paths remain the intended cure/formalise surfaces.
+            if (hookData.isMMOperation && !hookData.isSeizing && p.params.liquidityDelta != 0) {
+                PositionAccounting storage paGuard = s.positionAccounting[result.id];
+                if (paGuard.commitmentDeficit.token0 > 0 || paGuard.commitmentDeficit.token1 > 0) {
+                    revert Errors.CommitmentDeficitBlocksLiquidityChange(result.id);
+                }
+            }
+
             if (p.params.liquidityDelta < 0) {
                 // Disallow decreases on previously-inactive positions. (If liq == 0, Uniswap will revert anyway.)
                 if (!posStorage.isActive) revert Errors.NotActive(result.id);
@@ -1238,6 +1285,11 @@ library VTSPositionLib {
                 if (p.params.liquidityDelta > 0) {
                     // Allow re-activating a previously inactive position by adding liquidity.
                     // Logically required to build on value routing while collecting fees on inactive positions.
+                    // Rebase tick-indexed snapshots first so the zero-liquidity interval is not charged/credited to
+                    // the newly reactivated liquidity.
+                    if (!posStorage.isActive) {
+                        _checkpointTickIndexedSnapshots(s, ctx.poolManager, result.id);
+                    }
                     requiredSettlementDelta = _touchExistingIncrease(s, poolId, result.id, p.params, hookData);
                 } else {
                     // Allow a no-op when active (Uniswap v4 disallows this when initial liq == 0).

@@ -199,6 +199,11 @@ contract VTSPositionLibHarness {
         return (s.poolAccounting[poolId].protocolFeeAccrued.token0, s.poolAccounting[poolId].protocolFeeAccrued.token1);
     }
 
+    function setPoolProtocolFeeAccrued(PoolId poolId, uint256 fee0, uint256 fee1) external {
+        s.poolAccounting[poolId].protocolFeeAccrued.token0 = fee0;
+        s.poolAccounting[poolId].protocolFeeAccrued.token1 = fee1;
+    }
+
     function getFeesShared(PositionId id) external view returns (uint256 fee0, uint256 fee1) {
         return (s.positionAccounting[id].feesShared.token0, s.positionAccounting[id].feesShared.token1);
     }
