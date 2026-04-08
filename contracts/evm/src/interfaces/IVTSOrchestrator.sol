@@ -104,13 +104,6 @@ interface IVTSOrchestrator is IPausableVTS, IVTSCurrencyDelta, IVTSAdmin {
     /// @param positionId The position identifier
     function settlePositionGrowths(PositionId positionId) external;
 
-    /// @notice Reconcile position state after paused remove-liquidity without reopening full processing
-    /// @dev Called by CoreHook only while pool/global pause is active.
-    ///      Updates downward bookkeeping (commitment maxima, settled clamp, active/liquidity mirror).
-    /// @param positionId The position identifier
-    /// @param params The remove-liquidity params that were applied to PoolManager
-    function reconcileAfterPausedRemove(PositionId positionId, ModifyLiquidityParams calldata params) external;
-
     /// @notice Get the protocol fee accrued (slashed fees) for a pool
     /// @param poolId The pool identifier
     /// @return fee0 The accrued fee for token0

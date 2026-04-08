@@ -192,16 +192,7 @@ contract CoreHook is BaseHook, ImmutableMarketState, ImmutableVTSState, ICoreHoo
         BalanceDelta feesAccrued,
         bytes calldata hookData
     ) internal virtual override returns (bytes4, BalanceDelta) {
-        if (_isPoolOrGlobalPaused(key)) {
-            // When paused, `_beforeRemoveLiquidity` already settled growths through the canonical hook path.
-            // Reconcile only downward bookkeeping from the now-applied remove-liquidity change without
-            // reopening full processPosition/MM/fee mutation while pause remains active.
-            vtsOrchestrator.reconcileAfterPausedRemove(PositionLibrary.generateId(sender, params), params);
-            return (this.afterRemoveLiquidity.selector, BalanceDelta.wrap(0));
-        }
-
-        // Update VTS position state with registration/update based on actual pool id
-        // Pass callerDelta and feesAccrued for consolidated delta management
+        // All liquidity modifications now share the same VTS entrypoint; pause policy is enforced in touchPosition.
         (,, BalanceDelta feeAdj,) = vtsOrchestrator.processPosition(sender, key, params, delta, feesAccrued, hookData);
 
         // NOTE: We deliberately do NOT notify ProxyHook on direct-LP removals.
@@ -213,10 +204,6 @@ contract CoreHook is BaseHook, ImmutableMarketState, ImmutableVTSState, ICoreHoo
     // Helper function to get the proxy hook address from the core pool key
     function _getProxyHook(PoolKey calldata corePoolKey) internal view returns (address) {
         return MarketHandlerLib.getProxyHook(marketFactory, corePoolKey);
-    }
-
-    function _isPoolOrGlobalPaused(PoolKey calldata key) internal view returns (bool) {
-        return vtsOrchestrator.isPoolOrGlobalPaused(key.toId());
     }
 
     /// @dev Emits direct swap lane fact to canonical vault handler for obligation follow-up.

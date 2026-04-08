@@ -118,7 +118,7 @@ contract CoreHookTest is Test {
         vts.setReturn(toBalanceDelta(int128(1), int128(1)), true);
 
         hook.exposed_afterRemoveLiquidity(
-            address(this), key, _dummyParams(), toBalanceDelta(int128(7), int128(9)), BalanceDelta.wrap(0), ""
+            address(this), key, _dummyRemoveParams(), toBalanceDelta(int128(7), int128(9)), BalanceDelta.wrap(0), ""
         );
 
         assertEq(spy.calls(), 0, "spy should not be called for MM operations");
@@ -131,7 +131,7 @@ contract CoreHookTest is Test {
         vts.setReturn(feeAdj, false);
 
         (bytes4 sel, BalanceDelta returnedFeeAdj) =
-            hook.exposed_afterRemoveLiquidity(address(this), key, _dummyParams(), delta, BalanceDelta.wrap(0), "");
+            hook.exposed_afterRemoveLiquidity(address(this), key, _dummyRemoveParams(), delta, BalanceDelta.wrap(0), "");
         assertEq(sel, hook.afterRemoveLiquidity.selector);
         assertEq(BalanceDelta.unwrap(returnedFeeAdj), BalanceDelta.unwrap(feeAdj));
 
@@ -237,6 +237,10 @@ contract CoreHookTest is Test {
 
     function _dummyParams() internal pure returns (ModifyLiquidityParams memory) {
         return ModifyLiquidityParams({tickLower: -60, tickUpper: 60, liquidityDelta: int256(1), salt: bytes32(0)});
+    }
+
+    function _dummyRemoveParams() internal pure returns (ModifyLiquidityParams memory) {
+        return ModifyLiquidityParams({tickLower: -60, tickUpper: 60, liquidityDelta: -int256(1), salt: bytes32(0)});
     }
 }
 
@@ -420,6 +424,14 @@ contract MockVTSOrchestrator {
         BalanceDelta,
         bytes calldata
     ) external view returns (Position memory pos, PositionId id, BalanceDelta feeAdj, bool isMMPosition) {
+        return _positionReturn();
+    }
+
+    function _positionReturn()
+        private
+        view
+        returns (Position memory pos, PositionId id, BalanceDelta feeAdj, bool isMMPosition)
+    {
         pos = Position({
             owner: address(0),
             poolId: PoolId.wrap(bytes32(0)),

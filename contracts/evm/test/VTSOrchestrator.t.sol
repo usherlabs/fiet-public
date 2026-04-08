@@ -599,6 +599,16 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
         vtsOrchestrator.processPosition(address(this), corePoolKey, params, callerDelta, feesAccrued, "");
     }
 
+    function test_revert_processPosition_negativeLiquidity_whenNotCoreHook() public {
+        ModifyLiquidityParams memory params =
+            ModifyLiquidityParams({tickLower: -60, tickUpper: 60, liquidityDelta: -1e18, salt: bytes32(0)});
+        BalanceDelta callerDelta = toBalanceDelta(0, 0);
+        BalanceDelta feesAccrued = toBalanceDelta(0, 0);
+
+        vm.expectRevert();
+        vtsOrchestrator.processPosition(address(this), corePoolKey, params, callerDelta, feesAccrued, "");
+    }
+
     function test_revert_afterCoreSwap_whenNotCoreHook() public {
         SwapParams memory swapParams = SwapParams({zeroForOne: true, amountSpecified: -100, sqrtPriceLimitX96: 0});
         BalanceDelta delta = toBalanceDelta(-100, 100);
@@ -1628,46 +1638,23 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
         assertEq(cd1After, cd1Before, "Partial settlement should not affect token1 deficit");
     }
 
-    function test_pausedRemoveLiquidity_preservesPrePauseGrowthAttribution() public {
+    /// @dev Paused remove uses the same RFS gate as unpaused: cannot decrease while RFS is open (non-seizure).
+    function test_revert_pausedRemoveLiquidity_whenRfsOpen() public {
         uint256 liquidity = 1e10;
         uint256 amountToDecrease = liquidity / 2;
-        (, PositionId controlPositionId,,) = _createCommittedPosition(-60, 60, liquidity);
         (uint256 pausedTokenId, PositionId pausedPositionId,,) =
             _createCommittedPosition(renewSignal, -60, 60, liquidity, bytes32(0));
 
         _swapCore(true, -int256(1e18));
 
-        (bool controlRfsOpenBefore, BalanceDelta controlRfsBefore) = vtsOrchestrator.calcRFS(controlPositionId, false);
-        (uint256 controlDeficit0Before, uint256 controlDeficit1Before) = _cumulativeDeficit(controlPositionId);
-
-        assertTrue(controlDeficit0Before > 0 || controlDeficit1Before > 0, "swap should accrue deficit before pause");
-        assertTrue(controlRfsOpenBefore, "control position should have open RFS after growth settlement");
+        (bool rfsOpenBefore,) = vtsOrchestrator.calcRFS(pausedPositionId, false);
+        assertTrue(rfsOpenBefore, "swap should leave RFS open");
 
         vtsOrchestrator.pausePool(corePoolKey.toId());
+
+        // CoreHook wraps low-level reverts from the hook callback.
+        vm.expectRevert();
         _decreasePosition(pausedTokenId, amountToDecrease);
-        vtsOrchestrator.unpausePool(corePoolKey.toId());
-
-        (bool pausedRfsOpenAfter, BalanceDelta pausedRfsAfter) = vtsOrchestrator.calcRFS(pausedPositionId, false);
-        (uint256 pausedDeficit0After, uint256 pausedDeficit1After) = _cumulativeDeficit(pausedPositionId);
-
-        assertEq(pausedDeficit0After, controlDeficit0Before, "paused removal must preserve token0 deficit growth");
-        assertEq(pausedDeficit1After, controlDeficit1Before, "paused removal must preserve token1 deficit growth");
-        assertEq(
-            pausedRfsOpenAfter, controlRfsOpenBefore, "paused removal should leave the same RFS-open state as control"
-        );
-        // Paused remove now reconciles commitment/settled mirrors immediately.
-        // RFS delta magnitudes may differ from the historical stale-state behaviour, but deficit attribution and
-        // RFS-open semantics must still be preserved.
-        pausedRfsAfter;
-        controlRfsBefore;
-        if (controlDeficit1Before > 0) {
-            DICEAccounting memory diceAfterPaused = _getPoolDICEAccounting(corePoolKey.toId());
-            assertEq(
-                diceAfterPaused.totalDeficitPrincipal1,
-                controlDeficit1Before * 2,
-                "paused removal must preserve pool deficit principal on token1"
-            );
-        }
     }
 
     function test_pausedRemoveLiquidity_reconcilesSettledCommitmentOnPartialRemove() public {

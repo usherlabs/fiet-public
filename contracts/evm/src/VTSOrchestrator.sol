@@ -513,30 +513,9 @@ contract VTSOrchestrator is
         }
     }
 
-    /// @notice Reconcile downward-only bookkeeping after paused remove-liquidity.
-    /// @dev This preserves pause as unwind-only mode while preventing stale settled/commitment/liquidity mirrors.
-    ///      Intended to be called by CoreHook in `_afterRemoveLiquidity` only when pool/global pause is active.
-    function reconcileAfterPausedRemove(PositionId positionId, ModifyLiquidityParams calldata params) external {
-        if (!isPositionValid(positionId, false)) {
-            return;
-        }
-        Position memory pos = s.positions[positionId];
-        PoolId poolId = pos.poolId;
-        Pool memory pool = s.pools[poolId];
-
-        IMarketFactory factory =
-            liquidityHub.getFactory(Currency.unwrap(pool.currency0), Currency.unwrap(pool.currency1));
-        MarketHandlerLib.assertCoreHook(factory, _msgSender());
-
-        if (!(s.isPaused || s.pools[poolId].isPaused)) {
-            revert Errors.ExpectedPause();
-        }
-
-        VTSPositionLib.reconcileAfterPausedRemove(s, poolManager, positionId, params);
-    }
-
     /// @notice Called by CoreHook after add/remove liquidity to update position state and process fees
     /// @dev Consolidates all delta management for both MM and DirectLP positions.
+    ///      Pause policy is enforced inside `VTSPositionLib.touchPosition` based on `liquidityDelta` and VTS storage.
     ///      For MM positions: handles fee accounting, LCC issuance/cancellation, position linking, and delta accounting.
     ///      All position processing logic is delegated to VTSPositionLib.touchPosition.
     /// @param owner The owner of the position (e.g., MMPositionManager or other router)
@@ -559,7 +538,6 @@ contract VTSOrchestrator is
     )
         external
         onlyCoreHook(poolKey.currency0, poolKey.currency1)
-        notPoolPaused(poolKey.toId())
         returns (Position memory pos, PositionId id, BalanceDelta feeAdj, bool isMMPosition)
     {
         isMMPosition = _validateMMOperationLinked(owner, poolKey, hookData);

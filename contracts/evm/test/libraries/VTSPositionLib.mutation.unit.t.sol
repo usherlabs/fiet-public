@@ -84,9 +84,43 @@ contract VTSPositionLibMutationUnitTest is Test {
         clearanceExpose = new VTSPositionLibDeltaClearanceExpose();
         residualExpose = new VTSPositionLibResidualFlushExpose();
         pm = new MockExtsloadPoolManager();
-        poolId = PoolId.wrap(bytes32(uint256(0xD1CE)));
+        poolId = _poolKey().toId();
         owner = address(0xBEEF);
         harness.setupPool(poolId, _defaultCfg());
+    }
+
+    function _poolKey() internal pure returns (PoolKey memory) {
+        return PoolKey({
+            currency0: Currency.wrap(address(0x1000)),
+            currency1: Currency.wrap(address(0x2000)),
+            fee: 3000,
+            tickSpacing: 60,
+            hooks: IHooks(address(0))
+        });
+    }
+
+    function _defaultPositionContext() internal view returns (PositionContext memory ctx) {
+        ctx = PositionContext({
+            poolManager: IPoolManager(address(pm)),
+            liquidityHub: ILiquidityHub(address(0)),
+            oracleHelper: IOracleHelper(address(0)),
+            marketVault: IMarketVault(address(0))
+        });
+    }
+
+    function _directRemoveTouchParams(ModifyLiquidityParams memory params)
+        internal
+        view
+        returns (TouchPositionParams memory tp)
+    {
+        tp = TouchPositionParams({
+            owner: owner,
+            poolKey: _poolKey(),
+            params: params,
+            callerDelta: toBalanceDelta(0, 0),
+            feesAccrued: toBalanceDelta(0, 0),
+            hookData: ""
+        });
     }
 
     function _defaultCfg() internal pure returns (MarketVTSConfiguration memory) {
@@ -622,7 +656,7 @@ contract VTSPositionLibMutationUnitTest is Test {
             liquidityDelta: -int256(uint256(liqBefore - liqAfter)),
             salt: addParams.salt
         });
-        harness.reconcileAfterPausedRemove(IPoolManager(address(pm)), id, removeParams);
+        harness.touchPosition(_defaultPositionContext(), _directRemoveTouchParams(removeParams));
 
         (uint256 c0After,, uint256 s0After,,,) = harness.getPositionAccounting(id);
         assertLt(c0After, c0Before, "commitment max should decrease after paused remove reconcile");
@@ -657,7 +691,7 @@ contract VTSPositionLibMutationUnitTest is Test {
             liquidityDelta: -int256(uint256(liqBefore)),
             salt: addParams.salt
         });
-        harness.reconcileAfterPausedRemove(IPoolManager(address(pm)), id, removeParams);
+        harness.touchPosition(_defaultPositionContext(), _directRemoveTouchParams(removeParams));
 
         (uint256 c0After, uint256 c1After, uint256 s0After, uint256 s1After,,) = harness.getPositionAccounting(id);
         Position memory posAfter = harness.getPosition(id);
@@ -671,6 +705,38 @@ contract VTSPositionLibMutationUnitTest is Test {
         assertEq(poolTotal1After, 0, "pool totalSettled token1 should be reduced");
         assertEq(posAfter.liquidity, 0, "liquidity mirror should be zero after full remove");
         assertFalse(posAfter.isActive, "full remove should mark position inactive");
+    }
+
+    /// @notice Regression (finding 5): full deactivation must not preserve commitment-deficit age for later reactivation.
+    function test_reconcileAfterPausedRemove_fullRemove_clearsCommitmentDeficitAge() public {
+        uint128 liqBefore = 1000;
+        (PositionId id, ModifyLiquidityParams memory addParams) = _register(bytes32(uint256(0xAA60)), liqBefore);
+
+        (uint256 c0Before, uint256 c1Before) =
+            LiquidityUtils.calculateCommitmentMaxima(TICK_LOWER, TICK_UPPER, liqBefore);
+        harness.setCommitmentMax(id, c0Before, c1Before);
+        harness.setSettled(id, c0Before, c1Before);
+        harness.setPoolTotalSettled(poolId, c0Before, c1Before);
+
+        harness.setCommitmentDeficitSince(id, 12345, 67890);
+        harness.setCommitmentDeficitBps(id, 500);
+
+        _pmSetSlot0Tick(poolId, 0);
+        _pmSetPositionLiquidity(poolId, PositionId.unwrap(id), 0);
+        harness.setPositionLiquidityMirror(id, liqBefore);
+
+        ModifyLiquidityParams memory removeParams = ModifyLiquidityParams({
+            tickLower: addParams.tickLower,
+            tickUpper: addParams.tickUpper,
+            liquidityDelta: -int256(uint256(liqBefore)),
+            salt: addParams.salt
+        });
+        harness.touchPosition(_defaultPositionContext(), _directRemoveTouchParams(removeParams));
+
+        (uint256 since0, uint256 since1) = harness.getCommitmentDeficitSince(id);
+        assertEq(since0, 0, "full remove should clear commitmentDeficitSince0");
+        assertEq(since1, 0, "full remove should clear commitmentDeficitSince1");
+        assertEq(harness.getCommitmentDeficitBps(id), 0, "full remove should clear commitmentDeficitBps");
     }
 
     function test_settlePositionInflowGrowth_positiveAdd0_increasesSettledAndPoolTotalSettled() public {

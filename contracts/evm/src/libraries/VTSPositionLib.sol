@@ -1122,17 +1122,24 @@ library VTSPositionLib {
         }
     }
 
-    /// @notice Handles existing position decrease and returns required settlement delta
+    /// @notice Handles existing position decrease: RFS gate, commitment tracking, settled clamp / MM excess delta.
+    /// @param currentLiq Live PoolManager liquidity after the remove (same as unpaused `touchPosition` decrease path).
+    /// @dev RFS uses `getRFS` only; growth is already settled in CoreHook `_beforeRemoveLiquidity` — avoid `calcRFS` here
+    ///      so we do not re-enter `settlePositionGrowths` (would double-apply CISE / growth side-effects in the same modify).
     function _touchExistingDecrease(
         VTSStorage storage s,
-        IPoolManager poolManager,
         PositionId positionId,
         ModifyLiquidityParams calldata params,
         uint128 currentLiq,
         TouchPositionHookData memory hookData
     ) private returns (BalanceDelta requiredSettlementDelta) {
+        // Growth is already settled in CoreHook `_beforeRemoveLiquidity`; avoid `calcRFS` here so we do not
+        // re-enter `settlePositionGrowths` (would double-apply CISE / growth side-effects in the same modify).
         if (!hookData.isSeizing) {
-            calcRFS(s, poolManager, positionId, true);
+            (bool rfsOpen,) = getRFS(s, positionId);
+            if (rfsOpen) {
+                revert Errors.RFSOpenForPosition(positionId);
+            }
         }
         _trackCommitment(s, positionId, params);
 
@@ -1145,37 +1152,6 @@ library VTSPositionLib {
             _applySettlementClampFromExcess(s, positionId, excess0, excess1);
             requiredSettlementDelta = BalanceDelta.wrap(0);
         }
-    }
-
-    /// @notice Reconcile downward-only position bookkeeping after paused remove-liquidity.
-    /// @dev Must only be called from the canonical paused remove hook path after
-    ///      `_beforeRemoveLiquidity` has already settled pre-remove growths.
-    ///      This helper intentionally avoids full touch/fee/MM processing.
-    function reconcileAfterPausedRemove(
-        VTSStorage storage s,
-        IPoolManager poolManager,
-        PositionId positionId,
-        ModifyLiquidityParams calldata params
-    ) public {
-        Position storage posStorage = s.positions[positionId];
-        if (posStorage.owner == address(0)) return;
-        if (params.liquidityDelta >= 0) {
-            revert Errors.InvariantViolated("Paused remove reconcile requires negative liquidity delta");
-        }
-
-        uint256 initialLiquidity = posStorage.liquidity;
-        uint128 liqLive =
-            StateLibrary.getPositionLiquidity(poolManager, posStorage.poolId, PositionId.unwrap(positionId));
-
-        // Mirror the normal decrease path's commitment tracking and settled clamp, but without
-        // running full processPosition side-effects while pause is active.
-        _trackCommitment(s, positionId, params);
-
-        PositionAccounting storage pa = s.positionAccounting[positionId];
-        (uint256 excess0, uint256 excess1) = _computeSettledExcessAgainstCommitmentMax(pa, liqLive);
-        _applySettlementClampFromExcess(s, positionId, excess0, excess1);
-
-        _applyLiquidityMirrorTransition(s, pa, posStorage, initialLiquidity, liqLive);
     }
 
     /// @notice Handles existing position increase and returns required settlement delta
@@ -1221,6 +1197,10 @@ library VTSPositionLib {
         returns (TouchPositionResult memory result)
     {
         PoolId poolId = p.poolKey.toId();
+        bool isPaused = s.isPaused || s.pools[poolId].isPaused;
+        if (isPaused && p.params.liquidityDelta >= 0) {
+            revert Errors.EnforcedPause();
+        }
         _seedOutsideGrowthForNewlyInitializedTicks(s, ctx.poolManager, poolId, p.params);
 
         result.id = PositionLibrary.generateId(p.owner, p.params);
@@ -1233,6 +1213,9 @@ library VTSPositionLib {
         BalanceDelta requiredSettlementDelta;
 
         if (isNewPosition) {
+            if (p.params.liquidityDelta <= 0) {
+                revert Errors.InvalidPosition(0, 0, result.id);
+            }
             // NEW POSITION
             requiredSettlementDelta =
                 _touchNewPosition(s, ctx.poolManager, poolId, p.owner, p.params, result.id, hookData);
@@ -1247,23 +1230,30 @@ library VTSPositionLib {
             if (p.params.liquidityDelta < 0) {
                 // Disallow decreases on previously-inactive positions. (If liq == 0, Uniswap will revert anyway.)
                 if (!posStorage.isActive) revert Errors.NotActive(result.id);
-                requiredSettlementDelta = _touchExistingDecrease(s, ctx.poolManager, result.id, p.params, liq, hookData);
-            } else if (p.params.liquidityDelta > 0) {
-                // Allow re-activating a previously inactive position by adding liquidity.
-                // Logically required to build on value routing while collecting fees on inactive positions.
-                requiredSettlementDelta = _touchExistingIncrease(s, poolId, result.id, p.params, hookData);
+                requiredSettlementDelta = _touchExistingDecrease(s, result.id, p.params, liq, hookData);
+                // Mirror using live PoolManager liquidity post-modify for both paused and unpaused removes.
+                PositionAccounting storage paDec = s.positionAccounting[result.id];
+                _applyLiquidityMirrorTransition(s, paDec, posStorage, initialLiquidity, liq);
             } else {
-                // Allow a no-op when active (Uniswap v4 disallows this when initial liq == 0).
-                // See https://github.com/Uniswap/v4-core/blob/36d790b1a3af38461453a13a6ff395290fbc11b2/src/libraries/Position.sol#L86
-                requiredSettlementDelta = BalanceDelta.wrap(0);
+                if (p.params.liquidityDelta > 0) {
+                    // Allow re-activating a previously inactive position by adding liquidity.
+                    // Logically required to build on value routing while collecting fees on inactive positions.
+                    requiredSettlementDelta = _touchExistingIncrease(s, poolId, result.id, p.params, hookData);
+                } else {
+                    // Allow a no-op when active (Uniswap v4 disallows this when initial liq == 0).
+                    // See https://github.com/Uniswap/v4-core/blob/36d790b1a3af38461453a13a6ff395290fbc11b2/src/libraries/Position.sol#L86
+                    requiredSettlementDelta = BalanceDelta.wrap(0);
+                }
+                int256 newLiquidity = SafeCast.toInt256(uint256(posStorage.liquidity)) + p.params.liquidityDelta;
+                PositionAccounting storage paRem = s.positionAccounting[result.id];
+                _applyLiquidityMirrorTransition(
+                    s,
+                    paRem,
+                    posStorage,
+                    initialLiquidity,
+                    newLiquidity < 0 ? 0 : SafeCast.toUint128(uint256(newLiquidity))
+                );
             }
-
-            // Update position liquidity
-            int256 newLiquidity = SafeCast.toInt256(uint256(posStorage.liquidity)) + p.params.liquidityDelta;
-            PositionAccounting storage paRem = s.positionAccounting[result.id];
-            _applyLiquidityMirrorTransition(
-                s, paRem, posStorage, initialLiquidity, newLiquidity < 0 ? 0 : SafeCast.toUint128(uint256(newLiquidity))
-            );
         }
 
         if (isNewPosition) {
@@ -1351,6 +1341,12 @@ library VTSPositionLib {
             // Remainder is defined for a fixed liquidity denominator; reset on liquidity changes.
             pa.feeBurnGrowthRemainder.token0 = 0;
             pa.feeBurnGrowthRemainder.token1 = 0;
+        }
+        // Full deactivation: do not carry commitment-deficit age across zero-liquidity intervals (seizure grace bypass).
+        if (initialLiquidity > 0 && nextLiquidity == 0) {
+            pa.commitmentDeficitSince.token0 = 0;
+            pa.commitmentDeficitSince.token1 = 0;
+            pa.commitmentDeficitBps = 0;
         }
         _updateActiveStatus(s, posStorage, initialLiquidity, nextLiquidity);
     }
