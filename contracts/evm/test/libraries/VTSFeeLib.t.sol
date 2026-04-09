@@ -831,6 +831,52 @@ contract VTSFeeLibTest is VTSLibTestBase {
         assertEq(poolExp0After, 2e6, "pool token0 exposure should remain banked when token1 allocation fails");
     }
 
+    /// @dev Regression for the audit-finding false positive:
+    ///      with consistent CISE state, each cleanup step leaves the denominator equal to the
+    ///      untouched positions' remaining banked exposure rather than starving later claimants.
+    function test_afterTouchPosition_ciseCleanup_preservesRemainingUntouchedExposure() public {
+        PositionId posA = PositionId.wrap(bytes32(uint256(0xA11CE)));
+        PositionId posB = PositionId.wrap(bytes32(uint256(0xB0B)));
+        PositionId posC = PositionId.wrap(bytes32(uint256(0xCAFE)));
+        harness.setupPosition(posA, testPoolId);
+        harness.setupPosition(posB, testPoolId);
+        harness.setupPosition(posC, testPoolId);
+
+        // Use token0 exposure to allocate from the token1 fee pot.
+        harness.setPoolTotalCISEExposure(testPoolId, 1000, 0);
+        harness.setCISEExposure(posA, 500, 0);
+        harness.setCISEExposure(posB, 300, 0);
+        harness.setCISEExposure(posC, 200, 0);
+        harness.setFeesShared(posA, 0, 0);
+        harness.setFeesShared(posB, 0, 0);
+        harness.setFeesShared(posC, 0, 0);
+        harness.setProtocolFeeAccrued(testPoolId, 0, 1000);
+        harness.setSlashedPot(testPoolId, 0, 1000);
+
+        harness.afterTouchPosition(posA);
+        (uint256 poolExp0AfterA,) = harness.getPoolTotalCISEExposure(testPoolId);
+        (uint256 posBExp0AfterA,) = harness.getCISEExposure(posB);
+        (uint256 posCExp0AfterA,) = harness.getCISEExposure(posC);
+        (, uint256 protocolFeeAfterA) = harness.getProtocolFeeAccrued(testPoolId);
+        assertEq(poolExp0AfterA, 500, "pool denominator should equal the untouched exposure after first touch");
+        assertEq(poolExp0AfterA, posBExp0AfterA + posCExp0AfterA, "cleanup must preserve later claimants' weight");
+        assertEq(protocolFeeAfterA, 500, "first claimant should only consume its proportional share");
+
+        harness.afterTouchPosition(posB);
+        (uint256 poolExp0AfterB,) = harness.getPoolTotalCISEExposure(testPoolId);
+        (uint256 posCExp0AfterB,) = harness.getCISEExposure(posC);
+        (, uint256 protocolFeeAfterB) = harness.getProtocolFeeAccrued(testPoolId);
+        assertEq(poolExp0AfterB, 200, "second cleanup should leave the last claimant's banked exposure");
+        assertEq(poolExp0AfterB, posCExp0AfterB, "remaining denominator should match the untouched final claimant");
+        assertEq(protocolFeeAfterB, 200, "second claimant should leave the residual pot for the last claimant");
+
+        harness.afterTouchPosition(posC);
+        (uint256 poolExp0AfterC,) = harness.getPoolTotalCISEExposure(testPoolId);
+        (, uint256 protocolFeeAfterC) = harness.getProtocolFeeAccrued(testPoolId);
+        assertEq(poolExp0AfterC, 0, "all claimant exposure should be consumed after the final touch");
+        assertEq(protocolFeeAfterC, 0, "final claimant should receive the remaining pot");
+    }
+
     function test_bonusAllocation_setup_positiveCISEExposure() public {
         // Setup: position has positive CISE exposure
         harness.setCISEExposure(testPositionId, 100e18, 50e18);
