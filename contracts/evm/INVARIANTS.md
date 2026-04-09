@@ -205,12 +205,14 @@ being an informal “should”.
 ### HUB-06: `prepareSettle` must preserve direct-liquidity accounting consistency
 
 - **Statement**: Preparing direct liquidity for vault settlement must reduce both:
+
   - shared-underlying direct reserve (`reserveOfUnderlying[underlying].direct`), and
   - per-LCC direct inventory (`directSupply[lcc]`),
     by the same `amount`.
 
   This prevents a drift where `directSupply[lcc]` overstates immediately serviceable direct liquidity after a settle
   preparation step.
+
 - **Enforced by**:
   - `src/LiquidityHub.sol::prepareSettle` computes `maxSettleableDirect = min(reserveDirect, directSupply[lcc])`,
     reverts `Errors.InvalidAmount(amount, maxSettleableDirect)` when exceeded, then decrements both counters by
@@ -334,7 +336,7 @@ being an informal “should”.
   1. `cumulativeDeficit` first,
   2. then `commitmentDeficit`,
   3. then `settled` increases.
-  Only the `cumulativeDeficit` leg mutates DICE principal (`totalDeficitPrincipal`).
+     Only the `cumulativeDeficit` leg mutates DICE principal (`totalDeficitPrincipal`).
 - **Enforced by**:
   - `src/libraries/VTSPositionLib.sol::settlePositionGrowths` calls `_settleDeficitIndexedCoverageUsage` after settling
     deficit/inflow growths, and is invoked by `CoreHook` _before_ modifies.
@@ -418,6 +420,38 @@ being an informal “should”.
     in the counterpart token within the same position.
 - **Enforced by**: `src/libraries/VTSPositionLib.sol::_settleSeizing` (deposit clamp uses positive RFS; withdrawal clamp
   uses `positionRequiredSettlementDelta`).
+
+### SETTLE-03: MM decrease splits immediate-settle and queued-shortfall accounting
+
+- **Statement**:
+  - For MM liquidity decreases, the excess settled entitlement computed against the reduced commitment is not a single
+    homogeneous bucket.
+  - It must be split into:
+    - an **immediately settleable** slice, which remains in live `pa.settled` until the follow-on settlement flow
+      consumes the transient underlying delta for that batch, and
+    - a **queued shortfall** slice, which must leave live VTS settled accounting once the Hub queue amount is known.
+- **Protocol rule**:
+  - This invariant is explicitly coupled to **DELTA-01**.
+  - `DynamicCurrencyDelta` remains the transient “must resolve now” accounting surface for the immediate settleable slice, meaning that any immediate-settle value which is still required to be resolved before batch end must remain represented on the delta path until that requirement is discharged.
+  - Queue-backed shortfall must not remain in `pa.settled` / pool `totalSettled`, because it has become an explicit
+    Hub-backed deferred entitlement rather than live position settlement.
+  - Therefore, the live-settlement clamp for MM decreases must be applied to the **queued shortfall only**, not to the
+    full excess pre-emptively; otherwise the protocol would remove value from live settled state before the corresponding
+    DELTA-01 obligation had been resolved.
+- **Enforced / expressed by**:
+  - `src/libraries/VTSPositionLib.sol::_touchExistingDecrease` computes the full MM excess as
+    `requiredSettlementDelta` without eagerly reducing `pa.settled`.
+  - `src/libraries/VTSPositionLib.sol::_handleLiquidityDecrease` computes:
+    - `settleableDelta` (immediate slice), and
+    - `queuedShortfallDelta` (unavailable portion routed into `LiquidityHub` queueing).
+  - `src/libraries/VTSPositionLib.sol::_processMMOperations`:
+    - books only `settleableDelta` into `DynamicCurrencyDelta`, and
+    - clamps `pa.settled` / pool `totalSettled` only for `queuedShortfallDelta`.
+- **Why**:
+  - Clamping the full excess too early would double-count later settlement paths that still rely on
+    `DynamicCurrencyDelta` as the transient settle obligation.
+  - Clamping only the queued shortfall satisfies the stronger invariant that queued-away amounts no longer remain as live
+    settled exposure, while preserving the required-delta-resolution model in **DELTA-01**.
 
 ### SEIZE-01: Seizability is token-lane scoped and aggregated at position level
 
@@ -700,6 +734,7 @@ being an informal “should”.
 
 - **Statement**: Any protocol surface that groups a market’s two tokens into `(0,1)` lanes must use **core pool / LCC**
   ordering as the canonical order:
+
   - `lcc0 = corePoolKey.currency0`
   - `lcc1 = corePoolKey.currency1`
   - `lcc0UnderlyingAsset = ILCC(lcc0).underlying()`
@@ -709,6 +744,7 @@ being an informal “should”.
   ambiguous.
 
 - **Enforced by**:
+
   - `src/MarketFactory.sol::createMarket` emits `MarketCreated(corePoolId, proxyPoolId, lcc0, lcc1, lcc0UnderlyingAsset, lcc1UnderlyingAsset, ...)`
     derived from `corePoolKey.currency0/1` plus the deterministic input mapping
     `(underlyingAsset0 -> ctx.lccToken0, underlyingAsset1 -> ctx.lccToken1)`.

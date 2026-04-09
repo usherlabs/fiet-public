@@ -141,9 +141,11 @@ contract VTSPositionLibHarness {
         BalanceDelta requiredSettlementDelta,
         address queueRecipient
     ) external returns (BalanceDelta settleableDelta) {
-        return VTSPositionLib._handleLiquidityDecrease(
-            ctx, owner, poolKey, principalDelta, requiredSettlementDelta, queueRecipient
-        );
+        VTSPositionLib.LiquidityDecreaseResult memory result =
+            VTSPositionLib._handleLiquidityDecrease(
+                ctx, owner, poolKey, principalDelta, requiredSettlementDelta, queueRecipient
+            );
+        return result.settleableDelta;
     }
 
     // ============ Storage Getters (for assertions) ============

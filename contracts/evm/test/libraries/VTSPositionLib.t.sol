@@ -1291,6 +1291,55 @@ contract VTSPositionLibTest is VTSLibTestBase {
         assertEq(hub.lastQueued0(), 0, "queued0 should be 0 when vault reports full availability");
     }
 
+    function test_touchPosition_existingDecrease_currentLiqZero_MM_partialQueue_clampsOnlyQueuedShortfall() public {
+        _initMarket();
+        PoolId corePoolId = _getDefaultPoolId();
+        harness.setupPool(corePoolId, _createDefaultVTSConfig());
+
+        bytes32 salt = bytes32(uint256(406));
+        PositionId positionId = _registerHarnessPositionInPool(corePoolId, DEFAULT_OWNER, -60, 60, 1, salt);
+        harness.setPositionActive(positionId, true);
+
+        uint256 commitId = 124;
+        harness.setPositionCommitId(positionId, commitId);
+        harness.setCommitActivePositionCount(commitId, 1);
+
+        harness.setCommitmentMax(positionId, 0, 0);
+        harness.setSettled(positionId, 100e18, 0);
+        harness.setCumulativeDeficit(positionId, 0, 0);
+        harness.setCommitmentDeficit(positionId, 0, 0);
+        harness.setPoolTotalSettled(corePoolId, 100e18, 0);
+
+        VTSPositionLibTest_LiquidityHubCapture hub = new VTSPositionLibTest_LiquidityHubCapture();
+        // Only 30 is immediately settleable, so 70 should become queued and leave live settled accounting.
+        IMarketVault vault = new VTSPositionLibTest_VaultClamp(int128(int256(30e18)), 0);
+        PositionContext memory ctx = PositionContext({
+            poolManager: manager,
+            liquidityHub: ILiquidityHub(address(hub)),
+            oracleHelper: IOracleHelper(address(0)),
+            marketVault: vault
+        });
+
+        ModifyLiquidityParams memory decParams =
+            ModifyLiquidityParams({tickLower: -60, tickUpper: 60, liquidityDelta: -int256(uint256(1)), salt: salt});
+        TouchPositionParams memory tp = TouchPositionParams({
+            owner: DEFAULT_OWNER,
+            poolKey: _mkPoolKey(),
+            params: decParams,
+            callerDelta: toBalanceDelta(int128(int256(100e18)), 0),
+            feesAccrued: toBalanceDelta(0, 0),
+            hookData: _mkHookData(true, false, commitId)
+        });
+
+        harness.touchPosition(ctx, tp);
+
+        (,, uint256 settled0After,,,) = harness.getPositionAccounting(positionId);
+        assertEq(settled0After, 30e18, "only the queued shortfall should leave live settled accounting");
+        (uint256 poolSettled0,) = harness.getPoolTotalSettled(corePoolId);
+        assertEq(poolSettled0, 30e18, "pool totalSettled should retain only the immediate settleable slice");
+        assertEq(hub.lastQueued0(), 70e18, "queued shortfall should match the unavailable portion");
+    }
+
     /// @notice Non-seizure MM decreases are blocked while commitmentDeficit is non-zero, even if RFS is closed.
     function test_touchPosition_mmDecrease_nonSeizing_revertsWhenCommitmentDeficit_nonZero() public {
         _initMarket();

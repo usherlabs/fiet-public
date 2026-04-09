@@ -2094,7 +2094,6 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
         uint256 recipientLcc0FeeAfterTake;
         uint256 lcc1BalanceBefore;
         uint256 amount;
-        uint256 settled1;
         {
             AfterSwapPhase1Params memory p;
 
@@ -2141,24 +2140,16 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
             p.lcc0Currency = Currency.wrap(lcc0Addr);
             p.amountToDecrease = 1e18; // matches liquidityDelta used in setup
 
-            (amount, settled1) = _afterSwapPhase1(p);
+            _afterSwapPhase1(p);
         }
+        // Queued principal is an explicit Hub-backed entitlement; it should not remain as live `pa.settled`.
         assertEq(
             ILiquidityHub(liquidityHub).settleQueue(lcc0Addr, address(positionManager)),
             0,
             "precondition: MMPM does NOT get assigned the queue, the recipient does."
         );
-        assertEq(
-            ILiquidityHub(liquidityHub).settleQueue(lcc0Addr, recipient),
-            amount,
-            "precondition: recipient should have queued settlement after unwrap shortfall"
-        );
-        // Optional: symmetry check on the token1 side (helps catch currency mixups).
-        assertEq(
-            ILiquidityHub(liquidityHub).settleQueue(lcc1Addr, recipient),
-            settled1,
-            "precondition: recipient lcc1 queue should match settledToken1"
-        );
+        amount = ILiquidityHub(liquidityHub).settleQueue(lcc0Addr, recipient);
+        assertGt(amount, 0, "precondition: recipient should have queued settlement after unwrap shortfall");
 
         // Assert: fee LCC0 was takeable (non-zero) and did NOT drain the queued principal held by MMPM.
         recipientLcc0FeeAfterTake = IERC20(lcc0Addr).balanceOf(recipient) - recipientLcc0Before;
@@ -2251,7 +2242,7 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
 
     /*** INTERNAL FUNCTIONS FOR test_collectAvailableLiquidity_afterSwap ***/
 
-    function _afterSwapPhase1(AfterSwapPhase1Params memory p) internal returns (uint256 amount, uint256 settled1) {
+    function _afterSwapPhase1(AfterSwapPhase1Params memory p) internal {
         // Force MarketVault to report zero available liquidity so cancellation must queue.
         vm.mockCall(
             address(mv),
@@ -2296,9 +2287,9 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
         MMA.executeWithUnlock(positionManager, setup, block.timestamp + 3600);
         vm.stopPrank();
 
-        // getPositionSettledAmounts returns (token0, token1). We are asserting the queue for LCC0 (token0).
         (uint256 settled0, uint256 settled1Out) = vtsOrchestrator.getPositionSettledAmounts(positionId);
-        return (settled0, settled1Out);
+        assertEq(settled0, 0, "full queued shortfall should leave no live settled token0");
+        assertEq(settled1Out, 0, "full queued shortfall should leave no live settled token1");
     }
 
     function _swapAccrueFeesViaSwap(MockERC20 underlying0, address lcc0Addr, uint256 swapAmount) internal {

@@ -66,6 +66,12 @@ library VTSPositionLib {
         BalanceDelta principalDelta;
     }
 
+    /// @dev Internal struct to return both immediate and queued MM decrease settlement splits.
+    struct LiquidityDecreaseResult {
+        BalanceDelta settleableDelta;
+        BalanceDelta queuedShortfallDelta;
+    }
+
     /// @dev Internal struct to reduce stack depth in _deltaAndCheckpointGrowth
     struct GrowthParams {
         PoolId poolId;
@@ -1440,7 +1446,7 @@ library VTSPositionLib {
 
             // Only the immediately-settleable portion should be accounted as an underlying settlement delta.
             // Any unavailable remainder is persisted via the LiquidityHub queue mechanics.
-            BalanceDelta settleableDelta;
+            LiquidityDecreaseResult memory decreaseResult;
             if (isSeizing) {
                 // @note: For Seizures,
                 // - LCCs are received directly by locker simiarly to fees.
@@ -1448,7 +1454,7 @@ library VTSPositionLib {
                 // - For any excess, this can also be settled immediately via MM operations.
 
                 // Only cancel excess settled received.
-                settleableDelta = _handleLiquidityDecrease(
+                decreaseResult = _handleLiquidityDecrease(
                     ctx, p.owner, p.poolKey, requiredSettlementDelta, requiredSettlementDelta, queueRecipient
                 );
             } else {
@@ -1459,13 +1465,22 @@ library VTSPositionLib {
                 // Therefore, we plan to cancel the LCC's and queue the settlement once this settlement occurs.
                 // This relies on the current MM path immediately performing the matching PoolManager -> MMPM take
                 // once modifyLiquidity(...) returns, before any same-key planned cancel can be restaged.
-                settleableDelta = _handleLiquidityDecrease(
+                decreaseResult = _handleLiquidityDecrease(
                     ctx, p.owner, p.poolKey, principalDelta, requiredSettlementDelta, queueRecipient
                 );
             }
+            // Only queued shortfall leaves live VTS settled immediately. The immediate settleable slice remains
+            // represented in `pa.settled` until the later settle flow consumes the transient underlying delta.
+            _applySettlementClampFromExcess(
+                s,
+                result.id,
+                LiquidityUtils.safeInt128ToUint256(decreaseResult.queuedShortfallDelta.amount0()),
+                LiquidityUtils.safeInt128ToUint256(decreaseResult.queuedShortfallDelta.amount1())
+            );
+
             // @note: We use the settleableDelta here because it is the immediately available liquidity that can be used to cover settlement.
             // Anything queued is not accounted for in DynamicCurrencyDelta
-            requiredSettlementDelta = settleableDelta;
+            requiredSettlementDelta = decreaseResult.settleableDelta;
         }
 
         if (!LiquidityUtils.isZeroDelta(requiredSettlementDelta)) {
@@ -1560,9 +1575,9 @@ library VTSPositionLib {
         BalanceDelta principalDelta,
         BalanceDelta requiredSettlementDelta,
         address queueRecipient
-    ) internal returns (BalanceDelta settleableDelta) {
+    ) internal returns (LiquidityDecreaseResult memory result) {
         if (LiquidityUtils.isZeroDelta(principalDelta)) {
-            return BalanceDelta.wrap(0);
+            return result;
         }
 
         uint256 principalAmount0 = LiquidityUtils.safeInt128ToUint256(principalDelta.amount0());
@@ -1579,9 +1594,10 @@ library VTSPositionLib {
             if (shortfall1 < 0) shortfall1 = 0;
 
             // Settle only the immediate portion (required minus unavailable shortfall).
-            settleableDelta = toBalanceDelta(
+            result.settleableDelta = toBalanceDelta(
                 requiredSettlementDelta.amount0() - shortfall0, requiredSettlementDelta.amount1() - shortfall1
             );
+            result.queuedShortfallDelta = toBalanceDelta(shortfall0, shortfall1);
 
             uint256 shortfallAmount0 = LiquidityUtils.safeInt128ToUint256(shortfall0);
             uint256 shortfallAmount1 = LiquidityUtils.safeInt128ToUint256(shortfall1);
