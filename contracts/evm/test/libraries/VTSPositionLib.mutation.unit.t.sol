@@ -564,7 +564,8 @@ contract VTSPositionLibMutationUnitTest is Test {
         harness.setCommitmentDeficit(id, 0, 0);
 
         _pmSetSlot0Tick(pId, 0);
-        _pmSetPositionLiquidity(pId, PositionId.unwrap(id), 1000);
+        // Seed the live post-modify liquidity that touchPosition observes from PoolManager on increase.
+        _pmSetPositionLiquidity(pId, PositionId.unwrap(id), 1200);
 
         uint128 liqAdded = 200;
         TouchPositionParams memory tp = TouchPositionParams({
@@ -907,7 +908,8 @@ contract VTSPositionLibMutationUnitTest is Test {
         harness.setCommitmentDeficit(id, 0, 0);
 
         _pmSetSlot0Tick(pId, 0);
-        _pmSetPositionLiquidity(pId, PositionId.unwrap(id), 1000);
+        // Seed the live post-modify liquidity that touchPosition observes from PoolManager on increase.
+        _pmSetPositionLiquidity(pId, PositionId.unwrap(id), 1200);
 
         TouchPositionParams memory tp = TouchPositionParams({
             owner: owner,
@@ -1432,7 +1434,8 @@ contract VTSPositionLibMutationUnitTest is Test {
 
             // 4) Set up PoolManager mock state.
             _pmSetSlot0Tick(pId, 0);
-            _pmSetPositionLiquidity(pId, PositionId.unwrap(id), 1000);
+            // Seed the live post-modify liquidity that touchPosition observes from PoolManager on increase.
+            _pmSetPositionLiquidity(pId, PositionId.unwrap(id), 1100);
             _pmSetFeeGrowthGlobals(pId, 0, 0);
             _pmSetTickFeeGrowthOutside(pId, TICK_LOWER, 0, 0);
             _pmSetTickFeeGrowthOutside(pId, TICK_UPPER, 0, 0);
@@ -1539,7 +1542,8 @@ contract VTSPositionLibMutationUnitTest is Test {
         harness.setCommitmentDeficit(id, 1, 0);
 
         _pmSetSlot0Tick(pId, 0);
-        _pmSetPositionLiquidity(pId, PositionId.unwrap(id), 1000);
+        // Increase path reads live PoolManager liquidity before reverting on the deficit freeze guard.
+        _pmSetPositionLiquidity(pId, PositionId.unwrap(id), 1100);
         _pmSetFeeGrowthGlobals(pId, 0, 0);
         _pmSetTickFeeGrowthOutside(pId, TICK_LOWER, 0, 0);
         _pmSetTickFeeGrowthOutside(pId, TICK_UPPER, 0, 0);
@@ -1615,7 +1619,8 @@ contract VTSPositionLibMutationUnitTest is Test {
 
         // 4) Set up PoolManager mock.
         _pmSetSlot0Tick(pId, 0);
-        _pmSetPositionLiquidity(pId, PositionId.unwrap(id), 1000);
+        // Seed the live post-modify liquidity that touchPosition observes from PoolManager on increase.
+        _pmSetPositionLiquidity(pId, PositionId.unwrap(id), 1200);
         _pmSetFeeGrowthGlobals(pId, 0, 0);
         _pmSetTickFeeGrowthOutside(pId, TICK_LOWER, 0, 0);
         _pmSetTickFeeGrowthOutside(pId, TICK_UPPER, 0, 0);
