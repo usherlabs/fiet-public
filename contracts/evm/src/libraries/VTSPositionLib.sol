@@ -37,7 +37,7 @@ import {
 import {Pool} from "../types/Pool.sol";
 import {LiquidityUtils} from "./LiquidityUtils.sol";
 import {Errors} from "./Errors.sol";
-import {VTSFeeLinkedLib, VTSFeeLib} from "./VTSFeeLib.sol";
+import {VTSFeeLinkedLib} from "./VTSFeeLib.sol";
 import {DynamicCurrencyDelta} from "./DynamicCurrencyDelta.sol";
 import {VTSCommitLib} from "./VTSCommitLib.sol";
 import {CheckpointLibrary} from "./Checkpoint.sol";
@@ -66,6 +66,12 @@ library VTSPositionLib {
         BalanceDelta principalDelta;
     }
 
+    /// @dev Internal struct to return both immediate and queued MM decrease settlement splits.
+    struct LiquidityDecreaseResult {
+        BalanceDelta settleableDelta;
+        BalanceDelta queuedShortfallDelta;
+    }
+
     /// @dev Internal struct to reduce stack depth in _deltaAndCheckpointGrowth
     struct GrowthParams {
         PoolId poolId;
@@ -76,16 +82,6 @@ library VTSPositionLib {
         uint256 global0;
         uint256 global1;
         bool isInflow;
-    }
-
-    /// @dev Internal struct to keep fee-burn helper signatures below stack-too-deep thresholds.
-    struct FeesBurnParams {
-        PoolId poolId;
-        uint8 deficitTokenIndex;
-        uint8 feeTokenIndex;
-        uint256 burnBase;
-        uint128 positionLiquidity;
-        uint256 outflowFloor;
     }
 
     // Maximum positive magnitude representable in int128
@@ -172,7 +168,6 @@ library VTSPositionLib {
         // CISE: Track pool-wide totalSettled aggregate
         {
             uint256 currentTotalSettled = paPool.totalSettled.get(tokenIndex);
-            bool wasZero = currentTotalSettled == 0;
 
             if (settledDelta >= 0) {
                 paPool.totalSettled.set(tokenIndex, currentTotalSettled + uint256(settledDelta));
@@ -180,12 +175,6 @@ library VTSPositionLib {
                 uint256 decSettled = uint256(-settledDelta);
                 paPool.totalSettled
                     .set(tokenIndex, decSettled > currentTotalSettled ? 0 : (currentTotalSettled - decSettled));
-            }
-
-            // CISE: Flush residual if totalSettled transitions from 0 to >0
-            uint256 newTotalSettled = paPool.totalSettled.get(tokenIndex);
-            if (wasZero && newTotalSettled > 0) {
-                _flushCISEResidualIfNeeded(s, pos.poolId, tokenIndex);
             }
         }
 
@@ -329,28 +318,6 @@ library VTSPositionLib {
     // --------------------------------------------------
     // CISE (Coverage-Indexed Settled Exposure) Helpers
     // --------------------------------------------------
-
-    /// @notice Flush any pending CISE residual into the coverage-per-settled index
-    /// @dev Called when totalSettled increases from 0 to >0.
-    ///      Residual is socialised across current settled liquidity holders.
-    /// @param s The central VTS storage
-    /// @param poolId The pool ID
-    /// @param tokenIndex The token index (0 or 1)
-    function _flushCISEResidualIfNeeded(VTSStorage storage s, PoolId poolId, uint8 tokenIndex) internal {
-        PoolAccounting storage paPool = s.poolAccounting[poolId];
-        uint256 residual = paPool.coverageResidualCISE.get(tokenIndex);
-        uint256 totalSettled = paPool.totalSettled.get(tokenIndex);
-
-        if (residual > 0 && totalSettled > 0) {
-            uint256 deltaIndex = FullMath.mulDiv(residual, FixedPoint128.Q128, totalSettled);
-            uint256 currentIndex = paPool.coveragePerSettledIndexX128.get(tokenIndex);
-            paPool.coveragePerSettledIndexX128.set(tokenIndex, currentIndex + deltaIndex);
-            // Match incrementCoverage: socialise the full deferred coverage window into the bonus denominator.
-            uint256 curTotalCISE = paPool.totalCISEExposureSinceLastMod.get(tokenIndex);
-            paPool.totalCISEExposureSinceLastMod.set(tokenIndex, curTotalCISE + residual);
-            paPool.coverageResidualCISE.set(tokenIndex, 0);
-        }
-    }
 
     // --------------------------------------------------
     // Growth Accounting Helper Functions
@@ -592,171 +559,6 @@ library VTSPositionLib {
         }
     }
 
-    /// @notice Calculate fees and checkpoint snapshots for coverage burn
-    /// @dev Extracted to reduce stack depth in _applyCoverageBurn
-    /// @param s The central VTS storage
-    /// @param poolManager The pool manager contract
-    /// @param id The position ID
-    /// @param params The packed fee-burn parameters
-    /// @return feesBurn The calculated fees burn amount
-    /// @return consumedBurnBase The portion of burn base consumed in the current eligible window
-    /// @return consumedFees The fee entitlement consumed by that outflow share before applying fee-share bps
-    function _calculateFeesBurn(
-        VTSStorage storage s,
-        IPoolManager poolManager,
-        PositionId id,
-        FeesBurnParams memory params
-    ) private returns (uint256 feesBurn, uint256 consumedBurnBase, uint256 consumedFees) {
-        PositionAccounting storage pa = s.positionAccounting[id];
-        uint256 fees;
-        uint256 fg;
-
-        // Scoped block: Read fee growth and calculate fees
-        {
-            Position memory pos = s.positions[id];
-            (uint256 fg0, uint256 fg1) =
-                StateLibrary.getFeeGrowthInside(poolManager, params.poolId, pos.tickLower, pos.tickUpper);
-            fg = params.feeTokenIndex == 0 ? fg0 : fg1;
-
-            uint256 lastFeeGrowth = pa.feeGrowthInsideLast.get(params.feeTokenIndex);
-            if (params.positionLiquidity > 0 && fg > lastFeeGrowth) {
-                fees = FullMath.mulDiv(fg - lastFeeGrowth, uint256(params.positionLiquidity), FixedPoint128.Q128);
-            }
-        }
-
-        // Read outflow window (deficit token) since last burn checkpoint.
-        // IMPORTANT:
-        // - `fees` are on `feeTokenIndex` (input/counterparty token)
-        // - `burnBase` and `ofDelta` are on `tokenIndex` (deficit/output token)
-        // We must NOT checkpoint the outflow window to `cf` for partial exercises; otherwise future
-        // coverage exercises against the same historical outflows would see `ofDelta == 0` and burn nothing.
-        //
-        // Instead, we advance `outflowsAtFeeSnap` by the amount of outflows actually "consumed" by this burn
-        // (i.e. exercised deficit, capped by the current `ofDelta`), and only when a non-zero burn occurs.
-        uint256 cf = pa.cumulativeOutflows.get(params.deficitTokenIndex);
-        uint256 snap = pa.outflowsAtFeeSnap.get(params.deficitTokenIndex);
-        // For banked residual burn, only windows newer than outflowFloor are eligible.
-        if (params.outflowFloor > snap) {
-            snap = params.outflowFloor;
-        }
-        uint256 ofDelta = cf >= snap ? (cf - snap) : 0; // outflows since effective burn checkpoint.
-
-        if (fees == 0 || ofDelta == 0) {
-            return (0, 0, 0);
-        }
-
-        return _finaliseFeesBurn(s, pa, params, fees, ofDelta, snap);
-    }
-
-    /// @dev Finalise fees burn maths and update outflow checkpoints for the consumed window share.
-    function _finaliseFeesBurn(
-        VTSStorage storage s,
-        PositionAccounting storage pa,
-        FeesBurnParams memory params,
-        uint256 fees,
-        uint256 ofDelta,
-        uint256 snap
-    ) private returns (uint256, uint256, uint256) {
-        uint256 bps = s.pools[params.poolId].vtsConfig.coverageFeeShare;
-        if (bps == 0) {
-            return (0, 0, 0);
-        }
-        // Clamp to 100% to make behaviour explicit and avoid redundant runtime clamps later.
-        if (bps > LiquidityUtils.BPS_DENOMINATOR) {
-            bps = LiquidityUtils.BPS_DENOMINATOR;
-        }
-
-        // Never allow the exercised share to exceed 100% of the current outflow window.
-        uint256 consumedBurnBase = params.burnBase <= ofDelta ? params.burnBase : ofDelta;
-
-        // Consume fee entitlement proportional to the exercised outflow share, then apply fee-share bps.
-        uint256 consumedFees = FullMath.mulDiv(fees, consumedBurnBase, ofDelta);
-        uint256 feesBurn = FullMath.mulDiv(consumedFees, bps, LiquidityUtils.BPS_DENOMINATOR);
-
-        // Only advance burn checkpoints if a non-zero burn is actually applied.
-        // - Fee growth baseline is advanced later via `lastFeeGrowthBefore + growthInc` in _applyBurnBase.
-        // - Outflow snapshot is advanced here by the exercised outflow share to support repeated exercises.
-        if (feesBurn > 0) {
-            // This says: "we have just exercised consumedBurnBase worth of the remaining outflow window, so
-            // reduce the remaining window by that amount".
-            pa.outflowsAtFeeSnap.set(params.deficitTokenIndex, snap + consumedBurnBase);
-        }
-
-        return (feesBurn, consumedBurnBase, consumedFees);
-    }
-
-    /// @notice Apply a precomputed burn base for a position and return the consumed outflow share
-    function _applyBurnBase(
-        VTSStorage storage s,
-        IPoolManager poolManager,
-        PositionId id,
-        PoolId p,
-        uint8 tokenIndex,
-        uint256 burnBase,
-        uint128 positionLiquidity,
-        uint256 outflowFloor
-    ) private returns (uint256 consumedBurnBase) {
-        if (burnBase == 0) return 0;
-
-        PositionAccounting storage pa = s.positionAccounting[id];
-        uint8 feeTokenIndex = tokenIndex == 0 ? 1 : 0; // Fee token is opposite of deficit token
-        uint256 feesBurn;
-        uint256 consumedFees;
-        (feesBurn, consumedBurnBase, consumedFees) = _calculateFeesBurnForApply(
-            s, poolManager, id, p, tokenIndex, feeTokenIndex, burnBase, positionLiquidity, outflowFloor
-        );
-
-        if (feesBurn == 0) return 0;
-
-        // Advance fee growth baseline by the full consumed fee entitlement for this exercised outflow share.
-        // This keeps remaining fee entitlement aligned with the remaining outflow window across partial burns.
-        // Carry remainder across burns so floor(consumedFees * Q128 / L) does not lose dust per event.
-        if (positionLiquidity > 0) {
-            uint256 L = uint256(positionLiquidity);
-            uint256 carryIn = pa.feeBurnGrowthRemainder.get(feeTokenIndex);
-            (uint256 growthInc, uint256 newCarry) =
-                LiquidityUtils.feeBurnGrowthIncWithRemainder(consumedFees, L, carryIn);
-            pa.feeBurnGrowthRemainder.set(feeTokenIndex, newCarry);
-            pa.feeGrowthInsideLast.set(feeTokenIndex, pa.feeGrowthInsideLast.get(feeTokenIndex) + growthInc);
-        }
-
-        // Update accounting in scoped block (for the fee token)
-        {
-            PoolAccounting storage paPool = s.poolAccounting[p];
-
-            // CSI: Sync remaining shares BEFORE minting new shares (critical ordering)
-            VTSFeeLib._syncFeesSharedRemainingForToken(pa, paPool, feeTokenIndex);
-
-            paPool.protocolFeeAccrued.set(feeTokenIndex, paPool.protocolFeeAccrued.get(feeTokenIndex) + feesBurn);
-            pa.feesShared.set(feeTokenIndex, pa.feesShared.get(feeTokenIndex) + feesBurn);
-
-            pa.pendingFeeAdj.set(feeTokenIndex, pa.pendingFeeAdj.get(feeTokenIndex) + feesBurn.toInt256());
-        }
-    }
-
-    /// @dev Keep `_applyBurnBase` below stack-too-deep threshold for non-via-ir builds.
-    function _calculateFeesBurnForApply(
-        VTSStorage storage s,
-        IPoolManager poolManager,
-        PositionId id,
-        PoolId p,
-        uint8 tokenIndex,
-        uint8 feeTokenIndex,
-        uint256 burnBase,
-        uint128 positionLiquidity,
-        uint256 outflowFloor
-    ) private returns (uint256 feesBurn, uint256 consumedBurnBase, uint256 consumedFees) {
-        FeesBurnParams memory params = FeesBurnParams({
-            poolId: p,
-            deficitTokenIndex: tokenIndex,
-            feeTokenIndex: feeTokenIndex,
-            burnBase: burnBase,
-            positionLiquidity: positionLiquidity,
-            outflowFloor: outflowFloor
-        });
-        return _calculateFeesBurn(s, poolManager, id, params);
-    }
-
     /// @notice Apply banked residual-derived DICE burn against later outflow windows only
     function _applyBankedResidualBurn(
         VTSStorage storage s,
@@ -771,8 +573,9 @@ library VTSPositionLib {
         if (pendingBurnBase == 0) return;
 
         uint256 outflowFloor = pa.pendingResidualBurnOutflowsFloor.get(tokenIndex);
-        uint256 consumedBurnBase =
-            _applyBurnBase(s, poolManager, id, p, tokenIndex, pendingBurnBase, positionLiquidity, outflowFloor);
+        uint256 consumedBurnBase = VTSFeeLinkedLib.applyBurnBase(
+            s, poolManager, id, p, tokenIndex, pendingBurnBase, positionLiquidity, outflowFloor
+        );
         if (consumedBurnBase > 0) {
             pa.pendingResidualBurnBase.set(tokenIndex, pendingBurnBase - consumedBurnBase);
             if (pendingBurnBase == consumedBurnBase) {
@@ -824,7 +627,7 @@ library VTSPositionLib {
             if (burnBase == 0) return;
         }
 
-        _applyBurnBase(s, poolManager, id, p, tokenIndex, burnBase, positionLiquidity, 0);
+        VTSFeeLinkedLib.applyBurnBase(s, poolManager, id, p, tokenIndex, burnBase, positionLiquidity, 0);
     }
 
     /// @notice Settle coverage for a single token using DICE accounting
@@ -893,8 +696,9 @@ library VTSPositionLib {
 
     /// @notice Realise and checkpoint CISE exposure for a single token
     /// @dev Computes exposure = settled * (indexNow - indexLast) / Q128 and accumulates it on the position.
-    ///      Pool-wide `totalCISEExposureSinceLastMod` is updated eagerly in `incrementCoverage` and
-    ///      `_flushCISEResidualIfNeeded`, not here, so bonus denominators are not first-mover gamed.
+    ///      Pool-wide `totalCISEExposureSinceLastMod` is updated eagerly in `incrementCoverage`, not here,
+    ///      so bonus denominators are not first-mover gamed. Coverage exercised while totalSettled was zero
+    ///      is intentionally excluded from CISE and never reaches this realisation path.
     /// @dev Performed on _settleCoverageUsage to ensure accurate CISE exposure is realised and checkpointed
     /// @param pa The position accounting storage reference
     /// @param paPool The pool accounting storage reference
@@ -1209,13 +1013,10 @@ library VTSPositionLib {
         s.inflowGrowthOutside[poolId][tick].token1 = paPool.inflowGrowthGlobal.token1;
     }
 
-    /**
-     * @notice Initializes the snapshots for a position. Prevents new positions from inheriting historical tick-indexed growths.
-     * @param s The central VTS storage
-     * @param poolManager The pool manager contract
-     * @param id The id of the position
-     */
-    function _initPositionSnapshots(VTSStorage storage s, IPoolManager poolManager, PositionId id) internal {
+    /// @notice Checkpoint the tick-indexed growth snapshots at the current pool state.
+    /// @dev Used for both first-time registration and inactive-position reactivation so zero-liquidity intervals
+    ///      cannot be retroactively attributed to freshly added liquidity.
+    function _checkpointTickIndexedSnapshots(VTSStorage storage s, IPoolManager poolManager, PositionId id) internal {
         Position memory pos = s.positions[id];
         PoolId p = pos.poolId;
         PositionAccounting storage pa = s.positionAccounting[id];
@@ -1227,6 +1028,49 @@ library VTSPositionLib {
         _initDeficitSnapshot(s, pa, sp);
         _initInflowSnapshot(s, pa, sp);
         _initFeeSnapshot(poolManager, pa, sp);
+    }
+
+    /// @notice Rebase zero-principal settlement snapshots during inactive-position reactivation.
+    /// @dev Only lanes with no current settled / deficit principal are checkpointed to current pool indices.
+    ///      Non-zero lanes keep their historical checkpoints so previously-earned DICE / CISE state is preserved.
+    function _checkpointZeroPrincipalSettlementSnapshots(VTSStorage storage s, PositionId id) internal {
+        Position memory pos = s.positions[id];
+        PositionAccounting storage pa = s.positionAccounting[id];
+        PoolAccounting storage paPool = s.poolAccounting[pos.poolId];
+
+        if (pa.cumulativeDeficit.token0 == 0) {
+            pa.coverageIndexLastX128.token0 = paPool.coveragePerDeficitIndexX128.token0;
+            pa.residualCoverageIndexLastX128.token0 = paPool.coveragePerResidualDeficitIndexX128.token0;
+        }
+        if (pa.cumulativeDeficit.token1 == 0) {
+            pa.coverageIndexLastX128.token1 = paPool.coveragePerDeficitIndexX128.token1;
+            pa.residualCoverageIndexLastX128.token1 = paPool.coveragePerResidualDeficitIndexX128.token1;
+        }
+        if (pa.settled.token0 == 0) {
+            pa.ciseIndexLastX128.token0 = paPool.coveragePerSettledIndexX128.token0;
+        }
+        if (pa.settled.token1 == 0) {
+            pa.ciseIndexLastX128.token1 = paPool.coveragePerSettledIndexX128.token1;
+        }
+    }
+
+    /**
+     * @notice Initializes the snapshots for a position. Prevents new positions from inheriting historical tick-indexed growths.
+     * @param s The central VTS storage
+     * @param poolManager The pool manager contract
+     * @param id The id of the position
+     */
+    function _initPositionSnapshots(VTSStorage storage s, IPoolManager poolManager, PositionId id) internal {
+        PositionAccounting storage pa = s.positionAccounting[id];
+
+        _checkpointTickIndexedSnapshots(s, poolManager, id);
+
+        Position memory pos = s.positions[id];
+        PoolId p = pos.poolId;
+        (, int24 tickCurrent,,) = StateLibrary.getSlot0(poolManager, p);
+        SnapshotParams memory sp =
+            SnapshotParams({poolId: p, tickLower: pos.tickLower, tickUpper: pos.tickUpper, tickCurrent: tickCurrent});
+
         _initCoverageSnapshot(s, pa, sp);
         _initCISESnapshot(s, pa, sp);
     }
@@ -1296,44 +1140,34 @@ library VTSPositionLib {
         }
     }
 
-    /// @notice Handles existing position decrease and returns required settlement delta
+    /// @notice Handles existing position decrease: RFS gate, commitment tracking, settled clamp / MM excess delta.
+    /// @param currentLiq Live PoolManager liquidity after the remove (same as unpaused `touchPosition` decrease path).
+    /// @dev RFS uses `getRFS` only; growth is already settled in CoreHook `_beforeRemoveLiquidity` — avoid `calcRFS` here
+    ///      so we do not re-enter `settlePositionGrowths` (would double-apply CISE / growth side-effects in the same modify).
     function _touchExistingDecrease(
         VTSStorage storage s,
-        IPoolManager poolManager,
         PositionId positionId,
         ModifyLiquidityParams calldata params,
         uint128 currentLiq,
         TouchPositionHookData memory hookData
     ) private returns (BalanceDelta requiredSettlementDelta) {
+        // Growth is already settled in CoreHook `_beforeRemoveLiquidity`; avoid `calcRFS` here so we do not
+        // re-enter `settlePositionGrowths` (would double-apply CISE / growth side-effects in the same modify).
         if (!hookData.isSeizing) {
-            calcRFS(s, poolManager, positionId, true);
+            (bool rfsOpen,) = getRFS(s, positionId);
+            if (rfsOpen) {
+                revert Errors.RFSOpenForPosition(positionId);
+            }
         }
         _trackCommitment(s, positionId, params);
 
         PositionAccounting storage pa = s.positionAccounting[positionId];
-        uint256 s0 = pa.settled.token0;
-        uint256 s1 = pa.settled.token1;
-        uint256 excess0;
-        uint256 excess1;
-
-        if (currentLiq == 0) {
-            excess0 = s0;
-            excess1 = s1;
-        } else {
-            TokenPairUint memory commitmentMaxima = pa.commitmentMax;
-            excess0 = s0 > commitmentMaxima.token0 ? s0 - commitmentMaxima.token0 : 0;
-            excess1 = s1 > commitmentMaxima.token1 ? s1 - commitmentMaxima.token1 : 0;
-        }
+        (uint256 excess0, uint256 excess1) = _computeSettledExcessAgainstCommitmentMax(pa, currentLiq);
 
         if (hookData.isMMOperation) {
             requiredSettlementDelta = LiquidityUtils.safeToBalanceDelta(excess0, excess1, false, false);
         } else {
-            if (excess0 > 0) {
-                _sUpdateSettlement(s, positionId, 0, -SafeCast.toInt256(excess0));
-            }
-            if (excess1 > 0) {
-                _sUpdateSettlement(s, positionId, 1, -SafeCast.toInt256(excess1));
-            }
+            _applySettlementClampFromExcess(s, positionId, excess0, excess1);
             requiredSettlementDelta = BalanceDelta.wrap(0);
         }
     }
@@ -1381,17 +1215,25 @@ library VTSPositionLib {
         returns (TouchPositionResult memory result)
     {
         PoolId poolId = p.poolKey.toId();
+        bool isPaused = s.isPaused || s.pools[poolId].isPaused;
+        if (isPaused && p.params.liquidityDelta >= 0) {
+            revert Errors.EnforcedPause();
+        }
         _seedOutsideGrowthForNewlyInitializedTicks(s, ctx.poolManager, poolId, p.params);
 
         result.id = PositionLibrary.generateId(p.owner, p.params);
         Position storage posStorage = s.positions[result.id];
+        bool isNewPosition = posStorage.owner == address(0);
         uint256 initialLiquidity = posStorage.liquidity;
         uint128 liq = ctx.poolManager.getPositionLiquidity(poolId, PositionId.unwrap(result.id));
 
         TouchPositionHookData memory hookData = _decodeHookData(p.hookData);
         BalanceDelta requiredSettlementDelta;
 
-        if (posStorage.owner == address(0)) {
+        if (isNewPosition) {
+            if (p.params.liquidityDelta <= 0) {
+                revert Errors.InvalidPosition(0, 0, result.id);
+            }
             // NEW POSITION
             requiredSettlementDelta =
                 _touchNewPosition(s, ctx.poolManager, poolId, p.owner, p.params, result.id, hookData);
@@ -1403,32 +1245,48 @@ library VTSPositionLib {
                 revert Errors.InvariantViolated("Invalid operation: Commit ID mismatch");
             }
 
+            // Insolvency freeze: do not allow non-seizure MM liquidity changes while commitment deficit persists.
+            // Settlement, checkpoint(withCommitment), and seizure paths remain the intended cure/formalise surfaces.
+            if (hookData.isMMOperation && !hookData.isSeizing && p.params.liquidityDelta != 0) {
+                PositionAccounting storage paGuard = s.positionAccounting[result.id];
+                if (paGuard.commitmentDeficit.token0 > 0 || paGuard.commitmentDeficit.token1 > 0) {
+                    revert Errors.CommitmentDeficitBlocksLiquidityChange(result.id);
+                }
+            }
+
             if (p.params.liquidityDelta < 0) {
                 // Disallow decreases on previously-inactive positions. (If liq == 0, Uniswap will revert anyway.)
                 if (!posStorage.isActive) revert Errors.NotActive(result.id);
-                requiredSettlementDelta = _touchExistingDecrease(s, ctx.poolManager, result.id, p.params, liq, hookData);
-            } else if (p.params.liquidityDelta > 0) {
-                // Allow re-activating a previously inactive position by adding liquidity.
-                // Logically required to build on value routing while collecting fees on inactive positions.
-                requiredSettlementDelta = _touchExistingIncrease(s, poolId, result.id, p.params, hookData);
+                requiredSettlementDelta = _touchExistingDecrease(s, result.id, p.params, liq, hookData);
+                // Mirror using live PoolManager liquidity post-modify for both paused and unpaused removes.
+                PositionAccounting storage paDec = s.positionAccounting[result.id];
+                _applyLiquidityMirrorTransition(s, paDec, posStorage, initialLiquidity, liq);
             } else {
-                // Allow a no-op when active (Uniswap v4 disallows this when initial liq == 0).
-                // See https://github.com/Uniswap/v4-core/blob/36d790b1a3af38461453a13a6ff395290fbc11b2/src/libraries/Position.sol#L86
-                requiredSettlementDelta = BalanceDelta.wrap(0);
-            }
-
-            // Update position liquidity
-            int256 newLiquidity = SafeCast.toInt256(uint256(posStorage.liquidity)) + p.params.liquidityDelta;
-            posStorage.liquidity = newLiquidity < 0 ? 0 : SafeCast.toUint128(uint256(newLiquidity));
-            // Remainder is defined for a fixed liquidity denominator; reset on any liquidity change.
-            if (p.params.liquidityDelta != 0) {
+                (uint128 liveLiquidityBeforeAdd, uint128 nextLiquidity) =
+                    _deriveIncreaseTransitionLiquidity(liq, p.params.liquidityDelta);
+                if (p.params.liquidityDelta > 0) {
+                    // Allow re-activating a previously inactive position by adding liquidity.
+                    // Logically required to build on value routing while collecting fees on inactive positions.
+                    // Rebase tick-indexed snapshots first so the zero-liquidity interval is not charged/credited to
+                    // the newly reactivated liquidity.
+                    if (liveLiquidityBeforeAdd == 0) {
+                        _checkpointTickIndexedSnapshots(s, ctx.poolManager, result.id);
+                        _checkpointZeroPrincipalSettlementSnapshots(s, result.id);
+                    }
+                    requiredSettlementDelta = _touchExistingIncrease(s, poolId, result.id, p.params, hookData);
+                } else {
+                    // Allow a no-op when active (Uniswap v4 disallows this when initial liq == 0).
+                    // See https://github.com/Uniswap/v4-core/blob/36d790b1a3af38461453a13a6ff395290fbc11b2/src/libraries/Position.sol#L86
+                    requiredSettlementDelta = BalanceDelta.wrap(0);
+                }
                 PositionAccounting storage paRem = s.positionAccounting[result.id];
-                paRem.feeBurnGrowthRemainder.token0 = 0;
-                paRem.feeBurnGrowthRemainder.token1 = 0;
+                _applyLiquidityMirrorTransition(s, paRem, posStorage, uint256(liveLiquidityBeforeAdd), nextLiquidity);
             }
         }
 
-        _updateActiveStatus(s, posStorage, initialLiquidity, liq);
+        if (isNewPosition) {
+            _updateActiveStatus(s, posStorage, initialLiquidity, liq);
+        }
 
         result.feeAdj = VTSFeeLinkedLib.afterTouchPosition(s, result.id);
 
@@ -1464,6 +1322,85 @@ library VTSPositionLib {
                 s.commits[commitId].activePositionCount++;
             }
         }
+    }
+
+    function _deriveIncreaseTransitionLiquidity(uint128 liq, int256 liquidityDelta)
+        internal
+        pure
+        returns (uint128 liveLiquidityBeforeAdd, uint128 nextLiquidity)
+    {
+        if (liquidityDelta <= 0) {
+            return (liq, liq);
+        }
+
+        uint128 addedLiquidity = uint256(liquidityDelta).toUint128();
+        liveLiquidityBeforeAdd = liq > addedLiquidity ? liq - addedLiquidity : 0;
+        nextLiquidity = liq;
+
+        // Unit harnesses may call touchPosition without pre-mutating PoolManager liquidity first.
+        if (nextLiquidity == 0) nextLiquidity = liveLiquidityBeforeAdd + addedLiquidity;
+    }
+
+    /// @dev Compute settled excess over current commitment maxima after a decrease.
+    ///      If live liquidity is zero, all settled is excess.
+    function _computeSettledExcessAgainstCommitmentMax(PositionAccounting storage pa, uint128 currentLiq)
+        internal
+        view
+        returns (uint256 excess0, uint256 excess1)
+    {
+        uint256 s0 = pa.settled.token0;
+        uint256 s1 = pa.settled.token1;
+        if (currentLiq == 0) {
+            return (s0, s1);
+        }
+        TokenPairUint memory commitmentMaxima = pa.commitmentMax;
+        excess0 = s0 > commitmentMaxima.token0 ? s0 - commitmentMaxima.token0 : 0;
+        excess1 = s1 > commitmentMaxima.token1 ? s1 - commitmentMaxima.token1 : 0;
+    }
+
+    /// @dev Clamp settled balances downward by precomputed excess values.
+    function _applySettlementClampFromExcess(
+        VTSStorage storage s,
+        PositionId positionId,
+        uint256 excess0,
+        uint256 excess1
+    ) internal {
+        if (excess0 > 0) {
+            _sUpdateSettlement(s, positionId, 0, -SafeCast.toInt256(excess0));
+        }
+        if (excess1 > 0) {
+            _sUpdateSettlement(s, positionId, 1, -SafeCast.toInt256(excess1));
+        }
+    }
+
+    /// @dev Apply the shared liquidity mirror transition logic used by touch/reconcile.
+    function _applyLiquidityMirrorTransition(
+        VTSStorage storage s,
+        PositionAccounting storage pa,
+        Position storage posStorage,
+        uint256 initialLiquidity,
+        uint128 nextLiquidity
+    ) internal {
+        posStorage.liquidity = nextLiquidity;
+        if (initialLiquidity != uint256(nextLiquidity)) {
+            // Remainder is defined for a fixed liquidity denominator; reset on liquidity changes.
+            pa.feeBurnGrowthRemainder.token0 = 0;
+            pa.feeBurnGrowthRemainder.token1 = 0;
+        }
+        // Full deactivation: reset the entire commitment-deficit snapshot (amounts, age, severity).
+        // Issued commitment is zero once liquidity is fully unwound, so there is nothing left to be insolvent for.
+        // Clearing token amounts avoids stale `commitmentDeficit` with `commitmentDeficitSince == 0` after a prior
+        // partial reset, which would otherwise block age-gated deficit bypass in `CheckpointLibrary.isSeizable`.
+        // Non-seizure MM liquidity changes remain blocked while deficit is non-zero (`CommitmentDeficitBlocksLiquidityChange`);
+        // this reset is the semantic cleanup once deactivation is actually reached (including non-MM and seizure paths).
+        if (initialLiquidity > 0 && nextLiquidity == 0) {
+            pa.commitmentDeficit.set(0, 0);
+            pa.commitmentDeficit.set(1, 0);
+            pa.commitmentDeficitSince.token0 = 0;
+            pa.commitmentDeficitSince.token1 = 0;
+            pa.commitmentDeficitBps = 0;
+        }
+        _updateActiveStatus(s, posStorage, initialLiquidity, nextLiquidity);
     }
 
     /// @notice Process MM-specific operations (LCC management, deltas, checkpoints)
@@ -1521,7 +1458,7 @@ library VTSPositionLib {
 
             // Only the immediately-settleable portion should be accounted as an underlying settlement delta.
             // Any unavailable remainder is persisted via the LiquidityHub queue mechanics.
-            BalanceDelta settleableDelta;
+            LiquidityDecreaseResult memory decreaseResult;
             if (isSeizing) {
                 // @note: For Seizures,
                 // - LCCs are received directly by locker simiarly to fees.
@@ -1529,7 +1466,7 @@ library VTSPositionLib {
                 // - For any excess, this can also be settled immediately via MM operations.
 
                 // Only cancel excess settled received.
-                settleableDelta = _handleLiquidityDecrease(
+                decreaseResult = _handleLiquidityDecrease(
                     ctx, p.owner, p.poolKey, requiredSettlementDelta, requiredSettlementDelta, queueRecipient
                 );
             } else {
@@ -1540,13 +1477,22 @@ library VTSPositionLib {
                 // Therefore, we plan to cancel the LCC's and queue the settlement once this settlement occurs.
                 // This relies on the current MM path immediately performing the matching PoolManager -> MMPM take
                 // once modifyLiquidity(...) returns, before any same-key planned cancel can be restaged.
-                settleableDelta = _handleLiquidityDecrease(
+                decreaseResult = _handleLiquidityDecrease(
                     ctx, p.owner, p.poolKey, principalDelta, requiredSettlementDelta, queueRecipient
                 );
             }
+            // Only queued shortfall leaves live VTS settled immediately. The immediate settleable slice remains
+            // represented in `pa.settled` until the later settle flow consumes the transient underlying delta.
+            _applySettlementClampFromExcess(
+                s,
+                result.id,
+                LiquidityUtils.safeInt128ToUint256(decreaseResult.queuedShortfallDelta.amount0()),
+                LiquidityUtils.safeInt128ToUint256(decreaseResult.queuedShortfallDelta.amount1())
+            );
+
             // @note: We use the settleableDelta here because it is the immediately available liquidity that can be used to cover settlement.
             // Anything queued is not accounted for in DynamicCurrencyDelta
-            requiredSettlementDelta = settleableDelta;
+            requiredSettlementDelta = decreaseResult.settleableDelta;
         }
 
         if (!LiquidityUtils.isZeroDelta(requiredSettlementDelta)) {
@@ -1641,9 +1587,9 @@ library VTSPositionLib {
         BalanceDelta principalDelta,
         BalanceDelta requiredSettlementDelta,
         address queueRecipient
-    ) internal returns (BalanceDelta settleableDelta) {
+    ) internal returns (LiquidityDecreaseResult memory result) {
         if (LiquidityUtils.isZeroDelta(principalDelta)) {
-            return BalanceDelta.wrap(0);
+            return result;
         }
 
         uint256 principalAmount0 = LiquidityUtils.safeInt128ToUint256(principalDelta.amount0());
@@ -1660,9 +1606,10 @@ library VTSPositionLib {
             if (shortfall1 < 0) shortfall1 = 0;
 
             // Settle only the immediate portion (required minus unavailable shortfall).
-            settleableDelta = toBalanceDelta(
+            result.settleableDelta = toBalanceDelta(
                 requiredSettlementDelta.amount0() - shortfall0, requiredSettlementDelta.amount1() - shortfall1
             );
+            result.queuedShortfallDelta = toBalanceDelta(shortfall0, shortfall1);
 
             uint256 shortfallAmount0 = LiquidityUtils.safeInt128ToUint256(shortfall0);
             uint256 shortfallAmount1 = LiquidityUtils.safeInt128ToUint256(shortfall1);
@@ -1927,7 +1874,9 @@ library VTSPositionLib {
         // PHASE 5: Touch ups
         // ========================================
 
-        // Mark RFS checkpoint for the position
+        // Recompute from final stored settlement state so the returned RFS view and persisted checkpoint do not lag
+        // one settlement behind when `_updateSettlement` or shortfall rollback changed the lane-open state.
+        (result.rfsOpen, rfsDelta) = getRFS(s, p.positionId);
         CheckpointLibrary.markCheckpoint(s, p.positionId, _rfsOpenMask(rfsDelta));
     }
 
@@ -2190,7 +2139,11 @@ library VTSPositionLib {
             if (cfg.token0.baseVTSRate > e0bps) e0bps = cfg.token0.baseVTSRate;
             if (cfg.token1.baseVTSRate > e1bps) e1bps = cfg.token1.baseVTSRate;
 
-            // 2) Determine a portion of the seizure exposure proportional to settled / RfS amount
+            // 2) Determine a portion of the seizure exposure proportional to settled / RfS amount.
+            // Protocol design note: once any currently-open lane has aged past grace, the position becomes seizable.
+            // Seizure reward is then sized against the still-open position exposure, so settlement on either positive-RFS
+            // lane can contribute to the seized amount. Grace is the trigger for seizure rights, not a per-lane cap on
+            // which settlement currency may count once seizure is live.
             uint256 p0bps = LiquidityUtils.settleOfRfsBps(s0, r0);
             uint256 p1bps = LiquidityUtils.settleOfRfsBps(s1, r1);
 

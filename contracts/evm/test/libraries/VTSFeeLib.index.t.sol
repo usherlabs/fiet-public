@@ -16,10 +16,10 @@ import {FixedPoint128} from "v4-periphery/lib/v4-core/src/libraries/FixedPoint12
 import {console} from "forge-std/console.sol";
 
 /// @title VTSFeeLibIndexTest
-/// @notice Unit tests for DICE (Deficit-Indexed Coverage Exercise) and CSI (Contribution Spend Index) mechanisms
+/// @notice Unit tests for DICE (Deficit-Indexed Coverage Exercise) and CSI remaining-factor mechanisms
 /// @dev These tests verify the core index-based accounting mechanisms:
 ///      - DICE: Coverage attribution to deficit creators, not current tick positions
-///      - CSI: Self-excluding bonus allocation via contribution spend tracking
+///      - CSI: Self-excluding bonus allocation via remaining-share factor tracking
 contract VTSFeeLibIndexTest is VTSOrchestratorFixture {
     using CurrencyLibrary for Currency;
 
@@ -66,16 +66,16 @@ contract VTSFeeLibIndexTest is VTSOrchestratorFixture {
         (, feesShared1,,) = _testableOrchestrator().getPositionCSIAccounting(posId);
     }
 
-    function _csiRemaining1(PositionId posId) internal view returns (uint256 remaining1) {
-        (, remaining1,,) = _testableOrchestrator().getPositionCSIAccounting(posId);
+    function _csiRemainingShares1(PositionId posId) internal view returns (uint256 remainingShares1) {
+        (, remainingShares1,,) = _testableOrchestrator().getPositionCSIAccounting(posId);
     }
 
-    function _csiFeesShared1AndIndexLast1(PositionId posId)
+    function _csiFeesShared1AndFactorLast1(PositionId posId)
         internal
         view
-        returns (uint256 feesShared1, uint256 indexLast1)
+        returns (uint256 feesShared1, uint256 factorLast1)
     {
-        (, feesShared1,, indexLast1) = _testableOrchestrator().getPositionCSIAccounting(posId);
+        (, feesShared1,, factorLast1) = _testableOrchestrator().getPositionCSIAccounting(posId);
     }
 
     /// @notice Creates a new MM commit with a unique signal (supports multiple independent commits)
@@ -439,7 +439,7 @@ contract VTSFeeLibIndexTest is VTSOrchestratorFixture {
     }
 
     // ============================================================
-    // CSI (Contribution Spend Index) Tests
+    // CSI Remaining-Factor Tests
     // ============================================================
     // These tests verify the CSI mechanism for self-exclusion, ensuring
     // that potAvail is computed correctly based on remaining self-contribution
@@ -482,8 +482,8 @@ contract VTSFeeLibIndexTest is VTSOrchestratorFixture {
 
         // Record pot and CSI state
         (, uint256 potBefore) = _protocolFeeAccrued(corePoolKey.toId());
-        // Fee token for one-for-zero swaps is token1, so we track token1's spend index.
-        (, uint256 poolSpendIndex1Before) = _testableOrchestrator().getPoolCSIAccounting(corePoolKey.toId());
+        // Fee token for one-for-zero swaps is token1, so we track token1's remaining factor.
+        (, uint256 poolRemainingFactor1Before) = _testableOrchestrator().getPoolCSIAccounting(corePoolKey.toId());
 
         // A's contribution is the only thing in the pot
         // A's selfRemaining should equal its feesShared (nothing consumed yet)
@@ -502,10 +502,12 @@ contract VTSFeeLibIndexTest is VTSOrchestratorFixture {
         assertGe(aPending1After, 0, "CSI: Position must not queue a bonus from its own contribution (pending < 0)");
         assertGe(aFeesShared1After, 0, "CSI: Position must maintain a fee share as bonus is not allocated.");
 
-        // Pool spend index should NOT have advanced (no bonus was allocated)
-        (, uint256 poolSpendIndex1After) = _testableOrchestrator().getPoolCSIAccounting(corePoolKey.toId());
+        // Pool remaining factor should NOT have advanced (no bonus was allocated)
+        (, uint256 poolRemainingFactor1After) = _testableOrchestrator().getPoolCSIAccounting(corePoolKey.toId());
         assertEq(
-            poolSpendIndex1After, poolSpendIndex1Before, "CSI: Spend index should not advance when no bonus allocated"
+            poolRemainingFactor1After,
+            poolRemainingFactor1Before,
+            "CSI: remaining factor should not advance when no bonus allocated"
         );
 
         // Suppress unused variable warnings
@@ -615,14 +617,24 @@ contract VTSFeeLibIndexTest is VTSOrchestratorFixture {
             console.log("-------------------------------- END Poke A");
 
             // With remaining-shares CSI, A's remaining shares should decrease after C consumes from the pot.
-            uint256 aRemaining1After = _csiRemaining1(posIdA);
+            uint256 aRemaining1After = _csiRemainingShares1(posIdA);
+            assertGt(
+                aRemaining1After,
+                0,
+                "CSI: contributor A should remain self-excluded after unseen partial spend until full exhaustion"
+            );
 
             // Similarly B pokes
             console.log("-------------------------------- Poke B");
             _pokeMM(mmB, 0);
             console.log("-------------------------------- END Poke B");
 
-            uint256 bRemaining1After = _csiRemaining1(posIdB);
+            uint256 bRemaining1After = _csiRemainingShares1(posIdB);
+            assertGt(
+                bRemaining1After,
+                0,
+                "CSI: contributor B should remain self-excluded after unseen partial spend until full exhaustion"
+            );
 
             (, uint256 pot1) = _testableOrchestrator().getSlashedPot(corePoolKey.toId());
             assertEq(pot1, potAfterSlashes, "CSI: Slashed pot should increase after poke");
@@ -669,10 +681,10 @@ contract VTSFeeLibIndexTest is VTSOrchestratorFixture {
         potAfterSlashes;
     }
 
-    /// @notice CSI Test 3: Bonus allocation advances the contribution spend index (integration)
+    /// @notice CSI Test 3: Bonus allocation advances the pool remaining factor (integration)
     /// @dev End-to-end check after a slasher queues token1 protocol fees: a solvent MM realises CISE, pokes,
     ///      receives a bonus (mulDivRoundingUp avoids dust flooring to zero against eager CISE denominators),
-    ///      and the pool `feesSharedSpendIndex` for token1 moves. A second slash round with chained swaps is
+    ///      and the pool `feesSharedRemainingFactorX128` for token1 moves. A second slash round with chained swaps is
     ///      omitted here because this fixture's pool can pin to MAX_SQRT_PRICE, which makes further one-for-zero
     ///      legs revert; multi-round CSI share accounting is covered in `test_csi_mixedPotPartialExclusion_withPostFeeShareSettleForBonus`.
     function test_csi_newSharesNotRetroactivelyConsumed() public {
@@ -688,8 +700,13 @@ contract VTSFeeLibIndexTest is VTSOrchestratorFixture {
             vtsOrchestrator.incrementCoverage(corePoolKey.toId(), 2e18, 0);
             vtsOrchestrator.settlePositionGrowths(posIdA);
 
-            (uint256 aFeesShared1First,) = _csiFeesShared1AndIndexLast1(posIdA);
+            (uint256 aFeesShared1First, uint256 factorLast1First) = _csiFeesShared1AndFactorLast1(posIdA);
             assertGt(aFeesShared1First, 0, "A should have fees shared after first slash");
+            assertEq(
+                factorLast1First,
+                0,
+                "A should still hold the baseline matching-epoch CSI factor before any bonus spend is synced"
+            );
 
             uint256 lcc1BalanceBefore = _selfLccBalance(lccCurrency1);
             (, uint256 pot1BeforeBonus) = _protocolFeeAccrued(corePoolKey.toId());

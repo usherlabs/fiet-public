@@ -31,11 +31,7 @@ abstract contract VTSConfigFileBase is Script {
         return (cfg, path);
     }
 
-    function _parseJsonConfig(string memory json)
-        private
-        view
-        returns (MarketVTSConfiguration memory cfg)
-    {
+    function _parseJsonConfig(string memory json) private view returns (MarketVTSConfiguration memory cfg) {
         cfg = MarketVTSConfiguration({
             token0: _parseJsonTokenConfig(json, ".token0"),
             token1: _parseJsonTokenConfig(json, ".token1"),
@@ -45,11 +41,7 @@ abstract contract VTSConfigFileBase is Script {
         });
     }
 
-    function _parseTomlConfig(string memory toml)
-        private
-        view
-        returns (MarketVTSConfiguration memory cfg)
-    {
+    function _parseTomlConfig(string memory toml) private view returns (MarketVTSConfiguration memory cfg) {
         cfg = MarketVTSConfiguration({
             token0: _parseTomlTokenConfig(toml, "token0"),
             token1: _parseTomlTokenConfig(toml, "token1"),
@@ -68,7 +60,9 @@ abstract contract VTSConfigFileBase is Script {
             gracePeriodTime: _jsonUint(json, string.concat(prefix, ".gracePeriodTime")),
             baseVTSRate: _jsonUint(json, string.concat(prefix, ".baseVTSRate")),
             maxGracePeriodTime: _jsonUint(json, string.concat(prefix, ".maxGracePeriodTime")),
-            unbackedCommitmentGraceBypassTime: _jsonUint(json, string.concat(prefix, ".unbackedCommitmentGraceBypassTime")),
+            unbackedCommitmentGraceBypassTime: _jsonUint(
+                json, string.concat(prefix, ".unbackedCommitmentGraceBypassTime")
+            ),
             unbackedCommitmentGraceBypassThreshold: _jsonUint(
                 json, string.concat(prefix, ".unbackedCommitmentGraceBypassThreshold")
             )

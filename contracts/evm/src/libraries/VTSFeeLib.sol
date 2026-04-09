@@ -3,6 +3,8 @@ pragma solidity ^0.8.26;
 
 import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {BalanceDelta, toBalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
+import {IPoolManager} from "v4-periphery/lib/v4-core/src/interfaces/IPoolManager.sol";
+import {StateLibrary} from "v4-periphery/lib/v4-core/src/libraries/StateLibrary.sol";
 import {FullMath} from "@uniswap/v4-core/src/libraries/FullMath.sol";
 import {FixedPoint128} from "v4-periphery/lib/v4-core/src/libraries/FixedPoint128.sol";
 import {SafeCast} from "@uniswap/v4-core/src/libraries/SafeCast.sol";
@@ -27,6 +29,16 @@ library VTSFeeLib {
     using TokenPairLib for TokenPairUint;
     using TokenPairLib for TokenPairInt;
 
+    /// @dev Internal struct to keep fee-burn helper signatures below stack-too-deep thresholds.
+    struct FeesBurnParams {
+        PoolId poolId;
+        uint8 deficitTokenIndex;
+        uint8 feeTokenIndex;
+        uint256 burnBase;
+        uint128 positionLiquidity;
+        uint256 outflowFloor;
+    }
+
     // --------------------------------------------------
     // Fee Adjustment Helpers
     // --------------------------------------------------
@@ -34,7 +46,7 @@ library VTSFeeLib {
     /// @dev Queue a bonus for a single token using CISE (Coverage-Indexed Settled Exposure).
     /// @notice CISE replaces selfNet as the primary eligibility gate, fixing the commitmentMax clamp bug.
     ///         Positions accrue exposure when incrementCoverage is called, proportional to their settled liquidity.
-    ///         CSI (Contribution Spend Index) is used for self-exclusion to ensure positions can receive bonuses
+    ///         CSI remaining-share factors are used for self-exclusion to ensure positions can receive bonuses
     ///         even after their contributed slashes have been distributed to others.
     /// @param pa The position accounting storage reference
     /// @param paPool The pool accounting storage reference
@@ -63,8 +75,9 @@ library VTSFeeLib {
 
         if (potAvail == 0) return false;
 
-        // CISE: Denominator is the pool-wide coverage window (eager on incrementCoverage / CISE residual flush),
-        // decremented on allocation; not lazily summed from per-touch position realisations.
+        // CISE: Denominator is the pool-wide allocatable coverage window, updated eagerly on `incrementCoverage`
+        // and decremented on allocation; not lazily summed from per-touch position realisations. Coverage exercised
+        // while `totalSettled == 0` is excluded upstream because no settled liquidity was live to earn that weight.
         uint256 totalExposure = paPool.totalCISEExposureSinceLastMod.get(coverageTokenIndex);
         if (totalExposure == 0) return false;
 
@@ -73,14 +86,9 @@ library VTSFeeLib {
         if (bonus > potAvail) bonus = potAvail;
         if (bonus == 0) return false;
 
-        // CSI: Advance spend index (spend down the pot across all remaining contribution shares).
+        // CSI: Update the cumulative remaining-share factor for this epoch.
         // Note: Under consistent accounting, total remaining shares == current pot (pre-spend).
-        if (pot > 0) {
-            uint256 deltaIndex = FullMath.mulDiv(bonus, FixedPoint128.Q128, pot);
-            uint256 currentIndex = paPool.feesSharedSpendIndexX128.get(feeTokenIndex);
-            // The spend index is a accumulator tracking how much of the pot, comprised of all positions' feesShared, has been spent.
-            paPool.feesSharedSpendIndexX128.set(feeTokenIndex, currentIndex + deltaIndex);
-        }
+        if (pot > 0) _advanceFeesSharedFactor(paPool, feeTokenIndex, pot, bonus);
 
         // Deduct from pot (accounting)
         paPool.protocolFeeAccrued.set(feeTokenIndex, pot - bonus);
@@ -112,11 +120,11 @@ library VTSFeeLib {
     }
 
     // --------------------------------------------------
-    // CSI (Contribution Spend Index) Helpers
+    // CSI Remaining-Factor Helpers
     // --------------------------------------------------
 
     /// @dev Sync a position's remaining feesShared (self-contribution still embedded in the pot)
-    ///      against the pool spend index.
+    ///      against the pool remaining-share factor for the current spend epoch.
     /// @notice Must be called BEFORE incrementing feesShared (slash) or reading selfRemaining (bonus)
     /// @param pa The position accounting storage reference
     /// @param paPool The pool accounting storage reference
@@ -126,22 +134,217 @@ library VTSFeeLib {
         PoolAccounting storage paPool,
         uint8 tokenIndex
     ) internal {
-        uint256 indexNow = paPool.feesSharedSpendIndexX128.get(tokenIndex);
-        uint256 indexLast = pa.feesSharedIndexLastX128.get(tokenIndex);
+        uint256 epochNow = _currentFeesSharedEpoch(paPool, tokenIndex);
+        if (epochNow == 0) return;
 
-        // Always checkpoint index (even if no consumption to apply)
-        if (indexNow != indexLast) {
-            pa.feesSharedIndexLastX128.set(tokenIndex, indexNow);
+        uint256 epochLast = pa.feesSharedEpoch.get(tokenIndex);
+        uint256 factorNow = paPool.feesSharedRemainingFactorX128.get(tokenIndex);
+
+        if (epochLast != epochNow) {
+            if (pa.feesShared.get(tokenIndex) != 0) {
+                pa.feesShared.set(tokenIndex, 0);
+            }
+            pa.feesSharedEpoch.set(tokenIndex, epochNow);
+            pa.feesSharedRemainingFactorLastX128.set(tokenIndex, factorNow);
+            return;
         }
 
-        uint256 deltaIndex = indexNow - indexLast;
-        if (deltaIndex > 0) {
-            uint256 sharesRemaining = pa.feesShared.get(tokenIndex);
-            uint256 spent = FullMath.mulDiv(sharesRemaining, deltaIndex, FixedPoint128.Q128);
-            if (spent > 0) {
-                pa.feesShared.set(tokenIndex, spent >= sharesRemaining ? 0 : (sharesRemaining - spent));
+        uint256 factorLast = pa.feesSharedRemainingFactorLastX128.get(tokenIndex);
+        if (factorNow == factorLast) return;
+
+        uint256 sharesRemaining = pa.feesShared.get(tokenIndex);
+        if (sharesRemaining > 0) {
+            uint256 updatedShares;
+            if (factorLast == 0) {
+                // No spend had been realised against this position in the current epoch yet. A zero pool factor is still
+                // the identity state until the first bonus allocation stores a non-zero remaining-share factor.
+                // Keep remaining shares conservative for tiny balances so self-exclusion does not collapse early.
+                updatedShares = factorNow == 0
+                    ? sharesRemaining
+                    : FullMath.mulDivRoundingUp(sharesRemaining, factorNow, FixedPoint128.Q128);
+            } else {
+                // Round up so partial spend does not floor tiny remaining self-contribution to zero.
+                updatedShares = factorNow == 0 ? 0 : FullMath.mulDivRoundingUp(sharesRemaining, factorNow, factorLast);
+            }
+
+            if (updatedShares != sharesRemaining) {
+                pa.feesShared.set(tokenIndex, updatedShares);
             }
         }
+
+        pa.feesSharedEpoch.set(tokenIndex, epochNow);
+        pa.feesSharedRemainingFactorLastX128.set(tokenIndex, factorNow);
+    }
+
+    function _currentFeesSharedEpoch(PoolAccounting storage paPool, uint8 tokenIndex)
+        private
+        view
+        returns (uint256 epoch)
+    {
+        epoch = paPool.feesSharedEpoch.get(tokenIndex);
+    }
+
+    function _beginFeesSharedEpochIfNeeded(PoolAccounting storage paPool, uint8 tokenIndex) internal {
+        uint256 epoch = paPool.feesSharedEpoch.get(tokenIndex);
+        if (epoch == 0) {
+            paPool.feesSharedEpoch.set(tokenIndex, 1);
+            return;
+        }
+
+        uint256 factor = paPool.feesSharedRemainingFactorX128.get(tokenIndex);
+        uint256 protocolPot = paPool.protocolFeeAccrued.get(tokenIndex);
+        if (factor == 0 && protocolPot == 0) {
+            paPool.feesSharedEpoch.set(tokenIndex, epoch + 1);
+        }
+    }
+
+    function _advanceFeesSharedFactor(PoolAccounting storage paPool, uint8 tokenIndex, uint256 pot, uint256 bonus)
+        private
+    {
+        if (paPool.feesSharedEpoch.get(tokenIndex) == 0) {
+            paPool.feesSharedEpoch.set(tokenIndex, 1);
+        }
+
+        uint256 currentFactor = paPool.feesSharedRemainingFactorX128.get(tokenIndex);
+        uint256 factorBase = currentFactor == 0 ? FixedPoint128.Q128 : currentFactor;
+        uint256 nextFactor = FullMath.mulDivRoundingUp(factorBase, pot - bonus, pot);
+        paPool.feesSharedRemainingFactorX128.set(tokenIndex, nextFactor);
+    }
+
+    function _prepareFeeShareMint(PositionAccounting storage pa, PoolAccounting storage paPool, uint8 feeTokenIndex)
+        internal
+    {
+        _beginFeesSharedEpochIfNeeded(paPool, feeTokenIndex);
+        _syncFeesSharedRemainingForToken(pa, paPool, feeTokenIndex);
+    }
+
+    /// @notice Calculate fees and checkpoint snapshots for coverage burn
+    /// @dev Extracted to keep position-side DICE orchestration small.
+    function _calculateFeesBurn(
+        VTSStorage storage s,
+        IPoolManager poolManager,
+        PositionId positionId,
+        FeesBurnParams memory params
+    ) internal returns (uint256 feesBurn, uint256 consumedBurnBase, uint256 consumedFees) {
+        PositionAccounting storage pa = s.positionAccounting[positionId];
+        uint256 fees;
+        uint256 fg;
+
+        {
+            Position memory pos = s.positions[positionId];
+            (uint256 fg0, uint256 fg1) =
+                StateLibrary.getFeeGrowthInside(poolManager, params.poolId, pos.tickLower, pos.tickUpper);
+            fg = params.feeTokenIndex == 0 ? fg0 : fg1;
+
+            uint256 lastFeeGrowth = pa.feeGrowthInsideLast.get(params.feeTokenIndex);
+            if (params.positionLiquidity > 0 && fg > lastFeeGrowth) {
+                fees = FullMath.mulDiv(fg - lastFeeGrowth, uint256(params.positionLiquidity), FixedPoint128.Q128);
+            }
+        }
+
+        uint256 cumulativeOutflows = pa.cumulativeOutflows.get(params.deficitTokenIndex);
+        uint256 snap = pa.outflowsAtFeeSnap.get(params.deficitTokenIndex);
+        if (params.outflowFloor > snap) {
+            snap = params.outflowFloor;
+        }
+        uint256 ofDelta = cumulativeOutflows >= snap ? (cumulativeOutflows - snap) : 0;
+
+        if (fees == 0 || ofDelta == 0) {
+            return (0, 0, 0);
+        }
+
+        return _finaliseFeesBurn(s, pa, params, fees, ofDelta, snap);
+    }
+
+    /// @dev Finalise fees burn maths and update outflow checkpoints for the consumed window share.
+    function _finaliseFeesBurn(
+        VTSStorage storage s,
+        PositionAccounting storage pa,
+        FeesBurnParams memory params,
+        uint256 fees,
+        uint256 ofDelta,
+        uint256 snap
+    ) internal returns (uint256, uint256, uint256) {
+        uint256 bps = s.pools[params.poolId].vtsConfig.coverageFeeShare;
+        if (bps == 0) {
+            return (0, 0, 0);
+        }
+        if (bps > LiquidityUtils.BPS_DENOMINATOR) {
+            bps = LiquidityUtils.BPS_DENOMINATOR;
+        }
+
+        uint256 consumedBurnBase = params.burnBase <= ofDelta ? params.burnBase : ofDelta;
+        uint256 consumedFees = FullMath.mulDiv(fees, consumedBurnBase, ofDelta);
+        uint256 feesBurn = FullMath.mulDiv(consumedFees, bps, LiquidityUtils.BPS_DENOMINATOR);
+
+        if (feesBurn > 0) {
+            pa.outflowsAtFeeSnap.set(params.deficitTokenIndex, snap + consumedBurnBase);
+        }
+
+        return (feesBurn, consumedBurnBase, consumedFees);
+    }
+
+    /// @dev Keep `_applyBurnBase` below stack-too-deep threshold for non-via-ir builds.
+    function _calculateFeesBurnForApply(
+        VTSStorage storage s,
+        IPoolManager poolManager,
+        PositionId positionId,
+        PoolId poolId,
+        uint8 tokenIndex,
+        uint8 feeTokenIndex,
+        uint256 burnBase,
+        uint128 positionLiquidity,
+        uint256 outflowFloor
+    ) internal returns (uint256 feesBurn, uint256 consumedBurnBase, uint256 consumedFees) {
+        FeesBurnParams memory params = FeesBurnParams({
+            poolId: poolId,
+            deficitTokenIndex: tokenIndex,
+            feeTokenIndex: feeTokenIndex,
+            burnBase: burnBase,
+            positionLiquidity: positionLiquidity,
+            outflowFloor: outflowFloor
+        });
+        return _calculateFeesBurn(s, poolManager, positionId, params);
+    }
+
+    /// @notice Apply a precomputed burn base for a position and return the consumed outflow share
+    function _applyBurnBase(
+        VTSStorage storage s,
+        IPoolManager poolManager,
+        PositionId positionId,
+        PoolId poolId,
+        uint8 tokenIndex,
+        uint256 burnBase,
+        uint128 positionLiquidity,
+        uint256 outflowFloor
+    ) internal returns (uint256 consumedBurnBase) {
+        if (burnBase == 0) return 0;
+
+        PositionAccounting storage pa = s.positionAccounting[positionId];
+        uint8 feeTokenIndex = tokenIndex == 0 ? 1 : 0;
+        uint256 feesBurn;
+        uint256 consumedFees;
+        (feesBurn, consumedBurnBase, consumedFees) = _calculateFeesBurnForApply(
+            s, poolManager, positionId, poolId, tokenIndex, feeTokenIndex, burnBase, positionLiquidity, outflowFloor
+        );
+
+        if (feesBurn == 0) return 0;
+
+        if (positionLiquidity > 0) {
+            uint256 liquidity = uint256(positionLiquidity);
+            uint256 carryIn = pa.feeBurnGrowthRemainder.get(feeTokenIndex);
+            (uint256 growthInc, uint256 newCarry) =
+                LiquidityUtils.feeBurnGrowthIncWithRemainder(consumedFees, liquidity, carryIn);
+            pa.feeBurnGrowthRemainder.set(feeTokenIndex, newCarry);
+            pa.feeGrowthInsideLast.set(feeTokenIndex, pa.feeGrowthInsideLast.get(feeTokenIndex) + growthInc);
+        }
+
+        PoolAccounting storage paPool = s.poolAccounting[poolId];
+        _prepareFeeShareMint(pa, paPool, feeTokenIndex);
+
+        paPool.protocolFeeAccrued.set(feeTokenIndex, paPool.protocolFeeAccrued.get(feeTokenIndex) + feesBurn);
+        pa.feesShared.set(feeTokenIndex, pa.feesShared.get(feeTokenIndex) + feesBurn);
+        pa.pendingFeeAdj.set(feeTokenIndex, pa.pendingFeeAdj.get(feeTokenIndex) + feesBurn.toInt256());
     }
 
     // --------------------------------------------------
@@ -298,6 +501,18 @@ library VTSFeeLib {
 /// @notice Library for VTS fee processing
 /// @dev Operates on VTSStorage storage struct via storage pointers
 library VTSFeeLinkedLib {
+    /// @notice Prepares CSI state before minting fresh fee-share contributions for a position
+    /// @dev Advances the spend epoch if needed, then syncs the position's remaining self-share
+    ///      against the current pool factor before the caller increases `protocolFeeAccrued` and `feesShared`.
+    /// @param pa The position accounting storage reference
+    /// @param paPool The pool accounting storage reference
+    /// @param feeTokenIndex The fee token index receiving the newly minted contribution
+    function beforeFeeShareMint(PositionAccounting storage pa, PoolAccounting storage paPool, uint8 feeTokenIndex)
+        external
+    {
+        VTSFeeLib._prepareFeeShareMint(pa, paPool, feeTokenIndex);
+    }
+
     /// @notice Processes the fees for a position after touch
     /// @dev Updates accounting state only. Actual ERC6909 mint/burn is handled by CoreHook.settleHookDeltasToPot
     /// @param s The VTS storage
@@ -305,5 +520,21 @@ library VTSFeeLinkedLib {
     /// @return adj The materialised fee adjustment delta
     function afterTouchPosition(VTSStorage storage s, PositionId positionId) external returns (BalanceDelta adj) {
         return VTSFeeLib._processPositionFees(s, positionId);
+    }
+
+    /// @notice Apply the fee-burn pipeline for a position and return the consumed outflow share
+    function applyBurnBase(
+        VTSStorage storage s,
+        IPoolManager poolManager,
+        PositionId positionId,
+        PoolId poolId,
+        uint8 tokenIndex,
+        uint256 burnBase,
+        uint128 positionLiquidity,
+        uint256 outflowFloor
+    ) external returns (uint256 consumedBurnBase) {
+        return VTSFeeLib._applyBurnBase(
+            s, poolManager, positionId, poolId, tokenIndex, burnBase, positionLiquidity, outflowFloor
+        );
     }
 }

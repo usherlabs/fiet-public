@@ -126,6 +126,87 @@ contract CheckpointTypeTest is Test {
         assertEq(reopened.gracePeriodExtension0, 0);
     }
 
+    function test_mark_secondLaneOpen_01To11_inheritsCanonicalEpisodeTimestamp() public {
+        vm.warp(1_000);
+        h.mark(1);
+        RFSCheckpoint memory before = h.get();
+        assertEq(before.openSince0, 1_000);
+        assertEq(before.openSince1, 0);
+
+        vm.warp(1_500);
+        h.mark(3);
+        RFSCheckpoint memory after_ = h.get();
+        assertEq(after_.openMask, 3);
+        assertEq(after_.openSince0, 1_000);
+        assertEq(after_.openSince1, 1_000);
+    }
+
+    function test_mark_secondLaneOpen_10To11_inheritsCanonicalEpisodeTimestamp() public {
+        vm.warp(2_000);
+        h.mark(2);
+        RFSCheckpoint memory before = h.get();
+        assertEq(before.openSince0, 0);
+        assertEq(before.openSince1, 2_000);
+
+        vm.warp(2_500);
+        h.mark(3);
+        RFSCheckpoint memory after_ = h.get();
+        assertEq(after_.openMask, 3);
+        assertEq(after_.openSince0, 2_000);
+        assertEq(after_.openSince1, 2_000);
+    }
+
+    function test_mark_survivingLaneTransitions_preserveCanonicalEpisodeTimestamp() public {
+        vm.warp(3_000);
+        h.mark(3);
+        RFSCheckpoint memory opened = h.get();
+        assertEq(opened.openSince0, 3_000);
+        assertEq(opened.openSince1, 3_000);
+
+        vm.warp(3_700);
+        h.mark(1); // 11 -> 01
+        RFSCheckpoint memory onlyToken0 = h.get();
+        assertEq(onlyToken0.openMask, 1);
+        assertEq(onlyToken0.openSince0, 3_000);
+        assertEq(onlyToken0.openSince1, 0);
+
+        vm.warp(3_900);
+        h.mark(3); // 01 -> 11
+        RFSCheckpoint memory reopenedBoth = h.get();
+        assertEq(reopenedBoth.openSince0, 3_000);
+        assertEq(reopenedBoth.openSince1, 3_000);
+
+        vm.warp(4_100);
+        h.mark(2); // 11 -> 10
+        RFSCheckpoint memory onlyToken1 = h.get();
+        assertEq(onlyToken1.openMask, 2);
+        assertEq(onlyToken1.openSince0, 0);
+        assertEq(onlyToken1.openSince1, 3_000);
+    }
+
+    function test_mark_fullCloseThenOpen_startsFreshEpisodeTimestamp() public {
+        vm.warp(4_500);
+        h.mark(3);
+        RFSCheckpoint memory opened = h.get();
+        assertEq(opened.openMask, 3);
+        assertEq(opened.openSince0, 4_500);
+        assertEq(opened.openSince1, 4_500);
+
+        vm.warp(4_800);
+        h.mark(0);
+        RFSCheckpoint memory closed = h.get();
+        assertEq(closed.openMask, 0);
+        assertEq(closed.openSince0, 0);
+        assertEq(closed.openSince1, 0);
+
+        vm.warp(5_100);
+        h.mark(2);
+        RFSCheckpoint memory reopened = h.get();
+        assertEq(reopened.openMask, 2);
+        assertEq(reopened.openSince0, 0);
+        assertEq(reopened.openSince1, 5_100);
+    }
+
     function test_extendGracePeriod_token0_incrementsAndCaps() public {
         TokenConfiguration memory cfg = _cfg(10, 35); // maxExtension = 25
         h.mark(1);

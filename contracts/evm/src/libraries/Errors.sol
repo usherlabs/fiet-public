@@ -192,6 +192,9 @@ library Errors {
     /// @notice Thrown when RFS (Required for Settlement) is not open for a position
     error RFSNotOpenForPosition(PositionId positionId);
 
+    /// @notice Thrown when a non-seizure MM liquidity change is attempted while commitment deficit is non-zero
+    error CommitmentDeficitBlocksLiquidityChange(PositionId positionId);
+
     /// @notice Thrown when a commitment descriptor is not set
     error CommitmentDescriptorNotSet();
 
@@ -238,6 +241,9 @@ library Errors {
 
     /// @notice Thrown when an invariant is violated
     error InvariantViolated(string message);
+
+    /// @notice Thrown when a bucket-tracked holder has ERC20 balance but no bucket accounting
+    error InvalidBucketState(address account, uint256 balance);
 
     // ============ VTS ORCHESTRATOR ERRORS ============
     // Errors related to the VTS Orchestrator

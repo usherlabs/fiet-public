@@ -8,12 +8,15 @@ import {VTSPositionLib} from "../../../src/libraries/VTSPositionLib.sol";
 
 /// @notice Single source of truth for Echidna hard-linked library addresses and CREATE2 deploy helpers.
 /// @dev Addresses must match `foundry.toml [profile.echidna].libraries`.
-///      When library bytecode changes, recompute with `ComputeAddr.sol` and update here + foundry.toml.
+///      When linked-library bytecode changes, run `just recompute-fuzz-lib-addrs` and update here + foundry.toml.
 library EchidnaLinkedLibs {
-    address internal constant LCC_FACTORY_LINKED_LIB = 0xd8E0e4b777DD88D05ae366996599A7b1e111AA09;
+    address internal constant LCC_FACTORY_LINKED_LIB = 0x5A3842F9D1B0F96003669A36Ec4a09165bc7de54;
     address internal constant LIQUIDITY_HUB_LINKED_LIB = 0xB3A02cd6d8fB5B8Fe16DD569EdF8BE35a87bD0FA;
-    address internal constant VTS_COMMIT_LIB = 0x7642a5fddF1c8C0424f0BBecBbc41F74dD583046;
-    address internal constant VTS_POSITION_LIB = 0x1072F36983964FAf6D5Efc92c0a3f2cD11943222;
+    address internal constant VTS_COMMIT_LIB = 0x6215030BFA6e034fFe347cbe7237e37e5f1eEc61;
+    address internal constant VTS_POSITION_LIB = 0xdD67F58482eb3D28B38FaD20Adb45F4246a0e49c;
+    /// @dev Deterministic placeholder only: not CREATE2-validated by `ValidateEchidnaLinkedLibs` (see script + foundry.toml
+    ///      `[profile.echidna].libraries`). No `deployVTSLifecycleLinkedLib` helper — lifecycle is linked for compile only.
+    address internal constant VTS_LIFECYCLE_LINKED_LIB = 0x1111111111111111111111111111111111111113;
 
     error LCCFactoryLinkedLibAddrMismatch();
     error LiquidityHubLinkedLibAddrMismatch();
@@ -35,6 +38,10 @@ library EchidnaLinkedLibs {
 
     function expectedVTSPositionLib() internal pure returns (address) {
         return VTS_POSITION_LIB;
+    }
+
+    function expectedVTSLifecycleLinkedLib() internal pure returns (address) {
+        return VTS_LIFECYCLE_LINKED_LIB;
     }
 
     function deployLCCFactoryLinkedLib() internal {

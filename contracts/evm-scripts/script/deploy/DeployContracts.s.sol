@@ -181,7 +181,9 @@ contract DeployContracts is DeployProtocolBase {
 
         // Step 12: Initialise MarketFactory
         console.log("\n=== Step 12: Initialising MarketFactory ===");
-        _initialiseFactory(globalConfig, marketFactory, coreHook, mmPositionManager, queueCustodian, directLPDeltaResolver);
+        _initialiseFactory(
+            globalConfig, marketFactory, coreHook, mmPositionManager, queueCustodian, directLPDeltaResolver
+        );
         console.log("MarketFactory initialised successfully (via GlobalConfig.proxyCall)");
 
         // Step 13: Verify hooks addresses across the contracts

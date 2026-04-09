@@ -9,6 +9,7 @@
 The `MMPositionManager` (MMPM) is the primary entry point for Market Maker (MM) commitment and position management. It handles commitment lifecycle operations locally (as ERC721 tokens) and delegates position operations to `MMPositionActionsImpl` via delegatecall.
 
 Actions are organised into three categories based on their action codes:
+
 - **Position Operations** (`0x00–0x09`): Delegated to `MMPositionActionsImpl`
 - **Commitment Operations** (`0x20–0x24`): Handled locally in `MMPositionManager`
 - **Utility Operations** (`0x40+`): Handled locally in `MMPositionManager`
@@ -57,12 +58,13 @@ Settles underlying assets to/from a position. This is the core settlement operat
 
 **`usePositionManagerBalance` Semantics:**
 
-| Value | Token Flow | Delta Accounting |
-|-------|-----------|------------------|
-| `true` | MMPM ↔ Vault | Locker's deltas adjusted |
-| `false` | Locker ↔ Vault (direct) | No delta adjustment |
+| Value   | Token Flow              | Delta Accounting         |
+| ------- | ----------------------- | ------------------------ |
+| `true`  | MMPM ↔ Vault            | Locker's deltas adjusted |
+| `false` | Locker ↔ Vault (direct) | No delta adjustment      |
 
 **Flow:**
+
 ```
 _settle()
   → vtsOrchestrator.onMMSettle()       // Update VTS accounting
@@ -87,6 +89,7 @@ Mints a new position within an existing commitment. Creates a new liquidity posi
 | `liquidity` | `uint256` | Amount of liquidity units to mint |
 
 **Flow:**
+
 ```
 _mintPosition()
   → vtsOrchestrator.getCommit()         // Get next position index
@@ -154,6 +157,7 @@ Seizes a position that has failed to meet its backing requirements after the gra
 | `usePositionManagerBalance` | `bool` | Token flow control |
 
 **Flow:**
+
 ```
 _seizePosition()
   → vtsOrchestrator.onSeize()           // Validate grace period elapsed
@@ -180,12 +184,13 @@ Increases liquidity using available delta credits. Calculates liquidity from ava
 
 **`payerIsUser` Semantics:**
 
-| Value | Delta Target | Behaviour |
-|-------|--------------|-----------|
-| `true` | MMPM (`address(this)`) | User consumes credit the **protocol owes them**. LCCs are issued, capitalised by underlying already owed to the MM. No additional settlement. |
-| `false` | Locker (`msgSender()`) | Uses locker's direct credit. After increasing, **settles underlying tokens** into position (clears locker delta). |
+| Value   | Delta Target           | Behaviour                                                                                                                                     |
+| ------- | ---------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| `true`  | MMPM (`address(this)`) | User consumes credit the **protocol owes them**. LCCs are issued, capitalised by underlying already owed to the MM. No additional settlement. |
+| `false` | Locker (`msgSender()`) | Uses locker's direct credit. After increasing, **settles underlying tokens** into position (clears locker delta).                             |
 
 **Flow (payerIsUser = true):**
+
 ```
 _increaseFromDeltas(payerIsUser=true)
   → _getFullCreditPair(MMPM)            // Read protocol's owed credit
@@ -195,6 +200,7 @@ _increaseFromDeltas(payerIsUser=true)
 ```
 
 **Flow (payerIsUser = false):**
+
 ```
 _increaseFromDeltas(payerIsUser=false)
   → _getFullCreditPair(locker)          // Read locker's credit
@@ -236,12 +242,13 @@ Settles into a position using available delta credits. This action deposits unde
 
 **`payerIsUser` Semantics:**
 
-| Value | Delta Target | Behaviour |
-|-------|--------------|-----------|
-| `true` | MMPM | User settles funds **already owed to them**. No token movement — `onMMSettle` called directly for accounting update only. |
-| `false` | Locker | Settle using `usePositionManagerBalance = true` — moves tokens from MMPM balance to vault, debits locker's delta. |
+| Value   | Delta Target | Behaviour                                                                                                                 |
+| ------- | ------------ | ------------------------------------------------------------------------------------------------------------------------- |
+| `true`  | MMPM         | User settles funds **already owed to them**. No token movement — `onMMSettle` called directly for accounting update only. |
+| `false` | Locker       | Settle using `usePositionManagerBalance = true` — moves tokens from MMPM balance to vault, debits locker's delta.         |
 
 **Flow (payerIsUser = true):**
+
 ```
 _settleFromDeltas(payerIsUser=true)
   → _getFullCreditPair(MMPM)            // Read protocol's owed credit
@@ -250,6 +257,7 @@ _settleFromDeltas(payerIsUser=true)
 ```
 
 **Flow (payerIsUser = false):**
+
 ```
 _settleFromDeltas(payerIsUser=false)
   → _getFullCreditPair(locker)          // Read locker's credit
@@ -264,14 +272,15 @@ The `FromDeltas` actions deserve special attention due to their nuanced delta ha
 
 ### Delta Target Semantics
 
-| Delta Target | Positive Delta (Credit) | Meaning |
-|--------------|------------------------|---------|
-| **MMPM** (`address(this)`) | Protocol **owes** external sources | User can consume this credit without providing tokens |
-| **Locker** (`msgSender()`) | External entity **is owed** by protocol | MMPM holds tokens that belong to locker |
+| Delta Target               | Positive Delta (Credit)                 | Meaning                                               |
+| -------------------------- | --------------------------------------- | ----------------------------------------------------- |
+| **MMPM** (`address(this)`) | Protocol **owes** external sources      | User can consume this credit without providing tokens |
+| **Locker** (`msgSender()`) | External entity **is owed** by protocol | MMPM holds tokens that belong to locker               |
 
 ### Token Flow Diagrams
 
 **payerIsUser = true (MMPM delta):**
+
 ```
 ┌────────────────────────────────────────────────────────────┐
 │  Protocol owes user 100 (tracked on MMPM delta)            │
@@ -283,6 +292,7 @@ The `FromDeltas` actions deserve special attention due to their nuanced delta ha
 ```
 
 **payerIsUser = false (Locker delta):**
+
 ```
 ┌────────────────────────────────────────────────────────────┐
 │  Locker has 100 credit (MMPM holds their tokens)           │
@@ -311,6 +321,7 @@ Commits a liquidity signal and mints a commitment NFT to the specified owner.
 | `owner` | `address` | Recipient of the commitment NFT (supports address mapping) |
 
 **Flow:**
+
 ```
 _commitSignal()
   → vtsOrchestrator.commitSignal()      // Validate and record signal
@@ -342,6 +353,7 @@ Decommits a signal and burns the commitment NFT. Requires all positions to be re
 | `tokenId` | `uint256` | The commitment NFT token ID |
 
 **Requirements:**
+
 - Caller must be approved or owner of the NFT
 - Commitment must have zero positions (`positionCount == 0`)
 
@@ -395,6 +407,7 @@ Takes currency from delta and transfers to recipient.
 | `maxAmount` | `uint256` | Maximum amount to take (0 = max available) |
 
 **Behaviour:**
+
 - For **LCC currencies**: Burns ERC-6909 claims → Takes actual ERC20 → Debits MMPM delta
 - For **underlying currencies**: Debits locker delta → Direct ERC20 transfer
 
@@ -424,6 +437,7 @@ Wraps native ETH to WETH. Takes from locker's native delta.
 | `amount` | `uint256` | Amount of ETH to wrap (0 = max available from deltas) |
 
 **Flow:**
+
 ```
 _wrapNative()
   → vtsOrchestrator.take(NATIVE, locker, amount)  // Debit native delta
@@ -444,6 +458,7 @@ Unwraps WETH to native ETH.
 | `payerIsUser` | `bool` | Whether to pull from user wallet or use deltas |
 
 **Flow:**
+
 ```
 _unwrapNative()
   → [if payerIsUser] transferFrom(user, amount)

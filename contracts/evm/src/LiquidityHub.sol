@@ -701,6 +701,10 @@ contract LiquidityHub is BoundRegistry, Ownable, ReentrancyGuardTransient {
      */
     function cancel(address lcc, address from, uint256 amount) external onlyIssuer(lcc) nonReentrant {
         // Note: LCC burn path reverts on zero (direct+market) amount.
+        // `from` is intentionally issuer-selected because issuers are fixed protocol actors (for example ProxyHook and
+        // VTSOrchestrator) that cancel along validated protocol flows, not arbitrary public confiscation surfaces.
+        // Typical callers burn protocol-controlled holders such as queued settlement holders, MarketVault balances,
+        // or staged transfer recipients after the surrounding flow has already proven the accounting path.
         _burn(lcc, from, 0, amount);
     }
 
@@ -728,6 +732,8 @@ contract LiquidityHub is BoundRegistry, Ownable, ReentrancyGuardTransient {
         if (queueAmount > principalAmount) {
             revert Errors.InvalidAmount(queueAmount, principalAmount);
         }
+        // Same trusted-issuer rationale as `cancel`: the issuer chooses `from` because this path is used to unwind
+        // protocol-side LCC holdings while optionally preserving the recipient's queued settlement claim.
         _cancelWithQueue(lcc, from, principalAmount, queueAmount, recipient);
     }
 
@@ -984,6 +990,8 @@ contract LiquidityHub is BoundRegistry, Ownable, ReentrancyGuardTransient {
     /// @dev Assumes at most one live plan per `(lcc, sender, recipient)` path at consumption time.
     ///      The current call graph preserves this by staging the plan immediately before the
     ///      matching transfer; this function does not independently disambiguate multiple same-key plans.
+    ///      Planned cancels are intentionally consumed from the transfer path so the burn source is the exact
+    ///      protocol-side recipient that just received the LCC, rather than an arbitrary user-selected address.
     function executePlannedCancel(address sender, address cancelFromRecipient) external onlyValidLcc(_msgSender()) {
         address lcc = _msgSender();
 

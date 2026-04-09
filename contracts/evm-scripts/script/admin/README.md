@@ -19,6 +19,20 @@ That means **the transaction signer must be the `GlobalConfig` owner** for most 
   - `marketFactory`
   - and derived from getters: `vtsOrchestrator`, `oracleHelper`, `liquidityHub`, `signalManager`, `settlementObserver`
 
+## CSI micro-share rounding rollout note
+
+For the CSI micro-share self-exclusion fix (conservative rounding during `feesShared` sync):
+
+- this is a runtime maths patch in `VTSFeeLib` only;
+- no storage layout change is required;
+- no dedicated migration script is required for already-migrated CSI lanes.
+
+Recommended verification after deployment:
+
+1. run the CSI library and index test suites covering micro-share partial-spend cases;
+2. sanity-check that a self-only or micro-split contributor cannot queue bonus from still-self-attributable residual pot;
+3. verify ordinary CSI epoch rollover semantics are unchanged.
+
 ## Commands
 
 ### `just admin-proxy-call`
@@ -221,7 +235,7 @@ The Venus oracle stack under `contracts/evm/lib/oracle/` has **two separate admi
 - **Ownership** (typically `Ownable2Step`): who can transfer/accept ownership, etc.
 - **AccessControlManager (ACM) permissions**: many `ResilientOracle` admin functions are gated by ACM checks (ownership alone does not automatically grant ACM permissions).
 
-If your goal is **GlobalConfig as the single admin** for *all* administrative operations in `lib/oracle`, you generally need **both**:
+If your goal is **GlobalConfig as the single admin** for _all_ administrative operations in `lib/oracle`, you generally need **both**:
 
 - **`OracleStackOwnership.s.sol`** (`just admin-oracle-transfer-to-globalconfig` / `just admin-oracle-transfer-stack-to-globalconfig`): makes `GlobalConfig` the `ResilientOracle` owner (and, optionally, transfers ACM admin and other oracle-stack ownership surfaces).
 - **`ResilientOracleACMPermissions.s.sol`** (`just admin-oracle-acm-give-call-permission`): grants ACM call permissions for whichever `ResilientOracle` function signatures you intend to run via `GlobalConfig` (and you should ensure no other accounts retain those permissions).

@@ -97,6 +97,61 @@ contract VRLSignalManagerTest is MarketMakerTestBase {
         signalManager.setSignalExpiryInSeconds(7200);
     }
 
+    function test_seedMMNonce_setsReplayFloorForReplacementDeployment() public {
+        address mmOwner = liquiditySignal.mmState.owner;
+        signalManager.seedMMNonce(mmOwner, 7);
+
+        assertEq(signalManager.mmNonce(mmOwner), 7);
+
+        LiquiditySignal memory staleSignal = liquiditySignal;
+        staleSignal.nonce = 6;
+
+        vm.expectRevert(abi.encodeWithSelector(Errors.InvalidNonce.selector, staleSignal.nonce, 7));
+        signalManager.verifyLiquiditySignal(mmOwner, abi.encode(staleSignal), true);
+    }
+
+    function test_seedMMNonce_revertsWhenTryingToLowerNonce() public {
+        address mmOwner = liquiditySignal.mmState.owner;
+        signalManager.seedMMNonce(mmOwner, 7);
+
+        vm.expectRevert(abi.encodeWithSelector(Errors.InvalidNonce.selector, 6, 7));
+        signalManager.seedMMNonce(mmOwner, 6);
+    }
+
+    function test_seedMMNonce_revertsForNonOwner() public {
+        address attacker = makeAddr("attacker");
+        vm.prank(attacker);
+        vm.expectRevert(abi.encodeWithSelector(Ownable.OwnableUnauthorizedAccount.selector, attacker));
+        signalManager.seedMMNonce(liquiditySignal.mmState.owner, 1);
+    }
+
+    function test_seedSubmitAuthNonce_setsRelayReplayFloorForReplacementDeployment() public {
+        address sender = liquiditySignal.mmState.owner;
+        signalManager.seedSubmitAuthNonce(sender, 3);
+
+        assertEq(signalManager.submitAuthNonce(sender), 3);
+
+        vm.expectRevert(abi.encodeWithSelector(Errors.InvalidNonce.selector, 2, 3));
+        signalManager.verifyLiquiditySignalRelayed(
+            sender, 0, abi.encode(liquiditySignal), block.timestamp + 1 hours, 2, bytes(""), false
+        );
+    }
+
+    function test_seedSubmitAuthNonce_revertsWhenTryingToLowerNonce() public {
+        address sender = liquiditySignal.mmState.owner;
+        signalManager.seedSubmitAuthNonce(sender, 3);
+
+        vm.expectRevert(abi.encodeWithSelector(Errors.InvalidNonce.selector, 2, 3));
+        signalManager.seedSubmitAuthNonce(sender, 2);
+    }
+
+    function test_seedSubmitAuthNonce_revertsForNonOwner() public {
+        address attacker = makeAddr("attacker");
+        vm.prank(attacker);
+        vm.expectRevert(abi.encodeWithSelector(Ownable.OwnableUnauthorizedAccount.selector, attacker));
+        signalManager.seedSubmitAuthNonce(liquiditySignal.mmState.owner, 1);
+    }
+
     function test_canVerifyLiquiditySignal() public {
         // Verify the liquidity signal
         (bool success, uint256 expiry) =

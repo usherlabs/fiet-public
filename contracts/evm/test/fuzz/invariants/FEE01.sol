@@ -14,6 +14,9 @@ import {FixedPoint128} from "v4-periphery/lib/v4-core/src/libraries/FixedPoint12
 ///         This is split into two actions:
 ///         - queueBonus: moves protocolFeeAccrued/pending (queue) while pot stays fixed.
 ///         - finalise: moves slashedPot while protocolFeeAccrued stays fixed.
+///
+/// @dev Each action resets CSI epoch / remaining-factor state so expectations match `VTSFeeLib._queueBonusForToken`
+///      without implicit carry-over from prior fuzz steps (Echidna reuses one contract instance).
 contract FEE01 {
     VTSFeeLibHarness internal feeHarness;
 
@@ -92,6 +95,8 @@ contract FEE01 {
         int256 pending = pendingRaw;
         uint256 slashedPot = _clamp(slashedPotRaw);
         uint256 protocolFee = _clamp(protocolFeeAccruedRaw);
+
+        _resetFeeShareIsolationBaseline();
 
         // Seed pending adjustment and pot state for the selected token.
         _setPending(tokenIndex, pending);
@@ -188,6 +193,8 @@ contract FEE01 {
     }
 
     function _setupQueueState() internal {
+        _resetFeeShareIsolationBaseline();
+
         // Seed queue state: pot, self-remaining shares, and exposure windows.
         _setProtocolFee(sFeeTokenIndex, sPot);
         _setFeesShared(sFeeTokenIndex, sSelfRemaining);
@@ -196,8 +203,21 @@ contract FEE01 {
         } else {
             feeHarness.setPoolTotalCISEExposure(POOL_ID, 0, sTotalExposure);
         }
-        feeHarness.setPoolFeesSharedSpendIndexX128(POOL_ID, 0, 0);
-        feeHarness.setPositionFeesSharedIndexLastX128(POSITION_ID, 0, 0);
+        feeHarness.setPoolFeesSharedRemainingFactorX128(POOL_ID, 0, 0);
+        feeHarness.setPositionFeesSharedRemainingFactorLastX128(POSITION_ID, 0, 0);
+    }
+
+    /// @notice Clears cross-action CSI state so each fuzz action matches a fresh `VTSFeeLib` baseline.
+    function _resetFeeShareIsolationBaseline() internal {
+        feeHarness.setProtocolFeeAccrued(POOL_ID, 0, 0);
+        feeHarness.setSlashedPot(POOL_ID, 0, 0);
+        feeHarness.setPendingFeeAdj(POSITION_ID, 0, 0);
+        feeHarness.setFeesShared(POSITION_ID, 0, 0);
+        feeHarness.setPoolTotalCISEExposure(POOL_ID, 0, 0);
+        feeHarness.setPoolFeesSharedEpoch(POOL_ID, 0, 0);
+        feeHarness.setPositionFeesSharedEpoch(POSITION_ID, 0, 0);
+        feeHarness.setPoolFeesSharedRemainingFactorX128(POOL_ID, 0, 0);
+        feeHarness.setPositionFeesSharedRemainingFactorLastX128(POSITION_ID, 0, 0);
     }
 
     function _applyQueueAndCheck() internal returns (bool) {
@@ -242,9 +262,11 @@ contract FEE01 {
 
         expProtocolFee = pot - bonus;
         expPending = beforeQueue.pending - int256(bonus);
+        // Mirror VTSFeeLib._advanceFeesSharedFactor: multiplicative remaining-share factor, not additive delta.
         if (pot > 0) {
-            uint256 deltaIndex = FullMath.mulDiv(bonus, FixedPoint128.Q128, pot);
-            expSpendIndex = beforeQueue.spendIndex + deltaIndex;
+            uint256 currentFactor = beforeQueue.spendIndex;
+            uint256 factorBase = currentFactor == 0 ? FixedPoint128.Q128 : currentFactor;
+            expSpendIndex = FullMath.mulDivRoundingUp(factorBase, pot - bonus, pot);
         } else {
             expSpendIndex = beforeQueue.spendIndex;
         }
@@ -252,11 +274,11 @@ contract FEE01 {
     }
 
     function _snapshotQueue(QueueSnap storage snap) internal {
-        // Read the fee pot, pending, and spend index for the fee token under test.
+        // Read the fee pot, pending, and CSI remaining factor for the fee token under test.
         (uint256 fee0, uint256 fee1) = feeHarness.getProtocolFeeAccrued(POOL_ID);
         (int256 pend0, int256 pend1) = feeHarness.getPendingFeeAdj(POSITION_ID);
         (uint256 pot0, uint256 pot1) = feeHarness.getSlashedPot(POOL_ID);
-        (uint256 idx0, uint256 idx1) = feeHarness.getPoolFeesSharedSpendIndexX128(POOL_ID);
+        (uint256 idx0, uint256 idx1) = feeHarness.getPoolFeesSharedRemainingFactorX128(POOL_ID);
 
         snap.protocolFee = sFeeTokenIndex == 0 ? fee0 : fee1;
         snap.pending = sFeeTokenIndex == 0 ? pend0 : pend1;

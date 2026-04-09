@@ -84,9 +84,43 @@ contract VTSPositionLibMutationUnitTest is Test {
         clearanceExpose = new VTSPositionLibDeltaClearanceExpose();
         residualExpose = new VTSPositionLibResidualFlushExpose();
         pm = new MockExtsloadPoolManager();
-        poolId = PoolId.wrap(bytes32(uint256(0xD1CE)));
+        poolId = _poolKey().toId();
         owner = address(0xBEEF);
         harness.setupPool(poolId, _defaultCfg());
+    }
+
+    function _poolKey() internal pure returns (PoolKey memory) {
+        return PoolKey({
+            currency0: Currency.wrap(address(0x1000)),
+            currency1: Currency.wrap(address(0x2000)),
+            fee: 3000,
+            tickSpacing: 60,
+            hooks: IHooks(address(0))
+        });
+    }
+
+    function _defaultPositionContext() internal view returns (PositionContext memory ctx) {
+        ctx = PositionContext({
+            poolManager: IPoolManager(address(pm)),
+            liquidityHub: ILiquidityHub(address(0)),
+            oracleHelper: IOracleHelper(address(0)),
+            marketVault: IMarketVault(address(0))
+        });
+    }
+
+    function _directRemoveTouchParams(ModifyLiquidityParams memory params)
+        internal
+        view
+        returns (TouchPositionParams memory tp)
+    {
+        tp = TouchPositionParams({
+            owner: owner,
+            poolKey: _poolKey(),
+            params: params,
+            callerDelta: toBalanceDelta(0, 0),
+            feesAccrued: toBalanceDelta(0, 0),
+            hookData: ""
+        });
     }
 
     function _defaultCfg() internal pure returns (MarketVTSConfiguration memory) {
@@ -196,6 +230,55 @@ contract VTSPositionLibMutationUnitTest is Test {
         assertEq(settledAfterOut, 125e18, "settled should decrease on withdrawal");
         (uint256 poolTotalAfterOut,) = harness.getPoolTotalSettled(poolId);
         assertEq(poolTotalAfterOut, 125e18, "pool totalSettled should decrease on withdrawal");
+    }
+
+    function test_updateSettlement_firstPostZeroSettlerCannotCaptureHistoricalCISEExposureOrBonus() public {
+        uint128 liquidity = 1e18;
+        uint256 settledAmount = 100e18;
+        uint256 residual = 40e18;
+
+        (PositionId id, ModifyLiquidityParams memory p) = _register(bytes32(uint256(0xC15E)), liquidity);
+
+        harness.setCommitmentMax(id, settledAmount, 0);
+        harness.incrementCoverage(poolId, 0, residual);
+
+        _pmSetSlot0Tick(poolId, 0);
+        _pmSetPositionLiquidity(poolId, PositionId.unwrap(id), liquidity);
+
+        int256 applied = harness.updateSettlement(id, 0, int256(settledAmount));
+        assertEq(applied, int256(settledAmount), "deposit should settle the triggering position");
+
+        (uint256 totalSettled0,) = harness.getPoolTotalSettled(poolId);
+        assertEq(totalSettled0, settledAmount, "pool totalSettled should reflect the first depositor");
+
+        (uint256 poolIndex0,) = harness.getPoolCoveragePerSettledIndexX128(poolId);
+        assertEq(poolIndex0, 0, "pool CISE index unchanged: zero-settled coverage is not deferred into CISE");
+
+        (uint256 poolExposure0,) = harness.getPoolTotalCISEExposure(poolId);
+        assertEq(poolExposure0, 0, "pool CISE denominator unchanged: no dead weight from zero-settled coverage");
+
+        (uint256 ciseIndexLast0,) = harness.getCISEIndexLastX128(id);
+        assertEq(ciseIndexLast0, 0, "position CISE checkpoint matches pool index when pool CISE index never moved");
+
+        harness.setPoolProtocolFeeAccrued(poolId, 0, 777e18);
+
+        harness.settlePositionGrowths(IPoolManager(address(pm)), id);
+
+        {
+            (uint256 ciseExposure0, uint256 ciseExposure1) = harness.getCISEExposure(id);
+            assertEq(ciseExposure0, 0, "settling growths must not realise CISE from zero-settled coverage epochs");
+            assertEq(ciseExposure1, 0, "unaffected token should remain without exposure");
+        }
+
+        ModifyLiquidityParams memory pokeParams =
+            ModifyLiquidityParams({tickLower: TICK_LOWER, tickUpper: TICK_UPPER, liquidityDelta: 0, salt: p.salt});
+        harness.touchPosition(_defaultPositionContext(), _directRemoveTouchParams(pokeParams));
+
+        (, uint256 protocolFeeAfter1) = harness.getPoolProtocolFeeAccrued(poolId);
+        assertEq(protocolFeeAfter1, 777e18, "queued fee pot must remain untouched");
+
+        (, int256 pending1) = harness.getPendingFeeAdj(id);
+        assertEq(pending1, 0, "touch must not queue a negative pending bonus");
     }
 
     // ============================================================
@@ -481,7 +564,8 @@ contract VTSPositionLibMutationUnitTest is Test {
         harness.setCommitmentDeficit(id, 0, 0);
 
         _pmSetSlot0Tick(pId, 0);
-        _pmSetPositionLiquidity(pId, PositionId.unwrap(id), 1000);
+        // Seed the live post-modify liquidity that touchPosition observes from PoolManager on increase.
+        _pmSetPositionLiquidity(pId, PositionId.unwrap(id), 1200);
 
         uint128 liqAdded = 200;
         TouchPositionParams memory tp = TouchPositionParams({
@@ -597,6 +681,157 @@ contract VTSPositionLibMutationUnitTest is Test {
         assertEq(exposureSecond, exposureFirst, "second settle with same pool index must not add exposure again");
     }
 
+    function test_reconcileAfterPausedRemove_clampsSettledBeforeLaterCISESettlement() public {
+        uint128 liqBefore = 1000;
+        uint128 liqAfter = 500;
+        (PositionId id, ModifyLiquidityParams memory addParams) = _register(bytes32(uint256(0xAA55E)), liqBefore);
+
+        (uint256 c0Before, uint256 c1Before) =
+            LiquidityUtils.calculateCommitmentMaxima(TICK_LOWER, TICK_UPPER, liqBefore);
+        harness.setCommitmentMax(id, c0Before, c1Before);
+        harness.setSettled(id, c0Before, c1Before);
+        harness.setPoolTotalSettled(poolId, c0Before, c1Before);
+
+        // Coverage advanced while paused; we intentionally defer realisation until after reconciliation.
+        harness.setCISEIndexLastX128(id, 0, 0);
+        harness.setPoolCoveragePerSettledIndexX128(poolId, FixedPoint128.Q128, 0);
+
+        _pmSetSlot0Tick(poolId, 0);
+        _pmSetPositionLiquidity(poolId, PositionId.unwrap(id), liqAfter);
+        harness.setPositionLiquidityMirror(id, liqBefore);
+
+        ModifyLiquidityParams memory removeParams = ModifyLiquidityParams({
+            tickLower: addParams.tickLower,
+            tickUpper: addParams.tickUpper,
+            liquidityDelta: -int256(uint256(liqBefore - liqAfter)),
+            salt: addParams.salt
+        });
+        harness.touchPosition(_defaultPositionContext(), _directRemoveTouchParams(removeParams));
+
+        (uint256 c0After,, uint256 s0After,,,) = harness.getPositionAccounting(id);
+        assertLt(c0After, c0Before, "commitment max should decrease after paused remove reconcile");
+        assertEq(s0After, c0After, "settled should clamp to the post-remove commitment max");
+
+        Position memory posAfter = harness.getPosition(id);
+        assertEq(posAfter.liquidity, liqAfter, "liquidity mirror should match live PoolManager liquidity");
+        assertTrue(posAfter.isActive, "partially removed position should remain active");
+
+        harness.settlePositionGrowths(IPoolManager(address(pm)), id);
+        (uint256 exposure0,) = harness.getCISEExposure(id);
+        assertEq(exposure0, s0After, "CISE exposure should realise from clamped settled baseline");
+    }
+
+    function test_reconcileAfterPausedRemove_clampsSettledBeforeLaterCISESettlement_token1() public {
+        uint128 liqBefore = 1000;
+        uint128 liqAfter = 500;
+        (PositionId id, ModifyLiquidityParams memory addParams) = _register(bytes32(uint256(0xAA560)), liqBefore);
+
+        (uint256 c0Before, uint256 c1Before) =
+            LiquidityUtils.calculateCommitmentMaxima(TICK_LOWER, TICK_UPPER, liqBefore);
+        harness.setCommitmentMax(id, c0Before, c1Before);
+        harness.setSettled(id, c0Before, c1Before);
+        harness.setPoolTotalSettled(poolId, c0Before, c1Before);
+
+        harness.setCISEIndexLastX128(id, 0, 0);
+        harness.setPoolCoveragePerSettledIndexX128(poolId, 0, FixedPoint128.Q128);
+
+        _pmSetSlot0Tick(poolId, 0);
+        _pmSetPositionLiquidity(poolId, PositionId.unwrap(id), liqAfter);
+        harness.setPositionLiquidityMirror(id, liqBefore);
+
+        ModifyLiquidityParams memory removeParams = ModifyLiquidityParams({
+            tickLower: addParams.tickLower,
+            tickUpper: addParams.tickUpper,
+            liquidityDelta: -int256(uint256(liqBefore - liqAfter)),
+            salt: addParams.salt
+        });
+        harness.touchPosition(_defaultPositionContext(), _directRemoveTouchParams(removeParams));
+
+        (, uint256 c1After,, uint256 s1After,,) = harness.getPositionAccounting(id);
+        assertLt(c1After, c1Before, "commitment max token1 should decrease after paused remove reconcile");
+        assertEq(s1After, c1After, "settled token1 should clamp to the post-remove commitment max");
+
+        Position memory posAfter = harness.getPosition(id);
+        assertEq(posAfter.liquidity, liqAfter, "liquidity mirror should match live PoolManager liquidity");
+        assertTrue(posAfter.isActive, "partially removed position should remain active");
+
+        harness.settlePositionGrowths(IPoolManager(address(pm)), id);
+        (, uint256 exposure1) = harness.getCISEExposure(id);
+        assertEq(exposure1, s1After, "CISE exposure token1 should realise from clamped settled baseline");
+    }
+
+    function test_reconcileAfterPausedRemove_fullRemove_zeroesSettledAndMarksInactive() public {
+        uint128 liqBefore = 1000;
+        (PositionId id, ModifyLiquidityParams memory addParams) = _register(bytes32(uint256(0xAA55F)), liqBefore);
+
+        (uint256 c0Before, uint256 c1Before) =
+            LiquidityUtils.calculateCommitmentMaxima(TICK_LOWER, TICK_UPPER, liqBefore);
+        harness.setCommitmentMax(id, c0Before, c1Before);
+        harness.setSettled(id, c0Before, c1Before);
+        harness.setPoolTotalSettled(poolId, c0Before, c1Before);
+
+        _pmSetSlot0Tick(poolId, 0);
+        _pmSetPositionLiquidity(poolId, PositionId.unwrap(id), 0);
+        harness.setPositionLiquidityMirror(id, liqBefore);
+
+        ModifyLiquidityParams memory removeParams = ModifyLiquidityParams({
+            tickLower: addParams.tickLower,
+            tickUpper: addParams.tickUpper,
+            liquidityDelta: -int256(uint256(liqBefore)),
+            salt: addParams.salt
+        });
+        harness.touchPosition(_defaultPositionContext(), _directRemoveTouchParams(removeParams));
+
+        (uint256 c0After, uint256 c1After, uint256 s0After, uint256 s1After,,) = harness.getPositionAccounting(id);
+        Position memory posAfter = harness.getPosition(id);
+        (uint256 poolTotal0After, uint256 poolTotal1After) = harness.getPoolTotalSettled(poolId);
+
+        assertEq(c0After, 0, "full remove should clear commitment max token0");
+        assertEq(c1After, 0, "full remove should clear commitment max token1");
+        assertEq(s0After, 0, "full remove should clear settled token0");
+        assertEq(s1After, 0, "full remove should clear settled token1");
+        assertEq(poolTotal0After, 0, "pool totalSettled token0 should be reduced");
+        assertEq(poolTotal1After, 0, "pool totalSettled token1 should be reduced");
+        assertEq(posAfter.liquidity, 0, "liquidity mirror should be zero after full remove");
+        assertFalse(posAfter.isActive, "full remove should mark position inactive");
+    }
+
+    /// @notice Regression (finding 5): full deactivation clears all commitment-deficit fields (semantic cleanup).
+    function test_reconcileAfterPausedRemove_fullRemove_clearsCommitmentDeficitState() public {
+        uint128 liqBefore = 1000;
+        (PositionId id, ModifyLiquidityParams memory addParams) = _register(bytes32(uint256(0xAA60)), liqBefore);
+
+        (uint256 c0Before, uint256 c1Before) =
+            LiquidityUtils.calculateCommitmentMaxima(TICK_LOWER, TICK_UPPER, liqBefore);
+        harness.setCommitmentMax(id, c0Before, c1Before);
+        harness.setSettled(id, c0Before, c1Before);
+        harness.setPoolTotalSettled(poolId, c0Before, c1Before);
+
+        harness.setCommitmentDeficit(id, 42, 99);
+        harness.setCommitmentDeficitSince(id, 12345, 67890);
+        harness.setCommitmentDeficitBps(id, 500);
+
+        _pmSetSlot0Tick(poolId, 0);
+        _pmSetPositionLiquidity(poolId, PositionId.unwrap(id), 0);
+        harness.setPositionLiquidityMirror(id, liqBefore);
+
+        ModifyLiquidityParams memory removeParams = ModifyLiquidityParams({
+            tickLower: addParams.tickLower,
+            tickUpper: addParams.tickUpper,
+            liquidityDelta: -int256(uint256(liqBefore)),
+            salt: addParams.salt
+        });
+        harness.touchPosition(_defaultPositionContext(), _directRemoveTouchParams(removeParams));
+
+        (uint256 cd0, uint256 cd1) = harness.getCommitmentDeficit(id);
+        assertEq(cd0, 0, "full remove should clear commitmentDeficit token0");
+        assertEq(cd1, 0, "full remove should clear commitmentDeficit token1");
+        (uint256 since0, uint256 since1) = harness.getCommitmentDeficitSince(id);
+        assertEq(since0, 0, "full remove should clear commitmentDeficitSince0");
+        assertEq(since1, 0, "full remove should clear commitmentDeficitSince1");
+        assertEq(harness.getCommitmentDeficitBps(id), 0, "full remove should clear commitmentDeficitBps");
+    }
+
     function test_settlePositionInflowGrowth_positiveAdd0_increasesSettledAndPoolTotalSettled() public {
         (PositionId id, ModifyLiquidityParams memory p) = _register(bytes32(uint256(13)), 1);
 
@@ -673,7 +908,8 @@ contract VTSPositionLibMutationUnitTest is Test {
         harness.setCommitmentDeficit(id, 0, 0);
 
         _pmSetSlot0Tick(pId, 0);
-        _pmSetPositionLiquidity(pId, PositionId.unwrap(id), 1000);
+        // Seed the live post-modify liquidity that touchPosition observes from PoolManager on increase.
+        _pmSetPositionLiquidity(pId, PositionId.unwrap(id), 1200);
 
         TouchPositionParams memory tp = TouchPositionParams({
             owner: owner,
@@ -1121,37 +1357,6 @@ contract VTSPositionLibMutationUnitTest is Test {
     // Residual flushers: kill guard broadening mutants (291, 314)
     // ============================================================
 
-    function test_flushCISE_residualPositive_totalSettledZero_isNoop() public {
-        PoolId p = PoolId.wrap(bytes32(uint256(0xC15E)));
-        residualExpose.setCISE(p, 0, 1e18, 0, 0);
-
-        // Expected: no-op, and must NOT revert.
-        residualExpose.flushCISE(p, 0);
-        (uint256 idx, uint256 residual, uint256 totalSettled) = residualExpose.getCISE(p, 0);
-        assertEq(idx, 0, "CISE index should remain unchanged when totalSettled is zero");
-        assertEq(residual, 1e18, "CISE residual should remain when totalSettled is zero");
-        assertEq(totalSettled, 0, "CISE totalSettled should remain zero");
-    }
-
-    function test_flushCISE_happyPath_updatesIndex_andClearsResidual() public {
-        PoolId p = PoolId.wrap(bytes32(uint256(0xC15E2)));
-        uint256 residual = 5e18;
-        uint256 totalSettled = 20e18;
-        residualExpose.setCISE(p, 1, residual, totalSettled, 7);
-
-        residualExpose.flushCISE(p, 1);
-        (uint256 idxAfter, uint256 residualAfter,) = residualExpose.getCISE(p, 1);
-
-        uint256 expDelta = FullMath.mulDiv(residual, FixedPoint128.Q128, totalSettled);
-        assertEq(idxAfter, 7 + expDelta, "CISE index should advance by residual/totalSettled");
-        assertEq(residualAfter, 0, "CISE residual should clear after flush");
-        assertEq(
-            residualExpose.getPoolTotalCISEExposureSinceLastMod(p, 1),
-            residual,
-            "flush should add residual to pool CISE bonus denominator"
-        );
-    }
-
     function test_flushDICE_residualPositive_principalZero_isNoop() public {
         PoolId p = PoolId.wrap(bytes32(uint256(0xD1CE)));
         residualExpose.setDICE(p, 0, 1e18, 0, 0);
@@ -1229,7 +1434,8 @@ contract VTSPositionLibMutationUnitTest is Test {
 
             // 4) Set up PoolManager mock state.
             _pmSetSlot0Tick(pId, 0);
-            _pmSetPositionLiquidity(pId, PositionId.unwrap(id), 1000);
+            // Seed the live post-modify liquidity that touchPosition observes from PoolManager on increase.
+            _pmSetPositionLiquidity(pId, PositionId.unwrap(id), 1100);
             _pmSetFeeGrowthGlobals(pId, 0, 0);
             _pmSetTickFeeGrowthOutside(pId, TICK_LOWER, 0, 0);
             _pmSetTickFeeGrowthOutside(pId, TICK_UPPER, 0, 0);
@@ -1304,6 +1510,73 @@ contract VTSPositionLibMutationUnitTest is Test {
         );
     }
 
+    /// @notice Non-seizure MM increases revert while stored commitmentDeficit is non-zero.
+    function test_touchPosition_mmIncrease_revertsWhenCommitmentDeficit_nonZero() public {
+        MockLCC lcc0 = new MockLCC(address(0xB0));
+        MockLCC lcc1 = new MockLCC(address(0xB1));
+        address lcc0Addr = address(lcc0);
+        address lcc1Addr = address(lcc1);
+        PoolKey memory key = PoolKey({
+            currency0: Currency.wrap(lcc0Addr),
+            currency1: Currency.wrap(lcc1Addr),
+            fee: 0,
+            tickSpacing: 60,
+            hooks: IHooks(address(0))
+        });
+        PoolId pId = key.toId();
+        harness.setupPool(pId, _defaultCfg());
+
+        ModifyLiquidityParams memory reg = ModifyLiquidityParams({
+            tickLower: TICK_LOWER,
+            tickUpper: TICK_UPPER,
+            liquidityDelta: int256(uint256(1000)),
+            salt: bytes32(uint256(42))
+        });
+        harness.registerPosition(owner, pId, reg);
+        PositionId id = PositionLibrary.generateId(owner, reg);
+
+        harness.setCommitmentMax(id, 100e18, 100e18);
+        harness.setSettled(id, 2e18, 2e18);
+        harness.setPoolTotalSettled(pId, 2e18, 2e18);
+        harness.setCumulativeDeficit(id, 0, 0);
+        harness.setCommitmentDeficit(id, 1, 0);
+
+        _pmSetSlot0Tick(pId, 0);
+        // Increase path reads live PoolManager liquidity before reverting on the deficit freeze guard.
+        _pmSetPositionLiquidity(pId, PositionId.unwrap(id), 1100);
+        _pmSetFeeGrowthGlobals(pId, 0, 0);
+        _pmSetTickFeeGrowthOutside(pId, TICK_LOWER, 0, 0);
+        _pmSetTickFeeGrowthOutside(pId, TICK_UPPER, 0, 0);
+
+        uint256 commitId = 2;
+        harness.setPositionCommitId(id, commitId);
+        harness.setCommitActivePositionCount(commitId, 1);
+
+        MockLiquidityHubRecorder hub = new MockLiquidityHubRecorder(lcc0Addr, lcc1Addr);
+        MockMarketVaultPassthrough vault = new MockMarketVaultPassthrough();
+
+        PositionContext memory ctx = PositionContext({
+            poolManager: IPoolManager(address(pm)),
+            liquidityHub: ILiquidityHub(address(hub)),
+            oracleHelper: IOracleHelper(address(0)),
+            marketVault: IMarketVault(address(vault))
+        });
+
+        TouchPositionParams memory tp = TouchPositionParams({
+            owner: owner,
+            poolKey: key,
+            params: ModifyLiquidityParams({
+                tickLower: reg.tickLower, tickUpper: reg.tickUpper, liquidityDelta: int256(uint256(100)), salt: reg.salt
+            }),
+            callerDelta: toBalanceDelta(0, 0),
+            feesAccrued: toBalanceDelta(0, 0),
+            hookData: PositionModificationHookDataLib.encode(commitId, 0, owner)
+        });
+
+        vm.expectRevert(abi.encodeWithSelector(Errors.CommitmentDeficitBlocksLiquidityChange.selector, id));
+        harness.touchPosition(ctx, tp);
+    }
+
     // ============================================================
     // _touchExistingIncrease non-MM path: kill Lines 1137-1138 mutants (commitmentMax - s → + s)
     // ============================================================
@@ -1346,7 +1619,8 @@ contract VTSPositionLibMutationUnitTest is Test {
 
         // 4) Set up PoolManager mock.
         _pmSetSlot0Tick(pId, 0);
-        _pmSetPositionLiquidity(pId, PositionId.unwrap(id), 1000);
+        // Seed the live post-modify liquidity that touchPosition observes from PoolManager on increase.
+        _pmSetPositionLiquidity(pId, PositionId.unwrap(id), 1200);
         _pmSetFeeGrowthGlobals(pId, 0, 0);
         _pmSetTickFeeGrowthOutside(pId, TICK_LOWER, 0, 0);
         _pmSetTickFeeGrowthOutside(pId, TICK_UPPER, 0, 0);
@@ -1456,44 +1730,10 @@ contract VTSPositionLibDeltaClearanceExpose {
 contract VTSPositionLibResidualFlushExpose {
     VTSStorage internal s;
 
-    function setCISE(PoolId poolId, uint8 tokenIndex, uint256 residual, uint256 totalSettled, uint256 indexNow)
-        external
-    {
-        if (tokenIndex == 0) {
-            s.poolAccounting[poolId].coverageResidualCISE.token0 = residual;
-            s.poolAccounting[poolId].totalSettled.token0 = totalSettled;
-            s.poolAccounting[poolId].coveragePerSettledIndexX128.token0 = indexNow;
-        } else {
-            s.poolAccounting[poolId].coverageResidualCISE.token1 = residual;
-            s.poolAccounting[poolId].totalSettled.token1 = totalSettled;
-            s.poolAccounting[poolId].coveragePerSettledIndexX128.token1 = indexNow;
-        }
-    }
-
-    function getCISE(PoolId poolId, uint8 tokenIndex)
-        external
-        view
-        returns (uint256 indexNow, uint256 residual, uint256 totalSettled)
-    {
-        if (tokenIndex == 0) {
-            indexNow = s.poolAccounting[poolId].coveragePerSettledIndexX128.token0;
-            residual = s.poolAccounting[poolId].coverageResidualCISE.token0;
-            totalSettled = s.poolAccounting[poolId].totalSettled.token0;
-        } else {
-            indexNow = s.poolAccounting[poolId].coveragePerSettledIndexX128.token1;
-            residual = s.poolAccounting[poolId].coverageResidualCISE.token1;
-            totalSettled = s.poolAccounting[poolId].totalSettled.token1;
-        }
-    }
-
     function getPoolTotalCISEExposureSinceLastMod(PoolId poolId, uint8 tokenIndex) external view returns (uint256) {
         return tokenIndex == 0
             ? s.poolAccounting[poolId].totalCISEExposureSinceLastMod.token0
             : s.poolAccounting[poolId].totalCISEExposureSinceLastMod.token1;
-    }
-
-    function flushCISE(PoolId poolId, uint8 tokenIndex) external {
-        VTSPositionLib._flushCISEResidualIfNeeded(s, poolId, tokenIndex);
     }
 
     function setDICE(PoolId poolId, uint8 tokenIndex, uint256 residual, uint256 principal, uint256 indexNow) external {

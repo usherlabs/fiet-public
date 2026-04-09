@@ -33,7 +33,9 @@ library CheckpointLibrary {
      *         - token-specific minimum deficit age is met, and
      *         - `commitmentDeficitBps >= unbackedCommitmentGraceBypassBps`, or
      *         - optional per-token thresholds (when set > 0) are breached
-     *      2. Normal RFS path: checkpoint has open lane(s) AND lane-local grace period elapsed
+     *      2. Normal RFS path: checkpoint has open lane(s) and at least one open lane is grace-eligible
+     *         using the canonical checkpointed RFS-open episode timer (`openSince*`) plus lane-local extension.
+     *         `openSince*` is intentionally inherited across lane-composition changes unless checkpoint state fully closes.
      * @param s The VTS storage struct
      * @param commitId The token ID to check
      * @param positionIndex The position index to check
@@ -89,7 +91,8 @@ library CheckpointLibrary {
             }
         }
 
-        // Normal RFS path: check checkpoint + grace period
+        // Normal RFS path: check checkpoint + grace period.
+        // Seizability is lane-scoped for currently-open lanes and position-aggregated via OR.
         RFSCheckpoint memory checkpoint = getCheckpoint(s, positionId);
 
         if (checkpoint.openMask == 0) {
@@ -127,6 +130,8 @@ library CheckpointLibrary {
      *      a valid settlement proof that gets verified against a Settlement Observer's verifier.
      * @dev "I have a token coming, it's just pending a bank transfer to the stablecoin issuer."
      * @dev IMPORTANT: Callers MUST validate that `positionId` belongs to `poolKey.toId()`.
+     *      Settlement verifiers receive `abi.encode(poolId, settlementTokenIndex, positionId)` and MUST bind proofs to
+     *      that target so the same attestation cannot be spent on a different position in the same lane.
      * @param positionId The position ID
      * @param settlementProof The settlement signal containing the proof
      */
@@ -144,10 +149,15 @@ library CheckpointLibrary {
         }
         MarketVTSConfiguration memory vtsConfiguration = s.pools[poolKey.toId()].vtsConfig;
 
-        // verify the settlement proof and get the grace period extension
-        settlementObserver.verifySettlementProof(poolKey, settlementTokenIndex, verifierIndex, settlementProof, true);
+        // Proof verification is token-lane scoped: the verifier proves settlement for the lane being extended, not a
+        // broader market-wide claim. The verifier authorises "this lane is settling"; protocol configuration still
+        // decides how much grace to add, so verifier output cannot unilaterally widen the extension window.
+        settlementObserver.verifySettlementProof(
+            poolKey, settlementTokenIndex, verifierIndex, positionId, settlementProof, true
+        );
 
-        // extend the grace period for the position
+        // Extension magnitude is capped by protocol policy from TokenConfiguration. If future designs want verifier-
+        // specific sizing, that should be introduced as a bounded suggestion layered on top of these caps.
         TokenConfiguration memory tokenConfiguration =
             settlementTokenIndex == 0 ? vtsConfiguration.token0 : vtsConfiguration.token1;
         bool tokenLaneOpen = settlementTokenIndex == 0

@@ -8,6 +8,7 @@ import {VTSOrchestrator} from "../src/VTSOrchestrator.sol";
 import {LiquiditySignal} from "../src/types/Commit.sol";
 import {IOracleHelper} from "../src/interfaces/IOracleHelper.sol";
 import {IVRLSettlementObserver} from "../src/interfaces/IVRLSettlementObserver.sol";
+import {PositionId} from "../src/types/Position.sol";
 import {BalanceDelta, toBalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
@@ -297,12 +298,19 @@ contract VTSOrchestratorReentrancyTest is VTSOrchestratorFixture {
         _etchReentrantSignalManager();
 
         (uint256 commitId,,,) = _createCommittedPosition();
+        PositionId extendPid = vtsOrchestrator.getPositionId(commitId, 0);
 
         // Settlement proof verification is view; just force it to succeed.
         vm.mockCall(
             address(settlementObserver),
             abi.encodeWithSelector(
-                IVRLSettlementObserver.verifySettlementProof.selector, corePoolKey, uint8(0), uint32(0), bytes(""), true
+                IVRLSettlementObserver.verifySettlementProof.selector,
+                corePoolKey,
+                uint8(0),
+                uint32(0),
+                extendPid,
+                bytes(""),
+                true
             ),
             abi.encode(true)
         );

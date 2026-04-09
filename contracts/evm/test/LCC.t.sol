@@ -188,9 +188,8 @@ contract LiquidityCommitmentCertificateTest is Test {
         assertEq(marketBal, 7);
     }
 
-    /// @dev Mutation-hardening: balancesOf() must fall back to `(fullBalance, 0)` even if the account is not exempt,
-    ///      when buckets are empty but ERC20 balance is non-zero. This kills the `||` -> `&&` mutant.
-    function test_balancesOf_bucketlessNonExempt_fallsBackToFullBalanceWrapped() public {
+    /// @dev Bucket-tracked holders must never rely on the exempt-holder fallback.
+    function test_balancesOf_bucketlessNonExempt_revertsInvalidBucketState() public {
         address bucketless = makeAddr("bucketless");
 
         // Make the account exempt for mint so bucket maps remain empty.
@@ -201,9 +200,21 @@ contract LiquidityCommitmentCertificateTest is Test {
         // Now make it non-exempt while keeping bucket maps empty.
         _setBoundLevel(bucketless, BOUND_ENDPOINT);
 
-        (uint256 wrappedBal, uint256 marketBal) = lcc.balancesOf(bucketless);
-        assertEq(wrappedBal, 10);
-        assertEq(marketBal, 0);
+        vm.expectRevert(abi.encodeWithSelector(Errors.InvalidBucketState.selector, bucketless, uint256(10)));
+        lcc.balancesOf(bucketless);
+    }
+
+    /// @dev Bucket sum must match `balanceOf` for non-exempt holders (not only the bucketless case).
+    function test_balancesOf_bucketSumMismatchNonExempt_revertsInvalidBucketState() public {
+        lcc.mint(alice, 5, 5);
+        assertEq(lcc.balanceOf(alice), 10);
+
+        // `wrappedBalances` storage slot from `forge inspect ... storage-layout` (ERC20 uses slots 0–4).
+        bytes32 wrappedEntry = keccak256(abi.encode(alice, uint256(5)));
+        vm.store(address(lcc), wrappedEntry, bytes32(uint256(3))); // 3 + 5 != 10
+
+        vm.expectRevert(abi.encodeWithSelector(Errors.InvalidBucketState.selector, alice, uint256(10)));
+        lcc.balancesOf(alice);
     }
 
     function test_burn_revertsWhenAmountIsZero() public {
@@ -555,9 +566,9 @@ contract LiquidityCommitmentCertificateTest is Test {
         assertEq(toWrapped + toMarket, lcc.balanceOf(to));
     }
 
-    /// @dev Mutation-hardening: bucket-tracked protocol -> bucket-exempt protocol must NOT credit bucket maps
-    ///      while exempt. We flip the recipient to non-exempt afterwards to make bucket pollution observable.
-    function test_transfer_bucketTrackedEndpointToBucketExemptEndpoint_doesNotCreditBucketsWhileExempt_evenAfterFlip()
+    /// @dev Exempt endpoints may stay bucketless while exempt, but flipping them back to bucket-tracked without
+    ///      reconciling buckets must surface as an invalid state rather than silently classifying the balance as wrapped.
+    function test_transfer_bucketTrackedEndpointToBucketExemptEndpoint_flipAfterwards_revertsInvalidBucketState()
         public
     {
         address mmpm = makeAddr("mmpmFlip");
@@ -575,13 +586,11 @@ contract LiquidityCommitmentCertificateTest is Test {
         vm.prank(mmpm);
         lcc.transfer(protocol, 70);
 
-        // Flip recipient to non-exempt; if any buckets were incorrectly credited while exempt,
-        // balancesOf will return the bucket split rather than `(fullBalance, 0)`.
+        // Flip recipient to non-exempt; bucketless state is no longer permitted once the holder is bucket-tracked.
         _setBoundLevel(protocol, BOUND_ENDPOINT);
 
-        (uint256 wrappedBal, uint256 marketBal) = lcc.balancesOf(protocol);
-        assertEq(wrappedBal, 70);
-        assertEq(marketBal, 0);
+        vm.expectRevert(abi.encodeWithSelector(Errors.InvalidBucketState.selector, protocol, uint256(70)));
+        lcc.balancesOf(protocol);
     }
 }
 

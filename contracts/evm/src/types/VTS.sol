@@ -7,6 +7,8 @@ import {PositionId, Position} from "./Position.sol";
 import {Pool} from "./Pool.sol";
 import {ILiquidityHub} from "../interfaces/ILiquidityHub.sol";
 import {IOracleHelper} from "../interfaces/IOracleHelper.sol";
+import {IVRLSignalManager} from "../interfaces/IVRLSignalManager.sol";
+import {IVRLSettlementObserver} from "../interfaces/IVRLSettlementObserver.sol";
 import {IPoolManager} from "v4-periphery/lib/v4-core/src/interfaces/IPoolManager.sol";
 import {IMarketVault} from "../interfaces/IMarketVault.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
@@ -52,6 +54,27 @@ struct PositionContext {
     IOracleHelper oracleHelper;
     // Market vault address for settlement clamping
     IMarketVault marketVault;
+}
+
+/// @notice Lightweight orchestrator context for lifecycle library paths
+struct VTSLifecycleContext {
+    IPoolManager poolManager;
+    ILiquidityHub liquidityHub;
+    IOracleHelper oracleHelper;
+    IVRLSettlementObserver settlementObserver;
+}
+
+/// @notice CoreHook processing context before market-vault resolution
+struct VTSCoreHookContext {
+    IPoolManager poolManager;
+    ILiquidityHub liquidityHub;
+    IOracleHelper oracleHelper;
+}
+
+/// @notice Routing context for commit/renew entrypoints
+struct VTSCommitRouterContext {
+    ILiquidityHub liquidityHub;
+    IVRLSignalManager signalManager;
 }
 
 /// @notice Parameters for touchPosition to reduce stack pressure
@@ -152,10 +175,15 @@ struct PositionAccounting {
     TokenPairUint ciseIndexLastX128;
     // CISE: Banked realised exposure since last bonus allocation
     TokenPairUint ciseExposureSinceLastMod;
-    // CSI: Position checkpoint of pool spend index (Q128)
-    TokenPairUint feesSharedIndexLastX128;
+    // CSI: Position checkpoint of the pool remaining-share factor (Q128), last synced from pool for this position.
+    // Interpret `feesSharedRemainingFactorLastX128` together with `feesSharedEpoch` on the same token lane:
+    // when the position epoch matches the pool epoch, `factor == 0` is the baseline sentinel meaning "no prior
+    // remaining-share checkpoint in this epoch yet" and the next sync should adopt the pool factor, not treat the
+    // position as fully spent. Fully spent state is represented by `feesShared == 0`, not by a zero factor alone.
+    TokenPairUint feesSharedRemainingFactorLastX128;
+    // CSI: Position checkpoint of the pool spend epoch (per token), advanced with the pool on sync / setup.
+    TokenPairUint feesSharedEpoch;
     // Remainder numerator for coverage fee-burn baseline checkpoint (see VTSPositionLib._applyBurnBase).
-    // Appended for storage-layout compatibility on upgrade.
     TokenPairUint feeBurnGrowthRemainder;
 }
 
@@ -183,13 +211,15 @@ struct PoolAccounting {
     TokenPairUint totalSettled;
     // CISE: Coverage-per-settled index (Q128) per token
     TokenPairUint coveragePerSettledIndexX128;
-    // CISE: Deferred residual when totalSettled = 0 at exercise time
-    TokenPairUint coverageResidualCISE;
-    // CISE: Pool-wide bonus denominator window: incremented by coveredAmount on each coverage index step
-    // (and by deferred residual on flush); decremented when bonuses are allocated. Position numerators accrue lazily.
+    // CISE: Pool-wide bonus denominator window: incremented by coveredAmount on each allocatable coverage index step
+    // and decremented when bonuses are allocated. Position numerators accrue lazily. Coverage exercised while
+    // `totalSettled == 0` is intentionally excluded from CISE rather than being deferred and socialised later.
     TokenPairUint totalCISEExposureSinceLastMod;
-    // CSI: Spend-per-share index (Q128), advances when bonuses allocated
-    TokenPairUint feesSharedSpendIndexX128;
+    // CSI: Pool-wide remaining-share factor (Q128). Zero means either "no spend this epoch yet" or
+    // "epoch fully spent"; `feesSharedEpoch` disambiguates replacement epochs.
+    TokenPairUint feesSharedRemainingFactorX128;
+    // CSI: Pool-wide spend epoch, incremented when a fully-spent epoch is replaced by fresh contributions.
+    TokenPairUint feesSharedEpoch;
 }
 
 /// @notice Simple pair struct for per-tick growth (replaces uint256[2] arrays)

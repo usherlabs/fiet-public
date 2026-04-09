@@ -205,12 +205,14 @@ being an informal “should”.
 ### HUB-06: `prepareSettle` must preserve direct-liquidity accounting consistency
 
 - **Statement**: Preparing direct liquidity for vault settlement must reduce both:
+
   - shared-underlying direct reserve (`reserveOfUnderlying[underlying].direct`), and
   - per-LCC direct inventory (`directSupply[lcc]`),
     by the same `amount`.
 
   This prevents a drift where `directSupply[lcc]` overstates immediately serviceable direct liquidity after a settle
   preparation step.
+
 - **Enforced by**:
   - `src/LiquidityHub.sol::prepareSettle` computes `maxSettleableDirect = min(reserveDirect, directSupply[lcc])`,
     reverts `Errors.InvalidAmount(amount, maxSettleableDirect)` when exceeded, then decrements both counters by
@@ -288,6 +290,26 @@ being an informal “should”.
 - **Separation invariant**: `commitmentDeficit` is a checkpoint-derived solvency gate and is not the pool DICE
   principal. DICE denominator (`totalDeficitPrincipal`) tracks swap-incurred `cumulativeDeficit` only.
 
+### COMMIT-02A: Non-seizure MM liquidity changes blocked while `commitmentDeficit` is non-zero
+
+- **Statement**: If `PositionAccounting.commitmentDeficit` is non-zero on either token, any MM `touchPosition` with
+  `liquidityDelta != 0` must revert unless the operation is a seizure (`hookData.seizure.isSeizing == true`).
+- **Enforced by**: `src/libraries/VTSPositionLib.sol::touchPosition` reverts `Errors.CommitmentDeficitBlocksLiquidityChange`.
+- **Rationale**: Closing live RFS (via settlement) does not necessarily clear stored `commitmentDeficit`; allowing MM
+  add/remove while the insolvency gate persists would desynchronise commitment context from checkpoint-derived deficit
+  state. MM no-ops (`liquidityDelta == 0`) and settlement / checkpoint paths remain available to cure or formalise
+  backing.
+
+### COMMIT-02B: Full liquidity mirror deactivation clears commitment-deficit storage
+
+- **Statement**: When `positionLiquidityMirror` transitions from a value `> 0` to `0`, `commitmentDeficit` (both
+  tokens), `commitmentDeficitSince`, and `commitmentDeficitBps` are reset to zero.
+- **Enforced by**: `src/libraries/VTSPositionLib.sol::_applyLiquidityMirrorTransition`.
+- **Rationale**: Issued commitment is zero after a full unwind; retaining token deficit amounts without a coherent age
+  vector would be stale and could interact badly with deficit-age bypass logic. **COMMIT-02A** remains in force: MM still
+  cannot change liquidity while deficit is non-zero, so this reset is not a way to “MM-remove past” the gate—it is the
+  bookkeeping cleanup once deactivation is actually reached (including non-MM and seizure paths).
+
 ### COMMIT-03: “Advancer” binding for checkpoint-with-commitment must hold
 
 - **Statement**: A checkpoint-with-commitment must only accept signals where:
@@ -314,7 +336,7 @@ being an informal “should”.
   1. `cumulativeDeficit` first,
   2. then `commitmentDeficit`,
   3. then `settled` increases.
-  Only the `cumulativeDeficit` leg mutates DICE principal (`totalDeficitPrincipal`).
+     Only the `cumulativeDeficit` leg mutates DICE principal (`totalDeficitPrincipal`).
 - **Enforced by**:
   - `src/libraries/VTSPositionLib.sol::settlePositionGrowths` calls `_settleDeficitIndexedCoverageUsage` after settling
     deficit/inflow growths, and is invoked by `CoreHook` _before_ modifies.
@@ -360,6 +382,11 @@ being an informal “should”.
   - `src/libraries/VTSFeeLib.sol::_processPositionFees` calls `_finaliseFeeAdjustment` during touch.
   - Bonus sizing uses `FullMath.mulDivRoundingUp(potAvail, ciseExposure, totalExposure)` (then caps to `potAvail`) so
     tiny proportional shares are not stranded at zero wei when the position is otherwise eligible.
+- **Echidna harness note**:
+  - `test/fuzz/invariants/FEE01.sol` resets CSI `feesSharedEpoch`, remaining-share factors, and related accounting at the
+    start of each action. Echidna reuses a single deployed harness, so without that reset, `_syncFeesSharedRemainingForToken`
+    can clear or rescale seeded `feesShared` across steps and desynchronise a naive “expected queue” model from production
+    behaviour.
 
 ### FEE-02: New positions must not receive fee-sharing bonuses on creation
 
@@ -394,14 +421,55 @@ being an informal “should”.
 - **Enforced by**: `src/libraries/VTSPositionLib.sol::_settleSeizing` (deposit clamp uses positive RFS; withdrawal clamp
   uses `positionRequiredSettlementDelta`).
 
+### SETTLE-03: MM decrease splits immediate-settle and queued-shortfall accounting
+
+- **Statement**:
+  - For MM liquidity decreases, the excess settled entitlement computed against the reduced commitment is not a single
+    homogeneous bucket.
+  - It must be split into:
+    - an **immediately settleable** slice, which remains in live `pa.settled` until the follow-on settlement flow
+      consumes the transient underlying delta for that batch, and
+    - a **queued shortfall** slice, which must leave live VTS settled accounting once the Hub queue amount is known.
+- **Protocol rule**:
+  - This invariant is explicitly coupled to **DELTA-01**.
+  - `DynamicCurrencyDelta` remains the transient “must resolve now” accounting surface for the immediate settleable slice, meaning that any immediate-settle value which is still required to be resolved before batch end must remain represented on the delta path until that requirement is discharged.
+  - Queue-backed shortfall must not remain in `pa.settled` / pool `totalSettled`, because it has become an explicit
+    Hub-backed deferred entitlement rather than live position settlement.
+  - Therefore, the live-settlement clamp for MM decreases must be applied to the **queued shortfall only**, not to the
+    full excess pre-emptively; otherwise the protocol would remove value from live settled state before the corresponding
+    DELTA-01 obligation had been resolved.
+- **Enforced / expressed by**:
+  - `src/libraries/VTSPositionLib.sol::_touchExistingDecrease` computes the full MM excess as
+    `requiredSettlementDelta` without eagerly reducing `pa.settled`.
+  - `src/libraries/VTSPositionLib.sol::_handleLiquidityDecrease` computes:
+    - `settleableDelta` (immediate slice), and
+    - `queuedShortfallDelta` (unavailable portion routed into `LiquidityHub` queueing).
+  - `src/libraries/VTSPositionLib.sol::_processMMOperations`:
+    - books only `settleableDelta` into `DynamicCurrencyDelta`, and
+    - clamps `pa.settled` / pool `totalSettled` only for `queuedShortfallDelta`.
+- **Why**:
+  - Clamping the full excess too early would double-count later settlement paths that still rely on
+    `DynamicCurrencyDelta` as the transient settle obligation.
+  - Clamping only the queued shortfall satisfies the stronger invariant that queued-away amounts no longer remain as live
+    settled exposure, while preserving the required-delta-resolution model in **DELTA-01**.
+
 ### SEIZE-01: Seizability is token-lane scoped and aggregated at position level
 
 - **Statement**:
+  - Checkpointed RFS openness is modelled as a continuous **position-level** episode, represented with lane-addressable
+    storage:
+    - `openMask` identifies currently open lanes,
+    - `openSince*` stores the canonical checkpointed episode start timestamp mirrored on open lanes.
+  - Lane-composition changes that do not pass through a fully-closed checkpoint state preserve the same canonical episode
+    timer (for example `01 -> 11`, `10 -> 11`, `11 -> 01`, `11 -> 10`).
+  - Only a genuine checkpoint transition through `openMask == 0` begins a fresh episode timer.
   - Commitment-deficit bypass is evaluated per token lane using token-specific deficit age and thresholds.
   - `commitmentDeficit` bypass is distinct from swap-incurred `cumulativeDeficit` accounting:
     - `commitmentDeficit` hardens solvency enforcement (RFS/seizability),
     - `cumulativeDeficit` drives DICE slash attribution and pool deficit principal.
   - Normal grace-path seizability is evaluated only for token lanes currently marked open in the checkpoint mask.
+  - For normal grace-path checks, open-lane eligibility uses each lane's configured grace plus lane-local extension
+    against the canonical checkpointed episode timestamp on that lane.
   - Position-level seizability is true when at least one token lane is currently eligible.
   - Explicit protocol rule: token-lane behaviour is specific to seizability and bypass-gate mechanics only.
   - Once any eligible lane authorises seizure, the position may enter a position-level seizure flow.
@@ -415,7 +483,8 @@ being an informal “should”.
 ### SEIZE-02: Grace period extensions require an allowed verifier for the settlement token
 
 - **Statement**: A settlement proof must be verified by an indexed verifier that is both registered and allowlisted for
-  the relevant token.
+  the relevant token. Verifiers receive `abi.encode(poolId, tokenIndex, positionId)` so attestations can be bound to the
+  extension target position (same lane, different positions cannot reuse another position’s proof bytes).
 - **Enforced by**: `src/VRLSettlementObserver.sol::verifySettlementProof` (reverts `Errors.InvalidVerifier` /
   `Errors.InvalidProof`).
 - **Applied by**: `src/libraries/Checkpoint.sol::extendGracePeriod` and `src/VTSOrchestrator.sol::extendGracePeriod`.
@@ -665,6 +734,7 @@ being an informal “should”.
 
 - **Statement**: Any protocol surface that groups a market’s two tokens into `(0,1)` lanes must use **core pool / LCC**
   ordering as the canonical order:
+
   - `lcc0 = corePoolKey.currency0`
   - `lcc1 = corePoolKey.currency1`
   - `lcc0UnderlyingAsset = ILCC(lcc0).underlying()`
@@ -674,6 +744,7 @@ being an informal “should”.
   ambiguous.
 
 - **Enforced by**:
+
   - `src/MarketFactory.sol::createMarket` emits `MarketCreated(corePoolId, proxyPoolId, lcc0, lcc1, lcc0UnderlyingAsset, lcc1UnderlyingAsset, ...)`
     derived from `corePoolKey.currency0/1` plus the deterministic input mapping
     `(underlyingAsset0 -> ctx.lccToken0, underlyingAsset1 -> ctx.lccToken1)`.

@@ -140,9 +140,9 @@ contract VTSOrchestratorInvariantRegressionsTest is VTSOrchestratorFixture {
         assertLe(fees1Mid, fees1Before, "token1 feesShared must not increase after first decrease");
         assertLe(fees0After, fees0Mid, "token0 feesShared must be monotonic non-increasing");
         assertLe(fees1After, fees1Mid, "token1 feesShared must be monotonic non-increasing");
-        assertGe(idx0Mid, idx0Before, "token0 spend index should not go backwards");
-        assertGe(idx1Mid, idx1Before, "token1 spend index should not go backwards");
-        assertGe(idx0After, idx0Mid, "token0 spend index should progress monotonically");
-        assertGe(idx1After, idx1Mid, "token1 spend index should progress monotonically");
+        assertGe(idx0Mid, idx0Before, "token0 remaining factor should not go backwards");
+        assertGe(idx1Mid, idx1Before, "token1 remaining factor should not go backwards");
+        assertGe(idx0After, idx0Mid, "token0 remaining factor should progress monotonically");
+        assertGe(idx1After, idx1Mid, "token1 remaining factor should progress monotonically");
     }
 }

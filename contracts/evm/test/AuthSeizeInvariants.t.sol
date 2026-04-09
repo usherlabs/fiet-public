@@ -118,7 +118,7 @@ contract AuthSeizeInvariantsTest is MarketTestBase, MarketMakerTestBase {
             address(lcc1)
         );
 
-        _openSeizeWindow();
+        _openSeizeWindow(seizedTokenId);
 
         address guarantor = makeAddr("guarantor-auth01a-scope");
         IERC20(lcc0.underlying()).transfer(guarantor, SEIZE_SETTLE0);
@@ -151,7 +151,7 @@ contract AuthSeizeInvariantsTest is MarketTestBase, MarketMakerTestBase {
             address(lcc0),
             address(lcc1)
         );
-        _openSeizeWindow();
+        _openSeizeWindow(tokenId);
 
         address guarantor = makeAddr("guarantor-auth01a-clear");
         IERC20(lcc0.underlying()).transfer(guarantor, SEIZE_SETTLE0);
@@ -177,13 +177,15 @@ contract AuthSeizeInvariantsTest is MarketTestBase, MarketMakerTestBase {
         vm.stopPrank();
     }
 
-    function _openSeizeWindow() internal {
+    function _openSeizeWindow(uint256 tokenId) internal {
         swapRouter.swap(
             proxyPoolKey,
             SwapParams({zeroForOne: true, amountSpecified: -1e18, sqrtPriceLimitX96: ZERO_FOR_ONE_LIMIT}),
             PoolSwapTest.TestSettings({takeClaims: false, settleUsingBurn: false}),
             ZERO_BYTES
         );
+        // Persist the live RFS-open state before time-warping so seizure grace measures a stored checkpoint window.
+        positionManager.checkpoint(tokenId, 0, false);
         // Exceed grace period to enable seizure path.
         vm.warp(block.timestamp + 300000 + 1);
     }

@@ -96,7 +96,7 @@ Scaling:
 For position \(r\):
 
 - \(R_{r,t}\): position’s **remaining** self‑contribution shares, i.e. `feesShared_t` (non‑increasing except when slashed).
-- \(i_{r,t}\): position checkpoint of pool spend index, i.e. `feesSharedIndexLastX128_t`.
+- \(i_{r,t}\): position checkpoint of pool remaining-share factor, i.e. `feesSharedRemainingFactorLastX128_t`.
 
 Derived:
 
@@ -239,11 +239,11 @@ This section is intentionally written to map to the code architecture implied by
 
 Per pool \(p\), per fee token \(t\):
 
-- `feesSharedSpendIndexX128_t` \(\leftrightarrow I^{\mathrm{spend}}_t\)
+- `feesSharedRemainingFactorX128_t` \(\leftrightarrow I^{\mathrm{spend}}_t\)
 
 Per position \(r\), per fee token \(t\):
 
-- `feesSharedIndexLastX128_t` \(\leftrightarrow i_{r,t}\)
+- `feesSharedRemainingFactorLastX128_t` \(\leftrightarrow i_{r,t}\)
 
 The existing:
 
@@ -304,7 +304,7 @@ flowchart TD
         B4 --> B5{potAvail > 0?}
         B5 -->|Yes| B6[Compute bonus]
         B6 --> B7["protocolFeeAccrued -= bonus"]
-        B7 --> B8["Advance feesSharedSpendIndexX128"]
+        B7 --> B8["Advance feesSharedRemainingFactorX128"]
         B8 --> B9["pendingFeeAdj -= bonus"]
         B5 -->|No| B10[Return false]
     end

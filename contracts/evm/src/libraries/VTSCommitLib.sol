@@ -185,9 +185,9 @@ library VTSCommitLib {
             uint256 curTotalCISE = paPool.totalCISEExposureSinceLastMod.get(tokenIndex);
             paPool.totalCISEExposureSinceLastMod.set(tokenIndex, curTotalCISE + coveredAmount);
         } else {
-            // No settled liquidity: defer to CISE residual (socialised when settled becomes non-zero)
-            uint256 currentResidualCISE = paPool.coverageResidualCISE.get(tokenIndex);
-            paPool.coverageResidualCISE.set(tokenIndex, currentResidualCISE + coveredAmount);
+            // No settled liquidity existed during this coverage event, so there is no valid CISE claimant.
+            // Unlike DICE, we intentionally do not defer-and-socialise this later; only coverage exercised
+            // while settled liquidity is live contributes to allocatable CISE index/denominator state.
         }
     }
 

@@ -156,8 +156,10 @@ contract OracleConfigureAssetsScript is AdminBase {
                 console.log("NOTE: config asset=0x0 (native), using sentinel:", asset);
             }
 
-            if (assetFilter.length > 0 && !_containsAddress(assetFilter, asset) && !_containsAddress(assetFilter, configAsset))
-            {
+            if (
+                assetFilter.length > 0 && !_containsAddress(assetFilter, asset)
+                    && !_containsAddress(assetFilter, configAsset)
+            ) {
                 console.log("\nSKIP: filtered out");
                 console.log("asset:", asset);
                 continue;
@@ -316,6 +318,5 @@ contract OracleConfigureAssetsScript is AdminBase {
         }
         return string(out);
     }
-
 }
 

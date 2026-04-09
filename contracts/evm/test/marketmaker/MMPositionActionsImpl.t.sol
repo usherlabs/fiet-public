@@ -197,6 +197,18 @@ contract MMPositionManagerActionsTest is MarketTestBase, MarketMakerTestBase {
         }
     }
 
+    function _openSeizeWindow(uint256 tokenId, uint256 positionIndex) internal {
+        swapRouter.swap(
+            proxyPoolKey,
+            SwapParams({zeroForOne: true, amountSpecified: -1e18, sqrtPriceLimitX96: ZERO_FOR_ONE_LIMIT}),
+            PoolSwapTest.TestSettings({takeClaims: false, settleUsingBurn: false}),
+            ZERO_BYTES
+        );
+        // Persist the live RFS-open state before time-warping so seizure grace is measured from checkpoint storage.
+        positionManager.checkpoint(tokenId, positionIndex, false);
+        vm.warp(block.timestamp + 300000 + 1);
+    }
+
     function testCanCommitMintAndSettlePosition() public {
         // Objective:
         // - Prove a user can commit, mint, and settle a single MM position via the position manager.
@@ -544,6 +556,7 @@ contract MMPositionManagerActionsTest is MarketTestBase, MarketMakerTestBase {
             assertEq(rfsOpen, true, "RFS should be open after deficit-causing swap");
         }
 
+        positionManager.checkpoint(tokenId, positionIndex, false);
         vm.warp(block.timestamp + 300000 + 1);
 
         // Setup guarantor settlement
@@ -607,14 +620,8 @@ contract MMPositionManagerActionsTest is MarketTestBase, MarketMakerTestBase {
             address(lcc1)
         );
 
-        // Open RFS by creating a deficit via swap, then warp past grace.
-        swapRouter.swap(
-            proxyPoolKey,
-            SwapParams({zeroForOne: true, amountSpecified: -1e18, sqrtPriceLimitX96: ZERO_FOR_ONE_LIMIT}),
-            PoolSwapTest.TestSettings({takeClaims: false, settleUsingBurn: false}),
-            ZERO_BYTES
-        );
-        vm.warp(block.timestamp + 300000 + 1);
+        // Open RFS by creating a deficit via swap, persist the checkpoint, then warp past grace.
+        _openSeizeWindow(tokenId, positionIndex);
 
         uint256 seizeSettle0 = 5_999_709_018_652_707;
         uint256 seizeSettle1 = 5_999_709_018_652_707;
@@ -705,13 +712,7 @@ contract MMPositionManagerActionsTest is MarketTestBase, MarketMakerTestBase {
             address(lcc1)
         );
 
-        swapRouter.swap(
-            proxyPoolKey,
-            SwapParams({zeroForOne: true, amountSpecified: -1e18, sqrtPriceLimitX96: ZERO_FOR_ONE_LIMIT}),
-            PoolSwapTest.TestSettings({takeClaims: false, settleUsingBurn: false}),
-            ZERO_BYTES
-        );
-        vm.warp(block.timestamp + 300000 + 1);
+        _openSeizeWindow(tokenId, positionIndex);
 
         vm.mockCall(
             address(mv),
@@ -767,13 +768,7 @@ contract MMPositionManagerActionsTest is MarketTestBase, MarketMakerTestBase {
             address(lcc1)
         );
 
-        swapRouter.swap(
-            proxyPoolKey,
-            SwapParams({zeroForOne: true, amountSpecified: -1e18, sqrtPriceLimitX96: ZERO_FOR_ONE_LIMIT}),
-            PoolSwapTest.TestSettings({takeClaims: false, settleUsingBurn: false}),
-            ZERO_BYTES
-        );
-        vm.warp(block.timestamp + 300000 + 1);
+        _openSeizeWindow(tokenId, positionIndex);
 
         vm.mockCall(
             address(mv),
@@ -1637,15 +1632,8 @@ contract MMPositionManagerActionsTest is MarketTestBase, MarketMakerTestBase {
             address(lcc1)
         );
 
-        // Create deficit so RFS opens.
-        swapRouter.swap(
-            proxyPoolKey,
-            SwapParams({zeroForOne: true, amountSpecified: -1e18, sqrtPriceLimitX96: ZERO_FOR_ONE_LIMIT}),
-            PoolSwapTest.TestSettings({takeClaims: false, settleUsingBurn: false}),
-            ZERO_BYTES
-        );
-
-        vm.warp(block.timestamp + 300000 + 1);
+        // Create deficit so RFS opens, persist the checkpoint, then warp past grace.
+        _openSeizeWindow(tokenId, positionIndex);
 
         uint256 settleAmount0 = 5_999_709_018_652_707;
         uint256 settleAmount1 = 5_999_709_018_652_707;

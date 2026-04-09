@@ -13,6 +13,7 @@ import {IVRLSettlementObserver} from "../../src/interfaces/IVRLSettlementObserve
 import {VTSStorage, MarketVTSConfiguration} from "../../src/types/VTS.sol";
 import {VTSConfigs} from "../../src/libraries/VTSConfigs.sol";
 import {Errors} from "../../src/libraries/Errors.sol";
+import {PositionId} from "../../src/types/Position.sol";
 
 contract MockSignalManagerForAdmin is IVRLSignalManager {
     address public immutable override submitter;
@@ -71,7 +72,7 @@ contract MockSignalManagerForAdmin is IVRLSignalManager {
 
         function disallowVerifierForTokens(uint32, address[] memory) external {}
 
-        function verifySettlementProof(PoolKey memory, uint8, uint32, bytes memory, bool)
+        function verifySettlementProof(PoolKey memory, uint8, uint32, PositionId, bytes memory, bool)
             external
             pure
             returns (bool isProofValid)

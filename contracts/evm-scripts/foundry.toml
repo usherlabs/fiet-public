@@ -65,10 +65,18 @@ libraries = [
   "src/libraries/VTSPositionLib.sol:VTSPositionLib:0x26e024F42D5F766b562fc35701f13B2d5e01A5C2",
   "src/libraries/VTSSwapLib.sol:VTSSwapLib:0x62ef223B345cF2bCc9c9097F093202c5f8C88f31",
   "src/libraries/VTSCommitLib.sol:VTSCommitLib:0x97D09b290896136360857499EA8f6d6F98c3Fb1B",
+  "src/libraries/VTSLifecycleLinkedLib.sol:VTSLifecycleLinkedLib:0x4f564C280e60CF5c5d11Ce3eB9aED1eCC0B62839",
   "src/libraries/VTSFeeLib.sol:VTSFeeLinkedLib:0x203f4945f3cf29f34743306d1A33366Da3771bD2",
   "src/libraries/LCCFactoryLib.sol:LCCFactoryLinkedLib:0x42B8987753996202F071f1598Eef6B2a7F82299B",
   "src/libraries/LiquidityHubLinkedLib.sol:LiquidityHubLinkedLib:0x43B8987753996202F071f1598Eef6B2a7F82299B",
 ]
+
+# Match CI: E2E scripts compile without IR to avoid Yul stack-depth failures under linked-library builds.
+additional_compiler_profiles = [
+  { name = "script_ir", via_ir = true },
+  { name = "e2e_non_ir", via_ir = false },
+]
+compilation_restrictions = [{ paths = "script/e2e/**", via_ir = false }]
 
 [profile.ci]
 # Mirrors `profile.deploy`: library addresses are generated using Anvil account 0
@@ -91,6 +99,7 @@ libraries = [
   "src/libraries/VTSPositionLib.sol:VTSPositionLib:0x2C95130C4DE0504c82f4688C657c9A4CC01761EF",
   "src/libraries/VTSSwapLib.sol:VTSSwapLib:0x8AF1433f3d2b0547A63f7004B9dA9C5953fD522D",
   "src/libraries/VTSCommitLib.sol:VTSCommitLib:0x6EBB20A904a9CA505e7d4A253c7FbF72DF5a777b",
+  "src/libraries/VTSLifecycleLinkedLib.sol:VTSLifecycleLinkedLib:0x4f564C280e60CF5c5d11Ce3eB9aED1eCC0B62839",
   "src/libraries/VTSFeeLib.sol:VTSFeeLinkedLib:0xF99a25421b798087e7eE2E3fD78268CC961dEbf6",
   "src/libraries/LCCFactoryLib.sol:LCCFactoryLinkedLib:0x3209860215dB283218CBc8f0D5acf57Ae8874C85",
   "src/libraries/LiquidityHubLinkedLib.sol:LiquidityHubLinkedLib:0x8c51807d9598086bD05901377e98996d0d7E6691",
@@ -101,6 +110,7 @@ libraries = [
   "src/libraries/VTSPositionLib.sol:VTSPositionLib:0xc07478b5475c1C5ccd330c8c1B8A317cdD24622F",
   "src/libraries/VTSSwapLib.sol:VTSSwapLib:0x4B8C9DF02E1c0C554552d64bc867D9Be2E4a9780",
   "src/libraries/VTSCommitLib.sol:VTSCommitLib:0x09674841a09016a84676d4a040Eeca7aDbf31b3B",
+  "src/libraries/VTSLifecycleLinkedLib.sol:VTSLifecycleLinkedLib:0x4f564C280e60CF5c5d11Ce3eB9aED1eCC0B62839",
   "src/libraries/VTSFeeLib.sol:VTSFeeLinkedLib:0xFe204493B9eA006e7907f1e8b80B6422D51130a9",
   "src/libraries/LCCFactoryLib.sol:LCCFactoryLinkedLib:0x00Da46d8c1Dd8c421d781f9983f6A6ec74c702A0",
   "src/libraries/LiquidityHubLinkedLib.sol:LiquidityHubLinkedLib:0x01Da46d8c1Dd8c421d781f9983f6A6ec74c702A0",
@@ -111,6 +121,7 @@ libraries = [
   "src/libraries/VTSPositionLib.sol:VTSPositionLib:0x13f707F2111e5219602a3f8C6418eF68cC357E6e",
   "src/libraries/VTSSwapLib.sol:VTSSwapLib:0x6c7b64142A8f772dbAb7b18Fd16F870d60bdb02F",
   "src/libraries/VTSCommitLib.sol:VTSCommitLib:0xB4298eE98002FB3a979475Ed2749b380Db65A5Cc",
+  "src/libraries/VTSLifecycleLinkedLib.sol:VTSLifecycleLinkedLib:0x4f564C280e60CF5c5d11Ce3eB9aED1eCC0B62839",
   "src/libraries/VTSFeeLib.sol:VTSFeeLinkedLib:0x08647D2342687FBbb36D3EdF9650457dceE81F21",
   "src/libraries/LCCFactoryLib.sol:LCCFactoryLinkedLib:0xf03A5240059AF5e4B8B0935e45dF7f1a40be06b3",
   "src/libraries/LiquidityHubLinkedLib.sol:LiquidityHubLinkedLib:0xf13A5240059AF5e4B8B0935e45dF7f1a40be06b3",

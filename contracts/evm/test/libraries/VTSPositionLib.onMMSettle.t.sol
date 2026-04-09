@@ -396,6 +396,33 @@ contract VTSPositionLibOnMMSettleTest is VTSLibTestBase {
         );
     }
 
+    function test_onMMSettle_active_withdraw_afterQueuedShortfallClamp_landsOnCommitmentMax() public {
+        _initMarket();
+        PositionId positionId = _registerActivePosition();
+        address owner = DEFAULT_OWNER;
+
+        // Simulate the post-decrease state:
+        // - commitmentMax already reduced to 60
+        // - queued shortfall already removed from live settled, leaving only the immediate settleable 10 excess
+        harness.setCommitmentMax(positionId, 60e18, 60e18);
+        harness.setSettled(positionId, 70e18, 60e18);
+        harness.setPositionActive(positionId, true);
+
+        harness.setUnderlyingDelta(underlyingCurrency0, owner, 10e18);
+        mockVault.setAvailableLiquidity(type(int128).max, type(int128).max);
+
+        (BalanceDelta settlementDelta, bool rfsOpen,) = harness.onMMSettle(
+            manager, mockVault, positionId, lccCurrency0, lccCurrency1, toBalanceDelta(10e18, 0), false
+        );
+
+        assertFalse(rfsOpen, "RFS should stay closed for the immediate settleable withdrawal");
+        assertEq(settlementDelta.amount0(), 10e18, "withdrawal should pay the immediate settleable slice");
+
+        (,, uint256 settled0, uint256 settled1,,) = harness.getPositionAccounting(positionId);
+        assertEq(settled0, 60e18, "follow-on settle should land exactly on the reduced commitment max");
+        assertEq(settled1, 60e18, "untouched lane should remain at commitment max");
+    }
+
     // ============================================================
     // Scenario 4: Seizing with positive amounts (withdrawals)
     // Should clamp by currencyDelta mechanics (positionRequiredSettlementDelta)
@@ -489,7 +516,7 @@ contract VTSPositionLibOnMMSettleTest is VTSLibTestBase {
                 true // isSeizing
             );
 
-        assertTrue(rfsOpen, "RFS should be open before seizure deposit");
+        assertFalse(rfsOpen, "RFS should close after seizure deposit satisfies the open requirement");
         // Clamped to RfS requirement (50 each)
         assertEq(settlementDelta.amount0(), -50e18, "Seizing deposit0 clamped by RfS");
         assertEq(settlementDelta.amount1(), -50e18, "Seizing deposit1 clamped by RfS");

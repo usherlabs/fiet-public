@@ -16,8 +16,9 @@ contract ValidateEchidnaLinkedLibs is Script {
     address internal constant ECHIDNA_DEPLOYER = 0x00a329c0648769A73afAc7F9381E08FB43dBEA72;
     address internal constant VTSSWAPLIB_PLACEHOLDER = 0x1111111111111111111111111111111111111112;
     address internal constant VTSFEE_LINKEDLIB_PLACEHOLDER = 0x1111111111111111111111111111111111111111;
+    address internal constant VTSLIFECYCLE_LINKEDLIB_PLACEHOLDER = 0x1111111111111111111111111111111111111113;
 
-    function run() external view {
+    function run() external pure {
         uint256 failures = 0;
         console2.log("Validating Echidna linked library addresses...");
 
@@ -45,6 +46,13 @@ contract ValidateEchidnaLinkedLibs is Script {
                 _compute(type(VTSPositionLib).creationCode, "echidna.VTSPositionLib")
             )) failures++;
 
+        // Intentional placeholder: must stay aligned with `EchidnaLinkedLibs.VTS_LIFECYCLE_LINKED_LIB` and foundry.toml.
+        if (!_check(
+                "VTSLifecycleLinkedLib (Echidna placeholder)",
+                VTSLIFECYCLE_LINKEDLIB_PLACEHOLDER,
+                EchidnaLinkedLibs.expectedVTSLifecycleLinkedLib()
+            )) failures++;
+
         if (failures != 0) {
             console2.log("Echidna linked library mismatches:", failures);
             console2.log("update the addresses in the foundry.toml file and the EchidnaLinkedLibs.sol file");
@@ -57,6 +65,16 @@ contract ValidateEchidnaLinkedLibs is Script {
         }
 
         console2.log("Echidna linked library addresses are up to date.");
+    }
+
+    /// @notice Prints the current fuzz-context CREATE2 outputs and copy-pasteable updates.
+    /// @dev Use this after linked-library bytecode changes to regenerate the source-of-truth values.
+    function printComputed() external pure {
+        console2.log("Computed Echidna linked library addresses for the current fuzz build:");
+        console2.log("foundry.toml [profile.echidna].libraries block:");
+        _printFoundryTomlLibrariesBlock();
+        console2.log("EchidnaLinkedLibs.sol constants:");
+        _printEchidnaLinkedLibsConstants();
     }
 
     function _check(string memory name, address expected, address computed) internal pure returns (bool) {
@@ -109,6 +127,11 @@ contract ValidateEchidnaLinkedLibs is Script {
             )
         );
         console2.log("  # Intentional placeholders for libs that are not CREATE2-validated by this script.");
+        console2.log(
+            _libraryEntry(
+                "src/libraries/VTSLifecycleLinkedLib.sol:VTSLifecycleLinkedLib", VTSLIFECYCLE_LINKEDLIB_PLACEHOLDER
+            )
+        );
         console2.log(_libraryEntry("src/libraries/VTSSwapLib.sol:VTSSwapLib", VTSSWAPLIB_PLACEHOLDER));
         console2.log(_libraryEntry("src/libraries/VTSFeeLib.sol:VTSFeeLinkedLib", VTSFEE_LINKEDLIB_PLACEHOLDER));
         console2.log("]");
@@ -133,6 +156,7 @@ contract ValidateEchidnaLinkedLibs is Script {
         console2.log(
             _constantEntry("VTS_POSITION_LIB", _compute(type(VTSPositionLib).creationCode, "echidna.VTSPositionLib"))
         );
+        console2.log(_constantEntry("VTS_LIFECYCLE_LINKED_LIB", VTSLIFECYCLE_LINKEDLIB_PLACEHOLDER));
     }
 
     function _libraryEntry(string memory path, address lib) internal pure returns (string memory) {

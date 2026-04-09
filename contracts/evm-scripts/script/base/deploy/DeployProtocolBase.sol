@@ -68,12 +68,12 @@ abstract contract DeployProtocolBase is CREATE3Script, NetworkConfig {
         address globalConfig
     ) internal returns (address payable) {
         return payable(_deployCreate3(
-            LIQUIDITY_HUB,
-            abi.encodePacked(
-                type(LiquidityHub).creationCode,
-                abi.encode(oracleHelper, nativeAssetName, nativeAssetSymbol, nativeAssetDecimals, globalConfig)
-            )
-        ));
+                LIQUIDITY_HUB,
+                abi.encodePacked(
+                    type(LiquidityHub).creationCode,
+                    abi.encode(oracleHelper, nativeAssetName, nativeAssetSymbol, nativeAssetDecimals, globalConfig)
+                )
+            ));
     }
 
     function _deployVTSOrchestrator(address oracleHelper, address liquidityHub, address globalConfig)
@@ -82,20 +82,26 @@ abstract contract DeployProtocolBase is CREATE3Script, NetworkConfig {
     {
         return _deployCreate3(
             VTS_ORCHESTRATOR,
-            abi.encodePacked(type(VTSOrchestrator).creationCode, abi.encode(config.poolManager, oracleHelper, liquidityHub, globalConfig))
+            abi.encodePacked(
+                type(VTSOrchestrator).creationCode,
+                abi.encode(config.poolManager, oracleHelper, liquidityHub, globalConfig)
+            )
         );
     }
 
     function _deploySignalVerifier(address publicKeyAddress) internal returns (address) {
         return _deployCreate3(
-            SIGNAL_VERIFIER, abi.encodePacked(type(ECDSASignatureSignalVerifier).creationCode, abi.encode(publicKeyAddress))
+            SIGNAL_VERIFIER,
+            abi.encodePacked(type(ECDSASignatureSignalVerifier).creationCode, abi.encode(publicKeyAddress))
         );
     }
 
-    function _deploySignalManager(address signalVerifier, uint256 signalExpiryInSeconds, address submitter, address globalConfig)
-        internal
-        returns (address)
-    {
+    function _deploySignalManager(
+        address signalVerifier,
+        uint256 signalExpiryInSeconds,
+        address submitter,
+        address globalConfig
+    ) internal returns (address) {
         return _deployCreate3(
             SIGNAL_MANAGER,
             abi.encodePacked(
@@ -107,7 +113,8 @@ abstract contract DeployProtocolBase is CREATE3Script, NetworkConfig {
 
     function _deploySettlementObserver(address submitter, address globalConfig) internal returns (address) {
         return _deployCreate3(
-            SETTLEMENT_OBSERVER, abi.encodePacked(type(VRLSettlementObserver).creationCode, abi.encode(submitter, globalConfig))
+            SETTLEMENT_OBSERVER,
+            abi.encodePacked(type(VRLSettlementObserver).creationCode, abi.encode(submitter, globalConfig))
         );
     }
 
@@ -117,8 +124,9 @@ abstract contract DeployProtocolBase is CREATE3Script, NetworkConfig {
         address signalManager,
         address settlementObserver
     ) internal {
-        bytes memory callData =
-            abi.encodeWithSelector(IVTSAdmin.registerVRLProofHandlers.selector, signalManager, settlementObserver);
+        bytes memory callData = abi.encodeWithSelector(
+            IVTSAdmin.registerVRLProofHandlers.selector, signalManager, settlementObserver
+        );
         GlobalConfig(globalConfig).proxyCall(vtsOrchestrator, callData);
     }
 
@@ -138,8 +146,7 @@ abstract contract DeployProtocolBase is CREATE3Script, NetworkConfig {
         actionsImpl = _deployCreate3(
             ACTIONS_IMPL,
             abi.encodePacked(
-                type(MMPositionActionsImpl).creationCode,
-                abi.encode(config.poolManager, marketFactory, vtsOrchestrator)
+                type(MMPositionActionsImpl).creationCode, abi.encode(config.poolManager, marketFactory, vtsOrchestrator)
             )
         );
 
@@ -174,10 +181,12 @@ abstract contract DeployProtocolBase is CREATE3Script, NetworkConfig {
         );
     }
 
-    function _deployMarketFactory(address liquidityHub, address oracleHelper, address vtsOrchestrator, address globalConfig)
-        internal
-        returns (address)
-    {
+    function _deployMarketFactory(
+        address liquidityHub,
+        address oracleHelper,
+        address vtsOrchestrator,
+        address globalConfig
+    ) internal returns (address) {
         return _deployCreate3(
             MARKET_FACTORY,
             abi.encodePacked(

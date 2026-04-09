@@ -144,6 +144,20 @@ contract VTSOrchestratorTestable is VTSOrchestrator {
         return (pa.commitmentDeficit.token0, pa.commitmentDeficit.token1);
     }
 
+    /// @notice Commitment-deficit bypass timer fields (for integration tests)
+    /// @param positionId The PositionId whose commitment-deficit timing fields are being inspected.
+    /// @return since0 The `commitmentDeficitSince.token0` timestamp for the position.
+    /// @return since1 The `commitmentDeficitSince.token1` timestamp for the position.
+    /// @return deficitBps The stored commitment-deficit severity in basis points.
+    function getCommitmentDeficitAgeFields(PositionId positionId)
+        external
+        view
+        returns (uint256 since0, uint256 since1, uint16 deficitBps)
+    {
+        PositionAccounting storage pa = s.positionAccounting[positionId];
+        return (pa.commitmentDeficitSince.token0, pa.commitmentDeficitSince.token1, pa.commitmentDeficitBps);
+    }
+
     /// @notice Get bonus weighting inputs for a position (CISE-only)
     /// @dev Bonus eligibility uses CISE exposure (coverage-indexed settled exposure).
     /// @param positionId The position identifier
@@ -177,8 +191,6 @@ contract VTSOrchestratorTestable is VTSOrchestrator {
     /// @return totalSettled1 Total settled aggregate for token1
     /// @return coveragePerSettledIndex0 Coverage per settled index (Q128) for token0
     /// @return coveragePerSettledIndex1 Coverage per settled index (Q128) for token1
-    /// @return coverageResidualCISE0 Deferred CISE residual for token0
-    /// @return coverageResidualCISE1 Deferred CISE residual for token1
     /// @return totalCISEExposure0 Pool-wide CISE exposure since last modification for token0
     /// @return totalCISEExposure1 Pool-wide CISE exposure since last modification for token1
     function getPoolCISEAccounting(PoolId poolId)
@@ -189,8 +201,6 @@ contract VTSOrchestratorTestable is VTSOrchestrator {
             uint256 totalSettled1,
             uint256 coveragePerSettledIndex0,
             uint256 coveragePerSettledIndex1,
-            uint256 coverageResidualCISE0,
-            uint256 coverageResidualCISE1,
             uint256 totalCISEExposure0,
             uint256 totalCISEExposure1
         )
@@ -201,8 +211,6 @@ contract VTSOrchestratorTestable is VTSOrchestrator {
             paPool.totalSettled.token1,
             paPool.coveragePerSettledIndexX128.token0,
             paPool.coveragePerSettledIndexX128.token1,
-            paPool.coverageResidualCISE.token0,
-            paPool.coverageResidualCISE.token1,
             paPool.totalCISEExposureSinceLastMod.token0,
             paPool.totalCISEExposureSinceLastMod.token1
         );
@@ -221,36 +229,36 @@ contract VTSOrchestratorTestable is VTSOrchestrator {
         return (pa.ciseIndexLastX128.token0, pa.ciseIndexLastX128.token1);
     }
 
-    /// @notice Get pool CSI (Contribution Spend Index) accounting for debugging
+    /// @notice Get pool CSI accounting for debugging
     /// @param poolId The pool identifier
-    /// @return feesSharedSpendIndex0 Spend-per-share index (Q128) for token0
-    /// @return feesSharedSpendIndex1 Spend-per-share index (Q128) for token1
+    /// @return feesSharedRemainingFactor0 Pool remaining-share factor (Q128) for token0
+    /// @return feesSharedRemainingFactor1 Pool remaining-share factor (Q128) for token1
     function getPoolCSIAccounting(PoolId poolId)
         external
         view
-        returns (uint256 feesSharedSpendIndex0, uint256 feesSharedSpendIndex1)
+        returns (uint256 feesSharedRemainingFactor0, uint256 feesSharedRemainingFactor1)
     {
         PoolAccounting storage paPool = s.poolAccounting[poolId];
-        return (paPool.feesSharedSpendIndexX128.token0, paPool.feesSharedSpendIndexX128.token1);
+        return (paPool.feesSharedRemainingFactorX128.token0, paPool.feesSharedRemainingFactorX128.token1);
     }
 
-    /// @notice Get position's CSI (Contribution Spend Index) accounting for debugging
+    /// @notice Get position CSI accounting for debugging
     /// @param positionId The position identifier
     /// @return feesShared0 Remaining self-contribution shares for token0
     /// @return feesShared1 Remaining self-contribution shares for token1
-    /// @return feesSharedIndexLast0 Last spend index checkpoint for token0
-    /// @return feesSharedIndexLast1 Last spend index checkpoint for token1
+    /// @return feesSharedFactorLast0 Last pool remaining-factor checkpoint for token0
+    /// @return feesSharedFactorLast1 Last pool remaining-factor checkpoint for token1
     function getPositionCSIAccounting(PositionId positionId)
         external
         view
-        returns (uint256 feesShared0, uint256 feesShared1, uint256 feesSharedIndexLast0, uint256 feesSharedIndexLast1)
+        returns (uint256 feesShared0, uint256 feesShared1, uint256 feesSharedFactorLast0, uint256 feesSharedFactorLast1)
     {
         PositionAccounting storage pa = s.positionAccounting[positionId];
         return (
             pa.feesShared.token0,
             pa.feesShared.token1,
-            pa.feesSharedIndexLastX128.token0,
-            pa.feesSharedIndexLastX128.token1
+            pa.feesSharedRemainingFactorLastX128.token0,
+            pa.feesSharedRemainingFactorLastX128.token1
         );
     }
 }
