@@ -78,6 +78,11 @@ contract LifecycleTestFactory {
 
 contract LifecycleTestSignalManager is IVRLSignalManager {
     uint256 internal _expirySeconds = 3600;
+    address public lastSender;
+    uint256 public lastCommitId;
+    uint256 public lastDeadline;
+    uint256 public lastAuthNonce;
+    bytes public lastAuthSig;
 
     function setExpirySeconds(uint256 s) external {
         _expirySeconds = s;
@@ -111,20 +116,41 @@ contract LifecycleTestSignalManager is IVRLSignalManager {
         revert("not implemented");
     }
 
-    function verifyLiquiditySignal(address, bytes memory, bool) external view returns (bool, uint256) {
+    function verifyLiquiditySignal(address sender, bytes memory, bool) external returns (bool, uint256) {
+        lastSender = sender;
+        lastCommitId = 0;
+        lastDeadline = 0;
+        lastAuthNonce = 0;
+        delete lastAuthSig;
         return (true, _expirySeconds);
     }
 
-    function verifyLiquiditySignalRelayed(address, uint256, bytes memory, uint256, uint256, bytes memory, bool)
-        external
-        view
-        returns (bool, uint256)
-    {
+    function verifyLiquiditySignalRelayed(
+        address sender,
+        uint256 commitId,
+        bytes memory,
+        uint256 deadline,
+        uint256 authNonce,
+        bytes memory authSig,
+        bool
+    ) external returns (bool, uint256) {
+        lastSender = sender;
+        lastCommitId = commitId;
+        lastDeadline = deadline;
+        lastAuthNonce = authNonce;
+        lastAuthSig = authSig;
         return (true, _expirySeconds);
     }
 }
 
 contract LifecycleTestSettlementObserver is IVRLSettlementObserver {
+    PositionId public expectedPositionId;
+    PositionId public lastPositionId;
+
+    function setExpectedPositionId(PositionId positionId) external {
+        expectedPositionId = positionId;
+    }
+
     function submitter() external pure returns (address) {
         return address(0);
     }
@@ -139,12 +165,37 @@ contract LifecycleTestSettlementObserver is IVRLSettlementObserver {
 
     function disallowVerifierForTokens(uint32, address[] memory) external pure {}
 
-    function verifySettlementProof(PoolKey memory, uint8, uint32, PositionId, bytes memory, bool)
-        external
-        pure
-        returns (bool)
-    {
+    function verifySettlementProof(
+        PoolKey memory,
+        uint8,
+        uint32,
+        PositionId positionId,
+        bytes memory,
+        bool revertOnInvalid
+    ) external returns (bool) {
+        lastPositionId = positionId;
+        if (
+            PositionId.unwrap(expectedPositionId) != bytes32(0)
+                && PositionId.unwrap(positionId) != PositionId.unwrap(expectedPositionId)
+        ) {
+            if (revertOnInvalid) revert("LifecycleTestSettlementObserver: unexpected position");
+            return false;
+        }
         return true;
+    }
+}
+
+contract LifecycleTestPoolManagerStub {
+    function extsload(bytes32) external pure returns (bytes32 value) {
+        return bytes32(0);
+    }
+
+    function extsload(bytes32, uint256 nSlots) external pure returns (bytes32[] memory values) {
+        values = new bytes32[](nSlots);
+    }
+
+    function extsload(bytes32[] calldata slots) external pure returns (bytes32[] memory values) {
+        values = new bytes32[](slots.length);
     }
 }
 
@@ -168,6 +219,7 @@ contract VTSLifecycleLinkedLibTest is Test {
     Currency internal c1 = Currency.wrap(address(0xC1));
 
     PoolKey internal poolKey;
+    LifecycleTestPoolManagerStub internal poolManagerStub;
 
     function setUp() public {
         harness = new VTSLifecycleLinkedLibHarness();
@@ -176,6 +228,7 @@ contract VTSLifecycleLinkedLibTest is Test {
         factoryOther = new LifecycleTestFactory();
         signalManager = new LifecycleTestSignalManager();
         settlementObserver = new LifecycleTestSettlementObserver();
+        poolManagerStub = new LifecycleTestPoolManagerStub();
 
         hub.setFactoryRegistered(address(factory), true);
         hub.setPairFactory(Currency.unwrap(c0), Currency.unwrap(c1), address(factory));
@@ -229,6 +282,15 @@ contract VTSLifecycleLinkedLibTest is Test {
         });
     }
 
+    function _lifecycleCtx() internal view returns (VTSLifecycleContext memory) {
+        return VTSLifecycleContext({
+            poolManager: IPoolManager(address(poolManagerStub)),
+            liquidityHub: ILiquidityHub(address(hub)),
+            oracleHelper: IOracleHelper(address(0)),
+            settlementObserver: settlementObserver
+        });
+    }
+
     // --- commitSignal / sender resolution ---
 
     function test_commitSignal_revertsWhenFactoryNotRegistered() public {
@@ -246,12 +308,14 @@ contract VTSLifecycleLinkedLibTest is Test {
             _routerCtx(), IMarketFactory(address(factory)), unboundCaller, unboundCaller, _encodedSignal()
         );
         assertEq(id, 1);
+        assertEq(signalManager.lastSender(), unboundCaller);
     }
 
     function test_commitSignal_usesForwardedSenderWhenCallerIsBound() public {
         factory.setBound(boundCaller, true);
         harness.commitSignal(_routerCtx(), IMarketFactory(address(factory)), boundCaller, mmOwner, _encodedSignal());
         assertEq(harness.getCommitMMOwner(1), mmOwner);
+        assertEq(signalManager.lastSender(), mmOwner);
     }
 
     function test_commitSignalRelayed_revertsWhenUnboundCallerForwardsDifferentSender() public {
@@ -262,12 +326,27 @@ contract VTSLifecycleLinkedLibTest is Test {
     }
 
     function test_commitSignalRelayed_succeedsWhenBoundCallerForwardsMMOwner() public {
+        uint256 deadline = block.timestamp + 1 hours;
+        uint256 authNonce = 17;
+        bytes memory authSig = hex"CAFE";
         factory.setBound(boundCaller, true);
         uint256 id = harness.commitSignalRelayed(
-            _routerCtx(), IMarketFactory(address(factory)), boundCaller, mmOwner, _encodedSignal(), 0, 0, bytes("")
+            _routerCtx(),
+            IMarketFactory(address(factory)),
+            boundCaller,
+            mmOwner,
+            _encodedSignal(),
+            deadline,
+            authNonce,
+            authSig
         );
         assertEq(id, 1);
         assertEq(harness.getCommitMMOwner(1), mmOwner);
+        assertEq(signalManager.lastSender(), mmOwner);
+        assertEq(signalManager.lastCommitId(), 0);
+        assertEq(signalManager.lastDeadline(), deadline);
+        assertEq(signalManager.lastAuthNonce(), authNonce);
+        assertEq(signalManager.lastAuthSig(), authSig);
     }
 
     function test_renewSignal_revertsWhenUnboundCallerForwardsDifferentSender() public {
@@ -291,6 +370,7 @@ contract VTSLifecycleLinkedLibTest is Test {
             _routerCtx(), IMarketFactory(address(factory)), boundCaller, advancer, 1, _renewSignalBytes(2)
         );
         assertGt(harness.getCommitExpiresAt(1), expBefore);
+        assertEq(signalManager.lastSender(), advancer);
     }
 
     function test_renewSignalRelayed_revertsWhenUnboundCallerForwardsDifferentSender() public {
@@ -312,6 +392,9 @@ contract VTSLifecycleLinkedLibTest is Test {
     }
 
     function test_renewSignalRelayed_succeedsWhenBoundCallerForwardsAdvancer() public {
+        uint256 deadline = block.timestamp + 1 hours;
+        uint256 authNonce = 29;
+        bytes memory authSig = hex"BEEF";
         factory.setBound(boundCaller, true);
         harness.commitSignalRelayed(
             _routerCtx(), IMarketFactory(address(factory)), boundCaller, mmOwner, _encodedSignal(), 0, 0, bytes("")
@@ -326,11 +409,32 @@ contract VTSLifecycleLinkedLibTest is Test {
             advancer,
             1,
             _renewSignalBytes(2),
-            0,
-            0,
-            bytes("")
+            deadline,
+            authNonce,
+            authSig
         );
         assertGt(harness.getCommitExpiresAt(1), expBefore);
+        assertEq(signalManager.lastSender(), advancer);
+        assertEq(signalManager.lastCommitId(), 1);
+        assertEq(signalManager.lastDeadline(), deadline);
+        assertEq(signalManager.lastAuthNonce(), authNonce);
+        assertEq(signalManager.lastAuthSig(), authSig);
+    }
+
+    function test_extendGracePeriod_forwardsPositionIdToSettlementObserver() public {
+        PoolId pid = poolKey.toId();
+        PositionId positionId = PositionId.wrap(keccak256("lifecycle-position"));
+
+        harness.testSeedPool(pid, c0, c1);
+        harness.testSeedPosition(positionId, mmOwner, pid, 0, true);
+        harness.testSetCheckpoint(positionId, 1, block.timestamp - 1, 0, 0, 0);
+        harness.testSetCommitmentMax(positionId, 1e18, 0);
+        harness.testSetCommitmentDeficit(positionId, 1e18, 0);
+        settlementObserver.setExpectedPositionId(positionId);
+
+        harness.extendGracePeriod(_lifecycleCtx(), poolKey, positionId, 0, 7, hex"ABCD");
+
+        assertEq(PositionId.unwrap(settlementObserver.lastPositionId()), PositionId.unwrap(positionId));
     }
 
     // --- validateMMOperation ---

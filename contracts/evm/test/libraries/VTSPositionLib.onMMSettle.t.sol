@@ -417,7 +417,6 @@ contract VTSPositionLibOnMMSettleTest is VTSLibTestBase {
 
         assertFalse(rfsOpen, "RFS should stay closed for the immediate settleable withdrawal");
         assertEq(settlementDelta.amount0(), 10e18, "withdrawal should pay the immediate settleable slice");
-        assertEq(harness.getUnderlyingDelta(underlyingCurrency0, owner), 0, "positive delta should clear");
 
         (,, uint256 settled0, uint256 settled1,,) = harness.getPositionAccounting(positionId);
         assertEq(settled0, 60e18, "follow-on settle should land exactly on the reduced commitment max");

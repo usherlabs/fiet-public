@@ -66,8 +66,8 @@ contract VTSFeeLibIndexTest is VTSOrchestratorFixture {
         (, feesShared1,,) = _testableOrchestrator().getPositionCSIAccounting(posId);
     }
 
-    function _csiRemaining1(PositionId posId) internal view returns (uint256 remaining1) {
-        (, remaining1,,) = _testableOrchestrator().getPositionCSIAccounting(posId);
+    function _csiRemainingShares1(PositionId posId) internal view returns (uint256 remainingShares1) {
+        (, remainingShares1,,) = _testableOrchestrator().getPositionCSIAccounting(posId);
     }
 
     function _csiFeesShared1AndFactorLast1(PositionId posId)
@@ -617,7 +617,7 @@ contract VTSFeeLibIndexTest is VTSOrchestratorFixture {
             console.log("-------------------------------- END Poke A");
 
             // With remaining-shares CSI, A's remaining shares should decrease after C consumes from the pot.
-            uint256 aRemaining1After = _csiRemaining1(posIdA);
+            uint256 aRemaining1After = _csiRemainingShares1(posIdA);
             assertGt(
                 aRemaining1After,
                 0,
@@ -629,7 +629,7 @@ contract VTSFeeLibIndexTest is VTSOrchestratorFixture {
             _pokeMM(mmB, 0);
             console.log("-------------------------------- END Poke B");
 
-            uint256 bRemaining1After = _csiRemaining1(posIdB);
+            uint256 bRemaining1After = _csiRemainingShares1(posIdB);
             assertGt(
                 bRemaining1After,
                 0,

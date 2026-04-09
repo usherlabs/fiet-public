@@ -1262,12 +1262,14 @@ library VTSPositionLib {
                 PositionAccounting storage paDec = s.positionAccounting[result.id];
                 _applyLiquidityMirrorTransition(s, paDec, posStorage, initialLiquidity, liq);
             } else {
+                (uint128 liveLiquidityBeforeAdd, uint128 nextLiquidity) =
+                    _deriveIncreaseTransitionLiquidity(liq, p.params.liquidityDelta);
                 if (p.params.liquidityDelta > 0) {
                     // Allow re-activating a previously inactive position by adding liquidity.
                     // Logically required to build on value routing while collecting fees on inactive positions.
                     // Rebase tick-indexed snapshots first so the zero-liquidity interval is not charged/credited to
                     // the newly reactivated liquidity.
-                    if (!posStorage.isActive) {
+                    if (liveLiquidityBeforeAdd == 0) {
                         _checkpointTickIndexedSnapshots(s, ctx.poolManager, result.id);
                         _checkpointZeroPrincipalSettlementSnapshots(s, result.id);
                     }
@@ -1277,15 +1279,8 @@ library VTSPositionLib {
                     // See https://github.com/Uniswap/v4-core/blob/36d790b1a3af38461453a13a6ff395290fbc11b2/src/libraries/Position.sol#L86
                     requiredSettlementDelta = BalanceDelta.wrap(0);
                 }
-                int256 newLiquidity = SafeCast.toInt256(uint256(posStorage.liquidity)) + p.params.liquidityDelta;
                 PositionAccounting storage paRem = s.positionAccounting[result.id];
-                _applyLiquidityMirrorTransition(
-                    s,
-                    paRem,
-                    posStorage,
-                    initialLiquidity,
-                    newLiquidity < 0 ? 0 : SafeCast.toUint128(uint256(newLiquidity))
-                );
+                _applyLiquidityMirrorTransition(s, paRem, posStorage, uint256(liveLiquidityBeforeAdd), nextLiquidity);
             }
         }
 
@@ -1327,6 +1322,23 @@ library VTSPositionLib {
                 s.commits[commitId].activePositionCount++;
             }
         }
+    }
+
+    function _deriveIncreaseTransitionLiquidity(uint128 liq, int256 liquidityDelta)
+        internal
+        pure
+        returns (uint128 liveLiquidityBeforeAdd, uint128 nextLiquidity)
+    {
+        if (liquidityDelta <= 0) {
+            return (liq, liq);
+        }
+
+        uint128 addedLiquidity = uint256(liquidityDelta).toUint128();
+        liveLiquidityBeforeAdd = liq > addedLiquidity ? liq - addedLiquidity : 0;
+        nextLiquidity = liq;
+
+        // Unit harnesses may call touchPosition without pre-mutating PoolManager liquidity first.
+        if (nextLiquidity == 0) nextLiquidity = liveLiquidityBeforeAdd + addedLiquidity;
     }
 
     /// @dev Compute settled excess over current commitment maxima after a decrease.

@@ -142,6 +142,7 @@ contract VTSLifecycleLinkedLibHarness {
     /// @dev TEST-ONLY: minimal commit state for validateMMOperation / signal validity tests
     function testSeedCommit(uint256 commitId, address owner_, address advancer_, uint256 expiresAt) external {
         MarketMaker.State storage st = s.commits[commitId].mmState;
+        delete st.reserves;
         st.owner = owner_;
         st.advancer = advancer_;
         st.reserves.push(MarketMaker.Reserve({asset: "x", amount: 1}));
@@ -169,6 +170,23 @@ contract VTSLifecycleLinkedLibHarness {
         });
     }
 
+    function testSetCheckpoint(
+        PositionId pid,
+        uint8 openMask,
+        uint256 openSince0,
+        uint256 openSince1,
+        uint256 gracePeriodExtension0,
+        uint256 gracePeriodExtension1
+    ) external {
+        s.positions[pid].checkpoint = RFSCheckpoint({
+            openMask: openMask,
+            openSince0: openSince0,
+            openSince1: openSince1,
+            gracePeriodExtension0: gracePeriodExtension0,
+            gracePeriodExtension1: gracePeriodExtension1
+        });
+    }
+
     function testLinkCommitPosition(uint256 commitId, uint256 positionIndex, PositionId pid) external {
         s.commits[commitId].positions[positionIndex] = pid;
     }
@@ -176,6 +194,11 @@ contract VTSLifecycleLinkedLibHarness {
     function testSetCommitmentDeficit(PositionId pid, uint256 d0, uint256 d1) external {
         s.positionAccounting[pid].commitmentDeficit.token0 = d0;
         s.positionAccounting[pid].commitmentDeficit.token1 = d1;
+    }
+
+    function testSetCommitmentMax(PositionId pid, uint256 c0, uint256 c1) external {
+        s.positionAccounting[pid].commitmentMax.token0 = c0;
+        s.positionAccounting[pid].commitmentMax.token1 = c1;
     }
 
     function getCommitMMOwner(uint256 commitId) external view returns (address) {
