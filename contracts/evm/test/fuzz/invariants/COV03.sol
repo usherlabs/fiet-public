@@ -11,7 +11,7 @@ import {FixedPoint128} from "v4-periphery/lib/v4-core/src/libraries/FixedPoint12
 /// @notice Echidna harness for COV-03: Coverage increments are meaningful only when there is principal/settled to index against.
 ///         Exercises VTSCommitLib.incrementCoverage and asserts the conditional routing:
 ///         - DICE: if totalDeficitPrincipal > 0, bump coveragePerDeficitIndexX128; else add to coverageResidualDICE.
-///         - CISE: if totalSettled > 0, bump coveragePerSettledIndexX128; else add to coverageResidualCISE.
+///         - CISE: if totalSettled > 0, bump coveragePerSettledIndexX128; else do nothing.
 contract COV03 {
     VTSCommitLibHarness internal commitHarness;
 
@@ -30,7 +30,6 @@ contract COV03 {
         uint256 dIndex;
         uint256 dResidual;
         uint256 sIndex;
-        uint256 sResidual;
     }
 
     Snap internal beforeSnap;
@@ -84,19 +83,19 @@ contract COV03 {
         return (indexBefore, residualBefore + coveredAmount);
     }
 
-    function _expectCISE(uint256 indexBefore, uint256 residualBefore, uint256 totalSettled, uint256 coveredAmount)
+    function _expectCISE(uint256 indexBefore, uint256 totalSettled, uint256 coveredAmount)
         internal
         pure
-        returns (uint256 expIndex, uint256 expResidual)
+        returns (uint256 expIndex)
     {
         if (coveredAmount == 0) {
-            return (indexBefore, residualBefore);
+            return indexBefore;
         }
         if (totalSettled > 0) {
             uint256 deltaIndex = FullMath.mulDiv(coveredAmount, FixedPoint128.Q128, totalSettled);
-            return (indexBefore + deltaIndex, residualBefore);
+            return indexBefore + deltaIndex;
         }
-        return (indexBefore, residualBefore + coveredAmount);
+        return indexBefore;
     }
 
     function _clamp(uint256 value) internal pure returns (uint256) {
@@ -122,17 +121,14 @@ contract COV03 {
 
         (uint256 expDIndex, uint256 expDResidual) =
             _expectDICE(beforeSnap.dIndex, beforeSnap.dResidual, sTotalPrincipal, sCovered);
-        (uint256 expSIndex, uint256 expSResidual) =
-            _expectCISE(beforeSnap.sIndex, beforeSnap.sResidual, sTotalSettled, sCovered);
+        uint256 expSIndex = _expectCISE(beforeSnap.sIndex, sTotalSettled, sCovered);
 
-        return afterSnap.dIndex == expDIndex && afterSnap.dResidual == expDResidual && afterSnap.sIndex == expSIndex
-            && afterSnap.sResidual == expSResidual;
+        return afterSnap.dIndex == expDIndex && afterSnap.dResidual == expDResidual && afterSnap.sIndex == expSIndex;
     }
 
     function _snapshot(Snap storage snap) internal {
         snap.dIndex = commitHarness.getCoveragePerDeficitIndexX128(POOL_ID, sTokenIndex);
         snap.dResidual = commitHarness.getCoverageResidualDICE(POOL_ID, sTokenIndex);
         snap.sIndex = commitHarness.getCoveragePerSettledIndexX128(POOL_ID, sTokenIndex);
-        snap.sResidual = commitHarness.getCoverageResidualCISE(POOL_ID, sTokenIndex);
     }
 }

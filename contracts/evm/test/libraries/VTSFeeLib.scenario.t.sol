@@ -671,7 +671,7 @@ contract VTSFeeLibScenarioTest is VTSOrchestratorFixture {
         uint256 coverage0;
         {
             (,, uint256 directSettled0,,,) = _testableOrchestrator().getPositionAccounting(directPosId);
-            (uint256 totalSettled0,,,,,,,) = _testableOrchestrator().getPoolCISEAccounting(corePoolKey.toId());
+            (uint256 totalSettled0,,,,,) = _testableOrchestrator().getPoolCISEAccounting(corePoolKey.toId());
             assertGt(totalSettled0, 0, "Precondition: totalSettled0 must be > 0 for CISE indexing");
             assertGt(directSettled0, 0, "Precondition: DirectLP must have settled0 > 0 for CISE exposure");
 
@@ -784,7 +784,7 @@ contract VTSFeeLibScenarioTest is VTSOrchestratorFixture {
         // We compute coverage0 to ensure DirectLP gets positive CISE exposure on token0, enabling a token1 bonus.
         {
             (,, uint256 directSettled0,,,) = _testableOrchestrator().getPositionAccounting(directPosId);
-            (uint256 totalSettled0,,,,,,,) = _testableOrchestrator().getPoolCISEAccounting(corePoolKey.toId());
+            (uint256 totalSettled0,,,,,) = _testableOrchestrator().getPoolCISEAccounting(corePoolKey.toId());
             assertGt(totalSettled0, 0, "Precondition: totalSettled0 must be > 0 for CISE indexing");
             assertGt(directSettled0, 0, "Precondition: DirectLP must have settled0 > 0 for CISE exposure");
 
@@ -1101,7 +1101,7 @@ contract VTSFeeLibScenarioTest is VTSOrchestratorFixture {
             // Ensure the beneficiary accrues positive CISE exposure so a bonus can be queued.
             {
                 (,, uint256 beneficiarySettled0,,,) = _testableOrchestrator().getPositionAccounting(beneficiaryPosId);
-                (uint256 totalSettled0,,,,,,,) = _testableOrchestrator().getPoolCISEAccounting(corePoolKey.toId());
+                (uint256 totalSettled0,,,,,) = _testableOrchestrator().getPoolCISEAccounting(corePoolKey.toId());
                 assertGt(totalSettled0, 0, "Precondition: totalSettled0 must be > 0 for CISE indexing");
                 assertGt(beneficiarySettled0, 0, "Precondition: beneficiary must have settled0 > 0 for CISE exposure");
 
@@ -1278,7 +1278,7 @@ contract VTSFeeLibScenarioTest is VTSOrchestratorFixture {
             // Ensure this DirectLP accrues positive exposure after creation so it can queue a bonus on touch.
             {
                 (,, uint256 dlSettled0,,,) = _testableOrchestrator().getPositionAccounting(directPosId);
-                (uint256 totalSettled0,,,,,,,) = _testableOrchestrator().getPoolCISEAccounting(corePoolKey.toId());
+                (uint256 totalSettled0,,,,,) = _testableOrchestrator().getPoolCISEAccounting(corePoolKey.toId());
                 assertGt(totalSettled0, 0, "Precondition: totalSettled0 must be > 0 for CISE indexing");
                 assertGt(dlSettled0, 0, "Precondition: DirectLP must have settled0 > 0 for CISE exposure");
 
@@ -1429,7 +1429,7 @@ contract VTSFeeLibScenarioTest is VTSOrchestratorFixture {
             // Ensure positive CISE exposure after creation so it can queue a bonus on touch.
             {
                 (,, uint256 mmSettled0,,,) = _testableOrchestrator().getPositionAccounting(beneficiaryPosId);
-                (uint256 totalSettled0,,,,,,,) = _testableOrchestrator().getPoolCISEAccounting(corePoolKey.toId());
+                (uint256 totalSettled0,,,,,) = _testableOrchestrator().getPoolCISEAccounting(corePoolKey.toId());
                 assertGt(totalSettled0, 0, "Precondition: totalSettled0 must be > 0 for CISE indexing");
                 assertGt(mmSettled0, 0, "Precondition: beneficiary MM must have settled0 > 0 for CISE exposure");
 

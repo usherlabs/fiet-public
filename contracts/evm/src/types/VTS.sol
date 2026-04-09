@@ -211,10 +211,9 @@ struct PoolAccounting {
     TokenPairUint totalSettled;
     // CISE: Coverage-per-settled index (Q128) per token
     TokenPairUint coveragePerSettledIndexX128;
-    // CISE: Deferred residual when totalSettled = 0 at exercise time
-    TokenPairUint coverageResidualCISE;
-    // CISE: Pool-wide bonus denominator window: incremented by coveredAmount on each coverage index step
-    // (and by deferred residual on flush); decremented when bonuses are allocated. Position numerators accrue lazily.
+    // CISE: Pool-wide bonus denominator window: incremented by coveredAmount on each allocatable coverage index step
+    // and decremented when bonuses are allocated. Position numerators accrue lazily. Coverage exercised while
+    // `totalSettled == 0` is intentionally excluded from CISE rather than being deferred and socialised later.
     TokenPairUint totalCISEExposureSinceLastMod;
     // CSI: Pool-wide remaining-share factor (Q128). Zero means either "no spend this epoch yet" or
     // "epoch fully spent"; `feesSharedEpoch` disambiguates replacement epochs.

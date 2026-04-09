@@ -75,8 +75,9 @@ library VTSFeeLib {
 
         if (potAvail == 0) return false;
 
-        // CISE: Denominator is the pool-wide coverage window (eager on incrementCoverage / CISE residual flush),
-        // decremented on allocation; not lazily summed from per-touch position realisations.
+        // CISE: Denominator is the pool-wide allocatable coverage window, updated eagerly on `incrementCoverage`
+        // and decremented on allocation; not lazily summed from per-touch position realisations. Coverage exercised
+        // while `totalSettled == 0` is excluded upstream because no settled liquidity was live to earn that weight.
         uint256 totalExposure = paPool.totalCISEExposureSinceLastMod.get(coverageTokenIndex);
         if (totalExposure == 0) return false;
 

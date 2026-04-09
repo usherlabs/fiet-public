@@ -162,7 +162,6 @@ library VTSPositionLib {
         // CISE: Track pool-wide totalSettled aggregate
         {
             uint256 currentTotalSettled = paPool.totalSettled.get(tokenIndex);
-            bool wasZero = currentTotalSettled == 0;
 
             if (settledDelta >= 0) {
                 paPool.totalSettled.set(tokenIndex, currentTotalSettled + uint256(settledDelta));
@@ -171,40 +170,12 @@ library VTSPositionLib {
                 paPool.totalSettled
                     .set(tokenIndex, decSettled > currentTotalSettled ? 0 : (currentTotalSettled - decSettled));
             }
-
-            // CISE: Flush residual if totalSettled transitions from 0 to >0
-            uint256 newTotalSettled = paPool.totalSettled.get(tokenIndex);
-            if (wasZero && newTotalSettled > 0) {
-                _flushCISEResidualIfNeeded(s, pos.poolId, tokenIndex);
-                _checkpointFirstPostZeroSettlerCISE(s, id, paPool, tokenIndex);
-            }
         }
 
         // Return helper-consumed amount: cumulativeDeficit coverage + settled change
         // Deposits (positive delta to _updateSettlement): returns positive value
         // Withdrawals (negative delta to _updateSettlement): returns negative value (0 + negative settledDelta)
         applied = cumulativeDeficitCoverage.toInt256() + settledDelta;
-    }
-
-    /// @dev Security rationale:
-    ///      If deferred CISE residual is flushed exactly when pool `totalSettled` goes from 0 to >0,
-    ///      the position causing that transition would otherwise have:
-    ///      1) a pre-flush `ciseIndexLastX128`,
-    ///      2) a post-deposit positive `settled` balance, and
-    ///      3) permissionless access to `settlePositionGrowths`.
-    ///
-    ///      That combination lets the first post-zero settler realise historical residual coverage as if it were
-    ///      their own exposure, then potentially queue or materialise an outsized bonus against `protocolFeeAccrued`
-    ///      on a later touch. We checkpoint them to the post-flush index immediately so only future coverage is eligible.
-    function _checkpointFirstPostZeroSettlerCISE(
-        VTSStorage storage s,
-        PositionId id,
-        PoolAccounting storage paPool,
-        uint8 tokenIndex
-    ) private {
-        // The first post-zero settler must not inherit historical residual exposure that accrued while
-        // the pool had no settled liquidity. Checkpoint them to the post-flush index immediately.
-        s.positionAccounting[id].ciseIndexLastX128.set(tokenIndex, paPool.coveragePerSettledIndexX128.get(tokenIndex));
     }
 
     /// @notice "Silent" update settlement helper wrapper for contexts where we deliberately don't need the applied return value
@@ -341,28 +312,6 @@ library VTSPositionLib {
     // --------------------------------------------------
     // CISE (Coverage-Indexed Settled Exposure) Helpers
     // --------------------------------------------------
-
-    /// @notice Flush any pending CISE residual into the coverage-per-settled index
-    /// @dev Called when totalSettled increases from 0 to >0.
-    ///      Residual is socialised across current settled liquidity holders.
-    /// @param s The central VTS storage
-    /// @param poolId The pool ID
-    /// @param tokenIndex The token index (0 or 1)
-    function _flushCISEResidualIfNeeded(VTSStorage storage s, PoolId poolId, uint8 tokenIndex) internal {
-        PoolAccounting storage paPool = s.poolAccounting[poolId];
-        uint256 residual = paPool.coverageResidualCISE.get(tokenIndex);
-        uint256 totalSettled = paPool.totalSettled.get(tokenIndex);
-
-        if (residual > 0 && totalSettled > 0) {
-            uint256 deltaIndex = FullMath.mulDiv(residual, FixedPoint128.Q128, totalSettled);
-            uint256 currentIndex = paPool.coveragePerSettledIndexX128.get(tokenIndex);
-            paPool.coveragePerSettledIndexX128.set(tokenIndex, currentIndex + deltaIndex);
-            // Match incrementCoverage: socialise the full deferred coverage window into the bonus denominator.
-            uint256 curTotalCISE = paPool.totalCISEExposureSinceLastMod.get(tokenIndex);
-            paPool.totalCISEExposureSinceLastMod.set(tokenIndex, curTotalCISE + residual);
-            paPool.coverageResidualCISE.set(tokenIndex, 0);
-        }
-    }
 
     // --------------------------------------------------
     // Growth Accounting Helper Functions
@@ -741,8 +690,9 @@ library VTSPositionLib {
 
     /// @notice Realise and checkpoint CISE exposure for a single token
     /// @dev Computes exposure = settled * (indexNow - indexLast) / Q128 and accumulates it on the position.
-    ///      Pool-wide `totalCISEExposureSinceLastMod` is updated eagerly in `incrementCoverage` and
-    ///      `_flushCISEResidualIfNeeded`, not here, so bonus denominators are not first-mover gamed.
+    ///      Pool-wide `totalCISEExposureSinceLastMod` is updated eagerly in `incrementCoverage`, not here,
+    ///      so bonus denominators are not first-mover gamed. Coverage exercised while totalSettled was zero
+    ///      is intentionally excluded from CISE and never reaches this realisation path.
     /// @dev Performed on _settleCoverageUsage to ensure accurate CISE exposure is realised and checkpointed
     /// @param pa The position accounting storage reference
     /// @param paPool The pool accounting storage reference

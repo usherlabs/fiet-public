@@ -65,8 +65,6 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
         uint256 totalSettled1;
         uint256 ciseIndex0;
         uint256 ciseIndex1;
-        uint256 ciseResidual0;
-        uint256 ciseResidual1;
         uint256 totalCISEExposure0;
         uint256 totalCISEExposure1;
     }
@@ -529,7 +527,6 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
         assertEq(ciseAfter.totalSettled0, ciseBefore.totalSettled0, "totalSettled0 should not change");
         assertEq(ciseAfter.totalSettled1, ciseBefore.totalSettled1, "totalSettled1 should not change");
         assertEq(ciseAfter.ciseIndex0, ciseBefore.ciseIndex0, "ciseIndex0 should not change");
-        assertEq(ciseAfter.ciseResidual0, ciseBefore.ciseResidual0, "ciseResidual0 should not change");
         assertEq(ciseAfter.totalCISEExposure0, ciseBefore.totalCISEExposure0, "totalCISEExposure0 should not change");
         // Token1 coverage: when pool totalSettled1 > 0, incrementCoverage eagerly bumps CISE exposure (see VTSCommitLib).
         if (ciseBefore.totalSettled1 > 0) {
@@ -546,7 +543,9 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
             );
         }
 
-        // Coverage must land either in the index (if totals > 0) or in residuals (if totals == 0).
+        // Coverage routing differs by mechanism:
+        // - DICE defers into residuals when no deficit principal exists.
+        // - CISE only advances when settled liquidity is already live; zero-settled coverage is ignored.
         if (diceBefore.totalDeficitPrincipal1 > 0) {
             assertGt(diceAfter.diceIndex1, diceBefore.diceIndex1, "DICE index1 should increase when deficits exist");
         } else {
@@ -560,10 +559,8 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
         if (ciseBefore.totalSettled1 > 0) {
             assertGt(ciseAfter.ciseIndex1, ciseBefore.ciseIndex1, "CISE index1 should increase when settled > 0");
         } else {
-            assertGt(
-                ciseAfter.ciseResidual1,
-                ciseBefore.ciseResidual1,
-                "CISE residual1 should increase when no settled exists"
+            assertEq(
+                ciseAfter.ciseIndex1, ciseBefore.ciseIndex1, "CISE index1 should not change when no settled exists"
             );
         }
     }
@@ -574,16 +571,8 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
     }
 
     function _getPoolCISEAccounting(PoolId poolId) internal view returns (CISEAccounting memory a) {
-        (
-            a.totalSettled0,
-            a.totalSettled1,
-            a.ciseIndex0,
-            a.ciseIndex1,
-            a.ciseResidual0,
-            a.ciseResidual1,
-            a.totalCISEExposure0,
-            a.totalCISEExposure1
-        ) = _testableOrchestrator().getPoolCISEAccounting(poolId);
+        (a.totalSettled0, a.totalSettled1, a.ciseIndex0, a.ciseIndex1, a.totalCISEExposure0, a.totalCISEExposure1) =
+            _testableOrchestrator().getPoolCISEAccounting(poolId);
     }
 
     // ============================================================

@@ -21,6 +21,7 @@ import {ModifyLiquidityParams} from "@uniswap/v4-core/src/types/PoolOperation.so
 import {BalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
 import {IPoolManager} from "v4-periphery/lib/v4-core/src/interfaces/IPoolManager.sol";
 import {VTSPositionLib} from "../../../src/libraries/VTSPositionLib.sol";
+import {VTSCommitLib} from "../../../src/libraries/VTSCommitLib.sol";
 import {RFSCheckpoint} from "../../../src/types/Checkpoint.sol";
 import {IMarketVault} from "../../../src/interfaces/IMarketVault.sol";
 import {DynamicCurrencyDelta} from "../../../src/libraries/DynamicCurrencyDelta.sol";
@@ -65,6 +66,11 @@ contract VTSPositionLibHarness {
     /// @notice Exposes settlePositionGrowths
     function settlePositionGrowths(IPoolManager poolManager, PositionId positionId) external {
         VTSPositionLib.settlePositionGrowths(s, poolManager, positionId);
+    }
+
+    /// @notice Exposes incrementCoverage for CISE/DICE routing tests (same storage as position lib)
+    function incrementCoverage(PoolId poolId, uint8 tokenIndex, uint256 coveredAmount) external {
+        VTSCommitLib.incrementCoverage(s, poolId, tokenIndex, coveredAmount);
     }
 
     /// @notice Exposes calcRFS
@@ -222,11 +228,6 @@ contract VTSPositionLibHarness {
         return (
             s.poolAccounting[poolId].totalDeficitPrincipal.token0, s.poolAccounting[poolId].totalDeficitPrincipal.token1
         );
-    }
-
-    function getPoolCoverageResidualCISE(PoolId poolId) external view returns (uint256 residual0, uint256 residual1) {
-        return
-            (s.poolAccounting[poolId].coverageResidualCISE.token0, s.poolAccounting[poolId].coverageResidualCISE.token1);
     }
 
     function getPoolCoverageResidualDICE(PoolId poolId) external view returns (uint256 residual0, uint256 residual1) {
@@ -404,11 +405,6 @@ contract VTSPositionLibHarness {
     function setPoolTotalDeficitPrincipal(PoolId poolId, uint256 principal0, uint256 principal1) external {
         s.poolAccounting[poolId].totalDeficitPrincipal.token0 = principal0;
         s.poolAccounting[poolId].totalDeficitPrincipal.token1 = principal1;
-    }
-
-    function setPoolCoverageResidualCISE(PoolId poolId, uint256 residual0, uint256 residual1) external {
-        s.poolAccounting[poolId].coverageResidualCISE.token0 = residual0;
-        s.poolAccounting[poolId].coverageResidualCISE.token1 = residual1;
     }
 
     function setPoolCoverageResidualDICE(PoolId poolId, uint256 residual0, uint256 residual1) external {

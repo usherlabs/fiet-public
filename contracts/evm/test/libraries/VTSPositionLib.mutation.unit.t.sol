@@ -240,12 +240,10 @@ contract VTSPositionLibMutationUnitTest is Test {
         (PositionId id, ModifyLiquidityParams memory p) = _register(bytes32(uint256(0xC15E)), liquidity);
 
         harness.setCommitmentMax(id, settledAmount, 0);
-        harness.setPoolCoverageResidualCISE(poolId, residual, 0);
+        harness.incrementCoverage(poolId, 0, residual);
 
         _pmSetSlot0Tick(poolId, 0);
         _pmSetPositionLiquidity(poolId, PositionId.unwrap(id), liquidity);
-
-        uint256 expectedDeltaIndex = FullMath.mulDiv(residual, FixedPoint128.Q128, settledAmount);
 
         int256 applied = harness.updateSettlement(id, 0, int256(settledAmount));
         assertEq(applied, int256(settledAmount), "deposit should settle the triggering position");
@@ -253,19 +251,14 @@ contract VTSPositionLibMutationUnitTest is Test {
         (uint256 totalSettled0,) = harness.getPoolTotalSettled(poolId);
         assertEq(totalSettled0, settledAmount, "pool totalSettled should reflect the first depositor");
 
-        (uint256 residualAfter0,) = harness.getPoolCoverageResidualCISE(poolId);
-        assertEq(residualAfter0, 0, "CISE residual should flush on the 0->>0 transition");
-
         (uint256 poolIndex0,) = harness.getPoolCoveragePerSettledIndexX128(poolId);
-        assertEq(poolIndex0, expectedDeltaIndex, "pool CISE index should advance by the deferred residual");
+        assertEq(poolIndex0, 0, "pool CISE index unchanged: zero-settled coverage is not deferred into CISE");
 
         (uint256 poolExposure0,) = harness.getPoolTotalCISEExposure(poolId);
-        assertEq(poolExposure0, residual, "pool CISE denominator should include the flushed residual");
+        assertEq(poolExposure0, 0, "pool CISE denominator unchanged: no dead weight from zero-settled coverage");
 
         (uint256 ciseIndexLast0,) = harness.getCISEIndexLastX128(id);
-        assertEq(
-            ciseIndexLast0, expectedDeltaIndex, "first post-zero settler must checkpoint to the post-flush CISE index"
-        );
+        assertEq(ciseIndexLast0, 0, "position CISE checkpoint matches pool index when pool CISE index never moved");
 
         harness.setPoolProtocolFeeAccrued(poolId, 0, 777e18);
 
@@ -273,7 +266,7 @@ contract VTSPositionLibMutationUnitTest is Test {
 
         {
             (uint256 ciseExposure0, uint256 ciseExposure1) = harness.getCISEExposure(id);
-            assertEq(ciseExposure0, 0, "settling growths must not realise historical residual exposure");
+            assertEq(ciseExposure0, 0, "settling growths must not realise CISE from zero-settled coverage epochs");
             assertEq(ciseExposure1, 0, "unaffected token should remain without exposure");
         }
 
@@ -1362,37 +1355,6 @@ contract VTSPositionLibMutationUnitTest is Test {
     // Residual flushers: kill guard broadening mutants (291, 314)
     // ============================================================
 
-    function test_flushCISE_residualPositive_totalSettledZero_isNoop() public {
-        PoolId p = PoolId.wrap(bytes32(uint256(0xC15E)));
-        residualExpose.setCISE(p, 0, 1e18, 0, 0);
-
-        // Expected: no-op, and must NOT revert.
-        residualExpose.flushCISE(p, 0);
-        (uint256 idx, uint256 residual, uint256 totalSettled) = residualExpose.getCISE(p, 0);
-        assertEq(idx, 0, "CISE index should remain unchanged when totalSettled is zero");
-        assertEq(residual, 1e18, "CISE residual should remain when totalSettled is zero");
-        assertEq(totalSettled, 0, "CISE totalSettled should remain zero");
-    }
-
-    function test_flushCISE_happyPath_updatesIndex_andClearsResidual() public {
-        PoolId p = PoolId.wrap(bytes32(uint256(0xC15E2)));
-        uint256 residual = 5e18;
-        uint256 totalSettled = 20e18;
-        residualExpose.setCISE(p, 1, residual, totalSettled, 7);
-
-        residualExpose.flushCISE(p, 1);
-        (uint256 idxAfter, uint256 residualAfter,) = residualExpose.getCISE(p, 1);
-
-        uint256 expDelta = FullMath.mulDiv(residual, FixedPoint128.Q128, totalSettled);
-        assertEq(idxAfter, 7 + expDelta, "CISE index should advance by residual/totalSettled");
-        assertEq(residualAfter, 0, "CISE residual should clear after flush");
-        assertEq(
-            residualExpose.getPoolTotalCISEExposureSinceLastMod(p, 1),
-            residual,
-            "flush should add residual to pool CISE bonus denominator"
-        );
-    }
-
     function test_flushDICE_residualPositive_principalZero_isNoop() public {
         PoolId p = PoolId.wrap(bytes32(uint256(0xD1CE)));
         residualExpose.setDICE(p, 0, 1e18, 0, 0);
@@ -1763,44 +1725,10 @@ contract VTSPositionLibDeltaClearanceExpose {
 contract VTSPositionLibResidualFlushExpose {
     VTSStorage internal s;
 
-    function setCISE(PoolId poolId, uint8 tokenIndex, uint256 residual, uint256 totalSettled, uint256 indexNow)
-        external
-    {
-        if (tokenIndex == 0) {
-            s.poolAccounting[poolId].coverageResidualCISE.token0 = residual;
-            s.poolAccounting[poolId].totalSettled.token0 = totalSettled;
-            s.poolAccounting[poolId].coveragePerSettledIndexX128.token0 = indexNow;
-        } else {
-            s.poolAccounting[poolId].coverageResidualCISE.token1 = residual;
-            s.poolAccounting[poolId].totalSettled.token1 = totalSettled;
-            s.poolAccounting[poolId].coveragePerSettledIndexX128.token1 = indexNow;
-        }
-    }
-
-    function getCISE(PoolId poolId, uint8 tokenIndex)
-        external
-        view
-        returns (uint256 indexNow, uint256 residual, uint256 totalSettled)
-    {
-        if (tokenIndex == 0) {
-            indexNow = s.poolAccounting[poolId].coveragePerSettledIndexX128.token0;
-            residual = s.poolAccounting[poolId].coverageResidualCISE.token0;
-            totalSettled = s.poolAccounting[poolId].totalSettled.token0;
-        } else {
-            indexNow = s.poolAccounting[poolId].coveragePerSettledIndexX128.token1;
-            residual = s.poolAccounting[poolId].coverageResidualCISE.token1;
-            totalSettled = s.poolAccounting[poolId].totalSettled.token1;
-        }
-    }
-
     function getPoolTotalCISEExposureSinceLastMod(PoolId poolId, uint8 tokenIndex) external view returns (uint256) {
         return tokenIndex == 0
             ? s.poolAccounting[poolId].totalCISEExposureSinceLastMod.token0
             : s.poolAccounting[poolId].totalCISEExposureSinceLastMod.token1;
-    }
-
-    function flushCISE(PoolId poolId, uint8 tokenIndex) external {
-        VTSPositionLib._flushCISEResidualIfNeeded(s, poolId, tokenIndex);
     }
 
     function setDICE(PoolId poolId, uint8 tokenIndex, uint256 residual, uint256 principal, uint256 indexNow) external {

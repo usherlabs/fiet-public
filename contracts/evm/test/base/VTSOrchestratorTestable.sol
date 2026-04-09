@@ -191,8 +191,6 @@ contract VTSOrchestratorTestable is VTSOrchestrator {
     /// @return totalSettled1 Total settled aggregate for token1
     /// @return coveragePerSettledIndex0 Coverage per settled index (Q128) for token0
     /// @return coveragePerSettledIndex1 Coverage per settled index (Q128) for token1
-    /// @return coverageResidualCISE0 Deferred CISE residual for token0
-    /// @return coverageResidualCISE1 Deferred CISE residual for token1
     /// @return totalCISEExposure0 Pool-wide CISE exposure since last modification for token0
     /// @return totalCISEExposure1 Pool-wide CISE exposure since last modification for token1
     function getPoolCISEAccounting(PoolId poolId)
@@ -203,8 +201,6 @@ contract VTSOrchestratorTestable is VTSOrchestrator {
             uint256 totalSettled1,
             uint256 coveragePerSettledIndex0,
             uint256 coveragePerSettledIndex1,
-            uint256 coverageResidualCISE0,
-            uint256 coverageResidualCISE1,
             uint256 totalCISEExposure0,
             uint256 totalCISEExposure1
         )
@@ -215,8 +211,6 @@ contract VTSOrchestratorTestable is VTSOrchestrator {
             paPool.totalSettled.token1,
             paPool.coveragePerSettledIndexX128.token0,
             paPool.coveragePerSettledIndexX128.token1,
-            paPool.coverageResidualCISE.token0,
-            paPool.coverageResidualCISE.token1,
             paPool.totalCISEExposureSinceLastMod.token0,
             paPool.totalCISEExposureSinceLastMod.token1
         );
