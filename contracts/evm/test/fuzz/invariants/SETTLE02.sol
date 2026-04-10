@@ -52,6 +52,7 @@ contract SETTLE02 {
     bool internal withdrawAllOk = true;
 
     constructor() {
+        EchidnaLinkedLibs.deployVTSFeeLinkedLib();
         EchidnaLinkedLibs.deployVTSPositionLib();
         harness = new VTSPositionLibEchidnaHarness();
         poolManager = new MockPoolManager();

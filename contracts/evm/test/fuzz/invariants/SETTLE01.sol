@@ -43,6 +43,7 @@ contract SETTLE01 {
     bool internal closedAllOk = true;
 
     constructor() {
+        EchidnaLinkedLibs.deployVTSFeeLinkedLib();
         EchidnaLinkedLibs.deployVTSPositionLib();
         harness = new VTSPositionLibEchidnaHarness();
         poolManager = new MockPoolManager();
