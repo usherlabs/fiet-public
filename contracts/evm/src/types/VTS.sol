@@ -187,7 +187,7 @@ struct PositionAccounting {
     TokenPairUint feesSharedRemainingFactorLastX128;
     // CSI: Position checkpoint of the pool spend epoch (per token), advanced with the pool on sync / setup.
     TokenPairUint feesSharedEpoch;
-    // Remainder numerator for coverage fee-burn baseline checkpoint (see VTSPositionLib._applyBurnBase).
+    // Remainder numerator for coverage fee-burn baseline checkpoint (see VTSFeeLib._applyBurnBase).
     TokenPairUint feeBurnGrowthRemainder;
 }
 

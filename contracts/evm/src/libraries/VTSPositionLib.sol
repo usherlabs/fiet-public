@@ -560,91 +560,8 @@ library VTSPositionLib {
         }
     }
 
-    /// @notice Apply banked residual-derived DICE burn against later outflow windows only
-    function _applyBankedResidualBurn(
-        VTSStorage storage s,
-        IPoolManager poolManager,
-        PositionId id,
-        PoolId p,
-        uint8 tokenIndex,
-        uint128 positionLiquidity
-    ) private {
-        PositionAccounting storage pa = s.positionAccounting[id];
-        uint256 pendingBurnBase = pa.pendingResidualBurnBase.get(tokenIndex);
-        if (pendingBurnBase == 0) return;
-
-        uint256 outflowFloor = pa.pendingResidualBurnOutflowsFloor.get(tokenIndex);
-        uint256 consumedBurnBase = VTSFeeLinkedLib.applyBurnBase(
-            s, poolManager, id, p, tokenIndex, pendingBurnBase, positionLiquidity, outflowFloor, true
-        );
-        if (consumedBurnBase > 0) {
-            pa.pendingResidualBurnBase.set(tokenIndex, pendingBurnBase - consumedBurnBase);
-            if (pendingBurnBase == consumedBurnBase) {
-                pa.pendingResidualBurnOutflowsFloor.set(tokenIndex, 0);
-                _clearResolvedResidualFeeBacking(pa, tokenIndex);
-            }
-        }
-    }
-
-    /// @dev Residual fee backing is episode-scoped: once the matching burn base is exhausted,
-    ///      any leftover backing on the opposite fee lane must not survive into a later residual episode.
-    function _clearResolvedResidualFeeBacking(PositionAccounting storage pa, uint8 deficitTokenIndex) private {
-        if (pa.pendingResidualBurnBase.get(deficitTokenIndex) != 0) return;
-
-        uint8 feeTokenIndex = deficitTokenIndex == 0 ? 1 : 0;
-        pa.pendingResidualFeeBacking.set(feeTokenIndex, 0);
-    }
-
-    /// @notice Freeze unresolved residual-burn fee backing before a position deactivates to zero liquidity.
-    /// @dev Captures fee growth accrued up to the remove call on the fee token lanes needed by pending residual burn.
-    ///      This keeps historical burn backing available after reactivation checkpoints reset feeGrowthInsideLast.
-    function _captureResidualFeeBackingOnDeactivation(
-        VTSStorage storage s,
-        IPoolManager poolManager,
-        PositionId id,
-        uint128 liquidityBeforeRemove
-    ) private {
-        if (liquidityBeforeRemove == 0) return;
-
-        PositionAccounting storage pa = s.positionAccounting[id];
-        bool needFeeToken0 = pa.pendingResidualBurnBase.token1 > 0;
-        bool needFeeToken1 = pa.pendingResidualBurnBase.token0 > 0;
-        if (!needFeeToken0 && !needFeeToken1) return;
-
-        Position memory pos = s.positions[id];
-        (uint256 fg0, uint256 fg1) =
-            StateLibrary.getFeeGrowthInside(poolManager, pos.poolId, pos.tickLower, pos.tickUpper);
-        uint256 liq = uint256(liquidityBeforeRemove);
-
-        if (needFeeToken0) {
-            uint256 last0 = pa.feeGrowthInsideLast.token0;
-            if (fg0 > last0) {
-                uint256 backing0 = FullMath.mulDiv(fg0 - last0, liq, FixedPoint128.Q128);
-                if (backing0 > 0) pa.pendingResidualFeeBacking.token0 += backing0;
-                pa.feeGrowthInsideLast.token0 = fg0;
-            }
-        }
-
-        if (needFeeToken1) {
-            uint256 last1 = pa.feeGrowthInsideLast.token1;
-            if (fg1 > last1) {
-                uint256 backing1 = FullMath.mulDiv(fg1 - last1, liq, FixedPoint128.Q128);
-                if (backing1 > 0) pa.pendingResidualFeeBacking.token1 += backing1;
-                pa.feeGrowthInsideLast.token1 = fg1;
-            }
-        }
-    }
-
-    /// @notice Apply coverage burn for a position
-    /// @param s The central VTS storage
-    /// @param poolManager The pool manager contract
-    /// @param id The position ID
-    /// @param p The pool ID
-    /// @param tokenIndex The token index (0 or 1) - this is the deficit token (output token)
-    /// @param cov The coverage usage amount
-    /// @param positionLiquidity The position liquidity
-    /// @dev Fees accrue on the input token, not the deficit token. For a token0 deficit (from token1->token0 swap),
-    ///      fees accrued on token1. For a token1 deficit (from token0->token1 swap), fees accrued on token0.
+    /// @notice Apply coverage burn for a position (implementation in `VTSFeeLib`; exposed for harness tests)
+    /// @dev Fees accrue on the input token, not the deficit token.
     function _applyCoverageBurn(
         VTSStorage storage s,
         IPoolManager poolManager,
@@ -654,31 +571,7 @@ library VTSPositionLib {
         uint256 cov,
         uint128 positionLiquidity
     ) internal {
-        PositionAccounting storage pa = s.positionAccounting[id];
-
-        // Calculate burnBase in scoped block
-        uint256 burnBase;
-        {
-            uint256 d = pa.cumulativeDeficit.get(tokenIndex);
-            uint256 settled = pa.settled.get(tokenIndex);
-            if (d == 0 && settled == 0) return;
-
-            // Enforce invariant: cov <= d + settled, then burn only deficit portion
-            // clamp the requested coverage to what could possibly be owed: cEff = min(cov, d + settled)
-            uint256 cEff = cov <= (d + settled) ? cov : (d + settled);
-            if (d == 0) return;
-            burnBase = cEff < d ? cEff : d; // min(coverage, deficit)
-
-            /**
-             * guards that include cov == 0 and cEff == 0 have become redundant correctness-wise:
-             * cov == 0: if cov is zero, then cEff = min(cov, d + settled) is zero, so burnBase = min(cEff, d) is also zero. That then deterministically produces feesBurn == 0, and _applyCoverageBurn returns without writing state (it has if (feesBurn == 0) return;). So the explicit cov == 0 guard is just an optimisation branch now, not a safety requirement.
-             * cEff == 0: same story—cEff == 0 implies burnBase == 0, which implies feesBurn == 0, which implies the function returns before any state updates.
-             */
-            // An early return.
-            if (burnBase == 0) return;
-        }
-
-        VTSFeeLinkedLib.applyBurnBase(s, poolManager, id, p, tokenIndex, burnBase, positionLiquidity, 0, false);
+        VTSFeeLinkedLib.applyCoverageBurn(s, poolManager, id, p, tokenIndex, cov, positionLiquidity);
     }
 
     /// @notice Settle coverage for a single token using DICE accounting
@@ -701,7 +594,7 @@ library VTSPositionLib {
         uint256 deficitPrincipal = pa.cumulativeDeficit.get(tokenIndex);
 
         // Only actually clears if pendingResidualBurnBase is zero == 0
-        _clearResolvedResidualFeeBacking(pa, tokenIndex);
+        VTSFeeLinkedLib.clearResolvedResidualFeeBacking(pa, tokenIndex);
 
         {
             uint256 residualIndexNow = s.poolAccounting[poolId].coveragePerResidualDeficitIndexX128.get(tokenIndex);
@@ -745,7 +638,7 @@ library VTSPositionLib {
             }
         }
 
-        _applyBankedResidualBurn(s, poolManager, positionId, poolId, tokenIndex, liq);
+        VTSFeeLinkedLib.applyBankedResidualBurn(s, poolManager, positionId, poolId, tokenIndex, liq);
     }
 
     /// @notice Realise and checkpoint CISE exposure for a single token
@@ -1315,7 +1208,7 @@ library VTSPositionLib {
                 // Mirror using live PoolManager liquidity post-modify for both paused and unpaused removes.
                 PositionAccounting storage paDec = s.positionAccounting[result.id];
                 if (initialLiquidity > 0 && liq == 0) {
-                    _captureResidualFeeBackingOnDeactivation(
+                    VTSFeeLinkedLib.captureResidualFeeBackingOnDeactivation(
                         s, ctx.poolManager, result.id, SafeCast.toUint128(initialLiquidity)
                     );
                 }
