@@ -66,10 +66,11 @@ library VTSPositionLib {
         BalanceDelta principalDelta;
     }
 
-    /// @dev Internal struct to return both immediate and queued MM decrease settlement splits.
+    /// @dev Internal struct to return both Hub-queued and DynamicCurrencyDelta-backed MM decrease settlement splits.
     struct LiquidityDecreaseResult {
         BalanceDelta settleableDelta;
-        BalanceDelta queuedShortfallDelta;
+        BalanceDelta queuedDelta;
+        BalanceDelta underlyingDeltaSettlement;
     }
 
     /// @dev Internal struct to reduce stack depth in _deltaAndCheckpointGrowth
@@ -574,12 +575,62 @@ library VTSPositionLib {
 
         uint256 outflowFloor = pa.pendingResidualBurnOutflowsFloor.get(tokenIndex);
         uint256 consumedBurnBase = VTSFeeLinkedLib.applyBurnBase(
-            s, poolManager, id, p, tokenIndex, pendingBurnBase, positionLiquidity, outflowFloor
+            s, poolManager, id, p, tokenIndex, pendingBurnBase, positionLiquidity, outflowFloor, true
         );
         if (consumedBurnBase > 0) {
             pa.pendingResidualBurnBase.set(tokenIndex, pendingBurnBase - consumedBurnBase);
             if (pendingBurnBase == consumedBurnBase) {
                 pa.pendingResidualBurnOutflowsFloor.set(tokenIndex, 0);
+                _clearResolvedResidualFeeBacking(pa, tokenIndex);
+            }
+        }
+    }
+
+    /// @dev Residual fee backing is episode-scoped: once the matching burn base is exhausted,
+    ///      any leftover backing on the opposite fee lane must not survive into a later residual episode.
+    function _clearResolvedResidualFeeBacking(PositionAccounting storage pa, uint8 deficitTokenIndex) private {
+        if (pa.pendingResidualBurnBase.get(deficitTokenIndex) != 0) return;
+
+        uint8 feeTokenIndex = deficitTokenIndex == 0 ? 1 : 0;
+        pa.pendingResidualFeeBacking.set(feeTokenIndex, 0);
+    }
+
+    /// @notice Freeze unresolved residual-burn fee backing before a position deactivates to zero liquidity.
+    /// @dev Captures fee growth accrued up to the remove call on the fee token lanes needed by pending residual burn.
+    ///      This keeps historical burn backing available after reactivation checkpoints reset feeGrowthInsideLast.
+    function _captureResidualFeeBackingOnDeactivation(
+        VTSStorage storage s,
+        IPoolManager poolManager,
+        PositionId id,
+        uint128 liquidityBeforeRemove
+    ) private {
+        if (liquidityBeforeRemove == 0) return;
+
+        PositionAccounting storage pa = s.positionAccounting[id];
+        bool needFeeToken0 = pa.pendingResidualBurnBase.token1 > 0;
+        bool needFeeToken1 = pa.pendingResidualBurnBase.token0 > 0;
+        if (!needFeeToken0 && !needFeeToken1) return;
+
+        Position memory pos = s.positions[id];
+        (uint256 fg0, uint256 fg1) =
+            StateLibrary.getFeeGrowthInside(poolManager, pos.poolId, pos.tickLower, pos.tickUpper);
+        uint256 liq = uint256(liquidityBeforeRemove);
+
+        if (needFeeToken0) {
+            uint256 last0 = pa.feeGrowthInsideLast.token0;
+            if (fg0 > last0) {
+                uint256 backing0 = FullMath.mulDiv(fg0 - last0, liq, FixedPoint128.Q128);
+                if (backing0 > 0) pa.pendingResidualFeeBacking.token0 += backing0;
+                pa.feeGrowthInsideLast.token0 = fg0;
+            }
+        }
+
+        if (needFeeToken1) {
+            uint256 last1 = pa.feeGrowthInsideLast.token1;
+            if (fg1 > last1) {
+                uint256 backing1 = FullMath.mulDiv(fg1 - last1, liq, FixedPoint128.Q128);
+                if (backing1 > 0) pa.pendingResidualFeeBacking.token1 += backing1;
+                pa.feeGrowthInsideLast.token1 = fg1;
             }
         }
     }
@@ -627,7 +678,7 @@ library VTSPositionLib {
             if (burnBase == 0) return;
         }
 
-        VTSFeeLinkedLib.applyBurnBase(s, poolManager, id, p, tokenIndex, burnBase, positionLiquidity, 0);
+        VTSFeeLinkedLib.applyBurnBase(s, poolManager, id, p, tokenIndex, burnBase, positionLiquidity, 0, false);
     }
 
     /// @notice Settle coverage for a single token using DICE accounting
@@ -648,6 +699,9 @@ library VTSPositionLib {
     ) private {
         PositionAccounting storage pa = s.positionAccounting[positionId];
         uint256 deficitPrincipal = pa.cumulativeDeficit.get(tokenIndex);
+
+        // Only actually clears if pendingResidualBurnBase is zero == 0
+        _clearResolvedResidualFeeBacking(pa, tokenIndex);
 
         {
             uint256 residualIndexNow = s.poolAccounting[poolId].coveragePerResidualDeficitIndexX128.get(tokenIndex);
@@ -1260,6 +1314,11 @@ library VTSPositionLib {
                 requiredSettlementDelta = _touchExistingDecrease(s, result.id, p.params, liq, hookData);
                 // Mirror using live PoolManager liquidity post-modify for both paused and unpaused removes.
                 PositionAccounting storage paDec = s.positionAccounting[result.id];
+                if (initialLiquidity > 0 && liq == 0) {
+                    _captureResidualFeeBackingOnDeactivation(
+                        s, ctx.poolManager, result.id, SafeCast.toUint128(initialLiquidity)
+                    );
+                }
                 _applyLiquidityMirrorTransition(s, paDec, posStorage, initialLiquidity, liq);
             } else {
                 (uint128 liveLiquidityBeforeAdd, uint128 nextLiquidity) =
@@ -1456,8 +1515,9 @@ library VTSPositionLib {
                 queueRecipient = PositionModificationHookDataLib.getLocker(mmData);
             }
 
-            // Only the immediately-settleable portion should be accounted as an underlying settlement delta.
-            // Any unavailable remainder is persisted via the LiquidityHub queue mechanics.
+            // Remove from live `settled` only what is actually preserved elsewhere:
+            // - queued amounts move into LiquidityHub queue accounting
+            // - everything else stays represented via DynamicCurrencyDelta until a later settle call consumes it
             LiquidityDecreaseResult memory decreaseResult;
             if (isSeizing) {
                 // @note: For Seizures,
@@ -1481,18 +1541,19 @@ library VTSPositionLib {
                     ctx, p.owner, p.poolKey, principalDelta, requiredSettlementDelta, queueRecipient
                 );
             }
-            // Only queued shortfall leaves live VTS settled immediately. The immediate settleable slice remains
-            // represented in `pa.settled` until the later settle flow consumes the transient underlying delta.
+            // Only the amount actually preserved in the Hub queue should leave live VTS settled immediately.
+            // Immediate settleable liquidity, plus any shortfall remainder that could not be queued this call,
+            // remains represented via DynamicCurrencyDelta until later settlement.
             _applySettlementClampFromExcess(
                 s,
                 result.id,
-                LiquidityUtils.safeInt128ToUint256(decreaseResult.queuedShortfallDelta.amount0()),
-                LiquidityUtils.safeInt128ToUint256(decreaseResult.queuedShortfallDelta.amount1())
+                LiquidityUtils.safeInt128ToUint256(decreaseResult.queuedDelta.amount0()),
+                LiquidityUtils.safeInt128ToUint256(decreaseResult.queuedDelta.amount1())
             );
 
-            // @note: We use the settleableDelta here because it is the immediately available liquidity that can be used to cover settlement.
-            // Anything queued is not accounted for in DynamicCurrencyDelta
-            requiredSettlementDelta = decreaseResult.settleableDelta;
+            // Anything moved into the Hub queue is already preserved elsewhere and must not also remain in
+            // DynamicCurrencyDelta. The remainder (immediate settleable slice plus any unqueued shortfall) stays live.
+            requiredSettlementDelta = decreaseResult.underlyingDeltaSettlement;
         }
 
         if (!LiquidityUtils.isZeroDelta(requiredSettlementDelta)) {
@@ -1609,13 +1670,18 @@ library VTSPositionLib {
             result.settleableDelta = toBalanceDelta(
                 requiredSettlementDelta.amount0() - shortfall0, requiredSettlementDelta.amount1() - shortfall1
             );
-            result.queuedShortfallDelta = toBalanceDelta(shortfall0, shortfall1);
 
             uint256 shortfallAmount0 = LiquidityUtils.safeInt128ToUint256(shortfall0);
             uint256 shortfallAmount1 = LiquidityUtils.safeInt128ToUint256(shortfall1);
             retainedPrincipal0 = shortfallAmount0 > principalAmount0 ? principalAmount0 : shortfallAmount0;
             retainedPrincipal1 = shortfallAmount1 > principalAmount1 ? principalAmount1 : shortfallAmount1;
         }
+
+        result.queuedDelta = LiquidityUtils.safeToBalanceDelta(retainedPrincipal0, retainedPrincipal1, false, false);
+        result.underlyingDeltaSettlement = toBalanceDelta(
+            requiredSettlementDelta.amount0() - retainedPrincipal0.toInt128(),
+            requiredSettlementDelta.amount1() - retainedPrincipal1.toInt128()
+        );
 
         // 3. Queue settlements via cancelWithQueue
         // Burns LCCs on transfer from PoolManager to owner (MMPM) and queues shortfall for queueRecipient (locker).
@@ -1650,9 +1716,10 @@ library VTSPositionLib {
             }
         }
 
-        // 4. Queued shortfall is tracked in LiquidityHub as owed to queueRecipient
+        // 4. Actual queued amounts are tracked in LiquidityHub as owed to queueRecipient.
         // When _collectAvailableLiquidity is called, underlying is transferred to the recipient.
         // If recipient is MMPM, the balance is synced to the locker's delta.
+        // Any shortfall remainder beyond this call's cancellable principal stays represented via DynamicCurrencyDelta.
     }
 
     // --------------------------------------------------

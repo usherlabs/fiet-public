@@ -37,6 +37,28 @@ library VTSFeeLib {
         uint256 burnBase;
         uint128 positionLiquidity;
         uint256 outflowFloor;
+        bool consumeResidualFeeBacking;
+    }
+
+    struct FeesBurnResolution {
+        uint256 totalFees;
+        uint256 bankedFees;
+        uint256 ofDelta;
+        uint256 snap;
+    }
+
+    struct FeesBurnComputation {
+        uint256 freshFees;
+        uint256 bankedFees;
+        uint256 snap;
+        uint256 ofDelta;
+        uint256 totalFees;
+        uint256 bps;
+        uint256 consumedBurnBase;
+        uint256 consumedTotalFees;
+        uint256 feesBurn;
+        uint256 consumedBankedFees;
+        uint256 consumedFreshFees;
     }
 
     // --------------------------------------------------
@@ -225,86 +247,57 @@ library VTSFeeLib {
         IPoolManager poolManager,
         PositionId positionId,
         FeesBurnParams memory params
-    ) internal returns (uint256 feesBurn, uint256 consumedBurnBase, uint256 consumedFees) {
+    ) internal returns (uint256, uint256, uint256, uint256) {
         PositionAccounting storage pa = s.positionAccounting[positionId];
-        uint256 fees;
-        uint256 fg;
+        FeesBurnComputation memory c;
 
         {
             Position memory pos = s.positions[positionId];
             (uint256 fg0, uint256 fg1) =
                 StateLibrary.getFeeGrowthInside(poolManager, params.poolId, pos.tickLower, pos.tickUpper);
-            fg = params.feeTokenIndex == 0 ? fg0 : fg1;
+            uint256 fg = params.feeTokenIndex == 0 ? fg0 : fg1;
 
             uint256 lastFeeGrowth = pa.feeGrowthInsideLast.get(params.feeTokenIndex);
             if (params.positionLiquidity > 0 && fg > lastFeeGrowth) {
-                fees = FullMath.mulDiv(fg - lastFeeGrowth, uint256(params.positionLiquidity), FixedPoint128.Q128);
+                c.freshFees = FullMath.mulDiv(fg - lastFeeGrowth, uint256(params.positionLiquidity), FixedPoint128.Q128);
+            }
+            if (params.consumeResidualFeeBacking && params.positionLiquidity > 0) {
+                c.bankedFees = pa.pendingResidualFeeBacking.get(params.feeTokenIndex);
             }
         }
 
         uint256 cumulativeOutflows = pa.cumulativeOutflows.get(params.deficitTokenIndex);
-        uint256 snap = pa.outflowsAtFeeSnap.get(params.deficitTokenIndex);
-        if (params.outflowFloor > snap) {
-            snap = params.outflowFloor;
+        c.snap = pa.outflowsAtFeeSnap.get(params.deficitTokenIndex);
+        if (params.outflowFloor > c.snap) {
+            c.snap = params.outflowFloor;
         }
-        uint256 ofDelta = cumulativeOutflows >= snap ? (cumulativeOutflows - snap) : 0;
+        c.ofDelta = cumulativeOutflows >= c.snap ? (cumulativeOutflows - c.snap) : 0;
 
-        if (fees == 0 || ofDelta == 0) {
-            return (0, 0, 0);
-        }
-
-        return _finaliseFeesBurn(s, pa, params, fees, ofDelta, snap);
-    }
-
-    /// @dev Finalise fees burn maths and update outflow checkpoints for the consumed window share.
-    function _finaliseFeesBurn(
-        VTSStorage storage s,
-        PositionAccounting storage pa,
-        FeesBurnParams memory params,
-        uint256 fees,
-        uint256 ofDelta,
-        uint256 snap
-    ) internal returns (uint256, uint256, uint256) {
-        uint256 bps = s.pools[params.poolId].vtsConfig.coverageFeeShare;
-        if (bps == 0) {
-            return (0, 0, 0);
-        }
-        if (bps > LiquidityUtils.BPS_DENOMINATOR) {
-            bps = LiquidityUtils.BPS_DENOMINATOR;
+        c.totalFees = c.freshFees + c.bankedFees;
+        if (c.totalFees == 0 || c.ofDelta == 0) {
+            return (0, 0, 0, 0);
         }
 
-        uint256 consumedBurnBase = params.burnBase <= ofDelta ? params.burnBase : ofDelta;
-        uint256 consumedFees = FullMath.mulDiv(fees, consumedBurnBase, ofDelta);
-        uint256 feesBurn = FullMath.mulDiv(consumedFees, bps, LiquidityUtils.BPS_DENOMINATOR);
-
-        if (feesBurn > 0) {
-            pa.outflowsAtFeeSnap.set(params.deficitTokenIndex, snap + consumedBurnBase);
+        c.bps = s.pools[params.poolId].vtsConfig.coverageFeeShare;
+        if (c.bps == 0) {
+            return (0, 0, 0, 0);
+        }
+        if (c.bps > LiquidityUtils.BPS_DENOMINATOR) {
+            c.bps = LiquidityUtils.BPS_DENOMINATOR;
         }
 
-        return (feesBurn, consumedBurnBase, consumedFees);
-    }
+        c.consumedBurnBase = params.burnBase <= c.ofDelta ? params.burnBase : c.ofDelta;
+        c.consumedTotalFees = FullMath.mulDiv(c.totalFees, c.consumedBurnBase, c.ofDelta);
+        c.feesBurn = FullMath.mulDiv(c.consumedTotalFees, c.bps, LiquidityUtils.BPS_DENOMINATOR);
+        if (c.feesBurn == 0) {
+            return (0, 0, 0, 0);
+        }
 
-    /// @dev Keep `_applyBurnBase` below stack-too-deep threshold for non-via-ir builds.
-    function _calculateFeesBurnForApply(
-        VTSStorage storage s,
-        IPoolManager poolManager,
-        PositionId positionId,
-        PoolId poolId,
-        uint8 tokenIndex,
-        uint8 feeTokenIndex,
-        uint256 burnBase,
-        uint128 positionLiquidity,
-        uint256 outflowFloor
-    ) internal returns (uint256 feesBurn, uint256 consumedBurnBase, uint256 consumedFees) {
-        FeesBurnParams memory params = FeesBurnParams({
-            poolId: poolId,
-            deficitTokenIndex: tokenIndex,
-            feeTokenIndex: feeTokenIndex,
-            burnBase: burnBase,
-            positionLiquidity: positionLiquidity,
-            outflowFloor: outflowFloor
-        });
-        return _calculateFeesBurn(s, poolManager, positionId, params);
+        c.consumedBankedFees = c.consumedTotalFees <= c.bankedFees ? c.consumedTotalFees : c.bankedFees;
+        c.consumedFreshFees = c.consumedTotalFees - c.consumedBankedFees;
+        pa.outflowsAtFeeSnap.set(params.deficitTokenIndex, c.snap + c.consumedBurnBase);
+
+        return (c.feesBurn, c.consumedBurnBase, c.consumedFreshFees, c.consumedBankedFees);
     }
 
     /// @notice Apply a precomputed burn base for a position and return the consumed outflow share
@@ -316,32 +309,62 @@ library VTSFeeLib {
         uint8 tokenIndex,
         uint256 burnBase,
         uint128 positionLiquidity,
-        uint256 outflowFloor
+        uint256 outflowFloor,
+        bool consumeResidualFeeBacking
     ) internal returns (uint256 consumedBurnBase) {
         if (burnBase == 0) return 0;
 
-        PositionAccounting storage pa = s.positionAccounting[positionId];
         uint8 feeTokenIndex = tokenIndex == 0 ? 1 : 0;
         uint256 feesBurn;
-        uint256 consumedFees;
-        (feesBurn, consumedBurnBase, consumedFees) = _calculateFeesBurnForApply(
-            s, poolManager, positionId, poolId, tokenIndex, feeTokenIndex, burnBase, positionLiquidity, outflowFloor
-        );
+        uint256 consumedFreshFees;
+        uint256 consumedBankedFees;
+        FeesBurnParams memory params = FeesBurnParams({
+            poolId: poolId,
+            deficitTokenIndex: tokenIndex,
+            feeTokenIndex: feeTokenIndex,
+            burnBase: burnBase,
+            positionLiquidity: positionLiquidity,
+            outflowFloor: outflowFloor,
+            consumeResidualFeeBacking: consumeResidualFeeBacking
+        });
+        (feesBurn, consumedBurnBase, consumedFreshFees, consumedBankedFees) =
+            _calculateFeesBurn(s, poolManager, positionId, params);
 
         if (feesBurn == 0) return 0;
 
-        if (positionLiquidity > 0) {
+        _finaliseBurnAccounting(
+            s, positionId, poolId, feeTokenIndex, positionLiquidity, consumedFreshFees, consumedBankedFees, feesBurn
+        );
+    }
+
+    function _finaliseBurnAccounting(
+        VTSStorage storage s,
+        PositionId positionId,
+        PoolId poolId,
+        uint8 feeTokenIndex,
+        uint128 positionLiquidity,
+        uint256 consumedFreshFees,
+        uint256 consumedBankedFees,
+        uint256 feesBurn
+    ) private {
+        PositionAccounting storage pa = s.positionAccounting[positionId];
+        if (consumedBankedFees > 0) {
+            uint256 currentBacking = pa.pendingResidualFeeBacking.get(feeTokenIndex);
+            pa.pendingResidualFeeBacking
+                .set(feeTokenIndex, consumedBankedFees > currentBacking ? 0 : (currentBacking - consumedBankedFees));
+        }
+
+        if (positionLiquidity > 0 && consumedFreshFees > 0) {
             uint256 liquidity = uint256(positionLiquidity);
             uint256 carryIn = pa.feeBurnGrowthRemainder.get(feeTokenIndex);
             (uint256 growthInc, uint256 newCarry) =
-                LiquidityUtils.feeBurnGrowthIncWithRemainder(consumedFees, liquidity, carryIn);
+                LiquidityUtils.feeBurnGrowthIncWithRemainder(consumedFreshFees, liquidity, carryIn);
             pa.feeBurnGrowthRemainder.set(feeTokenIndex, newCarry);
             pa.feeGrowthInsideLast.set(feeTokenIndex, pa.feeGrowthInsideLast.get(feeTokenIndex) + growthInc);
         }
 
         PoolAccounting storage paPool = s.poolAccounting[poolId];
         _prepareFeeShareMint(pa, paPool, feeTokenIndex);
-
         paPool.protocolFeeAccrued.set(feeTokenIndex, paPool.protocolFeeAccrued.get(feeTokenIndex) + feesBurn);
         pa.feesShared.set(feeTokenIndex, pa.feesShared.get(feeTokenIndex) + feesBurn);
         pa.pendingFeeAdj.set(feeTokenIndex, pa.pendingFeeAdj.get(feeTokenIndex) + feesBurn.toInt256());
@@ -531,10 +554,19 @@ library VTSFeeLinkedLib {
         uint8 tokenIndex,
         uint256 burnBase,
         uint128 positionLiquidity,
-        uint256 outflowFloor
+        uint256 outflowFloor,
+        bool consumeResidualFeeBacking
     ) external returns (uint256 consumedBurnBase) {
         return VTSFeeLib._applyBurnBase(
-            s, poolManager, positionId, poolId, tokenIndex, burnBase, positionLiquidity, outflowFloor
+            s,
+            poolManager,
+            positionId,
+            poolId,
+            tokenIndex,
+            burnBase,
+            positionLiquidity,
+            outflowFloor,
+            consumeResidualFeeBacking
         );
     }
 }

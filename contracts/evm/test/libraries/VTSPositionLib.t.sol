@@ -17,6 +17,7 @@ import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
 import {PositionModificationHookData, PositionModificationHookDataLib} from "../../src/types/Position.sol";
 import {ILiquidityHub} from "../../src/interfaces/ILiquidityHub.sol";
+import {ILCC} from "../../src/interfaces/ILCC.sol";
 import {IOracleHelper} from "../../src/interfaces/IOracleHelper.sol";
 import {IMarketVault} from "../../src/interfaces/IMarketVault.sol";
 import {CurrencyDelta} from "v4-periphery/lib/v4-core/src/libraries/CurrencyDelta.sol";
@@ -1073,6 +1074,158 @@ contract VTSPositionLibTest is VTSLibTestBase {
         }
     }
 
+    function test_touchPosition_fullRemove_banksResidualFeeBacking_andReactivationPreservesIt() public {
+        _initMarket();
+        PoolId corePoolId = _getDefaultPoolId();
+        harness.setupPool(corePoolId, _createDefaultVTSConfig());
+
+        uint128 liq = uint128(1e18);
+        PositionId positionId = _registerHarnessPositionInPool(
+            corePoolId, DEFAULT_OWNER, DEFAULT_TICK_LOWER, DEFAULT_TICK_UPPER, liq, DEFAULT_SALT
+        );
+
+        // Banking is only required on fee token lanes with unresolved residual burn base.
+        harness.setPendingResidualBurnBase(positionId, 1, 0);
+        harness.setFeeGrowthInsideLast(positionId, 0, 0);
+
+        _accrueFeeGrowthInCoreRange(true); // token1 fee growth
+        (, uint256 fg1BeforeRemove) = _getFeeGrowthInside(corePoolId, DEFAULT_TICK_LOWER, DEFAULT_TICK_UPPER);
+        uint256 expectedBanked = FullMath.mulDiv(fg1BeforeRemove, uint256(liq), FixedPoint128.Q128);
+        assertGt(expectedBanked, 0, "setup: expected bankable fee backing");
+
+        ModifyLiquidityParams memory removeParams = ModifyLiquidityParams({
+            tickLower: DEFAULT_TICK_LOWER,
+            tickUpper: DEFAULT_TICK_UPPER,
+            liquidityDelta: -int256(uint256(liq)),
+            salt: DEFAULT_SALT
+        });
+        TouchPositionParams memory removeTp = TouchPositionParams({
+            owner: DEFAULT_OWNER,
+            poolKey: _mkPoolKey(),
+            params: removeParams,
+            callerDelta: toBalanceDelta(0, 0),
+            feesAccrued: toBalanceDelta(0, 0),
+            hookData: _mkHookData(false, false, 0)
+        });
+
+        harness.touchPosition(_mkCtx(), removeTp);
+
+        (uint256 bankedFee0AfterRemove, uint256 bankedFee1AfterRemove) =
+            harness.getPendingResidualFeeBacking(positionId);
+        assertEq(bankedFee0AfterRemove, 0, "fee token0 lane should remain unbanked");
+        assertEq(bankedFee1AfterRemove, expectedBanked, "full remove should freeze historical token1 fee backing");
+
+        (, uint256 fg1AfterRemove) = harness.getFeeGrowthInsideLast(positionId);
+        assertEq(fg1AfterRemove, fg1BeforeRemove, "deactivation banking should checkpoint token1 fee growth");
+
+        ModifyLiquidityParams memory addParams = ModifyLiquidityParams({
+            tickLower: DEFAULT_TICK_LOWER,
+            tickUpper: DEFAULT_TICK_UPPER,
+            liquidityDelta: int256(uint256(liq)),
+            salt: DEFAULT_SALT
+        });
+        TouchPositionParams memory addTp = TouchPositionParams({
+            owner: DEFAULT_OWNER,
+            poolKey: _mkPoolKey(),
+            params: addParams,
+            callerDelta: toBalanceDelta(0, 0),
+            feesAccrued: toBalanceDelta(0, 0),
+            hookData: _mkHookData(false, false, 0)
+        });
+
+        harness.touchPosition(_mkCtx(), addTp);
+        (, uint256 bankedFee1AfterReactivate) = harness.getPendingResidualFeeBacking(positionId);
+        assertEq(
+            bankedFee1AfterReactivate, expectedBanked, "reactivation should preserve historical residual fee backing"
+        );
+    }
+
+    function test_settlePositionGrowths_residualBurn_canConsumeBankedFeeBacking_withoutFreshFees() public {
+        _initMarket();
+        PoolId corePoolId = _getDefaultPoolId();
+        uint16 feeShareBps = 5000; // 50%
+        {
+            MarketVTSConfiguration memory cfg = _createDefaultVTSConfig();
+            cfg.coverageFeeShare = feeShareBps;
+            harness.setupPool(corePoolId, cfg);
+        }
+
+        int24 tickLower;
+        int24 tickUpper;
+        PositionId positionId;
+        {
+            (, int24 tickCurrent,,) = StateLibrary.getSlot0(manager, corePoolId);
+            tickLower = tickCurrent - 60;
+            tickUpper = tickCurrent + 60;
+
+            ModifyLiquidityParams memory addParams = ModifyLiquidityParams({
+                tickLower: tickLower,
+                tickUpper: tickUpper,
+                liquidityDelta: int256(uint256(uint128(1e18))),
+                salt: bytes32(uint256(0xBEEF))
+            });
+            modifyLiquidityRouter.modifyLiquidity(corePoolKey, addParams, ZERO_BYTES);
+            harness.registerPosition(address(modifyLiquidityRouter), corePoolId, addParams);
+            positionId = PositionLibrary.generateId(address(modifyLiquidityRouter), addParams);
+        }
+
+        uint256 burnBase = 40e18;
+        uint256 outflowWindow = 100e18;
+        uint256 bankedFeeToken1 = 50e18;
+        harness.setCoverageIndexLastX128(positionId, 0, 0);
+        harness.setResidualCoverageIndexLastX128(positionId, 0, 0);
+        harness.setPoolCoveragePerDeficitIndexX128(corePoolId, 0, 0);
+        harness.setPoolCoveragePerResidualDeficitIndexX128(corePoolId, 0, 0);
+
+        // Seed active settled balance so RFS/growth bookkeeping remains consistent for this synthetic path.
+        harness.setSettled(positionId, burnBase, 0);
+        harness.setPoolTotalSettled(corePoolId, burnBase, 0);
+        harness.setPendingResidualBurnBase(positionId, burnBase, 0);
+        harness.setPendingResidualBurnOutflowsFloor(positionId, 0, 0);
+        harness.setCumulativeOutflows(positionId, outflowWindow, 0);
+        harness.setOutflowsAtFeeSnap(positionId, 0, 0);
+        harness.setPendingResidualFeeBacking(positionId, 0, bankedFeeToken1);
+
+        // Make fresh fee delta zero so burn must come from banked historical backing.
+        (uint256 fg0Now, uint256 fg1Now) = _getFeeGrowthInside(corePoolId, tickLower, tickUpper);
+        harness.setFeeGrowthInsideLast(positionId, fg0Now, fg1Now);
+
+        uint256 expectedConsumedBanked = FullMath.mulDiv(bankedFeeToken1, burnBase, outflowWindow);
+        uint256 expectedFeesBurn =
+            FullMath.mulDiv(uint256(expectedConsumedBanked), uint256(feeShareBps), LiquidityUtils.BPS_DENOMINATOR);
+        assertGt(expectedFeesBurn, 0, "setup: expected non-zero slash from banked backing");
+
+        harness.settlePositionGrowths(manager, positionId);
+
+        {
+            (, uint256 bankedFee1After) = harness.getPendingResidualFeeBacking(positionId);
+            assertEq(bankedFee1After, 0, "banked fee backing should clear once the residual burn is exhausted");
+        }
+
+        {
+            (uint256 pendingBurn0After,) = harness.getPendingResidualBurnBase(positionId);
+            (uint256 floor0After,) = harness.getPendingResidualBurnOutflowsFloor(positionId);
+            (uint256 snap0After,) = harness.getOutflowsAtFeeSnap(positionId);
+            assertEq(pendingBurn0After, 0, "residual burn base should be fully consumed");
+            assertEq(floor0After, 0, "residual outflow floor should clear when bank is fully consumed");
+            assertEq(snap0After, burnBase, "fee snap should advance only by consumed residual burn base");
+        }
+
+        {
+            (, uint256 fg1After) = harness.getFeeGrowthInsideLast(positionId);
+            assertEq(fg1After, fg1Now, "consuming purely banked fees must not advance live fee growth baseline");
+        }
+
+        {
+            (, uint256 protocolFee1After) = harness.getPoolProtocolFeeAccrued(corePoolId);
+            (, uint256 feesShared1After) = harness.getFeesShared(positionId);
+            (, int256 pendingAdj1After) = harness.getPendingFeeAdj(positionId);
+            assertEq(protocolFee1After, expectedFeesBurn, "protocol fee pot should increase by expected slash amount");
+            assertEq(feesShared1After, expectedFeesBurn, "position feesShared should track slash funding");
+            assertEq(pendingAdj1After, int256(expectedFeesBurn), "pending fee adjustment should queue slash");
+        }
+    }
+
     function test_touchPosition_increaseWhileSeizing_reverts() public {
         PositionId positionId =
             _registerHarnessPosition(DEFAULT_OWNER, DEFAULT_TICK_LOWER, DEFAULT_TICK_UPPER, 1000, DEFAULT_SALT);
@@ -1338,6 +1491,65 @@ contract VTSPositionLibTest is VTSLibTestBase {
         (uint256 poolSettled0,) = harness.getPoolTotalSettled(corePoolId);
         assertEq(poolSettled0, 30e18, "pool totalSettled should retain only the immediate settleable slice");
         assertEq(hub.lastQueued0(), 70e18, "queued shortfall should match the unavailable portion");
+    }
+
+    function test_touchPosition_existingDecrease_currentLiqZero_MM_principalCappedQueue_preservesUnqueuedRemainder()
+        public
+    {
+        _initMarket();
+        PoolId corePoolId = _getDefaultPoolId();
+        harness.setupPool(corePoolId, _createDefaultVTSConfig());
+
+        bytes32 salt = bytes32(uint256(4061));
+        PositionId positionId = _registerHarnessPositionInPool(corePoolId, DEFAULT_OWNER, -60, 60, 1, salt);
+        harness.setPositionActive(positionId, true);
+
+        uint256 commitId = 1241;
+        harness.setPositionCommitId(positionId, commitId);
+        harness.setCommitActivePositionCount(commitId, 1);
+
+        harness.setCommitmentMax(positionId, 0, 0);
+        harness.setSettled(positionId, 100e18, 0);
+        harness.setCumulativeDeficit(positionId, 0, 0);
+        harness.setCommitmentDeficit(positionId, 0, 0);
+        harness.setPoolTotalSettled(corePoolId, 100e18, 0);
+
+        VTSPositionLibTest_LiquidityHubCapture hub = new VTSPositionLibTest_LiquidityHubCapture();
+        IMarketVault vault = new VTSPositionLibTest_VaultClamp(0, 0);
+        PositionContext memory ctx = PositionContext({
+            poolManager: manager,
+            liquidityHub: ILiquidityHub(address(hub)),
+            oracleHelper: IOracleHelper(address(0)),
+            marketVault: vault
+        });
+
+        ModifyLiquidityParams memory decParams =
+            ModifyLiquidityParams({tickLower: -60, tickUpper: 60, liquidityDelta: -int256(uint256(1)), salt: salt});
+        TouchPositionParams memory tp = TouchPositionParams({
+            owner: DEFAULT_OWNER,
+            poolKey: _mkPoolKey(),
+            params: decParams,
+            callerDelta: toBalanceDelta(int128(int256(30e18)), 0),
+            feesAccrued: toBalanceDelta(0, 0),
+            hookData: _mkHookData(true, false, commitId)
+        });
+
+        harness.touchPosition(ctx, tp);
+
+        (,, uint256 settled0After,,,) = harness.getPositionAccounting(positionId);
+        assertEq(settled0After, 70e18, "only the actual queued amount should leave live settled accounting");
+
+        (uint256 poolSettled0,) = harness.getPoolTotalSettled(corePoolId);
+        assertEq(poolSettled0, 70e18, "pool totalSettled should retain the unqueued shortfall remainder");
+
+        assertEq(hub.lastQueued0(), 30e18, "queued amount should be capped by per-call principal");
+
+        Currency underlyingCurrency0 = Currency.wrap(ILCC(Currency.unwrap(corePoolKey.currency0)).underlying());
+        assertEq(
+            harness.getUnderlyingDelta(underlyingCurrency0, DEFAULT_OWNER),
+            int256(70e18),
+            "unqueued shortfall remainder should stay represented via underlying delta"
+        );
     }
 
     /// @notice Non-seizure MM decreases are blocked while commitmentDeficit is non-zero, even if RFS is closed.
@@ -2363,6 +2575,41 @@ contract VTSPositionLibTest is VTSLibTestBase {
         assertEq(settleable.amount1(), 0, "token1 settleable should be zero when no liquidity is available");
         assertEq(hub.lastQueued0(), 3, "token0 queue must be capped by per-call principal");
         assertEq(hub.lastQueued1(), 7, "token1 queue can use full shortfall when principal is sufficient");
+    }
+
+    function test_handleLiquidityDecrease_reportsUnderlyingDeltaSettlement_whenQueueIsPrincipalCapped() public {
+        VTSPositionLibTest_LiquidityHubCapture hub = new VTSPositionLibTest_LiquidityHubCapture();
+        IMarketVault vault = new VTSPositionLibTest_VaultClamp(0, 0);
+
+        PositionContext memory ctx = PositionContext({
+            poolManager: manager,
+            liquidityHub: ILiquidityHub(address(hub)),
+            oracleHelper: IOracleHelper(address(0)),
+            marketVault: vault
+        });
+
+        PoolKey memory pk = corePoolKey;
+        BalanceDelta principalDelta = toBalanceDelta(int128(int256(3)), int128(int256(20)));
+        BalanceDelta requiredSettlementDelta = toBalanceDelta(int128(int256(10)), int128(int256(7)));
+
+        (BalanceDelta settleable, BalanceDelta queuedDelta, BalanceDelta underlyingDeltaSettlement) = harness.handleLiquidityDecreaseDetailed(
+            ctx, DEFAULT_OWNER, pk, principalDelta, requiredSettlementDelta, DEFAULT_OWNER
+        );
+
+        assertEq(settleable.amount0(), 0, "token0 settleable should be zero when no liquidity is available");
+        assertEq(settleable.amount1(), 0, "token1 settleable should be zero when no liquidity is available");
+        assertEq(queuedDelta.amount0(), 3, "token0 queue should reflect the principal-capped amount");
+        assertEq(queuedDelta.amount1(), 7, "token1 queue should reflect the fully preserved shortfall");
+        assertEq(
+            underlyingDeltaSettlement.amount0(),
+            7,
+            "token0 underlying delta should retain the shortfall remainder that could not be queued"
+        );
+        assertEq(
+            underlyingDeltaSettlement.amount1(),
+            0,
+            "token1 underlying delta should be zero when the entire shortfall is preserved in queue"
+        );
     }
 
     function test_handleLiquidityDecrease_settleableTracksAvailability_whenQueueIsPrincipalCapped() public {

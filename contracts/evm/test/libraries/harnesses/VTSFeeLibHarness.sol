@@ -9,6 +9,7 @@ import {BalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
 import {VTSFeeLib} from "../../../src/libraries/VTSFeeLib.sol";
 import {RFSCheckpoint} from "../../../src/types/Checkpoint.sol";
 import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
+import {IPoolManager} from "v4-periphery/lib/v4-core/src/interfaces/IPoolManager.sol";
 
 /// @title VTSFeeLibHarness
 /// @notice Exposes internal VTSFeeLib functions for unit testing
@@ -83,6 +84,30 @@ contract VTSFeeLibHarness {
         );
     }
 
+    /// @notice Exposes `_applyBurnBase` for direct fee-burn maths tests.
+    function applyBurnBase(
+        IPoolManager poolManager,
+        PositionId positionId,
+        PoolId poolId,
+        uint8 tokenIndex,
+        uint256 burnBase,
+        uint128 positionLiquidity,
+        uint256 outflowFloor,
+        bool consumeResidualFeeBacking
+    ) external returns (uint256 consumedBurnBase) {
+        return VTSFeeLib._applyBurnBase(
+            s,
+            poolManager,
+            positionId,
+            poolId,
+            tokenIndex,
+            burnBase,
+            positionLiquidity,
+            outflowFloor,
+            consumeResidualFeeBacking
+        );
+    }
+
     // ============ Storage Getters (for assertions) ============
 
     function getPendingFeeAdj(PositionId id) external view returns (int256 adj0, int256 adj1) {
@@ -145,6 +170,22 @@ contract VTSFeeLibHarness {
         return (s.positionAccounting[id].feesSharedEpoch.token0, s.positionAccounting[id].feesSharedEpoch.token1);
     }
 
+    function getPendingResidualFeeBacking(PositionId id) external view returns (uint256 fee0, uint256 fee1) {
+        return (
+            s.positionAccounting[id].pendingResidualFeeBacking.token0,
+            s.positionAccounting[id].pendingResidualFeeBacking.token1
+        );
+    }
+
+    function getOutflowsAtFeeSnap(PositionId id) external view returns (uint256 snap0, uint256 snap1) {
+        return (s.positionAccounting[id].outflowsAtFeeSnap.token0, s.positionAccounting[id].outflowsAtFeeSnap.token1);
+    }
+
+    function getFeeGrowthInsideLast(PositionId id) external view returns (uint256 fg0, uint256 fg1) {
+        return
+            (s.positionAccounting[id].feeGrowthInsideLast.token0, s.positionAccounting[id].feeGrowthInsideLast.token1);
+    }
+
     // ============ Storage Setters (for test setup) ============
 
     /// @notice Sets up a pool with VTS configuration
@@ -168,6 +209,32 @@ contract VTSFeeLibHarness {
             liquidity: 1000e18,
             isActive: true,
             salt: bytes32(0),
+            checkpoint: RFSCheckpoint({
+                openMask: 0, openSince0: 0, openSince1: 0, gracePeriodExtension0: 0, gracePeriodExtension1: 0
+            })
+        });
+        s.positionAccounting[id].feesSharedEpoch.token0 = s.poolAccounting[poolId].feesSharedEpoch.token0;
+        s.positionAccounting[id].feesSharedEpoch.token1 = s.poolAccounting[poolId].feesSharedEpoch.token1;
+    }
+
+    /// @notice Registers a position with explicit pool geometry for live PoolManager-backed fee tests.
+    function setupPositionWithDetails(
+        PositionId id,
+        PoolId poolId,
+        int24 tickLower,
+        int24 tickUpper,
+        uint128 liquidity,
+        bytes32 salt
+    ) external {
+        s.positions[id] = Position({
+            owner: address(this),
+            poolId: poolId,
+            commitId: 0,
+            tickLower: tickLower,
+            tickUpper: tickUpper,
+            liquidity: liquidity,
+            isActive: true,
+            salt: salt,
             checkpoint: RFSCheckpoint({
                 openMask: 0, openSince0: 0, openSince1: 0, gracePeriodExtension0: 0, gracePeriodExtension1: 0
             })
@@ -230,5 +297,25 @@ contract VTSFeeLibHarness {
     function setPositionFeesSharedEpoch(PositionId id, uint256 epoch0, uint256 epoch1) external {
         s.positionAccounting[id].feesSharedEpoch.token0 = epoch0;
         s.positionAccounting[id].feesSharedEpoch.token1 = epoch1;
+    }
+
+    function setPendingResidualFeeBacking(PositionId id, uint256 fee0, uint256 fee1) external {
+        s.positionAccounting[id].pendingResidualFeeBacking.token0 = fee0;
+        s.positionAccounting[id].pendingResidualFeeBacking.token1 = fee1;
+    }
+
+    function setCumulativeOutflows(PositionId id, uint256 out0, uint256 out1) external {
+        s.positionAccounting[id].cumulativeOutflows.token0 = out0;
+        s.positionAccounting[id].cumulativeOutflows.token1 = out1;
+    }
+
+    function setOutflowsAtFeeSnap(PositionId id, uint256 snap0, uint256 snap1) external {
+        s.positionAccounting[id].outflowsAtFeeSnap.token0 = snap0;
+        s.positionAccounting[id].outflowsAtFeeSnap.token1 = snap1;
+    }
+
+    function setFeeGrowthInsideLast(PositionId id, uint256 fg0, uint256 fg1) external {
+        s.positionAccounting[id].feeGrowthInsideLast.token0 = fg0;
+        s.positionAccounting[id].feeGrowthInsideLast.token1 = fg1;
     }
 }

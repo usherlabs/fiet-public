@@ -148,6 +148,25 @@ contract VTSPositionLibHarness {
         return result.settleableDelta;
     }
 
+    /// @notice Exposes full liquidity decrease helper outputs for unit tests.
+    function handleLiquidityDecreaseDetailed(
+        PositionContext memory ctx,
+        address owner,
+        PoolKey calldata poolKey,
+        BalanceDelta principalDelta,
+        BalanceDelta requiredSettlementDelta,
+        address queueRecipient
+    )
+        external
+        returns (BalanceDelta settleableDelta, BalanceDelta queuedDelta, BalanceDelta underlyingDeltaSettlement)
+    {
+        VTSPositionLib.LiquidityDecreaseResult memory
+            result = VTSPositionLib._handleLiquidityDecrease(
+            ctx, owner, poolKey, principalDelta, requiredSettlementDelta, queueRecipient
+        );
+        return (result.settleableDelta, result.queuedDelta, result.underlyingDeltaSettlement);
+    }
+
     // ============ Storage Getters (for assertions) ============
 
     function getPositionAccounting(PositionId id)
@@ -286,6 +305,13 @@ contract VTSPositionLibHarness {
         return (
             s.positionAccounting[id].pendingResidualBurnBase.token0,
             s.positionAccounting[id].pendingResidualBurnBase.token1
+        );
+    }
+
+    function getPendingResidualFeeBacking(PositionId id) external view returns (uint256 fee0, uint256 fee1) {
+        return (
+            s.positionAccounting[id].pendingResidualFeeBacking.token0,
+            s.positionAccounting[id].pendingResidualFeeBacking.token1
         );
     }
 
@@ -437,6 +463,11 @@ contract VTSPositionLibHarness {
     function setPendingResidualBurnBase(PositionId id, uint256 burn0, uint256 burn1) external {
         s.positionAccounting[id].pendingResidualBurnBase.token0 = burn0;
         s.positionAccounting[id].pendingResidualBurnBase.token1 = burn1;
+    }
+
+    function setPendingResidualFeeBacking(PositionId id, uint256 fee0, uint256 fee1) external {
+        s.positionAccounting[id].pendingResidualFeeBacking.token0 = fee0;
+        s.positionAccounting[id].pendingResidualFeeBacking.token1 = fee1;
     }
 
     function setPendingResidualBurnOutflowsFloor(PositionId id, uint256 floor0, uint256 floor1) external {
