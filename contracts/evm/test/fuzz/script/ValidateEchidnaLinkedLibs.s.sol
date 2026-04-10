@@ -6,6 +6,7 @@ import {Strings} from "openzeppelin-contracts/contracts/utils/Strings.sol";
 import {LCCFactoryLinkedLib} from "../../../src/libraries/LCCFactoryLib.sol";
 import {LiquidityHubLinkedLib} from "../../../src/libraries/LiquidityHubLinkedLib.sol";
 import {VTSCommitLib} from "../../../src/libraries/VTSCommitLib.sol";
+import {VTSFeeLinkedLib} from "../../../src/libraries/VTSFeeLib.sol";
 import {VTSPositionLib} from "../../../src/libraries/VTSPositionLib.sol";
 import {EchidnaLinkedLibs} from "../base/EchidnaLinkedLibs.sol";
 
@@ -15,7 +16,6 @@ contract ValidateEchidnaLinkedLibs is Script {
     /// Echidna's default deployer address (the harness contract is deployed here).
     address internal constant ECHIDNA_DEPLOYER = 0x00a329c0648769A73afAc7F9381E08FB43dBEA72;
     address internal constant VTSSWAPLIB_PLACEHOLDER = 0x1111111111111111111111111111111111111112;
-    address internal constant VTSFEE_LINKEDLIB_PLACEHOLDER = 0x1111111111111111111111111111111111111111;
     address internal constant VTSLIFECYCLE_LINKEDLIB_PLACEHOLDER = 0x1111111111111111111111111111111111111113;
 
     function run() external pure {
@@ -38,6 +38,12 @@ contract ValidateEchidnaLinkedLibs is Script {
                 "VTSCommitLib",
                 EchidnaLinkedLibs.expectedVTSCommitLib(),
                 _compute(type(VTSCommitLib).creationCode, "echidna.VTSCommitLib")
+            )) failures++;
+
+        if (!_check(
+                "VTSFeeLinkedLib",
+                EchidnaLinkedLibs.expectedVTSFeeLinkedLib(),
+                _compute(type(VTSFeeLinkedLib).creationCode, "echidna.VTSFeeLinkedLib")
             )) failures++;
 
         if (!_check(
@@ -118,6 +124,12 @@ contract ValidateEchidnaLinkedLibs is Script {
             )
         );
         console2.log(
+            _libraryEntry(
+                "src/libraries/VTSFeeLib.sol:VTSFeeLinkedLib",
+                _compute(type(VTSFeeLinkedLib).creationCode, "echidna.VTSFeeLinkedLib")
+            )
+        );
+        console2.log(
             "  # Deterministic CREATE2 address deployed by `VTSPositionLibEchidnaHarness` (avoids Echidna RPC fetch attempts)."
         );
         console2.log(
@@ -133,7 +145,6 @@ contract ValidateEchidnaLinkedLibs is Script {
             )
         );
         console2.log(_libraryEntry("src/libraries/VTSSwapLib.sol:VTSSwapLib", VTSSWAPLIB_PLACEHOLDER));
-        console2.log(_libraryEntry("src/libraries/VTSFeeLib.sol:VTSFeeLinkedLib", VTSFEE_LINKEDLIB_PLACEHOLDER));
         console2.log("]");
     }
 
@@ -152,6 +163,11 @@ contract ValidateEchidnaLinkedLibs is Script {
         );
         console2.log(
             _constantEntry("VTS_COMMIT_LIB", _compute(type(VTSCommitLib).creationCode, "echidna.VTSCommitLib"))
+        );
+        console2.log(
+            _constantEntry(
+                "VTS_FEE_LINKED_LIB", _compute(type(VTSFeeLinkedLib).creationCode, "echidna.VTSFeeLinkedLib")
+            )
         );
         console2.log(
             _constantEntry("VTS_POSITION_LIB", _compute(type(VTSPositionLib).creationCode, "echidna.VTSPositionLib"))

@@ -313,6 +313,59 @@ contract VTSFeeLibTest is VTSLibTestBase {
         assertEq(out.pendingAdj1After, int256(exp.feesBurn), "pending fee adjustment should queue the slash");
     }
 
+    function test_applyBurnBase_residualBacking_zeroLiquidity_stillConsumesBankedFees() public {
+        PoolId corePoolId = _getDefaultPoolId();
+        uint256 bankedFeeToken1 = 50e18;
+
+        _setupResidualBurnPool(corePoolId);
+
+        (, int24 tickCurrent,,) = StateLibrary.getSlot0(manager, corePoolId);
+        int24 tickLower = tickCurrent - 60;
+        int24 tickUpper = tickCurrent + 60;
+        PositionId positionId = _setupLiveFeeBurnPosition(
+            corePoolId, tickLower, tickUpper, RESIDUAL_TEST_LIQUIDITY, bytes32(uint256(0xDEAD))
+        );
+
+        harness.setPendingResidualFeeBacking(positionId, 0, bankedFeeToken1);
+        harness.setCumulativeOutflows(positionId, RESIDUAL_TEST_OUTFLOW_WINDOW, 0);
+        harness.setOutflowsAtFeeSnap(positionId, 0, 0);
+
+        (uint256 fg0Now, uint256 fg1Now) = _getFeeGrowthInside(corePoolId, tickLower, tickUpper);
+        harness.setFeeGrowthInsideLast(positionId, fg0Now, fg1Now);
+
+        uint256 expectedConsumedBanked =
+            FullMath.mulDiv(bankedFeeToken1, RESIDUAL_TEST_PURE_BURN_BASE, RESIDUAL_TEST_OUTFLOW_WINDOW);
+        uint256 expectedFeesBurn =
+            FullMath.mulDiv(expectedConsumedBanked, RESIDUAL_TEST_FEE_SHARE_BPS, LiquidityUtils.BPS_DENOMINATOR);
+        assertGt(expectedFeesBurn, 0, "setup: expected non-zero slash from banked backing");
+
+        uint256 consumedBurnBase =
+            harness.applyBurnBase(manager, positionId, corePoolId, 0, RESIDUAL_TEST_PURE_BURN_BASE, 0, 0, true);
+
+        assertEq(
+            consumedBurnBase,
+            RESIDUAL_TEST_PURE_BURN_BASE,
+            "zero-liquidity residual burn should still consume the eligible banked base"
+        );
+
+        (, uint256 bankedFee1After) = harness.getPendingResidualFeeBacking(positionId);
+        assertEq(
+            bankedFee1After, bankedFeeToken1 - expectedConsumedBanked, "zero-liquidity burn should debit banked backing"
+        );
+
+        (, uint256 fg1After) = harness.getFeeGrowthInsideLast(positionId);
+        assertEq(fg1After, fg1Now, "zero-liquidity banked burn must not advance the live fee growth baseline");
+
+        (, uint256 protocolFee1After) = harness.getProtocolFeeAccrued(corePoolId);
+        (, uint256 feesShared1After) = harness.getFeesShared(positionId);
+        (, int256 pendingAdj1After) = harness.getPendingFeeAdj(positionId);
+        assertEq(protocolFee1After, expectedFeesBurn, "protocol fee pot should mint the expected zero-liquidity slash");
+        assertEq(feesShared1After, expectedFeesBurn, "feesShared should track the zero-liquidity slash amount");
+        assertEq(
+            pendingAdj1After, int256(expectedFeesBurn), "pending fee adjustment should queue the zero-liquidity slash"
+        );
+    }
+
     function test_applyBurnBase_residualBacking_mixedBankedAndFreshFees_consumesBankFirst_andAdvancesFreshCheckpoint()
         public
     {

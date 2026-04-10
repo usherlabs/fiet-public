@@ -261,7 +261,7 @@ library VTSFeeLib {
             if (params.positionLiquidity > 0 && fg > lastFeeGrowth) {
                 c.freshFees = FullMath.mulDiv(fg - lastFeeGrowth, uint256(params.positionLiquidity), FixedPoint128.Q128);
             }
-            if (params.consumeResidualFeeBacking && params.positionLiquidity > 0) {
+            if (params.consumeResidualFeeBacking) {
                 c.bankedFees = pa.pendingResidualFeeBacking.get(params.feeTokenIndex);
             }
         }

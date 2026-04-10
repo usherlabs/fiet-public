@@ -6,7 +6,7 @@ Echidna fuzz harnesses use **hard-linked library addresses** so that Foundry's l
 
 Regenerate addresses when:
 
-- You modify any of: `LCCFactoryLinkedLib`, `VTSCommitLib`, `VTSPositionLib`
+- You modify any of: `LCCFactoryLinkedLib`, `VTSCommitLib`, `VTSFeeLinkedLib`, `VTSPositionLib`
 - You change dependencies (e.g. Uniswap v4, OpenZeppelin) that affect those libraries
 - Echidna fails with `EchidnaLinkedLibs: * addr mismatch` during harness deployment
 
@@ -60,26 +60,28 @@ Update **exactly two** places with the recomputed addresses:
 
 ### 1. `contracts/evm/test/fuzz/base/EchidnaLinkedLibs.sol`
 
-Replace the three constant values (lines ~12–14):
+Replace the computed constant values:
 
 ```solidity
 address internal constant LCC_FACTORY_LINKED_LIB = 0x...;
+address internal constant LIQUIDITY_HUB_LINKED_LIB = 0x...;
 address internal constant VTS_COMMIT_LIB = 0x...;
+address internal constant VTS_FEE_LINKED_LIB = 0x...;
 address internal constant VTS_POSITION_LIB = 0x...;
 ```
 
 ### 2. `contracts/evm/foundry.toml`
 
-In the `[profile.echidna]` section, update the `libraries` array (lines ~62–71). Replace the hex addresses in the first three entries:
+In the `[profile.echidna]` section, update the `libraries` array. Replace the hex addresses in the computed entries:
 
 ```toml
 libraries = [
   "src/libraries/LCCFactoryLib.sol:LCCFactoryLinkedLib:0x...",             # validated by script
   "src/libraries/LiquidityHubLinkedLib.sol:LiquidityHubLinkedLib:0x...",   # validated by script
   "src/libraries/VTSCommitLib.sol:VTSCommitLib:0x...",                     # validated by script
+  "src/libraries/VTSFeeLib.sol:VTSFeeLinkedLib:0x...",                     # validated by script
   "src/libraries/VTSPositionLib.sol:VTSPositionLib:0x...",                 # validated by script
   "src/libraries/VTSSwapLib.sol:VTSSwapLib:0x...",                         # placeholder, not validated
-  "src/libraries/VTSFeeLib.sol:VTSFeeLinkedLib:0x...",                     # placeholder, not validated
 ]
 ```
 
@@ -92,6 +94,7 @@ Current validation covers:
 - `LCCFactoryLinkedLib`
 - `LiquidityHubLinkedLib`
 - `VTSCommitLib`
+- `VTSFeeLinkedLib`
 - `VTSPositionLib`
 
 ## Why CREATE2 Addresses Change

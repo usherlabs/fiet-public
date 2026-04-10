@@ -4,6 +4,7 @@ pragma solidity ^0.8.26;
 import {LCCFactoryLinkedLib} from "../../../src/libraries/LCCFactoryLib.sol";
 import {LiquidityHubLinkedLib} from "../../../src/libraries/LiquidityHubLinkedLib.sol";
 import {VTSCommitLib} from "../../../src/libraries/VTSCommitLib.sol";
+import {VTSFeeLinkedLib} from "../../../src/libraries/VTSFeeLib.sol";
 import {VTSPositionLib} from "../../../src/libraries/VTSPositionLib.sol";
 
 /// @notice Single source of truth for Echidna hard-linked library addresses and CREATE2 deploy helpers.
@@ -13,14 +14,14 @@ library EchidnaLinkedLibs {
     address internal constant LCC_FACTORY_LINKED_LIB = 0x5A3842F9D1B0F96003669A36Ec4a09165bc7de54;
     address internal constant LIQUIDITY_HUB_LINKED_LIB = 0xB3A02cd6d8fB5B8Fe16DD569EdF8BE35a87bD0FA;
     address internal constant VTS_COMMIT_LIB = 0x6215030BFA6e034fFe347cbe7237e37e5f1eEc61;
-    address internal constant VTS_POSITION_LIB = 0x2b42b12f10eC54014a379fdbe32893Dac7f70C8f;
-    /// @dev Deterministic placeholder only: not CREATE2-validated by `ValidateEchidnaLinkedLibs` (see script + foundry.toml
-    ///      `[profile.echidna].libraries`). No `deployVTSLifecycleLinkedLib` helper — lifecycle is linked for compile only.
+    address internal constant VTS_FEE_LINKED_LIB = 0xde93cedd687279B3700B3df14C88838A1b84fC77;
+    address internal constant VTS_POSITION_LIB = 0x60BEBeFa3a0B67870828f47Fa518947068c2fc42;
     address internal constant VTS_LIFECYCLE_LINKED_LIB = 0x1111111111111111111111111111111111111113;
 
     error LCCFactoryLinkedLibAddrMismatch();
     error LiquidityHubLinkedLibAddrMismatch();
     error VTSCommitLibAddrMismatch();
+    error VTSFeeLinkedLibAddrMismatch();
     error VTSPositionLibAddrMismatch();
     error DeployFailed();
 
@@ -34,6 +35,10 @@ library EchidnaLinkedLibs {
 
     function expectedVTSCommitLib() internal pure returns (address) {
         return VTS_COMMIT_LIB;
+    }
+
+    function expectedVTSFeeLinkedLib() internal pure returns (address) {
+        return VTS_FEE_LINKED_LIB;
     }
 
     function expectedVTSPositionLib() internal pure returns (address) {
@@ -57,6 +62,11 @@ library EchidnaLinkedLibs {
     function deployVTSCommitLib() internal {
         address lib = _deploy(keccak256("echidna.VTSCommitLib"), type(VTSCommitLib).creationCode);
         if (lib != VTS_COMMIT_LIB) revert VTSCommitLibAddrMismatch();
+    }
+
+    function deployVTSFeeLinkedLib() internal {
+        address lib = _deploy(keccak256("echidna.VTSFeeLinkedLib"), type(VTSFeeLinkedLib).creationCode);
+        if (lib != VTS_FEE_LINKED_LIB) revert VTSFeeLinkedLibAddrMismatch();
     }
 
     function deployVTSPositionLib() internal {

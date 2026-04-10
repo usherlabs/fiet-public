@@ -9,6 +9,7 @@ contract EchidnaLinkedLibSmokeRunner {
         EchidnaLinkedLibs.deployLCCFactoryLinkedLib();
         EchidnaLinkedLibs.deployLiquidityHubLinkedLib();
         EchidnaLinkedLibs.deployVTSCommitLib();
+        EchidnaLinkedLibs.deployVTSFeeLinkedLib();
         EchidnaLinkedLibs.deployVTSPositionLib();
     }
 }
