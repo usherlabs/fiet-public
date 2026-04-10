@@ -1207,9 +1207,9 @@ library VTSPositionLib {
                 requiredSettlementDelta = _touchExistingDecrease(s, result.id, p.params, liq, hookData);
                 // Mirror using live PoolManager liquidity post-modify for both paused and unpaused removes.
                 PositionAccounting storage paDec = s.positionAccounting[result.id];
-                if (initialLiquidity > 0 && liq == 0) {
-                    VTSFeeLinkedLib.captureResidualFeeBackingOnDeactivation(
-                        s, ctx.poolManager, result.id, SafeCast.toUint128(initialLiquidity)
+                if (liq == 0) {
+                    _captureResidualFeeBackingOnFullDeactivation(
+                        s, ctx.poolManager, result.id, liq, p.params.liquidityDelta
                     );
                 }
                 _applyLiquidityMirrorTransition(s, paDec, posStorage, initialLiquidity, liq);
@@ -1291,6 +1291,18 @@ library VTSPositionLib {
 
         // Unit harnesses may call touchPosition without pre-mutating PoolManager liquidity first.
         if (nextLiquidity == 0) nextLiquidity = liveLiquidityBeforeAdd + addedLiquidity;
+    }
+
+    function _captureResidualFeeBackingOnFullDeactivation(
+        VTSStorage storage s,
+        IPoolManager poolManager,
+        PositionId positionId,
+        uint128 liq,
+        int256 liquidityDelta
+    ) internal {
+        uint128 removedLiquidity = uint256(-liquidityDelta).toUint128();
+        uint128 liveLiquidityBeforeRemove = (uint256(liq) + uint256(removedLiquidity)).toUint128();
+        VTSFeeLinkedLib.captureResidualFeeBackingOnDeactivation(s, poolManager, positionId, liveLiquidityBeforeRemove);
     }
 
     /// @dev Compute settled excess over current commitment maxima after a decrease.

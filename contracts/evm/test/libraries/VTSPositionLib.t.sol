@@ -1140,6 +1140,56 @@ contract VTSPositionLibTest is VTSLibTestBase {
         );
     }
 
+    function test_touchPosition_fullRemove_banksResidualFeeBacking_fromLiveLiquidity_notMirror() public {
+        _initMarket();
+        PoolId corePoolId = _getDefaultPoolId();
+        harness.setupPool(corePoolId, _createDefaultVTSConfig());
+
+        uint128 liveLiquidityBeforeRemove = uint128(1e18);
+        PositionId positionId = _registerHarnessPositionInPool(
+            corePoolId, DEFAULT_OWNER, DEFAULT_TICK_LOWER, DEFAULT_TICK_UPPER, liveLiquidityBeforeRemove, DEFAULT_SALT
+        );
+
+        // Simulate a stale mirror after an external/paused remove path: storage no longer reflects
+        // the authoritative pre-remove liquidity that the hook action is reconciling.
+        harness.setPositionLiquidityMirror(positionId, 1);
+
+        harness.setPendingResidualBurnBase(positionId, 1, 0);
+        harness.setFeeGrowthInsideLast(positionId, 0, 0);
+
+        _accrueFeeGrowthInCoreRange(true); // token1 fee growth
+        (, uint256 fg1BeforeRemove) = _getFeeGrowthInside(corePoolId, DEFAULT_TICK_LOWER, DEFAULT_TICK_UPPER);
+        uint256 expectedBanked =
+            FullMath.mulDiv(fg1BeforeRemove, uint256(liveLiquidityBeforeRemove), FixedPoint128.Q128);
+        assertGt(expectedBanked, 0, "setup: expected bankable fee backing");
+
+        ModifyLiquidityParams memory removeParams = ModifyLiquidityParams({
+            tickLower: DEFAULT_TICK_LOWER,
+            tickUpper: DEFAULT_TICK_UPPER,
+            liquidityDelta: -int256(uint256(liveLiquidityBeforeRemove)),
+            salt: DEFAULT_SALT
+        });
+        TouchPositionParams memory removeTp = TouchPositionParams({
+            owner: DEFAULT_OWNER,
+            poolKey: _mkPoolKey(),
+            params: removeParams,
+            callerDelta: toBalanceDelta(0, 0),
+            feesAccrued: toBalanceDelta(0, 0),
+            hookData: _mkHookData(false, false, 0)
+        });
+
+        harness.touchPosition(_mkCtx(), removeTp);
+
+        (uint256 bankedFee0AfterRemove, uint256 bankedFee1AfterRemove) =
+            harness.getPendingResidualFeeBacking(positionId);
+        assertEq(bankedFee0AfterRemove, 0, "fee token0 lane should remain unbanked");
+        assertEq(
+            bankedFee1AfterRemove,
+            expectedBanked,
+            "full remove should bank backing from authoritative pre-remove liquidity, not the mirror"
+        );
+    }
+
     function test_settlePositionGrowths_residualBurn_canConsumeBankedFeeBacking_withoutFreshFees() public {
         _initMarket();
         PoolId corePoolId = _getDefaultPoolId();
