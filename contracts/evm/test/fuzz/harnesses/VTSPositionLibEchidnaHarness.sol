@@ -17,6 +17,7 @@ import {BalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
 import {IPoolManager} from "v4-periphery/lib/v4-core/src/interfaces/IPoolManager.sol";
 import {ModifyLiquidityParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
 import {VTSPositionLib} from "../../../src/libraries/VTSPositionLib.sol";
+import {VTSLifecycleLinkedLib} from "../../../src/libraries/VTSLifecycleLinkedLib.sol";
 import {DynamicCurrencyDelta} from "../../../src/libraries/DynamicCurrencyDelta.sol";
 import {IMarketVault} from "../../../src/interfaces/IMarketVault.sol";
 import {ILiquidityHub} from "../../../src/interfaces/ILiquidityHub.sol";
@@ -149,7 +150,7 @@ contract VTSPositionLibEchidnaHarness {
     }
 
     // -------------------------------------------------------------------------
-    // MM settle entrypoint (production VTSPositionLib path)
+    // MM settle entrypoint (`VTSLifecycleLinkedLib.executeMMSettleFromParams`)
     // -------------------------------------------------------------------------
 
     function onMMSettle(
@@ -172,7 +173,7 @@ contract VTSPositionLibEchidnaHarness {
             delta: delta,
             isSeizing: isSeizing
         });
-        SettleResult memory result = VTSPositionLib.onMMSettle(s, poolManager, p);
+        SettleResult memory result = VTSLifecycleLinkedLib.executeMMSettleFromParams(s, poolManager, p);
         return (result.settlementDelta, result.rfsOpen, result.seizedLiquidityUnits);
     }
 

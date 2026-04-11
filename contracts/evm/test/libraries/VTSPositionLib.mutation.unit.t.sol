@@ -15,6 +15,8 @@ import {BalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
 import {LiquidityUtils} from "../../src/libraries/LiquidityUtils.sol";
 import {Errors} from "../../src/libraries/Errors.sol";
 import {VTSPositionLib} from "../../src/libraries/VTSPositionLib.sol";
+import {VTSLifecycleLinkedLib} from "../../src/libraries/VTSLifecycleLinkedLib.sol";
+import {VTSFeeLinkedLib} from "../../src/libraries/VTSFeeLib.sol";
 import {FullMath} from "@uniswap/v4-core/src/libraries/FullMath.sol";
 import {FixedPoint128} from "v4-periphery/lib/v4-core/src/libraries/FixedPoint128.sol";
 import {Pool} from "../../src/types/Pool.sol";
@@ -1720,10 +1722,10 @@ contract VTSPositionLibMutationUnitTest is Test {
     }
 }
 
-/// @notice Exposes internal VTSPositionLib pure helper for truth-table tests.
+/// @notice Exposes MM delta-clearance pure helper for truth-table tests.
 contract VTSPositionLibDeltaClearanceExpose {
     function calc(int128 delta, int128 amount) external pure returns (int128) {
-        return VTSPositionLib._calcDeltaClearance(delta, amount);
+        return VTSLifecycleLinkedLib.mmCalcDeltaClearance(delta, amount);
     }
 }
 
@@ -1767,7 +1769,7 @@ contract VTSPositionLibResidualFlushExpose {
     }
 
     function flushDICE(PoolId poolId, uint8 tokenIndex) external {
-        VTSPositionLib._flushCoverageResidualIfNeeded(s, poolId, tokenIndex);
+        VTSFeeLinkedLib.flushCoverageResidualIfNeeded(s, poolId, tokenIndex);
     }
 }
 
@@ -1949,7 +1951,7 @@ contract VTSPositionLibCISEExpose {
     }
 
     function settleSettledIndexedCoverageUsage(PositionId id) external {
-        VTSPositionLib._settleSettledIndexedCoverageUsage(s, id);
+        VTSFeeLinkedLib.settleSettledIndexedCoverageUsage(s, id);
     }
 
     function getCISEExposure(PositionId id) external view returns (uint256 e0, uint256 e1) {
@@ -2027,7 +2029,7 @@ contract VTSPositionLibDICEExpose {
     }
 
     function settleDeficitIndexedCoverageUsage(IPoolManager poolManager, PositionId id) external {
-        VTSPositionLib._settleDeficitIndexedCoverageUsage(s, poolManager, id);
+        VTSFeeLinkedLib.settleDeficitIndexedCoverageUsage(s, poolManager, id);
     }
 
     function getPoolProtocolFeeAccrued(PoolId poolId) external view returns (uint256 fee0, uint256 fee1) {

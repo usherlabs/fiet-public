@@ -21,6 +21,8 @@ import {ModifyLiquidityParams} from "@uniswap/v4-core/src/types/PoolOperation.so
 import {BalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
 import {IPoolManager} from "v4-periphery/lib/v4-core/src/interfaces/IPoolManager.sol";
 import {VTSPositionLib} from "../../../src/libraries/VTSPositionLib.sol";
+import {VTSLifecycleLinkedLib} from "../../../src/libraries/VTSLifecycleLinkedLib.sol";
+import {VTSFeeLinkedLib} from "../../../src/libraries/VTSFeeLib.sol";
 import {VTSCommitLib} from "../../../src/libraries/VTSCommitLib.sol";
 import {RFSCheckpoint} from "../../../src/types/Checkpoint.sol";
 import {IMarketVault} from "../../../src/interfaces/IMarketVault.sol";
@@ -104,7 +106,7 @@ contract VTSPositionLibHarness {
         BalanceDelta delta,
         bool isSeizing
     ) external returns (BalanceDelta settlementDelta, bool rfsOpen, uint256 seizedLiquidityUnits) {
-        SettleResult memory result = VTSPositionLib.onMMSettle(
+        SettleResult memory result = VTSLifecycleLinkedLib.executeMMSettleFromParams(
             s,
             poolManager,
             SettleParams({
@@ -129,7 +131,7 @@ contract VTSPositionLibHarness {
         uint256 cov,
         uint128 positionLiquidity
     ) external {
-        VTSPositionLib._applyCoverageBurn(s, poolManager, positionId, poolId, tokenIndex, cov, positionLiquidity);
+        VTSFeeLinkedLib.applyCoverageBurn(s, poolManager, positionId, poolId, tokenIndex, cov, positionLiquidity);
     }
 
     /// @notice Exposes internal liquidity decrease helper for unit tests (queue clamping, settleableDelta)

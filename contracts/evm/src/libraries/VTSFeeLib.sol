@@ -638,6 +638,119 @@ library VTSFeeLib {
         }
     }
 
+    // --------------------------------------------------
+    // DICE / CISE coverage settlement (linked from VTSPositionLib.settlePositionGrowths)
+    // --------------------------------------------------
+
+    /// @notice Flush any pending deficit-indexed coverage residual into the DICE index
+    function _flushCoverageResidualIfNeeded(VTSStorage storage s, PoolId poolId, uint8 tokenIndex) internal {
+        PoolAccounting storage paPool = s.poolAccounting[poolId];
+        uint256 residual = paPool.coverageResidualDICE.get(tokenIndex);
+        uint256 principal = paPool.totalDeficitPrincipal.get(tokenIndex);
+
+        if (residual > 0 && principal > 0) {
+            uint256 deltaIndex = FullMath.mulDiv(residual, FixedPoint128.Q128, principal);
+            uint256 currentIndex = paPool.coveragePerResidualDeficitIndexX128.get(tokenIndex);
+            paPool.coveragePerResidualDeficitIndexX128.set(tokenIndex, currentIndex + deltaIndex);
+            paPool.coverageResidualDICE.set(tokenIndex, 0);
+        }
+    }
+
+    function _settleCISEForToken(PositionAccounting storage pa, PoolAccounting storage paPool, uint8 tokenIndex)
+        internal
+    {
+        uint256 indexNow = paPool.coveragePerSettledIndexX128.get(tokenIndex);
+        uint256 indexLast = pa.ciseIndexLastX128.get(tokenIndex);
+
+        if (indexNow != indexLast) {
+            pa.ciseIndexLastX128.set(tokenIndex, indexNow);
+        }
+
+        uint256 deltaIndex = indexNow - indexLast;
+        if (deltaIndex > 0) {
+            uint256 settled = pa.settled.get(tokenIndex);
+            uint256 exposure = FullMath.mulDiv(settled, deltaIndex, FixedPoint128.Q128);
+            if (exposure > 0) {
+                pa.ciseExposureSinceLastMod.set(tokenIndex, pa.ciseExposureSinceLastMod.get(tokenIndex) + exposure);
+            }
+        }
+    }
+
+    function _settleDICEForToken(
+        VTSStorage storage s,
+        IPoolManager poolManager,
+        PositionId positionId,
+        PoolId poolId,
+        uint8 tokenIndex,
+        uint128 liq
+    ) internal {
+        PositionAccounting storage pa = s.positionAccounting[positionId];
+        uint256 deficitPrincipal = pa.cumulativeDeficit.get(tokenIndex);
+
+        _clearResolvedResidualFeeBacking(pa, tokenIndex);
+
+        {
+            uint256 residualIndexNow = s.poolAccounting[poolId].coveragePerResidualDeficitIndexX128.get(tokenIndex);
+            uint256 residualIndexLast = pa.residualCoverageIndexLastX128.get(tokenIndex);
+
+            if (residualIndexNow != residualIndexLast) {
+                pa.residualCoverageIndexLastX128.set(tokenIndex, residualIndexNow);
+            }
+
+            uint256 deltaResidualIndex = residualIndexNow - residualIndexLast;
+            if (deltaResidualIndex > 0 && deficitPrincipal > 0) {
+                uint256 residualCov = FullMath.mulDiv(deficitPrincipal, deltaResidualIndex, FixedPoint128.Q128);
+                if (residualCov > 0) {
+                    pa.pendingResidualBurnBase.set(tokenIndex, pa.pendingResidualBurnBase.get(tokenIndex) + residualCov);
+
+                    uint256 curOutflows = pa.cumulativeOutflows.get(tokenIndex);
+                    uint256 existingFloor = pa.pendingResidualBurnOutflowsFloor.get(tokenIndex);
+                    if (curOutflows > existingFloor) {
+                        pa.pendingResidualBurnOutflowsFloor.set(tokenIndex, curOutflows);
+                    }
+                }
+            }
+        }
+
+        {
+            uint256 indexNow = s.poolAccounting[poolId].coveragePerDeficitIndexX128.get(tokenIndex);
+            uint256 indexLast = pa.coverageIndexLastX128.get(tokenIndex);
+
+            if (indexNow != indexLast) {
+                pa.coverageIndexLastX128.set(tokenIndex, indexNow);
+            }
+
+            uint256 deltaIndex = indexNow - indexLast;
+            if (deltaIndex > 0 && deficitPrincipal > 0) {
+                uint256 cov = FullMath.mulDiv(deficitPrincipal, deltaIndex, FixedPoint128.Q128);
+                if (cov > 0) {
+                    _applyCoverageBurn(s, poolManager, positionId, poolId, tokenIndex, cov, liq);
+                }
+            }
+        }
+
+        _applyBankedResidualBurn(s, poolManager, positionId, poolId, tokenIndex, liq);
+    }
+
+    function _settleDeficitIndexedCoverageUsage(VTSStorage storage s, IPoolManager poolManager, PositionId positionId)
+        internal
+    {
+        Position memory pos = s.positions[positionId];
+        PoolId poolId = pos.poolId;
+        uint128 liq = StateLibrary.getPositionLiquidity(poolManager, poolId, PositionId.unwrap(positionId));
+
+        _settleDICEForToken(s, poolManager, positionId, poolId, 0, liq);
+        _settleDICEForToken(s, poolManager, positionId, poolId, 1, liq);
+    }
+
+    function _settleSettledIndexedCoverageUsage(VTSStorage storage s, PositionId positionId) internal {
+        Position memory pos = s.positions[positionId];
+        PoolId poolId = pos.poolId;
+
+        _settleCISEForToken(s.positionAccounting[positionId], s.poolAccounting[poolId], 0);
+        _settleCISEForToken(s.positionAccounting[positionId], s.poolAccounting[poolId], 1);
+    }
+
     /// @notice Apply coverage burn for a position (deficit-indexed coverage exercise → fee share)
     /// @dev Fees accrue on the input token, not the deficit token.
     function _applyCoverageBurn(
@@ -766,5 +879,22 @@ library VTSFeeLinkedLib {
         uint128 positionLiquidity
     ) external {
         VTSFeeLib._applyCoverageBurn(s, poolManager, id, p, tokenIndex, cov, positionLiquidity);
+    }
+
+    /// @notice Flush pending deficit-indexed coverage residual into the DICE index when principal becomes non-zero
+    function flushCoverageResidualIfNeeded(VTSStorage storage s, PoolId poolId, uint8 tokenIndex) external {
+        VTSFeeLib._flushCoverageResidualIfNeeded(s, poolId, tokenIndex);
+    }
+
+    /// @notice Settle settled-indexed coverage usage (CISE) for both tokens
+    function settleSettledIndexedCoverageUsage(VTSStorage storage s, PositionId positionId) external {
+        VTSFeeLib._settleSettledIndexedCoverageUsage(s, positionId);
+    }
+
+    /// @notice Settle deficit-indexed coverage usage (DICE) for both tokens
+    function settleDeficitIndexedCoverageUsage(VTSStorage storage s, IPoolManager poolManager, PositionId positionId)
+        external
+    {
+        VTSFeeLib._settleDeficitIndexedCoverageUsage(s, poolManager, positionId);
     }
 }

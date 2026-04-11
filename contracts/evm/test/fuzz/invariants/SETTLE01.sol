@@ -17,7 +17,7 @@ import {LiquidityUtils} from "../../../src/libraries/LiquidityUtils.sol";
 import {EchidnaLinkedLibs} from "../base/EchidnaLinkedLibs.sol";
 
 /// @notice Echidna harness for SETTLE-01: Withdrawals from active positions are disallowed while RFS is open.
-///         Uses the production `VTSPositionLib.onMMSettle` path via the Echidna harness.
+///         Uses the production MM settle path via `VTSLifecycleLinkedLib.executeMMSettleFromParams` (Echidna harness).
 contract SETTLE01 {
     uint256 internal constant MAX_VACUOUS_ATTEMPTS = 12;
     string internal constant RFS_OPEN_REASON = "VTSPositionLib: RFS open";
@@ -45,6 +45,7 @@ contract SETTLE01 {
     constructor() {
         EchidnaLinkedLibs.deployVTSFeeLinkedLib();
         EchidnaLinkedLibs.deployVTSPositionLib();
+        EchidnaLinkedLibs.deployVTSLifecycleLinkedLib();
         harness = new VTSPositionLibEchidnaHarness();
         poolManager = new MockPoolManager();
         vault = new MockMarketVault();

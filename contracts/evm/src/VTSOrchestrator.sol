@@ -666,7 +666,7 @@ contract VTSOrchestrator is
 
     /// @notice Settle a market maker position
     /// @dev Called by MMPositionManager to settle a position, handling both normal settlement and seizure.
-    ///      Position validation is performed inside VTSPositionLib.onMMSettle.
+    ///      Position validation is performed inside `VTSLifecycleLinkedLib.executeMMSettleFromParams`.
     /// @param factory The market factory namespace for caller-bound validation
     /// @param commitId The commit identifier
     /// @param positionIndex The position index within the commit

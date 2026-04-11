@@ -8,6 +8,7 @@ import {LiquidityHubLinkedLib} from "../../../src/libraries/LiquidityHubLinkedLi
 import {VTSCommitLib} from "../../../src/libraries/VTSCommitLib.sol";
 import {VTSFeeLinkedLib} from "../../../src/libraries/VTSFeeLib.sol";
 import {VTSPositionLib} from "../../../src/libraries/VTSPositionLib.sol";
+import {VTSLifecycleLinkedLib} from "../../../src/libraries/VTSLifecycleLinkedLib.sol";
 import {EchidnaLinkedLibs} from "../base/EchidnaLinkedLibs.sol";
 
 /// @notice Validates that `EchidnaLinkedLibs` constants match current CREATE2 outputs.
@@ -16,7 +17,6 @@ contract ValidateEchidnaLinkedLibs is Script {
     /// Echidna's default deployer address (the harness contract is deployed here).
     address internal constant ECHIDNA_DEPLOYER = 0x00a329c0648769A73afAc7F9381E08FB43dBEA72;
     address internal constant VTSSWAPLIB_PLACEHOLDER = 0x1111111111111111111111111111111111111112;
-    address internal constant VTSLIFECYCLE_LINKEDLIB_PLACEHOLDER = 0x1111111111111111111111111111111111111113;
 
     function run() external pure {
         uint256 failures = 0;
@@ -52,11 +52,10 @@ contract ValidateEchidnaLinkedLibs is Script {
                 _compute(type(VTSPositionLib).creationCode, "echidna.VTSPositionLib")
             )) failures++;
 
-        // Intentional placeholder: must stay aligned with `EchidnaLinkedLibs.VTS_LIFECYCLE_LINKED_LIB` and foundry.toml.
         if (!_check(
-                "VTSLifecycleLinkedLib (Echidna placeholder)",
-                VTSLIFECYCLE_LINKEDLIB_PLACEHOLDER,
-                EchidnaLinkedLibs.expectedVTSLifecycleLinkedLib()
+                "VTSLifecycleLinkedLib",
+                EchidnaLinkedLibs.expectedVTSLifecycleLinkedLib(),
+                _compute(type(VTSLifecycleLinkedLib).creationCode, "echidna.VTSLifecycleLinkedLib")
             )) failures++;
 
         if (failures != 0) {
@@ -138,12 +137,13 @@ contract ValidateEchidnaLinkedLibs is Script {
                 _compute(type(VTSPositionLib).creationCode, "echidna.VTSPositionLib")
             )
         );
-        console2.log("  # Intentional placeholders for libs that are not CREATE2-validated by this script.");
         console2.log(
             _libraryEntry(
-                "src/libraries/VTSLifecycleLinkedLib.sol:VTSLifecycleLinkedLib", VTSLIFECYCLE_LINKEDLIB_PLACEHOLDER
+                "src/libraries/VTSLifecycleLinkedLib.sol:VTSLifecycleLinkedLib",
+                _compute(type(VTSLifecycleLinkedLib).creationCode, "echidna.VTSLifecycleLinkedLib")
             )
         );
+        console2.log("  # Intentional placeholder for libs not CREATE2-validated by this script.");
         console2.log(_libraryEntry("src/libraries/VTSSwapLib.sol:VTSSwapLib", VTSSWAPLIB_PLACEHOLDER));
         console2.log("]");
     }
@@ -172,7 +172,12 @@ contract ValidateEchidnaLinkedLibs is Script {
         console2.log(
             _constantEntry("VTS_POSITION_LIB", _compute(type(VTSPositionLib).creationCode, "echidna.VTSPositionLib"))
         );
-        console2.log(_constantEntry("VTS_LIFECYCLE_LINKED_LIB", VTSLIFECYCLE_LINKEDLIB_PLACEHOLDER));
+        console2.log(
+            _constantEntry(
+                "VTS_LIFECYCLE_LINKED_LIB",
+                _compute(type(VTSLifecycleLinkedLib).creationCode, "echidna.VTSLifecycleLinkedLib")
+            )
+        );
     }
 
     function _libraryEntry(string memory path, address lib) internal pure returns (string memory) {
