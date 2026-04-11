@@ -2198,7 +2198,7 @@ contract VTSPositionLibTest is VTSLibTestBase {
         Currency lccCurrency0 = Currency.wrap(address(lcc0));
         Currency lccCurrency1 = Currency.wrap(address(lcc1));
 
-        // Give DEFAULT_OWNER a positive underlying delta so _calcDeltaClearance hits (delta > 0 && amount > 0).
+        // Give DEFAULT_OWNER a positive underlying delta; withdrawal path nets it before settled-backed leg.
         harness.setUnderlyingDelta(Currency.wrap(underlying0), DEFAULT_OWNER, int128(int256(20)));
 
         VTSPositionLibTest_VaultNoop vault = new VTSPositionLibTest_VaultNoop();
@@ -2207,6 +2207,9 @@ contract VTSPositionLibTest is VTSLibTestBase {
         (BalanceDelta settlementDelta,,) =
             harness.onMMSettle(manager, vault, positionId, lccCurrency0, lccCurrency1, delta, false);
         assertEq(settlementDelta.amount0(), int128(10), "withdrawal should be applied");
+
+        (,, uint256 settled0,,,) = harness.getPositionAccounting(positionId);
+        assertEq(settled0, 50, "delta-backed withdrawal should not reduce live settled");
 
         // Underlying delta should be reduced by min(20, 10) => 10 remaining.
         int256 remaining = harness.getDelta(Currency.wrap(underlying0), DEFAULT_OWNER);
@@ -2239,6 +2242,9 @@ contract VTSPositionLibTest is VTSLibTestBase {
         );
         assertEq(settlementDelta.amount1(), int128(10), "withdrawal on token1 should be applied");
         assertEq(seized, 0, "seizedLiquidityUnits should be zero when not seizing");
+
+        (,,, uint256 settled1,,) = harness.getPositionAccounting(positionId);
+        assertEq(settled1, 50, "token1 delta-backed withdrawal should not reduce live settled");
 
         int256 remaining = harness.getDelta(Currency.wrap(underlying1), DEFAULT_OWNER);
         assertEq(remaining, 10, "underlying positive delta (token1) should be partially cleared");
@@ -2705,7 +2711,7 @@ contract VTSPositionLibTest is VTSLibTestBase {
         assertEq(idx1, 987, "ciseIndexLastX128.token1 should be initialised to pool index");
     }
 
-    function test_onMMSettle_withdrawalClampedByVault_addsBackShortfall() public {
+    function test_onMMSettle_withdrawalClampedByVault_clampsBeforeSettledMutation() public {
         _initMarket();
         PositionId positionId = _registerDefaultPosition();
 
@@ -2717,6 +2723,7 @@ contract VTSPositionLibTest is VTSLibTestBase {
         harness.setSettled(positionId, 100e18, 0);
 
         // Request withdrawal of 80, but vault only has 30 available.
+        // Under the strict ordering model, only the final clamped amount should touch settled.
         IMarketVault vault = new VTSPositionLibTest_VaultClamp(int128(int256(30e18)), 0);
 
         // onMMSettle expects LCC currencies to be actual LCC token contracts (it calls `underlying()`).
@@ -2741,7 +2748,7 @@ contract VTSPositionLibTest is VTSLibTestBase {
         assertEq(settled0, 70e18, "settled should only decrease by the available (clamped) withdrawal amount");
     }
 
-    function test_onMMSettle_withdrawalClampedByVault_token1_addsBackShortfall() public {
+    function test_onMMSettle_withdrawalClampedByVault_token1_clampsBeforeSettledMutation() public {
         _initMarket();
         PositionId positionId = _registerDefaultPosition();
 
@@ -2750,6 +2757,7 @@ contract VTSPositionLibTest is VTSLibTestBase {
         harness.setSettled(positionId, 0, 100e18);
 
         // Request withdrawal of 80 on token1, but vault only has 30 available on token1.
+        // Only the clamped amount should reduce settled on this lane.
         IMarketVault vault = new VTSPositionLibTest_VaultClamp(0, int128(int256(30e18)));
         VTSPositionLibTest_MockLCC lcc0 = new VTSPositionLibTest_MockLCC(address(0xC0));
         VTSPositionLibTest_MockLCC lcc1 = new VTSPositionLibTest_MockLCC(address(0xC1));
@@ -2811,7 +2819,7 @@ contract VTSPositionLibTest is VTSLibTestBase {
             "seizing withdrawal should clamp to posRequiredSettlement0"
         );
         (,, uint256 settled0After,,,) = harness.getPositionAccounting(positionId);
-        assertEq(settled0After, 90e18, "settled0 should decrease only by the clamped withdrawal amount");
+        assertEq(settled0After, 100e18, "delta-backed seizing withdrawal should not reduce live settled");
     }
 
     function test_onMMSettle_seizing_depositClampedByPositiveRFS() public {

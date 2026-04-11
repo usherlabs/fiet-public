@@ -423,6 +423,12 @@ This amendment updates the MM settlement model for decrease/export flows to pres
 - **Intentional asymmetry**:
   - **Decrease path**: accounting is eager on the source side because value has already left the source position economically.
   - **Increase / import path**: accounting is deferred on the target side until value transfer or delta consumption is actually effected.
+- **Settlement ordering asymmetry inside `_settle()` / `onMMSettle()`**:
+  - **Deposits** may still update target `pa.settled` before negative underlying delta debt is cleared, because the batch is
+    moving fresh value into the position.
+  - **Withdrawals** must consume positive MMPM underlying delta first; only any residual amount still backed by live
+    position settlement may reduce `pa.settled` / pool `totalSettled`.
+  - Therefore, a delta-backed withdrawal is not allowed to book a settled reduction first and then "restore" it later.
 - **Interpretation of `requiredSettlementDelta`**:
   - In MM decrease flows, `requiredSettlementDelta` should be interpreted as value already exported from source position accounting and awaiting settlement, queue custody, or later delta consumption.
   - It should no longer be interpreted as value that remains live in source `settled` until a later follow-on settle action.

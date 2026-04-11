@@ -1342,9 +1342,10 @@ contract VTSPositionLibMutationUnitTest is Test {
         assertEq(clearanceExpose.calc(-100, -50), 50, "neg/neg: should clear +50");
         assertEq(clearanceExpose.calc(-50, -100), 50, "neg/neg: should clear +50 (clamped to debt)");
 
-        // delta > 0 && amount > 0 => clearance < 0 (reduces credit)
-        assertEq(clearanceExpose.calc(100, 50), -50, "pos/pos: should clear -50");
-        assertEq(clearanceExpose.calc(50, 100), -50, "pos/pos: should clear -50 (clamped to credit)");
+        // delta > 0 && amount > 0 => 0 here: withdrawal-side netting of positive underlying delta is applied
+        // earlier in onMMSettle, not via _calcDeltaClearance (phase-4 only calls this for amount < 0).
+        assertEq(clearanceExpose.calc(100, 50), 0, "pos/pos: no clearance via _calcDeltaClearance");
+        assertEq(clearanceExpose.calc(50, 100), 0, "pos/pos: no clearance via _calcDeltaClearance (clamped row)");
 
         // Other quadrants => 0
         assertEq(clearanceExpose.calc(-100, 50), 0, "neg/pos: should clear 0");

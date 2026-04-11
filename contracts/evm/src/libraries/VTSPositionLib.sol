@@ -66,11 +66,32 @@ library VTSPositionLib {
         BalanceDelta principalDelta;
     }
 
-    /// @dev Internal struct to return both Hub-queued and DynamicCurrencyDelta-backed MM decrease settlement splits.
-    struct LiquidityDecreaseResult {
-        BalanceDelta settleableDelta;
-        BalanceDelta queuedDelta;
-        BalanceDelta underlyingDeltaSettlement;
+    /// @dev Internal struct describing how a withdrawal is funded before `pa.settled` is mutated.
+    struct WithdrawalPlan {
+        uint256 deltaBacked0;
+        uint256 deltaBacked1;
+        uint256 settledBacked0;
+        uint256 settledBacked1;
+    }
+
+    /// @dev Bundles withdrawal execution parameters to keep `onMMSettle` below stack limits.
+    struct WithdrawalExecutionParams {
+        PositionId positionId;
+        address owner;
+        IMarketVault vault;
+        Currency lccCurrency0;
+        Currency lccCurrency1;
+        int256 requestedAmount0;
+        int256 requestedAmount1;
+        bool isActive;
+        bool isSeizing;
+        bool rfsOpen;
+    }
+
+    /// @dev Concrete withdrawal amounts after vault clamping.
+    struct WithdrawalActuals {
+        uint256 amount0;
+        uint256 amount1;
     }
 
     /// @dev Internal struct to reduce stack depth in _deltaAndCheckpointGrowth
@@ -198,28 +219,6 @@ library VTSPositionLib {
     function _sUpdateSettlement(VTSStorage storage s, PositionId id, uint8 tokenIndex, int256 delta) internal {
         int256 applied = _updateSettlement(s, id, tokenIndex, delta);
         applied;
-    }
-
-    /// @notice Restores previously over-withdrawn settled balance without netting deficits
-    /// @dev Used only when Phase 2 discovers vault shortfall after a withdrawal was already booked.
-    ///      No new underlying arrived, so this must only reverse the settled reduction and pool totalSettled.
-    function _restoreSettledAfterShortfall(VTSStorage storage s, PositionId id, uint8 tokenIndex, uint256 shortfall)
-        internal
-    {
-        if (shortfall == 0) return;
-
-        PositionAccounting storage pa = s.positionAccounting[id];
-        uint256 cur = pa.settled.get(tokenIndex);
-        uint256 commitmentMax = pa.commitmentMax.get(tokenIndex);
-        uint256 maxRestore = commitmentMax > cur ? commitmentMax - cur : 0;
-        uint256 restored = shortfall > maxRestore ? maxRestore : shortfall;
-        if (restored == 0) return;
-
-        pa.settled.set(tokenIndex, cur + restored);
-
-        Position memory pos = s.positions[id];
-        PoolAccounting storage paPool = s.poolAccounting[pos.poolId];
-        _applyPoolTotalSettledDelta(paPool, tokenIndex, restored.toInt256());
     }
 
     /// @notice Updates the settlement amount by a delta which could be positive or negative
@@ -1458,11 +1457,11 @@ library VTSPositionLib {
                 queueRecipient = PositionModificationHookDataLib.getLocker(mmData);
             }
 
-            // Snapshot full required settlement before `_handleLiquidityDecrease` splits it across Hub queue vs
+            // Snapshot full required settlement before `_handleLiquidityDecrease` plans Hub queue vs
             // owner underlying credit. Both legs move economic value out of live `settled`; clamping only the
             // queued portion would leave the same value in `settled` and in DynamicCurrencyDelta (double count).
             BalanceDelta postDecreaseDelta = requiredSettlementDelta;
-            LiquidityDecreaseResult memory decreaseResult;
+            BalanceDelta underlyingDeltaSettlement;
             if (isSeizing) {
                 // @note: For Seizures,
                 // - LCCs are received directly by locker simiarly to fees.
@@ -1470,7 +1469,7 @@ library VTSPositionLib {
                 // - For any excess, this can also be settled immediately via MM operations.
 
                 // Only cancel excess settled received.
-                decreaseResult = _handleLiquidityDecrease(
+                underlyingDeltaSettlement = _handleLiquidityDecrease(
                     ctx, p.owner, p.poolKey, requiredSettlementDelta, requiredSettlementDelta, queueRecipient
                 );
             } else {
@@ -1481,7 +1480,7 @@ library VTSPositionLib {
                 // Therefore, we plan to cancel the LCC's and queue the settlement once this settlement occurs.
                 // This relies on the current MM path immediately performing the matching PoolManager -> MMPM take
                 // once modifyLiquidity(...) returns, before any same-key planned cancel can be restaged.
-                decreaseResult = _handleLiquidityDecrease(
+                underlyingDeltaSettlement = _handleLiquidityDecrease(
                     ctx, p.owner, p.poolKey, principalDelta, requiredSettlementDelta, queueRecipient
                 );
             }
@@ -1492,9 +1491,7 @@ library VTSPositionLib {
                 LiquidityUtils.safeInt128ToUint256(postDecreaseDelta.amount1())
             );
 
-            // Owner underlying credit reflects the post-split remainder (settleable now + unqueued shortfall);
-            // Hub queue holds the complementary shortfall preserved via cancel-with-queue.
-            requiredSettlementDelta = decreaseResult.underlyingDeltaSettlement;
+            requiredSettlementDelta = underlyingDeltaSettlement;
         }
 
         if (!LiquidityUtils.isZeroDelta(requiredSettlementDelta)) {
@@ -1572,6 +1569,55 @@ library VTSPositionLib {
         }
     }
 
+    /// @dev View-only routing split for MM decreases; must stay aligned with `_handleLiquidityDecrease`.
+    ///      Exposed for harness-based unit tests that assert settleable vs queued vs underlying legs.
+    function _previewLiquidityDecreaseRouting(
+        PositionContext memory ctx,
+        BalanceDelta principalDelta,
+        BalanceDelta requiredSettlementDelta
+    )
+        internal
+        view
+        returns (
+            uint256 retainedPrincipal0,
+            uint256 retainedPrincipal1,
+            BalanceDelta settleableDelta,
+            BalanceDelta queuedDelta,
+            BalanceDelta underlyingDeltaSettlement
+        )
+    {
+        if (LiquidityUtils.isZeroDelta(principalDelta)) {
+            return (0, 0, BalanceDelta.wrap(0), BalanceDelta.wrap(0), BalanceDelta.wrap(0));
+        }
+
+        uint256 principalAmount0 = LiquidityUtils.safeInt128ToUint256(principalDelta.amount0());
+        uint256 principalAmount1 = LiquidityUtils.safeInt128ToUint256(principalDelta.amount1());
+        {
+            BalanceDelta availableDelta = ctx.marketVault.dryModifyLiquidities(requiredSettlementDelta);
+            // Queue only the unavailable shortfall and cap by this call's cancellable principal.
+            BalanceDelta rawShortfall = requiredSettlementDelta - availableDelta;
+            int128 shortfall0 = rawShortfall.amount0();
+            int128 shortfall1 = rawShortfall.amount1();
+            if (shortfall0 < 0) shortfall0 = 0;
+            if (shortfall1 < 0) shortfall1 = 0;
+
+            settleableDelta = toBalanceDelta(
+                requiredSettlementDelta.amount0() - shortfall0, requiredSettlementDelta.amount1() - shortfall1
+            );
+
+            uint256 shortfallAmount0 = LiquidityUtils.safeInt128ToUint256(shortfall0);
+            uint256 shortfallAmount1 = LiquidityUtils.safeInt128ToUint256(shortfall1);
+            retainedPrincipal0 = shortfallAmount0 > principalAmount0 ? principalAmount0 : shortfallAmount0;
+            retainedPrincipal1 = shortfallAmount1 > principalAmount1 ? principalAmount1 : shortfallAmount1;
+        }
+
+        queuedDelta = LiquidityUtils.safeToBalanceDelta(retainedPrincipal0, retainedPrincipal1, false, false);
+        underlyingDeltaSettlement = toBalanceDelta(
+            requiredSettlementDelta.amount0() - retainedPrincipal0.toInt128(),
+            requiredSettlementDelta.amount1() - retainedPrincipal1.toInt128()
+        );
+    }
+
     /// @notice Handle liquidity decrease (remove liquidity or burn) - cancels LCCs
     /// @dev Stages path-keyed planned cancels for the subsequent PoolManager -> MMPM LCC transfer.
     ///      This helper is correct only because the surrounding MM decrease flow immediately
@@ -1582,6 +1628,8 @@ library VTSPositionLib {
     /// @param principalDelta The principal delta after fee adjustments
     /// @param requiredSettlementDelta The required settlement delta from touchPosition
     /// @param queueRecipient The recipient for settlement queue (locker)
+    /// @return underlyingDeltaSettlement Portion routed to `DynamicCurrencyDelta` (immediate vault slice plus any
+    ///         shortfall remainder that could not be principal-queued).
     function _handleLiquidityDecrease(
         PositionContext memory ctx,
         address owner,
@@ -1589,40 +1637,18 @@ library VTSPositionLib {
         BalanceDelta principalDelta,
         BalanceDelta requiredSettlementDelta,
         address queueRecipient
-    ) internal returns (LiquidityDecreaseResult memory result) {
+    ) internal returns (BalanceDelta underlyingDeltaSettlement) {
+        uint256 retainedPrincipal0;
+        uint256 retainedPrincipal1;
+        (retainedPrincipal0, retainedPrincipal1,,, underlyingDeltaSettlement) =
+            _previewLiquidityDecreaseRouting(ctx, principalDelta, requiredSettlementDelta);
+
         if (LiquidityUtils.isZeroDelta(principalDelta)) {
-            return result;
+            return underlyingDeltaSettlement;
         }
 
         uint256 principalAmount0 = LiquidityUtils.safeInt128ToUint256(principalDelta.amount0());
         uint256 principalAmount1 = LiquidityUtils.safeInt128ToUint256(principalDelta.amount1());
-        uint256 retainedPrincipal0;
-        uint256 retainedPrincipal1;
-        {
-            BalanceDelta availableDelta = ctx.marketVault.dryModifyLiquidities(requiredSettlementDelta);
-            // Queue only the unavailable shortfall and cap by this call's cancellable principal.
-            BalanceDelta rawShortfall = requiredSettlementDelta - availableDelta;
-            int128 shortfall0 = rawShortfall.amount0();
-            int128 shortfall1 = rawShortfall.amount1();
-            if (shortfall0 < 0) shortfall0 = 0;
-            if (shortfall1 < 0) shortfall1 = 0;
-
-            // Settle only the immediate portion (required minus unavailable shortfall).
-            result.settleableDelta = toBalanceDelta(
-                requiredSettlementDelta.amount0() - shortfall0, requiredSettlementDelta.amount1() - shortfall1
-            );
-
-            uint256 shortfallAmount0 = LiquidityUtils.safeInt128ToUint256(shortfall0);
-            uint256 shortfallAmount1 = LiquidityUtils.safeInt128ToUint256(shortfall1);
-            retainedPrincipal0 = shortfallAmount0 > principalAmount0 ? principalAmount0 : shortfallAmount0;
-            retainedPrincipal1 = shortfallAmount1 > principalAmount1 ? principalAmount1 : shortfallAmount1;
-        }
-
-        result.queuedDelta = LiquidityUtils.safeToBalanceDelta(retainedPrincipal0, retainedPrincipal1, false, false);
-        result.underlyingDeltaSettlement = toBalanceDelta(
-            requiredSettlementDelta.amount0() - retainedPrincipal0.toInt128(),
-            requiredSettlementDelta.amount1() - retainedPrincipal1.toInt128()
-        );
 
         // 3. Queue settlements via cancelWithQueue
         // Burns LCCs on transfer from PoolManager to owner (MMPM) and queues shortfall for queueRecipient (locker).
@@ -1755,6 +1781,15 @@ library VTSPositionLib {
     // --------------------------------------------------
 
     /// @notice Core settlement entrypoint for MM-managed positions
+    /// @dev Sign convention for `p.delta` matches `_updateSettlement` / `_sUpdateSettlement` callers:
+    ///      negative lane amounts are deposits (increase settled), positive lane amounts are withdrawals
+    ///      (decrease settled). `result.settlementDelta` mirrors that convention lane-wise from whichever
+    ///      branch ran (deposit vs withdrawal) so downstream seizure math stays aligned.
+    /// @dev Directional asymmetry by design:
+    ///      - Deposits remain settlement-first: book into position accounting here, then clear any matching
+    ///        negative underlying delta in Phase 4 (`_clearDepositSideDelta` + `_calcDeltaClearance`).
+    ///      - Withdrawals are strict: consume any positive underlying delta first, only then reduce live
+    ///        settled for the remainder (see `_planWithdrawals` / `_applyWithdrawalLane`).
     /// @param s The central VTS storage
     /// @param poolManager The pool manager contract
     /// @param p The MM settle parameters (vault, positionId, currencies, delta, isSeizing)
@@ -1767,72 +1802,56 @@ library VTSPositionLib {
         Position memory pos = s.positions[p.positionId];
 
         // Validate position exists
-        address owner = pos.owner;
-        if (owner == address(0)) {
+        if (pos.owner == address(0)) {
             revert("VTSPositionLib: Invalid position");
         }
 
-        // Read position required settlement delta from currencyDelta (set by _touchPosition via DynamicCurrencyDelta)
+        // Underlying delta pair for this owner/currency slice (DynamicCurrencyDelta). Positive means the
+        // protocol notionally owes the owner on that lane; negative means the owner owes the protocol.
+        // Withdrawal planning uses the positive component as the delta-backed cap before touching settled.
         BalanceDelta positionRequiredSettlementDelta =
-            DynamicCurrencyDelta.getUnderlyingDeltaPair(owner, p.lccCurrency0, p.lccCurrency1);
-
-        // During withdrawals, delta is positive as per caller context. During deposits, delta is negative.
-        // However, _updateSettlement accepts the inverse as a delta of the settled amount.
-        // Ie. positive increases, and negative decreases the metric.
-        int256 amount0 = int256(p.delta.amount0());
-        int256 amount1 = int256(p.delta.amount1());
+            DynamicCurrencyDelta.getUnderlyingDeltaPair(pos.owner, p.lccCurrency0, p.lccCurrency1);
 
         // Settle growths and get RFS state
         BalanceDelta rfsDelta;
         settlePositionGrowths(s, poolManager, p.positionId);
         (result.rfsOpen, rfsDelta) = getRFS(s, p.positionId);
 
-        // Handle settlement based on position state
-        if (!pos.isActive) {
-            // Inactive: unrestricted deposits/settlements
-            (amount0, amount1) = _settleInactive(s, p.positionId, amount0, amount1);
-        } else if (p.isSeizing) {
-            // Seizing: clamp deposits/withdrawals by RFS and position requirements
-            (amount0, amount1) =
-                _settleSeizing(s, p.positionId, amount0, amount1, rfsDelta, positionRequiredSettlementDelta);
+        BalanceDelta depositSettlementDelta;
+
+        // Deposits keep the existing settlement-first semantics.
+        // Only the seizing path has deposit-specific clamping by open RFS; ordinary deposits can share one helper.
+        if (p.isSeizing) {
+            depositSettlementDelta =
+                _settleSeizingDeposits(s, p.positionId, int256(p.delta.amount0()), int256(p.delta.amount1()), rfsDelta);
         } else {
-            // Active and not seizing: validate and apply RFS clamps
-            (amount0, amount1) = _settleActive(s, p.positionId, amount0, amount1, rfsDelta, result.rfsOpen);
+            // same method whether active or inactive.
+            depositSettlementDelta =
+                _settleDeposits(s, p.positionId, int256(p.delta.amount0()), int256(p.delta.amount1()));
         }
 
-        // Clamps within _updateSettlement may modify the return delta. Flip the signs on amount0 and amount1 to match caller-context delta.
-        result.settlementDelta =
-            LiquidityUtils.negateBalanceDelta(toBalanceDelta(amount0.toInt128(), amount1.toInt128()));
+        BalanceDelta withdrawalSettlementDelta = _executeWithdrawals(
+            s,
+            WithdrawalExecutionParams({
+                positionId: p.positionId,
+                owner: pos.owner,
+                vault: p.vault,
+                lccCurrency0: p.lccCurrency0,
+                lccCurrency1: p.lccCurrency1,
+                requestedAmount0: int256(p.delta.amount0()),
+                requestedAmount1: int256(p.delta.amount1()),
+                isActive: pos.isActive,
+                isSeizing: p.isSeizing,
+                rfsOpen: result.rfsOpen
+            }),
+            rfsDelta,
+            positionRequiredSettlementDelta
+        );
 
-        // ========================================
-        // PHASE 2: Clamp by available market liquidity & retroactive adjustment
-        // ========================================
-
-        // Only need to clamp withdrawals (positive settlementDelta)
-        if (result.settlementDelta.amount0() > 0 || result.settlementDelta.amount1() > 0) {
-            // Get available liquidity from vault
-            // This does not include deposits during seizing, as liquidity has not tranferred yet.
-            BalanceDelta availableDelta = p.vault.dryModifyLiquidities(result.settlementDelta);
-
-            // Scoped block for shortfall calculation
-            {
-                // Calculate shortfall for withdrawals only
-                int128 shortfall0 = result.settlementDelta.amount0() - availableDelta.amount0();
-                int128 shortfall1 = result.settlementDelta.amount1() - availableDelta.amount1();
-
-                // Restore only the over-withdrawn settled amount.
-                // No underlying was received for the shortfall, so this rollback must not net deficits.
-                if (shortfall0 > 0) {
-                    _restoreSettledAfterShortfall(s, p.positionId, 0, LiquidityUtils.safeInt128ToUint256(shortfall0));
-                }
-                if (shortfall1 > 0) {
-                    _restoreSettledAfterShortfall(s, p.positionId, 1, LiquidityUtils.safeInt128ToUint256(shortfall1));
-                }
-            }
-
-            // Update settlementDelta to reflect actual available amounts
-            result.settlementDelta = availableDelta;
-        }
+        result.settlementDelta = toBalanceDelta(
+            p.delta.amount0() < 0 ? depositSettlementDelta.amount0() : withdrawalSettlementDelta.amount0(),
+            p.delta.amount1() < 0 ? depositSettlementDelta.amount1() : withdrawalSettlementDelta.amount1()
+        );
 
         // ========================================
         // PHASE 3: Seizure calculation and Fee Management
@@ -1848,34 +1867,12 @@ library VTSPositionLib {
         // ========================================
         // PHASE 4: Clear currency deltas based on settlement
         // ========================================
+        // Phase 4 only adjusts deposit-side debt clearance against negative settlement amounts. Positive
+        // settlement (withdrawals) already netted positive underlying delta inside `_executeWithdrawals`.
 
-        // Scoped block for delta clearance to free temporaries early
-        {
-            Currency underlyingCurrency0 = DynamicCurrencyDelta.lccToUnderlyingCurrency(p.lccCurrency0);
-            Currency underlyingCurrency1 = DynamicCurrencyDelta.lccToUnderlyingCurrency(p.lccCurrency1);
-
-            // Read current owner deltas (these represent what was owed/credited from position modifications)
-            int128 ownerDelta0 = positionRequiredSettlementDelta.amount0();
-            int128 ownerDelta1 = positionRequiredSettlementDelta.amount1();
-
-            // settlementDelta represents actual amounts being moved:
-            // - negative = deposit (caller owes protocol)
-            // - positive = withdrawal (protocol owes caller)
-            int128 settleAmount0 = result.settlementDelta.amount0();
-            int128 settleAmount1 = result.settlementDelta.amount1();
-
-            // Clear deltas based on settlement conditions
-            int128 deltaClear0 = _calcDeltaClearance(ownerDelta0, settleAmount0);
-            int128 deltaClear1 = _calcDeltaClearance(ownerDelta1, settleAmount1);
-
-            // Apply delta clearance (negative values reduce positive deltas, positive values reduce negative deltas)
-            if (deltaClear0 != 0) {
-                DynamicCurrencyDelta.accountDelta(underlyingCurrency0, deltaClear0, owner);
-            }
-            if (deltaClear1 != 0) {
-                DynamicCurrencyDelta.accountDelta(underlyingCurrency1, deltaClear1, owner);
-            }
-        }
+        _clearDepositSideDelta(
+            pos.owner, p.lccCurrency0, p.lccCurrency1, positionRequiredSettlementDelta, result.settlementDelta
+        );
 
         // ========================================
         // PHASE 5: Touch ups
@@ -1887,159 +1884,256 @@ library VTSPositionLib {
         CheckpointLibrary.markCheckpoint(s, p.positionId, _rfsOpenMask(rfsDelta));
     }
 
-    /// @notice Handle settlement for inactive positions (unrestricted)
-    /// @dev Extracted to reduce stack pressure in onMMSettle
-    function _settleInactive(VTSStorage storage s, PositionId positionId, int256 amount0, int256 amount1)
+    /// @notice Handle deposit settlement for non-seizing MM settles
+    /// @dev Deposits preserve the original settlement-first behaviour: book into position accounting immediately,
+    ///      then clear any negative underlying delta in Phase 4.
+    function _settleDeposits(VTSStorage storage s, PositionId positionId, int256 amount0, int256 amount1)
         internal
-        returns (int256, int256)
+        returns (BalanceDelta settlementDelta)
     {
-        if (amount0 != 0) {
-            amount0 = _updateSettlement(s, positionId, 0, -amount0);
+        int128 settleAmount0;
+        int128 settleAmount1;
+        if (amount0 < 0) {
+            settleAmount0 = -_updateSettlement(s, positionId, 0, -amount0).toInt128();
         }
-        if (amount1 != 0) {
-            amount1 = _updateSettlement(s, positionId, 1, -amount1);
+        if (amount1 < 0) {
+            settleAmount1 = -_updateSettlement(s, positionId, 1, -amount1).toInt128();
         }
-        return (amount0, amount1);
+        settlementDelta = toBalanceDelta(settleAmount0, settleAmount1);
     }
 
-    /// @notice Handle settlement during seizure with RFS clamping
-    /// @dev Extracted to reduce stack pressure in onMMSettle
-    function _settleSeizing(
+    /// @notice Handle deposit settlement during seizure with RFS clamping
+    /// @dev Extracted to reduce stack pressure in onMMSettle.
+    ///      When `rfsDelta` is positive on a lane, open RFS records a protocol-side receivable; deposits on
+    ///      that lane are clamped so they cannot exceed what RFS still expects (mirrors the legacy guard
+    ///      that used to live inline on the deposit path).
+    function _settleSeizingDeposits(
         VTSStorage storage s,
         PositionId positionId,
         int256 amount0,
         int256 amount1,
-        BalanceDelta rfsDelta,
-        BalanceDelta positionRequiredSettlementDelta
-    ) internal returns (int256, int256) {
-        // Seizing: clamp deposits (negative settlementDelta) by positive rfsDelta
+        BalanceDelta rfsDelta
+    ) internal returns (BalanceDelta settlementDelta) {
         int128 rfs0 = rfsDelta.amount0();
         int128 rfs1 = rfsDelta.amount1();
-
-        // Read the required settlement delta from position modifications
-        // Signs: negative delta = caller owes liquidity (deposit), positive = protocol owes (withdrawal)
-        int128 posRequiredSettlement0 = positionRequiredSettlementDelta.amount0();
-        int128 posRequiredSettlement1 = positionRequiredSettlementDelta.amount1();
+        int128 settleAmount0;
+        int128 settleAmount1;
 
         if (amount0 < 0) {
-            // deposit: clamp by positive rfsDelta
-            // If rfs0 > 0, we can deposit up to rfs0 (clamp amount0 to -rfs0 minimum)
-            // If rfs0 <= 0, no RFS requirement, so don't deposit (clamp to 0)
             if (rfs0 > 0) {
-                int128 maxDeposit0 = -rfs0; // negative because deposits are negative
+                int128 maxDeposit0 = -rfs0;
                 if (amount0 < maxDeposit0) {
                     amount0 = maxDeposit0;
                 }
-                // Return value is total (deficit coverage + settled increase)
-                amount0 = _updateSettlement(s, positionId, 0, -amount0);
-            } else {
-                // No RFS requirement for token0, don't deposit
-                amount0 = 0;
+                settleAmount0 = -_updateSettlement(s, positionId, 0, -amount0).toInt128();
             }
-        } else if (amount0 > 0) {
-            // withdrawal: clamp by positionRequiredSettlementDelta
-            // If positionRequiredSettlementDelta > 0, clamp to min(amount0, positionRequiredSettlementDelta)
-            // If positionRequiredSettlementDelta <= 0, clamp to 0
-            if (posRequiredSettlement0 > 0) {
-                if (amount0 > posRequiredSettlement0) {
-                    amount0 = posRequiredSettlement0;
-                }
-            } else {
-                amount0 = 0;
-            }
-
-            amount0 = _updateSettlement(s, positionId, 0, -amount0);
         }
 
         if (amount1 < 0) {
-            // deposit: clamp by positive rfsDelta
-            // If rfs1 > 0, we can deposit up to rfs1 (clamp amount1 to -rfs1 minimum)
-            // If rfs1 <= 0, no RFS requirement, so don't deposit (set to 0)
             if (rfs1 > 0) {
-                int128 maxDeposit1 = -rfs1; // negative because deposits are negative
+                int128 maxDeposit1 = -rfs1;
                 if (amount1 < maxDeposit1) {
                     amount1 = maxDeposit1;
                 }
-                // Return value is total (deficit coverage + settled increase)
-                amount1 = _updateSettlement(s, positionId, 1, -amount1);
-            } else {
-                // No RFS requirement for token1, clamp deposit to 0
-                amount1 = 0;
+                settleAmount1 = -_updateSettlement(s, positionId, 1, -amount1).toInt128();
             }
-        } else if (amount1 > 0) {
-            // withdrawal: clamp by positionRequiredSettlementDelta
-            // If positionRequiredSettlementDelta > 0, clamp to min(amount1, positionRequiredSettlementDelta)
-            // If positionRequiredSettlementDelta <= 0, clamp to 0
-            if (posRequiredSettlement1 > 0) {
-                if (amount1 > posRequiredSettlement1) {
-                    amount1 = posRequiredSettlement1;
-                }
-            } else {
-                amount1 = 0;
-            }
-
-            amount1 = _updateSettlement(s, positionId, 1, -amount1);
         }
 
-        return (amount0, amount1);
+        settlementDelta = toBalanceDelta(settleAmount0, settleAmount1);
     }
 
-    /// @notice Handle settlement for active positions (with RFS validation)
-    /// @dev Extracted to reduce stack pressure in onMMSettle
-    function _settleActive(
+    /// @notice Compute withdrawal sources before mutating `pa.settled`
+    /// @dev Positive underlying delta is always consumed before any live settled reduction.
+    function _planWithdrawals(
         VTSStorage storage s,
         PositionId positionId,
         int256 amount0,
         int256 amount1,
+        bool isActive,
+        bool isSeizing,
         BalanceDelta rfsDelta,
-        bool rfsOpen
-    ) internal returns (int256, int256) {
-        // Active and not seizing: apply RFS clamps
-        // For withdrawals, validate RFS closure
-        bool isWithdrawal = amount0 > 0 || amount1 > 0;
-        if (isWithdrawal && rfsOpen) {
+        BalanceDelta positionRequiredSettlementDelta
+    ) internal view returns (WithdrawalPlan memory plan) {
+        if (amount0 > 0) {
+            (plan.deltaBacked0, plan.settledBacked0) = _planWithdrawalLane(
+                s,
+                positionId,
+                0,
+                uint256(amount0),
+                isActive,
+                isSeizing,
+                rfsDelta.amount0(),
+                positionRequiredSettlementDelta.amount0()
+            );
+        }
+        if (amount1 > 0) {
+            (plan.deltaBacked1, plan.settledBacked1) = _planWithdrawalLane(
+                s,
+                positionId,
+                1,
+                uint256(amount1),
+                isActive,
+                isSeizing,
+                rfsDelta.amount1(),
+                positionRequiredSettlementDelta.amount1()
+            );
+        }
+    }
+
+    /// @notice Compute how much of a withdrawal lane is delta-backed versus settled-backed
+    function _planWithdrawalLane(
+        VTSStorage storage s,
+        PositionId positionId,
+        uint8 tokenIndex,
+        uint256 requested,
+        bool isActive,
+        bool isSeizing,
+        int128 rfsLaneDelta,
+        int128 positionRequiredSettlementLane
+    ) internal view returns (uint256 deltaBacked, uint256 settledBacked) {
+        if (requested == 0) return (0, 0);
+
+        if (positionRequiredSettlementLane > 0) {
+            deltaBacked = LiquidityUtils.safeInt128ToUint256(positionRequiredSettlementLane);
+            if (deltaBacked > requested) {
+                deltaBacked = requested;
+            }
+        }
+
+        if (isSeizing) {
+            // Seizure withdrawals are capped only by the calculated positive settlement delta carried on
+            // DynamicCurrencyDelta. They must not additionally draw against generic live settled excess.
+            return (deltaBacked, 0);
+        }
+
+        uint256 settledCapacity;
+        if (!isActive) {
+            settledCapacity = s.positionAccounting[positionId].settled.get(tokenIndex);
+        } else if (rfsLaneDelta < 0) {
+            settledCapacity = LiquidityUtils.safeInt128ToUint256(rfsLaneDelta);
+        }
+
+        uint256 remainder = requested > deltaBacked ? requested - deltaBacked : 0;
+        settledBacked = remainder > settledCapacity ? settledCapacity : remainder;
+    }
+
+    /// @notice Execute withdrawal settlement with strict ordering: delta first, settled second.
+    function _executeWithdrawals(
+        VTSStorage storage s,
+        WithdrawalExecutionParams memory p,
+        BalanceDelta rfsDelta,
+        BalanceDelta positionRequiredSettlementDelta
+    ) internal returns (BalanceDelta settlementDelta) {
+        if (p.requestedAmount0 <= 0 && p.requestedAmount1 <= 0) {
+            return settlementDelta;
+        }
+
+        // Active non-seizing withdrawals are still forbidden while RFS is open; keep this guard on the
+        // actual withdrawal path rather than inside a deposit helper.
+        if (p.isActive && !p.isSeizing && p.rfsOpen) {
             revert("VTSPositionLib: RFS open");
         }
 
-        // Apply RFS clamps for withdrawals
-        if (amount0 > 0) {
-            // withdraw
-            // Clamp by rfsDelta: if rfsDelta < 0, then -rfsDelta is withdrawable
-            int128 rfs0 = rfsDelta.amount0();
-            if (rfs0 < 0) {
-                uint256 withdrawable0 = LiquidityUtils.safeInt128ToUint256(rfs0);
-                if (uint256(amount0) > withdrawable0) {
-                    amount0 = withdrawable0.toInt256();
-                }
-                amount0 = _updateSettlement(s, positionId, 0, -amount0);
-            } else {
-                // rfsDelta >= 0 means cannot withdraw
-                amount0 = 0;
-            }
-        } else if (amount0 < 0) {
-            // deposit
-            amount0 = _updateSettlement(s, positionId, 0, -amount0);
-        }
-        if (amount1 > 0) {
-            // withdraw
-            // Clamp by rfsDelta: if rfsDelta < 0, then -rfsDelta is withdrawable
-            int128 rfs1 = rfsDelta.amount1();
-            if (rfs1 < 0) {
-                uint256 withdrawable1 = LiquidityUtils.safeInt128ToUint256(rfs1);
-                if (uint256(amount1) > withdrawable1) {
-                    amount1 = withdrawable1.toInt256();
-                }
-                amount1 = _updateSettlement(s, positionId, 1, -amount1);
-            } else {
-                // rfsDelta >= 0 means cannot withdraw
-                amount1 = 0;
-            }
-        } else if (amount1 < 0) {
-            // deposit
-            amount1 = _updateSettlement(s, positionId, 1, -amount1);
+        WithdrawalPlan memory plan = _planWithdrawals(
+            s,
+            p.positionId,
+            p.requestedAmount0,
+            p.requestedAmount1,
+            p.isActive,
+            p.isSeizing,
+            rfsDelta,
+            positionRequiredSettlementDelta
+        );
+
+        uint256 plannedWithdrawal0 = plan.deltaBacked0 + plan.settledBacked0;
+        uint256 plannedWithdrawal1 = plan.deltaBacked1 + plan.settledBacked1;
+        if (plannedWithdrawal0 == 0 && plannedWithdrawal1 == 0) {
+            return settlementDelta;
         }
 
-        return (amount0, amount1);
+        // Vault dry-clamp: probe with a *positive* BalanceDelta (both magnitudes non-negative) so the vault
+        // reports how much of the planned withdrawal can be sourced without mutating on-chain state.
+        BalanceDelta availableDelta = p.vault
+            .dryModifyLiquidities(
+                LiquidityUtils.safeToBalanceDelta(plannedWithdrawal0, plannedWithdrawal1, false, false)
+            );
+
+        uint256 actualWithdrawal0 =
+            availableDelta.amount0() > 0 ? LiquidityUtils.safeInt128ToUint256(availableDelta.amount0()) : 0;
+        uint256 actualWithdrawal1 =
+            availableDelta.amount1() > 0 ? LiquidityUtils.safeInt128ToUint256(availableDelta.amount1()) : 0;
+
+        if (actualWithdrawal0 > plannedWithdrawal0) actualWithdrawal0 = plannedWithdrawal0;
+        if (actualWithdrawal1 > plannedWithdrawal1) actualWithdrawal1 = plannedWithdrawal1;
+
+        WithdrawalActuals memory actuals = WithdrawalActuals({amount0: actualWithdrawal0, amount1: actualWithdrawal1});
+        _applyWithdrawalPlan(s, p, plan, actuals);
+
+        settlementDelta = toBalanceDelta(actualWithdrawal0.toInt128(), actualWithdrawal1.toInt128());
+    }
+
+    /// @notice Apply both withdrawal lanes after final vault clamping.
+    function _applyWithdrawalPlan(
+        VTSStorage storage s,
+        WithdrawalExecutionParams memory p,
+        WithdrawalPlan memory plan,
+        WithdrawalActuals memory actuals
+    ) internal {
+        _applyWithdrawalLane(s, p.positionId, 0, actuals.amount0, plan.deltaBacked0, p.lccCurrency0, p.owner);
+        _applyWithdrawalLane(s, p.positionId, 1, actuals.amount1, plan.deltaBacked1, p.lccCurrency1, p.owner);
+    }
+
+    /// @notice Apply a single withdrawal lane after final vault clamping.
+    /// @dev Delta-backed value is consumed first; only the residual touches live `pa.settled`.
+    function _applyWithdrawalLane(
+        VTSStorage storage s,
+        PositionId positionId,
+        uint8 tokenIndex,
+        uint256 actualWithdrawal,
+        uint256 deltaBackedCap,
+        Currency lccCurrency,
+        address owner
+    ) internal {
+        if (actualWithdrawal == 0) return;
+
+        uint256 deltaBackedWithdrawal = actualWithdrawal > deltaBackedCap ? deltaBackedCap : actualWithdrawal;
+        if (deltaBackedWithdrawal > 0) {
+            Currency underlyingCurrency = DynamicCurrencyDelta.lccToUnderlyingCurrency(lccCurrency);
+            DynamicCurrencyDelta.accountDelta(underlyingCurrency, -deltaBackedWithdrawal.toInt128(), owner);
+        }
+
+        uint256 settledBackedWithdrawal = actualWithdrawal - deltaBackedWithdrawal;
+        if (settledBackedWithdrawal > 0) {
+            _sUpdateSettlement(s, positionId, tokenIndex, -settledBackedWithdrawal.toInt256());
+        }
+    }
+
+    /// @notice Clear only deposit-side underlying delta after settlement.
+    /// @dev Withdrawal-backed positive delta is consumed earlier in `_executeWithdrawals`.
+    function _clearDepositSideDelta(
+        address owner,
+        Currency lccCurrency0,
+        Currency lccCurrency1,
+        BalanceDelta positionRequiredSettlementDelta,
+        BalanceDelta settlementDelta
+    ) internal {
+        Currency underlyingCurrency0 = DynamicCurrencyDelta.lccToUnderlyingCurrency(lccCurrency0);
+        Currency underlyingCurrency1 = DynamicCurrencyDelta.lccToUnderlyingCurrency(lccCurrency1);
+
+        int128 ownerDelta0 = positionRequiredSettlementDelta.amount0();
+        int128 ownerDelta1 = positionRequiredSettlementDelta.amount1();
+        int128 finalSettleAmount0 = settlementDelta.amount0();
+        int128 finalSettleAmount1 = settlementDelta.amount1();
+
+        int128 deltaClear0 = finalSettleAmount0 < 0 ? _calcDeltaClearance(ownerDelta0, finalSettleAmount0) : int128(0);
+        int128 deltaClear1 = finalSettleAmount1 < 0 ? _calcDeltaClearance(ownerDelta1, finalSettleAmount1) : int128(0);
+
+        if (deltaClear0 != 0) {
+            DynamicCurrencyDelta.accountDelta(underlyingCurrency0, deltaClear0, owner);
+        }
+        if (deltaClear1 != 0) {
+            DynamicCurrencyDelta.accountDelta(underlyingCurrency1, deltaClear1, owner);
+        }
     }
 
     /// @notice Calculates the delta clearance amount based on settlement conditions
@@ -2058,9 +2152,6 @@ library VTSPositionLib {
          * delta > 0 && amount < 0: NO accounting. Just settling in (deposit above what's owed).
          *   -- Deposit doesn't clear positive delta (protocol still owes caller).
          *
-         * delta > 0 && amount > 0: Either net delta to 0, or reduce by withdrawal amount.
-         *   -- Clear: use min(delta, amount)
-         *
          * delta == 0 && amount < 0: NO accounting. Just depositing, clamped by commitmentMaxima.
          * delta == 0 && amount > 0: NO accounting. Just withdrawing, clamped by rfsDelta.
          */
@@ -2072,12 +2163,6 @@ library VTSPositionLib {
             // eg. delta = -50, amount = -100 → clear +50 (reduce debt by 50, can only clear up to debt)
             int128 minMagnitude = delta > amount ? delta : amount; // max of negatives = smaller absolute
             clearance = -minMagnitude; // positive clearance reduces negative delta
-        } else if (delta > 0 && amount > 0) {
-            // Both positive: clear by min of the two
-            // eg. delta = 100, amount = 50 → clear -50 (reduce credit by 50)
-            // eg. delta = 50, amount = 100 → clear -50 (reduce credit by 50, can only clear up to credit)
-            int128 minValue = delta < amount ? delta : amount;
-            clearance = -minValue; // negative clearance reduces positive delta
         }
         // All other cases: clearance = 0 (no accounting)
     }

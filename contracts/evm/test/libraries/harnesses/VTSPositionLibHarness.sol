@@ -141,14 +141,16 @@ contract VTSPositionLibHarness {
         BalanceDelta requiredSettlementDelta,
         address queueRecipient
     ) external returns (BalanceDelta settleableDelta) {
-        VTSPositionLib.LiquidityDecreaseResult memory result =
-            VTSPositionLib._handleLiquidityDecrease(
-                ctx, owner, poolKey, principalDelta, requiredSettlementDelta, queueRecipient
-            );
-        return result.settleableDelta;
+        (,, settleableDelta,,) = VTSPositionLib._previewLiquidityDecreaseRouting(
+            ctx, principalDelta, requiredSettlementDelta
+        );
+        VTSPositionLib._handleLiquidityDecrease(
+            ctx, owner, poolKey, principalDelta, requiredSettlementDelta, queueRecipient
+        );
+        return settleableDelta;
     }
 
-    /// @notice Exposes full liquidity decrease helper outputs for unit tests.
+    /// @notice Exposes full liquidity decrease routing splits for unit tests (preview + same effects as production).
     function handleLiquidityDecreaseDetailed(
         PositionContext memory ctx,
         address owner,
@@ -160,11 +162,13 @@ contract VTSPositionLibHarness {
         external
         returns (BalanceDelta settleableDelta, BalanceDelta queuedDelta, BalanceDelta underlyingDeltaSettlement)
     {
-        VTSPositionLib.LiquidityDecreaseResult memory
-            result = VTSPositionLib._handleLiquidityDecrease(
+        (
+            ,, settleableDelta, queuedDelta, underlyingDeltaSettlement
+        ) = VTSPositionLib._previewLiquidityDecreaseRouting(ctx, principalDelta, requiredSettlementDelta);
+        VTSPositionLib._handleLiquidityDecrease(
             ctx, owner, poolKey, principalDelta, requiredSettlementDelta, queueRecipient
         );
-        return (result.settleableDelta, result.queuedDelta, result.underlyingDeltaSettlement);
+        return (settleableDelta, queuedDelta, underlyingDeltaSettlement);
     }
 
     // ============ Storage Getters (for assertions) ============

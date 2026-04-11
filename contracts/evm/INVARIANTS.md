@@ -438,18 +438,29 @@ being an informal “should”.
   - **Consumption-based target credit**: another position’s `pa.settled` increases only when `_settle()` / `onMMSettle()`
     actually consumes protocol underlying delta or token flow (`MMPositionActionsImpl._netProtocolCredits` path), not
     merely because positive delta exists on MMPM.
+  - **Directional settlement ordering** inside `onMMSettle()` is intentionally asymmetric:
+    - deposits may still increase `pa.settled` before Phase-4 delta debt clearance, because they are moving value into
+      the position;
+    - withdrawals must consume any positive owner underlying delta first, then reduce `pa.settled` only for the
+      residual amount that is still backed by live position settlement.
 - **Enforced / expressed by**:
   - `src/libraries/VTSPositionLib.sol::_touchExistingDecrease` computes `requiredSettlementDelta` for the MM excess.
-  - `src/libraries/VTSPositionLib.sol::_handleLiquidityDecrease` splits vault availability vs queue vs
-    `underlyingDeltaSettlement` for routing.
-  - `src/libraries/VTSPositionLib.sol::_processMMOperations` (decrease branch): snapshots `fullMmDecreaseSettlement`,
-    calls `_applySettlementClampFromExcess` with the **full** exported requirement, then
-    `DynamicCurrencyDelta.accountUnderlyingSettlementDelta` for `decreaseResult.underlyingDeltaSettlement` only.
+  - `src/libraries/VTSPositionLib.sol::_previewLiquidityDecreaseRouting` (and `_handleLiquidityDecrease` which uses it)
+    splits vault availability vs Hub-queued principal vs the remainder booked as owner underlying credit
+    (`underlyingDeltaSettlement`).
+  - `src/libraries/VTSPositionLib.sol::_processMMOperations` (decrease branch): snapshots `postDecreaseDelta` as the full
+    exported requirement, calls `_applySettlementClampFromExcess` with that **full** amount, then
+    `DynamicCurrencyDelta.accountUnderlyingSettlementDelta` for the `BalanceDelta` returned from `_handleLiquidityDecrease`
+    only.
+  - `src/libraries/VTSPositionLib.sol::onMMSettle` plans withdrawals from positive underlying delta and settled-backed
+    capacity separately, consumes the delta-backed portion first, and only then mutates `pa.settled`.
 - **Why**:
   - Clamping only the queued shortfall while also booking the immediate slice on `DynamicCurrencyDelta` would double-count
     the same value as both live source `settled` and MMPM credit, enabling cross-position reuse without conservation.
   - Removing the full export from source `settled` preserves single-representation while **DELTA-01** still forces batch
     resolution of the transient delta leg.
+  - The stricter withdrawal ordering prevents a later delta-backed settle from deducting the same exported value from
+    source `pa.settled` a second time.
 
 ### SEIZE-01: Seizability is token-lane scoped and aggregated at position level
 

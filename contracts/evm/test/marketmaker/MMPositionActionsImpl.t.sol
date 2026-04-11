@@ -1061,19 +1061,79 @@ contract MMPositionManagerActionsTest is MarketTestBase, MarketMakerTestBase {
         {
             (, PositionId position1Id) = positionManager.getPosition(tokenId, positionIndex);
             (uint256 s0, uint256 s1) = vtsOrchestrator.getPositionSettledAmounts(position1Id);
-            uint256 position1SettledSumAfter = s0 + s1;
+            uint256 position1SettledSumAfterDeltaImport = s0 + s1;
             assertLe(
-                position1SettledSumAfter,
+                position1SettledSumAfterDeltaImport,
                 position1SettledSumBefore,
                 "source position settled should not increase; exported slice leaves live settled on decrease"
             );
             uint256 importedToTarget =
                 position2SettledSumAfter - (position2SettledAmount0Before + position2SettledAmount1Before);
-            uint256 exportedFromSource = position1SettledSumBefore - position1SettledSumAfter;
+            uint256 exportedFromSource = position1SettledSumBefore - position1SettledSumAfterDeltaImport;
             assertGe(
                 exportedFromSource,
                 importedToTarget,
                 "settled credited to target via deltas should be backed by reduction of source settled (no double representation)"
+            );
+        }
+    }
+
+    function testFollowOnSettleFromDeltas_doesNotReduceSourceSettledTwice_afterDecreaseRoutesCreditElsewhere() public {
+        uint256 positionIndex = 0;
+        uint256 tokenId;
+        uint256 newTokenId;
+        uint256 sourceSettledBeforeFollowOn;
+
+        {
+            ModifyLiquidityParams memory newLiquidityParams =
+                ModifyLiquidityParams({tickLower: 0, tickUpper: 60, liquidityDelta: 1e10, salt: bytes32(0)});
+
+            (tokenId,,,) = _setupCommittedPosition(
+                positionManager,
+                corePoolKey,
+                abi.encode(liquiditySignal),
+                defaultlLiquidityParams,
+                marketVTSConfiguration,
+                address(lcc0),
+                address(lcc1)
+            );
+
+            uint256 settlementAmount = 1_000_000e18;
+            approveAndSettleUnderlyingToPosition(tokenId, positionIndex, settlementAmount, settlementAmount);
+
+            (newTokenId,,,) = _setupCommittedPosition(
+                positionManager,
+                corePoolKey,
+                abi.encode(renewSignal),
+                newLiquidityParams,
+                marketVTSConfiguration,
+                address(lcc0),
+                address(lcc1)
+            );
+
+            MMA.PreparedAction[] memory actions = new MMA.PreparedAction[](2);
+            actions[0] = MMA.prepareDecrease(corePoolKey, tokenId, positionIndex, 1000);
+            actions[1] = MMA.prepareIncreaseFromDeltas(corePoolKey, newTokenId, positionIndex, true);
+            MMA.executeWithUnlock(positionManager, actions, block.timestamp + 3600);
+
+            (, PositionId position1IdBeforeSettle) = positionManager.getPosition(tokenId, positionIndex);
+            (uint256 before0, uint256 before1) = vtsOrchestrator.getPositionSettledAmounts(position1IdBeforeSettle);
+            sourceSettledBeforeFollowOn = before0 + before1;
+        }
+
+        {
+            MMA.PreparedAction[] memory actions = new MMA.PreparedAction[](1);
+            actions[0] = MMA.prepareSettleFromDeltas(corePoolKey, tokenId, positionIndex, true, true);
+            MMA.executeWithUnlock(positionManager, actions, block.timestamp + 3600);
+        }
+
+        {
+            (, PositionId position1Id) = positionManager.getPosition(tokenId, positionIndex);
+            (uint256 s0, uint256 s1) = vtsOrchestrator.getPositionSettledAmounts(position1Id);
+            assertEq(
+                s0 + s1,
+                sourceSettledBeforeFollowOn,
+                "follow-on delta-backed withdrawal must not reduce source settled again"
             );
         }
     }
