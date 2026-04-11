@@ -63,9 +63,9 @@ libraries = [
   # Prevent HEVM crashes by eliminating unlinked placeholders in unrelated contracts (e.g. VTSOrchestrator).
   # Deterministic CREATE2 address deployed by the SIG-BACKING harness (avoids any RPC fetch attempts).
   "src/libraries/VTSCommitLib.sol:VTSCommitLib:0x6215030bfa6e034ffe347cbe7237e37e5f1eec61",
-  "src/libraries/VTSFeeLib.sol:VTSFeeLinkedLib:0x1c9805d772968d273e42c5a4eb731c3b7c650701",
+  "src/libraries/VTSFeeLib.sol:VTSFeeLinkedLib:0xc72bb5dc413e589bad2983f888505f002f196a01",
   # Deterministic CREATE2 address deployed by `VTSPositionLibEchidnaHarness` (avoids Echidna RPC fetch attempts).
-  "src/libraries/VTSPositionLib.sol:VTSPositionLib:0xad2ef9cb3360d8d276365e72d4a04e3a3bf6303c",
+  "src/libraries/VTSPositionLib.sol:VTSPositionLib:0xeb7fc44734d377d98c1e806ffb42a1673f9137e5",
   # Intentional placeholders for libs that are not CREATE2-validated by this script.
   "src/libraries/VTSLifecycleLinkedLib.sol:VTSLifecycleLinkedLib:0x1111111111111111111111111111111111111113",
   "src/libraries/VTSSwapLib.sol:VTSSwapLib:0x1111111111111111111111111111111111111112",
