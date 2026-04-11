@@ -1513,6 +1513,131 @@ contract VTSPositionLibMutationUnitTest is Test {
         );
     }
 
+    /// @notice Two MM full burns in one logical batch must accumulate MMPM underlying settlement delta (SETTLE-03 + DELTA-01).
+    /// @dev Regression: setter-style `accountUnderlyingSettlementDelta` would drop the first op's credit when a second
+    ///      same-owner decrease runs; both positions export the same per-lane settled surplus here.
+    function test_touchPosition_twoMmDecreases_sameOwner_accumulatesUnderlyingSettlementDelta() public {
+        (PoolKey memory key, PoolId pId, PositionContext memory ctx,,) = _setupTwoMmBurnPositionsForAccumulationTest();
+
+        PositionId idA = PositionLibrary.generateId(
+            owner,
+            ModifyLiquidityParams({
+                tickLower: TICK_LOWER,
+                tickUpper: TICK_UPPER,
+                liquidityDelta: int256(uint256(1000)),
+                salt: bytes32(uint256(701))
+            })
+        );
+        PositionId idB = PositionLibrary.generateId(
+            owner,
+            ModifyLiquidityParams({
+                tickLower: TICK_LOWER,
+                tickUpper: TICK_UPPER,
+                liquidityDelta: int256(uint256(1000)),
+                salt: bytes32(uint256(702))
+            })
+        );
+
+        _pmSetSlot0Tick(pId, 0);
+        _pmSetFeeGrowthGlobals(pId, 0, 0);
+        _pmSetTickFeeGrowthOutside(pId, TICK_LOWER, 0, 0);
+        _pmSetTickFeeGrowthOutside(pId, TICK_UPPER, 0, 0);
+
+        TouchPositionParams memory tpDec = TouchPositionParams({
+            owner: owner,
+            poolKey: key,
+            params: ModifyLiquidityParams({
+                tickLower: TICK_LOWER,
+                tickUpper: TICK_UPPER,
+                liquidityDelta: -int256(uint256(1000)),
+                salt: bytes32(uint256(701))
+            }),
+            callerDelta: toBalanceDelta(0, 0),
+            feesAccrued: toBalanceDelta(0, 0),
+            hookData: PositionModificationHookDataLib.encode(1, 0, owner)
+        });
+
+        _pmSetPositionLiquidity(pId, PositionId.unwrap(idA), 1000);
+        harness.touchPosition(ctx, tpDec);
+
+        Currency cu0 = Currency.wrap(address(0xD0));
+        Currency cu1 = Currency.wrap(address(0xD1));
+        int256 d0 = harness.getUnderlyingDelta(cu0, owner);
+        int256 d1 = harness.getUnderlyingDelta(cu1, owner);
+        assertTrue(d0 != 0 || d1 != 0, "first MM decrease should book non-zero underlying");
+
+        _pmSetPositionLiquidity(pId, PositionId.unwrap(idB), 1000);
+        tpDec.params.salt = bytes32(uint256(702));
+        harness.touchPosition(ctx, tpDec);
+
+        assertEq(harness.getUnderlyingDelta(cu0, owner), d0 * 2, "token0 underlying delta should accumulate");
+        assertEq(harness.getUnderlyingDelta(cu1, owner), d1 * 2, "token1 underlying delta should accumulate");
+    }
+
+    function _setupTwoMmBurnPositionsForAccumulationTest()
+        internal
+        returns (PoolKey memory key, PoolId pId, PositionContext memory ctx, uint256 b0, uint256 b1)
+    {
+        MockLCC lcc0 = new MockLCC(address(0xD0));
+        MockLCC lcc1 = new MockLCC(address(0xD1));
+        key = PoolKey({
+            currency0: Currency.wrap(address(lcc0)),
+            currency1: Currency.wrap(address(lcc1)),
+            fee: 0,
+            tickSpacing: 60,
+            hooks: IHooks(address(0))
+        });
+        pId = key.toId();
+        harness.setupPool(pId, _defaultCfg());
+        harness.setCommitExpiresAt(1, block.timestamp + 365 days);
+        harness.setCommitActivePositionCount(1, 2);
+
+        uint256 c0;
+        uint256 c1;
+        (c0, c1) = LiquidityUtils.calculateCommitmentMaxima(TICK_LOWER, TICK_UPPER, 1000);
+        (b0, b1) = LiquidityUtils.getBaseSettlementAmounts(c0, c1, DEFAULT_BASE_VTS_RATE, DEFAULT_BASE_VTS_RATE);
+
+        ModifyLiquidityParams memory regA = ModifyLiquidityParams({
+            tickLower: TICK_LOWER,
+            tickUpper: TICK_UPPER,
+            liquidityDelta: int256(uint256(1000)),
+            salt: bytes32(uint256(701))
+        });
+        harness.registerPosition(owner, pId, regA);
+        PositionId idA = PositionLibrary.generateId(owner, regA);
+        harness.initPositionSnapshots(IPoolManager(address(pm)), idA);
+        harness.setCommitmentMax(idA, c0, c1);
+        harness.setSettled(idA, b0, b1);
+        harness.setCumulativeDeficit(idA, 0, 0);
+        harness.setCommitmentDeficit(idA, 0, 0);
+        harness.setPositionCommitId(idA, 1);
+
+        ModifyLiquidityParams memory regB = ModifyLiquidityParams({
+            tickLower: TICK_LOWER,
+            tickUpper: TICK_UPPER,
+            liquidityDelta: int256(uint256(1000)),
+            salt: bytes32(uint256(702))
+        });
+        harness.registerPosition(owner, pId, regB);
+        PositionId idB = PositionLibrary.generateId(owner, regB);
+        harness.initPositionSnapshots(IPoolManager(address(pm)), idB);
+        harness.setCommitmentMax(idB, c0, c1);
+        harness.setSettled(idB, b0, b1);
+        harness.setCumulativeDeficit(idB, 0, 0);
+        harness.setCommitmentDeficit(idB, 0, 0);
+        harness.setPositionCommitId(idB, 1);
+
+        harness.setPoolTotalSettled(pId, b0 + b0, b1 + b1);
+
+        MockLiquidityHubRecorder hub = new MockLiquidityHubRecorder(address(lcc0), address(lcc1));
+        ctx = PositionContext({
+            poolManager: IPoolManager(address(pm)),
+            liquidityHub: ILiquidityHub(address(hub)),
+            oracleHelper: IOracleHelper(address(0)),
+            marketVault: IMarketVault(address(new MockMarketVaultPassthrough()))
+        });
+    }
+
     /// @notice Non-seizure MM increases revert while stored commitmentDeficit is non-zero.
     function test_touchPosition_mmIncrease_revertsWhenCommitmentDeficit_nonZero() public {
         MockLCC lcc0 = new MockLCC(address(0xB0));

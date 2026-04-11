@@ -1290,8 +1290,19 @@ library VTSPositionLib {
             // Account underlying currency settlement obligations to MMPositionManager
             // Split model: Underlying settlement deltas on MMPM represent market liquidity claims (settle-only)
             // Balance syncs from wrap/unwrap target locker (msgSender) for takeable credits
+            //
+            // Accumulate per-batch: `accountUnderlyingSettlementDelta` is setter-style (targets absolute pair), so
+            // multiple MM ops in the same unlock for the same owner/currency lane must add onto the current pair.
+            BalanceDelta currentUnderlying =
+                DynamicCurrencyDelta.getUnderlyingDeltaPair(p.owner, p.poolKey.currency0, p.poolKey.currency1);
             DynamicCurrencyDelta.accountUnderlyingSettlementDelta(
-                p.owner, requiredSettlementDelta, p.poolKey.currency0, p.poolKey.currency1
+                p.owner,
+                LiquidityUtils.safeToBalanceDelta(
+                    int256(currentUnderlying.amount0()) + int256(requiredSettlementDelta.amount0()),
+                    int256(currentUnderlying.amount1()) + int256(requiredSettlementDelta.amount1())
+                ),
+                p.poolKey.currency0,
+                p.poolKey.currency1
             );
         }
 
