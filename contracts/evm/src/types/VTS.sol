@@ -170,8 +170,8 @@ struct PositionAccounting {
     // DICE: Banked residual-derived burn base awaiting a later outflow window
     TokenPairUint pendingResidualBurnBase;
     // DICE: Historical fee backing frozen for the currently unresolved residual-burn episode across
-    // zero-liquidity intervals. Stored by fee token lane (opposite the deficit token lane) and cleared
-    // once that matching residual burn base is fully consumed.
+    // zero-liquidity intervals and partial liquidity decreases (removed slice). Stored by fee token lane
+    // (opposite the deficit token lane) and cleared once that matching residual burn base is fully consumed.
     TokenPairUint pendingResidualFeeBacking;
     // DICE: Outflow watermark captured when residual burn base is banked
     TokenPairUint pendingResidualBurnOutflowsFloor;

@@ -532,6 +532,64 @@ library VTSFeeLib {
         pa.pendingResidualFeeBacking.set(feeTokenIndex, 0);
     }
 
+    /// @dev Shared residual-backing capture: banks `liquidityScale * (fg - feeGrowthInsideLast)` per fee lane when
+    ///      `pendingResidualBurnBase` implies that lane. Uses `getPositionInfo` fee growth (position snapshot after
+    ///      modifyLiquidity), which stays authoritative after full removes that clear ticks.
+    /// @param advanceFeeGrowthCheckpoint If true (full deactivation), set `feeGrowthInsideLast` to `fg` whenever
+    ///        `fg > last`. If false (partial decrease), leave `feeGrowthInsideLast` unchanged for surviving liquidity.
+    function _accumulateResidualFeeBackingForLanes(
+        PositionAccounting storage pa,
+        uint256 fg0,
+        uint256 fg1,
+        bool needFeeToken0,
+        bool needFeeToken1,
+        uint256 liquidityScale,
+        bool advanceFeeGrowthCheckpoint
+    ) private {
+        if (needFeeToken0) {
+            uint256 last0 = pa.feeGrowthInsideLast.token0;
+            if (fg0 > last0) {
+                uint256 backing0 = FullMath.mulDiv(fg0 - last0, liquidityScale, FixedPoint128.Q128);
+                if (backing0 > 0) pa.pendingResidualFeeBacking.token0 += backing0;
+                if (advanceFeeGrowthCheckpoint) pa.feeGrowthInsideLast.token0 = fg0;
+            }
+        }
+
+        if (needFeeToken1) {
+            uint256 last1 = pa.feeGrowthInsideLast.token1;
+            if (fg1 > last1) {
+                uint256 backing1 = FullMath.mulDiv(fg1 - last1, liquidityScale, FixedPoint128.Q128);
+                if (backing1 > 0) pa.pendingResidualFeeBacking.token1 += backing1;
+                if (advanceFeeGrowthCheckpoint) pa.feeGrowthInsideLast.token1 = fg1;
+            }
+        }
+    }
+
+    /// @dev Loads pending-residual lanes, reads post-modify position fee growth from PoolManager, then banks backing.
+    ///      Prefer `getPositionInfo` over range `getFeeGrowthInside` on full deactivation: after a full remove, Uniswap
+    ///      may clear boundary ticks so range-based reads can be wrong; the position snapshot from `modifyLiquidity` is authoritative.
+    function _captureResidualFeeBackingForLiquidityScale(
+        VTSStorage storage s,
+        IPoolManager poolManager,
+        PositionId id,
+        uint128 liquidityScale,
+        bool advanceFeeGrowthCheckpoint
+    ) private {
+        if (liquidityScale == 0) return;
+
+        PositionAccounting storage pa = s.positionAccounting[id];
+        bool needFeeToken0 = pa.pendingResidualBurnBase.token1 > 0;
+        bool needFeeToken1 = pa.pendingResidualBurnBase.token0 > 0;
+        if (!needFeeToken0 && !needFeeToken1) return;
+
+        Position memory pos = s.positions[id];
+        (, uint256 fg0, uint256 fg1) = StateLibrary.getPositionInfo(poolManager, pos.poolId, PositionId.unwrap(id));
+
+        _accumulateResidualFeeBackingForLanes(
+            pa, fg0, fg1, needFeeToken0, needFeeToken1, uint256(liquidityScale), advanceFeeGrowthCheckpoint
+        );
+    }
+
     /// @notice Freeze unresolved residual-burn fee backing before a position deactivates to zero liquidity.
     /// @dev Captures fee growth accrued up to the remove call on the fee token lanes needed by pending residual burn.
     function _captureResidualFeeBackingOnDeactivation(
@@ -540,35 +598,19 @@ library VTSFeeLib {
         PositionId id,
         uint128 liquidityBeforeRemove
     ) internal {
-        if (liquidityBeforeRemove == 0) return;
+        _captureResidualFeeBackingForLiquidityScale(s, poolManager, id, liquidityBeforeRemove, true);
+    }
 
-        PositionAccounting storage pa = s.positionAccounting[id];
-        bool needFeeToken0 = pa.pendingResidualBurnBase.token1 > 0;
-        bool needFeeToken1 = pa.pendingResidualBurnBase.token0 > 0;
-        if (!needFeeToken0 && !needFeeToken1) return;
-
-        Position memory pos = s.positions[id];
-        (uint256 fg0, uint256 fg1) =
-            StateLibrary.getFeeGrowthInside(poolManager, pos.poolId, pos.tickLower, pos.tickUpper);
-        uint256 liq = uint256(liquidityBeforeRemove);
-
-        if (needFeeToken0) {
-            uint256 last0 = pa.feeGrowthInsideLast.token0;
-            if (fg0 > last0) {
-                uint256 backing0 = FullMath.mulDiv(fg0 - last0, liq, FixedPoint128.Q128);
-                if (backing0 > 0) pa.pendingResidualFeeBacking.token0 += backing0;
-                pa.feeGrowthInsideLast.token0 = fg0;
-            }
-        }
-
-        if (needFeeToken1) {
-            uint256 last1 = pa.feeGrowthInsideLast.token1;
-            if (fg1 > last1) {
-                uint256 backing1 = FullMath.mulDiv(fg1 - last1, liq, FixedPoint128.Q128);
-                if (backing1 > 0) pa.pendingResidualFeeBacking.token1 += backing1;
-                pa.feeGrowthInsideLast.token1 = fg1;
-            }
-        }
+    /// @notice Bank fee-token backing for removed liquidity during a partial decrease while a residual episode is open.
+    /// @dev Unlike full deactivation, does not advance `feeGrowthInsideLast`: remaining live liquidity keeps the same
+    ///      baseline so `freshFees` on later burns still include its share of growth since the last checkpoint.
+    function _captureResidualFeeBackingOnPartialDecrease(
+        VTSStorage storage s,
+        IPoolManager poolManager,
+        PositionId id,
+        uint128 removedLiquidity
+    ) internal {
+        _captureResidualFeeBackingForLiquidityScale(s, poolManager, id, removedLiquidity, false);
     }
 
     /// @notice Apply banked residual-derived DICE burn against later outflow windows only
@@ -689,6 +731,16 @@ library VTSFeeLinkedLib {
         uint128 liquidityBeforeRemove
     ) external {
         VTSFeeLib._captureResidualFeeBackingOnDeactivation(s, poolManager, id, liquidityBeforeRemove);
+    }
+
+    /// @notice Bank historical fee backing for the removed liquidity slice on partial decrease (residual episode open)
+    function captureResidualFeeBackingOnPartialDecrease(
+        VTSStorage storage s,
+        IPoolManager poolManager,
+        PositionId id,
+        uint128 removedLiquidity
+    ) external {
+        VTSFeeLib._captureResidualFeeBackingOnPartialDecrease(s, poolManager, id, removedLiquidity);
     }
 
     /// @notice Apply banked residual-derived burn against eligible outflow windows

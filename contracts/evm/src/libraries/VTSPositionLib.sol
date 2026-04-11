@@ -134,6 +134,24 @@ library VTSPositionLib {
     // Settlement Updates
     // --------------------------------------------------
 
+    /// @notice Applies a settled delta to the pool-wide `totalSettled` aggregate
+    /// @param paPool The pool accounting storage reference
+    /// @param tokenIndex The token index (0 or 1)
+    /// @param settledDelta The signed settled delta to apply
+    function _applyPoolTotalSettledDelta(PoolAccounting storage paPool, uint8 tokenIndex, int256 settledDelta) private {
+        if (settledDelta == 0) return;
+
+        uint256 currentTotalSettled = paPool.totalSettled.get(tokenIndex);
+
+        if (settledDelta >= 0) {
+            paPool.totalSettled.set(tokenIndex, currentTotalSettled + uint256(settledDelta));
+        } else {
+            uint256 decSettled = uint256(-settledDelta);
+            paPool.totalSettled
+                .set(tokenIndex, decSettled > currentTotalSettled ? 0 : (currentTotalSettled - decSettled));
+        }
+    }
+
     /// @notice Updates pool accounting for settlement changes
     /// @dev Extracted to reduce stack depth in _updateSettlement
     /// @param s The central VTS storage
@@ -167,17 +185,7 @@ library VTSPositionLib {
         }
 
         // CISE: Track pool-wide totalSettled aggregate
-        {
-            uint256 currentTotalSettled = paPool.totalSettled.get(tokenIndex);
-
-            if (settledDelta >= 0) {
-                paPool.totalSettled.set(tokenIndex, currentTotalSettled + uint256(settledDelta));
-            } else {
-                uint256 decSettled = uint256(-settledDelta);
-                paPool.totalSettled
-                    .set(tokenIndex, decSettled > currentTotalSettled ? 0 : (currentTotalSettled - decSettled));
-            }
-        }
+        _applyPoolTotalSettledDelta(paPool, tokenIndex, settledDelta);
 
         // Return helper-consumed amount: cumulativeDeficit coverage + settled change
         // Deposits (positive delta to _updateSettlement): returns positive value
@@ -190,6 +198,28 @@ library VTSPositionLib {
     function _sUpdateSettlement(VTSStorage storage s, PositionId id, uint8 tokenIndex, int256 delta) internal {
         int256 applied = _updateSettlement(s, id, tokenIndex, delta);
         applied;
+    }
+
+    /// @notice Restores previously over-withdrawn settled balance without netting deficits
+    /// @dev Used only when Phase 2 discovers vault shortfall after a withdrawal was already booked.
+    ///      No new underlying arrived, so this must only reverse the settled reduction and pool totalSettled.
+    function _restoreSettledAfterShortfall(VTSStorage storage s, PositionId id, uint8 tokenIndex, uint256 shortfall)
+        internal
+    {
+        if (shortfall == 0) return;
+
+        PositionAccounting storage pa = s.positionAccounting[id];
+        uint256 cur = pa.settled.get(tokenIndex);
+        uint256 commitmentMax = pa.commitmentMax.get(tokenIndex);
+        uint256 maxRestore = commitmentMax > cur ? commitmentMax - cur : 0;
+        uint256 restored = shortfall > maxRestore ? maxRestore : shortfall;
+        if (restored == 0) return;
+
+        pa.settled.set(tokenIndex, cur + restored);
+
+        Position memory pos = s.positions[id];
+        PoolAccounting storage paPool = s.poolAccounting[pos.poolId];
+        _applyPoolTotalSettledDelta(paPool, tokenIndex, restored.toInt256());
     }
 
     /// @notice Updates the settlement amount by a delta which could be positive or negative
@@ -1211,6 +1241,11 @@ library VTSPositionLib {
                     _captureResidualFeeBackingOnFullDeactivation(
                         s, ctx.poolManager, result.id, liq, p.params.liquidityDelta
                     );
+                } else {
+                    uint128 removedLiquidity = uint256(-p.params.liquidityDelta).toUint128();
+                    VTSFeeLinkedLib.captureResidualFeeBackingOnPartialDecrease(
+                        s, ctx.poolManager, result.id, removedLiquidity
+                    );
                 }
                 _applyLiquidityMirrorTransition(s, paDec, posStorage, initialLiquidity, liq);
             } else {
@@ -1323,6 +1358,9 @@ library VTSPositionLib {
     }
 
     /// @dev Clamp settled balances downward by precomputed excess values.
+    ///      For MM decreases, callers pass the full exported settlement requirement (`postDecreaseDelta`):
+    ///      both Hub-queued shortfall and the immediate `DynamicCurrencyDelta` slice leave live `pa.settled` here so the
+    ///      same value is not represented twice (source settled plus queue or MMPM underlying credit).
     function _applySettlementClampFromExcess(
         VTSStorage storage s,
         PositionId positionId,
@@ -1420,9 +1458,10 @@ library VTSPositionLib {
                 queueRecipient = PositionModificationHookDataLib.getLocker(mmData);
             }
 
-            // Remove from live `settled` only what is actually preserved elsewhere:
-            // - queued amounts move into LiquidityHub queue accounting
-            // - everything else stays represented via DynamicCurrencyDelta until a later settle call consumes it
+            // Snapshot full required settlement before `_handleLiquidityDecrease` splits it across Hub queue vs
+            // owner underlying credit. Both legs move economic value out of live `settled`; clamping only the
+            // queued portion would leave the same value in `settled` and in DynamicCurrencyDelta (double count).
+            BalanceDelta postDecreaseDelta = requiredSettlementDelta;
             LiquidityDecreaseResult memory decreaseResult;
             if (isSeizing) {
                 // @note: For Seizures,
@@ -1446,18 +1485,15 @@ library VTSPositionLib {
                     ctx, p.owner, p.poolKey, principalDelta, requiredSettlementDelta, queueRecipient
                 );
             }
-            // Only the amount actually preserved in the Hub queue should leave live VTS settled immediately.
-            // Immediate settleable liquidity, plus any shortfall remainder that could not be queued this call,
-            // remains represented via DynamicCurrencyDelta until later settlement.
             _applySettlementClampFromExcess(
                 s,
                 result.id,
-                LiquidityUtils.safeInt128ToUint256(decreaseResult.queuedDelta.amount0()),
-                LiquidityUtils.safeInt128ToUint256(decreaseResult.queuedDelta.amount1())
+                LiquidityUtils.safeInt128ToUint256(postDecreaseDelta.amount0()),
+                LiquidityUtils.safeInt128ToUint256(postDecreaseDelta.amount1())
             );
 
-            // Anything moved into the Hub queue is already preserved elsewhere and must not also remain in
-            // DynamicCurrencyDelta. The remainder (immediate settleable slice plus any unqueued shortfall) stays live.
+            // Owner underlying credit reflects the post-split remainder (settleable now + unqueued shortfall);
+            // Hub queue holds the complementary shortfall preserved via cancel-with-queue.
             requiredSettlementDelta = decreaseResult.underlyingDeltaSettlement;
         }
 
@@ -1784,14 +1820,13 @@ library VTSPositionLib {
                 int128 shortfall0 = result.settlementDelta.amount0() - availableDelta.amount0();
                 int128 shortfall1 = result.settlementDelta.amount1() - availableDelta.amount1();
 
-                // Retroactively adjust _updateSettlement for any shortfall
-                // Shortfall is positive when we over-settled. We need to add back (positive delta to _updateSettlement)
-                // because we previously called _updateSettlement with negative delta for withdrawals
+                // Restore only the over-withdrawn settled amount.
+                // No underlying was received for the shortfall, so this rollback must not net deficits.
                 if (shortfall0 > 0) {
-                    _sUpdateSettlement(s, p.positionId, 0, int256(shortfall0));
+                    _restoreSettledAfterShortfall(s, p.positionId, 0, LiquidityUtils.safeInt128ToUint256(shortfall0));
                 }
                 if (shortfall1 > 0) {
-                    _sUpdateSettlement(s, p.positionId, 1, int256(shortfall1));
+                    _restoreSettledAfterShortfall(s, p.positionId, 1, LiquidityUtils.safeInt128ToUint256(shortfall1));
                 }
             }
 

@@ -956,6 +956,7 @@ contract MMPositionManagerActionsTest is MarketTestBase, MarketMakerTestBase {
         uint128 position2LiquidityBefore;
         uint256 position2SettledAmount0Before;
         uint256 position2SettledAmount1Before;
+        uint256 position1SettledSumBefore;
 
         {
             ModifyLiquidityParams memory newLiquidityParams =
@@ -989,8 +990,11 @@ contract MMPositionManagerActionsTest is MarketTestBase, MarketMakerTestBase {
 
             // Snapshot only the fields we assert on (rather than keeping whole structs alive).
             {
-                (Position memory position1Before,) = positionManager.getPosition(tokenId, positionIndex);
+                (Position memory position1Before, PositionId position1Id) =
+                    positionManager.getPosition(tokenId, positionIndex);
                 position1LiquidityBefore = position1Before.liquidity;
+                (uint256 s0, uint256 s1) = vtsOrchestrator.getPositionSettledAmounts(position1Id);
+                position1SettledSumBefore = s0 + s1;
             }
             {
                 (Position memory position2Before, PositionId _position2Id) =
@@ -1028,6 +1032,7 @@ contract MMPositionManagerActionsTest is MarketTestBase, MarketMakerTestBase {
         }
 
         // validate the new position's settlement has increased
+        uint256 position2SettledSumAfter;
         {
             (uint256 position2SettledAmount0After, uint256 position2SettledAmount1After) =
                 vtsOrchestrator.getPositionSettledAmounts(position2Id);
@@ -1047,6 +1052,28 @@ contract MMPositionManagerActionsTest is MarketTestBase, MarketMakerTestBase {
                 position2SettledAmount0After + position2SettledAmount1After,
                 position2SettledAmount0Before + position2SettledAmount1Before,
                 "Position2 total settled should increase when liquidity is added from deltas"
+            );
+            position2SettledSumAfter = position2SettledAmount0After + position2SettledAmount1After;
+        }
+
+        // Regression (SETTLE-03 / exported settlement): value routed to MMPM delta and into position2 must not also
+        // remain as live settled on the source position after decrease.
+        {
+            (, PositionId position1Id) = positionManager.getPosition(tokenId, positionIndex);
+            (uint256 s0, uint256 s1) = vtsOrchestrator.getPositionSettledAmounts(position1Id);
+            uint256 position1SettledSumAfter = s0 + s1;
+            assertLe(
+                position1SettledSumAfter,
+                position1SettledSumBefore,
+                "source position settled should not increase; exported slice leaves live settled on decrease"
+            );
+            uint256 importedToTarget =
+                position2SettledSumAfter - (position2SettledAmount0Before + position2SettledAmount1Before);
+            uint256 exportedFromSource = position1SettledSumBefore - position1SettledSumAfter;
+            assertGe(
+                exportedFromSource,
+                importedToTarget,
+                "settled credited to target via deltas should be backed by reduction of source settled (no double representation)"
             );
         }
     }

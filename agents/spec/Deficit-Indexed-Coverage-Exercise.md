@@ -353,6 +353,7 @@ The final implementation now treats residual-burn fee backing as a distinct, epi
 - `pendingResidualBurnBase` remains the banked burn principal waiting for a later eligible outflow window.
 - `pendingResidualFeeBacking` stores the historical fee-token backing frozen for that unresolved residual-burn episode.
 - On a transition from positive liquidity to zero liquidity, the position crystallises fee growth into `pendingResidualFeeBacking` before reactivation can reset `feeGrowthInsideLast`.
+- On a **partial** decrease (positive liquidity remains), the position banks into `pendingResidualFeeBacking` only the fee growth attributable to the **removed liquidity slice** since the last checkpoint, and **does not** advance `feeGrowthInsideLast`, so the surviving liquidity continues to accrue against the same baseline (closing the staged-exit gap where backing was previously only captured on full deactivation).
 - When residual burn is later applied, burn sourcing uses:
   - banked historical fee backing first, then
   - fresh post-reactivation fees second.
@@ -376,7 +377,7 @@ This closes the attribution gap without changing the intended economics of parti
 The residual-burn path should now be understood as follows:
 
 1. DICE may bank residual coverage into `pendingResidualBurnBase` when realised coverage cannot yet be consumed against the current outflow window.
-2. If the position deactivates to zero liquidity before that burn is resolved, the corresponding historical fee backing is frozen into `pendingResidualFeeBacking`.
+2. If the position deactivates to zero liquidity before that burn is resolved, the corresponding historical fee backing is frozen into `pendingResidualFeeBacking`. If the position only **partially** decreases while the episode is open, the removed slice’s share of fee growth since the last checkpoint is banked the same way, without advancing the live checkpoint for the remaining liquidity.
 3. Reactivation still checkpoints tick-indexed growth normally, so zero-liquidity periods do not inherit fresh fees.
 4. A later eligible outflow window may consume the old residual burn, but only against:
    - preserved historical backing, and then
@@ -399,7 +400,7 @@ This refinement preserves all of the intended first-principles properties of DIC
 
 The implemented regression coverage now explicitly checks that:
 
-- historical residual fee backing survives deactivate/reactivate,
+- historical residual fee backing survives deactivate/reactivate and partial decreases bank the removed slice without losing backing to staged exits,
 - purely banked residual backing can be consumed without advancing the live fee-growth baseline,
 - mixed banked-plus-fresh fee consumption spends banked backing first and only advances the checkpoint by the fresh portion consumed, and
 - banked fee backing is cleared once the matching residual burn base is fully exhausted.

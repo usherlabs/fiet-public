@@ -390,7 +390,12 @@ contract VTSOrchestrator is
         onlyPositionValid(positionId)
         returns (bool, BalanceDelta)
     {
-        return VTSPositionLib.calcRFS(s, poolManager, positionId, requireClosedRfS);
+        settlePositionGrowths(positionId);
+        (bool rfsOpen, BalanceDelta delta) = VTSPositionLib.getRFS(s, positionId);
+        if (requireClosedRfS && rfsOpen) {
+            revert Errors.RFSOpenForPosition(positionId);
+        }
+        return (rfsOpen, delta);
     }
 
     /// @inheritdoc IVTSOrchestrator
@@ -400,7 +405,11 @@ contract VTSOrchestrator is
     {
         PositionId positionId = getPositionId(commitId, positionIndex);
         _assertPositionValid(positionId, true);
-        (bool rfsOpen, BalanceDelta delta) = VTSPositionLib.calcRFS(s, poolManager, positionId, requireClosedRfS);
+        settlePositionGrowths(positionId);
+        (bool rfsOpen, BalanceDelta delta) = VTSPositionLib.getRFS(s, positionId);
+        if (requireClosedRfS && rfsOpen) {
+            revert Errors.RFSOpenForPosition(positionId);
+        }
         return (positionId, rfsOpen, delta);
     }
 
@@ -791,6 +800,7 @@ contract VTSOrchestrator is
 
         PositionId positionId = getPositionId(commitId, positionIndex);
         _assertPositionValid(positionId, true);
+        settlePositionGrowths(positionId);
         RFSCheckpoint memory checkpointOut =
             VTSLifecycleLinkedLib.checkpoint(s, _lifecycleContext(), commitId, withCommitment, positionId);
         emit Checkpointed(commitId, positionIndex, checkpointOut, withCommitment);

@@ -154,6 +154,26 @@ library VTSLifecycleLinkedLib {
         });
     }
 
+    /// @dev Commitment backing (optional) plus RFS checkpoint marking from current stored accounting.
+    ///      Caller must have settled position growths first when pause gating matters (e.g. via
+    ///      `VTSOrchestrator.settlePositionGrowths`).
+    function _checkpointAfterGrowthSettled(
+        VTSStorage storage s,
+        VTSLifecycleContext memory ctx,
+        uint256 commitId,
+        bool withCommitment,
+        PositionId positionId
+    ) private returns (RFSCheckpoint memory checkpointOut) {
+        if (withCommitment) {
+            VTSCommitLib.checkpointWithCommitment(s, ctx.poolManager, ctx.oracleHelper, commitId, positionId);
+        }
+        (, BalanceDelta rfsDelta) = VTSPositionLib.getRFS(s, positionId);
+        CheckpointLibrary.markCheckpoint(s, positionId, VTSPositionLib._rfsOpenMask(rfsDelta));
+        checkpointOut = s.positions[positionId].checkpoint;
+    }
+
+    /// @notice Optional commitment backing check, then mark the RFS checkpoint from current state
+    /// @dev Does not settle growths. The orchestrator must call `settlePositionGrowths` first so pause policy applies.
     function checkpoint(
         VTSStorage storage s,
         VTSLifecycleContext memory ctx,
@@ -161,13 +181,7 @@ library VTSLifecycleLinkedLib {
         bool withCommitment,
         PositionId positionId
     ) external returns (RFSCheckpoint memory checkpointOut) {
-        VTSPositionLib.settlePositionGrowths(s, ctx.poolManager, positionId);
-        if (withCommitment) {
-            VTSCommitLib.checkpointWithCommitment(s, ctx.poolManager, ctx.oracleHelper, commitId, positionId);
-        }
-        (, BalanceDelta rfsDelta) = VTSPositionLib.getRFS(s, positionId);
-        CheckpointLibrary.markCheckpoint(s, positionId, VTSPositionLib._rfsOpenMask(rfsDelta));
-        checkpointOut = s.positions[positionId].checkpoint;
+        checkpointOut = _checkpointAfterGrowthSettled(s, ctx, commitId, withCommitment, positionId);
     }
 
     function extendGracePeriod(
@@ -199,9 +213,7 @@ library VTSLifecycleLinkedLib {
             || s.positionAccounting[positionId].commitmentDeficit.token1 > 0;
         if (hasStoredCommitmentDeficit) {
             VTSPositionLib.settlePositionGrowths(s, ctx.poolManager, positionId);
-            VTSCommitLib.checkpointWithCommitment(s, ctx.poolManager, ctx.oracleHelper, commitId, positionId);
-            (, BalanceDelta rfsDelta) = VTSPositionLib.getRFS(s, positionId);
-            CheckpointLibrary.markCheckpoint(s, positionId, VTSPositionLib._rfsOpenMask(rfsDelta));
+            _checkpointAfterGrowthSettled(s, ctx, commitId, true, positionId);
         }
 
         CheckpointLibrary.isSeizable(s, commitId, positionIndex, true);

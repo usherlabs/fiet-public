@@ -421,37 +421,35 @@ being an informal “should”.
 - **Enforced by**: `src/libraries/VTSPositionLib.sol::_settleSeizing` (deposit clamp uses positive RFS; withdrawal clamp
   uses `positionRequiredSettlementDelta`).
 
-### SETTLE-03: MM decrease splits immediate-settle and queued-shortfall accounting
+### SETTLE-03: MM decrease splits routing; exported value leaves live `settled` once
 
 - **Statement**:
-  - For MM liquidity decreases, the excess settled entitlement computed against the reduced commitment is not a single
-    homogeneous bucket.
-  - It must be split into:
-    - an **immediately settleable** slice, which remains in live `pa.settled` until the follow-on settlement flow
-      consumes the transient underlying delta for that batch, and
-    - a **queued shortfall** slice, which must leave live VTS settled accounting once the Hub queue amount is known.
+  - For MM liquidity decreases, the excess settled entitlement relative to the reduced commitment is not a single
+    homogeneous bucket for **routing** (vault-available immediate slice vs Hub queue vs residual underlying credit).
+  - However, economically exported settlement value must have **exactly one** live representation after the decrease step:
+    either Hub-backed queue, MMPM underlying delta (`DynamicCurrencyDelta`), or still in source `pa.settled` — never two
+    at once for the same slice.
 - **Protocol rule**:
-  - This invariant is explicitly coupled to **DELTA-01**.
-  - `DynamicCurrencyDelta` remains the transient “must resolve now” accounting surface for the immediate settleable slice, meaning that any immediate-settle value which is still required to be resolved before batch end must remain represented on the delta path until that requirement is discharged.
-  - Queue-backed shortfall must not remain in `pa.settled` / pool `totalSettled`, because it has become an explicit
-    Hub-backed deferred entitlement rather than live position settlement.
-  - Therefore, the live-settlement clamp for MM decreases must be applied to the **queued shortfall only**, not to the
-    full excess pre-emptively; otherwise the protocol would remove value from live settled state before the corresponding
-    DELTA-01 obligation had been resolved.
+  - Coupled to **DELTA-01**: transient MMPM underlying deltas from the immediate-settle slice must still net to zero per
+    unlock/batch via authorised settlement paths.
+  - **Eager source-side decrement**: the full MM decrease export amount (`requiredSettlementDelta` entering
+    `_handleLiquidityDecrease`) is removed from source `pa.settled` / pool `totalSettled` via
+    `_applySettlementClampFromExcess` using that full amount, not only the queued portion.
+  - **Consumption-based target credit**: another position’s `pa.settled` increases only when `_settle()` / `onMMSettle()`
+    actually consumes protocol underlying delta or token flow (`MMPositionActionsImpl._netProtocolCredits` path), not
+    merely because positive delta exists on MMPM.
 - **Enforced / expressed by**:
-  - `src/libraries/VTSPositionLib.sol::_touchExistingDecrease` computes the full MM excess as
-    `requiredSettlementDelta` without eagerly reducing `pa.settled`.
-  - `src/libraries/VTSPositionLib.sol::_handleLiquidityDecrease` computes:
-    - `settleableDelta` (immediate slice), and
-    - `queuedShortfallDelta` (unavailable portion routed into `LiquidityHub` queueing).
-  - `src/libraries/VTSPositionLib.sol::_processMMOperations`:
-    - books only `settleableDelta` into `DynamicCurrencyDelta`, and
-    - clamps `pa.settled` / pool `totalSettled` only for `queuedShortfallDelta`.
+  - `src/libraries/VTSPositionLib.sol::_touchExistingDecrease` computes `requiredSettlementDelta` for the MM excess.
+  - `src/libraries/VTSPositionLib.sol::_handleLiquidityDecrease` splits vault availability vs queue vs
+    `underlyingDeltaSettlement` for routing.
+  - `src/libraries/VTSPositionLib.sol::_processMMOperations` (decrease branch): snapshots `fullMmDecreaseSettlement`,
+    calls `_applySettlementClampFromExcess` with the **full** exported requirement, then
+    `DynamicCurrencyDelta.accountUnderlyingSettlementDelta` for `decreaseResult.underlyingDeltaSettlement` only.
 - **Why**:
-  - Clamping the full excess too early would double-count later settlement paths that still rely on
-    `DynamicCurrencyDelta` as the transient settle obligation.
-  - Clamping only the queued shortfall satisfies the stronger invariant that queued-away amounts no longer remain as live
-    settled exposure, while preserving the required-delta-resolution model in **DELTA-01**.
+  - Clamping only the queued shortfall while also booking the immediate slice on `DynamicCurrencyDelta` would double-count
+    the same value as both live source `settled` and MMPM credit, enabling cross-position reuse without conservation.
+  - Removing the full export from source `settled` preserves single-representation while **DELTA-01** still forces batch
+    resolution of the transient delta leg.
 
 ### SEIZE-01: Seizability is token-lane scoped and aggregated at position level
 

@@ -211,6 +211,20 @@ contract VTSPositionLibTest is VTSLibTestBase {
         uint256 totalSettled1;
     }
 
+    /// @dev Scratch fixture for `test_settlePositionGrowths_DICE_stagedPartialExit_*` (keeps stack shallow).
+    struct DiceDeferredStagedFixture {
+        PoolId corePoolId;
+        PositionId positionId;
+        int24 tickLower;
+        int24 tickUpper;
+        address owner;
+        bytes32 salt;
+        uint128 liq;
+        uint128 half;
+        uint256 snapshot;
+        uint256 shareBps;
+    }
+
     function _positionSettleState(PositionId positionId) internal view returns (PositionSettleState memory st) {
         (,, st.settled0, st.settled1, st.deficit0, st.deficit1) = harness.getPositionAccounting(positionId);
     }
@@ -333,6 +347,37 @@ contract VTSPositionLibTest is VTSLibTestBase {
         );
         assertEq(fs1After2, expectedFeesBurn, "feesShared should track the smoothed burn");
         assertEq(pending1After2, int256(expectedFeesBurn), "smoothed burn should queue the slash later");
+    }
+
+    /// @dev Second deficit window + settle; returns the nominal full-liquidity fee burn from current fee growth.
+    /// @param accrueBeforeSecondWindow When true, runs one fee accrual swap before opening the second window (the
+    ///        original deferred-residual regression). When false, both reference and staged paths must skip this so
+    ///        pool fee growth does not depend on divergent live liquidity during the accrual swap.
+    /// @param assertStandardResidualAccounting When true, asserts `outflows == 2 * liq` style accounting; false when
+    ///        live pool liquidity was reduced before this phase.
+    function _diceSecondOutflowWindow_burnAsFullLiquidity(
+        PoolId corePoolId,
+        PositionId positionId,
+        int24 tickLower,
+        int24 tickUpper,
+        uint128 liq,
+        uint256 coverageFeeShareBps,
+        bool assertStandardResidualAccounting,
+        bool accrueBeforeSecondWindow
+    ) internal returns (uint256 expectedFeesBurn) {
+        if (accrueBeforeSecondWindow) {
+            _accrueFeeGrowthInCoreRange(true);
+        }
+        harness.setDeficitGrowthGlobal(corePoolId, FixedPoint128.Q128 * 2, 0);
+        (, uint256 fg1Later) = StateLibrary.getFeeGrowthInside(manager, corePoolId, tickLower, tickUpper);
+        uint256 totalFees = FullMath.mulDiv(fg1Later, uint256(liq), FixedPoint128.Q128);
+        expectedFeesBurn = FullMath.mulDiv(totalFees, coverageFeeShareBps, LiquidityUtils.BPS_DENOMINATOR);
+        harness.settlePositionGrowths(manager, positionId);
+        if (assertStandardResidualAccounting) {
+            _assertDeferredResidualLaterBurnState(corePoolId, positionId, liq, expectedFeesBurn);
+        } else {
+            _assertDeferredResidualLaterBurnFees(corePoolId, positionId, expectedFeesBurn);
+        }
     }
 
     function setUp() public override {
@@ -1080,27 +1125,49 @@ contract VTSPositionLibTest is VTSLibTestBase {
         harness.setupPool(corePoolId, _createDefaultVTSConfig());
 
         uint128 liq = uint128(1e18);
-        PositionId positionId = _registerHarnessPositionInPool(
-            corePoolId, DEFAULT_OWNER, DEFAULT_TICK_LOWER, DEFAULT_TICK_UPPER, liq, DEFAULT_SALT
+        address owner = address(modifyLiquidityRouter);
+        PositionId positionId;
+        ModifyLiquidityParams memory addParams = ModifyLiquidityParams({
+            tickLower: DEFAULT_TICK_LOWER,
+            tickUpper: DEFAULT_TICK_UPPER,
+            liquidityDelta: int256(uint256(liq)),
+            salt: DEFAULT_SALT
+        });
+        modifyLiquidityRouter.modifyLiquidity(corePoolKey, addParams, ZERO_BYTES);
+        harness.touchPosition(
+            _mkCtx(),
+            TouchPositionParams({
+                owner: owner,
+                poolKey: _mkPoolKey(),
+                params: addParams,
+                callerDelta: toBalanceDelta(0, 0),
+                feesAccrued: toBalanceDelta(0, 0),
+                hookData: _mkHookData(false, false, 0)
+            })
         );
+        positionId = PositionLibrary.generateId(owner, addParams);
 
         // Banking is only required on fee token lanes with unresolved residual burn base.
         harness.setPendingResidualBurnBase(positionId, 1, 0);
-        harness.setFeeGrowthInsideLast(positionId, 0, 0);
+        (, uint256 fg1BeforeRemove) = harness.getFeeGrowthInsideLast(positionId);
 
         _accrueFeeGrowthInCoreRange(true); // token1 fee growth
-        (, uint256 fg1BeforeRemove) = _getFeeGrowthInside(corePoolId, DEFAULT_TICK_LOWER, DEFAULT_TICK_UPPER);
-        uint256 expectedBanked = FullMath.mulDiv(fg1BeforeRemove, uint256(liq), FixedPoint128.Q128);
-        assertGt(expectedBanked, 0, "setup: expected bankable fee backing");
-
         ModifyLiquidityParams memory removeParams = ModifyLiquidityParams({
             tickLower: DEFAULT_TICK_LOWER,
             tickUpper: DEFAULT_TICK_UPPER,
             liquidityDelta: -int256(uint256(liq)),
             salt: DEFAULT_SALT
         });
+        modifyLiquidityRouter.modifyLiquidity(corePoolKey, removeParams, ZERO_BYTES);
+
+        (,, uint256 fg1StoredAfterRemove) =
+            StateLibrary.getPositionInfo(manager, corePoolId, PositionId.unwrap(positionId));
+        uint256 expectedBanked =
+            FullMath.mulDiv(fg1StoredAfterRemove - fg1BeforeRemove, uint256(liq), FixedPoint128.Q128);
+        assertGt(expectedBanked, 0, "setup: expected bankable fee backing");
+
         TouchPositionParams memory removeTp = TouchPositionParams({
-            owner: DEFAULT_OWNER,
+            owner: owner,
             poolKey: _mkPoolKey(),
             params: removeParams,
             callerDelta: toBalanceDelta(0, 0),
@@ -1116,16 +1183,11 @@ contract VTSPositionLibTest is VTSLibTestBase {
         assertEq(bankedFee1AfterRemove, expectedBanked, "full remove should freeze historical token1 fee backing");
 
         (, uint256 fg1AfterRemove) = harness.getFeeGrowthInsideLast(positionId);
-        assertEq(fg1AfterRemove, fg1BeforeRemove, "deactivation banking should checkpoint token1 fee growth");
+        assertEq(fg1AfterRemove, fg1StoredAfterRemove, "deactivation banking should checkpoint token1 fee growth");
 
-        ModifyLiquidityParams memory addParams = ModifyLiquidityParams({
-            tickLower: DEFAULT_TICK_LOWER,
-            tickUpper: DEFAULT_TICK_UPPER,
-            liquidityDelta: int256(uint256(liq)),
-            salt: DEFAULT_SALT
-        });
+        modifyLiquidityRouter.modifyLiquidity(corePoolKey, addParams, ZERO_BYTES);
         TouchPositionParams memory addTp = TouchPositionParams({
-            owner: DEFAULT_OWNER,
+            owner: owner,
             poolKey: _mkPoolKey(),
             params: addParams,
             callerDelta: toBalanceDelta(0, 0),
@@ -1140,37 +1202,223 @@ contract VTSPositionLibTest is VTSLibTestBase {
         );
     }
 
+    function test_touchPosition_partialRemove_banksRemovedSliceResidualFeeBacking_preservesFeeGrowthInsideLast()
+        public
+    {
+        _initMarket();
+        PoolId corePoolId = _getDefaultPoolId();
+        harness.setupPool(corePoolId, _createDefaultVTSConfig());
+
+        uint128 liq = uint128(1e18);
+        uint128 half = uint128(5e17);
+        address owner = address(modifyLiquidityRouter);
+        PositionId positionId;
+        ModifyLiquidityParams memory addParams = ModifyLiquidityParams({
+            tickLower: DEFAULT_TICK_LOWER,
+            tickUpper: DEFAULT_TICK_UPPER,
+            liquidityDelta: int256(uint256(liq)),
+            salt: DEFAULT_SALT
+        });
+        modifyLiquidityRouter.modifyLiquidity(corePoolKey, addParams, ZERO_BYTES);
+        harness.touchPosition(
+            _mkCtx(),
+            TouchPositionParams({
+                owner: owner,
+                poolKey: _mkPoolKey(),
+                params: addParams,
+                callerDelta: toBalanceDelta(0, 0),
+                feesAccrued: toBalanceDelta(0, 0),
+                hookData: _mkHookData(false, false, 0)
+            })
+        );
+        positionId = PositionLibrary.generateId(owner, addParams);
+
+        harness.setPendingResidualBurnBase(positionId, 1, 0);
+        (, uint256 fg1BeforeAccrue) = harness.getFeeGrowthInsideLast(positionId);
+
+        _accrueFeeGrowthInCoreRange(true);
+
+        ModifyLiquidityParams memory partialRemove = ModifyLiquidityParams({
+            tickLower: DEFAULT_TICK_LOWER,
+            tickUpper: DEFAULT_TICK_UPPER,
+            liquidityDelta: -int256(uint256(half)),
+            salt: DEFAULT_SALT
+        });
+        modifyLiquidityRouter.modifyLiquidity(corePoolKey, partialRemove, ZERO_BYTES);
+
+        (,, uint256 fg1StoredAfterModify) =
+            StateLibrary.getPositionInfo(manager, corePoolId, PositionId.unwrap(positionId));
+
+        uint256 dfg = fg1StoredAfterModify - fg1BeforeAccrue;
+        uint256 expectedPartialBank = FullMath.mulDiv(dfg, uint256(half), FixedPoint128.Q128);
+        assertGt(expectedPartialBank, 0, "setup: expected positive slice backing");
+
+        harness.touchPosition(
+            _mkCtx(),
+            TouchPositionParams({
+                owner: owner,
+                poolKey: _mkPoolKey(),
+                params: partialRemove,
+                callerDelta: toBalanceDelta(0, 0),
+                feesAccrued: toBalanceDelta(0, 0),
+                hookData: _mkHookData(false, false, 0)
+            })
+        );
+
+        (uint256 bankedFee0, uint256 bankedFee1) = harness.getPendingResidualFeeBacking(positionId);
+        assertEq(bankedFee0, 0, "fee token0 lane should remain unbanked");
+        assertEq(bankedFee1, expectedPartialBank, "partial remove should bank removed slice only");
+
+        (, uint256 fg1AfterTouch) = harness.getFeeGrowthInsideLast(positionId);
+        assertEq(
+            fg1AfterTouch,
+            fg1BeforeAccrue,
+            "partial remove must not advance feeGrowthInsideLast for surviving liquidity"
+        );
+    }
+
+    function test_touchPosition_partialThenFullRemove_sameFeeWindow_totalBankingMatchesOneShotFullRemove() public {
+        _initMarket();
+        PoolId corePoolId = _getDefaultPoolId();
+        harness.setupPool(corePoolId, _createDefaultVTSConfig());
+
+        uint128 liq = uint128(1e18);
+        uint128 half = uint128(5e17);
+        address owner = address(modifyLiquidityRouter);
+        PositionId positionId;
+        ModifyLiquidityParams memory addParams = ModifyLiquidityParams({
+            tickLower: DEFAULT_TICK_LOWER,
+            tickUpper: DEFAULT_TICK_UPPER,
+            liquidityDelta: int256(uint256(liq)),
+            salt: DEFAULT_SALT
+        });
+        modifyLiquidityRouter.modifyLiquidity(corePoolKey, addParams, ZERO_BYTES);
+        harness.touchPosition(
+            _mkCtx(),
+            TouchPositionParams({
+                owner: owner,
+                poolKey: _mkPoolKey(),
+                params: addParams,
+                callerDelta: toBalanceDelta(0, 0),
+                feesAccrued: toBalanceDelta(0, 0),
+                hookData: _mkHookData(false, false, 0)
+            })
+        );
+        positionId = PositionLibrary.generateId(owner, addParams);
+
+        harness.setPendingResidualBurnBase(positionId, 1, 0);
+        (, uint256 fg1BeforeAccrue) = harness.getFeeGrowthInsideLast(positionId);
+
+        _accrueFeeGrowthInCoreRange(true);
+
+        // Live fee growth inside the range (position storage last is not advanced until modifyLiquidity).
+        (, uint256 fg1InsideAfterAccrue) =
+            StateLibrary.getFeeGrowthInside(manager, corePoolId, DEFAULT_TICK_LOWER, DEFAULT_TICK_UPPER);
+        uint256 dfg = fg1InsideAfterAccrue - fg1BeforeAccrue;
+        uint256 expectedOneShot = FullMath.mulDiv(dfg, uint256(liq), FixedPoint128.Q128);
+        assertGt(expectedOneShot, 0, "setup: expected one-shot bankable amount");
+
+        ModifyLiquidityParams memory partialRemove = ModifyLiquidityParams({
+            tickLower: DEFAULT_TICK_LOWER,
+            tickUpper: DEFAULT_TICK_UPPER,
+            liquidityDelta: -int256(uint256(half)),
+            salt: DEFAULT_SALT
+        });
+        modifyLiquidityRouter.modifyLiquidity(corePoolKey, partialRemove, ZERO_BYTES);
+        harness.touchPosition(
+            _mkCtx(),
+            TouchPositionParams({
+                owner: owner,
+                poolKey: _mkPoolKey(),
+                params: partialRemove,
+                callerDelta: toBalanceDelta(0, 0),
+                feesAccrued: toBalanceDelta(0, 0),
+                hookData: _mkHookData(false, false, 0)
+            })
+        );
+
+        ModifyLiquidityParams memory fullRemoveRest = ModifyLiquidityParams({
+            tickLower: DEFAULT_TICK_LOWER,
+            tickUpper: DEFAULT_TICK_UPPER,
+            liquidityDelta: -int256(uint256(half)),
+            salt: DEFAULT_SALT
+        });
+        modifyLiquidityRouter.modifyLiquidity(corePoolKey, fullRemoveRest, ZERO_BYTES);
+        harness.touchPosition(
+            _mkCtx(),
+            TouchPositionParams({
+                owner: owner,
+                poolKey: _mkPoolKey(),
+                params: fullRemoveRest,
+                callerDelta: toBalanceDelta(0, 0),
+                feesAccrued: toBalanceDelta(0, 0),
+                hookData: _mkHookData(false, false, 0)
+            })
+        );
+
+        (, uint256 bankedFee1Total) = harness.getPendingResidualFeeBacking(positionId);
+        // Chained mulDiv rounding can differ from a single full-position mulDiv by at most a few wei.
+        uint256 diff =
+            bankedFee1Total > expectedOneShot ? bankedFee1Total - expectedOneShot : expectedOneShot - bankedFee1Total;
+        assertLe(diff, 2, "partial then full should match one-shot banking within rounding tolerance");
+
+        (, uint256 fg1AfterFull) = harness.getFeeGrowthInsideLast(positionId);
+        assertEq(fg1AfterFull, fg1InsideAfterAccrue, "full deactivation should checkpoint token1 fee growth");
+    }
+
     function test_touchPosition_fullRemove_banksResidualFeeBacking_fromLiveLiquidity_notMirror() public {
         _initMarket();
         PoolId corePoolId = _getDefaultPoolId();
         harness.setupPool(corePoolId, _createDefaultVTSConfig());
 
         uint128 liveLiquidityBeforeRemove = uint128(1e18);
-        PositionId positionId = _registerHarnessPositionInPool(
-            corePoolId, DEFAULT_OWNER, DEFAULT_TICK_LOWER, DEFAULT_TICK_UPPER, liveLiquidityBeforeRemove, DEFAULT_SALT
+        address owner = address(modifyLiquidityRouter);
+        PositionId positionId;
+        ModifyLiquidityParams memory addParams = ModifyLiquidityParams({
+            tickLower: DEFAULT_TICK_LOWER,
+            tickUpper: DEFAULT_TICK_UPPER,
+            liquidityDelta: int256(uint256(liveLiquidityBeforeRemove)),
+            salt: DEFAULT_SALT
+        });
+        modifyLiquidityRouter.modifyLiquidity(corePoolKey, addParams, ZERO_BYTES);
+        harness.touchPosition(
+            _mkCtx(),
+            TouchPositionParams({
+                owner: owner,
+                poolKey: _mkPoolKey(),
+                params: addParams,
+                callerDelta: toBalanceDelta(0, 0),
+                feesAccrued: toBalanceDelta(0, 0),
+                hookData: _mkHookData(false, false, 0)
+            })
         );
+        positionId = PositionLibrary.generateId(owner, addParams);
 
         // Simulate a stale mirror after an external/paused remove path: storage no longer reflects
         // the authoritative pre-remove liquidity that the hook action is reconciling.
         harness.setPositionLiquidityMirror(positionId, 1);
 
         harness.setPendingResidualBurnBase(positionId, 1, 0);
-        harness.setFeeGrowthInsideLast(positionId, 0, 0);
+        (, uint256 fg1BeforeRemove) = harness.getFeeGrowthInsideLast(positionId);
 
         _accrueFeeGrowthInCoreRange(true); // token1 fee growth
-        (, uint256 fg1BeforeRemove) = _getFeeGrowthInside(corePoolId, DEFAULT_TICK_LOWER, DEFAULT_TICK_UPPER);
-        uint256 expectedBanked =
-            FullMath.mulDiv(fg1BeforeRemove, uint256(liveLiquidityBeforeRemove), FixedPoint128.Q128);
-        assertGt(expectedBanked, 0, "setup: expected bankable fee backing");
-
         ModifyLiquidityParams memory removeParams = ModifyLiquidityParams({
             tickLower: DEFAULT_TICK_LOWER,
             tickUpper: DEFAULT_TICK_UPPER,
             liquidityDelta: -int256(uint256(liveLiquidityBeforeRemove)),
             salt: DEFAULT_SALT
         });
+        modifyLiquidityRouter.modifyLiquidity(corePoolKey, removeParams, ZERO_BYTES);
+
+        (,, uint256 fg1StoredAfterRemove) =
+            StateLibrary.getPositionInfo(manager, corePoolId, PositionId.unwrap(positionId));
+        uint256 expectedBanked = FullMath.mulDiv(
+            fg1StoredAfterRemove - fg1BeforeRemove, uint256(liveLiquidityBeforeRemove), FixedPoint128.Q128
+        );
+        assertGt(expectedBanked, 0, "setup: expected bankable fee backing");
+
         TouchPositionParams memory removeTp = TouchPositionParams({
-            owner: DEFAULT_OWNER,
+            owner: owner,
             poolKey: _mkPoolKey(),
             params: removeParams,
             callerDelta: toBalanceDelta(0, 0),
@@ -1187,6 +1435,111 @@ contract VTSPositionLibTest is VTSLibTestBase {
             bankedFee1AfterRemove,
             expectedBanked,
             "full remove should bank backing from authoritative pre-remove liquidity, not the mirror"
+        );
+    }
+
+    function test_touchPosition_fullRemove_banksResidualFeeBacking_fromStoredPositionSnapshot_whenTicksClear() public {
+        _initMarket();
+        PoolId corePoolId = _getDefaultPoolId();
+        harness.setupPool(corePoolId, _createDefaultVTSConfig());
+
+        (, int24 tickCurrent,,) = StateLibrary.getSlot0(manager, corePoolId);
+        int24 tickLower = tickCurrent - 120;
+        int24 tickUpper = tickCurrent + 120;
+        bytes32 salt = bytes32(uint256(0xC1EA7));
+        bytes32 sharedUpperSalt = bytes32(uint256(0xC1EA8));
+        uint128 liq = uint128(1e18);
+        PositionId positionId;
+
+        // Seed non-zero pre-add globals so clearing the unique lower boundary measurably diverges from the
+        // position's stored fee-growth snapshot after the full remove.
+        _accrueFeeGrowthInCoreRange(true);
+
+        {
+            ModifyLiquidityParams memory addParams = ModifyLiquidityParams({
+                tickLower: tickLower, tickUpper: tickUpper, liquidityDelta: int256(uint256(liq)), salt: salt
+            });
+            modifyLiquidityRouter.modifyLiquidity(corePoolKey, addParams, ZERO_BYTES);
+            harness.touchPosition(
+                _mkCtx(),
+                TouchPositionParams({
+                    owner: address(modifyLiquidityRouter),
+                    poolKey: _mkPoolKey(),
+                    params: addParams,
+                    callerDelta: toBalanceDelta(0, 0),
+                    feesAccrued: toBalanceDelta(0, 0),
+                    hookData: _mkHookData(false, false, 0)
+                })
+            );
+            positionId = PositionLibrary.generateId(address(modifyLiquidityRouter), addParams);
+        }
+        modifyLiquidityRouter.modifyLiquidity(
+            corePoolKey,
+            ModifyLiquidityParams({
+                tickLower: tickCurrent,
+                tickUpper: tickUpper,
+                liquidityDelta: int256(uint256(liq)),
+                salt: sharedUpperSalt
+            }),
+            ZERO_BYTES
+        );
+        harness.setPendingResidualBurnBase(positionId, 1, 0);
+
+        (, uint256 fg1BeforeRemove) = harness.getFeeGrowthInsideLast(positionId);
+
+        // Accrue live in-range fees that should be frozen into banked residual backing on deactivation.
+        _accrueFeeGrowthInCoreRange(true);
+        (, int24 tickBeforeRemove,,) = StateLibrary.getSlot0(manager, corePoolId);
+        assertGe(tickBeforeRemove, tickLower, "setup: tracked position should still span the current tick");
+        assertLt(tickBeforeRemove, tickUpper, "setup: tracked position should still span the current tick");
+
+        {
+            ModifyLiquidityParams memory removeParams = ModifyLiquidityParams({
+                tickLower: tickLower, tickUpper: tickUpper, liquidityDelta: -int256(uint256(liq)), salt: salt
+            });
+            modifyLiquidityRouter.modifyLiquidity(corePoolKey, removeParams, ZERO_BYTES);
+            harness.touchPosition(
+                _mkCtx(),
+                TouchPositionParams({
+                    owner: address(modifyLiquidityRouter),
+                    poolKey: _mkPoolKey(),
+                    params: removeParams,
+                    callerDelta: toBalanceDelta(0, 0),
+                    feesAccrued: toBalanceDelta(0, 0),
+                    hookData: _mkHookData(false, false, 0)
+                })
+            );
+        }
+
+        (uint128 coreLiquidityAfterRemove,, uint256 storedFg1AfterRemove) =
+            StateLibrary.getPositionInfo(manager, corePoolId, PositionId.unwrap(positionId));
+        (, uint256 rangeFg1AfterClear) = StateLibrary.getFeeGrowthInside(manager, corePoolId, tickLower, tickUpper);
+        assertEq(coreLiquidityAfterRemove, 0, "setup: full remove should zero core position liquidity");
+        assertGt(storedFg1AfterRemove, fg1BeforeRemove, "setup: remove should checkpoint newly accrued fees");
+        assertGt(
+            rangeFg1AfterClear,
+            storedFg1AfterRemove,
+            "setup: post-clear range fee growth should diverge from the stored position snapshot"
+        );
+
+        uint256 expectedBanked =
+            FullMath.mulDiv(storedFg1AfterRemove - fg1BeforeRemove, uint256(liq), FixedPoint128.Q128);
+        assertGt(expectedBanked, 0, "setup: expected non-zero banked residual backing");
+
+        (uint256 bankedFee0AfterRemove, uint256 bankedFee1AfterRemove) =
+            harness.getPendingResidualFeeBacking(positionId);
+        assertEq(bankedFee0AfterRemove, 0, "fee token0 lane should remain unbanked");
+        assertEq(
+            bankedFee1AfterRemove,
+            expectedBanked,
+            "full remove should bank from the stored position snapshot, not the post-clear range read"
+        );
+
+        (, uint256 fg1AfterRemove) = harness.getFeeGrowthInsideLast(positionId);
+        assertEq(
+            fg1AfterRemove,
+            storedFg1AfterRemove,
+            "deactivation banking should checkpoint the stored post-remove position fee growth"
         );
     }
 
@@ -1483,9 +1836,19 @@ contract VTSPositionLibTest is VTSLibTestBase {
 
         harness.touchPosition(ctx, tp);
 
-        // Settled should be unchanged (MM uses requiredSettlementDelta, does not refund via _sUpdateSettlement here).
+        // Settled is reduced in `_processMMOperations` by the full required settlement amount (not via
+        // `_touchExistingDecrease`); value is exported as owner underlying credit when the vault can supply it.
         (,, uint256 settled0After,,,) = harness.getPositionAccounting(positionId);
-        assertEq(settled0After, 100e18, "MM decrease should not refund settled in _touchExistingDecrease");
+        assertEq(settled0After, 0, "MM decrease should remove full required settlement from live settled");
+        (uint256 poolSettled0,) = harness.getPoolTotalSettled(corePoolId);
+        assertEq(poolSettled0, 0, "pool totalSettled should match position settled");
+
+        Currency underlyingCurrency0 = Currency.wrap(ILCC(Currency.unwrap(corePoolKey.currency0)).underlying());
+        assertEq(
+            harness.getUnderlyingDelta(underlyingCurrency0, DEFAULT_OWNER),
+            int256(100e18),
+            "full excess should be owner underlying credit when vault reports full availability"
+        );
 
         // And a cancel plan should have been created (queued should be 0 under VaultNoop availability).
         assertEq(
@@ -1494,7 +1857,7 @@ contract VTSPositionLibTest is VTSLibTestBase {
         assertEq(hub.lastQueued0(), 0, "queued0 should be 0 when vault reports full availability");
     }
 
-    function test_touchPosition_existingDecrease_currentLiqZero_MM_partialQueue_clampsOnlyQueuedShortfall() public {
+    function test_touchPosition_existingDecrease_currentLiqZero_MM_partialQueue_clampsFullRequiredSettlement() public {
         _initMarket();
         PoolId corePoolId = _getDefaultPoolId();
         harness.setupPool(corePoolId, _createDefaultVTSConfig());
@@ -1537,13 +1900,22 @@ contract VTSPositionLibTest is VTSLibTestBase {
         harness.touchPosition(ctx, tp);
 
         (,, uint256 settled0After,,,) = harness.getPositionAccounting(positionId);
-        assertEq(settled0After, 30e18, "only the queued shortfall should leave live settled accounting");
+        assertEq(
+            settled0After, 0, "full required settlement should leave live settled once exported to queue or credit"
+        );
         (uint256 poolSettled0,) = harness.getPoolTotalSettled(corePoolId);
-        assertEq(poolSettled0, 30e18, "pool totalSettled should retain only the immediate settleable slice");
+        assertEq(poolSettled0, 0, "pool totalSettled should match position settled");
         assertEq(hub.lastQueued0(), 70e18, "queued shortfall should match the unavailable portion");
+
+        Currency underlyingCurrency0 = Currency.wrap(ILCC(Currency.unwrap(corePoolKey.currency0)).underlying());
+        assertEq(
+            harness.getUnderlyingDelta(underlyingCurrency0, DEFAULT_OWNER),
+            int256(30e18),
+            "immediate settleable slice should be owner underlying credit"
+        );
     }
 
-    function test_touchPosition_existingDecrease_currentLiqZero_MM_principalCappedQueue_preservesUnqueuedRemainder()
+    function test_touchPosition_existingDecrease_currentLiqZero_MM_principalCappedQueue_exportsUnqueuedToUnderlyingDelta()
         public
     {
         _initMarket();
@@ -1587,10 +1959,10 @@ contract VTSPositionLibTest is VTSLibTestBase {
         harness.touchPosition(ctx, tp);
 
         (,, uint256 settled0After,,,) = harness.getPositionAccounting(positionId);
-        assertEq(settled0After, 70e18, "only the actual queued amount should leave live settled accounting");
+        assertEq(settled0After, 0, "live settled should not retain value also exported as queue + underlying credit");
 
         (uint256 poolSettled0,) = harness.getPoolTotalSettled(corePoolId);
-        assertEq(poolSettled0, 70e18, "pool totalSettled should retain the unqueued shortfall remainder");
+        assertEq(poolSettled0, 0, "pool totalSettled should match position settled");
 
         assertEq(hub.lastQueued0(), 30e18, "queued amount should be capped by per-call principal");
 
@@ -2836,6 +3208,123 @@ contract VTSPositionLibTest is VTSLibTestBase {
 
         harness.settlePositionGrowths(manager, positionId);
         _assertDeferredResidualLaterBurnState(corePoolId, positionId, liq, expectedFeesBurn);
+    }
+
+    /// @dev Isolated stack frame for the staged-exit DICE E2E scenario (the public test wrapper stays shallow).
+    function _runDiceStagedPartialExitEndToEnd() internal {
+        DiceDeferredStagedFixture memory fx;
+        _initMarket();
+        fx.corePoolId = _getDefaultPoolId();
+        {
+            MarketVTSConfiguration memory cfg = _createDefaultVTSConfig();
+            cfg.coverageFeeShare = 5000;
+            harness.setupPool(fx.corePoolId, cfg);
+            fx.shareBps = uint256(cfg.coverageFeeShare);
+        }
+
+        _accrueFeeGrowthInCoreRange(true);
+
+        (, int24 tickCurrent,,) = StateLibrary.getSlot0(manager, fx.corePoolId);
+        fx.tickLower = tickCurrent - 60;
+        fx.tickUpper = tickCurrent + 60;
+        fx.owner = address(modifyLiquidityRouter);
+        fx.salt = bytes32(uint256(0x57A9E3));
+        fx.liq = 1e18;
+        fx.half = fx.liq / 2;
+
+        {
+            ModifyLiquidityParams memory addParams = ModifyLiquidityParams({
+                tickLower: fx.tickLower, tickUpper: fx.tickUpper, liquidityDelta: int256(uint256(fx.liq)), salt: fx.salt
+            });
+            modifyLiquidityRouter.modifyLiquidity(corePoolKey, addParams, ZERO_BYTES);
+            harness.registerPosition(fx.owner, fx.corePoolId, addParams);
+            fx.positionId = PositionLibrary.generateId(fx.owner, addParams);
+        }
+
+        uint256 residual = uint256(fx.liq);
+        harness.setPoolCoverageResidualDICE(fx.corePoolId, residual, 0);
+        harness.setPoolCoveragePerDeficitIndexX128(fx.corePoolId, 0, 0);
+        harness.setPoolCoveragePerResidualDeficitIndexX128(fx.corePoolId, 0, 0);
+        harness.setCoverageIndexLastX128(fx.positionId, 0, 0);
+        harness.setResidualCoverageIndexLastX128(fx.positionId, 0, 0);
+        harness.setCISEIndexLastX128(fx.positionId, 0, 0);
+        harness.setPoolTotalDeficitPrincipal(fx.corePoolId, 0, 0);
+        harness.setSettled(fx.positionId, 0, 0);
+        harness.setPoolTotalSettled(fx.corePoolId, 0, 0);
+        harness.setCumulativeOutflows(fx.positionId, 0, 0);
+        harness.setOutflowsAtFeeSnap(fx.positionId, 0, 0);
+        harness.setFeeGrowthInsideLast(fx.positionId, 0, 0);
+        harness.setPendingResidualBurnOutflowsFloor(fx.positionId, 0, 0);
+
+        harness.setDeficitGrowthGlobal(fx.corePoolId, FixedPoint128.Q128, 0);
+        harness.setDeficitGrowthOutside(fx.corePoolId, fx.tickLower, 0, 0);
+        harness.setDeficitGrowthOutside(fx.corePoolId, fx.tickUpper, 0, 0);
+        harness.setDeficitGrowthInsideLast(fx.positionId, 0, 0);
+
+        harness.setInflowGrowthGlobal(fx.corePoolId, 0, 0);
+        harness.setInflowGrowthOutside(fx.corePoolId, fx.tickLower, 0, 0);
+        harness.setInflowGrowthOutside(fx.corePoolId, fx.tickUpper, 0, 0);
+        harness.setInflowGrowthInsideLast(fx.positionId, 0, 0);
+
+        {
+            (, uint256 fg1) = StateLibrary.getFeeGrowthInside(manager, fx.corePoolId, fx.tickLower, fx.tickUpper);
+            assertGt(
+                FullMath.mulDiv(fg1, uint256(fx.liq), FixedPoint128.Q128),
+                0,
+                "setup: fee growth on token1 must be positive"
+            );
+        }
+
+        harness.settlePositionGrowths(manager, fx.positionId);
+        _assertDeferredResidualFirstBurnState(fx.corePoolId, fx.positionId, fx.liq, residual);
+
+        harness.settlePositionGrowths(manager, fx.positionId);
+        _assertDeferredResidualFirstBurnState(fx.corePoolId, fx.positionId, fx.liq, residual);
+
+        _accrueFeeGrowthInCoreRange(true);
+
+        fx.snapshot = vm.snapshotState();
+
+        // No second-phase accrue here: a swap with half the live liquidity would not reproduce the same `feeGrowthInside`
+        // as the full-liquidity reference path. Fee growth for the burn is fixed at snapshot; the staged path must still
+        // slash the same amount after a partial remove + touch.
+        uint256 expectedFeesBurn = _diceSecondOutflowWindow_burnAsFullLiquidity(
+            fx.corePoolId, fx.positionId, fx.tickLower, fx.tickUpper, fx.liq, fx.shareBps, true, false
+        );
+
+        assertTrue(vm.revertToState(fx.snapshot));
+
+        {
+            ModifyLiquidityParams memory partialRemove = ModifyLiquidityParams({
+                tickLower: fx.tickLower,
+                tickUpper: fx.tickUpper,
+                liquidityDelta: -int256(uint256(fx.half)),
+                salt: fx.salt
+            });
+            modifyLiquidityRouter.modifyLiquidity(corePoolKey, partialRemove, ZERO_BYTES);
+            harness.touchPosition(
+                _mkCtx(),
+                TouchPositionParams({
+                    owner: fx.owner,
+                    poolKey: _mkPoolKey(),
+                    params: partialRemove,
+                    callerDelta: toBalanceDelta(0, 0),
+                    feesAccrued: toBalanceDelta(0, 0),
+                    hookData: _mkHookData(false, false, 0)
+                })
+            );
+        }
+
+        uint256 stagedBurn = _diceSecondOutflowWindow_burnAsFullLiquidity(
+            fx.corePoolId, fx.positionId, fx.tickLower, fx.tickUpper, fx.liq, fx.shareBps, false, false
+        );
+        assertEq(stagedBurn, expectedFeesBurn, "staged partial exit must match full-liquidity residual burn");
+    }
+
+    /// @notice End-to-end: after deferred residual banking, a partial remove + touch must not under-slash the later
+    ///         DICE fee burn versus staying full-sized through the same pool accrual and second outflow window.
+    function test_settlePositionGrowths_DICE_stagedPartialExit_endToEnd_matchesFullLiquidityResidualBurn() public {
+        _runDiceStagedPartialExitEndToEnd();
     }
 
     // ============================================================

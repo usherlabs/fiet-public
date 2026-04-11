@@ -2,6 +2,7 @@
 pragma solidity ^0.8.26;
 
 import {VTSLifecycleLinkedLib} from "../../../src/libraries/VTSLifecycleLinkedLib.sol";
+import {VTSPositionLib} from "../../../src/libraries/VTSPositionLib.sol";
 import {
     VTSStorage,
     VTSLifecycleContext,
@@ -30,6 +31,9 @@ contract VTSLifecycleLinkedLibHarness {
         external
         returns (RFSCheckpoint memory)
     {
+        // Mirror historical behaviour: linked `checkpoint` assumes growth is already settled; tests without an
+        // orchestrator settle here so DICE/CISE state matches pre-refactor `VTSLifecycleLinkedLib.checkpoint`.
+        VTSPositionLib.settlePositionGrowths(s, ctx.poolManager, positionId);
         return VTSLifecycleLinkedLib.checkpoint(s, ctx, commitId, withCommitment, positionId);
     }
 

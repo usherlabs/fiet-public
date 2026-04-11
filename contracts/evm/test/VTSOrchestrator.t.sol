@@ -658,6 +658,22 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
         vtsOrchestrator.settlePositionGrowths(positionId);
     }
 
+    function test_revert_calcRFS_whenPoolPaused_andNotCanonicalCoreHook() public {
+        (, PositionId positionId,,) = _createCommittedPosition();
+        vtsOrchestrator.pausePool(corePoolKey.toId());
+
+        vm.expectRevert(Errors.InvalidSender.selector);
+        vtsOrchestrator.calcRFS(positionId, false);
+    }
+
+    function test_revert_checkpoint_whenPoolPaused_andNotCanonicalCoreHook() public {
+        (uint256 tokenId,,,) = _createCommittedPosition();
+        vtsOrchestrator.pausePool(corePoolKey.toId());
+
+        vm.expectRevert(Errors.InvalidSender.selector);
+        vtsOrchestrator.checkpoint(tokenId, 0, false);
+    }
+
     // ============================================================
     // Signal Lifecycle Tests
     // ============================================================
