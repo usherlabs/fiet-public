@@ -170,6 +170,10 @@ contract VTSFeeLibHarness {
         return (s.positionAccounting[id].feesSharedEpoch.token0, s.positionAccounting[id].feesSharedEpoch.token1);
     }
 
+    /// @notice Returns the position's pending residual fee backing balances.
+    /// @param id The position id.
+    /// @return fee0 The token0 residual fee backing.
+    /// @return fee1 The token1 residual fee backing.
     function getPendingResidualFeeBacking(PositionId id) external view returns (uint256 fee0, uint256 fee1) {
         return (
             s.positionAccounting[id].pendingResidualFeeBacking.token0,
@@ -177,10 +181,18 @@ contract VTSFeeLibHarness {
         );
     }
 
+    /// @notice Returns the position's cumulative outflow snapshot used for fee accounting.
+    /// @param id The position id.
+    /// @return snap0 The token0 outflow snapshot.
+    /// @return snap1 The token1 outflow snapshot.
     function getOutflowsAtFeeSnap(PositionId id) external view returns (uint256 snap0, uint256 snap1) {
         return (s.positionAccounting[id].outflowsAtFeeSnap.token0, s.positionAccounting[id].outflowsAtFeeSnap.token1);
     }
 
+    /// @notice Returns the last fee-growth-inside snapshot stored for the position.
+    /// @param id The position id.
+    /// @return fg0 The token0 fee growth inside snapshot.
+    /// @return fg1 The token1 fee growth inside snapshot.
     function getFeeGrowthInsideLast(PositionId id) external view returns (uint256 fg0, uint256 fg1) {
         return
             (s.positionAccounting[id].feeGrowthInsideLast.token0, s.positionAccounting[id].feeGrowthInsideLast.token1);
@@ -299,6 +311,10 @@ contract VTSFeeLibHarness {
         s.positionAccounting[id].feesSharedEpoch.token1 = epoch1;
     }
 
+    /// @notice Sets the position's pending residual fee backing balances.
+    /// @param id The position id.
+    /// @param fee0 The token0 residual fee backing.
+    /// @param fee1 The token1 residual fee backing.
     function setPendingResidualFeeBacking(PositionId id, uint256 fee0, uint256 fee1) external {
         s.positionAccounting[id].pendingResidualFeeBacking.token0 = fee0;
         s.positionAccounting[id].pendingResidualFeeBacking.token1 = fee1;
@@ -309,11 +325,19 @@ contract VTSFeeLibHarness {
         s.positionAccounting[id].cumulativeOutflows.token1 = out1;
     }
 
+    /// @notice Sets the position's cumulative outflow snapshot used for fee accounting.
+    /// @param id The position id.
+    /// @param snap0 The token0 outflow snapshot.
+    /// @param snap1 The token1 outflow snapshot.
     function setOutflowsAtFeeSnap(PositionId id, uint256 snap0, uint256 snap1) external {
         s.positionAccounting[id].outflowsAtFeeSnap.token0 = snap0;
         s.positionAccounting[id].outflowsAtFeeSnap.token1 = snap1;
     }
 
+    /// @notice Sets the last fee-growth-inside snapshot stored for the position.
+    /// @param id The position id.
+    /// @param fg0 The token0 fee growth inside snapshot.
+    /// @param fg1 The token1 fee growth inside snapshot.
     function setFeeGrowthInsideLast(PositionId id, uint256 fg0, uint256 fg1) external {
         s.positionAccounting[id].feeGrowthInsideLast.token0 = fg0;
         s.positionAccounting[id].feeGrowthInsideLast.token1 = fg1;

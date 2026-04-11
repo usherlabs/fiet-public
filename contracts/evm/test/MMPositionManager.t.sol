@@ -2462,7 +2462,9 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
 
         swapRouter.swap(
             corePoolKey,
-            SwapParams({zeroForOne: false, amountSpecified: int256(swapAmount), sqrtPriceLimitX96: ONE_FOR_ZERO_LIMIT}),
+            SwapParams({
+                zeroForOne: false, amountSpecified: -int256(swapAmount), sqrtPriceLimitX96: ONE_FOR_ZERO_LIMIT
+            }),
             PoolSwapTest.TestSettings({takeClaims: false, settleUsingBurn: false}),
             ZERO_BYTES
         );

@@ -235,6 +235,9 @@ library VTSLifecycleLinkedLib {
                 _settleDeposits(s, p.positionId, int256(p.delta.amount0()), int256(p.delta.amount1()));
         }
 
+        // Refresh RFS allows a mixed settle like token0 deposit + token1 withdrawal on an active position to flip RFS open guard if token0 was the only open lane and _settleDeposits just closed it.
+        (result.rfsOpen, rfsDelta) = VTSPositionLib.getRFS(s, p.positionId);
+
         BalanceDelta withdrawalSettlementDelta = _executeWithdrawals(
             s,
             WithdrawalExecutionParams({
@@ -416,7 +419,7 @@ library VTSLifecycleLinkedLib {
         }
 
         if (p.isActive && !p.isSeizing && p.rfsOpen) {
-            revert("VTSPositionLib: RFS open");
+            revert Errors.RFSOpenForPosition(p.positionId);
         }
 
         WithdrawalPlan memory plan = _planWithdrawals(

@@ -6,7 +6,7 @@ Echidna fuzz harnesses use **hard-linked library addresses** so that Foundry's l
 
 Regenerate addresses when:
 
-- You modify any of: `LCCFactoryLinkedLib`, `VTSCommitLib`, `VTSFeeLinkedLib`, `VTSPositionLib`
+- You modify any of: `LCCFactoryLinkedLib`, `LiquidityHubLinkedLib`, `VTSCommitLib`, `VTSFeeLinkedLib`, `VTSPositionLib`
 - You change dependencies (e.g. Uniswap v4, OpenZeppelin) that affect those libraries
 - Echidna fails with `EchidnaLinkedLibs: * addr mismatch` during harness deployment
 

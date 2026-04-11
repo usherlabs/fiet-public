@@ -903,6 +903,22 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
         assertTrue(true, "calcRFS should not revert");
     }
 
+    function test_revert_calcRFS_whenRFSOpen_requiresClosedRfS() public {
+        _mockLccPrices(1e18, 1e18);
+        _mockSignalUsd(1e30);
+
+        (, PositionId positionId,,) = _createCommittedPosition();
+
+        _swapCore(false, -int256(50e18));
+        vtsOrchestrator.settlePositionGrowths(positionId);
+
+        (bool rfsOpen,) = vtsOrchestrator.calcRFS(positionId, false);
+        assertTrue(rfsOpen, "precondition: live RFS should be open");
+
+        vm.expectRevert(abi.encodeWithSelector(Errors.RFSOpenForPosition.selector, positionId));
+        vtsOrchestrator.calcRFS(positionId, true);
+    }
+
     function test_revert_calcRFS_whenInvalidPosition() public {
         PositionId invalidId = PositionId.wrap(bytes32(uint256(999)));
         vm.expectRevert(abi.encodeWithSelector(Errors.InvalidPosition.selector, 0, 0, invalidId));

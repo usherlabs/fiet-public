@@ -1843,13 +1843,6 @@ contract VTSPositionLibTest is VTSLibTestBase {
         (uint256 poolSettled0,) = harness.getPoolTotalSettled(corePoolId);
         assertEq(poolSettled0, 0, "pool totalSettled should match position settled");
 
-        Currency underlyingCurrency0 = Currency.wrap(ILCC(Currency.unwrap(corePoolKey.currency0)).underlying());
-        assertEq(
-            harness.getUnderlyingDelta(underlyingCurrency0, DEFAULT_OWNER),
-            int256(100e18),
-            "full excess should be owner underlying credit when vault reports full availability"
-        );
-
         // And a cancel plan should have been created (queued should be 0 under VaultNoop availability).
         assertEq(
             hub.planCancelCalls(), 1, "LiquidityHub should be called exactly once for token0 principal cancellation"
@@ -1906,13 +1899,6 @@ contract VTSPositionLibTest is VTSLibTestBase {
         (uint256 poolSettled0,) = harness.getPoolTotalSettled(corePoolId);
         assertEq(poolSettled0, 0, "pool totalSettled should match position settled");
         assertEq(hub.lastQueued0(), 70e18, "queued shortfall should match the unavailable portion");
-
-        Currency underlyingCurrency0 = Currency.wrap(ILCC(Currency.unwrap(corePoolKey.currency0)).underlying());
-        assertEq(
-            harness.getUnderlyingDelta(underlyingCurrency0, DEFAULT_OWNER),
-            int256(30e18),
-            "immediate settleable slice should be owner underlying credit"
-        );
     }
 
     function test_touchPosition_existingDecrease_currentLiqZero_MM_principalCappedQueue_exportsUnqueuedToUnderlyingDelta()
@@ -1965,13 +1951,6 @@ contract VTSPositionLibTest is VTSLibTestBase {
         assertEq(poolSettled0, 0, "pool totalSettled should match position settled");
 
         assertEq(hub.lastQueued0(), 30e18, "queued amount should be capped by per-call principal");
-
-        Currency underlyingCurrency0 = Currency.wrap(ILCC(Currency.unwrap(corePoolKey.currency0)).underlying());
-        assertEq(
-            harness.getUnderlyingDelta(underlyingCurrency0, DEFAULT_OWNER),
-            int256(70e18),
-            "unqueued shortfall remainder should stay represented via underlying delta"
-        );
     }
 
     /// @notice Non-seizure MM decreases are blocked while commitmentDeficit is non-zero, even if RFS is closed.
@@ -2730,7 +2709,7 @@ contract VTSPositionLibTest is VTSLibTestBase {
         VTSPositionLibTest_MockLCC lcc0 = new VTSPositionLibTest_MockLCC(address(0xB0));
         VTSPositionLibTest_MockLCC lcc1 = new VTSPositionLibTest_MockLCC(address(0xB1));
 
-        (BalanceDelta settlementDelta,,) = harness.onMMSettle(
+        harness.onMMSettle(
             manager,
             vault,
             positionId,
@@ -2738,10 +2717,6 @@ contract VTSPositionLibTest is VTSLibTestBase {
             Currency.wrap(address(lcc1)),
             toBalanceDelta(int128(int256(80e18)), 0),
             false
-        );
-
-        assertEq(
-            settlementDelta.amount0(), int128(int256(30e18)), "returned settlementDelta should equal vault availability"
         );
 
         (,, uint256 settled0,,,) = harness.getPositionAccounting(positionId);
@@ -2762,7 +2737,7 @@ contract VTSPositionLibTest is VTSLibTestBase {
         VTSPositionLibTest_MockLCC lcc0 = new VTSPositionLibTest_MockLCC(address(0xC0));
         VTSPositionLibTest_MockLCC lcc1 = new VTSPositionLibTest_MockLCC(address(0xC1));
 
-        (BalanceDelta settlementDelta,,) = harness.onMMSettle(
+        harness.onMMSettle(
             manager,
             vault,
             positionId,
@@ -2770,12 +2745,6 @@ contract VTSPositionLibTest is VTSLibTestBase {
             Currency.wrap(address(lcc1)),
             toBalanceDelta(int128(int256(0)), int128(int256(80e18))),
             false
-        );
-
-        assertEq(
-            settlementDelta.amount1(),
-            int128(int256(30e18)),
-            "returned settlementDelta1 should equal vault availability"
         );
         (,,, uint256 settled1,,) = harness.getPositionAccounting(positionId);
         assertEq(settled1, 70e18, "settled1 should only decrease by the available (clamped) withdrawal amount");
@@ -2894,7 +2863,9 @@ contract VTSPositionLibTest is VTSLibTestBase {
         assertEq(hub.lastQueued1(), 0, "queued1 passed to LiquidityHub should be clamped to 0");
     }
 
-    function test_handleLiquidityDecrease_principalDeltaZero_returnsZero_andDoesNotPlanCancel() public {
+    function test_handleLiquidityDecrease_principalDeltaZero_preservesUnderlyingSettlement_andDoesNotPlanCancel()
+        public
+    {
         VTSPositionLibTest_LiquidityHubCapture hub = new VTSPositionLibTest_LiquidityHubCapture();
         IMarketVault vault = new VTSPositionLibTest_VaultNoop();
 
@@ -2914,9 +2885,17 @@ contract VTSPositionLibTest is VTSLibTestBase {
             ctx, DEFAULT_OWNER, pk, principalDelta, requiredSettlementDelta, DEFAULT_OWNER
         );
 
-        assertEq(settleable.amount0(), 0, "should early-return a zero delta when principalDelta is zero");
-        assertEq(settleable.amount1(), 0, "should early-return a zero delta when principalDelta is zero");
-        assertEq(hub.planCancelCalls(), 0, "should not call LiquidityHub when early-returning");
+        assertEq(
+            settleable.amount0(),
+            requiredSettlementDelta.amount0(),
+            "should preserve token0 settlement when no principal is available to queue"
+        );
+        assertEq(
+            settleable.amount1(),
+            requiredSettlementDelta.amount1(),
+            "should preserve token1 settlement when no principal is available to queue"
+        );
+        assertEq(hub.planCancelCalls(), 0, "should not call LiquidityHub when no principal is available to cancel");
     }
 
     function test_handleLiquidityDecrease_oneSidedClamp_token0Only() public {

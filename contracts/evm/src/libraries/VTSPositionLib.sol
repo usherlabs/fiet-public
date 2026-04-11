@@ -1378,7 +1378,9 @@ library VTSPositionLib {
             BalanceDelta underlyingDeltaSettlement
         )
     {
-        if (LiquidityUtils.isZeroDelta(principalDelta)) {
+        // Check isZeroDelta on both principalDelta and requiredSettlementDelta:
+        // if both are zero, we early return the default routing. This ensures that we don't incorrectly route or record shortfalls when requiredSettlementDelta is nonzero but principalDelta is zero (i.e. a pure burn-from-settled case), as vault clamping and state updates are handled elsewhere in the flow.
+        if (LiquidityUtils.isZeroDelta(principalDelta) && LiquidityUtils.isZeroDelta(requiredSettlementDelta)) {
             return (0, 0, BalanceDelta.wrap(0), BalanceDelta.wrap(0), BalanceDelta.wrap(0));
         }
 
