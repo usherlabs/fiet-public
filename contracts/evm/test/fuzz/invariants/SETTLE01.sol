@@ -15,12 +15,12 @@ import {ModifyLiquidityParams} from "@uniswap/v4-core/src/types/PoolOperation.so
 import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
 import {LiquidityUtils} from "../../../src/libraries/LiquidityUtils.sol";
 import {EchidnaLinkedLibs} from "../base/EchidnaLinkedLibs.sol";
+import {Errors} from "../../../src/libraries/Errors.sol";
 
 /// @notice Echidna harness for SETTLE-01: Withdrawals from active positions are disallowed while RFS is open.
 ///         Uses the production MM settle path via `VTSLifecycleLinkedLib.executeMMSettleFromParams` (Echidna harness).
 contract SETTLE01 {
     uint256 internal constant MAX_VACUOUS_ATTEMPTS = 12;
-    string internal constant RFS_OPEN_REASON = "VTSPositionLib: RFS open";
 
     VTSPositionLibEchidnaHarness internal harness;
     MockPoolManager internal poolManager;
@@ -126,10 +126,8 @@ contract SETTLE01 {
             BalanceDelta, bool, uint256
         ) {
             revertedWithExpectedReason = false;
-        } catch Error(string memory reason) {
-            revertedWithExpectedReason = _eq(reason, RFS_OPEN_REASON);
-        } catch {
-            revertedWithExpectedReason = false;
+        } catch (bytes memory reason) {
+            revertedWithExpectedReason = _selectorOf(reason) == Errors.RFSOpenForPosition.selector;
         }
         (uint256 settledAfter0, uint256 settledAfter1) = harness.getSettled(positionId);
 
@@ -191,8 +189,12 @@ contract SETTLE01 {
         return closedAllOk;
     }
 
-    function _eq(string memory a, string memory b) internal pure returns (bool) {
-        return keccak256(bytes(a)) == keccak256(bytes(b));
+    function _selectorOf(bytes memory reason) internal pure returns (bytes4 selector) {
+        if (reason.length >= 4) {
+            assembly {
+                selector := mload(add(reason, 0x20))
+            }
+        }
     }
 
     function _configureRfsOpen(uint256 commitmentMax0, uint256 commitmentMax1, uint256 settled0, uint256 settled1)

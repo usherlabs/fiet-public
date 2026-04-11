@@ -405,7 +405,8 @@ being an informal “should”.
 ### SETTLE-01: Withdrawals from active positions are disallowed while RFS is open
 
 - **Statement**: If a position is active and RFS is open, withdrawals must revert (unless in seizure context).
-- **Enforced by**: `src/libraries/VTSPositionLib.sol::_settleActive` reverts `"VTSPositionLib: RFS open"` when
+- **Enforced by**: `src/libraries/VTSLifecycleLinkedLib.sol::_executeWithdrawals` reverts
+  `Errors.RFSOpenForPosition(positionId)` when
   withdrawing while `rfsOpen`.
 
 ### SETTLE-02: Seizure settlement is clamped by RFS (for deposits) and by position-required settlement (for withdrawals)
