@@ -208,7 +208,7 @@ library VTSLifecycleLinkedLib {
     /// @param p The MM settle parameters (vault, positionId, currencies, delta, isSeizing)
     /// @return result The MM settle result (settlementDelta, rfsOpen, seizedLiquidityUnits)
     //#olympix-ignore-reentrancy
-    function executeMMSettleFromParams(VTSStorage storage s, IPoolManager poolManager, SettleParams memory p)
+    function _executeMMSettleFromParams(VTSStorage storage s, IPoolManager poolManager, SettleParams memory p)
         internal
         returns (SettleResult memory result)
     {
@@ -687,7 +687,7 @@ library VTSLifecycleLinkedLib {
         bool isSeizing
     ) external returns (SettleResult memory result) {
         SettleParams memory params = _buildMMSettleParams(s, ctx, factory, positionId, poolId, amountDelta, isSeizing);
-        result = executeMMSettleFromParams(s, ctx.poolManager, params);
+        result = _executeMMSettleFromParams(s, ctx.poolManager, params);
     }
 
     function validateMMOperation(

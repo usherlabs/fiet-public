@@ -254,8 +254,8 @@ contract MMPositionActionsImpl is
     }
 
     /// @notice Applies protocol (MMPM) underlying credits into `settled` via `onMMSettle` without token movement.
-    /// @dev Clamps each side to the position owner's current negative underlying delta (debt). Without this,
-    ///      stale pre-read credit pairs (e.g. from before a liquidity add) could inflate `settled` beyond debt.
+    /// @dev Clamps each side to currently-available positive protocol credit, then explicitly nets the exact amount
+    ///      consumed so the batch does not retain stale underlying credit after routing value into `settled`.
     function _netProtocolCredits(
         PoolKey calldata poolKey,
         uint256 tokenId,
@@ -266,13 +266,13 @@ contract MMPositionActionsImpl is
     ) internal {
         BalanceDelta ownerDelta =
             vtsOrchestrator.getUnderlyingDeltaPair(address(this), poolKey.currency0, poolKey.currency1);
-        uint256 need0 = ownerDelta.amount0() < 0 ? LiquidityUtils.safeInt128ToUint256(ownerDelta.amount0()) : 0;
-        uint256 need1 = ownerDelta.amount1() < 0 ? LiquidityUtils.safeInt128ToUint256(ownerDelta.amount1()) : 0;
-        if (credit0 > need0) credit0 = need0;
-        if (credit1 > need1) credit1 = need1;
+        uint256 available0 = ownerDelta.amount0() > 0 ? LiquidityUtils.safeInt128ToUint256(ownerDelta.amount0()) : 0;
+        uint256 available1 = ownerDelta.amount1() > 0 ? LiquidityUtils.safeInt128ToUint256(ownerDelta.amount1()) : 0;
+        if (credit0 > available0) credit0 = available0;
+        if (credit1 > available1) credit1 = available1;
         if (credit0 == 0 && credit1 == 0) return;
 
-        _callOnMMSettle(
+        (BalanceDelta settlementDelta,) = _callOnMMSettle(
             SettleCallParams({
                 vault: _getVault(poolKey),
                 factory: marketFactory,
@@ -282,6 +282,19 @@ contract MMPositionActionsImpl is
                 isSeizing: isSeizing
             })
         );
+
+        uint256 used0 =
+            settlementDelta.amount0() < 0 ? LiquidityUtils.safeInt128ToUint256(settlementDelta.amount0()) : 0;
+        uint256 used1 =
+            settlementDelta.amount1() < 0 ? LiquidityUtils.safeInt128ToUint256(settlementDelta.amount1()) : 0;
+        Currency underlying0 = _lccToUnderlyingCurrency(poolKey.currency0);
+        Currency underlying1 = _lccToUnderlyingCurrency(poolKey.currency1);
+        if (used0 > 0) {
+            vtsOrchestrator.take(underlying0, address(this), used0);
+        }
+        if (used1 > 0) {
+            vtsOrchestrator.take(underlying1, address(this), used1);
+        }
     }
 
     function _settleFromDeltasCredits(

@@ -422,20 +422,23 @@ being an informal “should”.
 - **Enforced by**: `src/libraries/VTSPositionLib.sol::_settleSeizing` (deposit clamp uses positive RFS; withdrawal clamp
   uses `positionRequiredSettlementDelta`).
 
-### SETTLE-03: MM decrease splits routing; exported value leaves live `settled` once
+### SETTLE-03: MM decrease splits routing; batch-clearable delta vs deferred `settled`
 
 - **Statement**:
   - For MM liquidity decreases, the excess settled entitlement relative to the reduced commitment is not a single
-    homogeneous bucket for **routing** (vault-available immediate slice vs Hub queue vs residual underlying credit).
-  - However, economically exported settlement value must have **exactly one** live representation after the decrease step:
-    either Hub-backed queue, MMPM underlying delta (`DynamicCurrencyDelta`), or still in source `pa.settled` — never two
-    at once for the same slice.
+    homogeneous bucket for **routing** (vault-available immediate slice vs Hub queue vs value that must remain in live
+    source `pa.settled` until it is serviceable).
+  - Each economic sub-slice must have **exactly one** live representation after the decrease step: Hub-backed queue,
+    MMPM underlying delta (`DynamicCurrencyDelta`) for the **vault-immediate** portion only, or still in source
+    `pa.settled` — never two at once for the same slice.
 - **Protocol rule**:
-  - Coupled to **DELTA-01**: transient MMPM underlying deltas from the immediate-settle slice must still net to zero per
-    unlock/batch via authorised settlement paths.
-  - **Eager source-side decrement**: the full MM decrease export amount (`requiredSettlementDelta` entering
-    `_handleLiquidityDecrease`) is removed from source `pa.settled` / pool `totalSettled` via
-    `_applySettlementClampFromExcess` using that full amount, not only the queued portion.
+  - Coupled to **DELTA-01**: transient MMPM underlying deltas must be batch-clearable; only the vault-immediate slice is
+    booked as positive owner underlying delta. Any shortfall that cannot be Hub-queued (principal-capped) and cannot be
+    paid from the vault in the same unlock **stays in live source `settled`**, not on `DynamicCurrencyDelta`.
+  - **Source-side decrement (routed amount only)**: `_applySettlementClampFromExcess` removes
+    `settleableDelta + queuedDelta` from source `pa.settled` / pool `totalSettled` — the value actually routed to the
+    vault path or queue in this step — not the full `requiredSettlementDelta` when part of it must remain deferred in
+    `settled`.
   - **Consumption-based target credit**: another position’s `pa.settled` increases only when `_settle()` / `onMMSettle()`
     actually consumes protocol underlying delta or token flow (`MMPositionActionsImpl._netProtocolCredits` path), not
     merely because positive delta exists on MMPM.
@@ -446,20 +449,19 @@ being an informal “should”.
       residual amount that is still backed by live position settlement.
 - **Enforced / expressed by**:
   - `src/libraries/VTSPositionLib.sol::_touchExistingDecrease` computes `requiredSettlementDelta` for the MM excess.
-  - `src/libraries/VTSPositionLib.sol::_previewLiquidityDecreaseRouting` (and `_handleLiquidityDecrease` which uses it)
-    splits vault availability vs Hub-queued principal vs the remainder booked as owner underlying credit
-    (`underlyingDeltaSettlement`).
-  - `src/libraries/VTSPositionLib.sol::_processMMOperations` (decrease branch): snapshots `postDecreaseDelta` as the full
-    exported requirement, calls `_applySettlementClampFromExcess` with that **full** amount, then
-    `DynamicCurrencyDelta.accountUnderlyingSettlementDelta` for the `BalanceDelta` returned from `_handleLiquidityDecrease`
-    only.
+  - `src/libraries/VTSPositionLib.sol::_previewLiquidityDecreaseRouting` (and `_handleLiquidityDecrease` via
+    `_computeLiquidityDecreaseRoutingSplit`) splits vault availability vs Hub-queued principal; `underlyingDeltaSettlement`
+    for dynamic delta accounting equals the vault-immediate slice (`settleableDelta`) only.
+  - `src/libraries/VTSPositionLib.sol::_processMMOperations` (decrease branch): calls `_applySettlementClampFromExcess`
+    with `exportedForSettlementClamp` from `_handleLiquidityDecrease` (`settleableDelta + queuedDelta`), then
+    `DynamicCurrencyDelta.accountUnderlyingSettlementDelta` for the immediate slice only.
   - `src/libraries/VTSPositionLib.sol::onMMSettle` plans withdrawals from positive underlying delta and settled-backed
     capacity separately, consumes the delta-backed portion first, and only then mutates `pa.settled`.
 - **Why**:
   - Clamping only the queued shortfall while also booking the immediate slice on `DynamicCurrencyDelta` would double-count
     the same value as both live source `settled` and MMPM credit, enabling cross-position reuse without conservation.
-  - Removing the full export from source `settled` preserves single-representation while **DELTA-01** still forces batch
-    resolution of the transient delta leg.
+  - Booking a principal-capped shortfall remainder as positive MMPM underlying delta while the vault cannot pay it in the
+    same batch violates **DELTA-01** (uncleared transient delta at batch end).
   - The stricter withdrawal ordering prevents a later delta-backed settle from deducting the same exported value from
     source `pa.settled` a second time.
 

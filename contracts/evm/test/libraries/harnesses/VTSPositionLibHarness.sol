@@ -106,7 +106,7 @@ contract VTSPositionLibHarness {
         BalanceDelta delta,
         bool isSeizing
     ) external returns (BalanceDelta settlementDelta, bool rfsOpen, uint256 seizedLiquidityUnits) {
-        SettleResult memory result = VTSLifecycleLinkedLib.executeMMSettleFromParams(
+        SettleResult memory result = VTSLifecycleLinkedLib._executeMMSettleFromParams(
             s,
             poolManager,
             SettleParams({

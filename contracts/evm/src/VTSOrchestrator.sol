@@ -666,7 +666,7 @@ contract VTSOrchestrator is
 
     /// @notice Settle a market maker position
     /// @dev Called by MMPositionManager to settle a position, handling both normal settlement and seizure.
-    ///      Position validation is performed inside `VTSLifecycleLinkedLib.executeMMSettleFromParams`.
+    ///      Position validation is performed inside `VTSLifecycleLinkedLib._executeMMSettleFromParams`.
     /// @param factory The market factory namespace for caller-bound validation
     /// @param commitId The commit identifier
     /// @param positionIndex The position index within the commit
@@ -800,7 +800,17 @@ contract VTSOrchestrator is
 
         PositionId positionId = getPositionId(commitId, positionIndex);
         _assertPositionValid(positionId, true);
-        settlePositionGrowths(positionId);
+
+        ///      When the pool (or VTS globally) is paused, `settlePositionGrowths` is CoreHook-only; for
+        ///      `withCommitment == true` we skip that call so advancers can still run `checkpointWithCommitment`
+        ///      and persist `commitmentDeficit` (see COMMIT-02 / COMMIT-02A in `INVARIANTS.md`). Paused removes
+        ///      still settle growth in `CoreHook` before `touchPosition`; other checkpoints keep settle-first.
+        PoolId poolId = s.positions[positionId].poolId;
+        bool poolOrGlobalPaused = s.isPaused || s.pools[poolId].isPaused;
+        if (!(poolOrGlobalPaused && withCommitment)) {
+            settlePositionGrowths(positionId);
+        }
+
         RFSCheckpoint memory checkpointOut =
             VTSLifecycleLinkedLib.checkpoint(s, _lifecycleContext(), commitId, withCommitment, positionId);
         emit Checkpointed(commitId, positionIndex, checkpointOut, withCommitment);

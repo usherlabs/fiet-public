@@ -17,7 +17,7 @@ import {LiquidityUtils} from "../../../src/libraries/LiquidityUtils.sol";
 import {EchidnaLinkedLibs} from "../base/EchidnaLinkedLibs.sol";
 
 /// @notice Echidna harness for SETTLE-02: seizure settlement clamps deposit/withdraw bounds.
-/// @dev Exercises the production MM settle seizing branch via `VTSLifecycleLinkedLib.executeMMSettleFromParams`.
+/// @dev Exercises the production MM settle seizing branch via `VTSLifecycleLinkedLib._executeMMSettleFromParams`.
 contract SETTLE02 {
     uint256 internal constant MAX_NON_VACUOUS_ATTEMPTS = 32;
 

@@ -416,6 +416,21 @@ contract VTSPositionLibTest is VTSLibTestBase {
         );
     }
 
+    function _modifyLiquidityAndTouch(address owner, ModifyLiquidityParams memory params) internal {
+        modifyLiquidityRouter.modifyLiquidity(corePoolKey, params, ZERO_BYTES);
+        harness.touchPosition(
+            _mkCtx(),
+            TouchPositionParams({
+                owner: owner,
+                poolKey: _mkPoolKey(),
+                params: params,
+                callerDelta: toBalanceDelta(0, 0),
+                feesAccrued: toBalanceDelta(0, 0),
+                hookData: _mkHookData(false, false, 0)
+            })
+        );
+    }
+
     /// @notice Helper to register a position in harness and return its ID
     function _registerHarnessPosition(address owner, int24 tickLower, int24 tickUpper, uint128 liquidity, bytes32 salt)
         internal
@@ -1133,18 +1148,7 @@ contract VTSPositionLibTest is VTSLibTestBase {
             liquidityDelta: int256(uint256(liq)),
             salt: DEFAULT_SALT
         });
-        modifyLiquidityRouter.modifyLiquidity(corePoolKey, addParams, ZERO_BYTES);
-        harness.touchPosition(
-            _mkCtx(),
-            TouchPositionParams({
-                owner: owner,
-                poolKey: _mkPoolKey(),
-                params: addParams,
-                callerDelta: toBalanceDelta(0, 0),
-                feesAccrued: toBalanceDelta(0, 0),
-                hookData: _mkHookData(false, false, 0)
-            })
-        );
+        _modifyLiquidityAndTouch(owner, addParams);
         positionId = PositionLibrary.generateId(owner, addParams);
 
         // Banking is only required on fee token lanes with unresolved residual burn base.
@@ -1274,6 +1278,119 @@ contract VTSPositionLibTest is VTSLibTestBase {
             fg1AfterTouch,
             fg1BeforeAccrue,
             "partial remove must not advance feeGrowthInsideLast for surviving liquidity"
+        );
+    }
+
+    function test_touchPosition_activeAdd_withPendingResidualBurn_rebasesOppositeFeeCheckpoint() public {
+        _initMarket();
+        PoolId corePoolId = _getDefaultPoolId();
+        harness.setupPool(corePoolId, _createDefaultVTSConfig());
+
+        uint128 liq = uint128(1e18);
+        uint128 half = uint128(5e17);
+        address owner = address(modifyLiquidityRouter);
+        ModifyLiquidityParams memory addParams = ModifyLiquidityParams({
+            tickLower: DEFAULT_TICK_LOWER,
+            tickUpper: DEFAULT_TICK_UPPER,
+            liquidityDelta: int256(uint256(liq)),
+            salt: DEFAULT_SALT
+        });
+        _modifyLiquidityAndTouch(owner, addParams);
+        PositionId positionId = PositionLibrary.generateId(owner, addParams);
+
+        harness.setPendingResidualBurnBase(positionId, 1, 0);
+        (, uint256 fg1BeforeAccrue) = harness.getFeeGrowthInsideLast(positionId);
+
+        _accrueFeeGrowthInCoreRange(true);
+
+        ModifyLiquidityParams memory partialRemove = ModifyLiquidityParams({
+            tickLower: DEFAULT_TICK_LOWER,
+            tickUpper: DEFAULT_TICK_UPPER,
+            liquidityDelta: -int256(uint256(half)),
+            salt: DEFAULT_SALT
+        });
+        _modifyLiquidityAndTouch(owner, partialRemove);
+
+        uint256 bankedFee1AfterRemove;
+        uint256 fg0AfterRemove;
+        {
+            (, bankedFee1AfterRemove) = harness.getPendingResidualFeeBacking(positionId);
+            assertGt(bankedFee1AfterRemove, 0, "setup: partial remove should bank historical fee backing");
+
+            uint256 fg1AfterRemove;
+            (fg0AfterRemove, fg1AfterRemove) = harness.getFeeGrowthInsideLast(positionId);
+            assertEq(fg1AfterRemove, fg1BeforeAccrue, "partial remove should preserve surviving-liquidity checkpoint");
+        }
+
+        ModifyLiquidityParams memory addBack = ModifyLiquidityParams({
+            tickLower: DEFAULT_TICK_LOWER,
+            tickUpper: DEFAULT_TICK_UPPER,
+            liquidityDelta: int256(uint256(half)),
+            salt: DEFAULT_SALT
+        });
+        _modifyLiquidityAndTouch(owner, addBack);
+
+        {
+            (uint256 fg0AfterAdd, uint256 fg1AfterAdd) = harness.getFeeGrowthInsideLast(positionId);
+            (, uint256 fg1InsideAfterAdd) =
+                StateLibrary.getFeeGrowthInside(manager, corePoolId, DEFAULT_TICK_LOWER, DEFAULT_TICK_UPPER);
+            (, uint256 bankedFee1AfterAdd) = harness.getPendingResidualFeeBacking(positionId);
+
+            assertEq(fg0AfterAdd, fg0AfterRemove, "active add should not rebase unrelated fee lanes");
+            assertEq(
+                fg1AfterAdd, fg1InsideAfterAdd, "active add should rebase the residual fee lane to live fee growth"
+            );
+            assertEq(bankedFee1AfterAdd, bankedFee1AfterRemove, "active add should preserve banked historical backing");
+        }
+    }
+
+    function test_touchPosition_partialRemoveAddRemove_sameFeeWindow_doesNotRebankReaddedLiquidity() public {
+        _initMarket();
+        PoolId corePoolId = _getDefaultPoolId();
+        harness.setupPool(corePoolId, _createDefaultVTSConfig());
+
+        uint128 liq = uint128(1e18);
+        uint128 half = uint128(5e17);
+        address owner = address(modifyLiquidityRouter);
+        PositionId positionId;
+        ModifyLiquidityParams memory addParams = ModifyLiquidityParams({
+            tickLower: DEFAULT_TICK_LOWER,
+            tickUpper: DEFAULT_TICK_UPPER,
+            liquidityDelta: int256(uint256(liq)),
+            salt: DEFAULT_SALT
+        });
+        _modifyLiquidityAndTouch(owner, addParams);
+        positionId = PositionLibrary.generateId(owner, addParams);
+
+        harness.setPendingResidualBurnBase(positionId, 1, 0);
+        _accrueFeeGrowthInCoreRange(true);
+
+        ModifyLiquidityParams memory partialRemove = ModifyLiquidityParams({
+            tickLower: DEFAULT_TICK_LOWER,
+            tickUpper: DEFAULT_TICK_UPPER,
+            liquidityDelta: -int256(uint256(half)),
+            salt: DEFAULT_SALT
+        });
+        _modifyLiquidityAndTouch(owner, partialRemove);
+
+        (, uint256 bankedFee1AfterFirstRemove) = harness.getPendingResidualFeeBacking(positionId);
+        assertGt(bankedFee1AfterFirstRemove, 0, "setup: first remove should bank the historical fee window");
+
+        ModifyLiquidityParams memory addBack = ModifyLiquidityParams({
+            tickLower: DEFAULT_TICK_LOWER,
+            tickUpper: DEFAULT_TICK_UPPER,
+            liquidityDelta: int256(uint256(half)),
+            salt: DEFAULT_SALT
+        });
+        _modifyLiquidityAndTouch(owner, addBack);
+
+        _modifyLiquidityAndTouch(owner, partialRemove);
+
+        (, uint256 bankedFee1AfterSecondRemove) = harness.getPendingResidualFeeBacking(positionId);
+        assertEq(
+            bankedFee1AfterSecondRemove,
+            bankedFee1AfterFirstRemove,
+            "same fee window should not be banked again after an active re-add"
         );
     }
 
@@ -1836,8 +1953,8 @@ contract VTSPositionLibTest is VTSLibTestBase {
 
         harness.touchPosition(ctx, tp);
 
-        // Settled is reduced in `_processMMOperations` by the full required settlement amount (not via
-        // `_touchExistingDecrease`); value is exported as owner underlying credit when the vault can supply it.
+        // Settled is reduced in `_processMMOperations` by routed amount (settleable + queued); immediate vault slice
+        // is mirrored on underlying delta when the vault can supply it.
         (,, uint256 settled0After,,,) = harness.getPositionAccounting(positionId);
         assertEq(settled0After, 0, "MM decrease should remove full required settlement from live settled");
         (uint256 poolSettled0,) = harness.getPoolTotalSettled(corePoolId);
@@ -1901,7 +2018,9 @@ contract VTSPositionLibTest is VTSLibTestBase {
         assertEq(hub.lastQueued0(), 70e18, "queued shortfall should match the unavailable portion");
     }
 
-    function test_touchPosition_existingDecrease_currentLiqZero_MM_principalCappedQueue_exportsUnqueuedToUnderlyingDelta()
+    /// @notice Regression (finding 4): principal-capped queue must not force the unqueueable shortfall onto transient
+    ///         MMPM underlying delta; it remains in live `settled` until serviceable.
+    function test_touchPosition_existingDecrease_currentLiqZero_MM_principalCappedQueue_retainsUnqueuedInSettled()
         public
     {
         _initMarket();
@@ -1945,10 +2064,14 @@ contract VTSPositionLibTest is VTSLibTestBase {
         harness.touchPosition(ctx, tp);
 
         (,, uint256 settled0After,,,) = harness.getPositionAccounting(positionId);
-        assertEq(settled0After, 0, "live settled should not retain value also exported as queue + underlying credit");
+        assertEq(
+            settled0After,
+            70e18,
+            "unqueueable shortfall stays in live settled; only settleable+queued is clamped from settled"
+        );
 
         (uint256 poolSettled0,) = harness.getPoolTotalSettled(corePoolId);
-        assertEq(poolSettled0, 0, "pool totalSettled should match position settled");
+        assertEq(poolSettled0, 70e18, "pool totalSettled should match position settled");
 
         assertEq(hub.lastQueued0(), 30e18, "queued amount should be capped by per-call principal");
     }
@@ -2986,6 +3109,8 @@ contract VTSPositionLibTest is VTSLibTestBase {
         assertEq(hub.lastQueued1(), 7, "token1 queue can use full shortfall when principal is sufficient");
     }
 
+    /// @notice Regression (finding 4): non-queueable shortfall must not become positive MMPM underlying delta;
+    ///         it stays in live `settled` until the vault can pay or principal can queue more.
     function test_handleLiquidityDecrease_reportsUnderlyingDeltaSettlement_whenQueueIsPrincipalCapped() public {
         VTSPositionLibTest_LiquidityHubCapture hub = new VTSPositionLibTest_LiquidityHubCapture();
         IMarketVault vault = new VTSPositionLibTest_VaultClamp(0, 0);
@@ -3011,13 +3136,13 @@ contract VTSPositionLibTest is VTSLibTestBase {
         assertEq(queuedDelta.amount1(), 7, "token1 queue should reflect the fully preserved shortfall");
         assertEq(
             underlyingDeltaSettlement.amount0(),
-            7,
-            "token0 underlying delta should retain the shortfall remainder that could not be queued"
+            0,
+            "token0 underlying delta must be vault-immediate only; unserviceable remainder stays in settled"
         );
         assertEq(
             underlyingDeltaSettlement.amount1(),
             0,
-            "token1 underlying delta should be zero when the entire shortfall is preserved in queue"
+            "token1 underlying delta must be vault-immediate only when settleable is zero"
         );
     }
 

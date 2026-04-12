@@ -674,6 +674,39 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
         vtsOrchestrator.checkpoint(tokenId, 0, false);
     }
 
+    /// @dev Regression: paused `checkpoint(..., false)` stays blocked (growth settle is CoreHook-only). Advancer
+    ///      `checkpoint(..., true)` must still persist commitment backing state so insolvency gates are not blind
+    ///      during pause while MM removes remain possible via the hook.
+    function test_checkpoint_withCommitment_succeeds_whenPoolPaused_recordsCommitmentDeficit() public {
+        (uint256 tokenId, PositionId positionId,,) = _createCommittedPosition();
+        address advancer = liquiditySignal.mmState.advancer;
+
+        bytes memory signalBytes = abi.encode(liquiditySignal);
+        vm.mockCall(
+            address(signalManager),
+            abi.encodeWithSelector(
+                bytes4(keccak256("verifyLiquiditySignal(address,bytes,bool)")),
+                liquiditySignal.mmState.owner,
+                signalBytes,
+                true
+            ),
+            abi.encode(true, 10)
+        );
+
+        _mockLccPrices(1e18, 1e18);
+        _mockSignalUsd(0);
+
+        vtsOrchestrator.pausePool(corePoolKey.toId());
+
+        vm.prank(advancer);
+        unlockCaller.run(
+            address(vtsOrchestrator), abi.encodeWithSelector(VTSOrchestrator.checkpoint.selector, tokenId, 0, true)
+        );
+
+        (uint256 cd0, uint256 cd1) = _commitmentDeficit(positionId);
+        assertTrue(cd0 > 0 || cd1 > 0, "paused commitment checkpoint should record deficit");
+    }
+
     // ============================================================
     // Signal Lifecycle Tests
     // ============================================================

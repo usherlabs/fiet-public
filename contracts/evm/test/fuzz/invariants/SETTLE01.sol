@@ -18,7 +18,7 @@ import {EchidnaLinkedLibs} from "../base/EchidnaLinkedLibs.sol";
 import {Errors} from "../../../src/libraries/Errors.sol";
 
 /// @notice Echidna harness for SETTLE-01: Withdrawals from active positions are disallowed while RFS is open.
-///         Uses the production MM settle path via `VTSLifecycleLinkedLib.executeMMSettleFromParams` (Echidna harness).
+///         Uses the production MM settle path via `VTSLifecycleLinkedLib._executeMMSettleFromParams` (Echidna harness).
 contract SETTLE01 {
     uint256 internal constant MAX_VACUOUS_ATTEMPTS = 12;
 

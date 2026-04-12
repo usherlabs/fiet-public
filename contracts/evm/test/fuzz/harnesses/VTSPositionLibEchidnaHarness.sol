@@ -150,7 +150,7 @@ contract VTSPositionLibEchidnaHarness {
     }
 
     // -------------------------------------------------------------------------
-    // MM settle entrypoint (`VTSLifecycleLinkedLib.executeMMSettleFromParams`)
+    // MM settle entrypoint (`VTSLifecycleLinkedLib._executeMMSettleFromParams`)
     // -------------------------------------------------------------------------
 
     function onMMSettle(
@@ -173,7 +173,7 @@ contract VTSPositionLibEchidnaHarness {
             delta: delta,
             isSeizing: isSeizing
         });
-        SettleResult memory result = VTSLifecycleLinkedLib.executeMMSettleFromParams(s, poolManager, p);
+        SettleResult memory result = VTSLifecycleLinkedLib._executeMMSettleFromParams(s, poolManager, p);
         return (result.settlementDelta, result.rfsOpen, result.seizedLiquidityUnits);
     }
 
