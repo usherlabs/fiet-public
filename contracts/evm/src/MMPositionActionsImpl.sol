@@ -576,6 +576,26 @@ contract MMPositionActionsImpl is
         int24 tickUpper,
         uint256 liquidity
     ) internal returns (PositionId positionId, BalanceDelta principalDelta) {
+        return _increaseInternal(
+            poolKey,
+            tokenId,
+            positionIndex,
+            tickLower,
+            tickUpper,
+            liquidity,
+            PositionModificationHookDataLib.encode(tokenId, positionIndex, msgSender())
+        );
+    }
+
+    function _increaseInternal(
+        PoolKey calldata poolKey,
+        uint256 tokenId,
+        uint256 positionIndex,
+        int24 tickLower,
+        int24 tickUpper,
+        uint256 liquidity,
+        bytes memory hookData
+    ) internal returns (PositionId positionId, BalanceDelta principalDelta) {
         if (liquidity > type(uint128).max) {
             revert Errors.InvalidAmount(liquidity, type(uint128).max);
         }
@@ -588,7 +608,6 @@ contract MMPositionActionsImpl is
         });
 
         positionId = PositionLibrary.generateId(address(this), params);
-        bytes memory hookData = PositionModificationHookDataLib.encode(tokenId, positionIndex, msgSender());
         (BalanceDelta liquidityDelta, BalanceDelta feesAccrued) =
             _modifySyntheticLiquidity(poolKey, params, tokenId, hookData);
         principalDelta = liquidityDelta - feesAccrued;
@@ -625,11 +644,18 @@ contract MMPositionActionsImpl is
         address deltaTarget = payerIsUser ? address(this) : sender;
         (uint256 liquidityFromDeltas, uint256 credit0, uint256 credit1) =
             _getLiquidityFromDeltas(poolKey, deltaTarget, position.tickLower, position.tickUpper);
+        bytes memory hookData = payerIsUser
+            ? PositionModificationHookDataLib.encodeWithInHookProtocolSettlement(
+                tokenId, positionIndex, sender, credit0, credit1
+            )
+            : PositionModificationHookDataLib.encode(tokenId, positionIndex, sender);
         (, BalanceDelta principalDelta) = _increaseInternal(
-            poolKey, tokenId, positionIndex, position.tickLower, position.tickUpper, liquidityFromDeltas
+            poolKey, tokenId, positionIndex, position.tickLower, position.tickUpper, liquidityFromDeltas, hookData
         );
         _validateMaxIn(principalDelta, amount0Max, amount1Max);
-        _settleFromDeltasCredits(poolKey, tokenId, positionIndex, credit0, credit1, payerIsUser);
+        if (!payerIsUser) {
+            _settleFromDeltasCredits(poolKey, tokenId, positionIndex, credit0, credit1, false);
+        }
     }
 
     /// @notice Mints a new position within a commitment
@@ -677,11 +703,20 @@ contract MMPositionActionsImpl is
         address deltaTarget = payerIsUser ? address(this) : msgSender();
         (uint256 liquidityFromDeltas, uint256 credit0, uint256 credit1) =
             _getLiquidityFromDeltas(poolKey, deltaTarget, tickLower, tickUpper);
+        uint256 nextPositionIndex;
+        (,, nextPositionIndex,) = vtsOrchestrator.getCommit(tokenId);
+        bytes memory hookData = payerIsUser
+            ? PositionModificationHookDataLib.encodeWithInHookProtocolSettlement(
+                tokenId, nextPositionIndex, msgSender(), credit0, credit1
+            )
+            : PositionModificationHookDataLib.encode(tokenId, nextPositionIndex, msgSender());
         // This works as LCCs are issued, capitalised by underlying tokens owed to the MM.
         (, uint256 positionIndex, BalanceDelta principalDelta) =
-            _mintPositionInternal(poolKey, tokenId, tickLower, tickUpper, liquidityFromDeltas);
+            _mintPositionInternal(poolKey, tokenId, tickLower, tickUpper, liquidityFromDeltas, hookData);
         _validateMaxIn(principalDelta, amount0Max, amount1Max);
-        _settleFromDeltasCredits(poolKey, tokenId, positionIndex, credit0, credit1, payerIsUser);
+        if (!payerIsUser) {
+            _settleFromDeltasCredits(poolKey, tokenId, positionIndex, credit0, credit1, false);
+        }
     }
 
     /// @notice Settles into/from the position using available delta credits
@@ -820,6 +855,26 @@ contract MMPositionActionsImpl is
         int24 tickUpper,
         uint256 liquidity
     ) internal returns (PositionId positionId, uint256 positionIndex, BalanceDelta principalDelta) {
+        uint256 nextPositionIndex;
+        (,, nextPositionIndex,) = vtsOrchestrator.getCommit(tokenId);
+        return _mintPositionInternal(
+            poolKey,
+            tokenId,
+            tickLower,
+            tickUpper,
+            liquidity,
+            PositionModificationHookDataLib.encode(tokenId, nextPositionIndex, msgSender())
+        );
+    }
+
+    function _mintPositionInternal(
+        PoolKey calldata poolKey,
+        uint256 tokenId,
+        int24 tickLower,
+        int24 tickUpper,
+        uint256 liquidity,
+        bytes memory hookData
+    ) internal returns (PositionId positionId, uint256 positionIndex, BalanceDelta principalDelta) {
         if (liquidity > type(uint128).max) {
             revert Errors.InvalidAmount(liquidity, type(uint128).max);
         }
@@ -834,7 +889,6 @@ contract MMPositionActionsImpl is
         });
 
         positionId = PositionLibrary.generateId(address(this), params);
-        bytes memory hookData = PositionModificationHookDataLib.encode(tokenId, positionIndex, msgSender());
         (BalanceDelta liquidityDelta, BalanceDelta feesAccrued) =
             _modifySyntheticLiquidity(poolKey, params, tokenId, hookData);
         principalDelta = liquidityDelta - feesAccrued;

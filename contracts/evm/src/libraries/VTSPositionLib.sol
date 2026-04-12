@@ -30,7 +30,8 @@ import {
     Position,
     PositionLibrary,
     PositionModificationHookData,
-    PositionModificationHookDataLib
+    PositionModificationHookDataLib,
+    MMIncreaseHookExtraData
 } from "../types/Position.sol";
 import {Pool} from "../types/Pool.sol";
 import {LiquidityUtils} from "./LiquidityUtils.sol";
@@ -867,6 +868,78 @@ library VTSPositionLib {
         data.isSeizing = mmData.seizure.isSeizing;
     }
 
+    /// @dev Applies one deposit lane of in-hook protocol-credit settlement for MM add-liquidity paths.
+    ///      `requiredSettlementDelta` uses negative sign for deposit requirements, while `_updateSettlement`
+    ///      expects a positive deposit amount and returns the amount actually consumed after all clamping/netting.
+    function _applyInHookProtocolSettlementLane(
+        VTSStorage storage s,
+        PositionId positionId,
+        address owner,
+        Currency underlyingCurrency,
+        uint8 tokenIndex,
+        int128 requiredSettlementDelta,
+        int128 currentUnderlyingDelta,
+        uint256 intendedSettle
+    ) private returns (int128 remainingRequiredSettlementDelta) {
+        remainingRequiredSettlementDelta = requiredSettlementDelta;
+        if (requiredSettlementDelta >= 0 || currentUnderlyingDelta <= 0 || intendedSettle == 0) {
+            return remainingRequiredSettlementDelta;
+        }
+
+        uint256 availableCredit = LiquidityUtils.safeInt128ToUint256(currentUnderlyingDelta);
+        uint256 requiredAmount = LiquidityUtils.safeInt128ToUint256(requiredSettlementDelta);
+        uint256 requestedAmount = intendedSettle;
+        if (requestedAmount > availableCredit) requestedAmount = availableCredit;
+        if (requestedAmount > requiredAmount) requestedAmount = requiredAmount;
+        if (requestedAmount == 0) return remainingRequiredSettlementDelta;
+
+        int256 applied = _updateSettlement(s, positionId, tokenIndex, requestedAmount.toInt256());
+        if (applied <= 0) return remainingRequiredSettlementDelta;
+
+        uint256 actualUsed = uint256(applied);
+        DynamicCurrencyDelta.accountDelta(underlyingCurrency, -actualUsed.toInt128(), owner);
+        remainingRequiredSettlementDelta += actualUsed.toInt128();
+    }
+
+    /// @dev Settles protocol credit inside the MM add-liquidity hook path before LCC issuance/backing validation.
+    function _applyInHookProtocolSettlementForMmIncrease(
+        VTSStorage storage s,
+        address owner,
+        PositionId positionId,
+        PoolKey calldata poolKey,
+        bytes calldata hookData,
+        BalanceDelta requiredSettlementDelta
+    ) private returns (BalanceDelta remainingRequiredSettlementDelta) {
+        PositionModificationHookData memory mmData = PositionModificationHookDataLib.decodeCalldata(hookData);
+        MMIncreaseHookExtraData memory extra = PositionModificationHookDataLib.decodeMMIncreaseHookExtraData(mmData);
+        if (!extra.settleInHook) return requiredSettlementDelta;
+
+        BalanceDelta currentUnderlying =
+            DynamicCurrencyDelta.getUnderlyingDeltaPair(owner, poolKey.currency0, poolKey.currency1);
+        int128 remaining0 = _applyInHookProtocolSettlementLane(
+            s,
+            positionId,
+            owner,
+            DynamicCurrencyDelta.lccToUnderlyingCurrency(poolKey.currency0),
+            0,
+            requiredSettlementDelta.amount0(),
+            currentUnderlying.amount0(),
+            extra.intendedSettle0
+        );
+        int128 remaining1 = _applyInHookProtocolSettlementLane(
+            s,
+            positionId,
+            owner,
+            DynamicCurrencyDelta.lccToUnderlyingCurrency(poolKey.currency1),
+            1,
+            requiredSettlementDelta.amount1(),
+            currentUnderlying.amount1(),
+            extra.intendedSettle1
+        );
+
+        remainingRequiredSettlementDelta = toBalanceDelta(remaining0, remaining1);
+    }
+
     /// @notice Handles new position initialization and returns required settlement delta
     function _touchNewPosition(
         VTSStorage storage s,
@@ -1267,7 +1340,10 @@ library VTSPositionLib {
 
         // Handle LCC issuance/cancellation based on liquidity direction
         if (p.params.liquidityDelta > 0) {
-            // Adding liquidity: Issue LCCs
+            // Adding liquidity: settle any hook-carried protocol credit before backing validation/LCC issuance.
+            requiredSettlementDelta = _applyInHookProtocolSettlementForMmIncrease(
+                s, p.owner, result.id, p.poolKey, p.hookData, requiredSettlementDelta
+            );
             _handleLiquidityIncrease(
                 s,
                 ctx,

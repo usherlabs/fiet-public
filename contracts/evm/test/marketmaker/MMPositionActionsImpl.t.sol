@@ -497,11 +497,12 @@ contract MMPositionManagerActionsTest is MarketTestBase, MarketMakerTestBase {
 
         // get amounts from liquidity params
         uint256 newPositionIndex = 1;
-        MMA.PreparedAction[] memory actions = new MMA.PreparedAction[](2);
+        MMA.PreparedAction[] memory actions = new MMA.PreparedAction[](3);
         int24 newUpperTick = 0;
         actions[0] = MMA.prepareDecrease(corePoolKey, tokenId, positionIndex, liquidityToDecrease);
         actions[1] =
             MMA.prepareMintFromDeltas(corePoolKey, tokenId, newUpperTick, defaultlLiquidityParams.tickUpper, true);
+        actions[2] = MMA.prepareSettleFromDeltas(corePoolKey, tokenId, positionIndex, true, true);
         MMA.executeWithUnlock(positionManager, actions, block.timestamp + 3600);
 
         // validate liquidity of the initial position is decreased
@@ -1013,9 +1014,10 @@ contract MMPositionManagerActionsTest is MarketTestBase, MarketMakerTestBase {
             // batch actions;
             // decrease the liquidity in the initial position with index 0
             // increase the liquidity in the new position with index 1
-            MMA.PreparedAction[] memory actions = new MMA.PreparedAction[](2);
+            MMA.PreparedAction[] memory actions = new MMA.PreparedAction[](3);
             actions[0] = MMA.prepareDecrease(corePoolKey, snap.tokenId, positionIndex, 1000);
             actions[1] = MMA.prepareIncreaseFromDeltas(corePoolKey, snap.newTokenId, positionIndex, true);
+            actions[2] = MMA.prepareSettleFromDeltas(corePoolKey, snap.tokenId, positionIndex, true, true);
             MMA.executeWithUnlock(positionManager, actions, block.timestamp + 3600);
         }
 
@@ -1113,9 +1115,10 @@ contract MMPositionManagerActionsTest is MarketTestBase, MarketMakerTestBase {
                 address(lcc1)
             );
 
-            MMA.PreparedAction[] memory actions = new MMA.PreparedAction[](2);
+            MMA.PreparedAction[] memory actions = new MMA.PreparedAction[](3);
             actions[0] = MMA.prepareDecrease(corePoolKey, tokenId, positionIndex, 1000);
             actions[1] = MMA.prepareIncreaseFromDeltas(corePoolKey, newTokenId, positionIndex, true);
+            actions[2] = MMA.prepareSettleFromDeltas(corePoolKey, tokenId, positionIndex, true, true);
             MMA.executeWithUnlock(positionManager, actions, block.timestamp + 3600);
 
             (, PositionId position1IdBeforeSettle) = positionManager.getPosition(tokenId, positionIndex);

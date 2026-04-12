@@ -37,6 +37,20 @@ import {PositionModificationHookDataLib} from "../../src/types/Position.sol";
 /// @notice Mutation-focused unit tests for VTSPositionLib that do NOT depend on MarketTestBase/_setupMarket.
 /// @dev Purpose: avoid fixture panics masking kills. These tests aim to kill meaningful mutants via direct harness state.
 contract VTSPositionLibMutationUnitTest is Test {
+    using SafeCast for uint256;
+
+    struct MMIncreaseInHookSetup {
+        PoolKey key;
+        PoolId poolId;
+        PositionContext ctx;
+        TouchPositionParams tp;
+        PositionId positionId;
+        Currency underlying0;
+        Currency underlying1;
+        uint256 required0;
+        uint256 required1;
+    }
+
     VTSPositionLibHarness internal harness;
     VTSPositionLibDeltaClearanceExpose internal clearanceExpose;
     VTSPositionLibResidualFlushExpose internal residualExpose;
@@ -1513,6 +1527,70 @@ contract VTSPositionLibMutationUnitTest is Test {
         );
     }
 
+    function test_touchPosition_mmIncrease_exactProtocolCredit_settlesInHookAndClearsDelta() public {
+        MMIncreaseInHookSetup memory setup = _setupMmIncreaseInHookSettlementCase(0, 0);
+        setup.tp.hookData = PositionModificationHookDataLib.encodeWithInHookProtocolSettlement(
+            1, 0, owner, setup.required0, setup.required1
+        );
+        harness.setUnderlyingDelta(setup.underlying0, owner, setup.required0.toInt128());
+        harness.setUnderlyingDelta(setup.underlying1, owner, setup.required1.toInt128());
+
+        harness.touchPosition(setup.ctx, setup.tp);
+
+        (,, uint256 settled0, uint256 settled1,,) = harness.getPositionAccounting(setup.positionId);
+        assertEq(settled0, setup.required0, "token0 settled should increase by exact consumed credit");
+        assertEq(settled1, setup.required1, "token1 settled should increase by exact consumed credit");
+        assertEq(harness.getUnderlyingDelta(setup.underlying0, owner), 0, "token0 credit should be fully consumed");
+        assertEq(harness.getUnderlyingDelta(setup.underlying1, owner), 0, "token1 credit should be fully consumed");
+    }
+
+    function test_touchPosition_mmIncrease_surplusProtocolCredit_leavesOnlyRemainder() public {
+        MMIncreaseInHookSetup memory setup = _setupMmIncreaseInHookSettlementCase(0, 0);
+        uint256 surplus0 = setup.required0 + 7e18;
+        uint256 surplus1 = setup.required1 + 11e18;
+        setup.tp.hookData =
+            PositionModificationHookDataLib.encodeWithInHookProtocolSettlement(1, 0, owner, surplus0, surplus1);
+        harness.setUnderlyingDelta(setup.underlying0, owner, surplus0.toInt128());
+        harness.setUnderlyingDelta(setup.underlying1, owner, surplus1.toInt128());
+
+        harness.touchPosition(setup.ctx, setup.tp);
+
+        (,, uint256 settled0, uint256 settled1,,) = harness.getPositionAccounting(setup.positionId);
+        assertEq(settled0, setup.required0, "token0 settled should clamp to required settlement");
+        assertEq(settled1, setup.required1, "token1 settled should clamp to required settlement");
+        assertEq(
+            harness.getUnderlyingDelta(setup.underlying0, owner),
+            int256(surplus0 - setup.required0),
+            "token0 should keep only the surplus protocol credit"
+        );
+        assertEq(
+            harness.getUnderlyingDelta(setup.underlying1, owner),
+            int256(surplus1 - setup.required1),
+            "token1 should keep only the surplus protocol credit"
+        );
+    }
+
+    function test_touchPosition_mmIncrease_mixedExactAndSurplus_preservesPerLaneAccounting() public {
+        MMIncreaseInHookSetup memory setup = _setupMmIncreaseInHookSettlementCase(0, 0);
+        uint256 surplus1 = setup.required1 + 13e18;
+        setup.tp.hookData =
+            PositionModificationHookDataLib.encodeWithInHookProtocolSettlement(1, 0, owner, setup.required0, surplus1);
+        harness.setUnderlyingDelta(setup.underlying0, owner, setup.required0.toInt128());
+        harness.setUnderlyingDelta(setup.underlying1, owner, surplus1.toInt128());
+
+        harness.touchPosition(setup.ctx, setup.tp);
+
+        (,, uint256 settled0, uint256 settled1,,) = harness.getPositionAccounting(setup.positionId);
+        assertEq(settled0, setup.required0, "token0 exact-match credit should fully settle");
+        assertEq(settled1, setup.required1, "token1 settled should clamp to the live requirement");
+        assertEq(harness.getUnderlyingDelta(setup.underlying0, owner), 0, "token0 exact-match credit should clear");
+        assertEq(
+            harness.getUnderlyingDelta(setup.underlying1, owner),
+            int256(surplus1 - setup.required1),
+            "token1 should retain only the surplus credit remainder"
+        );
+    }
+
     /// @notice Two MM full burns in one logical batch must accumulate MMPM underlying settlement delta (SETTLE-03 + DELTA-01).
     /// @dev Regression: setter-style `accountUnderlyingSettlementDelta` would drop the first op's credit when a second
     ///      same-owner decrease runs; both positions export the same per-lane settled surplus here.
@@ -1578,6 +1656,75 @@ contract VTSPositionLibMutationUnitTest is Test {
         (int256 snapshot0, int256 snapshot1) = harness.getLastUnderlyingDeltaSnapshot();
         assertEq(snapshot0, d0 * 2, "token0 underlying delta should accumulate");
         assertEq(snapshot1, d1 * 2, "token1 underlying delta should accumulate");
+    }
+
+    function _setupMmIncreaseInHookSettlementCase(uint256 settled0, uint256 settled1)
+        internal
+        returns (MMIncreaseInHookSetup memory setup)
+    {
+        MockLCC lcc0 = new MockLCC(address(0xE0));
+        MockLCC lcc1 = new MockLCC(address(0xE1));
+        setup.key = PoolKey({
+            currency0: Currency.wrap(address(lcc0)),
+            currency1: Currency.wrap(address(lcc1)),
+            fee: 0,
+            tickSpacing: 60,
+            hooks: IHooks(address(0))
+        });
+        setup.poolId = setup.key.toId();
+        harness.setupPool(setup.poolId, _defaultCfg());
+
+        ModifyLiquidityParams memory reg = ModifyLiquidityParams({
+            tickLower: TICK_LOWER,
+            tickUpper: TICK_UPPER,
+            liquidityDelta: int256(uint256(1000)),
+            salt: bytes32(uint256(880))
+        });
+        harness.registerPosition(owner, setup.poolId, reg);
+        setup.positionId = PositionLibrary.generateId(owner, reg);
+
+        harness.setCommitmentMax(setup.positionId, 100e18, 100e18);
+        harness.setSettled(setup.positionId, settled0, settled1);
+        harness.setPoolTotalSettled(setup.poolId, settled0, settled1);
+        harness.setCumulativeDeficit(setup.positionId, 0, 0);
+        harness.setCommitmentDeficit(setup.positionId, 0, 0);
+
+        _pmSetSlot0Tick(setup.poolId, 0);
+        _pmSetPositionLiquidity(setup.poolId, PositionId.unwrap(setup.positionId), 1100);
+        _pmSetFeeGrowthGlobals(setup.poolId, 0, 0);
+        _pmSetTickFeeGrowthOutside(setup.poolId, TICK_LOWER, 0, 0);
+        _pmSetTickFeeGrowthOutside(setup.poolId, TICK_UPPER, 0, 0);
+
+        harness.setPositionCommitId(setup.positionId, 1);
+        harness.setCommitActivePositionCount(1, 1);
+
+        setup.ctx = PositionContext({
+            poolManager: IPoolManager(address(pm)),
+            liquidityHub: ILiquidityHub(address(new MockLiquidityHubRecorder(address(lcc0), address(lcc1)))),
+            oracleHelper: IOracleHelper(address(0)),
+            marketVault: IMarketVault(address(new MockMarketVaultPassthrough()))
+        });
+
+        uint256 addC0;
+        uint256 addC1;
+        (addC0, addC1) = LiquidityUtils.calculateCommitmentMaxima(TICK_LOWER, TICK_UPPER, 100);
+        (setup.required0, setup.required1) = LiquidityUtils.getBaseSettlementAmounts(
+            100e18 + addC0, 100e18 + addC1, DEFAULT_BASE_VTS_RATE, DEFAULT_BASE_VTS_RATE
+        );
+        setup.required0 = setup.required0 > settled0 ? setup.required0 - settled0 : 0;
+        setup.required1 = setup.required1 > settled1 ? setup.required1 - settled1 : 0;
+        setup.underlying0 = Currency.wrap(address(0xE0));
+        setup.underlying1 = Currency.wrap(address(0xE1));
+        setup.tp = TouchPositionParams({
+            owner: owner,
+            poolKey: setup.key,
+            params: ModifyLiquidityParams({
+                tickLower: TICK_LOWER, tickUpper: TICK_UPPER, liquidityDelta: int256(uint256(100)), salt: reg.salt
+            }),
+            callerDelta: toBalanceDelta(0, 0),
+            feesAccrued: toBalanceDelta(0, 0),
+            hookData: PositionModificationHookDataLib.encode(1, 0, owner)
+        });
     }
 
     function _setupTwoMmBurnPositionsForAccumulationTest()
