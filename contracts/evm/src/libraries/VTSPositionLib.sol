@@ -1053,7 +1053,9 @@ library VTSPositionLib {
                     }
                     requiredSettlementDelta = _touchExistingIncrease(s, poolId, result.id, p.params, hookData);
                     if (liveLiquidityBeforeAdd > 0) {
-                        _rebaseResidualFeeGrowthOnActiveIncrease(s, ctx.poolManager, poolId, result.id);
+                        _rebaseResidualFeeGrowthOnActiveIncrease(
+                            s, ctx.poolManager, poolId, result.id, liveLiquidityBeforeAdd
+                        );
                     }
                 } else {
                     // Allow a no-op when active (Uniswap v4 disallows this when initial liq == 0).
@@ -1125,11 +1127,15 @@ library VTSPositionLib {
     /// @dev Rebase fee-growth checkpoints for fee lanes that still have unresolved residual burn base when adding
     ///      liquidity to an already-active position. This prevents newly added liquidity from inheriting the pre-add
     ///      fee window and double counting against already-banked historical residual backing.
+    /// @param liquidityBeforeAdd Live position liquidity before this increase (pre-modify units); used to bank any
+    ///        fee growth accrued on the surviving slice since `feeGrowthInsideLast` when settlement could not yet
+    ///        materialise a burn (e.g. zero outflow window), so rebasing does not erase that window.
     function _rebaseResidualFeeGrowthOnActiveIncrease(
         VTSStorage storage s,
         IPoolManager poolManager,
         PoolId poolId,
-        PositionId positionId
+        PositionId positionId,
+        uint128 liquidityBeforeAdd
     ) internal {
         PositionAccounting storage pa = s.positionAccounting[positionId];
         bool needFeeToken0 = pa.pendingResidualBurnBase.token1 > 0;
@@ -1138,6 +1144,19 @@ library VTSPositionLib {
 
         Position storage pos = s.positions[positionId];
         (uint256 fg0, uint256 fg1) = StateLibrary.getFeeGrowthInside(poolManager, poolId, pos.tickLower, pos.tickUpper);
+
+        if (needFeeToken0 && liquidityBeforeAdd > 0 && fg0 > pa.feeGrowthInsideLast.token0) {
+            pa.pendingResidualFeeBacking
+            .token0 += FullMath.mulDiv(
+                fg0 - pa.feeGrowthInsideLast.token0, uint256(liquidityBeforeAdd), FixedPoint128.Q128
+            );
+        }
+        if (needFeeToken1 && liquidityBeforeAdd > 0 && fg1 > pa.feeGrowthInsideLast.token1) {
+            pa.pendingResidualFeeBacking
+            .token1 += FullMath.mulDiv(
+                fg1 - pa.feeGrowthInsideLast.token1, uint256(liquidityBeforeAdd), FixedPoint128.Q128
+            );
+        }
 
         if (needFeeToken0) pa.feeGrowthInsideLast.token0 = fg0;
         if (needFeeToken1) pa.feeGrowthInsideLast.token1 = fg1;

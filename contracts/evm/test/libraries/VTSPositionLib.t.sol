@@ -431,6 +431,30 @@ contract VTSPositionLibTest is VTSLibTestBase {
         );
     }
 
+    /// @dev Stack-isolated assertions for `test_touchPosition_activeAdd_withPendingResidualBurn_rebasesOppositeFeeCheckpoint`.
+    function _assertActiveAddResidualFeeBackingAfterReadd(
+        PositionId positionId,
+        uint256 fg0AfterRemove,
+        uint256 bankedFee1AfterRemove,
+        uint256 fg1AfterRemove,
+        uint128 liveLiquidityBeforeAdd
+    ) internal view {
+        (uint256 fg0AfterAdd, uint256 fg1AfterAdd) = harness.getFeeGrowthInsideLast(positionId);
+        (, uint256 fg1InsideAfterAdd) =
+            StateLibrary.getFeeGrowthInside(manager, _getDefaultPoolId(), DEFAULT_TICK_LOWER, DEFAULT_TICK_UPPER);
+        (, uint256 bankedFee1AfterAdd) = harness.getPendingResidualFeeBacking(positionId);
+
+        assertEq(fg0AfterAdd, fg0AfterRemove, "active add should not rebase unrelated fee lanes");
+        assertEq(fg1AfterAdd, fg1InsideAfterAdd, "active add should rebase the residual fee lane to live fee growth");
+        uint256 expectedLiveSliceBank =
+            FullMath.mulDiv(fg1InsideAfterAdd - fg1AfterRemove, uint256(liveLiquidityBeforeAdd), FixedPoint128.Q128);
+        assertEq(
+            bankedFee1AfterAdd,
+            bankedFee1AfterRemove + expectedLiveSliceBank,
+            "active add should bank surviving pre-add fee window then preserve prior banked backing"
+        );
+    }
+
     /// @notice Helper to register a position in harness and return its ID
     function _registerHarnessPosition(address owner, int24 tickLower, int24 tickUpper, uint128 liquidity, bytes32 salt)
         internal
@@ -1283,8 +1307,7 @@ contract VTSPositionLibTest is VTSLibTestBase {
 
     function test_touchPosition_activeAdd_withPendingResidualBurn_rebasesOppositeFeeCheckpoint() public {
         _initMarket();
-        PoolId corePoolId = _getDefaultPoolId();
-        harness.setupPool(corePoolId, _createDefaultVTSConfig());
+        harness.setupPool(_getDefaultPoolId(), _createDefaultVTSConfig());
 
         uint128 liq = uint128(1e18);
         uint128 half = uint128(5e17);
@@ -1313,11 +1336,11 @@ contract VTSPositionLibTest is VTSLibTestBase {
 
         uint256 bankedFee1AfterRemove;
         uint256 fg0AfterRemove;
+        uint256 fg1AfterRemove;
         {
             (, bankedFee1AfterRemove) = harness.getPendingResidualFeeBacking(positionId);
             assertGt(bankedFee1AfterRemove, 0, "setup: partial remove should bank historical fee backing");
 
-            uint256 fg1AfterRemove;
             (fg0AfterRemove, fg1AfterRemove) = harness.getFeeGrowthInsideLast(positionId);
             assertEq(fg1AfterRemove, fg1BeforeAccrue, "partial remove should preserve surviving-liquidity checkpoint");
         }
@@ -1330,18 +1353,107 @@ contract VTSPositionLibTest is VTSLibTestBase {
         });
         _modifyLiquidityAndTouch(owner, addBack);
 
-        {
-            (uint256 fg0AfterAdd, uint256 fg1AfterAdd) = harness.getFeeGrowthInsideLast(positionId);
-            (, uint256 fg1InsideAfterAdd) =
-                StateLibrary.getFeeGrowthInside(manager, corePoolId, DEFAULT_TICK_LOWER, DEFAULT_TICK_UPPER);
-            (, uint256 bankedFee1AfterAdd) = harness.getPendingResidualFeeBacking(positionId);
+        _assertActiveAddResidualFeeBackingAfterReadd(
+            positionId, fg0AfterRemove, bankedFee1AfterRemove, fg1AfterRemove, half
+        );
+    }
 
-            assertEq(fg0AfterAdd, fg0AfterRemove, "active add should not rebase unrelated fee lanes");
-            assertEq(
-                fg1AfterAdd, fg1InsideAfterAdd, "active add should rebase the residual fee lane to live fee growth"
-            );
-            assertEq(bankedFee1AfterAdd, bankedFee1AfterRemove, "active add should preserve banked historical backing");
+    /// @dev When residual burn cannot run (ofDelta == 0), pre-add fee growth on live liquidity must be banked on
+    ///      active increase, not erased by the fee-growth rebase.
+    function test_touchPosition_activeAdd_ofDeltaZero_banksLiveSliceBeforeRebase() public {
+        _initMarket();
+        harness.setupPool(_getDefaultPoolId(), _createDefaultVTSConfig());
+
+        uint128 liq = uint128(1e18);
+        address owner = address(modifyLiquidityRouter);
+        ModifyLiquidityParams memory addParams = ModifyLiquidityParams({
+            tickLower: DEFAULT_TICK_LOWER,
+            tickUpper: DEFAULT_TICK_UPPER,
+            liquidityDelta: int256(uint256(liq)),
+            salt: DEFAULT_SALT
+        });
+        _modifyLiquidityAndTouch(owner, addParams);
+        PositionId positionId = PositionLibrary.generateId(owner, addParams);
+
+        harness.setPendingResidualBurnBase(positionId, 40e18, 0);
+        harness.setPendingResidualBurnOutflowsFloor(positionId, 100e18, 0);
+        harness.setOutflowsAtFeeSnap(positionId, 100e18, 0);
+        harness.setCumulativeOutflows(positionId, 100e18, 0);
+
+        (, uint256 bankedBefore) = harness.getPendingResidualFeeBacking(positionId);
+        assertEq(bankedBefore, 0, "setup: banked residual fee backing starts at zero");
+
+        _accrueFeeGrowthInCoreRange(true);
+
+        (, uint256 fg1LastBeforeAdd) = harness.getFeeGrowthInsideLast(positionId);
+        (, uint256 fg1InsideAfterAccrue) =
+            StateLibrary.getFeeGrowthInside(manager, _getDefaultPoolId(), DEFAULT_TICK_LOWER, DEFAULT_TICK_UPPER);
+        assertGt(fg1InsideAfterAccrue, fg1LastBeforeAdd, "setup: expect fee growth on token1 fee lane");
+
+        uint128 addDelta = uint128(1e15);
+        ModifyLiquidityParams memory bumpAdd = ModifyLiquidityParams({
+            tickLower: DEFAULT_TICK_LOWER,
+            tickUpper: DEFAULT_TICK_UPPER,
+            liquidityDelta: int256(uint256(addDelta)),
+            salt: DEFAULT_SALT
+        });
+        _modifyLiquidityAndTouch(owner, bumpAdd);
+
+        (, uint256 bankedAfter) = harness.getPendingResidualFeeBacking(positionId);
+        uint256 expectedBank =
+            FullMath.mulDiv(fg1InsideAfterAccrue - fg1LastBeforeAdd, uint256(liq), FixedPoint128.Q128);
+        assertEq(bankedAfter, expectedBank, "ofDelta==0 active add should bank pre-add live slice fees");
+
+        (, uint256 fg1After) = harness.getFeeGrowthInsideLast(positionId);
+        (, uint256 fg1InsideNow) =
+            StateLibrary.getFeeGrowthInside(manager, _getDefaultPoolId(), DEFAULT_TICK_LOWER, DEFAULT_TICK_UPPER);
+        assertEq(fg1After, fg1InsideNow, "fee lane checkpoint should rebase to live growth after active add");
+    }
+
+    /// @dev Repeated active adds with a zero outflow window must not erase accumulated fee backing.
+    function test_touchPosition_activeAdd_ofDeltaZero_repeatedAdds_accumulateBankedBacking() public {
+        _initMarket();
+        harness.setupPool(_getDefaultPoolId(), _createDefaultVTSConfig());
+
+        uint128 liq = uint128(1e18);
+        address owner = address(modifyLiquidityRouter);
+        ModifyLiquidityParams memory addParams = ModifyLiquidityParams({
+            tickLower: DEFAULT_TICK_LOWER,
+            tickUpper: DEFAULT_TICK_UPPER,
+            liquidityDelta: int256(uint256(liq)),
+            salt: DEFAULT_SALT
+        });
+        _modifyLiquidityAndTouch(owner, addParams);
+        PositionId positionId = PositionLibrary.generateId(owner, addParams);
+
+        harness.setPendingResidualBurnBase(positionId, 40e18, 0);
+        harness.setPendingResidualBurnOutflowsFloor(positionId, 100e18, 0);
+        harness.setOutflowsAtFeeSnap(positionId, 100e18, 0);
+        harness.setCumulativeOutflows(positionId, 100e18, 0);
+
+        uint128 bump = uint128(1e15);
+        uint256 bankedRunning;
+        for (uint256 i = 0; i < 3; i++) {
+            _accrueFeeGrowthInCoreRange(true);
+            (, uint256 fg1Last) = harness.getFeeGrowthInsideLast(positionId);
+            (, uint256 fg1Inside) =
+                StateLibrary.getFeeGrowthInside(manager, _getDefaultPoolId(), DEFAULT_TICK_LOWER, DEFAULT_TICK_UPPER);
+            assertGt(fg1Inside, fg1Last, "setup: accrue should move inside fee growth");
+
+            uint256 liqLive = uint256(liq) + uint256(bump) * i;
+            bankedRunning += FullMath.mulDiv(fg1Inside - fg1Last, liqLive, FixedPoint128.Q128);
+
+            ModifyLiquidityParams memory bumpAdd = ModifyLiquidityParams({
+                tickLower: DEFAULT_TICK_LOWER,
+                tickUpper: DEFAULT_TICK_UPPER,
+                liquidityDelta: int256(uint256(bump)),
+                salt: DEFAULT_SALT
+            });
+            _modifyLiquidityAndTouch(owner, bumpAdd);
         }
+
+        (, uint256 bankedAfter) = harness.getPendingResidualFeeBacking(positionId);
+        assertEq(bankedAfter, bankedRunning, "repeated ofDelta==0 adds should accumulate banked fee slices");
     }
 
     function test_touchPosition_partialRemoveAddRemove_sameFeeWindow_doesNotRebankReaddedLiquidity() public {
@@ -1384,13 +1496,20 @@ contract VTSPositionLibTest is VTSLibTestBase {
         });
         _modifyLiquidityAndTouch(owner, addBack);
 
+        (, uint256 bankedFee1AfterAddBack) = harness.getPendingResidualFeeBacking(positionId);
+        assertGt(
+            bankedFee1AfterAddBack,
+            bankedFee1AfterFirstRemove,
+            "active re-add should bank surviving live slice into pendingResidualFeeBacking"
+        );
+
         _modifyLiquidityAndTouch(owner, partialRemove);
 
         (, uint256 bankedFee1AfterSecondRemove) = harness.getPendingResidualFeeBacking(positionId);
         assertEq(
             bankedFee1AfterSecondRemove,
-            bankedFee1AfterFirstRemove,
-            "same fee window should not be banked again after an active re-add"
+            bankedFee1AfterAddBack,
+            "with no further fee accrual, second partial remove must not re-bank the same fee window"
         );
     }
 
