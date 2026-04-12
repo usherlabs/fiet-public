@@ -290,10 +290,16 @@ contract MMPositionActionsImpl is
         Currency underlying0 = _lccToUnderlyingCurrency(poolKey.currency0);
         Currency underlying1 = _lccToUnderlyingCurrency(poolKey.currency1);
         if (used0 > 0) {
-            vtsOrchestrator.take(underlying0, address(this), used0);
+            uint256 taken0 = vtsOrchestrator.take(underlying0, address(this), used0);
+            if (taken0 != used0) {
+                revert Errors.InsufficientBalance(taken0, used0);
+            }
         }
         if (used1 > 0) {
-            vtsOrchestrator.take(underlying1, address(this), used1);
+            uint256 taken1 = vtsOrchestrator.take(underlying1, address(this), used1);
+            if (taken1 != used1) {
+                revert Errors.InsufficientBalance(taken1, used1);
+            }
         }
     }
 

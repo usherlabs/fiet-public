@@ -6,7 +6,7 @@ Echidna fuzz harnesses use **hard-linked library addresses** so that Foundry's l
 
 Regenerate addresses when:
 
-- You modify any of: `LCCFactoryLinkedLib`, `LiquidityHubLinkedLib`, `VTSCommitLib`, `VTSFeeLinkedLib`, `VTSPositionLib`
+- You modify any of: `LCCFactoryLinkedLib`, `LiquidityHubLinkedLib`, `VTSCommitLib`, `VTSFeeLinkedLib`, `VTSPositionLib`, `VTSLifecycleLinkedLib`
 - You change dependencies (e.g. Uniswap v4, OpenZeppelin) that affect those libraries
 - Echidna fails with `EchidnaLinkedLibs: * addr mismatch` during harness deployment
 
@@ -68,6 +68,7 @@ address internal constant LIQUIDITY_HUB_LINKED_LIB = 0x...;
 address internal constant VTS_COMMIT_LIB = 0x...;
 address internal constant VTS_FEE_LINKED_LIB = 0x...;
 address internal constant VTS_POSITION_LIB = 0x...;
+address internal constant VTS_LIFECYCLE_LINKED_LIB = 0x...;
 ```
 
 ### 2. `contracts/evm/foundry.toml`
@@ -81,11 +82,12 @@ libraries = [
   "src/libraries/VTSCommitLib.sol:VTSCommitLib:0x...",                     # validated by script
   "src/libraries/VTSFeeLib.sol:VTSFeeLinkedLib:0x...",                     # validated by script
   "src/libraries/VTSPositionLib.sol:VTSPositionLib:0x...",                 # validated by script
+  "src/libraries/VTSLifecycleLinkedLib.sol:VTSLifecycleLinkedLib:0x...",   # validated by script
   "src/libraries/VTSSwapLib.sol:VTSSwapLib:0x...",                         # placeholder, not validated
 ]
 ```
 
-`just validate-fuzz-libs` checks all entries defined in `EchidnaLinkedLibs.sol`, including the intentional lifecycle placeholder.
+`just validate-fuzz-libs` checks all CREATE2-validated entries defined in `EchidnaLinkedLibs.sol`.
 
 ## Scope
 
@@ -96,6 +98,7 @@ Current validation covers:
 - `VTSCommitLib`
 - `VTSFeeLinkedLib`
 - `VTSPositionLib`
+- `VTSLifecycleLinkedLib`
 
 ## Why CREATE2 Addresses Change
 

@@ -2967,9 +2967,8 @@ contract VTSPositionLibTest is VTSLibTestBase {
         BalanceDelta principalDelta = toBalanceDelta(int128(int256(100)), int128(int256(200)));
         BalanceDelta requiredSettlementDelta = toBalanceDelta(int128(int256(5)), int128(int256(7)));
 
-        BalanceDelta settleable = harness.handleLiquidityDecrease(
-            ctx, DEFAULT_OWNER, pk, principalDelta, requiredSettlementDelta, DEFAULT_OWNER
-        );
+        harness.handleLiquidityDecrease(ctx, DEFAULT_OWNER, pk, principalDelta, requiredSettlementDelta, DEFAULT_OWNER);
+        (BalanceDelta settleable,,) = harness.getLastLiquidityDecreasePreview();
 
         // Because vault reports more-than-required availability, rawQueued is negative and must clamp to 0.
         assertEq(
@@ -3004,9 +3003,8 @@ contract VTSPositionLibTest is VTSLibTestBase {
         BalanceDelta principalDelta = toBalanceDelta(int128(0), int128(0));
         BalanceDelta requiredSettlementDelta = toBalanceDelta(int128(int256(5)), int128(int256(7)));
 
-        BalanceDelta settleable = harness.handleLiquidityDecrease(
-            ctx, DEFAULT_OWNER, pk, principalDelta, requiredSettlementDelta, DEFAULT_OWNER
-        );
+        harness.handleLiquidityDecrease(ctx, DEFAULT_OWNER, pk, principalDelta, requiredSettlementDelta, DEFAULT_OWNER);
+        (BalanceDelta settleable,,) = harness.getLastLiquidityDecreasePreview();
 
         assertEq(
             settleable.amount0(),
@@ -3038,9 +3036,8 @@ contract VTSPositionLibTest is VTSLibTestBase {
         BalanceDelta principalDelta = toBalanceDelta(int128(int256(100)), int128(int256(200)));
         BalanceDelta requiredSettlementDelta = toBalanceDelta(int128(int256(5)), int128(int256(7)));
 
-        BalanceDelta settleable = harness.handleLiquidityDecrease(
-            ctx, DEFAULT_OWNER, pk, principalDelta, requiredSettlementDelta, DEFAULT_OWNER
-        );
+        harness.handleLiquidityDecrease(ctx, DEFAULT_OWNER, pk, principalDelta, requiredSettlementDelta, DEFAULT_OWNER);
+        (BalanceDelta settleable,,) = harness.getLastLiquidityDecreasePreview();
 
         assertEq(
             settleable.amount0(), int128(int256(5)), "token0 should remain fully settleable when queue clamps to 0"
@@ -3069,9 +3066,8 @@ contract VTSPositionLibTest is VTSLibTestBase {
         BalanceDelta principalDelta = toBalanceDelta(int128(int256(100)), int128(int256(200)));
         BalanceDelta requiredSettlementDelta = toBalanceDelta(int128(int256(5)), int128(int256(7)));
 
-        BalanceDelta settleable = harness.handleLiquidityDecrease(
-            ctx, DEFAULT_OWNER, pk, principalDelta, requiredSettlementDelta, DEFAULT_OWNER
-        );
+        harness.handleLiquidityDecrease(ctx, DEFAULT_OWNER, pk, principalDelta, requiredSettlementDelta, DEFAULT_OWNER);
+        (BalanceDelta settleable,,) = harness.getLastLiquidityDecreasePreview();
 
         assertEq(
             settleable.amount0(), int128(int256(0)), "token0 should be fully queued when vault returns no availability"
@@ -3099,9 +3095,8 @@ contract VTSPositionLibTest is VTSLibTestBase {
         BalanceDelta principalDelta = toBalanceDelta(int128(int256(3)), int128(int256(20)));
         BalanceDelta requiredSettlementDelta = toBalanceDelta(int128(int256(10)), int128(int256(7)));
 
-        BalanceDelta settleable = harness.handleLiquidityDecrease(
-            ctx, DEFAULT_OWNER, pk, principalDelta, requiredSettlementDelta, DEFAULT_OWNER
-        );
+        harness.handleLiquidityDecrease(ctx, DEFAULT_OWNER, pk, principalDelta, requiredSettlementDelta, DEFAULT_OWNER);
+        (BalanceDelta settleable,,) = harness.getLastLiquidityDecreasePreview();
 
         assertEq(settleable.amount0(), 0, "token0 settleable should be zero when no liquidity is available");
         assertEq(settleable.amount1(), 0, "token1 settleable should be zero when no liquidity is available");
@@ -3126,9 +3121,11 @@ contract VTSPositionLibTest is VTSLibTestBase {
         BalanceDelta principalDelta = toBalanceDelta(int128(int256(3)), int128(int256(20)));
         BalanceDelta requiredSettlementDelta = toBalanceDelta(int128(int256(10)), int128(int256(7)));
 
-        (BalanceDelta settleable, BalanceDelta queuedDelta, BalanceDelta underlyingDeltaSettlement) = harness.handleLiquidityDecreaseDetailed(
+        harness.handleLiquidityDecreaseDetailed(
             ctx, DEFAULT_OWNER, pk, principalDelta, requiredSettlementDelta, DEFAULT_OWNER
         );
+        (BalanceDelta settleable, BalanceDelta queuedDelta, BalanceDelta underlyingDeltaSettlement) =
+            harness.getLastLiquidityDecreasePreview();
 
         assertEq(settleable.amount0(), 0, "token0 settleable should be zero when no liquidity is available");
         assertEq(settleable.amount1(), 0, "token1 settleable should be zero when no liquidity is available");
@@ -3162,9 +3159,8 @@ contract VTSPositionLibTest is VTSLibTestBase {
         BalanceDelta principalDelta = toBalanceDelta(int128(int256(9)), int128(int256(5)));
         BalanceDelta requiredSettlementDelta = toBalanceDelta(int128(int256(10)), int128(int256(10)));
 
-        BalanceDelta settleable = harness.handleLiquidityDecrease(
-            ctx, DEFAULT_OWNER, pk, principalDelta, requiredSettlementDelta, DEFAULT_OWNER
-        );
+        harness.handleLiquidityDecrease(ctx, DEFAULT_OWNER, pk, principalDelta, requiredSettlementDelta, DEFAULT_OWNER);
+        (BalanceDelta settleable,,) = harness.getLastLiquidityDecreasePreview();
 
         assertEq(settleable.amount0(), 4, "token0 settleable should equal immediate vault availability");
         assertEq(settleable.amount1(), 2, "token1 settleable should equal immediate vault availability");

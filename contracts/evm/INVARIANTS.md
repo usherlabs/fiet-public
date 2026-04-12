@@ -455,7 +455,8 @@ being an informal “should”.
   - `src/libraries/VTSPositionLib.sol::_processMMOperations` (decrease branch): calls `_applySettlementClampFromExcess`
     with `exportedForSettlementClamp` from `_handleLiquidityDecrease` (`settleableDelta + queuedDelta`), then
     `DynamicCurrencyDelta.accountUnderlyingSettlementDelta` for the immediate slice only.
-  - `src/libraries/VTSPositionLib.sol::onMMSettle` plans withdrawals from positive underlying delta and settled-backed
+  - `src/libraries/VTSLifecycleLinkedLib.sol::onMMSettle` plans withdrawals from positive underlying delta and
+    settled-backed
     capacity separately, consumes the delta-backed portion first, and only then mutates `pa.settled`.
 - **Why**:
   - Clamping only the queued shortfall while also booking the immediate slice on `DynamicCurrencyDelta` would double-count

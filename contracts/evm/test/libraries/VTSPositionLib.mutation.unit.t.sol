@@ -1557,21 +1557,27 @@ contract VTSPositionLibMutationUnitTest is Test {
             hookData: PositionModificationHookDataLib.encode(1, 0, owner)
         });
 
-        _pmSetPositionLiquidity(pId, PositionId.unwrap(idA), 1000);
+        _pmSetPositionLiquidity(pId, PositionId.unwrap(idA), 0);
         harness.touchPosition(ctx, tpDec);
+        assertFalse(harness.getPosition(idA).isActive, "first full burn should deactivate position A");
+        assertEq(harness.getCommitActivePositionCount(1), 1, "first full burn should decrement active positions");
 
         Currency cu0 = Currency.wrap(address(0xD0));
         Currency cu1 = Currency.wrap(address(0xD1));
-        int256 d0 = harness.getUnderlyingDelta(cu0, owner);
-        int256 d1 = harness.getUnderlyingDelta(cu1, owner);
+        harness.snapshotUnderlyingDeltaPair(cu0, cu1, owner);
+        (int256 d0, int256 d1) = harness.getLastUnderlyingDeltaSnapshot();
         assertTrue(d0 != 0 || d1 != 0, "first MM decrease should book non-zero underlying");
 
-        _pmSetPositionLiquidity(pId, PositionId.unwrap(idB), 1000);
+        _pmSetPositionLiquidity(pId, PositionId.unwrap(idB), 0);
         tpDec.params.salt = bytes32(uint256(702));
         harness.touchPosition(ctx, tpDec);
+        assertFalse(harness.getPosition(idB).isActive, "second full burn should deactivate position B");
+        assertEq(harness.getCommitActivePositionCount(1), 0, "two full burns should clear active positions");
 
-        assertEq(harness.getUnderlyingDelta(cu0, owner), d0 * 2, "token0 underlying delta should accumulate");
-        assertEq(harness.getUnderlyingDelta(cu1, owner), d1 * 2, "token1 underlying delta should accumulate");
+        harness.snapshotUnderlyingDeltaPair(cu0, cu1, owner);
+        (int256 snapshot0, int256 snapshot1) = harness.getLastUnderlyingDeltaSnapshot();
+        assertEq(snapshot0, d0 * 2, "token0 underlying delta should accumulate");
+        assertEq(snapshot1, d1 * 2, "token1 underlying delta should accumulate");
     }
 
     function _setupTwoMmBurnPositionsForAccumulationTest()

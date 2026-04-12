@@ -37,6 +37,11 @@ contract VTSPositionLibHarness {
 
     /// @notice Internal VTSStorage for testing
     VTSStorage internal s;
+    BalanceDelta internal lastSettleableDelta;
+    BalanceDelta internal lastQueuedDelta;
+    BalanceDelta internal lastUnderlyingDeltaSettlement;
+    int256 internal lastUnderlyingDeltaSnapshot0;
+    int256 internal lastUnderlyingDeltaSnapshot1;
 
     // ============ Library Function Exposers ============
 
@@ -143,9 +148,9 @@ contract VTSPositionLibHarness {
         BalanceDelta requiredSettlementDelta,
         address queueRecipient
     ) external returns (BalanceDelta settleableDelta) {
-        (,, settleableDelta,,) = VTSPositionLib._previewLiquidityDecreaseRouting(
-            ctx, principalDelta, requiredSettlementDelta
-        );
+        (,, settleableDelta, lastQueuedDelta, lastUnderlyingDeltaSettlement) =
+            VTSPositionLib._previewLiquidityDecreaseRouting(ctx, principalDelta, requiredSettlementDelta);
+        lastSettleableDelta = settleableDelta;
         VTSPositionLib._handleLiquidityDecrease(
             ctx, owner, poolKey, principalDelta, requiredSettlementDelta, queueRecipient
         );
@@ -167,6 +172,9 @@ contract VTSPositionLibHarness {
         (
             ,, settleableDelta, queuedDelta, underlyingDeltaSettlement
         ) = VTSPositionLib._previewLiquidityDecreaseRouting(ctx, principalDelta, requiredSettlementDelta);
+        lastSettleableDelta = settleableDelta;
+        lastQueuedDelta = queuedDelta;
+        lastUnderlyingDeltaSettlement = underlyingDeltaSettlement;
         VTSPositionLib._handleLiquidityDecrease(
             ctx, owner, poolKey, principalDelta, requiredSettlementDelta, queueRecipient
         );
@@ -195,6 +203,14 @@ contract VTSPositionLibHarness {
             s.positionAccounting[id].cumulativeDeficit.token0,
             s.positionAccounting[id].cumulativeDeficit.token1
         );
+    }
+
+    function getLastLiquidityDecreasePreview()
+        external
+        view
+        returns (BalanceDelta settleableDelta, BalanceDelta queuedDelta, BalanceDelta underlyingDeltaSettlement)
+    {
+        return (lastSettleableDelta, lastQueuedDelta, lastUnderlyingDeltaSettlement);
     }
 
     function getPosition(PositionId id) external view returns (Position memory) {
@@ -524,6 +540,10 @@ contract VTSPositionLibHarness {
         s.commits[commitId].activePositionCount = activeCount;
     }
 
+    function getCommitActivePositionCount(uint256 commitId) external view returns (uint256) {
+        return s.commits[commitId].activePositionCount;
+    }
+
     /// @notice Sets deficit growth global for a pool
     function setDeficitGrowthGlobal(PoolId poolId, uint256 g0, uint256 g1) external {
         s.poolAccounting[poolId].deficitGrowthGlobal.token0 = g0;
@@ -611,5 +631,19 @@ contract VTSPositionLibHarness {
     /// @notice Gets underlying currency delta for a target address
     function getUnderlyingDelta(Currency currency, address target) external view returns (int256) {
         return currency.getDelta(target);
+    }
+
+    function snapshotUnderlyingDeltaPair(Currency currency0, Currency currency1, address target)
+        external
+        returns (int256 delta0, int256 delta1)
+    {
+        delta0 = currency0.getDelta(target);
+        delta1 = currency1.getDelta(target);
+        lastUnderlyingDeltaSnapshot0 = delta0;
+        lastUnderlyingDeltaSnapshot1 = delta1;
+    }
+
+    function getLastUnderlyingDeltaSnapshot() external view returns (int256 delta0, int256 delta1) {
+        return (lastUnderlyingDeltaSnapshot0, lastUnderlyingDeltaSnapshot1);
     }
 }

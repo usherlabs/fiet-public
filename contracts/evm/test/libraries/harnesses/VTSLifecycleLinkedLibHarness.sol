@@ -31,8 +31,16 @@ contract VTSLifecycleLinkedLibHarness {
         external
         returns (RFSCheckpoint memory)
     {
-        // Mirror historical behaviour: linked `checkpoint` assumes growth is already settled; tests without an
-        // orchestrator settle here so DICE/CISE state matches pre-refactor `VTSLifecycleLinkedLib.checkpoint`.
+        return VTSLifecycleLinkedLib.checkpoint(s, ctx, commitId, withCommitment, positionId);
+    }
+
+    /// @notice TEST-ONLY helper for legacy flows that still want pre-settlement before checkpointing.
+    function settleThenCheckpoint(
+        VTSLifecycleContext memory ctx,
+        uint256 commitId,
+        bool withCommitment,
+        PositionId positionId
+    ) external returns (RFSCheckpoint memory) {
         VTSPositionLib.settlePositionGrowths(s, ctx.poolManager, positionId);
         return VTSLifecycleLinkedLib.checkpoint(s, ctx, commitId, withCommitment, positionId);
     }
