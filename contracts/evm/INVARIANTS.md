@@ -285,6 +285,14 @@ being an informal “should”.
 - **Statement**: A commitment checkpoint must set (or reduce/clear) `PositionAccounting.commitmentDeficit` in token
   units based on the USD backing shortfall.
 - **Enforced by**: `src/libraries/VTSCommitLib.sol::checkpointWithCommitment`.
+- **Ordering (growth before commitment)**: `checkpointWithCommitment` values backing from stored `pa.settled` (and
+  effective issued amounts). Therefore `src/VTSOrchestrator.sol::checkpoint(..., withCommitment: true)` must settle
+  position growths **before** delegating to `VTSLifecycleLinkedLib.checkpoint` / `checkpointWithCommitment`, so
+  uncrystallised deficit/inflow/fee growth cannot make the commitment gate read stale-high `settled`. While the pool
+  (or VTS globally) is paused, public `VTSOrchestrator.settlePositionGrowths` remains restricted to the canonical
+  `CoreHook` for that market; the orchestrator-only helper `_settleGrowthsBeforeCheckpoint` performs the same
+  `VTSPositionLib.settlePositionGrowths` work for paused commitment checkpoints only, without widening arbitrary
+  third-party refresh on the public entrypoint.
 - **Consequence**: Positions with non-zero `commitmentDeficit` can bypass normal grace only when the configured
   token-lane bypass age/severity gates in `SEIZE-01` are satisfied.
 - **Separation invariant**: `commitmentDeficit` is a checkpoint-derived solvency gate and is not the pool DICE
@@ -621,13 +629,32 @@ being an informal “should”.
 - **Enforced by**: `src/MMPositionManager.sol::transferFrom` guarded by `onlyIfPoolManagerLocked` which reverts
   `Errors.PoolManagerMustBeLocked()`.
 
-### PAUSE-01: Global/pool pause must halt sensitive VTS entrypoints
+### PAUSE-01: Global/pool pause (soft pause: freeze trading risk, allow scoped solvency maintenance)
 
-- **Statement**: When paused, swap processing and position processing must revert.
-- **Enforced by**:
+- **Statement**: When the pool or VTS is globally paused, swap processing and risk-expanding position processing must
+  revert. Certain solvency-maintenance and readjustment entrypoints remain intentionally available so operators and
+  participants can still settle, checkpoint commitment backing, extend grace with proofs, and validate seizure—without
+  reopening general-purpose trading.
+- **Enforced by (halted paths)**:
   - `src/modules/PausableVTS.sol` guards (`notPoolPaused`, `notGlobalPaused`) revert `Errors.EnforcedPause()`.
-  - Applied to `src/VTSOrchestrator.sol::processPosition` and `afterCoreSwap` (and to `settlePositionGrowths` for active
-    positions).
+  - Applied to `src/VTSOrchestrator.sol::processPosition` and `afterCoreSwap`.
+  - `src/VTSOrchestrator.sol::settlePositionGrowths`: when `s.isPaused || s.pools[poolId].isPaused`, only the canonical
+    `CoreHook` for that market may call the public entrypoint (`MarketHandlerLib.assertCoreHook`); other callers revert
+    `Errors.InvalidSender()`. This blocks permissionless growth refresh during pause except via hook-driven removes and
+    the orchestrator-internal paused commitment-checkpoint path (see **COMMIT-02** ordering).
+- **Intentionally available during pause (non-exhaustive)**:
+  - Canonical remove-liquidity: `CoreHook` still calls `settlePositionGrowths` before `touchPosition`; `touchPosition`
+    allows negative `liquidityDelta` while paused and reverts non-removal modifies (`src/libraries/VTSPositionLib.sol::touchPosition`).
+  - `VTSOrchestrator.checkpoint(..., withCommitment: true)`: uses `_settleGrowthsBeforeCheckpoint` so commitment state is
+    consistent (see **COMMIT-02**).
+  - `VTSOrchestrator.checkpoint(..., withCommitment: false)` and `calcRFS`: still call public `settlePositionGrowths`
+    first, so they remain **CoreHook-only** while paused (same gate as above).
+  - `extendGracePeriod`, MM settlement, and conditional seizure refresh: `VTSLifecycleLinkedLib` may call
+    `VTSPositionLib.settlePositionGrowths` directly on authorised paths (not via the public orchestrator pause gate).
+  - `onSeize` / signal lifecycle (`commitSignal`, `renewSignal`, …) are not `notPoolPaused`-gated at the orchestrator
+    layer; product policy treats these as solvency / lifecycle maintenance compatible with soft pause.
+- **Non-goal**: Pause is **not** a full “hard freeze” of every state transition. A separate hard-freeze mode is not part
+  of this invariant; integrators should not assume all orchestrator entrypoints revert when paused.
 
 ## Market creation and Uniswap hook constraints (structural invariants)
 

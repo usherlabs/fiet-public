@@ -631,7 +631,9 @@ library VTSLifecycleLinkedLib {
     }
 
     /// @notice Optional commitment backing check, then mark the RFS checkpoint from current state
-    /// @dev Does not settle growths. The orchestrator must call `settlePositionGrowths` first so pause policy applies.
+    /// @dev Does not settle growths. The orchestrator must settle growth first (including its paused
+    ///      `checkpoint(..., true)` path that calls `VTSPositionLib.settlePositionGrowths` directly when the public
+    ///      entrypoint is CoreHook-only).
     function checkpoint(
         VTSStorage storage s,
         VTSLifecycleContext memory ctx,
@@ -667,6 +669,11 @@ library VTSLifecycleLinkedLib {
         uint256 positionIndex,
         PositionId positionId
     ) external {
+        // When a stored commitment deficit exists, refresh growth and re-run commitment checkpoint before seizability
+        // so bypass eligibility cannot rely on stale `commitmentDeficit` after backing recovers.
+        // We do not always call `_checkpointAfterGrowthSettled(..., true)` here: that would `markCheckpoint` from
+        // live `getRFS` and could materialise the first ordinary RFS checkpoint, which `onSeize` must not do
+        // (see `test_onSeize_doesNotStartOrdinaryGraceWithoutPriorCheckpoint`).
         bool hasStoredCommitmentDeficit = s.positionAccounting[positionId].commitmentDeficit.token0 > 0
             || s.positionAccounting[positionId].commitmentDeficit.token1 > 0;
         if (hasStoredCommitmentDeficit) {

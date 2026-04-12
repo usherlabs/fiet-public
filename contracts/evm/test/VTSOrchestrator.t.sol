@@ -707,6 +707,118 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
         assertTrue(cd0 > 0 || cd1 > 0, "paused commitment checkpoint should record deficit");
     }
 
+    /// @dev Regression (audit finding #2): paused `checkpoint(..., true)` must settle growth before
+    ///      `checkpointWithCommitment` so backing uses post-growth `pa.settled` (same outcome as CoreHook settle
+    ///      then checkpoint).
+    function test_checkpoint_withCommitment_whenPoolPaused_settles_growth_before_commitment_deficit() public {
+        (uint256 tokenId, PositionId positionId,,) = _createCommittedPosition();
+        address advancer = liquiditySignal.mmState.advancer;
+
+        bytes memory signalBytes = abi.encode(liquiditySignal);
+        vm.mockCall(
+            address(signalManager),
+            abi.encodeWithSelector(
+                bytes4(keccak256("verifyLiquiditySignal(address,bytes,bool)")),
+                liquiditySignal.mmState.owner,
+                signalBytes,
+                true
+            ),
+            abi.encode(true, 10)
+        );
+
+        _mockLccPrices(1e18, 1e18);
+        _mockSignalUsd(0);
+
+        (uint256 settled0BeforeSwap, uint256 settled1BeforeSwap) = vtsOrchestrator.getPositionSettledAmounts(positionId);
+        settled1BeforeSwap;
+        _swapCore(false, -int256(50e18));
+        (uint256 settled0AfterSwap, uint256 settled1AfterSwap) = vtsOrchestrator.getPositionSettledAmounts(positionId);
+        settled1AfterSwap;
+        assertEq(
+            settled0AfterSwap,
+            settled0BeforeSwap,
+            "precondition: swap-driven deficit growth must not be crystallised until settlement"
+        );
+
+        vtsOrchestrator.pausePool(corePoolKey.toId());
+
+        vm.prank(advancer);
+        unlockCaller.run(
+            address(vtsOrchestrator), abi.encodeWithSelector(VTSOrchestrator.checkpoint.selector, tokenId, 0, true)
+        );
+
+        (uint256 settled0AfterCheckpoint, uint256 settled1AfterCheckpoint) =
+            vtsOrchestrator.getPositionSettledAmounts(positionId);
+        settled1AfterCheckpoint;
+        assertLt(
+            settled0AfterCheckpoint,
+            settled0BeforeSwap,
+            "paused commitment checkpoint must crystallise deficit growth into settled before commitment math"
+        );
+
+        (uint256 cd0, uint256 cd1) = _commitmentDeficit(positionId);
+        assertTrue(cd0 > 0 || cd1 > 0, "expected commitment deficit after growth-aware paused checkpoint");
+    }
+
+    /// @dev Same as pool-pause regression but under global pause.
+    function test_checkpoint_withCommitment_whenGloballyPaused_settles_growth_before_commitment_deficit() public {
+        (uint256 tokenId, PositionId positionId,,) = _createCommittedPosition();
+        address advancer = liquiditySignal.mmState.advancer;
+
+        bytes memory signalBytes = abi.encode(liquiditySignal);
+        vm.mockCall(
+            address(signalManager),
+            abi.encodeWithSelector(
+                bytes4(keccak256("verifyLiquiditySignal(address,bytes,bool)")),
+                liquiditySignal.mmState.owner,
+                signalBytes,
+                true
+            ),
+            abi.encode(true, 10)
+        );
+
+        _mockLccPrices(1e18, 1e18);
+        _mockSignalUsd(0);
+
+        (uint256 settled0BeforeSwap, uint256 settled1BeforeSwapG) =
+            vtsOrchestrator.getPositionSettledAmounts(positionId);
+        settled1BeforeSwapG;
+        _swapCore(false, -int256(50e18));
+
+        vm.prank(vtsOrchestrator.owner());
+        vtsOrchestrator.setGlobalPause(true);
+
+        vm.prank(advancer);
+        unlockCaller.run(
+            address(vtsOrchestrator), abi.encodeWithSelector(VTSOrchestrator.checkpoint.selector, tokenId, 0, true)
+        );
+
+        (uint256 settled0AfterCheckpoint, uint256 settled1AfterCheckpointG2) =
+            vtsOrchestrator.getPositionSettledAmounts(positionId);
+        settled1AfterCheckpointG2;
+        assertLt(settled0AfterCheckpoint, settled0BeforeSwap, "global pause: growth must crystallise before commitment");
+
+        (uint256 cd0, uint256 cd1) = _commitmentDeficit(positionId);
+        assertTrue(cd0 > 0 || cd1 > 0, "global pause: commitment deficit should be recorded");
+    }
+
+    /// @dev Soft pause: `onSeize` pre-check remains available under pool pause (seizure path is not pause-gated).
+    function test_onSeize_validateSeize_succeeds_whenPoolPaused_after_checkpoint_and_warp() public {
+        (uint256 tokenId,,,) = _createCommittedPosition();
+
+        _mockLccPrices(1e18, 1e18);
+        _mockSignalUsd(0);
+        unlockCaller.run(
+            address(vtsOrchestrator), abi.encodeWithSelector(VTSOrchestrator.checkpoint.selector, tokenId, 0, true)
+        );
+
+        vtsOrchestrator.pausePool(corePoolKey.toId());
+
+        vm.warp(block.timestamp + 10_000_000);
+
+        unlockCaller.run(address(vtsOrchestrator), abi.encodeWithSelector(VTSOrchestrator.onSeize.selector, tokenId, 0));
+    }
+
     // ============================================================
     // Signal Lifecycle Tests
     // ============================================================

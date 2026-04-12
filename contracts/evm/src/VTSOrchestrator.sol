@@ -523,6 +523,22 @@ contract VTSOrchestrator is
         }
     }
 
+    /// @dev Growth must be settled before `checkpointWithCommitment` reads `pa.settled`. When paused, the public
+    ///      `settlePositionGrowths` entrypoint is restricted to CoreHook; this orchestrator-only path performs the
+    ///      same settlement for `checkpoint(..., true)` without widening arbitrary third-party refresh during pause.
+    function _settleGrowthsBeforeCheckpoint(PositionId positionId, bool withCommitment) internal {
+        if (!isPositionValid(positionId, false)) {
+            return;
+        }
+        PoolId poolId = s.positions[positionId].poolId;
+        bool poolOrGlobalPaused = s.isPaused || s.pools[poolId].isPaused;
+        if (poolOrGlobalPaused && withCommitment) {
+            VTSPositionLib.settlePositionGrowths(s, poolManager, positionId);
+        } else {
+            settlePositionGrowths(positionId);
+        }
+    }
+
     /// @notice Called by CoreHook after add/remove liquidity to update position state and process fees
     /// @dev Consolidates all delta management for both MM and DirectLP positions.
     ///      Pause policy is enforced inside `VTSPositionLib.touchPosition` based on `liquidityDelta` and VTS storage.
@@ -801,15 +817,12 @@ contract VTSOrchestrator is
         PositionId positionId = getPositionId(commitId, positionIndex);
         _assertPositionValid(positionId, true);
 
-        ///      When the pool (or VTS globally) is paused, `settlePositionGrowths` is CoreHook-only; for
-        ///      `withCommitment == true` we skip that call so advancers can still run `checkpointWithCommitment`
-        ///      and persist `commitmentDeficit` (see COMMIT-02 / COMMIT-02A in `INVARIANTS.md`). Paused removes
-        ///      still settle growth in `CoreHook` before `touchPosition`; other checkpoints keep settle-first.
-        PoolId poolId = s.positions[positionId].poolId;
-        bool poolOrGlobalPaused = s.isPaused || s.pools[poolId].isPaused;
-        if (!(poolOrGlobalPaused && withCommitment)) {
-            settlePositionGrowths(positionId);
-        }
+        ///      When the pool (or VTS globally) is paused, public `settlePositionGrowths` is CoreHook-only so
+        ///      arbitrary third parties cannot refresh growth during pause. Commitment checkpoints must still run on
+        ///      growth-settled accounting (see COMMIT-02 / COMMIT-02A in `INVARIANTS.md`): for paused
+        ///      `withCommitment == true` we settle via this orchestrator path only, then run the linked checkpoint.
+        ///      Paused `checkpoint(..., false)` and public `calcRFS` / `settlePositionGrowths` remain CoreHook-only.
+        _settleGrowthsBeforeCheckpoint(positionId, withCommitment);
 
         RFSCheckpoint memory checkpointOut =
             VTSLifecycleLinkedLib.checkpoint(s, _lifecycleContext(), commitId, withCommitment, positionId);
