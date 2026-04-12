@@ -1745,7 +1745,8 @@ contract MMPositionManagerActionsTest is MarketTestBase, MarketMakerTestBase {
                 tokenId,
                 positionIndex,
                 expectedDelta,
-                true
+                true,
+                false
             )
         );
 

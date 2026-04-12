@@ -136,7 +136,7 @@ contract SETTLE02 {
 
             BalanceDelta delta = toBalanceDelta(-int128(uint128(c.requested0)), -int128(uint128(c.requested1)));
             try harness.onMMSettle(
-                IPoolManager(address(poolManager)), vault, positionId, lccCurrency0, lccCurrency1, delta, true
+                IPoolManager(address(poolManager)), vault, positionId, lccCurrency0, lccCurrency1, delta, true, false
             ) returns (
                 BalanceDelta settlementDelta, bool, uint256
             ) {
@@ -197,7 +197,7 @@ contract SETTLE02 {
 
             BalanceDelta delta = toBalanceDelta(int128(uint128(c.requested0)), int128(uint128(c.requested1)));
             try harness.onMMSettle(
-                IPoolManager(address(poolManager)), vault, positionId, lccCurrency0, lccCurrency1, delta, true
+                IPoolManager(address(poolManager)), vault, positionId, lccCurrency0, lccCurrency1, delta, true, false
             ) returns (
                 BalanceDelta settlementDelta, bool, uint256
             ) {

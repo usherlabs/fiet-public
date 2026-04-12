@@ -160,7 +160,8 @@ contract VTSPositionLibEchidnaHarness {
         Currency lccCurrency0,
         Currency lccCurrency1,
         BalanceDelta delta,
-        bool isSeizing
+        bool isSeizing,
+        bool fromDeltas
     ) external returns (BalanceDelta settlementDelta, bool rfsOpen, uint256 seizedLiquidityUnits) {
         Position memory pos = s.positions[positionId];
         if (pos.owner == address(0)) revert("VTSPositionLib: Invalid position");
@@ -171,7 +172,8 @@ contract VTSPositionLibEchidnaHarness {
             lccCurrency0: lccCurrency0,
             lccCurrency1: lccCurrency1,
             delta: delta,
-            isSeizing: isSeizing
+            isSeizing: isSeizing,
+            fromDeltas: fromDeltas
         });
         SettleResult memory result = VTSLifecycleLinkedLib._executeMMSettleFromParams(s, poolManager, p);
         return (result.settlementDelta, result.rfsOpen, result.seizedLiquidityUnits);

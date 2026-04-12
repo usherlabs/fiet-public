@@ -73,9 +73,10 @@ contract VTSLifecycleLinkedLibHarness {
         PositionId positionId,
         PoolId poolId,
         BalanceDelta amountDelta,
-        bool isSeizing
+        bool isSeizing,
+        bool fromDeltas
     ) external returns (SettleResult memory) {
-        return VTSLifecycleLinkedLib.onMMSettle(s, ctx, factory, positionId, poolId, amountDelta, isSeizing);
+        return VTSLifecycleLinkedLib.onMMSettle(s, ctx, factory, positionId, poolId, amountDelta, isSeizing, fromDeltas);
     }
 
     function validateMMOperation(

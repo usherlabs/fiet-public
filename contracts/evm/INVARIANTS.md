@@ -474,6 +474,31 @@ being an informal “should”.
   - The stricter withdrawal ordering prevents a later delta-backed settle from deducting the same exported value from
     source `pa.settled` a second time.
 
+### SETTLE-04: MM in-hook protocol credit must not over-clear `requiredSettlementDelta` when deficit is cured first
+
+- **Statement**: For MM liquidity increases that settle protocol credit inside `_processMMOperations` (in-hook path with
+  `clampToRequiredSettlement`), `_updateSettlement` / `_vUpdateSettlement` may apply a single positive deposit amount across
+  `cumulativeDeficit`, `commitmentDeficit`, and `pa.settled` in the usual netting order (**COV-02**). The portion of
+  protocol credit that cures deficits without increasing `pa.settled` must still be debited from positive underlying
+  delta (full economic consumption), but it must **not** be treated as having satisfied the MM add deposit requirement
+  encoded in `requiredSettlementDelta`. Only the actual `pa.settled` lane delta may reduce that remainder before the
+  post-hook underlying settlement step.
+- **Protocol rule**:
+  - **Credit consumption** follows total applied amount from settlement (`totalApplied`): deficit cure + settled increase
+    (and pool accounting such as DICE principal on the cumulative-deficit leg) stays internally consistent.
+  - **Requirement bookkeeping** for MM add backing vs the live negative `requiredSettlementDelta` advances only by the
+    settled leg (`settledDeltaOnly`), so a position cannot skip posting the still-outstanding deposit obligation merely
+    because credit first cleared `cumulativeDeficit` / `commitmentDeficit`.
+- **Enforced by**:
+  - `src/libraries/VTSPositionLib.sol::_vUpdateSettlement` (returns both `totalApplied` and `next - cur` on `pa.settled`)
+  - `src/libraries/VTSPositionLib.sol::_consumePositiveUnderlyingDeltaForSettlementLane` when `clampToRequiredSettlement`
+    is true (MM in-hook settlement only; `onMMSettle` settle-from-deltas keeps `clampToRequiredSettlement = false`).
+- **Regression tests**:
+  - `test/libraries/VTSPositionLib.mutation.unit.t.sol`:
+    - `test_touchPosition_mmIncrease_cumulativeDeficit_doesNotOverClearRequiredSettlement`
+    - `test_touchPosition_mmIncrease_cumulativeDeficit_surplusProtocolCredit_preservesShortfallAndSurplus`
+    - `test_touchPosition_mmIncrease_mixedLane_cumulativeDeficitToken0_exactToken1`
+
 ### SEIZE-01: Seizability is token-lane scoped and aggregated at position level
 
 - **Statement**:

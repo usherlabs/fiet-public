@@ -67,7 +67,7 @@ contract VTSPositionLibOnMMSettleTest is VTSLibTestBase {
         BalanceDelta delta = toBalanceDelta(-50e18, -50e18); // negative = deposit
 
         (BalanceDelta settlementDelta,,) =
-            harness.onMMSettle(manager, mockVault, positionId, lccCurrency0, lccCurrency1, delta, false);
+            harness.onMMSettle(manager, mockVault, positionId, lccCurrency0, lccCurrency1, delta, false, false);
 
         // Should clamp: only 20 can be deposited (100 - 80)
         assertEq(settlementDelta.amount0(), -20e18, "Should clamp deposit0 to available commitment");
@@ -101,7 +101,7 @@ contract VTSPositionLibOnMMSettleTest is VTSLibTestBase {
         BalanceDelta delta = toBalanceDelta(-50e18, -30e18);
 
         (BalanceDelta settlementDelta,,) =
-            harness.onMMSettle(manager, mockVault, positionId, lccCurrency0, lccCurrency1, delta, false);
+            harness.onMMSettle(manager, mockVault, positionId, lccCurrency0, lccCurrency1, delta, false, false);
 
         // Settlement should match the deposit (currencyDelta doesn't clamp inactive positions)
         assertEq(settlementDelta.amount0(), -50e18, "settlementDelta0 should match deposit");
@@ -152,7 +152,7 @@ contract VTSPositionLibOnMMSettleTest is VTSLibTestBase {
         BalanceDelta delta = toBalanceDelta(-80e18, -60e18);
 
         (BalanceDelta settlementDelta,,) =
-            harness.onMMSettle(manager, mockVault, positionId, lccCurrency0, lccCurrency1, delta, false);
+            harness.onMMSettle(manager, mockVault, positionId, lccCurrency0, lccCurrency1, delta, false, false);
 
         // Settlement should match the full deposit (not clamped by currencyDelta for inactive positions)
         // This allows settlement to be greater than original negative currency delta
@@ -201,7 +201,7 @@ contract VTSPositionLibOnMMSettleTest is VTSLibTestBase {
         BalanceDelta delta = toBalanceDelta(-20e18, -20e18);
 
         (BalanceDelta settlementDelta,,) =
-            harness.onMMSettle(manager, mockVault, positionId, lccCurrency0, lccCurrency1, delta, false);
+            harness.onMMSettle(manager, mockVault, positionId, lccCurrency0, lccCurrency1, delta, false, false);
 
         // Settlement should match the full deposit (not clamped by currencyDelta for inactive positions)
         // This allows settlement to be greater than original negative currency delta
@@ -227,7 +227,7 @@ contract VTSPositionLibOnMMSettleTest is VTSLibTestBase {
         BalanceDelta delta = toBalanceDelta(-1e18, -1e18);
 
         vm.expectRevert("VTSPositionLib: Invalid position");
-        harness.onMMSettle(manager, mockVault, invalid, lccCurrency0, lccCurrency1, delta, false);
+        harness.onMMSettle(manager, mockVault, invalid, lccCurrency0, lccCurrency1, delta, false, false);
     }
 
     // ============================================================
@@ -249,7 +249,7 @@ contract VTSPositionLibOnMMSettleTest is VTSLibTestBase {
         BalanceDelta delta = toBalanceDelta(160e18, 160e18); // positive = withdrawal
 
         (BalanceDelta settlementDelta, bool rfsOpen,) =
-            harness.onMMSettle(manager, mockVault, positionId, lccCurrency0, lccCurrency1, delta, false);
+            harness.onMMSettle(manager, mockVault, positionId, lccCurrency0, lccCurrency1, delta, false, false);
 
         assertFalse(rfsOpen, "RFS should be closed");
         // Should clamp to available excess (200 - 50 = 150)
@@ -270,7 +270,7 @@ contract VTSPositionLibOnMMSettleTest is VTSLibTestBase {
         BalanceDelta delta = toBalanceDelta(200e18, 200e18);
 
         (BalanceDelta settlementDelta, bool rfsOpen,) =
-            harness.onMMSettle(manager, mockVault, positionId, lccCurrency0, lccCurrency1, delta, false);
+            harness.onMMSettle(manager, mockVault, positionId, lccCurrency0, lccCurrency1, delta, false, false);
 
         assertFalse(rfsOpen, "RFS should be closed");
         // Should clamp to available (100 - 50 = 50)
@@ -296,7 +296,7 @@ contract VTSPositionLibOnMMSettleTest is VTSLibTestBase {
         BalanceDelta delta = toBalanceDelta(50e18, 50e18); // withdrawal
 
         vm.expectRevert(abi.encodeWithSelector(Errors.RFSOpenForPosition.selector, positionId));
-        harness.onMMSettle(manager, mockVault, positionId, lccCurrency0, lccCurrency1, delta, false);
+        harness.onMMSettle(manager, mockVault, positionId, lccCurrency0, lccCurrency1, delta, false, false);
     }
 
     function test_onMMSettle_withdrawals_phase2ShortfallToken1_clampsBeforeSettledMutation() public {
@@ -312,7 +312,8 @@ contract VTSPositionLibOnMMSettleTest is VTSLibTestBase {
         mockVault.setAvailableLiquidity(100e18, 60e18);
         BalanceDelta delta = toBalanceDelta(100e18, 100e18);
 
-        (, bool rfsOpen,) = harness.onMMSettle(manager, mockVault, positionId, lccCurrency0, lccCurrency1, delta, false);
+        (, bool rfsOpen,) =
+            harness.onMMSettle(manager, mockVault, positionId, lccCurrency0, lccCurrency1, delta, false, false);
 
         assertFalse(rfsOpen, "RFS should be closed for withdrawals");
 
@@ -336,7 +337,8 @@ contract VTSPositionLibOnMMSettleTest is VTSLibTestBase {
         mockVault.setAvailableLiquidity(60e18, 100e18);
         BalanceDelta delta = toBalanceDelta(100e18, 100e18);
 
-        (, bool rfsOpen,) = harness.onMMSettle(manager, mockVault, positionId, lccCurrency0, lccCurrency1, delta, false);
+        (, bool rfsOpen,) =
+            harness.onMMSettle(manager, mockVault, positionId, lccCurrency0, lccCurrency1, delta, false, false);
 
         assertFalse(rfsOpen, "RFS should remain closed after the partial clamp");
 
@@ -372,7 +374,7 @@ contract VTSPositionLibOnMMSettleTest is VTSLibTestBase {
         mockVault.setAvailableLiquidity(60e18, 100e18);
 
         (, bool rfsOpen,) = harness.onMMSettle(
-            manager, mockVault, positionId, lccCurrency0, lccCurrency1, toBalanceDelta(100e18, 0), true
+            manager, mockVault, positionId, lccCurrency0, lccCurrency1, toBalanceDelta(100e18, 0), true, false
         );
 
         assertFalse(rfsOpen, "RFS should remain closed after the partial clamp");
@@ -417,7 +419,7 @@ contract VTSPositionLibOnMMSettleTest is VTSLibTestBase {
 
         BalanceDelta delta = toBalanceDelta(100e18, 100e18);
         (BalanceDelta settlementDelta, bool rfsOpen,) =
-            harness.onMMSettle(manager, mockVault, positionId, lccCurrency0, lccCurrency1, delta, false);
+            harness.onMMSettle(manager, mockVault, positionId, lccCurrency0, lccCurrency1, delta, false, false);
 
         assertFalse(rfsOpen, "RFS should be closed for withdrawals");
         assertEq(settlementDelta.amount0(), 100e18, "token0 should use dry cap");
@@ -434,7 +436,7 @@ contract VTSPositionLibOnMMSettleTest is VTSLibTestBase {
         harness.setPositionActive(positionId, true);
 
         (, bool rfsOpen,) = harness.onMMSettle(
-            manager, mockVault, positionId, lccCurrency0, lccCurrency1, toBalanceDelta(-1e18, 0), false
+            manager, mockVault, positionId, lccCurrency0, lccCurrency1, toBalanceDelta(-1e18, 0), false, false
         );
 
         // token0 deposit is clamped by commitmentMax(0), while token1 still reports open RFS.
@@ -464,7 +466,8 @@ contract VTSPositionLibOnMMSettleTest is VTSLibTestBase {
         mockVault.setAvailableLiquidity(type(int128).max, type(int128).max);
         BalanceDelta delta = toBalanceDelta(20e18, 0);
 
-        (, bool rfsOpen,) = harness.onMMSettle(manager, mockVault, positionId, lccCurrency0, lccCurrency1, delta, false);
+        (, bool rfsOpen,) =
+            harness.onMMSettle(manager, mockVault, positionId, lccCurrency0, lccCurrency1, delta, false, false);
 
         assertFalse(rfsOpen, "RFS should be closed");
         (,, uint256 settled0, uint256 settled1,,) = harness.getPositionAccounting(positionId);
@@ -491,7 +494,7 @@ contract VTSPositionLibOnMMSettleTest is VTSLibTestBase {
         mockVault.setAvailableLiquidity(60e18, 0);
 
         (, bool rfsOpen,) = harness.onMMSettle(
-            manager, mockVault, positionId, lccCurrency0, lccCurrency1, toBalanceDelta(100e18, 0), false
+            manager, mockVault, positionId, lccCurrency0, lccCurrency1, toBalanceDelta(100e18, 0), false, false
         );
 
         assertFalse(rfsOpen, "RFS should remain closed");
@@ -522,7 +525,7 @@ contract VTSPositionLibOnMMSettleTest is VTSLibTestBase {
         mockVault.setAvailableLiquidity(type(int128).max, type(int128).max);
 
         (, bool rfsOpen,) = harness.onMMSettle(
-            manager, mockVault, positionId, lccCurrency0, lccCurrency1, toBalanceDelta(10e18, 0), false
+            manager, mockVault, positionId, lccCurrency0, lccCurrency1, toBalanceDelta(10e18, 0), false, false
         );
 
         assertFalse(rfsOpen, "RFS should stay closed for the immediate settleable withdrawal");
@@ -547,7 +550,7 @@ contract VTSPositionLibOnMMSettleTest is VTSLibTestBase {
         harness.setUnderlyingDelta(underlyingCurrency1, owner, 40e18);
 
         (, bool rfsOpen,) = harness.onMMSettle(
-            manager, mockVault, positionId, lccCurrency0, lccCurrency1, toBalanceDelta(-50e18, 20e18), false
+            manager, mockVault, positionId, lccCurrency0, lccCurrency1, toBalanceDelta(-50e18, 20e18), false, false
         );
 
         assertFalse(rfsOpen, "inactive mixed settlement should not open RFS");
@@ -577,7 +580,9 @@ contract VTSPositionLibOnMMSettleTest is VTSLibTestBase {
         harness.setUnderlyingDelta(underlyingCurrency0, owner, 50e18);
 
         vm.expectRevert(abi.encodeWithSelector(Errors.RFSOpenForPosition.selector, positionId));
-        harness.onMMSettle(manager, mockVault, positionId, lccCurrency0, lccCurrency1, toBalanceDelta(20e18, 0), false);
+        harness.onMMSettle(
+            manager, mockVault, positionId, lccCurrency0, lccCurrency1, toBalanceDelta(20e18, 0), false, false
+        );
     }
 
     function test_onMMSettle_activeMixedDepositAndWithdrawal_refreshesRFSBeforeWithdrawal() public {
@@ -594,7 +599,7 @@ contract VTSPositionLibOnMMSettleTest is VTSLibTestBase {
         harness.setUnderlyingDelta(underlyingCurrency1, owner, 40e18);
 
         (, bool rfsOpen,) = harness.onMMSettle(
-            manager, mockVault, positionId, lccCurrency0, lccCurrency1, toBalanceDelta(-30e18, 20e18), false
+            manager, mockVault, positionId, lccCurrency0, lccCurrency1, toBalanceDelta(-30e18, 20e18), false, false
         );
 
         assertFalse(rfsOpen, "deposit leg should refresh RFS before the withdrawal leg executes");
@@ -632,16 +637,16 @@ contract VTSPositionLibOnMMSettleTest is VTSLibTestBase {
         // Try to withdraw 100 each during seizure
         BalanceDelta delta = toBalanceDelta(100e18, 100e18);
 
-        (BalanceDelta settlementDelta,,) =
-            harness.onMMSettle(
-                manager,
-                mockVault,
-                positionId,
-                lccCurrency0,
-                lccCurrency1,
-                delta,
-                true // isSeizing
-            );
+        (BalanceDelta settlementDelta,,) = harness.onMMSettle(
+            manager,
+            mockVault,
+            positionId,
+            lccCurrency0,
+            lccCurrency1,
+            delta,
+            true, // isSeizing
+            false
+        );
 
         // Should clamp to positionRequiredSettlementDelta
         assertEq(settlementDelta.amount0(), 50e18, "Seizing withdrawal0 clamped by currencyDelta");
@@ -666,7 +671,7 @@ contract VTSPositionLibOnMMSettleTest is VTSLibTestBase {
         BalanceDelta delta = toBalanceDelta(50e18, 50e18);
 
         (BalanceDelta settlementDelta,,) =
-            harness.onMMSettle(manager, mockVault, positionId, lccCurrency0, lccCurrency1, delta, true);
+            harness.onMMSettle(manager, mockVault, positionId, lccCurrency0, lccCurrency1, delta, true, false);
 
         // Should clamp to zero when no currencyDelta
         assertEq(settlementDelta.amount0(), 0, "Seizing withdrawal0 should be zero with no currencyDelta");
@@ -691,16 +696,16 @@ contract VTSPositionLibOnMMSettleTest is VTSLibTestBase {
         // Seizer tries to deposit 100 each
         BalanceDelta delta = toBalanceDelta(-100e18, -100e18); // negative = deposit
 
-        (BalanceDelta settlementDelta, bool rfsOpen,) =
-            harness.onMMSettle(
-                manager,
-                mockVault,
-                positionId,
-                lccCurrency0,
-                lccCurrency1,
-                delta,
-                true // isSeizing
-            );
+        (BalanceDelta settlementDelta, bool rfsOpen,) = harness.onMMSettle(
+            manager,
+            mockVault,
+            positionId,
+            lccCurrency0,
+            lccCurrency1,
+            delta,
+            true, // isSeizing
+            false
+        );
 
         assertFalse(rfsOpen, "RFS should close after seizure deposit satisfies the open requirement");
         // Clamped to RfS requirement (50 each)
@@ -721,7 +726,7 @@ contract VTSPositionLibOnMMSettleTest is VTSLibTestBase {
         BalanceDelta delta = toBalanceDelta(-50e18, -50e18);
 
         (BalanceDelta settlementDelta, bool rfsOpen,) =
-            harness.onMMSettle(manager, mockVault, positionId, lccCurrency0, lccCurrency1, delta, true);
+            harness.onMMSettle(manager, mockVault, positionId, lccCurrency0, lccCurrency1, delta, true, false);
 
         assertFalse(rfsOpen, "RFS should be closed");
         // Should clamp to zero when no RfS requirement
@@ -747,7 +752,7 @@ contract VTSPositionLibOnMMSettleTest is VTSLibTestBase {
         BalanceDelta delta = toBalanceDelta(-100e18, -100e18);
 
         (BalanceDelta settlementDelta,,) =
-            harness.onMMSettle(manager, mockVault, positionId, lccCurrency0, lccCurrency1, delta, false);
+            harness.onMMSettle(manager, mockVault, positionId, lccCurrency0, lccCurrency1, delta, false, false);
 
         // settlementDelta should be full deposit amount (deficit coverage + settled increase)
         assertEq(settlementDelta.amount0(), -100e18, "settlementDelta0 should be total deposited");
@@ -775,7 +780,7 @@ contract VTSPositionLibOnMMSettleTest is VTSLibTestBase {
         BalanceDelta delta = toBalanceDelta(-50e18, -50e18);
 
         (BalanceDelta settlementDelta,,) =
-            harness.onMMSettle(manager, mockVault, positionId, lccCurrency0, lccCurrency1, delta, false);
+            harness.onMMSettle(manager, mockVault, positionId, lccCurrency0, lccCurrency1, delta, false, false);
 
         // Token0: 30 covers deficit, 20 goes to settled (reaches max) = total 50
         // Token1: 20 covers deficit, 30 goes to settled but clamped to 20 (reaches max) = total 40

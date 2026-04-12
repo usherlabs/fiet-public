@@ -121,7 +121,7 @@ contract SETTLE01 {
         (uint256 settledBefore0, uint256 settledBefore1) = harness.getSettled(positionId);
         bool revertedWithExpectedReason = false;
         try harness.onMMSettle(
-            IPoolManager(address(poolManager)), vault, positionId, lccCurrency0, lccCurrency1, delta, false
+            IPoolManager(address(poolManager)), vault, positionId, lccCurrency0, lccCurrency1, delta, false, false
         ) returns (
             BalanceDelta, bool, uint256
         ) {
@@ -159,7 +159,7 @@ contract SETTLE01 {
 
         bool success;
         try harness.onMMSettle(
-            IPoolManager(address(poolManager)), vault, positionId, lccCurrency0, lccCurrency1, delta, false
+            IPoolManager(address(poolManager)), vault, positionId, lccCurrency0, lccCurrency1, delta, false, false
         ) returns (
             BalanceDelta, bool, uint256
         ) {

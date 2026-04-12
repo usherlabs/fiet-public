@@ -467,7 +467,7 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
         BalanceDelta amountDelta = toBalanceDelta(-100, -100);
 
         vm.expectRevert(Errors.PoolManagerMustBeUnlocked.selector);
-        vtsOrchestrator.onMMSettle(IMarketFactory(marketFactory), tokenId, 0, amountDelta, false);
+        vtsOrchestrator.onMMSettle(IMarketFactory(marketFactory), tokenId, 0, amountDelta, false, false);
     }
 
     function test_revert_onSeize_whenPoolManagerLocked() public {
@@ -1517,7 +1517,7 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
         unlockCaller.run(
             address(vtsOrchestrator),
             abi.encodeWithSelector(
-                VTSOrchestrator.onMMSettle.selector, IMarketFactory(marketFactory), 0, 0, amountDelta, false
+                VTSOrchestrator.onMMSettle.selector, IMarketFactory(marketFactory), 0, 0, amountDelta, false, false
             )
         );
     }
@@ -1530,7 +1530,13 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
         unlockCaller.run(
             address(vtsOrchestrator),
             abi.encodeWithSelector(
-                VTSOrchestrator.onMMSettle.selector, IMarketFactory(marketFactory), tokenId, 0, depositDelta, false
+                VTSOrchestrator.onMMSettle.selector,
+                IMarketFactory(marketFactory),
+                tokenId,
+                0,
+                depositDelta,
+                false,
+                false
             )
         );
     }
@@ -1704,7 +1710,9 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
         vm.expectRevert(Errors.InvalidSender.selector);
         unlockCaller.run(
             address(vtsOrchestrator),
-            abi.encodeWithSelector(VTSOrchestrator.onMMSettle.selector, invalidFactory, tokenId, 0, depositDelta, false)
+            abi.encodeWithSelector(
+                VTSOrchestrator.onMMSettle.selector, invalidFactory, tokenId, 0, depositDelta, false, false
+            )
         );
     }
 
@@ -1721,7 +1729,13 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
         boundCaller.run(
             address(vtsOrchestrator),
             abi.encodeWithSelector(
-                VTSOrchestrator.onMMSettle.selector, IMarketFactory(marketFactory), tokenId, 0, depositDelta, false
+                VTSOrchestrator.onMMSettle.selector,
+                IMarketFactory(marketFactory),
+                tokenId,
+                0,
+                depositDelta,
+                false,
+                false
             )
         );
     }
@@ -2176,7 +2190,13 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
         unlockCaller.run(
             address(vtsOrchestrator),
             abi.encodeWithSelector(
-                VTSOrchestrator.onMMSettle.selector, IMarketFactory(marketFactory), tokenId, 0, depositDelta, true
+                VTSOrchestrator.onMMSettle.selector,
+                IMarketFactory(marketFactory),
+                tokenId,
+                0,
+                depositDelta,
+                true,
+                false
             )
         );
     }

@@ -1132,7 +1132,8 @@ contract VTSPositionLibMutationUnitTest is Test {
                 Currency.wrap(address(lcc0)),
                 Currency.wrap(address(lcc1)),
                 delta,
-                true
+                true,
+                false
             );
             settleAmount1 = settlementDelta.amount1();
         }
@@ -1589,6 +1590,102 @@ contract VTSPositionLibMutationUnitTest is Test {
             int256(surplus1 - setup.required1),
             "token1 should retain only the surplus credit remainder"
         );
+    }
+
+    /// @notice In-hook MM increase: credit that cures `cumulativeDeficit` must not over-clear `requiredSettlementDelta`.
+    /// @dev Regression for `_vUpdateSettlement`: `totalApplied` debits underlying credit, but only `settled` delta
+    ///      should reduce the MM deposit requirement carried past in-hook settlement.
+    function test_touchPosition_mmIncrease_cumulativeDeficit_doesNotOverClearRequiredSettlement() public {
+        MMIncreaseInHookSetup memory setup = _setupMmIncreaseInHookSettlementCase(0, 0);
+        uint256 d0 = 3e18;
+        assertGt(setup.required0, d0, "precondition: token0 requirement must exceed deficit");
+        harness.setCumulativeDeficit(setup.positionId, d0, 0);
+
+        setup.tp.hookData = PositionModificationHookDataLib.encodeWithInHookProtocolSettlement(
+            1, 0, owner, setup.required0, setup.required1
+        );
+        harness.setUnderlyingDelta(setup.underlying0, owner, setup.required0.toInt128());
+        harness.setUnderlyingDelta(setup.underlying1, owner, setup.required1.toInt128());
+
+        harness.touchPosition(setup.ctx, setup.tp);
+
+        (,, uint256 settled0, uint256 settled1, uint256 cd0After, uint256 cd1After) =
+            harness.getPositionAccounting(setup.positionId);
+        assertEq(cd0After, 0, "token0 cumulative deficit should be fully cured by credit");
+        assertEq(cd1After, 0, "token1 cumulative deficit should remain zero");
+        assertEq(settled1, setup.required1, "token1 should settle to requirement when no deficit");
+        assertEq(
+            settled0,
+            setup.required0 - d0,
+            "token0 settled should increase only by credit after deficit cure, not full credit"
+        );
+        assertEq(harness.getUnderlyingDelta(setup.underlying0, owner), -int256(d0), "token0 should still owe shortfall");
+        assertEq(harness.getUnderlyingDelta(setup.underlying1, owner), 0, "token1 credit should be fully consumed");
+    }
+
+    /// @notice Deficit lane + surplus credit: in-hook clamps to requirement; surplus remains; shortfall still owed for deficit leg.
+    function test_touchPosition_mmIncrease_cumulativeDeficit_surplusProtocolCredit_preservesShortfallAndSurplus()
+        public
+    {
+        MMIncreaseInHookSetup memory setup = _setupMmIncreaseInHookSettlementCase(0, 0);
+        uint256 d0 = 3e18;
+        assertGt(setup.required0, d0, "precondition: token0 requirement must exceed deficit");
+        harness.setCumulativeDeficit(setup.positionId, d0, 0);
+
+        uint256 surplus0 = setup.required0 + 9e18;
+        uint256 surplus1 = setup.required1 + 5e18;
+        setup.tp.hookData =
+            PositionModificationHookDataLib.encodeWithInHookProtocolSettlement(1, 0, owner, surplus0, surplus1);
+        harness.setUnderlyingDelta(setup.underlying0, owner, surplus0.toInt128());
+        harness.setUnderlyingDelta(setup.underlying1, owner, surplus1.toInt128());
+
+        harness.touchPosition(setup.ctx, setup.tp);
+
+        (,, uint256 settled0, uint256 settled1, uint256 cd0After, uint256 cd1After) =
+            harness.getPositionAccounting(setup.positionId);
+        assertEq(cd0After, 0, "token0 cumulative deficit should clear");
+        assertEq(cd1After, 0, "token1 cumulative deficit should remain zero");
+        assertEq(
+            settled0,
+            setup.required0 - d0,
+            "token0 settled increases by credit after deficit; in-hook credit is clamped to required magnitude"
+        );
+        assertEq(settled1, setup.required1, "token1 settled should clamp to live requirement");
+        assertEq(
+            harness.getUnderlyingDelta(setup.underlying0, owner),
+            int256(surplus0 - setup.required0) - int256(d0),
+            "token0: surplus minus consumed requirement, minus deficit shortfall still booked"
+        );
+        assertEq(
+            harness.getUnderlyingDelta(setup.underlying1, owner),
+            int256(surplus1 - setup.required1),
+            "token1 should retain surplus only"
+        );
+    }
+
+    /// @notice Mixed lanes: cumulative deficit on token0 only; token1 exact credit — per-lane shortfall and full settle.
+    function test_touchPosition_mmIncrease_mixedLane_cumulativeDeficitToken0_exactToken1() public {
+        MMIncreaseInHookSetup memory setup = _setupMmIncreaseInHookSettlementCase(0, 0);
+        uint256 d0 = 3e18;
+        assertGt(setup.required0, d0, "precondition: token0 requirement must exceed deficit");
+        harness.setCumulativeDeficit(setup.positionId, d0, 0);
+
+        setup.tp.hookData = PositionModificationHookDataLib.encodeWithInHookProtocolSettlement(
+            1, 0, owner, setup.required0, setup.required1
+        );
+        harness.setUnderlyingDelta(setup.underlying0, owner, setup.required0.toInt128());
+        harness.setUnderlyingDelta(setup.underlying1, owner, setup.required1.toInt128());
+
+        harness.touchPosition(setup.ctx, setup.tp);
+
+        (,, uint256 settled0, uint256 settled1, uint256 cd0After, uint256 cd1After) =
+            harness.getPositionAccounting(setup.positionId);
+        assertEq(cd0After, 0, "token0 deficit should clear");
+        assertEq(cd1After, 0, "token1 deficit should stay zero");
+        assertEq(settled0, setup.required0 - d0, "token0 settled increases by credit after deficit only");
+        assertEq(settled1, setup.required1, "token1 should fully settle with no deficit");
+        assertEq(harness.getUnderlyingDelta(setup.underlying0, owner), -int256(d0), "token0 owes shortfall");
+        assertEq(harness.getUnderlyingDelta(setup.underlying1, owner), 0, "token1 credit fully consumed");
     }
 
     /// @notice Two MM full burns in one logical batch must accumulate MMPM underlying settlement delta (SETTLE-03 + DELTA-01).

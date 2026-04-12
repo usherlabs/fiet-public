@@ -688,6 +688,8 @@ contract VTSOrchestrator is
     /// @param positionIndex The position index within the commit
     /// @param amountDelta The amount delta for settlement
     /// @param isSeizing Whether the position is being seized
+    /// @param fromDeltas When true, deposit lanes consume existing positive underlying delta (settle-from-deltas).
+    ///        Withdrawal lanes ignore this flag; see `VTSLifecycleLinkedLib._executeMMSettleFromParams`.
     /// @return settlementDelta The settlement balance delta
     /// @return rfsOpen Whether the RFS is open after settlement
     /// @return seizedLiquidityUnits The amount of liquidity units seized (0 if not seizing)
@@ -696,7 +698,8 @@ contract VTSOrchestrator is
         uint256 commitId,
         uint256 positionIndex,
         BalanceDelta amountDelta,
-        bool isSeizing
+        bool isSeizing,
+        bool fromDeltas
     )
         external
         onlyIfPoolManagerUnlocked
@@ -717,7 +720,7 @@ contract VTSOrchestrator is
         }
 
         SettleResult memory result = VTSLifecycleLinkedLib.onMMSettle(
-            s, _lifecycleContext(), factory, positionId, pos.poolId, amountDelta, isSeizing
+            s, _lifecycleContext(), factory, positionId, pos.poolId, amountDelta, isSeizing, fromDeltas
         );
         settlementDelta = result.settlementDelta;
         rfsOpen = result.rfsOpen;

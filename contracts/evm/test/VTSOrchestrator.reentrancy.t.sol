@@ -160,7 +160,13 @@ contract ReentrantSignalManager {
             BalanceDelta amountDelta = toBalanceDelta(0, 0);
             return target.call(
                 abi.encodeWithSelector(
-                    VTSOrchestrator.onMMSettle.selector, marketFactory, commitId, positionIndex, amountDelta, false
+                    VTSOrchestrator.onMMSettle.selector,
+                    marketFactory,
+                    commitId,
+                    positionIndex,
+                    amountDelta,
+                    false,
+                    false
                 )
             );
         }

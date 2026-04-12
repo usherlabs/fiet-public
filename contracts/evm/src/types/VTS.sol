@@ -120,6 +120,8 @@ struct SettleParams {
     BalanceDelta delta;
     // Whether the position is being seized
     bool isSeizing;
+    // When true, deposit lanes settle from existing positive underlying delta (explicit settle-from-deltas path). No-op for withdrawals.
+    bool fromDeltas;
 }
 
 /// @notice Result of onMMSettle to reduce stack pressure

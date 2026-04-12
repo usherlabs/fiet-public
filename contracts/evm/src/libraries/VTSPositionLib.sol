@@ -76,6 +76,40 @@ library VTSPositionLib {
         bool isInflow;
     }
 
+    /// @dev Shared protocol-credit deposit inputs for MM add and explicit settle-from-deltas paths.
+    struct ProtocolCreditSettlementParams {
+        PositionId positionId;
+        address owner;
+        Currency lccCurrency0;
+        Currency lccCurrency1;
+        uint256 intendedSettle0;
+        uint256 intendedSettle1;
+        BalanceDelta requiredSettlementDelta;
+        BalanceDelta rfsDelta;
+        bool clampToRequiredSettlement;
+        bool isSeizing;
+    }
+
+    /// @dev Shared protocol-credit deposit result.
+    struct ProtocolCreditSettlementResult {
+        BalanceDelta settlementDelta;
+        BalanceDelta remainingRequiredSettlementDelta;
+    }
+
+    /// @dev Single-lane protocol-credit settlement inputs to keep helper calls below stack limits.
+    struct ProtocolCreditSettlementLaneParams {
+        PositionId positionId;
+        address owner;
+        Currency underlyingCurrency;
+        uint8 tokenIndex;
+        int128 currentUnderlyingDelta;
+        uint256 intendedSettle;
+        int128 requiredSettlementDelta;
+        int128 rfsDelta;
+        bool clampToRequiredSettlement;
+        bool isSeizing;
+    }
+
     // Maximum positive magnitude representable in int128
     uint256 internal constant INT128_MAX_U = uint256(type(uint128).max) >> 1;
 
@@ -191,19 +225,15 @@ library VTSPositionLib {
         applied;
     }
 
-    /// @notice Updates the settlement amount by a delta which could be positive or negative
-    /// @dev Shared by both local settlement flows and `VTSLifecycleLinkedLib`'s MM settlement path.
-    ///      Nets against cumulative deficit, then derived commit deficit, then applies to settled.
-    /// @param s The central VTS storage
-    /// @param id The position id
-    /// @param tokenIndex The token index (0 or 1)
-    /// @param delta The delta of the settlement
-    /// @return applied The total amount applied (deficit coverage + settled increase)
-    function _updateSettlement(VTSStorage storage s, PositionId id, uint8 tokenIndex, int256 delta)
+    /// @notice Verbose settlement update: returns total economic consumption and the `pa.settled` lane delta separately.
+    /// @dev `totalApplied` matches legacy `_updateSettlement` return (deficit coverage + settled change).
+    ///      `settledDeltaOnly` is `next - cur` on `pa.settled` for this lane only; amounts that cure
+    ///      `cumulativeDeficit` / `commitmentDeficit` without increasing settled appear only in `totalApplied`.
+    function _vUpdateSettlement(VTSStorage storage s, PositionId id, uint8 tokenIndex, int256 delta)
         internal
-        returns (int256 applied)
+        returns (int256 totalApplied, int256 settledDeltaOnly)
     {
-        if (delta == 0) return 0;
+        if (delta == 0) return (0, 0);
 
         PositionAccounting storage pa = s.positionAccounting[id];
 
@@ -278,14 +308,31 @@ library VTSPositionLib {
         pa.settled.set(tokenIndex, next);
         pa.cumulativeDeficit.set(tokenIndex, cumulativeDef);
 
+        settledDeltaOnly = next.toInt256() - cur.toInt256();
+
         // Update pool accounting via helper function.
         // This returns cumulativeDeficitCoverage + settledDelta.
-        applied = _updatePoolAccounting(s, id, tokenIndex, cur, next, cumulativeDeficitCoverage);
+        totalApplied = _updatePoolAccounting(s, id, tokenIndex, cur, next, cumulativeDeficitCoverage);
 
         // Preserve existing semantics: include both cumulativeDeficit and commitmentDeficit netting in applied.
         if (totalDeficitCoverage > cumulativeDeficitCoverage) {
-            applied += SafeCast.toInt256(totalDeficitCoverage - cumulativeDeficitCoverage);
+            totalApplied += SafeCast.toInt256(totalDeficitCoverage - cumulativeDeficitCoverage);
         }
+    }
+
+    /// @notice Updates the settlement amount by a delta which could be positive or negative
+    /// @dev Shared by both local settlement flows and `VTSLifecycleLinkedLib`'s MM settlement path.
+    ///      Nets against cumulative deficit, then derived commit deficit, then applies to settled.
+    /// @param s The central VTS storage
+    /// @param id The position id
+    /// @param tokenIndex The token index (0 or 1)
+    /// @param delta The delta of the settlement
+    /// @return applied The total amount applied (deficit coverage + settled increase)
+    function _updateSettlement(VTSStorage storage s, PositionId id, uint8 tokenIndex, int256 delta)
+        internal
+        returns (int256 applied)
+    {
+        (applied,) = _vUpdateSettlement(s, id, tokenIndex, delta);
     }
 
     // --------------------------------------------------
@@ -868,37 +915,91 @@ library VTSPositionLib {
         data.isSeizing = mmData.seizure.isSeizing;
     }
 
-    /// @dev Applies one deposit lane of in-hook protocol-credit settlement for MM add-liquidity paths.
-    ///      `requiredSettlementDelta` uses negative sign for deposit requirements, while `_updateSettlement`
-    ///      expects a positive deposit amount and returns the amount actually consumed after all clamping/netting.
-    function _applyInHookProtocolSettlementLane(
+    /// @dev Applies one protocol-credit deposit lane by consuming live positive underlying delta.
+    ///      `requiredSettlementDelta` uses negative sign for deposit requirements when `clampToRequiredSettlement`
+    ///      is enabled; otherwise it is ignored.
+    function _consumePositiveUnderlyingDeltaForSettlementLane(
         VTSStorage storage s,
-        PositionId positionId,
-        address owner,
-        Currency underlyingCurrency,
-        uint8 tokenIndex,
-        int128 requiredSettlementDelta,
-        int128 currentUnderlyingDelta,
-        uint256 intendedSettle
-    ) private returns (int128 remainingRequiredSettlementDelta) {
-        remainingRequiredSettlementDelta = requiredSettlementDelta;
-        if (requiredSettlementDelta >= 0 || currentUnderlyingDelta <= 0 || intendedSettle == 0) {
-            return remainingRequiredSettlementDelta;
+        ProtocolCreditSettlementLaneParams memory p
+    ) private returns (int128 settlementDelta, int128 remainingRequiredSettlementDelta) {
+        remainingRequiredSettlementDelta = p.requiredSettlementDelta;
+        if (p.currentUnderlyingDelta <= 0 || p.intendedSettle == 0) {
+            return (0, remainingRequiredSettlementDelta);
+        }
+        if (p.clampToRequiredSettlement && p.requiredSettlementDelta >= 0) {
+            return (0, remainingRequiredSettlementDelta);
         }
 
-        uint256 availableCredit = LiquidityUtils.safeInt128ToUint256(currentUnderlyingDelta);
-        uint256 requiredAmount = LiquidityUtils.safeInt128ToUint256(requiredSettlementDelta);
-        uint256 requestedAmount = intendedSettle;
+        uint256 availableCredit = LiquidityUtils.safeInt128ToUint256(p.currentUnderlyingDelta);
+        uint256 requestedAmount = p.intendedSettle;
         if (requestedAmount > availableCredit) requestedAmount = availableCredit;
-        if (requestedAmount > requiredAmount) requestedAmount = requiredAmount;
-        if (requestedAmount == 0) return remainingRequiredSettlementDelta;
+        if (p.clampToRequiredSettlement) {
+            uint256 requiredAmount = LiquidityUtils.safeInt128ToUint256(p.requiredSettlementDelta);
+            if (requestedAmount > requiredAmount) requestedAmount = requiredAmount;
+        }
+        if (p.isSeizing) {
+            if (p.rfsDelta <= 0) return (0, remainingRequiredSettlementDelta);
+            uint256 maxSeizingDeposit = LiquidityUtils.safeInt128ToUint256(p.rfsDelta);
+            if (requestedAmount > maxSeizingDeposit) requestedAmount = maxSeizingDeposit;
+        }
+        if (requestedAmount == 0) return (0, remainingRequiredSettlementDelta);
 
-        int256 applied = _updateSettlement(s, positionId, tokenIndex, requestedAmount.toInt256());
-        if (applied <= 0) return remainingRequiredSettlementDelta;
+        (int256 totalApplied, int256 settledDeltaOnly) =
+            _vUpdateSettlement(s, p.positionId, p.tokenIndex, requestedAmount.toInt256());
+        if (totalApplied <= 0) return (0, remainingRequiredSettlementDelta);
 
-        uint256 actualUsed = uint256(applied);
-        DynamicCurrencyDelta.accountDelta(underlyingCurrency, -actualUsed.toInt128(), owner);
-        remainingRequiredSettlementDelta += actualUsed.toInt128();
+        uint256 creditConsumed = uint256(totalApplied);
+        DynamicCurrencyDelta.accountDelta(p.underlyingCurrency, -creditConsumed.toInt128(), p.owner);
+        settlementDelta = -creditConsumed.toInt128();
+        if (p.clampToRequiredSettlement) {
+            // MM in-hook backing: only the portion that increases `pa.settled` satisfies the deposit requirement.
+            // Deficit / commitment-deficit cure consumes credit but must not over-clear `requiredSettlementDelta`.
+            if (settledDeltaOnly > 0) {
+                remainingRequiredSettlementDelta += uint256(settledDeltaOnly).toInt128();
+            }
+        }
+    }
+
+    /// @dev Shared protocol-credit deposit primitive reused by MM add and explicit settle-from-deltas paths.
+    function _settleFromPositiveUnderlyingDelta(VTSStorage storage s, ProtocolCreditSettlementParams memory p)
+        internal
+        returns (ProtocolCreditSettlementResult memory result)
+    {
+        BalanceDelta currentUnderlying =
+            DynamicCurrencyDelta.getUnderlyingDeltaPair(p.owner, p.lccCurrency0, p.lccCurrency1);
+        (int128 settle0, int128 remaining0) = _consumePositiveUnderlyingDeltaForSettlementLane(
+            s,
+            ProtocolCreditSettlementLaneParams({
+                positionId: p.positionId,
+                owner: p.owner,
+                underlyingCurrency: DynamicCurrencyDelta.lccToUnderlyingCurrency(p.lccCurrency0),
+                tokenIndex: 0,
+                currentUnderlyingDelta: currentUnderlying.amount0(),
+                intendedSettle: p.intendedSettle0,
+                requiredSettlementDelta: p.requiredSettlementDelta.amount0(),
+                rfsDelta: p.rfsDelta.amount0(),
+                clampToRequiredSettlement: p.clampToRequiredSettlement,
+                isSeizing: p.isSeizing
+            })
+        );
+        (int128 settle1, int128 remaining1) = _consumePositiveUnderlyingDeltaForSettlementLane(
+            s,
+            ProtocolCreditSettlementLaneParams({
+                positionId: p.positionId,
+                owner: p.owner,
+                underlyingCurrency: DynamicCurrencyDelta.lccToUnderlyingCurrency(p.lccCurrency1),
+                tokenIndex: 1,
+                currentUnderlyingDelta: currentUnderlying.amount1(),
+                intendedSettle: p.intendedSettle1,
+                requiredSettlementDelta: p.requiredSettlementDelta.amount1(),
+                rfsDelta: p.rfsDelta.amount1(),
+                clampToRequiredSettlement: p.clampToRequiredSettlement,
+                isSeizing: p.isSeizing
+            })
+        );
+
+        result.settlementDelta = toBalanceDelta(settle0, settle1);
+        result.remainingRequiredSettlementDelta = toBalanceDelta(remaining0, remaining1);
     }
 
     /// @dev Settles protocol credit inside the MM add-liquidity hook path before LCC issuance/backing validation.
@@ -914,30 +1015,23 @@ library VTSPositionLib {
         MMIncreaseHookExtraData memory extra = PositionModificationHookDataLib.decodeMMIncreaseHookExtraData(mmData);
         if (!extra.settleInHook) return requiredSettlementDelta;
 
-        BalanceDelta currentUnderlying =
-            DynamicCurrencyDelta.getUnderlyingDeltaPair(owner, poolKey.currency0, poolKey.currency1);
-        int128 remaining0 = _applyInHookProtocolSettlementLane(
+        ProtocolCreditSettlementResult memory result = _settleFromPositiveUnderlyingDelta(
             s,
-            positionId,
-            owner,
-            DynamicCurrencyDelta.lccToUnderlyingCurrency(poolKey.currency0),
-            0,
-            requiredSettlementDelta.amount0(),
-            currentUnderlying.amount0(),
-            extra.intendedSettle0
-        );
-        int128 remaining1 = _applyInHookProtocolSettlementLane(
-            s,
-            positionId,
-            owner,
-            DynamicCurrencyDelta.lccToUnderlyingCurrency(poolKey.currency1),
-            1,
-            requiredSettlementDelta.amount1(),
-            currentUnderlying.amount1(),
-            extra.intendedSettle1
+            ProtocolCreditSettlementParams({
+                positionId: positionId,
+                owner: owner,
+                lccCurrency0: poolKey.currency0,
+                lccCurrency1: poolKey.currency1,
+                intendedSettle0: extra.intendedSettle0,
+                intendedSettle1: extra.intendedSettle1,
+                requiredSettlementDelta: requiredSettlementDelta,
+                rfsDelta: BalanceDelta.wrap(0),
+                clampToRequiredSettlement: true,
+                isSeizing: false
+            })
         );
 
-        remainingRequiredSettlementDelta = toBalanceDelta(remaining0, remaining1);
+        remainingRequiredSettlementDelta = result.remainingRequiredSettlementDelta;
     }
 
     /// @notice Handles new position initialization and returns required settlement delta

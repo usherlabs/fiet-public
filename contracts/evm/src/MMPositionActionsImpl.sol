@@ -72,6 +72,8 @@ contract MMPositionActionsImpl is
         uint256 positionIndex;
         BalanceDelta requestedDelta;
         bool isSeizing;
+        /// @dev Passed through to `onMMSettle`: affects deposit lanes only; no-op for withdrawals.
+        bool fromDeltas;
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
@@ -253,10 +255,19 @@ contract MMPositionActionsImpl is
         }
     }
 
-    /// @notice Applies protocol (MMPM) underlying credits into `settled` via `onMMSettle` without token movement.
-    /// @dev Clamps each side to currently-available positive protocol credit, then explicitly nets the exact amount
-    ///      consumed so the batch does not retain stale underlying credit after routing value into `settled`.
-    function _netProtocolCredits(
+    /// @notice Settles locker's available delta credits into the position via MMPM balance.
+    function _settleFromDeltasCredits(
+        PoolKey calldata poolKey,
+        uint256 tokenId,
+        uint256 positionIndex,
+        uint256 credit0,
+        uint256 credit1
+    ) internal {
+        _settle(poolKey, tokenId, positionIndex, -credit0.toInt128(), -credit1.toInt128(), true);
+    }
+
+    /// @notice Settles protocol-owned underlying delta credits into the position without token movement.
+    function _settleProtocolCreditsFromDeltas(
         PoolKey calldata poolKey,
         uint256 tokenId,
         uint256 positionIndex,
@@ -264,59 +275,19 @@ contract MMPositionActionsImpl is
         uint256 credit1,
         bool isSeizing
     ) internal {
-        BalanceDelta ownerDelta =
-            vtsOrchestrator.getUnderlyingDeltaPair(address(this), poolKey.currency0, poolKey.currency1);
-        uint256 available0 = ownerDelta.amount0() > 0 ? LiquidityUtils.safeInt128ToUint256(ownerDelta.amount0()) : 0;
-        uint256 available1 = ownerDelta.amount1() > 0 ? LiquidityUtils.safeInt128ToUint256(ownerDelta.amount1()) : 0;
-        if (credit0 > available0) credit0 = available0;
-        if (credit1 > available1) credit1 = available1;
         if (credit0 == 0 && credit1 == 0) return;
 
-        (BalanceDelta settlementDelta,) = _callOnMMSettle(
+        _callOnMMSettle(
             SettleCallParams({
                 vault: _getVault(poolKey),
                 factory: marketFactory,
                 tokenId: tokenId,
                 positionIndex: positionIndex,
                 requestedDelta: LiquidityUtils.safeToBalanceDelta(credit0, credit1, true, true),
-                isSeizing: isSeizing
+                isSeizing: isSeizing,
+                fromDeltas: true
             })
         );
-
-        uint256 used0 =
-            settlementDelta.amount0() < 0 ? LiquidityUtils.safeInt128ToUint256(settlementDelta.amount0()) : 0;
-        uint256 used1 =
-            settlementDelta.amount1() < 0 ? LiquidityUtils.safeInt128ToUint256(settlementDelta.amount1()) : 0;
-        Currency underlying0 = _lccToUnderlyingCurrency(poolKey.currency0);
-        Currency underlying1 = _lccToUnderlyingCurrency(poolKey.currency1);
-        if (used0 > 0) {
-            uint256 taken0 = vtsOrchestrator.take(underlying0, address(this), used0);
-            if (taken0 != used0) {
-                revert Errors.InsufficientBalance(taken0, used0);
-            }
-        }
-        if (used1 > 0) {
-            uint256 taken1 = vtsOrchestrator.take(underlying1, address(this), used1);
-            if (taken1 != used1) {
-                revert Errors.InsufficientBalance(taken1, used1);
-            }
-        }
-    }
-
-    function _settleFromDeltasCredits(
-        PoolKey calldata poolKey,
-        uint256 tokenId,
-        uint256 positionIndex,
-        uint256 credit0,
-        uint256 credit1,
-        bool payerIsUser
-    ) internal {
-        if (payerIsUser) {
-            _netProtocolCredits(poolKey, tokenId, positionIndex, credit0, credit1, false);
-        } else {
-            // Settle into the position the underlying tokens that are owed.
-            _settle(poolKey, tokenId, positionIndex, -credit0.toInt128(), -credit1.toInt128(), true);
-        }
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
@@ -378,7 +349,12 @@ contract MMPositionActionsImpl is
         returns (BalanceDelta settlementDelta, uint256 seizedLiquidityUnits)
     {
         (settlementDelta,, seizedLiquidityUnits) = vtsOrchestrator.onMMSettle(
-            params.factory, params.tokenId, params.positionIndex, params.requestedDelta, params.isSeizing
+            params.factory,
+            params.tokenId,
+            params.positionIndex,
+            params.requestedDelta,
+            params.isSeizing,
+            params.fromDeltas
         );
     }
 
@@ -504,7 +480,8 @@ contract MMPositionActionsImpl is
                 tokenId: tokenId,
                 positionIndex: positionIndex,
                 requestedDelta: toBalanceDelta(amount0, amount1),
-                isSeizing: isSeizing
+                isSeizing: isSeizing,
+                fromDeltas: false
             });
         }
 
@@ -654,7 +631,7 @@ contract MMPositionActionsImpl is
         );
         _validateMaxIn(principalDelta, amount0Max, amount1Max);
         if (!payerIsUser) {
-            _settleFromDeltasCredits(poolKey, tokenId, positionIndex, credit0, credit1, false);
+            _settleFromDeltasCredits(poolKey, tokenId, positionIndex, credit0, credit1);
         }
     }
 
@@ -715,7 +692,7 @@ contract MMPositionActionsImpl is
             _mintPositionInternal(poolKey, tokenId, tickLower, tickUpper, liquidityFromDeltas, hookData);
         _validateMaxIn(principalDelta, amount0Max, amount1Max);
         if (!payerIsUser) {
-            _settleFromDeltasCredits(poolKey, tokenId, positionIndex, credit0, credit1, false);
+            _settleFromDeltasCredits(poolKey, tokenId, positionIndex, credit0, credit1);
         }
     }
 
@@ -744,7 +721,7 @@ contract MMPositionActionsImpl is
 
         // Behaviour matrix:
         // - shouldTake=true && payerIsUser=true:  Withdraw to locker from protocol delta via _settle
-        // - shouldTake=false && payerIsUser=true: Net protocol delta with onMMSettle (no token movement)
+        // - shouldTake=false && payerIsUser=true: Settle protocol-owned delta credits via VTS lifecycle accounting
         // - shouldTake=true && payerIsUser=false: Withdraw to MMPM and sync credits
         // - shouldTake=false && payerIsUser=false: Settle from MMPM balance via _settle
 
@@ -758,8 +735,7 @@ contract MMPositionActionsImpl is
                 _settle(poolKey, tokenId, positionIndex, credit0.toInt128(), credit1.toInt128(), !payerIsUser);
                 // if !payerIsUser, balance sync handled in _settle
             } else {
-                // DEPOSIT: Net protocol credits into position via onMMSettle (no token movement).
-                // Clamped to current MMPM underlying debt — same helper as mint/increase-from-deltas.
+                // DEPOSIT: Settle protocol-owned underlying delta credits into the position with no token movement.
                 bool isSeizing;
                 {
                     Position memory position;
@@ -773,7 +749,7 @@ contract MMPositionActionsImpl is
                     MMHelpers.assertApprovedOrOwner(sender, tokenId);
                 }
 
-                _netProtocolCredits(poolKey, tokenId, positionIndex, credit0, credit1, isSeizing);
+                _settleProtocolCreditsFromDeltas(poolKey, tokenId, positionIndex, credit0, credit1, isSeizing);
             }
         }
         if (!payerIsUser && !shouldTake) {

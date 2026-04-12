@@ -174,7 +174,8 @@ library VTSLifecycleLinkedLib {
         PositionId positionId,
         PoolId poolId,
         BalanceDelta amountDelta,
-        bool isSeizing
+        bool isSeizing,
+        bool fromDeltas
     ) internal view returns (SettleParams memory params) {
         Pool memory pool = s.pools[poolId];
         Currency currency0 = pool.currency0;
@@ -189,7 +190,8 @@ library VTSLifecycleLinkedLib {
             lccCurrency0: currency0,
             lccCurrency1: currency1,
             delta: amountDelta,
-            isSeizing: isSeizing
+            isSeizing: isSeizing,
+            fromDeltas: fromDeltas
         });
     }
 
@@ -203,6 +205,9 @@ library VTSLifecycleLinkedLib {
     ///        negative underlying delta in Phase 4 (`_clearDepositSideDelta` + `_calcDeltaClearance`).
     ///      - Withdrawals are strict: consume any positive underlying delta first, only then reduce live
     ///        settled for the remainder (see `_planWithdrawals` / `_applyWithdrawalLane`).
+    /// @dev `p.fromDeltas` only selects the deposit settlement branch (`_settleFromPositiveUnderlyingDelta` vs
+    ///      `_settleDeposits` / `_settleSeizingDeposits`). Withdrawal lanes always use `_executeWithdrawals` and
+    ///      ignore `fromDeltas` (no-op for withdrawals).
     /// @param s The central VTS storage
     /// @param poolManager The pool manager contract
     /// @param p The MM settle parameters (vault, positionId, currencies, delta, isSeizing)
@@ -227,7 +232,29 @@ library VTSLifecycleLinkedLib {
 
         BalanceDelta depositSettlementDelta;
 
-        if (p.isSeizing) {
+        if (p.fromDeltas) {
+            VTSPositionLib.ProtocolCreditSettlementResult memory protocolCreditSettlement =
+                VTSPositionLib._settleFromPositiveUnderlyingDelta(
+                    s,
+                    VTSPositionLib.ProtocolCreditSettlementParams({
+                        positionId: p.positionId,
+                        owner: pos.owner,
+                        lccCurrency0: p.lccCurrency0,
+                        lccCurrency1: p.lccCurrency1,
+                        intendedSettle0: p.delta.amount0() < 0
+                            ? LiquidityUtils.safeInt128ToUint256(p.delta.amount0())
+                            : 0,
+                        intendedSettle1: p.delta.amount1() < 0
+                            ? LiquidityUtils.safeInt128ToUint256(p.delta.amount1())
+                            : 0,
+                        requiredSettlementDelta: BalanceDelta.wrap(0),
+                        rfsDelta: rfsDelta,
+                        clampToRequiredSettlement: false,
+                        isSeizing: p.isSeizing
+                    })
+                );
+            depositSettlementDelta = protocolCreditSettlement.settlementDelta;
+        } else if (p.isSeizing) {
             depositSettlementDelta =
                 _settleSeizingDeposits(s, p.positionId, int256(p.delta.amount0()), int256(p.delta.amount1()), rfsDelta);
         } else {
@@ -684,6 +711,8 @@ library VTSLifecycleLinkedLib {
         CheckpointLibrary.isSeizable(s, commitId, positionIndex, true);
     }
 
+    /// @param fromDeltas When true, deposit lanes (negative `amountDelta` components) may settle from existing
+    ///        positive underlying delta. Withdrawal lanes are unchanged; see `_executeMMSettleFromParams`.
     function onMMSettle(
         VTSStorage storage s,
         VTSLifecycleContext memory ctx,
@@ -691,9 +720,12 @@ library VTSLifecycleLinkedLib {
         PositionId positionId,
         PoolId poolId,
         BalanceDelta amountDelta,
-        bool isSeizing
+        bool isSeizing,
+        bool fromDeltas
     ) external returns (SettleResult memory result) {
-        SettleParams memory params = _buildMMSettleParams(s, ctx, factory, positionId, poolId, amountDelta, isSeizing);
+        SettleParams memory params = _buildMMSettleParams(
+            s, ctx, factory, positionId, poolId, amountDelta, isSeizing, fromDeltas
+        );
         result = _executeMMSettleFromParams(s, ctx.poolManager, params);
     }
 

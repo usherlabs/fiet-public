@@ -2426,7 +2426,7 @@ contract VTSPositionLibTest is VTSLibTestBase {
         BalanceDelta delta = toBalanceDelta(int128(10), int128(0)); // withdrawal of 10
 
         (BalanceDelta settlementDelta,,) =
-            harness.onMMSettle(manager, vault, positionId, lccCurrency0, lccCurrency1, delta, false);
+            harness.onMMSettle(manager, vault, positionId, lccCurrency0, lccCurrency1, delta, false, false);
         assertEq(settlementDelta.amount0(), int128(10), "withdrawal should be applied");
 
         (,, uint256 settled0,,,) = harness.getPositionAccounting(positionId);
@@ -2459,7 +2459,7 @@ contract VTSPositionLibTest is VTSLibTestBase {
         BalanceDelta delta = toBalanceDelta(int128(0), int128(10)); // withdrawal of 10 on token1
 
         (BalanceDelta settlementDelta,, uint256 seized) = harness.onMMSettle(
-            manager, vault, positionId, Currency.wrap(address(lcc0)), Currency.wrap(address(lcc1)), delta, false
+            manager, vault, positionId, Currency.wrap(address(lcc0)), Currency.wrap(address(lcc1)), delta, false, false
         );
         assertEq(settlementDelta.amount1(), int128(10), "withdrawal on token1 should be applied");
         assertEq(seized, 0, "seizedLiquidityUnits should be zero when not seizing");
@@ -2491,6 +2491,7 @@ contract VTSPositionLibTest is VTSLibTestBase {
             Currency.wrap(address(lcc0)),
             Currency.wrap(address(lcc1)),
             toBalanceDelta(int128(int256(1)), int128(int256(0))),
+            false,
             false
         );
         assertEq(seized, 0, "seizedLiquidityUnits must be 0 when isSeizing is false");
@@ -2522,7 +2523,7 @@ contract VTSPositionLibTest is VTSLibTestBase {
         // sum would exceed liq without the cap.
         BalanceDelta delta = toBalanceDelta(int128(-99), int128(-99));
         (,, uint256 seized) = harness.onMMSettle(
-            manager, vault, positionId, Currency.wrap(address(lcc0)), Currency.wrap(address(lcc1)), delta, true
+            manager, vault, positionId, Currency.wrap(address(lcc0)), Currency.wrap(address(lcc1)), delta, true, false
         );
 
         assertEq(seized, 1000, "seizure should cap at full position liquidity");
@@ -2552,7 +2553,7 @@ contract VTSPositionLibTest is VTSLibTestBase {
         // With baseVTSRate floored to 100%, exposure is maxed, so seizure is driven mainly by phi.
         BalanceDelta delta = toBalanceDelta(int128(-40), int128(0));
         (,, uint256 seized) = harness.onMMSettle(
-            manager, vault, positionId, Currency.wrap(address(lcc0)), Currency.wrap(address(lcc1)), delta, true
+            manager, vault, positionId, Currency.wrap(address(lcc0)), Currency.wrap(address(lcc1)), delta, true, false
         );
 
         assertEq(seized, 1000, "residual threshold should fully close the position");
@@ -2958,6 +2959,7 @@ contract VTSPositionLibTest is VTSLibTestBase {
             Currency.wrap(address(lcc0)),
             Currency.wrap(address(lcc1)),
             toBalanceDelta(int128(int256(80e18)), 0),
+            false,
             false
         );
 
@@ -2986,6 +2988,7 @@ contract VTSPositionLibTest is VTSLibTestBase {
             Currency.wrap(address(lcc0)),
             Currency.wrap(address(lcc1)),
             toBalanceDelta(int128(int256(0)), int128(int256(80e18))),
+            false,
             false
         );
         (,,, uint256 settled1,,) = harness.getPositionAccounting(positionId);
@@ -3021,7 +3024,8 @@ contract VTSPositionLibTest is VTSLibTestBase {
             Currency.wrap(address(lcc0)),
             Currency.wrap(address(lcc1)),
             toBalanceDelta(int128(int256(50e18)), 0),
-            true
+            true,
+            false
         );
 
         assertEq(
@@ -3060,7 +3064,8 @@ contract VTSPositionLibTest is VTSLibTestBase {
             Currency.wrap(address(lcc0)),
             Currency.wrap(address(lcc1)),
             toBalanceDelta(int128(int256(-100e18)), 0),
-            true
+            true,
+            false
         );
         assertEq(settlementDelta.amount0(), int128(int256(-50e18)), "seizing deposit should clamp to -rfs0");
 
