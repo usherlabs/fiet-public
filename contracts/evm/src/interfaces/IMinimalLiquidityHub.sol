@@ -3,7 +3,7 @@ pragma solidity ^0.8.26;
 
 /**
  * @title IMinimalLiquidityHub
- * @notice Minimal, wallet-facing interface for the LiquidityHub
+ * @notice Minimal interface for the LiquidityHub trader-facing wrap/unwrap and settlement helpers
  */
 interface IMinimalLiquidityHub {
     // ============ Trader wrapping/unwrapping ============
@@ -13,6 +13,10 @@ interface IMinimalLiquidityHub {
     function wrap(address underlying, bytes32 marketId, uint256 amount) external payable;
     function unwrap(address lcc, uint256 amount) external;
     function unwrap(address underlying, bytes32 marketId, uint256 amount) external;
+    /**
+     * @notice Endpoint-only: unwrap from `msg.sender`’s Hub/LCC balance and pay underlying to `to` (queue shortfall to `to`).
+     * @dev Caller must be `BOUND_ENDPOINT` for this LCC’s market. Direct users should use `unwrap(...)`.
+     */
     function unwrapTo(address lcc, address to, uint256 amount) external;
 
     /**
@@ -23,8 +27,8 @@ interface IMinimalLiquidityHub {
      *      Queue creation validates owner shape (for example non-zero and non-exempt unless Hub), while present settleability is
      *      enforced at `processSettlementFor` time and may require a later retry after reconciliation.
      *
-     *      This overload exists for protocol flows where "who receives underlying now" differs from "who owns the
-     *      settlement claim".
+     *      Endpoint-only: caller must be `BOUND_ENDPOINT` for this LCC’s market. Intended for protocol flows where
+     *      "who receives underlying now" differs from "who owns the settlement claim".
      * @param lcc The LCC token address to unwrap
      * @param to The recipient address for any underlying paid out immediately
      * @param queueTo The address credited for any queued settlement shortfall (the eventual recipient on settlement)
@@ -34,6 +38,9 @@ interface IMinimalLiquidityHub {
      * @custom:constraints `queueTo` MAY equal `to` to match the behaviour of `unwrapTo(lcc, to, amount)`.
      */
     function unwrapTo(address lcc, address to, address queueTo, uint256 amount) external;
+    /**
+     * @notice Endpoint-only: same as `unwrapTo(lcc, to, amount)` with LCC resolved by market.
+     */
     function unwrapTo(address underlying, bytes32 marketId, address to, uint256 amount) external;
 
     /**
@@ -44,8 +51,7 @@ interface IMinimalLiquidityHub {
      *      Queue creation validates owner shape (for example non-zero and non-exempt unless Hub), while present settleability is
      *      enforced at `processSettlementFor` time and may require a later retry after reconciliation.
      *
-     *      This overload exists for protocol flows where the settlement queue owner must differ from the immediate
-     *      payout recipient.
+     *      Endpoint-only: caller must be `BOUND_ENDPOINT` for the resolved LCC’s market.
      * @param underlying The underlying asset address
      * @param marketId The market ID (corePoolKey -> PoolID -> unwrap() to bytes32)
      * @param to The recipient address for any underlying paid out immediately
