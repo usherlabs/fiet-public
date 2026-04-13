@@ -255,8 +255,44 @@ being an informal “should”.
 - **Enforced by**:
   - `src/VTSOrchestrator.sol::afterCoreSwap` → `src/libraries/VTSSwapLib.sol::processSwap`
   - `VTSSwapLib._accrueSegmentGrowth`, `_accrueDeficitGlobalGrowth`, `_accrueInflowGlobalGrowth`.
+- **Implementation note**: `CoreHook` snapshots the authoritative pre-swap `slot0.tick` (with `sqrtPBefore` and
+  liquidity) into transient storage for `processSwap`. Tick-indexed attribution must not reconstruct the pre-swap
+  tick from `sqrtPBefore` alone, because at exact tick boundaries Uniswap may store `tick = T - 1` while
+  `getTickAtSqrtPrice(sqrtPrice) == T`.
 
 ## Commitment backing, signals, and insolvency gates
+
+### COMMIT-ROLE-01: Commitment owner and advancer are intentionally distinct roles
+
+- **Operating model / protocol assumption**:
+  - `mmState.owner` is the durable identity for the market maker's signalled state and is expected to correspond to the
+    operator's high-security custody / approval authority.
+  - `mmState.advancer` is the lower-friction operational key used to submit / renew VRL-backed MM state and to initiate
+    ordinary MM position operations through `MMPositionManager`.
+  - These roles are intentionally **not** interchangeable, but they are expected to remain under the control of the
+    same real-world operator / coordinated trust domain.
+- **Practical consequence**:
+  - A plain ERC-721 transfer of the commitment NFT is **not**, by itself, an on-chain handover of MM operational control.
+  - `transferFrom(...)` changes NFT ownership only; it does not rotate the stored advancer or rewrite the committed MM
+    identity.
+  - Therefore, a live commitment NFT should not be treated as a freely saleable / independently operable position object
+    unless the transfer is accompanied by off-chain coordination of the advancer / owner operating model.
+- **Why**:
+  - The protocol intentionally separates:
+    - custody / approval authority (`ownerOf(tokenId)` / `mmState.owner`-anchored MM identity), and
+    - hot-path MM execution / proof-submission authority (`mmState.advancer`).
+  - This lets operators keep asset custody and approval flows on a more secure key while using a lighter operational key
+    for maker actions and prover-facing workflows.
+- **Expressed by**:
+  - `src/libraries/VTSCommitLib.sol::_renewSignalInternal` preserves `mmState.owner` across renewals and authorises
+    renewals via `mmState.advancer`.
+  - `src/libraries/VTSLifecycleLinkedLib.sol::validateMMOperation` requires the MM batch locker to equal the stored
+    advancer for non-seizure MM operations.
+  - `src/libraries/MMHelpers.sol::assertApprovedOrOwner` separately enforces ERC-721 owner / approval authority on the
+    relevant `MMPositionManager` entrypoints.
+- **Non-goal**:
+  - The protocol does **not** guarantee that transferring an active commitment NFT alone transfers full MM operating
+    authority to the recipient.
 
 ### SIG-01: VRL nonce must be strictly monotonically increasing per MM
 
@@ -269,6 +305,16 @@ being an informal “should”.
 - **Statement**: When a call requests revert-on-invalid, an invalid proof must revert.
 - **Enforced by**: `src/VRLSignalManager.sol::verifyLiquiditySignal(address,bytes,bool)` reverts `Errors.InvalidProof()` when
   `revertOnInvalid && !ok`.
+
+### COMMIT-00: `commitmentMax` must match live position liquidity (no path-dependent drift)
+
+- **Statement**: `PositionAccounting.commitmentMax` for each token must equal the rounded-up CLMM maxima for the
+  position’s tick range evaluated at the position’s **current live** Uniswap v4 position liquidity. It must not be
+  maintained by incremental add/subtract of per-delta maxima alone, because per-delta `roundUp` amounts are not
+  additive and can understate the true maxima for the remaining liquidity after partial removes.
+- **Enforced by**: `src/libraries/VTSPositionLib.sol::_trackCommitment`, invoked from
+  `touchPosition` after liquidity-changing modifies (new position, increase, decrease) and on active zero-delta
+  touches to resynchronise against live `PoolManager` liquidity.
 
 ### COMMIT-01: Commitment backing must satisfy `issuedUsd <= settledUsd + signalUsd` (per-position, per-commit)
 

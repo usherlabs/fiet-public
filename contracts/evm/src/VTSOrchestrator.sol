@@ -234,46 +234,19 @@ contract VTSOrchestrator is
         }
     }
 
-    /// @notice Checks if a commit exists and optionally checks if signal hasn't expired
+    /// @notice Checks if a commit exists and optionally enforces a live VRL-backed signal
     /// @param commitId The commit identifier
-    /// @param requireLiveSignal If true, checks expiry. If false, skips expiry check.
-    /// @return isValid True if the signal is valid (commit exists and, if requireLiveSignal is true, hasn't expired)
+    /// @param requireLiveSignal If true, requires non-empty reserves, not expired, and a non-zero owner. If false,
+    ///        only requires an initialised commit with a non-zero owner (zero backing / empty reserves allowed).
+    /// @return isValid True if the commit satisfies the requested constraints
     function isSignalValid(uint256 commitId, bool requireLiveSignal) public view returns (bool isValid) {
-        // Check if commit exists (commitId must be > 0)
-        if (commitId == 0) {
-            return false;
-        }
-
-        Commit storage commit = s.commits[commitId];
-
-        // Check if commit actually exists (expiresAt > 0 indicates commit was initialized)
-        if (commit.expiresAt == 0) {
-            return false;
-        }
-
-        // Validate that mmState has valid parameters
-        MarketMaker.State memory mmState = commit.mmState;
-        if (mmState.owner == address(0)) {
-            return false;
-        }
-        if (mmState.reserves.length == 0) {
-            return false;
-        }
-
-        // Only check expiry if requireLiveSignal is true
-        if (requireLiveSignal) {
-            bool isExpired = block.timestamp >= commit.expiresAt;
-            if (isExpired) {
-                return false;
-            }
-        }
-
-        return true;
+        return VTSLifecycleLinkedLib.isSignalValid(s, commitId, requireLiveSignal);
     }
 
-    /// @notice Validates that a commit exists and optionally checks if signal hasn't expired
+    /// @notice Validates that a commit exists and optionally enforces a live VRL-backed signal
     /// @param commitId The commit identifier
-    /// @param requireLiveSignal If true, checks expiry and reverts if expired. If false, skips expiry check.
+    /// @param requireLiveSignal If true, reverts when reserves are empty or expired. If false, only reverts when the
+    ///        commit is missing or has no owner.
     function _assertSignalValid(uint256 commitId, bool requireLiveSignal) internal view {
         if (!isSignalValid(commitId, requireLiveSignal)) {
             revert Errors.InvalidSignal(commitId);
@@ -342,6 +315,8 @@ contract VTSOrchestrator is
     /// @return mmState The MarketMaker state
     /// @return expiresAt The expiration timestamp
     /// @return positionCount The count of positions
+    /// @return activePositionCount The count of active positions
+    /// @return inactiveRemnantCount Inactive positions with non-zero live settled (blocks decommit)
     function getCommit(uint256 commitId)
         external
         view
@@ -349,11 +324,18 @@ contract VTSOrchestrator is
             MarketMaker.State memory mmState,
             uint256 expiresAt,
             uint256 positionCount,
-            uint256 activePositionCount
+            uint256 activePositionCount,
+            uint256 inactiveRemnantCount
         )
     {
         Commit storage commit = s.commits[commitId];
-        return (commit.mmState, commit.expiresAt, commit.positionCount, commit.activePositionCount);
+        return (
+            commit.mmState,
+            commit.expiresAt,
+            commit.positionCount,
+            commit.activePositionCount,
+            commit.inactiveRemnantCount
+        );
     }
 
     /// @notice Get pool by PoolId
@@ -599,14 +581,16 @@ contract VTSOrchestrator is
     /// @param delta The balance delta from the swap
     /// @param sqrtPBefore The sqrt price before the swap
     /// @param liqBefore The liquidity before the swap
+    /// @param tickBefore Authoritative `slot0.tick` before the swap (from CoreHook transient snapshot)
     function afterCoreSwap(
         PoolKey calldata key,
         SwapParams calldata params,
         BalanceDelta delta,
         uint160 sqrtPBefore,
-        uint128 liqBefore
+        uint128 liqBefore,
+        int24 tickBefore
     ) external onlyCoreHook(key.currency0, key.currency1) notPoolPaused(key.toId()) {
-        VTSSwapLib.processSwap(s, poolManager, key, params, delta, sqrtPBefore, liqBefore);
+        VTSSwapLib.processSwap(s, poolManager, key, params, delta, sqrtPBefore, liqBefore, tickBefore);
     }
 
     // -----------------------------------------------------------------------------

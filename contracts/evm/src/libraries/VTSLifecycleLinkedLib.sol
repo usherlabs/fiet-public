@@ -99,21 +99,47 @@ library VTSLifecycleLinkedLib {
         return caller;
     }
 
-    function _isSignalValid(VTSStorage storage s, uint256 commitId, bool requireLiveSignal)
+    /// @notice Checks if a commit exists and optionally enforces a live VRL-backed signal
+    /// @param commitId The commit identifier
+    /// @param requireLiveSignal If true, requires non-empty reserves, not expired, and a non-zero owner. If false,
+    ///        only requires an initialised commit with a non-zero owner (zero backing / empty reserves allowed).
+    /// @return isValid True if the commit satisfies the requested constraints
+    function isSignalValid(VTSStorage storage s, uint256 commitId, bool requireLiveSignal)
         internal
         view
         returns (bool isValid)
     {
-        if (commitId == 0) return false;
+        // Check if commit exists (commitId must be > 0)
+        if (commitId == 0) {
+            return false;
+        }
 
         Commit storage commit = s.commits[commitId];
-        if (commit.expiresAt == 0) return false;
 
+        // Check if commit actually exists (expiresAt > 0 indicates commit was initialized)
+        if (commit.expiresAt == 0) {
+            return false;
+        }
+
+        // Validate that mmState has valid parameters
         MarketMaker.State storage mmState = commit.mmState;
-        if (mmState.owner == address(0)) return false;
-        if (mmState.reserves.length == 0) return false;
+        if (mmState.owner == address(0)) {
+            return false;
+        }
 
-        if (requireLiveSignal && block.timestamp >= commit.expiresAt) return false;
+        // Empty reserves mean zero VRL-backed backing; only reject for live-signal flows.
+        // Recovery paths (renewal, checkpoint, seizure) use requireLiveSignal=false.
+        if (requireLiveSignal && mmState.reserves.length == 0) {
+            return false;
+        }
+
+        // Only check expiry if requireLiveSignal is true
+        if (requireLiveSignal) {
+            bool isExpired = block.timestamp >= commit.expiresAt;
+            if (isExpired) {
+                return false;
+            }
+        }
 
         return true;
     }
@@ -746,7 +772,7 @@ library VTSLifecycleLinkedLib {
             return false;
         }
 
-        if (!_isSignalValid(s, mmData.commitId, !mmData.seizure.isSeizing)) {
+        if (!isSignalValid(s, mmData.commitId, !mmData.seizure.isSeizing)) {
             revert Errors.InvalidSignal(mmData.commitId);
         }
 

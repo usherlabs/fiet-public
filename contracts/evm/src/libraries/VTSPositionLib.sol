@@ -117,42 +117,24 @@ library VTSPositionLib {
     // Commitment Tracking
     // --------------------------------------------------
 
-    /// @notice Tracks the maximum potential commitment for both tokens in a position
-    /// @dev Tracks per-position maxima only (no commit-level aggregation)
+    /// @notice Sets `commitmentMax` from live Uniswap position liquidity (single source of truth).
+    /// @dev Per-delta rounded add/subtract bookkeeping is not equivalent to rounding once on the total;
+    ///      incremental `ceil` arithmetic can drift below the true maxima for the remaining range.
+    ///      Always derive from `liveLiquidity` after any modify that changes pool position liquidity.
     /// @param s The central VTS storage
-    /// @param positionId The ascribed id of the position
-    /// @param params The parameters of the transaction
-    function _trackCommitment(VTSStorage storage s, PositionId positionId, ModifyLiquidityParams calldata params)
-        internal
-    {
+    /// @param positionId The position id
+    /// @param liveLiquidity Current position liquidity from PoolManager after the modify
+    function _trackCommitment(VTSStorage storage s, PositionId positionId, uint128 liveLiquidity) internal {
         PositionAccounting storage pa = s.positionAccounting[positionId];
-
-        // Current tracked maxima for this position
-        uint256 currentC0 = pa.commitmentMax.token0;
-        uint256 currentC1 = pa.commitmentMax.token1;
-
-        if (params.liquidityDelta > 0) {
-            // Liquidity added: increase tracked maxima by the delta's maxima over the tick range
-            // Cast int256 -> uint256 -> uint128 to preserve full uint128 range (not limited by int128 max)
-            uint128 liquidityAdded = uint256(params.liquidityDelta).toUint128();
-            (uint256 addC0, uint256 addC1) =
-                LiquidityUtils.calculateCommitmentMaxima(params.tickLower, params.tickUpper, liquidityAdded);
-
-            pa.commitmentMax.token0 = currentC0 + addC0;
-            pa.commitmentMax.token1 = currentC1 + addC1;
-        } else if (params.liquidityDelta < 0) {
-            // Liquidity removed: decrease tracked maxima by the delta's maxima over the tick range
-            uint128 liquidityRemoved = uint256(-params.liquidityDelta).toUint128();
-            (uint256 subC0, uint256 subC1) =
-                LiquidityUtils.calculateCommitmentMaxima(params.tickLower, params.tickUpper, liquidityRemoved);
-
-            // Clamp at zero to avoid underflow; if fully removed, both become zero
-            pa.commitmentMax.token0 = currentC0 > subC0 ? (currentC0 - subC0) : 0;
-            pa.commitmentMax.token1 = currentC1 > subC1 ? (currentC1 - subC1) : 0;
-        } else {
-            // No-op if liquidityDelta == 0 (poke)
+        if (liveLiquidity == 0) {
+            pa.commitmentMax.token0 = 0;
+            pa.commitmentMax.token1 = 0;
             return;
         }
+        Position memory pos = s.positions[positionId];
+        (uint256 c0, uint256 c1) = LiquidityUtils.calculateCommitmentMaxima(pos.tickLower, pos.tickUpper, liveLiquidity);
+        pa.commitmentMax.token0 = c0;
+        pa.commitmentMax.token1 = c1;
     }
 
     // --------------------------------------------------
@@ -227,6 +209,25 @@ library VTSPositionLib {
         applied;
     }
 
+    /// @dev Nets a positive settlement delta against `commitmentDeficit` for one lane; isolated to reduce stack depth in `_vUpdateSettlement`.
+    function _netCommitmentDeficitOnPositiveDelta(PositionAccounting storage pa, uint8 tokenIndex, int256 delta)
+        private
+        returns (int256 newDelta, uint256 commitmentDeficitCovered)
+    {
+        uint256 cd = pa.commitmentDeficit.get(tokenIndex);
+        if (delta <= 0 || cd == 0) return (delta, 0);
+
+        uint256 coverCd = uint256(delta) > cd ? cd : uint256(delta);
+        if (coverCd == 0) return (delta, 0);
+
+        uint256 nextCd = cd - coverCd;
+        pa.commitmentDeficit.set(tokenIndex, nextCd);
+        if (nextCd == 0) {
+            pa.commitmentDeficitSince.set(tokenIndex, 0);
+        }
+        return (delta - int256(coverCd), coverCd);
+    }
+
     /// @notice Verbose settlement update: returns total economic consumption and the `pa.settled` lane delta separately.
     /// @dev `totalApplied` matches legacy `_updateSettlement` return (deficit coverage + settled change).
     ///      `settledDeltaOnly` is `next - cur` on `pa.settled` for this lane only; amounts that cure
@@ -238,7 +239,19 @@ library VTSPositionLib {
         if (delta == 0) return (0, 0);
 
         PositionAccounting storage pa = s.positionAccounting[id];
+        (uint256 oldRemnantS0, uint256 oldRemnantS1) = (pa.settled.token0, pa.settled.token1);
+        (totalApplied, settledDeltaOnly) = _vUpdateSettlementCore(s, id, tokenIndex, delta, pa);
+        _syncInactiveRemnantAfterSettledPairChange(s, id, oldRemnantS0, oldRemnantS1);
+    }
 
+    /// @dev Core settlement mutation split from `_vUpdateSettlement` to avoid stack-too-deep in the outer wrapper.
+    function _vUpdateSettlementCore(
+        VTSStorage storage s,
+        PositionId id,
+        uint8 tokenIndex,
+        int256 delta,
+        PositionAccounting storage pa
+    ) private returns (int256 totalApplied, int256 settledDeltaOnly) {
         // Read current values in scoped block
         uint256 cur;
         uint256 c;
@@ -268,21 +281,10 @@ library VTSPositionLib {
                 }
             }
 
-            // Net against position-level commitment deficit in scoped block
             {
-                uint256 cd = pa.commitmentDeficit.get(tokenIndex);
-                if (delta > 0 && cd > 0) {
-                    uint256 coverCd = uint256(delta) > cd ? cd : uint256(delta);
-                    if (coverCd > 0) {
-                        uint256 nextCd = cd - coverCd;
-                        pa.commitmentDeficit.set(tokenIndex, nextCd);
-                        if (nextCd == 0) {
-                            pa.commitmentDeficitSince.set(tokenIndex, 0);
-                        }
-                        delta -= int256(coverCd);
-                        totalDeficitCoverage += coverCd;
-                    }
-                }
+                uint256 coveredCd;
+                (delta, coveredCd) = _netCommitmentDeficitOnPositiveDelta(pa, tokenIndex, delta);
+                totalDeficitCoverage += coveredCd;
             }
 
             // If position-level commitment deficit is fully cured, clear any stored severity bps.
@@ -319,6 +321,71 @@ library VTSPositionLib {
         // Preserve existing semantics: include both cumulativeDeficit and commitmentDeficit netting in applied.
         if (totalDeficitCoverage > cumulativeDeficitCoverage) {
             totalApplied += SafeCast.toInt256(totalDeficitCoverage - cumulativeDeficitCoverage);
+        }
+    }
+
+    /// @dev Increments/decrements `Commit.inactiveRemnantCount` when `isActive` flips but settled pair is unchanged
+    ///      (liquidity mirror transition). O(1); no commit-wide scan.
+    function _syncInactiveRemnantAfterActiveTransition(
+        VTSStorage storage s,
+        PositionId positionId,
+        bool wasActive,
+        uint256 settled0,
+        uint256 settled1
+    ) private {
+        Position storage pos = s.positions[positionId];
+        uint256 commitId = pos.commitId;
+        if (commitId == 0) return;
+
+        bool hasSettled = settled0 > 0 || settled1 > 0;
+        bool oldShould = !wasActive && hasSettled;
+        bool newShould = !pos.isActive && hasSettled;
+        if (oldShould == newShould) return;
+
+        if (newShould) {
+            unchecked {
+                s.commits[commitId].inactiveRemnantCount++;
+            }
+        } else {
+            uint256 cnt = s.commits[commitId].inactiveRemnantCount;
+            if (cnt == 0) {
+                revert Errors.InvariantViolated("inactive remnant count underflow");
+            }
+            unchecked {
+                s.commits[commitId].inactiveRemnantCount = cnt - 1;
+            }
+        }
+    }
+
+    /// @dev Increments/decrements `Commit.inactiveRemnantCount` when only the settled pair changes while inactive.
+    function _syncInactiveRemnantAfterSettledPairChange(
+        VTSStorage storage s,
+        PositionId positionId,
+        uint256 oldS0,
+        uint256 oldS1
+    ) private {
+        Position storage pos = s.positions[positionId];
+        uint256 commitId = pos.commitId;
+        if (commitId == 0) return;
+
+        PositionAccounting storage pa = s.positionAccounting[positionId];
+        bool inactive = !pos.isActive;
+        bool oldShould = inactive && (oldS0 > 0 || oldS1 > 0);
+        bool newShould = inactive && (pa.settled.token0 > 0 || pa.settled.token1 > 0);
+        if (oldShould == newShould) return;
+
+        if (newShould) {
+            unchecked {
+                s.commits[commitId].inactiveRemnantCount++;
+            }
+        } else {
+            uint256 cnt = s.commits[commitId].inactiveRemnantCount;
+            if (cnt == 0) {
+                revert Errors.InvariantViolated("inactive remnant count underflow");
+            }
+            unchecked {
+                s.commits[commitId].inactiveRemnantCount = cnt - 1;
+            }
         }
     }
 
@@ -1044,6 +1111,7 @@ library VTSPositionLib {
         address owner,
         ModifyLiquidityParams calldata params,
         PositionId positionId,
+        uint128 liveLiquidityAfterModify,
         TouchPositionHookData memory hookData
     ) private returns (BalanceDelta requiredSettlementDelta) {
         if (hookData.isMMOperation && hookData.isSeizing) {
@@ -1057,7 +1125,10 @@ library VTSPositionLib {
         }
 
         _initPositionSnapshots(s, poolManager, positionId);
-        _trackCommitment(s, positionId, params);
+        if (uint256(params.liquidityDelta).toUint128() != liveLiquidityAfterModify) {
+            revert Errors.InvariantViolated("live liquidity mismatch on new position touch");
+        }
+        _trackCommitment(s, positionId, liveLiquidityAfterModify);
 
         TokenPairUint memory commitmentMaxima = s.positionAccounting[positionId].commitmentMax;
 
@@ -1088,6 +1159,10 @@ library VTSPositionLib {
         uint128 currentLiq,
         TouchPositionHookData memory hookData
     ) private returns (BalanceDelta requiredSettlementDelta) {
+        Position memory posDec = s.positions[positionId];
+        if (params.tickLower != posDec.tickLower || params.tickUpper != posDec.tickUpper) {
+            revert Errors.InvariantViolated("modify tick mismatch");
+        }
         // Growth is already settled in CoreHook `_beforeRemoveLiquidity`; avoid `calcRFS` here so we do not
         // re-enter `settlePositionGrowths` (would double-apply CISE / growth side-effects in the same modify).
         if (!hookData.isSeizing) {
@@ -1096,7 +1171,7 @@ library VTSPositionLib {
                 revert Errors.RFSOpenForPosition(positionId);
             }
         }
-        _trackCommitment(s, positionId, params);
+        _trackCommitment(s, positionId, currentLiq);
 
         PositionAccounting storage pa = s.positionAccounting[positionId];
         (uint256 excess0, uint256 excess1) = _computeSettledExcessAgainstCommitmentMax(pa, currentLiq);
@@ -1115,9 +1190,14 @@ library VTSPositionLib {
         PoolId poolId,
         PositionId positionId,
         ModifyLiquidityParams calldata params,
+        uint128 liveLiquidityAfterModify,
         TouchPositionHookData memory hookData
     ) private returns (BalanceDelta requiredSettlementDelta) {
-        _trackCommitment(s, positionId, params);
+        Position memory posInc = s.positions[positionId];
+        if (params.tickLower != posInc.tickLower || params.tickUpper != posInc.tickUpper) {
+            revert Errors.InvariantViolated("modify tick mismatch");
+        }
+        _trackCommitment(s, positionId, liveLiquidityAfterModify);
 
         PositionAccounting storage pa = s.positionAccounting[positionId];
         uint256 s0 = pa.settled.token0;
@@ -1173,7 +1253,7 @@ library VTSPositionLib {
             }
             // NEW POSITION
             requiredSettlementDelta =
-                _touchNewPosition(s, ctx.poolManager, poolId, p.owner, p.params, result.id, hookData);
+                _touchNewPosition(s, ctx.poolManager, poolId, p.owner, p.params, result.id, liq, hookData);
         } else {
             // EXISTING POSITION (active or previously inactive)
 
@@ -1207,7 +1287,7 @@ library VTSPositionLib {
                         s, ctx.poolManager, result.id, removedLiquidity
                     );
                 }
-                _applyLiquidityMirrorTransition(s, paDec, posStorage, initialLiquidity, liq);
+                _applyLiquidityMirrorTransition(s, result.id, paDec, posStorage, initialLiquidity, liq);
             } else {
                 (uint128 liveLiquidityBeforeAdd, uint128 nextLiquidity) =
                     _deriveIncreaseTransitionLiquidity(liq, p.params.liquidityDelta);
@@ -1220,7 +1300,8 @@ library VTSPositionLib {
                         _checkpointTickIndexedSnapshots(s, ctx.poolManager, result.id);
                         _checkpointZeroPrincipalSettlementSnapshots(s, result.id);
                     }
-                    requiredSettlementDelta = _touchExistingIncrease(s, poolId, result.id, p.params, hookData);
+                    requiredSettlementDelta =
+                        _touchExistingIncrease(s, poolId, result.id, p.params, nextLiquidity, hookData);
                     if (liveLiquidityBeforeAdd > 0) {
                         _rebaseResidualFeeGrowthOnActiveIncrease(
                             s, ctx.poolManager, poolId, result.id, liveLiquidityBeforeAdd
@@ -1229,15 +1310,19 @@ library VTSPositionLib {
                 } else {
                     // Allow a no-op when active (Uniswap v4 disallows this when initial liq == 0).
                     // See https://github.com/Uniswap/v4-core/blob/36d790b1a3af38461453a13a6ff395290fbc11b2/src/libraries/Position.sol#L86
+                    // Refresh commitment maxima from live liquidity (e.g. mirror desync or post-migration).
+                    _trackCommitment(s, result.id, liq);
                     requiredSettlementDelta = BalanceDelta.wrap(0);
                 }
                 PositionAccounting storage paRem = s.positionAccounting[result.id];
-                _applyLiquidityMirrorTransition(s, paRem, posStorage, uint256(liveLiquidityBeforeAdd), nextLiquidity);
+                _applyLiquidityMirrorTransition(
+                    s, result.id, paRem, posStorage, uint256(liveLiquidityBeforeAdd), nextLiquidity
+                );
             }
         }
 
         if (isNewPosition) {
-            _updateActiveStatus(s, posStorage, initialLiquidity, liq);
+            _updateStatus(s, result.id, posStorage, initialLiquidity, liq);
         }
 
         result.feeAdj = VTSFeeLinkedLib.afterTouchPosition(s, result.id);
@@ -1274,6 +1359,22 @@ library VTSPositionLib {
                 s.commits[commitId].activePositionCount++;
             }
         }
+    }
+
+    /// @dev Runs `_updateActiveStatus` then `Commit.inactiveRemnantCount` sync in a separate stack frame.
+    function _updateStatus(
+        VTSStorage storage s,
+        PositionId positionId,
+        Position storage posStorage,
+        uint256 initialLiquidity,
+        uint128 liq
+    ) private {
+        bool wasActive = posStorage.isActive;
+        PositionAccounting storage pa = s.positionAccounting[positionId];
+        uint256 s0 = pa.settled.token0;
+        uint256 s1 = pa.settled.token1;
+        _updateActiveStatus(s, posStorage, initialLiquidity, liq);
+        _syncInactiveRemnantAfterActiveTransition(s, positionId, wasActive, s0, s1);
     }
 
     function _deriveIncreaseTransitionLiquidity(uint128 liq, int256 liquidityDelta)
@@ -1382,6 +1483,7 @@ library VTSPositionLib {
     /// @dev Apply the shared liquidity mirror transition logic used by touch/reconcile.
     function _applyLiquidityMirrorTransition(
         VTSStorage storage s,
+        PositionId positionId,
         PositionAccounting storage pa,
         Position storage posStorage,
         uint256 initialLiquidity,
@@ -1406,7 +1508,7 @@ library VTSPositionLib {
             pa.commitmentDeficitSince.token1 = 0;
             pa.commitmentDeficitBps = 0;
         }
-        _updateActiveStatus(s, posStorage, initialLiquidity, nextLiquidity);
+        _updateStatus(s, positionId, posStorage, initialLiquidity, nextLiquidity);
     }
 
     /// @notice Process MM-specific operations (LCC management, deltas, checkpoints)

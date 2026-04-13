@@ -202,6 +202,10 @@ library Errors {
     /// @param tokenId The token ID of the commitment that cannot be decommitted
     error CommitNotEmpty(uint256 tokenId);
 
+    /// @notice Thrown when decommit is blocked because inactive position(s) still hold withdrawable `pa.settled`
+    /// @param tokenId The commitment NFT id (commit id)
+    error CommitNotDrained(uint256 tokenId);
+
     // ============ PAUSE & STATE ERRORS ============
     // Errors related to contract pause state and state transitions
 

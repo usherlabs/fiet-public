@@ -496,120 +496,88 @@ contract VTSPositionLibTest is VTSLibTestBase {
     // _trackCommitment Tests
     // ============================================================
 
-    function test_trackCommitment_addsLiquidity_increasesCommitmentMax() public {
+    function test_trackCommitment_matchesCalculatedMaxima_forRegisteredLiquidity() public {
         PositionId positionId = _registerDefaultPosition();
-
-        ModifyLiquidityParams memory params = ModifyLiquidityParams({
-            tickLower: DEFAULT_TICK_LOWER,
-            tickUpper: DEFAULT_TICK_UPPER,
-            liquidityDelta: int256(uint256(DEFAULT_LIQUIDITY)),
-            salt: DEFAULT_SALT
-        });
 
         (uint256 expectedC0, uint256 expectedC1) =
             LiquidityUtils.calculateCommitmentMaxima(DEFAULT_TICK_LOWER, DEFAULT_TICK_UPPER, DEFAULT_LIQUIDITY);
 
-        harness.trackCommitment(positionId, params);
+        harness.trackCommitmentFromLiveLiquidity(positionId, DEFAULT_LIQUIDITY);
 
         (uint256 c0, uint256 c1,,,,) = harness.getPositionAccounting(positionId);
         assertEq(c0, expectedC0, "commitmentMax0 should match calculated maxima");
         assertEq(c1, expectedC1, "commitmentMax1 should match calculated maxima");
     }
 
-    function test_trackCommitment_removesLiquidity_decreasesCommitmentMax() public {
+    function test_trackCommitment_overwritesStaleStoredValues() public {
         PositionId positionId = _registerDefaultPosition();
 
-        uint256 initialC0 = 1000e18;
-        uint256 initialC1 = 1000e18;
-        harness.setCommitmentMax(positionId, initialC0, initialC1);
+        harness.setCommitmentMax(positionId, 1000e18, 1000e18);
 
-        uint128 liquidityToRemove = 500e18;
-        ModifyLiquidityParams memory params = ModifyLiquidityParams({
-            tickLower: DEFAULT_TICK_LOWER,
-            tickUpper: DEFAULT_TICK_UPPER,
-            liquidityDelta: -int256(uint256(liquidityToRemove)),
-            salt: DEFAULT_SALT
-        });
+        uint128 remainingLiq = 500e18;
+        harness.trackCommitmentFromLiveLiquidity(positionId, remainingLiq);
 
-        (uint256 subC0, uint256 subC1) =
-            LiquidityUtils.calculateCommitmentMaxima(DEFAULT_TICK_LOWER, DEFAULT_TICK_UPPER, liquidityToRemove);
-
-        harness.trackCommitment(positionId, params);
+        (uint256 exp0, uint256 exp1) =
+            LiquidityUtils.calculateCommitmentMaxima(DEFAULT_TICK_LOWER, DEFAULT_TICK_UPPER, remainingLiq);
 
         (uint256 c0, uint256 c1,,,,) = harness.getPositionAccounting(positionId);
-        assertEq(c0, initialC0 - subC0, "commitmentMax0 should decrease by removal amount");
-        assertEq(c1, initialC1 - subC1, "commitmentMax1 should decrease by removal amount");
+        assertEq(c0, exp0, "commitmentMax0 should equal maxima for live liquidity");
+        assertEq(c1, exp1, "commitmentMax1 should equal maxima for live liquidity");
     }
 
-    function test_trackCommitment_fullRemoval_resetsToZero() public {
+    function test_trackCommitment_zeroLiveLiquidity_clearsCommitment() public {
         PositionId positionId = _registerDefaultPosition();
 
-        // First add liquidity
-        ModifyLiquidityParams memory addParams = ModifyLiquidityParams({
-            tickLower: DEFAULT_TICK_LOWER,
-            tickUpper: DEFAULT_TICK_UPPER,
-            liquidityDelta: int256(uint256(DEFAULT_LIQUIDITY)),
-            salt: DEFAULT_SALT
-        });
-        harness.trackCommitment(positionId, addParams);
-
-        // Then remove all
-        ModifyLiquidityParams memory removeParams = ModifyLiquidityParams({
-            tickLower: DEFAULT_TICK_LOWER,
-            tickUpper: DEFAULT_TICK_UPPER,
-            liquidityDelta: -int256(uint256(DEFAULT_LIQUIDITY)),
-            salt: DEFAULT_SALT
-        });
-        harness.trackCommitment(positionId, removeParams);
+        harness.trackCommitmentFromLiveLiquidity(positionId, DEFAULT_LIQUIDITY);
+        harness.trackCommitmentFromLiveLiquidity(positionId, 0);
 
         (uint256 c0, uint256 c1,,,,) = harness.getPositionAccounting(positionId);
-        assertEq(c0, 0, "commitmentMax0 should be zero after full removal");
-        assertEq(c1, 0, "commitmentMax1 should be zero after full removal");
+        assertEq(c0, 0, "commitmentMax0 should be zero when liquidity is zero");
+        assertEq(c1, 0, "commitmentMax1 should be zero when liquidity is zero");
     }
 
-    function test_trackCommitment_zeroLiquidityDelta_noOp() public {
+    function test_trackCommitment_correctsManualDrift_toLiveLiquidity() public {
         PositionId positionId = _registerDefaultPosition();
         harness.setCommitmentMax(positionId, 1000e18, 1000e18);
 
-        ModifyLiquidityParams memory params = ModifyLiquidityParams({
-            tickLower: DEFAULT_TICK_LOWER,
-            tickUpper: DEFAULT_TICK_UPPER,
-            liquidityDelta: 0, // poke
-            salt: DEFAULT_SALT
-        });
+        harness.trackCommitmentFromLiveLiquidity(positionId, DEFAULT_LIQUIDITY);
 
-        harness.trackCommitment(positionId, params);
+        (uint256 exp0, uint256 exp1) =
+            LiquidityUtils.calculateCommitmentMaxima(DEFAULT_TICK_LOWER, DEFAULT_TICK_UPPER, DEFAULT_LIQUIDITY);
 
         (uint256 c0, uint256 c1,,,,) = harness.getPositionAccounting(positionId);
-        assertEq(c0, 1000e18, "commitmentMax0 should remain unchanged on poke");
-        assertEq(c1, 1000e18, "commitmentMax1 should remain unchanged on poke");
+        assertEq(c0, exp0, "commitmentMax0 should snap to maxima for live liquidity");
+        assertEq(c1, exp1, "commitmentMax1 should snap to maxima for live liquidity");
     }
 
-    function test_trackCommitment_partialRemoval_clampsToZero() public {
+    function test_trackCommitment_partialLiveLiquidity_matchesFormula() public {
         PositionId positionId = _registerDefaultPosition();
 
-        uint128 liquidityToRemove = 500e18;
+        uint128 partialLiq = 250e18;
+        harness.trackCommitmentFromLiveLiquidity(positionId, partialLiq);
 
-        // Calculate the commitment that corresponds to the liquidity being removed
-        (uint256 subC0, uint256 subC1) =
-            LiquidityUtils.calculateCommitmentMaxima(DEFAULT_TICK_LOWER, DEFAULT_TICK_UPPER, liquidityToRemove);
-
-        // Set initial commitment to LESS than what the removal will subtract
-        // This ensures the subtraction will clamp to zero rather than underflow
-        harness.setCommitmentMax(positionId, subC0 / 2, subC1 / 2);
-
-        ModifyLiquidityParams memory params = ModifyLiquidityParams({
-            tickLower: DEFAULT_TICK_LOWER,
-            tickUpper: DEFAULT_TICK_UPPER,
-            liquidityDelta: -int256(uint256(liquidityToRemove)),
-            salt: DEFAULT_SALT
-        });
-
-        harness.trackCommitment(positionId, params);
+        (uint256 exp0, uint256 exp1) =
+            LiquidityUtils.calculateCommitmentMaxima(DEFAULT_TICK_LOWER, DEFAULT_TICK_UPPER, partialLiq);
 
         (uint256 c0, uint256 c1,,,,) = harness.getPositionAccounting(positionId);
-        assertEq(c0, 0, "commitmentMax0 should clamp to zero");
-        assertEq(c1, 0, "commitmentMax1 should clamp to zero");
+        assertEq(c0, exp0);
+        assertEq(c1, exp1);
+    }
+
+    /// @notice Regression: commitment maxima must follow live liquidity (narrow range), not incremental ceil drift.
+    function test_trackCommitment_narrowRange_remainingLiquidity_matchesFormula() public {
+        int24 tickLower = -60;
+        int24 tickUpper = 60;
+        uint128 L = 1e10;
+        PositionId positionId = _registerHarnessPosition(DEFAULT_OWNER, tickLower, tickUpper, L, DEFAULT_SALT);
+
+        uint128 remaining = L - 1;
+        harness.trackCommitmentFromLiveLiquidity(positionId, remaining);
+
+        (uint256 c0, uint256 c1,,,,) = harness.getPositionAccounting(positionId);
+        (uint256 exp0, uint256 exp1) = LiquidityUtils.calculateCommitmentMaxima(tickLower, tickUpper, remaining);
+        assertEq(c0, exp0);
+        assertEq(c1, exp1);
     }
 
     // ============================================================
@@ -1932,63 +1900,6 @@ contract VTSPositionLibTest is VTSLibTestBase {
         harness.touchPosition(_mkCtx(), tp);
     }
 
-    function test_touchPosition_existingDecrease_nonMM_refundsExcessSettledAboveNewCommitment() public {
-        // Targets the excess refund logic in _touchExistingDecrease (non-MM path):
-        //   if (excess0 > 0) _sUpdateSettlement(..., -excess0);
-        // Requires currentLiq > 0 (otherwise excess==s0 and the test is not about commitment deltas).
-
-        _initMarket();
-        PoolId corePoolId = _getDefaultPoolId();
-        harness.setupPool(corePoolId, _createDefaultVTSConfig());
-
-        // Create real PoolManager liquidity so currentLiq != 0. Owner is the router (manager keys positions by msg.sender).
-        address owner = address(modifyLiquidityRouter);
-        bytes32 salt = bytes32(uint256(202));
-
-        ModifyLiquidityParams memory addParams =
-            ModifyLiquidityParams({tickLower: -60, tickUpper: 60, liquidityDelta: int256(uint256(1e18)), salt: salt});
-        modifyLiquidityRouter.modifyLiquidity(corePoolKey, addParams, ZERO_BYTES);
-
-        // Mirror the position in harness storage.
-        harness.registerPosition(owner, corePoolId, addParams);
-        PositionId positionId = PositionLibrary.generateId(owner, addParams);
-        harness.setPositionActive(positionId, true);
-
-        // Compute how much commitment will be subtracted by this decrease.
-        uint128 liqToRemove = 1e18;
-        (uint256 subC0,) = LiquidityUtils.calculateCommitmentMaxima(-60, 60, liqToRemove);
-
-        // Set commitmentMax such that after removal newCommitmentMax0 == 50e18.
-        uint256 newC0 = 50e18;
-        uint256 curC0 = subC0 + newC0;
-        harness.setCommitmentMax(positionId, curC0, 0);
-
-        // Ensure RFS is closed pre-decrease so we don't revert before refund logic.
-        harness.setSettled(positionId, 200e18, 0);
-        harness.setPoolTotalSettled(corePoolId, 200e18, 0);
-        harness.setCumulativeDeficit(positionId, 0, 0);
-        harness.setCommitmentDeficit(positionId, 0, 0);
-
-        // Decrease (same ticks/salt), which will reduce commitmentMax and then refund excess settled to the new commitment.
-        ModifyLiquidityParams memory decParams = ModifyLiquidityParams({
-            tickLower: -60, tickUpper: 60, liquidityDelta: -int256(uint256(liqToRemove)), salt: salt
-        });
-
-        TouchPositionParams memory tp = TouchPositionParams({
-            owner: owner,
-            poolKey: _mkPoolKey(),
-            params: decParams,
-            callerDelta: toBalanceDelta(0, 0),
-            feesAccrued: toBalanceDelta(0, 0),
-            hookData: _mkHookData(false, false, 0) // non-MM, non-seizing
-        });
-
-        harness.touchPosition(_mkCtx(), tp);
-
-        (,, uint256 settled0After,,,) = harness.getPositionAccounting(positionId);
-        assertEq(settled0After, newC0, "settled0 should be refunded down to new commitmentMax0");
-    }
-
     function test_touchPosition_existingDecrease_currentLiqZero_nonMM_refundsAllSettled() public {
         // Exercises the `currentLiq == 0` branch in _touchExistingDecrease and verifies refund behaviour.
         _initMarket();
@@ -2137,6 +2048,7 @@ contract VTSPositionLibTest is VTSLibTestBase {
         (uint256 poolSettled0,) = harness.getPoolTotalSettled(corePoolId);
         assertEq(poolSettled0, 0, "pool totalSettled should match position settled");
         assertEq(hub.lastQueued0(), 70e18, "queued shortfall should match the unavailable portion");
+        assertEq(harness.inactiveRemnantCount(124), 0, "no inactive settled remainder => no decommit blockers");
     }
 
     /// @notice Regression (finding 4): principal-capped queue must not force the unqueueable shortfall onto transient
@@ -2195,6 +2107,7 @@ contract VTSPositionLibTest is VTSLibTestBase {
         assertEq(poolSettled0, 70e18, "pool totalSettled should match position settled");
 
         assertEq(hub.lastQueued0(), 30e18, "queued amount should be capped by per-call principal");
+        assertEq(harness.inactiveRemnantCount(1241), 1, "inactive + live settled must increment commit remnant count");
     }
 
     /// @notice Non-seizure MM decreases are blocked while commitmentDeficit is non-zero, even if RFS is closed.
@@ -2339,12 +2252,23 @@ contract VTSPositionLibTest is VTSLibTestBase {
             hookData: _mkHookData(true, false, commitId) // MM, not seizing
         });
 
-        harness.touchPosition(_mkCtx(), tp);
+        PositionContext memory ctx = _mkCtx();
+        harness.touchPosition(ctx, tp);
 
         RFSCheckpoint memory afterCp = harness.getRFSCheckpoint(positionId);
-        assertEq(afterCp.openMask, 1, "checkpoint should mark token0 lane open when RFS is open on token0");
-        assertEq(afterCp.openSince0, block.timestamp, "token0 open timestamp should update");
-        assertEq(afterCp.openSince1, 0, "token1 should remain closed");
+        // Poke recomputes `commitmentMax` from live liquidity; narrow two-sided ranges can open both RFS lanes.
+        (bool rfsOpen, BalanceDelta rfsDelta) = harness.calcRFS(ctx.poolManager, positionId, false);
+        assertTrue(rfsOpen, "RFS should be open with zero settled vs live commitment");
+        uint8 expectedMask = 0;
+        if (rfsDelta.amount0() > 0) expectedMask |= 1;
+        if (rfsDelta.amount1() > 0) expectedMask |= 2;
+        assertEq(afterCp.openMask, expectedMask, "checkpoint openMask should match live RFS lanes");
+        if ((expectedMask & 1) != 0) {
+            assertEq(afterCp.openSince0, block.timestamp, "token0 open timestamp should update when lane opens");
+        }
+        if ((expectedMask & 2) != 0) {
+            assertEq(afterCp.openSince1, block.timestamp, "token1 open timestamp should update when lane opens");
+        }
         assertEq(afterCp.gracePeriodExtension0, 0, "grace extensions should reset on transition");
         assertEq(afterCp.gracePeriodExtension1, 0, "grace extensions should reset on transition");
     }
@@ -2394,10 +2318,15 @@ contract VTSPositionLibTest is VTSLibTestBase {
             hookData: _mkHookData(true, false, commitId)
         });
 
-        harness.touchPosition(_mkCtx(), tp);
+        PositionContext memory ctxMm = _mkCtx();
+        harness.touchPosition(ctxMm, tp);
 
         RFSCheckpoint memory afterCp = harness.getRFSCheckpoint(positionId);
-        assertEq(afterCp.openMask, 1, "checkpoint should still mark token0 lane open when RFS is open");
+        (, BalanceDelta rfsDeltaCd) = harness.calcRFS(ctxMm.poolManager, positionId, false);
+        uint8 expectedMaskCd = 0;
+        if (rfsDeltaCd.amount0() > 0) expectedMaskCd |= 1;
+        if (rfsDeltaCd.amount1() > 0) expectedMaskCd |= 2;
+        assertEq(afterCp.openMask, expectedMaskCd, "checkpoint openMask should match live RFS lanes");
     }
 
     // ============================================================
@@ -4258,7 +4187,9 @@ contract VTSPositionLibTest is VTSLibTestBase {
     // Fuzz Tests
     // ============================================================
 
-    function testFuzz_trackCommitment_addRemove_symmetric(uint128 liquidity, int24 tickLower, int24 tickUpper) public {
+    function testFuzz_trackCommitment_nonZeroThenZero_returnsZero(uint128 liquidity, int24 tickLower, int24 tickUpper)
+        public
+    {
         // Bound inputs
         vm.assume(liquidity > 0 && liquidity < type(uint128).max / 2);
 
@@ -4277,22 +4208,13 @@ contract VTSPositionLibTest is VTSLibTestBase {
 
         PositionId positionId = _registerHarnessPosition(DEFAULT_OWNER, tickLower, tickUpper, liquidity, DEFAULT_SALT);
 
-        // Add liquidity
-        ModifyLiquidityParams memory addParams = ModifyLiquidityParams({
-            tickLower: tickLower, tickUpper: tickUpper, liquidityDelta: int256(uint256(liquidity)), salt: DEFAULT_SALT
-        });
-        harness.trackCommitment(positionId, addParams);
-
-        // Remove same liquidity
-        ModifyLiquidityParams memory removeParams = ModifyLiquidityParams({
-            tickLower: tickLower, tickUpper: tickUpper, liquidityDelta: -int256(uint256(liquidity)), salt: DEFAULT_SALT
-        });
-        harness.trackCommitment(positionId, removeParams);
+        harness.trackCommitmentFromLiveLiquidity(positionId, liquidity);
+        harness.trackCommitmentFromLiveLiquidity(positionId, 0);
 
         (uint256 afterRemove0, uint256 afterRemove1,,,,) = harness.getPositionAccounting(positionId);
 
-        assertEq(afterRemove0, 0, "Should return to zero after symmetric add/remove");
-        assertEq(afterRemove1, 0, "Should return to zero after symmetric add/remove");
+        assertEq(afterRemove0, 0, "Should return to zero after live liquidity goes to zero");
+        assertEq(afterRemove1, 0, "Should return to zero after live liquidity goes to zero");
     }
 
     function testFuzz_updateSettlement_neverExceedsCommitment(uint256 commitment, uint256 initialSettled, int256 delta)

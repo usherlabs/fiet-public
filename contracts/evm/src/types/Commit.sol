@@ -32,4 +32,6 @@ struct Commit {
     uint256 positionCount;
     /// Count of active positions
     uint256 activePositionCount;
+    /// Inactive positions that still hold live `pa.settled` (withdrawable via MM settle paths; blocks decommit)
+    uint256 inactiveRemnantCount;
 }

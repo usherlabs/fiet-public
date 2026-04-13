@@ -246,12 +246,18 @@ contract MMPositionManagerActionsTest is MarketTestBase, MarketMakerTestBase {
 
         // test conditions to ensure that a position was committed and minted and settled to
         // for commitment testing:
-        (MarketMaker.State memory mmState, uint256 expiresAt, uint256 positionCount, uint256 activePositionCount) =
-            vtsOrchestrator.getCommit(tokenId);
+        (
+            MarketMaker.State memory mmState,
+            uint256 expiresAt,
+            uint256 positionCount,
+            uint256 activePositionCount,
+            uint256 inactiveRemnantCount
+        ) = vtsOrchestrator.getCommit(tokenId);
         assertEq(mmState.owner, liquiditySignal.mmState.owner, "Commit owner should match liquidity signal owner");
         assertEq(expiresAt, block.timestamp + 3600, "Commit expiry should be now + 1 hour");
         assertEq(positionCount, 1, "Commit should have exactly 1 position");
         assertEq(activePositionCount, 1, "Commit should have exactly 1 active position");
+        assertEq(inactiveRemnantCount, 0, "Fresh commit should have no inactive settled remnants");
 
         // validate the owner of the NFT minted is the caller of the function
         assertEq(positionManager.ownerOf(tokenId), address(this), "NFT owner should be the test contract");
@@ -303,7 +309,7 @@ contract MMPositionManagerActionsTest is MarketTestBase, MarketMakerTestBase {
         uint256 token1BalanceBefore = Currency.wrap(lcc1.underlying()).balanceOf(address(this));
 
         // get the active position count before burning
-        (,,, uint256 activePositionCountBeforeBurn) = vtsOrchestrator.getCommit(tokenId);
+        (,,, uint256 activePositionCountBeforeBurn,) = vtsOrchestrator.getCommit(tokenId);
         assertEq(activePositionCountBeforeBurn, 1, "Precondition: commit should have 1 active position");
 
         // Batch burn and settle from deltas
@@ -318,7 +324,7 @@ contract MMPositionManagerActionsTest is MarketTestBase, MarketMakerTestBase {
         MMA.executeWithUnlock(positionManager, actions, block.timestamp + 3600);
 
         // get the active position count after burning
-        (,,, uint256 activePositionCountAfterBurn) = vtsOrchestrator.getCommit(tokenId);
+        (,,, uint256 activePositionCountAfterBurn,) = vtsOrchestrator.getCommit(tokenId);
         assertEq(activePositionCountAfterBurn, 0, "Burn should reduce active position count to 0");
 
         // get the underlying asset balance after burning a position
@@ -439,7 +445,7 @@ contract MMPositionManagerActionsTest is MarketTestBase, MarketMakerTestBase {
         (Position memory positionBeforeIncrease,) = positionManager.getPosition(tokenId, positionIndex);
 
         // get the active position count before increasing the liquidity
-        (,,, uint256 activePositionCountBeforeIncrease) = vtsOrchestrator.getCommit(tokenId);
+        (,,, uint256 activePositionCountBeforeIncrease,) = vtsOrchestrator.getCommit(tokenId);
         assertEq(activePositionCountBeforeIncrease, 1, "Precondition: commit should have 1 active position");
 
         // increase the liquidity in the position by a specified amount
@@ -455,7 +461,7 @@ contract MMPositionManagerActionsTest is MarketTestBase, MarketMakerTestBase {
         );
 
         // get the active position count after increasing the liquidity
-        (,,, uint256 activePositionCountAfterIncrease) = vtsOrchestrator.getCommit(tokenId);
+        (,,, uint256 activePositionCountAfterIncrease,) = vtsOrchestrator.getCommit(tokenId);
         assertEq(activePositionCountAfterIncrease, 1, "Active position count should remain 1 after increase");
     }
 
@@ -1608,7 +1614,7 @@ contract MMPositionManagerActionsTest is MarketTestBase, MarketMakerTestBase {
         actions[0] = MMA.prepareDecrease(corePoolKey, tokenId, positionIndex, 1_000_000_000);
         actions[1] = MMA.prepareIncreaseFromDeltas(corePoolKey, tokenId, positionIndex, 0, 0, true);
 
-        vm.expectRevert(abi.encodeWithSelector(Errors.MaximumAmountExceeded.selector, uint128(0), uint128(5_999_710)));
+        vm.expectRevert(abi.encodeWithSelector(Errors.MaximumAmountExceeded.selector, uint128(0), uint128(5_999_709)));
         MMA.executeWithUnlock(positionManager, actions, block.timestamp + 3600);
     }
 
@@ -1635,7 +1641,7 @@ contract MMPositionManagerActionsTest is MarketTestBase, MarketMakerTestBase {
             corePoolKey, tokenId, defaultlLiquidityParams.tickLower, defaultlLiquidityParams.tickUpper, 0, 0, true
         );
 
-        vm.expectRevert(abi.encodeWithSelector(Errors.MaximumAmountExceeded.selector, uint128(0), uint128(5_999_710)));
+        vm.expectRevert(abi.encodeWithSelector(Errors.MaximumAmountExceeded.selector, uint128(0), uint128(5_999_709)));
         MMA.executeWithUnlock(positionManager, actions, block.timestamp + 3600);
     }
 

@@ -56,6 +56,7 @@ interface IVTSOrchestrator is IPausableVTS, IVTSCurrencyDelta, IVTSAdmin {
     /// @return expiresAt The expiration timestamp
     /// @return positionCount The count of positions in the commit
     /// @return activePositionCount The count of active positions in the commit
+    /// @return inactiveRemnantCount Inactive positions under this commit that still hold non-zero live `pa.settled` (blocks decommit)
     function getCommit(uint256 commitId)
         external
         view
@@ -63,7 +64,8 @@ interface IVTSOrchestrator is IPausableVTS, IVTSCurrencyDelta, IVTSAdmin {
             MarketMaker.State memory mmState,
             uint256 expiresAt,
             uint256 positionCount,
-            uint256 activePositionCount
+            uint256 activePositionCount,
+            uint256 inactiveRemnantCount
         );
 
     /// @notice Get pool information by PoolId
@@ -92,10 +94,11 @@ interface IVTSOrchestrator is IPausableVTS, IVTSCurrencyDelta, IVTSAdmin {
     /// @return True if the position is valid under the requested constraints
     function isPositionValid(PositionId id, bool requireActive) external view returns (bool);
 
-    /// @notice Checks if a commit exists and optionally checks if signal hasn't expired
+    /// @notice Checks if a commit exists and optionally enforces a live VRL-backed signal
     /// @param commitId The commit identifier
-    /// @param requireLiveSignal If true, checks expiry. If false, skips expiry check.
-    /// @return isValid True if the signal is valid (commit exists and, if requireLiveSignal is true, hasn't expired)
+    /// @param requireLiveSignal If true, requires non-empty reserves, not expired, and a non-zero owner. If false,
+    ///        only requires an initialised commit with a non-zero owner (empty reserves allowed for recovery flows).
+    /// @return isValid True if the commit satisfies the requested constraints
     function isSignalValid(uint256 commitId, bool requireLiveSignal) external view returns (bool isValid);
 
     // VTS Logic & Settlement
@@ -210,12 +213,14 @@ interface IVTSOrchestrator is IPausableVTS, IVTSCurrencyDelta, IVTSAdmin {
     /// @param delta The balance delta from the swap
     /// @param sqrtPBefore The sqrt price before the swap
     /// @param liqBefore The liquidity before the swap
+    /// @param tickBefore Authoritative `slot0.tick` before the swap (must not be derived from `sqrtPBefore` alone)
     function afterCoreSwap(
         PoolKey calldata key,
         SwapParams calldata params,
         BalanceDelta delta,
         uint160 sqrtPBefore,
-        uint128 liqBefore
+        uint128 liqBefore,
+        int24 tickBefore
     ) external;
 
     // MMPositionManager Functions

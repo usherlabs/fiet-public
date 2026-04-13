@@ -57,7 +57,7 @@ contract PausedMMTrace is MarketTestBase, MarketMakerTestBase {
             address(lcc0),
             address(lcc1)
         );
-        (,, uint256 pc,) = vtsOrchestrator.getCommit(tokenId);
+        (,, uint256 pc,,) = vtsOrchestrator.getCommit(tokenId);
         uint256 positionIndex = pc - 1;
         vm.mockCall(
             address(mv),
