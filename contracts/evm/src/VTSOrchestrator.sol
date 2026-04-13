@@ -390,7 +390,12 @@ contract VTSOrchestrator is
         onlyPositionValid(positionId)
         returns (bool, BalanceDelta)
     {
-        return VTSPositionLib.calcRFS(s, poolManager, positionId, requireClosedRfS);
+        settlePositionGrowths(positionId);
+        (bool rfsOpen, BalanceDelta delta) = VTSPositionLib.getRFS(s, positionId);
+        if (requireClosedRfS && rfsOpen) {
+            revert Errors.RFSOpenForPosition(positionId);
+        }
+        return (rfsOpen, delta);
     }
 
     /// @inheritdoc IVTSOrchestrator
@@ -400,7 +405,11 @@ contract VTSOrchestrator is
     {
         PositionId positionId = getPositionId(commitId, positionIndex);
         _assertPositionValid(positionId, true);
-        (bool rfsOpen, BalanceDelta delta) = VTSPositionLib.calcRFS(s, poolManager, positionId, requireClosedRfS);
+        settlePositionGrowths(positionId);
+        (bool rfsOpen, BalanceDelta delta) = VTSPositionLib.getRFS(s, positionId);
+        if (requireClosedRfS && rfsOpen) {
+            revert Errors.RFSOpenForPosition(positionId);
+        }
         return (positionId, rfsOpen, delta);
     }
 
@@ -511,6 +520,23 @@ contract VTSOrchestrator is
                 _notPoolPaused(poolId);
             }
             VTSPositionLib.settlePositionGrowths(s, poolManager, positionId);
+        }
+    }
+
+    /// @dev Growth must be settled before `checkpointWithCommitment` reads `pa.settled`. When paused, the public
+    ///      `settlePositionGrowths` entrypoint is restricted to CoreHook; this orchestrator-only path performs the
+    ///      same settlement for `checkpoint(..., true)` only, so commitment checkpoints stay growth-consistent without
+    ///      widening who may call the public `settlePositionGrowths` entrypoint during pause (see **PAUSE-01**).
+    function _settleGrowthsBeforeCheckpoint(PositionId positionId, bool withCommitment) internal {
+        if (!isPositionValid(positionId, false)) {
+            return;
+        }
+        PoolId poolId = s.positions[positionId].poolId;
+        bool poolOrGlobalPaused = s.isPaused || s.pools[poolId].isPaused;
+        if (poolOrGlobalPaused && withCommitment) {
+            VTSPositionLib.settlePositionGrowths(s, poolManager, positionId);
+        } else {
+            settlePositionGrowths(positionId);
         }
     }
 
@@ -657,12 +683,14 @@ contract VTSOrchestrator is
 
     /// @notice Settle a market maker position
     /// @dev Called by MMPositionManager to settle a position, handling both normal settlement and seizure.
-    ///      Position validation is performed inside VTSPositionLib.onMMSettle.
+    ///      Position validation is performed inside `VTSLifecycleLinkedLib._executeMMSettleFromParams`.
     /// @param factory The market factory namespace for caller-bound validation
     /// @param commitId The commit identifier
     /// @param positionIndex The position index within the commit
     /// @param amountDelta The amount delta for settlement
     /// @param isSeizing Whether the position is being seized
+    /// @param fromDeltas When true, deposit lanes consume existing positive underlying delta (settle-from-deltas).
+    ///        Withdrawal lanes ignore this flag; see `VTSLifecycleLinkedLib._executeMMSettleFromParams`.
     /// @return settlementDelta The settlement balance delta
     /// @return rfsOpen Whether the RFS is open after settlement
     /// @return seizedLiquidityUnits The amount of liquidity units seized (0 if not seizing)
@@ -671,7 +699,8 @@ contract VTSOrchestrator is
         uint256 commitId,
         uint256 positionIndex,
         BalanceDelta amountDelta,
-        bool isSeizing
+        bool isSeizing,
+        bool fromDeltas
     )
         external
         onlyIfPoolManagerUnlocked
@@ -692,7 +721,7 @@ contract VTSOrchestrator is
         }
 
         SettleResult memory result = VTSLifecycleLinkedLib.onMMSettle(
-            s, _lifecycleContext(), factory, positionId, pos.poolId, amountDelta, isSeizing
+            s, _lifecycleContext(), factory, positionId, pos.poolId, amountDelta, isSeizing, fromDeltas
         );
         settlementDelta = result.settlementDelta;
         rfsOpen = result.rfsOpen;
@@ -791,6 +820,14 @@ contract VTSOrchestrator is
 
         PositionId positionId = getPositionId(commitId, positionIndex);
         _assertPositionValid(positionId, true);
+
+        ///      When the pool (or VTS globally) is paused, public `settlePositionGrowths` is CoreHook-only so
+        ///      arbitrary third parties cannot refresh growth during pause. Commitment checkpoints must still run on
+        ///      growth-settled accounting (see COMMIT-02 / COMMIT-02A in `INVARIANTS.md`): for paused
+        ///      `withCommitment == true` we settle via this orchestrator path only, then run the linked checkpoint.
+        ///      Paused `checkpoint(..., false)` and public `calcRFS` / `settlePositionGrowths` remain CoreHook-only.
+        _settleGrowthsBeforeCheckpoint(positionId, withCommitment);
+
         RFSCheckpoint memory checkpointOut =
             VTSLifecycleLinkedLib.checkpoint(s, _lifecycleContext(), commitId, withCommitment, positionId);
         emit Checkpointed(commitId, positionIndex, checkpointOut, withCommitment);

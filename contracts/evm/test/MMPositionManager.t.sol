@@ -76,6 +76,23 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
         uint256 amountToDecrease;
     }
 
+    struct PriceShapedScenario {
+        uint256 tokenId;
+        PositionId positionId;
+        uint256 positionIndex;
+        uint256 requiredSettlementAmount0;
+        uint256 requiredSettlementAmount1;
+    }
+
+    struct OutOfRangeDecreaseParams {
+        uint256 tokenId;
+        uint256 positionIndex;
+        PositionId positionId;
+        uint256 requiredSettlementAmount0;
+        uint256 requiredSettlementAmount1;
+        uint256 amountToDecrease;
+    }
+
     function setUp() public {
         _setupMarket();
         _setUpMM();
@@ -1957,6 +1974,58 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
         MMA.executeWithUnlock(positionManager, actions, block.timestamp + 3600);
     }
 
+    /// @notice End-to-end regression for finding 4 using a real price-shaped one-sided remove.
+    /// @dev Pushes the core price above the upper tick so a full remove returns token1 principal only, then starves
+    ///      vault liquidity. Token0 therefore has no same-token principal available for queueing; its claim must
+    ///      survive as an MMPositionManager underlying delta rather than being dropped.
+    function test_priceShapedMMRemove_oneSidedPrincipal_preservesUnqueuedUnderlyingDelta() public {
+        PriceShapedScenario memory scenario = _setupPriceShapedScenario();
+        (uint256 settled0BeforeDecrease, uint256 settled1BeforeDecrease) = _settleShapedPositionForFullRemove(scenario);
+
+        vm.mockCall(
+            address(mv),
+            abi.encodeWithSelector(
+                IMarketVault.dryModifyLiquidities.selector,
+                toBalanceDelta(SafeCast.toInt128(settled0BeforeDecrease), SafeCast.toInt128(settled1BeforeDecrease))
+            ),
+            abi.encode(toBalanceDelta(0, 0))
+        );
+        vm.mockCall(
+            marketFactory, abi.encodeWithSelector(IMarketFactory.useMarketLiquidity.selector), abi.encode(uint256(0))
+        );
+
+        uint256 lockerUnderlying0Before = MockERC20(lcc0.underlying()).balanceOf(address(this));
+
+        MMA.PreparedAction[] memory actions = new MMA.PreparedAction[](4);
+        actions[0] = MMA.prepareDecrease(corePoolKey, scenario.tokenId, scenario.positionIndex, 1e18);
+        actions[1] = MMA.prepareSettle(
+            corePoolKey, scenario.tokenId, scenario.positionIndex, SafeCast.toInt128(settled0BeforeDecrease), 0, false
+        );
+        actions[2] = MMA.prepareTake(Currency.wrap(address(lcc0)), address(this), 0);
+        actions[3] = MMA.prepareTake(Currency.wrap(address(lcc1)), address(this), 0);
+        MMA.executeWithUnlock(positionManager, actions, block.timestamp + 3600);
+
+        (uint256 settled0After, uint256 settled1After) = vtsOrchestrator.getPositionSettledAmounts(scenario.positionId);
+
+        assertEq(
+            ILiquidityHub(liquidityHub).settleQueue(address(lcc0), address(this)),
+            0,
+            "token0 queue should stay zero when the remove returns no token0 principal"
+        );
+        assertGt(
+            ILiquidityHub(liquidityHub).settleQueue(address(lcc1), address(this)),
+            0,
+            "token1 shortfall should still queue against the one-sided returned principal"
+        );
+        assertEq(
+            MockERC20(lcc0.underlying()).balanceOf(address(this)) - lockerUnderlying0Before,
+            settled0BeforeDecrease,
+            "token0 remainder should be recoverable via a follow-up settle instead of being lost"
+        );
+        assertEq(settled0After, 0, "token0 settled should be fully withdrawn by the follow-up settle");
+        assertEq(settled1After, 0, "token1 settled should be fully removed once its shortfall is preserved via queue");
+    }
+
     /// @notice Mutation-killer: when `recipient == address(this)`, COLLECT_AVAILABLE_LIQUIDITY must sync underlying credit.
     /// @dev Practical tip: verify the sync by immediately doing a `TAKE(underlying)` to an external recipient.
     function test_collectAvailableLiquidity_noSwap() public {
@@ -2292,6 +2361,70 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
         assertEq(settled1Out, 0, "full queued shortfall should leave no live settled token1");
     }
 
+    function _setupPriceShapedScenario() internal returns (PriceShapedScenario memory scenario) {
+        vm.mockCall(
+            marketFactory,
+            abi.encodeWithSelector(IMarketFactory.bounds.selector, address(positionManager)),
+            abi.encode(true)
+        );
+
+        ModifyLiquidityParams memory liquidityParams =
+            ModifyLiquidityParams({tickLower: -60, tickUpper: 60, liquidityDelta: 1e18, salt: bytes32(uint256(77))});
+
+        (
+            scenario.tokenId,
+            scenario.positionId,
+            scenario.requiredSettlementAmount0,
+            scenario.requiredSettlementAmount1
+        ) =
+            _setupCommittedPosition(
+                positionManager,
+                corePoolKey,
+                abi.encode(liquiditySignal),
+                liquidityParams,
+                marketVTSConfiguration,
+                address(lcc0),
+                address(lcc1)
+            );
+        scenario.positionIndex = 0;
+
+        int24 tickAfterSwap = _swapPushCorePriceAboveUpperViaToken1In(MockERC20(lcc1.underlying()), address(lcc1), 5e18);
+        assertGt(tickAfterSwap, liquidityParams.tickUpper, "precondition: core price should move above the upper tick");
+    }
+
+    function _settleShapedPositionForFullRemove(PriceShapedScenario memory scenario)
+        internal
+        returns (uint256 settled0BeforeDecrease, uint256 settled1BeforeDecrease)
+    {
+        (bool rfsOpen, BalanceDelta rfsDelta) = vtsOrchestrator.calcRFS(scenario.positionId, false);
+        assertTrue(rfsOpen, "precondition: shaped price move should open RFS");
+
+        int128 settle0 = rfsDelta.amount0() > 0
+            ? -rfsDelta.amount0() - SafeCast.toInt128(scenario.requiredSettlementAmount0)
+            : int128(0);
+        int128 settle1 = rfsDelta.amount1() > 0
+            ? -rfsDelta.amount1() - SafeCast.toInt128(scenario.requiredSettlementAmount1)
+            : int128(0);
+
+        uint256 pay0 = LiquidityUtils.safeInt128ToUint256(settle0);
+        uint256 pay1 = LiquidityUtils.safeInt128ToUint256(settle1);
+        if (pay0 > 0) {
+            MockERC20(lcc0.underlying()).mint(address(this), pay0);
+            MockERC20(lcc0.underlying()).approve(address(positionManager), pay0);
+        }
+        if (pay1 > 0) {
+            MockERC20(lcc1.underlying()).mint(address(this), pay1);
+            MockERC20(lcc1.underlying()).approve(address(positionManager), pay1);
+        }
+
+        MMA.PreparedAction[] memory actions = new MMA.PreparedAction[](1);
+        actions[0] = MMA.prepareSettle(corePoolKey, scenario.tokenId, scenario.positionIndex, settle0, settle1, false);
+        MMA.executeWithUnlock(positionManager, actions, block.timestamp + 3600);
+
+        (settled0BeforeDecrease, settled1BeforeDecrease) =
+            vtsOrchestrator.getPositionSettledAmounts(scenario.positionId);
+    }
+
     function _swapAccrueFeesViaSwap(MockERC20 underlying0, address lcc0Addr, uint256 swapAmount) internal {
         // ------------------------------------------------------------
         // Create fees on the core pool before decreasing:
@@ -2309,6 +2442,27 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
             PoolSwapTest.TestSettings({takeClaims: false, settleUsingBurn: false}),
             ZERO_BYTES
         );
+    }
+
+    function _swapPushCorePriceAboveUpperViaToken1In(MockERC20 underlying1, address lcc1Addr, uint256 swapAmount)
+        internal
+        returns (int24 tickAfter)
+    {
+        underlying1.mint(address(this), swapAmount);
+        underlying1.approve(address(liquidityHub), swapAmount);
+        ILiquidityHub(liquidityHub).wrap(lcc1Addr, swapAmount);
+        IERC20(lcc1Addr).approve(address(swapRouter), type(uint256).max);
+
+        swapRouter.swap(
+            corePoolKey,
+            SwapParams({
+                zeroForOne: false, amountSpecified: -int256(swapAmount), sqrtPriceLimitX96: ONE_FOR_ZERO_LIMIT
+            }),
+            PoolSwapTest.TestSettings({takeClaims: false, settleUsingBurn: false}),
+            ZERO_BYTES
+        );
+
+        (, tickAfter,,) = manager.getSlot0(corePoolKey.toId());
     }
 
     function _setDirectSupply(address lcc, uint256 value) internal {

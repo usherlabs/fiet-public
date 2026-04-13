@@ -14,6 +14,7 @@ CONSTANT_TO_LIBRARY = {
     "LCC_FACTORY_LINKED_LIB": "src/libraries/LCCFactoryLib.sol:LCCFactoryLinkedLib",
     "LIQUIDITY_HUB_LINKED_LIB": "src/libraries/LiquidityHubLinkedLib.sol:LiquidityHubLinkedLib",
     "VTS_COMMIT_LIB": "src/libraries/VTSCommitLib.sol:VTSCommitLib",
+    "VTS_FEE_LINKED_LIB": "src/libraries/VTSFeeLib.sol:VTSFeeLinkedLib",
     "VTS_POSITION_LIB": "src/libraries/VTSPositionLib.sol:VTSPositionLib",
     "VTS_LIFECYCLE_LINKED_LIB": "src/libraries/VTSLifecycleLinkedLib.sol:VTSLifecycleLinkedLib",
 }

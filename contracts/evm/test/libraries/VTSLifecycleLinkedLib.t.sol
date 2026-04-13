@@ -586,6 +586,7 @@ contract VTSLifecycleLinkedLibTest is Test {
             posId,
             pid,
             toBalanceDelta(0, 0),
+            false,
             false
         );
     }

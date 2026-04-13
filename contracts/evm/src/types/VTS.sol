@@ -120,6 +120,8 @@ struct SettleParams {
     BalanceDelta delta;
     // Whether the position is being seized
     bool isSeizing;
+    // When true, deposit lanes settle from existing positive underlying delta (explicit settle-from-deltas path). No-op for withdrawals.
+    bool fromDeltas;
 }
 
 /// @notice Result of onMMSettle to reduce stack pressure
@@ -169,6 +171,10 @@ struct PositionAccounting {
     TokenPairUint residualCoverageIndexLastX128;
     // DICE: Banked residual-derived burn base awaiting a later outflow window
     TokenPairUint pendingResidualBurnBase;
+    // DICE: Historical fee backing frozen for the currently unresolved residual-burn episode across
+    // zero-liquidity intervals and partial liquidity decreases (removed slice). Stored by fee token lane
+    // (opposite the deficit token lane) and cleared once that matching residual burn base is fully consumed.
+    TokenPairUint pendingResidualFeeBacking;
     // DICE: Outflow watermark captured when residual burn base is banked
     TokenPairUint pendingResidualBurnOutflowsFloor;
     // CISE: Position checkpoint of pool coverage-per-settled index (Q128)
@@ -183,7 +189,7 @@ struct PositionAccounting {
     TokenPairUint feesSharedRemainingFactorLastX128;
     // CSI: Position checkpoint of the pool spend epoch (per token), advanced with the pool on sync / setup.
     TokenPairUint feesSharedEpoch;
-    // Remainder numerator for coverage fee-burn baseline checkpoint (see VTSPositionLib._applyBurnBase).
+    // Remainder numerator for coverage fee-burn baseline checkpoint (see VTSFeeLib._applyBurnBase).
     TokenPairUint feeBurnGrowthRemainder;
 }
 

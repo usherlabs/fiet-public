@@ -285,6 +285,14 @@ being an informal “should”.
 - **Statement**: A commitment checkpoint must set (or reduce/clear) `PositionAccounting.commitmentDeficit` in token
   units based on the USD backing shortfall.
 - **Enforced by**: `src/libraries/VTSCommitLib.sol::checkpointWithCommitment`.
+- **Ordering (growth before commitment)**: `checkpointWithCommitment` values backing from stored `pa.settled` (and
+  effective issued amounts). Therefore `src/VTSOrchestrator.sol::checkpoint(..., withCommitment: true)` must settle
+  position growths **before** delegating to `VTSLifecycleLinkedLib.checkpoint` / `checkpointWithCommitment`, so
+  uncrystallised deficit/inflow/fee growth cannot make the commitment gate read stale-high `settled`. While the pool
+  (or VTS globally) is paused, public `VTSOrchestrator.settlePositionGrowths` remains restricted to the canonical
+  `CoreHook` for that market; the orchestrator-only helper `_settleGrowthsBeforeCheckpoint` performs the same
+  `VTSPositionLib.settlePositionGrowths` work for paused commitment checkpoints only, without widening arbitrary
+  third-party refresh on the public entrypoint.
 - **Consequence**: Positions with non-zero `commitmentDeficit` can bypass normal grace only when the configured
   token-lane bypass age/severity gates in `SEIZE-01` are satisfied.
 - **Separation invariant**: `commitmentDeficit` is a checkpoint-derived solvency gate and is not the pool DICE
@@ -405,7 +413,8 @@ being an informal “should”.
 ### SETTLE-01: Withdrawals from active positions are disallowed while RFS is open
 
 - **Statement**: If a position is active and RFS is open, withdrawals must revert (unless in seizure context).
-- **Enforced by**: `src/libraries/VTSPositionLib.sol::_settleActive` reverts `"VTSPositionLib: RFS open"` when
+- **Enforced by**: `src/libraries/VTSLifecycleLinkedLib.sol::_executeWithdrawals` reverts
+  `Errors.RFSOpenForPosition(positionId)` when
   withdrawing while `rfsOpen`.
 
 ### SETTLE-02: Seizure settlement is clamped by RFS (for deposits) and by position-required settlement (for withdrawals)
@@ -421,37 +430,74 @@ being an informal “should”.
 - **Enforced by**: `src/libraries/VTSPositionLib.sol::_settleSeizing` (deposit clamp uses positive RFS; withdrawal clamp
   uses `positionRequiredSettlementDelta`).
 
-### SETTLE-03: MM decrease splits immediate-settle and queued-shortfall accounting
+### SETTLE-03: MM decrease splits routing; batch-clearable delta vs deferred `settled`
 
 - **Statement**:
-  - For MM liquidity decreases, the excess settled entitlement computed against the reduced commitment is not a single
-    homogeneous bucket.
-  - It must be split into:
-    - an **immediately settleable** slice, which remains in live `pa.settled` until the follow-on settlement flow
-      consumes the transient underlying delta for that batch, and
-    - a **queued shortfall** slice, which must leave live VTS settled accounting once the Hub queue amount is known.
+  - For MM liquidity decreases, the excess settled entitlement relative to the reduced commitment is not a single
+    homogeneous bucket for **routing** (vault-available immediate slice vs Hub queue vs value that must remain in live
+    source `pa.settled` until it is serviceable).
+  - Each economic sub-slice must have **exactly one** live representation after the decrease step: Hub-backed queue,
+    MMPM underlying delta (`DynamicCurrencyDelta`) for the **vault-immediate** portion only, or still in source
+    `pa.settled` — never two at once for the same slice.
 - **Protocol rule**:
-  - This invariant is explicitly coupled to **DELTA-01**.
-  - `DynamicCurrencyDelta` remains the transient “must resolve now” accounting surface for the immediate settleable slice, meaning that any immediate-settle value which is still required to be resolved before batch end must remain represented on the delta path until that requirement is discharged.
-  - Queue-backed shortfall must not remain in `pa.settled` / pool `totalSettled`, because it has become an explicit
-    Hub-backed deferred entitlement rather than live position settlement.
-  - Therefore, the live-settlement clamp for MM decreases must be applied to the **queued shortfall only**, not to the
-    full excess pre-emptively; otherwise the protocol would remove value from live settled state before the corresponding
-    DELTA-01 obligation had been resolved.
+  - Coupled to **DELTA-01**: transient MMPM underlying deltas must be batch-clearable; only the vault-immediate slice is
+    booked as positive owner underlying delta. Any shortfall that cannot be Hub-queued (principal-capped) and cannot be
+    paid from the vault in the same unlock **stays in live source `settled`**, not on `DynamicCurrencyDelta`.
+  - **Source-side decrement (routed amount only)**: `_applySettlementClampFromExcess` removes
+    `settleableDelta + queuedDelta` from source `pa.settled` / pool `totalSettled` — the value actually routed to the
+    vault path or queue in this step — not the full `requiredSettlementDelta` when part of it must remain deferred in
+    `settled`.
+  - **Consumption-based target credit**: another position’s `pa.settled` increases only when `_settle()` / `onMMSettle()`
+    actually consumes protocol underlying delta or token flow (`MMPositionActionsImpl._netProtocolCredits` path), not
+    merely because positive delta exists on MMPM.
+  - **Directional settlement ordering** inside `onMMSettle()` is intentionally asymmetric:
+    - deposits may still increase `pa.settled` before Phase-4 delta debt clearance, because they are moving value into
+      the position;
+    - withdrawals must consume any positive owner underlying delta first, then reduce `pa.settled` only for the
+      residual amount that is still backed by live position settlement.
 - **Enforced / expressed by**:
-  - `src/libraries/VTSPositionLib.sol::_touchExistingDecrease` computes the full MM excess as
-    `requiredSettlementDelta` without eagerly reducing `pa.settled`.
-  - `src/libraries/VTSPositionLib.sol::_handleLiquidityDecrease` computes:
-    - `settleableDelta` (immediate slice), and
-    - `queuedShortfallDelta` (unavailable portion routed into `LiquidityHub` queueing).
-  - `src/libraries/VTSPositionLib.sol::_processMMOperations`:
-    - books only `settleableDelta` into `DynamicCurrencyDelta`, and
-    - clamps `pa.settled` / pool `totalSettled` only for `queuedShortfallDelta`.
+  - `src/libraries/VTSPositionLib.sol::_touchExistingDecrease` computes `requiredSettlementDelta` for the MM excess.
+  - `src/libraries/VTSPositionLib.sol::_previewLiquidityDecreaseRouting` (and `_handleLiquidityDecrease` via
+    `_computeLiquidityDecreaseRoutingSplit`) splits vault availability vs Hub-queued principal; `underlyingDeltaSettlement`
+    for dynamic delta accounting equals the vault-immediate slice (`settleableDelta`) only.
+  - `src/libraries/VTSPositionLib.sol::_processMMOperations` (decrease branch): calls `_applySettlementClampFromExcess`
+    with `exportedForSettlementClamp` from `_handleLiquidityDecrease` (`settleableDelta + queuedDelta`), then
+    `DynamicCurrencyDelta.accountUnderlyingSettlementDelta` for the immediate slice only.
+  - `src/libraries/VTSLifecycleLinkedLib.sol::onMMSettle` plans withdrawals from positive underlying delta and
+    settled-backed
+    capacity separately, consumes the delta-backed portion first, and only then mutates `pa.settled`.
 - **Why**:
-  - Clamping the full excess too early would double-count later settlement paths that still rely on
-    `DynamicCurrencyDelta` as the transient settle obligation.
-  - Clamping only the queued shortfall satisfies the stronger invariant that queued-away amounts no longer remain as live
-    settled exposure, while preserving the required-delta-resolution model in **DELTA-01**.
+  - Clamping only the queued shortfall while also booking the immediate slice on `DynamicCurrencyDelta` would double-count
+    the same value as both live source `settled` and MMPM credit, enabling cross-position reuse without conservation.
+  - Booking a principal-capped shortfall remainder as positive MMPM underlying delta while the vault cannot pay it in the
+    same batch violates **DELTA-01** (uncleared transient delta at batch end).
+  - The stricter withdrawal ordering prevents a later delta-backed settle from deducting the same exported value from
+    source `pa.settled` a second time.
+
+### SETTLE-04: MM in-hook protocol credit must not over-clear `requiredSettlementDelta` when deficit is cured first
+
+- **Statement**: For MM liquidity increases that settle protocol credit inside `_processMMOperations` (in-hook path with
+  `clampToRequiredSettlement`), `_updateSettlement` / `_vUpdateSettlement` may apply a single positive deposit amount across
+  `cumulativeDeficit`, `commitmentDeficit`, and `pa.settled` in the usual netting order (**COV-02**). The portion of
+  protocol credit that cures deficits without increasing `pa.settled` must still be debited from positive underlying
+  delta (full economic consumption), but it must **not** be treated as having satisfied the MM add deposit requirement
+  encoded in `requiredSettlementDelta`. Only the actual `pa.settled` lane delta may reduce that remainder before the
+  post-hook underlying settlement step.
+- **Protocol rule**:
+  - **Credit consumption** follows total applied amount from settlement (`totalApplied`): deficit cure + settled increase
+    (and pool accounting such as DICE principal on the cumulative-deficit leg) stays internally consistent.
+  - **Requirement bookkeeping** for MM add backing vs the live negative `requiredSettlementDelta` advances only by the
+    settled leg (`settledDeltaOnly`), so a position cannot skip posting the still-outstanding deposit obligation merely
+    because credit first cleared `cumulativeDeficit` / `commitmentDeficit`.
+- **Enforced by**:
+  - `src/libraries/VTSPositionLib.sol::_vUpdateSettlement` (returns both `totalApplied` and `next - cur` on `pa.settled`)
+  - `src/libraries/VTSPositionLib.sol::_consumePositiveUnderlyingDeltaForSettlementLane` when `clampToRequiredSettlement`
+    is true (MM in-hook settlement only; `onMMSettle` settle-from-deltas keeps `clampToRequiredSettlement = false`).
+- **Regression tests**:
+  - `test/libraries/VTSPositionLib.mutation.unit.t.sol`:
+    - `test_touchPosition_mmIncrease_cumulativeDeficit_doesNotOverClearRequiredSettlement`
+    - `test_touchPosition_mmIncrease_cumulativeDeficit_surplusProtocolCredit_preservesShortfallAndSurplus`
+    - `test_touchPosition_mmIncrease_mixedLane_cumulativeDeficitToken0_exactToken1`
 
 ### SEIZE-01: Seizability is token-lane scoped and aggregated at position level
 
@@ -608,13 +654,32 @@ being an informal “should”.
 - **Enforced by**: `src/MMPositionManager.sol::transferFrom` guarded by `onlyIfPoolManagerLocked` which reverts
   `Errors.PoolManagerMustBeLocked()`.
 
-### PAUSE-01: Global/pool pause must halt sensitive VTS entrypoints
+### PAUSE-01: Global/pool pause (soft pause: freeze trading risk, allow scoped solvency maintenance)
 
-- **Statement**: When paused, swap processing and position processing must revert.
-- **Enforced by**:
+- **Statement**: When the pool or VTS is globally paused, swap processing and risk-expanding position processing must
+  revert. Certain solvency-maintenance and readjustment entrypoints remain intentionally available so operators and
+  participants can still settle, checkpoint commitment backing, extend grace with proofs, and validate seizure—without
+  reopening general-purpose trading.
+- **Enforced by (halted paths)**:
   - `src/modules/PausableVTS.sol` guards (`notPoolPaused`, `notGlobalPaused`) revert `Errors.EnforcedPause()`.
-  - Applied to `src/VTSOrchestrator.sol::processPosition` and `afterCoreSwap` (and to `settlePositionGrowths` for active
-    positions).
+  - Applied to `src/VTSOrchestrator.sol::processPosition` and `afterCoreSwap`.
+  - `src/VTSOrchestrator.sol::settlePositionGrowths`: when `s.isPaused || s.pools[poolId].isPaused`, only the canonical
+    `CoreHook` for that market may call the public entrypoint (`MarketHandlerLib.assertCoreHook`); other callers revert
+    `Errors.InvalidSender()`. This blocks permissionless growth refresh during pause except via hook-driven removes and
+    the orchestrator-internal paused commitment-checkpoint path (see **COMMIT-02** ordering).
+- **Intentionally available during pause (non-exhaustive)**:
+  - Canonical remove-liquidity: `CoreHook` still calls `settlePositionGrowths` before `touchPosition`; `touchPosition`
+    allows negative `liquidityDelta` while paused and reverts non-removal modifies (`src/libraries/VTSPositionLib.sol::touchPosition`).
+  - `VTSOrchestrator.checkpoint(..., withCommitment: true)`: uses `_settleGrowthsBeforeCheckpoint` so commitment state is
+    consistent (see **COMMIT-02**).
+  - `VTSOrchestrator.checkpoint(..., withCommitment: false)` and `calcRFS`: still call public `settlePositionGrowths`
+    first, so they remain **CoreHook-only** while paused (same gate as above).
+  - `extendGracePeriod`, MM settlement, and conditional seizure refresh: `VTSLifecycleLinkedLib` may call
+    `VTSPositionLib.settlePositionGrowths` directly on authorised paths (not via the public orchestrator pause gate).
+  - `onSeize` / signal lifecycle (`commitSignal`, `renewSignal`, …) are not `notPoolPaused`-gated at the orchestrator
+    layer; product policy treats these as solvency / lifecycle maintenance compatible with soft pause.
+- **Non-goal**: Pause is **not** a full “hard freeze” of every state transition. A separate hard-freeze mode is not part
+  of this invariant; integrators should not assume all orchestrator entrypoints revert when paused.
 
 ## Market creation and Uniswap hook constraints (structural invariants)
 

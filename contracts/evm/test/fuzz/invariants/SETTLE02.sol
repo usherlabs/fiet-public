@@ -17,7 +17,7 @@ import {LiquidityUtils} from "../../../src/libraries/LiquidityUtils.sol";
 import {EchidnaLinkedLibs} from "../base/EchidnaLinkedLibs.sol";
 
 /// @notice Echidna harness for SETTLE-02: seizure settlement clamps deposit/withdraw bounds.
-/// @dev Exercises the production `VTSPositionLib.onMMSettle` seizing branch via harness wrapper.
+/// @dev Exercises the production MM settle seizing branch via `VTSLifecycleLinkedLib._executeMMSettleFromParams`.
 contract SETTLE02 {
     uint256 internal constant MAX_NON_VACUOUS_ATTEMPTS = 32;
 
@@ -52,7 +52,9 @@ contract SETTLE02 {
     bool internal withdrawAllOk = true;
 
     constructor() {
+        EchidnaLinkedLibs.deployVTSFeeLinkedLib();
         EchidnaLinkedLibs.deployVTSPositionLib();
+        EchidnaLinkedLibs.deployVTSLifecycleLinkedLib();
         harness = new VTSPositionLibEchidnaHarness();
         poolManager = new MockPoolManager();
         vault = new MockMarketVault();
@@ -134,7 +136,7 @@ contract SETTLE02 {
 
             BalanceDelta delta = toBalanceDelta(-int128(uint128(c.requested0)), -int128(uint128(c.requested1)));
             try harness.onMMSettle(
-                IPoolManager(address(poolManager)), vault, positionId, lccCurrency0, lccCurrency1, delta, true
+                IPoolManager(address(poolManager)), vault, positionId, lccCurrency0, lccCurrency1, delta, true, false
             ) returns (
                 BalanceDelta settlementDelta, bool, uint256
             ) {
@@ -195,7 +197,7 @@ contract SETTLE02 {
 
             BalanceDelta delta = toBalanceDelta(int128(uint128(c.requested0)), int128(uint128(c.requested1)));
             try harness.onMMSettle(
-                IPoolManager(address(poolManager)), vault, positionId, lccCurrency0, lccCurrency1, delta, true
+                IPoolManager(address(poolManager)), vault, positionId, lccCurrency0, lccCurrency1, delta, true, false
             ) returns (
                 BalanceDelta settlementDelta, bool, uint256
             ) {

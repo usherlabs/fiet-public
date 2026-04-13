@@ -17,6 +17,7 @@ import {BalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
 import {IPoolManager} from "v4-periphery/lib/v4-core/src/interfaces/IPoolManager.sol";
 import {ModifyLiquidityParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
 import {VTSPositionLib} from "../../../src/libraries/VTSPositionLib.sol";
+import {VTSLifecycleLinkedLib} from "../../../src/libraries/VTSLifecycleLinkedLib.sol";
 import {DynamicCurrencyDelta} from "../../../src/libraries/DynamicCurrencyDelta.sol";
 import {IMarketVault} from "../../../src/interfaces/IMarketVault.sol";
 import {ILiquidityHub} from "../../../src/interfaces/ILiquidityHub.sol";
@@ -149,7 +150,7 @@ contract VTSPositionLibEchidnaHarness {
     }
 
     // -------------------------------------------------------------------------
-    // MM settle entrypoint (production VTSPositionLib path)
+    // MM settle entrypoint (`VTSLifecycleLinkedLib._executeMMSettleFromParams`)
     // -------------------------------------------------------------------------
 
     function onMMSettle(
@@ -159,7 +160,8 @@ contract VTSPositionLibEchidnaHarness {
         Currency lccCurrency0,
         Currency lccCurrency1,
         BalanceDelta delta,
-        bool isSeizing
+        bool isSeizing,
+        bool fromDeltas
     ) external returns (BalanceDelta settlementDelta, bool rfsOpen, uint256 seizedLiquidityUnits) {
         Position memory pos = s.positions[positionId];
         if (pos.owner == address(0)) revert("VTSPositionLib: Invalid position");
@@ -170,9 +172,10 @@ contract VTSPositionLibEchidnaHarness {
             lccCurrency0: lccCurrency0,
             lccCurrency1: lccCurrency1,
             delta: delta,
-            isSeizing: isSeizing
+            isSeizing: isSeizing,
+            fromDeltas: fromDeltas
         });
-        SettleResult memory result = VTSPositionLib.onMMSettle(s, poolManager, p);
+        SettleResult memory result = VTSLifecycleLinkedLib._executeMMSettleFromParams(s, poolManager, p);
         return (result.settlementDelta, result.rfsOpen, result.seizedLiquidityUnits);
     }
 

@@ -2,6 +2,7 @@
 pragma solidity ^0.8.26;
 
 import {VTSLifecycleLinkedLib} from "../../../src/libraries/VTSLifecycleLinkedLib.sol";
+import {VTSPositionLib} from "../../../src/libraries/VTSPositionLib.sol";
 import {
     VTSStorage,
     VTSLifecycleContext,
@@ -33,6 +34,17 @@ contract VTSLifecycleLinkedLibHarness {
         return VTSLifecycleLinkedLib.checkpoint(s, ctx, commitId, withCommitment, positionId);
     }
 
+    /// @notice TEST-ONLY helper for legacy flows that still want pre-settlement before checkpointing.
+    function settleThenCheckpoint(
+        VTSLifecycleContext memory ctx,
+        uint256 commitId,
+        bool withCommitment,
+        PositionId positionId
+    ) external returns (RFSCheckpoint memory) {
+        VTSPositionLib.settlePositionGrowths(s, ctx.poolManager, positionId);
+        return VTSLifecycleLinkedLib.checkpoint(s, ctx, commitId, withCommitment, positionId);
+    }
+
     function extendGracePeriod(
         VTSLifecycleContext memory ctx,
         PoolKey memory poolKey,
@@ -61,9 +73,10 @@ contract VTSLifecycleLinkedLibHarness {
         PositionId positionId,
         PoolId poolId,
         BalanceDelta amountDelta,
-        bool isSeizing
+        bool isSeizing,
+        bool fromDeltas
     ) external returns (SettleResult memory) {
-        return VTSLifecycleLinkedLib.onMMSettle(s, ctx, factory, positionId, poolId, amountDelta, isSeizing);
+        return VTSLifecycleLinkedLib.onMMSettle(s, ctx, factory, positionId, poolId, amountDelta, isSeizing, fromDeltas);
     }
 
     function validateMMOperation(

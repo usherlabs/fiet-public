@@ -50,6 +50,18 @@ contract MMPositionManagerActionsTest is MarketTestBase, MarketMakerTestBase {
     using MarketMaker for MarketMaker.State;
     using StateLibrary for IPoolManager;
 
+    struct IncreaseFromDeltasSnapshot {
+        uint256 tokenId;
+        uint256 newTokenId;
+        PositionId position2Id;
+        uint128 position1LiquidityBefore;
+        uint128 position2LiquidityBefore;
+        uint256 position1Settled0Before;
+        uint256 position1Settled1Before;
+        uint256 position2SettledAmount0Before;
+        uint256 position2SettledAmount1Before;
+    }
+
     MMPositionManager internal positionManager;
     MarketVTSConfiguration internal marketVTSConfiguration;
 
@@ -485,11 +497,12 @@ contract MMPositionManagerActionsTest is MarketTestBase, MarketMakerTestBase {
 
         // get amounts from liquidity params
         uint256 newPositionIndex = 1;
-        MMA.PreparedAction[] memory actions = new MMA.PreparedAction[](2);
+        MMA.PreparedAction[] memory actions = new MMA.PreparedAction[](3);
         int24 newUpperTick = 0;
         actions[0] = MMA.prepareDecrease(corePoolKey, tokenId, positionIndex, liquidityToDecrease);
         actions[1] =
             MMA.prepareMintFromDeltas(corePoolKey, tokenId, newUpperTick, defaultlLiquidityParams.tickUpper, true);
+        actions[2] = MMA.prepareSettleFromDeltas(corePoolKey, tokenId, positionIndex, true, true);
         MMA.executeWithUnlock(positionManager, actions, block.timestamp + 3600);
 
         // validate liquidity of the initial position is decreased
@@ -949,20 +962,14 @@ contract MMPositionManagerActionsTest is MarketTestBase, MarketMakerTestBase {
         uint256 positionIndex = 0;
         // Under coverage compilation (optimiser/viaIR disabled), this test can hit stack-too-deep.
         // Keep only the values needed across scopes alive.
-        uint256 tokenId;
-        uint256 newTokenId;
-        PositionId position2Id;
-        uint128 position1LiquidityBefore;
-        uint128 position2LiquidityBefore;
-        uint256 position2SettledAmount0Before;
-        uint256 position2SettledAmount1Before;
+        IncreaseFromDeltasSnapshot memory snap;
 
         {
             ModifyLiquidityParams memory newLiquidityParams =
                 ModifyLiquidityParams({tickLower: 0, tickUpper: 60, liquidityDelta: 1e10, salt: bytes32(0)});
 
             // create a new position with the default liquidity params and liquidity signal
-            (tokenId,,,) = _setupCommittedPosition(
+            (snap.tokenId,,,) = _setupCommittedPosition(
                 positionManager,
                 corePoolKey,
                 abi.encode(liquiditySignal),
@@ -975,6 +982,127 @@ contract MMPositionManagerActionsTest is MarketTestBase, MarketMakerTestBase {
             // make settlements for the position
             uint256 settlementAmount = 1_000_000e18;
             // make a settlement for the position over the required settlement amounts, so we can use the excess funds to increase the liquidity
+            approveAndSettleUnderlyingToPosition(snap.tokenId, positionIndex, settlementAmount, settlementAmount);
+
+            (snap.newTokenId,,,) = _setupCommittedPosition(
+                positionManager,
+                corePoolKey,
+                abi.encode(renewSignal),
+                newLiquidityParams,
+                marketVTSConfiguration,
+                address(lcc0),
+                address(lcc1)
+            );
+
+            // Snapshot only the fields we assert on (rather than keeping whole structs alive).
+            {
+                (Position memory position1Before, PositionId position1Id) =
+                    positionManager.getPosition(snap.tokenId, positionIndex);
+                snap.position1LiquidityBefore = position1Before.liquidity;
+                (snap.position1Settled0Before, snap.position1Settled1Before) =
+                    vtsOrchestrator.getPositionSettledAmounts(position1Id);
+            }
+            {
+                (Position memory position2Before, PositionId _position2Id) =
+                    positionManager.getPosition(snap.newTokenId, positionIndex);
+                snap.position2LiquidityBefore = position2Before.liquidity;
+                snap.position2Id = _position2Id;
+            }
+            (snap.position2SettledAmount0Before, snap.position2SettledAmount1Before) =
+                vtsOrchestrator.getPositionSettledAmounts(snap.position2Id);
+
+            // batch actions;
+            // decrease the liquidity in the initial position with index 0
+            // increase the liquidity in the new position with index 1
+            MMA.PreparedAction[] memory actions = new MMA.PreparedAction[](3);
+            actions[0] = MMA.prepareDecrease(corePoolKey, snap.tokenId, positionIndex, 1000);
+            actions[1] = MMA.prepareIncreaseFromDeltas(corePoolKey, snap.newTokenId, positionIndex, true);
+            actions[2] = MMA.prepareSettleFromDeltas(corePoolKey, snap.tokenId, positionIndex, true, true);
+            MMA.executeWithUnlock(positionManager, actions, block.timestamp + 3600);
+        }
+
+        // validate the liquidity of the initial position is decreased
+        // validate the liquidity of the new position is increased
+        {
+            (Position memory position1After,) = positionManager.getPosition(snap.tokenId, positionIndex);
+            (Position memory position2After,) = positionManager.getPosition(snap.newTokenId, positionIndex);
+            assertLt(
+                uint256(position1After.liquidity),
+                uint256(snap.position1LiquidityBefore),
+                "Position1 liquidity should decrease after prepareDecrease"
+            );
+            assertGt(
+                uint256(position2After.liquidity),
+                uint256(snap.position2LiquidityBefore),
+                "Position2 liquidity should increase after increaseFromDeltas"
+            );
+        }
+
+        // validate the new position's settlement has increased
+        uint256 position2SettledAmount0After;
+        uint256 position2SettledAmount1After;
+        {
+            (position2SettledAmount0After, position2SettledAmount1After) =
+                vtsOrchestrator.getPositionSettledAmounts(snap.position2Id);
+            assertGt(
+                position2SettledAmount0After,
+                snap.position2SettledAmount0Before,
+                "Position2 settled amount0 should increase after increaseFromDeltas"
+            );
+            // payerIsUser=true deposits are clamped to MMPM negative underlying delta per token; if token1 debt
+            // after the increase is already cleared by credits, token1 settled may legitimately stay flat.
+            assertGe(
+                position2SettledAmount1After,
+                snap.position2SettledAmount1Before,
+                "Position2 settled amount1 must not decrease after increaseFromDeltas"
+            );
+            assertGt(
+                position2SettledAmount0After + position2SettledAmount1After,
+                snap.position2SettledAmount0Before + snap.position2SettledAmount1Before,
+                "Position2 total settled should increase when liquidity is added from deltas"
+            );
+        }
+
+        // Regression (SETTLE-03 / exported settlement): value routed to MMPM delta and into position2 must not also
+        // remain as live settled on the source position after decrease.
+        {
+            (, PositionId position1Id) = positionManager.getPosition(snap.tokenId, positionIndex);
+            (uint256 s0, uint256 s1) = vtsOrchestrator.getPositionSettledAmounts(position1Id);
+            assertLe(s0, snap.position1Settled0Before, "source token0 settled should not increase");
+            assertLe(s1, snap.position1Settled1Before, "source token1 settled should not increase");
+
+            uint256 imported0 = position2SettledAmount0After - snap.position2SettledAmount0Before;
+            uint256 imported1 = position2SettledAmount1After - snap.position2SettledAmount1Before;
+            uint256 exported0 = snap.position1Settled0Before - s0;
+            uint256 exported1 = snap.position1Settled1Before - s1;
+
+            assertGe(exported0, imported0, "token0 import must be backed by token0 source export");
+            assertGe(exported1, imported1, "token1 import must be backed by token1 source export");
+        }
+    }
+
+    function testFollowOnSettleFromDeltas_doesNotReduceSourceSettledTwice_afterDecreaseRoutesCreditElsewhere() public {
+        uint256 positionIndex = 0;
+        uint256 tokenId;
+        uint256 newTokenId;
+        uint256 sourceSettled0BeforeFollowOn;
+        uint256 sourceSettled1BeforeFollowOn;
+
+        {
+            ModifyLiquidityParams memory newLiquidityParams =
+                ModifyLiquidityParams({tickLower: 0, tickUpper: 60, liquidityDelta: 1e10, salt: bytes32(0)});
+
+            (tokenId,,,) = _setupCommittedPosition(
+                positionManager,
+                corePoolKey,
+                abi.encode(liquiditySignal),
+                defaultlLiquidityParams,
+                marketVTSConfiguration,
+                address(lcc0),
+                address(lcc1)
+            );
+
+            uint256 settlementAmount = 1_000_000e18;
             approveAndSettleUnderlyingToPosition(tokenId, positionIndex, settlementAmount, settlementAmount);
 
             (newTokenId,,,) = _setupCommittedPosition(
@@ -987,67 +1115,29 @@ contract MMPositionManagerActionsTest is MarketTestBase, MarketMakerTestBase {
                 address(lcc1)
             );
 
-            // Snapshot only the fields we assert on (rather than keeping whole structs alive).
-            {
-                (Position memory position1Before,) = positionManager.getPosition(tokenId, positionIndex);
-                position1LiquidityBefore = position1Before.liquidity;
-            }
-            {
-                (Position memory position2Before, PositionId _position2Id) =
-                    positionManager.getPosition(newTokenId, positionIndex);
-                position2LiquidityBefore = position2Before.liquidity;
-                position2Id = _position2Id;
-            }
-            (position2SettledAmount0Before, position2SettledAmount1Before) =
-                vtsOrchestrator.getPositionSettledAmounts(position2Id);
-
-            // batch actions;
-            // decrease the liquidity in the initial position with index 0
-            // increase the liquidity in the new position with index 1
-            MMA.PreparedAction[] memory actions = new MMA.PreparedAction[](2);
+            MMA.PreparedAction[] memory actions = new MMA.PreparedAction[](3);
             actions[0] = MMA.prepareDecrease(corePoolKey, tokenId, positionIndex, 1000);
             actions[1] = MMA.prepareIncreaseFromDeltas(corePoolKey, newTokenId, positionIndex, true);
+            actions[2] = MMA.prepareSettleFromDeltas(corePoolKey, tokenId, positionIndex, true, true);
+            MMA.executeWithUnlock(positionManager, actions, block.timestamp + 3600);
+
+            (, PositionId position1IdBeforeSettle) = positionManager.getPosition(tokenId, positionIndex);
+            (uint256 before0, uint256 before1) = vtsOrchestrator.getPositionSettledAmounts(position1IdBeforeSettle);
+            sourceSettled0BeforeFollowOn = before0;
+            sourceSettled1BeforeFollowOn = before1;
+        }
+
+        {
+            MMA.PreparedAction[] memory actions = new MMA.PreparedAction[](1);
+            actions[0] = MMA.prepareSettleFromDeltas(corePoolKey, tokenId, positionIndex, true, true);
             MMA.executeWithUnlock(positionManager, actions, block.timestamp + 3600);
         }
 
-        // validate the liquidity of the initial position is decreased
-        // validate the liquidity of the new position is increased
         {
-            (Position memory position1After,) = positionManager.getPosition(tokenId, positionIndex);
-            (Position memory position2After,) = positionManager.getPosition(newTokenId, positionIndex);
-            assertLt(
-                uint256(position1After.liquidity),
-                uint256(position1LiquidityBefore),
-                "Position1 liquidity should decrease after prepareDecrease"
-            );
-            assertGt(
-                uint256(position2After.liquidity),
-                uint256(position2LiquidityBefore),
-                "Position2 liquidity should increase after increaseFromDeltas"
-            );
-        }
-
-        // validate the new position's settlement has increased
-        {
-            (uint256 position2SettledAmount0After, uint256 position2SettledAmount1After) =
-                vtsOrchestrator.getPositionSettledAmounts(position2Id);
-            assertGt(
-                position2SettledAmount0After,
-                position2SettledAmount0Before,
-                "Position2 settled amount0 should increase after increaseFromDeltas"
-            );
-            // payerIsUser=true deposits are clamped to MMPM negative underlying delta per token; if token1 debt
-            // after the increase is already cleared by credits, token1 settled may legitimately stay flat.
-            assertGe(
-                position2SettledAmount1After,
-                position2SettledAmount1Before,
-                "Position2 settled amount1 must not decrease after increaseFromDeltas"
-            );
-            assertGt(
-                position2SettledAmount0After + position2SettledAmount1After,
-                position2SettledAmount0Before + position2SettledAmount1Before,
-                "Position2 total settled should increase when liquidity is added from deltas"
-            );
+            (, PositionId position1Id) = positionManager.getPosition(tokenId, positionIndex);
+            (uint256 s0, uint256 s1) = vtsOrchestrator.getPositionSettledAmounts(position1Id);
+            assertEq(s0, sourceSettled0BeforeFollowOn, "follow-on settle must not reduce source token0 settled again");
+            assertEq(s1, sourceSettled1BeforeFollowOn, "follow-on settle must not reduce source token1 settled again");
         }
     }
 
@@ -1655,7 +1745,8 @@ contract MMPositionManagerActionsTest is MarketTestBase, MarketMakerTestBase {
                 tokenId,
                 positionIndex,
                 expectedDelta,
-                true
+                true,
+                false
             )
         );
 

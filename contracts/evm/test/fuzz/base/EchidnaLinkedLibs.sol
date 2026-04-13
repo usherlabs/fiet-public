@@ -4,7 +4,9 @@ pragma solidity ^0.8.26;
 import {LCCFactoryLinkedLib} from "../../../src/libraries/LCCFactoryLib.sol";
 import {LiquidityHubLinkedLib} from "../../../src/libraries/LiquidityHubLinkedLib.sol";
 import {VTSCommitLib} from "../../../src/libraries/VTSCommitLib.sol";
+import {VTSFeeLinkedLib} from "../../../src/libraries/VTSFeeLib.sol";
 import {VTSPositionLib} from "../../../src/libraries/VTSPositionLib.sol";
+import {VTSLifecycleLinkedLib} from "../../../src/libraries/VTSLifecycleLinkedLib.sol";
 
 /// @notice Single source of truth for Echidna hard-linked library addresses and CREATE2 deploy helpers.
 /// @dev Addresses must match `foundry.toml [profile.echidna].libraries`.
@@ -13,14 +15,15 @@ library EchidnaLinkedLibs {
     address internal constant LCC_FACTORY_LINKED_LIB = 0x5A3842F9D1B0F96003669A36Ec4a09165bc7de54;
     address internal constant LIQUIDITY_HUB_LINKED_LIB = 0xB3A02cd6d8fB5B8Fe16DD569EdF8BE35a87bD0FA;
     address internal constant VTS_COMMIT_LIB = 0x6215030BFA6e034fFe347cbe7237e37e5f1eEc61;
-    address internal constant VTS_POSITION_LIB = 0xdD67F58482eb3D28B38FaD20Adb45F4246a0e49c;
-    /// @dev Deterministic placeholder only: not CREATE2-validated by `ValidateEchidnaLinkedLibs` (see script + foundry.toml
-    ///      `[profile.echidna].libraries`). No `deployVTSLifecycleLinkedLib` helper — lifecycle is linked for compile only.
-    address internal constant VTS_LIFECYCLE_LINKED_LIB = 0x1111111111111111111111111111111111111113;
+    address internal constant VTS_FEE_LINKED_LIB = 0xe2F744D132A1B346ACd29E304181EDf2bF9831b8;
+    address internal constant VTS_POSITION_LIB = 0xBF82351e13fB28688D2c9e9B7C482d5Fe71baB88;
+    address internal constant VTS_LIFECYCLE_LINKED_LIB = 0x02d5ce039F64D75De68D1C71303220601BFecF20;
 
+    error VTSLifecycleLinkedLibAddrMismatch();
     error LCCFactoryLinkedLibAddrMismatch();
     error LiquidityHubLinkedLibAddrMismatch();
     error VTSCommitLibAddrMismatch();
+    error VTSFeeLinkedLibAddrMismatch();
     error VTSPositionLibAddrMismatch();
     error DeployFailed();
 
@@ -34,6 +37,10 @@ library EchidnaLinkedLibs {
 
     function expectedVTSCommitLib() internal pure returns (address) {
         return VTS_COMMIT_LIB;
+    }
+
+    function expectedVTSFeeLinkedLib() internal pure returns (address) {
+        return VTS_FEE_LINKED_LIB;
     }
 
     function expectedVTSPositionLib() internal pure returns (address) {
@@ -59,9 +66,19 @@ library EchidnaLinkedLibs {
         if (lib != VTS_COMMIT_LIB) revert VTSCommitLibAddrMismatch();
     }
 
+    function deployVTSFeeLinkedLib() internal {
+        address lib = _deploy(keccak256("echidna.VTSFeeLinkedLib"), type(VTSFeeLinkedLib).creationCode);
+        if (lib != VTS_FEE_LINKED_LIB) revert VTSFeeLinkedLibAddrMismatch();
+    }
+
     function deployVTSPositionLib() internal {
         address lib = _deploy(keccak256("echidna.VTSPositionLib"), type(VTSPositionLib).creationCode);
         if (lib != VTS_POSITION_LIB) revert VTSPositionLibAddrMismatch();
+    }
+
+    function deployVTSLifecycleLinkedLib() internal {
+        address lib = _deploy(keccak256("echidna.VTSLifecycleLinkedLib"), type(VTSLifecycleLinkedLib).creationCode);
+        if (lib != VTS_LIFECYCLE_LINKED_LIB) revert VTSLifecycleLinkedLibAddrMismatch();
     }
 
     function _deploy(bytes32 salt, bytes memory initCode) private returns (address lib) {

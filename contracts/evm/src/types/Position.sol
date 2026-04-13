@@ -41,6 +41,16 @@ struct SeizureData {
     int128 settle1;
 }
 
+/// @notice MM increase-specific hook payload for consuming protocol credit in-hook
+struct MMIncreaseHookExtraData {
+    /// @notice Whether this modify should settle protocol credit inside the hook path
+    bool settleInHook;
+    /// @notice Token0 protocol credit snapshot intended for in-hook settlement
+    uint256 intendedSettle0;
+    /// @notice Token1 protocol credit snapshot intended for in-hook settlement
+    uint256 intendedSettle1;
+}
+
 /// @notice Hook data structure for position modifications via MMPositionManager
 /// @dev Passed through poolManager.modifyLiquidity -> CoreHook -> VTSOrchestrator
 struct PositionModificationHookData {
@@ -66,14 +76,43 @@ library PositionModificationHookDataLib {
     /// @param locker The locker address (msgSender who initiated the operation)
     /// @return Encoded hook data bytes
     function encode(uint256 commitId, uint256 positionIndex, address locker) internal pure returns (bytes memory) {
+        return encodeWithExtraData(commitId, positionIndex, locker, "");
+    }
+
+    /// @notice Encodes hook data for standard position modifications with custom extraData
+    function encodeWithExtraData(uint256 commitId, uint256 positionIndex, address locker, bytes memory extraData)
+        internal
+        pure
+        returns (bytes memory)
+    {
         return abi.encode(
             PositionModificationHookData({
                 commitId: commitId,
                 positionIndex: positionIndex,
                 locker: locker,
                 seizure: SeizureData({isSeizing: false, settle0: 0, settle1: 0}),
-                extraData: ""
+                extraData: extraData
             })
+        );
+    }
+
+    /// @notice Encodes hook data for MM add-liquidity paths that settle protocol credit inside the hook
+    function encodeWithInHookProtocolSettlement(
+        uint256 commitId,
+        uint256 positionIndex,
+        address locker,
+        uint256 intendedSettle0,
+        uint256 intendedSettle1
+    ) internal pure returns (bytes memory) {
+        return encodeWithExtraData(
+            commitId,
+            positionIndex,
+            locker,
+            abi.encode(
+                MMIncreaseHookExtraData({
+                    settleInHook: true, intendedSettle0: intendedSettle0, intendedSettle1: intendedSettle1
+                })
+            )
         );
     }
 
@@ -130,6 +169,18 @@ library PositionModificationHookDataLib {
             });
         }
         return abi.decode(hookData, (PositionModificationHookData));
+    }
+
+    /// @notice Decodes MM increase extraData, returning the zero/default payload when absent
+    function decodeMMIncreaseHookExtraData(PositionModificationHookData memory data)
+        internal
+        pure
+        returns (MMIncreaseHookExtraData memory extra)
+    {
+        if (data.extraData.length == 0) {
+            return MMIncreaseHookExtraData({settleInHook: false, intendedSettle0: 0, intendedSettle1: 0});
+        }
+        return abi.decode(data.extraData, (MMIncreaseHookExtraData));
     }
 
     /// @notice Check if this is an MM position modification (has valid commitId)

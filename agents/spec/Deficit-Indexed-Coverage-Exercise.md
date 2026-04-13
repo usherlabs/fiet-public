@@ -329,3 +329,80 @@ This document is a design update, not an implementation diff, but it maps cleanl
 ### Summary
 
 Tick‑indexed coverage usage is correct for “active tick” phenomena, but coverage exercise in Fiet is a **realisation‑time repayment** of a **swap‑time liability**. DICE re‑indexes coverage to the liability principal (outstanding deficits) via a pool‑global Q128 index, preserving O(1) updates and aligning fee burning/slashing with the positions that actually created the deficit.
+
+### 2026-04-10: Residual burn reactivation hardening
+
+The DICE rollout introduced an important follow-up refinement around **residual-derived burn base** and **fee-burn attribution across zero-liquidity intervals**.
+
+#### Problem discovered after the core DICE upgrade
+
+Under the initial residual-burn design, a position could:
+
+- accumulate `pendingResidualBurnBase`,
+- remove to zero liquidity while that residual burn base remained unresolved,
+- reactivate later with fresh liquidity,
+- have `feeGrowthInsideLast` checkpointed to the new live baseline,
+- and then potentially discharge old residual burn using only a tiny amount of post-reactivation fee growth once a later eligible outflow window appeared.
+
+That was economically wrong. The old residual burn corresponded to a historical deficit-coverage episode and should have remained backed by the historical fee accrual that existed before deactivation. Resetting the live fee checkpoint on reactivation is still the correct behaviour for zero-liquidity intervals, but it must not erase the fee source for already-banked residual burn.
+
+#### Upgrade implemented
+
+The final implementation now treats residual-burn fee backing as a distinct, episode-scoped bank:
+
+- `pendingResidualBurnBase` remains the banked burn principal waiting for a later eligible outflow window.
+- `pendingResidualFeeBacking` stores the historical fee-token backing frozen for that unresolved residual-burn episode.
+- On a transition from positive liquidity to zero liquidity, the position crystallises fee growth into `pendingResidualFeeBacking` before reactivation can reset `feeGrowthInsideLast`.
+- On a **partial** decrease (positive liquidity remains), the position banks into `pendingResidualFeeBacking` only the fee growth attributable to the **removed liquidity slice** since the last checkpoint, and **does not** advance `feeGrowthInsideLast`, so the surviving liquidity continues to accrue against the same baseline (closing the staged-exit gap where backing was previously only captured on full deactivation).
+- When residual burn is later applied, burn sourcing uses:
+  - banked historical fee backing first, then
+  - fresh post-reactivation fees second.
+- Only the actually-backed burn advances `outflowsAtFeeSnap`.
+
+This preserves the intended DICE burn-window semantics while preventing reactivation from laundering an old residual liability into a new fee-growth baseline.
+
+#### Why the extra lifecycle rule was necessary
+
+The first pass of the fix solved the original exploit path, but left a subtle attribution hazard: banked fee backing could outlive the exact residual-burn episode it was meant to support. If leftover backing survived after the matching `pendingResidualBurnBase` had already been fully consumed, a later unrelated residual episode on the same fee lane could incorrectly inherit that historical backing.
+
+The final upgrade therefore makes `pendingResidualFeeBacking` **episode-scoped rather than lane-scoped**:
+
+- once the matching `pendingResidualBurnBase` is exhausted, the leftover fee backing is cleared; and
+- before a new residual episode is banked, stale backing is defensively normalised away if no matching residual burn base remains.
+
+This closes the attribution gap without changing the intended economics of partially-consumed residual burn.
+
+#### Final behavioural model
+
+The residual-burn path should now be understood as follows:
+
+1. DICE may bank residual coverage into `pendingResidualBurnBase` when realised coverage cannot yet be consumed against the current outflow window.
+2. If the position deactivates to zero liquidity before that burn is resolved, the corresponding historical fee backing is frozen into `pendingResidualFeeBacking`. If the position only **partially** decreases while the episode is open, the removed slice’s share of fee growth since the last checkpoint is banked the same way, without advancing the live checkpoint for the remaining liquidity.
+3. Reactivation still checkpoints tick-indexed growth normally, so zero-liquidity periods do not inherit fresh fees.
+4. A later eligible outflow window may consume the old residual burn, but only against:
+   - preserved historical backing, and then
+   - genuinely new fee accrual thereafter.
+5. When the residual burn is fully exhausted, both:
+   - `pendingResidualBurnOutflowsFloor`, and
+   - the matching `pendingResidualFeeBacking`
+   are cleared.
+
+#### Rationale
+
+This refinement preserves all of the intended first-principles properties of DICE:
+
+- **Swap-time attribution remains intact** because the liability still originates from deficit principal.
+- **Realisation-time semantics remain intact** because burn is still only exercised when coverage has actually been realised and a newer eligible outflow window exists.
+- **Zero-liquidity neutrality remains intact** because reactivation still resets the live fee-growth baseline.
+- **Historical fee attribution is now preserved correctly** because old residual burn cannot be discharged using only tiny post-reactivation fees.
+
+#### Testing implications
+
+The implemented regression coverage now explicitly checks that:
+
+- historical residual fee backing survives deactivate/reactivate and partial decreases bank the removed slice without losing backing to staged exits,
+- purely banked residual backing can be consumed without advancing the live fee-growth baseline,
+- mixed banked-plus-fresh fee consumption spends banked backing first and only advances the checkpoint by the fresh portion consumed, and
+- banked fee backing is cleared once the matching residual burn base is fully exhausted.
+
+In other words, the DICE design now includes not only deficit-indexed liability attribution, but also a hardened residual-burn lifecycle that safely spans zero-liquidity deactivation and later reactivation.

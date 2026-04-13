@@ -260,6 +260,8 @@ interface IVTSOrchestrator is IPausableVTS, IVTSCurrencyDelta, IVTSAdmin {
     /// @param positionIndex The position index within the commit
     /// @param amountDelta The amount delta for settlement
     /// @param isSeizing Whether the position is being seized
+    /// @param fromDeltas When true, deposit lanes consume existing positive underlying delta (settle-from-deltas).
+    ///        Withdrawal lanes ignore this flag; they always follow the withdrawal path in `VTSLifecycleLinkedLib`.
     /// @return settlementDelta The settlement balance delta
     /// @return rfsOpen Whether the RFS is open after settlement
     /// @return seizedLiquidityUnits The amount of liquidity units seized (0 if not seizing)
@@ -268,7 +270,8 @@ interface IVTSOrchestrator is IPausableVTS, IVTSCurrencyDelta, IVTSAdmin {
         uint256 commitId,
         uint256 positionIndex,
         BalanceDelta amountDelta,
-        bool isSeizing
+        bool isSeizing,
+        bool fromDeltas
     ) external returns (BalanceDelta settlementDelta, bool rfsOpen, uint256 seizedLiquidityUnits);
 
     /// @notice Validate that the grace period has elapsed for a position (required before seizure)

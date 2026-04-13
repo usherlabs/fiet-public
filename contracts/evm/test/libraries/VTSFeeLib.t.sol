@@ -4,17 +4,25 @@ pragma solidity ^0.8.26;
 import {VTSLibTestBase} from "../base/VTSLibTestBase.sol";
 import {VTSFeeLibHarness} from "./harnesses/VTSFeeLibHarness.sol";
 import {VTSFeeLib} from "../../src/libraries/VTSFeeLib.sol";
+import {LiquidityUtils} from "../../src/libraries/LiquidityUtils.sol";
 import {PositionId, PositionLibrary} from "../../src/types/Position.sol";
 import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
 import {BalanceDelta, toBalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
 import {FullMath} from "@uniswap/v4-core/src/libraries/FullMath.sol";
 import {FixedPoint128} from "v4-periphery/lib/v4-core/src/libraries/FixedPoint128.sol";
+import {StateLibrary} from "v4-periphery/lib/v4-core/src/libraries/StateLibrary.sol";
 import {MarketVTSConfiguration, TokenConfiguration} from "../../src/types/VTS.sol";
-import {ModifyLiquidityParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
+import {ModifyLiquidityParams, SwapParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
+import {PoolSwapTest} from "@uniswap/v4-core/src/test/PoolSwapTest.sol";
 
 contract VTSFeeLibTest is VTSLibTestBase {
     VTSFeeLibHarness harness;
+    uint16 internal constant RESIDUAL_TEST_FEE_SHARE_BPS = 5000;
+    uint128 internal constant RESIDUAL_TEST_LIQUIDITY = 1e18;
+    uint256 internal constant RESIDUAL_TEST_OUTFLOW_WINDOW = 100e18;
+    uint256 internal constant RESIDUAL_TEST_PURE_BURN_BASE = 40e18;
+    uint256 internal constant RESIDUAL_TEST_MIXED_BURN_BASE = 80e18;
 
     // Test pool ID for harness (isolated from corePoolKey)
     PoolId testPoolId;
@@ -37,6 +45,32 @@ contract VTSFeeLibTest is VTSLibTestBase {
         uint256 spendIdx1;
         uint256 idxLast0;
         uint256 idxLast1;
+    }
+
+    struct ResidualBurnMathExpectations {
+        uint256 fg1Before;
+        uint256 bankedFeeToken1;
+        uint256 consumedBanked;
+        uint256 consumedFresh;
+        uint256 feesBurn;
+        uint256 growthInc;
+    }
+
+    struct ResidualBurnMathOutcome {
+        uint256 consumedBurnBase;
+        uint256 bankedFee1After;
+        uint256 fg1After;
+        uint256 snap0After;
+        uint256 protocolFee1After;
+        uint256 feesShared1After;
+        int256 pendingAdj1After;
+    }
+
+    struct PureBankedResidualExpectations {
+        uint256 fg1Before;
+        uint256 bankedFeeToken1;
+        uint256 consumedBanked;
+        uint256 feesBurn;
     }
 
     function _snapshotAfterTouchPositionState(PositionId positionId, PoolId poolId)
@@ -95,6 +129,267 @@ contract VTSFeeLibTest is VTSLibTestBase {
         (uint256 posEpoch0, uint256 posEpoch1) = harness.getPositionFeesSharedEpoch(testPositionId);
         assertEq(posEpoch0, 1, "setupPosition should inherit pool feesSharedEpoch token0");
         assertEq(posEpoch1, 1, "setupPosition should inherit pool feesSharedEpoch token1");
+    }
+
+    function _accrueFeeGrowthInCoreRange(bool accrueFeesOnToken1) internal {
+        SwapParams memory params = SwapParams({
+            zeroForOne: !accrueFeesOnToken1,
+            amountSpecified: -int256(1e15),
+            sqrtPriceLimitX96: accrueFeesOnToken1
+                ? LiquidityUtils.ONE_FOR_ZERO_LIMIT
+                : LiquidityUtils.ZERO_FOR_ONE_LIMIT
+        });
+        swapRouter.swap(
+            corePoolKey, params, PoolSwapTest.TestSettings({takeClaims: false, settleUsingBurn: false}), ZERO_BYTES
+        );
+    }
+
+    function _setupLiveFeeBurnPosition(
+        PoolId poolId,
+        int24 tickLower,
+        int24 tickUpper,
+        uint128 liquidity,
+        bytes32 salt
+    ) internal returns (PositionId positionId) {
+        ModifyLiquidityParams memory params = ModifyLiquidityParams({
+            tickLower: tickLower, tickUpper: tickUpper, liquidityDelta: int256(uint256(liquidity)), salt: salt
+        });
+        modifyLiquidityRouter.modifyLiquidity(corePoolKey, params, ZERO_BYTES);
+        positionId = PositionLibrary.generateId(address(modifyLiquidityRouter), params);
+        harness.setupPositionWithDetails(positionId, poolId, tickLower, tickUpper, liquidity, salt);
+    }
+
+    function _applyResidualBurnWithBacking(
+        PositionId positionId,
+        PoolId poolId,
+        uint8 tokenIndex,
+        uint256 burnBase,
+        uint128 liquidity
+    ) internal returns (uint256 consumedBurnBase) {
+        return harness.applyBurnBase(manager, positionId, poolId, tokenIndex, burnBase, liquidity, 0, true);
+    }
+
+    function _setupResidualBurnPool(PoolId poolId) internal {
+        MarketVTSConfiguration memory cfg = _createDefaultVTSConfig();
+        cfg.coverageFeeShare = RESIDUAL_TEST_FEE_SHARE_BPS;
+        harness.setupPool(poolId, cfg);
+        harness.setPoolFeesSharedEpoch(poolId, 1, 1);
+    }
+
+    function _readResidualBurnOutcome(PositionId positionId, PoolId poolId)
+        internal
+        view
+        returns (ResidualBurnMathOutcome memory out)
+    {
+        (, out.bankedFee1After) = harness.getPendingResidualFeeBacking(positionId);
+        (, out.fg1After) = harness.getFeeGrowthInsideLast(positionId);
+        (out.snap0After,) = harness.getOutflowsAtFeeSnap(positionId);
+        (, out.protocolFee1After) = harness.getProtocolFeeAccrued(poolId);
+        (, out.feesShared1After) = harness.getFeesShared(positionId);
+        (, out.pendingAdj1After) = harness.getPendingFeeAdj(positionId);
+    }
+
+    function _runPureBankedResidualBurnScenario()
+        internal
+        returns (PureBankedResidualExpectations memory exp, ResidualBurnMathOutcome memory out)
+    {
+        PoolId corePoolId = _getDefaultPoolId();
+        exp.bankedFeeToken1 = 50e18;
+
+        _setupResidualBurnPool(corePoolId);
+
+        (, int24 tickCurrent,,) = StateLibrary.getSlot0(manager, corePoolId);
+        int24 tickLower = tickCurrent - 60;
+        int24 tickUpper = tickCurrent + 60;
+        PositionId positionId = _setupLiveFeeBurnPosition(
+            corePoolId, tickLower, tickUpper, RESIDUAL_TEST_LIQUIDITY, bytes32(uint256(0xFADE))
+        );
+
+        harness.setPendingResidualFeeBacking(positionId, 0, exp.bankedFeeToken1);
+        harness.setCumulativeOutflows(positionId, RESIDUAL_TEST_OUTFLOW_WINDOW, 0);
+        harness.setOutflowsAtFeeSnap(positionId, 0, 0);
+
+        (uint256 fg0Now, uint256 fg1Now) = _getFeeGrowthInside(corePoolId, tickLower, tickUpper);
+        exp.fg1Before = fg1Now;
+        harness.setFeeGrowthInsideLast(positionId, fg0Now, fg1Now);
+
+        exp.consumedBanked =
+            FullMath.mulDiv(exp.bankedFeeToken1, RESIDUAL_TEST_PURE_BURN_BASE, RESIDUAL_TEST_OUTFLOW_WINDOW);
+        exp.feesBurn = FullMath.mulDiv(exp.consumedBanked, RESIDUAL_TEST_FEE_SHARE_BPS, LiquidityUtils.BPS_DENOMINATOR);
+
+        out.consumedBurnBase = _applyResidualBurnWithBacking(
+            positionId, corePoolId, 0, RESIDUAL_TEST_PURE_BURN_BASE, RESIDUAL_TEST_LIQUIDITY
+        );
+        ResidualBurnMathOutcome memory post = _readResidualBurnOutcome(positionId, corePoolId);
+        out.bankedFee1After = post.bankedFee1After;
+        out.fg1After = post.fg1After;
+        out.snap0After = post.snap0After;
+        out.protocolFee1After = post.protocolFee1After;
+        out.feesShared1After = post.feesShared1After;
+        out.pendingAdj1After = post.pendingAdj1After;
+    }
+
+    function _runMixedResidualBurnScenario()
+        internal
+        returns (ResidualBurnMathExpectations memory exp, ResidualBurnMathOutcome memory out)
+    {
+        PoolId corePoolId = _getDefaultPoolId();
+        _setupResidualBurnPool(corePoolId);
+
+        PositionId positionId;
+        {
+            (, int24 tickCurrent,,) = StateLibrary.getSlot0(manager, corePoolId);
+            int24 tickLower = tickCurrent - 60;
+            int24 tickUpper = tickCurrent + 60;
+            positionId = _setupLiveFeeBurnPosition(
+                corePoolId, tickLower, tickUpper, RESIDUAL_TEST_LIQUIDITY, bytes32(uint256(0xBACE))
+            );
+
+            harness.setCumulativeOutflows(positionId, RESIDUAL_TEST_OUTFLOW_WINDOW, 0);
+            harness.setOutflowsAtFeeSnap(positionId, 0, 0);
+
+            (uint256 fg0Before, uint256 fg1Before) = _getFeeGrowthInside(corePoolId, tickLower, tickUpper);
+            exp.fg1Before = fg1Before;
+            harness.setFeeGrowthInsideLast(positionId, fg0Before, fg1Before);
+
+            _accrueFeeGrowthInCoreRange(true);
+
+            (, uint256 fg1AfterAccrual) = _getFeeGrowthInside(corePoolId, tickLower, tickUpper);
+            uint256 freshFees =
+                FullMath.mulDiv(fg1AfterAccrual - fg1Before, uint256(RESIDUAL_TEST_LIQUIDITY), FixedPoint128.Q128);
+            assertGt(freshFees, 1, "setup: expected non-trivial fresh fees after swap");
+
+            exp.bankedFeeToken1 = freshFees / 2;
+            harness.setPendingResidualFeeBacking(positionId, 0, exp.bankedFeeToken1);
+
+            uint256 totalFees = exp.bankedFeeToken1 + freshFees;
+            uint256 expectedConsumedTotal =
+                FullMath.mulDiv(totalFees, RESIDUAL_TEST_MIXED_BURN_BASE, RESIDUAL_TEST_OUTFLOW_WINDOW);
+            exp.consumedBanked =
+                expectedConsumedTotal <= exp.bankedFeeToken1 ? expectedConsumedTotal : exp.bankedFeeToken1;
+            exp.consumedFresh = expectedConsumedTotal - exp.consumedBanked;
+            exp.feesBurn =
+                FullMath.mulDiv(expectedConsumedTotal, RESIDUAL_TEST_FEE_SHARE_BPS, LiquidityUtils.BPS_DENOMINATOR);
+            (exp.growthInc,) =
+                LiquidityUtils.feeBurnGrowthIncWithRemainder(exp.consumedFresh, uint256(RESIDUAL_TEST_LIQUIDITY), 0);
+        }
+
+        out.consumedBurnBase = _applyResidualBurnWithBacking(
+            positionId, corePoolId, 0, RESIDUAL_TEST_MIXED_BURN_BASE, RESIDUAL_TEST_LIQUIDITY
+        );
+        ResidualBurnMathOutcome memory post = _readResidualBurnOutcome(positionId, corePoolId);
+        out.bankedFee1After = post.bankedFee1After;
+        out.fg1After = post.fg1After;
+        out.snap0After = post.snap0After;
+        out.protocolFee1After = post.protocolFee1After;
+        out.feesShared1After = post.feesShared1After;
+        out.pendingAdj1After = post.pendingAdj1After;
+    }
+
+    // ============================================================
+    // Residual fee-burn maths tests
+    // ============================================================
+
+    function test_applyBurnBase_residualBacking_pureBankedFees_decrementsBank_withoutAdvancingFreshBaseline() public {
+        (PureBankedResidualExpectations memory exp, ResidualBurnMathOutcome memory out) =
+            _runPureBankedResidualBurnScenario();
+        assertEq(
+            out.consumedBurnBase,
+            RESIDUAL_TEST_PURE_BURN_BASE,
+            "banked-only residual burn should consume the full eligible burn base"
+        );
+
+        assertEq(
+            out.bankedFee1After,
+            exp.bankedFeeToken1 - exp.consumedBanked,
+            "pure banked burn should only decrement the consumed banked backing"
+        );
+
+        assertEq(out.snap0After, RESIDUAL_TEST_PURE_BURN_BASE, "fee snap should advance by the consumed burn base");
+
+        assertEq(out.fg1After, exp.fg1Before, "pure banked burn must not advance the live fee growth baseline");
+        assertEq(out.protocolFee1After, exp.feesBurn, "protocol fee pot should mint the expected slash");
+        assertEq(out.feesShared1After, exp.feesBurn, "feesShared should match the banked-only slash amount");
+        assertEq(out.pendingAdj1After, int256(exp.feesBurn), "pending fee adjustment should queue the slash");
+    }
+
+    function test_applyBurnBase_residualBacking_zeroLiquidity_stillConsumesBankedFees() public {
+        PoolId corePoolId = _getDefaultPoolId();
+        uint256 bankedFeeToken1 = 50e18;
+
+        _setupResidualBurnPool(corePoolId);
+
+        (, int24 tickCurrent,,) = StateLibrary.getSlot0(manager, corePoolId);
+        int24 tickLower = tickCurrent - 60;
+        int24 tickUpper = tickCurrent + 60;
+        PositionId positionId = _setupLiveFeeBurnPosition(
+            corePoolId, tickLower, tickUpper, RESIDUAL_TEST_LIQUIDITY, bytes32(uint256(0xDEAD))
+        );
+
+        harness.setPendingResidualFeeBacking(positionId, 0, bankedFeeToken1);
+        harness.setCumulativeOutflows(positionId, RESIDUAL_TEST_OUTFLOW_WINDOW, 0);
+        harness.setOutflowsAtFeeSnap(positionId, 0, 0);
+
+        (uint256 fg0Now, uint256 fg1Now) = _getFeeGrowthInside(corePoolId, tickLower, tickUpper);
+        harness.setFeeGrowthInsideLast(positionId, fg0Now, fg1Now);
+
+        uint256 expectedConsumedBanked =
+            FullMath.mulDiv(bankedFeeToken1, RESIDUAL_TEST_PURE_BURN_BASE, RESIDUAL_TEST_OUTFLOW_WINDOW);
+        uint256 expectedFeesBurn =
+            FullMath.mulDiv(expectedConsumedBanked, RESIDUAL_TEST_FEE_SHARE_BPS, LiquidityUtils.BPS_DENOMINATOR);
+        assertGt(expectedFeesBurn, 0, "setup: expected non-zero slash from banked backing");
+
+        uint256 consumedBurnBase =
+            harness.applyBurnBase(manager, positionId, corePoolId, 0, RESIDUAL_TEST_PURE_BURN_BASE, 0, 0, true);
+
+        assertEq(
+            consumedBurnBase,
+            RESIDUAL_TEST_PURE_BURN_BASE,
+            "zero-liquidity residual burn should still consume the eligible banked base"
+        );
+
+        (, uint256 bankedFee1After) = harness.getPendingResidualFeeBacking(positionId);
+        assertEq(
+            bankedFee1After, bankedFeeToken1 - expectedConsumedBanked, "zero-liquidity burn should debit banked backing"
+        );
+
+        (, uint256 fg1After) = harness.getFeeGrowthInsideLast(positionId);
+        assertEq(fg1After, fg1Now, "zero-liquidity banked burn must not advance the live fee growth baseline");
+
+        (, uint256 protocolFee1After) = harness.getProtocolFeeAccrued(corePoolId);
+        (, uint256 feesShared1After) = harness.getFeesShared(positionId);
+        (, int256 pendingAdj1After) = harness.getPendingFeeAdj(positionId);
+        assertEq(protocolFee1After, expectedFeesBurn, "protocol fee pot should mint the expected zero-liquidity slash");
+        assertEq(feesShared1After, expectedFeesBurn, "feesShared should track the zero-liquidity slash amount");
+        assertEq(
+            pendingAdj1After, int256(expectedFeesBurn), "pending fee adjustment should queue the zero-liquidity slash"
+        );
+    }
+
+    function test_applyBurnBase_residualBacking_mixedBankedAndFreshFees_consumesBankFirst_andAdvancesFreshCheckpoint()
+        public
+    {
+        (ResidualBurnMathExpectations memory exp, ResidualBurnMathOutcome memory out) = _runMixedResidualBurnScenario();
+        assertEq(out.consumedBurnBase, 80e18, "mixed residual burn should consume the full eligible burn base");
+        assertGt(exp.consumedBanked, 0, "setup: mixed path should consume some banked backing first");
+        assertGt(exp.consumedFresh, 0, "setup: mixed path should still require some fresh fees");
+
+        assertEq(
+            out.bankedFee1After,
+            exp.bankedFeeToken1 - exp.consumedBanked,
+            "mixed burn should debit banked backing before attributing fresh fees"
+        );
+
+        assertEq(
+            out.fg1After,
+            exp.fg1Before + exp.growthInc,
+            "mixed burn should advance the live fee checkpoint only by the fresh-fee portion consumed"
+        );
+
+        assertEq(out.snap0After, 80e18, "fee snap should advance by the consumed mixed-source burn base");
+        assertEq(out.protocolFee1After, exp.feesBurn, "protocol fee pot should reflect mixed-source burn maths");
+        assertEq(out.feesShared1After, exp.feesBurn, "feesShared should track the mixed-source slash amount");
+        assertEq(out.pendingAdj1After, int256(exp.feesBurn), "pending fee adjustment should queue the mixed slash");
     }
 
     // ============================================================
@@ -829,6 +1124,52 @@ contract VTSFeeLibTest is VTSLibTestBase {
         (uint256 poolExp0After, uint256 poolExp1After) = harness.getPoolTotalCISEExposure(testPoolId);
         assertEq(poolExp1After, 0, "pool token1 exposure should be decremented/cleared after token0 allocation");
         assertEq(poolExp0After, 2e6, "pool token0 exposure should remain banked when token1 allocation fails");
+    }
+
+    /// @dev Regression for the audit-finding false positive:
+    ///      with consistent CISE state, each cleanup step leaves the denominator equal to the
+    ///      untouched positions' remaining banked exposure rather than starving later claimants.
+    function test_afterTouchPosition_ciseCleanup_preservesRemainingUntouchedExposure() public {
+        PositionId posA = PositionId.wrap(bytes32(uint256(0xA11CE)));
+        PositionId posB = PositionId.wrap(bytes32(uint256(0xB0B)));
+        PositionId posC = PositionId.wrap(bytes32(uint256(0xCAFE)));
+        harness.setupPosition(posA, testPoolId);
+        harness.setupPosition(posB, testPoolId);
+        harness.setupPosition(posC, testPoolId);
+
+        // Use token0 exposure to allocate from the token1 fee pot.
+        harness.setPoolTotalCISEExposure(testPoolId, 1000, 0);
+        harness.setCISEExposure(posA, 500, 0);
+        harness.setCISEExposure(posB, 300, 0);
+        harness.setCISEExposure(posC, 200, 0);
+        harness.setFeesShared(posA, 0, 0);
+        harness.setFeesShared(posB, 0, 0);
+        harness.setFeesShared(posC, 0, 0);
+        harness.setProtocolFeeAccrued(testPoolId, 0, 1000);
+        harness.setSlashedPot(testPoolId, 0, 1000);
+
+        harness.afterTouchPosition(posA);
+        (uint256 poolExp0AfterA,) = harness.getPoolTotalCISEExposure(testPoolId);
+        (uint256 posBExp0AfterA,) = harness.getCISEExposure(posB);
+        (uint256 posCExp0AfterA,) = harness.getCISEExposure(posC);
+        (, uint256 protocolFeeAfterA) = harness.getProtocolFeeAccrued(testPoolId);
+        assertEq(poolExp0AfterA, 500, "pool denominator should equal the untouched exposure after first touch");
+        assertEq(poolExp0AfterA, posBExp0AfterA + posCExp0AfterA, "cleanup must preserve later claimants' weight");
+        assertEq(protocolFeeAfterA, 500, "first claimant should only consume its proportional share");
+
+        harness.afterTouchPosition(posB);
+        (uint256 poolExp0AfterB,) = harness.getPoolTotalCISEExposure(testPoolId);
+        (uint256 posCExp0AfterB,) = harness.getCISEExposure(posC);
+        (, uint256 protocolFeeAfterB) = harness.getProtocolFeeAccrued(testPoolId);
+        assertEq(poolExp0AfterB, 200, "second cleanup should leave the last claimant's banked exposure");
+        assertEq(poolExp0AfterB, posCExp0AfterB, "remaining denominator should match the untouched final claimant");
+        assertEq(protocolFeeAfterB, 200, "second claimant should leave the residual pot for the last claimant");
+
+        harness.afterTouchPosition(posC);
+        (uint256 poolExp0AfterC,) = harness.getPoolTotalCISEExposure(testPoolId);
+        (, uint256 protocolFeeAfterC) = harness.getProtocolFeeAccrued(testPoolId);
+        assertEq(poolExp0AfterC, 0, "all claimant exposure should be consumed after the final touch");
+        assertEq(protocolFeeAfterC, 0, "final claimant should receive the remaining pot");
     }
 
     function test_bonusAllocation_setup_positiveCISEExposure() public {
