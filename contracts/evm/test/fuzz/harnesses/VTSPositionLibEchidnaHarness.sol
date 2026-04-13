@@ -69,6 +69,11 @@ contract VTSPositionLibEchidnaHarness {
         s.positionAccounting[id].settled.token1 = s1;
     }
 
+    function setPoolTotalSettled(PoolId poolId, uint256 total0, uint256 total1) external {
+        s.poolAccounting[poolId].totalSettled.token0 = total0;
+        s.poolAccounting[poolId].totalSettled.token1 = total1;
+    }
+
     function setCumulativeDeficit(PositionId id, uint256 d0, uint256 d1) external {
         s.positionAccounting[id].cumulativeDeficit.token0 = d0;
         s.positionAccounting[id].cumulativeDeficit.token1 = d1;

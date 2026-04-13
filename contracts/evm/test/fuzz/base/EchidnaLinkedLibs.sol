@@ -16,8 +16,8 @@ library EchidnaLinkedLibs {
     address internal constant LIQUIDITY_HUB_LINKED_LIB = 0xB3A02cd6d8fB5B8Fe16DD569EdF8BE35a87bD0FA;
     address internal constant VTS_COMMIT_LIB = 0x6215030BFA6e034fFe347cbe7237e37e5f1eEc61;
     address internal constant VTS_FEE_LINKED_LIB = 0xe2F744D132A1B346ACd29E304181EDf2bF9831b8;
-    address internal constant VTS_POSITION_LIB = 0xBF82351e13fB28688D2c9e9B7C482d5Fe71baB88;
-    address internal constant VTS_LIFECYCLE_LINKED_LIB = 0x02d5ce039F64D75De68D1C71303220601BFecF20;
+    address internal constant VTS_POSITION_LIB = 0x68B09Dc7C71462B7652f34f74b10b0e47B61aBc4;
+    address internal constant VTS_LIFECYCLE_LINKED_LIB = 0x982A481B4C9F3fd5E732C38C30961c84f3E4f510;
 
     error VTSLifecycleLinkedLibAddrMismatch();
     error LCCFactoryLinkedLibAddrMismatch();

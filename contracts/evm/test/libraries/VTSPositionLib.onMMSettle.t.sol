@@ -657,6 +657,11 @@ contract VTSPositionLibOnMMSettleTest is VTSLibTestBase {
         // Should clamp to positionRequiredSettlementDelta
         assertEq(settlementDelta.amount0(), 50e18, "Seizing withdrawal0 clamped by currencyDelta");
         assertEq(settlementDelta.amount1(), 30e18, "Seizing withdrawal1 clamped by currencyDelta");
+        (,, uint256 settled0, uint256 settled1,,) = harness.getPositionAccounting(positionId);
+        assertEq(settled0, 100e18, "Seizing delta-backed withdrawal0 should not reduce settled");
+        assertEq(settled1, 100e18, "Seizing delta-backed withdrawal1 should not reduce settled");
+        assertEq(harness.getUnderlyingDelta(underlyingCurrency0, owner), 0, "token0 delta should be fully consumed");
+        assertEq(harness.getUnderlyingDelta(underlyingCurrency1, owner), 0, "token1 delta should be fully consumed");
     }
 
     function test_onMMSettle_seizing_withdrawals_zeroCurrencyDelta_clampsToZero() public {
@@ -682,6 +687,9 @@ contract VTSPositionLibOnMMSettleTest is VTSLibTestBase {
         // Should clamp to zero when no currencyDelta
         assertEq(settlementDelta.amount0(), 0, "Seizing withdrawal0 should be zero with no currencyDelta");
         assertEq(settlementDelta.amount1(), 0, "Seizing withdrawal1 should be zero with no currencyDelta");
+        (,, uint256 settled0, uint256 settled1,,) = harness.getPositionAccounting(positionId);
+        assertEq(settled0, 100e18, "Zero-cap seizing withdrawal0 should leave settled unchanged");
+        assertEq(settled1, 100e18, "Zero-cap seizing withdrawal1 should leave settled unchanged");
     }
 
     // ============================================================
