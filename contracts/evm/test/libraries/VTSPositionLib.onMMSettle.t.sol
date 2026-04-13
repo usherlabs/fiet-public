@@ -226,7 +226,7 @@ contract VTSPositionLibOnMMSettleTest is VTSLibTestBase {
         PositionId invalid = PositionId.wrap(bytes32(uint256(0xBADD)));
         BalanceDelta delta = toBalanceDelta(-1e18, -1e18);
 
-        vm.expectRevert("VTSPositionLib: Invalid position");
+        vm.expectRevert(abi.encodeWithSelector(Errors.InvalidPosition.selector, uint256(0), uint256(0), invalid));
         harness.onMMSettle(manager, mockVault, invalid, lccCurrency0, lccCurrency1, delta, false, false);
     }
 
