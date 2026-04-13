@@ -42,10 +42,17 @@ interface IMMPositionManager {
     /// @return expiresAt the expiry timestamp of the commitment
     /// @return positionCount the number of positions associated with the commitment
     /// @return activePositionCount the number of active positions associated with the commitment
+    /// @return inactiveRemnantCount inactive positions under this commit that still hold non-zero live `pa.settled`
     function commitOf(uint256 tokenId)
         external
         view
-        returns (MarketMaker.State memory state, uint256 expiresAt, uint256 positionCount, uint256 activePositionCount);
+        returns (
+            MarketMaker.State memory state,
+            uint256 expiresAt,
+            uint256 positionCount,
+            uint256 activePositionCount,
+            uint256 inactiveRemnantCount
+        );
 
     /// @notice Get the next token ID that will be assigned
     /// @dev Returns the next commit ID from VTSOrchestrator, matching Uniswap PositionManager interface
