@@ -2432,9 +2432,12 @@ contract VTSPositionLibTest is VTSLibTestBase {
         (,, uint256 settled0,,,) = harness.getPositionAccounting(positionId);
         assertEq(settled0, 50, "delta-backed withdrawal should not reduce live settled");
 
-        // Underlying delta should be reduced by min(20, 10) => 10 remaining.
-        int256 remaining = harness.getDelta(Currency.wrap(underlying0), DEFAULT_OWNER);
-        assertEq(remaining, 10, "underlying positive delta should be partially cleared");
+        // Second identical withdrawal should still be fully delta-backed without touching live settled.
+        (BalanceDelta settlementDelta2,,) =
+            harness.onMMSettle(manager, vault, positionId, lccCurrency0, lccCurrency1, delta, false, false);
+        assertEq(settlementDelta2.amount0(), int128(10), "second withdrawal should consume remaining positive delta");
+        (,, uint256 settled0After,,,) = harness.getPositionAccounting(positionId);
+        assertEq(settled0After, 50, "live settled should be unchanged after two delta-backed withdrawals");
     }
 
     function test_onMMSettle_clearsPositiveUnderlyingDelta_token1_onWithdrawal() public {
@@ -2467,8 +2470,12 @@ contract VTSPositionLibTest is VTSLibTestBase {
         (,,, uint256 settled1,,) = harness.getPositionAccounting(positionId);
         assertEq(settled1, 50, "token1 delta-backed withdrawal should not reduce live settled");
 
-        int256 remaining = harness.getDelta(Currency.wrap(underlying1), DEFAULT_OWNER);
-        assertEq(remaining, 10, "underlying positive delta (token1) should be partially cleared");
+        (BalanceDelta settlementDelta2,,) = harness.onMMSettle(
+            manager, vault, positionId, Currency.wrap(address(lcc0)), Currency.wrap(address(lcc1)), delta, false, false
+        );
+        assertEq(settlementDelta2.amount1(), int128(10), "second token1 withdrawal should consume remaining delta");
+        (,,, uint256 settled1After,,) = harness.getPositionAccounting(positionId);
+        assertEq(settled1After, 50, "live settled should be unchanged after two delta-backed withdrawals on token1");
     }
 
     function test_onMMSettle_notSeizing_setsSeizedLiquidityUnitsZero() public {

@@ -525,7 +525,8 @@ contract VTSOrchestrator is
 
     /// @dev Growth must be settled before `checkpointWithCommitment` reads `pa.settled`. When paused, the public
     ///      `settlePositionGrowths` entrypoint is restricted to CoreHook; this orchestrator-only path performs the
-    ///      same settlement for `checkpoint(..., true)` without widening arbitrary third-party refresh during pause.
+    ///      same settlement for `checkpoint(..., true)` only, so commitment checkpoints stay growth-consistent without
+    ///      widening who may call the public `settlePositionGrowths` entrypoint during pause (see **PAUSE-01**).
     function _settleGrowthsBeforeCheckpoint(PositionId positionId, bool withCommitment) internal {
         if (!isPositionValid(positionId, false)) {
             return;

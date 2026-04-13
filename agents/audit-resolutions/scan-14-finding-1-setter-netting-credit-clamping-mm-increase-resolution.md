@@ -1,9 +1,9 @@
 # Scan #14 / Finding #1: Setter-netting and credit-clamping in MM increase/mint-from-deltas (resolution)
 
-**Last updated:** 2026-04-13
+**Last updated:** 2026-04-12
 
 ## Original finding
-[agents/audit-findings/1__critical-setter-netting-and-credit-clamping-in-mm-increase-mint-from-deltas-causes-silent-loss-of-protocol-credit-and-un.md](agents/audit-findings/1__critical-setter-netting-and-credit-clamping-in-mm-increase-mint-from-deltas-causes-silent-loss-of-protocol-credit-and-un.md)
+[../audit-findings/1__critical-setter-netting-and-credit-clamping-in-mm-increase-mint-from-deltas-causes-silent-loss-of-protocol-credit-and-un.md](../audit-findings/1__critical-setter-netting-and-credit-clamping-in-mm-increase-mint-from-deltas-causes-silent-loss-of-protocol-credit-and-un.md)
 
 **Summary of the critical issue (pre-fix):**
 - `payerIsUser=true` `increaseFromDeltas` / `mintFromDeltas` performed setter-netting of owner underlying deltas against `requiredSettlementDelta` **before** settlement.

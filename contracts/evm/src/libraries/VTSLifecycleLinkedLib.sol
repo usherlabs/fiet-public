@@ -220,7 +220,7 @@ library VTSLifecycleLinkedLib {
         Position memory pos = s.positions[p.positionId];
 
         if (pos.owner == address(0)) {
-            revert("VTSPositionLib: Invalid position");
+            revert Errors.InvalidPosition(0, 0, p.positionId);
         }
 
         BalanceDelta positionRequiredSettlementDelta =

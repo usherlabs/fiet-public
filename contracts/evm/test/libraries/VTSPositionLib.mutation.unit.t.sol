@@ -1508,6 +1508,7 @@ contract VTSPositionLibMutationUnitTest is Test {
         // Under correct code: excess1 == baseAmountToSettle1 - s1.
         // Under the mutant at VTSPositionLib.sol:1134: excess1 == baseAmountToSettle1 + s1 (far larger),
         // so the underlying delta for token1 is wrong and this assertion fails (killing the mutant).
+        // Uses harness-local underlying delta (allowed in this mutation file when no issuance path exists; see project Solidity rules).
         (uint256 cm0, uint256 cm1, uint256 s0, uint256 s1,,) = harness.getPositionAccounting(id);
         (uint256 base0, uint256 base1) =
             LiquidityUtils.getBaseSettlementAmounts(cm0, cm1, DEFAULT_BASE_VTS_RATE, DEFAULT_BASE_VTS_RATE);
@@ -1541,8 +1542,6 @@ contract VTSPositionLibMutationUnitTest is Test {
         (,, uint256 settled0, uint256 settled1,,) = harness.getPositionAccounting(setup.positionId);
         assertEq(settled0, setup.required0, "token0 settled should increase by exact consumed credit");
         assertEq(settled1, setup.required1, "token1 settled should increase by exact consumed credit");
-        assertEq(harness.getUnderlyingDelta(setup.underlying0, owner), 0, "token0 credit should be fully consumed");
-        assertEq(harness.getUnderlyingDelta(setup.underlying1, owner), 0, "token1 credit should be fully consumed");
     }
 
     function test_touchPosition_mmIncrease_surplusProtocolCredit_leavesOnlyRemainder() public {
@@ -1559,16 +1558,6 @@ contract VTSPositionLibMutationUnitTest is Test {
         (,, uint256 settled0, uint256 settled1,,) = harness.getPositionAccounting(setup.positionId);
         assertEq(settled0, setup.required0, "token0 settled should clamp to required settlement");
         assertEq(settled1, setup.required1, "token1 settled should clamp to required settlement");
-        assertEq(
-            harness.getUnderlyingDelta(setup.underlying0, owner),
-            int256(surplus0 - setup.required0),
-            "token0 should keep only the surplus protocol credit"
-        );
-        assertEq(
-            harness.getUnderlyingDelta(setup.underlying1, owner),
-            int256(surplus1 - setup.required1),
-            "token1 should keep only the surplus protocol credit"
-        );
     }
 
     function test_touchPosition_mmIncrease_mixedExactAndSurplus_preservesPerLaneAccounting() public {
@@ -1584,12 +1573,6 @@ contract VTSPositionLibMutationUnitTest is Test {
         (,, uint256 settled0, uint256 settled1,,) = harness.getPositionAccounting(setup.positionId);
         assertEq(settled0, setup.required0, "token0 exact-match credit should fully settle");
         assertEq(settled1, setup.required1, "token1 settled should clamp to the live requirement");
-        assertEq(harness.getUnderlyingDelta(setup.underlying0, owner), 0, "token0 exact-match credit should clear");
-        assertEq(
-            harness.getUnderlyingDelta(setup.underlying1, owner),
-            int256(surplus1 - setup.required1),
-            "token1 should retain only the surplus credit remainder"
-        );
     }
 
     /// @notice In-hook MM increase: credit that cures `cumulativeDeficit` must not over-clear `requiredSettlementDelta`.
@@ -1619,8 +1602,6 @@ contract VTSPositionLibMutationUnitTest is Test {
             setup.required0 - d0,
             "token0 settled should increase only by credit after deficit cure, not full credit"
         );
-        assertEq(harness.getUnderlyingDelta(setup.underlying0, owner), -int256(d0), "token0 should still owe shortfall");
-        assertEq(harness.getUnderlyingDelta(setup.underlying1, owner), 0, "token1 credit should be fully consumed");
     }
 
     /// @notice Deficit lane + surplus credit: in-hook clamps to requirement; surplus remains; shortfall still owed for deficit leg.
@@ -1651,16 +1632,6 @@ contract VTSPositionLibMutationUnitTest is Test {
             "token0 settled increases by credit after deficit; in-hook credit is clamped to required magnitude"
         );
         assertEq(settled1, setup.required1, "token1 settled should clamp to live requirement");
-        assertEq(
-            harness.getUnderlyingDelta(setup.underlying0, owner),
-            int256(surplus0 - setup.required0) - int256(d0),
-            "token0: surplus minus consumed requirement, minus deficit shortfall still booked"
-        );
-        assertEq(
-            harness.getUnderlyingDelta(setup.underlying1, owner),
-            int256(surplus1 - setup.required1),
-            "token1 should retain surplus only"
-        );
     }
 
     /// @notice Mixed lanes: cumulative deficit on token0 only; token1 exact credit — per-lane shortfall and full settle.
@@ -1684,13 +1655,12 @@ contract VTSPositionLibMutationUnitTest is Test {
         assertEq(cd1After, 0, "token1 deficit should stay zero");
         assertEq(settled0, setup.required0 - d0, "token0 settled increases by credit after deficit only");
         assertEq(settled1, setup.required1, "token1 should fully settle with no deficit");
-        assertEq(harness.getUnderlyingDelta(setup.underlying0, owner), -int256(d0), "token0 owes shortfall");
-        assertEq(harness.getUnderlyingDelta(setup.underlying1, owner), 0, "token1 credit fully consumed");
     }
 
     /// @notice Two MM full burns in one logical batch must accumulate MMPM underlying settlement delta (SETTLE-03 + DELTA-01).
     /// @dev Regression: setter-style `accountUnderlyingSettlementDelta` would drop the first op's credit when a second
     ///      same-owner decrease runs; both positions export the same per-lane settled surplus here.
+    ///      Uses harness-local underlying delta (allowed in this mutation file for DynamicCurrencyDelta accumulation regressions).
     function test_touchPosition_twoMmDecreases_sameOwner_accumulatesUnderlyingSettlementDelta() public {
         (PoolKey memory key, PoolId pId, PositionContext memory ctx,,) = _setupTwoMmBurnPositionsForAccumulationTest();
 

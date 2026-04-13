@@ -17,12 +17,12 @@ It explains:
 
 ## 1. Core Principle (as clarified by the user)
 
-When a decrease occurs:
+When a decrease occurs, routing is a **two-step** story (see **SETTLE-03** in `contracts/evm/INVARIANTS.md`):
 
-1. **Remove the full `requiredSettlementDelta`** from live `pa.settled` (eager source-side accounting).
-2. **Export ONLY the non-queueable remainder** as positive underlying delta on the MMPM (`DynamicCurrencyDelta`).
+1. **Clamp live `pa.settled` (and pool `totalSettled`) only by what is actually routed in this step** — namely `settleableDelta + queuedDelta` (`exportedForSettlementClamp`), not necessarily the full `requiredSettlementDelta` when `shortfall > principal` on a lane.
+2. **Export ONLY the vault-immediate slice** (`settleableDelta`) as the positive owner underlying delta on `DynamicCurrencyDelta`. Any remainder that cannot be Hub-queued under the principal cap **stays in live `pa.settled`**, not on transient underlying delta (avoids double-count and **DELTA-01** violations).
 
-The queue should absorb everything that can be backed by same-lane principal. Fees are deliberately excluded from queueing because fee management is handled separately via the MMPM balance sync path.
+The queue should absorb everything that can be backed by same-lane **principal returned on this decrease path**. Fees are deliberately excluded from queueing because fee management is handled separately via the MMPM balance sync path.
 
 ---
 
@@ -67,7 +67,7 @@ Key points:
 
 This occurs precisely when:
 
-```
+```text
 shortfall on lane X > fee-excluded principal returned on lane X
 ```
 

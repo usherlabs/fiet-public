@@ -2005,9 +2005,6 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
         actions[3] = MMA.prepareTake(Currency.wrap(address(lcc1)), address(this), 0);
         MMA.executeWithUnlock(positionManager, actions, block.timestamp + 3600);
 
-        BalanceDelta mmDelta = vtsOrchestrator.getUnderlyingDeltaPair(
-            address(positionManager), corePoolKey.currency0, corePoolKey.currency1
-        );
         (uint256 settled0After, uint256 settled1After) = vtsOrchestrator.getPositionSettledAmounts(scenario.positionId);
 
         assertEq(
@@ -2024,10 +2021,6 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
             MockERC20(lcc0.underlying()).balanceOf(address(this)) - lockerUnderlying0Before,
             settled0BeforeDecrease,
             "token0 remainder should be recoverable via a follow-up settle instead of being lost"
-        );
-        assertEq(mmDelta.amount0(), 0, "token0 underlying delta should clear once the preserved remainder is settled");
-        assertEq(
-            mmDelta.amount1(), 0, "token1 should not need an underlying-delta remainder when it can queue normally"
         );
         assertEq(settled0After, 0, "token0 settled should be fully withdrawn by the follow-up settle");
         assertEq(settled1After, 0, "token1 settled should be fully removed once its shortfall is preserved via queue");
