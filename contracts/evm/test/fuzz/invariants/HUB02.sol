@@ -9,8 +9,9 @@ import {Bounds} from "../../../src/libraries/Bounds.sol";
 import {EchidnaLinkedLibs} from "../base/EchidnaLinkedLibs.sol";
 
 /// @notice Echidna harness for HUB-02: Unwrapping bounds and queue semantics.
-/// @dev "Unwrap requires 0 < amount <= wrappedBalance + marketDerivedBalance;
-///      any unavailable portion is tracked via the settlement queue rather than silently failing."
+/// @dev Unwrap requires `0 < amount <= availableToUnwrap`, where `availableToUnwrap` nets the holder's existing
+///      `settleQueue[lcc][queueTo]` against live bucketed balance; any unavailable portion is still tracked via the
+///      settlement queue rather than silently failing.
 ///
 /// Properties tested:
 ///   1. unwrap(0) always reverts (guard)
@@ -79,6 +80,7 @@ contract HUB02 {
         lcc = LiquidityCommitmentCertificate(hub.getUnderlying(l0) == address(underlying) ? l0 : l1);
 
         holder = new HUB02Holder();
+        hub.setBoundLevel(address(holder), Bounds.BOUND_ENDPOINT);
 
         // Give holder some initial balance for immediate exercisability.
         hub.issue(address(lcc), address(holder), 500e18);

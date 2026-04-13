@@ -62,7 +62,10 @@ This prevents repeated vault-to-Hub drains when queue debt is already reserve-ba
 
 ## Queue-Producing Paths
 
-- `unwrap(...)` / `unwrapTo(...)` via `LiquidityHubLib.unwrapInternalLogic(...)` shortfall queueing.
+- `unwrap(...)` (any caller) and `unwrapTo(...)` (caller must be `BOUND_ENDPOINT` for that LCC’s market) via
+  `LiquidityHubLib.unwrapInternalLogic(...)` shortfall queueing. Admission to `_unwrap` is capped by
+  `availableToUnwrap = max(0, callerBalance - settleQueue[lcc][queueTo])` so an unchanged LCC position cannot back
+  multiple stacked queued shortfalls (see `INVARIANTS.md` HUB-02 / HUB-02A).
 - `cancelWithQueue(...)` and planned-cancel execution.
 - `queueForTransferRecipient(...)` (issuer path after explicit recipient transfer).
 - Hub internal queue usage during wrap-with residual/netting paths.

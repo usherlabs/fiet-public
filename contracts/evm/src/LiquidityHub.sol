@@ -132,6 +132,17 @@ contract LiquidityHub is BoundRegistry, Ownable, ReentrancyGuardTransient {
         }
     }
 
+    /**
+     * @dev All `unwrapTo` overloads are endpoint-mediated on-behalf-of flows (e.g. `MMPositionManager`).
+     *      Direct users unwrap via `unwrap(...)` which queues shortfalls to the caller.
+     *      Caller must be `BOUND_ENDPOINT` in the LCC's market factory namespace (not EXEMPT/DEX).
+     */
+    function _onlyUnwrapToEndpoint(address lcc) internal view {
+        if (boundLevelOfLcc(lcc, _msgSender()) != Bounds.BOUND_ENDPOINT) {
+            revert Errors.InvalidSender();
+        }
+    }
+
     // ============ PUBLIC ACCESSORS ============
 
     /**
@@ -558,6 +569,13 @@ contract LiquidityHub is BoundRegistry, Ownable, ReentrancyGuardTransient {
     /**
      * @dev Unwraps LCC from the account's wallet and transfers underlying assets to recipient
      * @dev Accounts should only be able to unwrap if they have LCC in their wallet
+     * @dev Unwrap headroom (`availableToUnwrap`) nets any existing settlement queue for `queueTo` against the
+     *      caller-held balance (`from`), so the same LCC cannot back repeated queued shortfalls.
+     *      - Self-unwrap paths (`unwrap`, `unwrapTo` with `to == queueTo`): `queueTo == from`, so the queue is netted
+     *        against the same user's live balance.
+     *      - Endpoint `unwrapTo(lcc, to, queueTo, ...)`: supported only when the endpoint acts on behalf of the
+     *        beneficiary named by `queueTo`; caller-held balance is treated as representing that beneficiary for this
+     *        unwrap (see HUB-02A in INVARIANTS.md).
      * @param lcc The LCC token address to unwrap
      * @param to The recipient of the underlying asset
      * @param queueTo The address to queue shortfall to
@@ -571,9 +589,8 @@ contract LiquidityHub is BoundRegistry, Ownable, ReentrancyGuardTransient {
         // Generic queue paths validate queue-owner shape only.
         // Current settleability remains a redemption-time concern for processSettlementFor().
         _assertValidQueueOwner(lcc, queueTo, true);
-        if (amount == 0 || amount > fromBalance) {
-            revert Errors.InvalidAmount(amount, fromBalance);
-        }
+
+        _assertUnwrapWithinHeadroom(amount, fromBalance, s.settleQueue[lcc][queueTo]);
 
         (uint256 directUnwrapped, uint256 marketUnwrapped, uint256 queuedShortfall) =
             LiquidityHubLinkedLib.unwrapInternalLogic(s, lcc, queueTo, amount, wrappedBalance, marketDerivedBalance);
@@ -614,11 +631,14 @@ contract LiquidityHub is BoundRegistry, Ownable, ReentrancyGuardTransient {
 
     /**
      * @notice Unwraps LCC tokens back to underlying assets and sends them to a specified recipient
+     * @dev Endpoint-only: caller must be `BOUND_ENDPOINT` for this LCC's market. Direct users use `unwrap(...)`.
+     *      Shortfalls queue to `to`; admission is capped by `availableToUnwrap` (see `_unwrap` NatSpec, HUB-02).
      * @param lcc The LCC token address to unwrap
      * @param to The recipient address
      * @param amount The amount of LCC tokens to unwrap
      */
     function unwrapTo(address lcc, address to, uint256 amount) external nonReentrant {
+        _onlyUnwrapToEndpoint(lcc);
         // Backwards-compatible: queue shortfalls to the same address receiving the underlying.
         _unwrap(lcc, to, to, amount);
     }
@@ -626,31 +646,37 @@ contract LiquidityHub is BoundRegistry, Ownable, ReentrancyGuardTransient {
     /**
      * @notice Unwraps LCC tokens back to underlying assets and sends them to a specified recipient, while queueing any
      *         unfulfilled portion to a separate queue owner.
-     * @dev This exists for protocol flows (e.g. MMPM) where "who receives underlying now" differs from "who owns the
-     *      settlement queue claim".
+     * @dev Endpoint-only on-behalf-of flow (e.g. MMPM): "who receives underlying now" may differ from queue owner.
+     *      Admission is capped by netting `settleQueue[lcc][queueTo]` against the caller-held balance (HUB-02 / HUB-02A).
      * @param lcc The LCC token address to unwrap
      * @param to The recipient address for underlying
      * @param queueTo The address to attribute any queued settlement to
      * @param amount The amount of LCC tokens to unwrap
      */
     function unwrapTo(address lcc, address to, address queueTo, uint256 amount) external nonReentrant {
+        _onlyUnwrapToEndpoint(lcc);
         _unwrap(lcc, to, queueTo, amount);
     }
 
     /**
      * @notice Unwraps LCC tokens back to underlying assets and sends them to a specified recipient (overloaded)
+     * @dev Endpoint-only: caller must be `BOUND_ENDPOINT` for the resolved LCC. Direct users use `unwrap(...)`.
+     *      Admission uses `availableToUnwrap` with queue keyed to `to` (HUB-02).
      * @param underlying The underlying asset address
      * @param marketId The market ID
      * @param to The recipient address
      * @param amount The amount of LCC tokens to unwrap
      */
     function unwrapTo(address underlying, bytes32 marketId, address to, uint256 amount) external nonReentrant {
-        _unwrap(s.marketUnderlyingToLCC[marketId][underlying], to, to, amount);
+        address lccAddr = s.marketUnderlyingToLCC[marketId][underlying];
+        _onlyUnwrapToEndpoint(lccAddr);
+        _unwrap(lccAddr, to, to, amount);
     }
 
     /**
      * @notice Unwraps LCC tokens (resolved by underlying+marketId) to underlying assets, while queueing any unfulfilled
      *         portion to a separate queue owner.
+     * @dev Endpoint-only on-behalf-of flow. Admission uses `availableToUnwrap` with queue keyed to `queueTo` (HUB-02A).
      * @param underlying The underlying asset address
      * @param marketId The market ID
      * @param to The recipient address for underlying
@@ -661,7 +687,9 @@ contract LiquidityHub is BoundRegistry, Ownable, ReentrancyGuardTransient {
         external
         nonReentrant
     {
-        _unwrap(s.marketUnderlyingToLCC[marketId][underlying], to, queueTo, amount);
+        address lccAddr = s.marketUnderlyingToLCC[marketId][underlying];
+        _onlyUnwrapToEndpoint(lccAddr);
+        _unwrap(lccAddr, to, queueTo, amount);
     }
 
     // ============ LIQUIDITY FUNCTIONS ============
@@ -1106,6 +1134,14 @@ contract LiquidityHub is BoundRegistry, Ownable, ReentrancyGuardTransient {
     }
 
     // ============ INTERNAL FUNCTIONS ============
+
+    /// @dev Reverts unless `0 < amount <= availableToUnwrap` where `availableToUnwrap = max(0, fromBalance - existingQueue)`.
+    function _assertUnwrapWithinHeadroom(uint256 amount, uint256 fromBalance, uint256 existingQueue) private pure {
+        uint256 availableToUnwrap = fromBalance > existingQueue ? fromBalance - existingQueue : 0;
+        if (amount == 0 || amount > availableToUnwrap) {
+            revert Errors.InvalidAmount(amount, availableToUnwrap);
+        }
+    }
 
     /**
      * @dev Validates that the sender is the canonical vault for a native-backed market

@@ -5,6 +5,7 @@ import {LiquidityHubTestBase} from "./base/LiquidityHubTestBase.sol";
 import {ILCC} from "../src/interfaces/ILCC.sol";
 import {IMarketFactory} from "../src/interfaces/IMarketFactory.sol";
 import {Errors} from "../src/libraries/Errors.sol";
+import {Bounds} from "../src/libraries/Bounds.sol";
 import {MockERC20} from "./_mocks/MockERC20.sol";
 
 /**
@@ -582,7 +583,8 @@ contract LiquidityHubWrapTest is LiquidityHubTestBase {
         // Wrap
         _wrapDirectLCC(user1, lccToken1, wrapAmount);
 
-        // Unwrap to different recipient
+        // Unwrap to different recipient (endpoint-mediated on-behalf-of surface)
+        _setBoundLevel(user1, Bounds.BOUND_ENDPOINT);
         vm.prank(user1);
         liquidityHub.unwrapTo(lccToken1, user2, wrapAmount);
 

@@ -1208,6 +1208,60 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
         );
     }
 
+    /// @notice Empty reserves: recovery-style validity vs live-gated MM settle (finding #6 policy boundary).
+    function test_emptyReserves_checkpointAllowed_nonSeizingMMSettleStillReverts() public {
+        (uint256 tokenId,,,) = _createCommittedPosition();
+        LiquiditySignal memory baseSig = liquiditySignal;
+
+        LiquiditySignal memory emptyRenew = _liquiditySignalWithEmptyReservesAndNonce(baseSig, baseSig.nonce + 1);
+        bytes memory emptyBytes = abi.encode(emptyRenew);
+        vm.mockCall(
+            address(signalManager),
+            abi.encodeWithSelector(
+                bytes4(keccak256("verifyLiquiditySignal(address,bytes,bool)")),
+                emptyRenew.mmState.advancer,
+                emptyBytes,
+                true
+            ),
+            abi.encode(true, 3600)
+        );
+        unlockCaller.run(
+            address(vtsOrchestrator),
+            abi.encodeWithSelector(
+                bytes4(keccak256("renewSignal(address,address,uint256,bytes)")),
+                IMarketFactory(marketFactory),
+                emptyRenew.mmState.advancer,
+                tokenId,
+                emptyBytes
+            )
+        );
+
+        assertTrue(
+            vtsOrchestrator.isSignalValid(tokenId, false), "recovery paths should treat empty reserves as valid enough"
+        );
+        assertFalse(vtsOrchestrator.isSignalValid(tokenId, true), "live-signal flows must reject empty reserves");
+
+        vm.warp(block.timestamp + 1000);
+        unlockCaller.run(
+            address(vtsOrchestrator), abi.encodeWithSelector(VTSOrchestrator.checkpoint.selector, tokenId, 0, false)
+        );
+
+        BalanceDelta depositDelta = toBalanceDelta(int128(-1), int128(-1));
+        vm.expectRevert(abi.encodeWithSelector(Errors.InvalidSignal.selector, tokenId));
+        unlockCaller.run(
+            address(vtsOrchestrator),
+            abi.encodeWithSelector(
+                VTSOrchestrator.onMMSettle.selector,
+                IMarketFactory(marketFactory),
+                tokenId,
+                0,
+                depositDelta,
+                false,
+                false
+            )
+        );
+    }
+
     function test_revert_processPosition_mmPoke_whenCommitHasEmptyReserves() public {
         (uint256 tokenId, PositionId positionId,,) = _createCommittedPosition();
         LiquiditySignal memory baseSig = liquiditySignal;

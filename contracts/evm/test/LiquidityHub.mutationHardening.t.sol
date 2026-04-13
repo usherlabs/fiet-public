@@ -5,6 +5,7 @@ import {LiquidityHubTestBase} from "./base/LiquidityHubTestBase.sol";
 import {ILCC} from "../src/interfaces/ILCC.sol";
 import {IMarketFactory} from "../src/interfaces/IMarketFactory.sol";
 import {Errors} from "../src/libraries/Errors.sol";
+import {Bounds} from "../src/libraries/Bounds.sol";
 import {Vm} from "forge-std/Vm.sol";
 import {StdStorage, stdStorage} from "forge-std/StdStorage.sol";
 
@@ -151,6 +152,7 @@ contract LiquidityHubMutationHardeningTest is LiquidityHubTestBase {
         address to = user2;
         address queueTo = user3;
 
+        _setBoundLevel(user1, Bounds.BOUND_ENDPOINT);
         vm.prank(user1);
         liquidityHub.unwrapTo(address(underlyingAsset1), marketId1, to, queueTo, amount);
 
@@ -216,6 +218,7 @@ contract LiquidityHubMutationHardeningTest is LiquidityHubTestBase {
         uint256 amount = 9;
         _wrapDirectLCC(user1, lccToken1, amount);
 
+        _setBoundLevel(user1, Bounds.BOUND_ENDPOINT);
         vm.recordLogs();
         vm.prank(user1);
         liquidityHub.unwrapTo(lccToken1, user2, amount);

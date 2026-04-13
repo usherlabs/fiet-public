@@ -170,12 +170,33 @@ being an informal “should”.
 
 ### HUB-02: Unwrapping cannot exceed liquid (bucketed) balance; shortfalls are explicitly queued
 
-- **Statement**: Unwrap requires `0 < amount <= wrappedBalance + marketDerivedBalance`; any unavailable portion is
-  tracked via the settlement queue rather than silently failing.
+- **Statement**: Unwrap requires `0 < amount <= availableToUnwrap`, where `availableToUnwrap` is the caller’s live
+  bucketed balance (`wrappedBalance + marketDerivedBalance` for `msg.sender`) minus any existing settlement queue for
+  the same `(lcc, queueTo)` key: `max(0, fromBalance - settleQueue[lcc][queueTo])`. Any unavailable portion of the
+  requested unwrap is still tracked via the settlement queue rather than silently failing.
 - **Enforced by**:
-  - `src/LiquidityHub.sol::_unwrap` reverts `Errors.InvalidAmount(amount, fromBalance)` when out of bounds.
+  - `src/LiquidityHub.sol::_unwrap` reverts `Errors.InvalidAmount(amount, availableToUnwrap)` when out of bounds.
   - The split/queue behaviour is implemented in `LiquidityHubLib.unwrapInternalLogic(...)` (called from `_unwrap`).
   - Queue state is observable via `LiquidityHub.settleQueue(lcc, recipient)` and `LiquidityHub.totalQueued(lcc)`.
+- **Why**: Queued shortfall does not burn the holder’s LCC at queue time; without netting, the same balance could back
+  multiple queued claims and inflate `queueOfUnderlying` / vault obligation sizing.
+
+### HUB-02A: `unwrapTo` is endpoint-only (on-behalf-of); direct users use `unwrap`
+
+- **Statement**: Every `LiquidityHub.unwrapTo(...)` overload requires `msg.sender` to be `BOUND_ENDPOINT` in the
+  resolved LCC’s market factory namespace (`boundLevelOfLcc(lcc, msg.sender) == BOUND_ENDPOINT`). Bucket-exempt and
+  DEX tiers are not admitted via `unwrapTo`. End users unwrap with `unwrap(...)` / `unwrap(underlying, marketId, ...)`,
+  which always queue shortfalls to the caller.
+- **Enforced by**: `src/LiquidityHub.sol::_onlyUnwrapToEndpoint` on each `unwrapTo` entrypoint before `_unwrap`.
+- **Supported contract for `unwrapTo(lcc, to, queueTo, ...)`**: the endpoint acts on behalf of the beneficiary named by
+  `queueTo`; the caller-held LCC balance spent in this unwrap is treated as representing that beneficiary for the purpose
+  of HUB-02 netting (`settleQueue[lcc][queueTo]` is already encumbering that caller-held balance). For example,
+  `MMPositionManager` consumes the locker’s LCC or delta credit before calling `unwrapTo` with `queueTo` equal to the
+  locker. Endpoints that attribute queue to an address whose outstanding queue is not economically tied to the same
+  caller-held slice must not use this pattern without revisiting the netting rule.
+- **Rationale**: Splitting immediate payout recipient from queue owner is a trusted endpoint pattern (for example
+  `MMPositionManager` after it has consumed the beneficiary’s LCC or delta credit). Exposing that split to arbitrary EOAs
+  allowed repeated queue inflation against unchanged holder balance.
 
 ### HUB-03: Issuer-gated issuance/cancellation must never operate on invalid LCCs
 

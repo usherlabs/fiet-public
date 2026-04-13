@@ -23,6 +23,7 @@ import {HookMiner} from "v4-periphery/src/utils/HookMiner.sol";
 import {MarketTestBase} from "./base/MarketTestBase.sol";
 import {Actions} from "v4-periphery/src/libraries/Actions.sol";
 import {LiquidityHub} from "../src/LiquidityHub.sol";
+import {Bounds} from "../src/libraries/Bounds.sol";
 import {LiquidityCommitmentCertificate} from "../src/LCC.sol";
 import {ILCC} from "../src/interfaces/ILCC.sol";
 import {IERC20Minimal} from "@uniswap/v4-core/src/interfaces/external/IERC20Minimal.sol";
@@ -1204,6 +1205,9 @@ contract CoreHookDirectLPRemoveBucketingTest is MarketTestBase {
         ThreeStepDecreaseUnwrapSweepMulticaller mc =
             new ThreeStepDecreaseUnwrapSweepMulticaller(IPoolManager(address(manager)), liquidityHub, address(posm));
         t.mc = address(mc);
+
+        vm.prank(marketFactory);
+        LiquidityHub(payable(liquidityHub)).setBoundLevel(address(mc), Bounds.BOUND_ENDPOINT);
 
         // LP approves multicaller to manage the position token (so it can be the PosM "locker" for decrease).
         vm.prank(lp);

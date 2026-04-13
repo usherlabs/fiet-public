@@ -100,6 +100,7 @@ contract LiquidityHubConfirmTakeCallbackEchidnaTest {
             _createInitNativeMarket(abi.encodePacked(address(this), bytes1(0xC0)), bytes32(uint256(12)), "CT", issuers);
 
         holder = new LiquidityHubConfirmTakeCallback_Holder();
+        hub.setBoundLevel(address(holder), Bounds.BOUND_ENDPOINT);
 
         // Default to a small take request.
         requestedTake = 1;

@@ -702,5 +702,38 @@ contract VTSSwapLibTest is VTSLibTestBase {
             "tick 60 outside growth should flip when ending on that initialised boundary"
         );
     }
+
+    /// @notice Mis-specified `tickBefore` must diverge from the authoritative `slot0.tick` path (finding #7).
+    function test_processSwap_wrong_tickBefore_diverges_growth_from_authoritative_slot0() public {
+        (
+            PoolId poolId,
+            uint160 sqrtPBefore,
+            int24 tickCorrect,
+            uint128 liqBefore,
+            SwapParams memory params,
+            BalanceDelta delta
+        ) = _runSwapToTick60Boundary();
+
+        uint256 snap = vm.snapshotState();
+
+        int24 tickWrong = tickCorrect + 180;
+        ExpectedGrowth memory beforeW = _globalGrowth(poolId);
+        _invokeProcessSwap(params, delta, sqrtPBefore, liqBefore, tickWrong);
+        ExpectedGrowth memory afterW = _globalGrowth(poolId);
+
+        assertTrue(vm.revertToState(snap), "snapshot revert");
+
+        ExpectedGrowth memory beforeC = _globalGrowth(poolId);
+        _invokeProcessSwap(params, delta, sqrtPBefore, liqBefore, tickCorrect);
+        ExpectedGrowth memory afterC = _globalGrowth(poolId);
+
+        assertFalse(
+            afterW.deficit0 - beforeW.deficit0 == afterC.deficit0 - beforeC.deficit0
+                && afterW.deficit1 - beforeW.deficit1 == afterC.deficit1 - beforeC.deficit1
+                && afterW.inflow0 - beforeW.inflow0 == afterC.inflow0 - beforeC.inflow0
+                && afterW.inflow1 - beforeW.inflow1 == afterC.inflow1 - beforeC.inflow1,
+            "wrong tickBefore must not match authoritative slot0-driven growth deltas"
+        );
+    }
 }
 

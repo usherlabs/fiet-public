@@ -392,6 +392,7 @@ contract LiquidityHubTest is LiquidityHubTestBase {
         liquidityHub.wrap(address(underlyingAsset1), marketId1, amount);
         vm.stopPrank();
 
+        _setBoundLevel(user1, Bounds.BOUND_ENDPOINT);
         vm.prank(user1);
         liquidityHub.unwrapTo(address(underlyingAsset1), marketId1, user2, amount);
         assertEq(underlyingAsset1.balanceOf(user2), amount);
@@ -408,6 +409,7 @@ contract LiquidityHubTest is LiquidityHubTestBase {
         // Force market liquidity to 0 so it queues.
         vm.mockCall(factory, abi.encodeWithSelector(IMarketFactory.useMarketLiquidity.selector), abi.encode(uint256(0)));
 
+        _setBoundLevel(user1, Bounds.BOUND_ENDPOINT);
         vm.expectEmit(true, true, false, true, address(liquidityHub));
         emit SettlementQueued(lccToken1, user3, amount);
 
@@ -449,6 +451,72 @@ contract LiquidityHubTest is LiquidityHubTestBase {
         liquidityHub.unwrap(lccToken1, amount);
 
         assertEq(liquidityHub.settleQueue(lccToken1, user1), amount);
+    }
+
+    /// @dev HUB-02: prior queued shortfall encumbers the same holder; cannot unwrap the same nominal balance again.
+    function test_unwrap_secondIlliquidFullUnwrapReverts_whenExistingQueueEncumbersBalance() public {
+        uint256 amount = 17;
+        _wrapMarketDerivedLCC(user1, lccToken1, amount);
+
+        vm.mockCall(factory, abi.encodeWithSelector(IMarketFactory.useMarketLiquidity.selector), abi.encode(uint256(0)));
+
+        vm.prank(user1);
+        liquidityHub.unwrap(lccToken1, amount);
+        assertEq(liquidityHub.settleQueue(lccToken1, user1), amount);
+
+        vm.prank(user1);
+        vm.expectRevert(abi.encodeWithSelector(Errors.InvalidAmount.selector, amount, uint256(0)));
+        liquidityHub.unwrap(lccToken1, amount);
+    }
+
+    /// @dev After partial queue, only `balance - queued` headroom remains for further unwrap.
+    function test_unwrap_partialQueue_thenSecondUnwrapUpToHeadroom_thenThirdReverts() public {
+        uint256 amount = 20;
+        _wrapMarketDerivedLCC(user1, lccToken1, amount);
+
+        vm.mockCall(factory, abi.encodeWithSelector(IMarketFactory.useMarketLiquidity.selector), abi.encode(uint256(0)));
+
+        vm.prank(user1);
+        liquidityHub.unwrap(lccToken1, 15);
+        assertEq(liquidityHub.settleQueue(lccToken1, user1), 15);
+
+        vm.prank(user1);
+        liquidityHub.unwrap(lccToken1, 5);
+        assertEq(liquidityHub.settleQueue(lccToken1, user1), 20);
+
+        vm.prank(user1);
+        vm.expectRevert(abi.encodeWithSelector(Errors.InvalidAmount.selector, uint256(1), uint256(0)));
+        liquidityHub.unwrap(lccToken1, 1);
+    }
+
+    /// @dev Clearing queue via settlement restores unwrap headroom for new wrapped balance.
+    function test_unwrap_afterSettlementClearsQueue_canUnwrapAgain() public {
+        uint256 amount = 17;
+        _wrapMarketDerivedLCC(user1, lccToken1, amount);
+
+        vm.mockCall(factory, abi.encodeWithSelector(IMarketFactory.useMarketLiquidity.selector), abi.encode(uint256(0)));
+
+        vm.prank(user1);
+        liquidityHub.unwrap(lccToken1, amount);
+
+        underlyingAsset1.mint(address(liquidityHub), amount);
+        vm.prank(proxyHook);
+        liquidityHub.confirmTake(lccToken1, amount, false);
+        liquidityHub.processSettlementFor(lccToken1, user1, amount);
+        assertEq(liquidityHub.settleQueue(lccToken1, user1), 0);
+
+        underlyingAsset1.mint(user1, amount);
+        vm.startPrank(user1);
+        underlyingAsset1.approve(address(liquidityHub), amount);
+        liquidityHub.wrap(lccToken1, amount);
+        vm.stopPrank();
+
+        vm.mockCall(factory, abi.encodeWithSelector(IMarketFactory.useMarketLiquidity.selector), abi.encode(uint256(0)));
+
+        vm.prank(user1);
+        liquidityHub.unwrap(lccToken1, amount);
+        assertEq(liquidityHub.settleQueue(lccToken1, user1), 0);
+        assertEq(ILCC(lccToken1).balanceOf(user1), 0);
     }
 
     function test_wrapWith_emitsSettlementQueuedWhenResidualUnwrapQueuesToHub() public {
@@ -592,6 +660,7 @@ contract LiquidityHubTest is LiquidityHubTestBase {
         _wrapMarketDerivedLCC(user1, lccToken1, amount);
         vm.mockCall(factory, abi.encodeWithSelector(IMarketFactory.useMarketLiquidity.selector), abi.encode(uint256(0)));
 
+        _setBoundLevel(user1, Bounds.BOUND_ENDPOINT);
         vm.prank(user1);
         vm.expectRevert(abi.encodeWithSelector(Errors.InvalidAddress.selector, address(0)));
         liquidityHub.unwrapTo(lccToken1, user2, address(0), amount);
@@ -602,9 +671,19 @@ contract LiquidityHubTest is LiquidityHubTestBase {
         _wrapMarketDerivedLCC(user1, lccToken1, amount);
         vm.mockCall(factory, abi.encodeWithSelector(IMarketFactory.useMarketLiquidity.selector), abi.encode(uint256(0)));
 
+        _setBoundLevel(user1, Bounds.BOUND_ENDPOINT);
         vm.prank(user1);
         vm.expectRevert(abi.encodeWithSelector(Errors.NotApproved.selector, proxyHook));
         liquidityHub.unwrapTo(lccToken1, user2, proxyHook, amount);
+    }
+
+    function test_unwrapTo_revertsWhenCallerIsNotBoundEndpoint() public {
+        uint256 amount = 10;
+        _wrapDirectLCC(user1, lccToken1, amount);
+
+        vm.prank(user1);
+        vm.expectRevert(abi.encodeWithSelector(Errors.InvalidSender.selector));
+        liquidityHub.unwrapTo(lccToken1, user2, amount);
     }
 
     function test_queueForTransferRecipient_revertsWhenMarketDerivedIsInsufficient() public {

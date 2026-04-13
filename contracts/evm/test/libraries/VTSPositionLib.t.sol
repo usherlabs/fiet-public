@@ -764,6 +764,25 @@ contract VTSPositionLibTest is VTSLibTestBase {
         return corePoolKey;
     }
 
+    function _touchHarnessMmPrincipalCappedDecrease(PositionContext memory ctx, bytes32 salt, uint256 commitId)
+        internal
+    {
+        ModifyLiquidityParams memory dec = ModifyLiquidityParams({
+            tickLower: -60, tickUpper: 60, liquidityDelta: -int256(uint256(1)), salt: salt
+        });
+        harness.touchPosition(
+            ctx,
+            TouchPositionParams({
+                owner: DEFAULT_OWNER,
+                poolKey: corePoolKey,
+                params: dec,
+                callerDelta: toBalanceDelta(int128(int256(30e18)), 0),
+                feesAccrued: toBalanceDelta(0, 0),
+                hookData: _mkHookData(true, false, commitId)
+            })
+        );
+    }
+
     function _mkHookData(bool isMMOperation, bool isSeizing, uint256 commitId) internal pure returns (bytes memory) {
         if (!isMMOperation) return "";
         // MM-ness is encoded via commitId > 0.
@@ -2108,6 +2127,58 @@ contract VTSPositionLibTest is VTSLibTestBase {
 
         assertEq(hub.lastQueued0(), 30e18, "queued amount should be capped by per-call principal");
         assertEq(harness.inactiveRemnantCount(1241), 1, "inactive + live settled must increment commit remnant count");
+    }
+
+    /// @notice `inactiveRemnantCount` aggregates multiple inactive positions on one commit and decrements per drain (finding #3).
+    function test_inactiveRemnantCount_twoPositions_incrementsAndDecrementsWithSettlement() public {
+        _initMarket();
+        PoolId corePoolId = _getDefaultPoolId();
+        harness.setupPool(corePoolId, _createDefaultVTSConfig());
+
+        uint256 commitId = 9999;
+        harness.setCommitActivePositionCount(commitId, 2);
+
+        bytes32 salt1 = bytes32(uint256(0xA501));
+        bytes32 salt2 = bytes32(uint256(0xA502));
+        PositionId positionId1 = _registerHarnessPositionInPool(corePoolId, DEFAULT_OWNER, -60, 60, 1, salt1);
+        PositionId positionId2 = _registerHarnessPositionInPool(corePoolId, DEFAULT_OWNER, -60, 60, 1, salt2);
+        harness.setPositionCommitId(positionId1, commitId);
+        harness.setPositionCommitId(positionId2, commitId);
+        harness.setPositionActive(positionId1, true);
+        harness.setPositionActive(positionId2, true);
+
+        VTSPositionLibTest_LiquidityHubCapture hub = new VTSPositionLibTest_LiquidityHubCapture();
+        IMarketVault vault = new VTSPositionLibTest_VaultClamp(int128(int256(30e18)), 0);
+        PositionContext memory ctx = PositionContext({
+            poolManager: manager,
+            liquidityHub: ILiquidityHub(address(hub)),
+            oracleHelper: IOracleHelper(address(0)),
+            marketVault: vault
+        });
+
+        harness.setCommitmentMax(positionId1, 0, 0);
+        harness.setSettled(positionId1, 100e18, 0);
+        harness.setCumulativeDeficit(positionId1, 0, 0);
+        harness.setCommitmentDeficit(positionId1, 0, 0);
+        harness.setPoolTotalSettled(corePoolId, 100e18, 0);
+
+        _touchHarnessMmPrincipalCappedDecrease(ctx, salt1, commitId);
+        assertEq(harness.inactiveRemnantCount(commitId), 1, "first inactive settled remainder should increment counter");
+
+        harness.setCommitmentMax(positionId2, 0, 0);
+        harness.setSettled(positionId2, 100e18, 0);
+        harness.setCumulativeDeficit(positionId2, 0, 0);
+        harness.setCommitmentDeficit(positionId2, 0, 0);
+        harness.setPoolTotalSettled(corePoolId, 70e18 + 100e18, 0);
+
+        _touchHarnessMmPrincipalCappedDecrease(ctx, salt2, commitId);
+        assertEq(harness.inactiveRemnantCount(commitId), 2, "second inactive remainder should bump aggregate counter");
+
+        harness.updateSettlement(positionId1, 0, -70e18);
+        assertEq(harness.inactiveRemnantCount(commitId), 1, "draining first position settled should decrement counter");
+
+        harness.updateSettlement(positionId2, 0, -70e18);
+        assertEq(harness.inactiveRemnantCount(commitId), 0, "draining second position settled should clear counter");
     }
 
     /// @notice Non-seizure MM decreases are blocked while commitmentDeficit is non-zero, even if RFS is closed.
