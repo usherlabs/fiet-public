@@ -6,21 +6,16 @@ import {LiquiditySignal} from "../types/Commit.sol";
 interface IVRLSignalManager {
     // Events
     event VerifierChanged(address indexed oldVerifier, address indexed newVerifier);
-    event SignalExpiryInSecondsChanged(
-        uint256 indexed oldSignalExpiryInSeconds, uint256 indexed newSignalExpiryInSeconds
-    );
     event LiquiditySignalVerified(LiquiditySignal signal);
 
     // View functions
     function getVerifier() external view returns (address);
-    function signalExpiryInSeconds() external view returns (uint256);
     function mmNonce(address) external view returns (uint256);
     function submitAuthNonce(address) external view returns (uint256);
     function submitter() external view returns (address);
 
     // External functions
     function setVerifier(address _newVerifier) external;
-    function setSignalExpiryInSeconds(uint256 _signalExpiryInSeconds) external;
 
     // sender-bound bytes verification (reverting option)
     function verifyLiquiditySignal(address sender, bytes memory liquiditySignal, bool revertOnInvalid)

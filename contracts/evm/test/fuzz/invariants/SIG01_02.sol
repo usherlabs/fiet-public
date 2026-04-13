@@ -68,7 +68,7 @@ contract SIG01_02 {
     constructor() {
         verifier = new SIG01_02Verifier();
         // The harness itself is the submitter (onlySubmitter guard uses msg.sender).
-        sigMgr = new VRLSignalManager(address(verifier), 3600, address(this), address(this));
+        sigMgr = new VRLSignalManager(address(verifier), address(this), address(this));
 
         modelNonce = 0;
         highWaterNonce = 0;
@@ -286,7 +286,13 @@ contract SIG01_02 {
     function _makeSignal(address owner, address adv, uint256 nonce) internal pure returns (bytes memory) {
         MarketMaker.Reserve[] memory reserves = new MarketMaker.Reserve[](0);
         MarketMaker.State memory mmState = MarketMaker.State({
-            owner: owner, reserves: reserves, sourceState: "", prover: "", nonce: "", advancer: adv
+            owner: owner,
+            reserves: reserves,
+            sourceState: "",
+            prover: "",
+            nonce: "",
+            advancer: adv,
+            expiryAt: type(uint256).max
         });
         LiquiditySignal memory sig = LiquiditySignal({
             nonce: nonce,

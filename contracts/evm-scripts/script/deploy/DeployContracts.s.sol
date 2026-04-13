@@ -134,7 +134,7 @@ contract DeployContracts is DeployProtocolBase {
         console.log("Signal verifier public key address:", publicKeyAddress);
         signalVerifier = _deploySignalVerifier(publicKeyAddress);
         console.log("ECDSASignatureSignalVerifier deployed at:", signalVerifier);
-        signalManager = _deploySignalManager(signalVerifier, 3600, vtsOrchestrator, globalConfig);
+        signalManager = _deploySignalManager(signalVerifier, vtsOrchestrator, globalConfig);
         settlementObserver = _deploySettlementObserver(vtsOrchestrator, globalConfig);
         console.log("SignalManager deployed at:", signalManager);
         console.log("SignalManager owner:", globalConfig);

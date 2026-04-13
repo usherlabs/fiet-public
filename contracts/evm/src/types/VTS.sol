@@ -75,6 +75,8 @@ struct VTSCoreHookContext {
 struct VTSCommitRouterContext {
     ILiquidityHub liquidityHub;
     IVRLSignalManager signalManager;
+    /// @dev Used to enforce signal admission (oracle-priceable reserve set) on commit/renew.
+    IOracleHelper oracleHelper;
 }
 
 /// @notice Parameters for touchPosition to reduce stack pressure

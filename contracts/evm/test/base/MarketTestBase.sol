@@ -94,8 +94,6 @@ abstract contract MarketTestBase is Test, Deployers, DeployPermit2 {
     address lccToken0;
     address lccToken1;
 
-    uint256 signalExpiryInSeconds = 3600;
-
     // Approve `Constants.MAX_UINT256` amounts of  LCC tokens to be spent by the market contracts
     // This ensures that the market contracts can spend the LCC tokens without running out of allowance
     // i.e we do not need to approve the LCC tokens for the market contracts again and again
@@ -185,9 +183,7 @@ abstract contract MarketTestBase is Test, Deployers, DeployPermit2 {
         vtsOrchestrator =
             _deployVTSOrchestrator(address(manager), address(oracleHelper), address(liquidityHub), testOwner);
 
-        signalManager = new VRLSignalManager(
-            address(stubSignalVerifier), signalExpiryInSeconds, address(vtsOrchestrator), testOwner
-        );
+        signalManager = new VRLSignalManager(address(stubSignalVerifier), address(vtsOrchestrator), testOwner);
 
         // deploy the settlement observer
         settlementObserver = new VRLSettlementObserver(address(vtsOrchestrator), testOwner);

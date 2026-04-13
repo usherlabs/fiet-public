@@ -133,12 +133,10 @@ abstract contract DeployFullStackBase is DeployProtocolBase {
             _deployVTSOrchestrator(out.contracts.oracleHelper, out.contracts.liquidityHub, out.contracts.globalConfig);
 
         // 7) Verifiers / managers
-        uint256 signalExpiryInSeconds = 3600;
         address signalVerifier = _deploySignalVerifier(deployer);
 
-        out.contracts.signalManager = _deploySignalManager(
-            signalVerifier, signalExpiryInSeconds, out.contracts.vtsOrchestrator, out.contracts.globalConfig
-        );
+        out.contracts.signalManager =
+            _deploySignalManager(signalVerifier, out.contracts.vtsOrchestrator, out.contracts.globalConfig);
 
         out.contracts.settlementObserver =
             _deploySettlementObserver(out.contracts.vtsOrchestrator, out.contracts.globalConfig);

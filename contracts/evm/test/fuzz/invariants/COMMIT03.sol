@@ -3,21 +3,16 @@ pragma solidity ^0.8.26;
 
 import {VTSCommitLibHarness} from "../../libraries/harnesses/VTSCommitLibHarness.sol";
 import {IVRLSignalManager} from "../../../src/interfaces/IVRLSignalManager.sol";
+import {IOracleHelper} from "../../../src/interfaces/IOracleHelper.sol";
 import {LiquiditySignal} from "../../../src/types/Commit.sol";
 import {MarketMaker} from "../../../src/libraries/MarketMaker.sol";
 import {EchidnaLinkedLibs} from "../base/EchidnaLinkedLibs.sol";
 
-/// @dev Minimal mock that always returns (true, expirySeconds) — signal verification
+/// @dev Minimal mock that always verifies and returns leaf TTL — signal verification
 ///      is not the concern of this harness; advancer binding is.
 contract COMMIT03SignalManager is IVRLSignalManager {
-    uint256 internal constant EXPIRY = 3600;
-
     function getVerifier() external pure returns (address) {
         return address(0);
-    }
-
-    function signalExpiryInSeconds() external pure returns (uint256) {
-        return EXPIRY;
     }
 
     function mmNonce(address) external pure returns (uint256) {
@@ -32,29 +27,76 @@ contract COMMIT03SignalManager is IVRLSignalManager {
         return address(0);
     }
     function setVerifier(address) external {}
-    function setSignalExpiryInSeconds(uint256) external {}
 
-    function verifyLiquiditySignal(address, bytes memory, bool) external pure returns (bool, uint256) {
-        return (true, EXPIRY);
+    function verifyLiquiditySignal(address, bytes memory liquiditySignal, bool) external view returns (bool, uint256) {
+        LiquiditySignal memory signal = abi.decode(liquiditySignal, (LiquiditySignal));
+        return (true, signal.mmState.expiryAt - block.timestamp);
     }
 
-    function verifyLiquiditySignalRelayed(address, uint256, bytes memory, uint256, uint256, bytes memory, bool)
-        external
-        pure
-        returns (bool, uint256)
-    {
-        return (true, EXPIRY);
+    function verifyLiquiditySignalRelayed(
+        address,
+        uint256,
+        bytes memory liquiditySignal,
+        uint256,
+        uint256,
+        bytes memory,
+        bool
+    ) external view returns (bool, uint256) {
+        LiquiditySignal memory signal = abi.decode(liquiditySignal, (LiquiditySignal));
+        return (true, signal.mmState.expiryAt - block.timestamp);
+    }
+}
+
+/// @dev Minimal oracle so commit/renew admission (`getTotalValue`) succeeds for empty reserve lists in this harness.
+contract COMMIT03Oracle is IOracleHelper {
+    function oracle() external pure returns (address) {
+        return address(0);
+    }
+
+    function tickerHashToAsset(bytes32) external pure returns (address) {
+        return address(0);
+    }
+
+    function registerTicker(string calldata, address) external pure {}
+
+    function getAssetByTicker(string calldata) external pure returns (address) {
+        return address(0x1);
+    }
+
+    function getPriceByTicker(string calldata) external pure returns (uint256) {
+        return 1e18;
+    }
+
+    function validateMarketOracles(address, address) external pure {}
+
+    function getTotalValue(string[] memory, uint256[] memory) external pure returns (uint256) {
+        return 0;
+    }
+
+    function getPriceForLcc(address) external pure returns (uint256) {
+        return 1e18;
+    }
+
+    function getPricesForLccPair(address, address) external pure returns (uint256, uint256) {
+        return (1e18, 1e18);
     }
 }
 
 /// @dev Actor contract so we can call `renewSignal` from a specific `msg.sender`.
 contract COMMIT03Actor {
-    function tryRenewSignal(VTSCommitLibHarness harness, IVRLSignalManager sigMgr, uint256 commitId, bytes memory sig)
-        external
-        returns (bool)
-    {
+    function tryRenewSignal(
+        VTSCommitLibHarness harness,
+        IVRLSignalManager sigMgr,
+        IOracleHelper oracle_,
+        uint256 commitId,
+        bytes memory sig
+    ) external returns (bool) {
         (bool ok,) = address(harness)
-            .call(abi.encodeWithSignature("renewSignal(address,uint256,bytes)", address(sigMgr), commitId, sig));
+            .call(
+                abi.encodeWithSignature(
+                    "renewSignal(address,address,uint256,bytes)", address(sigMgr), address(oracle_), commitId, sig
+                )
+            );
         return ok;
     }
 }
@@ -73,6 +115,7 @@ contract COMMIT03Actor {
 contract COMMIT03 {
     VTSCommitLibHarness internal harness;
     COMMIT03SignalManager internal sigMgr;
+    COMMIT03Oracle internal admissionOracle;
 
     address internal constant MM_OWNER = address(0xAA);
     address internal constant ADVANCER_A = address(0xBB);
@@ -109,6 +152,7 @@ contract COMMIT03 {
 
         harness = new VTSCommitLibHarness();
         sigMgr = new COMMIT03SignalManager();
+        admissionOracle = new COMMIT03Oracle();
 
         // Deploy actor contracts at specific addresses via CREATE to act as different senders.
         advancerActorA = new COMMIT03Actor();
@@ -120,7 +164,10 @@ contract COMMIT03 {
         // The harness's commitSignal uses msg.sender for VRL validation but the mock always passes.
         // The commit stores mmState.owner and mmState.advancer from the signal.
         commitId = harness.commitSignal(
-            IVRLSignalManager(address(sigMgr)), address(advancerActorA), _makeSignal(MM_OWNER, address(advancerActorA))
+            IVRLSignalManager(address(sigMgr)),
+            address(advancerActorA),
+            IOracleHelper(address(admissionOracle)),
+            _makeSignal(MM_OWNER, address(advancerActorA))
         );
         currentAdvancer = address(advancerActorA);
 
@@ -130,14 +177,22 @@ contract COMMIT03 {
     function _seedAll() internal {
         // Seed valid renewal: advancerActorA renews with correct owner.
         bool ok = advancerActorA.tryRenewSignal(
-            harness, IVRLSignalManager(address(sigMgr)), commitId, _makeSignal(MM_OWNER, address(advancerActorA))
+            harness,
+            IVRLSignalManager(address(sigMgr)),
+            IOracleHelper(address(admissionOracle)),
+            commitId,
+            _makeSignal(MM_OWNER, address(advancerActorA))
         );
         checkedValidRenewal = true;
         lastValidRenewalOk = ok;
 
         // Seed owner-hijack: advancerActorA tries to renew with HIJACKER as owner.
         ok = advancerActorA.tryRenewSignal(
-            harness, IVRLSignalManager(address(sigMgr)), commitId, _makeSignal(HIJACKER, address(advancerActorA))
+            harness,
+            IVRLSignalManager(address(sigMgr)),
+            IOracleHelper(address(admissionOracle)),
+            commitId,
+            _makeSignal(HIJACKER, address(advancerActorA))
         );
         checkedOwnerHijack = true;
         lastOwnerHijackOk = !ok;
@@ -145,7 +200,11 @@ contract COMMIT03 {
         // Seed non-advancer: randomActor tries to renew but signal says advancer = advancerActorA.
         // Since sender (randomActor) != signal.advancer (advancerActorA), this must revert.
         ok = randomActor.tryRenewSignal(
-            harness, IVRLSignalManager(address(sigMgr)), commitId, _makeSignal(MM_OWNER, address(advancerActorA))
+            harness,
+            IVRLSignalManager(address(sigMgr)),
+            IOracleHelper(address(admissionOracle)),
+            commitId,
+            _makeSignal(MM_OWNER, address(advancerActorA))
         );
         checkedNonAdvancer = true;
         lastNonAdvancerOk = !ok;
@@ -162,7 +221,11 @@ contract COMMIT03 {
     function action_commit_03_valid_renewal() external {
         COMMIT03Actor currentActor = _actorForAdvancer();
         bool ok = currentActor.tryRenewSignal(
-            harness, IVRLSignalManager(address(sigMgr)), commitId, _makeSignal(MM_OWNER, currentAdvancer)
+            harness,
+            IVRLSignalManager(address(sigMgr)),
+            IOracleHelper(address(admissionOracle)),
+            commitId,
+            _makeSignal(MM_OWNER, currentAdvancer)
         );
         checkedValidRenewal = true;
         lastValidRenewalOk = ok;
@@ -177,7 +240,11 @@ contract COMMIT03 {
     function action_commit_03_owner_hijack() external {
         COMMIT03Actor currentActor = _actorForAdvancer();
         bool ok = currentActor.tryRenewSignal(
-            harness, IVRLSignalManager(address(sigMgr)), commitId, _makeSignal(HIJACKER, currentAdvancer)
+            harness,
+            IVRLSignalManager(address(sigMgr)),
+            IOracleHelper(address(admissionOracle)),
+            commitId,
+            _makeSignal(HIJACKER, currentAdvancer)
         );
         checkedOwnerHijack = true;
         lastOwnerHijackOk = !ok;
@@ -192,7 +259,11 @@ contract COMMIT03 {
     // forge-lint: disable-next-line(mixed-case-function)
     function action_commit_03_non_advancer_sender() external {
         bool ok = randomActor.tryRenewSignal(
-            harness, IVRLSignalManager(address(sigMgr)), commitId, _makeSignal(MM_OWNER, currentAdvancer)
+            harness,
+            IVRLSignalManager(address(sigMgr)),
+            IOracleHelper(address(admissionOracle)),
+            commitId,
+            _makeSignal(MM_OWNER, currentAdvancer)
         );
         checkedNonAdvancer = true;
         lastNonAdvancerOk = !ok;
@@ -202,7 +273,11 @@ contract COMMIT03 {
     // forge-lint: disable-next-line(mixed-case-function)
     function action_commit_03_another_non_advancer() external {
         bool ok = hijackerActor.tryRenewSignal(
-            harness, IVRLSignalManager(address(sigMgr)), commitId, _makeSignal(MM_OWNER, currentAdvancer)
+            harness,
+            IVRLSignalManager(address(sigMgr)),
+            IOracleHelper(address(admissionOracle)),
+            commitId,
+            _makeSignal(MM_OWNER, currentAdvancer)
         );
         checkedNonAdvancer = true;
         lastNonAdvancerOk = !ok;
@@ -227,7 +302,11 @@ contract COMMIT03 {
         COMMIT03Actor newActor = newAdvancer == address(advancerActorA) ? advancerActorA : advancerActorB;
         checkedRotation = true;
         bool ok = newActor.tryRenewSignal(
-            harness, IVRLSignalManager(address(sigMgr)), commitId, _makeSignal(MM_OWNER, newAdvancer)
+            harness,
+            IVRLSignalManager(address(sigMgr)),
+            IOracleHelper(address(admissionOracle)),
+            commitId,
+            _makeSignal(MM_OWNER, newAdvancer)
         );
         if (!ok) {
             lastRotationOk = false;
@@ -238,12 +317,20 @@ contract COMMIT03 {
 
         // After rotation, the OLD advancer must be rejected.
         bool oldOk = oldActor.tryRenewSignal(
-            harness, IVRLSignalManager(address(sigMgr)), commitId, _makeSignal(MM_OWNER, currentAdvancer)
+            harness,
+            IVRLSignalManager(address(sigMgr)),
+            IOracleHelper(address(admissionOracle)),
+            commitId,
+            _makeSignal(MM_OWNER, currentAdvancer)
         );
 
         // New advancer must succeed.
         bool newOk = newActor.tryRenewSignal(
-            harness, IVRLSignalManager(address(sigMgr)), commitId, _makeSignal(MM_OWNER, currentAdvancer)
+            harness,
+            IVRLSignalManager(address(sigMgr)),
+            IOracleHelper(address(admissionOracle)),
+            commitId,
+            _makeSignal(MM_OWNER, currentAdvancer)
         );
 
         lastRotationOk = !oldOk && newOk;
@@ -289,7 +376,13 @@ contract COMMIT03 {
     function _makeSignal(address owner, address adv) internal pure returns (bytes memory) {
         MarketMaker.Reserve[] memory reserves = new MarketMaker.Reserve[](0);
         MarketMaker.State memory mmState = MarketMaker.State({
-            owner: owner, reserves: reserves, sourceState: "", prover: "", nonce: "", advancer: adv
+            owner: owner,
+            reserves: reserves,
+            sourceState: "",
+            prover: "",
+            nonce: "",
+            advancer: adv,
+            expiryAt: type(uint256).max
         });
         LiquiditySignal memory sig = LiquiditySignal({
             nonce: 1,

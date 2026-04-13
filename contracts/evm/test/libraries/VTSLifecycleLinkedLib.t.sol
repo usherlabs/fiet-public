@@ -77,23 +77,14 @@ contract LifecycleTestFactory {
 }
 
 contract LifecycleTestSignalManager is IVRLSignalManager {
-    uint256 internal _expirySeconds = 3600;
     address public lastSender;
     uint256 public lastCommitId;
     uint256 public lastDeadline;
     uint256 public lastAuthNonce;
     bytes public lastAuthSig;
 
-    function setExpirySeconds(uint256 s) external {
-        _expirySeconds = s;
-    }
-
     function getVerifier() external pure returns (address) {
         return address(0);
-    }
-
-    function signalExpiryInSeconds() external view returns (uint256) {
-        return _expirySeconds;
     }
 
     function mmNonce(address) external pure returns (uint256) {
@@ -112,23 +103,23 @@ contract LifecycleTestSignalManager is IVRLSignalManager {
         revert("not implemented");
     }
 
-    function setSignalExpiryInSeconds(uint256) external pure {
-        revert("not implemented");
-    }
-
-    function verifyLiquiditySignal(address sender, bytes memory, bool) external returns (bool, uint256) {
+    function verifyLiquiditySignal(address sender, bytes memory liquiditySignal, bool)
+        external
+        returns (bool, uint256)
+    {
         lastSender = sender;
         lastCommitId = 0;
         lastDeadline = 0;
         lastAuthNonce = 0;
         delete lastAuthSig;
-        return (true, _expirySeconds);
+        LiquiditySignal memory signal = abi.decode(liquiditySignal, (LiquiditySignal));
+        return (true, signal.mmState.expiryAt - block.timestamp);
     }
 
     function verifyLiquiditySignalRelayed(
         address sender,
         uint256 commitId,
-        bytes memory,
+        bytes memory liquiditySignal,
         uint256 deadline,
         uint256 authNonce,
         bytes memory authSig,
@@ -139,7 +130,8 @@ contract LifecycleTestSignalManager is IVRLSignalManager {
         lastDeadline = deadline;
         lastAuthNonce = authNonce;
         lastAuthSig = authSig;
-        return (true, _expirySeconds);
+        LiquiditySignal memory signal = abi.decode(liquiditySignal, (LiquiditySignal));
+        return (true, signal.mmState.expiryAt - block.timestamp);
     }
 }
 
@@ -199,6 +191,41 @@ contract LifecycleTestPoolManagerStub {
     }
 }
 
+/// @notice Minimal oracle for commit admission: `getTotalValue` succeeds for any reserve list used in lifecycle tests.
+contract LifecycleTestOracleHelper is IOracleHelper {
+    function oracle() external pure returns (address) {
+        return address(0);
+    }
+
+    function tickerHashToAsset(bytes32) external pure returns (address) {
+        return address(0);
+    }
+
+    function registerTicker(string calldata, address) external pure {}
+
+    function getAssetByTicker(string calldata) external pure returns (address) {
+        return address(0x1);
+    }
+
+    function getPriceByTicker(string calldata) external pure returns (uint256) {
+        return 1e18;
+    }
+
+    function validateMarketOracles(address, address) external pure {}
+
+    function getTotalValue(string[] memory, uint256[] memory) external pure returns (uint256) {
+        return 0;
+    }
+
+    function getPriceForLcc(address) external pure returns (uint256) {
+        return 1e18;
+    }
+
+    function getPricesForLccPair(address, address) external pure returns (uint256, uint256) {
+        return (1e18, 1e18);
+    }
+}
+
 contract VTSLifecycleLinkedLibTest is Test {
     using PoolIdLibrary for PoolKey;
 
@@ -220,6 +247,7 @@ contract VTSLifecycleLinkedLibTest is Test {
 
     PoolKey internal poolKey;
     LifecycleTestPoolManagerStub internal poolManagerStub;
+    LifecycleTestOracleHelper internal commitOracle;
 
     function setUp() public {
         harness = new VTSLifecycleLinkedLibHarness();
@@ -229,6 +257,7 @@ contract VTSLifecycleLinkedLibTest is Test {
         signalManager = new LifecycleTestSignalManager();
         settlementObserver = new LifecycleTestSettlementObserver();
         poolManagerStub = new LifecycleTestPoolManagerStub();
+        commitOracle = new LifecycleTestOracleHelper();
 
         hub.setFactoryRegistered(address(factory), true);
         hub.setPairFactory(Currency.unwrap(c0), Currency.unwrap(c1), address(factory));
@@ -247,7 +276,13 @@ contract VTSLifecycleLinkedLibTest is Test {
             rootHashSignature: "",
             merkleProof: new bytes32[](0),
             mmState: MarketMaker.State({
-                owner: mmOwner, reserves: reserves, sourceState: "", prover: "", nonce: "", advancer: advancer
+                owner: mmOwner,
+                reserves: reserves,
+                sourceState: "",
+                prover: "",
+                nonce: "",
+                advancer: advancer,
+                expiryAt: block.timestamp + 50_000
             }),
             mmSignature: ""
         });
@@ -263,7 +298,13 @@ contract VTSLifecycleLinkedLibTest is Test {
             rootHashSignature: "",
             merkleProof: new bytes32[](0),
             mmState: MarketMaker.State({
-                owner: mmOwner, reserves: reserves, sourceState: "", prover: "", nonce: "", advancer: advancer
+                owner: mmOwner,
+                reserves: reserves,
+                sourceState: "",
+                prover: "",
+                nonce: "",
+                advancer: advancer,
+                expiryAt: block.timestamp + 80_000
             }),
             mmSignature: ""
         });
@@ -271,7 +312,11 @@ contract VTSLifecycleLinkedLibTest is Test {
     }
 
     function _routerCtx() internal view returns (VTSCommitRouterContext memory) {
-        return VTSCommitRouterContext({liquidityHub: ILiquidityHub(address(hub)), signalManager: signalManager});
+        return VTSCommitRouterContext({
+            liquidityHub: ILiquidityHub(address(hub)),
+            signalManager: signalManager,
+            oracleHelper: IOracleHelper(address(commitOracle))
+        });
     }
 
     function _coreCtx() internal pure returns (VTSCoreHookContext memory) {

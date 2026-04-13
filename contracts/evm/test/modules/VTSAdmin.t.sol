@@ -26,10 +26,6 @@ contract MockSignalManagerForAdmin is IVRLSignalManager {
         return address(0);
     }
 
-    function signalExpiryInSeconds() external pure returns (uint256) {
-        return 0;
-    }
-
     function mmNonce(address) external pure returns (uint256) {
         return 0;
     }
@@ -39,8 +35,6 @@ contract MockSignalManagerForAdmin is IVRLSignalManager {
     }
 
     function setVerifier(address) external {}
-
-    function setSignalExpiryInSeconds(uint256) external {}
 
     function verifyLiquiditySignal(address, bytes memory, bool) external pure returns (bool, uint256) {
         return (false, 0);

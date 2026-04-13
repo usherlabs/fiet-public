@@ -241,25 +241,20 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
             address(lcc1)
         );
 
-        (, uint256 expiresAtPrevious,,,) = vtsOrchestrator.getCommit(tokenId);
-
         // renew the signal
         uint256 newTimestamp = 1000;
         vm.warp(newTimestamp);
         // Renewal requires sender == mmState.advancer, and owner must remain immutable.
         LiquiditySignal memory sameOwnerRenew = liquiditySignal;
         sameOwnerRenew.nonce += 1;
+        sameOwnerRenew.mmState.expiryAt = block.timestamp + 5_000;
         address advancer = sameOwnerRenew.mmState.advancer;
         vm.prank(advancer);
         MMA.renew(positionManager, tokenId, abi.encode(sameOwnerRenew));
 
         (, uint256 expiresAtAfter,,,) = vtsOrchestrator.getCommit(tokenId);
 
-        console.log("expiresAtPrevious", expiresAtPrevious);
-        console.log("expiresAtAfter", expiresAtAfter);
-
-        // validate the expiry is updated
-        assertEq(expiresAtAfter + 1, newTimestamp + expiresAtPrevious);
+        assertEq(expiresAtAfter, newTimestamp + 5_000, "renewal should set expiresAt from the renewed leaf expiryAt");
     }
 
     function test_renewSignal_forwardsFactoryAndLockerToVtsOrchestrator() public {

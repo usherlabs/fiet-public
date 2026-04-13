@@ -267,7 +267,9 @@ contract VTSOrchestrator is
     }
 
     function _commitRouterContext() internal view returns (VTSCommitRouterContext memory ctx) {
-        ctx = VTSCommitRouterContext({liquidityHub: liquidityHub, signalManager: signalManager});
+        ctx = VTSCommitRouterContext({
+            liquidityHub: liquidityHub, signalManager: signalManager, oracleHelper: oracleHelper
+        });
     }
 
     // --------------------------------------------------

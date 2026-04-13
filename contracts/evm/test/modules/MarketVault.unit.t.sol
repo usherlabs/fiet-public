@@ -889,4 +889,29 @@ contract MarketVaultUnitTest is Test {
         assertEq(hub.lastCancelAmount(), requested);
         assertEq(hub.queueCalls(), 0);
     }
+
+    /// @notice Fully-deficit path: no vault underlying claims; must not call `cancel(0)` (would revert on LCC burn).
+    function test_cancelLCCWithDeficit_fullyDeficit_skipsZeroCancelAndQueues() public {
+        MockLiquidityHub_Min hub = new MockLiquidityHub_Min();
+        (MarketVaultUnitHarness vault, MockPoolManager_Min pm,, MockLCC lccErc20,, MockERC20 ua) =
+            _deployVaultWithHub(address(hub));
+
+        Currency uaC = Currency.wrap(address(ua));
+        pm.setClaimBalance(address(vault), uaC, 0);
+
+        address deficitRecipient = makeAddr("fullDeficitRecipient");
+        uint256 requested = 7;
+        lccErc20.mint(address(vault), requested);
+
+        uint256 amountToCancel = vault.exposed_cancelLCCWithDeficit(
+            PoolId.wrap(keccak256("pid_full_deficit")), ILCC(address(lccErc20)), requested, deficitRecipient
+        );
+
+        assertEq(amountToCancel, 0);
+        assertEq(hub.cancelCalls(), 0, "cancel must be skipped when amountToCancel is 0");
+        assertEq(hub.queueCalls(), 1);
+        assertEq(hub.lastQueueRecipient(), deficitRecipient);
+        assertEq(hub.lastQueueAmount(), requested);
+        assertEq(lccErc20.balanceOf(deficitRecipient), requested);
+    }
 }

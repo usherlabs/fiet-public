@@ -821,7 +821,7 @@ library VTSLifecycleLinkedLib {
         bytes memory liquiditySignal
     ) external returns (uint256 commitId) {
         address effectiveSender = _resolveSignalSender(ctx, factory, caller, sender);
-        commitId = VTSCommitLib.commitSignal(s, effectiveSender, ctx.signalManager, liquiditySignal);
+        commitId = VTSCommitLib.commitSignal(s, effectiveSender, ctx.signalManager, ctx.oracleHelper, liquiditySignal);
     }
 
     function commitSignalRelayed(
@@ -837,7 +837,7 @@ library VTSLifecycleLinkedLib {
     ) external returns (uint256 commitId) {
         address effectiveSender = _resolveSignalSender(ctx, factory, caller, sender);
         commitId = VTSCommitLib.commitSignalRelayed(
-            s, effectiveSender, ctx.signalManager, liquiditySignal, deadline, authNonce, authSig
+            s, effectiveSender, ctx.signalManager, ctx.oracleHelper, liquiditySignal, deadline, authNonce, authSig
         );
     }
 
@@ -851,7 +851,7 @@ library VTSLifecycleLinkedLib {
         bytes memory liquiditySignal
     ) external {
         address effectiveSender = _resolveSignalSender(ctx, factory, caller, sender);
-        VTSCommitLib.renewSignal(s, effectiveSender, ctx.signalManager, commitId, liquiditySignal);
+        VTSCommitLib.renewSignal(s, effectiveSender, ctx.signalManager, ctx.oracleHelper, commitId, liquiditySignal);
     }
 
     function renewSignalRelayed(
@@ -868,7 +868,15 @@ library VTSLifecycleLinkedLib {
     ) external {
         address effectiveSender = _resolveSignalSender(ctx, factory, caller, sender);
         VTSCommitLib.renewSignalRelayed(
-            s, effectiveSender, ctx.signalManager, commitId, liquiditySignal, deadline, authNonce, authSig
+            s,
+            effectiveSender,
+            ctx.signalManager,
+            ctx.oracleHelper,
+            commitId,
+            liquiditySignal,
+            deadline,
+            authNonce,
+            authSig
         );
     }
 }

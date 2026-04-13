@@ -254,7 +254,7 @@ contract MMPositionManagerActionsTest is MarketTestBase, MarketMakerTestBase {
             uint256 inactiveRemnantCount
         ) = vtsOrchestrator.getCommit(tokenId);
         assertEq(mmState.owner, liquiditySignal.mmState.owner, "Commit owner should match liquidity signal owner");
-        assertEq(expiresAt, block.timestamp + 3600, "Commit expiry should be now + 1 hour");
+        assertEq(expiresAt, liquiditySignal.mmState.expiryAt, "Commit expiry should match signed leaf expiryAt");
         assertEq(positionCount, 1, "Commit should have exactly 1 position");
         assertEq(activePositionCount, 1, "Commit should have exactly 1 active position");
         assertEq(inactiveRemnantCount, 0, "Fresh commit should have no inactive settled remnants");
