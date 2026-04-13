@@ -374,6 +374,7 @@ contract VTSPositionLibMutationUnitTest is Test {
         // Expected add1 = (outsideLower1 - outsideUpper1) * liq / Q128 = 7 * liq
         uint256 s1 = 2000;
         harness.setSettled(id, 0, s1);
+        harness.setPoolTotalSettled(poolId, 0, s1);
 
         // Run the growth settle (uses StateLibrary for tick and liquidity).
         harness.settlePositionGrowths(IPoolManager(address(pm)), id);
@@ -697,7 +698,7 @@ contract VTSPositionLibMutationUnitTest is Test {
         assertEq(exposureSecond, exposureFirst, "second settle with same pool index must not add exposure again");
     }
 
-    function test_reconcileAfterPausedRemove_clampsSettledBeforeLaterCISESettlement() public {
+    function test_reconcileAfterStaleLiquidityMirrorRemove_clampsSettledBeforeLaterCISESettlement() public {
         uint128 liqBefore = 1000;
         uint128 liqAfter = 500;
         (PositionId id, ModifyLiquidityParams memory addParams) = _register(bytes32(uint256(0xAA55E)), liqBefore);
@@ -708,7 +709,7 @@ contract VTSPositionLibMutationUnitTest is Test {
         harness.setSettled(id, c0Before, c1Before);
         harness.setPoolTotalSettled(poolId, c0Before, c1Before);
 
-        // Coverage advanced while paused; we intentionally defer realisation until after reconciliation.
+        // CISE index advanced while the stored liquidity mirror is stale; defer realisation until after reconciliation.
         harness.setCISEIndexLastX128(id, 0, 0);
         harness.setPoolCoveragePerSettledIndexX128(poolId, FixedPoint128.Q128, 0);
 
@@ -725,7 +726,7 @@ contract VTSPositionLibMutationUnitTest is Test {
         harness.touchPosition(_defaultPositionContext(), _directRemoveTouchParams(removeParams));
 
         (uint256 c0After,, uint256 s0After,,,) = harness.getPositionAccounting(id);
-        assertLt(c0After, c0Before, "commitment max should decrease after paused remove reconcile");
+        assertLt(c0After, c0Before, "commitment max should decrease after stale-mirror remove reconcile");
         assertEq(s0After, c0After, "settled should clamp to the post-remove commitment max");
 
         Position memory posAfter = harness.getPosition(id);
@@ -737,7 +738,7 @@ contract VTSPositionLibMutationUnitTest is Test {
         assertEq(exposure0, s0After, "CISE exposure should realise from clamped settled baseline");
     }
 
-    function test_reconcileAfterPausedRemove_clampsSettledBeforeLaterCISESettlement_token1() public {
+    function test_reconcileAfterStaleLiquidityMirrorRemove_clampsSettledBeforeLaterCISESettlement_token1() public {
         uint128 liqBefore = 1000;
         uint128 liqAfter = 500;
         (PositionId id, ModifyLiquidityParams memory addParams) = _register(bytes32(uint256(0xAA560)), liqBefore);
@@ -764,7 +765,7 @@ contract VTSPositionLibMutationUnitTest is Test {
         harness.touchPosition(_defaultPositionContext(), _directRemoveTouchParams(removeParams));
 
         (, uint256 c1After,, uint256 s1After,,) = harness.getPositionAccounting(id);
-        assertLt(c1After, c1Before, "commitment max token1 should decrease after paused remove reconcile");
+        assertLt(c1After, c1Before, "commitment max token1 should decrease after stale-mirror remove reconcile");
         assertEq(s1After, c1After, "settled token1 should clamp to the post-remove commitment max");
 
         Position memory posAfter = harness.getPosition(id);
@@ -776,7 +777,7 @@ contract VTSPositionLibMutationUnitTest is Test {
         assertEq(exposure1, s1After, "CISE exposure token1 should realise from clamped settled baseline");
     }
 
-    function test_reconcileAfterPausedRemove_fullRemove_zeroesSettledAndMarksInactive() public {
+    function test_reconcileAfterStaleLiquidityMirrorRemove_fullRemove_zeroesSettledAndMarksInactive() public {
         uint128 liqBefore = 1000;
         (PositionId id, ModifyLiquidityParams memory addParams) = _register(bytes32(uint256(0xAA55F)), liqBefore);
 
@@ -813,7 +814,7 @@ contract VTSPositionLibMutationUnitTest is Test {
     }
 
     /// @notice Regression (finding 5): full deactivation clears all commitment-deficit fields (semantic cleanup).
-    function test_reconcileAfterPausedRemove_fullRemove_clearsCommitmentDeficitState() public {
+    function test_reconcileAfterStaleLiquidityMirrorRemove_fullRemove_clearsCommitmentDeficitState() public {
         uint128 liqBefore = 1000;
         (PositionId id, ModifyLiquidityParams memory addParams) = _register(bytes32(uint256(0xAA60)), liqBefore);
 
@@ -1227,6 +1228,7 @@ contract VTSPositionLibMutationUnitTest is Test {
         PositionId id = PositionLibrary.generateId(owner, reg);
         harness.setCommitmentMax(id, 1e18, 1e18);
         harness.setSettled(id, 1e18, 1e18);
+        harness.setPoolTotalSettled(pId, 1e18, 1e18);
         harness.setCumulativeDeficit(id, 0, 0);
         harness.setCommitmentDeficit(id, 0, 0);
 

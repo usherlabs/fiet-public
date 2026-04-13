@@ -172,8 +172,10 @@ library VTSPositionLib {
             paPool.totalSettled.set(tokenIndex, currentTotalSettled + uint256(settledDelta));
         } else {
             uint256 decSettled = uint256(-settledDelta);
-            paPool.totalSettled
-                .set(tokenIndex, decSettled > currentTotalSettled ? 0 : (currentTotalSettled - decSettled));
+            if (decSettled > currentTotalSettled) {
+                revert Errors.InvariantViolated("pool totalSettled underflow");
+            }
+            paPool.totalSettled.set(tokenIndex, currentTotalSettled - decSettled);
         }
     }
 

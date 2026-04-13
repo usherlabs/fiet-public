@@ -15,6 +15,8 @@ import {DynamicCurrencyDelta} from "../../src/libraries/DynamicCurrencyDelta.sol
 import {Errors} from "../../src/libraries/Errors.sol";
 import {ILCC} from "../../src/interfaces/ILCC.sol";
 
+/// @dev Several scenarios assert `harness.getUnderlyingDelta` after `onMMSettle`: here that reads harness-local
+///      `DynamicCurrencyDelta` state in the same Forge transaction (not PoolManager unlock-scoped transient reads).
 contract VTSPositionLibOnMMSettleTest is VTSLibTestBase {
     VTSPositionLibHarness harness;
     MockMarketVault mockVault;
@@ -243,6 +245,7 @@ contract VTSPositionLibOnMMSettleTest is VTSLibTestBase {
         // Base requirement = 1000 * 5% = 50, settled = 200, so excess = 150
         harness.setCommitmentMax(positionId, 1000e18, 1000e18);
         harness.setSettled(positionId, 200e18, 200e18); // 20% settled, base is 5%
+        harness.setPoolTotalSettled(testPoolId, 200e18, 200e18);
         harness.setPositionActive(positionId, true);
 
         // Try to withdraw 150 each
@@ -264,6 +267,7 @@ contract VTSPositionLibOnMMSettleTest is VTSLibTestBase {
         // Setup: settled = 100, base requirement = 50, so withdrawable = 50
         harness.setCommitmentMax(positionId, 1000e18, 1000e18);
         harness.setSettled(positionId, 100e18, 100e18);
+        harness.setPoolTotalSettled(testPoolId, 100e18, 100e18);
         harness.setPositionActive(positionId, true);
 
         // Try to withdraw 200 (more than available)
@@ -306,6 +310,7 @@ contract VTSPositionLibOnMMSettleTest is VTSLibTestBase {
         // Fully-settled enough so RFS is closed and withdrawals are allowed.
         harness.setCommitmentMax(positionId, 1000e18, 1000e18);
         harness.setSettled(positionId, 200e18, 200e18);
+        harness.setPoolTotalSettled(testPoolId, 200e18, 200e18);
         harness.setPositionActive(positionId, true);
 
         // Request withdrawal, but vault can't satisfy full token1 amount.
@@ -413,6 +418,7 @@ contract VTSPositionLibOnMMSettleTest is VTSLibTestBase {
 
         harness.setCommitmentMax(positionId, 1000e18, 1000e18);
         harness.setSettled(positionId, 200e18, 200e18);
+        harness.setPoolTotalSettled(testPoolId, 200e18, 200e18);
         harness.setPositionActive(positionId, true);
 
         mockVault.setAvailableLiquidity(100e18, 60e18);

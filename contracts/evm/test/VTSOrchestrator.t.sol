@@ -1872,9 +1872,17 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
 
         vtsOrchestrator.pausePool(corePoolKey.toId());
 
-        // CoreHook wraps low-level reverts from the hook callback.
+        // CoreHook wraps hook reverts as `CustomRevert.WrappedError`, so assert durable state instead of the outer payload.
+        uint128 liqBefore = vtsOrchestrator.getPosition(pausedPositionId).liquidity;
         vm.expectRevert();
         _decreasePosition(pausedTokenId, amountToDecrease);
+        // Do not call `calcRFS` here while the pool is paused: the public entrypoint settles growths first and is
+        // CoreHook-gated under pause. Position liquidity is the durable proof the decrease did not land.
+        assertEq(
+            uint256(vtsOrchestrator.getPosition(pausedPositionId).liquidity),
+            uint256(liqBefore),
+            "position liquidity must be unchanged when decrease reverts"
+        );
     }
 
     /// @dev Regression for finding 6: paused remove must materialise queued positive slashes.
@@ -2275,16 +2283,14 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
         MMA.executeWithUnlock(positionManager, actions, block.timestamp + 3600);
     }
 
-    /// @dev Uses on-chain ticks/salt for settlement sizing; pads minted underlying because post-RFS flows can
-    ///      require more than `_calculateSettlementAmounts` alone (rounding and proxy-bridge legs).
+    /// @dev Uses on-chain ticks/salt for settlement sizing from `_calculateSettlementAmounts`.
     function _increasePosition(uint256 tokenId, PositionId positionId, uint256 amountToIncrease) internal {
         Position memory pos = vtsOrchestrator.getPosition(positionId);
         ModifyLiquidityParams memory p = ModifyLiquidityParams({
             tickLower: pos.tickLower, tickUpper: pos.tickUpper, liquidityDelta: int256(amountToIncrease), salt: pos.salt
         });
         (uint256 req0, uint256 req1) = _calculateSettlementAmounts(p, marketVTSConfiguration);
-        uint256 pad = 2_000_000e18;
-        _mintAndApproveUnderlyingForSettlement(req0 + pad, req1 + pad);
+        _mintAndApproveUnderlyingForSettlement(req0, req1);
 
         MMA.PreparedAction[] memory actions = new MMA.PreparedAction[](2);
         actions[0] = MMA.prepareIncrease(corePoolKey, tokenId, 0, amountToIncrease);

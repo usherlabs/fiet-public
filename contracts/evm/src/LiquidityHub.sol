@@ -813,8 +813,16 @@ contract LiquidityHub is BoundRegistry, Ownable, ReentrancyGuardTransient {
         try ILCC(lcc).balancesOf(from) returns (uint256 wrapped, uint256 market) {
             wrappedBal = wrapped;
             marketBal = market;
-        } catch {
-            hasBuckets = false;
+        } catch (bytes memory reason) {
+            // Keep fallback only for stubbed / non-implemented `balancesOf` paths (empty revert data).
+            // Integrity and bucket errors (e.g. `Errors.InvalidBucketState`) must surface.
+            if (reason.length == 0) {
+                hasBuckets = false;
+            } else {
+                assembly ("memory-safe") {
+                    revert(add(reason, 0x20), mload(reason))
+                }
+            }
         }
 
         if (!hasBuckets) {

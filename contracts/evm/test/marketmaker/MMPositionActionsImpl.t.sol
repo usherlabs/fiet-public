@@ -506,8 +506,7 @@ contract MMPositionManagerActionsTest is MarketTestBase, MarketMakerTestBase {
         MMA.executeWithUnlock(positionManager, actions, block.timestamp + 3600);
 
         // validate liquidity of the initial position is decreased
-        (Position memory positionAfterDecrease, PositionId newPositionId) =
-            positionManager.getPosition(tokenId, positionIndex);
+        (Position memory positionAfterDecrease,) = positionManager.getPosition(tokenId, positionIndex);
         assertEq(
             uint256(positionAfterDecrease.liquidity),
             uint256(positionBeforeDecrease.liquidity) - liquidityToDecrease,
@@ -515,7 +514,7 @@ contract MMPositionManagerActionsTest is MarketTestBase, MarketMakerTestBase {
         );
 
         // validate the new position was created with the new ticks provided
-        (Position memory newPosition,) = positionManager.getPosition(tokenId, newPositionIndex);
+        (Position memory newPosition, PositionId newPositionId) = positionManager.getPosition(tokenId, newPositionIndex);
         assertEq(newPosition.tickLower, newUpperTick, "New position tickLower should match requested tick");
         assertEq(
             newPosition.tickUpper, defaultlLiquidityParams.tickUpper, "New position tickUpper should match default"

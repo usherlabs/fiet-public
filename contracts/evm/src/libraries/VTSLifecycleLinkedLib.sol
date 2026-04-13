@@ -184,6 +184,11 @@ library VTSLifecycleLinkedLib {
             ctx.liquidityHub.getFactory(Currency.unwrap(currency0), Currency.unwrap(currency1));
         if (address(canonicalFactory) != address(factory)) revert Errors.InvalidSender();
 
+        Position memory pos = s.positions[positionId];
+        if (pos.owner == address(0) || PoolId.unwrap(pos.poolId) != PoolId.unwrap(poolId)) {
+            revert Errors.InvalidPosition(0, 0, positionId);
+        }
+
         params = SettleParams({
             vault: MarketHandlerLib.getVault(factory, poolId),
             positionId: positionId,

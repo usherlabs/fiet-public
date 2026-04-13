@@ -1102,6 +1102,7 @@ contract VTSPositionLibTest is VTSLibTestBase {
         harness.setCISEIndexLastX128(positionId, 903, 904);
         harness.setCumulativeDeficit(positionId, 10, 20);
         harness.setSettled(positionId, 30, 40);
+        harness.setPoolTotalSettled(corePoolId, 30, 40);
         harness.setPoolCoveragePerDeficitIndexX128(corePoolId, 1001, 1002);
         harness.setPoolCoveragePerResidualDeficitIndexX128(corePoolId, 1011, 1012);
         harness.setPoolCoveragePerSettledIndexX128(corePoolId, 1003, 1004);
@@ -1964,6 +1965,7 @@ contract VTSPositionLibTest is VTSLibTestBase {
 
         // Ensure RFS is closed pre-decrease so we don't revert before refund logic.
         harness.setSettled(positionId, 200e18, 0);
+        harness.setPoolTotalSettled(corePoolId, 200e18, 0);
         harness.setCumulativeDeficit(positionId, 0, 0);
         harness.setCommitmentDeficit(positionId, 0, 0);
 
@@ -2255,6 +2257,7 @@ contract VTSPositionLibTest is VTSLibTestBase {
 
         harness.setCommitmentMax(positionId, 1000e18, 0);
         harness.setSettled(positionId, 1000e18, 0);
+        harness.setPoolTotalSettled(corePoolId, 1000e18, 0);
         harness.setCumulativeDeficit(positionId, 0, 0);
         harness.setCommitmentDeficit(positionId, 50e18, 0);
 
@@ -2486,6 +2489,7 @@ contract VTSPositionLibTest is VTSLibTestBase {
 
         harness.setCommitmentMax(positionId, 100, 100);
         harness.setSettled(positionId, 50, 50);
+        harness.setPoolTotalSettled(testPoolId, 50, 50);
 
         VTSPositionLibTest_MockLCC lcc0 = new VTSPositionLibTest_MockLCC(address(0xB00));
         VTSPositionLibTest_MockLCC lcc1 = new VTSPositionLibTest_MockLCC(address(0xB01));
@@ -2950,6 +2954,7 @@ contract VTSPositionLibTest is VTSLibTestBase {
 
         // Seed settled so withdrawal is possible.
         harness.setSettled(positionId, 100e18, 0);
+        harness.setPoolTotalSettled(testPoolId, 100e18, 0);
 
         // Request withdrawal of 80, but vault only has 30 available.
         // Under the strict ordering model, only the final clamped amount should touch settled.
@@ -2981,6 +2986,7 @@ contract VTSPositionLibTest is VTSLibTestBase {
         harness.setPositionActive(positionId, false);
         harness.setCommitmentMax(positionId, 1000e18, 1000e18);
         harness.setSettled(positionId, 0, 100e18);
+        harness.setPoolTotalSettled(testPoolId, 0, 100e18);
 
         // Request withdrawal of 80 on token1, but vault only has 30 available on token1.
         // Only the clamped amount should reduce settled on this lane.
@@ -4301,6 +4307,7 @@ contract VTSPositionLibTest is VTSLibTestBase {
 
         harness.setCommitmentMax(positionId, commitment, 0);
         harness.setSettled(positionId, initialSettled, 0);
+        harness.setPoolTotalSettled(testPoolId, initialSettled, 0);
 
         harness.updateSettlement(positionId, 0, delta);
 
