@@ -2,6 +2,7 @@
 pragma solidity ^0.8.26;
 
 import {MarketTestBase} from "./MarketTestBase.sol";
+import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
 import {PoolSwapTest} from "@uniswap/v4-core/src/test/PoolSwapTest.sol";
 import {SwapParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
@@ -227,6 +228,16 @@ abstract contract MarketVaultBase is MarketTestBase {
             inputAmount = LiquidityUtils.safeInt128ToUint256(-delta.amount1());
             outputAmount = LiquidityUtils.safeInt128ToUint256(delta.amount0());
         }
+    }
+
+    /// @notice Core market id (bytes32) used by `CanonicalVault` for the deployed core pool.
+    function _coreMarketId() internal view returns (bytes32) {
+        return PoolId.unwrap(corePoolKey.toId());
+    }
+
+    /// @notice Durable ERC6909 claim balance on the PoolManager for an underlying `Currency`.
+    function _underlying6909Balance(address owner, Currency c) internal view returns (uint256) {
+        return IPoolManager(address(manager)).balanceOf(owner, c.toId());
     }
 }
 

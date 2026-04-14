@@ -188,12 +188,16 @@ being an informal “should”.
   DEX tiers are not admitted via `unwrapTo`. End users unwrap with `unwrap(...)` / `unwrap(underlying, marketId, ...)`,
   which always queue shortfalls to the caller.
 - **Enforced by**: `src/LiquidityHub.sol::_onlyUnwrapToEndpoint` on each `unwrapTo` entrypoint before `_unwrap`.
-- **Supported contract for `unwrapTo(lcc, to, queueTo, ...)`**: the endpoint acts on behalf of the beneficiary named by
-  `queueTo`; the caller-held LCC balance spent in this unwrap is treated as representing that beneficiary for the purpose
-  of HUB-02 netting (`settleQueue[lcc][queueTo]` is already encumbering that caller-held balance). For example,
-  `MMPositionManager` consumes the locker’s LCC or delta credit before calling `unwrapTo` with `queueTo` equal to the
-  locker. Endpoints that attribute queue to an address whose outstanding queue is not economically tied to the same
-  caller-held slice must not use this pattern without revisiting the netting rule.
+- **Trusted endpoint contract**:
+  - `unwrapTo(lcc, to, queueTo, ...)` is an on-behalf-of primitive, not a generic convenience wrapper over `unwrap`.
+  - The endpoint must call it only after it has already consumed/escrowed beneficiary-linked value (for example locker
+    LCC or delta credit) for `queueTo`, so the caller-held LCC slice economically represents that beneficiary.
+  - Under that precondition, HUB-02 headroom netting against `settleQueue[lcc][queueTo]` is correct because the queue is
+    already encumbering the same caller-held slice.
+  - Current intended caller: `MMPositionManager`, which consumes locker/user LCC or delta credit before calling
+    `unwrapTo`.
+  - Any additional `BOUND_ENDPOINT` integration that cannot preserve this coupling must not use `unwrapTo` without
+    revisiting HUB-02 netting assumptions.
 - **Rationale**: Splitting immediate payout recipient from queue owner is a trusted endpoint pattern (for example
   `MMPositionManager` after it has consumed the beneficiary’s LCC or delta credit). Exposing that split to arbitrary EOAs
   allowed repeated queue inflation against unchanged holder balance.

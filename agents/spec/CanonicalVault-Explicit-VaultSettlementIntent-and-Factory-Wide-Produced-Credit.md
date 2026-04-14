@@ -235,6 +235,71 @@ cross-market settlement remains possible through the explicit produced-credit br
 
 ---
 
+## PoolManager integration notes
+
+`CanonicalVault` durability relies on an important `PoolManager` integration detail:
+
+- the address that **executes** `take`, `settle`, `mint`, or `burn` is not always the same address that **owns** the
+  durable ERC6909 claim; and
+- the protocol intentionally uses that split.
+
+### Caller context vs durable claim owner
+
+In `PoolManager`, the caller primarily determines **whose transient delta is adjusted** in the current unlock batch:
+
+- `take(currency, to, amount)` debits the caller's delta and transfers underlying to `to`;
+- `settle()` credits the caller's delta; and
+- `settleFor(recipient)` credits the recipient's delta.
+
+For claim-token paths, durable ownership is controlled separately:
+
+- `mint(to, id, amount)` debits the caller's delta but mints the ERC6909 claim to `to`; and
+- `burn(from, id, amount)` credits the caller's delta but burns the ERC6909 claim from `from`.
+
+So the important distinction is:
+
+- **caller / execution context** controls transient unlock accounting; while
+- **`to` / `from` / `recipient` parameters** control durable claim ownership effects.
+
+### Why this is compatible with `ProxyHook` + `CanonicalVault`
+
+This is exactly why the proxy settlement pattern is valid.
+
+`ProxyHook` executes the swap-local settlement calls from its own unlock context, but it explicitly targets
+`CanonicalVault` as the durable claim holder:
+
+- input-side underlying custody is mirrored with `take(..., canonicalVault, ..., true)`, which mints ERC6909 claims to
+  `CanonicalVault`; and
+- output-side underlying settlement is mirrored with `settle(..., canonicalVault, ..., true)`, which burns ERC6909
+  claims from `CanonicalVault`.
+
+That means:
+
+- `ProxyHook` remains the swap-local execution context that clears the hook's active deltas; and
+- `CanonicalVault` remains the durable custody owner whose ERC6909 balances and reserve ledger represent market-backed
+  underlying claims.
+
+### Operator requirement
+
+Because output-side burns are executed by the facade context while the claims are held on `CanonicalVault`, the facade
+must be authorised to burn on behalf of `CanonicalVault`.
+
+The registration path establishes that relationship by setting the market facade as an operator for the vault-owned
+PoolManager claims. Without that operator approval, the facade could not successfully burn claims held by
+`CanonicalVault` even though it is the correct execution context for the swap batch.
+
+### Practical consequence for reviews
+
+When reviewing future changes, do not collapse these two ideas into one:
+
+- "who is calling the PoolManager helper"; and
+- "who should own or lose the durable claim token".
+
+The current design is safe precisely because those are allowed to differ, and the protocol passes the intended durable
+owner explicitly at the claim boundary.
+
+---
+
 ## Batch finality
 
 The protocol treats both transient namespaces as batch-scoped:

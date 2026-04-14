@@ -1094,6 +1094,13 @@ contract LiquidityHub is BoundRegistry, Ownable, ReentrancyGuardTransient {
     {
         _assertValidQueueOwner(lcc, recipient, allowHub);
 
+        // Native settlements push ETH directly to `recipient` during `processSettlementFor`.
+        // Restrict issuer-driven transfer-recipient queues to EOAs for native-backed LCCs so
+        // non-payable contract recipients cannot create permanently unserviceable queues.
+        if (s.lccToUnderlying[lcc] == address(0) && recipient.code.length != 0) {
+            revert Errors.NotApproved(recipient);
+        }
+
         (, uint256 marketDerivedBalance) = ILCC(lcc).balancesOf(recipient);
         if (marketDerivedBalance < amount) {
             revert Errors.InsufficientBalance(marketDerivedBalance, amount);

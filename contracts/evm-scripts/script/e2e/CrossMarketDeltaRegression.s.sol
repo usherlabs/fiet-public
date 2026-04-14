@@ -43,13 +43,74 @@ contract CrossMarketDeltaRegressionE2E is MME2EBase {
         );
     }
 
-    function _takeCorePair(MMPositionManager mmpm, PoolKey memory key, address recipient, uint256 mmPk) internal {
+    function _runCrossMarketAtomicBatch(
+        MMPositionManager mmpm,
+        PoolKey memory keyA,
+        PoolKey memory keyB,
+        PoolKey memory keyC,
+        PoolKey memory keyD,
+        uint256 commitA,
+        uint256 commitB,
+        uint256 commitC,
+        uint256 commitD,
+        uint256 decAmount,
+        address recipient,
+        uint256 mmPk
+    ) internal {
         vm.startBroadcast(mmPk);
         {
-            bytes memory actions = abi.encodePacked(bytes1(uint8(MMActions.TAKE)), bytes1(uint8(MMActions.TAKE)));
-            bytes[] memory params = new bytes[](2);
-            params[0] = abi.encode(key.currency0, recipient, 0);
-            params[1] = abi.encode(key.currency1, recipient, 0);
+            bytes memory actions = abi.encodePacked(
+                bytes1(uint8(MMActions.DECREASE_LIQUIDITY)),
+                bytes1(uint8(MMActions.SETTLE_POSITION)),
+                bytes1(uint8(MMActions.MINT_POSITION_FROM_DELTAS)),
+                bytes1(uint8(MMActions.DECREASE_LIQUIDITY)),
+                bytes1(uint8(MMActions.SETTLE_POSITION)),
+                bytes1(uint8(MMActions.INCREASE_LIQUIDITY_FROM_DELTAS)),
+                bytes1(uint8(MMActions.DECREASE_LIQUIDITY)),
+                bytes1(uint8(MMActions.SETTLE_POSITION)),
+                bytes1(uint8(MMActions.SETTLE_POSITION_FROM_DELTAS)),
+                bytes1(uint8(MMActions.DECREASE_LIQUIDITY)),
+                bytes1(uint8(MMActions.SETTLE_POSITION)),
+                bytes1(uint8(MMActions.MINT_POSITION_FROM_DELTAS)),
+                bytes1(uint8(MMActions.TAKE)),
+                bytes1(uint8(MMActions.TAKE)),
+                bytes1(uint8(MMActions.TAKE)),
+                bytes1(uint8(MMActions.TAKE)),
+                bytes1(uint8(MMActions.TAKE)),
+                bytes1(uint8(MMActions.TAKE)),
+                bytes1(uint8(MMActions.TAKE)),
+                bytes1(uint8(MMActions.TAKE))
+            );
+            bytes[] memory params = new bytes[](20);
+            params[0] = abi.encode(keyA, commitA, 0, decAmount);
+            params[1] = abi.encode(keyA, commitA, 0, type(int128).max, type(int128).max, true);
+            params[2] = abi.encode(
+                keyB,
+                commitB,
+                TICK_LOWER,
+                TICK_UPPER,
+                type(uint128).max,
+                type(uint128).max,
+                false // consume locker-scoped credits
+            );
+            params[3] = abi.encode(keyB, commitB, 0, decAmount);
+            params[4] = abi.encode(keyB, commitB, 0, type(int128).max, type(int128).max, true);
+            params[5] = abi.encode(keyB, commitB, 0, type(uint128).max, type(uint128).max, false);
+            params[6] = abi.encode(keyB, commitB, 0, decAmount);
+            params[7] = abi.encode(keyB, commitB, 0, type(int128).max, type(int128).max, true);
+            params[8] = abi.encode(keyC, commitC, 0, false, false);
+            params[9] = abi.encode(keyC, commitC, 0, decAmount);
+            params[10] = abi.encode(keyC, commitC, 0, type(int128).max, type(int128).max, true);
+            params[11] =
+                abi.encode(keyD, commitD, TICK_LOWER, TICK_UPPER, type(uint128).max, type(uint128).max, false);
+            params[12] = abi.encode(keyA.currency0, recipient, 0);
+            params[13] = abi.encode(keyA.currency1, recipient, 0);
+            params[14] = abi.encode(keyB.currency0, recipient, 0);
+            params[15] = abi.encode(keyB.currency1, recipient, 0);
+            params[16] = abi.encode(keyC.currency0, recipient, 0);
+            params[17] = abi.encode(keyC.currency1, recipient, 0);
+            params[18] = abi.encode(keyD.currency0, recipient, 0);
+            params[19] = abi.encode(keyD.currency1, recipient, 0);
             _executeMMActions(mmpm, actions, params, block.timestamp + 3600);
         }
         vm.stopBroadcast();
@@ -87,87 +148,9 @@ contract CrossMarketDeltaRegressionE2E is MME2EBase {
         uint256 decAmount = uint256(LIQUIDITY / 8);
         require(decAmount > 0, "regression: decrease amount must be non-zero");
 
-        // Phase 1 — decrease on market A (creates locker credits / settlement plumbing exercised by CoreHook+VTS).
-        vm.startBroadcast(mmPk);
-        {
-            bytes memory actions = abi.encodePacked(bytes1(uint8(MMActions.DECREASE_LIQUIDITY)));
-            bytes[] memory params = new bytes[](1);
-            params[0] = abi.encode(keyA, commitA, 0, decAmount);
-            _executeMMActions(mmpm, actions, params, block.timestamp + 3600);
-        }
-        vm.stopBroadcast();
-        console.log("OK: decrease market A");
-
-        // Phase 2 — mint on market B using locker delta credits (cross-market reuse).
-        vm.startBroadcast(mmPk);
-        {
-            bytes memory actions = abi.encodePacked(bytes1(uint8(MMActions.MINT_POSITION_FROM_DELTAS)));
-            bytes[] memory params = new bytes[](1);
-            params[0] = abi.encode(
-                keyB,
-                commitB,
-                TICK_LOWER,
-                TICK_UPPER,
-                type(uint128).max,
-                type(uint128).max,
-                false // payerIsUser=false: consume locker-scoped credits accrued on previous legs
-            );
-            _executeMMActions(mmpm, actions, params, block.timestamp + 3600);
-        }
-        vm.stopBroadcast();
-        console.log("OK: mint-from-deltas market B");
-
-        // Phase 3 — increase position 0 on market B from deltas.
-        vm.startBroadcast(mmPk);
-        {
-            bytes memory actions = abi.encodePacked(bytes1(uint8(MMActions.INCREASE_LIQUIDITY_FROM_DELTAS)));
-            bytes[] memory params = new bytes[](1);
-            params[0] = abi.encode(keyB, commitB, 0, type(uint128).max, type(uint128).max, false);
-            _executeMMActions(mmpm, actions, params, block.timestamp + 3600);
-        }
-        vm.stopBroadcast();
-        console.log("OK: increase-from-deltas market B");
-
-        // Phase 4 — decrease market B (partial).
-        vm.startBroadcast(mmPk);
-        {
-            bytes memory actions = abi.encodePacked(bytes1(uint8(MMActions.DECREASE_LIQUIDITY)));
-            bytes[] memory params = new bytes[](1);
-            params[0] = abi.encode(keyB, commitB, 0, decAmount);
-            _executeMMActions(mmpm, actions, params, block.timestamp + 3600);
-        }
-        vm.stopBroadcast();
-        console.log("OK: decrease market B");
-
-        // Phase 5 — settle-from-deltas on market C (consumes remaining locker credits against that market).
-        vm.startBroadcast(mmPk);
-        {
-            bytes memory actions = abi.encodePacked(bytes1(uint8(MMActions.SETTLE_POSITION_FROM_DELTAS)));
-            bytes[] memory params = new bytes[](1);
-            params[0] = abi.encode(keyC, commitC, 0, false, true);
-            _executeMMActions(mmpm, actions, params, block.timestamp + 3600);
-        }
-        vm.stopBroadcast();
-        console.log("OK: settle-from-deltas market C");
-
-        // Phase 6 — mint-from-deltas on market D (second position on the commitment).
-        vm.startBroadcast(mmPk);
-        {
-            bytes memory actions = abi.encodePacked(bytes1(uint8(MMActions.MINT_POSITION_FROM_DELTAS)));
-            bytes[] memory params = new bytes[](1);
-            params[0] = abi.encode(
-                keyD, commitD, TICK_LOWER, TICK_UPPER, type(uint128).max, type(uint128).max, false
-            );
-            _executeMMActions(mmpm, actions, params, block.timestamp + 3600);
-        }
-        vm.stopBroadcast();
-        console.log("OK: mint-from-deltas market D");
-
-        // Final sweep — take any remaining LCC credits on the locker for each touched core pool.
-        _takeCorePair(mmpm, keyA, mm, mmPk);
-        _takeCorePair(mmpm, keyB, mm, mmPk);
-        _takeCorePair(mmpm, keyC, mm, mmPk);
-        _takeCorePair(mmpm, keyD, mm, mmPk);
+        // Atomic cross-market flow: produce and consume credits inside one unlock batch.
+        _runCrossMarketAtomicBatch(mmpm, keyA, keyB, keyC, keyD, commitA, commitB, commitC, commitD, decAmount, mm, mmPk);
+        console.log("OK: cross-market atomic batch");
 
         // Lightweight sanity: MM still holds finite balances (unwrap phase intentionally omitted here).
         address lccA0 = Currency.unwrap(keyA.currency0);
