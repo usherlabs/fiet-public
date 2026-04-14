@@ -19,6 +19,7 @@ import {
     TouchPositionResult,
     SettleParams,
     SettleResult,
+    VaultSettlementIntent,
     MarketVTSConfiguration,
     PositionAccounting,
     TokenPairUint,
@@ -35,6 +36,7 @@ import {Pool} from "../types/Pool.sol";
 import {RFSCheckpoint} from "../types/Checkpoint.sol";
 import {IMarketFactory} from "../interfaces/IMarketFactory.sol";
 import {IMarketVault} from "../interfaces/IMarketVault.sol";
+import {ICanonicalVault} from "../interfaces/ICanonicalVault.sol";
 import {VTSPositionLib} from "./VTSPositionLib.sol";
 import {VTSCommitLib} from "./VTSCommitLib.sol";
 import {CheckpointLibrary} from "./Checkpoint.sol";
@@ -42,7 +44,8 @@ import {MarketHandlerLib} from "./MarketHandlerLib.sol";
 import {MarketMaker} from "./MarketMaker.sol";
 import {Errors} from "./Errors.sol";
 import {PositionLibrary} from "../types/Position.sol";
-import {DynamicCurrencyDelta} from "./DynamicCurrencyDelta.sol";
+import {OwnerCurrencyDelta} from "./OwnerCurrencyDelta.sol";
+import {MarketCurrencyDelta} from "./MarketCurrencyDelta.sol";
 import {LiquidityUtils} from "./LiquidityUtils.sol";
 
 /// @title VTSLifecycleLinkedLib
@@ -79,6 +82,13 @@ library VTSLifecycleLinkedLib {
     struct WithdrawalActuals {
         uint256 amount0;
         uint256 amount1;
+    }
+
+    /// @dev Explicit vault intent produced by withdrawal planning after clamping.
+    struct WithdrawalExecutionResult {
+        BalanceDelta settlementDelta;
+        uint256 creditBackedWithdrawal0;
+        uint256 creditBackedWithdrawal1;
     }
 
     function _assertRegisteredFactory(VTSCommitRouterContext memory ctx, IMarketFactory factory) internal view {
@@ -255,7 +265,7 @@ library VTSLifecycleLinkedLib {
         }
 
         BalanceDelta positionRequiredSettlementDelta =
-            DynamicCurrencyDelta.getUnderlyingDeltaPair(pos.owner, p.lccCurrency0, p.lccCurrency1);
+            OwnerCurrencyDelta.getUnderlyingDeltaPair(pos.owner, p.lccCurrency0, p.lccCurrency1);
 
         BalanceDelta rfsDelta;
         VTSPositionLib.settlePositionGrowths(s, poolManager, p.positionId);
@@ -297,7 +307,7 @@ library VTSLifecycleLinkedLib {
         // Refresh RFS allows a mixed settle like token0 deposit + token1 withdrawal on an active position to flip RFS open guard if token0 was the only open lane and _settleDeposits just closed it.
         (result.rfsOpen, rfsDelta) = VTSPositionLib.getRFS(s, p.positionId);
 
-        BalanceDelta withdrawalSettlementDelta = _executeWithdrawals(
+        WithdrawalExecutionResult memory withdrawalExecution = _executeWithdrawals(
             s,
             WithdrawalExecutionParams({
                 positionId: p.positionId,
@@ -314,11 +324,17 @@ library VTSLifecycleLinkedLib {
             rfsDelta,
             positionRequiredSettlementDelta
         );
+        BalanceDelta withdrawalSettlementDelta = withdrawalExecution.settlementDelta;
 
         result.settlementDelta = toBalanceDelta(
             p.delta.amount0() < 0 ? depositSettlementDelta.amount0() : withdrawalSettlementDelta.amount0(),
             p.delta.amount1() < 0 ? depositSettlementDelta.amount1() : withdrawalSettlementDelta.amount1()
         );
+        result.vaultSettlementIntent = VaultSettlementIntent({
+            requestedDelta: result.settlementDelta,
+            creditBackedWithdrawal0: withdrawalExecution.creditBackedWithdrawal0,
+            creditBackedWithdrawal1: withdrawalExecution.creditBackedWithdrawal1
+        });
 
         if (p.isSeizing) {
             result.seizedLiquidityUnits = _calcSeizure(s, poolManager, p.positionId, result.settlementDelta);
@@ -472,9 +488,9 @@ library VTSLifecycleLinkedLib {
         WithdrawalExecutionParams memory p,
         BalanceDelta rfsDelta,
         BalanceDelta positionRequiredSettlementDelta
-    ) private returns (BalanceDelta settlementDelta) {
+    ) private returns (WithdrawalExecutionResult memory result) {
         if (p.requestedAmount0 <= 0 && p.requestedAmount1 <= 0) {
-            return settlementDelta;
+            return result;
         }
 
         if (p.isActive && !p.isSeizing && p.rfsOpen) {
@@ -495,12 +511,18 @@ library VTSLifecycleLinkedLib {
         uint256 plannedWithdrawal0 = plan.deltaBacked0 + plan.settledBacked0;
         uint256 plannedWithdrawal1 = plan.deltaBacked1 + plan.settledBacked1;
         if (plannedWithdrawal0 == 0 && plannedWithdrawal1 == 0) {
-            return settlementDelta;
+            return result;
         }
 
         BalanceDelta availableDelta = p.vault
             .dryModifyLiquidities(
-                LiquidityUtils.safeToBalanceDelta(plannedWithdrawal0, plannedWithdrawal1, false, false)
+                VaultSettlementIntent({
+                    requestedDelta: LiquidityUtils.safeToBalanceDelta(
+                        plannedWithdrawal0, plannedWithdrawal1, false, false
+                    ),
+                    creditBackedWithdrawal0: plan.deltaBacked0,
+                    creditBackedWithdrawal1: plan.deltaBacked1
+                })
             );
 
         uint256 actualWithdrawal0 =
@@ -512,9 +534,8 @@ library VTSLifecycleLinkedLib {
         if (actualWithdrawal1 > plannedWithdrawal1) actualWithdrawal1 = plannedWithdrawal1;
 
         WithdrawalActuals memory actuals = WithdrawalActuals({amount0: actualWithdrawal0, amount1: actualWithdrawal1});
-        _applyWithdrawalPlan(s, p, plan, actuals);
-
-        settlementDelta = toBalanceDelta(actualWithdrawal0.toInt128(), actualWithdrawal1.toInt128());
+        (result.creditBackedWithdrawal0, result.creditBackedWithdrawal1) = _applyWithdrawalPlan(s, p, plan, actuals);
+        result.settlementDelta = toBalanceDelta(actualWithdrawal0.toInt128(), actualWithdrawal1.toInt128());
     }
 
     /// @notice Apply both withdrawal lanes after final vault clamping.
@@ -523,9 +544,13 @@ library VTSLifecycleLinkedLib {
         WithdrawalExecutionParams memory p,
         WithdrawalPlan memory plan,
         WithdrawalActuals memory actuals
-    ) private {
-        _applyWithdrawalLane(s, p.vault, p.positionId, 0, actuals.amount0, plan.deltaBacked0, p.lccCurrency0, p.owner);
-        _applyWithdrawalLane(s, p.vault, p.positionId, 1, actuals.amount1, plan.deltaBacked1, p.lccCurrency1, p.owner);
+    ) private returns (uint256 creditBacked0, uint256 creditBacked1) {
+        creditBacked0 = _applyWithdrawalLane(
+            s, p.vault, p.positionId, 0, actuals.amount0, plan.deltaBacked0, p.lccCurrency0, p.owner
+        );
+        creditBacked1 = _applyWithdrawalLane(
+            s, p.vault, p.positionId, 1, actuals.amount1, plan.deltaBacked1, p.lccCurrency1, p.owner
+        );
     }
 
     /// @notice Apply a single withdrawal lane after final vault clamping.
@@ -539,14 +564,16 @@ library VTSLifecycleLinkedLib {
         uint256 deltaBackedCap,
         Currency lccCurrency,
         address owner
-    ) private {
-        if (actualWithdrawal == 0) return;
+    ) private returns (uint256 deltaBackedWithdrawal) {
+        if (actualWithdrawal == 0) return 0;
 
-        uint256 deltaBackedWithdrawal = actualWithdrawal > deltaBackedCap ? deltaBackedCap : actualWithdrawal;
+        deltaBackedWithdrawal = actualWithdrawal > deltaBackedCap ? deltaBackedCap : actualWithdrawal;
         if (deltaBackedWithdrawal > 0) {
-            Currency underlyingCurrency = DynamicCurrencyDelta.lccToUnderlyingCurrency(lccCurrency);
-            DynamicCurrencyDelta.accountDelta(underlyingCurrency, -deltaBackedWithdrawal.toInt128(), owner);
-            vault.recordCreditConsumptionForWithdrawal(underlyingCurrency, deltaBackedWithdrawal);
+            Currency underlyingCurrency = OwnerCurrencyDelta.lccToUnderlyingCurrency(lccCurrency);
+            OwnerCurrencyDelta.accountDelta(underlyingCurrency, -deltaBackedWithdrawal.toInt128(), owner);
+            MarketCurrencyDelta.consumeProduced(
+                ICanonicalVault(vault.canonicalVault()).marketFactory(), underlyingCurrency, deltaBackedWithdrawal
+            );
         }
 
         uint256 settledBackedWithdrawal = actualWithdrawal - deltaBackedWithdrawal;
@@ -564,8 +591,8 @@ library VTSLifecycleLinkedLib {
         BalanceDelta positionRequiredSettlementDelta,
         BalanceDelta settlementDelta
     ) private {
-        Currency underlyingCurrency0 = DynamicCurrencyDelta.lccToUnderlyingCurrency(lccCurrency0);
-        Currency underlyingCurrency1 = DynamicCurrencyDelta.lccToUnderlyingCurrency(lccCurrency1);
+        Currency underlyingCurrency0 = OwnerCurrencyDelta.lccToUnderlyingCurrency(lccCurrency0);
+        Currency underlyingCurrency1 = OwnerCurrencyDelta.lccToUnderlyingCurrency(lccCurrency1);
 
         int128 ownerDelta0 = positionRequiredSettlementDelta.amount0();
         int128 ownerDelta1 = positionRequiredSettlementDelta.amount1();
@@ -576,10 +603,10 @@ library VTSLifecycleLinkedLib {
         int128 deltaClear1 = finalSettleAmount1 < 0 ? _calcDeltaClearance(ownerDelta1, finalSettleAmount1) : int128(0);
 
         if (deltaClear0 != 0) {
-            DynamicCurrencyDelta.accountDelta(underlyingCurrency0, deltaClear0, owner);
+            OwnerCurrencyDelta.accountDelta(underlyingCurrency0, deltaClear0, owner);
         }
         if (deltaClear1 != 0) {
-            DynamicCurrencyDelta.accountDelta(underlyingCurrency1, deltaClear1, owner);
+            OwnerCurrencyDelta.accountDelta(underlyingCurrency1, deltaClear1, owner);
         }
     }
 

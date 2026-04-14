@@ -74,7 +74,8 @@ FILES=(
   src/libraries/Bounds.sol
   src/libraries/Checkpoint.sol
   src/libraries/CurrencyTransfer.sol
-  src/libraries/DynamicCurrencyDelta.sol
+  src/libraries/MarketCurrencyDelta.sol
+  src/libraries/OwnerCurrencyDelta.sol
   src/libraries/LCCFactoryLib.sol
   src/libraries/LiquidityHubLib.sol
   src/libraries/LiquidityUtils.sol

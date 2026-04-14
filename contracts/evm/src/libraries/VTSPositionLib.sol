@@ -37,10 +37,12 @@ import {Pool} from "../types/Pool.sol";
 import {LiquidityUtils} from "./LiquidityUtils.sol";
 import {Errors} from "./Errors.sol";
 import {VTSFeeLinkedLib} from "./VTSFeeLib.sol";
-import {DynamicCurrencyDelta} from "./DynamicCurrencyDelta.sol";
+import {OwnerCurrencyDelta} from "./OwnerCurrencyDelta.sol";
+import {MarketCurrencyDelta} from "./MarketCurrencyDelta.sol";
 import {VTSCommitLib} from "./VTSCommitLib.sol";
 import {CheckpointLibrary} from "./Checkpoint.sol";
 import {IMarketVault} from "../interfaces/IMarketVault.sol";
+import {ICanonicalVault} from "../interfaces/ICanonicalVault.sol";
 
 /// @title VTSPositionLib
 /// @notice Position lifecycle, registration, RFS, settlement, seizure, and growth accounting for VTS
@@ -1021,7 +1023,7 @@ library VTSPositionLib {
         if (totalApplied <= 0) return (0, remainingRequiredSettlementDelta);
 
         uint256 creditConsumed = uint256(totalApplied);
-        DynamicCurrencyDelta.accountDelta(p.underlyingCurrency, -creditConsumed.toInt128(), p.owner);
+        OwnerCurrencyDelta.accountDelta(p.underlyingCurrency, -creditConsumed.toInt128(), p.owner);
         settlementDelta = -creditConsumed.toInt128();
         if (p.clampToRequiredSettlement) {
             // MM in-hook backing: only the portion that increases `pa.settled` satisfies the deposit requirement.
@@ -1038,13 +1040,13 @@ library VTSPositionLib {
         returns (ProtocolCreditSettlementResult memory result)
     {
         BalanceDelta currentUnderlying =
-            DynamicCurrencyDelta.getUnderlyingDeltaPair(p.owner, p.lccCurrency0, p.lccCurrency1);
+            OwnerCurrencyDelta.getUnderlyingDeltaPair(p.owner, p.lccCurrency0, p.lccCurrency1);
         (int128 settle0, int128 remaining0) = _consumePositiveUnderlyingDeltaForSettlementLane(
             s,
             ProtocolCreditSettlementLaneParams({
                 positionId: p.positionId,
                 owner: p.owner,
-                underlyingCurrency: DynamicCurrencyDelta.lccToUnderlyingCurrency(p.lccCurrency0),
+                underlyingCurrency: OwnerCurrencyDelta.lccToUnderlyingCurrency(p.lccCurrency0),
                 tokenIndex: 0,
                 currentUnderlyingDelta: currentUnderlying.amount0(),
                 intendedSettle: p.intendedSettle0,
@@ -1059,7 +1061,7 @@ library VTSPositionLib {
             ProtocolCreditSettlementLaneParams({
                 positionId: p.positionId,
                 owner: p.owner,
-                underlyingCurrency: DynamicCurrencyDelta.lccToUnderlyingCurrency(p.lccCurrency1),
+                underlyingCurrency: OwnerCurrencyDelta.lccToUnderlyingCurrency(p.lccCurrency1),
                 tokenIndex: 1,
                 currentUnderlyingDelta: currentUnderlying.amount1(),
                 intendedSettle: p.intendedSettle1,
@@ -1074,18 +1076,18 @@ library VTSPositionLib {
         result.remainingRequiredSettlementDelta = toBalanceDelta(remaining0, remaining1);
 
         if (settle0 < 0) {
-            p.marketVault
-                .recordCreditConsumptionForDeposit(
-                    DynamicCurrencyDelta.lccToUnderlyingCurrency(p.lccCurrency0),
-                    LiquidityUtils.safeInt128ToUint256(settle0)
-                );
+            MarketCurrencyDelta.consumeProduced(
+                ICanonicalVault(p.marketVault.canonicalVault()).marketFactory(),
+                OwnerCurrencyDelta.lccToUnderlyingCurrency(p.lccCurrency0),
+                LiquidityUtils.safeInt128ToUint256(settle0)
+            );
         }
         if (settle1 < 0) {
-            p.marketVault
-                .recordCreditConsumptionForDeposit(
-                    DynamicCurrencyDelta.lccToUnderlyingCurrency(p.lccCurrency1),
-                    LiquidityUtils.safeInt128ToUint256(settle1)
-                );
+            MarketCurrencyDelta.consumeProduced(
+                ICanonicalVault(p.marketVault.canonicalVault()).marketFactory(),
+                OwnerCurrencyDelta.lccToUnderlyingCurrency(p.lccCurrency1),
+                LiquidityUtils.safeInt128ToUint256(settle1)
+            );
         }
     }
 
@@ -1485,7 +1487,7 @@ library VTSPositionLib {
     ///      For MM decreases, callers pass the amount actually routed out of live `settled` in this step: the vault
     ///      immediate slice plus Hub-queued principal (`settleableDelta + queuedDelta`). Any remainder that could not
     ///      be queued stays in `pa.settled` until serviceable; only the immediate slice is mirrored on
-    ///      `DynamicCurrencyDelta` (see `_handleLiquidityDecrease`).
+    ///      `OwnerCurrencyDelta` (see `_handleLiquidityDecrease`).
     function _applySettlementClampFromExcess(
         VTSStorage storage s,
         PositionId positionId,
@@ -1589,7 +1591,7 @@ library VTSPositionLib {
 
             // Snapshot routing: `_handleLiquidityDecrease` splits vault-immediate vs Hub queue. Only the sum of
             // those two leaves live `settled` here; any shortfall that cannot be queued stays in `pa.settled`
-            // until later liquidity. Booking that remainder on `DynamicCurrencyDelta` would create batch uncleared
+            // until later liquidity. Booking that remainder on `OwnerCurrencyDelta` would create batch uncleared
             // positive underlying delta (DELTA-01) while the vault cannot pay it in the same unlock.
             BalanceDelta underlyingDeltaSettlement;
             BalanceDelta exportedForSettlementClamp;
@@ -1633,8 +1635,8 @@ library VTSPositionLib {
             // Accumulate per-batch: `accountUnderlyingSettlementDelta` is setter-style (targets absolute pair), so
             // multiple MM ops in the same unlock for the same owner/currency lane must add onto the current pair.
             BalanceDelta currentUnderlying =
-                DynamicCurrencyDelta.getUnderlyingDeltaPair(p.owner, p.poolKey.currency0, p.poolKey.currency1);
-            DynamicCurrencyDelta.accountUnderlyingSettlementDelta(
+                OwnerCurrencyDelta.getUnderlyingDeltaPair(p.owner, p.poolKey.currency0, p.poolKey.currency1);
+            OwnerCurrencyDelta.accountUnderlyingSettlementDelta(
                 p.owner,
                 LiquidityUtils.safeToBalanceDelta(
                     int256(currentUnderlying.amount0()) + int256(requiredSettlementDelta.amount0()),
@@ -1645,18 +1647,28 @@ library VTSPositionLib {
             );
 
             if (requiredSettlementDelta.amount0() > 0) {
+                Currency underlyingCurrency0 = OwnerCurrencyDelta.lccToUnderlyingCurrency(p.poolKey.currency0);
                 ctx.marketVault
-                    .recordCreditProduction(
-                        DynamicCurrencyDelta.lccToUnderlyingCurrency(p.poolKey.currency0),
-                        LiquidityUtils.safeInt128ToUint256(requiredSettlementDelta.amount0())
+                    .decreaseLiquidityReserve(
+                        underlyingCurrency0, LiquidityUtils.safeInt128ToUint256(requiredSettlementDelta.amount0())
                     );
+                MarketCurrencyDelta.addProduced(
+                    ICanonicalVault(ctx.marketVault.canonicalVault()).marketFactory(),
+                    underlyingCurrency0,
+                    LiquidityUtils.safeInt128ToUint256(requiredSettlementDelta.amount0())
+                );
             }
             if (requiredSettlementDelta.amount1() > 0) {
+                Currency underlyingCurrency1 = OwnerCurrencyDelta.lccToUnderlyingCurrency(p.poolKey.currency1);
                 ctx.marketVault
-                    .recordCreditProduction(
-                        DynamicCurrencyDelta.lccToUnderlyingCurrency(p.poolKey.currency1),
-                        LiquidityUtils.safeInt128ToUint256(requiredSettlementDelta.amount1())
+                    .decreaseLiquidityReserve(
+                        underlyingCurrency1, LiquidityUtils.safeInt128ToUint256(requiredSettlementDelta.amount1())
                     );
+                MarketCurrencyDelta.addProduced(
+                    ICanonicalVault(ctx.marketVault.canonicalVault()).marketFactory(),
+                    underlyingCurrency1,
+                    LiquidityUtils.safeInt128ToUint256(requiredSettlementDelta.amount1())
+                );
             }
         }
 
@@ -1819,7 +1831,7 @@ library VTSPositionLib {
     /// @param principalDelta The principal delta after fee adjustments
     /// @param requiredSettlementDelta The required settlement delta from touchPosition
     /// @param queueRecipient The recipient for settlement queue (locker)
-    /// @return underlyingDeltaSettlement Portion routed to `DynamicCurrencyDelta` (vault-immediate slice only).
+    /// @return underlyingDeltaSettlement Portion routed to `OwnerCurrencyDelta` (vault-immediate slice only).
     /// @return exportedForSettlementClamp Amount to remove from live `settled`: immediate slice plus queued principal.
     function _handleLiquidityDecrease(
         PositionContext memory ctx,

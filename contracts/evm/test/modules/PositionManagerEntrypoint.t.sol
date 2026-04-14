@@ -163,7 +163,7 @@ contract PositionManagerEntrypointTest is Test {
 
     function test_afterBatch_callsAssertNonZeroDeltas() public {
         vm.expectCall(orch, abi.encodeWithSignature("assertNonZeroDeltas()"));
-        vm.expectCall(canonical, abi.encodeWithSignature("assertNoPendingReallocations()"));
+        vm.expectCall(orch, abi.encodeWithSignature("assertNoPendingMarketDeltas(address)", factory));
         h.exposeAfterBatch();
     }
 

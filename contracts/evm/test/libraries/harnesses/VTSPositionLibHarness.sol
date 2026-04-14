@@ -10,7 +10,8 @@ import {
     TouchPositionParams,
     TouchPositionResult,
     SettleParams,
-    SettleResult
+    SettleResult,
+    VaultSettlementIntent
 } from "../../../src/types/VTS.sol";
 import {PositionId, Position} from "../../../src/types/Position.sol";
 import {Pool} from "../../../src/types/Pool.sol";
@@ -26,7 +27,9 @@ import {VTSFeeLinkedLib} from "../../../src/libraries/VTSFeeLib.sol";
 import {VTSCommitLib} from "../../../src/libraries/VTSCommitLib.sol";
 import {RFSCheckpoint} from "../../../src/types/Checkpoint.sol";
 import {IMarketVault} from "../../../src/interfaces/IMarketVault.sol";
-import {DynamicCurrencyDelta} from "../../../src/libraries/DynamicCurrencyDelta.sol";
+import {OwnerCurrencyDelta} from "../../../src/libraries/OwnerCurrencyDelta.sol";
+import {MarketCurrencyDelta} from "../../../src/libraries/MarketCurrencyDelta.sol";
+import {ICanonicalVault} from "../../../src/interfaces/ICanonicalVault.sol";
 import {CurrencyDelta} from "v4-periphery/lib/v4-core/src/libraries/CurrencyDelta.sol";
 
 /// @title VTSPositionLibHarness
@@ -122,6 +125,29 @@ contract VTSPositionLibHarness {
         params.fromDeltas = fromDeltas;
         SettleResult memory result = VTSLifecycleLinkedLib._executeMMSettleFromParams(s, poolManager, params);
         return (result.settlementDelta, result.rfsOpen, result.seizedLiquidityUnits);
+    }
+
+    function onMMSettleWithIntent(
+        IPoolManager poolManager,
+        IMarketVault vault,
+        PositionId positionId,
+        Currency lccCurrency0,
+        Currency lccCurrency1,
+        BalanceDelta delta,
+        bool isSeizing,
+        bool fromDeltas
+    ) external returns (BalanceDelta, bool, uint256, VaultSettlementIntent memory) {
+        SettleParams memory params = SettleParams({
+            vault: vault,
+            positionId: positionId,
+            lccCurrency0: lccCurrency0,
+            lccCurrency1: lccCurrency1,
+            delta: delta,
+            isSeizing: isSeizing,
+            fromDeltas: fromDeltas
+        });
+        SettleResult memory result = VTSLifecycleLinkedLib._executeMMSettleFromParams(s, poolManager, params);
+        return (result.settlementDelta, result.rfsOpen, result.seizedLiquidityUnits, result.vaultSettlementIntent);
     }
 
     /// @notice Exposes internal coverage burn for direct unit testing
@@ -610,10 +636,14 @@ contract VTSPositionLibHarness {
         s.positions[id].commitId = commitId;
     }
 
-    /// @notice Sets underlying currency delta using DynamicCurrencyDelta.accountDelta
-    /// @dev Uses DynamicCurrencyDelta to match the actual implementation
+    /// @notice Sets underlying currency delta using OwnerCurrencyDelta.accountDelta
+    /// @dev Uses OwnerCurrencyDelta to match the actual implementation
     function setUnderlyingDelta(Currency currency, address target, int128 delta) external {
-        DynamicCurrencyDelta.accountDelta(currency, delta, target);
+        OwnerCurrencyDelta.accountDelta(currency, delta, target);
+    }
+
+    function addMarketProducedCredit(IMarketVault vault, Currency currency, uint256 amount) external {
+        MarketCurrencyDelta.addProduced(ICanonicalVault(vault.canonicalVault()).marketFactory(), currency, amount);
     }
 
     /// @notice Reads the current currency delta for a target in this harness' transient storage context

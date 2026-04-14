@@ -1,21 +1,19 @@
 // SPDX-License-Identifier: BUSL-1.1
 pragma solidity ^0.8.26;
 
-import {Currency} from "v4-periphery/lib/v4-core/src/types/Currency.sol";
-import {BalanceDelta, toBalanceDelta} from "v4-periphery/lib/v4-core/src/types/BalanceDelta.sol";
-import {CurrencyDelta} from "v4-periphery/lib/v4-core/src/libraries/CurrencyDelta.sol";
+import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
+import {BalanceDelta, toBalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
+import {CurrencyDelta} from "@uniswap/v4-core/src/libraries/CurrencyDelta.sol";
 import {NonzeroDeltaCount} from "@uniswap/v4-core/src/libraries/NonzeroDeltaCount.sol";
-import {SafeCast} from "v4-periphery/lib/v4-core/src/libraries/SafeCast.sol";
+import {SafeCast} from "@uniswap/v4-core/src/libraries/SafeCast.sol";
 import {Math} from "openzeppelin-contracts/contracts/utils/math/Math.sol";
 import {ILCC} from "../interfaces/ILCC.sol";
 import {Errors} from "./Errors.sol";
 
-/// @title DynamicCurrencyDelta
-/// @notice Library for managing currency deltas and underlying settlement in VTS
-/// @dev Operates on VTSStorage, uses transient storage for deltas.
-///      Follows Uniswap v4 PoolManager patterns for delta accounting.
-/// @author Fiet Protocol
-library DynamicCurrencyDelta {
+/// @title OwnerCurrencyDelta
+/// @notice Library for managing owner-scoped currency deltas and underlying settlement in VTS.
+/// @dev Operates on Uniswap v4 transient deltas keyed by `(owner, currency)`.
+library OwnerCurrencyDelta {
     using CurrencyDelta for Currency;
 
     // ============================================================
@@ -55,7 +53,7 @@ library DynamicCurrencyDelta {
     /// @return The positive delta amount, or 0 if delta is not positive
     function getFullCredit(Currency currency, address target) internal view returns (uint256) {
         int256 delta = currency.getDelta(target);
-        return (delta > 0) ? uint256(delta) : 0;
+        return delta > 0 ? uint256(delta) : 0;
     }
 
     /// @notice Gets the full negative delta (debt) for a currency and target
@@ -64,7 +62,7 @@ library DynamicCurrencyDelta {
     /// @return The negative delta amount as uint256, or 0 if delta is not negative
     function getFullDebt(Currency currency, address target) internal view returns (uint256) {
         int256 delta = currency.getDelta(target);
-        return (delta < 0) ? uint256(-delta) : 0;
+        return delta < 0 ? uint256(-delta) : 0;
     }
 
     // ============================================================
@@ -140,7 +138,6 @@ library DynamicCurrencyDelta {
         Currency underlyingCurrency0 = lccToUnderlyingCurrency(lccCurrency0);
         Currency underlyingCurrency1 = lccToUnderlyingCurrency(lccCurrency1);
 
-        // Read current currency deltas
         int256 currentDelta0 = underlyingCurrency0.getDelta(target);
         int256 currentDelta1 = underlyingCurrency1.getDelta(target);
 
@@ -148,7 +145,6 @@ library DynamicCurrencyDelta {
         int128 changeDelta0 = targetSettlementDelta.amount0() - SafeCast.toInt128(currentDelta0);
         int128 changeDelta1 = targetSettlementDelta.amount1() - SafeCast.toInt128(currentDelta1);
 
-        // Account the delta of delta (the change)
         if (changeDelta0 != 0) {
             accountDelta(underlyingCurrency0, changeDelta0, target);
         }
@@ -157,7 +153,7 @@ library DynamicCurrencyDelta {
         }
     }
 
-    /// @notice Asserts that there are no nonzero deltas
+    /// @notice Asserts that there are no nonzero owner deltas left in the batch.
     function assertNonZeroDeltas() internal view {
         if (NonzeroDeltaCount.read() > 0) {
             revert Errors.CurrencyNotSettled();

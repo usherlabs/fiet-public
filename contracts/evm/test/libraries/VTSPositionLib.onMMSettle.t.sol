@@ -11,12 +11,13 @@ import {BalanceDelta, toBalanceDelta} from "@uniswap/v4-core/src/types/BalanceDe
 import {ModifyLiquidityParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
 import {IPoolManager} from "v4-periphery/lib/v4-core/src/interfaces/IPoolManager.sol";
 import {LiquidityUtils} from "../../src/libraries/LiquidityUtils.sol";
-import {DynamicCurrencyDelta} from "../../src/libraries/DynamicCurrencyDelta.sol";
+import {OwnerCurrencyDelta} from "../../src/libraries/OwnerCurrencyDelta.sol";
 import {Errors} from "../../src/libraries/Errors.sol";
 import {ILCC} from "../../src/interfaces/ILCC.sol";
+import {VaultSettlementIntent} from "../../src/types/VTS.sol";
 
 /// @dev Several scenarios assert `harness.getUnderlyingDelta` after `onMMSettle`: here that reads harness-local
-///      `DynamicCurrencyDelta` state in the same Forge transaction (not PoolManager unlock-scoped transient reads).
+///      `OwnerCurrencyDelta` state in the same Forge transaction (not PoolManager unlock-scoped transient reads).
 contract VTSPositionLibOnMMSettleTest is VTSLibTestBase {
     VTSPositionLibHarness harness;
     MockMarketVault mockVault;
@@ -376,6 +377,7 @@ contract VTSPositionLibOnMMSettleTest is VTSLibTestBase {
         harness.setPositionActive(positionId, true);
 
         harness.setUnderlyingDelta(underlyingCurrency0, DEFAULT_OWNER, 100e18);
+        harness.addMarketProducedCredit(mockVault, underlyingCurrency0, 100e18);
         mockVault.setAvailableLiquidity(60e18, 100e18);
 
         (, bool rfsOpen,) = harness.onMMSettle(
@@ -466,6 +468,7 @@ contract VTSPositionLibOnMMSettleTest is VTSLibTestBase {
 
         // Protocol owes the owner (positive delta).
         harness.setUnderlyingDelta(underlyingCurrency0, owner, 50e18);
+        harness.addMarketProducedCredit(mockVault, underlyingCurrency0, 50e18);
         assertEq(harness.getUnderlyingDelta(underlyingCurrency0, owner), 50e18, "precondition: positive delta");
 
         // Withdraw part of it; clearance should reduce the positive delta by min(delta, amount).
@@ -487,6 +490,29 @@ contract VTSPositionLibOnMMSettleTest is VTSLibTestBase {
         );
     }
 
+    function test_onMMSettle_withdrawals_returnsExplicitVaultIntentForDeltaBackedClamp() public {
+        _initMarket();
+        PositionId positionId = _registerActivePosition();
+        address owner = DEFAULT_OWNER;
+
+        harness.setCommitmentMax(positionId, 1000e18, 1000e18);
+        harness.setSettled(positionId, 200e18, 200e18);
+        harness.setPositionActive(positionId, true);
+
+        harness.setUnderlyingDelta(underlyingCurrency0, owner, 50e18);
+        harness.addMarketProducedCredit(mockVault, underlyingCurrency0, 50e18);
+        mockVault.setAvailableLiquidity(12e18, type(int128).max);
+
+        (BalanceDelta settlementDelta,,, VaultSettlementIntent memory vaultIntent) = harness.onMMSettleWithIntent(
+            manager, mockVault, positionId, lccCurrency0, lccCurrency1, toBalanceDelta(20e18, 0), false, false
+        );
+
+        assertEq(settlementDelta.amount0(), 12e18, "withdrawal should clamp to vault-available amount");
+        assertEq(vaultIntent.requestedDelta.amount0(), 12e18, "intent should use the clamped settlement delta");
+        assertEq(vaultIntent.creditBackedWithdrawal0, 12e18, "intent should carry the actual delta-backed withdrawal");
+        assertEq(vaultIntent.creditBackedWithdrawal1, 0, "untouched lane should keep zero credit-backed withdrawal");
+    }
+
     function test_onMMSettle_withdrawals_positiveCurrencyDelta_withVaultShortfall_keepsSettledUnchanged() public {
         _initMarket();
         PositionId positionId = _registerActivePosition();
@@ -497,6 +523,7 @@ contract VTSPositionLibOnMMSettleTest is VTSLibTestBase {
         harness.setPositionActive(positionId, true);
 
         harness.setUnderlyingDelta(underlyingCurrency0, owner, 100e18);
+        harness.addMarketProducedCredit(mockVault, underlyingCurrency0, 100e18);
         mockVault.setAvailableLiquidity(60e18, 0);
 
         (, bool rfsOpen,) = harness.onMMSettle(
@@ -528,6 +555,7 @@ contract VTSPositionLibOnMMSettleTest is VTSLibTestBase {
         harness.setPositionActive(positionId, true);
 
         harness.setUnderlyingDelta(underlyingCurrency0, owner, 10e18);
+        harness.addMarketProducedCredit(mockVault, underlyingCurrency0, 10e18);
         mockVault.setAvailableLiquidity(type(int128).max, type(int128).max);
 
         (, bool rfsOpen,) = harness.onMMSettle(
@@ -554,6 +582,7 @@ contract VTSPositionLibOnMMSettleTest is VTSLibTestBase {
         // Token0 carries deposit debt; token1 carries positive settlement credit.
         harness.setUnderlyingDelta(underlyingCurrency0, owner, -30e18);
         harness.setUnderlyingDelta(underlyingCurrency1, owner, 40e18);
+        harness.addMarketProducedCredit(mockVault, underlyingCurrency1, 40e18);
 
         (, bool rfsOpen,) = harness.onMMSettle(
             manager, mockVault, positionId, lccCurrency0, lccCurrency1, toBalanceDelta(-50e18, 20e18), false, false
@@ -603,6 +632,7 @@ contract VTSPositionLibOnMMSettleTest is VTSLibTestBase {
         // Token0 starts under-settled, so active withdrawals would revert unless the deposit closes RFS first.
         harness.setUnderlyingDelta(underlyingCurrency0, owner, -30e18);
         harness.setUnderlyingDelta(underlyingCurrency1, owner, 40e18);
+        harness.addMarketProducedCredit(mockVault, underlyingCurrency1, 40e18);
 
         (, bool rfsOpen,) = harness.onMMSettle(
             manager, mockVault, positionId, lccCurrency0, lccCurrency1, toBalanceDelta(-30e18, 20e18), false, false
@@ -639,6 +669,8 @@ contract VTSPositionLibOnMMSettleTest is VTSLibTestBase {
         // This represents what the position modification requires
         harness.setUnderlyingDelta(underlyingCurrency0, owner, 50e18);
         harness.setUnderlyingDelta(underlyingCurrency1, owner, 30e18);
+        harness.addMarketProducedCredit(mockVault, underlyingCurrency0, 50e18);
+        harness.addMarketProducedCredit(mockVault, underlyingCurrency1, 30e18);
 
         // Try to withdraw 100 each during seizure
         BalanceDelta delta = toBalanceDelta(100e18, 100e18);

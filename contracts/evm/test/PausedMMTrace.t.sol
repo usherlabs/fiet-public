@@ -10,6 +10,7 @@ import {LiquiditySignal} from "src/types/Commit.sol";
 import {LiquidityCommitmentCertificate} from "src/LCC.sol";
 import {IMarketFactory} from "src/interfaces/IMarketFactory.sol";
 import {IMarketVault} from "src/interfaces/IMarketVault.sol";
+import {IMarketVaultDryBalanceDelta} from "test/_helpers/IMarketVaultDryBalanceDelta.sol";
 import {ILiquidityHub} from "src/interfaces/ILiquidityHub.sol";
 import {BalanceDelta, toBalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
 import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
@@ -61,7 +62,7 @@ contract PausedMMTrace is MarketTestBase, MarketMakerTestBase {
         uint256 positionIndex = pc - 1;
         vm.mockCall(
             address(mv),
-            abi.encodeWithSelector(IMarketVault.dryModifyLiquidities.selector),
+            abi.encodeWithSelector(IMarketVaultDryBalanceDelta.dryModifyLiquidities.selector),
             abi.encode(toBalanceDelta(0, 0))
         );
         vm.mockCall(

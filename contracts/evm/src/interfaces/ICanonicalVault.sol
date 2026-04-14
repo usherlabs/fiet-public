@@ -3,6 +3,7 @@ pragma solidity ^0.8.26;
 
 import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
 import {BalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
+import {VaultSettlementIntent} from "../types/VTS.sol";
 
 /**
  * @title ICanonicalVault
@@ -27,6 +28,13 @@ interface ICanonicalVault {
         view
         returns (BalanceDelta);
 
+    function dryModifyLiquidities(
+        bytes32 marketId,
+        Currency currency0,
+        Currency currency1,
+        VaultSettlementIntent calldata settlementIntent
+    ) external view returns (BalanceDelta);
+
     function modifyLiquidities(
         bytes32 marketId,
         Currency currency0,
@@ -34,6 +42,16 @@ interface ICanonicalVault {
         address lcc0,
         address lcc1,
         BalanceDelta balanceDelta,
+        address recipient
+    ) external returns (BalanceDelta usedDelta);
+
+    function modifyLiquidities(
+        bytes32 marketId,
+        Currency currency0,
+        Currency currency1,
+        address lcc0,
+        address lcc1,
+        VaultSettlementIntent calldata settlementIntent,
         address recipient
     ) external returns (BalanceDelta usedDelta);
 
@@ -58,13 +76,4 @@ interface ICanonicalVault {
     function increaseLiquidityReserve(bytes32 marketId, Currency underlyingCurrency, uint256 amount) external;
 
     function decreaseLiquidityReserve(bytes32 marketId, Currency underlyingCurrency, uint256 amount) external;
-
-    function recordCreditProduction(bytes32 marketId, Currency underlyingCurrency, uint256 amount) external;
-
-    function recordCreditConsumptionForDeposit(bytes32 marketId, Currency underlyingCurrency, uint256 amount) external;
-
-    function recordCreditConsumptionForWithdrawal(bytes32 marketId, Currency underlyingCurrency, uint256 amount)
-        external;
-
-    function assertNoPendingReallocations() external view;
 }

@@ -30,6 +30,7 @@ import {MMCalldataDecoder} from "./libraries/MMCalldataDecoder.sol";
 import {MMHelpers} from "./libraries/MMHelpers.sol";
 import {Locker} from "v4-periphery/src/libraries/Locker.sol";
 import {DelegateCallGuard} from "./modules/DelegateCallGuard.sol";
+import {VaultSettlementIntent} from "./types/VTS.sol";
 
 /// @title MMPositionActionsImpl
 /// @notice Implementation contract for MMPositionManager position operations
@@ -346,23 +347,32 @@ contract MMPositionActionsImpl is
     /// @return seizedLiquidityUnits The amount of liquidity units seized
     function _callOnMMSettle(SettleCallParams memory params)
         internal
-        returns (BalanceDelta settlementDelta, uint256 seizedLiquidityUnits)
+        returns (
+            BalanceDelta settlementDelta,
+            uint256 seizedLiquidityUnits,
+            VaultSettlementIntent memory vaultSettlementIntent
+        )
     {
-        (settlementDelta,, seizedLiquidityUnits) = vtsOrchestrator.onMMSettle(
-            params.factory,
-            params.tokenId,
-            params.positionIndex,
-            params.requestedDelta,
-            params.isSeizing,
-            params.fromDeltas
-        );
+        (settlementDelta,, seizedLiquidityUnits, vaultSettlementIntent) =
+            vtsOrchestrator.onMMSettle(
+                params.factory,
+                params.tokenId,
+                params.positionIndex,
+                params.requestedDelta,
+                params.isSeizing,
+                params.fromDeltas
+            );
     }
 
     /// @notice Processes settlement transfers for a position
     /// @dev Extracted to reduce stack depth in _settle (avoids stack-too-deep with coverage instrumentation)
     /// @param params The transfer parameters bundled in a struct
-    /// @param settlementDelta The settlement delta from VTS
-    function _processSettlementTransfers(SettleTransferParams memory params, BalanceDelta settlementDelta) internal {
+    /// @param settlementIntent The explicit vault settlement intent from VTS
+    function _processSettlementTransfers(
+        SettleTransferParams memory params,
+        VaultSettlementIntent memory settlementIntent
+    ) internal {
+        BalanceDelta settlementDelta = settlementIntent.requestedDelta;
         // Adheres to core/LCC pool token ordering.
         int128 delta0 = settlementDelta.amount0();
         int128 delta1 = settlementDelta.amount1();
@@ -405,7 +415,7 @@ contract MMPositionActionsImpl is
             }
         }
 
-        params.vault.modifyLiquidities(settlementDelta);
+        params.vault.modifyLiquidities(settlementIntent);
 
         // Process positive deltas (outflows from vault)
         if (params.usePositionManagerBalance) {
@@ -487,7 +497,11 @@ contract MMPositionActionsImpl is
         }
 
         // Call onMMSettle via helper
-        (BalanceDelta settlementDelta, uint256 seizedLiquidityUnits) = _callOnMMSettle(callParams);
+        (
+            BalanceDelta settlementDelta,
+            uint256 seizedLiquidityUnits,
+            VaultSettlementIntent memory vaultSettlementIntent
+        ) = _callOnMMSettle(callParams);
 
         // Process settlement transfers via helper (reduces stack depth)
         _processSettlementTransfers(
@@ -497,7 +511,7 @@ contract MMPositionActionsImpl is
                 vault: callParams.vault,
                 usePositionManagerBalance: usePositionManagerBalance
             }),
-            settlementDelta
+            vaultSettlementIntent
         );
 
         return (settlementDelta, seizedLiquidityUnits);

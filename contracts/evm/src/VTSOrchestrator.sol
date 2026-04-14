@@ -14,6 +14,7 @@ import {
     MarketVTSConfiguration,
     PositionAccounting,
     SettleResult,
+    VaultSettlementIntent,
     VTSLifecycleContext,
     VTSCoreHookContext,
     VTSCommitRouterContext
@@ -667,6 +668,40 @@ contract VTSOrchestrator is
         emit GracePeriodExtended(commitId, positionIndex, settlementTokenIndex, checkpointOut);
     }
 
+    function _runOnMMSettle(
+        IMarketFactory factory,
+        PositionId positionId,
+        PoolId poolId,
+        BalanceDelta amountDelta,
+        bool isSeizing,
+        bool fromDeltas
+    ) internal returns (SettleResult memory result) {
+        return VTSLifecycleLinkedLib.onMMSettle(
+            s, _lifecycleContext(), factory, positionId, poolId, amountDelta, isSeizing, fromDeltas
+        );
+    }
+
+    function _emitPositionSettled(
+        uint256 commitId,
+        uint256 positionIndex,
+        PositionId positionId,
+        BalanceDelta settlementDelta,
+        bool isSeizing,
+        bool rfsOpen
+    ) internal {
+        PositionAccounting storage pa = s.positionAccounting[positionId];
+        emit PositionSettled(
+            commitId,
+            positionIndex,
+            settlementDelta.amount0(),
+            settlementDelta.amount1(),
+            pa.settled.token0,
+            pa.settled.token1,
+            isSeizing,
+            rfsOpen
+        );
+    }
+
     /// @notice Settle a market maker position
     /// @dev Called by MMPositionManager to settle a position, handling both normal settlement and seizure.
     ///      Position validation is performed inside `VTSLifecycleLinkedLib._executeMMSettleFromParams`.
@@ -680,6 +715,7 @@ contract VTSOrchestrator is
     /// @return settlementDelta The settlement balance delta
     /// @return rfsOpen Whether the RFS is open after settlement
     /// @return seizedLiquidityUnits The amount of liquidity units seized (0 if not seizing)
+    /// @return vaultSettlementIntent Explicit vault execution intent for downstream custody handling
     function onMMSettle(
         IMarketFactory factory,
         uint256 commitId,
@@ -691,7 +727,7 @@ contract VTSOrchestrator is
         external
         onlyIfPoolManagerUnlocked
         nonReentrant
-        returns (BalanceDelta settlementDelta, bool rfsOpen, uint256 seizedLiquidityUnits)
+        returns (BalanceDelta settlementDelta, bool rfsOpen, uint256 seizedLiquidityUnits, VaultSettlementIntent memory)
     {
         _assertSignalValid(commitId, !isSeizing);
         _assertBoundFactoryCaller(factory);
@@ -699,34 +735,20 @@ contract VTSOrchestrator is
         PositionId positionId = getPositionId(commitId, positionIndex);
         _assertPositionValid(positionId, false);
 
-        Position memory pos = s.positions[positionId];
-        if (_msgSender() != pos.owner) revert Errors.InvalidSender();
+        PoolId poolId;
+        {
+            Position memory pos = s.positions[positionId];
+            if (_msgSender() != pos.owner) revert Errors.InvalidSender();
+            poolId = pos.poolId;
+        }
 
         if (isSeizing) {
             CheckpointLibrary.isSeizable(s, commitId, positionIndex, true);
         }
 
-        SettleResult memory result = VTSLifecycleLinkedLib.onMMSettle(
-            s, _lifecycleContext(), factory, positionId, pos.poolId, amountDelta, isSeizing, fromDeltas
-        );
-        settlementDelta = result.settlementDelta;
-        rfsOpen = result.rfsOpen;
-        seizedLiquidityUnits = result.seizedLiquidityUnits;
-
-        // Emit event
-        {
-            PositionAccounting storage pa = s.positionAccounting[positionId];
-            emit PositionSettled(
-                commitId,
-                positionIndex,
-                settlementDelta.amount0(),
-                settlementDelta.amount1(),
-                pa.settled.token0,
-                pa.settled.token1,
-                isSeizing,
-                rfsOpen
-            );
-        }
+        SettleResult memory result = _runOnMMSettle(factory, positionId, poolId, amountDelta, isSeizing, fromDeltas);
+        _emitPositionSettled(commitId, positionIndex, positionId, result.settlementDelta, isSeizing, result.rfsOpen);
+        return (result.settlementDelta, result.rfsOpen, result.seizedLiquidityUnits, result.vaultSettlementIntent);
     }
 
     /// @notice Validate that the grace period has elapsed for a position (required before seizure)

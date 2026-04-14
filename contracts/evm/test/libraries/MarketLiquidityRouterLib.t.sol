@@ -10,22 +10,36 @@ import {Lock} from "@uniswap/v4-core/src/libraries/Lock.sol";
 import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
 import {BalanceDelta, toBalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
 import {MockERC20} from "../_mocks/MockERC20.sol";
+import {VaultSettlementIntent} from "../../src/types/VTS.sol";
 
 import {IMarketVault} from "../../src/interfaces/IMarketVault.sol";
 import {MarketLiquidityRouterLib} from "../../src/libraries/MarketLiquidityRouterLib.sol";
 import {Errors} from "../../src/libraries/Errors.sol";
 
+contract MockCanonicalVaultRef_RouterLib {
+    address public immutable marketFactory;
+
+    constructor(address _marketFactory) {
+        marketFactory = _marketFactory;
+    }
+}
+
 contract MockMarketVault_RouterLib is IMarketVault {
     BalanceDelta internal _used;
     BalanceDelta internal _lastRequested;
     address internal _lastRecipient;
+    address internal immutable _canonical;
+
+    constructor() {
+        _canonical = address(new MockCanonicalVaultRef_RouterLib(address(this)));
+    }
 
     function marketId() external pure returns (bytes32) {
         return bytes32(0);
     }
 
-    function canonicalVault() external pure returns (address) {
-        return address(0);
+    function canonicalVault() external view returns (address) {
+        return _canonical;
     }
 
     function setUsed(BalanceDelta usedDelta) external {
@@ -50,7 +64,13 @@ contract MockMarketVault_RouterLib is IMarketVault {
 
     function modifyLiquidities(BalanceDelta) external pure {}
 
+    function modifyLiquidities(VaultSettlementIntent calldata) external pure {}
+
     function tryModifyLiquidities(BalanceDelta) external pure returns (BalanceDelta) {
+        return toBalanceDelta(0, 0);
+    }
+
+    function tryModifyLiquidities(VaultSettlementIntent calldata) external pure returns (BalanceDelta) {
         return toBalanceDelta(0, 0);
     }
 
@@ -63,15 +83,24 @@ contract MockMarketVault_RouterLib is IMarketVault {
         return _used;
     }
 
+    function tryModifyLiquiditiesWithRecipient(VaultSettlementIntent calldata settlementIntent, address recipient)
+        external
+        returns (BalanceDelta)
+    {
+        _lastRequested = settlementIntent.requestedDelta;
+        _lastRecipient = recipient;
+        return _used;
+    }
+
     function dryModifyLiquidities(BalanceDelta) external pure returns (BalanceDelta) {
         return toBalanceDelta(0, 0);
     }
 
-    function recordCreditProduction(Currency, uint256) external pure {}
+    function dryModifyLiquidities(VaultSettlementIntent calldata) external pure returns (BalanceDelta) {
+        return toBalanceDelta(0, 0);
+    }
 
-    function recordCreditConsumptionForDeposit(Currency, uint256) external pure {}
-
-    function recordCreditConsumptionForWithdrawal(Currency, uint256) external pure {}
+    function decreaseLiquidityReserve(Currency, uint256) external pure {}
 }
 
 contract MockPoolManager_RouterLib {

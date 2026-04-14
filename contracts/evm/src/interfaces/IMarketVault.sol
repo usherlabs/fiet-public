@@ -3,6 +3,7 @@ pragma solidity ^0.8.26;
 
 import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
 import {BalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
+import {VaultSettlementIntent} from "../types/VTS.sol";
 
 /**
  * @title IMarketVault
@@ -52,9 +53,15 @@ interface IMarketVault {
      */
     function dryModifyLiquidities(BalanceDelta balanceDelta) external view returns (BalanceDelta);
 
-    function recordCreditProduction(Currency underlyingCurrency, uint256 amount) external;
+    function dryModifyLiquidities(VaultSettlementIntent calldata settlementIntent) external view returns (BalanceDelta);
 
-    function recordCreditConsumptionForDeposit(Currency underlyingCurrency, uint256 amount) external;
+    function modifyLiquidities(VaultSettlementIntent calldata settlementIntent) external;
 
-    function recordCreditConsumptionForWithdrawal(Currency underlyingCurrency, uint256 amount) external;
+    function tryModifyLiquidities(VaultSettlementIntent calldata settlementIntent) external returns (BalanceDelta);
+
+    function tryModifyLiquiditiesWithRecipient(VaultSettlementIntent calldata settlementIntent, address recipient)
+        external
+        returns (BalanceDelta);
+
+    function decreaseLiquidityReserve(Currency underlyingCurrency, uint256 amount) external;
 }

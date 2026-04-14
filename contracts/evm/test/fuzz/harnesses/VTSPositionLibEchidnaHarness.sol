@@ -18,7 +18,7 @@ import {IPoolManager} from "v4-periphery/lib/v4-core/src/interfaces/IPoolManager
 import {ModifyLiquidityParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
 import {VTSPositionLib} from "../../../src/libraries/VTSPositionLib.sol";
 import {VTSLifecycleLinkedLib} from "../../../src/libraries/VTSLifecycleLinkedLib.sol";
-import {DynamicCurrencyDelta} from "../../../src/libraries/DynamicCurrencyDelta.sol";
+import {OwnerCurrencyDelta} from "../../../src/libraries/OwnerCurrencyDelta.sol";
 import {IMarketVault} from "../../../src/interfaces/IMarketVault.sol";
 import {ILiquidityHub} from "../../../src/interfaces/ILiquidityHub.sol";
 import {IOracleHelper} from "../../../src/interfaces/IOracleHelper.sol";
@@ -111,7 +111,7 @@ contract VTSPositionLibEchidnaHarness {
     }
 
     function setUnderlyingDelta(Currency currency, address target, int128 delta) external {
-        DynamicCurrencyDelta.accountDelta(currency, delta, target);
+        OwnerCurrencyDelta.accountDelta(currency, delta, target);
     }
 
     function setUnderlyingDeltaAbsolute(Currency currency, address target, int128 desired) external {
@@ -120,16 +120,16 @@ contract VTSPositionLibEchidnaHarness {
         if (diff > type(int128).max) diff = type(int128).max;
         if (diff < type(int128).min) diff = type(int128).min;
         if (diff != 0) {
-            DynamicCurrencyDelta.accountDelta(currency, int128(diff), target);
+            OwnerCurrencyDelta.accountDelta(currency, int128(diff), target);
         }
     }
 
     function getUnderlyingDeltaSigned(Currency currency, address target) public view returns (int128) {
-        uint256 credit = DynamicCurrencyDelta.getFullCredit(currency, target);
+        uint256 credit = OwnerCurrencyDelta.getFullCredit(currency, target);
         if (credit > 0) {
             return credit >= uint256(uint128(type(int128).max)) ? type(int128).max : int128(uint128(credit));
         }
-        uint256 debt = DynamicCurrencyDelta.getFullDebt(currency, target);
+        uint256 debt = OwnerCurrencyDelta.getFullDebt(currency, target);
         if (debt == 0) return 0;
         if (debt >= uint256(uint128(type(int128).max))) return type(int128).min;
         return -int128(uint128(debt));

@@ -18,7 +18,7 @@ import {IMarketFactory} from "../interfaces/IMarketFactory.sol";
 import {ICanonicalVault} from "../interfaces/ICanonicalVault.sol";
 import {Errors} from "../libraries/Errors.sol";
 import {LiquidityUtils} from "../libraries/LiquidityUtils.sol";
-import {CanonicalVaultReallocation} from "../libraries/CanonicalVaultReallocation.sol";
+import {VaultSettlementIntent} from "../types/VTS.sol";
 
 /**
  * @title CanonicalVault
@@ -26,13 +26,9 @@ import {CanonicalVaultReallocation} from "../libraries/CanonicalVaultReallocatio
  * @dev Owner-level same-underlying credits are fungible at the VTS layer, but actual custody remains market-scoped.
  *      This contract is the bridge between those two truths:
  *      - each market keeps its own underlying sub-ledger in `marketLiquidityReserves`;
- *      - same-underlying credit produced in one market can be reallocated to another market during the same batch;
- *      - any unresolved canonical reallocation at batch end is a custody-accounting failure.
- *
- *      The preferred architecture would make destination-side withdrawal support explicit in the call path.
- *      The current implementation keeps the fallback model because MM settlement planning and later vault execution are
- *      split across different layers. That semantic split still requires CanonicalVault-local transient staging so the
- *      dry-run and execution paths observe the same cross-market credit-backed withdrawal capacity.
+ *      - same-underlying credit produced in one market can fund another market only through explicit VTS-provided
+ *        settlement intent;
+ *      - this contract does not own any hidden transient reconciliation subsystem.
  */
 contract CanonicalVault is ICanonicalVault, ImmutableState, ReentrancyGuardTransient {
     using CurrencySettler for Currency;
@@ -123,7 +119,23 @@ contract CanonicalVault is ICanonicalVault, ImmutableState, ReentrancyGuardTrans
         onlyMarketFacade(marketId)
         returns (BalanceDelta)
     {
-        return _dryModifyLiquidities(marketId, currency0, currency1, balanceDelta);
+        return _dryModifyLiquidities(
+            marketId,
+            currency0,
+            currency1,
+            VaultSettlementIntent({
+                requestedDelta: balanceDelta, creditBackedWithdrawal0: 0, creditBackedWithdrawal1: 0
+            })
+        );
+    }
+
+    function dryModifyLiquidities(
+        bytes32 marketId,
+        Currency currency0,
+        Currency currency1,
+        VaultSettlementIntent calldata settlementIntent
+    ) external view onlyMarketFacade(marketId) returns (BalanceDelta) {
+        return _dryModifyLiquidities(marketId, currency0, currency1, settlementIntent);
     }
 
     function modifyLiquidities(
@@ -135,12 +147,39 @@ contract CanonicalVault is ICanonicalVault, ImmutableState, ReentrancyGuardTrans
         BalanceDelta balanceDelta,
         address recipient
     ) external onlyMarketFacade(marketId) nonReentrant returns (BalanceDelta usedDelta) {
+        VaultSettlementIntent memory settlementIntent = VaultSettlementIntent({
+            requestedDelta: balanceDelta, creditBackedWithdrawal0: 0, creditBackedWithdrawal1: 0
+        });
+        return _modifyLiquidities(marketId, currency0, currency1, lcc0, lcc1, settlementIntent, recipient);
+    }
+
+    function modifyLiquidities(
+        bytes32 marketId,
+        Currency currency0,
+        Currency currency1,
+        address lcc0,
+        address lcc1,
+        VaultSettlementIntent calldata settlementIntent,
+        address recipient
+    ) external onlyMarketFacade(marketId) nonReentrant returns (BalanceDelta usedDelta) {
+        return _modifyLiquidities(marketId, currency0, currency1, lcc0, lcc1, settlementIntent, recipient);
+    }
+
+    function _modifyLiquidities(
+        bytes32 marketId,
+        Currency currency0,
+        Currency currency1,
+        address lcc0,
+        address lcc1,
+        VaultSettlementIntent memory settlementIntent,
+        address recipient
+    ) internal returns (BalanceDelta usedDelta) {
         MarketConfig storage cfg = _marketConfig(marketId);
         _assertUnderlyingPairConfigured(cfg, currency0, currency1);
         _assertLccPairConfigured(cfg, lcc0, lcc1);
-        usedDelta = _dryModifyLiquidities(marketId, currency0, currency1, balanceDelta);
-        _modifyLiquidityWithRecipient(marketId, currency0, currency1, usedDelta, recipient);
-        _finaliseModifyLiquidity(marketId, lcc0, lcc1, balanceDelta, usedDelta, recipient);
+        usedDelta = _dryModifyLiquidities(marketId, currency0, currency1, settlementIntent);
+        _modifyLiquidityWithRecipient(marketId, currency0, currency1, settlementIntent, usedDelta, recipient);
+        _finaliseModifyLiquidity(marketId, lcc0, lcc1, settlementIntent.requestedDelta, usedDelta, recipient);
     }
 
     function settleObligations(bytes32 marketId, address lcc0, address lcc1) external onlyMarketFacade(marketId) {
@@ -249,53 +288,21 @@ contract CanonicalVault is ICanonicalVault, ImmutableState, ReentrancyGuardTrans
         _decrementReserve(marketId, underlyingCurrency, amount);
     }
 
-    function recordCreditProduction(bytes32 marketId, Currency underlyingCurrency, uint256 amount)
-        external
-        onlyMarketFacade(marketId)
-    {
-        if (amount == 0) return;
-        _assertUnderlyingConfigured(_marketConfig(marketId), underlyingCurrency);
-        _decrementReserve(marketId, underlyingCurrency, amount);
-        CanonicalVaultReallocation.addProduced(underlyingCurrency, amount);
-    }
-
-    function recordCreditConsumptionForDeposit(bytes32 marketId, Currency underlyingCurrency, uint256 amount)
-        external
-        onlyMarketFacade(marketId)
-    {
-        if (amount == 0) return;
-        _assertUnderlyingConfigured(_marketConfig(marketId), underlyingCurrency);
-        CanonicalVaultReallocation.consumeProduced(underlyingCurrency, amount);
-        _incrementReserve(marketId, underlyingCurrency, amount);
-    }
-
-    function recordCreditConsumptionForWithdrawal(bytes32 marketId, Currency underlyingCurrency, uint256 amount)
-        external
-        onlyMarketFacade(marketId)
-    {
-        if (amount == 0) return;
-        _assertUnderlyingConfigured(_marketConfig(marketId), underlyingCurrency);
-        CanonicalVaultReallocation.stageWithdrawal(marketId, underlyingCurrency, amount);
-    }
-
-    function assertNoPendingReallocations() external view {
-        CanonicalVaultReallocation.assertResolved();
-    }
-
-    function _dryModifyLiquidities(bytes32 marketId, Currency currency0, Currency currency1, BalanceDelta balanceDelta)
-        internal
-        view
-        returns (BalanceDelta)
-    {
+    function _dryModifyLiquidities(
+        bytes32 marketId,
+        Currency currency0,
+        Currency currency1,
+        VaultSettlementIntent memory settlementIntent
+    ) internal view returns (BalanceDelta) {
         _assertUnderlyingPairConfigured(_marketConfig(marketId), currency0, currency1);
-        int128 delta0 = balanceDelta.amount0();
-        int128 delta1 = balanceDelta.amount1();
+        int128 delta0 = settlementIntent.requestedDelta.amount0();
+        int128 delta1 = settlementIntent.requestedDelta.amount1();
         int128 actualDelta0 = delta0;
         int128 actualDelta1 = delta1;
 
         if (delta0 > 0) {
             uint256 requested0 = LiquidityUtils.safeInt128ToUint256(delta0);
-            uint256 creditBacked0 = CanonicalVaultReallocation.stagedWithdrawal(marketId, currency0);
+            uint256 creditBacked0 = settlementIntent.creditBackedWithdrawal0;
             if (creditBacked0 > requested0) creditBacked0 = requested0;
             uint256 settledRequested0 = requested0 - creditBacked0;
             uint256 settledAvailable0 = marketLiquidityReserves[marketId][Currency.unwrap(currency0)];
@@ -305,7 +312,7 @@ contract CanonicalVault is ICanonicalVault, ImmutableState, ReentrancyGuardTrans
 
         if (delta1 > 0) {
             uint256 requested1 = LiquidityUtils.safeInt128ToUint256(delta1);
-            uint256 creditBacked1 = CanonicalVaultReallocation.stagedWithdrawal(marketId, currency1);
+            uint256 creditBacked1 = settlementIntent.creditBackedWithdrawal1;
             if (creditBacked1 > requested1) creditBacked1 = requested1;
             uint256 settledRequested1 = requested1 - creditBacked1;
             uint256 settledAvailable1 = marketLiquidityReserves[marketId][Currency.unwrap(currency1)];
@@ -320,6 +327,7 @@ contract CanonicalVault is ICanonicalVault, ImmutableState, ReentrancyGuardTrans
         bytes32 marketId,
         Currency currency0,
         Currency currency1,
+        VaultSettlementIntent memory settlementIntent,
         BalanceDelta balanceDelta,
         address recipient
     ) internal {
@@ -327,7 +335,8 @@ contract CanonicalVault is ICanonicalVault, ImmutableState, ReentrancyGuardTrans
 
         if (amount0 > 0) {
             uint256 requested0 = LiquidityUtils.safeInt128ToUint256(amount0);
-            uint256 creditBacked0 = CanonicalVaultReallocation.takeStagedWithdrawal(marketId, currency0, requested0);
+            uint256 creditBacked0 = settlementIntent.creditBackedWithdrawal0;
+            if (creditBacked0 > requested0) creditBacked0 = requested0;
             uint256 settledBacked0 = requested0 - creditBacked0;
             if (settledBacked0 > 0) {
                 _decrementReserve(marketId, currency0, settledBacked0);
@@ -341,7 +350,8 @@ contract CanonicalVault is ICanonicalVault, ImmutableState, ReentrancyGuardTrans
 
         if (amount1 > 0) {
             uint256 requested1 = LiquidityUtils.safeInt128ToUint256(amount1);
-            uint256 creditBacked1 = CanonicalVaultReallocation.takeStagedWithdrawal(marketId, currency1, requested1);
+            uint256 creditBacked1 = settlementIntent.creditBackedWithdrawal1;
+            if (creditBacked1 > requested1) creditBacked1 = requested1;
             uint256 settledBacked1 = requested1 - creditBacked1;
             if (settledBacked1 > 0) {
                 _decrementReserve(marketId, currency1, settledBacked1);

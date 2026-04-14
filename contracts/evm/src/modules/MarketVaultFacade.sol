@@ -9,6 +9,7 @@ import {ILCC} from "../interfaces/ILCC.sol";
 import {IMarketVault} from "../interfaces/IMarketVault.sol";
 import {ICanonicalVault} from "../interfaces/ICanonicalVault.sol";
 import {ILiquidityHub} from "../interfaces/ILiquidityHub.sol";
+import {VaultSettlementIntent} from "../types/VTS.sol";
 import {Errors} from "../libraries/Errors.sol";
 import {ReentrancyGuardTransient} from "openzeppelin-contracts/contracts/utils/ReentrancyGuardTransient.sol";
 import {ImmutableMarketState} from "./ImmutableMarketState.sol";
@@ -76,16 +77,14 @@ abstract contract MarketVaultFacade is IMarketVault, ImmutableMarketState, Reent
         return _canonicalVault().dryModifyLiquidities(_marketId(), currency0, currency1, balanceDelta);
     }
 
-    function recordCreditProduction(Currency underlyingCurrency, uint256 amount) external onlyVTS {
-        _canonicalVault().recordCreditProduction(_marketId(), underlyingCurrency, amount);
-    }
-
-    function recordCreditConsumptionForDeposit(Currency underlyingCurrency, uint256 amount) external onlyVTS {
-        _canonicalVault().recordCreditConsumptionForDeposit(_marketId(), underlyingCurrency, amount);
-    }
-
-    function recordCreditConsumptionForWithdrawal(Currency underlyingCurrency, uint256 amount) external onlyVTS {
-        _canonicalVault().recordCreditConsumptionForWithdrawal(_marketId(), underlyingCurrency, amount);
+    function dryModifyLiquidities(VaultSettlementIntent calldata settlementIntent)
+        public
+        view
+        virtual
+        returns (BalanceDelta)
+    {
+        (Currency currency0, Currency currency1) = _coreUnderlying();
+        return _canonicalVault().dryModifyLiquidities(_marketId(), currency0, currency1, settlementIntent);
     }
 
     function modifyLiquidities(BalanceDelta balanceDelta) external virtual onlyProtocolBounds nonReentrant {
@@ -96,6 +95,23 @@ abstract contract MarketVaultFacade is IMarketVault, ImmutableMarketState, Reent
                 _marketId(), currency0, currency1, address(lcc0), address(lcc1), balanceDelta, msg.sender
             );
         if (BalanceDelta.unwrap(usedDelta) != BalanceDelta.unwrap(balanceDelta)) {
+            revert Errors.InsufficientLiquidityToTake();
+        }
+    }
+
+    function modifyLiquidities(VaultSettlementIntent calldata settlementIntent)
+        external
+        virtual
+        onlyProtocolBounds
+        nonReentrant
+    {
+        (Currency currency0, Currency currency1) = _coreUnderlying();
+        (ILCC lcc0, ILCC lcc1) = _lccs();
+        BalanceDelta usedDelta = _canonicalVault()
+            .modifyLiquidities(
+                _marketId(), currency0, currency1, address(lcc0), address(lcc1), settlementIntent, msg.sender
+            );
+        if (BalanceDelta.unwrap(usedDelta) != BalanceDelta.unwrap(settlementIntent.requestedDelta)) {
             revert Errors.InsufficientLiquidityToTake();
         }
     }
@@ -115,6 +131,21 @@ abstract contract MarketVaultFacade is IMarketVault, ImmutableMarketState, Reent
             );
     }
 
+    function tryModifyLiquidities(VaultSettlementIntent calldata settlementIntent)
+        external
+        virtual
+        onlyProtocolBounds
+        nonReentrant
+        returns (BalanceDelta)
+    {
+        (Currency currency0, Currency currency1) = _coreUnderlying();
+        (ILCC lcc0, ILCC lcc1) = _lccs();
+        return _canonicalVault()
+            .modifyLiquidities(
+                _marketId(), currency0, currency1, address(lcc0), address(lcc1), settlementIntent, msg.sender
+            );
+    }
+
     function tryModifyLiquiditiesWithRecipient(BalanceDelta balanceDelta, address recipient)
         external
         virtual
@@ -127,6 +158,22 @@ abstract contract MarketVaultFacade is IMarketVault, ImmutableMarketState, Reent
         (ILCC lcc0, ILCC lcc1) = _lccs();
         return _canonicalVault()
             .modifyLiquidities(_marketId(), currency0, currency1, address(lcc0), address(lcc1), balanceDelta, recipient);
+    }
+
+    function tryModifyLiquiditiesWithRecipient(VaultSettlementIntent calldata settlementIntent, address recipient)
+        external
+        virtual
+        onlyProtocolBounds
+        nonReentrant
+        returns (BalanceDelta)
+    {
+        if (recipient == address(0)) revert Errors.InvalidAddress(recipient);
+        (Currency currency0, Currency currency1) = _coreUnderlying();
+        (ILCC lcc0, ILCC lcc1) = _lccs();
+        return _canonicalVault()
+            .modifyLiquidities(
+                _marketId(), currency0, currency1, address(lcc0), address(lcc1), settlementIntent, recipient
+            );
     }
 
     function _settleObligations(PoolKey memory) internal virtual {
@@ -175,6 +222,10 @@ abstract contract MarketVaultFacade is IMarketVault, ImmutableMarketState, Reent
 
     function _decreaseLiquidityReserve(Currency underlyingCurrency, uint256 amount) internal {
         _canonicalVault().decreaseLiquidityReserve(_marketId(), underlyingCurrency, amount);
+    }
+
+    function decreaseLiquidityReserve(Currency underlyingCurrency, uint256 amount) external onlyVTS {
+        _decreaseLiquidityReserve(underlyingCurrency, amount);
     }
 
     function _coreUnderlying() internal view returns (Currency currency0, Currency currency1) {
