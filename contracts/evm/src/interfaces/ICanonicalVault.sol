@@ -9,7 +9,7 @@ import {BalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
  * @notice Factory-scoped custody surface used by market facades and VTS bookkeeping paths.
  */
 interface ICanonicalVault {
-    function bindFactory(address factory) external;
+    function marketFactory() external view returns (address);
 
     function registerMarket(
         bytes32 marketId,

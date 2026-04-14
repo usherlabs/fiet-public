@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: BUSL-1.1
 pragma solidity ^0.8.26;
 
-import {Ownable} from "openzeppelin-contracts/contracts/access/Ownable.sol";
 import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
 import {CurrencySettler} from "@uniswap/v4-core/test/utils/CurrencySettler.sol";
 import {BalanceDelta, toBalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
@@ -21,11 +20,25 @@ import {Errors} from "../libraries/Errors.sol";
 import {LiquidityUtils} from "../libraries/LiquidityUtils.sol";
 import {CanonicalVaultReallocation} from "../libraries/CanonicalVaultReallocation.sol";
 
-/// @notice Factory-scoped custody layer that owns PoolManager claims for all markets in the factory.
-contract CanonicalVault is ICanonicalVault, Ownable, ImmutableState, ReentrancyGuardTransient {
+/**
+ * @title CanonicalVault
+ * @notice Factory-scoped custody layer that owns PoolManager claims and per-market underlying reserves.
+ * @dev Owner-level same-underlying credits are fungible at the VTS layer, but actual custody remains market-scoped.
+ *      This contract is the bridge between those two truths:
+ *      - each market keeps its own underlying sub-ledger in `marketLiquidityReserves`;
+ *      - same-underlying credit produced in one market can be reallocated to another market during the same batch;
+ *      - any unresolved canonical reallocation at batch end is a custody-accounting failure.
+ *
+ *      The preferred architecture would make destination-side withdrawal support explicit in the call path.
+ *      The current implementation keeps the fallback model because MM settlement planning and later vault execution are
+ *      split across different layers. That semantic split still requires CanonicalVault-local transient staging so the
+ *      dry-run and execution paths observe the same cross-market credit-backed withdrawal capacity.
+ */
+contract CanonicalVault is ICanonicalVault, ImmutableState, ReentrancyGuardTransient {
     using CurrencySettler for Currency;
     using CurrencyTransfer for Currency;
 
+    /// @dev Immutable market metadata used to validate that only registered assets mutate a market's custody state.
     struct MarketConfig {
         address facade;
         address lcc0;
@@ -35,56 +48,46 @@ contract CanonicalVault is ICanonicalVault, Ownable, ImmutableState, ReentrancyG
         bool exists;
     }
 
-    event MarketRegistered(bytes32 indexed marketId, address indexed facade, address lcc0, address lcc1);
-    event LiquidityAddedToVault(
-        bytes32 indexed marketId, address indexed sender, address indexed currency, uint256 amount
-    );
-    event LiquidityTakenFromVault(
-        bytes32 indexed marketId, address indexed recipient, address indexed currency, uint256 amount
-    );
-    event SwapDeficit(PoolId indexed poolId, address indexed lccToken, address deficitRecipient, uint256 deficitAmount);
+    event MarketRegistered(bytes32 indexed marketId, address facade, address lcc0, address lcc1);
+    event LiquidityAddedToVault(bytes32 indexed marketId, address sender, address currency, uint256 amount);
+    event LiquidityTakenFromVault(bytes32 indexed marketId, address recipient, address currency, uint256 amount);
+    event SwapDeficit(PoolId indexed poolId, address lccToken, address deficitRecipient, uint256 deficitAmount);
 
     ILiquidityHub public immutable liquidityHub;
-    IMarketFactory public marketFactory;
+    address public immutable marketFactory;
 
     mapping(bytes32 => MarketConfig) internal markets;
     mapping(address => bytes32) public facadeToMarket;
     mapping(bytes32 => mapping(address => uint256)) public marketLiquidityReserves;
     mapping(address => uint256) public totalUnderlyingReserves;
 
-    constructor(address _poolManager, address _liquidityHub, address _initialOwner)
-        Ownable(_initialOwner)
+    constructor(address _poolManager, address _liquidityHub, address _marketFactory)
         ImmutableState(IPoolManager(_poolManager))
     {
         if (_liquidityHub == address(0)) revert Errors.InvalidAddress(_liquidityHub);
+        if (_marketFactory == address(0)) revert Errors.InvalidAddress(_marketFactory);
         liquidityHub = ILiquidityHub(_liquidityHub);
+        marketFactory = _marketFactory;
     }
 
     modifier onlyFactory() {
-        if (msg.sender != address(marketFactory)) revert Errors.InvalidSender();
+        if (msg.sender != marketFactory) revert Errors.InvalidSender();
         _;
     }
 
     modifier onlyMarketFacade(bytes32 marketId) {
-        if (address(marketFactory) == address(0)) revert Errors.InvalidSender();
-        MarketConfig memory cfg = markets[marketId];
-        if (!cfg.exists || cfg.facade != msg.sender || !marketFactory.isMarketFacade(marketId, msg.sender)) {
+        MarketConfig storage cfg = _marketConfig(marketId);
+        if (cfg.facade != msg.sender || !IMarketFactory(marketFactory).isMarketFacade(marketId, msg.sender)) {
             revert Errors.InvalidSender();
         }
         _;
     }
 
     modifier onlyVTS() {
-        if (address(marketFactory) == address(0) || msg.sender != address(marketFactory.vts())) {
+        if (msg.sender != address(IMarketFactory(marketFactory).vts())) {
             revert Errors.InvalidSender();
         }
         _;
-    }
-
-    function bindFactory(address factory) external onlyOwner {
-        if (factory == address(0)) revert Errors.InvalidAddress(factory);
-        if (address(marketFactory) != address(0)) revert Errors.InvalidSender();
-        marketFactory = IMarketFactory(factory);
     }
 
     function registerMarket(
@@ -98,6 +101,9 @@ contract CanonicalVault is ICanonicalVault, Ownable, ImmutableState, ReentrancyG
         if (facade == address(0) || lcc0 == address(0) || lcc1 == address(0)) {
             revert Errors.InvalidSender();
         }
+        if (markets[marketId].exists || facadeToMarket[facade] != bytes32(0)) {
+            revert Errors.InvariantViolated("CanonicalVault: market already registered");
+        }
         markets[marketId] = MarketConfig({
             facade: facade, lcc0: lcc0, lcc1: lcc1, underlying0: underlying0, underlying1: underlying1, exists: true
         });
@@ -107,6 +113,7 @@ contract CanonicalVault is ICanonicalVault, Ownable, ImmutableState, ReentrancyG
     }
 
     function inMarketBalanceOf(bytes32 marketId, Currency currency) external view returns (uint256) {
+        _assertUnderlyingConfigured(_marketConfig(marketId), currency);
         return marketLiquidityReserves[marketId][Currency.unwrap(currency)];
     }
 
@@ -128,6 +135,9 @@ contract CanonicalVault is ICanonicalVault, Ownable, ImmutableState, ReentrancyG
         BalanceDelta balanceDelta,
         address recipient
     ) external onlyMarketFacade(marketId) nonReentrant returns (BalanceDelta usedDelta) {
+        MarketConfig storage cfg = _marketConfig(marketId);
+        _assertUnderlyingPairConfigured(cfg, currency0, currency1);
+        _assertLccPairConfigured(cfg, lcc0, lcc1);
         usedDelta = _dryModifyLiquidities(marketId, currency0, currency1, balanceDelta);
         _modifyLiquidityWithRecipient(marketId, currency0, currency1, usedDelta, recipient);
         _finaliseModifyLiquidity(marketId, lcc0, lcc1, balanceDelta, usedDelta, recipient);
@@ -147,6 +157,7 @@ contract CanonicalVault is ICanonicalVault, Ownable, ImmutableState, ReentrancyG
         onlyMarketFacade(marketId)
     {
         if (amount == 0) return;
+        _assertLccConfigured(_marketConfig(marketId), lccToken);
         liquidityHub.prepareSettle(lccToken, amount);
         Currency uaCurrency = Currency.wrap(ILCC(lccToken).underlying());
         address payer = uaCurrency.isAddressZero() ? address(this) : address(liquidityHub);
@@ -158,6 +169,7 @@ contract CanonicalVault is ICanonicalVault, Ownable, ImmutableState, ReentrancyG
         onlyMarketFacade(marketId)
         returns (uint256 amountToCancel)
     {
+        _assertLccConfigured(_marketConfig(marketId), lccToken);
         ILCC lcc = ILCC(lccToken);
         uint256 available = marketLiquidityReserves[marketId][lcc.underlying()];
         uint256 deficitAmount;
@@ -188,6 +200,7 @@ contract CanonicalVault is ICanonicalVault, Ownable, ImmutableState, ReentrancyG
         onlyMarketFacade(marketId)
     {
         if (amount == 0) return;
+        _assertUnderlyingConfigured(_marketConfig(marketId), underlyingCurrency);
         underlyingCurrency.take(poolManager, address(this), amount, true);
         _incrementReserve(marketId, underlyingCurrency, amount);
     }
@@ -197,12 +210,14 @@ contract CanonicalVault is ICanonicalVault, Ownable, ImmutableState, ReentrancyG
         onlyMarketFacade(marketId)
     {
         if (amount == 0) return;
+        _assertUnderlyingConfigured(_marketConfig(marketId), underlyingCurrency);
         _decrementReserve(marketId, underlyingCurrency, amount);
         underlyingCurrency.settle(poolManager, address(this), amount, true);
     }
 
     function issueAndSettleLcc(bytes32 marketId, address lccToken, uint256 amount) external onlyMarketFacade(marketId) {
         if (amount == 0) return;
+        _assertLccConfigured(_marketConfig(marketId), lccToken);
         liquidityHub.issue(lccToken, address(this), amount);
         Currency.wrap(lccToken).settle(poolManager, address(this), amount, false);
     }
@@ -212,6 +227,7 @@ contract CanonicalVault is ICanonicalVault, Ownable, ImmutableState, ReentrancyG
         onlyMarketFacade(marketId)
     {
         if (amount == 0) return;
+        _assertLccConfigured(_marketConfig(marketId), lccToken);
         Currency.wrap(lccToken).take(poolManager, address(this), amount, false);
     }
 
@@ -220,6 +236,7 @@ contract CanonicalVault is ICanonicalVault, Ownable, ImmutableState, ReentrancyG
         onlyMarketFacade(marketId)
     {
         if (amount == 0) return;
+        _assertUnderlyingConfigured(_marketConfig(marketId), underlyingCurrency);
         _incrementReserve(marketId, underlyingCurrency, amount);
     }
 
@@ -228,29 +245,36 @@ contract CanonicalVault is ICanonicalVault, Ownable, ImmutableState, ReentrancyG
         onlyMarketFacade(marketId)
     {
         if (amount == 0) return;
+        _assertUnderlyingConfigured(_marketConfig(marketId), underlyingCurrency);
         _decrementReserve(marketId, underlyingCurrency, amount);
     }
 
-    function recordCreditProduction(bytes32 marketId, Currency underlyingCurrency, uint256 amount) external onlyVTS {
+    function recordCreditProduction(bytes32 marketId, Currency underlyingCurrency, uint256 amount)
+        external
+        onlyMarketFacade(marketId)
+    {
         if (amount == 0) return;
+        _assertUnderlyingConfigured(_marketConfig(marketId), underlyingCurrency);
         _decrementReserve(marketId, underlyingCurrency, amount);
         CanonicalVaultReallocation.addProduced(underlyingCurrency, amount);
     }
 
     function recordCreditConsumptionForDeposit(bytes32 marketId, Currency underlyingCurrency, uint256 amount)
         external
-        onlyVTS
+        onlyMarketFacade(marketId)
     {
         if (amount == 0) return;
+        _assertUnderlyingConfigured(_marketConfig(marketId), underlyingCurrency);
         CanonicalVaultReallocation.consumeProduced(underlyingCurrency, amount);
         _incrementReserve(marketId, underlyingCurrency, amount);
     }
 
     function recordCreditConsumptionForWithdrawal(bytes32 marketId, Currency underlyingCurrency, uint256 amount)
         external
-        onlyVTS
+        onlyMarketFacade(marketId)
     {
         if (amount == 0) return;
+        _assertUnderlyingConfigured(_marketConfig(marketId), underlyingCurrency);
         CanonicalVaultReallocation.stageWithdrawal(marketId, underlyingCurrency, amount);
     }
 
@@ -263,6 +287,7 @@ contract CanonicalVault is ICanonicalVault, Ownable, ImmutableState, ReentrancyG
         view
         returns (BalanceDelta)
     {
+        _assertUnderlyingPairConfigured(_marketConfig(marketId), currency0, currency1);
         int128 delta0 = balanceDelta.amount0();
         int128 delta1 = balanceDelta.amount1();
         int128 actualDelta0 = delta0;
@@ -396,6 +421,7 @@ contract CanonicalVault is ICanonicalVault, Ownable, ImmutableState, ReentrancyG
     }
 
     function _settleObligationsForLCC(bytes32 marketId, ILCC lccToken) internal {
+        _assertLccConfigured(_marketConfig(marketId), address(lccToken));
         uint256 unfunded = liquidityHub.unfundedQueueOfUnderlying(address(lccToken));
         if (unfunded == 0) return;
 
@@ -420,11 +446,43 @@ contract CanonicalVault is ICanonicalVault, Ownable, ImmutableState, ReentrancyG
         totalUnderlyingReserves[underlying] -= amount;
     }
 
+    function _marketConfig(bytes32 marketId) internal view returns (MarketConfig storage cfg) {
+        cfg = markets[marketId];
+        if (!cfg.exists) revert Errors.InvalidSender();
+    }
+
+    function _assertUnderlyingConfigured(MarketConfig storage cfg, Currency underlyingCurrency) internal view {
+        address underlying = Currency.unwrap(underlyingCurrency);
+        if (underlying != cfg.underlying0 && underlying != cfg.underlying1) {
+            revert Errors.InvalidSender();
+        }
+    }
+
+    function _assertLccConfigured(MarketConfig storage cfg, address lccToken) internal view {
+        if (lccToken != cfg.lcc0 && lccToken != cfg.lcc1) {
+            revert Errors.InvalidSender();
+        }
+    }
+
+    function _assertUnderlyingPairConfigured(MarketConfig storage cfg, Currency currency0, Currency currency1)
+        internal
+        view
+    {
+        if (Currency.unwrap(currency0) != cfg.underlying0 || Currency.unwrap(currency1) != cfg.underlying1) {
+            revert Errors.InvalidSender();
+        }
+    }
+
+    function _assertLccPairConfigured(MarketConfig storage cfg, address lcc0, address lcc1) internal view {
+        if (lcc0 != cfg.lcc0 || lcc1 != cfg.lcc1) {
+            revert Errors.InvalidSender();
+        }
+    }
+
     receive() external payable {
-        if (address(marketFactory) == address(0)) revert Errors.InvalidEthSender();
         if (
             msg.sender != address(poolManager) && msg.sender != address(liquidityHub)
-                && !marketFactory.bounds(msg.sender)
+                && !IMarketFactory(marketFactory).bounds(msg.sender)
         ) {
             revert Errors.InvalidEthSender();
         }

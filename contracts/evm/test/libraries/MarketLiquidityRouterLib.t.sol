@@ -20,6 +20,14 @@ contract MockMarketVault_RouterLib is IMarketVault {
     BalanceDelta internal _lastRequested;
     address internal _lastRecipient;
 
+    function marketId() external pure returns (bytes32) {
+        return bytes32(0);
+    }
+
+    function canonicalVault() external pure returns (address) {
+        return address(0);
+    }
+
     function setUsed(BalanceDelta usedDelta) external {
         _used = usedDelta;
     }
@@ -58,6 +66,12 @@ contract MockMarketVault_RouterLib is IMarketVault {
     function dryModifyLiquidities(BalanceDelta) external pure returns (BalanceDelta) {
         return toBalanceDelta(0, 0);
     }
+
+    function recordCreditProduction(Currency, uint256) external pure {}
+
+    function recordCreditConsumptionForDeposit(Currency, uint256) external pure {}
+
+    function recordCreditConsumptionForWithdrawal(Currency, uint256) external pure {}
 }
 
 contract MockPoolManager_RouterLib {

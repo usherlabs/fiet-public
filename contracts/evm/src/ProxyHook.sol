@@ -201,11 +201,11 @@ contract ProxyHook is BaseHook, VaultCoreActionHandler {
         address excessRecipient
     ) private returns (uint256 amountToSettle) {
         address canonicalVault = address(_canonicalVault());
-        // Settle the hook's positive underlying delta into canonical custody claims.
+        // Swap execution still creates hook-owned active deltas in beforeSwap. Keep the irreducible take/settle calls
+        // local to the hook, but immediately mirror durable reserve effects into CanonicalVault.
         key.currency0.take(poolManager, canonicalVault, amountIn, true);
         _increaseLiquidityReserve(key.currency0, amountIn);
 
-        // LCCs remain hook-local transient swap inventory; only underlying custody is centralised.
         _liquidityHub().issue(address(ctx.lccTokenForCurrency0), address(this), amountIn);
         ctx.lccCurrencyForCurrency0.settle(poolManager, address(this), amountIn, false);
 

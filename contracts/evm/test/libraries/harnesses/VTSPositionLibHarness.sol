@@ -26,7 +26,6 @@ import {VTSFeeLinkedLib} from "../../../src/libraries/VTSFeeLib.sol";
 import {VTSCommitLib} from "../../../src/libraries/VTSCommitLib.sol";
 import {RFSCheckpoint} from "../../../src/types/Checkpoint.sol";
 import {IMarketVault} from "../../../src/interfaces/IMarketVault.sol";
-import {IMarketFactory} from "../../../src/interfaces/IMarketFactory.sol";
 import {DynamicCurrencyDelta} from "../../../src/libraries/DynamicCurrencyDelta.sol";
 import {CurrencyDelta} from "v4-periphery/lib/v4-core/src/libraries/CurrencyDelta.sol";
 
@@ -113,11 +112,8 @@ contract VTSPositionLibHarness {
         bool isSeizing,
         bool fromDeltas
     ) external returns (BalanceDelta settlementDelta, bool rfsOpen, uint256 seizedLiquidityUnits) {
-        PoolId poolId = s.positions[positionId].poolId;
         SettleParams memory params;
         params.vault = vault;
-        params.factory = IMarketFactory(address(0));
-        params.poolId = poolId;
         params.positionId = positionId;
         params.lccCurrency0 = lccCurrency0;
         params.lccCurrency1 = lccCurrency1;

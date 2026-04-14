@@ -20,7 +20,6 @@ import {VTSPositionLib} from "../../../src/libraries/VTSPositionLib.sol";
 import {VTSLifecycleLinkedLib} from "../../../src/libraries/VTSLifecycleLinkedLib.sol";
 import {DynamicCurrencyDelta} from "../../../src/libraries/DynamicCurrencyDelta.sol";
 import {IMarketVault} from "../../../src/interfaces/IMarketVault.sol";
-import {IMarketFactory} from "../../../src/interfaces/IMarketFactory.sol";
 import {ILiquidityHub} from "../../../src/interfaces/ILiquidityHub.sol";
 import {IOracleHelper} from "../../../src/interfaces/IOracleHelper.sol";
 
@@ -174,8 +173,6 @@ contract VTSPositionLibEchidnaHarness {
 
         SettleParams memory p;
         p.vault = vault;
-        p.factory = IMarketFactory(address(0));
-        p.poolId = pos.poolId;
         p.positionId = positionId;
         p.lccCurrency0 = lccCurrency0;
         p.lccCurrency1 = lccCurrency1;

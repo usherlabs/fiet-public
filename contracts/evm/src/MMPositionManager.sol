@@ -21,7 +21,6 @@ import {PositionManagerBase} from "./modules/PositionManagerBase.sol";
 import {PositionManagerQueueCustodian} from "./modules/PositionManagerQueueCustodian.sol";
 import {PositionManagerEntrypoint} from "./modules/PositionManagerEntrypoint.sol";
 import {Permit2Forwarder} from "v4-periphery/src/base/Permit2Forwarder.sol";
-import {IAllowanceTransfer} from "permit2/src/interfaces/IAllowanceTransfer.sol";
 import {MMActions} from "./libraries/MMActions.sol";
 import {MMCalldataDecoder} from "./libraries/MMCalldataDecoder.sol";
 import {MMHelpers} from "./libraries/MMHelpers.sol";
@@ -33,6 +32,7 @@ import {CurrencyTransfer} from "./libraries/CurrencyTransfer.sol";
 import {IMMQueueCustodian} from "./interfaces/IMMQueueCustodian.sol";
 import {IMarketFactory} from "./interfaces/IMarketFactory.sol";
 import {ILiquidityHub} from "./interfaces/ILiquidityHub.sol";
+import {IAllowanceTransfer} from "permit2/src/interfaces/IAllowanceTransfer.sol";
 
 /// @title MMPositionManager
 /// @notice Entry point for VRL commitment position management
@@ -49,6 +49,19 @@ contract MMPositionManager is
     PositionManagerEntrypoint,
     PositionManagerQueueCustodian
 {
+    /// @dev Aggregates constructor dependencies so unoptimised builds avoid stack-too-deep in the inheritance init list.
+    struct MMPositionManagerInit {
+        IPoolManager poolManager;
+        address marketFactory;
+        address vtsOrchestrator;
+        address canonicalCustody;
+        address descriptor;
+        IWETH9 weth9;
+        IAllowanceTransfer permit2;
+        address actionsImpl;
+        address queueCustodianAddr;
+    }
+
     using MMCalldataDecoder for bytes;
     using CurrencyTransfer for Currency;
     using StateLibrary for IPoolManager;
@@ -74,27 +87,18 @@ contract MMPositionManager is
     // Constructor
     // ═══════════════════════════════════════════════════════════════════════════
 
-    constructor(
-        address _manager,
-        address _marketFactory,
-        address _vtsOrchestrator,
-        address _descriptor,
-        IWETH9 _weth9,
-        IAllowanceTransfer _permit2,
-        address _actionsImpl,
-        address _queueCustodianAddr
-    )
+    constructor(MMPositionManagerInit memory p)
         ERC721Permit_v4("Fiet VRL Commitment Positions Manager", "FIET-VRL-MMP")
-        BaseActionsRouter(IPoolManager(_manager))
-        Permit2Forwarder(_permit2)
-        FietNativeWrapper(_weth9)
-        PositionManagerEntrypoint(_marketFactory, _vtsOrchestrator, _actionsImpl)
+        BaseActionsRouter(p.poolManager)
+        Permit2Forwarder(p.permit2)
+        FietNativeWrapper(p.weth9)
+        PositionManagerEntrypoint(p.marketFactory, p.vtsOrchestrator, p.canonicalCustody, p.actionsImpl)
     {
-        if (_queueCustodianAddr == address(0) || _queueCustodianAddr.code.length == 0) {
-            revert Errors.InvalidAddress(_queueCustodianAddr);
+        if (p.queueCustodianAddr == address(0) || p.queueCustodianAddr.code.length == 0) {
+            revert Errors.InvalidAddress(p.queueCustodianAddr);
         }
-        commitmentDescriptor = _descriptor;
-        queueCustodian = IMMQueueCustodian(_queueCustodianAddr);
+        commitmentDescriptor = p.descriptor;
+        queueCustodian = IMMQueueCustodian(p.queueCustodianAddr);
     }
 
     // ═══════════════════════════════════════════════════════════════════════════

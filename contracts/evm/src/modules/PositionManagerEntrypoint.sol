@@ -6,6 +6,7 @@ import {Math} from "openzeppelin-contracts/contracts/utils/math/Math.sol";
 import {Address} from "openzeppelin-contracts/contracts/utils/Address.sol";
 import {TransientSlots} from "../libraries/TransientSlots.sol";
 import {PositionManagerBase} from "./PositionManagerBase.sol";
+import {ICanonicalVault} from "../interfaces/ICanonicalVault.sol";
 import {Errors} from "../libraries/Errors.sol";
 
 /**
@@ -16,8 +17,8 @@ import {Errors} from "../libraries/Errors.sol";
 abstract contract PositionManagerEntrypoint is PositionManagerBase {
     address public immutable actionsImpl;
 
-    constructor(address _marketFactory, address _vtsOrchestrator, address _actionsImpl)
-        PositionManagerBase(_marketFactory, _vtsOrchestrator)
+    constructor(address _marketFactory, address _vtsOrchestrator, address _canonicalCustody, address _actionsImpl)
+        PositionManagerBase(_marketFactory, _vtsOrchestrator, _canonicalCustody)
     {
         if (_actionsImpl == address(0) || _actionsImpl.code.length == 0) {
             revert Errors.InvalidAddress(_actionsImpl);
@@ -55,8 +56,9 @@ abstract contract PositionManagerEntrypoint is PositionManagerBase {
         // Clear any per-batch transient context to avoid same-tx leakage into subsequent batches.
         TransientSlots.clearSeizedPositionId();
         TransientSlots.clearMsgValueRead();
-        // Assert that deltas are non-zero after batch execution
+        // Orchestrator and canonical custody own separate transient domains; both must resolve before the batch closes.
         vtsOrchestrator.assertNonZeroDeltas();
+        ICanonicalVault(canonicalCustody).assertNoPendingReallocations();
     }
 
     // ------------------------------------------------------------------------------------------------

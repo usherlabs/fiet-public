@@ -35,7 +35,6 @@ import {Pool} from "../types/Pool.sol";
 import {RFSCheckpoint} from "../types/Checkpoint.sol";
 import {IMarketFactory} from "../interfaces/IMarketFactory.sol";
 import {IMarketVault} from "../interfaces/IMarketVault.sol";
-import {ICanonicalVault} from "../interfaces/ICanonicalVault.sol";
 import {VTSPositionLib} from "./VTSPositionLib.sol";
 import {VTSCommitLib} from "./VTSCommitLib.sol";
 import {CheckpointLibrary} from "./Checkpoint.sol";
@@ -64,8 +63,6 @@ library VTSLifecycleLinkedLib {
 
     /// @dev Bundles withdrawal execution parameters to keep `onMMSettle` below stack limits.
     struct WithdrawalExecutionParams {
-        IMarketFactory factory;
-        PoolId poolId;
         PositionId positionId;
         address owner;
         IMarketVault vault;
@@ -220,8 +217,6 @@ library VTSLifecycleLinkedLib {
 
         params = SettleParams({
             vault: MarketHandlerLib.getVault(factory, poolId),
-            factory: factory,
-            poolId: poolId,
             positionId: positionId,
             lccCurrency0: currency0,
             lccCurrency1: currency1,
@@ -273,8 +268,7 @@ library VTSLifecycleLinkedLib {
                 VTSPositionLib._settleFromPositiveUnderlyingDelta(
                     s,
                     VTSPositionLib.ProtocolCreditSettlementParams({
-                        factory: p.factory,
-                        poolId: p.poolId,
+                        marketVault: p.vault,
                         positionId: p.positionId,
                         owner: pos.owner,
                         lccCurrency0: p.lccCurrency0,
@@ -306,8 +300,6 @@ library VTSLifecycleLinkedLib {
         BalanceDelta withdrawalSettlementDelta = _executeWithdrawals(
             s,
             WithdrawalExecutionParams({
-                factory: p.factory,
-                poolId: p.poolId,
                 positionId: p.positionId,
                 owner: pos.owner,
                 vault: p.vault,
@@ -532,20 +524,15 @@ library VTSLifecycleLinkedLib {
         WithdrawalPlan memory plan,
         WithdrawalActuals memory actuals
     ) private {
-        _applyWithdrawalLane(
-            s, p.factory, p.poolId, p.positionId, 0, actuals.amount0, plan.deltaBacked0, p.lccCurrency0, p.owner
-        );
-        _applyWithdrawalLane(
-            s, p.factory, p.poolId, p.positionId, 1, actuals.amount1, plan.deltaBacked1, p.lccCurrency1, p.owner
-        );
+        _applyWithdrawalLane(s, p.vault, p.positionId, 0, actuals.amount0, plan.deltaBacked0, p.lccCurrency0, p.owner);
+        _applyWithdrawalLane(s, p.vault, p.positionId, 1, actuals.amount1, plan.deltaBacked1, p.lccCurrency1, p.owner);
     }
 
     /// @notice Apply a single withdrawal lane after final vault clamping.
     /// @dev Delta-backed value is consumed first; only the residual touches live `pa.settled`.
     function _applyWithdrawalLane(
         VTSStorage storage s,
-        IMarketFactory factory,
-        PoolId poolId,
+        IMarketVault vault,
         PositionId positionId,
         uint8 tokenIndex,
         uint256 actualWithdrawal,
@@ -559,15 +546,7 @@ library VTSLifecycleLinkedLib {
         if (deltaBackedWithdrawal > 0) {
             Currency underlyingCurrency = DynamicCurrencyDelta.lccToUnderlyingCurrency(lccCurrency);
             DynamicCurrencyDelta.accountDelta(underlyingCurrency, -deltaBackedWithdrawal.toInt128(), owner);
-            if (address(factory) != address(0)) {
-                address canonicalVault = factory.canonicalVault();
-                if (canonicalVault != address(0)) {
-                    ICanonicalVault(canonicalVault)
-                        .recordCreditConsumptionForWithdrawal(
-                            PoolId.unwrap(poolId), underlyingCurrency, deltaBackedWithdrawal
-                        );
-                }
-            }
+            vault.recordCreditConsumptionForWithdrawal(underlyingCurrency, deltaBackedWithdrawal);
         }
 
         uint256 settledBackedWithdrawal = actualWithdrawal - deltaBackedWithdrawal;

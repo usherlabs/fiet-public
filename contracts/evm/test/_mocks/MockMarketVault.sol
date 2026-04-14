@@ -11,6 +11,14 @@ contract MockMarketVault is IMarketVault {
     BalanceDelta public availableLiquidity;
     mapping(Currency => uint256) public balances;
 
+    function marketId() external pure returns (bytes32) {
+        return bytes32(0);
+    }
+
+    function canonicalVault() external pure returns (address) {
+        return address(0);
+    }
+
     function setAvailableLiquidity(int128 amount0, int128 amount1) external {
         availableLiquidity = toBalanceDelta(amount0, amount1);
     }
@@ -48,5 +56,11 @@ contract MockMarketVault is IMarketVault {
     function lccs() external pure override returns (address lccToken0, address lccToken1) {
         return (address(0), address(0));
     }
+
+    function recordCreditProduction(Currency, uint256) external pure {}
+
+    function recordCreditConsumptionForDeposit(Currency, uint256) external pure {}
+
+    function recordCreditConsumptionForWithdrawal(Currency, uint256) external pure {}
 }
 

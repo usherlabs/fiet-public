@@ -204,13 +204,20 @@ contract ProxyHookTest is MarketVaultBase {
 
     function test_handleAddLiquidity_directCoreAction_pathExecutes() public {
         ProxyHookHarness fresh = new ProxyHookHarness(address(manager), address(marketFactory));
-        bytes32 marketId = PoolId.unwrap(corePoolKey.toId());
         address canonicalVault = IMarketFactory(marketFactory).canonicalVault();
+        PoolKey memory altCorePoolKey = PoolKey({
+            currency0: corePoolKey.currency0,
+            currency1: corePoolKey.currency1,
+            fee: corePoolKey.fee + 1,
+            tickSpacing: corePoolKey.tickSpacing,
+            hooks: corePoolKey.hooks
+        });
+        bytes32 marketId = PoolId.unwrap(altCorePoolKey.toId());
 
         vm.prank(marketFactory);
         fresh.activate();
         vm.prank(marketFactory);
-        fresh.setCorePoolKey(corePoolKey);
+        fresh.setCorePoolKey(altCorePoolKey);
         vm.mockCall(
             marketFactory,
             abi.encodeWithSelector(IMarketFactory.isMarketFacade.selector, marketId, address(fresh)),
@@ -1629,10 +1636,12 @@ contract DifferentTokenDecimalsProxyHookTest is MarketTestBase {
 
         bytes memory marketRef = abi.encodePacked(address(proxyHook));
         string memory marketName = "Test Market";
-        // Production wiring: vtsOrchestrator + proxyHook are issuers (MarketFactory does this).
-        address[] memory initialIssuers = new address[](2);
+        // Production wiring keeps proxy-hook-local LCC issue/cancel authority for swap-local hook deltas, while
+        // CanonicalVault owns the durable custody ledger for the market.
+        address[] memory initialIssuers = new address[](3);
         initialIssuers[0] = address(vtsOrchestrator);
         initialIssuers[1] = address(proxyHook);
+        initialIssuers[2] = IMarketFactory(marketFactory).canonicalVault();
 
         vm.prank(marketFactory);
         (address _lcc0, address _lcc1) = LiquidityHub(payable(liquidityHub))

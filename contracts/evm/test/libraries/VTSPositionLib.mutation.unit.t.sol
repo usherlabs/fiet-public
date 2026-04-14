@@ -2191,6 +2191,14 @@ contract MockMarketVaultNoop {
 
 /// @notice Passthrough market vault: returns the requested delta as "available" so no queuing occurs.
 contract MockMarketVaultPassthrough is IMarketVault {
+    function marketId() external pure returns (bytes32) {
+        return bytes32(0);
+    }
+
+    function canonicalVault() external pure returns (address) {
+        return address(0);
+    }
+
     function lccs() external pure returns (address, address) {
         return (address(0), address(0));
     }
@@ -2211,6 +2219,12 @@ contract MockMarketVaultPassthrough is IMarketVault {
     function dryModifyLiquidities(BalanceDelta d) external pure returns (BalanceDelta) {
         return d;
     }
+
+    function recordCreditProduction(Currency, uint256) external pure {}
+
+    function recordCreditConsumptionForDeposit(Currency, uint256) external pure {}
+
+    function recordCreditConsumptionForWithdrawal(Currency, uint256) external pure {}
 }
 
 /// @notice LiquidityHub recorder for mutation tests: captures planCancelWithQueue amounts.

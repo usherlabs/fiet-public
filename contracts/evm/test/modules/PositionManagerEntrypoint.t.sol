@@ -57,8 +57,8 @@ contract PositionManagerEntrypointHarness is PositionManagerEntrypoint {
     // Used to validate delegatecall writes to the caller's storage.
     uint256 public x;
 
-    constructor(address factory, address orch, address impl, address locker)
-        PositionManagerEntrypoint(factory, orch, impl)
+    constructor(address factory, address orch, address canonicalCustody, address impl, address locker)
+        PositionManagerEntrypoint(factory, orch, canonicalCustody, impl)
     {
         _locker = locker;
     }
@@ -101,19 +101,22 @@ contract PositionManagerEntrypointTest is Test {
     address internal hub;
     address internal factory;
     address internal orch;
+    address internal canonical;
     address internal locker;
 
     function setUp() public {
         hub = makeAddr("hub");
         factory = makeAddr("factory");
         orch = makeAddr("vtsOrchestrator");
+        canonical = makeAddr("canonicalVault");
         locker = makeAddr("locker");
         // Foundry reverts on interface calls to EOAs ("call to non-contract address").
         vm.etch(factory, hex"00");
         vm.mockCall(factory, abi.encodeWithSignature("liquidityHub()"), abi.encode(hub));
         vm.etch(orch, hex"00");
+        vm.etch(canonical, hex"00");
         impl = new DelegationImpl();
-        h = new PositionManagerEntrypointHarness(factory, orch, address(impl), locker);
+        h = new PositionManagerEntrypointHarness(factory, orch, canonical, address(impl), locker);
         caller = new BeforeAfterBatchCaller();
     }
 
@@ -160,6 +163,7 @@ contract PositionManagerEntrypointTest is Test {
 
     function test_afterBatch_callsAssertNonZeroDeltas() public {
         vm.expectCall(orch, abi.encodeWithSignature("assertNonZeroDeltas()"));
+        vm.expectCall(canonical, abi.encodeWithSignature("assertNoPendingReallocations()"));
         h.exposeAfterBatch();
     }
 
@@ -198,7 +202,12 @@ contract PositionManagerEntrypointTest is Test {
         address badImpl = makeAddr("badActionsImpl");
         vm.etch(badImpl, hex"");
         vm.expectRevert(abi.encodeWithSelector(Errors.InvalidAddress.selector, badImpl));
-        new PositionManagerEntrypointHarness(factory, orch, badImpl, locker);
+        new PositionManagerEntrypointHarness(factory, orch, canonical, badImpl, locker);
+    }
+
+    function test_constructor_revertsWhenCanonicalCustodyIsZero() public {
+        vm.expectRevert(abi.encodeWithSelector(Errors.InvalidAddress.selector, address(0)));
+        new PositionManagerEntrypointHarness(factory, orch, address(0), address(impl), locker);
     }
 }
 

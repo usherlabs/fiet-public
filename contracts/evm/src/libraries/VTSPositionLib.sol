@@ -40,8 +40,7 @@ import {VTSFeeLinkedLib} from "./VTSFeeLib.sol";
 import {DynamicCurrencyDelta} from "./DynamicCurrencyDelta.sol";
 import {VTSCommitLib} from "./VTSCommitLib.sol";
 import {CheckpointLibrary} from "./Checkpoint.sol";
-import {IMarketFactory} from "../interfaces/IMarketFactory.sol";
-import {ICanonicalVault} from "../interfaces/ICanonicalVault.sol";
+import {IMarketVault} from "../interfaces/IMarketVault.sol";
 
 /// @title VTSPositionLib
 /// @notice Position lifecycle, registration, RFS, settlement, seizure, and growth accounting for VTS
@@ -81,8 +80,7 @@ library VTSPositionLib {
 
     /// @dev Shared protocol-credit deposit inputs for MM add and explicit settle-from-deltas paths.
     struct ProtocolCreditSettlementParams {
-        IMarketFactory factory;
-        PoolId poolId;
+        IMarketVault marketVault;
         PositionId positionId;
         address owner;
         Currency lccCurrency0;
@@ -1075,26 +1073,19 @@ library VTSPositionLib {
         result.settlementDelta = toBalanceDelta(settle0, settle1);
         result.remainingRequiredSettlementDelta = toBalanceDelta(remaining0, remaining1);
 
-        if (address(p.factory) != address(0)) {
-            address canonicalVault = p.factory.canonicalVault();
-            if (canonicalVault != address(0)) {
-                if (settle0 < 0) {
-                    ICanonicalVault(canonicalVault)
-                        .recordCreditConsumptionForDeposit(
-                            PoolId.unwrap(p.poolId),
-                            DynamicCurrencyDelta.lccToUnderlyingCurrency(p.lccCurrency0),
-                            uint256(uint128(-settle0))
-                        );
-                }
-                if (settle1 < 0) {
-                    ICanonicalVault(canonicalVault)
-                        .recordCreditConsumptionForDeposit(
-                            PoolId.unwrap(p.poolId),
-                            DynamicCurrencyDelta.lccToUnderlyingCurrency(p.lccCurrency1),
-                            uint256(uint128(-settle1))
-                        );
-                }
-            }
+        if (settle0 < 0) {
+            p.marketVault
+                .recordCreditConsumptionForDeposit(
+                    DynamicCurrencyDelta.lccToUnderlyingCurrency(p.lccCurrency0),
+                    LiquidityUtils.safeInt128ToUint256(settle0)
+                );
+        }
+        if (settle1 < 0) {
+            p.marketVault
+                .recordCreditConsumptionForDeposit(
+                    DynamicCurrencyDelta.lccToUnderlyingCurrency(p.lccCurrency1),
+                    LiquidityUtils.safeInt128ToUint256(settle1)
+                );
         }
     }
 
@@ -1115,9 +1106,7 @@ library VTSPositionLib {
         ProtocolCreditSettlementResult memory result = _settleFromPositiveUnderlyingDelta(
             s,
             ProtocolCreditSettlementParams({
-                factory: ctx.liquidityHub
-                .getFactory(Currency.unwrap(poolKey.currency0), Currency.unwrap(poolKey.currency1)),
-                poolId: poolKey.toId(),
+                marketVault: ctx.marketVault,
                 positionId: positionId,
                 owner: owner,
                 lccCurrency0: poolKey.currency0,
@@ -1655,26 +1644,19 @@ library VTSPositionLib {
                 p.poolKey.currency1
             );
 
-            IMarketFactory factory =
-                ctx.liquidityHub.getFactory(Currency.unwrap(p.poolKey.currency0), Currency.unwrap(p.poolKey.currency1));
-            address canonicalVault = factory.canonicalVault();
-            if (canonicalVault != address(0)) {
-                if (requiredSettlementDelta.amount0() > 0) {
-                    ICanonicalVault(canonicalVault)
-                        .recordCreditProduction(
-                            PoolId.unwrap(p.poolKey.toId()),
-                            DynamicCurrencyDelta.lccToUnderlyingCurrency(p.poolKey.currency0),
-                            LiquidityUtils.safeInt128ToUint256(requiredSettlementDelta.amount0())
-                        );
-                }
-                if (requiredSettlementDelta.amount1() > 0) {
-                    ICanonicalVault(canonicalVault)
-                        .recordCreditProduction(
-                            PoolId.unwrap(p.poolKey.toId()),
-                            DynamicCurrencyDelta.lccToUnderlyingCurrency(p.poolKey.currency1),
-                            LiquidityUtils.safeInt128ToUint256(requiredSettlementDelta.amount1())
-                        );
-                }
+            if (requiredSettlementDelta.amount0() > 0) {
+                ctx.marketVault
+                    .recordCreditProduction(
+                        DynamicCurrencyDelta.lccToUnderlyingCurrency(p.poolKey.currency0),
+                        LiquidityUtils.safeInt128ToUint256(requiredSettlementDelta.amount0())
+                    );
+            }
+            if (requiredSettlementDelta.amount1() > 0) {
+                ctx.marketVault
+                    .recordCreditProduction(
+                        DynamicCurrencyDelta.lccToUnderlyingCurrency(p.poolKey.currency1),
+                        LiquidityUtils.safeInt128ToUint256(requiredSettlementDelta.amount1())
+                    );
             }
         }
 

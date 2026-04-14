@@ -124,11 +124,15 @@ contract MarketFactory is IMarketFactory, Ownable, ImmutableState, ImmutableVTSS
     }
 
     /**
-     * @notice Sets the core hook and initial bounds, then marks the factory as initialised
+     * @notice Binds canonical custody, sets the core hook and initial bounds, then marks the factory as initialised
+     * @param _canonicalVault CanonicalVault for this factory (single assignment)
      * @param _coreHook Core hook address used for core pools
      * @param initialBounds Addresses to set as bound endpoints
      */
-    function initialise(address _coreHook, address[] calldata initialBounds) external onlyOwner {
+    function initialise(address _canonicalVault, address _coreHook, address[] calldata initialBounds)
+        external
+        onlyOwner
+    {
         if (initialised) return;
 
         if (_coreHook == address(0)) {
@@ -138,6 +142,8 @@ contract MarketFactory is IMarketFactory, Ownable, ImmutableState, ImmutableVTSS
         if (coreHook != address(0) && coreHook != _coreHook) {
             revert Errors.InvalidAddress(_coreHook);
         }
+
+        _setCanonicalVault(_canonicalVault);
 
         coreHook = _coreHook;
         initialised = true;
@@ -159,9 +165,17 @@ contract MarketFactory is IMarketFactory, Ownable, ImmutableState, ImmutableVTSS
         return vtsOrchestrator;
     }
 
-    function setCanonicalVault(address _canonicalVault) external onlyOwner {
+    function _setCanonicalVault(address _canonicalVault) internal {
         if (_canonicalVault == address(0)) revert Errors.InvalidAddress(_canonicalVault);
-        canonicalVault = _canonicalVault;
+        if (_canonicalVault.code.length == 0) revert Errors.InvalidAddress(_canonicalVault);
+        if (ICanonicalVault(_canonicalVault).marketFactory() != address(this)) {
+            revert Errors.InvalidSender();
+        }
+        if (canonicalVault == address(0)) {
+            canonicalVault = _canonicalVault;
+        } else if (canonicalVault != _canonicalVault) {
+            revert Errors.InvariantViolated("MarketFactory: canonical vault already set");
+        }
     }
 
     /**

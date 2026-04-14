@@ -31,6 +31,11 @@ abstract contract MarketVaultFacade is IMarketVault, ImmutableMarketState, Reent
         _;
     }
 
+    modifier onlyVTS() {
+        if (msg.sender != address(marketFactory.vts())) revert Errors.InvalidSender();
+        _;
+    }
+
     constructor(address _marketFactory) ImmutableMarketState(_marketFactory) {}
 
     function _underlying() internal view virtual returns (Currency currency0, Currency currency1);
@@ -49,6 +54,14 @@ abstract contract MarketVaultFacade is IMarketVault, ImmutableMarketState, Reent
         vault = ICanonicalVault(canonical);
     }
 
+    function marketId() external view returns (bytes32) {
+        return _marketId();
+    }
+
+    function canonicalVault() external view returns (address) {
+        return address(_canonicalVault());
+    }
+
     function lccs() external view returns (address lccToken0, address lccToken1) {
         (ILCC l0, ILCC l1) = _lccs();
         return (address(l0), address(l1));
@@ -61,6 +74,18 @@ abstract contract MarketVaultFacade is IMarketVault, ImmutableMarketState, Reent
     function dryModifyLiquidities(BalanceDelta balanceDelta) public view virtual returns (BalanceDelta) {
         (Currency currency0, Currency currency1) = _coreUnderlying();
         return _canonicalVault().dryModifyLiquidities(_marketId(), currency0, currency1, balanceDelta);
+    }
+
+    function recordCreditProduction(Currency underlyingCurrency, uint256 amount) external onlyVTS {
+        _canonicalVault().recordCreditProduction(_marketId(), underlyingCurrency, amount);
+    }
+
+    function recordCreditConsumptionForDeposit(Currency underlyingCurrency, uint256 amount) external onlyVTS {
+        _canonicalVault().recordCreditConsumptionForDeposit(_marketId(), underlyingCurrency, amount);
+    }
+
+    function recordCreditConsumptionForWithdrawal(Currency underlyingCurrency, uint256 amount) external onlyVTS {
+        _canonicalVault().recordCreditConsumptionForWithdrawal(_marketId(), underlyingCurrency, amount);
     }
 
     function modifyLiquidities(BalanceDelta balanceDelta) external virtual onlyProtocolBounds nonReentrant {

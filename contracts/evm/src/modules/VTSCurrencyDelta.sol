@@ -8,7 +8,6 @@ import {VTSStorage} from "../types/VTS.sol";
 import {DynamicCurrencyDelta} from "../libraries/DynamicCurrencyDelta.sol";
 import {IVTSCurrencyDelta} from "../interfaces/IVTSCurrencyDelta.sol";
 import {IMarketFactory} from "../interfaces/IMarketFactory.sol";
-import {CanonicalVaultReallocation} from "../libraries/CanonicalVaultReallocation.sol";
 
 /**
  * @title VTSCurrencyDelta
@@ -80,7 +79,6 @@ abstract contract VTSCurrencyDelta is IVTSCurrencyDelta {
     /// @inheritdoc IVTSCurrencyDelta
     function assertNonZeroDeltas() external view {
         DynamicCurrencyDelta.assertNonZeroDeltas();
-        CanonicalVaultReallocation.assertResolved();
     }
 
     // ═══════════════════════════════════════════════════════════════════════════

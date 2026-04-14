@@ -40,6 +40,14 @@ contract VTSPositionLibTest_MockLCC {
 }
 
 contract VTSPositionLibTest_VaultNoop is IMarketVault {
+    function marketId() external pure returns (bytes32) {
+        return bytes32(0);
+    }
+
+    function canonicalVault() external pure returns (address) {
+        return address(0);
+    }
+
     function lccs() external pure returns (address, address) {
         return (address(0), address(0));
     }
@@ -60,6 +68,12 @@ contract VTSPositionLibTest_VaultNoop is IMarketVault {
     function dryModifyLiquidities(BalanceDelta d) external pure returns (BalanceDelta) {
         return d;
     }
+
+    function recordCreditProduction(Currency, uint256) external pure {}
+
+    function recordCreditConsumptionForDeposit(Currency, uint256) external pure {}
+
+    function recordCreditConsumptionForWithdrawal(Currency, uint256) external pure {}
 }
 
 /// @dev Vault that clamps withdrawals to fixed available amounts (used to test onMMSettle phase-2 shortfall correction).
@@ -70,6 +84,14 @@ contract VTSPositionLibTest_VaultClamp is IMarketVault {
     constructor(int128 avail0_, int128 avail1_) {
         avail0 = avail0_;
         avail1 = avail1_;
+    }
+
+    function marketId() external pure returns (bytes32) {
+        return bytes32(0);
+    }
+
+    function canonicalVault() external pure returns (address) {
+        return address(0);
     }
 
     function lccs() external pure returns (address, address) {
@@ -98,6 +120,12 @@ contract VTSPositionLibTest_VaultClamp is IMarketVault {
         if (a1 > 0 && a1 > avail1) a1 = avail1;
         return toBalanceDelta(a0, a1);
     }
+
+    function recordCreditProduction(Currency, uint256) external pure {}
+
+    function recordCreditConsumptionForDeposit(Currency, uint256) external pure {}
+
+    function recordCreditConsumptionForWithdrawal(Currency, uint256) external pure {}
 }
 
 /// @dev Vault that returns "more than requested" to force negative rawQueued and exercise clamp-to-zero paths.
@@ -108,6 +136,14 @@ contract VTSPositionLibTest_VaultOverAvailable is IMarketVault {
     constructor(int128 extra0_, int128 extra1_) {
         extra0 = extra0_;
         extra1 = extra1_;
+    }
+
+    function marketId() external pure returns (bytes32) {
+        return bytes32(0);
+    }
+
+    function canonicalVault() external pure returns (address) {
+        return address(0);
     }
 
     function lccs() external pure returns (address, address) {
@@ -136,6 +172,12 @@ contract VTSPositionLibTest_VaultOverAvailable is IMarketVault {
         if (a1 > 0) a1 += extra1;
         return toBalanceDelta(a0, a1);
     }
+
+    function recordCreditProduction(Currency, uint256) external pure {}
+
+    function recordCreditConsumptionForDeposit(Currency, uint256) external pure {}
+
+    function recordCreditConsumptionForWithdrawal(Currency, uint256) external pure {}
 }
 
 /// @dev Vault that returns more-than-requested availability for token0 only (used to test one-sided queue clamping).

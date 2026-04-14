@@ -18,6 +18,7 @@ import {PoolId, PoolIdLibrary} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {CurrencyLibrary, Currency} from "@uniswap/v4-core/src/types/Currency.sol";
 import {MarketMaker} from "../src/libraries/MarketMaker.sol";
 import {IMMPositionManager} from "../src/interfaces/IMMPositionManager.sol";
+import {ICanonicalVault} from "../src/interfaces/ICanonicalVault.sol";
 import {MarketVTSConfiguration} from "../src/types/VTS.sol";
 import {LiquidityUtils} from "../src/libraries/LiquidityUtils.sol";
 import {IOracleHelper} from "../src/interfaces/IOracleHelper.sol";
@@ -216,14 +217,13 @@ contract NativeETHMarket is MarketTestBase, MarketMakerTestBase {
         PoolSwapTest.TestSettings memory settings =
             PoolSwapTest.TestSettings({takeClaims: false, settleUsingBurn: false});
 
-        // For zeroForOne, the output currency is currency1; mock the vault's available claim-token balance to 0.
-        vm.mockCall(
-            address(manager),
-            abi.encodeWithSelector(
-                bytes4(keccak256("balanceOf(address,uint256)")), address(proxyHook), proxyPoolKey.currency1.toId()
-            ),
-            abi.encode(uint256(0))
-        );
+        // For zeroForOne exact-output swaps, available output liquidity is tracked on CanonicalVault's market reserve,
+        // not on the proxy hook's local PoolManager claims.
+        address canonical = mv.canonicalVault();
+        bytes32 marketId = mv.marketId();
+        uint256 available = mv.inMarketBalanceOf(proxyPoolKey.currency1);
+        vm.prank(address(proxyHook));
+        ICanonicalVault(canonical).decreaseLiquidityReserve(marketId, proxyPoolKey.currency1, available);
 
         bytes memory expectedReason =
             abi.encodeWithSelector(Errors.InsufficientLiquidity.selector, uint256(1e10), uint256(0));
@@ -389,8 +389,8 @@ contract NativeETHMarket is MarketTestBase, MarketMakerTestBase {
         uint256 selfEth;
         uint256 pmLcc0;
         uint256 pmLcc1;
-        uint256 proxyCurrency0;
-        uint256 proxyCurrency1;
+        uint256 canonicalCurrency0;
+        uint256 canonicalCurrency1;
         uint256 lcc1UnderlyingAsset;
     }
 
@@ -419,8 +419,8 @@ contract NativeETHMarket is MarketTestBase, MarketMakerTestBase {
             balancesBefore.selfEth = address(this).balance;
             balancesBefore.pmLcc0 = IERC20(address(lcc0)).balanceOf(address(manager));
             balancesBefore.pmLcc1 = IERC20(address(lcc1)).balanceOf(address(manager));
-            balancesBefore.proxyCurrency0 = manager.balanceOf(address(proxyHook), proxyPoolKey.currency0.toId());
-            balancesBefore.proxyCurrency1 = manager.balanceOf(address(proxyHook), proxyPoolKey.currency1.toId());
+            balancesBefore.canonicalCurrency0 = manager.balanceOf(mv.canonicalVault(), proxyPoolKey.currency0.toId());
+            balancesBefore.canonicalCurrency1 = manager.balanceOf(mv.canonicalVault(), proxyPoolKey.currency1.toId());
             balancesBefore.lcc1UnderlyingAsset = Currency.wrap(lcc1.underlying()).balanceOfSelf();
         }
 
@@ -448,8 +448,8 @@ contract NativeETHMarket is MarketTestBase, MarketMakerTestBase {
             balancesAfter.selfEth = address(this).balance;
             balancesAfter.pmLcc0 = IERC20(address(lcc0)).balanceOf(address(manager));
             balancesAfter.pmLcc1 = IERC20(address(lcc1)).balanceOf(address(manager));
-            balancesAfter.proxyCurrency0 = manager.balanceOf(address(proxyHook), proxyPoolKey.currency0.toId());
-            balancesAfter.proxyCurrency1 = manager.balanceOf(address(proxyHook), proxyPoolKey.currency1.toId());
+            balancesAfter.canonicalCurrency0 = manager.balanceOf(mv.canonicalVault(), proxyPoolKey.currency0.toId());
+            balancesAfter.canonicalCurrency1 = manager.balanceOf(mv.canonicalVault(), proxyPoolKey.currency1.toId());
             balancesAfter.lcc1UnderlyingAsset = Currency.wrap(lcc1.underlying()).balanceOfSelf();
         }
 
@@ -480,16 +480,16 @@ contract NativeETHMarket is MarketTestBase, MarketMakerTestBase {
             assertEq(balancesAfter.pmLcc0, balancesBefore.pmLcc0 + token0EffectiveLiquidity, "LCC0 balance mismatch");
             assertEq(balancesAfter.pmLcc1, balancesBefore.pmLcc1 + token1EffectiveLiquidity, "LCC1 balance mismatch");
 
-            // Validate underlying tokens have been transferred to proxy pool
+            // Validate underlying claims were custody-transferred into CanonicalVault.
             assertEq(
-                balancesAfter.proxyCurrency0,
-                balancesBefore.proxyCurrency0 + requiredSettlementAmount0,
-                "Proxy currency0 balance mismatch"
+                balancesAfter.canonicalCurrency0,
+                balancesBefore.canonicalCurrency0 + requiredSettlementAmount0,
+                "Canonical currency0 balance mismatch"
             );
             assertEq(
-                balancesAfter.proxyCurrency1,
-                balancesBefore.proxyCurrency1 + requiredSettlementAmount1,
-                "Proxy currency1 balance mismatch"
+                balancesAfter.canonicalCurrency1,
+                balancesBefore.canonicalCurrency1 + requiredSettlementAmount1,
+                "Canonical currency1 balance mismatch"
             );
         }
 

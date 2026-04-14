@@ -88,9 +88,7 @@ contract CanonicalVaultReallocationTest is Test {
         factory = new MockFactory_CanonicalVault(vts);
 
         vm.prank(owner);
-        canonicalVault = new CanonicalVault(address(poolManager), address(liquidityHub), owner);
-        vm.prank(owner);
-        canonicalVault.bindFactory(address(factory));
+        canonicalVault = new CanonicalVault(address(poolManager), address(liquidityHub), address(factory));
 
         factory.setFacade(MARKET_A, facadeA, true);
         factory.setFacade(MARKET_B, facadeB, true);
@@ -111,10 +109,10 @@ contract CanonicalVaultReallocationTest is Test {
         vm.prank(facadeA);
         canonicalVault.takeUnderlyingClaims(MARKET_A, Currency.wrap(address(underlying)), 100e18);
 
-        vm.prank(vts);
+        vm.prank(facadeA);
         canonicalVault.recordCreditProduction(MARKET_A, Currency.wrap(address(underlying)), 40e18);
 
-        vm.prank(vts);
+        vm.prank(facadeB);
         canonicalVault.recordCreditConsumptionForDeposit(MARKET_B, Currency.wrap(address(underlying)), 40e18);
 
         assertEq(canonicalVault.inMarketBalanceOf(MARKET_A, Currency.wrap(address(underlying))), 60e18);
@@ -127,10 +125,10 @@ contract CanonicalVaultReallocationTest is Test {
         vm.prank(facadeA);
         canonicalVault.takeUnderlyingClaims(MARKET_A, Currency.wrap(address(underlying)), 100e18);
 
-        vm.prank(vts);
+        vm.prank(facadeA);
         canonicalVault.recordCreditProduction(MARKET_A, Currency.wrap(address(underlying)), 40e18);
 
-        vm.prank(vts);
+        vm.prank(facadeB);
         canonicalVault.recordCreditConsumptionForWithdrawal(MARKET_B, Currency.wrap(address(underlying)), 40e18);
 
         vm.expectRevert(Errors.CurrencyNotSettled.selector);
@@ -163,5 +161,21 @@ contract CanonicalVaultReallocationTest is Test {
         assertEq(canonicalVault.inMarketBalanceOf(MARKET_B, Currency.wrap(address(underlying))), 0);
 
         canonicalVault.assertNoPendingReallocations();
+    }
+
+    function test_registerMarket_revertsWhenMarketIdIsReused() public {
+        vm.prank(address(factory));
+        vm.expectRevert(
+            abi.encodeWithSelector(Errors.InvariantViolated.selector, "CanonicalVault: market already registered")
+        );
+        canonicalVault.registerMarket(
+            MARKET_A, facadeA, address(0x3001), address(0x3002), address(underlying), address(otherUnderlying)
+        );
+    }
+
+    function test_takeUnderlyingClaims_revertsWhenUnderlyingIsNotRegisteredForMarket() public {
+        vm.prank(facadeA);
+        vm.expectRevert(Errors.InvalidSender.selector);
+        canonicalVault.takeUnderlyingClaims(MARKET_A, Currency.wrap(address(0xBEEF)), 1);
     }
 }

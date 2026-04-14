@@ -116,11 +116,12 @@ interface IMarketFactory {
     function removeBounds(address[] calldata bounds) external;
 
     /**
-     * @notice Explicitly initialises the MarketFactory and registers initial bounds.
+     * @notice Explicitly initialises the MarketFactory: binds canonical custody, core hook, and initial bounds.
+     * @param _canonicalVault The CanonicalVault contract for this factory
      * @param _coreHook The core hook address to bind to this factory
      * @param initialBounds Additional protocol-bound endpoints to register
      */
-    function initialise(address _coreHook, address[] calldata initialBounds) external;
+    function initialise(address _canonicalVault, address _coreHook, address[] calldata initialBounds) external;
 
     /**
      * @notice Returns whether the factory has been initialised.

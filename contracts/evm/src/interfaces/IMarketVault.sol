@@ -9,6 +9,10 @@ import {BalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
  * @notice Interface for th ProxyHook contract
  */
 interface IMarketVault {
+    function marketId() external view returns (bytes32);
+
+    function canonicalVault() external view returns (address);
+
     function lccs() external view returns (address lccToken0, address lccToken1);
 
     /**
@@ -47,4 +51,10 @@ interface IMarketVault {
      * @return The actual balance delta that was applied (may be less than requested for withdrawals)
      */
     function dryModifyLiquidities(BalanceDelta balanceDelta) external view returns (BalanceDelta);
+
+    function recordCreditProduction(Currency underlyingCurrency, uint256 amount) external;
+
+    function recordCreditConsumptionForDeposit(Currency underlyingCurrency, uint256 amount) external;
+
+    function recordCreditConsumptionForWithdrawal(Currency underlyingCurrency, uint256 amount) external;
 }

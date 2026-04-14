@@ -744,14 +744,17 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
         // Reuse the real actions impl from the already-deployed PositionManager so the constructor succeeds.
         // This test is about `commitmentDescriptor`, not delegation.
         MMPositionManager broken = new MMPositionManager(
-            address(manager),
-            address(marketFactory),
-            address(vtsOrchestrator),
-            address(0),
-            weth9,
-            permit2,
-            positionManager.actionsImpl(),
-            address(new MMQueueCustodian(address(this)))
+            MMPositionManager.MMPositionManagerInit({
+                poolManager: manager,
+                marketFactory: address(marketFactory),
+                vtsOrchestrator: address(vtsOrchestrator),
+                canonicalCustody: IMarketFactory(marketFactory).canonicalVault(),
+                descriptor: address(0),
+                weth9: weth9,
+                permit2: permit2,
+                actionsImpl: positionManager.actionsImpl(),
+                queueCustodianAddr: address(new MMQueueCustodian(address(this)))
+            })
         );
         vm.expectRevert(Errors.CommitmentDescriptorNotSet.selector);
         broken.tokenURI(1);
@@ -761,14 +764,17 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
         MockCommitmentDescriptor desc = new MockCommitmentDescriptor("ipfs://mock/");
 
         MMPositionManager fresh = new MMPositionManager(
-            address(manager),
-            address(marketFactory),
-            address(vtsOrchestrator),
-            address(desc),
-            weth9,
-            permit2,
-            positionManager.actionsImpl(),
-            address(new MMQueueCustodian(address(this)))
+            MMPositionManager.MMPositionManagerInit({
+                poolManager: manager,
+                marketFactory: address(marketFactory),
+                vtsOrchestrator: address(vtsOrchestrator),
+                canonicalCustody: IMarketFactory(marketFactory).canonicalVault(),
+                descriptor: address(desc),
+                weth9: weth9,
+                permit2: permit2,
+                actionsImpl: positionManager.actionsImpl(),
+                queueCustodianAddr: address(new MMQueueCustodian(address(this)))
+            })
         );
 
         assertEq(fresh.commitmentDescriptor(), address(desc), "constructor should set commitmentDescriptor");
@@ -778,14 +784,17 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
         MockCommitmentDescriptor desc = new MockCommitmentDescriptor("ipfs://mock/");
 
         MMPositionManager fresh = new MMPositionManager(
-            address(manager),
-            address(marketFactory),
-            address(vtsOrchestrator),
-            address(desc),
-            weth9,
-            permit2,
-            positionManager.actionsImpl(),
-            address(new MMQueueCustodian(address(this)))
+            MMPositionManager.MMPositionManagerInit({
+                poolManager: manager,
+                marketFactory: address(marketFactory),
+                vtsOrchestrator: address(vtsOrchestrator),
+                canonicalCustody: IMarketFactory(marketFactory).canonicalVault(),
+                descriptor: address(desc),
+                weth9: weth9,
+                permit2: permit2,
+                actionsImpl: positionManager.actionsImpl(),
+                queueCustodianAddr: address(new MMQueueCustodian(address(this)))
+            })
         );
 
         assertEq(fresh.tokenURI(123), "ipfs://mock/123", "tokenURI should delegate to descriptor when set");

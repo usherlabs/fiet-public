@@ -38,16 +38,16 @@ import {BalanceDelta, toBalanceDelta} from "@uniswap/v4-core/src/types/BalanceDe
 import {ICoreHook} from "../src/interfaces/ICoreHook.sol";
 import {Lock} from "@uniswap/v4-core/src/libraries/Lock.sol";
 import {IUnlockCallback} from "@uniswap/v4-core/src/interfaces/callback/IUnlockCallback.sol";
-import {StdStorage, stdStorage} from "forge-std/StdStorage.sol";
 import {MarketLiquidityRouterLib} from "../src/libraries/MarketLiquidityRouterLib.sol";
 import {CanonicalVault} from "../src/modules/CanonicalVault.sol";
 
 contract MarketFactoryTest is Test, Deployers {
     using PoolIdLibrary for PoolKey;
-    using stdStorage for StdStorage;
+
+    /// @dev From `forge inspect MarketFactory storageLayout` — update if layout changes.
+    uint256 internal constant _MF_STORAGE_SLOT_INITIALISED = 4;
 
     bytes32 salt;
-    StdStorage internal _store;
     MarketFactory factory;
     MMPositionManager positionManager;
     IPoolManager poolManager;
@@ -80,11 +80,29 @@ contract MarketFactoryTest is Test, Deployers {
             payable(address(new LiquidityHub(address(oracleHelperAddress), "Ether", "ETH", 18, owner)));
         liquidityHub = liquidityHubAddress;
 
-        // Deploy MMPositionManager first (needed for MarketFactory constructor)
+        // Deploy VTSOrchestrator
+        vm.prank(owner);
+        vtsOrchestrator = new VTSOrchestrator(address(poolManager), oracleHelperAddress, liquidityHubAddress, owner);
+
+        // Deploy VRLSettlementObserver
+        vm.prank(owner);
+        new VRLSettlementObserver(address(vtsOrchestrator), owner);
+
+        IAllowanceTransfer permit2 = IAllowanceTransfer(makeAddr("permit2"));
+
+        // Deploy MarketFactory (before MM stack so CanonicalVault can bind to it)
+        vm.prank(owner);
+        factory = new MarketFactory(
+            address(poolManager), liquidityHubAddress, oracleHelperAddress, address(vtsOrchestrator), owner
+        );
+
+        vm.prank(owner);
+        CanonicalVault canonicalVault = new CanonicalVault(address(poolManager), liquidityHubAddress, address(factory));
+
         IWETH9 weth9 = IWETH9(address(new WETH()));
         address commitmentDescriptor = address(new MMPCommitmentDescriptor());
 
-        // Mock factory calls used by MMPositionManager constructor
+        // Mock factory calls used by MMPositionManager constructor (MMPM still points at a placeholder factory addr)
         address tempFactoryAddr = makeAddr("marketFactory");
         vm.mockCall(
             tempFactoryAddr,
@@ -97,47 +115,28 @@ contract MarketFactoryTest is Test, Deployers {
             abi.encode(liquidityHubAddress)
         );
 
-        // Deploy VTSOrchestrator
+        // Deploy MMPositionActionsImpl + MMPositionManager
         vm.prank(owner);
-        vtsOrchestrator = new VTSOrchestrator(address(poolManager), oracleHelperAddress, liquidityHubAddress, owner);
-
-        // Deploy VRLSettlementObserver
-        vm.prank(owner);
-        new VRLSettlementObserver(address(vtsOrchestrator), owner);
-
-        IAllowanceTransfer permit2 = IAllowanceTransfer(makeAddr("permit2"));
-
-        // Deploy MMPositionActionsImpl first
-        vm.prank(owner);
-        MMPositionActionsImpl actionsImpl =
-            new MMPositionActionsImpl(address(poolManager), tempFactoryAddr, address(vtsOrchestrator));
+        MMPositionActionsImpl actionsImpl = new MMPositionActionsImpl(
+            address(poolManager), tempFactoryAddr, address(vtsOrchestrator), address(canonicalVault)
+        );
         MMQueueCustodian queueCustodian = new MMQueueCustodian(address(this));
 
         vm.prank(owner);
         positionManager = new MMPositionManager(
-            address(poolManager),
-            tempFactoryAddr, // temporary address, will be updated after factory deployment
-            address(vtsOrchestrator),
-            commitmentDescriptor,
-            weth9,
-            permit2,
-            address(actionsImpl),
-            address(queueCustodian)
+            MMPositionManager.MMPositionManagerInit({
+                poolManager: poolManager,
+                marketFactory: tempFactoryAddr, // temporary address, will be updated after factory deployment
+                vtsOrchestrator: address(vtsOrchestrator),
+                canonicalCustody: address(canonicalVault),
+                descriptor: commitmentDescriptor,
+                weth9: weth9,
+                permit2: permit2,
+                actionsImpl: address(actionsImpl),
+                queueCustodianAddr: address(queueCustodian)
+            })
         );
         queueCustodian.setPositionManager(address(positionManager));
-
-        // Deploy MarketFactory with all required arguments
-        vm.prank(owner);
-        factory = new MarketFactory(
-            address(poolManager), liquidityHubAddress, oracleHelperAddress, address(vtsOrchestrator), owner
-        );
-
-        vm.prank(owner);
-        CanonicalVault canonicalVault = new CanonicalVault(address(poolManager), liquidityHubAddress, owner);
-        vm.prank(owner);
-        canonicalVault.bindFactory(address(factory));
-        vm.prank(owner);
-        factory.setCanonicalVault(address(canonicalVault));
 
         // Deploy CoreHook at computed address
         deployCodeTo(
@@ -154,7 +153,7 @@ contract MarketFactoryTest is Test, Deployers {
             _generateProxyHookAddress(address(proxyDeployer), abi.encode(poolManager, address(factory)));
 
         vm.prank(owner);
-        factory.initialise(coreHookAddr, new address[](0));
+        factory.initialise(address(canonicalVault), coreHookAddr, new address[](0));
 
         vm.mockCall(address(poolManager), abi.encodeWithSelector(IERC6909Claims.setOperator.selector), abi.encode(true));
 
@@ -170,11 +169,12 @@ contract MarketFactoryTest is Test, Deployers {
     /// @dev Mutation-hardening: ensure the `coreHook != _coreHook` sub-condition in initialise() is killable by
     ///      simulating corrupted storage (coreHook set while initialised is false).
     function test_initialise_allowsSameCoreHookIfAlreadyPresentAndNotInitialised() public {
-        _store.target(address(factory)).sig("isInitialised()").checked_write(false);
-        _store.target(address(factory)).sig("coreHook()").checked_write(coreHookAddr);
+        // Corrupt `initialised` only; `stdStorage` on `isInitialised()` can target the wrong slot across layout changes.
+        vm.startPrank(owner);
+        vm.store(address(factory), bytes32(_MF_STORAGE_SLOT_INITIALISED), bytes32(uint256(0)));
 
-        vm.prank(owner);
-        factory.initialise(coreHookAddr, new address[](0));
+        factory.initialise(factory.canonicalVault(), coreHookAddr, new address[](0));
+        vm.stopPrank();
 
         assertTrue(factory.isInitialised());
         assertEq(factory.coreHook(), coreHookAddr);
@@ -183,13 +183,20 @@ contract MarketFactoryTest is Test, Deployers {
     /// @dev Mutation-hardening: if coreHook is already set (non-zero) but initialised is false, a mismatched
     ///      _coreHook must revert. This kills mutants that remove/flip the mismatch check.
     function test_initialise_revertsWhenCoreHookAlreadySetToDifferentAddress_evenIfNotInitialised() public {
-        _store.target(address(factory)).sig("isInitialised()").checked_write(false);
-        _store.target(address(factory)).sig("coreHook()").checked_write(coreHookAddr);
+        // Deterministic mismatch: `makeAddr` can collide with hook flag-derived addresses used in this suite.
+        address other = address(uint160(coreHookAddr) + 1);
+        address vaultAddr = factory.canonicalVault();
 
-        address other = makeAddr("otherCoreHook");
-        vm.prank(owner);
+        vm.startPrank(owner);
+        vm.store(address(factory), bytes32(_MF_STORAGE_SLOT_INITIALISED), bytes32(uint256(0)));
+
+        assertFalse(factory.isInitialised(), "storage patch should clear initialised");
+        assertEq(factory.coreHook(), coreHookAddr, "setUp initialise should have fixed coreHook");
+
+        // `vm.expectRevert` must apply to `initialise`, not to argument evaluation (`canonicalVault()` would run first).
         vm.expectRevert(abi.encodeWithSelector(Errors.InvalidAddress.selector, other));
-        factory.initialise(other, new address[](0));
+        factory.initialise(vaultAddr, other, new address[](0));
+        vm.stopPrank();
     }
 
     function testCreateMarket() public {
@@ -700,14 +707,11 @@ contract MarketFactoryUnitTest is Test {
         factory =
             new MarketFactory(address(poolManager), address(liquidityHub), address(oracleHelper), address(vts), owner);
         vm.prank(owner);
-        CanonicalVault canonicalVault = new CanonicalVault(address(poolManager), address(liquidityHub), owner);
-        vm.prank(owner);
-        canonicalVault.bindFactory(address(factory));
-        vm.prank(owner);
-        factory.setCanonicalVault(address(canonicalVault));
+        CanonicalVault canonicalVault =
+            new CanonicalVault(address(poolManager), address(liquidityHub), address(factory));
 
         vm.prank(owner);
-        factory.initialise(address(coreHook), new address[](0));
+        factory.initialise(address(canonicalVault), address(coreHook), new address[](0));
 
         // Mock deployProxyHook -> return our in-process proxyHook address.
         address deployer = factory.marketVaultDeployer();
@@ -764,6 +768,31 @@ contract MarketFactoryUnitTest is Test {
         new MarketFactory(address(poolManager), address(liquidityHub), address(oracleHelper), address(0), owner);
     }
 
+    function test_initialise_secondCall_doesNotRebindCanonicalOrCoreHook() public {
+        address vaultBefore = factory.canonicalVault();
+        address coreBefore = factory.coreHook();
+        vm.prank(owner);
+        factory.initialise(makeAddr("unusedVault"), makeAddr("unusedCore"), new address[](0));
+        assertEq(factory.canonicalVault(), vaultBefore);
+        assertEq(factory.coreHook(), coreBefore);
+    }
+
+    function test_initialise_revertsWhenCanonicalVaultBelongsToDifferentFactory() public {
+        vm.prank(owner);
+        MarketFactory freshFactory =
+            new MarketFactory(address(poolManager), address(liquidityHub), address(oracleHelper), address(vts), owner);
+        vm.prank(owner);
+        MarketFactory otherFactory =
+            new MarketFactory(address(poolManager), address(liquidityHub), address(oracleHelper), address(vts), owner);
+        CanonicalVault foreignVault =
+            new CanonicalVault(address(poolManager), address(liquidityHub), address(otherFactory));
+
+        vm.prank(owner);
+        vm.expectRevert(Errors.InvalidSender.selector);
+        address coreForFresh = makeAddr("coreForFresh");
+        freshFactory.initialise(address(foreignVault), coreForFresh, new address[](0));
+    }
+
     function test_initialise_revertsOnZeroAddress() public {
         vm.prank(owner);
         MarketFactory f =
@@ -771,7 +800,7 @@ contract MarketFactoryUnitTest is Test {
 
         vm.prank(owner);
         vm.expectRevert(abi.encodeWithSelector(Errors.InvalidAddress.selector, address(0)));
-        f.initialise(address(0), new address[](0));
+        f.initialise(address(0), address(0x1111), new address[](0));
     }
 
     function test_initialise_revertsForNonOwner() public {
@@ -779,9 +808,12 @@ contract MarketFactoryUnitTest is Test {
         MarketFactory f =
             new MarketFactory(address(poolManager), address(liquidityHub), address(oracleHelper), address(vts), owner);
 
+        vm.prank(owner);
+        CanonicalVault v = new CanonicalVault(address(poolManager), address(liquidityHub), address(f));
+
         vm.prank(nonOwner);
         _expectOwnableUnauthorised(nonOwner);
-        f.initialise(address(0x1111), new address[](0));
+        f.initialise(address(v), address(0x1111), new address[](0));
     }
 
     function test_initialise_setsOnce_andIgnoresSubsequentCalls() public {
@@ -790,11 +822,13 @@ contract MarketFactoryUnitTest is Test {
             new MarketFactory(address(poolManager), address(liquidityHub), address(oracleHelper), address(vts), owner);
 
         vm.prank(owner);
-        f.initialise(address(0x1111), new address[](0));
+        CanonicalVault v = new CanonicalVault(address(poolManager), address(liquidityHub), address(f));
+        vm.prank(owner);
+        f.initialise(address(v), address(0x1111), new address[](0));
         assertEq(f.coreHook(), address(0x1111));
 
         vm.prank(owner);
-        f.initialise(address(0x2222), new address[](0));
+        f.initialise(address(0x2222), address(0x2222), new address[](0));
         assertEq(f.coreHook(), address(0x1111));
     }
 

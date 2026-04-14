@@ -18,6 +18,7 @@ import {IWETH9} from "v4-periphery/src/interfaces/external/IWETH9.sol";
 import {IAllowanceTransfer} from "permit2/src/interfaces/IAllowanceTransfer.sol";
 import {VTSOrchestrator} from "../src/VTSOrchestrator.sol";
 import {VRLSettlementObserver} from "../src/VRLSettlementObserver.sol";
+import {CanonicalVault} from "../src/modules/CanonicalVault.sol";
 
 contract HookTest is Test, Deployers {
     IPoolManager poolManager;
@@ -44,23 +45,29 @@ contract HookTest is Test, Deployers {
         factory = new MarketFactory(
             address(poolManager), liquidityHubAddr, oracleHelperAddr, address(vtsOrchestrator), owner
         );
+        vm.prank(owner);
+        CanonicalVault canonicalVault = new CanonicalVault(address(poolManager), liquidityHubAddr, address(factory));
         IWETH9 weth9 = IWETH9(address(new WETH()));
         IAllowanceTransfer permit2 = IAllowanceTransfer(makeAddr("permit2"));
 
         // Deploy MMPositionActionsImpl first
-        MMPositionActionsImpl actionsImpl =
-            new MMPositionActionsImpl(address(poolManager), address(factory), address(vtsOrchestrator));
+        MMPositionActionsImpl actionsImpl = new MMPositionActionsImpl(
+            address(poolManager), address(factory), address(vtsOrchestrator), address(canonicalVault)
+        );
         MMQueueCustodian queueCustodian = new MMQueueCustodian(address(this));
 
         mmPositionManager = new MMPositionManager(
-            address(poolManager),
-            address(factory),
-            address(vtsOrchestrator),
-            makeAddr("descriptor"),
-            weth9,
-            permit2,
-            address(actionsImpl),
-            address(queueCustodian)
+            MMPositionManager.MMPositionManagerInit({
+                poolManager: poolManager,
+                marketFactory: address(factory),
+                vtsOrchestrator: address(vtsOrchestrator),
+                canonicalCustody: address(canonicalVault),
+                descriptor: makeAddr("descriptor"),
+                weth9: weth9,
+                permit2: permit2,
+                actionsImpl: address(actionsImpl),
+                queueCustodianAddr: address(queueCustodian)
+            })
         );
         queueCustodian.setPositionManager(address(mmPositionManager));
 
