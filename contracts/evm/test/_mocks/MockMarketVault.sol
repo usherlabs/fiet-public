@@ -21,8 +21,14 @@ contract MockMarketVault is IMarketVault {
     mapping(Currency => uint256) public balances;
     address internal immutable canonical;
 
-    constructor() {
-        canonical = address(new MockCanonicalVaultRef(address(this)));
+    /// @param canonicalOverride If zero, deploys `MockCanonicalVaultRef` with `marketFactory == address(this)` (legacy
+    ///        harness behaviour). If non-zero, uses that address as `canonicalVault()` (for shared-factory tests).
+    constructor(address canonicalOverride) {
+        if (canonicalOverride == address(0)) {
+            canonical = address(new MockCanonicalVaultRef(address(this)));
+        } else {
+            canonical = canonicalOverride;
+        }
     }
 
     function marketId() external pure returns (bytes32) {
@@ -37,12 +43,14 @@ contract MockMarketVault is IMarketVault {
         availableLiquidity = toBalanceDelta(amount0, amount1);
     }
 
-    function dryModifyLiquidities(BalanceDelta requested) public view returns (BalanceDelta) {
+    function dryModifyLiquidities(BalanceDelta balanceDelta) public view returns (BalanceDelta) {
         // Return min of requested and available for each token
-        int128 a0 =
-            requested.amount0() > availableLiquidity.amount0() ? availableLiquidity.amount0() : requested.amount0();
-        int128 a1 =
-            requested.amount1() > availableLiquidity.amount1() ? availableLiquidity.amount1() : requested.amount1();
+        int128 a0 = balanceDelta.amount0() > availableLiquidity.amount0()
+            ? availableLiquidity.amount0()
+            : balanceDelta.amount0();
+        int128 a1 = balanceDelta.amount1() > availableLiquidity.amount1()
+            ? availableLiquidity.amount1()
+            : balanceDelta.amount1();
         return toBalanceDelta(a0, a1);
     }
 

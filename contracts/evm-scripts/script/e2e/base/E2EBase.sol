@@ -188,6 +188,77 @@ abstract contract E2EBase is DeployFullStackBase {
         vm.stopBroadcast();
     }
 
+    /// @dev Create an additional market on an already-deployed stack using existing underlying tokens (for
+    ///      multi-market / cross-vault regression scripts that must share the same economic asset pair).
+    /// @param registerOracleTickers When false, skips `OracleHelper.registerTicker` proxy calls (reuse tickers from
+    ///        the first market created on this stack).
+    function _createMarketFromStackWithUnderlyings(
+        FullStack memory stack,
+        address lp,
+        uint24 corePoolFee,
+        address underlying0_,
+        address underlying1_,
+        bool registerOracleTickers
+    ) internal returns (StandaloneMarket memory m) {
+        vm.startBroadcast(_getDeployerPrivateKey());
+
+        m.stack = stack;
+        m.corePoolFee = corePoolFee;
+        (m.underlying0, m.underlying1) = _sort(underlying0_, underlying1_);
+
+        _configureMockOracle(m.stack.contracts.resilientOracle, m.stack.contracts.mainOracle, m.underlying0);
+        _configureMockOracle(m.stack.contracts.resilientOracle, m.stack.contracts.mainOracle, m.underlying1);
+
+        if (registerOracleTickers) {
+            GlobalConfig(m.stack.contracts.globalConfig)
+                .proxyCall(
+                    m.stack.contracts.oracleHelper,
+                    abi.encodeWithSignature("registerTicker(string,address)", "BTC", m.underlying0)
+                );
+            GlobalConfig(m.stack.contracts.globalConfig)
+                .proxyCall(
+                    m.stack.contracts.oracleHelper,
+                    abi.encodeWithSignature("registerTicker(string,address)", "USDT", m.underlying1)
+                );
+        }
+
+        MarketVTSConfiguration memory cfg = _defaultE2EVTSConfig();
+        address marketVaultDeployer = MarketFactory(m.stack.contracts.marketFactory).marketVaultDeployer();
+        (address expectedProxyHook, bytes32 salt) = HookMiner.find(
+            marketVaultDeployer,
+            HookFlags.PROXY_HOOK_FLAGS,
+            type(ProxyHook).creationCode,
+            abi.encode(config.poolManager, m.stack.contracts.marketFactory)
+        );
+        console.log("Expected ProxyHook (extra market):", expectedProxyHook);
+        uint160 initialSqrtPriceX96 = 79228162514264337593543950336; // 1:1
+
+        bytes memory ret = GlobalConfig(m.stack.contracts.globalConfig)
+            .proxyCall(
+                m.stack.contracts.marketFactory,
+                abi.encodeWithSelector(
+                    MarketFactory.createMarket.selector,
+                    m.underlying0,
+                    m.underlying1,
+                    corePoolFee,
+                    int24(60),
+                    initialSqrtPriceX96,
+                    salt,
+                    cfg
+                )
+            );
+
+        (bytes32 corePoolIdBytes32,) = abi.decode(ret, (bytes32, bytes32));
+        m.marketId = corePoolIdBytes32;
+
+        ILiquidityHub hub = ILiquidityHub(m.stack.contracts.liquidityHub);
+        m.lcc0 = hub.getLCC(m.marketId, m.underlying0);
+        m.lcc1 = hub.getLCC(m.marketId, m.underlying1);
+        require(m.lcc0 != address(0) && m.lcc1 != address(0), "market: LCCs not created (reuse underlyings)");
+
+        vm.stopBroadcast();
+    }
+
     function _defaultE2EVTSConfig() internal pure returns (MarketVTSConfiguration memory cfg) {
         TokenConfiguration memory token0 = TokenConfiguration({
             gracePeriodTime: 1800,

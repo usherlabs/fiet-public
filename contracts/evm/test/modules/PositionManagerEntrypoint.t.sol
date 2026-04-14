@@ -4,6 +4,7 @@ pragma solidity ^0.8.26;
 import "forge-std/Test.sol";
 
 import {PositionManagerEntrypoint} from "../../src/modules/PositionManagerEntrypoint.sol";
+import {VTSCurrencyDeltaHarness} from "../libraries/harnesses/VTSCurrencyDeltaHarness.sol";
 import {Currency} from "v4-periphery/lib/v4-core/src/types/Currency.sol";
 import {Errors} from "../../src/libraries/Errors.sol";
 
@@ -162,9 +163,23 @@ contract PositionManagerEntrypointTest is Test {
     }
 
     function test_afterBatch_callsAssertNonZeroDeltas() public {
-        vm.expectCall(orch, abi.encodeWithSignature("assertNonZeroDeltas()"));
-        vm.expectCall(orch, abi.encodeWithSignature("assertNoPendingMarketDeltas(address)", factory));
+        vm.expectCall(orch, abi.encodeWithSignature("assertNonZeroDeltas(address)", factory));
         h.exposeAfterBatch();
+    }
+
+    /// @notice Regression: `_afterBatch` must fail the unlock when factory-scoped produced credit remains uncleared.
+    /// @dev Uses `VTSCurrencyDeltaHarness` as the orchestrator stand-in so `MarketCurrencyDelta` transient state
+    ///      matches the callee context of `assertNonZeroDeltas` (same as production `VTSOrchestrator` wiring).
+    function test_afterBatch_revertsWhenMarketProducedCreditUnresolved() public {
+        VTSCurrencyDeltaHarness orchHarness = new VTSCurrencyDeltaHarness();
+        PositionManagerEntrypointHarness hh =
+            new PositionManagerEntrypointHarness(factory, address(orchHarness), canonical, address(impl), locker);
+
+        MockERC20 creditToken = new MockERC20("P", "P");
+        orchHarness.seedMarketProduced(factory, Currency.wrap(address(creditToken)), 1 ether);
+
+        vm.expectRevert(Errors.CurrencyNotSettled.selector);
+        hh.exposeAfterBatch();
     }
 
     function test_take_maxAmountZero_capsToBalance_andTransfersToRecipient() public {

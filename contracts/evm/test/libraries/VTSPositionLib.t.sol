@@ -70,8 +70,8 @@ contract VTSPositionLibTest_VaultNoop is IMarketVault {
 
     function modifyLiquidities(VaultSettlementIntent calldata) external pure {}
 
-    function tryModifyLiquidities(BalanceDelta d) external pure returns (BalanceDelta) {
-        return d;
+    function tryModifyLiquidities(BalanceDelta balanceDelta) external pure returns (BalanceDelta) {
+        return balanceDelta;
     }
 
     function tryModifyLiquidities(VaultSettlementIntent calldata settlementIntent)
@@ -82,8 +82,12 @@ contract VTSPositionLibTest_VaultNoop is IMarketVault {
         return settlementIntent.requestedDelta;
     }
 
-    function tryModifyLiquiditiesWithRecipient(BalanceDelta d, address) external pure returns (BalanceDelta) {
-        return d;
+    function tryModifyLiquiditiesWithRecipient(BalanceDelta balanceDelta, address)
+        external
+        pure
+        returns (BalanceDelta)
+    {
+        return balanceDelta;
     }
 
     function tryModifyLiquiditiesWithRecipient(VaultSettlementIntent calldata settlementIntent, address)
@@ -94,8 +98,8 @@ contract VTSPositionLibTest_VaultNoop is IMarketVault {
         return settlementIntent.requestedDelta;
     }
 
-    function dryModifyLiquidities(BalanceDelta d) external pure returns (BalanceDelta) {
-        return d;
+    function dryModifyLiquidities(BalanceDelta balanceDelta) external pure returns (BalanceDelta) {
+        return balanceDelta;
     }
 
     function dryModifyLiquidities(VaultSettlementIntent calldata settlementIntent)
@@ -140,8 +144,8 @@ contract VTSPositionLibTest_VaultClamp is IMarketVault {
 
     function modifyLiquidities(VaultSettlementIntent calldata) external pure {}
 
-    function tryModifyLiquidities(BalanceDelta d) external pure returns (BalanceDelta) {
-        return d;
+    function tryModifyLiquidities(BalanceDelta balanceDelta) external pure returns (BalanceDelta) {
+        return balanceDelta;
     }
 
     function tryModifyLiquidities(VaultSettlementIntent calldata settlementIntent)
@@ -152,8 +156,12 @@ contract VTSPositionLibTest_VaultClamp is IMarketVault {
         return _dry(settlementIntent.requestedDelta);
     }
 
-    function tryModifyLiquiditiesWithRecipient(BalanceDelta d, address) external pure returns (BalanceDelta) {
-        return d;
+    function tryModifyLiquiditiesWithRecipient(BalanceDelta balanceDelta, address)
+        external
+        pure
+        returns (BalanceDelta)
+    {
+        return balanceDelta;
     }
 
     function tryModifyLiquiditiesWithRecipient(VaultSettlementIntent calldata settlementIntent, address)
@@ -164,8 +172,8 @@ contract VTSPositionLibTest_VaultClamp is IMarketVault {
         return _dry(settlementIntent.requestedDelta);
     }
 
-    function dryModifyLiquidities(BalanceDelta d) external view returns (BalanceDelta) {
-        return _dry(d);
+    function dryModifyLiquidities(BalanceDelta balanceDelta) external view returns (BalanceDelta) {
+        return _dry(balanceDelta);
     }
 
     function dryModifyLiquidities(VaultSettlementIntent calldata settlementIntent)
@@ -176,10 +184,10 @@ contract VTSPositionLibTest_VaultClamp is IMarketVault {
         return _dry(settlementIntent.requestedDelta);
     }
 
-    function _dry(BalanceDelta d) internal view returns (BalanceDelta) {
+    function _dry(BalanceDelta balanceDelta) internal view returns (BalanceDelta) {
         // Only clamp positive (withdrawal) deltas; pass through deposits (negative).
-        int128 a0 = d.amount0();
-        int128 a1 = d.amount1();
+        int128 a0 = balanceDelta.amount0();
+        int128 a1 = balanceDelta.amount1();
         if (a0 > 0 && a0 > avail0) a0 = avail0;
         if (a1 > 0 && a1 > avail1) a1 = avail1;
         return toBalanceDelta(a0, a1);
@@ -219,8 +227,8 @@ contract VTSPositionLibTest_VaultOverAvailable is IMarketVault {
 
     function modifyLiquidities(VaultSettlementIntent calldata) external pure {}
 
-    function tryModifyLiquidities(BalanceDelta d) external pure returns (BalanceDelta) {
-        return d;
+    function tryModifyLiquidities(BalanceDelta balanceDelta) external pure returns (BalanceDelta) {
+        return balanceDelta;
     }
 
     function tryModifyLiquidities(VaultSettlementIntent calldata settlementIntent)
@@ -231,8 +239,12 @@ contract VTSPositionLibTest_VaultOverAvailable is IMarketVault {
         return _dry(settlementIntent.requestedDelta);
     }
 
-    function tryModifyLiquiditiesWithRecipient(BalanceDelta d, address) external pure returns (BalanceDelta) {
-        return d;
+    function tryModifyLiquiditiesWithRecipient(BalanceDelta balanceDelta, address)
+        external
+        pure
+        returns (BalanceDelta)
+    {
+        return balanceDelta;
     }
 
     function tryModifyLiquiditiesWithRecipient(VaultSettlementIntent calldata settlementIntent, address)
@@ -243,8 +255,8 @@ contract VTSPositionLibTest_VaultOverAvailable is IMarketVault {
         return _dry(settlementIntent.requestedDelta);
     }
 
-    function dryModifyLiquidities(BalanceDelta d) external view virtual returns (BalanceDelta) {
-        return _dry(d);
+    function dryModifyLiquidities(BalanceDelta balanceDelta) external view virtual returns (BalanceDelta) {
+        return _dry(balanceDelta);
     }
 
     function dryModifyLiquidities(VaultSettlementIntent calldata settlementIntent)
@@ -255,10 +267,10 @@ contract VTSPositionLibTest_VaultOverAvailable is IMarketVault {
         return _dry(settlementIntent.requestedDelta);
     }
 
-    function _dry(BalanceDelta d) internal view virtual returns (BalanceDelta) {
+    function _dry(BalanceDelta balanceDelta) internal view virtual returns (BalanceDelta) {
         // Return strictly more available than requested (for positive deltas).
-        int128 a0 = d.amount0();
-        int128 a1 = d.amount1();
+        int128 a0 = balanceDelta.amount0();
+        int128 a1 = balanceDelta.amount1();
         if (a0 > 0) a0 += extra0;
         if (a1 > 0) a1 += extra1;
         return toBalanceDelta(a0, a1);
@@ -271,13 +283,13 @@ contract VTSPositionLibTest_VaultOverAvailable is IMarketVault {
 contract VTSPositionLibTest_VaultOverAvailable0 is VTSPositionLibTest_VaultOverAvailable {
     constructor(int128 extra0_) VTSPositionLibTest_VaultOverAvailable(extra0_, 0) {}
 
-    function dryModifyLiquidities(BalanceDelta d) external view override returns (BalanceDelta) {
-        return _dry(d);
+    function dryModifyLiquidities(BalanceDelta balanceDelta) external view override returns (BalanceDelta) {
+        return _dry(balanceDelta);
     }
 
-    function _dry(BalanceDelta d) internal view override returns (BalanceDelta) {
-        int128 a0 = d.amount0();
-        int128 a1 = d.amount1();
+    function _dry(BalanceDelta balanceDelta) internal view override returns (BalanceDelta) {
+        int128 a0 = balanceDelta.amount0();
+        int128 a1 = balanceDelta.amount1();
         if (a0 > 0) a0 += extra0;
         // Force zero availability on token1 for positive deltas to create a queued remainder on token1.
         if (a1 > 0) a1 = 0;
@@ -289,13 +301,13 @@ contract VTSPositionLibTest_VaultOverAvailable0 is VTSPositionLibTest_VaultOverA
 contract VTSPositionLibTest_VaultOverAvailable1 is VTSPositionLibTest_VaultOverAvailable {
     constructor(int128 extra1_) VTSPositionLibTest_VaultOverAvailable(0, extra1_) {}
 
-    function dryModifyLiquidities(BalanceDelta d) external view override returns (BalanceDelta) {
-        return _dry(d);
+    function dryModifyLiquidities(BalanceDelta balanceDelta) external view override returns (BalanceDelta) {
+        return _dry(balanceDelta);
     }
 
-    function _dry(BalanceDelta d) internal view override returns (BalanceDelta) {
-        int128 a0 = d.amount0();
-        int128 a1 = d.amount1();
+    function _dry(BalanceDelta balanceDelta) internal view override returns (BalanceDelta) {
+        int128 a0 = balanceDelta.amount0();
+        int128 a1 = balanceDelta.amount1();
         // Force zero availability on token0 for positive deltas to create a queued remainder on token0.
         if (a0 > 0) a0 = 0;
         if (a1 > 0) a1 += extra1;

@@ -6,6 +6,7 @@ import {VTSStorage} from "../../../src/types/VTS.sol";
 import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
 import {BalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
 import {OwnerCurrencyDelta} from "../../../src/libraries/OwnerCurrencyDelta.sol";
+import {MarketCurrencyDelta} from "../../../src/libraries/MarketCurrencyDelta.sol";
 import {CurrencyDelta} from "v4-periphery/lib/v4-core/src/libraries/CurrencyDelta.sol";
 import {IMarketFactory} from "../../../src/interfaces/IMarketFactory.sol";
 
@@ -49,6 +50,12 @@ contract VTSCurrencyDeltaHarness is VTSCurrencyDelta {
     /// @dev Wrapper for OwnerCurrencyDelta.accountDelta
     function accountDelta(Currency currency, int128 delta, address target) external {
         OwnerCurrencyDelta.accountDelta(currency, delta, target);
+    }
+
+    /// @dev Seeds factory-scoped produced credit in this harness execution context (matches `VTSOrchestrator`
+    ///      transient namespace when the orchestrator is deployed as the harness stand-in in entrypoint tests).
+    function seedMarketProduced(address factory, Currency currency, uint256 amount) external {
+        MarketCurrencyDelta.addProduced(factory, currency, amount);
     }
 }
 

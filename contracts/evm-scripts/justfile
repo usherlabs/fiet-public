@@ -652,6 +652,12 @@ read-deployment:
 # Note: Make sure fork is running
 e2e: e2e-deploy e2e-normal-lp e2e-market-maker e2e-mm-coverage
 
+# E2E: Multi-market MM regression (shared underlyings across four markets; decrease/mint-from-deltas/settle-from-deltas).
+e2e-cross-market-delta:
+    FOUNDRY_PROFILE={{ foundry_profile }} forge script {{ script_dir }}/e2e/CrossMarketDeltaRegression.s.sol:CrossMarketDeltaRegressionE2E \
+        --rpc-url {{ rpc_url }} \
+        {{ broadcast_flag }} -vvv
+
 # E2E: Deploy full stack only (standalone) and print MarketFactory.
 e2e-deploy:
     FOUNDRY_PROFILE={{ foundry_profile }} forge script {{ script_dir }}/e2e/Deploy.s.sol:DeployE2E \

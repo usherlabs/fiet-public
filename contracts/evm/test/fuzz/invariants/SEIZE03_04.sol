@@ -46,7 +46,7 @@ contract SEIZE03_04 {
         EchidnaLinkedLibs.deployVTSPositionLib();
         harness = new VTSPositionLibEchidnaHarness();
         poolManager = new MockPoolManager();
-        vault = new MockMarketVault();
+        vault = new MockMarketVault(address(0));
 
         address underlying0 = address(0x2000000000000000000000000000000000000031);
         address underlying1 = address(0x2000000000000000000000000000000000000032);

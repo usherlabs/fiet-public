@@ -646,6 +646,10 @@ contract VTSPositionLibHarness {
         MarketCurrencyDelta.addProduced(ICanonicalVault(vault.canonicalVault()).marketFactory(), currency, amount);
     }
 
+    function marketProducedCredit(address factory, Currency currency) external view returns (uint256) {
+        return MarketCurrencyDelta.produced(factory, currency);
+    }
+
     /// @notice Reads the current currency delta for a target in this harness' transient storage context
     function getDelta(Currency currency, address target) external view returns (int256) {
         return currency.getDelta(target);

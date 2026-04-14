@@ -1266,7 +1266,7 @@ contract MarketFactoryUnitTest is Test {
     function test_unlockCallback_revertsWhenCallerIsNotPoolManager() public {
         MarketLiquidityRouterLib.UseMarketLiquidityUnlockData memory unlockData =
             MarketLiquidityRouterLib.UseMarketLiquidityUnlockData({
-                proxyHook: address(proxyHook), requestedDelta: 0, recipient: address(liquidityHub)
+                proxyHook: address(proxyHook), balanceDelta: 0, recipient: address(liquidityHub)
             });
 
         vm.expectRevert(Errors.InvalidSender.selector);
@@ -1275,11 +1275,11 @@ contract MarketFactoryUnitTest is Test {
 
     function test_unlockCallback_returnsEncodedUsedDelta() public {
         proxyHook.setForcedDelta(int128(3), int128(5));
-        BalanceDelta requested = toBalanceDelta(int128(11), int128(0));
+        BalanceDelta balanceDelta = toBalanceDelta(int128(11), int128(0));
         MarketLiquidityRouterLib.UseMarketLiquidityUnlockData memory unlockData =
             MarketLiquidityRouterLib.UseMarketLiquidityUnlockData({
                 proxyHook: address(proxyHook),
-                requestedDelta: BalanceDelta.unwrap(requested),
+                balanceDelta: BalanceDelta.unwrap(balanceDelta),
                 recipient: address(liquidityHub)
             });
 

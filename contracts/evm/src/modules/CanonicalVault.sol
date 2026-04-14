@@ -368,14 +368,14 @@ contract CanonicalVault is ICanonicalVault, ImmutableState, ReentrancyGuardTrans
         bytes32 marketId,
         address lcc0,
         address lcc1,
-        BalanceDelta requestedDelta,
+        BalanceDelta balanceDelta,
         BalanceDelta usedDelta,
         address recipient
     ) internal {
-        if (requestedDelta.amount0() < 0) {
+        if (balanceDelta.amount0() < 0) {
             _settleObligationsForLCC(marketId, ILCC(lcc0));
         }
-        if (requestedDelta.amount1() < 0) {
+        if (balanceDelta.amount1() < 0) {
             _settleObligationsForLCC(marketId, ILCC(lcc1));
         }
         if (recipient == address(liquidityHub)) {

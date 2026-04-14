@@ -56,7 +56,7 @@ abstract contract PositionManagerEntrypoint is PositionManagerBase {
         TransientSlots.clearSeizedPositionId();
         TransientSlots.clearMsgValueRead();
         // Owner-scoped and market-scoped transient namespaces both resolve through the orchestrator boundary.
-        vtsOrchestrator.assertNonZeroDeltas();
+        vtsOrchestrator.assertNonZeroDeltas(marketFactory);
     }
 
     // ------------------------------------------------------------------------------------------------

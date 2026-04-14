@@ -430,10 +430,9 @@ contract MarketFactory is IMarketFactory, Ownable, ImmutableState, ImmutableVTSS
         address proxyHook = _proxyToHook[coreToProxy[pId]];
         address currency0 = _corePoolToCurrencyPair[pId][0];
         address currency1 = _corePoolToCurrencyPair[pId][1];
-        BalanceDelta requestedDelta = MarketLiquidityRouterLib.toRequestedDelta(lcc, currency0, currency1, amount);
-        BalanceDelta usedDelta = MarketLiquidityRouterLib.useWithOptionalUnlock(
-            poolManager, proxyHook, requestedDelta, address(liquidityHub)
-        );
+        BalanceDelta balanceDelta = MarketLiquidityRouterLib.toRequestedDelta(lcc, currency0, currency1, amount);
+        BalanceDelta usedDelta =
+            MarketLiquidityRouterLib.useWithOptionalUnlock(poolManager, proxyHook, balanceDelta, address(liquidityHub));
 
         vtsOrchestrator.incrementCoverage(
             pId,
@@ -451,7 +450,7 @@ contract MarketFactory is IMarketFactory, Ownable, ImmutableState, ImmutableVTSS
         MarketLiquidityRouterLib.UseMarketLiquidityUnlockData memory unlockData =
             MarketLiquidityRouterLib.decodeUnlockData(data);
         BalanceDelta usedDelta = MarketLiquidityRouterLib.useWithoutUnlock(
-            unlockData.proxyHook, BalanceDelta.wrap(unlockData.requestedDelta), unlockData.recipient
+            unlockData.proxyHook, BalanceDelta.wrap(unlockData.balanceDelta), unlockData.recipient
         );
         return MarketLiquidityRouterLib.encodeUnlockResult(usedDelta);
     }

@@ -76,7 +76,9 @@ abstract contract VTSCurrencyDelta is IVTSCurrencyDelta {
     }
 
     /// @inheritdoc IVTSCurrencyDelta
-    function assertNonZeroDeltas() external view {
+    /// @dev `factory` must be the same `IMarketFactory` bound to the MM entrypoint so produced-credit finality matches
+    ///      the namespace used by `MarketCurrencyDelta.addProduced` / `consumeProduced` for that deployment.
+    function assertNonZeroDeltas(IMarketFactory factory) external view {
         OwnerCurrencyDelta.assertNonZeroDeltas();
         MarketCurrencyDelta.assertResolved(address(factory));
     }

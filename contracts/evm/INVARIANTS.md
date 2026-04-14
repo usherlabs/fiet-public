@@ -620,10 +620,55 @@ being an informal “should”.
 ### DELTA-01: Deltas must net to zero per unlock/batch
 
 - **Statement**: At the end of an unlock/batch, the protocol must have `NonzeroDeltaCount == 0` or revert.
-- **Enforced by**: `src/libraries/OwnerCurrencyDelta.sol::assertNonZeroDeltas` reverts `Errors.CurrencyNotSettled()`.
-- **Complemented by**: `src/libraries/MarketCurrencyDelta.sol::assertResolved` for factory-prefixed produced-credit state, asserted from `PositionManagerEntrypoint` via `VTSCurrencyDelta.assertNoPendingMarketDeltas`.
+- **Enforced by**: `src/modules/PositionManagerEntrypoint.sol::_afterBatch` calls
+  `VTSOrchestrator.assertNonZeroDeltas(IMarketFactory)` (implemented on `VTSCurrencyDelta`), which:
+  - runs `src/libraries/OwnerCurrencyDelta.sol::assertNonZeroDeltas` and reverts `Errors.CurrencyNotSettled()` when any
+    owner-scoped PoolManager currency delta remains non-zero; and
+  - runs `src/libraries/MarketCurrencyDelta.sol::assertResolved(address(factory))` for the **bound** MM
+    `marketFactory`, reverting `Errors.CurrencyNotSettled()` when any factory-prefixed produced-credit bucket is still
+    non-zero.
 - **Practical implication**: Credits do **not** persist across unlock sessions; they are transient and must be consumed
   (eg via `TAKE`, `SYNC`, unwrap flows) within the same batch.
+
+### DELTA-01A: Produced accounting must stay paired with explicit reserve export and credit-backed withdrawal consumption
+
+- **Statement**:
+  - Factory-scoped produced credit in `MarketCurrencyDelta` is the transient mirror of real same-underlying value
+    exported from a market's durable reserve ledger.
+  - Therefore, any path that **produces** same-underlying withdrawal credit for later cross-market use must pair:
+    - a durable source-market reserve decrement, and
+    - a matching `MarketCurrencyDelta.addProduced(factory, underlying, amount)`.
+  - Any path that **consumes** delta-backed withdrawal capacity must pair:
+    - an owner underlying-delta debit for the consumed amount, and
+    - a matching `MarketCurrencyDelta.consumeProduced(factory, underlying, amount)`.
+  - Owner-level same-underlying delta may remain global for planning, but it is **not** by itself sufficient economic
+    authority for a withdrawal. The withdrawal-backed slice is valid only when matched by available produced credit in the
+    same bound `marketFactory` namespace.
+- **Enforced / expressed by**:
+  - `src/libraries/VTSPositionLib.sol::_processMMOperations` (MM decrease export path):
+    - calls `IMarketVault.decreaseLiquidityReserve(...)` on the source market for the exported underlying amount, then
+    - calls `MarketCurrencyDelta.addProduced(factory, underlying, amount)` for the same amount.
+  - `src/libraries/VTSLifecycleLinkedLib.sol::_executeWithdrawals` and `_applyWithdrawalLane`:
+    - build `VaultSettlementIntent.creditBackedWithdrawal{0,1}` from the planned delta-backed slice,
+    - debit `OwnerCurrencyDelta` on the owner for the actual delta-backed withdrawal amount, and
+    - call `MarketCurrencyDelta.consumeProduced(factory, underlying, amount)` for that same actual amount.
+  - `src/modules/CanonicalVault.sol::_dryModifyLiquidities` and `_modifyLiquidityWithRecipient`:
+    - treat `creditBackedWithdrawal{0,1}` as distinct from the settled-backed remainder, so only the settled-backed
+      slice decrements the destination market's `marketLiquidityReserves`.
+  - `src/modules/PositionManagerEntrypoint.sol::_afterBatch`:
+    - calls `vtsOrchestrator.assertNonZeroDeltas(marketFactory)`, which in turn requires
+      `MarketCurrencyDelta.assertResolved(address(factory))`, preventing produced-credit residue from leaking across
+      batches.
+- **Why**:
+  - This pairing invariant is what closes the original cross-market vault-payout class where owner-level same-underlying
+    delta alone could be treated as withdrawal authority against the current market's vault.
+  - The protocol intentionally allows same-underlying credit exported in market A to fund settlement in market B within
+    the same factory, but only through:
+    - explicit `VaultSettlementIntent`,
+    - factory-scoped produced accounting, and
+    - CanonicalVault's durable per-market reserve ledger.
+  - Any future refactor that debits owner underlying delta without consuming produced credit, or that adds produced credit
+    without first exporting durable reserve, would violate this invariant and re-open principal misattribution risk.
 
 ### DELTA-02: `MMPositionManager` residual balances are FCFS dust, not a persisted user entitlement
 
@@ -648,8 +693,9 @@ being an informal “should”.
     `VTSOrchestrator.sync(...)`.
   - `src/modules/PositionManagerEntrypoint.sol::_take` debits the locker’s positive delta and transfers available
     contract balance to the requested recipient.
-  - `src/modules/PositionManagerEntrypoint.sol::_afterBatch` calls `vtsOrchestrator.assertNonZeroDeltas()`, which
-    forces callers to fully resolve transient credits/debts within the batch or revert.
+  - `src/modules/PositionManagerEntrypoint.sol::_afterBatch` calls `vtsOrchestrator.assertNonZeroDeltas(marketFactory)`,
+    which forces callers to fully resolve owner-scoped transient credits/debts and the bound factory’s market-produced
+    credit within the batch or revert.
 - **Scope clarification**:
   - This FCFS rule applies to **residual dust held by `MMPositionManager` itself**.
   - It does **not** redefine assets held in explicit custody/accounting domains (for example, queue-custodied balances,

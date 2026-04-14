@@ -2176,16 +2176,20 @@ contract MockMarketVaultNoop {
     }
     function modifyLiquidities(BalanceDelta) external pure {}
 
-    function tryModifyLiquidities(BalanceDelta d) external pure returns (BalanceDelta) {
-        return d;
+    function tryModifyLiquidities(BalanceDelta balanceDelta) external pure returns (BalanceDelta) {
+        return balanceDelta;
     }
 
-    function tryModifyLiquiditiesWithRecipient(BalanceDelta d, address) external pure returns (BalanceDelta) {
-        return d;
+    function tryModifyLiquiditiesWithRecipient(BalanceDelta balanceDelta, address)
+        external
+        pure
+        returns (BalanceDelta)
+    {
+        return balanceDelta;
     }
 
-    function dryModifyLiquidities(BalanceDelta d) external pure returns (BalanceDelta) {
-        return d;
+    function dryModifyLiquidities(BalanceDelta balanceDelta) external pure returns (BalanceDelta) {
+        return balanceDelta;
     }
 }
 
@@ -2220,8 +2224,8 @@ contract MockMarketVaultPassthrough is IMarketVault {
 
     function modifyLiquidities(VaultSettlementIntent calldata) external pure {}
 
-    function tryModifyLiquidities(BalanceDelta d) external pure returns (BalanceDelta) {
-        return d;
+    function tryModifyLiquidities(BalanceDelta balanceDelta) external pure returns (BalanceDelta) {
+        return balanceDelta;
     }
 
     function tryModifyLiquidities(VaultSettlementIntent calldata settlementIntent)
@@ -2232,8 +2236,12 @@ contract MockMarketVaultPassthrough is IMarketVault {
         return settlementIntent.requestedDelta;
     }
 
-    function tryModifyLiquiditiesWithRecipient(BalanceDelta d, address) external pure returns (BalanceDelta) {
-        return d;
+    function tryModifyLiquiditiesWithRecipient(BalanceDelta balanceDelta, address)
+        external
+        pure
+        returns (BalanceDelta)
+    {
+        return balanceDelta;
     }
 
     function tryModifyLiquiditiesWithRecipient(VaultSettlementIntent calldata settlementIntent, address)
@@ -2244,8 +2252,8 @@ contract MockMarketVaultPassthrough is IMarketVault {
         return settlementIntent.requestedDelta;
     }
 
-    function dryModifyLiquidities(BalanceDelta d) external pure returns (BalanceDelta) {
-        return d;
+    function dryModifyLiquidities(BalanceDelta balanceDelta) external pure returns (BalanceDelta) {
+        return balanceDelta;
     }
 
     function dryModifyLiquidities(VaultSettlementIntent calldata settlementIntent)
