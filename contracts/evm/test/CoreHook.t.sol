@@ -235,6 +235,22 @@ contract CoreHookTest is Test {
         assertEq(tickAfter, 0, "TICK_BEFORE_SLOT should be cleared");
     }
 
+    function test_afterSwap_preservesBoundaryTickSnapshots() public {
+        uint160 sqrtPBefore = 123;
+        uint128 liqBefore = 456;
+        SwapParams memory sp = SwapParams({zeroForOne: true, amountSpecified: int256(1), sqrtPriceLimitX96: 0});
+
+        hook.exposed_afterSwap_withPresetSnapshot(
+            key, sp, toBalanceDelta(int128(-1), int128(1)), sqrtPBefore, liqBefore, type(int24).min, bytes("")
+        );
+        assertEq(vts.lastTickBefore(), type(int24).min, "expected int24 min tick snapshot");
+
+        hook.exposed_afterSwap_withPresetSnapshot(
+            key, sp, toBalanceDelta(int128(-1), int128(1)), sqrtPBefore, liqBefore, type(int24).max, bytes("")
+        );
+        assertEq(vts.lastTickBefore(), type(int24).max, "expected int24 max tick snapshot");
+    }
+
     // ------------------------------------------------------------
     // Helpers
     // ------------------------------------------------------------
@@ -319,7 +335,7 @@ contract CoreHookHarness is CoreHook {
     ) external returns (uint256 sqrtAfter, uint256 liqAfter, uint256 tickAfter) {
         // Pre-seed transient slots to emulate the beforeSwap->afterSwap same-tx lifecycle.
         TransientSlot.asUint256(TransientSlots.SQRTP_BEFORE_SLOT).tstore(uint256(sqrtPBefore));
-        TransientSlot.asUint256(TransientSlots.TICK_BEFORE_SLOT).tstore(uint256(int256(tickBefore)));
+        TransientSlot.asUint256(TransientSlots.TICK_BEFORE_SLOT).tstore(TransientSlots.encodeTickBefore(tickBefore));
         TransientSlot.asUint256(TransientSlots.LIQ_BEFORE_SLOT).tstore(uint256(liqBefore));
 
         _afterSwap(address(this), k, params, delta, hookData);

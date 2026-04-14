@@ -454,8 +454,12 @@ contract VTSOrchestrator is
     /// @param vtsConfiguration The VTS configuration
     function initPool(PoolKey memory corePoolKey, MarketVTSConfiguration memory vtsConfiguration) external onlyFactory {
         _assertValidMarketVTSConfiguration(vtsConfiguration);
+        PoolId poolId = corePoolKey.toId();
+        if (Currency.unwrap(s.pools[poolId].currency0) != address(0)) {
+            revert Errors.InvariantViolated("VTSOrchestrator: pool already initialized");
+        }
         // Initialize the market details in the VTS state
-        s.pools[corePoolKey.toId()] = Pool({
+        s.pools[poolId] = Pool({
             currency0: corePoolKey.currency0,
             currency1: corePoolKey.currency1,
             vtsConfig: vtsConfiguration,
