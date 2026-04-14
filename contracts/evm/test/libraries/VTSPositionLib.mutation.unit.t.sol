@@ -1522,6 +1522,8 @@ contract VTSPositionLibMutationUnitTest is Test {
         );
         harness.setUnderlyingDelta(setup.underlying0, owner, setup.required0.toInt128());
         harness.setUnderlyingDelta(setup.underlying1, owner, setup.required1.toInt128());
+        harness.addMarketProducedCredit(setup.ctx.marketVault, setup.underlying0, setup.required0);
+        harness.addMarketProducedCredit(setup.ctx.marketVault, setup.underlying1, setup.required1);
 
         harness.touchPosition(setup.ctx, setup.tp);
 
@@ -1538,6 +1540,8 @@ contract VTSPositionLibMutationUnitTest is Test {
             PositionModificationHookDataLib.encodeWithInHookProtocolSettlement(1, 0, owner, surplus0, surplus1);
         harness.setUnderlyingDelta(setup.underlying0, owner, surplus0.toInt128());
         harness.setUnderlyingDelta(setup.underlying1, owner, surplus1.toInt128());
+        harness.addMarketProducedCredit(setup.ctx.marketVault, setup.underlying0, surplus0);
+        harness.addMarketProducedCredit(setup.ctx.marketVault, setup.underlying1, surplus1);
 
         harness.touchPosition(setup.ctx, setup.tp);
 
@@ -1553,6 +1557,8 @@ contract VTSPositionLibMutationUnitTest is Test {
             PositionModificationHookDataLib.encodeWithInHookProtocolSettlement(1, 0, owner, setup.required0, surplus1);
         harness.setUnderlyingDelta(setup.underlying0, owner, setup.required0.toInt128());
         harness.setUnderlyingDelta(setup.underlying1, owner, surplus1.toInt128());
+        harness.addMarketProducedCredit(setup.ctx.marketVault, setup.underlying0, setup.required0);
+        harness.addMarketProducedCredit(setup.ctx.marketVault, setup.underlying1, surplus1);
 
         harness.touchPosition(setup.ctx, setup.tp);
 
@@ -1575,6 +1581,8 @@ contract VTSPositionLibMutationUnitTest is Test {
         );
         harness.setUnderlyingDelta(setup.underlying0, owner, setup.required0.toInt128());
         harness.setUnderlyingDelta(setup.underlying1, owner, setup.required1.toInt128());
+        harness.addMarketProducedCredit(setup.ctx.marketVault, setup.underlying0, setup.required0);
+        harness.addMarketProducedCredit(setup.ctx.marketVault, setup.underlying1, setup.required1);
 
         harness.touchPosition(setup.ctx, setup.tp);
 
@@ -1605,6 +1613,8 @@ contract VTSPositionLibMutationUnitTest is Test {
             PositionModificationHookDataLib.encodeWithInHookProtocolSettlement(1, 0, owner, surplus0, surplus1);
         harness.setUnderlyingDelta(setup.underlying0, owner, surplus0.toInt128());
         harness.setUnderlyingDelta(setup.underlying1, owner, surplus1.toInt128());
+        harness.addMarketProducedCredit(setup.ctx.marketVault, setup.underlying0, surplus0);
+        harness.addMarketProducedCredit(setup.ctx.marketVault, setup.underlying1, surplus1);
 
         harness.touchPosition(setup.ctx, setup.tp);
 
@@ -1632,6 +1642,8 @@ contract VTSPositionLibMutationUnitTest is Test {
         );
         harness.setUnderlyingDelta(setup.underlying0, owner, setup.required0.toInt128());
         harness.setUnderlyingDelta(setup.underlying1, owner, setup.required1.toInt128());
+        harness.addMarketProducedCredit(setup.ctx.marketVault, setup.underlying0, setup.required0);
+        harness.addMarketProducedCredit(setup.ctx.marketVault, setup.underlying1, setup.required1);
 
         harness.touchPosition(setup.ctx, setup.tp);
 

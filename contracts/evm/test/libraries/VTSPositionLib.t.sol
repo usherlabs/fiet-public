@@ -2571,10 +2571,10 @@ contract VTSPositionLibTest is VTSLibTestBase {
         Currency lccCurrency0 = Currency.wrap(address(lcc0));
         Currency lccCurrency1 = Currency.wrap(address(lcc1));
 
+        VTSPositionLibTest_VaultNoop vault = new VTSPositionLibTest_VaultNoop();
         // Give DEFAULT_OWNER a positive underlying delta; withdrawal path nets it before settled-backed leg.
         harness.setUnderlyingDelta(Currency.wrap(underlying0), DEFAULT_OWNER, int128(int256(20)));
-
-        VTSPositionLibTest_VaultNoop vault = new VTSPositionLibTest_VaultNoop();
+        harness.addMarketProducedCredit(IMarketVault(address(vault)), Currency.wrap(underlying0), 20);
         BalanceDelta delta = toBalanceDelta(int128(10), int128(0)); // withdrawal of 10
 
         (BalanceDelta settlementDelta,,) =
@@ -2607,10 +2607,10 @@ contract VTSPositionLibTest is VTSLibTestBase {
         VTSPositionLibTest_MockLCC lcc0 = new VTSPositionLibTest_MockLCC(underlying0);
         VTSPositionLibTest_MockLCC lcc1 = new VTSPositionLibTest_MockLCC(underlying1);
 
+        VTSPositionLibTest_VaultNoop vault = new VTSPositionLibTest_VaultNoop();
         // Positive underlying delta on token1 should be cleared by withdrawal on token1.
         harness.setUnderlyingDelta(Currency.wrap(underlying1), DEFAULT_OWNER, int128(int256(20)));
-
-        VTSPositionLibTest_VaultNoop vault = new VTSPositionLibTest_VaultNoop();
+        harness.addMarketProducedCredit(IMarketVault(address(vault)), Currency.wrap(underlying1), 20);
         BalanceDelta delta = toBalanceDelta(int128(0), int128(10)); // withdrawal of 10 on token1
 
         (BalanceDelta settlementDelta,, uint256 seized) = harness.onMMSettle(
@@ -3175,10 +3175,10 @@ contract VTSPositionLibTest is VTSLibTestBase {
         VTSPositionLibTest_MockLCC lcc0 = new VTSPositionLibTest_MockLCC(underlying0);
         VTSPositionLibTest_MockLCC lcc1 = new VTSPositionLibTest_MockLCC(address(0xD1));
 
+        VTSPositionLibTest_VaultNoop vault = new VTSPositionLibTest_VaultNoop();
         // Only 10 is "required"/owed per OwnerCurrencyDelta, so seizing withdrawal must clamp to 10.
         harness.setUnderlyingDelta(Currency.wrap(underlying0), DEFAULT_OWNER, int128(int256(10e18)));
-
-        VTSPositionLibTest_VaultNoop vault = new VTSPositionLibTest_VaultNoop();
+        harness.addMarketProducedCredit(IMarketVault(address(vault)), Currency.wrap(underlying0), 10e18);
         (BalanceDelta settlementDelta,,) = harness.onMMSettle(
             manager,
             vault,
