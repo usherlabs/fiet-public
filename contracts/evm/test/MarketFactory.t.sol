@@ -6,6 +6,7 @@ import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {PoolId, PoolIdLibrary} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
 import {IHooks} from "@uniswap/v4-core/src/interfaces/IHooks.sol";
+import {IERC6909Claims} from "@uniswap/v4-core/src/interfaces/external/IERC6909Claims.sol";
 import {MockERC20} from "./_mocks/MockERC20.sol";
 import {IERC20} from "openzeppelin-contracts/contracts/token/ERC20/IERC20.sol";
 
@@ -39,6 +40,7 @@ import {Lock} from "@uniswap/v4-core/src/libraries/Lock.sol";
 import {IUnlockCallback} from "@uniswap/v4-core/src/interfaces/callback/IUnlockCallback.sol";
 import {StdStorage, stdStorage} from "forge-std/StdStorage.sol";
 import {MarketLiquidityRouterLib} from "../src/libraries/MarketLiquidityRouterLib.sol";
+import {CanonicalVault} from "../src/modules/CanonicalVault.sol";
 
 contract MarketFactoryTest is Test, Deployers {
     using PoolIdLibrary for PoolKey;
@@ -130,6 +132,13 @@ contract MarketFactoryTest is Test, Deployers {
             address(poolManager), liquidityHubAddress, oracleHelperAddress, address(vtsOrchestrator), owner
         );
 
+        vm.prank(owner);
+        CanonicalVault canonicalVault = new CanonicalVault(address(poolManager), liquidityHubAddress, owner);
+        vm.prank(owner);
+        canonicalVault.bindFactory(address(factory));
+        vm.prank(owner);
+        factory.setCanonicalVault(address(canonicalVault));
+
         // Deploy CoreHook at computed address
         deployCodeTo(
             "CoreHook.sol:CoreHook", abi.encode(poolManager, address(factory), address(vtsOrchestrator)), coreHookAddr
@@ -146,6 +155,8 @@ contract MarketFactoryTest is Test, Deployers {
 
         vm.prank(owner);
         factory.initialise(coreHookAddr, new address[](0));
+
+        vm.mockCall(address(poolManager), abi.encodeWithSelector(IERC6909Claims.setOperator.selector), abi.encode(true));
 
         // Mock calls made to external contracts over the cause of the test
         // Mock the validateMarketOracles call
@@ -374,6 +385,10 @@ contract MockPoolManager_MarketFactory {
         _exttload[Lock.IS_UNLOCKED_SLOT] = bytes32(uint256(1));
         result = IUnlockCallback(msg.sender).unlockCallback(data);
         _exttload[Lock.IS_UNLOCKED_SLOT] = bytes32(0);
+    }
+
+    function setOperator(address, bool) external pure returns (bool) {
+        return true;
     }
 
     function sync(Currency currency) external {
@@ -684,6 +699,12 @@ contract MarketFactoryUnitTest is Test {
         vm.prank(owner);
         factory =
             new MarketFactory(address(poolManager), address(liquidityHub), address(oracleHelper), address(vts), owner);
+        vm.prank(owner);
+        CanonicalVault canonicalVault = new CanonicalVault(address(poolManager), address(liquidityHub), owner);
+        vm.prank(owner);
+        canonicalVault.bindFactory(address(factory));
+        vm.prank(owner);
+        factory.setCanonicalVault(address(canonicalVault));
 
         vm.prank(owner);
         factory.initialise(address(coreHook), new address[](0));
@@ -982,9 +1003,10 @@ contract MarketFactoryUnitTest is Test {
         _createMarket(address(0x100), address(0x200), initial);
 
         address[] memory got = liquidityHub.lastIssuers();
-        assertEq(got.length, 2);
+        assertEq(got.length, 3);
         assertEq(got[0], address(vts));
         assertEq(got[1], address(proxyHook));
+        assertEq(got[2], address(factory.canonicalVault()));
     }
 
     function test_useMarketLiquidity_revertsWhenCallerNotLiquidityHub() public {

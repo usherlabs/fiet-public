@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: BUSL-1.1
 pragma solidity ^0.8.26;
 
-import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
+import {PoolId, PoolIdLibrary} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {ModifyLiquidityParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
 import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
 import {BalanceDelta, toBalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
@@ -40,6 +40,8 @@ import {VTSFeeLinkedLib} from "./VTSFeeLib.sol";
 import {DynamicCurrencyDelta} from "./DynamicCurrencyDelta.sol";
 import {VTSCommitLib} from "./VTSCommitLib.sol";
 import {CheckpointLibrary} from "./Checkpoint.sol";
+import {IMarketFactory} from "../interfaces/IMarketFactory.sol";
+import {ICanonicalVault} from "../interfaces/ICanonicalVault.sol";
 
 /// @title VTSPositionLib
 /// @notice Position lifecycle, registration, RFS, settlement, seizure, and growth accounting for VTS
@@ -53,6 +55,7 @@ library VTSPositionLib {
     using TokenPairLib for TokenPairUint;
     using TokenPairLib for TokenPairInt;
     using StateLibrary for IPoolManager;
+    using PoolIdLibrary for PoolKey;
 
     // ============ INTERNAL STRUCTS ============
 
@@ -78,6 +81,8 @@ library VTSPositionLib {
 
     /// @dev Shared protocol-credit deposit inputs for MM add and explicit settle-from-deltas paths.
     struct ProtocolCreditSettlementParams {
+        IMarketFactory factory;
+        PoolId poolId;
         PositionId positionId;
         address owner;
         Currency lccCurrency0;
@@ -1069,11 +1074,34 @@ library VTSPositionLib {
 
         result.settlementDelta = toBalanceDelta(settle0, settle1);
         result.remainingRequiredSettlementDelta = toBalanceDelta(remaining0, remaining1);
+
+        if (address(p.factory) != address(0)) {
+            address canonicalVault = p.factory.canonicalVault();
+            if (canonicalVault != address(0)) {
+                if (settle0 < 0) {
+                    ICanonicalVault(canonicalVault)
+                        .recordCreditConsumptionForDeposit(
+                            PoolId.unwrap(p.poolId),
+                            DynamicCurrencyDelta.lccToUnderlyingCurrency(p.lccCurrency0),
+                            uint256(uint128(-settle0))
+                        );
+                }
+                if (settle1 < 0) {
+                    ICanonicalVault(canonicalVault)
+                        .recordCreditConsumptionForDeposit(
+                            PoolId.unwrap(p.poolId),
+                            DynamicCurrencyDelta.lccToUnderlyingCurrency(p.lccCurrency1),
+                            uint256(uint128(-settle1))
+                        );
+                }
+            }
+        }
     }
 
     /// @dev Settles protocol credit inside the MM add-liquidity hook path before LCC issuance/backing validation.
     function _applyInHookProtocolSettlementForMmIncrease(
         VTSStorage storage s,
+        PositionContext memory ctx,
         address owner,
         PositionId positionId,
         PoolKey calldata poolKey,
@@ -1087,6 +1115,9 @@ library VTSPositionLib {
         ProtocolCreditSettlementResult memory result = _settleFromPositiveUnderlyingDelta(
             s,
             ProtocolCreditSettlementParams({
+                factory: ctx.liquidityHub
+                .getFactory(Currency.unwrap(poolKey.currency0), Currency.unwrap(poolKey.currency1)),
+                poolId: poolKey.toId(),
                 positionId: positionId,
                 owner: owner,
                 lccCurrency0: poolKey.currency0,
@@ -1540,7 +1571,7 @@ library VTSPositionLib {
         if (p.params.liquidityDelta > 0) {
             // Adding liquidity: settle any hook-carried protocol credit before backing validation/LCC issuance.
             requiredSettlementDelta = _applyInHookProtocolSettlementForMmIncrease(
-                s, p.owner, result.id, p.poolKey, p.hookData, requiredSettlementDelta
+                s, ctx, p.owner, result.id, p.poolKey, p.hookData, requiredSettlementDelta
             );
             _handleLiquidityIncrease(
                 s,
@@ -1623,6 +1654,28 @@ library VTSPositionLib {
                 p.poolKey.currency0,
                 p.poolKey.currency1
             );
+
+            IMarketFactory factory =
+                ctx.liquidityHub.getFactory(Currency.unwrap(p.poolKey.currency0), Currency.unwrap(p.poolKey.currency1));
+            address canonicalVault = factory.canonicalVault();
+            if (canonicalVault != address(0)) {
+                if (requiredSettlementDelta.amount0() > 0) {
+                    ICanonicalVault(canonicalVault)
+                        .recordCreditProduction(
+                            PoolId.unwrap(p.poolKey.toId()),
+                            DynamicCurrencyDelta.lccToUnderlyingCurrency(p.poolKey.currency0),
+                            LiquidityUtils.safeInt128ToUint256(requiredSettlementDelta.amount0())
+                        );
+                }
+                if (requiredSettlementDelta.amount1() > 0) {
+                    ICanonicalVault(canonicalVault)
+                        .recordCreditProduction(
+                            PoolId.unwrap(p.poolKey.toId()),
+                            DynamicCurrencyDelta.lccToUnderlyingCurrency(p.poolKey.currency1),
+                            LiquidityUtils.safeInt128ToUint256(requiredSettlementDelta.amount1())
+                        );
+                }
+            }
         }
 
         // Mark RFS checkpoint

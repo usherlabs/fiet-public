@@ -60,6 +60,7 @@ contract MMPositionActionsImpl is
         Currency underlying0;
         Currency underlying1;
         IMarketVault vault;
+        address custody;
         bool usePositionManagerBalance;
     }
 
@@ -378,14 +379,14 @@ contract MMPositionActionsImpl is
                 if (taken0 != amt0) {
                     revert Errors.InsufficientBalance(taken0, amt0);
                 }
-                params.underlying0.transfer(address(params.vault), amt0);
+                params.underlying0.transfer(params.custody, amt0);
             } else {
                 // Settle IN (deposit) of native ETH MUST come from MMPM balance.
                 if (params.underlying0 == CurrencyLibrary.ADDRESS_ZERO) {
                     revert Errors.NativeTransferFromUnsupported(sender);
                 }
                 // Otherwise, pull only from the locker (msgSender()).
-                params.underlying0.transferFrom(sender, address(params.vault), amt0);
+                params.underlying0.transferFrom(sender, params.custody, amt0);
             }
         }
         if (delta1 < 0) {
@@ -395,12 +396,12 @@ contract MMPositionActionsImpl is
                 if (taken1 != amt1) {
                     revert Errors.InsufficientBalance(taken1, amt1);
                 }
-                params.underlying1.transfer(address(params.vault), amt1);
+                params.underlying1.transfer(params.custody, amt1);
             } else {
                 if (params.underlying1 == CurrencyLibrary.ADDRESS_ZERO) {
                     revert Errors.NativeTransferFromUnsupported(sender);
                 }
-                params.underlying1.transferFrom(sender, address(params.vault), amt1);
+                params.underlying1.transferFrom(sender, params.custody, amt1);
             }
         }
 
@@ -494,6 +495,7 @@ contract MMPositionActionsImpl is
                 underlying0: _lccToUnderlyingCurrency(poolKey.currency0),
                 underlying1: _lccToUnderlyingCurrency(poolKey.currency1),
                 vault: callParams.vault,
+                custody: marketFactory.canonicalVault(),
                 usePositionManagerBalance: usePositionManagerBalance
             }),
             settlementDelta

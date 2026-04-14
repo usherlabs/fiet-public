@@ -14,6 +14,7 @@ import {PoolSwapTest} from "@uniswap/v4-core/src/test/PoolSwapTest.sol";
 import {ModifyLiquidityParams, SwapParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
 import {CurrencySortHelper} from "./utils/CurrencySortHelper.sol";
 import {LiquidityCommitmentCertificate} from "../src/LCC.sol";
+import {ICanonicalVault} from "../src/interfaces/ICanonicalVault.sol";
 import {IMarketFactory} from "../src/interfaces/IMarketFactory.sol";
 import {LiquidityUtils} from "../src/libraries/LiquidityUtils.sol";
 import {console} from "forge-std/console.sol";
@@ -203,11 +204,28 @@ contract ProxyHookTest is MarketVaultBase {
 
     function test_handleAddLiquidity_directCoreAction_pathExecutes() public {
         ProxyHookHarness fresh = new ProxyHookHarness(address(manager), address(marketFactory));
+        bytes32 marketId = PoolId.unwrap(corePoolKey.toId());
+        address canonicalVault = IMarketFactory(marketFactory).canonicalVault();
 
         vm.prank(marketFactory);
         fresh.activate();
         vm.prank(marketFactory);
         fresh.setCorePoolKey(corePoolKey);
+        vm.mockCall(
+            marketFactory,
+            abi.encodeWithSelector(IMarketFactory.isMarketFacade.selector, marketId, address(fresh)),
+            abi.encode(true)
+        );
+        vm.prank(marketFactory);
+        ICanonicalVault(canonicalVault)
+            .registerMarket(
+                marketId,
+                address(fresh),
+                address(lcc0),
+                address(lcc1),
+                Currency.unwrap(_currency0),
+                Currency.unwrap(_currency1)
+            );
 
         vm.prank(coreHookAddress);
         fresh.handleAddLiquidity();

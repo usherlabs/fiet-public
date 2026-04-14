@@ -6,6 +6,7 @@ import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {MarketVTSConfiguration} from "../types/VTS.sol";
 import {IOracleHelper} from "./IOracleHelper.sol";
 import {ILiquidityHub} from "./ILiquidityHub.sol";
+import {IVTSOrchestrator} from "./IVTSOrchestrator.sol";
 
 /**
  * @title IMarketFactory
@@ -65,6 +66,18 @@ interface IMarketFactory {
      * @return The oracle helper address
      */
     function oracleHelper() external view returns (IOracleHelper);
+
+    /**
+     * @notice Gets the VTS orchestrator address bound to this factory
+     * @return The VTS orchestrator address
+     */
+    function vts() external view returns (IVTSOrchestrator);
+
+    /**
+     * @notice Gets the canonical vault address for this factory
+     * @return The canonical vault address
+     */
+    function canonicalVault() external view returns (address);
 
     // ============ STATE CHANGING FUNCTIONS ============
 
@@ -127,6 +140,14 @@ interface IMarketFactory {
      * @return The currency pair
      */
     function proxyHookToCurrencyPair(address proxyHook) external view returns (address[2] memory);
+
+    /**
+     * @notice Returns whether an address is the registered facade for a given market
+     * @param marketId The market ID (core PoolId as bytes32)
+     * @param facade The facade/proxy hook address to validate
+     * @return True if the facade is canonical for the market
+     */
+    function isMarketFacade(bytes32 marketId, address facade) external view returns (bool);
 
     /**
      * @notice Gets the currency pair managed by a core pool

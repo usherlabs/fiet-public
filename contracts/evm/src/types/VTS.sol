@@ -11,6 +11,7 @@ import {IVRLSignalManager} from "../interfaces/IVRLSignalManager.sol";
 import {IVRLSettlementObserver} from "../interfaces/IVRLSettlementObserver.sol";
 import {IPoolManager} from "v4-periphery/lib/v4-core/src/interfaces/IPoolManager.sol";
 import {IMarketVault} from "../interfaces/IMarketVault.sol";
+import {IMarketFactory} from "../interfaces/IMarketFactory.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {ModifyLiquidityParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
 import {BalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
@@ -112,6 +113,10 @@ struct TouchPositionResult {
 struct SettleParams {
     // The market vault interface for liquidity availability checks
     IMarketVault vault;
+    // The market factory namespace for canonical vault routing and auth
+    IMarketFactory factory;
+    // The core pool / market id
+    PoolId poolId;
     // The position id
     PositionId positionId;
     // The pool currency of the LCC token for token0

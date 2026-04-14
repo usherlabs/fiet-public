@@ -5,12 +5,14 @@ import {MarketTestBase} from "./MarketTestBase.sol";
 import {PoolSwapTest} from "@uniswap/v4-core/src/test/PoolSwapTest.sol";
 import {SwapParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
+import {PoolId, PoolIdLibrary} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {BalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
 import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
 import {LiquidityCommitmentCertificate} from "../../src/LCC.sol";
 import {LiquidityUtils} from "../../src/libraries/LiquidityUtils.sol";
 import {SwapSimulator} from "../utils/SwapSimulator.sol";
 import {IMarketFactory} from "../../src/interfaces/IMarketFactory.sol";
+import {ICanonicalVault} from "../../src/interfaces/ICanonicalVault.sol";
 import {ILCC} from "../../src/interfaces/ILCC.sol";
 import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
 import {SafeCast as SafeCastLib} from "openzeppelin-contracts/contracts/utils/math/SafeCast.sol";
@@ -20,6 +22,8 @@ import {SafeCast as SafeCastLib} from "openzeppelin-contracts/contracts/utils/ma
  * @notice Base contract for MarketVault and ProxyHook tests that provides shared helper functions
  */
 abstract contract MarketVaultBase is MarketTestBase {
+    using PoolIdLibrary for PoolKey;
+
     LiquidityCommitmentCertificate lcc0;
     LiquidityCommitmentCertificate lcc1;
 
@@ -45,9 +49,12 @@ abstract contract MarketVaultBase is MarketTestBase {
      * ? rename to _mockLimitedVaultLiquidity
      */
     function _mockLimitedLiquidity(Currency currency, uint256 availableAmount) internal {
+        address canonicalVault = IMarketFactory(marketFactory).canonicalVault();
         vm.mockCall(
-            address(manager),
-            abi.encodeWithSelector(manager.balanceOf.selector, address(proxyHook), currency.toId()),
+            canonicalVault,
+            abi.encodeWithSelector(
+                ICanonicalVault.inMarketBalanceOf.selector, PoolId.unwrap(corePoolKey.toId()), currency
+            ),
             abi.encode(availableAmount)
         );
     }

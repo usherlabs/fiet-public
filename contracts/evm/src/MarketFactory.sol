@@ -15,6 +15,8 @@ import {IOracleHelper} from "./interfaces/IOracleHelper.sol";
 import {ILiquidityHub} from "./interfaces/ILiquidityHub.sol";
 import {BalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
 import {IMarketVault} from "./interfaces/IMarketVault.sol";
+import {ICanonicalVault} from "./interfaces/ICanonicalVault.sol";
+import {IVTSOrchestrator} from "./interfaces/IVTSOrchestrator.sol";
 import {LiquidityUtils} from "./libraries/LiquidityUtils.sol";
 import {MarketLiquidityRouterLib} from "./libraries/MarketLiquidityRouterLib.sol";
 import {Bounds} from "./libraries/Bounds.sol";
@@ -59,6 +61,7 @@ contract MarketFactory is IMarketFactory, Ownable, ImmutableState, ImmutableVTSS
     address public coreHook;
     address public immutable marketVaultDeployer;
     ILiquidityHub public immutable liquidityHub;
+    address public canonicalVault;
 
     // Mapping from core pool ID to proxy pool ID
     mapping(PoolId => PoolId) public coreToProxy;
@@ -152,6 +155,15 @@ contract MarketFactory is IMarketFactory, Ownable, ImmutableState, ImmutableVTSS
         }
     }
 
+    function vts() external view returns (IVTSOrchestrator) {
+        return vtsOrchestrator;
+    }
+
+    function setCanonicalVault(address _canonicalVault) external onlyOwner {
+        if (_canonicalVault == address(0)) revert Errors.InvalidAddress(_canonicalVault);
+        canonicalVault = _canonicalVault;
+    }
+
     /**
      * @notice Creates a new market with core and proxy pools
      * @param underlyingAsset0 First underlying asset address
@@ -174,6 +186,7 @@ contract MarketFactory is IMarketFactory, Ownable, ImmutableState, ImmutableVTSS
         MarketVTSConfiguration calldata vtsConfiguration
     ) external onlyOwner returns (PoolId corePoolId, PoolId proxyPoolId) {
         if (!initialised) revert Errors.InvalidAddress(coreHook);
+        if (canonicalVault == address(0)) revert Errors.InvalidAddress(canonicalVault);
         if (initialSqrtPriceX96 == 0) revert Errors.InvalidAmount(uint256(initialSqrtPriceX96), 0);
 
         MarketCreationContext memory ctx;
@@ -260,6 +273,11 @@ contract MarketFactory is IMarketFactory, Ownable, ImmutableState, ImmutableVTSS
             coreHook,
             ctx.proxyHookAddress
         );
+
+        ICanonicalVault(canonicalVault)
+            .registerMarket(
+                PoolId.unwrap(corePoolId), ctx.proxyHookAddress, lcc0, lcc1, lcc0UnderlyingAsset, lcc1UnderlyingAsset
+            );
     }
 
     /// @dev Deploys the proxy hook, constructs the market reference, and creates the LCC pair.
@@ -270,9 +288,10 @@ contract MarketFactory is IMarketFactory, Ownable, ImmutableState, ImmutableVTSS
     {
         proxyHookAddress = MarketVaultDeployer(marketVaultDeployer).deployProxyHook(address(poolManager), salt);
         marketRef = abi.encodePacked(proxyHookAddress);
-        address[] memory initialIssuers = new address[](2);
+        address[] memory initialIssuers = new address[](3);
         initialIssuers[0] = address(vtsOrchestrator);
         initialIssuers[1] = proxyHookAddress;
+        initialIssuers[2] = canonicalVault;
         (lccToken0, lccToken1) =
             liquidityHub.createLCCPair(marketRef, underlyingAsset0, underlyingAsset1, MARKET_NAME, initialIssuers);
     }
@@ -496,12 +515,16 @@ contract MarketFactory is IMarketFactory, Ownable, ImmutableState, ImmutableVTSS
     /// @inheritdoc IMarketFactory
     function isCanonicalVault(bytes32 marketId, address vault) external view returns (bool) {
         if (vault == address(0)) return false;
+        if (canonicalVault == address(0)) return false;
+        return canonicalVault == vault;
+    }
+
+    function isMarketFacade(bytes32 marketId, address facade) external view returns (bool) {
+        if (facade == address(0)) return false;
         PoolId corePoolId = PoolId.wrap(marketId);
         PoolId proxyPoolId = coreToProxy[corePoolId];
         if (PoolId.unwrap(proxyPoolId) == bytes32(0)) return false;
-        address canonicalVault = _proxyToHook[proxyPoolId];
-        if (canonicalVault == address(0)) return false;
-        return canonicalVault == vault;
+        return _proxyToHook[proxyPoolId] == facade;
     }
 
     /**

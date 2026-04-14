@@ -38,6 +38,7 @@ import {MMPCommitmentDescriptor} from "../../src/MMPCommitmentDescriptor.sol";
 import {MMPositionActionsImpl} from "../../src/MMPositionActionsImpl.sol";
 import {CurrencyTransfer} from "../../src/libraries/CurrencyTransfer.sol";
 import {OracleHelper} from "../../src/OracleHelper.sol";
+import {CanonicalVault} from "../../src/modules/CanonicalVault.sol";
 import {IOracleHelper} from "../../src/interfaces/IOracleHelper.sol";
 import {LiquidityHub} from "../../src/LiquidityHub.sol";
 import {ILiquidityHub} from "../../src/interfaces/ILiquidityHub.sol";
@@ -205,6 +206,12 @@ abstract contract MarketTestBase is Test, Deployers, DeployPermit2 {
                 address(manager), address(liquidityHub), address(oracleHelper), address(vtsOrchestrator), testOwner
             )
         );
+
+        CanonicalVault canonicalVault = new CanonicalVault(address(manager), address(liquidityHub), testOwner);
+        vm.prank(testOwner);
+        canonicalVault.bindFactory(marketFactory);
+        vm.prank(testOwner);
+        MarketFactory(marketFactory).setCanonicalVault(address(canonicalVault));
 
         // After market factory is deployed, set the factory in the liquidity hub
         LiquidityHub(payable(liquidityHub)).setFactory(marketFactory, true);
