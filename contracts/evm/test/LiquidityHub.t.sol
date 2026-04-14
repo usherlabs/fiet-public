@@ -66,6 +66,8 @@ contract MockSenderWithoutLccsSelector {
     receive() external payable {}
 }
 
+contract NonPayableRecipient {}
+
 /**
  * @title LiquidityHubTest
  * @notice Core unit tests for LiquidityHub admin/accessors and edge cases.
@@ -717,6 +719,55 @@ contract LiquidityHubTest is LiquidityHubTestBase {
         assertEq(liquidityHub.settleQueue(lccToken1, user2), amount);
         assertEq(liquidityHub.totalQueued(lccToken1), amount);
         assertEq(liquidityHub.queueOfUnderlying(lccToken1), amount);
+    }
+
+    function test_queueForTransferRecipient_revertsForNativeLccWhenRecipientIsContract() public {
+        address lccNative;
+        address lccErc20;
+        vm.startPrank(factory);
+        address[] memory issuers = new address[](1);
+        issuers[0] = proxyHook;
+        (lccNative, lccErc20) = liquidityHub.createLCCPair(
+            abi.encodePacked(address(0xD155)), address(0), address(underlyingAsset1), "Native Market", issuers
+        );
+        liquidityHub.initialize(lccNative, lccErc20, bytes32("nativeQueueMarket"), abi.encodePacked(address(0xD155)));
+        vm.stopPrank();
+
+        uint256 amount = 6;
+        NonPayableRecipient recipient = new NonPayableRecipient();
+        vm.prank(proxyHook);
+        liquidityHub.issue(lccNative, proxyHook, amount);
+        vm.prank(proxyHook);
+        ILCC(lccNative).transfer(address(recipient), amount);
+
+        vm.prank(proxyHook);
+        vm.expectRevert(abi.encodeWithSelector(Errors.NotApproved.selector, address(recipient)));
+        liquidityHub.queueForTransferRecipient(lccNative, address(recipient), amount);
+    }
+
+    function test_queueForTransferRecipient_nativeLcc_queuesForEoaRecipient() public {
+        address lccNative;
+        address lccErc20;
+        vm.startPrank(factory);
+        address[] memory issuers = new address[](1);
+        issuers[0] = proxyHook;
+        (lccNative, lccErc20) = liquidityHub.createLCCPair(
+            abi.encodePacked(address(0xD156)), address(0), address(underlyingAsset1), "Native Market", issuers
+        );
+        liquidityHub.initialize(lccNative, lccErc20, bytes32("nativeQueueMarket2"), abi.encodePacked(address(0xD156)));
+        vm.stopPrank();
+
+        uint256 amount = 7;
+        vm.prank(proxyHook);
+        liquidityHub.issue(lccNative, proxyHook, amount);
+        vm.prank(proxyHook);
+        ILCC(lccNative).transfer(user2, amount);
+
+        vm.prank(proxyHook);
+        liquidityHub.queueForTransferRecipient(lccNative, user2, amount);
+
+        assertEq(liquidityHub.settleQueue(lccNative, user2), amount);
+        assertEq(liquidityHub.totalQueued(lccNative), amount);
     }
 
     function test_queueForTransferRecipient_revertsWhenCallerIsNotIssuer() public {

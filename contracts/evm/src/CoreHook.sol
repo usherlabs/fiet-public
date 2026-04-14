@@ -116,7 +116,7 @@ contract CoreHook is BaseHook, ImmutableMarketState, ImmutableVTSState, ICoreHoo
         (uint160 sqrtPBefore, int24 tickBefore,,) = StateLibrary.getSlot0(poolManager, key.toId());
         uint128 liqBefore = StateLibrary.getLiquidity(poolManager, key.toId());
         TransientSlot.asUint256(TransientSlots.SQRTP_BEFORE_SLOT).tstore(uint256(sqrtPBefore));
-        TransientSlot.asUint256(TransientSlots.TICK_BEFORE_SLOT).tstore(uint256(int256(tickBefore)));
+        TransientSlots.storeTickBefore(tickBefore);
         TransientSlot.asUint256(TransientSlots.LIQ_BEFORE_SLOT).tstore(uint256(liqBefore));
         return (this.beforeSwap.selector, BeforeSwapDeltaLibrary.ZERO_DELTA, 0);
     }
@@ -130,10 +130,10 @@ contract CoreHook is BaseHook, ImmutableMarketState, ImmutableVTSState, ICoreHoo
         // Read swap snapshot from transient storage then clear immediately to avoid any same-tx "ghost state"
         // interactions if future refactors introduce nested/interleaved swaps.
         uint160 sqrtPBefore = uint160(TransientSlot.asUint256(TransientSlots.SQRTP_BEFORE_SLOT).tload());
-        int24 tickBefore = int24(int256(TransientSlot.asUint256(TransientSlots.TICK_BEFORE_SLOT).tload()));
+        int24 tickBefore = TransientSlots.loadTickBefore();
         uint128 liqBefore = uint128(TransientSlot.asUint256(TransientSlots.LIQ_BEFORE_SLOT).tload());
         TransientSlot.asUint256(TransientSlots.SQRTP_BEFORE_SLOT).tstore(0);
-        TransientSlot.asUint256(TransientSlots.TICK_BEFORE_SLOT).tstore(0);
+        TransientSlots.clearTickBefore();
         TransientSlot.asUint256(TransientSlots.LIQ_BEFORE_SLOT).tstore(0);
         vtsOrchestrator.afterCoreSwap(key, params, delta, sqrtPBefore, liqBefore, tickBefore);
 
