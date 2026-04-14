@@ -50,7 +50,7 @@ This intent is constructed in `VTSLifecycleLinkedLib` and passed through `MMPosi
 - `contracts/evm/src/MMPositionActionsImpl.sol` - `_callOnMMSettle`, `_processSettlementTransfers`
 - `contracts/evm/src/interfaces/IMarketVault.sol`
 - `contracts/evm/src/modules/MarketVaultFacade.sol`
-- `contracts/evm/src/modules/CanonicalVault.sol`
+- `contracts/evm/src/CanonicalVault.sol`
 
 ### 2. Factory-wide produced accounting via `MarketCurrencyDelta`
 
@@ -95,7 +95,7 @@ consume in market B" for the same underlying within one factory, without pretend
 entire withdrawal.
 
 **Implementation points:**
-- `contracts/evm/src/modules/CanonicalVault.sol` - `_dryModifyLiquidities`, `_modifyLiquidityWithRecipient`
+- `contracts/evm/src/CanonicalVault.sol` - `_dryModifyLiquidities`, `_modifyLiquidityWithRecipient`
 - `contracts/evm/src/modules/MarketVaultFacade.sol`
 
 ---

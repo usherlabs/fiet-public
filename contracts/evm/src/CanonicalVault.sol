@@ -8,17 +8,17 @@ import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
 import {IERC6909Claims} from "@uniswap/v4-core/src/interfaces/external/IERC6909Claims.sol";
 import {SafeCast} from "@uniswap/v4-core/src/libraries/SafeCast.sol";
-import {CurrencyTransfer} from "../libraries/CurrencyTransfer.sol";
+import {CurrencyTransfer} from "./libraries/CurrencyTransfer.sol";
 import {Math} from "openzeppelin-contracts/contracts/utils/math/Math.sol";
 import {ReentrancyGuardTransient} from "openzeppelin-contracts/contracts/utils/ReentrancyGuardTransient.sol";
 import {ImmutableState} from "v4-periphery/src/base/ImmutableState.sol";
-import {ILCC} from "../interfaces/ILCC.sol";
-import {ILiquidityHub} from "../interfaces/ILiquidityHub.sol";
-import {IMarketFactory} from "../interfaces/IMarketFactory.sol";
-import {ICanonicalVault} from "../interfaces/ICanonicalVault.sol";
-import {Errors} from "../libraries/Errors.sol";
-import {LiquidityUtils} from "../libraries/LiquidityUtils.sol";
-import {VaultSettlementIntent} from "../types/VTS.sol";
+import {ILCC} from "./interfaces/ILCC.sol";
+import {ILiquidityHub} from "./interfaces/ILiquidityHub.sol";
+import {IMarketFactory} from "./interfaces/IMarketFactory.sol";
+import {ICanonicalVault} from "./interfaces/ICanonicalVault.sol";
+import {Errors} from "./libraries/Errors.sol";
+import {LiquidityUtils} from "./libraries/LiquidityUtils.sol";
+import {VaultSettlementIntent} from "./types/VTS.sol";
 
 /**
  * @title CanonicalVault

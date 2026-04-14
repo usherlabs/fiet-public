@@ -18,7 +18,7 @@ import {IWETH9} from "v4-periphery/src/interfaces/external/IWETH9.sol";
 import {IAllowanceTransfer} from "permit2/src/interfaces/IAllowanceTransfer.sol";
 import {VTSOrchestrator} from "../src/VTSOrchestrator.sol";
 import {VRLSettlementObserver} from "../src/VRLSettlementObserver.sol";
-import {CanonicalVault} from "../src/modules/CanonicalVault.sol";
+import {CanonicalVault} from "../src/CanonicalVault.sol";
 
 contract HookTest is Test, Deployers {
     IPoolManager poolManager;

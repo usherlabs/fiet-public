@@ -656,7 +656,7 @@ being an informal “should”.
     - build `VaultSettlementIntent.creditBackedWithdrawal{0,1}` from the planned delta-backed slice,
     - debit `OwnerCurrencyDelta` on the owner for the actual delta-backed withdrawal amount, and
     - call `MarketCurrencyDelta.consumeProduced(factory, underlying, amount)` for that same actual amount.
-  - `src/modules/CanonicalVault.sol::_dryModifyLiquidities` and `_modifyLiquidityWithRecipient`:
+  - `src/CanonicalVault.sol::_dryModifyLiquidities` and `_modifyLiquidityWithRecipient`:
     - treat `creditBackedWithdrawal{0,1}` as distinct from the settled-backed remainder, so only the settled-backed
       slice decrements the destination market's `marketLiquidityReserves`.
   - `src/modules/PositionManagerEntrypoint.sol::_afterBatch`:

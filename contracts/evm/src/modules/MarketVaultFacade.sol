@@ -22,10 +22,8 @@ abstract contract MarketVaultFacade is IMarketVault, ImmutableMarketState, Reent
     event MarketRegistered(bytes32 indexed marketId);
     event MarketLiquidityAdded(bytes32 indexed marketId, uint256 amount);
     event MarketLiquidityUsed(bytes32 indexed marketId, uint256 amount);
-    event LiquidityAddedToVault(address indexed sender, address indexed from, address indexed currency, uint256 amount);
-    event LiquidityTakenFromVault(
-        address indexed sender, address indexed recipient, address indexed currency, uint256 amount
-    );
+    event LiquidityAddedToVault(address indexed sender, address indexed from, address currency, uint256 amount);
+    event LiquidityTakenFromVault(address indexed sender, address indexed recipient, address currency, uint256 amount);
 
     modifier onlyProtocolBounds() {
         if (!marketFactory.bounds(msg.sender)) revert Errors.InvalidSender();

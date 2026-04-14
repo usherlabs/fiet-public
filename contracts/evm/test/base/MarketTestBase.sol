@@ -38,7 +38,7 @@ import {MMPCommitmentDescriptor} from "../../src/MMPCommitmentDescriptor.sol";
 import {MMPositionActionsImpl} from "../../src/MMPositionActionsImpl.sol";
 import {CurrencyTransfer} from "../../src/libraries/CurrencyTransfer.sol";
 import {OracleHelper} from "../../src/OracleHelper.sol";
-import {CanonicalVault} from "../../src/modules/CanonicalVault.sol";
+import {CanonicalVault} from "../../src/CanonicalVault.sol";
 import {IOracleHelper} from "../../src/interfaces/IOracleHelper.sol";
 import {LiquidityHub} from "../../src/LiquidityHub.sol";
 import {ILiquidityHub} from "../../src/interfaces/ILiquidityHub.sol";

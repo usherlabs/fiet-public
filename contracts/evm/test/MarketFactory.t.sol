@@ -39,7 +39,7 @@ import {ICoreHook} from "../src/interfaces/ICoreHook.sol";
 import {Lock} from "@uniswap/v4-core/src/libraries/Lock.sol";
 import {IUnlockCallback} from "@uniswap/v4-core/src/interfaces/callback/IUnlockCallback.sol";
 import {MarketLiquidityRouterLib} from "../src/libraries/MarketLiquidityRouterLib.sol";
-import {CanonicalVault} from "../src/modules/CanonicalVault.sol";
+import {CanonicalVault} from "../src/CanonicalVault.sol";
 
 contract MarketFactoryTest is Test, Deployers {
     using PoolIdLibrary for PoolKey;

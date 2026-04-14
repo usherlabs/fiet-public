@@ -20,7 +20,7 @@ import {LiquidityHub} from "src/LiquidityHub.sol";
 import {GlobalConfig} from "src/GlobalConfig.sol";
 import {ECDSASignatureSignalVerifier} from "src/verifiers/ECDSASignatureSignalVerifier.sol";
 import {DirectLPDeltaResolver} from "src/DirectLPDeltaResolver.sol";
-import {CanonicalVault} from "src/modules/CanonicalVault.sol";
+import {CanonicalVault} from "src/CanonicalVault.sol";
 import {IPoolManager} from "v4-periphery/lib/v4-core/src/interfaces/IPoolManager.sol";
 import {IWETH9} from "v4-periphery/src/interfaces/external/IWETH9.sol";
 import {IAllowanceTransfer} from "permit2/src/interfaces/IAllowanceTransfer.sol";

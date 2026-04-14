@@ -35,7 +35,7 @@ import {StateLibrary} from "@uniswap/v4-core/src/libraries/StateLibrary.sol";
 import {IMsgSender} from "v4-periphery/src/interfaces/IMsgSender.sol";
 import {IERC20Minimal} from "@uniswap/v4-core/src/interfaces/external/IERC20Minimal.sol";
 import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
-import {CanonicalVault} from "../src/modules/CanonicalVault.sol";
+import {CanonicalVault} from "../src/CanonicalVault.sol";
 
 /**
  * 22nd October 2025 - ProxyHookTest.sol
