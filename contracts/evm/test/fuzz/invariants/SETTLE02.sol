@@ -202,7 +202,14 @@ contract SETTLE02 {
                 BalanceDelta settlementDelta, bool, uint256
             ) {
                 (uint256 settledAfter0, uint256 settledAfter1) = harness.getSettled(positionId);
-                ok = _withdrawOutcomeOk(c, settlementDelta, settledAfter0, settledAfter1);
+                ok = _withdrawOutcomeOk(
+                    c,
+                    settlementDelta,
+                    settledAfter0,
+                    settledAfter1,
+                    harness.getUnderlyingDeltaSigned(underlyingCurrency0, address(this)),
+                    harness.getUnderlyingDeltaSigned(underlyingCurrency1, address(this))
+                );
             } catch {
                 ok = false;
             }
@@ -258,22 +265,16 @@ contract SETTLE02 {
         ClampCase memory c,
         BalanceDelta settlementDelta,
         uint256 settledAfter0,
-        uint256 settledAfter1
+        uint256 settledAfter1,
+        int128 underlyingAfter0,
+        int128 underlyingAfter1
     ) internal pure returns (bool) {
         uint256 expected0 = c.requested0 < c.cap0 ? c.requested0 : c.cap0;
         uint256 expected1 = c.requested1 < c.cap1 ? c.requested1 : c.cap1;
-        if (expected0 > c.settledBefore0) expected0 = c.settledBefore0;
-        if (expected1 > c.settledBefore1) expected1 = c.settledBefore1;
         bool ok = settlementDelta.amount0() == int128(uint128(expected0))
-            && settlementDelta.amount1() == int128(uint128(expected1)) && settledAfter0 <= c.settledBefore0
-            && settledAfter1 <= c.settledBefore1;
-        if (settledAfter0 > c.settledBefore0 || settledAfter1 > c.settledBefore1) {
-            return false;
-        }
-
-        uint256 got0 = c.settledBefore0 - settledAfter0;
-        uint256 got1 = c.settledBefore1 - settledAfter1;
-        ok = ok && got0 == expected0 && got1 == expected1;
+            && settlementDelta.amount1() == int128(uint128(expected1)) && settledAfter0 == c.settledBefore0
+            && settledAfter1 == c.settledBefore1 && _toUintPositive(underlyingAfter0) == c.cap0 - expected0
+            && _toUintPositive(underlyingAfter1) == c.cap1 - expected1;
         if (c.zeroCapBranch) {
             ok = ok && settledAfter0 == c.settledBefore0 && settledAfter1 == c.settledBefore1;
         }
@@ -291,6 +292,7 @@ contract SETTLE02 {
 
         harness.setCommitmentMax(positionId, c0, c1);
         harness.setSettled(positionId, s0, s1);
+        harness.setPoolTotalSettled(POOL_ID, s0, s1);
 
         uint256 def0 = baseReq0 > s0 ? (baseReq0 - s0) + 1 : 1;
         uint256 def1 = baseReq1 > s1 ? (baseReq1 - s1) + 1 : 1;
@@ -310,6 +312,7 @@ contract SETTLE02 {
         uint256 req0 = baseReq0 > def0 ? baseReq0 : def0;
         uint256 req1 = baseReq1 > def1 ? baseReq1 : def1;
         harness.setSettled(positionId, req0, req1);
+        harness.setPoolTotalSettled(POOL_ID, req0, req1);
         harness.setCumulativeDeficit(positionId, def0, def1);
         harness.setPoolTotalDeficitPrincipal(POOL_ID, def0, def1);
         harness.setPositionActive(positionId, true);

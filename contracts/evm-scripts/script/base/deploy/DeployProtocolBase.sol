@@ -96,18 +96,13 @@ abstract contract DeployProtocolBase is CREATE3Script, NetworkConfig {
         );
     }
 
-    function _deploySignalManager(
-        address signalVerifier,
-        uint256 signalExpiryInSeconds,
-        address submitter,
-        address globalConfig
-    ) internal returns (address) {
+    function _deploySignalManager(address signalVerifier, address submitter, address globalConfig)
+        internal
+        returns (address)
+    {
         return _deployCreate3(
             SIGNAL_MANAGER,
-            abi.encodePacked(
-                type(VRLSignalManager).creationCode,
-                abi.encode(signalVerifier, signalExpiryInSeconds, submitter, globalConfig)
-            )
+            abi.encodePacked(type(VRLSignalManager).creationCode, abi.encode(signalVerifier, submitter, globalConfig))
         );
     }
 

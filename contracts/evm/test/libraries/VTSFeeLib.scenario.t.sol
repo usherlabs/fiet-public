@@ -159,7 +159,7 @@ contract VTSFeeLibScenarioTest is VTSOrchestratorFixture {
         internal
         returns (uint256 positionIndex, PositionId positionId)
     {
-        (,, uint256 countBefore,) = vtsOrchestrator.getCommit(tokenId);
+        (,, uint256 countBefore,,) = vtsOrchestrator.getCommit(tokenId);
 
         (uint256 requiredSettlementAmount0, uint256 requiredSettlementAmount1) =
             _requiredSettlementAmountsForMMModify(tickLower, tickUpper, liquidity, marketVTSConfiguration);

@@ -170,12 +170,33 @@ being an informal “should”.
 
 ### HUB-02: Unwrapping cannot exceed liquid (bucketed) balance; shortfalls are explicitly queued
 
-- **Statement**: Unwrap requires `0 < amount <= wrappedBalance + marketDerivedBalance`; any unavailable portion is
-  tracked via the settlement queue rather than silently failing.
+- **Statement**: Unwrap requires `0 < amount <= availableToUnwrap`, where `availableToUnwrap` is the caller’s live
+  bucketed balance (`wrappedBalance + marketDerivedBalance` for `msg.sender`) minus any existing settlement queue for
+  the same `(lcc, queueTo)` key: `max(0, fromBalance - settleQueue[lcc][queueTo])`. Any unavailable portion of the
+  requested unwrap is still tracked via the settlement queue rather than silently failing.
 - **Enforced by**:
-  - `src/LiquidityHub.sol::_unwrap` reverts `Errors.InvalidAmount(amount, fromBalance)` when out of bounds.
+  - `src/LiquidityHub.sol::_unwrap` reverts `Errors.InvalidAmount(amount, availableToUnwrap)` when out of bounds.
   - The split/queue behaviour is implemented in `LiquidityHubLib.unwrapInternalLogic(...)` (called from `_unwrap`).
   - Queue state is observable via `LiquidityHub.settleQueue(lcc, recipient)` and `LiquidityHub.totalQueued(lcc)`.
+- **Why**: Queued shortfall does not burn the holder’s LCC at queue time; without netting, the same balance could back
+  multiple queued claims and inflate `queueOfUnderlying` / vault obligation sizing.
+
+### HUB-02A: `unwrapTo` is endpoint-only (on-behalf-of); direct users use `unwrap`
+
+- **Statement**: Every `LiquidityHub.unwrapTo(...)` overload requires `msg.sender` to be `BOUND_ENDPOINT` in the
+  resolved LCC’s market factory namespace (`boundLevelOfLcc(lcc, msg.sender) == BOUND_ENDPOINT`). Bucket-exempt and
+  DEX tiers are not admitted via `unwrapTo`. End users unwrap with `unwrap(...)` / `unwrap(underlying, marketId, ...)`,
+  which always queue shortfalls to the caller.
+- **Enforced by**: `src/LiquidityHub.sol::_onlyUnwrapToEndpoint` on each `unwrapTo` entrypoint before `_unwrap`.
+- **Supported contract for `unwrapTo(lcc, to, queueTo, ...)`**: the endpoint acts on behalf of the beneficiary named by
+  `queueTo`; the caller-held LCC balance spent in this unwrap is treated as representing that beneficiary for the purpose
+  of HUB-02 netting (`settleQueue[lcc][queueTo]` is already encumbering that caller-held balance). For example,
+  `MMPositionManager` consumes the locker’s LCC or delta credit before calling `unwrapTo` with `queueTo` equal to the
+  locker. Endpoints that attribute queue to an address whose outstanding queue is not economically tied to the same
+  caller-held slice must not use this pattern without revisiting the netting rule.
+- **Rationale**: Splitting immediate payout recipient from queue owner is a trusted endpoint pattern (for example
+  `MMPositionManager` after it has consumed the beneficiary’s LCC or delta credit). Exposing that split to arbitrary EOAs
+  allowed repeated queue inflation against unchanged holder balance.
 
 ### HUB-03: Issuer-gated issuance/cancellation must never operate on invalid LCCs
 
@@ -255,8 +276,44 @@ being an informal “should”.
 - **Enforced by**:
   - `src/VTSOrchestrator.sol::afterCoreSwap` → `src/libraries/VTSSwapLib.sol::processSwap`
   - `VTSSwapLib._accrueSegmentGrowth`, `_accrueDeficitGlobalGrowth`, `_accrueInflowGlobalGrowth`.
+- **Implementation note**: `CoreHook` snapshots the authoritative pre-swap `slot0.tick` (with `sqrtPBefore` and
+  liquidity) into transient storage for `processSwap`. Tick-indexed attribution must not reconstruct the pre-swap
+  tick from `sqrtPBefore` alone, because at exact tick boundaries Uniswap may store `tick = T - 1` while
+  `getTickAtSqrtPrice(sqrtPrice) == T`.
 
 ## Commitment backing, signals, and insolvency gates
+
+### COMMIT-ROLE-01: Commitment owner and advancer are intentionally distinct roles
+
+- **Operating model / protocol assumption**:
+  - `mmState.owner` is the durable identity for the market maker's signalled state and is expected to correspond to the
+    operator's high-security custody / approval authority.
+  - `mmState.advancer` is the lower-friction operational key used to submit / renew VRL-backed MM state and to initiate
+    ordinary MM position operations through `MMPositionManager`.
+  - These roles are intentionally **not** interchangeable, but they are expected to remain under the control of the
+    same real-world operator / coordinated trust domain.
+- **Practical consequence**:
+  - A plain ERC-721 transfer of the commitment NFT is **not**, by itself, an on-chain handover of MM operational control.
+  - `transferFrom(...)` changes NFT ownership only; it does not rotate the stored advancer or rewrite the committed MM
+    identity.
+  - Therefore, a live commitment NFT should not be treated as a freely saleable / independently operable position object
+    unless the transfer is accompanied by off-chain coordination of the advancer / owner operating model.
+- **Why**:
+  - The protocol intentionally separates:
+    - custody / approval authority (`ownerOf(tokenId)` / `mmState.owner`-anchored MM identity), and
+    - hot-path MM execution / proof-submission authority (`mmState.advancer`).
+  - This lets operators keep asset custody and approval flows on a more secure key while using a lighter operational key
+    for maker actions and prover-facing workflows.
+- **Expressed by**:
+  - `src/libraries/VTSCommitLib.sol::_renewSignalInternal` preserves `mmState.owner` across renewals and authorises
+    renewals via `mmState.advancer`.
+  - `src/libraries/VTSLifecycleLinkedLib.sol::validateMMOperation` requires the MM batch locker to equal the stored
+    advancer for non-seizure MM operations.
+  - `src/libraries/MMHelpers.sol::assertApprovedOrOwner` separately enforces ERC-721 owner / approval authority on the
+    relevant `MMPositionManager` entrypoints.
+- **Non-goal**:
+  - The protocol does **not** guarantee that transferring an active commitment NFT alone transfers full MM operating
+    authority to the recipient.
 
 ### SIG-01: VRL nonce must be strictly monotonically increasing per MM
 
@@ -269,6 +326,16 @@ being an informal “should”.
 - **Statement**: When a call requests revert-on-invalid, an invalid proof must revert.
 - **Enforced by**: `src/VRLSignalManager.sol::verifyLiquiditySignal(address,bytes,bool)` reverts `Errors.InvalidProof()` when
   `revertOnInvalid && !ok`.
+
+### COMMIT-00: `commitmentMax` must match live position liquidity (no path-dependent drift)
+
+- **Statement**: `PositionAccounting.commitmentMax` for each token must equal the rounded-up CLMM maxima for the
+  position’s tick range evaluated at the position’s **current live** Uniswap v4 position liquidity. It must not be
+  maintained by incremental add/subtract of per-delta maxima alone, because per-delta `roundUp` amounts are not
+  additive and can understate the true maxima for the remaining liquidity after partial removes.
+- **Enforced by**: `src/libraries/VTSPositionLib.sol::_trackCommitment`, invoked from
+  `touchPosition` after liquidity-changing modifies (new position, increase, decrease) and on active zero-delta
+  touches to resynchronise against live `PoolManager` liquidity.
 
 ### COMMIT-01: Commitment backing must satisfy `issuedUsd <= settledUsd + signalUsd` (per-position, per-commit)
 

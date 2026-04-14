@@ -70,6 +70,17 @@ library VTSCommitLib {
         }
     }
 
+    /// @dev Admission policy after VRL verification: stored MM reserve state must be priceable on-chain (ticker cap,
+    ///      OracleHelper mapping + oracle reads) so `checkpointWithCommitment` and related paths cannot later revert
+    ///      solely because the committed signal is structurally unpriceable.
+    function _assertSignalAdmissible(IOracleHelper oracleHelper, bytes memory liquiditySignal) internal view {
+        if (address(oracleHelper) == address(0)) {
+            revert Errors.InvalidAddress(address(0));
+        }
+        LiquiditySignal memory signal = abi.decode(liquiditySignal, (LiquiditySignal));
+        _signalValue(signal.mmState, oracleHelper);
+    }
+
     /// @notice Calculates the USD value of the position's issued commitment
     /// @param oracleHelper The oracle helper for USD price calculations
     /// @param currency0 The currency 0
@@ -198,6 +209,7 @@ library VTSCommitLib {
         VTSStorage storage s,
         address sender,
         IVRLSignalManager signalManager,
+        IOracleHelper oracleHelper,
         bytes memory liquiditySignal
     ) external returns (uint256 commitId) {
         // validate the liquidity signal was actually provided
@@ -207,6 +219,7 @@ library VTSCommitLib {
 
         // verify the proofs associated with the state
         (, uint256 expirySeconds) = signalManager.verifyLiquiditySignal(sender, liquiditySignal, true);
+        _assertSignalAdmissible(oracleHelper, liquiditySignal);
         commitId = _commitSignalInternal(s, liquiditySignal, expirySeconds);
     }
 
@@ -215,6 +228,7 @@ library VTSCommitLib {
         VTSStorage storage s,
         address sender,
         IVRLSignalManager signalManager,
+        IOracleHelper oracleHelper,
         bytes memory liquiditySignal,
         uint256 deadline,
         uint256 authNonce,
@@ -226,6 +240,7 @@ library VTSCommitLib {
 
         (, uint256 expirySeconds) =
             signalManager.verifyLiquiditySignalRelayed(sender, 0, liquiditySignal, deadline, authNonce, authSig, true);
+        _assertSignalAdmissible(oracleHelper, liquiditySignal);
         commitId = _commitSignalInternal(s, liquiditySignal, expirySeconds);
     }
 
@@ -235,6 +250,7 @@ library VTSCommitLib {
         VTSStorage storage s,
         address sender,
         IVRLSignalManager signalManager,
+        IOracleHelper oracleHelper,
         uint256 commitId,
         bytes memory liquiditySignal
     ) external {
@@ -243,6 +259,7 @@ library VTSCommitLib {
         }
 
         (, uint256 expirySeconds) = signalManager.verifyLiquiditySignal(sender, liquiditySignal, true);
+        _assertSignalAdmissible(oracleHelper, liquiditySignal);
         _renewSignalInternal(s, sender, commitId, liquiditySignal, expirySeconds);
     }
 
@@ -251,6 +268,7 @@ library VTSCommitLib {
         VTSStorage storage s,
         address sender,
         IVRLSignalManager signalManager,
+        IOracleHelper oracleHelper,
         uint256 commitId,
         bytes memory liquiditySignal,
         uint256 deadline,
@@ -264,6 +282,7 @@ library VTSCommitLib {
         (, uint256 expirySeconds) = signalManager.verifyLiquiditySignalRelayed(
             sender, commitId, liquiditySignal, deadline, authNonce, authSig, true
         );
+        _assertSignalAdmissible(oracleHelper, liquiditySignal);
         _renewSignalInternal(s, sender, commitId, liquiditySignal, expirySeconds);
     }
 

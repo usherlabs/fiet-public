@@ -41,9 +41,37 @@ contract MockERC20 {
 contract MockMarketFactory {
     event AfterModifyLiquidityCalled(bytes32 poolId);
     address public liquidityHub;
+    address public coreHookAddr;
+
+    mapping(bytes32 corePoolId => bytes32 proxyPoolId) internal _coreToProxy;
+    mapping(bytes32 proxyPoolId => address hook) internal _proxyToHook;
 
     function setLiquidityHub(address hub) external {
         liquidityHub = hub;
+    }
+
+    function setCoreHookAddr(address hook) external {
+        coreHookAddr = hook;
+    }
+
+    function coreHook() external view returns (address) {
+        return coreHookAddr;
+    }
+
+    function setCoreToProxy(PoolId corePoolId, PoolId proxyPoolId) external {
+        _coreToProxy[PoolId.unwrap(corePoolId)] = PoolId.unwrap(proxyPoolId);
+    }
+
+    function coreToProxy(PoolId corePoolId) external view returns (PoolId) {
+        return PoolId.wrap(_coreToProxy[PoolId.unwrap(corePoolId)]);
+    }
+
+    function setProxyToHook(PoolId proxyPoolId, address hook) external {
+        _proxyToHook[PoolId.unwrap(proxyPoolId)] = hook;
+    }
+
+    function proxyToHook(PoolId proxyPoolId) external view returns (address) {
+        return _proxyToHook[PoolId.unwrap(proxyPoolId)];
     }
 
     function afterModifyLiquidity(PoolKey memory key) external {
@@ -364,6 +392,8 @@ contract PositionManagerImplTest is Test {
     address internal ua0;
     address internal ua1;
     address internal owner;
+    address internal coreHookAddr;
+    PoolId internal canonicalProxyPoolId;
 
     function setUp() public {
         poolManager = new MockPoolManager();
@@ -383,11 +413,19 @@ contract PositionManagerImplTest is Test {
         ua0 = makeAddr("ua0");
         ua1 = makeAddr("ua1");
 
+        coreHookAddr = makeAddr("coreHook");
+        factory.setCoreHookAddr(coreHookAddr);
+        canonicalProxyPoolId = PoolId.wrap(keccak256("canonicalProxyPool"));
+
         // Mock LCC -> underlying conversion.
         vm.mockCall(lcc0, abi.encodeWithSignature("underlying()"), abi.encode(ua0));
         vm.mockCall(lcc1, abi.encodeWithSignature("underlying()"), abi.encode(ua1));
 
         h = new PositionManagerImplHarness(IPoolManager(address(poolManager)), address(factory), orch, locker);
+
+        PoolKey memory canonKey = _defaultKey();
+        factory.setCoreToProxy(canonKey.toId(), canonicalProxyPoolId);
+        factory.setProxyToHook(canonicalProxyPoolId, makeAddr("canonicalProxyVault"));
     }
 
     function _defaultKey() internal view returns (PoolKey memory) {
@@ -396,7 +434,7 @@ contract PositionManagerImplTest is Test {
             currency1: Currency.wrap(lcc1),
             fee: 0,
             tickSpacing: 1,
-            hooks: IHooks(address(0))
+            hooks: IHooks(coreHookAddr)
         });
     }
 
@@ -530,6 +568,41 @@ contract PositionManagerImplTest is Test {
         poolManager.setModifyLiquidityReturn(BalanceDelta.wrap(0), BalanceDelta.wrap(0));
 
         vm.expectRevert(abi.encodeWithSelector(Errors.InvariantViolated.selector, "liquidity change incorrect"));
+        h.exposeModifySyntheticLiquidity(key, params, 0, "");
+    }
+
+    function test_modifySyntheticLiquidity_revertsInvalidMarket_whenHooksNotCoreHook() public {
+        PoolKey memory key = _defaultKey();
+        key.hooks = IHooks(makeAddr("foreignHook"));
+
+        ModifyLiquidityParams memory params = ModifyLiquidityParams({
+            tickLower: -60, tickUpper: 60, liquidityDelta: int128(1), salt: bytes32(uint256(789))
+        });
+        _seedPositionLiquidity(key, params.tickLower, params.tickUpper, params.salt, 10);
+        poolManager.setModifyLiquidityReturn(BalanceDelta.wrap(0), BalanceDelta.wrap(0));
+
+        vm.expectRevert(abi.encodeWithSelector(Errors.InvalidMarket.selector, key));
+        h.exposeModifySyntheticLiquidity(key, params, 0, "");
+    }
+
+    function test_modifySyntheticLiquidity_revertsInvalidMarket_whenProxyHookUnset() public {
+        PoolKey memory key = PoolKey({
+            currency0: Currency.wrap(lcc0),
+            currency1: Currency.wrap(lcc1),
+            fee: 0,
+            tickSpacing: 1,
+            hooks: IHooks(coreHookAddr)
+        });
+        // Same currencies and hook as canonical, but different fee => different pool id with no factory mapping.
+        key.fee = 1;
+
+        ModifyLiquidityParams memory params = ModifyLiquidityParams({
+            tickLower: -60, tickUpper: 60, liquidityDelta: int128(1), salt: bytes32(uint256(790))
+        });
+        _seedPositionLiquidity(key, params.tickLower, params.tickUpper, params.salt, 10);
+        poolManager.setModifyLiquidityReturn(BalanceDelta.wrap(0), BalanceDelta.wrap(0));
+
+        vm.expectRevert(abi.encodeWithSelector(Errors.InvalidMarket.selector, key));
         h.exposeModifySyntheticLiquidity(key, params, 0, "");
     }
 

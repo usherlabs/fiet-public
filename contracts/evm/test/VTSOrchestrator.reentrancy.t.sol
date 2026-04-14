@@ -130,7 +130,8 @@ contract ReentrantSignalManager {
             (bool ok,) = _reenter(k, liquiditySignal);
             if (ok) revert Reentered();
         }
-        return (true, 3600);
+        LiquiditySignal memory sig = abi.decode(liquiditySignal, (LiquiditySignal));
+        return (true, sig.mmState.expiryAt - block.timestamp);
     }
 
     function _reenter(uint8 k, bytes memory liquiditySignal) internal returns (bool ok, bytes memory data) {
@@ -200,10 +201,6 @@ contract ReentrantSignalManager {
         return address(0);
     }
 
-    function signalExpiryInSeconds() external pure returns (uint256) {
-        return 3600;
-    }
-
     function mmNonce(address) external pure returns (uint256) {
         return 0;
     }
@@ -217,7 +214,19 @@ contract ReentrantSignalManager {
     }
 
     function setVerifier(address) external {}
-    function setSignalExpiryInSeconds(uint256) external {}
+
+    function verifyLiquiditySignalRelayed(
+        address,
+        uint256,
+        bytes memory liquiditySignal,
+        uint256,
+        uint256,
+        bytes memory,
+        bool
+    ) external view returns (bool, uint256) {
+        LiquiditySignal memory sig = abi.decode(liquiditySignal, (LiquiditySignal));
+        return (true, sig.mmState.expiryAt - block.timestamp);
+    }
 }
 
 contract VTSOrchestratorReentrancyTest is VTSOrchestratorFixture {

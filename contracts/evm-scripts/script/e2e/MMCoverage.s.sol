@@ -138,7 +138,8 @@ contract MMCoverageE2E is MME2EBase {
     function _assertDistinctActors(ActorAddrs memory actors) internal pure {
         require(actors.mm1 != actors.mm2, "actors: mm1 must differ from mm2");
         require(actors.mm1 != actors.mm3, "actors: mm1 must differ from mm3");
-        // NOTE: mm1 may equal taker when the scenario reuses the same key for both roles.
+        // Taker swap output is measured via `ILCC.balanceOf(taker)`; mm1 must not be the taker or that leg is not isolated.
+        require(actors.mm1 != actors.taker, "actors: mm1 must differ from taker");
         require(actors.mm2 != actors.mm3, "actors: mm2 must differ from mm3");
         require(actors.mm2 != actors.taker, "actors: mm2 must differ from taker");
         require(actors.mm3 != actors.taker, "actors: mm3 must differ from taker");

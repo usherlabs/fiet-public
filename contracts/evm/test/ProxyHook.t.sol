@@ -1389,6 +1389,41 @@ contract ProxyHookTest is MarketVaultBase {
         assertGt(LiquidityHub(payable(liquidityHub)).settleQueue(address(lccOut), recipient), 0);
     }
 
+    /**
+     * @notice When the output-lane vault has zero underlying claims, exact-input with a resolved recipient must still
+     *         queue the full output as settlement (regression: `cancel(0)` must not revert before deficit transfer).
+     */
+    function test_proxyLiveness_outputLaneFullyDepleted_exactInputResolvedRecipientQueuesFullDeficit() public {
+        Currency currencyOut = proxyPoolKey.currency1;
+        if (Currency.unwrap(currencyOut) == address(0)) {
+            return;
+        }
+
+        LiquidityCommitmentCertificate lccOut = _lccForUnderlyingCurrency(currencyOut);
+        address recipient = makeAddr("full_deficit_recipient");
+        _setupRecipient(recipient);
+
+        uint256 beforeVault = mv.inMarketBalanceOf(currencyOut);
+        assertGt(beforeVault, 10_000, "pre: need vault liquidity");
+
+        _unwrapMarketDerivedFromVault(lccOut, beforeVault);
+        assertEq(mv.inMarketBalanceOf(currencyOut), 0, "post: output lane fully depleted");
+
+        uint256 swapAmount = 1e18;
+        (, uint256 expectedOutput) = _simulateCoreSwapAsProxy(proxyPoolKey, true, -int256(swapAmount));
+        assertGt(expectedOutput, 0, "pre: core must produce non-zero output LCC");
+
+        vm.expectRevert();
+        _executeSwap(proxyPoolKey, true, -int256(swapAmount), ZERO_BYTES);
+
+        uint256 qBefore = LiquidityHub(payable(liquidityHub)).settleQueue(address(lccOut), recipient);
+        _executeSwap(proxyPoolKey, true, -int256(swapAmount), abi.encode(recipient));
+        uint256 qAfter = LiquidityHub(payable(liquidityHub)).settleQueue(address(lccOut), recipient);
+        assertEq(
+            qAfter - qBefore, expectedOutput, "queued amount should cover full core output when vault has no claims"
+        );
+    }
+
     /// @dev Queue-backed obligation settlement on direct core swap can drain the victim output underlying before a proxy swap.
     function test_proxyLiveness_directCoreWithUnfundedQueue_drainsOutputLane_thenExactOutputReverts() public {
         Currency currencyOut = proxyPoolKey.currency1;

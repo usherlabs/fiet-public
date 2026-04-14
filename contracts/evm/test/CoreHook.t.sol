@@ -23,6 +23,7 @@ import {HookMiner} from "v4-periphery/src/utils/HookMiner.sol";
 import {MarketTestBase} from "./base/MarketTestBase.sol";
 import {Actions} from "v4-periphery/src/libraries/Actions.sol";
 import {LiquidityHub} from "../src/LiquidityHub.sol";
+import {Bounds} from "../src/libraries/Bounds.sol";
 import {LiquidityCommitmentCertificate} from "../src/LCC.sol";
 import {ILCC} from "../src/interfaces/ILCC.sol";
 import {IERC20Minimal} from "@uniswap/v4-core/src/interfaces/external/IERC20Minimal.sol";
@@ -221,14 +222,17 @@ contract CoreHookTest is Test {
         uint128 liqBefore = 456;
         SwapParams memory sp = SwapParams({zeroForOne: true, amountSpecified: int256(1), sqrtPriceLimitX96: 0});
 
-        (uint256 sqrtAfter, uint256 liqAfter) = hook.exposed_afterSwap_withPresetSnapshot(
-            key, sp, toBalanceDelta(int128(-1), int128(1)), sqrtPBefore, liqBefore, bytes("")
+        int24 tickBefore = -42;
+        (uint256 sqrtAfter, uint256 liqAfter, uint256 tickAfter) = hook.exposed_afterSwap_withPresetSnapshot(
+            key, sp, toBalanceDelta(int128(-1), int128(1)), sqrtPBefore, liqBefore, tickBefore, bytes("")
         );
 
         assertEq(vts.lastSqrtPBefore(), sqrtPBefore, "VTS should receive sqrtPBefore");
         assertEq(vts.lastLiqBefore(), liqBefore, "VTS should receive liqBefore");
+        assertEq(vts.lastTickBefore(), tickBefore, "VTS should receive tickBefore");
         assertEq(sqrtAfter, 0, "SQRTP_BEFORE_SLOT should be cleared");
         assertEq(liqAfter, 0, "LIQ_BEFORE_SLOT should be cleared");
+        assertEq(tickAfter, 0, "TICK_BEFORE_SLOT should be cleared");
     }
 
     // ------------------------------------------------------------
@@ -310,16 +314,19 @@ contract CoreHookHarness is CoreHook {
         BalanceDelta delta,
         uint160 sqrtPBefore,
         uint128 liqBefore,
+        int24 tickBefore,
         bytes calldata hookData
-    ) external returns (uint256 sqrtAfter, uint256 liqAfter) {
+    ) external returns (uint256 sqrtAfter, uint256 liqAfter, uint256 tickAfter) {
         // Pre-seed transient slots to emulate the beforeSwap->afterSwap same-tx lifecycle.
         TransientSlot.asUint256(TransientSlots.SQRTP_BEFORE_SLOT).tstore(uint256(sqrtPBefore));
+        TransientSlot.asUint256(TransientSlots.TICK_BEFORE_SLOT).tstore(uint256(int256(tickBefore)));
         TransientSlot.asUint256(TransientSlots.LIQ_BEFORE_SLOT).tstore(uint256(liqBefore));
 
         _afterSwap(address(this), k, params, delta, hookData);
 
         sqrtAfter = TransientSlot.asUint256(TransientSlots.SQRTP_BEFORE_SLOT).tload();
         liqAfter = TransientSlot.asUint256(TransientSlots.LIQ_BEFORE_SLOT).tload();
+        tickAfter = TransientSlot.asUint256(TransientSlots.TICK_BEFORE_SLOT).tload();
     }
 }
 
@@ -404,6 +411,7 @@ contract MockVTSOrchestrator {
 
     uint160 internal _lastSqrtPBefore;
     uint128 internal _lastLiqBefore;
+    int24 internal _lastTickBefore;
     PositionId internal _lastSettledPositionId;
     uint256 internal _settlePositionGrowthsCalls;
 
@@ -450,11 +458,17 @@ contract MockVTSOrchestrator {
         isMMPosition = _isMM;
     }
 
-    function afterCoreSwap(PoolKey calldata, SwapParams calldata, BalanceDelta, uint160 sqrtPBefore, uint128 liqBefore)
-        external
-    {
+    function afterCoreSwap(
+        PoolKey calldata,
+        SwapParams calldata,
+        BalanceDelta,
+        uint160 sqrtPBefore,
+        uint128 liqBefore,
+        int24 tickBefore
+    ) external {
         _lastSqrtPBefore = sqrtPBefore;
         _lastLiqBefore = liqBefore;
+        _lastTickBefore = tickBefore;
     }
 
     function settlePositionGrowths(PositionId positionId) external {
@@ -468,6 +482,10 @@ contract MockVTSOrchestrator {
 
     function lastLiqBefore() external view returns (uint128) {
         return _lastLiqBefore;
+    }
+
+    function lastTickBefore() external view returns (int24) {
+        return _lastTickBefore;
     }
 
     function lastSettledPositionId() external view returns (PositionId) {
@@ -1187,6 +1205,9 @@ contract CoreHookDirectLPRemoveBucketingTest is MarketTestBase {
         ThreeStepDecreaseUnwrapSweepMulticaller mc =
             new ThreeStepDecreaseUnwrapSweepMulticaller(IPoolManager(address(manager)), liquidityHub, address(posm));
         t.mc = address(mc);
+
+        vm.prank(marketFactory);
+        LiquidityHub(payable(liquidityHub)).setBoundLevel(address(mc), Bounds.BOUND_ENDPOINT);
 
         // LP approves multicaller to manage the position token (so it can be the PosM "locker" for decrease).
         vm.prank(lp);

@@ -99,21 +99,47 @@ library VTSLifecycleLinkedLib {
         return caller;
     }
 
-    function _isSignalValid(VTSStorage storage s, uint256 commitId, bool requireLiveSignal)
+    /// @notice Checks if a commit exists and optionally enforces a live VRL-backed signal
+    /// @param commitId The commit identifier
+    /// @param requireLiveSignal If true, requires non-empty reserves, not expired, and a non-zero owner. If false,
+    ///        only requires an initialised commit with a non-zero owner (zero backing / empty reserves allowed).
+    /// @return isValid True if the commit satisfies the requested constraints
+    function isSignalValid(VTSStorage storage s, uint256 commitId, bool requireLiveSignal)
         internal
         view
         returns (bool isValid)
     {
-        if (commitId == 0) return false;
+        // Check if commit exists (commitId must be > 0)
+        if (commitId == 0) {
+            return false;
+        }
 
         Commit storage commit = s.commits[commitId];
-        if (commit.expiresAt == 0) return false;
 
+        // Check if commit actually exists (expiresAt > 0 indicates commit was initialized)
+        if (commit.expiresAt == 0) {
+            return false;
+        }
+
+        // Validate that mmState has valid parameters
         MarketMaker.State storage mmState = commit.mmState;
-        if (mmState.owner == address(0)) return false;
-        if (mmState.reserves.length == 0) return false;
+        if (mmState.owner == address(0)) {
+            return false;
+        }
 
-        if (requireLiveSignal && block.timestamp >= commit.expiresAt) return false;
+        // Empty reserves mean zero VRL-backed backing; only reject for live-signal flows.
+        // Recovery paths (renewal, checkpoint, seizure) use requireLiveSignal=false.
+        if (requireLiveSignal && mmState.reserves.length == 0) {
+            return false;
+        }
+
+        // Only check expiry if requireLiveSignal is true
+        if (requireLiveSignal) {
+            bool isExpired = block.timestamp >= commit.expiresAt;
+            if (isExpired) {
+                return false;
+            }
+        }
 
         return true;
     }
@@ -183,6 +209,11 @@ library VTSLifecycleLinkedLib {
         IMarketFactory canonicalFactory =
             ctx.liquidityHub.getFactory(Currency.unwrap(currency0), Currency.unwrap(currency1));
         if (address(canonicalFactory) != address(factory)) revert Errors.InvalidSender();
+
+        Position memory pos = s.positions[positionId];
+        if (pos.owner == address(0) || PoolId.unwrap(pos.poolId) != PoolId.unwrap(poolId)) {
+            revert Errors.InvalidPosition(0, 0, positionId);
+        }
 
         params = SettleParams({
             vault: MarketHandlerLib.getVault(factory, poolId),
@@ -741,7 +772,7 @@ library VTSLifecycleLinkedLib {
             return false;
         }
 
-        if (!_isSignalValid(s, mmData.commitId, !mmData.seizure.isSeizing)) {
+        if (!isSignalValid(s, mmData.commitId, !mmData.seizure.isSeizing)) {
             revert Errors.InvalidSignal(mmData.commitId);
         }
 
@@ -790,7 +821,7 @@ library VTSLifecycleLinkedLib {
         bytes memory liquiditySignal
     ) external returns (uint256 commitId) {
         address effectiveSender = _resolveSignalSender(ctx, factory, caller, sender);
-        commitId = VTSCommitLib.commitSignal(s, effectiveSender, ctx.signalManager, liquiditySignal);
+        commitId = VTSCommitLib.commitSignal(s, effectiveSender, ctx.signalManager, ctx.oracleHelper, liquiditySignal);
     }
 
     function commitSignalRelayed(
@@ -806,7 +837,7 @@ library VTSLifecycleLinkedLib {
     ) external returns (uint256 commitId) {
         address effectiveSender = _resolveSignalSender(ctx, factory, caller, sender);
         commitId = VTSCommitLib.commitSignalRelayed(
-            s, effectiveSender, ctx.signalManager, liquiditySignal, deadline, authNonce, authSig
+            s, effectiveSender, ctx.signalManager, ctx.oracleHelper, liquiditySignal, deadline, authNonce, authSig
         );
     }
 
@@ -820,7 +851,7 @@ library VTSLifecycleLinkedLib {
         bytes memory liquiditySignal
     ) external {
         address effectiveSender = _resolveSignalSender(ctx, factory, caller, sender);
-        VTSCommitLib.renewSignal(s, effectiveSender, ctx.signalManager, commitId, liquiditySignal);
+        VTSCommitLib.renewSignal(s, effectiveSender, ctx.signalManager, ctx.oracleHelper, commitId, liquiditySignal);
     }
 
     function renewSignalRelayed(
@@ -837,7 +868,15 @@ library VTSLifecycleLinkedLib {
     ) external {
         address effectiveSender = _resolveSignalSender(ctx, factory, caller, sender);
         VTSCommitLib.renewSignalRelayed(
-            s, effectiveSender, ctx.signalManager, commitId, liquiditySignal, deadline, authNonce, authSig
+            s,
+            effectiveSender,
+            ctx.signalManager,
+            ctx.oracleHelper,
+            commitId,
+            liquiditySignal,
+            deadline,
+            authNonce,
+            authSig
         );
     }
 }

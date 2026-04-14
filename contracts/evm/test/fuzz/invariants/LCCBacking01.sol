@@ -309,6 +309,7 @@ contract LCCBacking01 {
             abi.encodePacked(address(this), bytes1(0x03)), bytes32(uint256(4)), "CONV_B", issuers
         );
         queueHolder = new LCCBacking01Holder();
+        hub.setBoundLevel(address(queueHolder), Bounds.BOUND_ENDPOINT);
 
         hub.issue(address(lccNative), address(this), INITIAL_MARKET_BALANCE);
         lastDirectMintOk = _checkDirectMint(1);

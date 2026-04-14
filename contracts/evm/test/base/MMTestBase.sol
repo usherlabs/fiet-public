@@ -9,6 +9,7 @@ import {LiquiditySignal} from "../../src/types/Commit.sol";
 import {ModifyLiquidityParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {PositionId} from "../../src/types/Position.sol";
+import {EfficientHashLib} from "solady/utils/EfficientHashLib.sol";
 import {MarketVTSConfiguration} from "../../src/types/VTS.sol";
 import {MMPositionManager} from "../../src/MMPositionManager.sol";
 import {MMActionAdapter as MMA} from "../utils/MMActionAdapter.sol";
@@ -76,11 +77,14 @@ abstract contract MarketMakerTestBase is Test {
         // store the merkle leaves of the market makers
         bytes32[] memory merkleLeaves = new bytes32[](numOfMarketMakers);
 
+        uint256 proofDeadline = block.timestamp + 180 days;
+
         for (uint256 i = 0; i < numOfMarketMakers; i++) {
             // generate a private key to serve as the signer
             uint256 uniquePrivateKey = uint256(keccak256(abi.encodePacked(i)));
             // append the market maker state to the liqudity signals generated so far
             MarketMaker.State memory state = _createMarketMakerState(uniquePrivateKey).state;
+            state.expiryAt = proofDeadline;
             // append the state to the array of merkle leaves, and store the mm state and private key info
             merkleLeaves[i] = state.toLeafHash();
             marketMakerStates[i] = StatePayload({privateKey: uniquePrivateKey, state: state});
@@ -99,9 +103,10 @@ abstract contract MarketMakerTestBase is Test {
                 _signEthMessage(marketMakerStates[i].privateKey, marketMakerStates[i].state.toLeafHash());
 
             // generate a canister signature of the payload(merkle root hash and signature)
-            bytes32 canisterSignaturePayload = keccak256(abi.encodePacked(nonce, merkleRootHash));
+            uint256 signalNonce = nonce;
+            bytes32 tssMessageHash = EfficientHashLib.hash(abi.encodePacked(signalNonce, merkleRootHash));
             bytes memory signatureVerifierMerkleRootHashSignature =
-                _signEthMessage(signatureVerifierPrivateKey, canisterSignaturePayload);
+                _signEthMessage(signatureVerifierPrivateKey, tssMessageHash);
             // generate the liquidity signal
             liquiditySignals[i] = LiquiditySignal({
                 // the merkle root hash of the merkle tree generated from the states
@@ -115,8 +120,9 @@ abstract contract MarketMakerTestBase is Test {
                 // the signature of the market maker state and the nonce
                 mmSignature: liquidityPayloadSignature,
                 // The nonce must always be incrementing.
-                nonce: nonce++
+                nonce: signalNonce
             });
+            nonce = signalNonce + 1;
         }
 
         // return the liquidity signals

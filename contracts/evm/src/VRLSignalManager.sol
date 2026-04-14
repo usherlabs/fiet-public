@@ -44,20 +44,18 @@ contract VRLSignalManager is Ownable, EIP712, IVRLSignalManager {
     // Seeders may only move these replay guards forwards; they can never lower an already-recorded nonce.
     mapping(address => uint256) public mmNonce;
     mapping(address => uint256) public submitAuthNonce;
-    uint256 public signalExpiryInSeconds;
     address public immutable submitter;
     bytes32 internal constant RELAY_AUTH_TYPEHASH = keccak256(
         "RelayAuth(address sender,uint256 commitId,bytes32 liquiditySignalHash,uint256 deadline,uint256 nonce)"
     );
 
-    constructor(address _verifier, uint256 _signalExpiryInSeconds, address _submitter, address _initialOwner)
+    constructor(address _verifier, address _submitter, address _initialOwner)
         Ownable(_initialOwner)
         EIP712("VRLSignalManager", "1")
     {
         if (_submitter == address(0)) revert Errors.InvalidAddress(_submitter);
 
         verifier = ISignalVerifier(_verifier);
-        signalExpiryInSeconds = _signalExpiryInSeconds;
         submitter = _submitter;
     }
 
@@ -87,16 +85,6 @@ contract VRLSignalManager is Ownable, EIP712, IVRLSignalManager {
      */
     function getVerifier() external view returns (address) {
         return address(verifier);
-    }
-
-    /**
-     * @dev This function is used to set the expiry in seconds for the liquidity signal
-     * @param _signalExpiryInSeconds The new expiry in seconds to set
-     */
-    function setSignalExpiryInSeconds(uint256 _signalExpiryInSeconds) external onlyOwner {
-        uint256 _oldSignalExpiryInSeconds = signalExpiryInSeconds;
-        signalExpiryInSeconds = _signalExpiryInSeconds;
-        emit SignalExpiryInSecondsChanged(_oldSignalExpiryInSeconds, _signalExpiryInSeconds);
     }
 
     /// @notice Seed the minimum accepted MM nonce on a replacement deployment before re-registering the handler.
@@ -144,6 +132,11 @@ contract VRLSignalManager is Ownable, EIP712, IVRLSignalManager {
             revert Errors.InvalidNonce(signal.nonce, mmNonce[signal.mmState.owner]);
         }
 
+        // Leaf-bound proof freshness: `expiryAt` is part of the signed Merkle leaf (`mmState`).
+        if (block.timestamp > signal.mmState.expiryAt) {
+            revert Errors.DeadlinePassed(signal.mmState.expiryAt);
+        }
+
         // verify the proofs associated with the state
         isProofValid = verifier.verifyProof(
             signal.nonce, signal.rootHash, signal.rootHashSignature, signal.mmState, signal.merkleProof
@@ -156,7 +149,8 @@ contract VRLSignalManager is Ownable, EIP712, IVRLSignalManager {
             emit LiquiditySignalVerified(signal);
         }
 
-        _signalExpiryInSeconds = signalExpiryInSeconds;
+        // On-chain commit window is the remaining time until the leaf `expiryAt` (signed in the Merkle state).
+        _signalExpiryInSeconds = signal.mmState.expiryAt - block.timestamp;
     }
 
     function verifyLiquiditySignal(address sender, bytes memory liquiditySignal, bool revertOnInvalid)

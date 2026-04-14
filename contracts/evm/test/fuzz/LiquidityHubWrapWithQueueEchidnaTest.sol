@@ -232,6 +232,7 @@ contract LiquidityHubWrapWithQueueEchidnaTest {
         uint256 totalQueued0 = hub.totalQueued(address(lccNative));
 
         hub.issue(address(lccNative), address(holder), total);
+        hub.setBoundLevel(address(holder), Bounds.BOUND_ENDPOINT);
 
         if (!holder.unwrapToQueue(address(hub), address(lccNative), q)) return;
 

@@ -19,6 +19,7 @@ import {SafeCast} from "v4-periphery/lib/v4-core/src/libraries/SafeCast.sol";
 import {Math} from "openzeppelin-contracts/contracts/utils/math/Math.sol";
 import {IMarketFactory} from "../interfaces/IMarketFactory.sol";
 import {IMMQueueCustodian} from "../interfaces/IMMQueueCustodian.sol";
+import {MarketHandlerLib} from "../libraries/MarketHandlerLib.sol";
 
 /**
  * @title PositionManagerImpl
@@ -256,6 +257,15 @@ abstract contract PositionManagerImpl is PositionManagerBase, ImmutableState {
         uint256 tokenId,
         bytes memory hookData
     ) internal virtual returns (BalanceDelta callerDelta, BalanceDelta feesAccrued) {
+        // MM liquidity must target the factory-registered canonical core pool so CoreHook runs and VTS registers
+        // the position. Otherwise modifyLiquidity can strand tokens in an unmanaged PoolManager position.
+        if (address(key.hooks) != MarketHandlerLib.getCoreHook(marketFactory)) {
+            revert Errors.InvalidMarket(key);
+        }
+        if (MarketHandlerLib.getProxyHook(marketFactory, key) == address(0)) {
+            revert Errors.InvalidMarket(key);
+        }
+
         address self = address(this);
 
         // Get liquidity state before modification for validation

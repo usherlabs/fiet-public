@@ -10,6 +10,7 @@ import {PositionId, Position} from "../../../src/types/Position.sol";
 import {RFSCheckpoint} from "../../../src/types/Checkpoint.sol";
 import {IVRLSignalManager} from "../../../src/interfaces/IVRLSignalManager.sol";
 import {IOracleHelper} from "../../../src/interfaces/IOracleHelper.sol";
+import {MarketMaker} from "../../../src/libraries/MarketMaker.sol";
 import {IPoolManager} from "v4-periphery/lib/v4-core/src/interfaces/IPoolManager.sol";
 import {StateLibrary} from "v4-periphery/lib/v4-core/src/libraries/StateLibrary.sol";
 
@@ -38,12 +39,22 @@ contract VTSCommitLibHarness {
         VTSCommitLib.incrementCoverage(s, poolId, tokenIndex, coveredAmount);
     }
 
-    function commitSignal(IVRLSignalManager mgr, address sender, bytes memory sig) external returns (uint256) {
-        return VTSCommitLib.commitSignal(s, sender, mgr, sig);
+    function commitSignal(IVRLSignalManager mgr, address sender, IOracleHelper oracleHelper, bytes memory sig)
+        external
+        returns (uint256)
+    {
+        return VTSCommitLib.commitSignal(s, sender, mgr, oracleHelper, sig);
     }
 
-    function renewSignal(IVRLSignalManager mgr, uint256 commitId, bytes memory sig) external {
-        VTSCommitLib.renewSignal(s, msg.sender, mgr, commitId, sig);
+    function renewSignal(IVRLSignalManager mgr, IOracleHelper oracleHelper, uint256 commitId, bytes memory sig)
+        external
+    {
+        VTSCommitLib.renewSignal(s, msg.sender, mgr, oracleHelper, commitId, sig);
+    }
+
+    /// @dev TEST-ONLY: overwrite stored commit MM state (e.g. to simulate legacy unpriceable storage).
+    function setCommitMmState(uint256 commitId, MarketMaker.State memory mm) external {
+        MarketMaker.save(s.commits[commitId].mmState, mm);
     }
 
     function checkpoint(IPoolManager poolManager, IOracleHelper oracleHelper, uint256 commitId, PositionId positionId)

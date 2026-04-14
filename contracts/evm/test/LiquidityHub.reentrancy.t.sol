@@ -7,6 +7,7 @@ import {LiquidityHub} from "../src/LiquidityHub.sol";
 import {ILCC} from "../src/interfaces/ILCC.sol";
 import {MockERC20} from "./_mocks/MockERC20.sol";
 import {Errors} from "../src/libraries/Errors.sol";
+import {Bounds} from "../src/libraries/Bounds.sol";
 import {CustomRevert} from "v4-periphery/lib/v4-core/src/libraries/CustomRevert.sol";
 import {StdStorage, stdStorage} from "forge-std/StdStorage.sol";
 
@@ -426,6 +427,7 @@ contract LiquidityHubReentrancyTest is LiquidityHubTestBase {
 
         evil.armTransferReentry(1);
 
+        _setBoundLevel(user1, Bounds.BOUND_ENDPOINT);
         vm.prank(user1);
         (bool ok, bytes memory data) =
             address(liquidityHub).call(abi.encodeWithSelector(_unwrapToSelector(), evilLcc, user2, amount));
@@ -457,6 +459,7 @@ contract LiquidityHubReentrancyTest is LiquidityHubTestBase {
 
         evil.armTransferReentry(1);
 
+        _setBoundLevel(user1, Bounds.BOUND_ENDPOINT);
         vm.prank(user1);
         (bool ok, bytes memory data) = address(liquidityHub)
             .call(abi.encodeWithSelector(_unwrapToByUnderlyingSelector(), address(evil), marketId, user2, amount));
@@ -487,6 +490,7 @@ contract LiquidityHubReentrancyTest is LiquidityHubTestBase {
 
         evil.armTransferReentry(1);
 
+        _setBoundLevel(user1, Bounds.BOUND_ENDPOINT);
         vm.prank(user1);
         (bool ok, bytes memory data) = address(liquidityHub)
             .call(abi.encodeWithSelector(_unwrapToWithQueueSelector(), evilLcc, user2, user3, amount));
@@ -518,6 +522,7 @@ contract LiquidityHubReentrancyTest is LiquidityHubTestBase {
 
         evil.armTransferReentry(1);
 
+        _setBoundLevel(user1, Bounds.BOUND_ENDPOINT);
         vm.prank(user1);
         (bool ok, bytes memory data) = address(liquidityHub)
             .call(

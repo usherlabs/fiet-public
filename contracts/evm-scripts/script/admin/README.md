@@ -111,15 +111,6 @@ Recommended verification after deployment:
 - **Env**:
   - `NEW_VERIFIER`: address
 
-### `just admin-vrl-signal-set-expiry`
-
-- **What it does**: sets the `LiquiditySignal` expiry window.
-- **On-chain call**: `VRLSignalManager.setSignalExpiryInSeconds(seconds)`
-  - if `VRLSignalManager.owner() == GlobalConfig`, this is routed via `GlobalConfig.proxyCall`
-- **Script**: `VRLSignalManagerAdmin.s.sol:VRLSignalManagerSetExpiryScript`
-- **Env**:
-  - `SIGNAL_EXPIRY_SECONDS`: `uint256`
-
 ### `just admin-vrl-settlement-add-verifier`
 
 - **What it does**: adds a verifier in `VRLSettlementObserver` and logs its index.

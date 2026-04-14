@@ -34,7 +34,7 @@ Located in `test/libraries/mocks/`:
 
 Comprehensive tests covering:
 
-- **Commitment Tracking** (`_trackCommitment`):
+- **Commitment maxima** (`_recomputeCommitmentMaxFromLiveLiquidity` via harness `recomputeCommitmentMaxFromLiveLiquidity`):
   - Adding liquidity increases commitment maxima
   - Removing liquidity decreases commitment maxima
   - Full removal resets to zero
@@ -109,7 +109,7 @@ forge test --match-path "test/libraries/VTSPositionLib.t.sol"
 forge test --match-path "test/libraries/**/*.t.sol" -vvv
 
 # Run specific test function
-forge test --match-test "test_trackCommitment_addsLiquidity_increasesCommitmentMax"
+forge test --match-test "test_recomputeCommitmentMax_matchesCalculatedMaxima_forRegisteredLiquidity"
 ```
 
 ### Writing New Tests

@@ -10,6 +10,8 @@ import {ISignalVerifier} from "../src/interfaces/ISignalVerifier.sol";
 import {LiquiditySignal} from "../src/types/Commit.sol";
 import {Errors} from "../src/libraries/Errors.sol";
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
+import {EfficientHashLib} from "solady/utils/EfficientHashLib.sol";
+import {MerkleProofGenerator} from "./utils/MerkleProofGenerator.sol";
 
 contract AlwaysTrueSignalVerifier is ISignalVerifier {
     function verifyProof(uint256, bytes32, bytes calldata, MarketMaker.State calldata, bytes32[] calldata)
@@ -33,6 +35,7 @@ contract AlwaysFalseSignalVerifier is ISignalVerifier {
 
 contract VRLSignalManagerTest is MarketMakerTestBase {
     using MarketMaker for MarketMaker.State;
+    using MerkleProofGenerator for bytes32[];
 
     VRLSignalManager signalManager;
     bytes32 internal constant EIP712_DOMAIN_TYPEHASH =
@@ -45,13 +48,13 @@ contract VRLSignalManagerTest is MarketMakerTestBase {
         // Create and fill in the test state
         _setUpMM();
         address verifier = address(new ECDSASignatureSignalVerifier(signatureVerifier));
-        signalManager = new VRLSignalManager(verifier, 3600, address(this), address(this));
+        signalManager = new VRLSignalManager(verifier, address(this), address(this));
     }
 
     function test_constructor_revertsWhenSubmitterIsZero() public {
         address verifier = address(new ECDSASignatureSignalVerifier(signatureVerifier));
         vm.expectRevert(abi.encodeWithSelector(Errors.InvalidAddress.selector, address(0)));
-        new VRLSignalManager(verifier, 3600, address(0), address(this));
+        new VRLSignalManager(verifier, address(0), address(this));
     }
 
     function test_canSetAndGetVerifier() public {
@@ -74,27 +77,6 @@ contract VRLSignalManagerTest is MarketMakerTestBase {
         vm.prank(attacker);
         vm.expectRevert(abi.encodeWithSelector(Ownable.OwnableUnauthorizedAccount.selector, attacker));
         signalManager.setVerifier(newVerifier);
-    }
-
-    function test_canSetAndGetSignalExpiry() public {
-        uint256 newExpiry = 7200; // 2 hours
-
-        // Set up event emission expectation
-        vm.expectEmit(true, true, true, true);
-        emit IVRLSignalManager.SignalExpiryInSecondsChanged(signalManager.signalExpiryInSeconds(), newExpiry);
-
-        signalManager.setSignalExpiryInSeconds(newExpiry);
-
-        // Verify the state changed
-        assertEq(signalManager.signalExpiryInSeconds(), newExpiry);
-    }
-
-    function test_onlyOwner_setSignalExpiryInSeconds_revertsForNonOwner() public {
-        address attacker = makeAddr("attacker");
-
-        vm.prank(attacker);
-        vm.expectRevert(abi.encodeWithSelector(Ownable.OwnableUnauthorizedAccount.selector, attacker));
-        signalManager.setSignalExpiryInSeconds(7200);
     }
 
     function test_seedMMNonce_setsReplayFloorForReplacementDeployment() public {
@@ -157,7 +139,7 @@ contract VRLSignalManagerTest is MarketMakerTestBase {
         (bool success, uint256 expiry) =
             signalManager.verifyLiquiditySignal(liquiditySignal.mmState.owner, abi.encode(liquiditySignal), true);
         assertEq(success, true);
-        assertEq(expiry, signalManager.signalExpiryInSeconds());
+        assertEq(expiry, liquiditySignal.mmState.expiryAt - block.timestamp);
     }
 
     function test_verifyLiquiditySignal_revertsForNonSubmitterCaller() public {
@@ -231,7 +213,7 @@ contract VRLSignalManagerTest is MarketMakerTestBase {
         (bool success, uint256 expiry) =
             signalManager.verifyLiquiditySignal(liquiditySignal.mmState.owner, abi.encode(liquiditySignal), true);
         assertEq(success, true);
-        assertEq(expiry, signalManager.signalExpiryInSeconds());
+        assertEq(expiry, liquiditySignal.mmState.expiryAt - block.timestamp);
     }
 
     function test_canVerifyLiquiditySignalWithRevertOnInvalid() public {
@@ -239,16 +221,17 @@ contract VRLSignalManagerTest is MarketMakerTestBase {
             nonce: 1,
             rootHash: bytes32(0),
             rootHashSignature: bytes(""),
-            mmSignature: bytes(""),
+            merkleProof: new bytes32[](0),
             mmState: MarketMaker.State({
                 owner: address(0),
                 reserves: new MarketMaker.Reserve[](0),
                 sourceState: "",
                 prover: "",
                 nonce: "",
-                advancer: address(0)
+                advancer: address(0),
+                expiryAt: block.timestamp + 1 days
             }),
-            merkleProof: new bytes32[](0)
+            mmSignature: bytes("")
         });
 
         // Expect revert with InvalidProof error
@@ -266,16 +249,17 @@ contract VRLSignalManagerTest is MarketMakerTestBase {
             nonce: 1,
             rootHash: bytes32(0),
             rootHashSignature: bytes(""),
-            mmSignature: bytes(""),
+            merkleProof: new bytes32[](0),
             mmState: MarketMaker.State({
                 owner: address(0),
                 reserves: new MarketMaker.Reserve[](0),
                 sourceState: "",
                 prover: "",
                 nonce: "",
-                advancer: address(0)
+                advancer: address(0),
+                expiryAt: block.timestamp + 1 days
             }),
-            merkleProof: new bytes32[](0)
+            mmSignature: bytes("")
         });
 
         // Verify the liquidity signal
@@ -308,27 +292,55 @@ contract VRLSignalManagerTest is MarketMakerTestBase {
         );
 
         assertTrue(ok);
-        assertEq(expiry, signalManager.signalExpiryInSeconds());
+        assertEq(expiry, liquiditySignal.mmState.expiryAt - block.timestamp);
         assertEq(signalManager.submitAuthNonce(sender), authNonce + 1);
     }
 
-    function test_verifyLiquiditySignalRelayed_advancerSigner_success() public {
-        uint256 advancerPrivateKey = uint256(keccak256(abi.encodePacked("relayed_advancer")));
-        address advancer = vm.addr(advancerPrivateKey);
-        LiquiditySignal memory advancerSignal = liquiditySignal;
-        advancerSignal.nonce = liquiditySignal.nonce + 100;
-        advancerSignal.mmState.advancer = advancer;
-        advancerSignal.merkleProof = new bytes32[](0);
-        advancerSignal.rootHash = advancerSignal.mmState.toLeafHash();
-        advancerSignal.rootHashSignature = _signEthMessage(
-            signatureVerifierPrivateKey, keccak256(abi.encodePacked(advancerSignal.nonce, advancerSignal.rootHash))
-        );
+    /// @dev ABI-encoded signal for `test_verifyLiquiditySignalRelayed_advancerSigner_success` (stack-shallow helper).
+    function _advancerRelayedLiquiditySignal()
+        internal
+        returns (bytes memory liquiditySignalBytes, address advancerAddr, uint256 advancerPrivateKey)
+    {
+        advancerPrivateKey = uint256(keccak256(abi.encodePacked("relayed_advancer")));
+        advancerAddr = vm.addr(advancerPrivateKey);
 
-        bytes memory liquiditySignalBytes = abi.encode(advancerSignal);
-        address sender = advancer;
+        MarketMaker.State memory st;
+        st.owner = liquiditySignal.mmState.owner;
+        st.reserves = new MarketMaker.Reserve[](1);
+        st.reserves[0] = MarketMaker.Reserve({asset: "ETH", amount: 1 ether});
+        st.sourceState = "";
+        st.prover = "";
+        st.nonce = "";
+        st.advancer = advancerAddr;
+        uint256 pExp = block.timestamp + 8 days;
+        st.expiryAt = pExp;
+
+        bytes32[] memory leaves = new bytes32[](1);
+        leaves[0] = st.toLeafHash();
+        bytes32 root = leaves.generateMerkleRoot();
+        bytes32[] memory proof = leaves.generateProof(0);
+
+        uint256 newNonce = liquiditySignal.nonce + 100;
+        bytes32 tssDigest = EfficientHashLib.hash(abi.encodePacked(newNonce, root));
+        bytes memory tssSig = _signEthMessage(signatureVerifierPrivateKey, tssDigest);
+
+        liquiditySignalBytes = abi.encode(
+            LiquiditySignal({
+                nonce: newNonce,
+                rootHash: root,
+                rootHashSignature: tssSig,
+                merkleProof: proof,
+                mmState: st,
+                mmSignature: bytes("")
+            })
+        );
+    }
+
+    function test_verifyLiquiditySignalRelayed_advancerSigner_success() public {
+        (bytes memory liquiditySignalBytes, address sender, uint256 advancerPk) = _advancerRelayedLiquiditySignal();
         uint256 deadline = block.timestamp + 1 hours;
         uint256 authNonce = signalManager.submitAuthNonce(sender);
-        bytes memory authSig = _signRelayAuth(advancerPrivateKey, sender, 0, liquiditySignalBytes, deadline, authNonce);
+        bytes memory authSig = _signRelayAuth(advancerPk, sender, 0, liquiditySignalBytes, deadline, authNonce);
 
         (bool ok,) = signalManager.verifyLiquiditySignalRelayed(
             sender, 0, liquiditySignalBytes, deadline, authNonce, authSig, true
@@ -352,7 +364,7 @@ contract VRLSignalManagerTest is MarketMakerTestBase {
         );
 
         assertTrue(ok);
-        assertEq(expiry, signalManager.signalExpiryInSeconds());
+        assertEq(expiry, liquiditySignal.mmState.expiryAt - block.timestamp);
         assertEq(signalManager.submitAuthNonce(sender), authNonce + 1);
     }
 
@@ -511,5 +523,22 @@ contract VRLSignalManagerTest is MarketMakerTestBase {
         bytes32 digest = _relayAuthDigest(sender, commitId, liquiditySignalBytes, deadline, authNonce);
         (uint8 v, bytes32 r, bytes32 s) = vm.sign(signerPrivateKey, digest);
         signature = abi.encodePacked(r, s, v);
+    }
+
+    function test_verifyLiquiditySignal_revertsWhenProofExpired() public {
+        uint256 prev = signalManager.mmNonce(liquiditySignal.mmState.owner);
+        LiquiditySignal memory s = liquiditySignal;
+        s.nonce = prev + 1;
+        s.mmState.expiryAt = block.timestamp - 1;
+        vm.expectRevert(abi.encodeWithSelector(Errors.DeadlinePassed.selector, s.mmState.expiryAt));
+        signalManager.verifyLiquiditySignal(s.mmState.owner, abi.encode(s), true);
+    }
+
+    function test_verifyLiquiditySignal_returnsLeafTtlRemaining() public {
+        uint256 targetTs = liquiditySignal.mmState.expiryAt - 40;
+        vm.warp(targetTs);
+        (, uint256 exp) =
+            signalManager.verifyLiquiditySignal(liquiditySignal.mmState.owner, abi.encode(liquiditySignal), false);
+        assertEq(exp, 40);
     }
 }

@@ -66,6 +66,24 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
     StdStorage internal _store;
     uint256 internal _scratchTokenId;
 
+    function _inactiveRemnantCount(uint256 tokenId) internal view returns (uint256) {
+        (,,,, uint256 cnt) = vtsOrchestrator.getCommit(tokenId);
+        return cnt;
+    }
+
+    function _mintUnderlyingForPositiveSettle(int128 settle0, int128 settle1) internal {
+        uint256 pay0 = LiquidityUtils.safeInt128ToUint256(settle0);
+        uint256 pay1 = LiquidityUtils.safeInt128ToUint256(settle1);
+        if (pay0 > 0) {
+            MockERC20(lcc0.underlying()).mint(address(this), pay0);
+            MockERC20(lcc0.underlying()).approve(address(positionManager), pay0);
+        }
+        if (pay1 > 0) {
+            MockERC20(lcc1.underlying()).mint(address(this), pay1);
+            MockERC20(lcc1.underlying()).approve(address(positionManager), pay1);
+        }
+    }
+
     struct AfterSwapPhase1Params {
         uint256 tokenId;
         uint256 positionIndex;
@@ -223,25 +241,20 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
             address(lcc1)
         );
 
-        (, uint256 expiresAtPrevious,,) = vtsOrchestrator.getCommit(tokenId);
-
         // renew the signal
         uint256 newTimestamp = 1000;
         vm.warp(newTimestamp);
         // Renewal requires sender == mmState.advancer, and owner must remain immutable.
         LiquiditySignal memory sameOwnerRenew = liquiditySignal;
         sameOwnerRenew.nonce += 1;
+        sameOwnerRenew.mmState.expiryAt = block.timestamp + 5_000;
         address advancer = sameOwnerRenew.mmState.advancer;
         vm.prank(advancer);
         MMA.renew(positionManager, tokenId, abi.encode(sameOwnerRenew));
 
-        (, uint256 expiresAtAfter,,) = vtsOrchestrator.getCommit(tokenId);
+        (, uint256 expiresAtAfter,,,) = vtsOrchestrator.getCommit(tokenId);
 
-        console.log("expiresAtPrevious", expiresAtPrevious);
-        console.log("expiresAtAfter", expiresAtAfter);
-
-        // validate the expiry is updated
-        assertEq(expiresAtAfter + 1, newTimestamp + expiresAtPrevious);
+        assertEq(expiresAtAfter, newTimestamp + 5_000, "renewal should set expiresAt from the renewed leaf expiryAt");
     }
 
     function test_renewSignal_forwardsFactoryAndLockerToVtsOrchestrator() public {
@@ -1067,9 +1080,10 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
 
     /// @notice Repro: when MMPM is bucket-exempt, it can hold LCC with zero buckets (bucketless ERC20 balance).
     /// @dev This path used to be unreachable (transfer would revert before protocol-bounds); it now succeeds due to bounds.
-    ///      Current behaviour: LiquidityHub.unwrap treats bucketless exempt holders as fully "wrapped", so it will NOT
-    ///      attempt market liquidity and will queue the entire amount when directSupply is 0.
-    function test_unwrapLcc_fromDeltas_mmpmBoundExempt_bucketlessBalance_doesNotUseMarketLiquidity_andQueuesAll()
+    ///      Current behaviour: LiquidityHub.unwrap treats wrapped-only Hub balances (here: user-wrapped LCC transferred
+    ///      to MMPM) as not requiring market liquidity when directSupply is 0, so the full amount queues.
+    ///      `unwrapTo` is endpoint-only; MMPM must remain `BOUND_ENDPOINT` (EXempt alone cannot call `unwrapTo`).
+    function test_unwrapLcc_fromDeltas_mmpmBoundEndpoint_wrappedTransfer_doesNotUseMarketLiquidity_andQueuesAll()
         public
     {
         address user = makeAddr("user");
@@ -1080,13 +1094,13 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
         MockERC20 underlying = MockERC20(lcc0.underlying());
         uint256 amount = 500;
 
-        // Make MMPM bucket-exempt: must clear ENDPOINT from bootstrap first (EXEMPT only assignable from NONE).
+        // Ensure MMPM is an endpoint (required for Hub `unwrapTo`); reset from bootstrap if needed.
         vm.prank(marketFactory);
         ILiquidityHub(liquidityHub).setBoundLevel(address(positionManager), Bounds.BOUND_NONE);
         vm.prank(marketFactory);
-        ILiquidityHub(liquidityHub).setBoundLevel(address(positionManager), Bounds.BOUND_EXEMPT);
+        ILiquidityHub(liquidityHub).setBoundLevel(address(positionManager), Bounds.BOUND_ENDPOINT);
 
-        // Create user wrapped LCC, then transfer to bucket-exempt MMPM.
+        // Create user wrapped LCC, then transfer to MMPM.
         underlying.mint(user, amount);
         vm.startPrank(user);
         underlying.approve(address(liquidityHub), amount);
@@ -1123,6 +1137,51 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
         );
         // The LCC remains held by MMPM for later settlement processing.
         assertEq(lcc0.balanceOf(address(positionManager)), amount, "MMPM should still hold queued principal as LCC");
+    }
+
+    /// @dev HUB-02 / HUB-02A: locker queue encumbers MMPM-held LCC; identical second unwrap batch must revert.
+    function test_unwrapLcc_fromDeltas_mmpmBoundEndpoint_secondIdenticalUnwrap_revertsWhenLockerQueueEncumbers()
+        public
+    {
+        address user = makeAddr("userQueueEncumber");
+        address locker = makeAddr("lockerQueueEncumber");
+        address recipient = makeAddr("recipientQueueEncumber");
+
+        address lccAddr = address(lcc0);
+        MockERC20 underlying = MockERC20(lcc0.underlying());
+        uint256 amount = 500;
+
+        vm.prank(marketFactory);
+        ILiquidityHub(liquidityHub).setBoundLevel(address(positionManager), Bounds.BOUND_NONE);
+        vm.prank(marketFactory);
+        ILiquidityHub(liquidityHub).setBoundLevel(address(positionManager), Bounds.BOUND_ENDPOINT);
+
+        underlying.mint(user, amount);
+        vm.startPrank(user);
+        underlying.approve(address(liquidityHub), amount);
+        ILiquidityHub(liquidityHub).wrap(lccAddr, amount);
+        lcc0.transfer(address(positionManager), amount);
+        vm.stopPrank();
+
+        _setDirectSupply(lccAddr, 0);
+
+        vm.mockCallRevert(
+            marketFactory,
+            abi.encodeWithSelector(IMarketFactory.useMarketLiquidity.selector),
+            abi.encodeWithSignature("Error(string)", "useMarketLiquidity called")
+        );
+
+        MMA.PreparedAction[] memory prepared = new MMA.PreparedAction[](2);
+        prepared[0] = MMA.prepareSync(Currency.wrap(lccAddr));
+        prepared[1] = MMA.prepareUnwrapLcc(lccAddr, amount, recipient, false);
+
+        vm.prank(locker);
+        MMA.execute(positionManager, prepared);
+        assertEq(ILiquidityHub(liquidityHub).settleQueue(lccAddr, locker), amount);
+
+        vm.prank(locker);
+        vm.expectRevert(abi.encodeWithSelector(Errors.InvalidAmount.selector, amount, uint256(0)));
+        MMA.execute(positionManager, prepared);
     }
 
     /// @notice Control: when MMPM is bucket-tracked (BOUND_ENDPOINT) and holds market-derived balance, unwrap should
@@ -1828,7 +1887,7 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
             address(lcc1)
         );
 
-        (,, uint256 commitPositionCount,) = positionManager.commitOf(tokenId);
+        (,, uint256 commitPositionCount,,) = positionManager.commitOf(tokenId);
         uint256 positionIndex = commitPositionCount - 1;
 
         vm.mockCall(
@@ -1926,7 +1985,7 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
             address(lcc1)
         );
 
-        (,, uint256 commitPositionCount,) = positionManager.commitOf(tokenId);
+        (,, uint256 commitPositionCount,,) = positionManager.commitOf(tokenId);
         uint256 positionIndex = commitPositionCount - 1;
 
         vtsOrchestrator.pausePool(corePoolKey.toId());
@@ -2026,6 +2085,119 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
         assertEq(settled1After, 0, "token1 settled should be fully removed once its shortfall is preserved via queue");
     }
 
+    /// @notice Decommit must revert while inactive position(s) still hold live `pa.settled` (scan-16 finding 3).
+    /// @dev Same price-shaped + starved-vault setup as `test_priceShapedMMRemove_oneSidedPrincipal_preservesUnqueuedUnderlyingDelta`,
+    ///      but we omit the token0 settle that would drain live settled before decommit.
+    function test_decommitSignal_revertsCommitNotDrained_whenInactiveSettledRemains() public {
+        PriceShapedScenario memory scenario = _setupPriceShapedScenario();
+        (uint256 settled0BeforeDecrease, uint256 settled1BeforeDecrease) = _settleShapedPositionForFullRemove(scenario);
+
+        vm.mockCall(
+            address(mv),
+            abi.encodeWithSelector(
+                IMarketVault.dryModifyLiquidities.selector,
+                toBalanceDelta(SafeCast.toInt128(settled0BeforeDecrease), SafeCast.toInt128(settled1BeforeDecrease))
+            ),
+            abi.encode(toBalanceDelta(0, 0))
+        );
+        vm.mockCall(
+            marketFactory, abi.encodeWithSelector(IMarketFactory.useMarketLiquidity.selector), abi.encode(uint256(0))
+        );
+
+        MMA.PreparedAction[] memory actions = new MMA.PreparedAction[](3);
+        actions[0] = MMA.prepareDecrease(corePoolKey, scenario.tokenId, scenario.positionIndex, 1e18);
+        actions[1] = MMA.prepareTake(Currency.wrap(address(lcc0)), address(this), 0);
+        actions[2] = MMA.prepareTake(Currency.wrap(address(lcc1)), address(this), 0);
+        MMA.executeWithUnlock(positionManager, actions, block.timestamp + 3600);
+
+        (uint256 s0, uint256 s1) = vtsOrchestrator.getPositionSettledAmounts(scenario.positionId);
+        assertGt(s0 + s1, 0, "precondition: inactive position retains live settled until separately settled");
+
+        (,,,, uint256 inactiveRemnantCount) = vtsOrchestrator.getCommit(scenario.tokenId);
+        assertGt(inactiveRemnantCount, 0, "commit remnant counter must reflect inactive settled remainder");
+
+        MMA.PreparedAction[] memory decommit = new MMA.PreparedAction[](1);
+        decommit[0] = MMA.prepareDecommit(scenario.tokenId);
+        vm.expectRevert(abi.encodeWithSelector(Errors.CommitNotDrained.selector, scenario.tokenId));
+        MMA.executeWithUnlock(positionManager, decommit, block.timestamp + 3600);
+    }
+
+    /// @notice After draining inactive live `settled`, decommit must succeed (finding #3 happy path).
+    /// @dev External body avoids stack-too-deep in this dense scenario.
+    function test_decommitSignal_succeeds_afterInactiveSettledRemnantsAreDrained() public {
+        this._externalDecommitAfterDrainHappyPath();
+    }
+
+    function _externalDecommitAfterDrainHappyPath() external {
+        PriceShapedScenario memory scenario = _setupPriceShapedScenario();
+        (uint256 settled0BeforeDecrease, uint256 settled1BeforeDecrease) = _settleShapedPositionForFullRemove(scenario);
+        uint256 scTokenId = scenario.tokenId;
+        uint256 scPosIndex = scenario.positionIndex;
+        PositionId scPosId = scenario.positionId;
+
+        vm.mockCall(
+            address(mv),
+            abi.encodeWithSelector(
+                IMarketVault.dryModifyLiquidities.selector,
+                toBalanceDelta(SafeCast.toInt128(settled0BeforeDecrease), SafeCast.toInt128(settled1BeforeDecrease))
+            ),
+            abi.encode(toBalanceDelta(0, 0))
+        );
+        vm.mockCall(
+            marketFactory, abi.encodeWithSelector(IMarketFactory.useMarketLiquidity.selector), abi.encode(uint256(0))
+        );
+
+        MMA.PreparedAction[] memory actions = new MMA.PreparedAction[](3);
+        actions[0] = MMA.prepareDecrease(corePoolKey, scTokenId, scPosIndex, 1e18);
+        actions[1] = MMA.prepareTake(Currency.wrap(address(lcc0)), address(this), 0);
+        actions[2] = MMA.prepareTake(Currency.wrap(address(lcc1)), address(this), 0);
+        MMA.executeWithUnlock(positionManager, actions, block.timestamp + 3600);
+
+        (uint256 s0, uint256 s1) = vtsOrchestrator.getPositionSettledAmounts(scPosId);
+        assertGt(s0 + s1, 0, "precondition: inactive position retains live settled until separately settled");
+
+        assertGt(_inactiveRemnantCount(scTokenId), 0, "precondition: inactive remnant counter should be non-zero");
+
+        int128 settle0 = SafeCast.toInt128(s0);
+        int128 settle1 = SafeCast.toInt128(s1);
+        _mintUnderlyingForPositiveSettle(settle0, settle1);
+
+        MMA.PreparedAction[] memory drain = new MMA.PreparedAction[](1);
+        drain[0] = MMA.prepareSettle(corePoolKey, scTokenId, scPosIndex, settle0, settle1, false);
+        MMA.executeWithUnlock(positionManager, drain, block.timestamp + 3600);
+
+        (uint256 s0After, uint256 s1After) = vtsOrchestrator.getPositionSettledAmounts(scPosId);
+        assertEq(s0After + s1After, 0, "inactive settled should be fully drained");
+
+        assertEq(
+            _inactiveRemnantCount(scTokenId),
+            0,
+            "inactive remnant counter should return to zero when settled is drained"
+        );
+
+        MMA.PreparedAction[] memory decommit = new MMA.PreparedAction[](1);
+        decommit[0] = MMA.prepareDecommit(scTokenId);
+        MMA.executeWithUnlock(positionManager, decommit, block.timestamp + 3600);
+        vm.expectRevert();
+        positionManager.ownerOf(scTokenId);
+    }
+
+    /// @notice `commitOf` must mirror `getCommit` on the orchestrator (including `inactiveRemnantCount`).
+    function test_commitOf_matches_getCommit_allTupleFields() public {
+        PriceShapedScenario memory scenario = _setupPriceShapedScenario();
+
+        (MarketMaker.State memory mmG, uint256 expG, uint256 posG, uint256 actG, uint256 inactG) =
+            vtsOrchestrator.getCommit(scenario.tokenId);
+        (MarketMaker.State memory mmC, uint256 expC, uint256 posC, uint256 actC, uint256 inactC) =
+            positionManager.commitOf(scenario.tokenId);
+
+        assertEq(mmG.owner, mmC.owner);
+        assertEq(expG, expC);
+        assertEq(posG, posC);
+        assertEq(actG, actC);
+        assertEq(inactG, inactC);
+    }
+
     /// @notice Mutation-killer: when `recipient == address(this)`, COLLECT_AVAILABLE_LIQUIDITY must sync underlying credit.
     /// @dev Practical tip: verify the sync by immediately doing a `TAKE(underlying)` to an external recipient.
     function test_collectAvailableLiquidity_noSwap() public {
@@ -2065,7 +2237,7 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
             _scratchTokenId = tokenId;
             amount = requiredSettlementAmount0;
 
-            (,, uint256 commitPositionCount,) = positionManager.commitOf(tokenId);
+            (,, uint256 commitPositionCount,,) = positionManager.commitOf(tokenId);
             uint256 positionIndex = commitPositionCount - 1;
 
             // Allow `recipient` (locker) to call decrease on this position.
@@ -2185,7 +2357,7 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
                 address(lcc1)
             );
             _scratchTokenId = p.tokenId;
-            (,, uint256 commitPositionCount,) = positionManager.commitOf(p.tokenId);
+            (,, uint256 commitPositionCount,,) = positionManager.commitOf(p.tokenId);
             p.positionIndex = commitPositionCount - 1;
 
             _swapAccrueFeesViaSwap(underlying0, lcc0Addr, 1e18);

@@ -78,6 +78,7 @@ contract HUB05 {
         hub.initialize(n0, n1, bytes32(uint256(2)), nativeRef);
         lccNative = LiquidityCommitmentCertificate(hub.getUnderlying(n0) == address(0) ? n0 : n1);
         callbackHolder = new HUB05Holder();
+        hub.setBoundLevel(address(callbackHolder), Bounds.BOUND_ENDPOINT);
 
         // Approve hub for ERC20 wrapping.
         erc20Underlying.approve(address(hub), type(uint256).max);

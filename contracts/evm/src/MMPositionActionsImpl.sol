@@ -681,7 +681,7 @@ contract MMPositionActionsImpl is
         (uint256 liquidityFromDeltas, uint256 credit0, uint256 credit1) =
             _getLiquidityFromDeltas(poolKey, deltaTarget, tickLower, tickUpper);
         uint256 nextPositionIndex;
-        (,, nextPositionIndex,) = vtsOrchestrator.getCommit(tokenId);
+        (,, nextPositionIndex,,) = vtsOrchestrator.getCommit(tokenId);
         bytes memory hookData = payerIsUser
             ? PositionModificationHookDataLib.encodeWithInHookProtocolSettlement(
                 tokenId, nextPositionIndex, msgSender(), credit0, credit1
@@ -832,7 +832,7 @@ contract MMPositionActionsImpl is
         uint256 liquidity
     ) internal returns (PositionId positionId, uint256 positionIndex, BalanceDelta principalDelta) {
         uint256 nextPositionIndex;
-        (,, nextPositionIndex,) = vtsOrchestrator.getCommit(tokenId);
+        (,, nextPositionIndex,,) = vtsOrchestrator.getCommit(tokenId);
         return _mintPositionInternal(
             poolKey,
             tokenId,
@@ -855,7 +855,7 @@ contract MMPositionActionsImpl is
             revert Errors.InvalidAmount(liquidity, type(uint128).max);
         }
 
-        (,, positionIndex,) = vtsOrchestrator.getCommit(tokenId);
+        (,, positionIndex,,) = vtsOrchestrator.getCommit(tokenId);
 
         ModifyLiquidityParams memory params = ModifyLiquidityParams({
             tickLower: tickLower,

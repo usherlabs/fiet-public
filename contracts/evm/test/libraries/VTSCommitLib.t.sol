@@ -88,20 +88,10 @@ contract MockOracleHelper is IOracleHelper {
 }
 
 contract MockSignalManager is IVRLSignalManager {
-    uint256 internal _expirySeconds = 3600;
-
-    function setExpirySeconds(uint256 s) external {
-        _expirySeconds = s;
-    }
-
     // ===== IVRLSignalManager (unused surface area: stubbed) =====
 
     function getVerifier() external pure returns (address) {
         return address(0);
-    }
-
-    function signalExpiryInSeconds() external view returns (uint256) {
-        return _expirySeconds;
     }
 
     function mmNonce(address) external pure returns (uint256) {
@@ -120,20 +110,22 @@ contract MockSignalManager is IVRLSignalManager {
         revert("MockSignalManager: not implemented");
     }
 
-    function setSignalExpiryInSeconds(uint256) external pure {
-        revert("MockSignalManager: not implemented");
+    function verifyLiquiditySignal(address, bytes memory liquiditySignal, bool) external view returns (bool, uint256) {
+        LiquiditySignal memory signal = abi.decode(liquiditySignal, (LiquiditySignal));
+        return (true, signal.mmState.expiryAt - block.timestamp);
     }
 
-    function verifyLiquiditySignal(address, bytes memory, bool) external view returns (bool, uint256) {
-        return (true, _expirySeconds);
-    }
-
-    function verifyLiquiditySignalRelayed(address, uint256, bytes memory, uint256, uint256, bytes memory, bool)
-        external
-        view
-        returns (bool, uint256)
-    {
-        return (true, _expirySeconds);
+    function verifyLiquiditySignalRelayed(
+        address,
+        uint256,
+        bytes memory liquiditySignal,
+        uint256,
+        uint256,
+        bytes memory,
+        bool
+    ) external view returns (bool, uint256) {
+        LiquiditySignal memory signal = abi.decode(liquiditySignal, (LiquiditySignal));
+        return (true, signal.mmState.expiryAt - block.timestamp);
     }
 }
 
@@ -166,7 +158,7 @@ contract VTSCommitLibTest is VTSLibTestBase {
         mmOwner = makeAddr("mmOwner");
         advancer = makeAddr("advancer");
 
-        commitId = harness.commitSignal(sigMgr, advancer, _makeSignal(mmOwner, advancer));
+        commitId = harness.commitSignal(sigMgr, advancer, oracle, _makeSignal(mmOwner, advancer));
 
         positionId = _generatePositionId(DEFAULT_OWNER, TL, TU, DEFAULT_SALT);
         harness.setupPosition(positionId, poolId, commitId, TL, TU, LIQ);
@@ -181,7 +173,7 @@ contract VTSCommitLibTest is VTSLibTestBase {
 
     function test_commitSignal_revertsOnEmptySignal() public {
         vm.expectRevert(abi.encodeWithSelector(Errors.InvalidLiquiditySignal.selector, 0, 0, 0));
-        harness.commitSignal(IVRLSignalManager(makeAddr("signalManager")), address(this), "");
+        harness.commitSignal(IVRLSignalManager(makeAddr("signalManager")), address(this), oracle, "");
     }
 
     function test_commitSignal_incrementsAndStoresState() public {
@@ -189,9 +181,8 @@ contract VTSCommitLibTest is VTSLibTestBase {
 
         address owner2 = makeAddr("owner2");
         address adv2 = makeAddr("adv2");
-        sigMgr.setExpirySeconds(1234);
 
-        uint256 newCommitId = harness.commitSignal(sigMgr, owner2, _makeSignal(owner2, adv2));
+        uint256 newCommitId = harness.commitSignal(sigMgr, owner2, oracle, _makeSignal(owner2, adv2, 1234));
 
         assertEq(newCommitId, beforeNext + 1, "commitId should increment");
         assertEq(harness.getNextCommitId(), newCommitId, "nextCommitId should match latest");
@@ -202,16 +193,15 @@ contract VTSCommitLibTest is VTSLibTestBase {
 
     function test_renewSignal_revertsOnEmptySignal() public {
         vm.expectRevert(abi.encodeWithSelector(Errors.InvalidLiquiditySignal.selector, 0, 0, 0));
-        harness.renewSignal(sigMgr, commitId, "");
+        harness.renewSignal(sigMgr, oracle, commitId, "");
     }
 
     function test_renewSignal_updatesStateAndExpiry() public {
         address owner2 = mmOwner;
         address adv2 = makeAddr("adv2");
-        sigMgr.setExpirySeconds(777);
 
         vm.prank(adv2);
-        harness.renewSignal(sigMgr, commitId, _makeSignal(owner2, adv2));
+        harness.renewSignal(sigMgr, oracle, commitId, _makeSignal(owner2, adv2, 777));
 
         assertEq(harness.getCommitOwner(commitId), owner2, "owner should remain immutable");
         assertEq(harness.getCommitAdvancer(commitId), adv2, "advancer should update");
@@ -221,18 +211,16 @@ contract VTSCommitLibTest is VTSLibTestBase {
     function test_renewSignal_revertsWhenOwnerChanges() public {
         address newOwner = makeAddr("newOwner");
         address adv = address(this);
-        sigMgr.setExpirySeconds(1);
 
         vm.expectRevert(Errors.InvalidSender.selector);
-        harness.renewSignal(sigMgr, commitId, _makeSignal(newOwner, adv));
+        harness.renewSignal(sigMgr, oracle, commitId, _makeSignal(newOwner, adv));
     }
 
     function test_renewSignal_revertsWhenCallerNotAdvancer() public {
         address adv = makeAddr("adv");
-        sigMgr.setExpirySeconds(1);
 
         vm.expectRevert(Errors.InvalidSender.selector);
-        harness.renewSignal(sigMgr, commitId, _makeSignal(mmOwner, adv));
+        harness.renewSignal(sigMgr, oracle, commitId, _makeSignal(mmOwner, adv));
     }
 
     // ============================================================
@@ -327,8 +315,9 @@ contract VTSCommitLibTest is VTSLibTestBase {
     }
 
     function test_validateLiquidityDelta_reverts_whenSignalHasTooManyUniqueReserveTickers() public {
-        sigMgr.setExpirySeconds(3600);
-        harness.renewSignal(sigMgr, commitId, _makeSignalWithUniqueReserveCount(mmOwner, address(this), 101));
+        LiquiditySignal memory poisonSig =
+            abi.decode(_makeSignalWithUniqueReserveCount(mmOwner, address(this), 101), (LiquiditySignal));
+        harness.setCommitMmState(commitId, poisonSig.mmState);
 
         VTSCommitLib.LiquidityDeltaParams memory p = _defaultLiquidityDeltaParams();
         oracle.setTotalValue(1_000_000e18);
@@ -337,9 +326,20 @@ contract VTSCommitLibTest is VTSLibTestBase {
         harness.validateLiquidityDelta(oracle, commitId, positionId, p, false);
     }
 
+    function test_renewSignal_reverts_whenReserveTickerCountExceedsMax() public {
+        vm.expectRevert(abi.encodeWithSelector(Errors.MMReserveTickerLimitExceeded.selector, 101, 100));
+        harness.renewSignal(sigMgr, oracle, commitId, _makeSignalWithUniqueReserveCount(mmOwner, address(this), 101));
+    }
+
+    function test_commitSignal_reverts_whenReserveTickerCountExceedsMax() public {
+        address owner2 = makeAddr("owner2cap");
+        address adv2 = makeAddr("adv2cap");
+        vm.expectRevert(abi.encodeWithSelector(Errors.MMReserveTickerLimitExceeded.selector, 101, 100));
+        harness.commitSignal(sigMgr, adv2, oracle, _makeSignalWithUniqueReserveCount(owner2, adv2, 101));
+    }
+
     function test_validateLiquidityDelta_allowsSignalAtMaxUniqueReserveTickers() public {
-        sigMgr.setExpirySeconds(3600);
-        harness.renewSignal(sigMgr, commitId, _makeSignalWithUniqueReserveCount(mmOwner, address(this), 100));
+        harness.renewSignal(sigMgr, oracle, commitId, _makeSignalWithUniqueReserveCount(mmOwner, address(this), 100));
 
         VTSCommitLib.LiquidityDeltaParams memory p = _defaultLiquidityDeltaParams();
         oracle.setTotalValue(1_000_000e18);
@@ -574,9 +574,8 @@ contract VTSCommitLibTest is VTSLibTestBase {
         harness.setPositionSettled(positionId, 0, 0);
         harness.setPositionCommitmentDeficit(positionId, 0, 0);
 
-        sigMgr.setExpirySeconds(1);
         // Renew updates expiresAt; sender must equal advancer in the signal.
-        harness.renewSignal(sigMgr, commitId, _makeSignal(mmOwner, address(this)));
+        harness.renewSignal(sigMgr, oracle, commitId, _makeSignal(mmOwner, address(this), 1));
 
         vm.warp(block.timestamp + 2);
 
@@ -643,10 +642,20 @@ contract VTSCommitLibTest is VTSLibTestBase {
     // helpers
     // ============================================================
 
-    function _makeSignal(address owner, address adv) internal pure returns (bytes memory) {
+    function _makeSignal(address owner, address adv) internal view returns (bytes memory) {
+        return _makeSignal(owner, adv, 365 days);
+    }
+
+    function _makeSignal(address owner, address adv, uint256 ttlSeconds) internal view returns (bytes memory) {
         MarketMaker.Reserve[] memory reserves = new MarketMaker.Reserve[](0);
         MarketMaker.State memory mmState = MarketMaker.State({
-            owner: owner, reserves: reserves, sourceState: "", prover: "", nonce: "", advancer: adv
+            owner: owner,
+            reserves: reserves,
+            sourceState: "",
+            prover: "",
+            nonce: "",
+            advancer: adv,
+            expiryAt: block.timestamp + ttlSeconds
         });
 
         LiquiditySignal memory sig = LiquiditySignal({
@@ -663,23 +672,37 @@ contract VTSCommitLibTest is VTSLibTestBase {
 
     function _makeSignalWithUniqueReserveCount(address owner, address adv, uint256 reserveCount)
         internal
-        pure
+        view
+        returns (bytes memory)
+    {
+        return _makeSignalWithUniqueReserveCount(owner, adv, reserveCount, 365 days);
+    }
+
+    function _makeSignalWithUniqueReserveCount(address owner, address adv, uint256 reserveCount, uint256 ttlSeconds)
+        internal
+        view
         returns (bytes memory)
     {
         MarketMaker.Reserve[] memory reserves = new MarketMaker.Reserve[](reserveCount);
         for (uint256 i = 0; i < reserveCount; i++) {
             reserves[i] = MarketMaker.Reserve({asset: string.concat("TK", vm.toString(i)), amount: 1e18});
         }
-        return _encodeSignal(owner, adv, reserves);
+        return _encodeSignal(owner, adv, reserves, ttlSeconds);
     }
 
-    function _encodeSignal(address owner, address adv, MarketMaker.Reserve[] memory reserves)
+    function _encodeSignal(address owner, address adv, MarketMaker.Reserve[] memory reserves, uint256 ttlSeconds)
         internal
-        pure
+        view
         returns (bytes memory)
     {
         MarketMaker.State memory mmState = MarketMaker.State({
-            owner: owner, reserves: reserves, sourceState: "", prover: "", nonce: "", advancer: adv
+            owner: owner,
+            reserves: reserves,
+            sourceState: "",
+            prover: "",
+            nonce: "",
+            advancer: adv,
+            expiryAt: block.timestamp + ttlSeconds
         });
 
         LiquiditySignal memory sig = LiquiditySignal({

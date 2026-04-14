@@ -45,9 +45,9 @@ contract VTSPositionLibHarness {
 
     // ============ Library Function Exposers ============
 
-    /// @notice Exposes _trackCommitment
-    function trackCommitment(PositionId positionId, ModifyLiquidityParams calldata params) external {
-        VTSPositionLib._trackCommitment(s, positionId, params);
+    /// @notice Exposes `_trackCommitment` (source-of-truth commitment maxima for live liquidity)
+    function trackCommitmentFromLiveLiquidity(PositionId positionId, uint128 liveLiquidity) external {
+        VTSPositionLib._trackCommitment(s, positionId, liveLiquidity);
     }
 
     /// @notice Exposes _updateSettlement
@@ -544,6 +544,11 @@ contract VTSPositionLibHarness {
 
     function getCommitActivePositionCount(uint256 commitId) external view returns (uint256) {
         return s.commits[commitId].activePositionCount;
+    }
+
+    /// @notice Test-only: reads `Commit.inactiveRemnantCount` from harness storage
+    function inactiveRemnantCount(uint256 commitId) external view returns (uint256) {
+        return s.commits[commitId].inactiveRemnantCount;
     }
 
     /// @notice Sets deficit growth global for a pool

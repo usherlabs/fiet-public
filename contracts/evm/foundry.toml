@@ -65,8 +65,8 @@ libraries = [
   "src/libraries/VTSCommitLib.sol:VTSCommitLib:0x6215030bfa6e034ffe347cbe7237e37e5f1eec61",
   "src/libraries/VTSFeeLib.sol:VTSFeeLinkedLib:0xe2f744d132a1b346acd29e304181edf2bf9831b8",
   # Deterministic CREATE2 address deployed by `VTSPositionLibEchidnaHarness` (avoids Echidna RPC fetch attempts).
-  "src/libraries/VTSPositionLib.sol:VTSPositionLib:0xbf82351e13fb28688d2c9e9b7c482d5fe71bab88",
-  "src/libraries/VTSLifecycleLinkedLib.sol:VTSLifecycleLinkedLib:0x02d5ce039f64d75de68d1c71303220601bfecf20",
+  "src/libraries/VTSPositionLib.sol:VTSPositionLib:0x68b09dc7c71462b7652f34f74b10b0e47b61abc4",
+  "src/libraries/VTSLifecycleLinkedLib.sol:VTSLifecycleLinkedLib:0x982a481b4c9f3fd5e732c38c30961c84f3e4f510",
   # Intentional placeholder for libs not CREATE2-validated by this script.
   "src/libraries/VTSSwapLib.sol:VTSSwapLib:0x1111111111111111111111111111111111111112",
 ]

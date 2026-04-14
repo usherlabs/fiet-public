@@ -86,6 +86,7 @@ contract LCC02 {
 
         holder = new LCC02Holder();
         endpoint = new LCC02Holder();
+        hub.setBoundLevel(address(holder), Bounds.BOUND_ENDPOINT);
         hub.setBoundLevel(address(endpoint), Bounds.BOUND_ENDPOINT);
 
         // Seed holder with market-derived balance.

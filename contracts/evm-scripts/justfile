@@ -726,11 +726,6 @@ admin-vrl-signal-set-verifier:
         --rpc-url {{ rpc_url }} \
         {{ broadcast_flag }} -vvv
 
-admin-vrl-signal-set-expiry:
-    forge script {{ script_dir }}/admin/VRLSignalManagerAdmin.s.sol:VRLSignalManagerSetExpiryScript \
-        --rpc-url {{ rpc_url }} \
-        {{ broadcast_flag }} -vvv
-
 admin-vrl-settlement-add-verifier:
     forge script {{ script_dir }}/admin/VRLSettlementObserverAdmin.s.sol:VRLSettlementAddVerifierScript \
         --rpc-url {{ rpc_url }} \

@@ -168,54 +168,41 @@ contract VTSPositionLibMutationUnitTest is Test {
     }
 
     // ============================================================
-    // _trackCommitment: kill add/sub arithmetic mutants (109, 110)
+    // _trackCommitment
     // ============================================================
 
-    function test_trackCommitment_addLiquidity_matchesCalculatedMaxima() public {
+    function test_trackCommitment_singleLiquidity_matchesCalculatedMaxima() public {
         (PositionId id, ModifyLiquidityParams memory p) = _register(bytes32(uint256(1)), 1);
 
         uint128 liq = 1e18;
-        ModifyLiquidityParams memory add = ModifyLiquidityParams({
-            tickLower: TICK_LOWER, tickUpper: TICK_UPPER, liquidityDelta: int256(uint256(liq)), salt: p.salt
-        });
 
         (uint256 exp0, uint256 exp1) = LiquidityUtils.calculateCommitmentMaxima(TICK_LOWER, TICK_UPPER, liq);
 
-        harness.trackCommitment(id, add);
+        harness.trackCommitmentFromLiveLiquidity(id, liq);
 
         (uint256 c0, uint256 c1,,,,) = harness.getPositionAccounting(id);
         assertEq(c0, exp0, "commitmentMax0 should equal calculated maxima");
         assertEq(c1, exp1, "commitmentMax1 should equal calculated maxima");
     }
 
-    function test_trackCommitment_addTwice_isAdditive() public {
+    function test_trackCommitment_sequentialTotals_matchesSingleShotMaxima() public {
         (PositionId id,) = _register(bytes32(uint256(2)), 1);
 
         uint128 liqA = 1e18;
         uint128 liqB = 2e18;
 
-        ModifyLiquidityParams memory addA = ModifyLiquidityParams({
-            tickLower: TICK_LOWER,
-            tickUpper: TICK_UPPER,
-            liquidityDelta: int256(uint256(liqA)),
-            salt: bytes32(uint256(2))
-        });
-        ModifyLiquidityParams memory addB = ModifyLiquidityParams({
-            tickLower: TICK_LOWER,
-            tickUpper: TICK_UPPER,
-            liquidityDelta: int256(uint256(liqB)),
-            salt: bytes32(uint256(2))
-        });
+        harness.trackCommitmentFromLiveLiquidity(id, liqA);
+        (uint256 mid0, uint256 mid1,,,,) = harness.getPositionAccounting(id);
+        (uint256 eMid0, uint256 eMid1) = LiquidityUtils.calculateCommitmentMaxima(TICK_LOWER, TICK_UPPER, liqA);
+        assertEq(mid0, eMid0);
+        assertEq(mid1, eMid1);
 
-        (uint256 a0, uint256 a1) = LiquidityUtils.calculateCommitmentMaxima(TICK_LOWER, TICK_UPPER, liqA);
-        (uint256 b0, uint256 b1) = LiquidityUtils.calculateCommitmentMaxima(TICK_LOWER, TICK_UPPER, liqB);
-
-        harness.trackCommitment(id, addA);
-        harness.trackCommitment(id, addB);
-
+        uint128 total = liqA + liqB;
+        harness.trackCommitmentFromLiveLiquidity(id, total);
         (uint256 c0, uint256 c1,,,,) = harness.getPositionAccounting(id);
-        assertEq(c0, a0 + b0, "commitmentMax0 should be additive across adds");
-        assertEq(c1, a1 + b1, "commitmentMax1 should be additive across adds");
+        (uint256 exp0, uint256 exp1) = LiquidityUtils.calculateCommitmentMaxima(TICK_LOWER, TICK_UPPER, total);
+        assertEq(c0, exp0, "final maxima must match total live liquidity");
+        assertEq(c1, exp1, "final maxima must match total live liquidity");
     }
 
     // ============================================================
@@ -374,6 +361,7 @@ contract VTSPositionLibMutationUnitTest is Test {
         // Expected add1 = (outsideLower1 - outsideUpper1) * liq / Q128 = 7 * liq
         uint256 s1 = 2000;
         harness.setSettled(id, 0, s1);
+        harness.setPoolTotalSettled(poolId, 0, s1);
 
         // Run the growth settle (uses StateLibrary for tick and liquidity).
         harness.settlePositionGrowths(IPoolManager(address(pm)), id);
@@ -697,7 +685,7 @@ contract VTSPositionLibMutationUnitTest is Test {
         assertEq(exposureSecond, exposureFirst, "second settle with same pool index must not add exposure again");
     }
 
-    function test_reconcileAfterPausedRemove_clampsSettledBeforeLaterCISESettlement() public {
+    function test_reconcileAfterStaleLiquidityMirrorRemove_clampsSettledBeforeLaterCISESettlement() public {
         uint128 liqBefore = 1000;
         uint128 liqAfter = 500;
         (PositionId id, ModifyLiquidityParams memory addParams) = _register(bytes32(uint256(0xAA55E)), liqBefore);
@@ -708,7 +696,7 @@ contract VTSPositionLibMutationUnitTest is Test {
         harness.setSettled(id, c0Before, c1Before);
         harness.setPoolTotalSettled(poolId, c0Before, c1Before);
 
-        // Coverage advanced while paused; we intentionally defer realisation until after reconciliation.
+        // CISE index advanced while the stored liquidity mirror is stale; defer realisation until after reconciliation.
         harness.setCISEIndexLastX128(id, 0, 0);
         harness.setPoolCoveragePerSettledIndexX128(poolId, FixedPoint128.Q128, 0);
 
@@ -725,7 +713,7 @@ contract VTSPositionLibMutationUnitTest is Test {
         harness.touchPosition(_defaultPositionContext(), _directRemoveTouchParams(removeParams));
 
         (uint256 c0After,, uint256 s0After,,,) = harness.getPositionAccounting(id);
-        assertLt(c0After, c0Before, "commitment max should decrease after paused remove reconcile");
+        assertLt(c0After, c0Before, "commitment max should decrease after stale-mirror remove reconcile");
         assertEq(s0After, c0After, "settled should clamp to the post-remove commitment max");
 
         Position memory posAfter = harness.getPosition(id);
@@ -737,7 +725,7 @@ contract VTSPositionLibMutationUnitTest is Test {
         assertEq(exposure0, s0After, "CISE exposure should realise from clamped settled baseline");
     }
 
-    function test_reconcileAfterPausedRemove_clampsSettledBeforeLaterCISESettlement_token1() public {
+    function test_reconcileAfterStaleLiquidityMirrorRemove_clampsSettledBeforeLaterCISESettlement_token1() public {
         uint128 liqBefore = 1000;
         uint128 liqAfter = 500;
         (PositionId id, ModifyLiquidityParams memory addParams) = _register(bytes32(uint256(0xAA560)), liqBefore);
@@ -764,7 +752,7 @@ contract VTSPositionLibMutationUnitTest is Test {
         harness.touchPosition(_defaultPositionContext(), _directRemoveTouchParams(removeParams));
 
         (, uint256 c1After,, uint256 s1After,,) = harness.getPositionAccounting(id);
-        assertLt(c1After, c1Before, "commitment max token1 should decrease after paused remove reconcile");
+        assertLt(c1After, c1Before, "commitment max token1 should decrease after stale-mirror remove reconcile");
         assertEq(s1After, c1After, "settled token1 should clamp to the post-remove commitment max");
 
         Position memory posAfter = harness.getPosition(id);
@@ -776,7 +764,7 @@ contract VTSPositionLibMutationUnitTest is Test {
         assertEq(exposure1, s1After, "CISE exposure token1 should realise from clamped settled baseline");
     }
 
-    function test_reconcileAfterPausedRemove_fullRemove_zeroesSettledAndMarksInactive() public {
+    function test_reconcileAfterStaleLiquidityMirrorRemove_fullRemove_zeroesSettledAndMarksInactive() public {
         uint128 liqBefore = 1000;
         (PositionId id, ModifyLiquidityParams memory addParams) = _register(bytes32(uint256(0xAA55F)), liqBefore);
 
@@ -813,7 +801,7 @@ contract VTSPositionLibMutationUnitTest is Test {
     }
 
     /// @notice Regression (finding 5): full deactivation clears all commitment-deficit fields (semantic cleanup).
-    function test_reconcileAfterPausedRemove_fullRemove_clearsCommitmentDeficitState() public {
+    function test_reconcileAfterStaleLiquidityMirrorRemove_fullRemove_clearsCommitmentDeficitState() public {
         uint128 liqBefore = 1000;
         (PositionId id, ModifyLiquidityParams memory addParams) = _register(bytes32(uint256(0xAA60)), liqBefore);
 
@@ -910,12 +898,11 @@ contract VTSPositionLibMutationUnitTest is Test {
         harness.registerPosition(owner, pId, reg);
         PositionId id = PositionLibrary.generateId(owner, reg);
 
-        // Prepare commitment max so the decrease step produces known new maxima.
+        // Stale stored commitment is irrelevant: touch recomputes from live PoolManager liquidity (post-decrease).
         uint128 liqRemoved = 500;
-        (uint256 subC0, uint256 subC1) = LiquidityUtils.calculateCommitmentMaxima(TICK_LOWER, TICK_UPPER, liqRemoved);
         uint256 newC0 = 10e18;
         uint256 newC1 = 20e18;
-        harness.setCommitmentMax(id, newC0 + subC0, newC1 + subC1);
+        harness.setCommitmentMax(id, newC0, newC1);
 
         // Settled above the post-decrease maxima so excess is positive.
         harness.setSettled(id, newC0, newC1 + 7e18);
@@ -924,8 +911,8 @@ contract VTSPositionLibMutationUnitTest is Test {
         harness.setCommitmentDeficit(id, 0, 0);
 
         _pmSetSlot0Tick(pId, 0);
-        // Seed the live post-modify liquidity that touchPosition observes from PoolManager on increase.
-        _pmSetPositionLiquidity(pId, PositionId.unwrap(id), 1200);
+        // Post-decrease live liquidity as PoolManager reports when CoreHook calls `touchPosition`.
+        _pmSetPositionLiquidity(pId, PositionId.unwrap(id), 700);
 
         TouchPositionParams memory tp = TouchPositionParams({
             owner: owner,
@@ -950,13 +937,16 @@ contract VTSPositionLibMutationUnitTest is Test {
 
         harness.touchPosition(ctx, tp);
 
+        // Pool reports post-modify liquidity 1200 - 500 == 700; commitmentMax == maxima(700).
+        (uint256 expC0, uint256 expC1) = LiquidityUtils.calculateCommitmentMaxima(TICK_LOWER, TICK_UPPER, 700);
+
         (uint256 settled0, uint256 settled1, uint256 d0, uint256 d1) = _getPositionStateLite(id);
-        assertEq(settled0, newC0, "token0 settled should remain at new commitment max");
-        assertEq(settled1, newC1, "token1 settled should be clamped to new commitment max");
+        assertEq(settled0, expC0, "token0 settled should clamp to live commitment max");
+        assertEq(settled1, expC1, "token1 settled should clamp to live commitment max");
         assertEq(d0, 0, "token0 deficit should remain unchanged");
         assertEq(d1, 0, "token1 deficit should remain unchanged");
 
-        _assertPoolTotalSettled(pId, newC0, newC1);
+        _assertPoolTotalSettled(pId, expC0, expC1);
     }
 
     function test_touchPosition_nonMMIncrease_setsSettledUpToNewCommitmentMax() public {
@@ -989,21 +979,16 @@ contract VTSPositionLibMutationUnitTest is Test {
         harness.setCommitmentDeficit(id, 0, 0);
 
         _pmSetSlot0Tick(pId, 0);
+        // Post-modify live liquidity seen by touchPosition (1000 after +200 from 800).
         _pmSetPositionLiquidity(pId, PositionId.unwrap(id), 1000);
 
-        uint128 liqAdded = 200;
-        (uint256 addC0, uint256 addC1) = LiquidityUtils.calculateCommitmentMaxima(TICK_LOWER, TICK_UPPER, liqAdded);
-        uint256 expC0 = 10e18 + addC0;
-        uint256 expC1 = 20e18 + addC1;
+        (uint256 expC0, uint256 expC1) = LiquidityUtils.calculateCommitmentMaxima(TICK_LOWER, TICK_UPPER, 1000);
 
         TouchPositionParams memory tp = TouchPositionParams({
             owner: owner,
             poolKey: key,
             params: ModifyLiquidityParams({
-                tickLower: reg.tickLower,
-                tickUpper: reg.tickUpper,
-                liquidityDelta: int256(uint256(liqAdded)),
-                salt: reg.salt
+                tickLower: reg.tickLower, tickUpper: reg.tickUpper, liquidityDelta: int256(uint256(200)), salt: reg.salt
             }),
             callerDelta: toBalanceDelta(0, 0),
             feesAccrued: toBalanceDelta(0, 0),
@@ -1227,6 +1212,7 @@ contract VTSPositionLibMutationUnitTest is Test {
         PositionId id = PositionLibrary.generateId(owner, reg);
         harness.setCommitmentMax(id, 1e18, 1e18);
         harness.setSettled(id, 1e18, 1e18);
+        harness.setPoolTotalSettled(pId, 1e18, 1e18);
         harness.setCumulativeDeficit(id, 0, 0);
         harness.setCommitmentDeficit(id, 0, 0);
 
@@ -1452,8 +1438,7 @@ contract VTSPositionLibMutationUnitTest is Test {
 
             // 4) Set up PoolManager mock state.
             _pmSetSlot0Tick(pId, 0);
-            // Seed the live post-modify liquidity that touchPosition observes from PoolManager on increase.
-            _pmSetPositionLiquidity(pId, PositionId.unwrap(id), 1100);
+            _pmSetPositionLiquidity(pId, PositionId.unwrap(id), uint128(10e18));
             _pmSetFeeGrowthGlobals(pId, 0, 0);
             _pmSetTickFeeGrowthOutside(pId, TICK_LOWER, 0, 0);
             _pmSetTickFeeGrowthOutside(pId, TICK_UPPER, 0, 0);
@@ -1493,17 +1478,18 @@ contract VTSPositionLibMutationUnitTest is Test {
 
             // 9) Execute touchPosition and assert liquidity updated.
             TouchPositionResult memory result = harness.touchPosition(ctx, tp);
-            // Started at 1000, added 100 => expected 1100.
-            assertEq(result.pos.liquidity, 1100, "liquidity should increase by liqAdded");
+            assertEq(
+                result.pos.liquidity, uint128(10e18), "position liquidity should mirror post-modify PoolManager read"
+            );
         }
 
         // Assert on the *underlying* settlement deltas that were accounted for this MM op.
         // `touchPosition` records the settlement delta via `DynamicCurrencyDelta.accountUnderlyingSettlementDelta`,
         // which maps each LCC currency to its underlying currency (here: 0xB0 and 0xB1).
         //
-        // IMPORTANT: `touchPosition` calls `_trackCommitment(...)` on increase, so commitmentMax (and therefore base)
-        // can change slightly due to tick math + mulDivRoundingUp. We therefore compute expected excess using the
-        // *post-touch* stored commitmentMax and settled amounts, to avoid brittle off-by-one failures.
+        // IMPORTANT: `touchPosition` recomputes `commitmentMax` from live liquidity on increase, so commitmentMax
+        // (and therefore base) can change slightly due to tick math + mulDivRoundingUp. We therefore compute expected
+        // excess using the *post-touch* stored commitmentMax and settled amounts, to avoid brittle off-by-one failures.
         //
         // Under correct code: excess1 == baseAmountToSettle1 - s1.
         // Under the mutant at VTSPositionLib.sol:1134: excess1 == baseAmountToSettle1 + s1 (far larger),
@@ -1580,7 +1566,7 @@ contract VTSPositionLibMutationUnitTest is Test {
     ///      should reduce the MM deposit requirement carried past in-hook settlement.
     function test_touchPosition_mmIncrease_cumulativeDeficit_doesNotOverClearRequiredSettlement() public {
         MMIncreaseInHookSetup memory setup = _setupMmIncreaseInHookSettlementCase(0, 0);
-        uint256 d0 = 3e18;
+        uint256 d0 = 1e16;
         assertGt(setup.required0, d0, "precondition: token0 requirement must exceed deficit");
         harness.setCumulativeDeficit(setup.positionId, d0, 0);
 
@@ -1609,7 +1595,7 @@ contract VTSPositionLibMutationUnitTest is Test {
         public
     {
         MMIncreaseInHookSetup memory setup = _setupMmIncreaseInHookSettlementCase(0, 0);
-        uint256 d0 = 3e18;
+        uint256 d0 = 1e16;
         assertGt(setup.required0, d0, "precondition: token0 requirement must exceed deficit");
         harness.setCumulativeDeficit(setup.positionId, d0, 0);
 
@@ -1637,7 +1623,7 @@ contract VTSPositionLibMutationUnitTest is Test {
     /// @notice Mixed lanes: cumulative deficit on token0 only; token1 exact credit — per-lane shortfall and full settle.
     function test_touchPosition_mmIncrease_mixedLane_cumulativeDeficitToken0_exactToken1() public {
         MMIncreaseInHookSetup memory setup = _setupMmIncreaseInHookSettlementCase(0, 0);
-        uint256 d0 = 3e18;
+        uint256 d0 = 1e16;
         assertGt(setup.required0, d0, "precondition: token0 requirement must exceed deficit");
         harness.setCumulativeDeficit(setup.positionId, d0, 0);
 
@@ -1757,7 +1743,8 @@ contract VTSPositionLibMutationUnitTest is Test {
         harness.setCommitmentDeficit(setup.positionId, 0, 0);
 
         _pmSetSlot0Tick(setup.poolId, 0);
-        _pmSetPositionLiquidity(setup.poolId, PositionId.unwrap(setup.positionId), 1100);
+        // Large live liquidity so MM base settlement comfortably exceeds typical cumulativeDeficit test amounts.
+        _pmSetPositionLiquidity(setup.poolId, PositionId.unwrap(setup.positionId), uint128(10e18));
         _pmSetFeeGrowthGlobals(setup.poolId, 0, 0);
         _pmSetTickFeeGrowthOutside(setup.poolId, TICK_LOWER, 0, 0);
         _pmSetTickFeeGrowthOutside(setup.poolId, TICK_UPPER, 0, 0);
@@ -1772,14 +1759,13 @@ contract VTSPositionLibMutationUnitTest is Test {
             marketVault: IMarketVault(address(new MockMarketVaultPassthrough()))
         });
 
-        uint256 addC0;
-        uint256 addC1;
-        (addC0, addC1) = LiquidityUtils.calculateCommitmentMaxima(TICK_LOWER, TICK_UPPER, 100);
-        (setup.required0, setup.required1) = LiquidityUtils.getBaseSettlementAmounts(
-            100e18 + addC0, 100e18 + addC1, DEFAULT_BASE_VTS_RATE, DEFAULT_BASE_VTS_RATE
-        );
-        setup.required0 = setup.required0 > settled0 ? setup.required0 - settled0 : 0;
-        setup.required1 = setup.required1 > settled1 ? setup.required1 - settled1 : 0;
+        // PoolManager reports post-modify liquidity before VTS runs; recomputed commitment uses that value.
+        uint128 liveAfterModify = uint128(10e18);
+        (uint256 cm0, uint256 cm1) = LiquidityUtils.calculateCommitmentMaxima(TICK_LOWER, TICK_UPPER, liveAfterModify);
+        (uint256 base0, uint256 base1) =
+            LiquidityUtils.getBaseSettlementAmounts(cm0, cm1, DEFAULT_BASE_VTS_RATE, DEFAULT_BASE_VTS_RATE);
+        setup.required0 = base0 > settled0 ? base0 - settled0 : 0;
+        setup.required1 = base1 > settled1 ? base1 - settled1 : 0;
         setup.underlying0 = Currency.wrap(address(0xE0));
         setup.underlying1 = Currency.wrap(address(0xE1));
         setup.tp = TouchPositionParams({

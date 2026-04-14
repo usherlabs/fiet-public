@@ -292,9 +292,17 @@ contract MMPositionManager is
         MMHelpers.assertApprovedOrOwner(msgSender(), tokenId);
 
         // Check if commit has any active positions (burned positions are inactive)
-        (,, uint256 positionCount, uint256 activePositionCount) = vtsOrchestrator.getCommit(tokenId);
+        (,, uint256 positionCount, uint256 activePositionCount, uint256 inactiveRemnantCount) =
+            vtsOrchestrator.getCommit(tokenId);
         if (activePositionCount > 0) {
             revert Errors.CommitNotEmpty(tokenId);
+        }
+        // Inactive positions may still hold withdrawable `pa.settled` (SETTLE-03); burning the NFT would strand it
+        // because MM settlement paths require `assertApprovedOrOwner` against this tokenId. Tracked in O(1) via
+        // `Commit.inactiveRemnantCount` (see VTSPositionLib._syncInactiveRemnantAfterActiveTransition /
+        // `_syncInactiveRemnantAfterSettledPairChange`).
+        if (inactiveRemnantCount > 0) {
+            revert Errors.CommitNotDrained(tokenId);
         }
 
         _burn(tokenId);
@@ -552,7 +560,13 @@ contract MMPositionManager is
     function commitOf(uint256 tokenId)
         external
         view
-        returns (MarketMaker.State memory state, uint256 expiresAt, uint256 positionCount, uint256 activePositionCount)
+        returns (
+            MarketMaker.State memory state,
+            uint256 expiresAt,
+            uint256 positionCount,
+            uint256 activePositionCount,
+            uint256 inactiveRemnantCount
+        )
     {
         return vtsOrchestrator.getCommit(tokenId);
     }

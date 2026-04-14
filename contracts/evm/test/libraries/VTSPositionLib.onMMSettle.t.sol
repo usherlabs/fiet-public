@@ -15,6 +15,8 @@ import {DynamicCurrencyDelta} from "../../src/libraries/DynamicCurrencyDelta.sol
 import {Errors} from "../../src/libraries/Errors.sol";
 import {ILCC} from "../../src/interfaces/ILCC.sol";
 
+/// @dev Several scenarios assert `harness.getUnderlyingDelta` after `onMMSettle`: here that reads harness-local
+///      `DynamicCurrencyDelta` state in the same Forge transaction (not PoolManager unlock-scoped transient reads).
 contract VTSPositionLibOnMMSettleTest is VTSLibTestBase {
     VTSPositionLibHarness harness;
     MockMarketVault mockVault;
@@ -243,6 +245,7 @@ contract VTSPositionLibOnMMSettleTest is VTSLibTestBase {
         // Base requirement = 1000 * 5% = 50, settled = 200, so excess = 150
         harness.setCommitmentMax(positionId, 1000e18, 1000e18);
         harness.setSettled(positionId, 200e18, 200e18); // 20% settled, base is 5%
+        harness.setPoolTotalSettled(testPoolId, 200e18, 200e18);
         harness.setPositionActive(positionId, true);
 
         // Try to withdraw 150 each
@@ -264,6 +267,7 @@ contract VTSPositionLibOnMMSettleTest is VTSLibTestBase {
         // Setup: settled = 100, base requirement = 50, so withdrawable = 50
         harness.setCommitmentMax(positionId, 1000e18, 1000e18);
         harness.setSettled(positionId, 100e18, 100e18);
+        harness.setPoolTotalSettled(testPoolId, 100e18, 100e18);
         harness.setPositionActive(positionId, true);
 
         // Try to withdraw 200 (more than available)
@@ -306,6 +310,7 @@ contract VTSPositionLibOnMMSettleTest is VTSLibTestBase {
         // Fully-settled enough so RFS is closed and withdrawals are allowed.
         harness.setCommitmentMax(positionId, 1000e18, 1000e18);
         harness.setSettled(positionId, 200e18, 200e18);
+        harness.setPoolTotalSettled(testPoolId, 200e18, 200e18);
         harness.setPositionActive(positionId, true);
 
         // Request withdrawal, but vault can't satisfy full token1 amount.
@@ -413,6 +418,7 @@ contract VTSPositionLibOnMMSettleTest is VTSLibTestBase {
 
         harness.setCommitmentMax(positionId, 1000e18, 1000e18);
         harness.setSettled(positionId, 200e18, 200e18);
+        harness.setPoolTotalSettled(testPoolId, 200e18, 200e18);
         harness.setPositionActive(positionId, true);
 
         mockVault.setAvailableLiquidity(100e18, 60e18);
@@ -651,6 +657,11 @@ contract VTSPositionLibOnMMSettleTest is VTSLibTestBase {
         // Should clamp to positionRequiredSettlementDelta
         assertEq(settlementDelta.amount0(), 50e18, "Seizing withdrawal0 clamped by currencyDelta");
         assertEq(settlementDelta.amount1(), 30e18, "Seizing withdrawal1 clamped by currencyDelta");
+        (,, uint256 settled0, uint256 settled1,,) = harness.getPositionAccounting(positionId);
+        assertEq(settled0, 100e18, "Seizing delta-backed withdrawal0 should not reduce settled");
+        assertEq(settled1, 100e18, "Seizing delta-backed withdrawal1 should not reduce settled");
+        assertEq(harness.getUnderlyingDelta(underlyingCurrency0, owner), 0, "token0 delta should be fully consumed");
+        assertEq(harness.getUnderlyingDelta(underlyingCurrency1, owner), 0, "token1 delta should be fully consumed");
     }
 
     function test_onMMSettle_seizing_withdrawals_zeroCurrencyDelta_clampsToZero() public {
@@ -676,6 +687,9 @@ contract VTSPositionLibOnMMSettleTest is VTSLibTestBase {
         // Should clamp to zero when no currencyDelta
         assertEq(settlementDelta.amount0(), 0, "Seizing withdrawal0 should be zero with no currencyDelta");
         assertEq(settlementDelta.amount1(), 0, "Seizing withdrawal1 should be zero with no currencyDelta");
+        (,, uint256 settled0, uint256 settled1,,) = harness.getPositionAccounting(positionId);
+        assertEq(settled0, 100e18, "Zero-cap seizing withdrawal0 should leave settled unchanged");
+        assertEq(settled1, 100e18, "Zero-cap seizing withdrawal1 should leave settled unchanged");
     }
 
     // ============================================================
