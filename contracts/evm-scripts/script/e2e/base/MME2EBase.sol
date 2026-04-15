@@ -18,7 +18,6 @@ import {Token} from "../../setup/MockERC20.s.sol";
 import {LiquiditySignal} from "src/types/Commit.sol";
 import {MarketMaker} from "src/libraries/MarketMaker.sol";
 import {MessageHashUtils} from "@openzeppelin/contracts/utils/cryptography/MessageHashUtils.sol";
-import {ActionConstants} from "v4-periphery/src/libraries/ActionConstants.sol";
 
 import {ILCC} from "src/interfaces/ILCC.sol";
 import {MMPositionManager} from "src/MMPositionManager.sol";
@@ -272,7 +271,7 @@ abstract contract MME2EBase is E2EBase {
             bytes1(uint8(MMActions.SETTLE_POSITION))
         );
         bytes[] memory params = new bytes[](3);
-        params[0] = abi.encode(liquiditySignalBytes, ActionConstants.MSG_SENDER, bytes(""));
+        params[0] = abi.encode(liquiditySignalBytes, bytes(""));
         params[1] = abi.encode(key, commitId, tickLower, tickUpper, liq);
         params[2] = abi.encode(key, commitId, 0, -int128(int256(settle0)), -int128(int256(settle1)), false);
         _executeMMActions(mmpm, actions, params, block.timestamp + 3600);
