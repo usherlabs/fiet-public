@@ -90,10 +90,12 @@ contract CrossMarketDeltaRegressionE2E is MME2EBase {
         require(s_decAmount > 0, "regression: decrease amount must be non-zero");
     }
 
-    /// @notice Runs the cross-market MM atomic batch (must call `_prepareCrossMarketBatch` in the same script run first).
+    /// @dev Runs the cross-market MM atomic batch (must call `_prepareCrossMarketBatch` in the same script run first).
+    /// Internal only: external `this.*` calls would route through the ephemeral script address and trip Foundry’s
+    /// script safety checks.
     /// @param recipient Locker credit sweep recipient for trailing `TAKE` actions (same as MM in `_runScenario`).
     /// @param mmPk MM private key (broadcast signer).
-    function runCrossMarketAtomicBatch(address recipient, uint256 mmPk) external {
+    function _runCrossMarketAtomicBatch(address recipient, uint256 mmPk) internal {
         require(address(s_mmpm) != address(0), "CrossMarket: call _prepareCrossMarketBatch first");
         require(recipient != address(0), "CrossMarket: recipient is zero");
         vm.startBroadcast(mmPk);
@@ -234,7 +236,7 @@ contract CrossMarketDeltaRegressionE2E is MME2EBase {
         s_preMmLccA0 = IERC20(lccA0).balanceOf(mm);
         s_preMmLccA1 = IERC20(lccA1).balanceOf(mm);
 
-        this.runCrossMarketAtomicBatch(mm, mmPk);
+        _runCrossMarketAtomicBatch(mm, mmPk);
         console.log("OK: cross-market atomic batch");
         _assertCrossMarketBatchPostState(mm);
     }
