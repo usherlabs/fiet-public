@@ -163,7 +163,7 @@ interface IMarketFactory {
      * @param vault The vault/proxy hook address to validate
      * @return True if the vault is canonical for the market
      */
-    function isCanonicalVault(bytes32 marketId, address vault) external view returns (bool);
+    function isCanonicalVault(address vault) external view returns (bool);
 
     /**
      * @notice Gets the market liquidity for a given underlying asset in a market

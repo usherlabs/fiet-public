@@ -37,127 +37,186 @@ contract CrossMarketDeltaRegressionE2E is MME2EBase {
     int24 internal constant TICK_UPPER = 60;
     uint128 internal constant LIQUIDITY = 1e10;
 
+    MMPositionManager internal s_mmpm;
+    PoolKey internal s_keyA;
+    PoolKey internal s_keyB;
+    PoolKey internal s_keyC;
+    PoolKey internal s_keyD;
+    uint256 internal s_commitA;
+    uint256 internal s_commitB;
+    uint256 internal s_commitC;
+    uint256 internal s_commitD;
+    uint256 internal s_decAmount;
+
     function _loadMmPrivateKey() internal view returns (uint256 mmPk) {
         mmPk = uint256(
             _requireEnvBytes32("LP_PRIVATE_KEY", "Missing LP_PRIVATE_KEY env var (anvil keys can be used directly)")
         );
     }
 
-    function _runCrossMarketAtomicBatch(
-        MMPositionManager mmpm,
-        PoolKey memory keyA,
-        PoolKey memory keyB,
-        PoolKey memory keyC,
-        PoolKey memory keyD,
-        uint256 commitA,
-        uint256 commitB,
-        uint256 commitC,
-        uint256 commitD,
-        uint256 decAmount,
-        address recipient,
-        uint256 mmPk
-    ) internal {
+    function _prepareCrossMarketBatch(address mm, uint256 mmPk) internal {
+        StandaloneMarket memory mA = _deployAndCreateMarket(mm, CORE_POOL_FEE);
+
+        s_mmpm = MMPositionManager(payable(mA.stack.contracts.mmPositionManager));
+        s_keyA = _corePoolKey(mA);
+        s_commitA = _createMmPosition(mA, mmPk, TICK_LOWER, TICK_UPPER, LIQUIDITY, 1);
+
+        StandaloneMarket memory nextMarket = _createMarketFromStackWithUnderlyings(
+            mA.stack, mm, CORE_POOL_FEE, mA.underlying0, mA.underlying1, false
+        );
+        s_keyB = _corePoolKey(nextMarket);
+        s_commitB = _createMmPosition(nextMarket, mmPk, TICK_LOWER, TICK_UPPER, LIQUIDITY, 2);
+
+        nextMarket = _createMarketFromStackWithUnderlyings(
+            mA.stack, mm, CORE_POOL_FEE, mA.underlying0, mA.underlying1, false
+        );
+        s_keyC = _corePoolKey(nextMarket);
+        s_commitC = _createMmPosition(nextMarket, mmPk, TICK_LOWER, TICK_UPPER, LIQUIDITY, 3);
+
+        nextMarket = _createMarketFromStackWithUnderlyings(
+            mA.stack, mm, CORE_POOL_FEE, mA.underlying0, mA.underlying1, false
+        );
+        s_keyD = _corePoolKey(nextMarket);
+        s_commitD = _createMmPosition(nextMarket, mmPk, TICK_LOWER, TICK_UPPER, LIQUIDITY, 4);
+
+        s_decAmount = uint256(LIQUIDITY / 8);
+        require(s_decAmount > 0, "regression: decrease amount must be non-zero");
+    }
+
+    function runCrossMarketAtomicBatch(address recipient, uint256 mmPk) external {
         vm.startBroadcast(mmPk);
         {
-            bytes memory actions = abi.encodePacked(
-                bytes1(uint8(MMActions.DECREASE_LIQUIDITY)),
-                bytes1(uint8(MMActions.SETTLE_POSITION)),
-                bytes1(uint8(MMActions.MINT_POSITION_FROM_DELTAS)),
-                bytes1(uint8(MMActions.DECREASE_LIQUIDITY)),
-                bytes1(uint8(MMActions.SETTLE_POSITION)),
-                bytes1(uint8(MMActions.INCREASE_LIQUIDITY_FROM_DELTAS)),
-                bytes1(uint8(MMActions.DECREASE_LIQUIDITY)),
-                bytes1(uint8(MMActions.SETTLE_POSITION)),
-                bytes1(uint8(MMActions.SETTLE_POSITION_FROM_DELTAS)),
-                bytes1(uint8(MMActions.DECREASE_LIQUIDITY)),
-                bytes1(uint8(MMActions.SETTLE_POSITION)),
-                bytes1(uint8(MMActions.MINT_POSITION_FROM_DELTAS)),
-                bytes1(uint8(MMActions.TAKE)),
-                bytes1(uint8(MMActions.TAKE)),
-                bytes1(uint8(MMActions.TAKE)),
-                bytes1(uint8(MMActions.TAKE)),
-                bytes1(uint8(MMActions.TAKE)),
-                bytes1(uint8(MMActions.TAKE)),
-                bytes1(uint8(MMActions.TAKE)),
-                bytes1(uint8(MMActions.TAKE))
-            );
-            bytes[] memory params = new bytes[](20);
-            params[0] = abi.encode(keyA, commitA, 0, decAmount);
-            params[1] = abi.encode(keyA, commitA, 0, type(int128).max, type(int128).max, true);
-            params[2] = abi.encode(
-                keyB,
-                commitB,
-                TICK_LOWER,
-                TICK_UPPER,
-                type(uint128).max,
-                type(uint128).max,
-                false // consume locker-scoped credits
-            );
-            params[3] = abi.encode(keyB, commitB, 0, decAmount);
-            params[4] = abi.encode(keyB, commitB, 0, type(int128).max, type(int128).max, true);
-            params[5] = abi.encode(keyB, commitB, 0, type(uint128).max, type(uint128).max, false);
-            params[6] = abi.encode(keyB, commitB, 0, decAmount);
-            params[7] = abi.encode(keyB, commitB, 0, type(int128).max, type(int128).max, true);
-            params[8] = abi.encode(keyC, commitC, 0, false, false);
-            params[9] = abi.encode(keyC, commitC, 0, decAmount);
-            params[10] = abi.encode(keyC, commitC, 0, type(int128).max, type(int128).max, true);
-            params[11] =
-                abi.encode(keyD, commitD, TICK_LOWER, TICK_UPPER, type(uint128).max, type(uint128).max, false);
-            params[12] = abi.encode(keyA.currency0, recipient, 0);
-            params[13] = abi.encode(keyA.currency1, recipient, 0);
-            params[14] = abi.encode(keyB.currency0, recipient, 0);
-            params[15] = abi.encode(keyB.currency1, recipient, 0);
-            params[16] = abi.encode(keyC.currency0, recipient, 0);
-            params[17] = abi.encode(keyC.currency1, recipient, 0);
-            params[18] = abi.encode(keyD.currency0, recipient, 0);
-            params[19] = abi.encode(keyD.currency1, recipient, 0);
-            _executeMMActions(mmpm, actions, params, block.timestamp + 3600);
+            bytes memory actions = _buildBatchActions();
+            bytes[] memory params = _buildBatchParams(recipient);
+            _executeMMActions(s_mmpm, actions, params, block.timestamp + 3600);
         }
         vm.stopBroadcast();
     }
 
-    function run() external {
-        console.log("=== E2E: CrossMarketDeltaRegression ===");
-        _initNetwork();
+    function _buildBatchActions() internal pure returns (bytes memory actions) {
+        actions = new bytes(20);
+        actions[0] = bytes1(uint8(MMActions.DECREASE_LIQUIDITY));
+        actions[1] = bytes1(uint8(MMActions.SETTLE_POSITION));
+        actions[2] = bytes1(uint8(MMActions.MINT_POSITION_FROM_DELTAS));
+        actions[3] = bytes1(uint8(MMActions.DECREASE_LIQUIDITY));
+        actions[4] = bytes1(uint8(MMActions.SETTLE_POSITION));
+        actions[5] = bytes1(uint8(MMActions.INCREASE_LIQUIDITY_FROM_DELTAS));
+        actions[6] = bytes1(uint8(MMActions.DECREASE_LIQUIDITY));
+        actions[7] = bytes1(uint8(MMActions.SETTLE_POSITION));
+        actions[8] = bytes1(uint8(MMActions.SETTLE_POSITION_FROM_DELTAS));
+        actions[9] = bytes1(uint8(MMActions.DECREASE_LIQUIDITY));
+        actions[10] = bytes1(uint8(MMActions.SETTLE_POSITION));
+        actions[11] = bytes1(uint8(MMActions.MINT_POSITION_FROM_DELTAS));
+        actions[12] = bytes1(uint8(MMActions.TAKE));
+        actions[13] = bytes1(uint8(MMActions.TAKE));
+        actions[14] = bytes1(uint8(MMActions.TAKE));
+        actions[15] = bytes1(uint8(MMActions.TAKE));
+        actions[16] = bytes1(uint8(MMActions.TAKE));
+        actions[17] = bytes1(uint8(MMActions.TAKE));
+        actions[18] = bytes1(uint8(MMActions.TAKE));
+        actions[19] = bytes1(uint8(MMActions.TAKE));
+    }
 
-        uint256 mmPk = _loadMmPrivateKey();
-        address mm = vm.addr(mmPk);
+    function _buildBatchParams(address recipient)
+        internal
+        view
+        returns (bytes[] memory params)
+    {
+        params = new bytes[](20);
+        params[0] = _param0();
+        params[1] = _param1();
+        params[2] = _param2();
+        params[3] = _param3();
+        params[4] = _param4();
+        params[5] = _param5();
+        params[6] = _param6();
+        params[7] = _param7();
+        params[8] = _param8();
+        params[9] = _param9();
+        params[10] = _param10();
+        params[11] = _param11();
+        params[12] = _takeParam(s_keyA.currency0, recipient);
+        params[13] = _takeParam(s_keyA.currency1, recipient);
+        params[14] = _takeParam(s_keyB.currency0, recipient);
+        params[15] = _takeParam(s_keyB.currency1, recipient);
+        params[16] = _takeParam(s_keyC.currency0, recipient);
+        params[17] = _takeParam(s_keyC.currency1, recipient);
+        params[18] = _takeParam(s_keyD.currency0, recipient);
+        params[19] = _takeParam(s_keyD.currency1, recipient);
+    }
 
-        StandaloneMarket memory mA = _deployAndCreateMarket(mm, CORE_POOL_FEE);
-        StandaloneMarket memory mB = _createMarketFromStackWithUnderlyings(
-            mA.stack, mm, CORE_POOL_FEE, mA.underlying0, mA.underlying1, false
-        );
-        StandaloneMarket memory mC = _createMarketFromStackWithUnderlyings(
-            mA.stack, mm, CORE_POOL_FEE, mA.underlying0, mA.underlying1, false
-        );
-        StandaloneMarket memory mD = _createMarketFromStackWithUnderlyings(
-            mA.stack, mm, CORE_POOL_FEE, mA.underlying0, mA.underlying1, false
-        );
+    function _param0() internal view returns (bytes memory) {
+        return abi.encode(s_keyA, s_commitA, 0, s_decAmount);
+    }
 
-        uint256 commitA = _createMmPosition(mA, mmPk, TICK_LOWER, TICK_UPPER, LIQUIDITY, 1);
-        uint256 commitB = _createMmPosition(mB, mmPk, TICK_LOWER, TICK_UPPER, LIQUIDITY, 2);
-        uint256 commitC = _createMmPosition(mC, mmPk, TICK_LOWER, TICK_UPPER, LIQUIDITY, 3);
-        uint256 commitD = _createMmPosition(mD, mmPk, TICK_LOWER, TICK_UPPER, LIQUIDITY, 4);
+    function _param1() internal view returns (bytes memory) {
+        return abi.encode(s_keyA, s_commitA, 0, type(int128).max, type(int128).max, true);
+    }
 
-        MMPositionManager mmpm = MMPositionManager(payable(mA.stack.contracts.mmPositionManager));
-        PoolKey memory keyA = _corePoolKey(mA);
-        PoolKey memory keyB = _corePoolKey(mB);
-        PoolKey memory keyC = _corePoolKey(mC);
-        PoolKey memory keyD = _corePoolKey(mD);
+    function _param2() internal view returns (bytes memory) {
+        return abi.encode(s_keyB, s_commitB, TICK_LOWER, TICK_UPPER, type(uint128).max, type(uint128).max, false);
+    }
 
-        uint256 decAmount = uint256(LIQUIDITY / 8);
-        require(decAmount > 0, "regression: decrease amount must be non-zero");
+    function _param3() internal view returns (bytes memory) {
+        return abi.encode(s_keyB, s_commitB, 0, s_decAmount);
+    }
 
-        // Atomic cross-market flow: produce and consume credits inside one unlock batch.
-        _runCrossMarketAtomicBatch(mmpm, keyA, keyB, keyC, keyD, commitA, commitB, commitC, commitD, decAmount, mm, mmPk);
-        console.log("OK: cross-market atomic batch");
+    function _param4() internal view returns (bytes memory) {
+        return abi.encode(s_keyB, s_commitB, 0, type(int128).max, type(int128).max, true);
+    }
 
-        // Lightweight sanity: MM still holds finite balances (unwrap phase intentionally omitted here).
-        address lccA0 = Currency.unwrap(keyA.currency0);
-        address lccA1 = Currency.unwrap(keyA.currency1);
+    function _param5() internal view returns (bytes memory) {
+        return abi.encode(s_keyB, s_commitB, 0, type(uint128).max, type(uint128).max, false);
+    }
+
+    function _param6() internal view returns (bytes memory) {
+        return abi.encode(s_keyB, s_commitB, 0, s_decAmount);
+    }
+
+    function _param7() internal view returns (bytes memory) {
+        return abi.encode(s_keyB, s_commitB, 0, type(int128).max, type(int128).max, true);
+    }
+
+    function _param8() internal view returns (bytes memory) {
+        return abi.encode(s_keyC, s_commitC, 0, false, false);
+    }
+
+    function _param9() internal view returns (bytes memory) {
+        return abi.encode(s_keyC, s_commitC, 0, s_decAmount);
+    }
+
+    function _param10() internal view returns (bytes memory) {
+        return abi.encode(s_keyC, s_commitC, 0, type(int128).max, type(int128).max, true);
+    }
+
+    function _param11() internal view returns (bytes memory) {
+        return abi.encode(s_keyD, s_commitD, TICK_LOWER, TICK_UPPER, type(uint128).max, type(uint128).max, false);
+    }
+
+    function _takeParam(Currency lane, address recipient) internal pure returns (bytes memory) {
+        return abi.encode(lane, recipient, 0);
+    }
+
+    function _assertBalancesReadable(address mm) internal view {
+        address lccA0 = Currency.unwrap(s_keyA.currency0);
+        address lccA1 = Currency.unwrap(s_keyA.currency1);
         require(IERC20(lccA0).balanceOf(mm) < type(uint256).max, "sanity: balances readable");
         require(IERC20(lccA1).balanceOf(mm) < type(uint256).max, "sanity: balances readable");
+    }
 
+    function _runScenario() internal {
+        _initNetwork();
+        uint256 mmPk = _loadMmPrivateKey();
+        address mm = vm.addr(mmPk);
+        _prepareCrossMarketBatch(mm, mmPk);
+        this.runCrossMarketAtomicBatch(mm, mmPk);
+        console.log("OK: cross-market atomic batch");
+        _assertBalancesReadable(mm);
+    }
+
+    function run() external {
+        console.log("=== E2E: CrossMarketDeltaRegression ===");
+        _runScenario();
         console.log("OK: CrossMarketDeltaRegression complete");
     }
 }

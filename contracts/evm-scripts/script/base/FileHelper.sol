@@ -9,7 +9,7 @@ abstract contract FileHelper is Script {
 
     string file = "";
 
-    function _getPrefix(string memory name) internal view returns (string memory) {
+    function _getPrefix(string memory /* name */) internal view returns (string memory) {
         string memory mode;
         try vm.envString("MODE") returns (string memory envMode) {
             mode = envMode;

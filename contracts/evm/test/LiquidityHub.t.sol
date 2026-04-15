@@ -260,9 +260,7 @@ contract LiquidityHubTest is LiquidityHubTestBase {
         MockMarketVaultForEthReceive vault = new MockMarketVaultForEthReceive(lccToken1, lccToken2);
         vm.deal(address(vault), 1 ether);
         vm.mockCall(
-            factory,
-            abi.encodeWithSelector(IMarketFactory.isCanonicalVault.selector, marketId1, address(vault)),
-            abi.encode(true)
+            factory, abi.encodeWithSelector(IMarketFactory.isCanonicalVault.selector, address(vault)), abi.encode(true)
         );
         vm.expectRevert(abi.encodeWithSelector(Errors.InvalidEthSender.selector));
         vault.sendEth(payable(address(liquidityHub)), 1);
@@ -301,9 +299,7 @@ contract LiquidityHubTest is LiquidityHubTestBase {
         vm.deal(address(vault), 1 ether);
 
         vm.mockCall(
-            factory,
-            abi.encodeWithSelector(IMarketFactory.isCanonicalVault.selector, bytes32("nativeMarket"), address(vault)),
-            abi.encode(true)
+            factory, abi.encodeWithSelector(IMarketFactory.isCanonicalVault.selector, address(vault)), abi.encode(true)
         );
 
         // Should not revert.
@@ -328,9 +324,7 @@ contract LiquidityHubTest is LiquidityHubTestBase {
         vm.deal(address(spoofVault), 1 ether);
         vm.mockCall(
             factory,
-            abi.encodeWithSelector(
-                IMarketFactory.isCanonicalVault.selector, bytes32("nativeMarketCanonical"), address(spoofVault)
-            ),
+            abi.encodeWithSelector(IMarketFactory.isCanonicalVault.selector, address(spoofVault)),
             abi.encode(false)
         );
 

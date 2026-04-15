@@ -526,7 +526,7 @@ contract MarketFactory is IMarketFactory, Ownable, ImmutableState, ImmutableVTSS
     }
 
     /// @inheritdoc IMarketFactory
-    function isCanonicalVault(bytes32 marketId, address vault) external view returns (bool) {
+    function isCanonicalVault(address vault) external view returns (bool) {
         if (vault == address(0)) return false;
         if (canonicalVault == address(0)) return false;
         return canonicalVault == vault;

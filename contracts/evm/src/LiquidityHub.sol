@@ -1185,7 +1185,7 @@ contract LiquidityHub is BoundRegistry, Ownable, ReentrancyGuardTransient {
         if (!isFactory[m0.factory]) {
             revert Errors.InvalidEthSender();
         }
-        if (!IMarketFactory(m0.factory).isCanonicalVault(m0.id, sender)) {
+        if (!IMarketFactory(m0.factory).isCanonicalVault(sender)) {
             revert Errors.InvalidEthSender();
         }
 

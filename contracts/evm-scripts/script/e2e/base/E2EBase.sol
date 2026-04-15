@@ -64,6 +64,14 @@ abstract contract E2EBase is DeployFullStackBase {
         uint256 amountMaxPerAsset;
     }
 
+    struct CreateMarketArgs {
+        address underlying0;
+        address underlying1;
+        uint24 corePoolFee;
+        bytes32 salt;
+        MarketVTSConfiguration cfg;
+    }
+
     function _requireEnvBytes32(string memory key, string memory err) internal view returns (bytes32) {
         try vm.envBytes32(key) returns (bytes32 v) {
             return v;
@@ -148,36 +156,7 @@ abstract contract E2EBase is DeployFullStackBase {
             );
 
         MarketVTSConfiguration memory cfg = _defaultE2EVTSConfig();
-        // IMPORTANT: ProxyHook is deployed via CREATE2 from `MarketVaultDeployer`.
-        // BaseHook validates the deployed hook address encodes the expected hook flags, so we must mine a salt.
-        address marketVaultDeployer = MarketFactory(m.stack.contracts.marketFactory).marketVaultDeployer();
-        (address expectedProxyHook, bytes32 salt) = HookMiner.find(
-            marketVaultDeployer,
-            HookFlags.PROXY_HOOK_FLAGS,
-            type(ProxyHook).creationCode,
-            abi.encode(config.poolManager, m.stack.contracts.marketFactory)
-        );
-        console.log("Expected ProxyHook:", expectedProxyHook);
-        uint160 initialSqrtPriceX96 = 79228162514264337593543950336; // 1:1
-
-        bytes memory ret = GlobalConfig(m.stack.contracts.globalConfig)
-            .proxyCall(
-                m.stack.contracts.marketFactory,
-                abi.encodeWithSelector(
-                    MarketFactory.createMarket.selector,
-                    m.underlying0,
-                    m.underlying1,
-                    corePoolFee,
-                    int24(60), // tickSpacing
-                    initialSqrtPriceX96,
-                    salt,
-                    cfg
-                )
-            );
-
-        // Decode returned PoolIds (abi-encoded as bytes32).
-        (bytes32 corePoolIdBytes32,) = abi.decode(ret, (bytes32, bytes32));
-        m.marketId = corePoolIdBytes32;
+        m.marketId = _createMarketFromExistingStack(m.stack, m.underlying0, m.underlying1, corePoolFee, cfg);
 
         // Resolve LCCs for the created market.
         ILiquidityHub hub = ILiquidityHub(m.stack.contracts.liquidityHub);
@@ -223,33 +202,7 @@ abstract contract E2EBase is DeployFullStackBase {
         }
 
         MarketVTSConfiguration memory cfg = _defaultE2EVTSConfig();
-        address marketVaultDeployer = MarketFactory(m.stack.contracts.marketFactory).marketVaultDeployer();
-        (address expectedProxyHook, bytes32 salt) = HookMiner.find(
-            marketVaultDeployer,
-            HookFlags.PROXY_HOOK_FLAGS,
-            type(ProxyHook).creationCode,
-            abi.encode(config.poolManager, m.stack.contracts.marketFactory)
-        );
-        console.log("Expected ProxyHook (extra market):", expectedProxyHook);
-        uint160 initialSqrtPriceX96 = 79228162514264337593543950336; // 1:1
-
-        bytes memory ret = GlobalConfig(m.stack.contracts.globalConfig)
-            .proxyCall(
-                m.stack.contracts.marketFactory,
-                abi.encodeWithSelector(
-                    MarketFactory.createMarket.selector,
-                    m.underlying0,
-                    m.underlying1,
-                    corePoolFee,
-                    int24(60),
-                    initialSqrtPriceX96,
-                    salt,
-                    cfg
-                )
-            );
-
-        (bytes32 corePoolIdBytes32,) = abi.decode(ret, (bytes32, bytes32));
-        m.marketId = corePoolIdBytes32;
+        m.marketId = _createMarketFromExistingStack(m.stack, m.underlying0, m.underlying1, corePoolFee, cfg);
 
         ILiquidityHub hub = ILiquidityHub(m.stack.contracts.liquidityHub);
         m.lcc0 = hub.getLCC(m.marketId, m.underlying0);
@@ -257,6 +210,60 @@ abstract contract E2EBase is DeployFullStackBase {
         require(m.lcc0 != address(0) && m.lcc1 != address(0), "market: LCCs not created (reuse underlyings)");
 
         vm.stopBroadcast();
+    }
+
+    function _createMarketFromExistingStack(
+        FullStack memory stack,
+        address underlying0,
+        address underlying1,
+        uint24 corePoolFee,
+        MarketVTSConfiguration memory cfg
+    ) internal returns (bytes32 corePoolIdBytes32) {
+        CreateMarketArgs memory args;
+        args.underlying0 = underlying0;
+        args.underlying1 = underlying1;
+        args.corePoolFee = corePoolFee;
+        args.salt = _findProxyHookSalt(stack.contracts.marketFactory);
+        args.cfg = cfg;
+
+        corePoolIdBytes32 = _proxyCreateMarket(
+            stack.contracts.globalConfig,
+            stack.contracts.marketFactory,
+            args
+        );
+    }
+
+    function _findProxyHookSalt(address marketFactoryAddr) internal returns (bytes32 salt) {
+        (address expectedProxyHook, bytes32 minedSalt) = HookMiner.find(
+            MarketFactory(marketFactoryAddr).marketVaultDeployer(),
+            HookFlags.PROXY_HOOK_FLAGS,
+            type(ProxyHook).creationCode,
+            abi.encode(config.poolManager, marketFactoryAddr)
+        );
+        console.log("Expected ProxyHook (extra market):", expectedProxyHook);
+        salt = minedSalt;
+    }
+
+    function _proxyCreateMarket(address globalConfigAddr, address marketFactoryAddr, CreateMarketArgs memory args)
+        internal
+        returns (bytes32 corePoolIdBytes32)
+    {
+        (corePoolIdBytes32,) = abi.decode(
+            GlobalConfig(globalConfigAddr).proxyCall(
+                marketFactoryAddr,
+                abi.encodeWithSelector(
+                    MarketFactory.createMarket.selector,
+                    args.underlying0,
+                    args.underlying1,
+                    args.corePoolFee,
+                    int24(60),
+                    uint160(79228162514264337593543950336), // 1:1
+                    args.salt,
+                    args.cfg
+                )
+            ),
+            (bytes32, bytes32)
+        );
     }
 
     function _defaultE2EVTSConfig() internal pure returns (MarketVTSConfiguration memory cfg) {
