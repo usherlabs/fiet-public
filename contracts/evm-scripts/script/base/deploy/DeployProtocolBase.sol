@@ -72,11 +72,12 @@ abstract contract DeployProtocolBase is CREATE3Script, NetworkConfig {
         uint8 nativeAssetDecimals,
         address globalConfig
     ) internal returns (address payable) {
+        address weth9 = address(PositionManager(payable(config.positionManager)).WETH9());
         return payable(_deployCreate3(
                 LIQUIDITY_HUB,
                 abi.encodePacked(
                     type(LiquidityHub).creationCode,
-                    abi.encode(oracleHelper, nativeAssetName, nativeAssetSymbol, nativeAssetDecimals, globalConfig)
+                    abi.encode(oracleHelper, nativeAssetName, nativeAssetSymbol, nativeAssetDecimals, weth9, globalConfig)
                 )
             ));
     }

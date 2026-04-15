@@ -178,11 +178,11 @@ contract MMCalldataDecoderHarness {
     function decodeCommitSignalParams(bytes calldata params)
         external
         pure
-        returns (bytes memory liquiditySignal, address owner, bytes memory relayParams)
+        returns (bytes memory liquiditySignal, bytes memory relayParams)
     {
         bytes calldata sig;
         bytes calldata relay;
-        (sig, owner, relay) = params.decodeCommitSignalParams();
+        (sig, relay) = params.decodeCommitSignalParams();
         liquiditySignal = sig;
         relayParams = relay;
     }
@@ -410,11 +410,9 @@ contract MMCalldataDecoderTest is Test {
 
     function test_decodeCommitSignalParams_ok() public view {
         bytes memory sig = hex"deadbeef";
-        address owner = address(0xBEEF);
         bytes memory relay = abi.encode(uint256(123), uint256(1), bytes("auth"));
-        bytes memory params = abi.encode(sig, owner, relay);
-        (bytes memory outSig, address outOwner, bytes memory outRelay) = h.decodeCommitSignalParams(params);
-        assertEq(outOwner, owner);
+        bytes memory params = abi.encode(sig, relay);
+        (bytes memory outSig, bytes memory outRelay) = h.decodeCommitSignalParams(params);
         assertEq(keccak256(outSig), keccak256(sig));
         assertEq(keccak256(outRelay), keccak256(relay));
     }
@@ -569,23 +567,20 @@ contract MMCalldataDecoderTest is Test {
     }
 
     function test_decodeCommitSignalParams_revertsOnTruncatedHead() public {
-        // Prior to the fix, a truncated head/tail could silently default `owner = address(0)` and decode an empty bytes.
-        // The minimum valid length (even for empty bytes fields) is 0xa0.
-        bytes memory truncated = new bytes(0x60);
+        // The minimum valid length (even for empty bytes fields) is 0x80.
+        bytes memory truncated = new bytes(0x40);
         vm.expectRevert(MMCalldataDecoder.SliceOutOfBounds.selector);
         h.decodeCommitSignalParams(truncated);
     }
 
-    /// @notice Regression: assembly `calldataload` into typed `address` must not break sentinel resolution
-    ///         (dirty upper 96 bits in the ABI word). Solidity cleans `address` on use; see audit scan #11 / vuln #11 (false positive).
-    function test_decodeCommitSignalParams_dirtyOwnerWord_mapsToCanonicalSentinel() public view {
-        bytes memory params = abi.encode(bytes(""), ActionConstants.MSG_SENDER, bytes(""));
-        _setAbiWord(params, 1, _dirtyAddressWord(ActionConstants.MSG_SENDER));
-        (bytes memory sig, address owner, bytes memory relay) = h.decodeCommitSignalParams(params);
+    function test_decodeCommitSignalParams_dirtyOffsets_stillDecodeSlices() public view {
+        bytes memory params = abi.encode(bytes(""), bytes(""));
+        // Dirty high bits in dynamic offset words should be masked by decoder.
+        _setAbiWord(params, 0, DIRTY_HIGH | uint256(0x40));
+        _setAbiWord(params, 1, DIRTY_HIGH | uint256(0x60));
+        (bytes memory sig, bytes memory relay) = h.decodeCommitSignalParams(params);
         assertEq(sig.length, 0);
         assertEq(relay.length, 0);
-        assertEq(owner, ActionConstants.MSG_SENDER);
-        assertTrue(owner == ActionConstants.MSG_SENDER, "sentinel compare as in BaseActionsRouter._mapRecipient");
     }
 
     function test_decodeUnwrapLccParams_dirtyRecipient_mapsToCanonicalSentinel() public view {

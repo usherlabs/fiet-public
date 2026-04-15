@@ -373,31 +373,29 @@ library MMCalldataDecoder {
         }
     }
 
-    /// @dev COMMIT_SIGNAL: (bytes, address, bytes relayParams)
+    /// @dev COMMIT_SIGNAL: (bytes liquiditySignal, bytes relayParams)
     /// @param params The calldata bytes to decode
     /// @return liquiditySignal The liquidity signal bytes
-    /// @return owner The address to receive the commitment NFT (can be mapped constants)
     /// @return relayParams Optional relayer auth params encoded as (uint256 deadline, uint256 authNonce, bytes authSig)
     function decodeCommitSignalParams(bytes calldata params)
         internal
         pure
-        returns (bytes calldata liquiditySignal, address owner, bytes calldata relayParams)
+        returns (bytes calldata liquiditySignal, bytes calldata relayParams)
     {
         assembly ("memory-safe") {
-            // ABI encoding: (bytes liquiditySignal, address owner, bytes relayParams)
+            // ABI encoding: (bytes liquiditySignal, bytes relayParams)
             // Minimum length for empty bytes fields:
-            // - head (3 words): offset, owner, offset => 0x60
+            // - head (2 words): offset, offset => 0x40
             // - tails (2 length words)                => 0x40
-            // total                                    => 0xa0
-            if lt(params.length, 0xa0) {
+            // total                               => 0x80
+            if lt(params.length, 0x80) {
                 mstore(0, SLICE_ERROR_SELECTOR)
                 revert(0x1c, 4)
             }
-            owner := calldataload(add(params.offset, 0x20))
         }
         // Use CalldataDecoder.toBytes for dynamic bytes (index 0 = 1st argument)
         liquiditySignal = params.toBytes(0);
-        relayParams = params.toBytes(2);
+        relayParams = params.toBytes(1);
     }
 
     /// @dev RENEW_SIGNAL: (uint256, bytes, bytes relayParams)

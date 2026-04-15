@@ -80,39 +80,23 @@ library MMActionAdapter {
 
     /**
      * @notice Prepares a COMMIT_SIGNAL action
-     * @dev Params are (bytes liquiditySignal, address owner)
+     * @dev Params are (bytes liquiditySignal, bytes relayParams)
      */
     function prepareCommit(bytes memory liquiditySignal) internal pure returns (PreparedAction memory) {
         return PreparedAction({
-            action: bytes1(uint8(MMActions.COMMIT_SIGNAL)),
-            params: abi.encode(liquiditySignal, ActionConstants.MSG_SENDER, bytes(""))
-        });
-    }
-
-    /**
-     * @notice Prepares a COMMIT_SIGNAL action with a specific owner
-     * @dev Params are (bytes liquiditySignal, address owner)
-     */
-    function prepareCommitWithOwner(bytes memory liquiditySignal, address owner)
-        internal
-        pure
-        returns (PreparedAction memory)
-    {
-        return PreparedAction({
-            action: bytes1(uint8(MMActions.COMMIT_SIGNAL)), params: abi.encode(liquiditySignal, owner, bytes(""))
+            action: bytes1(uint8(MMActions.COMMIT_SIGNAL)), params: abi.encode(liquiditySignal, bytes(""))
         });
     }
 
     function prepareCommitRelayed(
         bytes memory liquiditySignal,
-        address owner,
         uint256 deadline,
         uint256 authNonce,
         bytes memory authSig
     ) internal pure returns (PreparedAction memory) {
         bytes memory relayParams = abi.encode(deadline, authNonce, authSig);
         return PreparedAction({
-            action: bytes1(uint8(MMActions.COMMIT_SIGNAL)), params: abi.encode(liquiditySignal, owner, relayParams)
+            action: bytes1(uint8(MMActions.COMMIT_SIGNAL)), params: abi.encode(liquiditySignal, relayParams)
         });
     }
 

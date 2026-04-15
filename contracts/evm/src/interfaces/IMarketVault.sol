@@ -63,5 +63,7 @@ interface IMarketVault {
         external
         returns (BalanceDelta);
 
+    function increaseLiquidityReserve(Currency underlyingCurrency, uint256 amount) external;
+
     function decreaseLiquidityReserve(Currency underlyingCurrency, uint256 amount) external;
 }

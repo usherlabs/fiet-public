@@ -30,6 +30,21 @@ import {MMActionAdapter as MMA} from "./utils/MMActionAdapter.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {Errors} from "../src/libraries/Errors.sol";
 import {CustomRevert} from "@uniswap/v4-core/src/libraries/CustomRevert.sol";
+import {LiquidityHub} from "../src/LiquidityHub.sol";
+
+contract NativeQueueNonPayableRecipient {}
+
+contract NativeQueueCounterfactualDeployer {
+    function predict(bytes32 salt) external view returns (address predicted) {
+        bytes32 bytecodeHash = keccak256(type(NativeQueueNonPayableRecipient).creationCode);
+        bytes32 digest = keccak256(abi.encodePacked(bytes1(0xff), address(this), salt, bytecodeHash));
+        predicted = address(uint160(uint256(digest)));
+    }
+
+    function deploy(bytes32 salt) external returns (address deployed) {
+        deployed = address(new NativeQueueNonPayableRecipient{salt: salt}());
+    }
+}
 
 contract NativeETHMarket is MarketTestBase, MarketMakerTestBase {
     using SafeCast for *;
@@ -240,6 +255,50 @@ contract NativeETHMarket is MarketTestBase, MarketMakerTestBase {
         } catch (bytes memory data) {
             _assertWrappedReason(data, expectedReason);
         }
+    }
+
+    function test_canonicalVaultDeficit_nativeRecipientFallsBackToWethAfterCounterfactualDeployment() public {
+        NativeQueueCounterfactualDeployer deployer = new NativeQueueCounterfactualDeployer();
+        bytes32 salt = keccak256("native-canonical-deficit-counterfactual");
+        address recipient = deployer.predict(salt);
+
+        address canonical = mv.canonicalVault();
+        bytes32 marketId = mv.marketId();
+        uint256 amount = 7e18;
+
+        vm.prank(marketFactory);
+        LiquidityHub(payable(liquidityHub)).setBoundLevel(canonical, 1);
+
+        vm.prank(address(proxyHook));
+        LiquidityHub(payable(liquidityHub)).issue(address(lcc0), canonical, amount);
+
+        uint256 available = mv.inMarketBalanceOf(proxyPoolKey.currency0);
+        if (available > 0) {
+            vm.prank(address(proxyHook));
+            ICanonicalVault(canonical).decreaseLiquidityReserve(marketId, proxyPoolKey.currency0, available);
+        }
+
+        vm.prank(address(proxyHook));
+        ICanonicalVault(canonical).cancelLCCWithDeficit(marketId, address(lcc0), amount, recipient);
+        assertEq(LiquidityHub(payable(liquidityHub)).settleQueue(address(lcc0), recipient), amount);
+
+        uint256 reserveBefore = LiquidityHub(payable(liquidityHub)).reserveOfUnderlying(address(lcc0));
+        uint256 neededHubBalance = reserveBefore + amount;
+        if (address(liquidityHub).balance < neededHubBalance) {
+            vm.deal(liquidityHub, neededHubBalance);
+        }
+        vm.prank(address(proxyHook));
+        LiquidityHub(payable(liquidityHub)).confirmTake(address(lcc0), amount, false);
+
+        deployer.deploy(salt);
+        assertGt(recipient.code.length, 0, "recipient should now be non-payable contract");
+
+        address weth = address(LiquidityHub(payable(liquidityHub)).weth9());
+        LiquidityHub(payable(liquidityHub)).processSettlementFor(address(lcc0), recipient, amount);
+
+        assertEq(LiquidityHub(payable(liquidityHub)).settleQueue(address(lcc0), recipient), 0);
+        assertEq(IERC20(weth).balanceOf(recipient), amount);
+        assertEq(recipient.balance, 0);
     }
 
     function _stripSelector(bytes memory revertData) internal pure returns (bytes memory tail) {

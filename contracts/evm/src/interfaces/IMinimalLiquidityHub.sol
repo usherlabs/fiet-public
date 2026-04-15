@@ -16,6 +16,7 @@ interface IMinimalLiquidityHub {
     /**
      * @notice Endpoint-only: unwrap from `msg.sender`’s Hub/LCC balance and pay underlying to `to` (queue shortfall to `to`).
      * @dev Caller must be `BOUND_ENDPOINT` for this LCC’s market. Direct users should use `unwrap(...)`.
+     *      Immediate payout `to` must not be the Hub, `BOUND_EXEMPT`, or `BOUND_DEX` (see HUB-02B in INVARIANTS.md).
      */
     function unwrapTo(address lcc, address to, uint256 amount) external;
 
@@ -36,6 +37,7 @@ interface IMinimalLiquidityHub {
      *
      * @custom:constraints `queueTo` MUST NOT be `address(0)`; queueing to the zero address will strand the settlement.
      * @custom:constraints `queueTo` MAY equal `to` to match the behaviour of `unwrapTo(lcc, to, amount)`.
+     * @custom:constraints `to` MUST NOT be `address(0)`, the Hub, `BOUND_EXEMPT`, or `BOUND_DEX` (HUB-02B).
      */
     function unwrapTo(address lcc, address to, address queueTo, uint256 amount) external;
     /**
@@ -60,6 +62,7 @@ interface IMinimalLiquidityHub {
      *
      * @custom:constraints `queueTo` MUST NOT be `address(0)`; queueing to the zero address will strand the settlement.
      * @custom:constraints `queueTo` MAY equal `to` to match the behaviour of `unwrapTo(underlying, marketId, to, amount)`.
+     * @custom:constraints `to` MUST NOT be `address(0)`, the Hub, `BOUND_EXEMPT`, or `BOUND_DEX` (HUB-02B).
      */
     function unwrapTo(address underlying, bytes32 marketId, address to, address queueTo, uint256 amount) external;
 

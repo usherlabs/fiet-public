@@ -33,6 +33,7 @@ import {RFSCheckpoint} from "../../src/types/Checkpoint.sol";
 import {ILCC} from "../../src/interfaces/ILCC.sol";
 import {ILiquidityHub} from "../../src/interfaces/ILiquidityHub.sol";
 import {IMarketVault} from "../../src/interfaces/IMarketVault.sol";
+import {ICanonicalVault} from "../../src/interfaces/ICanonicalVault.sol";
 import {IMarketVaultDryBalanceDelta} from "../_helpers/IMarketVaultDryBalanceDelta.sol";
 import {IVRLSignalManager} from "../../src/interfaces/IVRLSignalManager.sol";
 import {LiquiditySignal} from "../../src/types/Commit.sol";
@@ -186,6 +187,11 @@ contract MMPositionManagerActionsTest is MarketTestBase, MarketMakerTestBase {
 
     function _walletLccSum(address account) internal view returns (uint256) {
         return Currency.wrap(address(lcc0)).balanceOf(account) + Currency.wrap(address(lcc1)).balanceOf(account);
+    }
+
+    function _marketReserveForLcc(bytes32 marketId, address lccToken) internal view returns (uint256) {
+        Currency underlyingCurrency = Currency.wrap(ILCC(lccToken).underlying());
+        return ICanonicalVault(canonicalVaultAddr).inMarketBalanceOf(marketId, underlyingCurrency);
     }
 
     function _primePositionForQueuedDecrease(uint256 tokenId, uint256 positionIndex, uint256 liquidityToDecrease)
@@ -1085,6 +1091,129 @@ contract MMPositionManagerActionsTest is MarketTestBase, MarketMakerTestBase {
             assertGe(exported0, imported0, "token0 import must be backed by token0 source export");
             assertGe(exported1, imported1, "token1 import must be backed by token1 source export");
         }
+    }
+
+    function test_settleFromDeltas_payerIsUserTrue_sameMarket_preservesDurableReserve() public {
+        uint256 positionIndex = 0;
+
+        (uint256 sourceTokenId,,,) = _setupCommittedPosition(
+            positionManager,
+            corePoolKey,
+            abi.encode(liquiditySignal),
+            defaultlLiquidityParams,
+            marketVTSConfiguration,
+            address(lcc0),
+            address(lcc1)
+        );
+        approveAndSettleUnderlyingToPosition(sourceTokenId, positionIndex, 1_000_000e18, 1_000_000e18);
+
+        (uint256 targetTokenId,,,) = _setupCommittedPosition(
+            positionManager,
+            corePoolKey,
+            abi.encode(renewSignal),
+            defaultlLiquidityParams,
+            marketVTSConfiguration,
+            address(lcc0),
+            address(lcc1)
+        );
+
+        (, PositionId targetPositionId) = positionManager.getPosition(targetTokenId, positionIndex);
+        (uint256 targetSettled0Before, uint256 targetSettled1Before) =
+            vtsOrchestrator.getPositionSettledAmounts(targetPositionId);
+        bytes32 coreMarketId = PoolId.unwrap(corePoolKey.toId());
+        uint256 reserve0Before = _marketReserveForLcc(coreMarketId, address(lcc0));
+        uint256 reserve1Before = _marketReserveForLcc(coreMarketId, address(lcc1));
+
+        MMA.PreparedAction[] memory actions = new MMA.PreparedAction[](2);
+        actions[0] = MMA.prepareDecrease(corePoolKey, sourceTokenId, positionIndex, 1_000);
+        actions[1] = MMA.prepareSettleFromDeltas(corePoolKey, targetTokenId, positionIndex, true, false);
+        MMA.executeWithUnlock(positionManager, actions, block.timestamp + 3600);
+
+        uint256 reserve0After = _marketReserveForLcc(coreMarketId, address(lcc0));
+        uint256 reserve1After = _marketReserveForLcc(coreMarketId, address(lcc1));
+        (uint256 targetSettled0After, uint256 targetSettled1After) =
+            vtsOrchestrator.getPositionSettledAmounts(targetPositionId);
+
+        assertGe(targetSettled0After, targetSettled0Before, "target settled0 should not decrease");
+        assertGe(targetSettled1After, targetSettled1Before, "target settled1 should not decrease");
+        assertEq(
+            reserve0After,
+            reserve0Before,
+            "same-market reserve0 should be neutral when exported credit is re-imported via protocol deposit"
+        );
+        assertEq(
+            reserve1After,
+            reserve1Before,
+            "same-market reserve1 should be neutral when exported credit is re-imported via protocol deposit"
+        );
+    }
+
+    function test_increaseFromDeltas_crossMarket_sameFactory_importsReserveOnDestinationMarket() public {
+        uint256 positionIndex = 0;
+
+        PoolKey memory sourcePoolKey = corePoolKey;
+
+        (uint256 sourceTokenId,,,) = _setupCommittedPosition(
+            positionManager,
+            sourcePoolKey,
+            abi.encode(liquiditySignal),
+            defaultlLiquidityParams,
+            marketVTSConfiguration,
+            address(lcc0),
+            address(lcc1)
+        );
+        approveAndSettleUnderlyingToPosition(sourceTokenId, positionIndex, 1_000_000e18, 1_000_000e18);
+
+        _createAndInitializeMarket(500, 60, SQRT_PRICE_1_1);
+        PoolKey memory destinationPoolKey = corePoolKey;
+        address[2] memory destinationLccPair =
+            IMarketFactory(marketFactory).corePoolToCurrencyPair(destinationPoolKey.toId());
+        MarketVTSConfiguration memory destinationCfg =
+            IVTSOrchestrator(vtsOrchestrator).getMarketVTSConfiguration(destinationPoolKey.toId());
+
+        (uint256 targetTokenId,,,) = _setupCommittedPosition(
+            positionManager,
+            destinationPoolKey,
+            abi.encode(renewSignal),
+            defaultlLiquidityParams,
+            destinationCfg,
+            destinationLccPair[0],
+            destinationLccPair[1]
+        );
+
+        (, PositionId targetPositionId) = positionManager.getPosition(targetTokenId, positionIndex);
+        bytes32 destinationMarketId = PoolId.unwrap(destinationPoolKey.toId());
+        uint256[2] memory targetSettledBefore;
+        uint256[2] memory reserveBefore;
+        (targetSettledBefore[0], targetSettledBefore[1]) = vtsOrchestrator.getPositionSettledAmounts(targetPositionId);
+        reserveBefore[0] = _marketReserveForLcc(destinationMarketId, destinationLccPair[0]);
+        reserveBefore[1] = _marketReserveForLcc(destinationMarketId, destinationLccPair[1]);
+
+        MMA.PreparedAction[] memory actions = new MMA.PreparedAction[](3);
+        actions[0] = MMA.prepareDecrease(sourcePoolKey, sourceTokenId, positionIndex, 1_000);
+        actions[1] = MMA.prepareIncreaseFromDeltas(destinationPoolKey, targetTokenId, positionIndex, true);
+        actions[2] = MMA.prepareSettleFromDeltas(sourcePoolKey, sourceTokenId, positionIndex, true, true);
+        MMA.executeWithUnlock(positionManager, actions, block.timestamp + 3600);
+
+        uint256[2] memory targetSettledAfter;
+        uint256[2] memory reserveAfter;
+        (targetSettledAfter[0], targetSettledAfter[1]) = vtsOrchestrator.getPositionSettledAmounts(targetPositionId);
+        reserveAfter[0] = _marketReserveForLcc(destinationMarketId, destinationLccPair[0]);
+        reserveAfter[1] = _marketReserveForLcc(destinationMarketId, destinationLccPair[1]);
+        uint256 imported0 = targetSettledAfter[0] - targetSettledBefore[0];
+        uint256 imported1 = targetSettledAfter[1] - targetSettledBefore[1];
+
+        assertGt(imported0 + imported1, 0, "cross-market increaseFromDeltas should import non-zero settled value");
+        assertEq(
+            reserveAfter[0] - reserveBefore[0],
+            imported0,
+            "destination reserve0 must increase by the settled amount imported via in-hook protocol credit"
+        );
+        assertEq(
+            reserveAfter[1] - reserveBefore[1],
+            imported1,
+            "destination reserve1 must increase by the settled amount imported via in-hook protocol credit"
+        );
     }
 
     function testFollowOnSettleFromDeltas_doesNotReduceSourceSettledTwice_afterDecreaseRoutesCreditElsewhere() public {

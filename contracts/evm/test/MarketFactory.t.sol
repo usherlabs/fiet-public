@@ -77,7 +77,7 @@ contract MarketFactoryTest is Test, Deployers {
         // Deploy LiquidityHub as `owner` so subsequent owner-only calls succeed
         vm.prank(owner);
         address payable liquidityHubAddress =
-            payable(address(new LiquidityHub(address(oracleHelperAddress), "Ether", "ETH", 18, owner)));
+            payable(address(new LiquidityHub(address(oracleHelperAddress), "Ether", "ETH", 18, address(0), owner)));
         liquidityHub = liquidityHubAddress;
 
         // Deploy VTSOrchestrator

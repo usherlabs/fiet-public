@@ -995,13 +995,13 @@ library VTSPositionLib {
     function _consumePositiveUnderlyingDeltaForSettlementLane(
         VTSStorage storage s,
         ProtocolCreditSettlementLaneParams memory p
-    ) private returns (int128 settlementDelta, int128 remainingRequiredSettlementDelta) {
+    ) private returns (int128 settlementDelta, int128 remainingRequiredSettlementDelta, uint256 settledIncrease) {
         remainingRequiredSettlementDelta = p.requiredSettlementDelta;
         if (p.currentUnderlyingDelta <= 0 || p.intendedSettle == 0) {
-            return (0, remainingRequiredSettlementDelta);
+            return (0, remainingRequiredSettlementDelta, 0);
         }
         if (p.clampToRequiredSettlement && p.requiredSettlementDelta >= 0) {
-            return (0, remainingRequiredSettlementDelta);
+            return (0, remainingRequiredSettlementDelta, 0);
         }
 
         uint256 availableCredit = LiquidityUtils.safeInt128ToUint256(p.currentUnderlyingDelta);
@@ -1012,19 +1012,22 @@ library VTSPositionLib {
             if (requestedAmount > requiredAmount) requestedAmount = requiredAmount;
         }
         if (p.isSeizing) {
-            if (p.rfsDelta <= 0) return (0, remainingRequiredSettlementDelta);
+            if (p.rfsDelta <= 0) return (0, remainingRequiredSettlementDelta, 0);
             uint256 maxSeizingDeposit = LiquidityUtils.safeInt128ToUint256(p.rfsDelta);
             if (requestedAmount > maxSeizingDeposit) requestedAmount = maxSeizingDeposit;
         }
-        if (requestedAmount == 0) return (0, remainingRequiredSettlementDelta);
+        if (requestedAmount == 0) return (0, remainingRequiredSettlementDelta, 0);
 
         (int256 totalApplied, int256 settledDeltaOnly) =
             _vUpdateSettlement(s, p.positionId, p.tokenIndex, requestedAmount.toInt256());
-        if (totalApplied <= 0) return (0, remainingRequiredSettlementDelta);
+        if (totalApplied <= 0) return (0, remainingRequiredSettlementDelta, 0);
 
         uint256 creditConsumed = uint256(totalApplied);
         OwnerCurrencyDelta.accountDelta(p.underlyingCurrency, -creditConsumed.toInt128(), p.owner);
         settlementDelta = -creditConsumed.toInt128();
+        if (settledDeltaOnly > 0) {
+            settledIncrease = uint256(settledDeltaOnly);
+        }
         if (p.clampToRequiredSettlement) {
             // MM in-hook backing: only the portion that increases `pa.settled` satisfies the deposit requirement.
             // Deficit / commitment-deficit cure consumes credit but must not over-clear `requiredSettlementDelta`.
@@ -1041,7 +1044,7 @@ library VTSPositionLib {
     {
         BalanceDelta currentUnderlying =
             OwnerCurrencyDelta.getUnderlyingDeltaPair(p.owner, p.lccCurrency0, p.lccCurrency1);
-        (int128 settle0, int128 remaining0) = _consumePositiveUnderlyingDeltaForSettlementLane(
+        (int128 settle0, int128 remaining0, uint256 settledIncrease0) = _consumePositiveUnderlyingDeltaForSettlementLane(
             s,
             ProtocolCreditSettlementLaneParams({
                 positionId: p.positionId,
@@ -1056,7 +1059,7 @@ library VTSPositionLib {
                 isSeizing: p.isSeizing
             })
         );
-        (int128 settle1, int128 remaining1) = _consumePositiveUnderlyingDeltaForSettlementLane(
+        (int128 settle1, int128 remaining1, uint256 settledIncrease1) = _consumePositiveUnderlyingDeltaForSettlementLane(
             s,
             ProtocolCreditSettlementLaneParams({
                 positionId: p.positionId,
@@ -1088,6 +1091,14 @@ library VTSPositionLib {
                 OwnerCurrencyDelta.lccToUnderlyingCurrency(p.lccCurrency1),
                 LiquidityUtils.safeInt128ToUint256(settle1)
             );
+        }
+        if (settledIncrease0 > 0) {
+            p.marketVault
+                .increaseLiquidityReserve(OwnerCurrencyDelta.lccToUnderlyingCurrency(p.lccCurrency0), settledIncrease0);
+        }
+        if (settledIncrease1 > 0) {
+            p.marketVault
+                .increaseLiquidityReserve(OwnerCurrencyDelta.lccToUnderlyingCurrency(p.lccCurrency1), settledIncrease1);
         }
     }
 

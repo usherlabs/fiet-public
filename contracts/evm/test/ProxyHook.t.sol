@@ -65,9 +65,72 @@ contract UnwrapInUnlockRunner {
     }
 }
 
+contract ProxyHookNativeQueueNonPayableRecipient {}
+
+contract ProxyHookNativeQueueCounterfactualDeployer {
+    function predict(bytes32 salt) external view returns (address predicted) {
+        bytes32 bytecodeHash = keccak256(type(ProxyHookNativeQueueNonPayableRecipient).creationCode);
+        bytes32 digest = keccak256(abi.encodePacked(bytes1(0xff), address(this), salt, bytecodeHash));
+        predicted = address(uint160(uint256(digest)));
+    }
+
+    function deploy(bytes32 salt) external returns (address deployed) {
+        deployed = address(new ProxyHookNativeQueueNonPayableRecipient{salt: salt}());
+    }
+}
+
 contract ProxyHookTest is MarketVaultBase {
     using PoolIdLibrary for PoolId;
     using CurrencyLibrary for Currency;
+
+    function test_nativeDeficitQueueCounterfactualRecipient_settlesViaWethFallback() public {
+        address lccNative;
+        address lccErc20;
+        vm.startPrank(marketFactory);
+        address[] memory issuers = new address[](1);
+        issuers[0] = address(proxyHook);
+        (lccNative, lccErc20) = LiquidityHub(payable(liquidityHub))
+            .createLCCPair(
+                abi.encodePacked(address(0xD201)),
+                address(0),
+                Currency.unwrap(proxyPoolKey.currency1),
+                "Proxy Native Queue Market",
+                issuers
+            );
+        LiquidityHub(payable(liquidityHub))
+            .initialize(lccNative, lccErc20, bytes32("proxyNativeQueueMarket"), abi.encodePacked(address(0xD201)));
+        vm.stopPrank();
+
+        ProxyHookNativeQueueCounterfactualDeployer deployer = new ProxyHookNativeQueueCounterfactualDeployer();
+        bytes32 salt = keccak256("proxy-native-counterfactual");
+        address recipient = deployer.predict(salt);
+        uint256 amount = 8e18;
+
+        vm.prank(address(proxyHook));
+        LiquidityHub(payable(liquidityHub)).issue(lccNative, address(proxyHook), amount);
+        vm.prank(address(proxyHook));
+        IERC20Minimal(lccNative).transfer(recipient, amount);
+        vm.prank(address(proxyHook));
+        LiquidityHub(payable(liquidityHub)).queueForTransferRecipient(lccNative, recipient, amount);
+
+        uint256 reserveBefore = LiquidityHub(payable(liquidityHub)).reserveOfUnderlying(lccNative);
+        uint256 neededHubBalance = reserveBefore + amount;
+        if (address(liquidityHub).balance < neededHubBalance) {
+            vm.deal(liquidityHub, neededHubBalance);
+        }
+        vm.prank(address(proxyHook));
+        LiquidityHub(payable(liquidityHub)).confirmTake(lccNative, amount, false);
+
+        deployer.deploy(salt);
+        assertGt(recipient.code.length, 0, "recipient should now be non-payable contract");
+
+        address weth = address(LiquidityHub(payable(liquidityHub)).weth9());
+        LiquidityHub(payable(liquidityHub)).processSettlementFor(lccNative, recipient, amount);
+
+        assertEq(LiquidityHub(payable(liquidityHub)).settleQueue(lccNative, recipient), 0);
+        assertEq(IERC20Minimal(weth).balanceOf(recipient), amount);
+        assertEq(recipient.balance, 0);
+    }
 
     function test_activate_revertsIfNotFactory_onFreshProxyHook() public {
         ProxyHookHarness fresh = new ProxyHookHarness(address(manager), address(marketFactory));

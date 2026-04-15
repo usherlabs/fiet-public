@@ -10,6 +10,8 @@ import {ILCC} from "../../src/interfaces/ILCC.sol";
 import {MockERC20} from "../_mocks/MockERC20.sol";
 import {Errors} from "../../src/libraries/Errors.sol";
 import {Bounds} from "../../src/libraries/Bounds.sol";
+import {WETH} from "@uniswap/v4-core/lib/solmate/src/tokens/WETH.sol";
+import {IWETH9} from "v4-periphery/src/interfaces/external/IWETH9.sol";
 
 /**
  * @title LiquidityHubTestBase
@@ -21,6 +23,7 @@ abstract contract LiquidityHubTestBase is Test {
     OracleHelper public oracleHelper;
     IResilientOracle public resilientOracle;
     IMarketFactory public mockMarketFactory;
+    IWETH9 public weth9;
 
     MockERC20 public underlyingAsset1;
     MockERC20 public underlyingAsset2;
@@ -47,9 +50,10 @@ abstract contract LiquidityHubTestBase is Test {
         // Deploy mock oracle
         resilientOracle = IResilientOracle(makeAddr("ResilientOracle"));
         oracleHelper = new OracleHelper(address(resilientOracle), address(this));
+        weth9 = IWETH9(address(new WETH()));
 
         // Deploy LiquidityHub
-        liquidityHub = new LiquidityHub(address(oracleHelper), "Ethereum", "ETH", 18, address(this));
+        liquidityHub = new LiquidityHub(address(oracleHelper), "Ethereum", "ETH", 18, address(weth9), address(this));
 
         // Deploy mock underlying assets
         underlyingAsset1 = new MockERC20("Token1", "TK1", 18);

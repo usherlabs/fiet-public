@@ -525,13 +525,6 @@ contract MarketFactory is IMarketFactory, Ownable, ImmutableState, ImmutableVTSS
         return _proxyHookToCurrencyPair[proxyHook];
     }
 
-    /// @inheritdoc IMarketFactory
-    function isCanonicalVault(address vault) external view returns (bool) {
-        if (vault == address(0)) return false;
-        if (canonicalVault == address(0)) return false;
-        return canonicalVault == vault;
-    }
-
     function isMarketFacade(bytes32 marketId, address facade) external view returns (bool) {
         if (facade == address(0)) return false;
         PoolId corePoolId = PoolId.wrap(marketId);

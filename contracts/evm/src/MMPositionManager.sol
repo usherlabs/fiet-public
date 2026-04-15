@@ -218,9 +218,9 @@ contract MMPositionManager is
     /// @param params The encoded parameters for the action
     function _handleCommitmentAction(uint256 action, bytes calldata params) internal {
         if (action == MMActions.COMMIT_SIGNAL) {
-            (bytes calldata liquiditySignal, address owner, bytes calldata relayParams) =
-                params.decodeCommitSignalParams();
-            _commitSignal(liquiditySignal, _mapRecipient(owner), relayParams);
+            (bytes calldata liquiditySignal, bytes calldata relayParams) = params.decodeCommitSignalParams();
+            // Commitment NFT is always minted to the locker; custody separation uses ERC-721 transfer after the batch.
+            _commitSignal(liquiditySignal, msgSender(), relayParams);
             return;
         }
         if (action == MMActions.RENEW_SIGNAL) {
@@ -256,7 +256,7 @@ contract MMPositionManager is
 
     /// @notice Commits a liquidity signal and mints a commitment NFT
     /// @param liquiditySignal The ABI-encoded LiquiditySignal to verify and record
-    /// @param owner The address to receive the commitment NFT
+    /// @param owner The locker (`msgSender()`); commitment NFT is minted to this address
     /// @return tokenId The commitment NFT id created
     function _commitSignal(bytes calldata liquiditySignal, address owner, bytes calldata relayParams)
         internal
@@ -354,10 +354,11 @@ contract MMPositionManager is
         }
         if (action == MMActions.UNWRAP_LCC) {
             (address lccAddr, uint256 amount, address recipient, bool payerIsUser) = params.decodeUnwrapLccParams();
+            address to = _resolveStrictRecipient(recipient);
             if (payerIsUser) {
-                _unwrapLccFromUser(lccAddr, _mapRecipient(recipient), amount);
+                _unwrapLccFromUser(lccAddr, to, amount);
             } else {
-                _unwrapLccFromDeltas(lccAddr, _mapRecipient(recipient), amount);
+                _unwrapLccFromDeltas(lccAddr, to, amount);
             }
             return;
         }
@@ -382,6 +383,15 @@ contract MMPositionManager is
             return;
         }
         revert Errors.UnsupportedAction(action);
+    }
+
+    /// @dev UNWRAP_LCC payout may only go to the locker or MMPM; arbitrary third-party recipients are disallowed.
+    function _resolveStrictRecipient(address recipient) internal view returns (address) {
+        address to = _mapRecipient(recipient);
+        if (to != msgSender() && to != address(this)) {
+            revert Errors.NotApproved(to);
+        }
+        return to;
     }
 
     /// @notice Unwraps LCC tokens to underlying asset using deltas (locker credit)

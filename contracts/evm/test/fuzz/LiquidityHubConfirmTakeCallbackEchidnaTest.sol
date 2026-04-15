@@ -89,7 +89,7 @@ contract LiquidityHubConfirmTakeCallbackEchidnaTest {
         _deployLinkedLib();
 
         MockOracleHelper oracleHelper = new MockOracleHelper(address(0xB0B));
-        hub = new LiquidityHub(address(oracleHelper), "Ether", "ETH", 18, address(this));
+        hub = new LiquidityHub(address(oracleHelper), "Ether", "ETH", 18, address(0), address(this));
 
         // Factory + issuer setup.
         hub.setFactory(address(this), true);

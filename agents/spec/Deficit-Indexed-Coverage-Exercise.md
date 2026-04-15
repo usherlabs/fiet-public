@@ -18,7 +18,7 @@ That model is mathematically correct **if** the coverage event you are attributi
 However, in Fiet’s economic design:
 
 - **Deficit** is the liability created at swap time (the pool paid out, settled lagged).
-- **Coverage** is the *exercise* of that liability at *realisation time* (when LCC unwrap consumes market liquidity via `useMarketLiquidity()`).
+- **Coverage** is the _exercise_ of that liability at _realisation time_ (when LCC unwrap consumes market liquidity via `useMarketLiquidity()`).
 
 If we update \(G^{\mathrm{cov}}\) only at unwrap time, tick‑indexed accounting necessarily shifts payer attribution to **who is in‑range at unwrap time**, rather than to **who created the deficit during swaps**. This document proposes a design update that preserves realisation‑time semantics while restoring swap‑time attribution.
 
@@ -45,9 +45,9 @@ This is analogous to an interest index:
 
 For a pool \(p\) and token \(k \in \{0,1\}\):
 
-- \(D_{i,k}\): outstanding deficit principal for position \(i\) in raw token units (already tracked as `cumulativeDeficit`).
-- \(D^{\Sigma}*{p,k} = \sum_i D*{i,k}\): pool‑wide outstanding deficit principal (new aggregate).
-- \(U_{p,k}\): a realised coverage event amount in raw token units (at unwrap time; “market liquidity used”).
+- \(D\_{i,k}\): outstanding deficit principal for position \(i\) in raw token units (already tracked as `cumulativeDeficit`).
+- \(D^{\Sigma}_{p,k} = \sum_i D_{i,k}\): pool‑wide outstanding deficit principal (new aggregate).
+- \(U\_{p,k}\): a realised coverage event amount in raw token units (at unwrap time; “market liquidity used”).
 
 We will use Q128 indexing (same scaling as existing growth):
 
@@ -62,24 +62,24 @@ For each pool \(p\), token \(k\):
 - **Outstanding deficit aggregate**:
 
 \[
-D^{\Sigma}_{p,k} \in \mathbb{N}
+D^{\Sigma}\_{p,k} \in \mathbb{N}
 \]
 
 - **Coverage‑per‑deficit index** (Q128):
 
 \[
-J_{p,k} \in \mathbb{N}
+J\_{p,k} \in \mathbb{N}
 \]
 
-Interpretation: if a position has deficit principal \(D_{i,k}\), then the cumulative “assigned coverage” (raw units) implied by the index is approximately:
+Interpretation: if a position has deficit principal \(D\_{i,k}\), then the cumulative “assigned coverage” (raw units) implied by the index is approximately:
 
 \[
-\mathrm{assignedCov}*{i,k} \approx \left\lfloor \frac{D*{i,k} \cdot J_{p,k}}{Q128} \right\rfloor
+\mathrm{assignedCov}_{i,k} \approx \left\lfloor \frac{D_{i,k} \cdot J\_{p,k}}{Q128} \right\rfloor
 \]
 
 Optionally:
 
-- **Deferred coverage residual** \(R^{\mathrm{cov}}*{p,k}\) (raw units), used when \(D^{\Sigma}*{p,k} = 0\) at exercise time.
+- **Deferred coverage residual** \(R^{\mathrm{cov}}_{p,k}\) (raw units), used when \(D^{\Sigma}_{p,k} = 0\) at exercise time.
 
 #### Position‑level
 
@@ -88,7 +88,7 @@ For each position \(i\), token \(k\):
 - **Coverage index checkpoint**:
 
 \[
-j_{i,k} \in \mathbb{N}
+j\_{i,k} \in \mathbb{N}
 \]
 
 This is the per‑position snapshot of the pool index at the last time we reconciled coverage for the position.
@@ -97,44 +97,54 @@ This is the per‑position snapshot of the pool index at the last time we reconc
 
 #### 1) Deficit principal accounting (already exists; add pool aggregate)
 
-Positions already maintain \(D_{i,k}\) via settlement logic (deficit accrual vs inflow netting).
+Positions already maintain \(D\_{i,k}\) via settlement logic (deficit accrual vs inflow netting).
 
-We additionally maintain \(D^{\Sigma}*{p,k}\) by mirroring changes to \(D*{i,k}\):
+We additionally maintain \(D^{\Sigma}_{p,k}\) by mirroring changes to \(D_{i,k}\):
 
 - When a position’s deficit increases by \(\Delta D > 0\):
 
 \[
-D^{\Sigma}*{p,k} \leftarrow D^{\Sigma}*{p,k} + \Delta D
+D^{\Sigma}_{p,k} \leftarrow D^{\Sigma}_{p,k} + \Delta D
 \]
 
 - When a position’s deficit decreases by \(\Delta D > 0\) (due to inflow or direct settlement netting deficit):
 
 \[
-D^{\Sigma}*{p,k} \leftarrow D^{\Sigma}*{p,k} - \Delta D
+D^{\Sigma}_{p,k} \leftarrow D^{\Sigma}_{p,k} - \Delta D
 \]
 
-This ensures \(D^{\Sigma}_{p,k}\) always tracks total outstanding principal.
+This ensures \(D^{\Sigma}\_{p,k}\) always tracks total outstanding principal.
 
 #### 2) Coverage exercise at unwrap time (new)
 
-When LCC unwrap consumes market liquidity, we observe a realised coverage amount \(U_{p,k}\) (raw units) for token \(k\).
+When LCC unwrap consumes market liquidity, we observe a realised coverage amount \(U\_{p,k}\) (raw units) for token \(k\).
 
-If \(D^{\Sigma}_{p,k} > 0\), compute an index increment:
+Important boundary (15th April 2026):
+
+- \(U\_{p,k}\) is measured only from the unwrap-time consumption of already-live market liquidity (currently
+  `MarketFactory.useMarketLiquidity()` -> `incrementCoverage(...)`).
+- If the unwrap cannot be fully served and the remainder is queued, that queued remainder is **not** itself a coverage
+  event.
+- Later queue fulfilment (for example token-in driven vault-to-Hub settlement such as
+  `_settleObligationsForLCC(...)` / `confirmTake(...)`) is reserve replenishment and debt service, not retroactive
+  expansion of the original \(U\_{p,k}\).
+
+If \(D^{\Sigma}\_{p,k} > 0\), compute an index increment:
 
 \[
-\Delta J_{p,k} = \left\lfloor \frac{U_{p,k} \cdot Q128}{D^{\Sigma}_{p,k}} \right\rfloor
+\Delta J*{p,k} = \left\lfloor \frac{U*{p,k} \cdot Q128}{D^{\Sigma}\_{p,k}} \right\rfloor
 \]
 
 Then:
 
 \[
-J_{p,k} \leftarrow J_{p,k} + \Delta J_{p,k}
+J*{p,k} \leftarrow J*{p,k} + \Delta J\_{p,k}
 \]
 
-If \(D^{\Sigma}_{p,k} = 0\), we cannot distribute (no principal exists). We defer:
+If \(D^{\Sigma}\_{p,k} = 0\), we cannot distribute (no principal exists). We defer:
 
 \[
-R^{\mathrm{cov}}*{p,k} \leftarrow R^{\mathrm{cov}}*{p,k} + U_{p,k}
+R^{\mathrm{cov}}_{p,k} \leftarrow R^{\mathrm{cov}}_{p,k} + U\_{p,k}
 \]
 
 and distribute the residual later when principal becomes non‑zero (see “residual handling”).
@@ -143,22 +153,22 @@ and distribute the residual later when principal becomes non‑zero (see “resi
 
 Whenever we “settle coverage” for a position \(i\):
 
-Let \(\Delta j_{i,k} = J_{p,k} - j_{i,k}\).
+Let \(\Delta j*{i,k} = J*{p,k} - j\_{i,k}\).
 
-Define the position’s *newly assigned coverage* (raw units) as:
+Define the position’s _newly assigned coverage_ (raw units) as:
 
 \[
-\mathrm{cov}*{i,k} =
-\left\lfloor \frac{D*{i,k} \cdot \Delta j_{i,k}}{Q128} \right\rfloor
+\mathrm{cov}_{i,k} =
+\left\lfloor \frac{D_{i,k} \cdot \Delta j\_{i,k}}{Q128} \right\rfloor
 \]
 
 Then checkpoint:
 
 \[
-j_{i,k} \leftarrow J_{p,k}
+j*{i,k} \leftarrow J*{p,k}
 \]
 
-This \(\mathrm{cov}_{i,k}\) is then fed into the existing fee‑burn logic (see below), which already clamps to the realised “exercisable” region (deficit + settled).
+This \(\mathrm{cov}\_{i,k}\) is then fed into the existing fee‑burn logic (see below), which already clamps to the realised “exercisable” region (deficit + settled).
 
 ### Integration with the existing fee‑burn model
 
@@ -167,13 +177,13 @@ The prior spec defines fee burning on “exercised deficits” as:
 - Effective coverage clamp:
 
 \[
-c_{\mathrm{eff}} = \min(\mathrm{cov}*{i,k},\; D*{i,k} + S_{i,k})
+c*{\mathrm{eff}} = \min(\mathrm{cov}*{i,k},\; D*{i,k} + S*{i,k})
 \]
 
 - Exercised deficit amount (burn base):
 
 \[
-\mathrm{burnBase}*{i,k} = \min(c*{\mathrm{eff}},\; D_{i,k})
+\mathrm{burnBase}_{i,k} = \min(c_{\mathrm{eff}},\; D\_{i,k})
 \]
 
 Then a burn of fees accrued since last fee checkpoint:
@@ -187,18 +197,18 @@ Then a burn of fees accrued since last fee checkpoint:
 
 where \(\mathrm{ofDelta}\) is the outflow window normaliser, and \(\mathrm{bps}\) is `coverageFeeShare`.
 
-**DICE does not change this formula.** It changes only how \(\mathrm{cov}_{i,k}\) is computed:
+**DICE does not change this formula.** It changes only how \(\mathrm{cov}\_{i,k}\) is computed:
 
 - Old: \(\mathrm{cov}\) derived from tick‑indexed \(G^{\mathrm{cov}}\) and liquidity.
 - New: \(\mathrm{cov}\) derived from deficit‑indexed \(J\) and deficit principal.
 
 ### Ordering constraints (critical for correctness)
 
-Because \(\mathrm{cov}*{i,k}\) depends on current \(D*{i,k}\), we must ensure we do not mutate \(D_{i,k}\) (netting/repayment) in a way that “skips” already‑exercised coverage.
+Because \(\mathrm{cov}_{i,k}\) depends on current \(D_{i,k}\), we must ensure we do not mutate \(D\_{i,k}\) (netting/repayment) in a way that “skips” already‑exercised coverage.
 
 Required invariant:
 
-- **Before decreasing a position’s deficit principal \(D_{i,k}\), the position must be reconciled up to the current index \(J_{p,k}\)** (i.e. apply and checkpoint \(\Delta j\) first).
+- **Before decreasing a position’s deficit principal \(D*{i,k}\), the position must be reconciled up to the current index \(J*{p,k}\)** (i.e. apply and checkpoint \(\Delta j\) first).
 
 Otherwise, the position would reduce its principal and thereby evade coverage that was exercised while it still had that principal outstanding.
 
@@ -212,20 +222,20 @@ Practically, this means:
 
 Residuals arise when coverage is exercised but there is no outstanding deficit principal at the pool at that moment.
 
-We maintain \(R^{\mathrm{cov}}_{p,k}\) and apply it when principal becomes available:
+We maintain \(R^{\mathrm{cov}}\_{p,k}\) and apply it when principal becomes available:
 
-When \(D^{\Sigma}*{p,k}\) transitions from 0 to >0 (or on any event where \(D^{\Sigma}*{p,k} > 0\) and \(R^{\mathrm{cov}}_{p,k} > 0\)), we can “flush”:
+When \(D^{\Sigma}_{p,k}\) transitions from 0 to >0 (or on any event where \(D^{\Sigma}_{p,k} > 0\) and \(R^{\mathrm{cov}}\_{p,k} > 0\)), we can “flush”:
 
 \[
-\Delta J_{p,k}^{\mathrm{res}} =
-\left\lfloor \frac{R^{\mathrm{cov}}*{p,k} \cdot Q128}{D^{\Sigma}*{p,k}} \right\rfloor
+\Delta J\_{p,k}^{\mathrm{res}} =
+\left\lfloor \frac{R^{\mathrm{cov}}_{p,k} \cdot Q128}{D^{\Sigma}_{p,k}} \right\rfloor
 \]
 
 then:
 
 \[
-J_{p,k} \leftarrow J_{p,k} + \Delta J_{p,k}^{\mathrm{res}},\quad
-R^{\mathrm{cov}}_{p,k} \leftarrow 0
+J*{p,k} \leftarrow J*{p,k} + \Delta J*{p,k}^{\mathrm{res}},\quad
+R^{\mathrm{cov}}*{p,k} \leftarrow 0
 \]
 
 This mirrors the existing “coverageResidual applied when liquidity becomes active” idea, but with “deficit principal becomes active” rather than “tick liquidity becomes active”.
@@ -248,9 +258,9 @@ Coverage allocation no longer depends on current tick. If a position has outstan
 
 Assume token \(k\) and three positions with outstanding deficits:
 
-- \(D_{1} = 60\)
-- \(D_{2} = 30\)
-- \(D_{3} = 10\)
+- \(D\_{1} = 60\)
+- \(D\_{2} = 30\)
+- \(D\_{3} = 10\)
 
 Then:
 
@@ -267,18 +277,18 @@ An unwrap consumes market liquidity \(U = 25\). Then:
 Each position’s assigned coverage (if \(j_i\) was at the prior index) is:
 
 \[
-\mathrm{cov}_1 = \left\lfloor 60 \cdot 0.25 \right\rfloor = 15
+\mathrm{cov}\_1 = \left\lfloor 60 \cdot 0.25 \right\rfloor = 15
 \]
 \[
-\mathrm{cov}_2 = \left\lfloor 30 \cdot 0.25 \right\rfloor = 7
+\mathrm{cov}\_2 = \left\lfloor 30 \cdot 0.25 \right\rfloor = 7
 \]
 \[
-\mathrm{cov}_3 = \left\lfloor 10 \cdot 0.25 \right\rfloor = 2
+\mathrm{cov}\_3 = \left\lfloor 10 \cdot 0.25 \right\rfloor = 2
 \]
 
 Total is 24 due to flooring; the rounding remainder stays implicit (standard with integer indices).
 
-Then the existing burn logic applies \(\mathrm{burnBase}_i = \min(\mathrm{cov}_i, D_i)\) etc.
+Then the existing burn logic applies \(\mathrm{burnBase}\_i = \min(\mathrm{cov}\_i, D_i)\) etc.
 
 ### Interaction with bonus mechanics
 
@@ -291,15 +301,15 @@ This update replaces only the “coverage usage growth” stream. Deficit and in
 Recommended migration approach:
 
 - Keep the existing \(G^{\mathrm{cov}}\), \(O^{\mathrm{cov}}\), \(S^{\mathrm{cov}}\) fields for a short transition window (or deprecate immediately if safe).
-- Introduce \(D^{\Sigma}\), \(J\), \(R^{\mathrm{cov}}\), and per‑position \(j_{i,k}\).
+- Introduce \(D^{\Sigma}\), \(J\), \(R^{\mathrm{cov}}\), and per‑position \(j\_{i,k}\).
 - Ensure all flows that:
   - mutate `cumulativeDeficit`, and/or
   - apply coverage burn
-  use the new index settlement.
+    use the new index settlement.
 
 If a hard migration is required mid‑deployment, you will need a one‑time initialisation:
 
-- Set \(j_{i,k} \leftarrow J_{p,k}\) for all positions (not feasible on‑chain without iteration), or
+- Set \(j*{i,k} \leftarrow J*{p,k}\) for all positions (not feasible on‑chain without iteration), or
 - Gate the new behaviour to “new positions only” (not ideal), or
 - Provide an off‑chain snapshot and per‑position initialisation via user actions (position touch) over time.
 
@@ -309,6 +319,8 @@ This document is a design update, not an implementation diff, but it maps cleanl
 
 - **Realisation time**: `MarketFactory.useMarketLiquidity()` already computes market liquidity used and calls `VTSOrchestrator.incrementCoverage(...)`.
   - That hook is the natural place to update \(J\) (instead of \(G^{\mathrm{cov}}\)).
+  - Queue-clearing paths such as vault-to-Hub obligation settlement are intentionally outside this measurement boundary:
+    they fulfil previously queued debt but do not re-open the original coverage event.
 
 - **Deficit principal**: `PositionAccounting.cumulativeDeficit` already exists.
   - You add \(D^{\Sigma}\) updates wherever `cumulativeDeficit` changes.
@@ -318,7 +330,7 @@ This document is a design update, not an implementation diff, but it maps cleanl
 
 ### Edge cases and safeguards
 
-- **Dust and rounding**: integer division means \(\sum_i \mathrm{cov}*{i,k}\) may be less than \(U*{p,k}\) by a small amount. This is standard for index schemes; you can optionally carry a per‑pool remainder accumulator if exact conservation is required.
+- **Dust and rounding**: integer division means \(\sum_i \mathrm{cov}_{i,k}\) may be less than \(U_{p,k}\) by a small amount. This is standard for index schemes; you can optionally carry a per‑pool remainder accumulator if exact conservation is required.
 
 - **Denominator zero**: handled via residual \(R^{\mathrm{cov}}\).
 
@@ -385,7 +397,7 @@ The residual-burn path should now be understood as follows:
 5. When the residual burn is fully exhausted, both:
    - `pendingResidualBurnOutflowsFloor`, and
    - the matching `pendingResidualFeeBacking`
-   are cleared.
+     are cleared.
 
 #### Rationale
 

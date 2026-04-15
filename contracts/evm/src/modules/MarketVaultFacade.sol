@@ -226,6 +226,10 @@ abstract contract MarketVaultFacade is IMarketVault, ImmutableMarketState, Reent
         _decreaseLiquidityReserve(underlyingCurrency, amount);
     }
 
+    function increaseLiquidityReserve(Currency underlyingCurrency, uint256 amount) external onlyVTS {
+        _increaseLiquidityReserve(underlyingCurrency, amount);
+    }
+
     function _coreUnderlying() internal view returns (Currency currency0, Currency currency1) {
         (ILCC lcc0, ILCC lcc1) = _lccs();
         currency0 = Currency.wrap(lcc0.underlying());

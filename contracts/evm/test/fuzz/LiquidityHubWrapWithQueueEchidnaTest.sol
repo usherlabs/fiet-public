@@ -76,7 +76,7 @@ contract LiquidityHubWrapWithQueueEchidnaTest {
         _deployLinkedLib();
 
         MockOracleHelper oracleHelper = new MockOracleHelper(address(0xB0B));
-        hub = new LiquidityHub(address(oracleHelper), "Ether", "ETH", 18, address(this));
+        hub = new LiquidityHub(address(oracleHelper), "Ether", "ETH", 18, address(0), address(this));
 
         hub.setFactory(address(this), true);
         // Allow LCC transfers into the Hub (needed for wrapWith which pulls backing LCC via transferFrom).

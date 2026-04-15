@@ -69,7 +69,7 @@ contract LCC02 {
         EchidnaLinkedLibs.deployLiquidityHubLinkedLib();
 
         MockOracleHelper oracleHelper = new MockOracleHelper(address(0));
-        hub = new LiquidityHub(address(oracleHelper), "Ether", "ETH", 18, address(this));
+        hub = new LiquidityHub(address(oracleHelper), "Ether", "ETH", 18, address(0), address(this));
         hub.setFactory(address(this), true);
         hub.setBoundLevel(address(hub), Bounds.BOUND_EXEMPT);
 

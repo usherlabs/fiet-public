@@ -68,7 +68,7 @@ contract HUB04 {
         EchidnaLinkedLibs.deployLiquidityHubLinkedLib();
 
         MockOracleHelper oracleHelper = new MockOracleHelper(address(0));
-        hub = new LiquidityHub(address(oracleHelper), "Ether", "ETH", 18, address(this));
+        hub = new LiquidityHub(address(oracleHelper), "Ether", "ETH", 18, address(0), address(this));
 
         // Register two factory addresses.
         hub.setFactory(address(this), true);
