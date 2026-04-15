@@ -125,7 +125,7 @@ Important boundary (15th April 2026):
   `MarketFactory.useMarketLiquidity()` -> `incrementCoverage(...)`).
 - If the unwrap cannot be fully served and the remainder is queued, that queued remainder is **not** itself a coverage
   event.
-- Later queue fulfilment (for example token-in driven vault-to-Hub settlement such as
+- Later queue fulfilment (for example token-in-driven vault-to-Hub settlement such as
   `_settleObligationsForLCC(...)` / `confirmTake(...)`) is reserve replenishment and debt service, not retroactive
   expansion of the original \(U\_{p,k}\).
 

@@ -115,6 +115,83 @@ contract VTSPositionLibTest_VaultNoop is IMarketVault {
     function increaseLiquidityReserve(Currency, uint256) external pure {}
 }
 
+/// @dev Like `VTSPositionLibTest_VaultNoop` but records the last `increaseLiquidityReserve` call for assertions.
+contract VTSPositionLibTest_VaultReserveSpy is IMarketVault {
+    address internal immutable canonical = address(new VTSPositionLibTest_CanonicalVaultRef(address(this)));
+
+    Currency public lastIncreaseCurrency;
+    uint256 public lastIncreaseAmount;
+    uint256 public increaseReserveCalls;
+
+    function marketId() external pure returns (bytes32) {
+        return bytes32(0);
+    }
+
+    function canonicalVault() external view returns (address) {
+        return canonical;
+    }
+
+    function lccs() external pure returns (address, address) {
+        return (address(0), address(0));
+    }
+
+    function inMarketBalanceOf(Currency) external pure returns (uint256) {
+        return 0;
+    }
+
+    function modifyLiquidities(BalanceDelta) external pure {}
+
+    function modifyLiquidities(VaultSettlementIntent calldata) external pure {}
+
+    function tryModifyLiquidities(BalanceDelta balanceDelta) external pure returns (BalanceDelta) {
+        return balanceDelta;
+    }
+
+    function tryModifyLiquidities(VaultSettlementIntent calldata settlementIntent)
+        external
+        pure
+        returns (BalanceDelta)
+    {
+        return settlementIntent.requestedDelta;
+    }
+
+    function tryModifyLiquiditiesWithRecipient(BalanceDelta balanceDelta, address)
+        external
+        pure
+        returns (BalanceDelta)
+    {
+        return balanceDelta;
+    }
+
+    function tryModifyLiquiditiesWithRecipient(VaultSettlementIntent calldata settlementIntent, address)
+        external
+        pure
+        returns (BalanceDelta)
+    {
+        return settlementIntent.requestedDelta;
+    }
+
+    function dryModifyLiquidities(BalanceDelta balanceDelta) external pure returns (BalanceDelta) {
+        return balanceDelta;
+    }
+
+    function dryModifyLiquidities(VaultSettlementIntent calldata settlementIntent)
+        external
+        pure
+        returns (BalanceDelta)
+    {
+        return settlementIntent.requestedDelta;
+    }
+
+    function decreaseLiquidityReserve(Currency, uint256) external pure {}
+
+    function increaseLiquidityReserve(Currency underlyingCurrency, uint256 amount) external {
+        lastIncreaseCurrency = underlyingCurrency;
+        lastIncreaseAmount = amount;
+        increaseReserveCalls++;
+    }
+}
+
 /// @dev Vault that clamps withdrawals to fixed available amounts (used to test onMMSettle phase-2 shortfall correction).
 contract VTSPositionLibTest_VaultClamp is IMarketVault {
     int128 internal avail0;
@@ -3239,6 +3316,46 @@ contract VTSPositionLibTest is VTSLibTestBase {
 
         (,, uint256 settled0After,,,) = harness.getPositionAccounting(positionId);
         assertEq(settled0After, 50e18, "settled0 should increase by the clamped deposit amount");
+    }
+
+    /// @dev `fromDeltas == true` runs `_settleFromPositiveUnderlyingDelta`, which bumps market liquidity reserve when
+    ///      `settledIncrease` is non-zero (seizing deposit path uses `_settleSeizingDeposits` instead).
+    function test_onMMSettle_fromDeltas_deposit_bumpsLiquidityReserve() public {
+        _initMarket();
+        PoolId corePoolId = _getDefaultPoolId();
+        harness.setupPool(corePoolId, _createDefaultVTSConfig());
+
+        bytes32 salt = bytes32(uint256(608));
+        PositionId positionId = _registerHarnessPositionInPool(corePoolId, DEFAULT_OWNER, -60, 60, 1, salt);
+        harness.setPositionActive(positionId, false);
+
+        harness.setCommitmentMax(positionId, 1000e18, 1000e18);
+        harness.setSettled(positionId, 0, 0);
+        harness.setPoolTotalSettled(corePoolId, 0, 0);
+
+        VTSPositionLibTest_MockLCC lcc0 = new VTSPositionLibTest_MockLCC(address(0xE0));
+        VTSPositionLibTest_MockLCC lcc1 = new VTSPositionLibTest_MockLCC(address(0xE1));
+        VTSPositionLibTest_VaultReserveSpy vault = new VTSPositionLibTest_VaultReserveSpy();
+
+        address u0 = lcc0.underlying();
+        harness.setUnderlyingDelta(Currency.wrap(u0), DEFAULT_OWNER, int128(int256(100e18)));
+        harness.addMarketProducedCredit(IMarketVault(address(vault)), Currency.wrap(u0), 100e18);
+
+        (BalanceDelta settlementDelta,,) = harness.onMMSettle(
+            manager,
+            vault,
+            positionId,
+            Currency.wrap(address(lcc0)),
+            Currency.wrap(address(lcc1)),
+            toBalanceDelta(int128(int256(-50e18)), 0),
+            false,
+            true
+        );
+        assertEq(settlementDelta.amount0(), int128(int256(-50e18)), "fromDeltas deposit should apply requested lane");
+
+        assertEq(vault.increaseReserveCalls(), 1, "settled increase should bump market liquidity reserve");
+        assertEq(Currency.unwrap(vault.lastIncreaseCurrency()), u0, "reserve bump targets token0 underlying");
+        assertEq(vault.lastIncreaseAmount(), 50e18, "reserve bump matches settled increase");
     }
 
     function test_handleLiquidityDecrease_clampsNegativeQueuedDeltaToZero() public {

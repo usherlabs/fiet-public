@@ -100,8 +100,8 @@ contract CrossMarketDeltaRegressionE2E is MME2EBase {
         {
             bytes memory actions = _buildBatchActions();
             bytes[] memory params = _buildBatchParams(recipient);
-            require(actions.length == BATCH_LEN, "CrossMarket: action/param length drift");
-            require(params.length == BATCH_LEN, "CrossMarket: action/param length drift");
+            require(actions.length == BATCH_LEN, "CrossMarket: actions length mismatch");
+            require(params.length == BATCH_LEN, "CrossMarket: params length mismatch");
             _executeMMActions(s_mmpm, actions, params, block.timestamp + 3600);
         }
         vm.stopBroadcast();

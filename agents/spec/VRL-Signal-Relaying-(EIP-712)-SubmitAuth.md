@@ -10,7 +10,7 @@ This spec documents how to produce the **off-chain** EIP-712 signature required 
   - `VTSOrchestrator.commitSignalRelayed(...)`
   - `VTSOrchestrator.renewSignalRelayed(...)`
 - **MMPositionManager action payloads** (relay passthrough):
-  - `COMMIT_SIGNAL`: `(bytes liquiditySignal, address owner, bytes relayParams)`
+  - `COMMIT_SIGNAL`: `(bytes liquiditySignal, bytes relayParams)`
   - `RENEW_SIGNAL`: `(uint256 tokenId, bytes liquiditySignal, bytes relayParams)`
 
 ## Security intent
@@ -134,13 +134,13 @@ relayParams := abi.encode(uint256 deadline, uint256 authNonce, bytes authSig)
 Action payload:
 
 ```solidity
-abi.encode(bytes liquiditySignal, address owner, bytes relayParams)
+abi.encode(bytes liquiditySignal, bytes relayParams)
 ```
 
 Behaviour:
 
-- if `relayParams.length == 0`: calls `VTSOrchestrator.commitSignal(sender, liquiditySignal)`
-- else: decodes `(deadline, authNonce, authSig)` and calls `VTSOrchestrator.commitSignalRelayed(marketFactory, sender, liquiditySignal, deadline, authNonce, authSig)`
+- if `relayParams.length == 0`: calls `VTSOrchestrator.commitSignal(marketFactory, sender, liquiditySignal)` (with `sender` derived from the batch locker context)
+- else: decodes `(deadline, authNonce, authSig)` from `relayParams` and calls `VTSOrchestrator.commitSignalRelayed(marketFactory, sender, liquiditySignal, deadline, authNonce, authSig)`
 
 ### RENEW_SIGNAL params
 

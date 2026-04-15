@@ -25,6 +25,8 @@ import {MME2EBase} from "./base/MME2EBase.sol";
 
 import {console} from "forge-std/Script.sol";
 
+// @note Future unwraps now first attempt to settle any outstanding queue for that owner, then only unwrap up to the current headroom (liquid - queued). If headroom is zero they skip gracefully instead of reverting.
+
 contract MarketMakerE2E is MME2EBase {
     // Non-zero so fee collection is meaningful.
     uint24 internal constant CORE_POOL_FEE = 3000;
@@ -50,7 +52,7 @@ contract MarketMakerE2E is MME2EBase {
 
     function _runExitPhase(StandaloneMarket memory m, uint256 mmPk, uint256 commitId) internal {
         _closeRfsBurnDecommitAndTakeAllLccs(m, mmPk, commitId);
-        _unwrapAllLccsAndAssert(m, mmPk, 0, true);
+        _unwrapAllLccsAndAssert(m, mmPk, commitId, 0, true);
     }
 
     /// @notice Runs the end-to-end market-maker happy path on the configured network.

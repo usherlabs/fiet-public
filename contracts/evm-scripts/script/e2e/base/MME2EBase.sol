@@ -83,6 +83,44 @@ abstract contract MME2EBase is E2EBase {
         vm.stopBroadcast();
     }
 
+    /// @dev Best-effort queue collection for a specific LCC and commitment bucket.
+    /// If reserve or custody cannot support settlement yet, this action is a no-op by design.
+    function _collectAvailableLiquidity(
+        StandaloneMarket memory m,
+        uint256 mmPk,
+        address lcc,
+        uint256 tokenId,
+        uint256 maxAmount
+    ) internal {
+        vm.startBroadcast(mmPk);
+        {
+            MMPositionManager mmpm = MMPositionManager(payable(m.stack.contracts.mmPositionManager));
+            bytes memory actions = abi.encodePacked(bytes1(uint8(MMActions.COLLECT_AVAILABLE_LIQUIDITY)));
+            bytes[] memory params = new bytes[](1);
+            params[0] = abi.encode(lcc, tokenId, maxAmount);
+            _executeMMActions(mmpm, actions, params, block.timestamp + 3600);
+        }
+        vm.stopBroadcast();
+    }
+
+    function _loadUnwrapSnapshot(ILiquidityHub hub, address lcc, address owner, address underlying)
+        internal
+        view
+        returns (UnwrapSnapshot memory snap)
+    {
+        (uint256 wrappedBefore, uint256 marketDerivedBefore) = ILCC(lcc).balancesOf(owner);
+        snap.liquid = wrappedBefore + marketDerivedBefore;
+        snap.queue = hub.settleQueue(lcc, owner);
+        snap.lcc = IERC20(lcc).balanceOf(owner);
+        snap.underlying = IERC20(underlying).balanceOf(owner);
+    }
+
+    function _targetUnwrapAmount(uint256 requestedAmount, uint256 liquid, uint256 queued) internal pure returns (uint256) {
+        uint256 unwrapHeadroom = liquid > queued ? (liquid - queued) : 0;
+        if (requestedAmount == 0) return unwrapHeadroom;
+        return requestedAmount > unwrapHeadroom ? unwrapHeadroom : requestedAmount;
+    }
+
     function _executeMMActions(MMPositionManager mmpm, bytes memory actions, bytes[] memory params, uint256 deadline)
         internal
     {
@@ -400,9 +438,24 @@ abstract contract MME2EBase is E2EBase {
         console.log("OK: closed RFS + burned + withdrew-from-deltas + decommitted");
     }
 
-    /// @dev Unwraps LCC balances held by `mmPk` back to underlying tokens.
-    /// `unwrapAmount == 0` is treated as unwrap-all by MMPositionManager.
+    /// @dev Backwards-compatible helper for callsites that do not provide a commitment bucket.
     function _unwrapLcc(StandaloneMarket memory m, address lcc, uint256 mmPk, uint256 unwrapAmount, bool assertBalance)
+        internal
+        returns (uint256 underlyingDelta)
+    {
+        return _unwrapLcc(m, lcc, mmPk, unwrapAmount, assertBalance, 0);
+    }
+
+    /// @dev Unwraps LCC balances held by `mmPk` back to underlying tokens.
+    /// `unwrapAmount == 0` unwraps the maximum currently allowed by Hub headroom.
+    function _unwrapLcc(
+        StandaloneMarket memory m,
+        address lcc,
+        uint256 mmPk,
+        uint256 unwrapAmount,
+        bool assertBalance,
+        uint256 commitId
+    )
         internal
         returns (uint256 underlyingDelta)
     {
@@ -410,20 +463,22 @@ abstract contract MME2EBase is E2EBase {
         ILiquidityHub hub = ILiquidityHub(m.stack.contracts.liquidityHub);
         address underlying = ILCC(lcc).underlying();
 
-        UnwrapSnapshot memory before;
-        {
-            (uint256 wrappedBefore, uint256 marketDerivedBefore) = ILCC(lcc).balancesOf(owner);
-            before.liquid = wrappedBefore + marketDerivedBefore;
-            before.queue = hub.settleQueue(lcc, owner);
-            before.lcc = IERC20(lcc).balanceOf(owner);
-            before.underlying = IERC20(underlying).balanceOf(owner);
+        // Try to consume any queue that can already be settled from custody/reserves.
+        if (hub.settleQueue(lcc, owner) > 0) {
+            _collectAvailableLiquidity(m, mmPk, lcc, commitId, type(uint256).max);
         }
-        _runUnwrapAction(m, mmPk, lcc, before.lcc, unwrapAmount);
 
-        UnwrapSnapshot memory afterState;
-        afterState.queue = hub.settleQueue(lcc, owner);
-        afterState.lcc = IERC20(lcc).balanceOf(owner);
-        afterState.underlying = IERC20(underlying).balanceOf(owner);
+        UnwrapSnapshot memory before = _loadUnwrapSnapshot(hub, lcc, owner, underlying);
+        uint256 targetUnwrapAmount = _targetUnwrapAmount(unwrapAmount, before.liquid, before.queue);
+        if (targetUnwrapAmount == 0) {
+            console.log("skip unwrap: no available headroom");
+            console.log("unwrap queue before:", before.queue);
+            return 0;
+        }
+
+        _runUnwrapAction(m, mmPk, lcc, before.lcc, targetUnwrapAmount);
+
+        UnwrapSnapshot memory afterState = _loadUnwrapSnapshot(hub, lcc, owner, underlying);
 
         uint256 lccSpent = before.lcc - afterState.lcc;
         underlyingDelta = afterState.underlying - before.underlying;
@@ -442,8 +497,14 @@ abstract contract MME2EBase is E2EBase {
     }
 
     /// @dev Unwraps LCC balances held by `mmPk` back to underlying tokens.
-    /// `unwrapAmount == 0` is treated as unwrap-all by MMPositionManager.
-    function _unwrapAllLccsAndAssert(StandaloneMarket memory m, uint256 mmPk, uint256 unwrapAmount, bool assertBalance)
+    /// `unwrapAmount == 0` unwraps the maximum currently allowed by Hub headroom.
+    function _unwrapAllLccsAndAssert(
+        StandaloneMarket memory m,
+        uint256 mmPk,
+        uint256 commitId,
+        uint256 unwrapAmount,
+        bool assertBalance
+    )
         internal
         returns (uint256 underlying0Delta, uint256 underlying1Delta)
     {
@@ -452,8 +513,8 @@ abstract contract MME2EBase is E2EBase {
         address lcc0 = Currency.unwrap(corePoolKey.currency0);
         address lcc1 = Currency.unwrap(corePoolKey.currency1);
 
-        underlying0Delta = _unwrapLcc(m, lcc0, mmPk, unwrapAmount, assertBalance);
-        underlying1Delta = _unwrapLcc(m, lcc1, mmPk, unwrapAmount, assertBalance);
+        underlying0Delta = _unwrapLcc(m, lcc0, mmPk, unwrapAmount, assertBalance, commitId);
+        underlying1Delta = _unwrapLcc(m, lcc1, mmPk, unwrapAmount, assertBalance, commitId);
     }
 
     // ============================================================

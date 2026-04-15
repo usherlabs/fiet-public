@@ -174,8 +174,9 @@ being an informal “should”.
 ### HUB-01A: Inbound plain ETH (`receive`) is sender-gated (factory-scoped canonical vault only)
 
 - **Statement**: Plain ETH sent to `LiquidityHub` outside of `wrap` must come only from the factory-scoped canonical
-  vault: `msg.sender` implements `ICanonicalVault`, `marketFactory()` is a registered hub factory (`LiquidityHub.isFactory`),
-  and `IMarketFactory(marketFactory).canonicalVault() == msg.sender`.
+  vault address: `msg.sender` must expose `marketFactory()` such that `LiquidityHub.isFactory(marketFactory)` holds and
+  `IMarketFactory(marketFactory).canonicalVault() == msg.sender` (the concrete type may be minimal; tests use mocks that
+  only implement `marketFactory()` plus whatever the guard reads).
 - **Enforced by**: `src/LiquidityHub.sol::_assertValidEthSender` (used by `receive()`).
 - **Why**: Market liquidity mobilisation sends native ETH from `CanonicalVault` to the Hub before `confirmTake`; Hub
   ingress must bind to that custody address, not to arbitrary contracts or per-market facades.
