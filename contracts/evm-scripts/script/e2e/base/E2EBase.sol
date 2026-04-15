@@ -169,13 +169,13 @@ abstract contract E2EBase is DeployFullStackBase {
 
     /// @dev Create an additional market on an already-deployed stack using existing underlying tokens (for
     ///      multi-market / cross-vault regression scripts that must share the same economic asset pair).
-    /// @param lp Retained for API parity with `_createMarketFromStack`; this path does not mint fresh tokens to `lp`
-    ///        because underlyings already exist on the reused stack.
     /// @param registerOracleTickers When false, skips `OracleHelper.registerTicker` proxy calls (reuse tickers from
     ///        the first market created on this stack).
+    /// @dev An unnamed `address` argument is retained for API parity with `_createMarketFromStack`; this path does not
+    ///      mint fresh tokens to that address because underlyings already exist on the reused stack.
     function _createMarketFromStackWithUnderlyings(
         FullStack memory stack,
-        address lp,
+        address,
         uint24 corePoolFee,
         address underlying0_,
         address underlying1_,
@@ -235,7 +235,7 @@ abstract contract E2EBase is DeployFullStackBase {
         );
     }
 
-    function _findProxyHookSalt(address marketFactoryAddr) internal returns (bytes32 salt) {
+    function _findProxyHookSalt(address marketFactoryAddr) internal view returns (bytes32 salt) {
         (address expectedProxyHook, bytes32 minedSalt) = HookMiner.find(
             MarketFactory(marketFactoryAddr).marketVaultDeployer(),
             HookFlags.PROXY_HOOK_FLAGS,

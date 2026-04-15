@@ -678,14 +678,10 @@ library VTSLifecycleLinkedLib {
 
     /// @notice Mark RFS checkpoint from current state without commitment-backed checkpointing (`withCommitment == false`).
     /// @dev Does not settle growths. The orchestrator must settle growth first where required.
-    function checkpointAfterGrowthNoCommitment(
-        VTSStorage storage s,
-        VTSLifecycleContext memory ctx,
-        uint256,
-        /* commitId */
-        // TODO: Remove unused params
-        PositionId positionId
-    ) external returns (RFSCheckpoint memory checkpointOut) {
+    function checkpointAfterGrowthNoCommitment(VTSStorage storage s, PositionId positionId)
+        external
+        returns (RFSCheckpoint memory checkpointOut)
+    {
         (, BalanceDelta rfsDelta) = VTSPositionLib.getRFS(s, positionId);
         CheckpointLibrary.markCheckpoint(s, positionId, VTSPositionLib._rfsOpenMask(rfsDelta));
         checkpointOut = s.positions[positionId].checkpoint;

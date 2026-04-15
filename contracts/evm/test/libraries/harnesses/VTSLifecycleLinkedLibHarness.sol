@@ -34,7 +34,7 @@ contract VTSLifecycleLinkedLibHarness {
     {
         return withCommitment
             ? VTSCommitLib.checkpointAfterGrowthWithCommitment(s, ctx, commitId, positionId)
-            : VTSLifecycleLinkedLib.checkpointAfterGrowthNoCommitment(s, ctx, commitId, positionId);
+            : VTSLifecycleLinkedLib.checkpointAfterGrowthNoCommitment(s, positionId);
     }
 
     /// @notice TEST-ONLY helper for legacy flows that still want pre-settlement before checkpointing.
@@ -47,7 +47,7 @@ contract VTSLifecycleLinkedLibHarness {
         VTSPositionLib.settlePositionGrowths(s, ctx.poolManager, positionId);
         return withCommitment
             ? VTSCommitLib.checkpointAfterGrowthWithCommitment(s, ctx, commitId, positionId)
-            : VTSLifecycleLinkedLib.checkpointAfterGrowthNoCommitment(s, ctx, commitId, positionId);
+            : VTSLifecycleLinkedLib.checkpointAfterGrowthNoCommitment(s, positionId);
     }
 
     function extendGracePeriod(

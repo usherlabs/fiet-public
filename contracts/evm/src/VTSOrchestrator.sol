@@ -843,7 +843,7 @@ contract VTSOrchestrator is
 
         RFSCheckpoint memory checkpointOut = withCommitment
             ? VTSCommitLib.checkpointAfterGrowthWithCommitment(s, _lifecycleContext(), commitId, positionId)
-            : VTSLifecycleLinkedLib.checkpointAfterGrowthNoCommitment(s, _lifecycleContext(), commitId, positionId);
+            : VTSLifecycleLinkedLib.checkpointAfterGrowthNoCommitment(s, positionId);
         emit Checkpointed(commitId, positionIndex, checkpointOut, withCommitment);
     }
 }
