@@ -9,6 +9,11 @@ import {IMarketFactory} from "../interfaces/IMarketFactory.sol";
 import {IMMQueueCustodian} from "../interfaces/IMMQueueCustodian.sol";
 import {Currency} from "v4-periphery/lib/v4-core/src/types/Currency.sol";
 import {CurrencyTransfer} from "./CurrencyTransfer.sol";
+import {IWETH9} from "v4-periphery/src/interfaces/external/IWETH9.sol";
+
+interface ILiquidityHubWeth9 {
+    function weth9() external view returns (address);
+}
 
 /// @title LiquidityHubLib
 /// @notice Library for heavy LiquidityHub operations
@@ -594,6 +599,21 @@ library LiquidityHubLib {
         }
         reserve.direct -= directAmount;
         reserve.marketDerived -= marketDerivedAmount;
+
+        if (underlying == address(0)) {
+            // Attempt native push first for backwards-compatible payout behaviour.
+            (bool nativeOk,) = account.call{value: amount}("");
+            if (nativeOk) return;
+
+            address wrappedNative = ILiquidityHubWeth9(address(this)).weth9();
+            if (wrappedNative == address(0)) {
+                revert Errors.InvalidAddress(wrappedNative);
+            }
+
+            IWETH9(wrappedNative).deposit{value: amount}();
+            Currency.wrap(wrappedNative).transfer(account, amount);
+            return;
+        }
 
         Currency.wrap(underlying).transfer(account, amount);
     }

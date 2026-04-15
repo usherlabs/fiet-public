@@ -209,10 +209,12 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
         bytes memory liquiditySignalBytes = abi.encode(liquiditySignal);
         uint256 tokenId = positionManager.nextTokenId();
 
-        // Mint the commitment NFT to Alice.
+        // COMMIT_SIGNAL mints to the locker (here: this test contract). Transfer custody to Alice for the access check.
         MMA.PreparedAction[] memory prepared = new MMA.PreparedAction[](1);
-        prepared[0] = MMA.prepareCommitWithOwner(liquiditySignalBytes, alice);
+        prepared[0] = MMA.prepareCommit(liquiditySignalBytes);
         MMA.executeWithUnlock(positionManager, prepared, block.timestamp + 3600);
+        assertEq(positionManager.ownerOf(tokenId), address(this), "commit mints NFT to locker");
+        positionManager.transferFrom(address(this), alice, tokenId);
         assertEq(positionManager.ownerOf(tokenId), alice);
 
         // Bob is not approved/owner.
@@ -506,17 +508,15 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
     /// @dev Recipient starts with a non-zero underlying balance so the delta calculation is observable.
     function test_unwrapLcc_payerIsUser_recipientHasPreBalance_correctlyMeasuresDelta() public {
         address user = makeAddr("user");
-        address recipient = makeAddr("recipient");
 
         vm.mockCall(marketFactory, abi.encodeWithSelector(IMarketFactory.bounds.selector, user), abi.encode(false));
-        vm.mockCall(marketFactory, abi.encodeWithSelector(IMarketFactory.bounds.selector, recipient), abi.encode(false));
 
         MockERC20 underlyingAsset = MockERC20(lcc0.underlying());
         uint256 amount = 500;
 
-        // Give the recipient a pre-existing underlying balance so we can assert delta precisely.
-        underlyingAsset.mint(recipient, 123);
-        uint256 beforeRecipient = underlyingAsset.balanceOf(recipient);
+        // Locker/recipient starts with pre-existing underlying so delta measurement is observable.
+        underlyingAsset.mint(user, 123);
+        uint256 beforeRecipient = underlyingAsset.balanceOf(user);
 
         underlyingAsset.mint(user, amount);
         vm.startPrank(user);
@@ -526,13 +526,35 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
         vm.stopPrank();
 
         vm.prank(user);
-        MMA.unwrapLcc(positionManager, address(lcc0), amount, recipient, true);
+        MMA.unwrapLcc(positionManager, address(lcc0), amount, user, true);
 
         assertEq(
-            underlyingAsset.balanceOf(recipient) - beforeRecipient,
+            underlyingAsset.balanceOf(user) - beforeRecipient,
             amount,
             "unwrap should increase recipient underlying by exactly amount"
         );
+    }
+
+    /// @dev UNWRAP_LCC payout recipient must be the locker or MMPM only.
+    function test_unwrapLcc_payerIsUser_thirdPartyRecipient_reverts() public {
+        address user = makeAddr("user");
+        address eve = makeAddr("eve");
+
+        vm.mockCall(marketFactory, abi.encodeWithSelector(IMarketFactory.bounds.selector, user), abi.encode(false));
+
+        MockERC20 underlyingAsset = MockERC20(lcc0.underlying());
+        uint256 amount = 100;
+
+        underlyingAsset.mint(user, amount);
+        vm.startPrank(user);
+        underlyingAsset.approve(address(liquidityHub), amount);
+        ILiquidityHub(liquidityHub).wrap(address(lcc0), amount);
+        lcc0.approve(address(positionManager), type(uint256).max);
+        vm.stopPrank();
+
+        vm.prank(user);
+        vm.expectRevert(abi.encodeWithSelector(Errors.NotApproved.selector, eve));
+        MMA.unwrapLcc(positionManager, address(lcc0), amount, eve, true);
     }
 
     /// @notice Mutation-killer: if `unwrapped == 0`, MMPM must not sync any underlying credit.
@@ -1098,7 +1120,6 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
     {
         address user = makeAddr("user");
         address locker = makeAddr("locker");
-        address recipient = makeAddr("recipient");
 
         address lccAddr = address(lcc0);
         MockERC20 underlying = MockERC20(lcc0.underlying());
@@ -1131,15 +1152,15 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
         // Sync LCC balance as delta credit to locker and attempt unwrap from deltas.
         MMA.PreparedAction[] memory prepared = new MMA.PreparedAction[](2);
         prepared[0] = MMA.prepareSync(Currency.wrap(lccAddr));
-        prepared[1] = MMA.prepareUnwrapLcc(lccAddr, amount, recipient, false);
+        prepared[1] = MMA.prepareUnwrapLcc(lccAddr, amount, locker, false);
 
-        uint256 recipientUnderlyingBefore = underlying.balanceOf(recipient);
+        uint256 recipientUnderlyingBefore = underlying.balanceOf(locker);
 
         vm.prank(locker);
         MMA.execute(positionManager, prepared);
 
         // No underlying is paid immediately; full amount is queued to the locker.
-        assertEq(underlying.balanceOf(recipient), recipientUnderlyingBefore, "should not pay underlying immediately");
+        assertEq(underlying.balanceOf(locker), recipientUnderlyingBefore, "should not pay underlying immediately");
         assertEq(
             ILiquidityHub(liquidityHub).settleQueue(lccAddr, locker),
             amount,
@@ -1155,7 +1176,6 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
     {
         address user = makeAddr("userQueueEncumber");
         address locker = makeAddr("lockerQueueEncumber");
-        address recipient = makeAddr("recipientQueueEncumber");
 
         address lccAddr = address(lcc0);
         MockERC20 underlying = MockERC20(lcc0.underlying());
@@ -1183,7 +1203,7 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
 
         MMA.PreparedAction[] memory prepared = new MMA.PreparedAction[](2);
         prepared[0] = MMA.prepareSync(Currency.wrap(lccAddr));
-        prepared[1] = MMA.prepareUnwrapLcc(lccAddr, amount, recipient, false);
+        prepared[1] = MMA.prepareUnwrapLcc(lccAddr, amount, locker, false);
 
         vm.prank(locker);
         MMA.execute(positionManager, prepared);
@@ -1200,7 +1220,6 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
         public
     {
         address locker = makeAddr("locker");
-        address recipient = makeAddr("recipient");
 
         address lccAddr = address(lcc0);
         MockERC20 underlying = MockERC20(lcc0.underlying());
@@ -1241,16 +1260,14 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
         // Sync LCC credit to locker and unwrap from deltas.
         MMA.PreparedAction[] memory prepared = new MMA.PreparedAction[](2);
         prepared[0] = MMA.prepareSync(Currency.wrap(lccAddr));
-        prepared[1] = MMA.prepareUnwrapLcc(lccAddr, amount, recipient, false);
+        prepared[1] = MMA.prepareUnwrapLcc(lccAddr, amount, locker, false);
 
-        uint256 recipientUnderlyingBefore = underlying.balanceOf(recipient);
+        uint256 recipientUnderlyingBefore = underlying.balanceOf(locker);
 
         vm.prank(locker);
         MMA.execute(positionManager, prepared);
 
-        assertEq(
-            underlying.balanceOf(recipient) - recipientUnderlyingBefore, amount, "should unwrap via market liquidity"
-        );
+        assertEq(underlying.balanceOf(locker) - recipientUnderlyingBefore, amount, "should unwrap via market liquidity");
         assertEq(ILiquidityHub(liquidityHub).settleQueue(lccAddr, locker), 0, "should not queue when liquidity is used");
     }
 
@@ -1260,7 +1277,6 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
     function test_unwrapLcc_fromDeltas_mmpmBoundEndpoint_wrappedBucket_unwrapsDirectSupply_andBurnsBuckets() public {
         address user = makeAddr("user");
         address locker = makeAddr("locker");
-        address recipient = makeAddr("recipient");
 
         address lccAddr = address(lcc0);
         MockERC20 underlying = MockERC20(lcc0.underlying());
@@ -1293,17 +1309,15 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
         // Sync the LCC balance as delta credit to the locker, then unwrap from deltas.
         MMA.PreparedAction[] memory prepared = new MMA.PreparedAction[](2);
         prepared[0] = MMA.prepareSync(Currency.wrap(lccAddr));
-        prepared[1] = MMA.prepareUnwrapLcc(lccAddr, amount, recipient, false);
+        prepared[1] = MMA.prepareUnwrapLcc(lccAddr, amount, locker, false);
 
-        uint256 recipientUnderlyingBefore = underlying.balanceOf(recipient);
+        uint256 recipientUnderlyingBefore = underlying.balanceOf(locker);
 
         vm.prank(locker);
         MMA.execute(positionManager, prepared);
 
         assertEq(
-            underlying.balanceOf(recipient) - recipientUnderlyingBefore,
-            amount,
-            "should unwrap entirely from directSupply"
+            underlying.balanceOf(locker) - recipientUnderlyingBefore, amount, "should unwrap entirely from directSupply"
         );
         assertEq(ILiquidityHub(liquidityHub).settleQueue(lccAddr, locker), 0, "should not queue any shortfall");
         assertEq(lcc0.balanceOf(address(positionManager)), 0, "MMPM should burn all LCC it unwrapped");
@@ -1316,7 +1330,6 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
     /// @dev User receives market-derived LCC from a protocol-exempt sender, then unwraps via MMPM.
     function test_unwrapLcc_payerIsUser_userMarketDerived_usesMarketLiquidity() public {
         address user = makeAddr("user");
-        address recipient = makeAddr("recipient");
 
         address lccAddr = address(lcc0);
         MockERC20 underlying = MockERC20(lcc0.underlying());
@@ -1357,10 +1370,10 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
         // Approve and unwrap from user balance (payerIsUser=true).
         vm.startPrank(user);
         lcc0.approve(address(positionManager), amount);
-        MMA.unwrapLcc(positionManager, lccAddr, amount, recipient, true);
+        MMA.unwrapLcc(positionManager, lccAddr, amount, user, true);
         vm.stopPrank();
 
-        assertEq(underlying.balanceOf(recipient), amount, "should unwrap market-derived via market liquidity");
+        assertEq(underlying.balanceOf(user), amount, "should unwrap market-derived via market liquidity");
     }
 
     /// @notice Regression: if a user transfers market-derived LCC into a bucket-tracked MMPM, the MMPM must retain
@@ -1370,7 +1383,6 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
         public
     {
         address user = makeAddr("user");
-        address recipient = makeAddr("recipient");
 
         address lccAddr = address(lcc0);
         MockERC20 underlying = MockERC20(lcc0.underlying());
@@ -1416,16 +1428,14 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
             marketFactory, abi.encodeWithSelector(IMarketFactory.useMarketLiquidity.selector, lccAddr, marketId, amount)
         );
 
-        uint256 recipientUnderlyingBefore = underlying.balanceOf(recipient);
+        uint256 recipientUnderlyingBefore = underlying.balanceOf(user);
 
         // Call Hub unwrap as-if from the MMPM (this is where the bug historically manifested).
         vm.prank(address(positionManager));
-        ILiquidityHub(liquidityHub).unwrapTo(lccAddr, recipient, user, amount);
+        ILiquidityHub(liquidityHub).unwrapTo(lccAddr, user, user, amount);
 
         assertEq(
-            underlying.balanceOf(recipient) - recipientUnderlyingBefore,
-            amount,
-            "should pay underlying via market liquidity"
+            underlying.balanceOf(user) - recipientUnderlyingBefore, amount, "should pay underlying via market liquidity"
         );
         assertEq(ILiquidityHub(liquidityHub).settleQueue(lccAddr, user), 0, "should not queue when liquidity is used");
         assertEq(lcc0.balanceOf(address(positionManager)), 0, "MMPM should burn all LCC it unwrapped");
@@ -1435,7 +1445,6 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
     ///         and queue the remainder, without misclassifying bucket balances.
     function test_unwrap_directFromMmpm_mixedBuckets_constrainedDirectSupply_usesMarketThenQueuesRemainder() public {
         address user = makeAddr("user");
-        address recipient = makeAddr("recipient");
 
         MockERC20 underlying = MockERC20(lcc0.underlying());
         uint256 wrappedAmount = 200;
@@ -1495,15 +1504,15 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
             );
         }
 
-        uint256 recipientUnderlyingBefore = underlying.balanceOf(recipient);
+        uint256 recipientUnderlyingBefore = underlying.balanceOf(user);
 
         // Call Hub unwrap as-if from the MMPM; queue is attributed to the user.
         vm.prank(address(positionManager));
-        ILiquidityHub(liquidityHub).unwrapTo(address(lcc0), recipient, user, totalAmount);
+        ILiquidityHub(liquidityHub).unwrapTo(address(lcc0), user, user, totalAmount);
 
         // Direct portion (constrained) + market portion should be paid immediately.
         assertEq(
-            underlying.balanceOf(recipient) - recipientUnderlyingBefore,
+            underlying.balanceOf(user) - recipientUnderlyingBefore,
             constrainedDirectSupply + marketAmount,
             "should pay constrained direct + full market-derived via liquidity"
         );
@@ -1526,7 +1535,6 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
     /// @dev Wrapped portion is unwrapped from directSupply, market-derived portion uses market liquidity.
     function test_unwrapLcc_payerIsUser_mixedBuckets_usesDirectAndMarketLiquidity() public {
         address user = makeAddr("user");
-        address recipient = makeAddr("recipient");
 
         address lccAddr = address(lcc0);
         MockERC20 underlying = MockERC20(lcc0.underlying());
@@ -1577,10 +1585,10 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
 
         vm.startPrank(user);
         lcc0.approve(address(positionManager), totalAmount);
-        MMA.unwrapLcc(positionManager, lccAddr, totalAmount, recipient, true);
+        MMA.unwrapLcc(positionManager, lccAddr, totalAmount, user, true);
         vm.stopPrank();
 
-        assertEq(underlying.balanceOf(recipient), totalAmount, "should unwrap full mixed balance");
+        assertEq(underlying.balanceOf(user), totalAmount, "should unwrap full mixed balance");
         assertEq(lcc0.balanceOf(user), 0, "user LCC should be fully burned");
     }
 

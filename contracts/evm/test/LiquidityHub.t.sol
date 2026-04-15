@@ -7,24 +7,13 @@ import {ILCC} from "../src/interfaces/ILCC.sol";
 import {Errors} from "../src/libraries/Errors.sol";
 import {Bounds} from "../src/libraries/Bounds.sol";
 import {Vm} from "forge-std/Vm.sol";
+import {IERC20} from "openzeppelin-contracts/contracts/token/ERC20/IERC20.sol";
 
-contract MockMarketVaultForEthReceive {
-    address internal _lcc0;
-    address internal _lcc1;
-
-    constructor(address lcc0_, address lcc1_) {
-        _lcc0 = lcc0_;
-        _lcc1 = lcc1_;
-    }
-
-    function lccs() external view returns (address, address) {
-        return (_lcc0, _lcc1);
-    }
-
+/// @dev Contract with no `ICanonicalVault.marketFactory()` — Hub `receive` must reject.
+contract MockNonCanonicalEthSender {
     function sendEth(address payable to, uint256 amount) external {
         (bool ok, bytes memory data) = to.call{value: amount}("");
         if (!ok) {
-            // Bubble revert data so tests can assert on the underlying custom error.
             assembly {
                 revert(add(data, 0x20), mload(data))
             }
@@ -34,26 +23,14 @@ contract MockMarketVaultForEthReceive {
     receive() external payable {}
 }
 
-contract MockMarketVaultWithInvalidLccs {
-    function lccs() external pure returns (address, address) {
-        // Not valid LCC addresses.
-        return (address(0xBADD), address(0xF00D));
+/// @notice Mimics factory-scoped `CanonicalVault`: exposes `marketFactory()` only.
+contract MockCanonicalVaultForEthReceive {
+    address public immutable marketFactory;
+
+    constructor(address _marketFactory) {
+        marketFactory = _marketFactory;
     }
 
-    function sendEth(address payable to, uint256 amount) external {
-        (bool ok, bytes memory data) = to.call{value: amount}("");
-        if (!ok) {
-            // Bubble revert data so tests can assert on the underlying custom error.
-            assembly {
-                revert(add(data, 0x20), mload(data))
-            }
-        }
-    }
-
-    receive() external payable {}
-}
-
-contract MockSenderWithoutLccsSelector {
     function sendEth(address payable to, uint256 amount) external {
         (bool ok, bytes memory data) = to.call{value: amount}("");
         if (!ok) {
@@ -67,6 +44,20 @@ contract MockSenderWithoutLccsSelector {
 }
 
 contract NonPayableRecipient {}
+
+contract NonPayableCreate2Recipient {}
+
+contract CounterfactualDeployer {
+    function predict(bytes32 salt) external view returns (address predicted) {
+        bytes32 bytecodeHash = keccak256(type(NonPayableCreate2Recipient).creationCode);
+        bytes32 digest = keccak256(abi.encodePacked(bytes1(0xff), address(this), salt, bytecodeHash));
+        predicted = address(uint160(uint256(digest)));
+    }
+
+    function deploy(bytes32 salt) external returns (address deployed) {
+        deployed = address(new NonPayableCreate2Recipient{salt: salt}());
+    }
+}
 
 /**
  * @title LiquidityHubTest
@@ -256,80 +247,49 @@ contract LiquidityHubTest is LiquidityHubTestBase {
         assertFalse(ok);
     }
 
-    function test_receive_revertsWhenNoNativeLcc() public {
-        MockMarketVaultForEthReceive vault = new MockMarketVaultForEthReceive(lccToken1, lccToken2);
-        vm.deal(address(vault), 1 ether);
-        vm.mockCall(
-            factory, abi.encodeWithSelector(IMarketFactory.isCanonicalVault.selector, address(vault)), abi.encode(true)
-        );
-        vm.expectRevert(abi.encodeWithSelector(Errors.InvalidEthSender.selector));
-        vault.sendEth(payable(address(liquidityHub)), 1);
-    }
-
-    function test_receive_revertsWhenSenderIsNotMarketVaultContract() public {
-        MockSenderWithoutLccsSelector sender = new MockSenderWithoutLccsSelector();
+    function test_receive_revertsWhenSenderIsNotCanonicalVault() public {
+        MockNonCanonicalEthSender sender = new MockNonCanonicalEthSender();
         vm.deal(address(sender), 1 ether);
 
         vm.expectRevert(abi.encodeWithSelector(Errors.InvalidEthSender.selector));
         sender.sendEth(payable(address(liquidityHub)), 1);
     }
 
-    function test_receive_revertsWhenMarketVaultReturnsInvalidLccs() public {
-        MockMarketVaultWithInvalidLccs vault = new MockMarketVaultWithInvalidLccs();
-        vm.deal(address(vault), 1 ether);
+    /// @dev Regression: factory-scoped `CanonicalVault` is `msg.sender` for native transfers to the Hub.
+    function test_receive_acceptsFromFactoryScopedCanonicalVault() public {
+        MockCanonicalVaultForEthReceive canonicalVault = new MockCanonicalVaultForEthReceive(factory);
+        vm.deal(address(canonicalVault), 1 ether);
+        vm.mockCall(
+            factory, abi.encodeWithSelector(IMarketFactory.canonicalVault.selector), abi.encode(address(canonicalVault))
+        );
 
-        vm.expectRevert(abi.encodeWithSelector(Errors.InvalidEthSender.selector));
-        vault.sendEth(payable(address(liquidityHub)), 1);
+        canonicalVault.sendEth(payable(address(liquidityHub)), 1);
     }
 
-    function test_receive_acceptsFromMarketVaultWithNativeLcc() public {
-        // Create a market where one LCC is native-asset-backed.
-        address lccNative;
-        address lccErc20;
-        vm.startPrank(factory);
-        address[] memory issuers = new address[](1);
-        issuers[0] = factory;
-        (lccNative, lccErc20) = liquidityHub.createLCCPair(
-            abi.encodePacked(address(0xBEEF)), address(0), address(underlyingAsset1), "Native Market", issuers
-        );
-        liquidityHub.initialize(lccNative, lccErc20, bytes32("nativeMarket"), abi.encodePacked(address(0xBEEF)));
-        vm.stopPrank();
-
-        MockMarketVaultForEthReceive vault = new MockMarketVaultForEthReceive(lccNative, lccErc20);
-        vm.deal(address(vault), 1 ether);
-
+    function test_receive_revertsWhenCanonicalVaultFactoryNotRegisteredInHub() public {
+        address unregisteredFactory = makeAddr("UNREGISTERED_MF");
+        MockCanonicalVaultForEthReceive canonicalVault = new MockCanonicalVaultForEthReceive(unregisteredFactory);
+        vm.deal(address(canonicalVault), 1 ether);
         vm.mockCall(
-            factory, abi.encodeWithSelector(IMarketFactory.isCanonicalVault.selector, address(vault)), abi.encode(true)
-        );
-
-        // Should not revert.
-        vault.sendEth(payable(address(liquidityHub)), 1);
-    }
-
-    function test_receive_revertsWhenSenderNotCanonicalVaultForMarket() public {
-        address lccNative;
-        address lccErc20;
-        vm.startPrank(factory);
-        address[] memory issuers = new address[](1);
-        issuers[0] = factory;
-        (lccNative, lccErc20) = liquidityHub.createLCCPair(
-            abi.encodePacked(address(0xBEEF)), address(0), address(underlyingAsset1), "Native Market", issuers
-        );
-        liquidityHub.initialize(
-            lccNative, lccErc20, bytes32("nativeMarketCanonical"), abi.encodePacked(address(0xBEEF))
-        );
-        vm.stopPrank();
-
-        MockMarketVaultForEthReceive spoofVault = new MockMarketVaultForEthReceive(lccNative, lccErc20);
-        vm.deal(address(spoofVault), 1 ether);
-        vm.mockCall(
-            factory,
-            abi.encodeWithSelector(IMarketFactory.isCanonicalVault.selector, address(spoofVault)),
-            abi.encode(false)
+            unregisteredFactory,
+            abi.encodeWithSelector(IMarketFactory.canonicalVault.selector),
+            abi.encode(address(canonicalVault))
         );
 
         vm.expectRevert(abi.encodeWithSelector(Errors.InvalidEthSender.selector));
-        spoofVault.sendEth(payable(address(liquidityHub)), 1);
+        canonicalVault.sendEth(payable(address(liquidityHub)), 1);
+    }
+
+    function test_receive_revertsWhenSenderDoesNotMatchFactoryCanonicalVault() public {
+        MockCanonicalVaultForEthReceive registered = new MockCanonicalVaultForEthReceive(factory);
+        MockCanonicalVaultForEthReceive impostor = new MockCanonicalVaultForEthReceive(factory);
+        vm.deal(address(impostor), 1 ether);
+        vm.mockCall(
+            factory, abi.encodeWithSelector(IMarketFactory.canonicalVault.selector), abi.encode(address(registered))
+        );
+
+        vm.expectRevert(abi.encodeWithSelector(Errors.InvalidEthSender.selector));
+        impostor.sendEth(payable(address(liquidityHub)), 1);
     }
 
     function test_wrapTo_overloadByUnderlyingAndMarketId_works() public {
@@ -664,7 +624,7 @@ contract LiquidityHubTest is LiquidityHubTestBase {
         vm.stopPrank();
 
         uint256 amount = 7;
-        MockSenderWithoutLccsSelector recipient = new MockSenderWithoutLccsSelector();
+        MockNonCanonicalEthSender recipient = new MockNonCanonicalEthSender();
         vm.prank(proxyHook);
         liquidityHub.issue(lccNative, proxyHook, amount);
         vm.prank(proxyHook);
@@ -677,7 +637,7 @@ contract LiquidityHubTest is LiquidityHubTestBase {
 
     function test_queueForTransferRecipient_erc20_allowsContractRecipient() public {
         uint256 amount = 6;
-        MockSenderWithoutLccsSelector recipient = new MockSenderWithoutLccsSelector();
+        MockNonCanonicalEthSender recipient = new MockNonCanonicalEthSender();
 
         vm.prank(proxyHook);
         liquidityHub.issue(lccToken1, proxyHook, amount);
@@ -721,6 +681,44 @@ contract LiquidityHubTest is LiquidityHubTestBase {
         vm.prank(user1);
         vm.expectRevert(abi.encodeWithSelector(Errors.InvalidSender.selector));
         liquidityHub.unwrapTo(lccToken1, user2, amount);
+    }
+
+    /// @dev HUB-02B: immediate payout `to` must not be exempt (e.g. proxy hook).
+    function test_unwrapTo_splitRecipient_revertsWhenPayoutRecipientIsExempt() public {
+        uint256 amount = 8;
+        _wrapMarketDerivedLCC(user1, lccToken1, amount);
+        vm.mockCall(factory, abi.encodeWithSelector(IMarketFactory.useMarketLiquidity.selector), abi.encode(uint256(0)));
+
+        _setBoundLevel(user1, Bounds.BOUND_ENDPOINT);
+        vm.prank(user1);
+        vm.expectRevert(abi.encodeWithSelector(Errors.NotApproved.selector, proxyHook));
+        liquidityHub.unwrapTo(lccToken1, proxyHook, user2, amount);
+    }
+
+    /// @dev HUB-02B: immediate payout `to` must not be the Hub.
+    function test_unwrapTo_splitRecipient_revertsWhenPayoutRecipientIsHub() public {
+        uint256 amount = 8;
+        _wrapMarketDerivedLCC(user1, lccToken1, amount);
+        vm.mockCall(factory, abi.encodeWithSelector(IMarketFactory.useMarketLiquidity.selector), abi.encode(uint256(0)));
+
+        _setBoundLevel(user1, Bounds.BOUND_ENDPOINT);
+        vm.prank(user1);
+        vm.expectRevert(abi.encodeWithSelector(Errors.NotApproved.selector, address(liquidityHub)));
+        liquidityHub.unwrapTo(lccToken1, address(liquidityHub), user2, amount);
+    }
+
+    /// @dev HUB-02B: immediate payout `to` must not be DEX sink.
+    function test_unwrapTo_splitRecipient_revertsWhenPayoutRecipientIsDex() public {
+        address poolManager = makeAddr("POOL_MGR_DEX");
+        uint256 amount = 8;
+        _wrapMarketDerivedLCC(user1, lccToken1, amount);
+        vm.mockCall(factory, abi.encodeWithSelector(IMarketFactory.useMarketLiquidity.selector), abi.encode(uint256(0)));
+
+        _setDexBound(poolManager);
+        _setBoundLevel(user1, Bounds.BOUND_ENDPOINT);
+        vm.prank(user1);
+        vm.expectRevert(abi.encodeWithSelector(Errors.NotApproved.selector, poolManager));
+        liquidityHub.unwrapTo(lccToken1, poolManager, user2, amount);
     }
 
     function test_queueForTransferRecipient_revertsWhenMarketDerivedIsInsufficient() public {
@@ -803,6 +801,98 @@ contract LiquidityHubTest is LiquidityHubTestBase {
 
         assertEq(liquidityHub.settleQueue(lccNative, user2), amount);
         assertEq(liquidityHub.totalQueued(lccNative), amount);
+    }
+
+    function test_processSettlementFor_nativeCounterfactualRecipient_fallsBackToWethAfterDeployment() public {
+        address lccNative;
+        address lccErc20;
+        vm.startPrank(factory);
+        address[] memory issuers = new address[](1);
+        issuers[0] = proxyHook;
+        (lccNative, lccErc20) = liquidityHub.createLCCPair(
+            abi.encodePacked(address(0xD157)), address(0), address(underlyingAsset1), "Native Queue Market 3", issuers
+        );
+        liquidityHub.initialize(lccNative, lccErc20, bytes32("nativeQueueMarket3"), abi.encodePacked(address(0xD157)));
+        vm.stopPrank();
+
+        CounterfactualDeployer deployer = new CounterfactualDeployer();
+        bytes32 salt = keccak256("native-counterfactual-recipient");
+        address recipient = deployer.predict(salt);
+
+        uint256 amount = 9;
+        vm.prank(proxyHook);
+        liquidityHub.issue(lccNative, proxyHook, amount);
+        vm.prank(proxyHook);
+        ILCC(lccNative).transfer(recipient, amount);
+        vm.prank(proxyHook);
+        liquidityHub.queueForTransferRecipient(lccNative, recipient, amount);
+
+        vm.deal(address(liquidityHub), amount);
+        vm.prank(proxyHook);
+        liquidityHub.confirmTake(lccNative, amount, false);
+
+        deployer.deploy(salt);
+        assertGt(recipient.code.length, 0, "recipient should now be a contract");
+
+        address weth = address(liquidityHub.weth9());
+        assertEq(IERC20(weth).balanceOf(recipient), 0);
+        assertEq(recipient.balance, 0);
+
+        liquidityHub.processSettlementFor(lccNative, recipient, amount);
+
+        assertEq(liquidityHub.settleQueue(lccNative, recipient), 0);
+        assertEq(ILCC(lccNative).balanceOf(recipient), 0);
+        assertEq(IERC20(weth).balanceOf(recipient), amount);
+        assertEq(recipient.balance, 0);
+    }
+
+    function test_processSettlementFor_nativeCounterfactualRecipient_partialThenWethFallback() public {
+        address lccNative;
+        address lccErc20;
+        vm.startPrank(factory);
+        address[] memory issuers = new address[](1);
+        issuers[0] = proxyHook;
+        (lccNative, lccErc20) = liquidityHub.createLCCPair(
+            abi.encodePacked(address(0xD158)), address(0), address(underlyingAsset1), "Native Queue Market 4", issuers
+        );
+        liquidityHub.initialize(lccNative, lccErc20, bytes32("nativeQueueMarket4"), abi.encodePacked(address(0xD158)));
+        vm.stopPrank();
+
+        CounterfactualDeployer deployer = new CounterfactualDeployer();
+        bytes32 salt = keccak256("native-counterfactual-recipient-partial");
+        address recipient = deployer.predict(salt);
+
+        uint256 amount = 10;
+        uint256 partialAmount = 4;
+        uint256 remainder = amount - partialAmount;
+
+        vm.prank(proxyHook);
+        liquidityHub.issue(lccNative, proxyHook, amount);
+        vm.prank(proxyHook);
+        ILCC(lccNative).transfer(recipient, amount);
+        vm.prank(proxyHook);
+        liquidityHub.queueForTransferRecipient(lccNative, recipient, amount);
+
+        vm.deal(address(liquidityHub), partialAmount);
+        vm.prank(proxyHook);
+        liquidityHub.confirmTake(lccNative, partialAmount, false);
+        liquidityHub.processSettlementFor(lccNative, recipient, partialAmount);
+        assertEq(liquidityHub.settleQueue(lccNative, recipient), remainder);
+        assertEq(recipient.balance, partialAmount);
+
+        deployer.deploy(salt);
+        assertGt(recipient.code.length, 0, "recipient should now be a contract");
+
+        vm.deal(address(liquidityHub), remainder);
+        vm.prank(proxyHook);
+        liquidityHub.confirmTake(lccNative, remainder, false);
+        liquidityHub.processSettlementFor(lccNative, recipient, remainder);
+
+        address weth = address(liquidityHub.weth9());
+        assertEq(liquidityHub.settleQueue(lccNative, recipient), 0);
+        assertEq(ILCC(lccNative).balanceOf(recipient), 0);
+        assertEq(recipient.balance, partialAmount);
+        assertEq(IERC20(weth).balanceOf(recipient), remainder);
     }
 
     function test_queueForTransferRecipient_revertsWhenCallerIsNotIssuer() public {

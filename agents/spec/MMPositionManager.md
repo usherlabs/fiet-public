@@ -312,20 +312,20 @@ These actions manage commitment lifecycle and are handled directly in `MMPositio
 
 ### COMMIT_SIGNAL (0x20)
 
-Commits a liquidity signal and mints a commitment NFT to the specified owner.
+Commits a liquidity signal and mints a commitment NFT to the **locker** (the batch caller). The encoded `owner` word in params is ignored for minting; use ERC-721 `transferFrom` after the batch if custody should differ.
 
 **Parameters:**
 | Name | Type | Description |
 |------|------|-------------|
 | `liquiditySignal` | `bytes` | ABI-encoded liquidity signal to verify and record |
-| `owner` | `address` | Recipient of the commitment NFT (supports address mapping) |
+| `owner` | `address` | Ignored for mint target (retained for ABI compatibility); NFT mints to locker |
 
 **Flow:**
 
 ```
 _commitSignal()
   → vtsOrchestrator.commitSignal()      // Validate and record signal
-  → _mint(owner, tokenId)               // Mint ERC721 NFT
+  → _mint(locker, tokenId)              // Mint ERC721 NFT to msgSender() / locker
   → emit SignalCommitted(tokenId)
 ```
 
@@ -422,8 +422,10 @@ Unwraps LCC tokens to underlying asset via the LiquidityHub.
 |------|------|-------------|
 | `lccAddr` | `address` | The LCC token address |
 | `amount` | `uint256` | Amount to unwrap (0 = max available) |
-| `recipient` | `address` | Recipient of underlying (supports address mapping) |
+| `recipient` | `address` | After `_mapRecipient`, must be the locker or `address(this)` (MMPM); arbitrary third-party recipients revert |
 | `payerIsUser` | `bool` | Whether to pull from user wallet or use deltas |
+
+**Policy:** Resolved payout address must be `msgSender()` (locker) or `address(this)` so on-behalf-of unwraps do not route underlying to unserviceable addresses. The Hub additionally rejects exempt/DEX/Hub payout targets (HUB-02B).
 
 ---
 

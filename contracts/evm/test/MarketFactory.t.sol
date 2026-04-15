@@ -77,7 +77,7 @@ contract MarketFactoryTest is Test, Deployers {
         // Deploy LiquidityHub as `owner` so subsequent owner-only calls succeed
         vm.prank(owner);
         address payable liquidityHubAddress =
-            payable(address(new LiquidityHub(address(oracleHelperAddress), "Ether", "ETH", 18, owner)));
+            payable(address(new LiquidityHub(address(oracleHelperAddress), "Ether", "ETH", 18, address(0), owner)));
         liquidityHub = liquidityHubAddress;
 
         // Deploy VTSOrchestrator
@@ -102,23 +102,10 @@ contract MarketFactoryTest is Test, Deployers {
         IWETH9 weth9 = IWETH9(address(new WETH()));
         address commitmentDescriptor = address(new MMPCommitmentDescriptor());
 
-        // Mock factory calls used by MMPositionManager constructor (MMPM still points at a placeholder factory addr)
-        address tempFactoryAddr = makeAddr("marketFactory");
-        vm.mockCall(
-            tempFactoryAddr,
-            abi.encodeWithSelector(IMarketFactory.oracleHelper.selector),
-            abi.encode(oracleHelperAddress)
-        );
-        vm.mockCall(
-            tempFactoryAddr,
-            abi.encodeWithSelector(IMarketFactory.liquidityHub.selector),
-            abi.encode(liquidityHubAddress)
-        );
-
-        // Deploy MMPositionActionsImpl + MMPositionManager
+        // Deploy MMPositionActionsImpl + MMPositionManager (wired to the real factory; getters resolve oracle/hub from factory ctor)
         vm.prank(owner);
         MMPositionActionsImpl actionsImpl = new MMPositionActionsImpl(
-            address(poolManager), tempFactoryAddr, address(vtsOrchestrator), address(canonicalVault)
+            address(poolManager), address(factory), address(vtsOrchestrator), address(canonicalVault)
         );
         MMQueueCustodian queueCustodian = new MMQueueCustodian(address(this));
 
@@ -126,7 +113,7 @@ contract MarketFactoryTest is Test, Deployers {
         positionManager = new MMPositionManager(
             MMPositionManager.MMPositionManagerInit({
                 poolManager: poolManager,
-                marketFactory: tempFactoryAddr, // temporary address, will be updated after factory deployment
+                marketFactory: address(factory),
                 vtsOrchestrator: address(vtsOrchestrator),
                 canonicalCustody: address(canonicalVault),
                 descriptor: commitmentDescriptor,

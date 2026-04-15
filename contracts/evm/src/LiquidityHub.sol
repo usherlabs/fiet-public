@@ -13,12 +13,13 @@ import {Currency} from "v4-periphery/lib/v4-core/src/types/Currency.sol";
 import {Math} from "openzeppelin-contracts/contracts/utils/math/Math.sol";
 import {ReentrancyGuardTransient} from "openzeppelin-contracts/contracts/utils/ReentrancyGuardTransient.sol";
 import {Errors} from "./libraries/Errors.sol";
-import {IMarketVault} from "./interfaces/IMarketVault.sol";
+import {ICanonicalVault} from "./interfaces/ICanonicalVault.sol";
 import {TransientSlots} from "./libraries/TransientSlots.sol";
 import {ILiquidityHub} from "./interfaces/ILiquidityHub.sol";
 import {ILCC} from "./interfaces/ILCC.sol";
 import {BoundRegistry} from "./modules/BoundRegistry.sol";
 import {Bounds} from "./libraries/Bounds.sol";
+import {IWETH9} from "v4-periphery/src/interfaces/external/IWETH9.sol";
 
 /**
  * @title LiquidityHub
@@ -32,6 +33,7 @@ contract LiquidityHub is BoundRegistry, Ownable, ReentrancyGuardTransient {
     LiquidityHubStorage internal s;
 
     IOracleHelper public immutable oracleHelper;
+    IWETH9 public immutable weth9;
 
     event FactorySet(address indexed factory, bool enabled);
     event LCCCreated(address indexed underlyingAsset, address indexed lccToken, bytes32 marketId);
@@ -57,6 +59,7 @@ contract LiquidityHub is BoundRegistry, Ownable, ReentrancyGuardTransient {
      * @param _nativeAssetName The name of the native asset (e.g., "Ether")
      * @param _nativeAssetSymbol The symbol of the native asset (e.g., "ETH")
      * @param _nativeAssetDecimals The decimals of the native asset (typically 18)
+     * @param _weth9 Wrapped native token used for native settlement fallback
      * @param _initialOwner The initial owner of the contract
      */
     constructor(
@@ -64,9 +67,11 @@ contract LiquidityHub is BoundRegistry, Ownable, ReentrancyGuardTransient {
         string memory _nativeAssetName,
         string memory _nativeAssetSymbol,
         uint8 _nativeAssetDecimals,
+        address _weth9,
         address _initialOwner
     ) Ownable(_initialOwner) {
         oracleHelper = IOracleHelper(_oracleHelper);
+        weth9 = IWETH9(_weth9);
         LCCFactoryLib.initNativeAsset(s, _nativeAssetName, _nativeAssetSymbol, _nativeAssetDecimals);
     }
 
@@ -576,6 +581,7 @@ contract LiquidityHub is BoundRegistry, Ownable, ReentrancyGuardTransient {
      *      - Endpoint `unwrapTo(lcc, to, queueTo, ...)`: supported only when the endpoint acts on behalf of the
      *        beneficiary named by `queueTo`; caller-held balance is treated as representing that beneficiary for this
      *        unwrap (see HUB-02A in INVARIANTS.md).
+     *      - Immediate payout `to` must be serviceable: not Hub, not exempt/DEX sinks (HUB-02B).
      * @param lcc The LCC token address to unwrap
      * @param to The recipient of the underlying asset
      * @param queueTo The address to queue shortfall to
@@ -589,6 +595,8 @@ contract LiquidityHub is BoundRegistry, Ownable, ReentrancyGuardTransient {
         // Generic queue paths validate queue-owner shape only.
         // Current settleability remains a redemption-time concern for processSettlementFor().
         _assertValidQueueOwner(lcc, queueTo, true);
+        // Immediate payout recipient must be serviceable: not Hub, not exempt/DEX sinks (see HUB-02B in INVARIANTS.md).
+        _assertValidUnwrapPayoutRecipient(lcc, to);
 
         _assertUnwrapWithinHeadroom(amount, fromBalance, s.settleQueue[lcc][queueTo]);
 
@@ -1095,7 +1103,7 @@ contract LiquidityHub is BoundRegistry, Ownable, ReentrancyGuardTransient {
         _assertValidQueueOwner(lcc, recipient, allowHub);
 
         // Native settlements push ETH directly to `recipient` during `processSettlementFor`.
-        // Restrict issuer-driven transfer-recipient queues to EOAs, or compatible contracts for native-backed LCCs.
+        // Restrict issuer-driven transfer-recipient queues to EOAs only for native-backed LCCs (reject all contracts here).
         // Reason: non-payable contract recipients cannot create permanently unserviceable queues.
         // Native payouts require a recipient shape we can deterministically service from push transfers.
         // The issuer deficit queue path (`queueForTransferRecipient`) is strict by design, so we reject
@@ -1132,6 +1140,24 @@ contract LiquidityHub is BoundRegistry, Ownable, ReentrancyGuardTransient {
     }
 
     /**
+     * @dev Unwrap immediate payout recipient: must not be zero, the Hub, bucket-exempt, or DEX sink.
+     *      Distinct from queue ownership: `queueTo` may be `address(this)` for Hub-internal queue semantics;
+     *      underlying must never be paid to unserviceable sinks (e.g. proxy-hook/facade).
+     */
+    function _assertValidUnwrapPayoutRecipient(address lcc, address recipient) internal view {
+        if (recipient == address(0)) {
+            revert Errors.InvalidAddress(recipient);
+        }
+        if (recipient == address(this)) {
+            revert Errors.NotApproved(recipient);
+        }
+        uint8 level = boundLevelOfLcc(lcc, recipient);
+        if (Bounds.isExempt(level) || Bounds.isDex(level)) {
+            revert Errors.NotApproved(recipient);
+        }
+    }
+
+    /**
      * @dev Queue accounting helper only.
      * Deliberately does not assert recipient backing/custody because queue ownership may be
      * intentionally decoupled from current LCC holder state. Serviceability is enforced at
@@ -1154,55 +1180,27 @@ contract LiquidityHub is BoundRegistry, Ownable, ReentrancyGuardTransient {
     }
 
     /**
-     * @dev Validates that the sender is the canonical vault for a native-backed market
-     * @dev Reverts if sender identity is not canonical for the market derived from returned LCCs
+     * @dev Validates inbound ETH from the factory-scoped canonical vault only.
+     *      `CanonicalVault` sends native ETH to the Hub; identity is `ICanonicalVault.marketFactory()` plus
+     *      `IMarketFactory.canonicalVault() == sender` for a hub-registered factory.
      */
     function _assertValidEthSender() internal view {
         address sender = _msgSender();
         if (sender.code.length == 0) revert Errors.InvalidEthSender();
 
-        address l0;
-        address l1;
-        // Prefer a typed call + try/catch over low-level staticcall probing.
-        try IMarketVault(sender).lccs() returns (address _l0, address _l1) {
-            l0 = _l0;
-            l1 = _l1;
-        } catch {
-            revert Errors.InvalidEthSender();
-        }
+        try ICanonicalVault(sender).marketFactory() returns (address mf) {
+            if (isFactory[mf] && IMarketFactory(mf).canonicalVault() == sender) {
+                return;
+            }
+        } catch {}
 
-        bool valid0 = LCCFactoryLib.isValidLcc(s, l0);
-        bool valid1 = LCCFactoryLib.isValidLcc(s, l1);
-        if (!valid0 || !valid1) {
-            revert Errors.InvalidEthSender();
-        }
-
-        Market memory m0 = s.lccToMarket[l0];
-        Market memory m1 = s.lccToMarket[l1];
-        if (m0.id == bytes32(0) || m1.id == bytes32(0) || m0.id != m1.id || m0.factory != m1.factory) {
-            revert Errors.InvalidEthSender();
-        }
-        if (!isFactory[m0.factory]) {
-            revert Errors.InvalidEthSender();
-        }
-        if (!IMarketFactory(m0.factory).isCanonicalVault(sender)) {
-            revert Errors.InvalidEthSender();
-        }
-
-        // Require a native-backed market.
-        if (s.lccToUnderlying[l0] != address(0) && s.lccToUnderlying[l1] != address(0)) {
-            revert Errors.InvalidEthSender();
-        }
+        revert Errors.InvalidEthSender();
     }
 
     /**
-     * @notice Receives native ETH transfers from MarketVault contracts
-     * @dev Only accepts transfers from valid MarketVault contracts with at least one native ETH LCC.
-     *      This enables the route: PoolManager -> MarketVault -> LiquidityHub for native asset settlements.
-     *      Reverts if the sender is not a valid MarketVault or if neither LCC uses native ETH as underlying.
+     * @notice Receives native ETH from the factory's `canonicalVault` only
      */
     receive() external payable {
-        // plain ETH transfer must come from a market vault.
         _assertValidEthSender();
     }
 }

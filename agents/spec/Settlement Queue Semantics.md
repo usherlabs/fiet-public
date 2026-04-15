@@ -45,6 +45,8 @@ Queue writes do **not** need to prove that settlement can execute immediately.
 - queue exists,
 - reserve is available,
 - recipient backing is currently valid for the selected settlement path.
+- for native-underlying payouts, direct ETH push may fall back to wrapped-native transfer when recipient cannot accept
+  ETH at settlement time.
 
 If these are not reconciled yet, reverting is the expected behaviour and callers should retry later.
 
@@ -73,7 +75,9 @@ This prevents repeated vault-to-Hub drains when queue debt is already reserve-ba
 ### Validation placement
 
 - `_queueSettlement(...)`: accounting helper only.
-- `queueForTransferRecipient(...)`: strict recipient serviceability checks are required because recipient-backed settlement is assumed immediately for this path.
+- `queueForTransferRecipient(...)`: strict recipient serviceability checks are required because recipient-backed
+  settlement is assumed immediately for this path. For native lanes, this remains an early filter (for example reject
+  currently deployed contract recipients) rather than a full future-liveness guarantee.
 - Other queue paths: validate only queue-owner shape (non-zero, non-exempt unless Hub); defer execution-time serviceability to settlement.
 
 ## Settlement Paths
@@ -84,6 +88,9 @@ Enforced in `processSettlementFor(...)` -> `LiquidityHubLib.processSettlementLog
 
 - Uses recipient market-derived balance for serviceability.
 - Burns recipient LCC and transfers underlying when executable.
+- Native-underlying delivery path:
+  - try direct ETH payout first;
+  - if ETH transfer fails, wrap to WETH and transfer ERC20 WETH to preserve queue liveness.
 - Reverts when not yet executable (`reserve` and/or holder backing mismatch).
 
 ### Hub path

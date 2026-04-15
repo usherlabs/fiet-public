@@ -101,6 +101,8 @@ contract MockMarketVault_RouterLib is IMarketVault {
     }
 
     function decreaseLiquidityReserve(Currency, uint256) external pure {}
+
+    function increaseLiquidityReserve(Currency, uint256) external pure {}
 }
 
 contract MockPoolManager_RouterLib {

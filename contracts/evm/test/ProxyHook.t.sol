@@ -65,9 +65,72 @@ contract UnwrapInUnlockRunner {
     }
 }
 
+contract ProxyHookNativeQueueNonPayableRecipient {}
+
+contract ProxyHookNativeQueueCounterfactualDeployer {
+    function predict(bytes32 salt) external view returns (address predicted) {
+        bytes32 bytecodeHash = keccak256(type(ProxyHookNativeQueueNonPayableRecipient).creationCode);
+        bytes32 digest = keccak256(abi.encodePacked(bytes1(0xff), address(this), salt, bytecodeHash));
+        predicted = address(uint160(uint256(digest)));
+    }
+
+    function deploy(bytes32 salt) external returns (address deployed) {
+        deployed = address(new ProxyHookNativeQueueNonPayableRecipient{salt: salt}());
+    }
+}
+
 contract ProxyHookTest is MarketVaultBase {
     using PoolIdLibrary for PoolId;
     using CurrencyLibrary for Currency;
+
+    function test_nativeDeficitQueueCounterfactualRecipient_settlesViaWethFallback() public {
+        address lccNative;
+        address lccErc20;
+        vm.startPrank(marketFactory);
+        address[] memory issuers = new address[](1);
+        issuers[0] = address(proxyHook);
+        (lccNative, lccErc20) = LiquidityHub(payable(liquidityHub))
+            .createLCCPair(
+                abi.encodePacked(address(0xD201)),
+                address(0),
+                Currency.unwrap(proxyPoolKey.currency1),
+                "Proxy Native Queue Market",
+                issuers
+            );
+        LiquidityHub(payable(liquidityHub))
+            .initialize(lccNative, lccErc20, bytes32("proxyNativeQueueMarket"), abi.encodePacked(address(0xD201)));
+        vm.stopPrank();
+
+        ProxyHookNativeQueueCounterfactualDeployer deployer = new ProxyHookNativeQueueCounterfactualDeployer();
+        bytes32 salt = keccak256("proxy-native-counterfactual");
+        address recipient = deployer.predict(salt);
+        uint256 amount = 8e18;
+
+        vm.prank(address(proxyHook));
+        LiquidityHub(payable(liquidityHub)).issue(lccNative, address(proxyHook), amount);
+        vm.prank(address(proxyHook));
+        IERC20Minimal(lccNative).transfer(recipient, amount);
+        vm.prank(address(proxyHook));
+        LiquidityHub(payable(liquidityHub)).queueForTransferRecipient(lccNative, recipient, amount);
+
+        uint256 reserveBefore = LiquidityHub(payable(liquidityHub)).reserveOfUnderlying(lccNative);
+        uint256 neededHubBalance = reserveBefore + amount;
+        if (address(liquidityHub).balance < neededHubBalance) {
+            vm.deal(liquidityHub, neededHubBalance);
+        }
+        vm.prank(address(proxyHook));
+        LiquidityHub(payable(liquidityHub)).confirmTake(lccNative, amount, false);
+
+        deployer.deploy(salt);
+        assertGt(recipient.code.length, 0, "recipient should now be non-payable contract");
+
+        address weth = address(LiquidityHub(payable(liquidityHub)).weth9());
+        LiquidityHub(payable(liquidityHub)).processSettlementFor(lccNative, recipient, amount);
+
+        assertEq(LiquidityHub(payable(liquidityHub)).settleQueue(lccNative, recipient), 0);
+        assertEq(IERC20Minimal(weth).balanceOf(recipient), amount);
+        assertEq(recipient.balance, 0);
+    }
 
     function test_activate_revertsIfNotFactory_onFreshProxyHook() public {
         ProxyHookHarness fresh = new ProxyHookHarness(address(manager), address(marketFactory));
@@ -1313,7 +1376,7 @@ contract ProxyHookTest is MarketVaultBase {
 
     /// @dev Suite B (plan): zeroForOne exact-input must mint input-lane underlying claims to CanonicalVault.
     function test_proxySwap_zeroForOne_exactInput_mintsInputUnderlyingClaimToCanonicalVault() public {
-        vm.assume(Currency.unwrap(proxyPoolKey.currency0) != address(0));
+        assertFalse(Currency.unwrap(proxyPoolKey.currency0) == address(0), "pre: Suite B requires ERC20 currency0");
         address payable cv = _canonicalVaultPayable();
 
         uint256 claimInBefore = _underlying6909Balance(address(cv), proxyPoolKey.currency0);
@@ -1328,7 +1391,7 @@ contract ProxyHookTest is MarketVaultBase {
 
     /// @dev Suite B (plan): zeroForOne exact-input must burn output-lane underlying claims from CanonicalVault.
     function test_proxySwap_zeroForOne_exactInput_burnsOutputUnderlyingClaimFromCanonicalVault() public {
-        vm.assume(Currency.unwrap(proxyPoolKey.currency1) != address(0));
+        assertFalse(Currency.unwrap(proxyPoolKey.currency1) == address(0), "pre: Suite B requires ERC20 currency1");
         address payable cv = _canonicalVaultPayable();
 
         uint256 claimOutBefore = _underlying6909Balance(address(cv), proxyPoolKey.currency1);
@@ -1343,7 +1406,7 @@ contract ProxyHookTest is MarketVaultBase {
 
     /// @dev Suite B (plan): oneForZero exact-input must mint input-lane underlying claims to CanonicalVault.
     function test_proxySwap_oneForZero_exactInput_mintsInputUnderlyingClaimToCanonicalVault() public {
-        vm.assume(Currency.unwrap(proxyPoolKey.currency1) != address(0));
+        assertFalse(Currency.unwrap(proxyPoolKey.currency1) == address(0), "pre: Suite B requires ERC20 currency1");
         address payable cv = _canonicalVaultPayable();
 
         uint256 claimInBefore = _underlying6909Balance(address(cv), proxyPoolKey.currency1);
@@ -1358,7 +1421,7 @@ contract ProxyHookTest is MarketVaultBase {
 
     /// @dev Suite B (plan): oneForZero exact-input must burn output-lane underlying claims from CanonicalVault.
     function test_proxySwap_oneForZero_exactInput_burnsOutputUnderlyingClaimFromCanonicalVault() public {
-        vm.assume(Currency.unwrap(proxyPoolKey.currency0) != address(0));
+        assertFalse(Currency.unwrap(proxyPoolKey.currency0) == address(0), "pre: Suite B requires ERC20 currency0");
         address payable cv = _canonicalVaultPayable();
 
         uint256 claimOutBefore = _underlying6909Balance(address(cv), proxyPoolKey.currency0);
@@ -1373,8 +1436,8 @@ contract ProxyHookTest is MarketVaultBase {
 
     /// @dev Suite B (plan): after successful exact-input swaps, CanonicalVault claim ownership must equal reserve ledger.
     function test_proxySwap_exactInput_preservesInvariant_claimsOwnedByCanonicalVault_matchVaultReserves() public {
-        vm.assume(Currency.unwrap(proxyPoolKey.currency0) != address(0));
-        vm.assume(Currency.unwrap(proxyPoolKey.currency1) != address(0));
+        assertFalse(Currency.unwrap(proxyPoolKey.currency0) == address(0), "pre: Suite B requires ERC20 currency0");
+        assertFalse(Currency.unwrap(proxyPoolKey.currency1) == address(0), "pre: Suite B requires ERC20 currency1");
 
         _assertUnderlyingClaimsMatchVaultReserves();
         _executeSwap(proxyPoolKey, true, -int256(1e18), ZERO_BYTES);
@@ -1386,7 +1449,7 @@ contract ProxyHookTest is MarketVaultBase {
 
     /// @dev Suite C (plan): with resolved recipient and limited output reserve, only immediate available output burns claims.
     function test_proxySwap_exactInput_withResolvedRecipient_burnsOnlyImmediateOutputClaimPortion() public {
-        vm.assume(Currency.unwrap(proxyPoolKey.currency1) != address(0));
+        assertFalse(Currency.unwrap(proxyPoolKey.currency1) == address(0), "pre: Suite B requires ERC20 currency1");
         address recipient = makeAddr("claim_deficit_recipient");
         _setupRecipient(recipient);
 
@@ -1411,7 +1474,7 @@ contract ProxyHookTest is MarketVaultBase {
 
     /// @dev Suite C (plan): deficit on output lane must not break full input-lane claim mirroring into CanonicalVault.
     function test_proxySwap_exactInput_withResolvedRecipient_keepsInputClaimMirroringEvenWhenOutputDeficits() public {
-        vm.assume(Currency.unwrap(proxyPoolKey.currency0) != address(0));
+        assertFalse(Currency.unwrap(proxyPoolKey.currency0) == address(0), "pre: Suite B requires ERC20 currency0");
         address recipient = makeAddr("claim_deficit_recipient_in");
         _setupRecipient(recipient);
 
@@ -1436,8 +1499,8 @@ contract ProxyHookTest is MarketVaultBase {
 
     /// @dev Suite C (plan): unresolved-recipient deficit must revert without mutating durable claim or reserve ownership.
     function test_proxySwap_exactInput_unresolvedRecipient_revertsWhenOutputExceedsVault() public {
-        vm.assume(Currency.unwrap(proxyPoolKey.currency1) != address(0));
-        vm.assume(Currency.unwrap(proxyPoolKey.currency0) != address(0));
+        assertFalse(Currency.unwrap(proxyPoolKey.currency1) == address(0), "pre: Suite B requires ERC20 currency1");
+        assertFalse(Currency.unwrap(proxyPoolKey.currency0) == address(0), "pre: Suite B requires ERC20 currency0");
 
         address payable cv = _canonicalVaultPayable();
         bytes32 marketId = _coreMarketId();

@@ -37,6 +37,9 @@ contract CrossMarketDeltaRegressionE2E is MME2EBase {
     int24 internal constant TICK_UPPER = 60;
     uint128 internal constant LIQUIDITY = 1e10;
 
+    /// @dev Must match `_buildBatchActions` / `_buildBatchParams` length (single source of truth).
+    uint256 internal constant BATCH_LEN = 20;
+
     MMPositionManager internal s_mmpm;
     PoolKey internal s_keyA;
     PoolKey internal s_keyB;
@@ -47,6 +50,10 @@ contract CrossMarketDeltaRegressionE2E is MME2EBase {
     uint256 internal s_commitC;
     uint256 internal s_commitD;
     uint256 internal s_decAmount;
+
+    /// @dev Snapshot of MM LCC wallet balances on market A before the atomic batch (for non-tautological postchecks).
+    uint256 internal s_preMmLccA0;
+    uint256 internal s_preMmLccA1;
 
     function _loadMmPrivateKey() internal view returns (uint256 mmPk) {
         mmPk = uint256(
@@ -59,42 +66,49 @@ contract CrossMarketDeltaRegressionE2E is MME2EBase {
 
         s_mmpm = MMPositionManager(payable(mA.stack.contracts.mmPositionManager));
         s_keyA = _corePoolKey(mA);
-        s_commitA = _createMmPosition(mA, mmPk, TICK_LOWER, TICK_UPPER, LIQUIDITY, 1);
+        s_commitA = _createMmPosition(mA, mmPk, TICK_LOWER, TICK_UPPER, LIQUIDITY);
 
         StandaloneMarket memory nextMarket = _createMarketFromStackWithUnderlyings(
             mA.stack, mm, CORE_POOL_FEE, mA.underlying0, mA.underlying1, false
         );
         s_keyB = _corePoolKey(nextMarket);
-        s_commitB = _createMmPosition(nextMarket, mmPk, TICK_LOWER, TICK_UPPER, LIQUIDITY, 2);
+        s_commitB = _createMmPosition(nextMarket, mmPk, TICK_LOWER, TICK_UPPER, LIQUIDITY);
 
         nextMarket = _createMarketFromStackWithUnderlyings(
             mA.stack, mm, CORE_POOL_FEE, mA.underlying0, mA.underlying1, false
         );
         s_keyC = _corePoolKey(nextMarket);
-        s_commitC = _createMmPosition(nextMarket, mmPk, TICK_LOWER, TICK_UPPER, LIQUIDITY, 3);
+        s_commitC = _createMmPosition(nextMarket, mmPk, TICK_LOWER, TICK_UPPER, LIQUIDITY);
 
         nextMarket = _createMarketFromStackWithUnderlyings(
             mA.stack, mm, CORE_POOL_FEE, mA.underlying0, mA.underlying1, false
         );
         s_keyD = _corePoolKey(nextMarket);
-        s_commitD = _createMmPosition(nextMarket, mmPk, TICK_LOWER, TICK_UPPER, LIQUIDITY, 4);
+        s_commitD = _createMmPosition(nextMarket, mmPk, TICK_LOWER, TICK_UPPER, LIQUIDITY);
 
         s_decAmount = uint256(LIQUIDITY / 8);
         require(s_decAmount > 0, "regression: decrease amount must be non-zero");
     }
 
+    /// @notice Runs the cross-market MM atomic batch (must call `_prepareCrossMarketBatch` in the same script run first).
+    /// @param recipient Locker credit sweep recipient for trailing `TAKE` actions (same as MM in `_runScenario`).
+    /// @param mmPk MM private key (broadcast signer).
     function runCrossMarketAtomicBatch(address recipient, uint256 mmPk) external {
+        require(address(s_mmpm) != address(0), "CrossMarket: call _prepareCrossMarketBatch first");
+        require(recipient != address(0), "CrossMarket: recipient is zero");
         vm.startBroadcast(mmPk);
         {
             bytes memory actions = _buildBatchActions();
             bytes[] memory params = _buildBatchParams(recipient);
+            require(actions.length == BATCH_LEN, "CrossMarket: action/param length drift");
+            require(params.length == BATCH_LEN, "CrossMarket: action/param length drift");
             _executeMMActions(s_mmpm, actions, params, block.timestamp + 3600);
         }
         vm.stopBroadcast();
     }
 
     function _buildBatchActions() internal pure returns (bytes memory actions) {
-        actions = new bytes(20);
+        actions = new bytes(BATCH_LEN);
         actions[0] = bytes1(uint8(MMActions.DECREASE_LIQUIDITY));
         actions[1] = bytes1(uint8(MMActions.SETTLE_POSITION));
         actions[2] = bytes1(uint8(MMActions.MINT_POSITION_FROM_DELTAS));
@@ -122,7 +136,7 @@ contract CrossMarketDeltaRegressionE2E is MME2EBase {
         view
         returns (bytes[] memory params)
     {
-        params = new bytes[](20);
+        params = new bytes[](BATCH_LEN);
         params[0] = _param0();
         params[1] = _param1();
         params[2] = _param2();
@@ -197,11 +211,16 @@ contract CrossMarketDeltaRegressionE2E is MME2EBase {
         return abi.encode(lane, recipient, 0);
     }
 
-    function _assertBalancesReadable(address mm) internal view {
+    /// @dev Asserts the batch actually moved durable MM wallet state (not merely that `balanceOf` did not revert).
+    function _assertCrossMarketBatchPostState(address mm) internal view {
         address lccA0 = Currency.unwrap(s_keyA.currency0);
         address lccA1 = Currency.unwrap(s_keyA.currency1);
-        require(IERC20(lccA0).balanceOf(mm) < type(uint256).max, "sanity: balances readable");
-        require(IERC20(lccA1).balanceOf(mm) < type(uint256).max, "sanity: balances readable");
+        uint256 postA0 = IERC20(lccA0).balanceOf(mm);
+        uint256 postA1 = IERC20(lccA1).balanceOf(mm);
+        require(
+            postA0 != s_preMmLccA0 || postA1 != s_preMmLccA1,
+            "regression: batch did not change market A LCC balances (unexpected no-op)"
+        );
     }
 
     function _runScenario() internal {
@@ -209,11 +228,18 @@ contract CrossMarketDeltaRegressionE2E is MME2EBase {
         uint256 mmPk = _loadMmPrivateKey();
         address mm = vm.addr(mmPk);
         _prepareCrossMarketBatch(mm, mmPk);
+
+        address lccA0 = Currency.unwrap(s_keyA.currency0);
+        address lccA1 = Currency.unwrap(s_keyA.currency1);
+        s_preMmLccA0 = IERC20(lccA0).balanceOf(mm);
+        s_preMmLccA1 = IERC20(lccA1).balanceOf(mm);
+
         this.runCrossMarketAtomicBatch(mm, mmPk);
         console.log("OK: cross-market atomic batch");
-        _assertBalancesReadable(mm);
+        _assertCrossMarketBatchPostState(mm);
     }
 
+    /// @notice Entrypoint for `forge script`: deploy stack, run cross-market scenario, assert postconditions.
     function run() external {
         console.log("=== E2E: CrossMarketDeltaRegression ===");
         _runScenario();

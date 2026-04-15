@@ -161,6 +161,8 @@ contract MarketFactory is IMarketFactory, Ownable, ImmutableState, ImmutableVTSS
         }
     }
 
+    /// @notice VTS orchestrator bound to this factory at construction (immutable).
+    /// @return The orchestrator contract.
     function vts() external view returns (IVTSOrchestrator) {
         return vtsOrchestrator;
     }
@@ -523,13 +525,6 @@ contract MarketFactory is IMarketFactory, Ownable, ImmutableState, ImmutableVTSS
      */
     function proxyHookToCurrencyPair(address proxyHook) external view returns (address[2] memory) {
         return _proxyHookToCurrencyPair[proxyHook];
-    }
-
-    /// @inheritdoc IMarketFactory
-    function isCanonicalVault(address vault) external view returns (bool) {
-        if (vault == address(0)) return false;
-        if (canonicalVault == address(0)) return false;
-        return canonicalVault == vault;
     }
 
     function isMarketFacade(bytes32 marketId, address facade) external view returns (bool) {

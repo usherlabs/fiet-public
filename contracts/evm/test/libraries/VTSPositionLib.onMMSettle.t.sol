@@ -869,6 +869,8 @@ contract VTSPositionLibOnMMSettleTest is VTSLibTestBase {
         harness.setCommitmentMax(positionId, 1000e18, 1000e18);
         harness.setSettled(positionId, 200e18, 200e18);
         harness.setPositionActive(positionId, true);
+        harness.setPoolTotalSettled(testPoolId, 200e18, 200e18);
+        harness.setPoolTotalDeficitPrincipal(testPoolId, 0, 0);
 
         uint256 producedAmt = 40e18;
         harness.addMarketProducedCredit(vaultA, underlyingCurrency0, producedAmt);
@@ -902,6 +904,13 @@ contract VTSPositionLibOnMMSettleTest is VTSLibTestBase {
             15e18,
             "produced credit should decrement by delta-backed withdrawal"
         );
+
+        (uint256 poolSettled0, uint256 poolSettled1) = harness.getPoolTotalSettled(testPoolId);
+        assertEq(poolSettled0, 200e18, "pool total settled token0 unchanged (delta-backed lane)");
+        assertEq(poolSettled1, 200e18, "pool total settled token1 unchanged (delta-backed lane)");
+        (uint256 principal0, uint256 principal1) = harness.getPoolTotalDeficitPrincipal(testPoolId);
+        assertEq(principal0, 0, "pool DICE principal token0 unchanged");
+        assertEq(principal1, 0, "pool DICE principal token1 unchanged");
     }
 
     /// @notice Regression: produced credit is namespaced by factory; another factory cannot backstop consumption.

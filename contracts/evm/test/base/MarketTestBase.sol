@@ -180,7 +180,8 @@ abstract contract MarketTestBase is Test, Deployers, DeployPermit2 {
         address commitmentDescriptor = address(new MMPCommitmentDescriptor());
 
         // Deploy LiquidityHub BEFORE VTSOrchestrator (VTSOrchestrator needs liquidityHub address)
-        liquidityHub = payable(address(new LiquidityHub(address(oracleHelper), "Ether", "ETH", 18, testOwner)));
+        liquidityHub =
+            payable(address(new LiquidityHub(address(oracleHelper), "Ether", "ETH", 18, address(weth9), testOwner)));
 
         // Deploy VTSOrchestrator (virtual to allow test overrides)
         vtsOrchestrator =

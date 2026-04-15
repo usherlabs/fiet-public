@@ -111,5 +111,7 @@ contract MockMarketVault is IMarketVault {
     }
 
     function decreaseLiquidityReserve(Currency, uint256) external pure {}
+
+    function increaseLiquidityReserve(Currency, uint256) external pure {}
 }
 

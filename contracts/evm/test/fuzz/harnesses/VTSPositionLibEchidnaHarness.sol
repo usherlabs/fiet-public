@@ -131,7 +131,7 @@ contract VTSPositionLibEchidnaHarness {
         }
         uint256 debt = OwnerCurrencyDelta.getFullDebt(currency, target);
         if (debt == 0) return 0;
-        if (debt >= uint256(uint128(type(int128).max))) return type(int128).min;
+        if (debt > uint256(uint128(type(int128).max))) return type(int128).min;
         return -int128(uint128(debt));
     }
 

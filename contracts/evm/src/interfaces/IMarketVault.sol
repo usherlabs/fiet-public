@@ -7,13 +7,20 @@ import {VaultSettlementIntent} from "../types/VTS.sol";
 
 /**
  * @title IMarketVault
- * @notice Interface for th ProxyHook contract
+ * @notice Per-market vault facade implemented by `ProxyHook` (routes to `ICanonicalVault`).
  */
 interface IMarketVault {
+    /// @notice Core pool identifier for this market facade.
+    /// @return The market id as `bytes32`.
     function marketId() external view returns (bytes32);
 
+    /// @notice Factory-scoped canonical custody used by this facade.
+    /// @return Canonical vault address.
     function canonicalVault() external view returns (address);
 
+    /// @notice Sorted LCC pair for this market.
+    /// @return lccToken0 First LCC token.
+    /// @return lccToken1 Second LCC token.
     function lccs() external view returns (address lccToken0, address lccToken1);
 
     /**
@@ -62,6 +69,8 @@ interface IMarketVault {
     function tryModifyLiquiditiesWithRecipient(VaultSettlementIntent calldata settlementIntent, address recipient)
         external
         returns (BalanceDelta);
+
+    function increaseLiquidityReserve(Currency underlyingCurrency, uint256 amount) external;
 
     function decreaseLiquidityReserve(Currency underlyingCurrency, uint256 amount) external;
 }

@@ -111,6 +111,8 @@ contract VTSPositionLibTest_VaultNoop is IMarketVault {
     }
 
     function decreaseLiquidityReserve(Currency, uint256) external pure {}
+
+    function increaseLiquidityReserve(Currency, uint256) external pure {}
 }
 
 /// @dev Vault that clamps withdrawals to fixed available amounts (used to test onMMSettle phase-2 shortfall correction).
@@ -194,6 +196,8 @@ contract VTSPositionLibTest_VaultClamp is IMarketVault {
     }
 
     function decreaseLiquidityReserve(Currency, uint256) external pure {}
+
+    function increaseLiquidityReserve(Currency, uint256) external pure {}
 }
 
 /// @dev Vault that returns "more than requested" to force negative rawQueued and exercise clamp-to-zero paths.
@@ -277,6 +281,8 @@ contract VTSPositionLibTest_VaultOverAvailable is IMarketVault {
     }
 
     function decreaseLiquidityReserve(Currency, uint256) external pure {}
+
+    function increaseLiquidityReserve(Currency, uint256) external pure {}
 }
 
 /// @dev Vault that returns more-than-requested availability for token0 only (used to test one-sided queue clamping).

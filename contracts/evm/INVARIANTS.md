@@ -47,7 +47,10 @@ being an informal “should”.
   - Making only `wrap()` actual-received-aware would not by itself make fee-on-transfer assets safe, because
     subsequent Hub ↔ vault / issuer / settlement transfers could still lose value and desynchronise reserves.
 - **Current code status**:
-  - Native ETH ingress is explicitly exact (`msg.value == amount`).
+  - Native ETH ingress is explicitly exact (`msg.value == amount`) on wrap paths; plain ETH to `LiquidityHub.receive`
+    is restricted to authorised vault senders (see **HUB-01A**).
+  - Native ETH settlement egress now attempts direct ETH payout first, then wraps to WETH9 and transfers ERC20 WETH
+    when the recipient cannot accept native ETH.
   - ERC20 ingress currently assumes standard ERC20 transfer behaviour; this assumption should be treated as part of the
     market-listing policy unless and until explicit on-chain rejection / normalisation is added.
 
@@ -168,6 +171,15 @@ being an informal “should”.
   - If support is needed for a non-standard asset, the supported route is to list a deterministic wrapper/share token
     as the underlying and let that wrapper absorb the raw asset's non-standard deposit / withdrawal semantics.
 
+### HUB-01A: Inbound plain ETH (`receive`) is sender-gated (factory-scoped canonical vault only)
+
+- **Statement**: Plain ETH sent to `LiquidityHub` outside of `wrap` must come only from the factory-scoped canonical
+  vault: `msg.sender` implements `ICanonicalVault`, `marketFactory()` is a registered hub factory (`LiquidityHub.isFactory`),
+  and `IMarketFactory(marketFactory).canonicalVault() == msg.sender`.
+- **Enforced by**: `src/LiquidityHub.sol::_assertValidEthSender` (used by `receive()`).
+- **Why**: Market liquidity mobilisation sends native ETH from `CanonicalVault` to the Hub before `confirmTake`; Hub
+  ingress must bind to that custody address, not to arbitrary contracts or per-market facades.
+
 ### HUB-02: Unwrapping cannot exceed liquid (bucketed) balance; shortfalls are explicitly queued
 
 - **Statement**: Unwrap requires `0 < amount <= availableToUnwrap`, where `availableToUnwrap` is the caller’s live
@@ -201,6 +213,30 @@ being an informal “should”.
 - **Rationale**: Splitting immediate payout recipient from queue owner is a trusted endpoint pattern (for example
   `MMPositionManager` after it has consumed the beneficiary’s LCC or delta credit). Exposing that split to arbitrary EOAs
   allowed repeated queue inflation against unchanged holder balance.
+
+### HUB-02B: Unwrap immediate payout recipients must be serviceable (not Hub, exempt, or DEX)
+
+- **Statement**: On every unwrap path, the immediate underlying payout address `to` must not be `address(0)`, the Hub
+  itself, any `BOUND_EXEMPT` address, or any `BOUND_DEX` address. This is independent of queue-owner validation on
+  `queueTo`: the Hub may still attribute queued settlement to `address(this)` where Hub-internal queue semantics apply,
+  but underlying must never be pushed to unserviceable protocol sinks (for example proxy-hook/facade).
+- **Enforced by**: `src/LiquidityHub.sol::_assertValidUnwrapPayoutRecipient` inside `_unwrap` before `_pay`.
+- **Why**: Exempt endpoints are not unwrap payout targets; paying them strands underlying outside durable custody and
+  settlement accounting.
+
+### HUB-02C: Native queue settlement remains serviceable if recipient shape changes after queueing
+
+- **Statement**: For native-underlying settlements on the external recipient path, `processSettlementFor(...)` must not
+  become permanently unserviceable merely because a queue owner that appeared EOA-shaped at queue time later becomes a
+  non-payable contract.
+- **Enforced by**:
+  - `src/libraries/LiquidityHubLib.sol::transferUnderlying`:
+    - attempts direct native ETH transfer first;
+    - on native transfer failure, wraps the same amount via `LiquidityHub.weth9()` and transfers WETH as ERC20.
+- **Why**:
+  - Queue-time recipient checks (for example `recipient.code.length`) are snapshot checks and cannot guarantee future
+    native payability for counterfactual addresses.
+  - Settlement-time fallback is therefore the definitive liveness guard for native queue redemption.
 
 ### HUB-03: Issuer-gated issuance/cancellation must never operate on invalid LCCs
 
@@ -428,6 +464,22 @@ being an informal “should”.
   - If `totalSettled > 0`, increment CISE index; else accrue to residual.
 - **Enforced by**: `src/libraries/VTSCommitLib.sol::incrementCoverage`.
 - **Practical implication**: Tests should not assume “arbitrary coverage” will always produce burns or index movement.
+
+### COV-03A: Coverage is measured at unwrap-time market consumption, not at later queue fulfilment
+
+- **Statement**:
+  - `incrementCoverage` measures only the amount of already-live market liquidity actually consumed by
+    `MarketFactory.useMarketLiquidity(...)` during an unwrap.
+  - Any unwrap remainder that is queued is **not** itself a coverage event.
+  - Later queue servicing via vault-to-Hub mobilisation (for example `CanonicalVault._settleObligationsForLCC(...)` ->
+    `LiquidityHub.confirmTake(...)`) is fulfilment / reserve reconciliation, not retroactive enlargement of the earlier
+    coverage event.
+- **Why**:
+  - DICE/CISE are intended to answer "how much market liquidity was exercised by this unwrap now?", not "how much queue
+    debt was eventually paid later?".
+  - Therefore, if current reserve state causes part of an unwrap to queue, the protocol records coverage only for the
+    immediate exercised slice. Later token-in replenishment may clear the queue, but it does not create a second
+    coverage event for that original unwrap.
 
 ### COV-04: Fee-burn baseline remainder carry and liquidity resets
 

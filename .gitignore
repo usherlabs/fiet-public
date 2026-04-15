@@ -15,6 +15,8 @@ reports
 contracts/evm-scripts/cache/
 contracts/evm-scripts/out/
 
+agents/audit-findings
+
 # Foundry broadcast artefacts (keep selected mainnet runs)
 contracts/evm-scripts/broadcast/**
 !contracts/evm-scripts/broadcast/
