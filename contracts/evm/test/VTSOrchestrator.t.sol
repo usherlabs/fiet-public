@@ -490,9 +490,34 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
 
     function test_initPool_whenFactory() public {
         MarketVTSConfiguration memory config = VTSConfigs.getDefaultConfig();
+        PoolKey memory freshPoolKey = PoolKey({
+            currency0: Currency.wrap(address(0x33333333)),
+            currency1: Currency.wrap(address(0x44444444)),
+            fee: corePoolKey.fee,
+            tickSpacing: corePoolKey.tickSpacing,
+            hooks: IHooks(address(0))
+        });
         vm.prank(marketFactory);
-        vtsOrchestrator.initPool(corePoolKey, config);
+        vtsOrchestrator.initPool(freshPoolKey, config);
         // Should not revert
+    }
+
+    function test_revert_initPool_whenAlreadyInitialized() public {
+        MarketVTSConfiguration memory config = VTSConfigs.getDefaultConfig();
+        PoolKey memory poolKeyA = PoolKey({
+            currency0: Currency.wrap(address(0x11111111)),
+            currency1: Currency.wrap(address(0x22222222)),
+            fee: corePoolKey.fee,
+            tickSpacing: corePoolKey.tickSpacing,
+            hooks: IHooks(address(0))
+        });
+        vm.startPrank(marketFactory);
+        vtsOrchestrator.initPool(poolKeyA, config);
+        vm.expectRevert(
+            abi.encodeWithSelector(Errors.InvariantViolated.selector, "VTSOrchestrator: pool already initialized")
+        );
+        vtsOrchestrator.initPool(poolKeyA, config);
+        vm.stopPrank();
     }
 
     function test_revert_incrementCoverage_whenNotFactory() public {

@@ -48,7 +48,7 @@ contract SETTLE01 {
         EchidnaLinkedLibs.deployVTSLifecycleLinkedLib();
         harness = new VTSPositionLibEchidnaHarness();
         poolManager = new MockPoolManager();
-        vault = new MockMarketVault();
+        vault = new MockMarketVault(address(0));
 
         ModifyLiquidityParams memory mlParams =
             ModifyLiquidityParams({tickLower: -60, tickUpper: 60, liquidityDelta: 1e10, salt: bytes32(0)});

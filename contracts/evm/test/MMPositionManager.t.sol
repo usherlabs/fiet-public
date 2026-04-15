@@ -35,6 +35,7 @@ import {LiquiditySignal} from "../src/types/Commit.sol";
 import {ILiquidityHub} from "../src/interfaces/ILiquidityHub.sol";
 import {IMMQueueCustodian} from "../src/interfaces/IMMQueueCustodian.sol";
 import {IMarketVault} from "../src/interfaces/IMarketVault.sol";
+import {IMarketVaultDryBalanceDelta} from "./_helpers/IMarketVaultDryBalanceDelta.sol";
 import {Errors} from "../src/libraries/Errors.sol";
 import {Bounds} from "../src/libraries/Bounds.sol";
 import {ActionConstants} from "v4-periphery/src/libraries/ActionConstants.sol";
@@ -744,14 +745,17 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
         // Reuse the real actions impl from the already-deployed PositionManager so the constructor succeeds.
         // This test is about `commitmentDescriptor`, not delegation.
         MMPositionManager broken = new MMPositionManager(
-            address(manager),
-            address(marketFactory),
-            address(vtsOrchestrator),
-            address(0),
-            weth9,
-            permit2,
-            positionManager.actionsImpl(),
-            address(new MMQueueCustodian(address(this)))
+            MMPositionManager.MMPositionManagerInit({
+                poolManager: manager,
+                marketFactory: address(marketFactory),
+                vtsOrchestrator: address(vtsOrchestrator),
+                canonicalCustody: IMarketFactory(marketFactory).canonicalVault(),
+                descriptor: address(0),
+                weth9: weth9,
+                permit2: permit2,
+                actionsImpl: positionManager.actionsImpl(),
+                queueCustodianAddr: address(new MMQueueCustodian(address(this)))
+            })
         );
         vm.expectRevert(Errors.CommitmentDescriptorNotSet.selector);
         broken.tokenURI(1);
@@ -761,14 +765,17 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
         MockCommitmentDescriptor desc = new MockCommitmentDescriptor("ipfs://mock/");
 
         MMPositionManager fresh = new MMPositionManager(
-            address(manager),
-            address(marketFactory),
-            address(vtsOrchestrator),
-            address(desc),
-            weth9,
-            permit2,
-            positionManager.actionsImpl(),
-            address(new MMQueueCustodian(address(this)))
+            MMPositionManager.MMPositionManagerInit({
+                poolManager: manager,
+                marketFactory: address(marketFactory),
+                vtsOrchestrator: address(vtsOrchestrator),
+                canonicalCustody: IMarketFactory(marketFactory).canonicalVault(),
+                descriptor: address(desc),
+                weth9: weth9,
+                permit2: permit2,
+                actionsImpl: positionManager.actionsImpl(),
+                queueCustodianAddr: address(new MMQueueCustodian(address(this)))
+            })
         );
 
         assertEq(fresh.commitmentDescriptor(), address(desc), "constructor should set commitmentDescriptor");
@@ -778,14 +785,17 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
         MockCommitmentDescriptor desc = new MockCommitmentDescriptor("ipfs://mock/");
 
         MMPositionManager fresh = new MMPositionManager(
-            address(manager),
-            address(marketFactory),
-            address(vtsOrchestrator),
-            address(desc),
-            weth9,
-            permit2,
-            positionManager.actionsImpl(),
-            address(new MMQueueCustodian(address(this)))
+            MMPositionManager.MMPositionManagerInit({
+                poolManager: manager,
+                marketFactory: address(marketFactory),
+                vtsOrchestrator: address(vtsOrchestrator),
+                canonicalCustody: IMarketFactory(marketFactory).canonicalVault(),
+                descriptor: address(desc),
+                weth9: weth9,
+                permit2: permit2,
+                actionsImpl: positionManager.actionsImpl(),
+                queueCustodianAddr: address(new MMQueueCustodian(address(this)))
+            })
         );
 
         assertEq(fresh.tokenURI(123), "ipfs://mock/123", "tokenURI should delegate to descriptor when set");
@@ -1865,7 +1875,7 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
 
     /// @notice Paused MM remove with a starved vault must still call `LiquidityHub.planCancelWithQueue` and create Hub queue entries (regression: finding 4).
     /// @dev When `dryModifyLiquidities` returns zero, the entire MM `requiredSettlementDelta` is treated as shortfall, so `settleableDelta == 0` and
-    ///      `DynamicCurrencyDelta.accountUnderlyingSettlementDelta` is not invoked — queue + `planCancelWithQueue` are still the critical invariants.
+    ///      `OwnerCurrencyDelta.accountUnderlyingSettlementDelta` is not invoked — queue + `planCancelWithQueue` are still the critical invariants.
     ///      Calldata matches `FOUNDRY_PROFILE=debug forge test ... -vvvv` on `test_collectAvailableLiquidity_noSwap` (full decrease, starved vault).
     function test_pausedMMRemove_starvedVault_invokesPlanCancelWithQueue_andQueuesSettlement() public {
         vm.mockCall(
@@ -1892,7 +1902,7 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
 
         vm.mockCall(
             address(mv),
-            abi.encodeWithSelector(IMarketVault.dryModifyLiquidities.selector),
+            abi.encodeWithSelector(IMarketVaultDryBalanceDelta.dryModifyLiquidities.selector),
             abi.encode(toBalanceDelta(0, 0))
         );
         vm.mockCall(
@@ -1963,7 +1973,7 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
     }
 
     /// @notice Paused full MM remove (live vault) still stages `planCancelWithQueue`; combined with settle, MMPM underlying deltas can return to the pre-remove snapshot.
-    /// @dev `DynamicCurrencyDelta.accountUnderlyingSettlementDelta` runs during the hook for non-zero `settleableDelta`; the follow-up `SETTLE` action nets locker/MMPM state.
+    /// @dev `OwnerCurrencyDelta.accountUnderlyingSettlementDelta` runs during the hook for non-zero `settleableDelta`; the follow-up `SETTLE` action nets locker/MMPM state.
     ///      We assert the hook path via `vm.expectCall` to `planCancelWithQueue` (queueAmount == 0) rather than requiring `getUnderlyingDeltaPair(MMPM)` to differ after a balanced settle batch.
     function test_pausedMMRemove_liveVault_invokesPlanCancelWithQueue() public {
         vm.mockCall(
@@ -2044,7 +2054,7 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
         vm.mockCall(
             address(mv),
             abi.encodeWithSelector(
-                IMarketVault.dryModifyLiquidities.selector,
+                IMarketVaultDryBalanceDelta.dryModifyLiquidities.selector,
                 toBalanceDelta(SafeCast.toInt128(settled0BeforeDecrease), SafeCast.toInt128(settled1BeforeDecrease))
             ),
             abi.encode(toBalanceDelta(0, 0))
@@ -2095,7 +2105,7 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
         vm.mockCall(
             address(mv),
             abi.encodeWithSelector(
-                IMarketVault.dryModifyLiquidities.selector,
+                IMarketVaultDryBalanceDelta.dryModifyLiquidities.selector,
                 toBalanceDelta(SafeCast.toInt128(settled0BeforeDecrease), SafeCast.toInt128(settled1BeforeDecrease))
             ),
             abi.encode(toBalanceDelta(0, 0))
@@ -2138,7 +2148,7 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
         vm.mockCall(
             address(mv),
             abi.encodeWithSelector(
-                IMarketVault.dryModifyLiquidities.selector,
+                IMarketVaultDryBalanceDelta.dryModifyLiquidities.selector,
                 toBalanceDelta(SafeCast.toInt128(settled0BeforeDecrease), SafeCast.toInt128(settled1BeforeDecrease))
             ),
             abi.encode(toBalanceDelta(0, 0))
@@ -2246,7 +2256,7 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
             // Force MarketVault to report zero available liquidity so cancellation must queue.
             vm.mockCall(
                 address(mv),
-                abi.encodeWithSelector(IMarketVault.dryModifyLiquidities.selector),
+                abi.encodeWithSelector(IMarketVaultDryBalanceDelta.dryModifyLiquidities.selector),
                 abi.encode(toBalanceDelta(0, 0))
             );
 
@@ -2487,7 +2497,7 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
         // Force MarketVault to report zero available liquidity so cancellation must queue.
         vm.mockCall(
             address(mv),
-            abi.encodeWithSelector(IMarketVault.dryModifyLiquidities.selector),
+            abi.encodeWithSelector(IMarketVaultDryBalanceDelta.dryModifyLiquidities.selector),
             abi.encode(toBalanceDelta(0, 0))
         );
 

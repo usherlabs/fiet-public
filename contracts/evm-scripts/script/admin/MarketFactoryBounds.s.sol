@@ -26,7 +26,7 @@ interface IMarketFactoryBoundsAdmin {
 }
 
 abstract contract MarketFactoryBoundsBase is AdminBase {
-    function _loadBounds() internal returns (address[] memory boundsToApply) {
+    function _loadBounds() internal view returns (address[] memory boundsToApply) {
         string memory json;
         if (vm.envExists("BOUNDS_FILE")) {
             string memory path = vm.envString("BOUNDS_FILE");

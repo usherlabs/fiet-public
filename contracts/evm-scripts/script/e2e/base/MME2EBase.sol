@@ -282,12 +282,24 @@ abstract contract MME2EBase is E2EBase {
         internal
         returns (uint256 commitId)
     {
+        return _createMmPosition(m, mmPk, tickLower, tickUpper, liq, 1);
+    }
+
+    /// @dev Create a new position for a market maker with an explicit VRL signal nonce.
+    function _createMmPosition(
+        StandaloneMarket memory m,
+        uint256 mmPk,
+        int24 tickLower,
+        int24 tickUpper,
+        uint128 liq,
+        uint256 signalNonce
+    ) internal returns (uint256 commitId) {
         address mm = vm.addr(mmPk);
 
         MMPositionManager mmpm = MMPositionManager(payable(m.stack.contracts.mmPositionManager));
         PoolKey memory key = _corePoolKey(m);
 
-        bytes memory liquiditySignalBytes = _buildSingleLeafLiquiditySignal(mmPk, 1);
+        bytes memory liquiditySignalBytes = _buildSingleLeafLiquiditySignal(mmPk, signalNonce);
         (uint256 settle0, uint256 settle1) =
             _baseSettlementAmounts(m.stack.contracts.vtsOrchestrator, key, tickLower, tickUpper, liq);
 
@@ -480,6 +492,7 @@ abstract contract MME2EBase is E2EBase {
         // MMPositionManager forwards locker as hook-data sender on MM ops;
         // keep advancer aligned with the E2E MM actor to satisfy sender guards.
         st.advancer = mm;
+        st.expiryAt = block.timestamp + 1 days;
         st.reserves = new MarketMaker.Reserve[](2);
         st.reserves[0] = MarketMaker.Reserve({asset: "BTC", amount: 1e20});
         st.reserves[1] = MarketMaker.Reserve({asset: "USDT", amount: 5e18});

@@ -26,6 +26,7 @@ import {FixedPoint128} from "v4-periphery/lib/v4-core/src/libraries/FixedPoint12
 import {StateLibrary} from "v4-periphery/lib/v4-core/src/libraries/StateLibrary.sol";
 import {FullMath} from "@uniswap/v4-core/src/libraries/FullMath.sol";
 import {RFSCheckpoint} from "../../src/types/Checkpoint.sol";
+import {VaultSettlementIntent} from "../../src/types/VTS.sol";
 
 contract VTSPositionLibTest_MockLCC {
     address internal u;
@@ -39,7 +40,25 @@ contract VTSPositionLibTest_MockLCC {
     }
 }
 
+contract VTSPositionLibTest_CanonicalVaultRef {
+    address public immutable marketFactory;
+
+    constructor(address _marketFactory) {
+        marketFactory = _marketFactory;
+    }
+}
+
 contract VTSPositionLibTest_VaultNoop is IMarketVault {
+    address internal immutable canonical = address(new VTSPositionLibTest_CanonicalVaultRef(address(this)));
+
+    function marketId() external pure returns (bytes32) {
+        return bytes32(0);
+    }
+
+    function canonicalVault() external view returns (address) {
+        return canonical;
+    }
+
     function lccs() external pure returns (address, address) {
         return (address(0), address(0));
     }
@@ -49,29 +68,70 @@ contract VTSPositionLibTest_VaultNoop is IMarketVault {
     }
     function modifyLiquidities(BalanceDelta) external pure {}
 
-    function tryModifyLiquidities(BalanceDelta d) external pure returns (BalanceDelta) {
-        return d;
+    function modifyLiquidities(VaultSettlementIntent calldata) external pure {}
+
+    function tryModifyLiquidities(BalanceDelta balanceDelta) external pure returns (BalanceDelta) {
+        return balanceDelta;
     }
 
-    function tryModifyLiquiditiesWithRecipient(BalanceDelta d, address) external pure returns (BalanceDelta) {
-        return d;
+    function tryModifyLiquidities(VaultSettlementIntent calldata settlementIntent)
+        external
+        pure
+        returns (BalanceDelta)
+    {
+        return settlementIntent.requestedDelta;
     }
 
-    function dryModifyLiquidities(BalanceDelta d) external pure returns (BalanceDelta) {
-        return d;
+    function tryModifyLiquiditiesWithRecipient(BalanceDelta balanceDelta, address)
+        external
+        pure
+        returns (BalanceDelta)
+    {
+        return balanceDelta;
     }
+
+    function tryModifyLiquiditiesWithRecipient(VaultSettlementIntent calldata settlementIntent, address)
+        external
+        pure
+        returns (BalanceDelta)
+    {
+        return settlementIntent.requestedDelta;
+    }
+
+    function dryModifyLiquidities(BalanceDelta balanceDelta) external pure returns (BalanceDelta) {
+        return balanceDelta;
+    }
+
+    function dryModifyLiquidities(VaultSettlementIntent calldata settlementIntent)
+        external
+        pure
+        returns (BalanceDelta)
+    {
+        return settlementIntent.requestedDelta;
+    }
+
+    function decreaseLiquidityReserve(Currency, uint256) external pure {}
 }
 
 /// @dev Vault that clamps withdrawals to fixed available amounts (used to test onMMSettle phase-2 shortfall correction).
 contract VTSPositionLibTest_VaultClamp is IMarketVault {
     int128 internal avail0;
     int128 internal avail1;
+    address internal immutable canonical = address(new VTSPositionLibTest_CanonicalVaultRef(address(this)));
 
     constructor(int128 avail0_, int128 avail1_) {
         avail0 = avail0_;
         avail1 = avail1_;
     }
 
+    function marketId() external pure returns (bytes32) {
+        return bytes32(0);
+    }
+
+    function canonicalVault() external view returns (address) {
+        return canonical;
+    }
+
     function lccs() external pure returns (address, address) {
         return (address(0), address(0));
     }
@@ -82,32 +142,77 @@ contract VTSPositionLibTest_VaultClamp is IMarketVault {
 
     function modifyLiquidities(BalanceDelta) external pure {}
 
-    function tryModifyLiquidities(BalanceDelta d) external pure returns (BalanceDelta) {
-        return d;
+    function modifyLiquidities(VaultSettlementIntent calldata) external pure {}
+
+    function tryModifyLiquidities(BalanceDelta balanceDelta) external pure returns (BalanceDelta) {
+        return balanceDelta;
     }
 
-    function tryModifyLiquiditiesWithRecipient(BalanceDelta d, address) external pure returns (BalanceDelta) {
-        return d;
+    function tryModifyLiquidities(VaultSettlementIntent calldata settlementIntent)
+        external
+        view
+        returns (BalanceDelta)
+    {
+        return _dry(settlementIntent.requestedDelta);
     }
 
-    function dryModifyLiquidities(BalanceDelta d) external view returns (BalanceDelta) {
+    function tryModifyLiquiditiesWithRecipient(BalanceDelta balanceDelta, address)
+        external
+        pure
+        returns (BalanceDelta)
+    {
+        return balanceDelta;
+    }
+
+    function tryModifyLiquiditiesWithRecipient(VaultSettlementIntent calldata settlementIntent, address)
+        external
+        view
+        returns (BalanceDelta)
+    {
+        return _dry(settlementIntent.requestedDelta);
+    }
+
+    function dryModifyLiquidities(BalanceDelta balanceDelta) external view returns (BalanceDelta) {
+        return _dry(balanceDelta);
+    }
+
+    function dryModifyLiquidities(VaultSettlementIntent calldata settlementIntent)
+        external
+        view
+        returns (BalanceDelta)
+    {
+        return _dry(settlementIntent.requestedDelta);
+    }
+
+    function _dry(BalanceDelta balanceDelta) internal view returns (BalanceDelta) {
         // Only clamp positive (withdrawal) deltas; pass through deposits (negative).
-        int128 a0 = d.amount0();
-        int128 a1 = d.amount1();
+        int128 a0 = balanceDelta.amount0();
+        int128 a1 = balanceDelta.amount1();
         if (a0 > 0 && a0 > avail0) a0 = avail0;
         if (a1 > 0 && a1 > avail1) a1 = avail1;
         return toBalanceDelta(a0, a1);
     }
+
+    function decreaseLiquidityReserve(Currency, uint256) external pure {}
 }
 
 /// @dev Vault that returns "more than requested" to force negative rawQueued and exercise clamp-to-zero paths.
 contract VTSPositionLibTest_VaultOverAvailable is IMarketVault {
     int128 internal extra0;
     int128 internal extra1;
+    address internal immutable canonical = address(new VTSPositionLibTest_CanonicalVaultRef(address(this)));
 
     constructor(int128 extra0_, int128 extra1_) {
         extra0 = extra0_;
         extra1 = extra1_;
+    }
+
+    function marketId() external pure returns (bytes32) {
+        return bytes32(0);
+    }
+
+    function canonicalVault() external view returns (address) {
+        return canonical;
     }
 
     function lccs() external pure returns (address, address) {
@@ -120,31 +225,71 @@ contract VTSPositionLibTest_VaultOverAvailable is IMarketVault {
 
     function modifyLiquidities(BalanceDelta) external pure {}
 
-    function tryModifyLiquidities(BalanceDelta d) external pure returns (BalanceDelta) {
-        return d;
+    function modifyLiquidities(VaultSettlementIntent calldata) external pure {}
+
+    function tryModifyLiquidities(BalanceDelta balanceDelta) external pure returns (BalanceDelta) {
+        return balanceDelta;
     }
 
-    function tryModifyLiquiditiesWithRecipient(BalanceDelta d, address) external pure returns (BalanceDelta) {
-        return d;
+    function tryModifyLiquidities(VaultSettlementIntent calldata settlementIntent)
+        external
+        view
+        returns (BalanceDelta)
+    {
+        return _dry(settlementIntent.requestedDelta);
     }
 
-    function dryModifyLiquidities(BalanceDelta d) external view virtual returns (BalanceDelta) {
+    function tryModifyLiquiditiesWithRecipient(BalanceDelta balanceDelta, address)
+        external
+        pure
+        returns (BalanceDelta)
+    {
+        return balanceDelta;
+    }
+
+    function tryModifyLiquiditiesWithRecipient(VaultSettlementIntent calldata settlementIntent, address)
+        external
+        view
+        returns (BalanceDelta)
+    {
+        return _dry(settlementIntent.requestedDelta);
+    }
+
+    function dryModifyLiquidities(BalanceDelta balanceDelta) external view virtual returns (BalanceDelta) {
+        return _dry(balanceDelta);
+    }
+
+    function dryModifyLiquidities(VaultSettlementIntent calldata settlementIntent)
+        external
+        view
+        returns (BalanceDelta)
+    {
+        return _dry(settlementIntent.requestedDelta);
+    }
+
+    function _dry(BalanceDelta balanceDelta) internal view virtual returns (BalanceDelta) {
         // Return strictly more available than requested (for positive deltas).
-        int128 a0 = d.amount0();
-        int128 a1 = d.amount1();
+        int128 a0 = balanceDelta.amount0();
+        int128 a1 = balanceDelta.amount1();
         if (a0 > 0) a0 += extra0;
         if (a1 > 0) a1 += extra1;
         return toBalanceDelta(a0, a1);
     }
+
+    function decreaseLiquidityReserve(Currency, uint256) external pure {}
 }
 
 /// @dev Vault that returns more-than-requested availability for token0 only (used to test one-sided queue clamping).
 contract VTSPositionLibTest_VaultOverAvailable0 is VTSPositionLibTest_VaultOverAvailable {
     constructor(int128 extra0_) VTSPositionLibTest_VaultOverAvailable(extra0_, 0) {}
 
-    function dryModifyLiquidities(BalanceDelta d) external view override returns (BalanceDelta) {
-        int128 a0 = d.amount0();
-        int128 a1 = d.amount1();
+    function dryModifyLiquidities(BalanceDelta balanceDelta) external view override returns (BalanceDelta) {
+        return _dry(balanceDelta);
+    }
+
+    function _dry(BalanceDelta balanceDelta) internal view override returns (BalanceDelta) {
+        int128 a0 = balanceDelta.amount0();
+        int128 a1 = balanceDelta.amount1();
         if (a0 > 0) a0 += extra0;
         // Force zero availability on token1 for positive deltas to create a queued remainder on token1.
         if (a1 > 0) a1 = 0;
@@ -156,9 +301,13 @@ contract VTSPositionLibTest_VaultOverAvailable0 is VTSPositionLibTest_VaultOverA
 contract VTSPositionLibTest_VaultOverAvailable1 is VTSPositionLibTest_VaultOverAvailable {
     constructor(int128 extra1_) VTSPositionLibTest_VaultOverAvailable(0, extra1_) {}
 
-    function dryModifyLiquidities(BalanceDelta d) external view override returns (BalanceDelta) {
-        int128 a0 = d.amount0();
-        int128 a1 = d.amount1();
+    function dryModifyLiquidities(BalanceDelta balanceDelta) external view override returns (BalanceDelta) {
+        return _dry(balanceDelta);
+    }
+
+    function _dry(BalanceDelta balanceDelta) internal view override returns (BalanceDelta) {
+        int128 a0 = balanceDelta.amount0();
+        int128 a1 = balanceDelta.amount1();
         // Force zero availability on token0 for positive deltas to create a queued remainder on token0.
         if (a0 > 0) a0 = 0;
         if (a1 > 0) a1 += extra1;
@@ -2422,10 +2571,10 @@ contract VTSPositionLibTest is VTSLibTestBase {
         Currency lccCurrency0 = Currency.wrap(address(lcc0));
         Currency lccCurrency1 = Currency.wrap(address(lcc1));
 
+        VTSPositionLibTest_VaultNoop vault = new VTSPositionLibTest_VaultNoop();
         // Give DEFAULT_OWNER a positive underlying delta; withdrawal path nets it before settled-backed leg.
         harness.setUnderlyingDelta(Currency.wrap(underlying0), DEFAULT_OWNER, int128(int256(20)));
-
-        VTSPositionLibTest_VaultNoop vault = new VTSPositionLibTest_VaultNoop();
+        harness.addMarketProducedCredit(IMarketVault(address(vault)), Currency.wrap(underlying0), 20);
         BalanceDelta delta = toBalanceDelta(int128(10), int128(0)); // withdrawal of 10
 
         (BalanceDelta settlementDelta,,) =
@@ -2458,10 +2607,10 @@ contract VTSPositionLibTest is VTSLibTestBase {
         VTSPositionLibTest_MockLCC lcc0 = new VTSPositionLibTest_MockLCC(underlying0);
         VTSPositionLibTest_MockLCC lcc1 = new VTSPositionLibTest_MockLCC(underlying1);
 
+        VTSPositionLibTest_VaultNoop vault = new VTSPositionLibTest_VaultNoop();
         // Positive underlying delta on token1 should be cleared by withdrawal on token1.
         harness.setUnderlyingDelta(Currency.wrap(underlying1), DEFAULT_OWNER, int128(int256(20)));
-
-        VTSPositionLibTest_VaultNoop vault = new VTSPositionLibTest_VaultNoop();
+        harness.addMarketProducedCredit(IMarketVault(address(vault)), Currency.wrap(underlying1), 20);
         BalanceDelta delta = toBalanceDelta(int128(0), int128(10)); // withdrawal of 10 on token1
 
         (BalanceDelta settlementDelta,, uint256 seized) = harness.onMMSettle(
@@ -3009,7 +3158,7 @@ contract VTSPositionLibTest is VTSLibTestBase {
     }
 
     function test_onMMSettle_seizing_withdrawalClampedByPosRequiredSettlement() public {
-        // Seizing withdrawals clamp to positionRequiredSettlementDelta (from DynamicCurrencyDelta).
+        // Seizing withdrawals clamp to positionRequiredSettlementDelta (from OwnerCurrencyDelta).
         _initMarket();
         PoolId corePoolId = _getDefaultPoolId();
         harness.setupPool(corePoolId, _createDefaultVTSConfig());
@@ -3026,10 +3175,10 @@ contract VTSPositionLibTest is VTSLibTestBase {
         VTSPositionLibTest_MockLCC lcc0 = new VTSPositionLibTest_MockLCC(underlying0);
         VTSPositionLibTest_MockLCC lcc1 = new VTSPositionLibTest_MockLCC(address(0xD1));
 
-        // Only 10 is "required"/owed per DynamicCurrencyDelta, so seizing withdrawal must clamp to 10.
-        harness.setUnderlyingDelta(Currency.wrap(underlying0), DEFAULT_OWNER, int128(int256(10e18)));
-
         VTSPositionLibTest_VaultNoop vault = new VTSPositionLibTest_VaultNoop();
+        // Only 10 is "required"/owed per OwnerCurrencyDelta, so seizing withdrawal must clamp to 10.
+        harness.setUnderlyingDelta(Currency.wrap(underlying0), DEFAULT_OWNER, int128(int256(10e18)));
+        harness.addMarketProducedCredit(IMarketVault(address(vault)), Currency.wrap(underlying0), 10e18);
         (BalanceDelta settlementDelta,,) = harness.onMMSettle(
             manager,
             vault,

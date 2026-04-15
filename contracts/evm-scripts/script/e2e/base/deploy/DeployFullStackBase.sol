@@ -52,6 +52,7 @@ abstract contract DeployFullStackBase is DeployProtocolBase {
         address vtsOrchestrator;
         address actionsImpl;
         address directLPDeltaResolver;
+        address canonicalVault;
     }
 
     struct FullStack {
@@ -159,26 +160,35 @@ abstract contract DeployFullStackBase is DeployProtocolBase {
             out.contracts.globalConfig
         );
 
-        // 10) Enable MarketFactory in LiquidityHub (via GlobalConfig)
+        // 10) CanonicalVault (factory-scoped custody)
+        out.contracts.canonicalVault =
+            _deployCanonicalVault(out.contracts.liquidityHub, out.contracts.marketFactory);
+
+        // 11) Enable MarketFactory in LiquidityHub (via GlobalConfig)
         _enableFactoryInLiquidityHub(
             out.contracts.globalConfig, out.contracts.liquidityHub, out.contracts.marketFactory
         );
 
-        // 11) MMPCommitmentDescriptor
+        // 12) MMPCommitmentDescriptor
         out.contracts.commitmentDescriptor = _deployCommitmentDescriptor();
 
-        // 12) MMPositionActionsImpl + MMQueueCustodian + MMPositionManager
+        // 13) MMPositionActionsImpl + MMQueueCustodian + MMPositionManager
         (out.contracts.actionsImpl, out.contracts.queueCustodian, out.contracts.mmPositionManager) = _deployMMStack(
-            out.contracts.marketFactory, out.contracts.vtsOrchestrator, out.contracts.commitmentDescriptor, deployer
+            out.contracts.marketFactory,
+            out.contracts.vtsOrchestrator,
+            out.contracts.commitmentDescriptor,
+            deployer,
+            out.contracts.canonicalVault
         );
 
-        // 13) Deploy CoreHook via CREATE2 HookMiner
+        // 14) Deploy CoreHook via CREATE2 HookMiner
         out.contracts.coreHook = _deployCoreHook(out.contracts.marketFactory, out.contracts.vtsOrchestrator);
 
-        // 14) Initialise MarketFactory (via GlobalConfig)
+        // 15) Initialise MarketFactory (via GlobalConfig)
         _initialiseFactory(
             out.contracts.globalConfig,
             out.contracts.marketFactory,
+            out.contracts.canonicalVault,
             out.contracts.coreHook,
             out.contracts.mmPositionManager,
             out.contracts.queueCustodian,

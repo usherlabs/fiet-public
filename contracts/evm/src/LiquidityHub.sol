@@ -1094,6 +1094,16 @@ contract LiquidityHub is BoundRegistry, Ownable, ReentrancyGuardTransient {
     {
         _assertValidQueueOwner(lcc, recipient, allowHub);
 
+        // Native settlements push ETH directly to `recipient` during `processSettlementFor`.
+        // Restrict issuer-driven transfer-recipient queues to EOAs, or compatible contracts for native-backed LCCs.
+        // Reason: non-payable contract recipients cannot create permanently unserviceable queues.
+        // Native payouts require a recipient shape we can deterministically service from push transfers.
+        // The issuer deficit queue path (`queueForTransferRecipient`) is strict by design, so we reject
+        // contract recipients in native lanes up-front rather than creating uncleareable queues.
+        if (s.lccToUnderlying[lcc] == address(0) && recipient.code.length > 0) {
+            revert Errors.NotApproved(recipient);
+        }
+
         (, uint256 marketDerivedBalance) = ILCC(lcc).balancesOf(recipient);
         if (marketDerivedBalance < amount) {
             revert Errors.InsufficientBalance(marketDerivedBalance, amount);
@@ -1175,7 +1185,7 @@ contract LiquidityHub is BoundRegistry, Ownable, ReentrancyGuardTransient {
         if (!isFactory[m0.factory]) {
             revert Errors.InvalidEthSender();
         }
-        if (!IMarketFactory(m0.factory).isCanonicalVault(m0.id, sender)) {
+        if (!IMarketFactory(m0.factory).isCanonicalVault(sender)) {
             revert Errors.InvalidEthSender();
         }
 

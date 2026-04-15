@@ -274,8 +274,8 @@ contract MockOrchestratorHandleLcc {
 contract PositionManagerImplHarness is PositionManagerQueueCustodian, PositionManagerImpl {
     address internal _locker;
 
-    constructor(IPoolManager pm, address marketFactory, address orch, address locker)
-        PositionManagerImpl(pm, marketFactory, orch)
+    constructor(IPoolManager pm, address marketFactory, address orch, address canonicalCustody, address locker)
+        PositionManagerImpl(pm, marketFactory, orch, canonicalCustody)
     {
         _locker = locker;
     }
@@ -349,8 +349,8 @@ contract PositionManagerImplRecordingHarness is PositionManagerImplHarness {
     address public lastFwdBeneficiary;
     uint256 public lastFwdAmount;
 
-    constructor(IPoolManager pm, address marketFactory, address orch, address locker)
-        PositionManagerImplHarness(pm, marketFactory, orch, locker)
+    constructor(IPoolManager pm, address marketFactory, address orch, address canonicalCustody, address locker)
+        PositionManagerImplHarness(pm, marketFactory, orch, canonicalCustody, locker)
     {}
 
     function _forwardQueuedLccToCustodian(Currency currency, uint256 tokenId, address beneficiary, uint256 amount)
@@ -393,6 +393,7 @@ contract PositionManagerImplTest is Test {
     address internal ua1;
     address internal owner;
     address internal coreHookAddr;
+    address internal canonicalCustody;
     PoolId internal canonicalProxyPoolId;
 
     function setUp() public {
@@ -415,13 +416,16 @@ contract PositionManagerImplTest is Test {
 
         coreHookAddr = makeAddr("coreHook");
         factory.setCoreHookAddr(coreHookAddr);
+        canonicalCustody = makeAddr("canonicalCustody");
         canonicalProxyPoolId = PoolId.wrap(keccak256("canonicalProxyPool"));
 
         // Mock LCC -> underlying conversion.
         vm.mockCall(lcc0, abi.encodeWithSignature("underlying()"), abi.encode(ua0));
         vm.mockCall(lcc1, abi.encodeWithSignature("underlying()"), abi.encode(ua1));
 
-        h = new PositionManagerImplHarness(IPoolManager(address(poolManager)), address(factory), orch, locker);
+        h = new PositionManagerImplHarness(
+            IPoolManager(address(poolManager)), address(factory), orch, canonicalCustody, locker
+        );
 
         PoolKey memory canonKey = _defaultKey();
         factory.setCoreToProxy(canonKey.toId(), canonicalProxyPoolId);
@@ -663,6 +667,7 @@ contract PositionManagerHandleLccHardeningTest is Test {
     MockMarketFactory internal factory;
 
     address internal locker = makeAddr("lockerHcc");
+    address internal canonicalCustody = makeAddr("canonicalCustodyHcc");
     address internal lcc0;
     address internal lcc1;
     address internal ua0;
@@ -686,7 +691,7 @@ contract PositionManagerHandleLccHardeningTest is Test {
         vm.mockCall(lcc1, abi.encodeWithSignature("underlying()"), abi.encode(ua1));
 
         h = new PositionManagerImplRecordingHarness(
-            IPoolManager(address(poolManager)), address(factory), address(orch), locker
+            IPoolManager(address(poolManager)), address(factory), address(orch), canonicalCustody, locker
         );
     }
 

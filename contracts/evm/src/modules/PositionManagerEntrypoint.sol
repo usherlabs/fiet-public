@@ -16,8 +16,8 @@ import {Errors} from "../libraries/Errors.sol";
 abstract contract PositionManagerEntrypoint is PositionManagerBase {
     address public immutable actionsImpl;
 
-    constructor(address _marketFactory, address _vtsOrchestrator, address _actionsImpl)
-        PositionManagerBase(_marketFactory, _vtsOrchestrator)
+    constructor(address _marketFactory, address _vtsOrchestrator, address _canonicalCustody, address _actionsImpl)
+        PositionManagerBase(_marketFactory, _vtsOrchestrator, _canonicalCustody)
     {
         if (_actionsImpl == address(0) || _actionsImpl.code.length == 0) {
             revert Errors.InvalidAddress(_actionsImpl);
@@ -55,8 +55,8 @@ abstract contract PositionManagerEntrypoint is PositionManagerBase {
         // Clear any per-batch transient context to avoid same-tx leakage into subsequent batches.
         TransientSlots.clearSeizedPositionId();
         TransientSlots.clearMsgValueRead();
-        // Assert that deltas are non-zero after batch execution
-        vtsOrchestrator.assertNonZeroDeltas();
+        // Owner-scoped and market-scoped transient namespaces both resolve through the orchestrator boundary.
+        vtsOrchestrator.assertNonZeroDeltas(marketFactory);
     }
 
     // ------------------------------------------------------------------------------------------------

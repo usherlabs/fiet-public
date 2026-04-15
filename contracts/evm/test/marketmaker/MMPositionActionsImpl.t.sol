@@ -33,6 +33,7 @@ import {RFSCheckpoint} from "../../src/types/Checkpoint.sol";
 import {ILCC} from "../../src/interfaces/ILCC.sol";
 import {ILiquidityHub} from "../../src/interfaces/ILiquidityHub.sol";
 import {IMarketVault} from "../../src/interfaces/IMarketVault.sol";
+import {IMarketVaultDryBalanceDelta} from "../_helpers/IMarketVaultDryBalanceDelta.sol";
 import {IVRLSignalManager} from "../../src/interfaces/IVRLSignalManager.sol";
 import {LiquiditySignal} from "../../src/types/Commit.sol";
 import {IVTSOrchestrator} from "../../src/interfaces/IVTSOrchestrator.sol";
@@ -694,7 +695,7 @@ contract MMPositionManagerActionsTest is MarketTestBase, MarketMakerTestBase {
         // Ensure decrease path queues retained principal with zero immediate availability.
         vm.mockCall(
             address(mv),
-            abi.encodeWithSelector(IMarketVault.dryModifyLiquidities.selector),
+            abi.encodeWithSelector(IMarketVaultDryBalanceDelta.dryModifyLiquidities.selector),
             abi.encode(toBalanceDelta(int128(0), int128(0)))
         );
 
@@ -734,7 +735,7 @@ contract MMPositionManagerActionsTest is MarketTestBase, MarketMakerTestBase {
 
         vm.mockCall(
             address(mv),
-            abi.encodeWithSelector(IMarketVault.dryModifyLiquidities.selector),
+            abi.encodeWithSelector(IMarketVaultDryBalanceDelta.dryModifyLiquidities.selector),
             abi.encode(toBalanceDelta(int128(0), int128(0)))
         );
 
@@ -790,7 +791,7 @@ contract MMPositionManagerActionsTest is MarketTestBase, MarketMakerTestBase {
 
         vm.mockCall(
             address(mv),
-            abi.encodeWithSelector(IMarketVault.dryModifyLiquidities.selector),
+            abi.encodeWithSelector(IMarketVaultDryBalanceDelta.dryModifyLiquidities.selector),
             abi.encode(toBalanceDelta(int128(0), int128(0)))
         );
 
@@ -1148,8 +1149,12 @@ contract MMPositionManagerActionsTest is MarketTestBase, MarketMakerTestBase {
 
     function test_actionsImpl_handleAction_revertsWhenNotDelegatecall() public {
         // MMPositionActionsImpl is meant to be invoked via delegatecall from MMPositionManager.
-        MMPositionActionsImpl impl =
-            new MMPositionActionsImpl(address(manager), address(marketFactory), address(vtsOrchestrator));
+        MMPositionActionsImpl impl = new MMPositionActionsImpl(
+            address(manager),
+            address(marketFactory),
+            address(vtsOrchestrator),
+            IMarketFactory(marketFactory).canonicalVault()
+        );
         // Provide well-formed params so that (if the guard were removed) we don't accidentally revert on ABI decoding.
         bytes memory params = abi.encode(corePoolKey, uint256(1), uint256(0), int128(1), int128(0), false);
         vm.expectRevert(DelegateCallGuard.OnlyDelegateCall.selector);

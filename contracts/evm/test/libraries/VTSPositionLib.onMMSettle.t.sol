@@ -3,7 +3,7 @@ pragma solidity ^0.8.26;
 
 import {VTSLibTestBase} from "../base/VTSLibTestBase.sol";
 import {VTSPositionLibHarness} from "./harnesses/VTSPositionLibHarness.sol";
-import {MockMarketVault} from "../_mocks/MockMarketVault.sol";
+import {MockCanonicalVaultRef, MockMarketVault} from "../_mocks/MockMarketVault.sol";
 import {PositionId, Position, PositionLibrary} from "../../src/types/Position.sol";
 import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
@@ -11,12 +11,14 @@ import {BalanceDelta, toBalanceDelta} from "@uniswap/v4-core/src/types/BalanceDe
 import {ModifyLiquidityParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
 import {IPoolManager} from "v4-periphery/lib/v4-core/src/interfaces/IPoolManager.sol";
 import {LiquidityUtils} from "../../src/libraries/LiquidityUtils.sol";
-import {DynamicCurrencyDelta} from "../../src/libraries/DynamicCurrencyDelta.sol";
+import {OwnerCurrencyDelta} from "../../src/libraries/OwnerCurrencyDelta.sol";
 import {Errors} from "../../src/libraries/Errors.sol";
+import {ICanonicalVault} from "../../src/interfaces/ICanonicalVault.sol";
 import {ILCC} from "../../src/interfaces/ILCC.sol";
+import {VaultSettlementIntent} from "../../src/types/VTS.sol";
 
 /// @dev Several scenarios assert `harness.getUnderlyingDelta` after `onMMSettle`: here that reads harness-local
-///      `DynamicCurrencyDelta` state in the same Forge transaction (not PoolManager unlock-scoped transient reads).
+///      `OwnerCurrencyDelta` state in the same Forge transaction (not PoolManager unlock-scoped transient reads).
 contract VTSPositionLibOnMMSettleTest is VTSLibTestBase {
     VTSPositionLibHarness harness;
     MockMarketVault mockVault;
@@ -30,7 +32,7 @@ contract VTSPositionLibOnMMSettleTest is VTSLibTestBase {
 
     function setUp() public override {
         harness = new VTSPositionLibHarness();
-        mockVault = new MockMarketVault();
+        mockVault = new MockMarketVault(address(0));
         testPoolId = PoolId.wrap(bytes32(uint256(0xDEAD)));
 
         harness.setupPool(testPoolId, _createDefaultVTSConfig());
@@ -376,6 +378,7 @@ contract VTSPositionLibOnMMSettleTest is VTSLibTestBase {
         harness.setPositionActive(positionId, true);
 
         harness.setUnderlyingDelta(underlyingCurrency0, DEFAULT_OWNER, 100e18);
+        harness.addMarketProducedCredit(mockVault, underlyingCurrency0, 100e18);
         mockVault.setAvailableLiquidity(60e18, 100e18);
 
         (, bool rfsOpen,) = harness.onMMSettle(
@@ -466,6 +469,7 @@ contract VTSPositionLibOnMMSettleTest is VTSLibTestBase {
 
         // Protocol owes the owner (positive delta).
         harness.setUnderlyingDelta(underlyingCurrency0, owner, 50e18);
+        harness.addMarketProducedCredit(mockVault, underlyingCurrency0, 50e18);
         assertEq(harness.getUnderlyingDelta(underlyingCurrency0, owner), 50e18, "precondition: positive delta");
 
         // Withdraw part of it; clearance should reduce the positive delta by min(delta, amount).
@@ -487,6 +491,33 @@ contract VTSPositionLibOnMMSettleTest is VTSLibTestBase {
         );
     }
 
+    function test_onMMSettle_withdrawals_returnsExplicitVaultIntentForDeltaBackedClamp() public {
+        _initMarket();
+        PositionId positionId = _registerActivePosition();
+        address owner = DEFAULT_OWNER;
+
+        harness.setCommitmentMax(positionId, 1000e18, 1000e18);
+        harness.setSettled(positionId, 200e18, 200e18);
+        harness.setPositionActive(positionId, true);
+
+        harness.setUnderlyingDelta(underlyingCurrency0, owner, 50e18);
+        harness.addMarketProducedCredit(mockVault, underlyingCurrency0, 50e18);
+        mockVault.setAvailableLiquidity(12e18, type(int128).max);
+
+        (BalanceDelta settlementDelta,,, VaultSettlementIntent memory settlementIntent) = harness.onMMSettleWithIntent(
+            manager, mockVault, positionId, lccCurrency0, lccCurrency1, toBalanceDelta(20e18, 0), false, false
+        );
+
+        assertEq(settlementDelta.amount0(), 12e18, "withdrawal should clamp to vault-available amount");
+        assertEq(settlementIntent.requestedDelta.amount0(), 12e18, "intent should use the clamped settlement delta");
+        assertEq(
+            settlementIntent.creditBackedWithdrawal0, 12e18, "intent should carry the actual delta-backed withdrawal"
+        );
+        assertEq(
+            settlementIntent.creditBackedWithdrawal1, 0, "untouched lane should keep zero credit-backed withdrawal"
+        );
+    }
+
     function test_onMMSettle_withdrawals_positiveCurrencyDelta_withVaultShortfall_keepsSettledUnchanged() public {
         _initMarket();
         PositionId positionId = _registerActivePosition();
@@ -497,6 +528,7 @@ contract VTSPositionLibOnMMSettleTest is VTSLibTestBase {
         harness.setPositionActive(positionId, true);
 
         harness.setUnderlyingDelta(underlyingCurrency0, owner, 100e18);
+        harness.addMarketProducedCredit(mockVault, underlyingCurrency0, 100e18);
         mockVault.setAvailableLiquidity(60e18, 0);
 
         (, bool rfsOpen,) = harness.onMMSettle(
@@ -528,6 +560,7 @@ contract VTSPositionLibOnMMSettleTest is VTSLibTestBase {
         harness.setPositionActive(positionId, true);
 
         harness.setUnderlyingDelta(underlyingCurrency0, owner, 10e18);
+        harness.addMarketProducedCredit(mockVault, underlyingCurrency0, 10e18);
         mockVault.setAvailableLiquidity(type(int128).max, type(int128).max);
 
         (, bool rfsOpen,) = harness.onMMSettle(
@@ -554,6 +587,7 @@ contract VTSPositionLibOnMMSettleTest is VTSLibTestBase {
         // Token0 carries deposit debt; token1 carries positive settlement credit.
         harness.setUnderlyingDelta(underlyingCurrency0, owner, -30e18);
         harness.setUnderlyingDelta(underlyingCurrency1, owner, 40e18);
+        harness.addMarketProducedCredit(mockVault, underlyingCurrency1, 40e18);
 
         (, bool rfsOpen,) = harness.onMMSettle(
             manager, mockVault, positionId, lccCurrency0, lccCurrency1, toBalanceDelta(-50e18, 20e18), false, false
@@ -603,6 +637,7 @@ contract VTSPositionLibOnMMSettleTest is VTSLibTestBase {
         // Token0 starts under-settled, so active withdrawals would revert unless the deposit closes RFS first.
         harness.setUnderlyingDelta(underlyingCurrency0, owner, -30e18);
         harness.setUnderlyingDelta(underlyingCurrency1, owner, 40e18);
+        harness.addMarketProducedCredit(mockVault, underlyingCurrency1, 40e18);
 
         (, bool rfsOpen,) = harness.onMMSettle(
             manager, mockVault, positionId, lccCurrency0, lccCurrency1, toBalanceDelta(-30e18, 20e18), false, false
@@ -639,6 +674,8 @@ contract VTSPositionLibOnMMSettleTest is VTSLibTestBase {
         // This represents what the position modification requires
         harness.setUnderlyingDelta(underlyingCurrency0, owner, 50e18);
         harness.setUnderlyingDelta(underlyingCurrency1, owner, 30e18);
+        harness.addMarketProducedCredit(mockVault, underlyingCurrency0, 50e18);
+        harness.addMarketProducedCredit(mockVault, underlyingCurrency1, 30e18);
 
         // Try to withdraw 100 each during seizure
         BalanceDelta delta = toBalanceDelta(100e18, 100e18);
@@ -808,6 +845,122 @@ contract VTSPositionLibOnMMSettleTest is VTSLibTestBase {
         assertEq(def1, 0, "Deficit1 should be cleared");
         assertEq(settled0, 100e18, "Settled0 should reach commitmentMax");
         assertEq(settled1, 100e18, "Settled1 should reach commitmentMax");
+    }
+
+    /// @notice Regression: factory-wide produced credit from one vault namespace can fund delta-backed withdrawal
+    ///         settlement on another vault that shares the same `marketFactory` (finding #9 class: provenance).
+    function test_onMMSettle_crossMarket_sameFactory_consumesProducedAcrossVaultFacades() public {
+        _initMarket();
+        PositionId positionId = _registerActivePosition();
+        address owner = DEFAULT_OWNER;
+
+        address sharedFactory = makeAddr("sharedMarketFactory");
+        MockCanonicalVaultRef sharedCanon = new MockCanonicalVaultRef(sharedFactory);
+        MockMarketVault vaultA = new MockMarketVault(address(sharedCanon));
+        MockMarketVault vaultB = new MockMarketVault(address(sharedCanon));
+
+        assertEq(
+            ICanonicalVault(vaultA.canonicalVault()).marketFactory(),
+            sharedFactory,
+            "pre: vault A should resolve shared factory"
+        );
+        assertEq(ICanonicalVault(vaultB.canonicalVault()).marketFactory(), sharedFactory, "pre: vault B same factory");
+
+        harness.setCommitmentMax(positionId, 1000e18, 1000e18);
+        harness.setSettled(positionId, 200e18, 200e18);
+        harness.setPositionActive(positionId, true);
+
+        uint256 producedAmt = 40e18;
+        harness.addMarketProducedCredit(vaultA, underlyingCurrency0, producedAmt);
+        assertEq(harness.marketProducedCredit(sharedFactory, underlyingCurrency0), producedAmt, "pre: produced bucket");
+
+        harness.setUnderlyingDelta(underlyingCurrency0, owner, 50e18);
+        vaultB.setAvailableLiquidity(type(int128).max, type(int128).max);
+
+        uint256 withdraw0 = 25e18;
+        (BalanceDelta settlementDelta,,) = harness.onMMSettle(
+            manager,
+            vaultB,
+            positionId,
+            lccCurrency0,
+            lccCurrency1,
+            toBalanceDelta(int128(int256(withdraw0)), 0),
+            false,
+            false
+        );
+
+        assertEq(settlementDelta.amount0(), int128(int256(withdraw0)), "withdrawal should succeed against vault B");
+        (,, uint256 settled0,,,) = harness.getPositionAccounting(positionId);
+        assertEq(settled0, 200e18, "delta-backed lane must not reduce live settled");
+        assertEq(
+            harness.getUnderlyingDelta(underlyingCurrency0, owner),
+            25e18,
+            "owner underlying credit should net by withdrawn amount"
+        );
+        assertEq(
+            harness.marketProducedCredit(sharedFactory, underlyingCurrency0),
+            15e18,
+            "produced credit should decrement by delta-backed withdrawal"
+        );
+    }
+
+    /// @notice Regression: produced credit is namespaced by factory; another factory cannot backstop consumption.
+    function test_onMMSettle_crossMarket_differentFactory_revertsOnProducedUnderflow() public {
+        _initMarket();
+        PositionId positionId = _registerActivePosition();
+        address owner = DEFAULT_OWNER;
+
+        address factoryA = makeAddr("factoryA");
+        address factoryB = makeAddr("factoryB");
+        MockMarketVault vaultA = new MockMarketVault(address(new MockCanonicalVaultRef(factoryA)));
+        MockMarketVault vaultB = new MockMarketVault(address(new MockCanonicalVaultRef(factoryB)));
+
+        harness.setCommitmentMax(positionId, 1000e18, 1000e18);
+        harness.setSettled(positionId, 200e18, 200e18);
+        harness.setPositionActive(positionId, true);
+
+        harness.addMarketProducedCredit(vaultA, underlyingCurrency0, 100e18);
+        harness.setUnderlyingDelta(underlyingCurrency0, owner, 50e18);
+        vaultB.setAvailableLiquidity(type(int128).max, type(int128).max);
+
+        vm.expectRevert(
+            abi.encodeWithSelector(Errors.InvariantViolated.selector, "MarketCurrencyDelta produced underflow")
+        );
+        harness.onMMSettle(
+            manager, vaultB, positionId, lccCurrency0, lccCurrency1, toBalanceDelta(10e18, 0), false, false
+        );
+    }
+
+    /// @notice Regression for audit finding #9: positive owner underlying credit cannot fund delta-backed withdrawals
+    ///         unless matching factory-scoped produced credit exists (reserve export provenance).
+    function test_onMMSettle_finding9_crossVaultWithdrawWithoutProduced_reverts() public {
+        _initMarket();
+        PositionId positionId = _registerActivePosition();
+        address owner = DEFAULT_OWNER;
+
+        address sharedFactory = makeAddr("finding9Factory");
+        MockCanonicalVaultRef sharedCanon = new MockCanonicalVaultRef(sharedFactory);
+        MockMarketVault vaultA = new MockMarketVault(address(sharedCanon));
+        MockMarketVault vaultB = new MockMarketVault(address(sharedCanon));
+        assertEq(
+            vaultA.canonicalVault(), vaultB.canonicalVault(), "pre: both vault facades share canonical custody ref"
+        );
+
+        harness.setCommitmentMax(positionId, 1000e18, 1000e18);
+        harness.setSettled(positionId, 200e18, 200e18);
+        harness.setPositionActive(positionId, true);
+
+        // Credit exists on the owner (as in the historical exploit shape), but no produced export was funded.
+        harness.setUnderlyingDelta(underlyingCurrency0, owner, 50e18);
+        assertTrue(address(vaultA) != address(vaultB), "pre: distinct market vault facades for cross-vault narrative");
+        vaultB.setAvailableLiquidity(type(int128).max, type(int128).max);
+
+        vm.expectRevert(
+            abi.encodeWithSelector(Errors.InvariantViolated.selector, "MarketCurrencyDelta produced underflow")
+        );
+        harness.onMMSettle(
+            manager, vaultB, positionId, lccCurrency0, lccCurrency1, toBalanceDelta(10e18, 0), false, false
+        );
     }
 
     // ============================================================

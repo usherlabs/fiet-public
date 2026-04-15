@@ -11,6 +11,7 @@ import {LiquidityCommitmentCertificate} from "../src/LCC.sol";
 import {MarketVTSConfiguration} from "../src/types/VTS.sol";
 import {IMarketFactory} from "../src/interfaces/IMarketFactory.sol";
 import {IMarketVault} from "../src/interfaces/IMarketVault.sol";
+import {IMarketVaultDryBalanceDelta} from "./_helpers/IMarketVaultDryBalanceDelta.sol";
 import {ILiquidityHub} from "../src/interfaces/ILiquidityHub.sol";
 import {IOracleHelper} from "../src/interfaces/IOracleHelper.sol";
 import {Errors} from "../src/libraries/Errors.sol";
@@ -92,7 +93,7 @@ contract DeltaDesignStatementsTest is MarketTestBase, MarketMakerTestBase {
         positionManager.approve(recipient, tokenId);
         vm.mockCall(
             address(mv),
-            abi.encodeWithSelector(IMarketVault.dryModifyLiquidities.selector),
+            abi.encodeWithSelector(IMarketVaultDryBalanceDelta.dryModifyLiquidities.selector),
             abi.encode(toBalanceDelta(0, 0))
         );
         vm.mockCall(

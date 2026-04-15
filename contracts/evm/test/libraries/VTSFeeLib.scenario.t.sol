@@ -12,6 +12,7 @@ import {PoolSwapTest} from "@uniswap/v4-core/src/test/PoolSwapTest.sol";
 
 import {PositionId, PositionLibrary} from "../../src/types/Position.sol";
 import {IMarketVault} from "../../src/interfaces/IMarketVault.sol";
+import {IMarketVaultDryBalanceDelta} from "../_helpers/IMarketVaultDryBalanceDelta.sol";
 import {VTSOrchestrator} from "../../src/VTSOrchestrator.sol";
 import {SafeCast} from "@uniswap/v4-core/src/libraries/SafeCast.sol";
 import {MMActionAdapter as MMA} from "../utils/MMActionAdapter.sol";
@@ -489,7 +490,7 @@ contract VTSFeeLibScenarioTest is VTSOrchestratorFixture {
         // Mock vault to have no liquidity, forcing clamp/queue on withdrawal
         vm.mockCall(
             address(proxyHook),
-            abi.encodeWithSelector(IMarketVault.dryModifyLiquidities.selector),
+            abi.encodeWithSelector(IMarketVaultDryBalanceDelta.dryModifyLiquidities.selector),
             abi.encode(toBalanceDelta(int128(0), int128(0)))
         );
 

@@ -4,7 +4,7 @@ pragma solidity ^0.8.26;
 import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
 import {ILCC} from "../interfaces/ILCC.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
-import {MarketVault} from "./MarketVault.sol";
+import {MarketVaultFacade} from "./MarketVaultFacade.sol";
 import {IVaultCoreActionHandler} from "../interfaces/IVaultCoreActionHandler.sol";
 import {Errors} from "../libraries/Errors.sol";
 import {CoreActionFlag} from "../libraries/CoreActionFlag.sol";
@@ -13,12 +13,12 @@ import {Exttload} from "v4-periphery/lib/v4-core/src/Exttload.sol";
 /**
  * @title VaultCoreActionHandler
  * @notice Ingress/direct-core reaction layer for canonical market vaults.
- * @dev This module sits between factory coordination and generic vault primitives (`MarketVault`).
+ * @dev This module sits between factory coordination and facade routing primitives (`MarketVaultFacade`).
  *      It also centralises transient direct-core flag toggling plus `exttload` exposure,
  *      so derived hooks inherit one isolated surface for cross-contract action provenance checks.
  */
-abstract contract VaultCoreActionHandler is MarketVault, IVaultCoreActionHandler, Exttload {
-    constructor(address _marketFactory) MarketVault(_marketFactory) {}
+abstract contract VaultCoreActionHandler is MarketVaultFacade, IVaultCoreActionHandler, Exttload {
+    constructor(address _marketFactory) MarketVaultFacade(_marketFactory) {}
 
     /// @dev Derived vaults provide the bound core hook address for direct-action gating.
     function _coreHook() internal view virtual returns (address);

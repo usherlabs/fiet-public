@@ -20,6 +20,10 @@ import {LiquidityHub} from "src/LiquidityHub.sol";
 import {GlobalConfig} from "src/GlobalConfig.sol";
 import {ECDSASignatureSignalVerifier} from "src/verifiers/ECDSASignatureSignalVerifier.sol";
 import {DirectLPDeltaResolver} from "src/DirectLPDeltaResolver.sol";
+import {CanonicalVault} from "src/CanonicalVault.sol";
+import {IPoolManager} from "v4-periphery/lib/v4-core/src/interfaces/IPoolManager.sol";
+import {IWETH9} from "v4-periphery/src/interfaces/external/IWETH9.sol";
+import {IAllowanceTransfer} from "permit2/src/interfaces/IAllowanceTransfer.sol";
 
 import {CREATE3Script} from "../CREATE3Script.sol";
 import {NetworkConfig} from "../NetworkConfig.sol";
@@ -38,6 +42,7 @@ abstract contract DeployProtocolBase is CREATE3Script, NetworkConfig {
     string internal constant MM_POSITION_MANAGER = "MMPositionManager";
     string internal constant DIRECT_LP_DELTA_RESOLVER = "DirectLPDeltaResolver";
     string internal constant MARKET_FACTORY = "MarketFactory";
+    string internal constant CANONICAL_VAULT = "CanonicalVault";
     string internal constant GLOBAL_CONFIG = "GlobalConfig";
 
     constructor() CREATE3Script("1") {}
@@ -129,11 +134,21 @@ abstract contract DeployProtocolBase is CREATE3Script, NetworkConfig {
         return _deployCreate3(COMMITMENT_DESCRIPTOR, type(MMPCommitmentDescriptor).creationCode);
     }
 
+    function _deployCanonicalVault(address liquidityHub, address marketFactory) internal returns (address) {
+        return _deployCreate3(
+            CANONICAL_VAULT,
+            abi.encodePacked(
+                type(CanonicalVault).creationCode, abi.encode(config.poolManager, liquidityHub, marketFactory)
+            )
+        );
+    }
+
     function _deployMMStack(
         address marketFactory,
         address vtsOrchestrator,
         address commitmentDescriptor,
-        address queueBinder
+        address queueBinder,
+        address canonicalVaultAddr
     ) internal returns (address actionsImpl, address queueCustodian, address mmPositionManager) {
         address weth9 = address(PositionManager(payable(config.positionManager)).WETH9());
         address permit2 = address(PositionManager(payable(config.positionManager)).permit2());
@@ -141,7 +156,8 @@ abstract contract DeployProtocolBase is CREATE3Script, NetworkConfig {
         actionsImpl = _deployCreate3(
             ACTIONS_IMPL,
             abi.encodePacked(
-                type(MMPositionActionsImpl).creationCode, abi.encode(config.poolManager, marketFactory, vtsOrchestrator)
+                type(MMPositionActionsImpl).creationCode,
+                abi.encode(config.poolManager, marketFactory, vtsOrchestrator, canonicalVaultAddr)
             )
         );
 
@@ -154,14 +170,17 @@ abstract contract DeployProtocolBase is CREATE3Script, NetworkConfig {
             abi.encodePacked(
                 type(MMPositionManager).creationCode,
                 abi.encode(
-                    config.poolManager,
-                    marketFactory,
-                    vtsOrchestrator,
-                    commitmentDescriptor,
-                    weth9,
-                    permit2,
-                    actionsImpl,
-                    queueCustodian
+                    MMPositionManager.MMPositionManagerInit({
+                        poolManager: IPoolManager(config.poolManager),
+                        marketFactory: marketFactory,
+                        vtsOrchestrator: vtsOrchestrator,
+                        canonicalCustody: canonicalVaultAddr,
+                        descriptor: commitmentDescriptor,
+                        weth9: IWETH9(weth9),
+                        permit2: IAllowanceTransfer(permit2),
+                        actionsImpl: actionsImpl,
+                        queueCustodianAddr: queueCustodian
+                    })
                 )
             )
         );
@@ -208,6 +227,7 @@ abstract contract DeployProtocolBase is CREATE3Script, NetworkConfig {
     function _initialiseFactory(
         address globalConfig,
         address marketFactory,
+        address canonicalVaultAddr,
         address coreHook,
         address mmPositionManager,
         address queueCustodian,
@@ -219,7 +239,8 @@ abstract contract DeployProtocolBase is CREATE3Script, NetworkConfig {
         initialBounds[2] = directLPDeltaResolver;
         GlobalConfig(globalConfig)
             .proxyCall(
-                marketFactory, abi.encodeWithSelector(MarketFactory.initialise.selector, coreHook, initialBounds)
+                marketFactory,
+                abi.encodeWithSelector(MarketFactory.initialise.selector, canonicalVaultAddr, coreHook, initialBounds)
             );
     }
 }

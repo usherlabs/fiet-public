@@ -6,7 +6,7 @@ import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
 import {BalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
 import {PositionId, Position} from "../types/Position.sol";
-import {MarketVTSConfiguration} from "../types/VTS.sol";
+import {MarketVTSConfiguration, VaultSettlementIntent} from "../types/VTS.sol";
 import {MarketMaker} from "../libraries/MarketMaker.sol";
 import {ModifyLiquidityParams, SwapParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
 import {RFSCheckpoint} from "../types/Checkpoint.sol";
@@ -270,6 +270,7 @@ interface IVTSOrchestrator is IPausableVTS, IVTSCurrencyDelta, IVTSAdmin {
     /// @return settlementDelta The settlement balance delta
     /// @return rfsOpen Whether the RFS is open after settlement
     /// @return seizedLiquidityUnits The amount of liquidity units seized (0 if not seizing)
+    /// @return vaultSettlementIntent Explicit vault execution intent for downstream custody handling
     function onMMSettle(
         IMarketFactory factory,
         uint256 commitId,
@@ -277,7 +278,14 @@ interface IVTSOrchestrator is IPausableVTS, IVTSCurrencyDelta, IVTSAdmin {
         BalanceDelta amountDelta,
         bool isSeizing,
         bool fromDeltas
-    ) external returns (BalanceDelta settlementDelta, bool rfsOpen, uint256 seizedLiquidityUnits);
+    )
+        external
+        returns (
+            BalanceDelta settlementDelta,
+            bool rfsOpen,
+            uint256 seizedLiquidityUnits,
+            VaultSettlementIntent memory vaultSettlementIntent
+        );
 
     /// @notice Validate that the grace period has elapsed for a position (required before seizure)
     /// @param commitId The commit identifier

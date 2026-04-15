@@ -5,7 +5,8 @@ import {VTSCurrencyDelta} from "../../../src/modules/VTSCurrencyDelta.sol";
 import {VTSStorage} from "../../../src/types/VTS.sol";
 import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
 import {BalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
-import {DynamicCurrencyDelta} from "../../../src/libraries/DynamicCurrencyDelta.sol";
+import {OwnerCurrencyDelta} from "../../../src/libraries/OwnerCurrencyDelta.sol";
+import {MarketCurrencyDelta} from "../../../src/libraries/MarketCurrencyDelta.sol";
 import {CurrencyDelta} from "v4-periphery/lib/v4-core/src/libraries/CurrencyDelta.sol";
 import {IMarketFactory} from "../../../src/interfaces/IMarketFactory.sol";
 
@@ -29,12 +30,12 @@ contract VTSCurrencyDeltaHarness is VTSCurrencyDelta {
     // ============ Test Setup Helpers ============
 
     /// @notice Sets up a currency delta for a target (uses transient storage)
-    /// @dev Uses DynamicCurrencyDelta.accountDelta to properly manage NonzeroDeltaCount
+    /// @dev Uses OwnerCurrencyDelta.accountDelta to properly manage NonzeroDeltaCount
     /// @param currency The currency to set delta for
     /// @param target The address to set delta for
     /// @param delta The delta amount (positive = credit, negative = debt)
     function setDelta(Currency currency, address target, int128 delta) external {
-        DynamicCurrencyDelta.accountDelta(currency, delta, target);
+        OwnerCurrencyDelta.accountDelta(currency, delta, target);
     }
 
     /// @notice Gets raw delta for a target from transient storage
@@ -46,9 +47,15 @@ contract VTSCurrencyDeltaHarness is VTSCurrencyDelta {
     }
 
     /// @notice Accounts a delta change using the library directly
-    /// @dev Wrapper for DynamicCurrencyDelta.accountDelta
+    /// @dev Wrapper for OwnerCurrencyDelta.accountDelta
     function accountDelta(Currency currency, int128 delta, address target) external {
-        DynamicCurrencyDelta.accountDelta(currency, delta, target);
+        OwnerCurrencyDelta.accountDelta(currency, delta, target);
+    }
+
+    /// @dev Seeds factory-scoped produced credit in this harness execution context (matches `VTSOrchestrator`
+    ///      transient namespace when the orchestrator is deployed as the harness stand-in in entrypoint tests).
+    function seedMarketProduced(address factory, Currency currency, uint256 amount) external {
+        MarketCurrencyDelta.addProduced(factory, currency, amount);
     }
 }
 

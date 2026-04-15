@@ -5,7 +5,7 @@ import "forge-std/Test.sol";
 
 import {VTSPositionLibHarness} from "./harnesses/VTSPositionLibHarness.sol";
 
-import {MarketVTSConfiguration, TokenConfiguration} from "../../src/types/VTS.sol";
+import {MarketVTSConfiguration, TokenConfiguration, VaultSettlementIntent} from "../../src/types/VTS.sol";
 import {VTSStorage} from "../../src/types/VTS.sol";
 import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {ModifyLiquidityParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
@@ -1484,7 +1484,7 @@ contract VTSPositionLibMutationUnitTest is Test {
         }
 
         // Assert on the *underlying* settlement deltas that were accounted for this MM op.
-        // `touchPosition` records the settlement delta via `DynamicCurrencyDelta.accountUnderlyingSettlementDelta`,
+        // `touchPosition` records the settlement delta via `OwnerCurrencyDelta.accountUnderlyingSettlementDelta`,
         // which maps each LCC currency to its underlying currency (here: 0xB0 and 0xB1).
         //
         // IMPORTANT: `touchPosition` recomputes `commitmentMax` from live liquidity on increase, so commitmentMax
@@ -1522,6 +1522,8 @@ contract VTSPositionLibMutationUnitTest is Test {
         );
         harness.setUnderlyingDelta(setup.underlying0, owner, setup.required0.toInt128());
         harness.setUnderlyingDelta(setup.underlying1, owner, setup.required1.toInt128());
+        harness.addMarketProducedCredit(setup.ctx.marketVault, setup.underlying0, setup.required0);
+        harness.addMarketProducedCredit(setup.ctx.marketVault, setup.underlying1, setup.required1);
 
         harness.touchPosition(setup.ctx, setup.tp);
 
@@ -1538,6 +1540,8 @@ contract VTSPositionLibMutationUnitTest is Test {
             PositionModificationHookDataLib.encodeWithInHookProtocolSettlement(1, 0, owner, surplus0, surplus1);
         harness.setUnderlyingDelta(setup.underlying0, owner, surplus0.toInt128());
         harness.setUnderlyingDelta(setup.underlying1, owner, surplus1.toInt128());
+        harness.addMarketProducedCredit(setup.ctx.marketVault, setup.underlying0, surplus0);
+        harness.addMarketProducedCredit(setup.ctx.marketVault, setup.underlying1, surplus1);
 
         harness.touchPosition(setup.ctx, setup.tp);
 
@@ -1553,6 +1557,8 @@ contract VTSPositionLibMutationUnitTest is Test {
             PositionModificationHookDataLib.encodeWithInHookProtocolSettlement(1, 0, owner, setup.required0, surplus1);
         harness.setUnderlyingDelta(setup.underlying0, owner, setup.required0.toInt128());
         harness.setUnderlyingDelta(setup.underlying1, owner, surplus1.toInt128());
+        harness.addMarketProducedCredit(setup.ctx.marketVault, setup.underlying0, setup.required0);
+        harness.addMarketProducedCredit(setup.ctx.marketVault, setup.underlying1, surplus1);
 
         harness.touchPosition(setup.ctx, setup.tp);
 
@@ -1575,6 +1581,8 @@ contract VTSPositionLibMutationUnitTest is Test {
         );
         harness.setUnderlyingDelta(setup.underlying0, owner, setup.required0.toInt128());
         harness.setUnderlyingDelta(setup.underlying1, owner, setup.required1.toInt128());
+        harness.addMarketProducedCredit(setup.ctx.marketVault, setup.underlying0, setup.required0);
+        harness.addMarketProducedCredit(setup.ctx.marketVault, setup.underlying1, setup.required1);
 
         harness.touchPosition(setup.ctx, setup.tp);
 
@@ -1605,6 +1613,8 @@ contract VTSPositionLibMutationUnitTest is Test {
             PositionModificationHookDataLib.encodeWithInHookProtocolSettlement(1, 0, owner, surplus0, surplus1);
         harness.setUnderlyingDelta(setup.underlying0, owner, surplus0.toInt128());
         harness.setUnderlyingDelta(setup.underlying1, owner, surplus1.toInt128());
+        harness.addMarketProducedCredit(setup.ctx.marketVault, setup.underlying0, surplus0);
+        harness.addMarketProducedCredit(setup.ctx.marketVault, setup.underlying1, surplus1);
 
         harness.touchPosition(setup.ctx, setup.tp);
 
@@ -1632,6 +1642,8 @@ contract VTSPositionLibMutationUnitTest is Test {
         );
         harness.setUnderlyingDelta(setup.underlying0, owner, setup.required0.toInt128());
         harness.setUnderlyingDelta(setup.underlying1, owner, setup.required1.toInt128());
+        harness.addMarketProducedCredit(setup.ctx.marketVault, setup.underlying0, setup.required0);
+        harness.addMarketProducedCredit(setup.ctx.marketVault, setup.underlying1, setup.required1);
 
         harness.touchPosition(setup.ctx, setup.tp);
 
@@ -1646,7 +1658,7 @@ contract VTSPositionLibMutationUnitTest is Test {
     /// @notice Two MM full burns in one logical batch must accumulate MMPM underlying settlement delta (SETTLE-03 + DELTA-01).
     /// @dev Regression: setter-style `accountUnderlyingSettlementDelta` would drop the first op's credit when a second
     ///      same-owner decrease runs; both positions export the same per-lane settled surplus here.
-    ///      Uses harness-local underlying delta (allowed in this mutation file for DynamicCurrencyDelta accumulation regressions).
+    ///      Uses harness-local underlying delta (allowed in this mutation file for OwnerCurrencyDelta accumulation regressions).
     function test_touchPosition_twoMmDecreases_sameOwner_accumulatesUnderlyingSettlementDelta() public {
         (PoolKey memory key, PoolId pId, PositionContext memory ctx,,) = _setupTwoMmBurnPositionsForAccumulationTest();
 
@@ -2152,7 +2164,7 @@ contract MockExtsloadPoolManager {
     }
 }
 
-/// @notice Minimal LCC mock for DynamicCurrencyDelta (needs underlying()).
+/// @notice Minimal LCC mock for OwnerCurrencyDelta (needs underlying()).
 contract MockLCC {
     address internal u;
 
@@ -2176,21 +2188,43 @@ contract MockMarketVaultNoop {
     }
     function modifyLiquidities(BalanceDelta) external pure {}
 
-    function tryModifyLiquidities(BalanceDelta d) external pure returns (BalanceDelta) {
-        return d;
+    function tryModifyLiquidities(BalanceDelta balanceDelta) external pure returns (BalanceDelta) {
+        return balanceDelta;
     }
 
-    function tryModifyLiquiditiesWithRecipient(BalanceDelta d, address) external pure returns (BalanceDelta) {
-        return d;
+    function tryModifyLiquiditiesWithRecipient(BalanceDelta balanceDelta, address)
+        external
+        pure
+        returns (BalanceDelta)
+    {
+        return balanceDelta;
     }
 
-    function dryModifyLiquidities(BalanceDelta d) external pure returns (BalanceDelta) {
-        return d;
+    function dryModifyLiquidities(BalanceDelta balanceDelta) external pure returns (BalanceDelta) {
+        return balanceDelta;
     }
 }
 
 /// @notice Passthrough market vault: returns the requested delta as "available" so no queuing occurs.
+contract MockCanonicalVaultRef_Mutation {
+    address public immutable marketFactory;
+
+    constructor(address _marketFactory) {
+        marketFactory = _marketFactory;
+    }
+}
+
 contract MockMarketVaultPassthrough is IMarketVault {
+    address internal immutable canonical = address(new MockCanonicalVaultRef_Mutation(address(this)));
+
+    function marketId() external pure returns (bytes32) {
+        return bytes32(0);
+    }
+
+    function canonicalVault() external view returns (address) {
+        return canonical;
+    }
+
     function lccs() external pure returns (address, address) {
         return (address(0), address(0));
     }
@@ -2200,17 +2234,49 @@ contract MockMarketVaultPassthrough is IMarketVault {
     }
     function modifyLiquidities(BalanceDelta) external pure {}
 
-    function tryModifyLiquidities(BalanceDelta d) external pure returns (BalanceDelta) {
-        return d;
+    function modifyLiquidities(VaultSettlementIntent calldata) external pure {}
+
+    function tryModifyLiquidities(BalanceDelta balanceDelta) external pure returns (BalanceDelta) {
+        return balanceDelta;
     }
 
-    function tryModifyLiquiditiesWithRecipient(BalanceDelta d, address) external pure returns (BalanceDelta) {
-        return d;
+    function tryModifyLiquidities(VaultSettlementIntent calldata settlementIntent)
+        external
+        pure
+        returns (BalanceDelta)
+    {
+        return settlementIntent.requestedDelta;
     }
 
-    function dryModifyLiquidities(BalanceDelta d) external pure returns (BalanceDelta) {
-        return d;
+    function tryModifyLiquiditiesWithRecipient(BalanceDelta balanceDelta, address)
+        external
+        pure
+        returns (BalanceDelta)
+    {
+        return balanceDelta;
     }
+
+    function tryModifyLiquiditiesWithRecipient(VaultSettlementIntent calldata settlementIntent, address)
+        external
+        pure
+        returns (BalanceDelta)
+    {
+        return settlementIntent.requestedDelta;
+    }
+
+    function dryModifyLiquidities(BalanceDelta balanceDelta) external pure returns (BalanceDelta) {
+        return balanceDelta;
+    }
+
+    function dryModifyLiquidities(VaultSettlementIntent calldata settlementIntent)
+        external
+        pure
+        returns (BalanceDelta)
+    {
+        return settlementIntent.requestedDelta;
+    }
+
+    function decreaseLiquidityReserve(Currency, uint256) external pure {}
 }
 
 /// @notice LiquidityHub recorder for mutation tests: captures planCancelWithQueue amounts.

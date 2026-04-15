@@ -6,6 +6,7 @@ import {Currency} from "v4-periphery/lib/v4-core/src/types/Currency.sol";
 import {ILCC} from "../interfaces/ILCC.sol";
 import {ILiquidityHub} from "../interfaces/ILiquidityHub.sol";
 import {IMarketFactory} from "../interfaces/IMarketFactory.sol";
+import {Errors} from "../libraries/Errors.sol";
 
 /**
  * @title PositionManagerBase
@@ -16,10 +17,16 @@ import {IMarketFactory} from "../interfaces/IMarketFactory.sol";
 abstract contract PositionManagerBase is ImmutableVTSState {
     ILiquidityHub internal immutable liquidityHub;
     IMarketFactory internal immutable marketFactory;
+    /// @notice Factory-scoped canonical custody used at batch finality and for settlement transfers.
+    address internal immutable canonicalCustody;
 
-    constructor(address _marketFactory, address _vtsOrchestrator) ImmutableVTSState(_vtsOrchestrator) {
+    constructor(address _marketFactory, address _vtsOrchestrator, address _canonicalCustody)
+        ImmutableVTSState(_vtsOrchestrator)
+    {
+        if (_canonicalCustody == address(0)) revert Errors.InvalidAddress(_canonicalCustody);
         marketFactory = IMarketFactory(_marketFactory);
         liquidityHub = marketFactory.liquidityHub();
+        canonicalCustody = _canonicalCustody;
     }
 
     // ------------------------------------------------------------------------------------------------

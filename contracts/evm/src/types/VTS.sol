@@ -126,11 +126,23 @@ struct SettleParams {
     bool fromDeltas;
 }
 
+/// @notice Explicit vault execution intent computed by VTS settlement paths.
+/// @dev `requestedDelta` is the final vault delta to execute after VTS-side clamping.
+///      `creditBackedWithdrawal{0,1}` describe the portion of positive withdrawal lanes that
+///      are funded by produced same-underlying credit rather than the destination market reserve.
+struct VaultSettlementIntent {
+    BalanceDelta requestedDelta;
+    uint256 creditBackedWithdrawal0;
+    uint256 creditBackedWithdrawal1;
+}
+
 /// @notice Result of onMMSettle to reduce stack pressure
 /// @dev Bundles return values into single struct
 struct SettleResult {
     // The delta actually applied to underlying
     BalanceDelta settlementDelta;
+    // Explicit vault execution intent for downstream custody calls.
+    VaultSettlementIntent vaultSettlementIntent;
     // Whether the RFS is open for the position
     bool rfsOpen;
     // The amount of liquidity units seized (non-zero only when seizing)

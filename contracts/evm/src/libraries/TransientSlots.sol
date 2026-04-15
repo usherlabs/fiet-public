@@ -12,7 +12,8 @@ library TransientSlots {
     bytes32 internal constant SQRTP_BEFORE_SLOT = keccak256("SQRTP_BEFORE");
     bytes32 internal constant LIQ_BEFORE_SLOT = keccak256("LIQ_BEFORE");
     /// @dev Authoritative `slot0.tick` before swap (not `TickMath.getTickAtSqrtPrice(sqrtPrice)`), for boundary-safe
-    ///      growth attribution. Stored as `uint256(int256(tick))` (sign-extended int24) for correct negative ticks.
+    ///      growth attribution. Payload is the low 24-bit two's-complement lane (see `encodeTickBefore` /
+    ///      `decodeTickBefore`); use `storeTickBefore` / `loadTickBefore` / `clearTickBefore` at call sites.
     bytes32 internal constant TICK_BEFORE_SLOT = keccak256("TICK_BEFORE");
     bytes32 internal constant NATIVE_VALUE_READ_SLOT = keccak256("NATIVE_VALUE_READ");
     bytes32 internal constant SEIZED_POSITION_ID_SLOT = keccak256("SEIZED_POSITION_ID");
@@ -126,5 +127,37 @@ library TransientSlots {
         TransientSlot.asUint256(baseSlot).tstore(0);
         TransientSlot.asUint256(bytes32(uint256(baseSlot) + 1)).tstore(0);
         TransientSlot.asUint256(bytes32(uint256(baseSlot) + 2)).tstore(0);
+    }
+
+    // ------------------------------
+    // Core swap tick snapshot (int24 in transient uint256 slot)
+    // ------------------------------
+
+    /// @dev Packs `tick` into the low 24 bits as two's-complement so negative ticks round-trip without relying on a
+    ///      full-word `uint256` -> `int256` reinterpretation at load time.
+    // If negative, the negative value is not stored as a “negative uint256”; it is stored as a 24-bit bit pattern inside the 256-bit slot, and the decode step restores the sign correctly.
+    function encodeTickBefore(int24 tick) internal pure returns (uint256 encoded) {
+        int256 asInt = int256(tick);
+        assembly ("memory-safe") {
+            encoded := and(asInt, 0xFFFFFF)
+        }
+    }
+
+    function decodeTickBefore(uint256 encoded) internal pure returns (int24 tickBefore) {
+        assembly ("memory-safe") {
+            tickBefore := signextend(2, and(encoded, 0xFFFFFF))
+        }
+    }
+
+    function storeTickBefore(int24 tickBefore) internal {
+        TransientSlot.asUint256(TICK_BEFORE_SLOT).tstore(encodeTickBefore(tickBefore));
+    }
+
+    function loadTickBefore() internal view returns (int24 tickBefore) {
+        return decodeTickBefore(TransientSlot.asUint256(TICK_BEFORE_SLOT).tload());
+    }
+
+    function clearTickBefore() internal {
+        TransientSlot.asUint256(TICK_BEFORE_SLOT).tstore(0);
     }
 }

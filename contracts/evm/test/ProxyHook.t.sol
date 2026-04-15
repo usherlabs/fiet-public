@@ -14,6 +14,7 @@ import {PoolSwapTest} from "@uniswap/v4-core/src/test/PoolSwapTest.sol";
 import {ModifyLiquidityParams, SwapParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
 import {CurrencySortHelper} from "./utils/CurrencySortHelper.sol";
 import {LiquidityCommitmentCertificate} from "../src/LCC.sol";
+import {ICanonicalVault} from "../src/interfaces/ICanonicalVault.sol";
 import {IMarketFactory} from "../src/interfaces/IMarketFactory.sol";
 import {LiquidityUtils} from "../src/libraries/LiquidityUtils.sol";
 import {console} from "forge-std/console.sol";
@@ -34,6 +35,7 @@ import {StateLibrary} from "@uniswap/v4-core/src/libraries/StateLibrary.sol";
 import {IMsgSender} from "v4-periphery/src/interfaces/IMsgSender.sol";
 import {IERC20Minimal} from "@uniswap/v4-core/src/interfaces/external/IERC20Minimal.sol";
 import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
+import {CanonicalVault} from "../src/CanonicalVault.sol";
 
 /**
  * 22nd October 2025 - ProxyHookTest.sol
@@ -203,11 +205,35 @@ contract ProxyHookTest is MarketVaultBase {
 
     function test_handleAddLiquidity_directCoreAction_pathExecutes() public {
         ProxyHookHarness fresh = new ProxyHookHarness(address(manager), address(marketFactory));
+        address canonicalVault = IMarketFactory(marketFactory).canonicalVault();
+        PoolKey memory altCorePoolKey = PoolKey({
+            currency0: corePoolKey.currency0,
+            currency1: corePoolKey.currency1,
+            fee: corePoolKey.fee + 1,
+            tickSpacing: corePoolKey.tickSpacing,
+            hooks: corePoolKey.hooks
+        });
+        bytes32 marketId = PoolId.unwrap(altCorePoolKey.toId());
 
         vm.prank(marketFactory);
         fresh.activate();
         vm.prank(marketFactory);
-        fresh.setCorePoolKey(corePoolKey);
+        fresh.setCorePoolKey(altCorePoolKey);
+        vm.mockCall(
+            marketFactory,
+            abi.encodeWithSelector(IMarketFactory.isMarketFacade.selector, marketId, address(fresh)),
+            abi.encode(true)
+        );
+        vm.prank(marketFactory);
+        ICanonicalVault(canonicalVault)
+            .registerMarket(
+                marketId,
+                address(fresh),
+                address(lcc0),
+                address(lcc1),
+                Currency.unwrap(_currency0),
+                Currency.unwrap(_currency1)
+            );
 
         vm.prank(coreHookAddress);
         fresh.handleAddLiquidity();
@@ -1263,6 +1289,205 @@ contract ProxyHookTest is MarketVaultBase {
     }
 
     // -------------------------------------------------------------------------
+    // CanonicalVault durable claim ownership (proxy swap mirroring; no transient deltas asserted)
+    // -------------------------------------------------------------------------
+
+    function _canonicalVaultPayable() internal view returns (address payable) {
+        return payable(IMarketFactory(marketFactory).canonicalVault());
+    }
+
+    function _assertUnderlyingClaimsMatchVaultReserves() internal view {
+        address payable cv = _canonicalVaultPayable();
+        bytes32 m = _coreMarketId();
+        assertEq(
+            _underlying6909Balance(address(cv), proxyPoolKey.currency0),
+            CanonicalVault(cv).inMarketBalanceOf(m, proxyPoolKey.currency0),
+            "currency0: ERC6909 claims on CanonicalVault must match durable reserve ledger"
+        );
+        assertEq(
+            _underlying6909Balance(address(cv), proxyPoolKey.currency1),
+            CanonicalVault(cv).inMarketBalanceOf(m, proxyPoolKey.currency1),
+            "currency1: ERC6909 claims on CanonicalVault must match durable reserve ledger"
+        );
+    }
+
+    /// @dev Suite B (plan): zeroForOne exact-input must mint input-lane underlying claims to CanonicalVault.
+    function test_proxySwap_zeroForOne_exactInput_mintsInputUnderlyingClaimToCanonicalVault() public {
+        vm.assume(Currency.unwrap(proxyPoolKey.currency0) != address(0));
+        address payable cv = _canonicalVaultPayable();
+
+        uint256 claimInBefore = _underlying6909Balance(address(cv), proxyPoolKey.currency0);
+        uint256 hookInBefore = _underlying6909Balance(address(proxyHook), proxyPoolKey.currency0);
+
+        BalanceDelta d = _executeSwap(proxyPoolKey, true, -int256(1e18), ZERO_BYTES);
+        (uint256 inputAmt,) = _getSwapDeltas(d, true);
+
+        assertEq(_underlying6909Balance(address(cv), proxyPoolKey.currency0), claimInBefore + inputAmt);
+        assertEq(_underlying6909Balance(address(proxyHook), proxyPoolKey.currency0), hookInBefore);
+    }
+
+    /// @dev Suite B (plan): zeroForOne exact-input must burn output-lane underlying claims from CanonicalVault.
+    function test_proxySwap_zeroForOne_exactInput_burnsOutputUnderlyingClaimFromCanonicalVault() public {
+        vm.assume(Currency.unwrap(proxyPoolKey.currency1) != address(0));
+        address payable cv = _canonicalVaultPayable();
+
+        uint256 claimOutBefore = _underlying6909Balance(address(cv), proxyPoolKey.currency1);
+        uint256 hookOutBefore = _underlying6909Balance(address(proxyHook), proxyPoolKey.currency1);
+
+        BalanceDelta d = _executeSwap(proxyPoolKey, true, -int256(1e18), ZERO_BYTES);
+        (, uint256 outputAmt) = _getSwapDeltas(d, true);
+
+        assertEq(claimOutBefore - _underlying6909Balance(address(cv), proxyPoolKey.currency1), outputAmt);
+        assertEq(_underlying6909Balance(address(proxyHook), proxyPoolKey.currency1), hookOutBefore);
+    }
+
+    /// @dev Suite B (plan): oneForZero exact-input must mint input-lane underlying claims to CanonicalVault.
+    function test_proxySwap_oneForZero_exactInput_mintsInputUnderlyingClaimToCanonicalVault() public {
+        vm.assume(Currency.unwrap(proxyPoolKey.currency1) != address(0));
+        address payable cv = _canonicalVaultPayable();
+
+        uint256 claimInBefore = _underlying6909Balance(address(cv), proxyPoolKey.currency1);
+        uint256 hookInBefore = _underlying6909Balance(address(proxyHook), proxyPoolKey.currency1);
+
+        BalanceDelta d = _executeSwap(proxyPoolKey, false, -int256(1e18), ZERO_BYTES);
+        (uint256 inputAmt,) = _getSwapDeltas(d, false);
+
+        assertEq(_underlying6909Balance(address(cv), proxyPoolKey.currency1), claimInBefore + inputAmt);
+        assertEq(_underlying6909Balance(address(proxyHook), proxyPoolKey.currency1), hookInBefore);
+    }
+
+    /// @dev Suite B (plan): oneForZero exact-input must burn output-lane underlying claims from CanonicalVault.
+    function test_proxySwap_oneForZero_exactInput_burnsOutputUnderlyingClaimFromCanonicalVault() public {
+        vm.assume(Currency.unwrap(proxyPoolKey.currency0) != address(0));
+        address payable cv = _canonicalVaultPayable();
+
+        uint256 claimOutBefore = _underlying6909Balance(address(cv), proxyPoolKey.currency0);
+        uint256 hookOutBefore = _underlying6909Balance(address(proxyHook), proxyPoolKey.currency0);
+
+        BalanceDelta d = _executeSwap(proxyPoolKey, false, -int256(1e18), ZERO_BYTES);
+        (, uint256 outputAmt) = _getSwapDeltas(d, false);
+
+        assertEq(claimOutBefore - _underlying6909Balance(address(cv), proxyPoolKey.currency0), outputAmt);
+        assertEq(_underlying6909Balance(address(proxyHook), proxyPoolKey.currency0), hookOutBefore);
+    }
+
+    /// @dev Suite B (plan): after successful exact-input swaps, CanonicalVault claim ownership must equal reserve ledger.
+    function test_proxySwap_exactInput_preservesInvariant_claimsOwnedByCanonicalVault_matchVaultReserves() public {
+        vm.assume(Currency.unwrap(proxyPoolKey.currency0) != address(0));
+        vm.assume(Currency.unwrap(proxyPoolKey.currency1) != address(0));
+
+        _assertUnderlyingClaimsMatchVaultReserves();
+        _executeSwap(proxyPoolKey, true, -int256(1e18), ZERO_BYTES);
+        _assertUnderlyingClaimsMatchVaultReserves();
+
+        _executeSwap(proxyPoolKey, false, -int256(1e17), ZERO_BYTES);
+        _assertUnderlyingClaimsMatchVaultReserves();
+    }
+
+    /// @dev Suite C (plan): with resolved recipient and limited output reserve, only immediate available output burns claims.
+    function test_proxySwap_exactInput_withResolvedRecipient_burnsOnlyImmediateOutputClaimPortion() public {
+        vm.assume(Currency.unwrap(proxyPoolKey.currency1) != address(0));
+        address recipient = makeAddr("claim_deficit_recipient");
+        _setupRecipient(recipient);
+
+        uint256 mockAvailable = 50;
+        _mockLimitedLiquidity(_currency1, mockAvailable);
+
+        uint256 swapAmount = 100;
+        (, uint256 expectedOutput) = _simulateSwap(corePoolKey, true, -int256(swapAmount));
+        assertGt(expectedOutput, mockAvailable, "pre: deficit path required");
+
+        address payable cv = _canonicalVaultPayable();
+        uint256 claimOutBefore = _underlying6909Balance(address(cv), proxyPoolKey.currency1);
+
+        _executeSwap(proxyPoolKey, true, -int256(swapAmount), abi.encode(recipient));
+
+        uint256 burned = claimOutBefore - _underlying6909Balance(address(cv), proxyPoolKey.currency1);
+        assertEq(burned, mockAvailable, "only immediate vault liquidity should burn underlying claims");
+
+        assertGt(LiquidityHub(payable(liquidityHub)).settleQueue(address(_getLCCOut(_currency1)), recipient), 0);
+        vm.clearMockedCalls();
+    }
+
+    /// @dev Suite C (plan): deficit on output lane must not break full input-lane claim mirroring into CanonicalVault.
+    function test_proxySwap_exactInput_withResolvedRecipient_keepsInputClaimMirroringEvenWhenOutputDeficits() public {
+        vm.assume(Currency.unwrap(proxyPoolKey.currency0) != address(0));
+        address recipient = makeAddr("claim_deficit_recipient_in");
+        _setupRecipient(recipient);
+
+        uint256 mockAvailable = 50;
+        _mockLimitedLiquidity(_currency1, mockAvailable);
+
+        uint256 swapAmount = 100;
+        (uint256 expectedInput, uint256 expectedOutput) = _simulateSwap(corePoolKey, true, -int256(swapAmount));
+        assertGt(expectedOutput, mockAvailable);
+
+        address payable cv = _canonicalVaultPayable();
+        uint256 claimInBefore = _underlying6909Balance(address(cv), proxyPoolKey.currency0);
+
+        BalanceDelta d = _executeSwap(proxyPoolKey, true, -int256(swapAmount), abi.encode(recipient));
+        (uint256 inputAmt,) = _getSwapDeltas(d, true);
+
+        assertEq(inputAmt, expectedInput);
+        assertEq(_underlying6909Balance(address(cv), proxyPoolKey.currency0), claimInBefore + inputAmt);
+
+        vm.clearMockedCalls();
+    }
+
+    /// @dev Suite C (plan): unresolved-recipient deficit must revert without mutating durable claim or reserve ownership.
+    function test_proxySwap_exactInput_unresolvedRecipient_revertsWhenOutputExceedsVault() public {
+        vm.assume(Currency.unwrap(proxyPoolKey.currency1) != address(0));
+        vm.assume(Currency.unwrap(proxyPoolKey.currency0) != address(0));
+
+        address payable cv = _canonicalVaultPayable();
+        bytes32 marketId = _coreMarketId();
+        uint256[2] memory reserveBefore = [
+            CanonicalVault(cv).inMarketBalanceOf(marketId, proxyPoolKey.currency0),
+            CanonicalVault(cv).inMarketBalanceOf(marketId, proxyPoolKey.currency1)
+        ];
+        uint256[2] memory totalBefore = [
+            CanonicalVault(cv).totalUnderlyingReserves(Currency.unwrap(proxyPoolKey.currency0)),
+            CanonicalVault(cv).totalUnderlyingReserves(Currency.unwrap(proxyPoolKey.currency1))
+        ];
+
+        uint256 mockAvailable = 50;
+        _mockLimitedLiquidity(_currency1, mockAvailable);
+
+        uint256 swapAmount = 100;
+        (, uint256 expectedOutput) = _simulateSwap(corePoolKey, true, -int256(swapAmount));
+        assertGt(expectedOutput, mockAvailable, "pre: must revert on unresolved recipient");
+
+        uint256 c0Claim = _underlying6909Balance(address(cv), proxyPoolKey.currency0);
+        uint256 c1Claim = _underlying6909Balance(address(cv), proxyPoolKey.currency1);
+        uint256 hookC0 = _underlying6909Balance(address(proxyHook), proxyPoolKey.currency0);
+        uint256 hookC1 = _underlying6909Balance(address(proxyHook), proxyPoolKey.currency1);
+
+        vm.expectRevert();
+        _executeSwap(proxyPoolKey, true, -int256(swapAmount), ZERO_BYTES);
+
+        vm.clearMockedCalls();
+
+        assertEq(_underlying6909Balance(address(cv), proxyPoolKey.currency0), c0Claim);
+        assertEq(_underlying6909Balance(address(cv), proxyPoolKey.currency1), c1Claim);
+        assertEq(_underlying6909Balance(address(proxyHook), proxyPoolKey.currency0), hookC0);
+        assertEq(_underlying6909Balance(address(proxyHook), proxyPoolKey.currency1), hookC1);
+        assertEq(CanonicalVault(cv).inMarketBalanceOf(marketId, proxyPoolKey.currency0), reserveBefore[0]);
+        assertEq(CanonicalVault(cv).inMarketBalanceOf(marketId, proxyPoolKey.currency1), reserveBefore[1]);
+        assertEq(CanonicalVault(cv).totalUnderlyingReserves(Currency.unwrap(proxyPoolKey.currency0)), totalBefore[0]);
+        assertEq(CanonicalVault(cv).totalUnderlyingReserves(Currency.unwrap(proxyPoolKey.currency1)), totalBefore[1]);
+    }
+
+    /// @dev Suite D (plan): compatibility pin for mint target ownership under `take(..., true)`.
+    function test_claimMintTarget_isCanonicalVault_notMsgSender() public {
+        test_proxySwap_zeroForOne_exactInput_mintsInputUnderlyingClaimToCanonicalVault();
+    }
+
+    /// @dev Suite D (plan): compatibility pin for burn source ownership under `settle(..., true)`.
+    function test_claimBurnSource_isCanonicalVault_notMsgSender() public {
+        test_proxySwap_zeroForOne_exactInput_burnsOutputUnderlyingClaimFromCanonicalVault();
+    }
+
+    // -------------------------------------------------------------------------
     // Liveness: prior legitimate vault consumers vs proxy swap (see CAVEATS.md)
     // -------------------------------------------------------------------------
 
@@ -1611,10 +1836,12 @@ contract DifferentTokenDecimalsProxyHookTest is MarketTestBase {
 
         bytes memory marketRef = abi.encodePacked(address(proxyHook));
         string memory marketName = "Test Market";
-        // Production wiring: vtsOrchestrator + proxyHook are issuers (MarketFactory does this).
-        address[] memory initialIssuers = new address[](2);
+        // Production wiring keeps proxy-hook-local LCC issue/cancel authority for swap-local hook deltas, while
+        // CanonicalVault owns the durable custody ledger for the market.
+        address[] memory initialIssuers = new address[](3);
         initialIssuers[0] = address(vtsOrchestrator);
         initialIssuers[1] = address(proxyHook);
+        initialIssuers[2] = IMarketFactory(marketFactory).canonicalVault();
 
         vm.prank(marketFactory);
         (address _lcc0, address _lcc1) = LiquidityHub(payable(liquidityHub))

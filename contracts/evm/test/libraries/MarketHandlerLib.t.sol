@@ -167,7 +167,7 @@ contract MarketHandlerLibTest is Test {
 
     function test_getVault_returnsCorePoolProxyHookAsVault() public {
         PoolId poolId = PoolId.wrap(bytes32(uint256(2)));
-        MockMarketVault vault = new MockMarketVault();
+        MockMarketVault vault = new MockMarketVault(address(0));
         factory.setCorePoolToProxyHook(poolId, address(vault));
 
         IMarketVault got = h.getVault(IMarketFactory(address(factory)), poolId);

@@ -30,6 +30,7 @@ import {MMCalldataDecoder} from "./libraries/MMCalldataDecoder.sol";
 import {MMHelpers} from "./libraries/MMHelpers.sol";
 import {Locker} from "v4-periphery/src/libraries/Locker.sol";
 import {DelegateCallGuard} from "./modules/DelegateCallGuard.sol";
+import {VaultSettlementIntent} from "./types/VTS.sol";
 
 /// @title MMPositionActionsImpl
 /// @notice Implementation contract for MMPositionManager position operations
@@ -84,8 +85,8 @@ contract MMPositionActionsImpl is
     // Constructor
     // ═══════════════════════════════════════════════════════════════════════════
 
-    constructor(address _manager, address _marketFactory, address _vtsOrchestrator)
-        PositionManagerImpl(IPoolManager(_manager), _marketFactory, _vtsOrchestrator)
+    constructor(address _manager, address _marketFactory, address _vtsOrchestrator, address _canonicalCustody)
+        PositionManagerImpl(IPoolManager(_manager), _marketFactory, _vtsOrchestrator, _canonicalCustody)
     {}
 
     // ═══════════════════════════════════════════════════════════════════════════
@@ -346,28 +347,38 @@ contract MMPositionActionsImpl is
     /// @return seizedLiquidityUnits The amount of liquidity units seized
     function _callOnMMSettle(SettleCallParams memory params)
         internal
-        returns (BalanceDelta settlementDelta, uint256 seizedLiquidityUnits)
+        returns (
+            BalanceDelta settlementDelta,
+            uint256 seizedLiquidityUnits,
+            VaultSettlementIntent memory vaultSettlementIntent
+        )
     {
-        (settlementDelta,, seizedLiquidityUnits) = vtsOrchestrator.onMMSettle(
-            params.factory,
-            params.tokenId,
-            params.positionIndex,
-            params.requestedDelta,
-            params.isSeizing,
-            params.fromDeltas
-        );
+        (settlementDelta,, seizedLiquidityUnits, vaultSettlementIntent) =
+            vtsOrchestrator.onMMSettle(
+                params.factory,
+                params.tokenId,
+                params.positionIndex,
+                params.requestedDelta,
+                params.isSeizing,
+                params.fromDeltas
+            );
     }
 
     /// @notice Processes settlement transfers for a position
     /// @dev Extracted to reduce stack depth in _settle (avoids stack-too-deep with coverage instrumentation)
     /// @param params The transfer parameters bundled in a struct
-    /// @param settlementDelta The settlement delta from VTS
-    function _processSettlementTransfers(SettleTransferParams memory params, BalanceDelta settlementDelta) internal {
+    /// @param settlementIntent The explicit vault settlement intent from VTS
+    function _processSettlementTransfers(
+        SettleTransferParams memory params,
+        VaultSettlementIntent memory settlementIntent
+    ) internal {
+        BalanceDelta settlementDelta = settlementIntent.requestedDelta;
         // Adheres to core/LCC pool token ordering.
         int128 delta0 = settlementDelta.amount0();
         int128 delta1 = settlementDelta.amount1();
 
         address sender = msgSender();
+        address custody = canonicalCustody;
 
         // Process negative deltas (inflows to vault)
         if (delta0 < 0) {
@@ -378,14 +389,14 @@ contract MMPositionActionsImpl is
                 if (taken0 != amt0) {
                     revert Errors.InsufficientBalance(taken0, amt0);
                 }
-                params.underlying0.transfer(address(params.vault), amt0);
+                params.underlying0.transfer(custody, amt0);
             } else {
                 // Settle IN (deposit) of native ETH MUST come from MMPM balance.
                 if (params.underlying0 == CurrencyLibrary.ADDRESS_ZERO) {
                     revert Errors.NativeTransferFromUnsupported(sender);
                 }
                 // Otherwise, pull only from the locker (msgSender()).
-                params.underlying0.transferFrom(sender, address(params.vault), amt0);
+                params.underlying0.transferFrom(sender, custody, amt0);
             }
         }
         if (delta1 < 0) {
@@ -395,16 +406,16 @@ contract MMPositionActionsImpl is
                 if (taken1 != amt1) {
                     revert Errors.InsufficientBalance(taken1, amt1);
                 }
-                params.underlying1.transfer(address(params.vault), amt1);
+                params.underlying1.transfer(custody, amt1);
             } else {
                 if (params.underlying1 == CurrencyLibrary.ADDRESS_ZERO) {
                     revert Errors.NativeTransferFromUnsupported(sender);
                 }
-                params.underlying1.transferFrom(sender, address(params.vault), amt1);
+                params.underlying1.transferFrom(sender, custody, amt1);
             }
         }
 
-        params.vault.modifyLiquidities(settlementDelta);
+        params.vault.modifyLiquidities(settlementIntent);
 
         // Process positive deltas (outflows from vault)
         if (params.usePositionManagerBalance) {
@@ -486,7 +497,11 @@ contract MMPositionActionsImpl is
         }
 
         // Call onMMSettle via helper
-        (BalanceDelta settlementDelta, uint256 seizedLiquidityUnits) = _callOnMMSettle(callParams);
+        (
+            BalanceDelta settlementDelta,
+            uint256 seizedLiquidityUnits,
+            VaultSettlementIntent memory vaultSettlementIntent
+        ) = _callOnMMSettle(callParams);
 
         // Process settlement transfers via helper (reduces stack depth)
         _processSettlementTransfers(
@@ -496,7 +511,7 @@ contract MMPositionActionsImpl is
                 vault: callParams.vault,
                 usePositionManagerBalance: usePositionManagerBalance
             }),
-            settlementDelta
+            vaultSettlementIntent
         );
 
         return (settlementDelta, seizedLiquidityUnits);

@@ -361,7 +361,7 @@ contract VTSCurrencyDeltaTest is Test {
 
     function test_assertNonZeroDeltas_noDeltas_doesNotRevert() public view {
         // No deltas set - nonzero count is 0
-        harness.assertNonZeroDeltas(); // Should not revert
+        harness.assertNonZeroDeltas(factory); // Should not revert
     }
 
     function test_assertNonZeroDeltas_withNonzeroCount_reverts() public {
@@ -370,7 +370,7 @@ contract VTSCurrencyDeltaTest is Test {
 
         // Act & Assert: should revert with CurrencyNotSettled
         vm.expectRevert(Errors.CurrencyNotSettled.selector);
-        harness.assertNonZeroDeltas();
+        harness.assertNonZeroDeltas(factory);
     }
 
     function test_assertNonZeroDeltas_afterDeltaCleared_doesNotRevert() public {
@@ -379,7 +379,7 @@ contract VTSCurrencyDeltaTest is Test {
         harness.setDelta(currency0, target, -100e18); // Clear by applying opposite
 
         // Act: should not revert now
-        harness.assertNonZeroDeltas();
+        harness.assertNonZeroDeltas(factory);
     }
 
     function test_assertNonZeroDeltas_negativeNonzero_reverts() public {
@@ -388,7 +388,14 @@ contract VTSCurrencyDeltaTest is Test {
 
         // Act & Assert: should revert - any nonzero delta counts
         vm.expectRevert(Errors.CurrencyNotSettled.selector);
-        harness.assertNonZeroDeltas();
+        harness.assertNonZeroDeltas(factory);
+    }
+
+    function test_assertNonZeroDeltas_revertsWhenMarketProducedCreditUnresolved() public {
+        harness.seedMarketProduced(address(factory), currency0, 1 ether);
+
+        vm.expectRevert(Errors.CurrencyNotSettled.selector);
+        harness.assertNonZeroDeltas(factory);
     }
 
     // ════════════════════════════════════════════════════════════════════════════

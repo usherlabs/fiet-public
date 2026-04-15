@@ -188,12 +188,16 @@ being an informal “should”.
   DEX tiers are not admitted via `unwrapTo`. End users unwrap with `unwrap(...)` / `unwrap(underlying, marketId, ...)`,
   which always queue shortfalls to the caller.
 - **Enforced by**: `src/LiquidityHub.sol::_onlyUnwrapToEndpoint` on each `unwrapTo` entrypoint before `_unwrap`.
-- **Supported contract for `unwrapTo(lcc, to, queueTo, ...)`**: the endpoint acts on behalf of the beneficiary named by
-  `queueTo`; the caller-held LCC balance spent in this unwrap is treated as representing that beneficiary for the purpose
-  of HUB-02 netting (`settleQueue[lcc][queueTo]` is already encumbering that caller-held balance). For example,
-  `MMPositionManager` consumes the locker’s LCC or delta credit before calling `unwrapTo` with `queueTo` equal to the
-  locker. Endpoints that attribute queue to an address whose outstanding queue is not economically tied to the same
-  caller-held slice must not use this pattern without revisiting the netting rule.
+- **Trusted endpoint contract**:
+  - `unwrapTo(lcc, to, queueTo, ...)` is an on-behalf-of primitive, not a generic convenience wrapper over `unwrap`.
+  - The endpoint must call it only after it has already consumed/escrowed beneficiary-linked value (for example locker
+    LCC or delta credit) for `queueTo`, so the caller-held LCC slice economically represents that beneficiary.
+  - Under that precondition, HUB-02 headroom netting against `settleQueue[lcc][queueTo]` is correct because the queue is
+    already encumbering the same caller-held slice.
+  - Current intended caller: `MMPositionManager`, which consumes locker/user LCC or delta credit before calling
+    `unwrapTo`.
+  - Any additional `BOUND_ENDPOINT` integration that cannot preserve this coupling must not use `unwrapTo` without
+    revisiting HUB-02 netting assumptions.
 - **Rationale**: Splitting immediate payout recipient from queue owner is a trusted endpoint pattern (for example
   `MMPositionManager` after it has consumed the beneficiary’s LCC or delta credit). Exposing that split to arbitrary EOAs
   allowed repeated queue inflation against unchanged holder balance.
@@ -504,12 +508,12 @@ being an informal “should”.
     homogeneous bucket for **routing** (vault-available immediate slice vs Hub queue vs value that must remain in live
     source `pa.settled` until it is serviceable).
   - Each economic sub-slice must have **exactly one** live representation after the decrease step: Hub-backed queue,
-    MMPM underlying delta (`DynamicCurrencyDelta`) for the **vault-immediate** portion only, or still in source
+    MMPM underlying delta (`OwnerCurrencyDelta`) for the **vault-immediate** portion only, or still in source
     `pa.settled` — never two at once for the same slice.
 - **Protocol rule**:
   - Coupled to **DELTA-01**: transient MMPM underlying deltas must be batch-clearable; only the vault-immediate slice is
     booked as positive owner underlying delta. Any shortfall that cannot be Hub-queued (principal-capped) and cannot be
-    paid from the vault in the same unlock **stays in live source `settled`**, not on `DynamicCurrencyDelta`.
+    paid from the vault in the same unlock **stays in live source `settled`**, not on `OwnerCurrencyDelta`.
   - **Source-side decrement (routed amount only)**: `_applySettlementClampFromExcess` removes
     `settleableDelta + queuedDelta` from source `pa.settled` / pool `totalSettled` — the value actually routed to the
     vault path or queue in this step — not the full `requiredSettlementDelta` when part of it must remain deferred in
@@ -529,12 +533,12 @@ being an informal “should”.
     for dynamic delta accounting equals the vault-immediate slice (`settleableDelta`) only.
   - `src/libraries/VTSPositionLib.sol::_processMMOperations` (decrease branch): calls `_applySettlementClampFromExcess`
     with `exportedForSettlementClamp` from `_handleLiquidityDecrease` (`settleableDelta + queuedDelta`), then
-    `DynamicCurrencyDelta.accountUnderlyingSettlementDelta` for the immediate slice only.
+    `OwnerCurrencyDelta.accountUnderlyingSettlementDelta` for the immediate slice only.
   - `src/libraries/VTSLifecycleLinkedLib.sol::onMMSettle` plans withdrawals from positive underlying delta and
     settled-backed
     capacity separately, consumes the delta-backed portion first, and only then mutates `pa.settled`.
 - **Why**:
-  - Clamping only the queued shortfall while also booking the immediate slice on `DynamicCurrencyDelta` would double-count
+  - Clamping only the queued shortfall while also booking the immediate slice on `OwnerCurrencyDelta` would double-count
     the same value as both live source `settled` and MMPM credit, enabling cross-position reuse without conservation.
   - Booking a principal-capped shortfall remainder as positive MMPM underlying delta while the vault cannot pay it in the
     same batch violates **DELTA-01** (uncleared transient delta at batch end).
@@ -620,9 +624,55 @@ being an informal “should”.
 ### DELTA-01: Deltas must net to zero per unlock/batch
 
 - **Statement**: At the end of an unlock/batch, the protocol must have `NonzeroDeltaCount == 0` or revert.
-- **Enforced by**: `src/libraries/DynamicCurrencyDelta.sol::assertNonZeroDeltas` reverts `Errors.CurrencyNotSettled()`.
+- **Enforced by**: `src/modules/PositionManagerEntrypoint.sol::_afterBatch` calls
+  `VTSOrchestrator.assertNonZeroDeltas(IMarketFactory)` (implemented on `VTSCurrencyDelta`), which:
+  - runs `src/libraries/OwnerCurrencyDelta.sol::assertNonZeroDeltas` and reverts `Errors.CurrencyNotSettled()` when any
+    owner-scoped PoolManager currency delta remains non-zero; and
+  - runs `src/libraries/MarketCurrencyDelta.sol::assertResolved(address(factory))` for the **bound** MM
+    `marketFactory`, reverting `Errors.CurrencyNotSettled()` when any factory-prefixed produced-credit bucket is still
+    non-zero.
 - **Practical implication**: Credits do **not** persist across unlock sessions; they are transient and must be consumed
   (eg via `TAKE`, `SYNC`, unwrap flows) within the same batch.
+
+### DELTA-01A: Produced accounting must stay paired with explicit reserve export and credit-backed withdrawal consumption
+
+- **Statement**:
+  - Factory-scoped produced credit in `MarketCurrencyDelta` is the transient mirror of real same-underlying value
+    exported from a market's durable reserve ledger.
+  - Therefore, any path that **produces** same-underlying withdrawal credit for later cross-market use must pair:
+    - a durable source-market reserve decrement, and
+    - a matching `MarketCurrencyDelta.addProduced(factory, underlying, amount)`.
+  - Any path that **consumes** delta-backed withdrawal capacity must pair:
+    - an owner underlying-delta debit for the consumed amount, and
+    - a matching `MarketCurrencyDelta.consumeProduced(factory, underlying, amount)`.
+  - Owner-level same-underlying delta may remain global for planning, but it is **not** by itself sufficient economic
+    authority for a withdrawal. The withdrawal-backed slice is valid only when matched by available produced credit in the
+    same bound `marketFactory` namespace.
+- **Enforced / expressed by**:
+  - `src/libraries/VTSPositionLib.sol::_processMMOperations` (MM decrease export path):
+    - calls `IMarketVault.decreaseLiquidityReserve(...)` on the source market for the exported underlying amount, then
+    - calls `MarketCurrencyDelta.addProduced(factory, underlying, amount)` for the same amount.
+  - `src/libraries/VTSLifecycleLinkedLib.sol::_executeWithdrawals` and `_applyWithdrawalLane`:
+    - build `VaultSettlementIntent.creditBackedWithdrawal{0,1}` from the planned delta-backed slice,
+    - debit `OwnerCurrencyDelta` on the owner for the actual delta-backed withdrawal amount, and
+    - call `MarketCurrencyDelta.consumeProduced(factory, underlying, amount)` for that same actual amount.
+  - `src/CanonicalVault.sol::_dryModifyLiquidities` and `_modifyLiquidityWithRecipient`:
+    - treat `creditBackedWithdrawal{0,1}` as distinct from the settled-backed remainder, so only the settled-backed
+      slice decrements the destination market's `marketLiquidityReserves`.
+  - `src/modules/PositionManagerEntrypoint.sol::_afterBatch`:
+    - calls `vtsOrchestrator.assertNonZeroDeltas(marketFactory)`, which in turn requires
+      `MarketCurrencyDelta.assertResolved(address(factory))`, preventing produced-credit residue from leaking across
+      batches.
+- **Why**:
+  - This pairing invariant is what closes the original cross-market vault-payout class where owner-level same-underlying
+    delta alone could be treated as withdrawal authority against the current market's vault.
+  - The protocol intentionally allows same-underlying credit exported in market A to fund settlement in market B within
+    the same factory, but only through:
+    - explicit `VaultSettlementIntent`,
+    - factory-scoped produced accounting, and
+    - CanonicalVault's durable per-market reserve ledger.
+  - Any future refactor that debits owner underlying delta without consuming produced credit, or that adds produced credit
+    without first exporting durable reserve, would violate this invariant and re-open principal misattribution risk.
 
 ### DELTA-02: `MMPositionManager` residual balances are FCFS dust, not a persisted user entitlement
 
@@ -647,8 +697,9 @@ being an informal “should”.
     `VTSOrchestrator.sync(...)`.
   - `src/modules/PositionManagerEntrypoint.sol::_take` debits the locker’s positive delta and transfers available
     contract balance to the requested recipient.
-  - `src/modules/PositionManagerEntrypoint.sol::_afterBatch` calls `vtsOrchestrator.assertNonZeroDeltas()`, which
-    forces callers to fully resolve transient credits/debts within the batch or revert.
+  - `src/modules/PositionManagerEntrypoint.sol::_afterBatch` calls `vtsOrchestrator.assertNonZeroDeltas(marketFactory)`,
+    which forces callers to fully resolve owner-scoped transient credits/debts and the bound factory’s market-produced
+    credit within the batch or revert.
 - **Scope clarification**:
   - This FCFS rule applies to **residual dust held by `MMPositionManager` itself**.
   - It does **not** redefine assets held in explicit custody/accounting domains (for example, queue-custodied balances,

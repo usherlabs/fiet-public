@@ -3,12 +3,17 @@ pragma solidity ^0.8.26;
 
 import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
 import {BalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
+import {VaultSettlementIntent} from "../types/VTS.sol";
 
 /**
  * @title IMarketVault
  * @notice Interface for th ProxyHook contract
  */
 interface IMarketVault {
+    function marketId() external view returns (bytes32);
+
+    function canonicalVault() external view returns (address);
+
     function lccs() external view returns (address lccToken0, address lccToken1);
 
     /**
@@ -47,4 +52,16 @@ interface IMarketVault {
      * @return The actual balance delta that was applied (may be less than requested for withdrawals)
      */
     function dryModifyLiquidities(BalanceDelta balanceDelta) external view returns (BalanceDelta);
+
+    function dryModifyLiquidities(VaultSettlementIntent calldata settlementIntent) external view returns (BalanceDelta);
+
+    function modifyLiquidities(VaultSettlementIntent calldata settlementIntent) external;
+
+    function tryModifyLiquidities(VaultSettlementIntent calldata settlementIntent) external returns (BalanceDelta);
+
+    function tryModifyLiquiditiesWithRecipient(VaultSettlementIntent calldata settlementIntent, address recipient)
+        external
+        returns (BalanceDelta);
+
+    function decreaseLiquidityReserve(Currency underlyingCurrency, uint256 amount) external;
 }

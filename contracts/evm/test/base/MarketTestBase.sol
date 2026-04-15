@@ -38,6 +38,7 @@ import {MMPCommitmentDescriptor} from "../../src/MMPCommitmentDescriptor.sol";
 import {MMPositionActionsImpl} from "../../src/MMPositionActionsImpl.sol";
 import {CurrencyTransfer} from "../../src/libraries/CurrencyTransfer.sol";
 import {OracleHelper} from "../../src/OracleHelper.sol";
+import {CanonicalVault} from "../../src/CanonicalVault.sol";
 import {IOracleHelper} from "../../src/interfaces/IOracleHelper.sol";
 import {LiquidityHub} from "../../src/LiquidityHub.sol";
 import {ILiquidityHub} from "../../src/interfaces/ILiquidityHub.sol";
@@ -72,6 +73,8 @@ abstract contract MarketTestBase is Test, Deployers, DeployPermit2 {
     PoolKey proxyPoolKey;
 
     address marketFactory;
+    /// @dev Set during `_deployCoreContracts` for `initialise` and MM stack wiring.
+    address canonicalVaultAddr;
     address payable liquidityHub;
     address coreHookAddress;
     address queueCustodian;
@@ -206,25 +209,32 @@ abstract contract MarketTestBase is Test, Deployers, DeployPermit2 {
             )
         );
 
+        CanonicalVault canonicalVault = new CanonicalVault(address(manager), address(liquidityHub), marketFactory);
+        canonicalVaultAddr = address(canonicalVault);
+
         // After market factory is deployed, set the factory in the liquidity hub
         LiquidityHub(payable(liquidityHub)).setFactory(marketFactory, true);
 
         // Deploy MMPositionActionsImpl first
-        MMPositionActionsImpl actionsImpl =
-            new MMPositionActionsImpl(address(manager), address(marketFactory), address(vtsOrchestrator));
+        MMPositionActionsImpl actionsImpl = new MMPositionActionsImpl(
+            address(manager), address(marketFactory), address(vtsOrchestrator), canonicalVaultAddr
+        );
         queueCustodian = address(new MMQueueCustodian(address(this)));
 
         // Deploy MMPositionManager
         mmPositionManager = address(
             new MMPositionManager(
-                address(manager),
-                address(marketFactory),
-                address(vtsOrchestrator),
-                commitmentDescriptor,
-                weth9,
-                permit2,
-                address(actionsImpl),
-                queueCustodian
+                MMPositionManager.MMPositionManagerInit({
+                    poolManager: manager,
+                    marketFactory: address(marketFactory),
+                    vtsOrchestrator: address(vtsOrchestrator),
+                    canonicalCustody: canonicalVaultAddr,
+                    descriptor: commitmentDescriptor,
+                    weth9: weth9,
+                    permit2: permit2,
+                    actionsImpl: address(actionsImpl),
+                    queueCustodianAddr: queueCustodian
+                })
             )
         );
         MMQueueCustodian(queueCustodian).setPositionManager(mmPositionManager);
@@ -251,7 +261,7 @@ abstract contract MarketTestBase is Test, Deployers, DeployPermit2 {
         initialBounds[0] = mmPositionManager;
         initialBounds[1] = queueCustodian;
         initialBounds[2] = address(directLPDeltaResolver);
-        MarketFactory(marketFactory).initialise(coreHookAddress, initialBounds);
+        MarketFactory(marketFactory).initialise(canonicalVaultAddr, coreHookAddress, initialBounds);
     }
 
     // Create and initialize the market i.e deploy core and proxy pools using the market factory

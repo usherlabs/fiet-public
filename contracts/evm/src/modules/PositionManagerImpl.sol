@@ -32,9 +32,9 @@ abstract contract PositionManagerImpl is PositionManagerBase, ImmutableState {
     using TransientStateLibrary for IPoolManager;
     using CurrencySettler for Currency;
 
-    constructor(IPoolManager _poolManager, address _marketFactory, address _vtsOrchestrator)
+    constructor(IPoolManager _poolManager, address _marketFactory, address _vtsOrchestrator, address _canonicalCustody)
         ImmutableState(_poolManager)
-        PositionManagerBase(_marketFactory, _vtsOrchestrator)
+        PositionManagerBase(_marketFactory, _vtsOrchestrator, _canonicalCustody)
     {}
 
     // ------------------------------------------------------------------------------------------------

@@ -3,6 +3,7 @@ pragma solidity ^0.8.26;
 
 import {VTSCurrencyDeltaHarness} from "../../libraries/harnesses/VTSCurrencyDeltaHarness.sol";
 import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
+import {IMarketFactory} from "../../../src/interfaces/IMarketFactory.sol";
 
 /// @notice Echidna harness for DELTA-01: Deltas must net to zero per unlock/batch.
 ///         Any non-zero currency delta at end-of-batch must cause CurrencyNotSettled().
@@ -12,6 +13,7 @@ contract DELTA01 {
     Currency internal constant C0 = Currency.wrap(address(0x1000));
     Currency internal constant C1 = Currency.wrap(address(0x2000));
     address internal constant TARGET = address(0xBEEF);
+    IMarketFactory internal constant DELTA01_FACTORY = IMarketFactory(address(0xF01));
 
     bool internal checked;
     bool internal lastOk;
@@ -35,7 +37,7 @@ contract DELTA01 {
 
         bool shouldRevert = d0 != 0 || d1 != 0;
         bool reverted;
-        try deltaHarness.assertNonZeroDeltas() {
+        try deltaHarness.assertNonZeroDeltas(DELTA01_FACTORY) {
             reverted = false;
         } catch {
             reverted = true;
