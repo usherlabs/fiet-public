@@ -73,15 +73,15 @@ library VTSPositionMMOpsLib {
     /// @notice MM liquidity-modify tail: LCC issue/cancel, protocol-credit, vault routing, RFS checkpoint.
     /// @dev Invoked from `VTSPositionLib.touchPosition` when hook data is an MM operation. CoreHook applies
     ///      `feeAdj` to caller delta; principal uses `callerDelta - (feesAccrued - feeAdj)`.
-    /// @param mmRequiredSettlementDelta Required settlement delta computed during the touch accounting phase.
+    /// @param requiredSettlementDelta Required settlement delta computed during the touch accounting phase.
     function processMMOperations(
         VTSStorage storage s,
         PositionContext memory ctx,
-        TouchPositionParams memory p,
+        TouchPositionParams calldata p,
         TouchPositionResult memory result,
-        BalanceDelta mmRequiredSettlementDelta
+        BalanceDelta requiredSettlementDelta
     ) external {
-        PositionModificationHookData memory mmData = PositionModificationHookDataLib.decode(p.hookData);
+        PositionModificationHookData memory mmData = PositionModificationHookDataLib.decodeCalldata(p.hookData);
         if (!PositionModificationHookDataLib.isMMOperation(mmData)) return;
 
         // CoreHook applies a feeAdj to the callerDelta. ie.  callerDelta = principalDelta - feesAccrued - feeAdj.
@@ -93,8 +93,6 @@ library VTSPositionMMOpsLib {
         // principal0/principal1 = a{0,1} - fees{0,1} reflect the true principal liquidity change
         // that maps to LCC cancellation. fees are trader-derived, wrapped LCC value and must remain wrapped.
         BalanceDelta principalDelta = p.callerDelta - accruedFeesAfterAdj;
-
-        BalanceDelta requiredSettlementDelta = mmRequiredSettlementDelta;
 
         // NOTE: LCC fee credits are handled at the MMPM level via balance sync pattern.
         // After MMPM takes from PoolManager, it syncs the LCC balance as credit to locker.
@@ -127,7 +125,6 @@ library VTSPositionMMOpsLib {
             // release LCC from the slice matching the caller's queue.
             address queueRecipient;
             {
-                PositionModificationHookData memory mmData = PositionModificationHookDataLib.decode(p.hookData);
                 queueRecipient = PositionModificationHookDataLib.getLocker(mmData);
             }
 

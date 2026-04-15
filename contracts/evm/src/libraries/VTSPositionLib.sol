@@ -1177,15 +1177,7 @@ library VTSPositionLib {
         result.pos = posStorage;
 
         if (hookData.isMMOperation) {
-            TouchPositionParams memory pCall = TouchPositionParams({
-                owner: p.owner,
-                poolKey: p.poolKey,
-                params: p.params,
-                callerDelta: p.callerDelta,
-                feesAccrued: p.feesAccrued,
-                hookData: p.hookData
-            });
-            VTSPositionMMOpsLib.processMMOperations(s, ctx, pCall, result, requiredSettlementDelta);
+            VTSPositionMMOpsLib.processMMOperations(s, ctx, p, result, requiredSettlementDelta);
         }
     }
 
