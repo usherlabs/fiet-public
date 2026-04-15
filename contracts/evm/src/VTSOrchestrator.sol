@@ -14,6 +14,8 @@ import {
     MarketVTSConfiguration,
     PositionAccounting,
     SettleResult,
+    TouchPositionParams,
+    TouchPositionResult,
     VaultSettlementIntent,
     VTSLifecycleContext,
     VTSCoreHookContext,
@@ -578,8 +580,21 @@ contract VTSOrchestrator is
         bytes calldata hookData
     ) private returns (Position memory pos, PositionId id, BalanceDelta feeAdj) {
         VTSCoreHookContext memory ctx = _coreHookContext();
-        (pos, id, feeAdj) =
-            VTSLifecycleLinkedLib.processPosition(s, ctx, owner, poolKey, params, callerDelta, feesAccrued, hookData);
+        TouchPositionResult memory result = VTSLifecycleLinkedLib.executeProcessPositionTouch(
+            s, ctx, owner, poolKey, params, callerDelta, feesAccrued, hookData
+        );
+        TouchPositionParams memory tpParams = TouchPositionParams({
+            owner: owner,
+            poolKey: poolKey,
+            params: params,
+            callerDelta: callerDelta,
+            feesAccrued: feesAccrued,
+            hookData: hookData
+        });
+        VTSLifecycleLinkedLib.finalizeProcessPositionMM(s, ctx, poolKey, tpParams, result);
+        pos = result.pos;
+        id = result.id;
+        feeAdj = result.feeAdj;
     }
 
     /// @notice Called by CoreHook after a swap to process swap-related accounting
@@ -616,9 +631,7 @@ contract VTSOrchestrator is
         nonReentrant
         returns (uint256 commitId)
     {
-        commitId = VTSLifecycleLinkedLib.commitSignal(
-            s, _commitRouterContext(), factory, _msgSender(), sender, liquiditySignal
-        );
+        commitId = VTSCommitLib.commitSignal(s, _commitRouterContext(), factory, _msgSender(), sender, liquiditySignal);
     }
 
     /// @notice Commit a liquidity signal using sender-signed EIP-712 relayer authorisation
@@ -634,7 +647,7 @@ contract VTSOrchestrator is
         uint256 authNonce,
         bytes memory authSig
     ) external onlyIfPoolManagerUnlocked onlyIfVRLHandlersRegistered nonReentrant returns (uint256 commitId) {
-        commitId = VTSLifecycleLinkedLib.commitSignalRelayed(
+        commitId = VTSCommitLib.commitSignalRelayed(
             s, _commitRouterContext(), factory, _msgSender(), sender, liquiditySignal, deadline, authNonce, authSig
         );
     }
@@ -666,7 +679,7 @@ contract VTSOrchestrator is
         if (address(factory) != address(canonicalFactory)) revert Errors.InvalidSender();
         _assertBoundFactoryCaller(canonicalFactory);
 
-        RFSCheckpoint memory checkpointOut = VTSLifecycleLinkedLib.extendGracePeriod(
+        RFSCheckpoint memory checkpointOut = VTSCommitLib.extendGracePeriod(
             s, _lifecycleContext(), poolKey, positionId, settlementTokenIndex, verifierIndex, settlementProof
         );
         emit GracePeriodExtended(commitId, positionIndex, settlementTokenIndex, checkpointOut);
@@ -768,7 +781,7 @@ contract VTSOrchestrator is
         PositionId positionId = getPositionId(commitId, positionIndex);
         _assertPositionValid(positionId, true);
 
-        VTSLifecycleLinkedLib.validateSeize(s, _lifecycleContext(), commitId, positionIndex, positionId);
+        VTSCommitLib.validateSeize(s, _lifecycleContext(), commitId, positionIndex, positionId);
     }
 
     /// @notice Renew a liquidity signal for an existing commit
@@ -784,9 +797,7 @@ contract VTSOrchestrator is
     {
         // Validate commit exists (but don't require live signal - expired signals can be seized)
         _assertSignalValid(commitId, false);
-        VTSLifecycleLinkedLib.renewSignal(
-            s, _commitRouterContext(), factory, _msgSender(), sender, commitId, liquiditySignal
-        );
+        VTSCommitLib.renewSignal(s, _commitRouterContext(), factory, _msgSender(), sender, commitId, liquiditySignal);
     }
 
     /// @notice Renew a liquidity signal using sender-signed EIP-712 relayer authorisation
@@ -804,7 +815,7 @@ contract VTSOrchestrator is
         bytes memory authSig
     ) external onlyIfPoolManagerUnlocked onlyIfVRLHandlersRegistered nonReentrant {
         _assertSignalValid(commitId, false);
-        VTSLifecycleLinkedLib.renewSignalRelayed(
+        VTSCommitLib.renewSignalRelayed(
             s,
             _commitRouterContext(),
             factory,
@@ -840,8 +851,9 @@ contract VTSOrchestrator is
         ///      Paused `checkpoint(..., false)` and public `calcRFS` / `settlePositionGrowths` remain CoreHook-only.
         _settleGrowthsBeforeCheckpoint(positionId, withCommitment);
 
-        RFSCheckpoint memory checkpointOut =
-            VTSLifecycleLinkedLib.checkpoint(s, _lifecycleContext(), commitId, withCommitment, positionId);
+        RFSCheckpoint memory checkpointOut = withCommitment
+            ? VTSCommitLib.checkpointAfterGrowthWithCommitment(s, _lifecycleContext(), commitId, positionId)
+            : VTSLifecycleLinkedLib.checkpointAfterGrowthNoCommitment(s, _lifecycleContext(), commitId, positionId);
         emit Checkpointed(commitId, positionIndex, checkpointOut, withCommitment);
     }
 }

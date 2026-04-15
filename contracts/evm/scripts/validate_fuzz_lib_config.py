@@ -17,6 +17,7 @@ CONSTANT_TO_LIBRARY = {
     "VTS_FEE_LINKED_LIB": "src/libraries/VTSFeeLib.sol:VTSFeeLinkedLib",
     "VTS_POSITION_LIB": "src/libraries/VTSPositionLib.sol:VTSPositionLib",
     "VTS_LIFECYCLE_LINKED_LIB": "src/libraries/VTSLifecycleLinkedLib.sol:VTSLifecycleLinkedLib",
+    "VTS_COMMIT_LIFECYCLE_LIB": "src/libraries/VTSCommitLifecycleLib.sol:VTSCommitLifecycleLib",
 }
 
 

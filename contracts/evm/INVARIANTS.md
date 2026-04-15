@@ -92,7 +92,7 @@ being an informal “should”.
     `directSupply[lcc]` and `reserveOfUnderlying[underlying]`, then mints LCC.
   - **Domain B**: `src/LiquidityHub.sol::issue` is `onlyIssuer(lcc)` and mints market-derived amount via the LCC hub
     mint path; issuer gating is enforced by `LiquidityHub._onlyIssuer` (valid LCC + issuer allowlist).
-  - **Domain C**: `src/libraries/VTSPositionLib.sol::_handleLiquidityIncrease` calls
+  - **Domain C**: `src/libraries/VTSPositionMMOpsLib.sol::_handleLiquidityIncrease` calls
     `src/libraries/VTSCommitLib.sol::validateLiquidityDelta(..., revertIfInsufficientBacking=true)`, which reverts
     `Errors.InvalidLiquiditySignal(...)` unless \(issuedUsd \le settledUsd + signalUsd\).
   - **Domain conversion**: `src/LiquidityHub.sol::_wrapWith` delegates to `LiquidityHubLib.wrapWithPrepare` /
@@ -385,7 +385,7 @@ being an informal “should”.
 - **Enforced by**:
   - `src/libraries/VTSCommitLib.sol::validateLiquidityDelta` computes issued/settled/signal values and reverts
     `Errors.InvalidLiquiditySignal(issuedValue, signalValue, settledValue)` when insufficient.
-  - Called during MM increases by `src/libraries/VTSPositionLib.sol::_handleLiquidityIncrease` with
+  - Called during MM increases by `src/libraries/VTSPositionMMOpsLib.sol::_handleLiquidityIncrease` with
     `revertIfInsufficientBacking = true`.
 
 ### COMMIT-02: Checkpointing with commitment updates `commitmentDeficit` as an insolvency gate
@@ -395,7 +395,7 @@ being an informal “should”.
 - **Enforced by**: `src/libraries/VTSCommitLib.sol::checkpointWithCommitment`.
 - **Ordering (growth before commitment)**: `checkpointWithCommitment` values backing from stored `pa.settled` (and
   effective issued amounts). Therefore `src/VTSOrchestrator.sol::checkpoint(..., withCommitment: true)` must settle
-  position growths **before** delegating to `VTSLifecycleLinkedLib.checkpoint` / `checkpointWithCommitment`, so
+  position growths **before** delegating to `VTSLifecycleLinkedLib.checkpointAfterGrowthNoCommitment` / `VTSCommitLib.checkpointAfterGrowthWithCommitment` (commitment path uses `VTSCommitLib.checkpointWithCommitment`), so
   uncrystallised deficit/inflow/fee growth cannot make the commitment gate read stale-high `settled`. While the pool
   (or VTS globally) is paused, public `VTSOrchestrator.settlePositionGrowths` remains restricted to the canonical
   `CoreHook` for that market; the orchestrator-only helper `_settleGrowthsBeforeCheckpoint` performs the same
@@ -581,10 +581,10 @@ being an informal “should”.
       residual amount that is still backed by live position settlement.
 - **Enforced / expressed by**:
   - `src/libraries/VTSPositionLib.sol::_touchExistingDecrease` computes `requiredSettlementDelta` for the MM excess.
-  - `src/libraries/VTSPositionLib.sol::_previewLiquidityDecreaseRouting` (and `_handleLiquidityDecrease` via
+  - `src/libraries/VTSPositionMMOpsLib.sol::previewLiquidityDecreaseRouting` (and `_handleLiquidityDecrease` via
     `_computeLiquidityDecreaseRoutingSplit`) splits vault availability vs Hub-queued principal; `underlyingDeltaSettlement`
     for dynamic delta accounting equals the vault-immediate slice (`settleableDelta`) only.
-  - `src/libraries/VTSPositionLib.sol::_processMMOperations` (decrease branch): calls `_applySettlementClampFromExcess`
+  - `src/libraries/VTSPositionMMOpsLib.sol::processMMOperations` (decrease branch): calls `_applySettlementClampFromExcess`
     with `exportedForSettlementClamp` from `_handleLiquidityDecrease` (`settleableDelta + queuedDelta`), then
     `OwnerCurrencyDelta.accountUnderlyingSettlementDelta` for the immediate slice only.
   - `src/libraries/VTSLifecycleLinkedLib.sol::onMMSettle` plans withdrawals from positive underlying delta and
@@ -600,7 +600,7 @@ being an informal “should”.
 
 ### SETTLE-04: MM in-hook protocol credit must not over-clear `requiredSettlementDelta` when deficit is cured first
 
-- **Statement**: For MM liquidity increases that settle protocol credit inside `_processMMOperations` (in-hook path with
+- **Statement**: For MM liquidity increases that settle protocol credit inside `processMMOperations` (in-hook path with
   `clampToRequiredSettlement`), `_updateSettlement` / `_vUpdateSettlement` may apply a single positive deposit amount across
   `cumulativeDeficit`, `commitmentDeficit`, and `pa.settled` in the usual netting order (**COV-02**). The portion of
   protocol credit that cures deficits without increasing `pa.settled` must still be debited from positive underlying
@@ -615,7 +615,7 @@ being an informal “should”.
     because credit first cleared `cumulativeDeficit` / `commitmentDeficit`.
 - **Enforced by**:
   - `src/libraries/VTSPositionLib.sol::_vUpdateSettlement` (returns both `totalApplied` and `next - cur` on `pa.settled`)
-  - `src/libraries/VTSPositionLib.sol::_consumePositiveUnderlyingDeltaForSettlementLane` when `clampToRequiredSettlement`
+  - `src/libraries/VTSPositionMMOpsLib.sol::_consumePositiveUnderlyingDeltaForSettlementLane` when `clampToRequiredSettlement`
     is true (MM in-hook settlement only; `onMMSettle` settle-from-deltas keeps `clampToRequiredSettlement = false`).
 - **Regression tests**:
   - `test/libraries/VTSPositionLib.mutation.unit.t.sol`:
@@ -702,7 +702,7 @@ being an informal “should”.
     authority for a withdrawal. The withdrawal-backed slice is valid only when matched by available produced credit in the
     same bound `marketFactory` namespace.
 - **Enforced / expressed by**:
-  - `src/libraries/VTSPositionLib.sol::_processMMOperations` (MM decrease export path):
+  - `src/libraries/VTSPositionMMOpsLib.sol::processMMOperations` (MM decrease export path):
     - calls `IMarketVault.decreaseLiquidityReserve(...)` on the source market for the exported underlying amount, then
     - calls `MarketCurrencyDelta.addProduced(factory, underlying, amount)` for the same amount.
   - `src/libraries/VTSLifecycleLinkedLib.sol::_executeWithdrawals` and `_applyWithdrawalLane`:
@@ -773,7 +773,7 @@ being an informal “should”.
     - preserve the same immediate-consumption sequencing, or
     - upgrade the transient key to include per-transfer identity.
 - **Enforced by (current call graph / sequencing invariant)**:
-  - `src/libraries/VTSPositionLib.sol::_handleLiquidityDecrease` stages the planned cancel while the position is still
+  - `src/libraries/VTSPositionMMOpsLib.sol::_handleLiquidityDecrease` stages the planned cancel while the position is still
     inside `PoolManager.modifyLiquidity(...)`, explicitly because the LCC has not yet been transferred to `MMPM`.
   - `src/modules/PositionManagerImpl.sol::_modifySyntheticLiquidity` calls `poolManager.modifyLiquidity(...)` and then,
     before returning to any outer MM action, immediately settles/takes the resulting deltas.

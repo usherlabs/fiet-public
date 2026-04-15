@@ -22,6 +22,7 @@ import {ModifyLiquidityParams} from "@uniswap/v4-core/src/types/PoolOperation.so
 import {BalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
 import {IPoolManager} from "v4-periphery/lib/v4-core/src/interfaces/IPoolManager.sol";
 import {VTSPositionLib} from "../../../src/libraries/VTSPositionLib.sol";
+import {VTSPositionMMOpsLib} from "../../../src/libraries/VTSPositionMMOpsLib.sol";
 import {VTSLifecycleLinkedLib} from "../../../src/libraries/VTSLifecycleLinkedLib.sol";
 import {VTSFeeLinkedLib} from "../../../src/libraries/VTSFeeLib.sol";
 import {VTSCommitLib} from "../../../src/libraries/VTSCommitLib.sol";
@@ -104,6 +105,17 @@ contract VTSPositionLibHarness {
         return VTSPositionLib.touchPosition(s, ctx, p);
     }
 
+    /// @notice Mirrors orchestrator two-stage MM processing in tests.
+    function touchPositionAndFinalizeMM(PositionContext memory ctx, TouchPositionParams calldata p)
+        external
+        returns (TouchPositionResult memory result)
+    {
+        result = VTSPositionLib.touchPosition(s, ctx, p);
+        if (result.isMMOperation) {
+            VTSPositionMMOpsLib.processMMOperations(s, ctx, p, result);
+        }
+    }
+
     /// @notice Exposes onMMSettle for testing
     function onMMSettle(
         IPoolManager poolManager,
@@ -173,9 +185,9 @@ contract VTSPositionLibHarness {
         address queueRecipient
     ) external returns (BalanceDelta settleableDelta) {
         (,, settleableDelta, lastQueuedDelta, lastUnderlyingDeltaSettlement) =
-            VTSPositionLib._previewLiquidityDecreaseRouting(ctx, principalDelta, requiredSettlementDelta);
+            VTSPositionMMOpsLib.previewLiquidityDecreaseRouting(ctx, principalDelta, requiredSettlementDelta);
         lastSettleableDelta = settleableDelta;
-        VTSPositionLib._handleLiquidityDecrease(
+        VTSPositionMMOpsLib.handleLiquidityDecrease(
             ctx, owner, poolKey, principalDelta, requiredSettlementDelta, queueRecipient
         );
         return settleableDelta;
@@ -195,11 +207,11 @@ contract VTSPositionLibHarness {
     {
         (
             ,, settleableDelta, queuedDelta, underlyingDeltaSettlement
-        ) = VTSPositionLib._previewLiquidityDecreaseRouting(ctx, principalDelta, requiredSettlementDelta);
+        ) = VTSPositionMMOpsLib.previewLiquidityDecreaseRouting(ctx, principalDelta, requiredSettlementDelta);
         lastSettleableDelta = settleableDelta;
         lastQueuedDelta = queuedDelta;
         lastUnderlyingDeltaSettlement = underlyingDeltaSettlement;
-        VTSPositionLib._handleLiquidityDecrease(
+        VTSPositionMMOpsLib.handleLiquidityDecrease(
             ctx, owner, poolKey, principalDelta, requiredSettlementDelta, queueRecipient
         );
         return (settleableDelta, queuedDelta, underlyingDeltaSettlement);

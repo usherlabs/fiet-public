@@ -9,6 +9,7 @@ import {VTSCommitLib} from "../../../src/libraries/VTSCommitLib.sol";
 import {VTSFeeLinkedLib} from "../../../src/libraries/VTSFeeLib.sol";
 import {VTSPositionLib} from "../../../src/libraries/VTSPositionLib.sol";
 import {VTSLifecycleLinkedLib} from "../../../src/libraries/VTSLifecycleLinkedLib.sol";
+import {VTSPositionMMOpsLib} from "../../../src/libraries/VTSPositionMMOpsLib.sol";
 import {EchidnaLinkedLibs} from "../base/EchidnaLinkedLibs.sol";
 
 /// @notice Validates that `EchidnaLinkedLibs` constants match current CREATE2 outputs.
@@ -56,6 +57,12 @@ contract ValidateEchidnaLinkedLibs is Script {
                 "VTSLifecycleLinkedLib",
                 EchidnaLinkedLibs.expectedVTSLifecycleLinkedLib(),
                 _compute(type(VTSLifecycleLinkedLib).creationCode, "echidna.VTSLifecycleLinkedLib")
+            )) failures++;
+
+        if (!_check(
+                "VTSPositionMMOpsLib",
+                EchidnaLinkedLibs.expectedVTSPositionMMOpsLib(),
+                _compute(type(VTSPositionMMOpsLib).creationCode, "echidna.VTSPositionMMOpsLib")
             )) failures++;
 
         if (failures != 0) {
@@ -143,6 +150,12 @@ contract ValidateEchidnaLinkedLibs is Script {
                 _compute(type(VTSLifecycleLinkedLib).creationCode, "echidna.VTSLifecycleLinkedLib")
             )
         );
+        console2.log(
+            _libraryEntry(
+                "src/libraries/VTSPositionMMOpsLib.sol:VTSPositionMMOpsLib",
+                _compute(type(VTSPositionMMOpsLib).creationCode, "echidna.VTSPositionMMOpsLib")
+            )
+        );
         console2.log("  # Intentional placeholder for libs not CREATE2-validated by this script.");
         console2.log(_libraryEntry("src/libraries/VTSSwapLib.sol:VTSSwapLib", VTSSWAPLIB_PLACEHOLDER));
         console2.log("]");
@@ -176,6 +189,12 @@ contract ValidateEchidnaLinkedLibs is Script {
             _constantEntry(
                 "VTS_LIFECYCLE_LINKED_LIB",
                 _compute(type(VTSLifecycleLinkedLib).creationCode, "echidna.VTSLifecycleLinkedLib")
+            )
+        );
+        console2.log(
+            _constantEntry(
+                "VTS_POSITION_MM_OPS_LIB",
+                _compute(type(VTSPositionMMOpsLib).creationCode, "echidna.VTSPositionMMOpsLib")
             )
         );
     }

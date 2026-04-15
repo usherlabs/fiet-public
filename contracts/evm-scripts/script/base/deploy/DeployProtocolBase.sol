@@ -47,6 +47,27 @@ abstract contract DeployProtocolBase is CREATE3Script, NetworkConfig {
 
     constructor() CREATE3Script("1") {}
 
+    /// @dev Fail-fast checks for common misconfigured network constants / stale env RPC combinations.
+    function _assertCorePeripheryConfig() internal view {
+        require(config.poolManager.code.length > 0, "NetworkConfig: poolManager has no code on current RPC");
+        require(config.positionManager.code.length > 0, "NetworkConfig: positionManager has no code on current RPC");
+        require(config.permit2.code.length > 0, "NetworkConfig: permit2 has no code on current RPC");
+
+        // Validate PositionManager wiring explicitly, so failures are clear instead of surfacing as opaque
+        // "call to non-contract address" deep inside deployment logic.
+        (bool okWeth, bytes memory wethData) = config.positionManager.staticcall(abi.encodeWithSignature("WETH9()"));
+        require(okWeth && wethData.length >= 32, "NetworkConfig: PositionManager.WETH9() call failed");
+        address weth9 = abi.decode(wethData, (address));
+        require(weth9 != address(0), "NetworkConfig: PositionManager.WETH9() returned zero address");
+        require(weth9.code.length > 0, "NetworkConfig: WETH9 has no code on current RPC");
+
+        (bool okPermit2, bytes memory permit2Data) =
+            config.positionManager.staticcall(abi.encodeWithSignature("permit2()"));
+        require(okPermit2 && permit2Data.length >= 32, "NetworkConfig: PositionManager.permit2() call failed");
+        address permit2FromPm = abi.decode(permit2Data, (address));
+        require(permit2FromPm == config.permit2, "NetworkConfig: PositionManager.permit2() mismatch vs config");
+    }
+
     function _deployCreate3(string memory name, bytes memory creationCode) internal returns (address deployed) {
         bytes32 salt = getCreate3ContractSalt(name);
         deployed = create3.deploy(salt, creationCode);

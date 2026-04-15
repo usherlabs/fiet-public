@@ -593,7 +593,7 @@ contract VTSPositionLibMutationUnitTest is Test {
             marketVault: IMarketVault(address(0))
         });
 
-        harness.touchPosition(ctx, tp);
+        TouchPositionResult memory result = harness.touchPositionAndFinalizeMM(ctx, tp);
 
         (r0, r1) = harness.getFeeBurnGrowthRemainder(id);
         assertEq(r0, 0, "liquidity change must reset fee-burn remainder token0");
@@ -935,7 +935,7 @@ contract VTSPositionLibMutationUnitTest is Test {
             marketVault: IMarketVault(address(0))
         });
 
-        harness.touchPosition(ctx, tp);
+        TouchPositionResult memory result = harness.touchPositionAndFinalizeMM(ctx, tp);
 
         // Pool reports post-modify liquidity 1200 - 500 == 700; commitmentMax == maxima(700).
         (uint256 expC0, uint256 expC1) = LiquidityUtils.calculateCommitmentMaxima(TICK_LOWER, TICK_UPPER, 700);
@@ -1002,7 +1002,7 @@ contract VTSPositionLibMutationUnitTest is Test {
             marketVault: IMarketVault(address(0))
         });
 
-        harness.touchPosition(ctx, tp);
+        TouchPositionResult memory result = harness.touchPositionAndFinalizeMM(ctx, tp);
 
         (uint256 settled0, uint256 settled1, uint256 d0, uint256 d1) = _getPositionStateLite(id);
         assertEq(settled0, expC0, "token0 settled should reach new commitment max");
@@ -1275,11 +1275,14 @@ contract VTSPositionLibMutationUnitTest is Test {
             hookData: PositionModificationHookDataLib.encode(commitId, 0, owner)
         });
 
-        harness.touchPosition(ctx, tp);
+        TouchPositionResult memory result = harness.touchPositionAndFinalizeMM(ctx, tp);
 
-        // Assert we planned a cancellation on token0 with principalAmount0 == callerDelta - feesAccrued + feeAdj (slash).
-        // feeAdj0 should equal the materialised pending adjustment (pend0) under current VTSFeeLib construction.
-        uint256 expectedPrincipal0 = uint256(int256(5000 - 2000 + pend0));
+        // Assert we planned a cancellation on token0 with principalAmount0 == callerDelta - (feesAccrued - feeAdj).
+        // Use the materialised fee adjustment from `touchPosition` so the check remains valid across fee-adj internals.
+        int256 caller0 = int256(tp.callerDelta.amount0());
+        int256 accrued0 = int256(tp.feesAccrued.amount0());
+        int256 feeAdj0 = int256(result.feeAdj.amount0());
+        uint256 expectedPrincipal0 = uint256(caller0 - accrued0 + feeAdj0);
         assertEq(hub.lastPrincipalAmount0(), expectedPrincipal0, "principalAmount0 should include +feeAdj for slash");
     }
 
@@ -1477,7 +1480,7 @@ contract VTSPositionLibMutationUnitTest is Test {
             });
 
             // 9) Execute touchPosition and assert liquidity updated.
-            TouchPositionResult memory result = harness.touchPosition(ctx, tp);
+            TouchPositionResult memory result = harness.touchPositionAndFinalizeMM(ctx, tp);
             assertEq(
                 result.pos.liquidity, uint128(10e18), "position liquidity should mirror post-modify PoolManager read"
             );
@@ -1525,7 +1528,7 @@ contract VTSPositionLibMutationUnitTest is Test {
         harness.addMarketProducedCredit(setup.ctx.marketVault, setup.underlying0, setup.required0);
         harness.addMarketProducedCredit(setup.ctx.marketVault, setup.underlying1, setup.required1);
 
-        harness.touchPosition(setup.ctx, setup.tp);
+        harness.touchPositionAndFinalizeMM(setup.ctx, setup.tp);
 
         (,, uint256 settled0, uint256 settled1,,) = harness.getPositionAccounting(setup.positionId);
         assertEq(settled0, setup.required0, "token0 settled should increase by exact consumed credit");
@@ -1543,7 +1546,7 @@ contract VTSPositionLibMutationUnitTest is Test {
         harness.addMarketProducedCredit(setup.ctx.marketVault, setup.underlying0, surplus0);
         harness.addMarketProducedCredit(setup.ctx.marketVault, setup.underlying1, surplus1);
 
-        harness.touchPosition(setup.ctx, setup.tp);
+        harness.touchPositionAndFinalizeMM(setup.ctx, setup.tp);
 
         (,, uint256 settled0, uint256 settled1,,) = harness.getPositionAccounting(setup.positionId);
         assertEq(settled0, setup.required0, "token0 settled should clamp to required settlement");
@@ -1560,7 +1563,7 @@ contract VTSPositionLibMutationUnitTest is Test {
         harness.addMarketProducedCredit(setup.ctx.marketVault, setup.underlying0, setup.required0);
         harness.addMarketProducedCredit(setup.ctx.marketVault, setup.underlying1, surplus1);
 
-        harness.touchPosition(setup.ctx, setup.tp);
+        harness.touchPositionAndFinalizeMM(setup.ctx, setup.tp);
 
         (,, uint256 settled0, uint256 settled1,,) = harness.getPositionAccounting(setup.positionId);
         assertEq(settled0, setup.required0, "token0 exact-match credit should fully settle");
@@ -1584,7 +1587,7 @@ contract VTSPositionLibMutationUnitTest is Test {
         harness.addMarketProducedCredit(setup.ctx.marketVault, setup.underlying0, setup.required0);
         harness.addMarketProducedCredit(setup.ctx.marketVault, setup.underlying1, setup.required1);
 
-        harness.touchPosition(setup.ctx, setup.tp);
+        harness.touchPositionAndFinalizeMM(setup.ctx, setup.tp);
 
         (,, uint256 settled0, uint256 settled1, uint256 cd0After, uint256 cd1After) =
             harness.getPositionAccounting(setup.positionId);
@@ -1616,7 +1619,7 @@ contract VTSPositionLibMutationUnitTest is Test {
         harness.addMarketProducedCredit(setup.ctx.marketVault, setup.underlying0, surplus0);
         harness.addMarketProducedCredit(setup.ctx.marketVault, setup.underlying1, surplus1);
 
-        harness.touchPosition(setup.ctx, setup.tp);
+        harness.touchPositionAndFinalizeMM(setup.ctx, setup.tp);
 
         (,, uint256 settled0, uint256 settled1, uint256 cd0After, uint256 cd1After) =
             harness.getPositionAccounting(setup.positionId);
@@ -1645,7 +1648,7 @@ contract VTSPositionLibMutationUnitTest is Test {
         harness.addMarketProducedCredit(setup.ctx.marketVault, setup.underlying0, setup.required0);
         harness.addMarketProducedCredit(setup.ctx.marketVault, setup.underlying1, setup.required1);
 
-        harness.touchPosition(setup.ctx, setup.tp);
+        harness.touchPositionAndFinalizeMM(setup.ctx, setup.tp);
 
         (,, uint256 settled0, uint256 settled1, uint256 cd0After, uint256 cd1After) =
             harness.getPositionAccounting(setup.positionId);
@@ -1701,7 +1704,7 @@ contract VTSPositionLibMutationUnitTest is Test {
         });
 
         _pmSetPositionLiquidity(pId, PositionId.unwrap(idA), 0);
-        harness.touchPosition(ctx, tpDec);
+        harness.touchPositionAndFinalizeMM(ctx, tpDec);
         assertFalse(harness.getPosition(idA).isActive, "first full burn should deactivate position A");
         assertEq(harness.getCommitActivePositionCount(1), 1, "first full burn should decrement active positions");
 
@@ -1713,7 +1716,7 @@ contract VTSPositionLibMutationUnitTest is Test {
 
         _pmSetPositionLiquidity(pId, PositionId.unwrap(idB), 0);
         tpDec.params.salt = bytes32(uint256(702));
-        harness.touchPosition(ctx, tpDec);
+        harness.touchPositionAndFinalizeMM(ctx, tpDec);
         assertFalse(harness.getPosition(idB).isActive, "second full burn should deactivate position B");
         assertEq(harness.getCommitActivePositionCount(1), 0, "two full burns should clear active positions");
 

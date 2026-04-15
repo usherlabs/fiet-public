@@ -11,7 +11,7 @@ mod exp "exp/justfile"
 mode := env_var_or_default("MODE", "LOCAL")
 network := env_var_or_default("NETWORK", "sepolia")
 broadcast := env_var_or_default("BROADCAST", "false")
-anvil_port := "8545"
+anvil_port := env_var_or_default("ANVIL_PORT", "8545")
 anvil_fork_url := "http://localhost:" + anvil_port
 script_dir := "script"
 foundry_profile := env_var_or_default("FOUNDRY_PROFILE", "deploy")
@@ -224,13 +224,19 @@ predict-globalconfig:
         exit 1
     fi
 
+    CREATE3_FACTORY_FILE="deployments/create3_factory_{{ network }}.address"
     if [ -n "${CREATE3_FACTORY:-}" ]; then
         FACTORY="$CREATE3_FACTORY"
+    elif [ "{{ mode }}" = "LOCAL" ]; then
+        FACTORY="0x9fBB3DF7C40Da2e5A0dE984fFE2CCB7C47cd0ABf"
+    elif [ -f "$CREATE3_FACTORY_FILE" ] && [ -s "$CREATE3_FACTORY_FILE" ]; then
+        FACTORY="$(tr -d '\n\r' < "$CREATE3_FACTORY_FILE" | head -n1)"
     elif [ "{{ network }}" = "sepolia" ]; then
         FACTORY="0x0EC3715467915Cbd7355A6B111510e4a09D9ccC0"
     else
         FACTORY="0x9fBB3DF7C40Da2e5A0dE984fFE2CCB7C47cd0ABf"
     fi
+    export CREATE3_FACTORY="$FACTORY"
 
     DEPLOYER_ADDR="$(cast wallet address --private-key "$PRIVATE_KEY")"
     SALT="$(cast keccak "GlobalConfig-v1")"
@@ -654,6 +660,70 @@ e2e: e2e-deploy e2e-normal-lp e2e-market-maker e2e-mm-coverage e2e-cross-market-
 
 # E2E: Multi-market MM regression (shared underlyings across four markets; decrease/mint-from-deltas/settle-from-deltas).
 e2e-cross-market-delta:
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    if [ -z "${PRIVATE_KEY:-}" ]; then
+        echo "Missing PRIVATE_KEY (required for deployer signer)."
+        exit 1
+    fi
+    if [ -z "${LP_PRIVATE_KEY:-}" ]; then
+        echo "Missing LP_PRIVATE_KEY (required for MM actor signer)."
+        exit 1
+    fi
+
+    # Resolve CREATE3 factory:
+    # 1) explicit env override
+    # 2) MODE=LOCAL -> canonical address used by setup-create3 / CREATE3Script
+    # 3) deployments/create3_factory_${NETWORK}.address for remote networks that needed a custom deployment
+    # 4) hardcoded defaults like CREATE3Script
+    CREATE3_FACTORY_FILE="deployments/create3_factory_{{ network }}.address"
+    if [ -n "${CREATE3_FACTORY:-}" ]; then
+        CREATE3_FACTORY_ADDR="$CREATE3_FACTORY"
+    elif [ "{{ mode }}" = "LOCAL" ]; then
+        CREATE3_FACTORY_ADDR="0x9fBB3DF7C40Da2e5A0dE984fFE2CCB7C47cd0ABf"
+    elif [ -f "$CREATE3_FACTORY_FILE" ] && [ -s "$CREATE3_FACTORY_FILE" ]; then
+        CREATE3_FACTORY_ADDR="$(tr -d '\n\r' < "$CREATE3_FACTORY_FILE" | head -n1)"
+    elif [ "{{ network }}" = "sepolia" ]; then
+        CREATE3_FACTORY_ADDR="0x0EC3715467915Cbd7355A6B111510e4a09D9ccC0"
+    else
+        CREATE3_FACTORY_ADDR="0x9fBB3DF7C40Da2e5A0dE984fFE2CCB7C47cd0ABf"
+    fi
+    export CREATE3_FACTORY="$CREATE3_FACTORY_ADDR"
+
+    CREATE3_CODE="$(cast code "$CREATE3_FACTORY_ADDR" --rpc-url {{ rpc_url }})"
+    if [ "$CREATE3_CODE" = "0x" ]; then
+        if [ "{{ mode }}" = "LOCAL" ] && [ "$CREATE3_FACTORY_ADDR" = "0x9fBB3DF7C40Da2e5A0dE984fFE2CCB7C47cd0ABf" ]; then
+            echo "CREATE3 factory missing on local fork at canonical address; bootstrapping via setup-create3..."
+            just setup-create3
+            CREATE3_CODE="$(cast code "$CREATE3_FACTORY_ADDR" --rpc-url {{ rpc_url }})"
+        fi
+    fi
+    if [ "$CREATE3_CODE" = "0x" ]; then
+        echo "CREATE3 factory has no code on current RPC: $CREATE3_FACTORY_ADDR"
+        echo "Set CREATE3_FACTORY to a deployed factory or run: just setup-create3"
+        exit 1
+    fi
+
+    # PositionManager addresses mirror script/base/NetworkConfig.sol constants.
+    if [ "{{ network }}" = "sepolia" ]; then
+        POSITION_MANAGER_ADDR="0xAc631556d3d4019C95769033B5E719dD77124BAc"
+    elif [ "{{ network }}" = "arbitrum" ]; then
+        POSITION_MANAGER_ADDR="0xd88f38f930b7952f2db2432cb002e7abbf3dd869"
+    elif [ "{{ network }}" = "ethsepolia" ]; then
+        POSITION_MANAGER_ADDR="0x429ba70129df741B2Ca2a85BC3A2a3328e5c09b4"
+    else
+        echo "Unsupported NETWORK for e2e-cross-market-delta: {{ network }}"
+        exit 1
+    fi
+
+    PM_CODE="$(cast code "$POSITION_MANAGER_ADDR" --rpc-url {{ rpc_url }})"
+    if [ "$PM_CODE" = "0x" ]; then
+        echo "PositionManager has no code on current RPC: $POSITION_MANAGER_ADDR"
+        echo "Likely NETWORK/RPC mismatch or stale fork. Check NETWORK={{ network }} and rpc_url={{ rpc_url }}."
+        exit 1
+    fi
+
     FOUNDRY_PROFILE={{ foundry_profile }} forge script {{ script_dir }}/e2e/CrossMarketDeltaRegression.s.sol:CrossMarketDeltaRegressionE2E \
         --rpc-url {{ rpc_url }} \
         {{ broadcast_flag }} -vvv

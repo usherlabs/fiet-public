@@ -45,6 +45,7 @@ contract SETTLE01 {
     constructor() {
         EchidnaLinkedLibs.deployVTSFeeLinkedLib();
         EchidnaLinkedLibs.deployVTSPositionLib();
+        EchidnaLinkedLibs.deployVTSPositionMMOpsLib();
         EchidnaLinkedLibs.deployVTSLifecycleLinkedLib();
         harness = new VTSPositionLibEchidnaHarness();
         poolManager = new MockPoolManager();

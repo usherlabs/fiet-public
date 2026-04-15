@@ -105,6 +105,14 @@ struct TouchPositionResult {
     PositionId id;
     // The fee adjustment delta
     BalanceDelta feeAdj;
+    /// @dev When true, `VTSPositionMMOpsLib.processMMOperations` must run after `touchPosition` (CoreHook path).
+    bool isMMOperation;
+    /// @dev MM commit id from hook data (zero when not MM).
+    uint256 mmCommitId;
+    /// @dev MM seizure flag from hook data.
+    bool mmIsSeizing;
+    /// @dev Required settlement delta computed during touch for MM paths (zero otherwise).
+    BalanceDelta mmRequiredSettlementDelta;
 }
 
 /// @notice Parameters for onMMSettle to reduce stack pressure

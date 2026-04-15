@@ -7,19 +7,22 @@ import {VTSCommitLib} from "../../../src/libraries/VTSCommitLib.sol";
 import {VTSFeeLinkedLib} from "../../../src/libraries/VTSFeeLib.sol";
 import {VTSPositionLib} from "../../../src/libraries/VTSPositionLib.sol";
 import {VTSLifecycleLinkedLib} from "../../../src/libraries/VTSLifecycleLinkedLib.sol";
+import {VTSPositionMMOpsLib} from "../../../src/libraries/VTSPositionMMOpsLib.sol";
 
 /// @notice Single source of truth for Echidna hard-linked library addresses and CREATE2 deploy helpers.
 /// @dev Addresses must match `foundry.toml [profile.echidna].libraries`.
 ///      When linked-library bytecode changes, run `just recompute-fuzz-lib-addrs` and update here + foundry.toml.
 library EchidnaLinkedLibs {
     address internal constant LCC_FACTORY_LINKED_LIB = 0x5A3842F9D1B0F96003669A36Ec4a09165bc7de54;
-    address internal constant LIQUIDITY_HUB_LINKED_LIB = 0xB3A02cd6d8fB5B8Fe16DD569EdF8BE35a87bD0FA;
-    address internal constant VTS_COMMIT_LIB = 0x6215030BFA6e034fFe347cbe7237e37e5f1eEc61;
+    address internal constant LIQUIDITY_HUB_LINKED_LIB = 0x5be262F2f2f9B3b5C70a256526eE9C6DD8Fc9E02;
+    address internal constant VTS_COMMIT_LIB = 0xfEd2b7739C0E197a05f0f5820473Fa5E40Afe6Bd;
     address internal constant VTS_FEE_LINKED_LIB = 0xe2F744D132A1B346ACd29E304181EDf2bF9831b8;
-    address internal constant VTS_POSITION_LIB = 0x68B09Dc7C71462B7652f34f74b10b0e47B61aBc4;
-    address internal constant VTS_LIFECYCLE_LINKED_LIB = 0x982A481B4C9F3fd5E732C38C30961c84f3E4f510;
+    address internal constant VTS_POSITION_LIB = 0x90c7906f303e369824C8444CF4A72FE0D3500f65;
+    address internal constant VTS_LIFECYCLE_LINKED_LIB = 0x6523d180a6da3e1C5E5D474b03bC292CaD6A9089;
+    address internal constant VTS_POSITION_MM_OPS_LIB = 0x378dD5049f0A8bCf075Ae672f7052D2366a5c5b0;
 
     error VTSLifecycleLinkedLibAddrMismatch();
+    error VTSPositionMMOpsLibAddrMismatch();
     error LCCFactoryLinkedLibAddrMismatch();
     error LiquidityHubLinkedLibAddrMismatch();
     error VTSCommitLibAddrMismatch();
@@ -51,6 +54,10 @@ library EchidnaLinkedLibs {
         return VTS_LIFECYCLE_LINKED_LIB;
     }
 
+    function expectedVTSPositionMMOpsLib() internal pure returns (address) {
+        return VTS_POSITION_MM_OPS_LIB;
+    }
+
     function deployLCCFactoryLinkedLib() internal {
         address lib = _deploy(keccak256("echidna.LCCFactoryLinkedLib"), type(LCCFactoryLinkedLib).creationCode);
         if (lib != LCC_FACTORY_LINKED_LIB) revert LCCFactoryLinkedLibAddrMismatch();
@@ -79,6 +86,11 @@ library EchidnaLinkedLibs {
     function deployVTSLifecycleLinkedLib() internal {
         address lib = _deploy(keccak256("echidna.VTSLifecycleLinkedLib"), type(VTSLifecycleLinkedLib).creationCode);
         if (lib != VTS_LIFECYCLE_LINKED_LIB) revert VTSLifecycleLinkedLibAddrMismatch();
+    }
+
+    function deployVTSPositionMMOpsLib() internal {
+        address lib = _deploy(keccak256("echidna.VTSPositionMMOpsLib"), type(VTSPositionMMOpsLib).creationCode);
+        if (lib != VTS_POSITION_MM_OPS_LIB) revert VTSPositionMMOpsLibAddrMismatch();
     }
 
     function _deploy(bytes32 salt, bytes memory initCode) private returns (address lib) {
