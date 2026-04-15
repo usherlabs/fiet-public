@@ -53,14 +53,19 @@ abstract contract MarketVaultFacade is IMarketVault, ImmutableMarketState, Reent
         vault = ICanonicalVault(canonical);
     }
 
+    /// @notice Core pool id (`bytes32`) this facade routes for.
     function marketId() external view returns (bytes32) {
         return _marketId();
     }
 
+    /// @notice Factory-scoped canonical custody contract backing all markets for this factory.
     function canonicalVault() external view returns (address) {
         return address(_canonicalVault());
     }
 
+    /// @notice LCC token pair for this market (sorted per pool key conventions).
+    /// @return lccToken0 First LCC ERC20 address.
+    /// @return lccToken1 Second LCC ERC20 address.
     function lccs() external view returns (address lccToken0, address lccToken1) {
         (ILCC l0, ILCC l1) = _lccs();
         return (address(l0), address(l1));
@@ -236,6 +241,7 @@ abstract contract MarketVaultFacade is IMarketVault, ImmutableMarketState, Reent
         currency1 = Currency.wrap(lcc1.underlying());
     }
 
+    /// @notice Accepts ETH only from the canonical vault, `address(0)` (selfdestruct-style origin), factory bounds, or this contract.
     receive() external payable virtual {
         address canonical = marketFactory.canonicalVault();
         if (

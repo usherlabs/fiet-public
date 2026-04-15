@@ -195,6 +195,14 @@ This is the critical difference from the old model.
 The current market's durable reserve is no longer implicitly treated as backing the whole withdrawal merely because the
 owner had positive same-underlying delta.
 
+### Deposit / MM-add paths also consume produced credit
+
+Produced credit is **not** only consumed on delta-backed **withdrawals**. When positive owner underlying delta is
+applied to **protocol-credit deposits** or **MM add-from-deltas** style settlement, `VTSPositionLib` may route through
+`_settleFromPositiveUnderlyingDelta(...)`, which debits owner underlying delta and calls `MarketCurrencyDelta.consumeProduced(...)`
+for the overlapping amount. Reviewers should verify both withdrawal-side and deposit-side settlement paths when auditing
+factory-produced credit invariants.
+
 ---
 
 ## Why the produced bucket is factory-wide rather than market-scoped

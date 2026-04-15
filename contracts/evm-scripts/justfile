@@ -650,7 +650,7 @@ read-deployment:
 
 # === E2E ===
 # Note: Make sure fork is running
-e2e: e2e-deploy e2e-normal-lp e2e-market-maker e2e-mm-coverage
+e2e: e2e-deploy e2e-normal-lp e2e-market-maker e2e-mm-coverage e2e-cross-market-delta
 
 # E2E: Multi-market MM regression (shared underlyings across four markets; decrease/mint-from-deltas/settle-from-deltas).
 e2e-cross-market-delta:

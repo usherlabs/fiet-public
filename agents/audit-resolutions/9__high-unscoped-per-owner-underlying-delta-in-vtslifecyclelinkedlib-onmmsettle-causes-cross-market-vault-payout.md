@@ -1,6 +1,6 @@
 # Audit finding #9 - substantive resolution
 
-**Last updated:** 2026-04-15
+**Last updated:** 2026-04-14
 
 **Finding:** [9__high-unscoped-per-owner-underlying-delta-in-vtslifecyclelinkedlib-onmmsettle-causes-cross-market-vault-payout.md](../audit-findings/9__high-unscoped-per-owner-underlying-delta-in-vtslifecyclelinkedlib-onmmsettle-causes-cross-market-vault-payout.md)
 
@@ -67,13 +67,17 @@ The critical pairing is:
 - **consume**:
   - owner same-underlying delta is debited by the delta-backed withdrawal amount; and
   - `MarketCurrencyDelta.consumeProduced(factory, underlying, amount)` is called for that same amount.
+  - **Also (not withdrawal-only):** positive owner underlying delta applied to protocol-credit deposit and market-maker
+    add-from-deltas paths runs through `VTSPositionLib._settleFromPositiveUnderlyingDelta(...)`, which calls
+    `consumeProduced(...)` when that settlement uses factory-produced credit—not only delta-backed withdrawals.
 
 This means owner-level same-underlying delta is no longer enough on its own to justify vault payout. A delta-backed
 withdrawal must also have matching produced credit in the same factory namespace.
 
 **Implementation points:**
 - `contracts/evm/src/libraries/MarketCurrencyDelta.sol`
-- `contracts/evm/src/libraries/VTSPositionLib.sol` - MM decrease export paths (`decreaseLiquidityReserve` + `addProduced`)
+- `contracts/evm/src/libraries/VTSPositionLib.sol` - MM decrease export paths (`decreaseLiquidityReserve` + `addProduced`);
+  positive-delta settlement (`_settleFromPositiveUnderlyingDelta` + `consumeProduced`)
 - `contracts/evm/src/libraries/VTSLifecycleLinkedLib.sol` - delta-backed withdrawal consumption (`accountDelta` +
   `consumeProduced`)
 
@@ -191,7 +195,8 @@ and value-conserving:
 - `CanonicalVault` owns durable custody and per-market reserve ledgers;
 - `VaultSettlementIntent` tells the vault exactly how much of a withdrawal is credit-backed;
 - `MarketCurrencyDelta` records factory-wide produced credit from real reserve export and requires that credit to be
-  consumed when owner-level underlying delta is spent on a withdrawal; and
+  consumed when owner-level underlying delta is spent (including delta-backed withdrawals and positive-delta deposit /
+  MM-add paths that settle via `consumeProduced`); and
 - batch close asserts that both owner deltas and produced-credit buckets resolve fully.
 
 That architecture preserves the intended "decrease in A, consume in B" behaviour within a factory while closing the

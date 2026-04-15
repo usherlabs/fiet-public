@@ -1376,7 +1376,7 @@ contract ProxyHookTest is MarketVaultBase {
 
     /// @dev Suite B (plan): zeroForOne exact-input must mint input-lane underlying claims to CanonicalVault.
     function test_proxySwap_zeroForOne_exactInput_mintsInputUnderlyingClaimToCanonicalVault() public {
-        vm.assume(Currency.unwrap(proxyPoolKey.currency0) != address(0));
+        assertFalse(Currency.unwrap(proxyPoolKey.currency0) == address(0), "pre: Suite B requires ERC20 currency0");
         address payable cv = _canonicalVaultPayable();
 
         uint256 claimInBefore = _underlying6909Balance(address(cv), proxyPoolKey.currency0);
@@ -1391,7 +1391,7 @@ contract ProxyHookTest is MarketVaultBase {
 
     /// @dev Suite B (plan): zeroForOne exact-input must burn output-lane underlying claims from CanonicalVault.
     function test_proxySwap_zeroForOne_exactInput_burnsOutputUnderlyingClaimFromCanonicalVault() public {
-        vm.assume(Currency.unwrap(proxyPoolKey.currency1) != address(0));
+        assertFalse(Currency.unwrap(proxyPoolKey.currency1) == address(0), "pre: Suite B requires ERC20 currency1");
         address payable cv = _canonicalVaultPayable();
 
         uint256 claimOutBefore = _underlying6909Balance(address(cv), proxyPoolKey.currency1);
@@ -1406,7 +1406,7 @@ contract ProxyHookTest is MarketVaultBase {
 
     /// @dev Suite B (plan): oneForZero exact-input must mint input-lane underlying claims to CanonicalVault.
     function test_proxySwap_oneForZero_exactInput_mintsInputUnderlyingClaimToCanonicalVault() public {
-        vm.assume(Currency.unwrap(proxyPoolKey.currency1) != address(0));
+        assertFalse(Currency.unwrap(proxyPoolKey.currency1) == address(0), "pre: Suite B requires ERC20 currency1");
         address payable cv = _canonicalVaultPayable();
 
         uint256 claimInBefore = _underlying6909Balance(address(cv), proxyPoolKey.currency1);
@@ -1421,7 +1421,7 @@ contract ProxyHookTest is MarketVaultBase {
 
     /// @dev Suite B (plan): oneForZero exact-input must burn output-lane underlying claims from CanonicalVault.
     function test_proxySwap_oneForZero_exactInput_burnsOutputUnderlyingClaimFromCanonicalVault() public {
-        vm.assume(Currency.unwrap(proxyPoolKey.currency0) != address(0));
+        assertFalse(Currency.unwrap(proxyPoolKey.currency0) == address(0), "pre: Suite B requires ERC20 currency0");
         address payable cv = _canonicalVaultPayable();
 
         uint256 claimOutBefore = _underlying6909Balance(address(cv), proxyPoolKey.currency0);
@@ -1436,8 +1436,8 @@ contract ProxyHookTest is MarketVaultBase {
 
     /// @dev Suite B (plan): after successful exact-input swaps, CanonicalVault claim ownership must equal reserve ledger.
     function test_proxySwap_exactInput_preservesInvariant_claimsOwnedByCanonicalVault_matchVaultReserves() public {
-        vm.assume(Currency.unwrap(proxyPoolKey.currency0) != address(0));
-        vm.assume(Currency.unwrap(proxyPoolKey.currency1) != address(0));
+        assertFalse(Currency.unwrap(proxyPoolKey.currency0) == address(0), "pre: Suite B requires ERC20 currency0");
+        assertFalse(Currency.unwrap(proxyPoolKey.currency1) == address(0), "pre: Suite B requires ERC20 currency1");
 
         _assertUnderlyingClaimsMatchVaultReserves();
         _executeSwap(proxyPoolKey, true, -int256(1e18), ZERO_BYTES);
@@ -1449,7 +1449,7 @@ contract ProxyHookTest is MarketVaultBase {
 
     /// @dev Suite C (plan): with resolved recipient and limited output reserve, only immediate available output burns claims.
     function test_proxySwap_exactInput_withResolvedRecipient_burnsOnlyImmediateOutputClaimPortion() public {
-        vm.assume(Currency.unwrap(proxyPoolKey.currency1) != address(0));
+        assertFalse(Currency.unwrap(proxyPoolKey.currency1) == address(0), "pre: Suite B requires ERC20 currency1");
         address recipient = makeAddr("claim_deficit_recipient");
         _setupRecipient(recipient);
 
@@ -1474,7 +1474,7 @@ contract ProxyHookTest is MarketVaultBase {
 
     /// @dev Suite C (plan): deficit on output lane must not break full input-lane claim mirroring into CanonicalVault.
     function test_proxySwap_exactInput_withResolvedRecipient_keepsInputClaimMirroringEvenWhenOutputDeficits() public {
-        vm.assume(Currency.unwrap(proxyPoolKey.currency0) != address(0));
+        assertFalse(Currency.unwrap(proxyPoolKey.currency0) == address(0), "pre: Suite B requires ERC20 currency0");
         address recipient = makeAddr("claim_deficit_recipient_in");
         _setupRecipient(recipient);
 
@@ -1499,8 +1499,8 @@ contract ProxyHookTest is MarketVaultBase {
 
     /// @dev Suite C (plan): unresolved-recipient deficit must revert without mutating durable claim or reserve ownership.
     function test_proxySwap_exactInput_unresolvedRecipient_revertsWhenOutputExceedsVault() public {
-        vm.assume(Currency.unwrap(proxyPoolKey.currency1) != address(0));
-        vm.assume(Currency.unwrap(proxyPoolKey.currency0) != address(0));
+        assertFalse(Currency.unwrap(proxyPoolKey.currency1) == address(0), "pre: Suite B requires ERC20 currency1");
+        assertFalse(Currency.unwrap(proxyPoolKey.currency0) == address(0), "pre: Suite B requires ERC20 currency0");
 
         address payable cv = _canonicalVaultPayable();
         bytes32 marketId = _coreMarketId();

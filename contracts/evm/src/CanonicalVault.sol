@@ -94,6 +94,9 @@ contract CanonicalVault is ICanonicalVault, ImmutableState, ReentrancyGuardTrans
         address underlying0,
         address underlying1
     ) external onlyFactory {
+        if (marketId == bytes32(0)) {
+            revert Errors.InvariantViolated("CanonicalVault: zero marketId unsupported");
+        }
         if (facade == address(0) || lcc0 == address(0) || lcc1 == address(0)) {
             revert Errors.InvalidSender();
         }
@@ -489,6 +492,9 @@ contract CanonicalVault is ICanonicalVault, ImmutableState, ReentrancyGuardTrans
         }
     }
 
+    /// @notice Accepts native ETH only from PoolManager, LiquidityHub, or factory-registered protocol bounds.
+    /// @dev Unlike `MarketVaultFacade.receive`, `address(0)` is not whitelisted: canonical custody rejects unknown
+    ///      ETH origins (including selfdestruct-style zero-address sends) while per-market facades remain more permissive.
     receive() external payable {
         if (
             msg.sender != address(poolManager) && msg.sender != address(liquidityHub)

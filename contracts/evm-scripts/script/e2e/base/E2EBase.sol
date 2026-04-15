@@ -169,6 +169,8 @@ abstract contract E2EBase is DeployFullStackBase {
 
     /// @dev Create an additional market on an already-deployed stack using existing underlying tokens (for
     ///      multi-market / cross-vault regression scripts that must share the same economic asset pair).
+    /// @param lp Retained for API parity with `_createMarketFromStack`; this path does not mint fresh tokens to `lp`
+    ///        because underlyings already exist on the reused stack.
     /// @param registerOracleTickers When false, skips `OracleHelper.registerTicker` proxy calls (reuse tickers from
     ///        the first market created on this stack).
     function _createMarketFromStackWithUnderlyings(

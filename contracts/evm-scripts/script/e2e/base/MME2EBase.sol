@@ -26,6 +26,7 @@ import {IVTSOrchestrator} from "src/interfaces/IVTSOrchestrator.sol";
 import {LiquidityUtils} from "src/libraries/LiquidityUtils.sol";
 import {MarketVTSConfiguration} from "src/types/VTS.sol";
 import {ILiquidityHub} from "src/interfaces/ILiquidityHub.sol";
+import {IVRLSignalManager} from "src/interfaces/IVRLSignalManager.sol";
 import {MMActions} from "src/libraries/MMActions.sol";
 
 abstract contract MME2EBase is E2EBase {
@@ -282,7 +283,9 @@ abstract contract MME2EBase is E2EBase {
         internal
         returns (uint256 commitId)
     {
-        return _createMmPosition(m, mmPk, tickLower, tickUpper, liq, 1);
+        address mm = vm.addr(mmPk);
+        uint256 lastVerified = IVRLSignalManager(m.stack.contracts.signalManager).mmNonce(mm);
+        return _createMmPosition(m, mmPk, tickLower, tickUpper, liq, lastVerified + 1);
     }
 
     /// @dev Create a new position for a market maker with an explicit VRL signal nonce.

@@ -161,6 +161,8 @@ contract MarketFactory is IMarketFactory, Ownable, ImmutableState, ImmutableVTSS
         }
     }
 
+    /// @notice VTS orchestrator bound to this factory at construction (immutable).
+    /// @return The orchestrator contract.
     function vts() external view returns (IVTSOrchestrator) {
         return vtsOrchestrator;
     }
