@@ -291,65 +291,6 @@ library VTSCommitLib {
         _renewSignalInternal(s, sender, commitId, liquiditySignal, expirySeconds);
     }
 
-    /// @notice Commits a liquidity signal to the VTS state (linked-library entry)
-    /// @dev Intentionally keeps all commitment logic in the linked library to reduce VTSOrchestrator bytecode size.
-    //#olympix-ignore-reentrancy
-    function commitSignal(
-        VTSStorage storage s,
-        address sender,
-        IVRLSignalManager signalManager,
-        IOracleHelper oracleHelper,
-        bytes memory liquiditySignal
-    ) external returns (uint256 commitId) {
-        commitId = _commitSignalLinked(s, sender, signalManager, oracleHelper, liquiditySignal);
-    }
-
-    /// @notice Commits a liquidity signal using sender-signed EIP-712 relayer auth (linked-library entry)
-    function commitSignalRelayed(
-        VTSStorage storage s,
-        address sender,
-        IVRLSignalManager signalManager,
-        IOracleHelper oracleHelper,
-        bytes memory liquiditySignal,
-        uint256 deadline,
-        uint256 authNonce,
-        bytes memory authSig
-    ) external returns (uint256 commitId) {
-        commitId = _commitSignalRelayedLinked(
-            s, sender, signalManager, oracleHelper, liquiditySignal, deadline, authNonce, authSig
-        );
-    }
-
-    /// @notice Renews a liquidity signal for a commit (linked-library entry)
-    //#olympix-ignore-reentrancy
-    function renewSignal(
-        VTSStorage storage s,
-        address sender,
-        IVRLSignalManager signalManager,
-        IOracleHelper oracleHelper,
-        uint256 commitId,
-        bytes memory liquiditySignal
-    ) external {
-        _renewSignalLinked(s, sender, signalManager, oracleHelper, commitId, liquiditySignal);
-    }
-
-    /// @notice Renews a liquidity signal using sender-signed EIP-712 relayer auth (linked-library entry)
-    function renewSignalRelayed(
-        VTSStorage storage s,
-        address sender,
-        IVRLSignalManager signalManager,
-        IOracleHelper oracleHelper,
-        uint256 commitId,
-        bytes memory liquiditySignal,
-        uint256 deadline,
-        uint256 authNonce,
-        bytes memory authSig
-    ) external {
-        _renewSignalRelayedLinked(
-            s, sender, signalManager, oracleHelper, commitId, liquiditySignal, deadline, authNonce, authSig
-        );
-    }
-
     function _commitSignalInternal(VTSStorage storage s, bytes memory liquiditySignal, uint256 expirySeconds)
         internal
         returns (uint256 commitId)
@@ -381,7 +322,7 @@ library VTSCommitLib {
         commit.expiresAt = block.timestamp + expirySeconds;
     }
 
-    /// @dev Core commitment checkpoint; used by external `checkpointWithCommitment` and growth-settled orchestration.
+    /// @dev Core commitment checkpoint; used by growth-settled orchestration and unit tests via internal call.
     //#olympix-ignore-reentrancy
     function _checkpointWithCommitment(
         VTSStorage storage s,
@@ -389,7 +330,7 @@ library VTSCommitLib {
         IOracleHelper oracleHelper,
         uint256 commitId,
         PositionId positionId
-    ) private {
+    ) internal {
         // Build checkpoint context in scoped block
         CheckpointContext memory ctx;
         Position memory pos = s.positions[positionId];
@@ -482,19 +423,6 @@ library VTSCommitLib {
             _writeCommitmentDeficitToken(pa, 0, FullMath.mulDiv(ctx.eff0, deficitBps, LiquidityUtils.BPS_DENOMINATOR));
             _writeCommitmentDeficitToken(pa, 1, FullMath.mulDiv(ctx.eff1, deficitBps, LiquidityUtils.BPS_DENOMINATOR));
         }
-    }
-
-    /// @notice Checkpoint with commitment backing checks (single linked-library call)
-    /// @dev Reads stored commit signal state and sets position commitment deficit.
-    //#olympix-ignore-reentrancy
-    function checkpointWithCommitment(
-        VTSStorage storage s,
-        IPoolManager poolManager,
-        IOracleHelper oracleHelper,
-        uint256 commitId,
-        PositionId positionId
-    ) external {
-        _checkpointWithCommitment(s, poolManager, oracleHelper, commitId, positionId);
     }
 
     /// @notice Calculates the USD value of the MarketMaker signal reserves for a commit

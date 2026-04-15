@@ -2071,7 +2071,7 @@ contract VTSPositionLibMutationUnitTest is Test {
 /// @notice Exposes MM delta-clearance pure helper for truth-table tests.
 contract VTSPositionLibDeltaClearanceExpose {
     function calc(int128 delta, int128 amount) external pure returns (int128) {
-        return VTSLifecycleLinkedLib.mmCalcDeltaClearance(delta, amount);
+        return VTSLifecycleLinkedLib._calcDeltaClearance(delta, amount);
     }
 }
 

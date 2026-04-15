@@ -595,16 +595,11 @@ library VTSLifecycleLinkedLib {
     /// @param delta The current currency delta for the owner (negative = owes, positive = owed)
     /// @param amount The settlement amount (negative = deposit, positive = withdrawal)
     /// @return clearance The amount to clear from delta (negative reduces positive delta, positive reduces negative delta)
-    function _calcDeltaClearance(int128 delta, int128 amount) private pure returns (int128 clearance) {
+    function _calcDeltaClearance(int128 delta, int128 amount) internal pure returns (int128 clearance) {
         if (delta < 0 && amount < 0) {
             int128 minMagnitude = delta > amount ? delta : amount;
             clearance = -minMagnitude;
         }
-    }
-
-    /// @notice Harness bridge for delta-clearance truth tables (logic lives with MM settlement).
-    function mmCalcDeltaClearance(int128 delta, int128 amount) external pure returns (int128 clearance) {
-        return _calcDeltaClearance(delta, amount);
     }
 
     /// @notice Calculates liquidity units to seize for a given position and settlement delta
@@ -762,7 +757,7 @@ library VTSLifecycleLinkedLib {
         result = _executeTouchPosition(s, ctx, owner, poolKey, params, callerDelta, feesAccrued, hookData);
     }
 
-    /// @notice Runs `touchPosition` only (MM tail is finalized separately via `finalizeProcessPositionMM`).
+    /// @notice Runs `VTSPositionLib.touchPosition` (includes MM tail via `VTSPositionMMOpsLib` when applicable).
     function executeProcessPositionTouch(
         VTSStorage storage s,
         VTSCoreHookContext memory ctx,
@@ -774,34 +769,6 @@ library VTSLifecycleLinkedLib {
         bytes calldata hookData
     ) external returns (TouchPositionResult memory result) {
         result = _processPositionTouchValidated(s, ctx, owner, poolKey, params, callerDelta, feesAccrued, hookData);
-    }
-
-    function _finalizeProcessPositionMM(
-        VTSStorage storage s,
-        VTSCoreHookContext memory ctx,
-        PoolKey calldata poolKey,
-        TouchPositionParams memory tpParams,
-        TouchPositionResult memory result
-    ) private {
-        if (!result.isMMOperation) return;
-        PositionContext memory positionCtx = PositionContext({
-            poolManager: ctx.poolManager,
-            liquidityHub: ctx.liquidityHub,
-            oracleHelper: ctx.oracleHelper,
-            marketVault: _resolveVault(ctx, poolKey)
-        });
-        VTSPositionMMOpsLib.processMMOperations(s, positionCtx, tpParams, result);
-    }
-
-    /// @notice MM-specific processing after `touchPosition` when `result.isMMOperation` (see `VTSPositionMMOpsLib`).
-    function finalizeProcessPositionMM(
-        VTSStorage storage s,
-        VTSCoreHookContext memory ctx,
-        PoolKey calldata poolKey,
-        TouchPositionParams memory tpParams,
-        TouchPositionResult memory result
-    ) external {
-        _finalizeProcessPositionMM(s, ctx, poolKey, tpParams, result);
     }
 
     function processPosition(
@@ -817,15 +784,6 @@ library VTSLifecycleLinkedLib {
         TouchPositionResult memory result = _processPositionTouchValidated(
             s, ctx, owner, poolKey, params, callerDelta, feesAccrued, hookData
         );
-        TouchPositionParams memory tpParams = TouchPositionParams({
-            owner: owner,
-            poolKey: poolKey,
-            params: params,
-            callerDelta: callerDelta,
-            feesAccrued: feesAccrued,
-            hookData: hookData
-        });
-        _finalizeProcessPositionMM(s, ctx, poolKey, tpParams, result);
         pos = result.pos;
         id = result.id;
         feeAdj = result.feeAdj;

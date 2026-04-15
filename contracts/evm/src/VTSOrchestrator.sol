@@ -14,7 +14,6 @@ import {
     MarketVTSConfiguration,
     PositionAccounting,
     SettleResult,
-    TouchPositionParams,
     TouchPositionResult,
     VaultSettlementIntent,
     VTSLifecycleContext,
@@ -583,15 +582,6 @@ contract VTSOrchestrator is
         TouchPositionResult memory result = VTSLifecycleLinkedLib.executeProcessPositionTouch(
             s, ctx, owner, poolKey, params, callerDelta, feesAccrued, hookData
         );
-        TouchPositionParams memory tpParams = TouchPositionParams({
-            owner: owner,
-            poolKey: poolKey,
-            params: params,
-            callerDelta: callerDelta,
-            feesAccrued: feesAccrued,
-            hookData: hookData
-        });
-        VTSLifecycleLinkedLib.finalizeProcessPositionMM(s, ctx, poolKey, tpParams, result);
         pos = result.pos;
         id = result.id;
         feeAdj = result.feeAdj;

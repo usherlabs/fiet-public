@@ -37,6 +37,7 @@ import {LiquidityUtils} from "./LiquidityUtils.sol";
 import {Errors} from "./Errors.sol";
 import {VTSFeeLinkedLib} from "./VTSFeeLib.sol";
 import {VTSCommitLib} from "./VTSCommitLib.sol";
+import {VTSPositionMMOpsLib} from "./VTSPositionMMOpsLib.sol";
 import {IMarketVault} from "../interfaces/IMarketVault.sol";
 
 /// @title VTSPositionLib
@@ -1173,12 +1174,19 @@ library VTSPositionLib {
 
         result.feeAdj = VTSFeeLinkedLib.afterTouchPosition(s, result.id);
 
-        result.isMMOperation = hookData.isMMOperation;
-        result.mmCommitId = hookData.commitId;
-        result.mmIsSeizing = hookData.isSeizing;
-        result.mmRequiredSettlementDelta = requiredSettlementDelta;
-
         result.pos = posStorage;
+
+        if (hookData.isMMOperation) {
+            TouchPositionParams memory pCall = TouchPositionParams({
+                owner: p.owner,
+                poolKey: p.poolKey,
+                params: p.params,
+                callerDelta: p.callerDelta,
+                feesAccrued: p.feesAccrued,
+                hookData: p.hookData
+            });
+            VTSPositionMMOpsLib.processMMOperations(s, ctx, pCall, result, requiredSettlementDelta);
+        }
     }
 
     /// @notice Update active status based on liquidity transitions

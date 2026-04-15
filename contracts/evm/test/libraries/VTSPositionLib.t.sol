@@ -1002,7 +1002,7 @@ contract VTSPositionLibTest is VTSLibTestBase {
         ModifyLiquidityParams memory dec = ModifyLiquidityParams({
             tickLower: -60, tickUpper: 60, liquidityDelta: -int256(uint256(1)), salt: salt
         });
-        harness.touchPosition(
+        harness.touchPositionAndFinalizeMM(
             ctx,
             TouchPositionParams({
                 owner: DEFAULT_OWNER,
@@ -2234,7 +2234,7 @@ contract VTSPositionLibTest is VTSLibTestBase {
             hookData: _mkHookData(true, false, commitId) // MM, not seizing
         });
 
-        harness.touchPosition(ctx, tp);
+        harness.touchPositionAndFinalizeMM(ctx, tp);
 
         // Settled is reduced in `_processMMOperations` by routed amount (settleable + queued); immediate vault slice
         // is mirrored on underlying delta when the vault can supply it.
@@ -2290,7 +2290,7 @@ contract VTSPositionLibTest is VTSLibTestBase {
             hookData: _mkHookData(true, false, commitId)
         });
 
-        harness.touchPosition(ctx, tp);
+        harness.touchPositionAndFinalizeMM(ctx, tp);
 
         (,, uint256 settled0After,,,) = harness.getPositionAccounting(positionId);
         assertEq(
@@ -2345,7 +2345,7 @@ contract VTSPositionLibTest is VTSLibTestBase {
             hookData: _mkHookData(true, false, commitId)
         });
 
-        harness.touchPosition(ctx, tp);
+        harness.touchPositionAndFinalizeMM(ctx, tp);
 
         (,, uint256 settled0After,,,) = harness.getPositionAccounting(positionId);
         assertEq(
@@ -2497,7 +2497,7 @@ contract VTSPositionLibTest is VTSLibTestBase {
             hookData: _mkHookData(true, true, commitId)
         });
 
-        harness.touchPosition(ctx, tp);
+        harness.touchPositionAndFinalizeMM(ctx, tp);
         assertEq(hub.planCancelCalls(), 1, "seizing MM decrease should still plan exactly one cancellation");
     }
 
@@ -2556,7 +2556,7 @@ contract VTSPositionLibTest is VTSLibTestBase {
         });
 
         PositionContext memory ctx = _mkCtx();
-        harness.touchPosition(ctx, tp);
+        harness.touchPositionAndFinalizeMM(ctx, tp);
 
         RFSCheckpoint memory afterCp = harness.getRFSCheckpoint(positionId);
         // Poke recomputes `commitmentMax` from live liquidity; narrow two-sided ranges can open both RFS lanes.
@@ -2622,7 +2622,7 @@ contract VTSPositionLibTest is VTSLibTestBase {
         });
 
         PositionContext memory ctxMm = _mkCtx();
-        harness.touchPosition(ctxMm, tp);
+        harness.touchPositionAndFinalizeMM(ctxMm, tp);
 
         RFSCheckpoint memory afterCp = harness.getRFSCheckpoint(positionId);
         (, BalanceDelta rfsDeltaCd) = harness.calcRFS(ctxMm.poolManager, positionId, false);
