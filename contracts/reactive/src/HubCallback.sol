@@ -88,10 +88,13 @@ contract HubCallback is AbstractCallback, Ownable {
     }
 
     /// @notice Record a queue-annulment callback for a recipient.
-    function recordSettlementAnnulled(address spokeRVMId, address lcc, address recipient, uint256 amount, uint256 nonce)
-        external
-        authorizedSenderOnly
-    {
+    function recordSettlementAnnulled(
+        address spokeRVMId,
+        address lcc,
+        address recipient,
+        uint256 amount,
+        uint256 nonce
+    ) external authorizedSenderOnly {
         if (!_validateEventParameters(
                 spokeRVMId, lcc, recipient, amount, nonce, ReactiveConstants.RECORD_SETTLEMENT_ANNULLED_SELECTOR
             )) return;
