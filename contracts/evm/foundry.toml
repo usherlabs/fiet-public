@@ -64,10 +64,26 @@ libraries = []
 [profile.prod]
 # ! Production deployments will adopt the Profile in contracts/evm-scripts/foundry.toml
 # ! This profile is only used for production builds in local development, and testing.
-optimizer_runs = 25000
+optimizer_runs = 15000
 optimizer = true
 via_ir = true
 ffi = true
+
+
+additional_compiler_profiles = [
+  { name = "script_ir", via_ir = true },
+  { name = "e2e_non_ir", via_ir = false },
+  { name = "hot_linked", via_ir = true, optimizer_runs = 25000 },
+]
+compilation_restrictions = [
+  { paths = "src/VTSOrchestrator.sol", optimizer_runs = 25000 },
+  { paths = "src/libraries/VTSSwapLib.sol", optimizer_runs = 25000 },
+  { paths = "src/libraries/VTSPositionLib.sol", optimizer_runs = 25000 },
+  { paths = "src/libraries/VTSPositionMMOpsLib.sol", optimizer_runs = 25000 },
+  { paths = "src/libraries/VTSFeeLib.sol", optimizer_runs = 25000 },
+  { paths = "src/libraries/VTSLifecycleLinkedLib.sol", optimizer_runs = 25000 },
+]
+
 
 [rpc_endpoints]
 local = "${ANVIL_FORK_URL}"
