@@ -203,6 +203,14 @@ abstract contract MarketMakerTestBase is Test {
 
     // ============ COMMITMENT SETUP HELPERS ============
 
+    /// @dev Effective MMPM batch locker for MM liquidity ops: hook `locker` must match `mmState.advancer`
+    ///      (`VTSLifecycleLinkedLib.validateMMOperation`). Commit mints the NFT to `msgSender()` (same locker).
+    ///      VRL accepts `sender` as owner or advancer — pranking advancer satisfies both when advancer == owner
+    ///      (default in `_createMarketMakerState`).
+    function _mmBatchLockerFromSignal(bytes memory signalBytes) internal pure returns (address) {
+        return abi.decode(signalBytes, (LiquiditySignal)).mmState.advancer;
+    }
+
     /**
      * @notice Calculates the base settlement amounts required for a given liquidity position
      * @param liquidityParams The liquidity parameters for the position
@@ -286,7 +294,7 @@ abstract contract MarketMakerTestBase is Test {
         (requiredSettlementAmount0, requiredSettlementAmount1) =
             _calculateSettlementAmounts(liquidityParams, marketVTSConfiguration);
 
-        address locker = abi.decode(signalBytes, (LiquiditySignal)).mmState.owner;
+        address locker = _mmBatchLockerFromSignal(signalBytes);
 
         tokenId = _setupCommittedPositionAsLocker(
             positionManager,

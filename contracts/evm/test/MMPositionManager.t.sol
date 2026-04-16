@@ -40,6 +40,7 @@ import {Errors} from "../src/libraries/Errors.sol";
 import {Bounds} from "../src/libraries/Bounds.sol";
 import {ActionConstants} from "v4-periphery/src/libraries/ActionConstants.sol";
 import {MockCommitmentDescriptor} from "./_mocks/MockCommitmentDescriptor.sol";
+import {IAllowanceTransfer} from "permit2/src/interfaces/IAllowanceTransfer.sol";
 
 contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
     using SafeCast for *;
@@ -72,15 +73,17 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
         return cnt;
     }
 
-    function _mintUnderlyingForPositiveSettle(int128 settle0, int128 settle1) internal {
+    function _mintUnderlyingForPositiveSettle(address payer, int128 settle0, int128 settle1) internal {
         uint256 pay0 = LiquidityUtils.safeInt128ToUint256(settle0);
         uint256 pay1 = LiquidityUtils.safeInt128ToUint256(settle1);
         if (pay0 > 0) {
-            MockERC20(lcc0.underlying()).mint(address(this), pay0);
+            MockERC20(lcc0.underlying()).mint(payer, pay0);
+            vm.prank(payer);
             MockERC20(lcc0.underlying()).approve(address(positionManager), pay0);
         }
         if (pay1 > 0) {
-            MockERC20(lcc1.underlying()).mint(address(this), pay1);
+            MockERC20(lcc1.underlying()).mint(payer, pay1);
+            vm.prank(payer);
             MockERC20(lcc1.underlying()).approve(address(positionManager), pay1);
         }
     }
@@ -135,37 +138,92 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
         vm.mockCall(
             address(oracleHelper), abi.encodeWithSelector(IOracleHelper.getTotalValue.selector), abi.encode(1e18)
         );
+        {
+            string[] memory tickers = new string[](2);
+            tickers[0] = "BTC";
+            tickers[1] = "USDT";
+            uint256[] memory amounts = new uint256[](2);
+            amounts[0] = 1e20;
+            amounts[1] = 5e18;
+            vm.mockCall(
+                address(oracleHelper),
+                abi.encodeWithSelector(IOracleHelper.getTotalValue.selector, tickers, amounts),
+                abi.encode(1e18)
+            );
+        }
 
         // VTS / factory-bound routing: MM locker EOAs must be treated like the bound `MMPositionManager` endpoint.
         vm.mockCall(
             marketFactory,
-            abi.encodeWithSelector(IMarketFactory.bounds.selector, liquiditySignal.mmState.owner),
+            abi.encodeWithSelector(IMarketFactory.bounds.selector, liquiditySignal.mmState.advancer),
             abi.encode(true)
         );
         vm.mockCall(
             marketFactory,
-            abi.encodeWithSelector(IMarketFactory.bounds.selector, renewSignal.mmState.owner),
+            abi.encodeWithSelector(IMarketFactory.bounds.selector, renewSignal.mmState.advancer),
             abi.encode(true)
         );
+
+        _permitMMPMForAdvancer(liquiditySignal.mmState.advancer);
+        _permitMMPMForAdvancer(renewSignal.mmState.advancer);
+    }
+
+    function _permitMMPMForAdvancer(address adv) internal {
+        address u0 = lcc0.underlying();
+        address u1 = lcc1.underlying();
+        if (u0 != address(0)) deal(u0, adv, 1e40);
+        if (u1 != address(0)) deal(u1, adv, 1e40);
+        vm.deal(adv, 1e22);
+        vm.startPrank(adv);
+        IERC20(address(lcc0)).approve(address(permit2), type(uint256).max);
+        IERC20(address(lcc1)).approve(address(permit2), type(uint256).max);
+        if (u0 != address(0)) IERC20(u0).approve(address(permit2), type(uint256).max);
+        if (u1 != address(0)) IERC20(u1).approve(address(permit2), type(uint256).max);
+        IAllowanceTransfer(permit2)
+            .approve(address(lcc0), address(positionManager), type(uint160).max, type(uint48).max);
+        IAllowanceTransfer(permit2)
+            .approve(address(lcc1), address(positionManager), type(uint160).max, type(uint48).max);
+        if (u0 != address(0)) {
+            IAllowanceTransfer(permit2).approve(u0, address(positionManager), type(uint160).max, type(uint48).max);
+        }
+        if (u1 != address(0)) {
+            IAllowanceTransfer(permit2).approve(u1, address(positionManager), type(uint160).max, type(uint48).max);
+        }
+        vm.stopPrank();
     }
 
     function _executeWithUnlockLiquidity(MMA.PreparedAction[] memory prepared, uint256 deadline) internal {
-        vm.prank(liquiditySignal.mmState.owner);
+        vm.prank(liquiditySignal.mmState.advancer);
+        MMA.executeWithUnlock(positionManager, prepared, deadline);
+    }
+
+    function _executeWithUnlockAs(address who, MMA.PreparedAction[] memory prepared, uint256 deadline) internal {
+        vm.prank(who);
         MMA.executeWithUnlock(positionManager, prepared, deadline);
     }
 
     function _executeLiquidity(MMA.PreparedAction[] memory prepared) internal {
-        vm.prank(liquiditySignal.mmState.owner);
+        vm.prank(liquiditySignal.mmState.advancer);
         MMA.execute(positionManager, prepared);
     }
 
     function _executeLiquidityValue(MMA.PreparedAction[] memory prepared, uint256 value) internal {
-        vm.prank(liquiditySignal.mmState.owner);
+        vm.prank(liquiditySignal.mmState.advancer);
+        MMA.execute(positionManager, prepared, value);
+    }
+
+    function _executeLiquidityAs(address who, MMA.PreparedAction[] memory prepared) internal {
+        vm.prank(who);
+        MMA.execute(positionManager, prepared);
+    }
+
+    function _executeLiquidityValueAs(address who, MMA.PreparedAction[] memory prepared, uint256 value) internal {
+        vm.prank(who);
         MMA.execute(positionManager, prepared, value);
     }
 
     function _runRenewLiquidity(uint256 tokenId, bytes memory data) internal {
-        vm.prank(liquiditySignal.mmState.owner);
+        vm.prank(liquiditySignal.mmState.advancer);
         MMA.renew(positionManager, tokenId, data);
     }
 
@@ -184,7 +242,7 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
 
         assertEq(
             positionManager.ownerOf(expectedTokenId),
-            liquiditySignal.mmState.owner,
+            liquiditySignal.mmState.advancer,
             "commit should mint NFT to expected owner"
         );
     }
@@ -198,7 +256,7 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
             abi.encodeWithSelector(
                 bytes4(keccak256("commitSignal(address,address,bytes)")),
                 IMarketFactory(marketFactory),
-                liquiditySignal.mmState.owner,
+                liquiditySignal.mmState.advancer,
                 liquiditySignalBytes
             )
         );
@@ -209,7 +267,7 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
 
         assertEq(
             positionManager.ownerOf(expectedTokenId),
-            liquiditySignal.mmState.owner,
+            liquiditySignal.mmState.advancer,
             "commit should mint NFT to expected owner"
         );
     }
@@ -250,9 +308,9 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
         MMA.PreparedAction[] memory prepared = new MMA.PreparedAction[](1);
         prepared[0] = MMA.prepareCommit(liquiditySignalBytes);
         _executeWithUnlockLiquidity(prepared, block.timestamp + 3600);
-        assertEq(positionManager.ownerOf(tokenId), liquiditySignal.mmState.owner, "commit mints NFT to locker");
-        vm.prank(liquiditySignal.mmState.owner);
-        positionManager.transferFrom(liquiditySignal.mmState.owner, alice, tokenId);
+        assertEq(positionManager.ownerOf(tokenId), liquiditySignal.mmState.advancer, "commit mints NFT to locker");
+        vm.prank(liquiditySignal.mmState.advancer);
+        positionManager.transferFrom(liquiditySignal.mmState.advancer, alice, tokenId);
         assertEq(positionManager.ownerOf(tokenId), alice);
 
         // Bob is not approved/owner.
@@ -313,7 +371,7 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
             abi.encodeWithSelector(
                 bytes4(keccak256("renewSignal(address,address,uint256,bytes)")),
                 IMarketFactory(marketFactory),
-                liquiditySignal.mmState.owner,
+                liquiditySignal.mmState.advancer,
                 tokenId,
                 renewBytes
             )
@@ -403,10 +461,12 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
         // get the checkpoint of the position
         RFSCheckpoint memory checkpointBefore = vtsOrchestrator.positionToCheckpoint(positionId);
 
-        // extend the grace period of the open settlement lane
-        MMA.extendGracePeriod(
-            positionManager, corePoolKey, tokenId, positionIndex, settlementTokenIndex0, verifierIndex, settlementProof
+        // extend the grace period of the open settlement lane (batch must run as the MM locker)
+        MMA.PreparedAction[] memory extendPrepared = new MMA.PreparedAction[](1);
+        extendPrepared[0] = MMA.prepareExtendGracePeriod(
+            corePoolKey, tokenId, positionIndex, settlementTokenIndex0, verifierIndex, settlementProof
         );
+        _executeWithUnlockLiquidity(extendPrepared, block.timestamp + 3600);
 
         // validate the extension
         RFSCheckpoint memory checkpointAfter = vtsOrchestrator.positionToCheckpoint(positionId);
@@ -434,8 +494,8 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
             address(lcc0),
             address(lcc1)
         );
-        vm.prank(liquiditySignal.mmState.owner);
-        positionManager.transferFrom(liquiditySignal.mmState.owner, alice, tokenId);
+        vm.prank(liquiditySignal.mmState.advancer);
+        positionManager.transferFrom(liquiditySignal.mmState.advancer, alice, tokenId);
 
         // Make proof verification succeed (but it should not be reached for Bob).
         vm.mockCall(
@@ -616,8 +676,7 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
         prepared[0] = MMA.prepareUnwrapLcc(address(lcc0), 1, ActionConstants.ADDRESS_THIS, true);
         prepared[1] = MMA.prepareTake(underlyingCurrency, user, 0);
 
-        vm.prank(user);
-        _executeLiquidity(prepared);
+        _executeLiquidityAs(user, prepared);
 
         // Correct behaviour: no unwrap occurred, so no sync should happen, so TAKE should move nothing.
         assertEq(underlying.balanceOf(user), userBefore, "unwrapped==0 should not create takeable underlying credit");
@@ -652,8 +711,7 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
         prepared[0] = MMA.prepareUnwrapLcc(address(lcc0), amount, ActionConstants.ADDRESS_THIS, true);
         prepared[1] = MMA.prepareTake(underlyingCurrency, user, 0);
 
-        vm.prank(user);
-        _executeLiquidity(prepared);
+        _executeLiquidityAs(user, prepared);
 
         assertEq(
             underlying.balanceOf(user), userBefore + amount, "unwrapped > 0 should sync underlying credit for TAKE"
@@ -985,8 +1043,7 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
         prepared[1] = MMA.prepareTake(CurrencyLibrary.ADDRESS_ZERO, user, 1 ether);
 
         uint256 ethBefore = user.balance;
-        vm.prank(user);
-        _executeLiquidity(prepared);
+        _executeLiquidityAs(user, prepared);
         assertEq(user.balance - ethBefore, 1 ether, "only unwrapped amount should be credited");
     }
 
@@ -1051,8 +1108,7 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
         prepared[0] = MMA.prepareUnwrapNative(0, true); // amount=0 => unwrap all payer WETH
         prepared[1] = MMA.prepareTake(CurrencyLibrary.ADDRESS_ZERO, user, 0); // withdraw all credited ETH
 
-        vm.prank(user);
-        _executeLiquidity(prepared);
+        _executeLiquidityAs(user, prepared);
 
         assertEq(user.balance, ethBefore + 1 ether);
     }
@@ -1170,8 +1226,7 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
         uint256 userBefore = underlying.balanceOf(user);
         uint256 pmBefore = underlying.balanceOf(address(positionManager));
 
-        vm.prank(user);
-        _executeLiquidity(prepared);
+        _executeLiquidityAs(user, prepared);
 
         assertEq(underlying.balanceOf(user), userBefore, "no unwrap => no underlying credit should be created");
         assertEq(
@@ -1244,9 +1299,8 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
         prepared[0] = MMA.prepareSync(Currency.wrap(lccAddr));
         prepared[1] = MMA.prepareUnwrapLcc(lccAddr, amount, locker, false);
 
-        vm.prank(locker);
         vm.expectRevert(abi.encodeWithSelector(Errors.InvalidAmount.selector, amount, uint256(0)));
-        _executeLiquidity(prepared);
+        _executeLiquidityAs(locker, prepared);
 
         assertEq(ILiquidityHub(liquidityHub).settleQueue(lccAddr, locker), 0);
         assertEq(positionManager.queueCustodian().queued(0, lccAddr, locker), 0);
@@ -1284,12 +1338,10 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
         prepared[0] = MMA.prepareSync(Currency.wrap(lccAddr));
         prepared[1] = MMA.prepareUnwrapLcc(lccAddr, amount, locker, false);
 
-        vm.prank(locker);
-        _executeLiquidity(prepared);
+        _executeLiquidityAs(locker, prepared);
         assertEq(ILiquidityHub(liquidityHub).settleQueue(lccAddr, locker), amount);
 
-        vm.prank(locker);
-        _executeLiquidity(prepared);
+        _executeLiquidityAs(locker, prepared);
         assertEq(
             ILiquidityHub(liquidityHub).settleQueue(lccAddr, locker),
             amount,
@@ -1347,8 +1399,7 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
 
         uint256 recipientUnderlyingBefore = underlying.balanceOf(locker);
 
-        vm.prank(locker);
-        _executeLiquidity(prepared);
+        _executeLiquidityAs(locker, prepared);
 
         assertEq(underlying.balanceOf(locker) - recipientUnderlyingBefore, amount, "should unwrap via market liquidity");
         assertEq(ILiquidityHub(liquidityHub).settleQueue(lccAddr, locker), 0, "should not queue when liquidity is used");
@@ -1396,8 +1447,7 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
 
         uint256 recipientUnderlyingBefore = underlying.balanceOf(locker);
 
-        vm.prank(locker);
-        _executeLiquidity(prepared);
+        _executeLiquidityAs(locker, prepared);
 
         assertEq(
             underlying.balanceOf(locker) - recipientUnderlyingBefore, amount, "should unwrap entirely from directSupply"
@@ -1672,8 +1722,7 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
         unwrapBatch[0] = MMA.prepareSync(Currency.wrap(lccAddr));
         unwrapBatch[1] = MMA.prepareUnwrapLcc(lccAddr, amount, locker, false);
 
-        vm.prank(locker);
-        _executeLiquidity(unwrapBatch);
+        _executeLiquidityAs(locker, unwrapBatch);
 
         assertEq(ILiquidityHub(liquidityHub).settleQueue(lccAddr, locker), amount);
         assertEq(lcc0.balanceOf(address(positionManager)), 0);
@@ -1686,8 +1735,7 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
         uint256 beforeUnderlying = underlying.balanceOf(locker);
         MMA.PreparedAction[] memory prepared = new MMA.PreparedAction[](1);
         prepared[0] = MMA.prepareCollectAvailableLiquidity(lccAddr, 0, type(uint256).max);
-        vm.prank(locker);
-        _executeWithUnlockLiquidity(prepared, block.timestamp + 3600);
+        _executeWithUnlockAs(locker, prepared, block.timestamp + 3600);
 
         assertEq(ILiquidityHub(liquidityHub).settleQueue(lccAddr, locker), 0);
         assertEq(underlying.balanceOf(locker) - beforeUnderlying, amount);
@@ -1737,8 +1785,7 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
         MMA.PreparedAction[] memory steal = new MMA.PreparedAction[](2);
         steal[0] = MMA.prepareSync(Currency.wrap(lccAddr));
         steal[1] = MMA.prepareTake(Currency.wrap(lccAddr), attacker, 0);
-        vm.prank(attacker);
-        _executeLiquidity(steal);
+        _executeLiquidityAs(attacker, steal);
 
         assertEq(lcc0.balanceOf(attacker), attackerLccBefore, "attacker must not take victim custodied LCC");
     }
@@ -1769,9 +1816,8 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
         // - Seed MMPositionManager with MARKET-DERIVED LCC (so later it can transfer market-derived to `user`)
         // - Create a queued settlement entry for `user` (via planned cancel with full queue)
         uint256 amount = 250;
-        underlying.mint(address(liquidityHub), amount);
-        vm.prank(address(liquidityHub));
-        ILiquidityHub(liquidityHub).wrap(lccAddr, amount);
+        vm.prank(address(proxyHook));
+        ILiquidityHub(liquidityHub).issue(lccAddr, address(liquidityHub), amount);
 
         // Force unwrap to queue (no market liquidity available).
         vm.mockCall(
@@ -1811,8 +1857,7 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
 
         MMA.PreparedAction[] memory prepared = new MMA.PreparedAction[](1);
         prepared[0] = MMA.prepareCollectAvailableLiquidity(lccAddr, 0, type(uint256).max);
-        vm.prank(user);
-        _executeWithUnlockLiquidity(prepared, block.timestamp + 3600);
+        _executeWithUnlockAs(user, prepared, block.timestamp + 3600);
 
         assertEq(ILiquidityHub(liquidityHub).settleQueue(lccAddr, user), 0, "collect should clear sender's queue entry");
         assertEq(
@@ -1828,9 +1873,8 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
         uint256 tokenId = 17;
         uint256 amount = 250;
 
-        underlying.mint(address(liquidityHub), amount);
-        vm.prank(address(liquidityHub));
-        ILiquidityHub(liquidityHub).wrap(lccAddr, amount);
+        vm.prank(address(proxyHook));
+        ILiquidityHub(liquidityHub).issue(lccAddr, address(liquidityHub), amount);
 
         vm.mockCall(
             marketFactory, abi.encodeWithSelector(IMarketFactory.useMarketLiquidity.selector), abi.encode(uint256(0))
@@ -1851,8 +1895,7 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
 
         MMA.PreparedAction[] memory prepared = new MMA.PreparedAction[](1);
         prepared[0] = MMA.prepareCollectAvailableLiquidity(lccAddr, tokenId, type(uint256).max);
-        vm.prank(user);
-        _executeWithUnlockLiquidity(prepared, block.timestamp + 3600);
+        _executeWithUnlockAs(user, prepared, block.timestamp + 3600);
 
         assertEq(underlying.balanceOf(user), userUnderlyingBefore, "no reserve => no underlying transferred");
         assertEq(lcc0.balanceOf(user), userLccBefore, "no reserve => no LCC released to user");
@@ -1869,9 +1912,8 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
         uint256 amount = 250;
         uint256 available = 100;
 
-        underlying.mint(address(liquidityHub), amount);
-        vm.prank(address(liquidityHub));
-        ILiquidityHub(liquidityHub).wrap(lccAddr, amount);
+        vm.prank(address(proxyHook));
+        ILiquidityHub(liquidityHub).issue(lccAddr, address(liquidityHub), amount);
 
         vm.mockCall(
             marketFactory, abi.encodeWithSelector(IMarketFactory.useMarketLiquidity.selector), abi.encode(uint256(0))
@@ -1895,8 +1937,7 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
 
         MMA.PreparedAction[] memory prepared = new MMA.PreparedAction[](1);
         prepared[0] = MMA.prepareCollectAvailableLiquidity(lccAddr, tokenId, type(uint256).max);
-        vm.prank(user);
-        _executeWithUnlockLiquidity(prepared, block.timestamp + 3600);
+        _executeWithUnlockAs(user, prepared, block.timestamp + 3600);
 
         assertEq(underlying.balanceOf(user) - beforeUnderlying, available, "should settle only live reserve");
         assertEq(lcc0.balanceOf(user), 0, "released LCC should be fully burned for settled amount only");
@@ -1919,9 +1960,8 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
         uint256 tokenIdB = 22;
 
         // Seed MMPM with market-derived LCC and queue all settlement for `user`.
-        underlying.mint(address(liquidityHub), totalAmount);
-        vm.prank(address(liquidityHub));
-        ILiquidityHub(liquidityHub).wrap(lccAddr, totalAmount);
+        vm.prank(address(proxyHook));
+        ILiquidityHub(liquidityHub).issue(lccAddr, address(liquidityHub), totalAmount);
 
         vm.mockCall(
             marketFactory, abi.encodeWithSelector(IMarketFactory.useMarketLiquidity.selector), abi.encode(uint256(0))
@@ -1956,8 +1996,7 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
         {
             MMA.PreparedAction[] memory preparedA = new MMA.PreparedAction[](1);
             preparedA[0] = MMA.prepareCollectAvailableLiquidity(lccAddr, tokenIdA, type(uint256).max);
-            vm.prank(user);
-            _executeWithUnlockLiquidity(preparedA, block.timestamp + 3600);
+            _executeWithUnlockAs(user, preparedA, block.timestamp + 3600);
         }
 
         assertEq(underlying.balanceOf(user) - beforeUnderlying, amountCommitA);
@@ -1969,8 +2008,7 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
         {
             MMA.PreparedAction[] memory preparedB = new MMA.PreparedAction[](1);
             preparedB[0] = MMA.prepareCollectAvailableLiquidity(lccAddr, tokenIdB, type(uint256).max);
-            vm.prank(user);
-            _executeWithUnlockLiquidity(preparedB, block.timestamp + 3600);
+            _executeWithUnlockAs(user, preparedB, block.timestamp + 3600);
         }
 
         assertEq(underlying.balanceOf(user) - beforeUnderlying, totalAmount);
@@ -1988,9 +2026,8 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
         uint256 tokenId = 99;
         uint256 amount = 150;
 
-        underlying.mint(address(liquidityHub), amount);
-        vm.prank(address(liquidityHub));
-        ILiquidityHub(liquidityHub).wrap(lccAddr, amount);
+        vm.prank(address(proxyHook));
+        ILiquidityHub(liquidityHub).issue(lccAddr, address(liquidityHub), amount);
 
         vm.mockCall(
             marketFactory, abi.encodeWithSelector(IMarketFactory.useMarketLiquidity.selector), abi.encode(uint256(0))
@@ -2020,8 +2057,7 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
 
         MMA.PreparedAction[] memory prepared = new MMA.PreparedAction[](1);
         prepared[0] = MMA.prepareCollectAvailableLiquidity(lccAddr, tokenId, type(uint256).max);
-        vm.prank(user);
-        _executeWithUnlockLiquidity(prepared, block.timestamp + 3600);
+        _executeWithUnlockAs(user, prepared, block.timestamp + 3600);
 
         assertEq(
             ILiquidityHub(liquidityHub).settleQueue(lccAddr, user), amount, "user queue must be unchanged (no release)"
@@ -2068,7 +2104,7 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
             marketFactory, abi.encodeWithSelector(IMarketFactory.useMarketLiquidity.selector), abi.encode(uint256(0))
         );
 
-        address locker = liquiditySignal.mmState.owner;
+        address locker = liquiditySignal.mmState.advancer;
         uint256 q0Before = ILiquidityHub(liquidityHub).settleQueue(Currency.unwrap(corePoolKey.currency0), locker);
         uint256 q1Before = ILiquidityHub(liquidityHub).settleQueue(Currency.unwrap(corePoolKey.currency1), locker);
 
@@ -2161,7 +2197,7 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
 
         uint256 principalPerSide = 29_953_549;
         uint256 queuePerSide = 0;
-        address locker = liquiditySignal.mmState.owner;
+        address locker = liquiditySignal.mmState.advancer;
 
         vm.expectCall(
             liquidityHub,
@@ -2207,6 +2243,7 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
     ///      vault liquidity. Token0 therefore has no same-token principal available for queueing; its claim must
     ///      survive as an MMPositionManager underlying delta rather than being dropped.
     function test_priceShapedMMRemove_oneSidedPrincipal_preservesUnqueuedUnderlyingDelta() public {
+        address locker = liquiditySignal.mmState.advancer;
         PriceShapedScenario memory scenario = _setupPriceShapedScenario();
         (uint256 settled0BeforeDecrease, uint256 settled1BeforeDecrease) = _settleShapedPositionForFullRemove(scenario);
 
@@ -2222,31 +2259,31 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
             marketFactory, abi.encodeWithSelector(IMarketFactory.useMarketLiquidity.selector), abi.encode(uint256(0))
         );
 
-        uint256 lockerUnderlying0Before = MockERC20(lcc0.underlying()).balanceOf(address(this));
+        uint256 lockerUnderlying0Before = MockERC20(lcc0.underlying()).balanceOf(locker);
 
         MMA.PreparedAction[] memory actions = new MMA.PreparedAction[](4);
         actions[0] = MMA.prepareDecrease(corePoolKey, scenario.tokenId, scenario.positionIndex, 1e18);
         actions[1] = MMA.prepareSettle(
             corePoolKey, scenario.tokenId, scenario.positionIndex, SafeCast.toInt128(settled0BeforeDecrease), 0, false
         );
-        actions[2] = MMA.prepareTake(Currency.wrap(address(lcc0)), address(this), 0);
-        actions[3] = MMA.prepareTake(Currency.wrap(address(lcc1)), address(this), 0);
+        actions[2] = MMA.prepareTake(Currency.wrap(address(lcc0)), locker, 0);
+        actions[3] = MMA.prepareTake(Currency.wrap(address(lcc1)), locker, 0);
         _executeWithUnlockLiquidity(actions, block.timestamp + 3600);
 
         (uint256 settled0After, uint256 settled1After) = vtsOrchestrator.getPositionSettledAmounts(scenario.positionId);
 
         assertEq(
-            ILiquidityHub(liquidityHub).settleQueue(address(lcc0), address(this)),
+            ILiquidityHub(liquidityHub).settleQueue(address(lcc0), locker),
             0,
             "token0 queue should stay zero when the remove returns no token0 principal"
         );
         assertGt(
-            ILiquidityHub(liquidityHub).settleQueue(address(lcc1), address(this)),
+            ILiquidityHub(liquidityHub).settleQueue(address(lcc1), locker),
             0,
             "token1 shortfall should still queue against the one-sided returned principal"
         );
         assertEq(
-            MockERC20(lcc0.underlying()).balanceOf(address(this)) - lockerUnderlying0Before,
+            MockERC20(lcc0.underlying()).balanceOf(locker) - lockerUnderlying0Before,
             settled0BeforeDecrease,
             "token0 remainder should be recoverable via a follow-up settle instead of being lost"
         );
@@ -2258,6 +2295,7 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
     /// @dev Same price-shaped + starved-vault setup as `test_priceShapedMMRemove_oneSidedPrincipal_preservesUnqueuedUnderlyingDelta`,
     ///      but we omit the token0 settle that would drain live settled before decommit.
     function test_decommitSignal_revertsCommitNotDrained_whenInactiveSettledRemains() public {
+        address locker = liquiditySignal.mmState.advancer;
         PriceShapedScenario memory scenario = _setupPriceShapedScenario();
         (uint256 settled0BeforeDecrease, uint256 settled1BeforeDecrease) = _settleShapedPositionForFullRemove(scenario);
 
@@ -2275,8 +2313,8 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
 
         MMA.PreparedAction[] memory actions = new MMA.PreparedAction[](3);
         actions[0] = MMA.prepareDecrease(corePoolKey, scenario.tokenId, scenario.positionIndex, 1e18);
-        actions[1] = MMA.prepareTake(Currency.wrap(address(lcc0)), address(this), 0);
-        actions[2] = MMA.prepareTake(Currency.wrap(address(lcc1)), address(this), 0);
+        actions[1] = MMA.prepareTake(Currency.wrap(address(lcc0)), locker, 0);
+        actions[2] = MMA.prepareTake(Currency.wrap(address(lcc1)), locker, 0);
         _executeWithUnlockLiquidity(actions, block.timestamp + 3600);
 
         (uint256 s0, uint256 s1) = vtsOrchestrator.getPositionSettledAmounts(scenario.positionId);
@@ -2298,6 +2336,7 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
     }
 
     function _externalDecommitAfterDrainHappyPath() external {
+        address locker = liquiditySignal.mmState.advancer;
         PriceShapedScenario memory scenario = _setupPriceShapedScenario();
         (uint256 settled0BeforeDecrease, uint256 settled1BeforeDecrease) = _settleShapedPositionForFullRemove(scenario);
         uint256 scTokenId = scenario.tokenId;
@@ -2318,8 +2357,8 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
 
         MMA.PreparedAction[] memory actions = new MMA.PreparedAction[](3);
         actions[0] = MMA.prepareDecrease(corePoolKey, scTokenId, scPosIndex, 1e18);
-        actions[1] = MMA.prepareTake(Currency.wrap(address(lcc0)), address(this), 0);
-        actions[2] = MMA.prepareTake(Currency.wrap(address(lcc1)), address(this), 0);
+        actions[1] = MMA.prepareTake(Currency.wrap(address(lcc0)), locker, 0);
+        actions[2] = MMA.prepareTake(Currency.wrap(address(lcc1)), locker, 0);
         _executeWithUnlockLiquidity(actions, block.timestamp + 3600);
 
         (uint256 s0, uint256 s1) = vtsOrchestrator.getPositionSettledAmounts(scPosId);
@@ -2329,7 +2368,7 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
 
         int128 settle0 = SafeCast.toInt128(s0);
         int128 settle1 = SafeCast.toInt128(s1);
-        _mintUnderlyingForPositiveSettle(settle0, settle1);
+        _mintUnderlyingForPositiveSettle(liquiditySignal.mmState.advancer, settle0, settle1);
 
         MMA.PreparedAction[] memory drain = new MMA.PreparedAction[](1);
         drain[0] = MMA.prepareSettle(corePoolKey, scTokenId, scPosIndex, settle0, settle1, false);
@@ -2409,7 +2448,8 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
             (,, uint256 commitPositionCount,,) = positionManager.commitOf(tokenId);
             uint256 positionIndex = commitPositionCount - 1;
 
-            // Allow `recipient` (locker) to call decrease on this position.
+            // Allow `recipient` (locker) to call decrease on this position (only owner may approve).
+            vm.prank(liquiditySignal.mmState.advancer);
             positionManager.approve(recipient, tokenId);
 
             // Force MarketVault to report zero available liquidity so cancellation must queue.
@@ -2440,8 +2480,7 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
                 false
             );
 
-            vm.prank(recipient);
-            _executeWithUnlockLiquidity(setup, block.timestamp + 3600);
+            _executeWithUnlockAs(recipient, setup, block.timestamp + 3600);
         }
 
         assertEq(
@@ -2471,8 +2510,7 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
             MMA.PreparedAction[] memory prepared = new MMA.PreparedAction[](1);
             prepared[0] = MMA.prepareCollectAvailableLiquidity(lcc0Addr, _scratchTokenId, type(uint256).max);
 
-            vm.prank(recipient);
-            _executeLiquidity(prepared);
+            _executeWithUnlockAs(recipient, prepared, block.timestamp + 3600);
         }
 
         uint256 lcc1BalanceAfter = Currency.wrap(address(lcc1)).balanceOfSelf();
@@ -2538,7 +2576,8 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
 
             recipientLcc0Before = IERC20(lcc0Addr).balanceOf(recipient);
 
-            // Allow `recipient` (locker) to call decrease on this position.
+            // Allow `recipient` (locker) to call decrease on this position (only owner may approve).
+            vm.prank(liquiditySignal.mmState.advancer);
             positionManager.approve(recipient, p.tokenId);
 
             // Phase 1 (protocol prep, within unlock):
@@ -2586,8 +2625,7 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
             MMA.PreparedAction[] memory prepared = new MMA.PreparedAction[](1);
             prepared[0] = MMA.prepareCollectAvailableLiquidity(lcc0Addr, _scratchTokenId, type(uint256).max);
 
-            vm.prank(recipient);
-            _executeLiquidity(prepared);
+            _executeWithUnlockAs(recipient, prepared, block.timestamp + 3600);
         }
 
         uint256 lcc1BalanceAfter;
@@ -2633,7 +2671,7 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
 
         vm.expectRevert(Errors.PoolManagerMustBeLocked.selector);
         caller.transferFromWhileUnlocked(
-            manager, positionManager, liquiditySignal.mmState.owner, makeAddr("to"), tokenId
+            manager, positionManager, liquiditySignal.mmState.advancer, makeAddr("to"), tokenId
         );
     }
 
@@ -2646,8 +2684,8 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
         _executeWithUnlockLiquidity(prepared, block.timestamp + 3600);
 
         address to = makeAddr("to");
-        vm.prank(liquiditySignal.mmState.owner);
-        positionManager.transferFrom(liquiditySignal.mmState.owner, to, tokenId);
+        vm.prank(liquiditySignal.mmState.advancer);
+        positionManager.transferFrom(liquiditySignal.mmState.advancer, to, tokenId);
         assertEq(
             positionManager.ownerOf(tokenId), to, "transferFrom should transfer ownership when PoolManager is locked"
         );
@@ -2687,18 +2725,18 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
         // Fee-only take: if fees accrued, this transfers only the fee portion (not the queued principal).
         setup[2] = MMA.prepareTake(p.lcc0Currency, p.recipient, 0);
 
-        vm.startPrank(p.recipient);
         // Fund exactly what we’re going to deposit for settlement (avoids underflow + avoids over-settling into a later withdrawal/queue).
         if (pay0 > 0) {
             MockERC20(lcc0.underlying()).mint(p.recipient, pay0);
+            vm.prank(p.recipient);
             MockERC20(lcc0.underlying()).approve(address(positionManager), pay0);
         }
         if (pay1 > 0) {
             MockERC20(lcc1.underlying()).mint(p.recipient, pay1);
+            vm.prank(p.recipient);
             MockERC20(lcc1.underlying()).approve(address(positionManager), pay1);
         }
-        _executeWithUnlockLiquidity(setup, block.timestamp + 3600);
-        vm.stopPrank();
+        _executeWithUnlockAs(p.recipient, setup, block.timestamp + 3600);
 
         (uint256 settled0, uint256 settled1Out) = vtsOrchestrator.getPositionSettledAmounts(positionId);
         assertEq(settled0, 0, "full queued shortfall should leave no live settled token0");
@@ -2750,14 +2788,17 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
             ? -rfsDelta.amount1() - SafeCast.toInt128(scenario.requiredSettlementAmount1)
             : int128(0);
 
+        address locker = liquiditySignal.mmState.advancer;
         uint256 pay0 = LiquidityUtils.safeInt128ToUint256(settle0);
         uint256 pay1 = LiquidityUtils.safeInt128ToUint256(settle1);
         if (pay0 > 0) {
-            MockERC20(lcc0.underlying()).mint(address(this), pay0);
+            MockERC20(lcc0.underlying()).mint(locker, pay0);
+            vm.prank(locker);
             MockERC20(lcc0.underlying()).approve(address(positionManager), pay0);
         }
         if (pay1 > 0) {
-            MockERC20(lcc1.underlying()).mint(address(this), pay1);
+            MockERC20(lcc1.underlying()).mint(locker, pay1);
+            vm.prank(locker);
             MockERC20(lcc1.underlying()).approve(address(positionManager), pay1);
         }
 
@@ -2816,6 +2857,7 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
 
     /// @notice End-to-end: `DECREASE_LIQUIDITY` with impossible min-out reverts (Uniswap v4-style `SlippageCheck`).
     function test_mmDecrease_revertsWhenPrincipalMinOutUnreachable() public {
+        address locker = liquiditySignal.mmState.advancer;
         (uint256 tokenId,,,) = _setupCommittedPosition(
             positionManager,
             corePoolKey,
@@ -2829,10 +2871,12 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
         uint256 positionIndex = positionCount - 1;
 
         uint256 settlementAmount = 1_000_000e18;
-        MockERC20(lcc0.underlying()).mint(address(this), settlementAmount);
-        MockERC20(lcc1.underlying()).mint(address(this), settlementAmount);
+        MockERC20(lcc0.underlying()).mint(locker, settlementAmount);
+        MockERC20(lcc1.underlying()).mint(locker, settlementAmount);
+        vm.startPrank(locker);
         MockERC20(lcc0.underlying()).approve(address(positionManager), settlementAmount);
         MockERC20(lcc1.underlying()).approve(address(positionManager), settlementAmount);
+        vm.stopPrank();
 
         MMA.PreparedAction[] memory settleOnly = new MMA.PreparedAction[](1);
         settleOnly[0] = MMA.prepareSettle(
@@ -2854,6 +2898,7 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
 
     /// @notice End-to-end: same path as `test_mmDecrease_revertsWhenPrincipalMinOutUnreachable` but with loose min-out (Uni-like floor).
     function test_mmDecrease_succeedsWithLoosePrincipalMinOut() public {
+        address locker = liquiditySignal.mmState.advancer;
         (uint256 tokenId,,,) = _setupCommittedPosition(
             positionManager,
             corePoolKey,
@@ -2867,10 +2912,12 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
         uint256 positionIndex = positionCount - 1;
 
         uint256 settlementAmount = 1_000_000e18;
-        MockERC20(lcc0.underlying()).mint(address(this), settlementAmount);
-        MockERC20(lcc1.underlying()).mint(address(this), settlementAmount);
+        MockERC20(lcc0.underlying()).mint(locker, settlementAmount);
+        MockERC20(lcc1.underlying()).mint(locker, settlementAmount);
+        vm.startPrank(locker);
         MockERC20(lcc0.underlying()).approve(address(positionManager), settlementAmount);
         MockERC20(lcc1.underlying()).approve(address(positionManager), settlementAmount);
+        vm.stopPrank();
 
         MMA.PreparedAction[] memory settleOnly = new MMA.PreparedAction[](1);
         settleOnly[0] = MMA.prepareSettle(

@@ -165,20 +165,22 @@ contract VTSFeeLibScenarioTest is VTSOrchestratorFixture {
         (uint256 requiredSettlementAmount0, uint256 requiredSettlementAmount1) =
             _requiredSettlementAmountsForMMModify(tickLower, tickUpper, liquidity, marketVTSConfiguration);
 
-        // Mint underlying tokens and approve via Permit2 for settlement
-        _mintAndApproveUnderlyingForSettlement(requiredSettlementAmount0, requiredSettlementAmount1);
+        address locker = positionManager.ownerOf(tokenId);
+        _mintAndApproveUnderlyingForSettlementTo(locker, requiredSettlementAmount0, requiredSettlementAmount1);
 
         MMA.PreparedAction[] memory actions = new MMA.PreparedAction[](2);
         actions[0] = MMA.prepareMint(corePoolKey, tokenId, tickLower, tickUpper, liquidity);
         actions[1] = MMA.prepareSettle(
             corePoolKey,
             tokenId,
-            positionIndex,
+            countBefore,
             -SafeCast.toInt128(requiredSettlementAmount0),
             -SafeCast.toInt128(requiredSettlementAmount1),
             false
         );
+        vm.startPrank(locker);
         MMA.executeWithUnlock(positionManager, actions, block.timestamp + 3600);
+        vm.stopPrank();
 
         positionIndex = countBefore;
         positionId = vtsOrchestrator.getPositionId(tokenId, positionIndex);
@@ -283,7 +285,8 @@ contract VTSFeeLibScenarioTest is VTSOrchestratorFixture {
 
         int128 settle0 = -SafeCast.toInt128(requiredSettlementAmount0);
         int128 settle1 = -SafeCast.toInt128(requiredSettlementAmount1);
-        _permitSettle(settle0, settle1);
+        address lockerInactive = positionManager.ownerOf(beneficiaryTokenId);
+        _permitSettleFor(lockerInactive, settle0, settle1);
 
         {
             MMA.PreparedAction[] memory actions = new MMA.PreparedAction[](6);
@@ -293,7 +296,9 @@ contract VTSFeeLibScenarioTest is VTSOrchestratorFixture {
             actions[3] = MMA.prepareSettleFromDeltas(corePoolKey, beneficiaryTokenId, 0, true, true); // take underlying back to user wallet.
             actions[4] = MMA.prepareTake(lccCurrency0, address(this), 0);
             actions[5] = MMA.prepareTake(lccCurrency1, address(this), 0);
+            vm.startPrank(lockerInactive);
             MMA.executeWithUnlock(positionManager, actions, block.timestamp + 3600);
+            vm.stopPrank();
         }
 
         assertEq(vtsOrchestrator.isPositionValid(beneficiaryPosId, true), false, "MM should end inactive after claim");
@@ -302,6 +307,18 @@ contract VTSFeeLibScenarioTest is VTSOrchestratorFixture {
 
         bal0After = _selfLccBalance(lccCurrency0);
         bal1After = _selfLccBalance(lccCurrency1);
+    }
+
+    /// @dev Stack-safe: decrease + settleFromDeltas + TAKE both LCC to this contract as the batch locker.
+    function _mmDecreaseSettleTakeToSelf(uint256 tokenId, uint256 mmLiquidity) internal {
+        MMA.PreparedAction[] memory actions = new MMA.PreparedAction[](4);
+        actions[0] = MMA.prepareDecrease(corePoolKey, tokenId, 0, mmLiquidity);
+        actions[1] = MMA.prepareSettleFromDeltas(corePoolKey, tokenId, 0, true, true);
+        actions[2] = MMA.prepareTake(lccCurrency0, address(this), 0);
+        actions[3] = MMA.prepareTake(lccCurrency1, address(this), 0);
+        vm.startPrank(positionManager.ownerOf(tokenId));
+        MMA.executeWithUnlock(positionManager, actions, block.timestamp + 3600);
+        vm.stopPrank();
     }
 
     // ============================================================
@@ -1449,14 +1466,7 @@ contract VTSFeeLibScenarioTest is VTSOrchestratorFixture {
             );
 
             // 4) Fully remove MM liquidity => position becomes inactive (0-liquidity), bonus remains queued (pot still empty)
-            {
-                MMA.PreparedAction[] memory actions = new MMA.PreparedAction[](4);
-                actions[0] = MMA.prepareDecrease(corePoolKey, beneficiaryTokenId, 0, mmLiquidity);
-                actions[1] = MMA.prepareSettleFromDeltas(corePoolKey, beneficiaryTokenId, 0, true, true);
-                actions[2] = MMA.prepareTake(lccCurrency0, address(this), 0);
-                actions[3] = MMA.prepareTake(lccCurrency1, address(this), 0);
-                MMA.executeWithUnlock(positionManager, actions, block.timestamp + 3600);
-            }
+            _mmDecreaseSettleTakeToSelf(beneficiaryTokenId, mmLiquidity);
 
             assertEq(
                 vtsOrchestrator.isPositionValid(beneficiaryPosId, true), false, "MM position should now be inactive"

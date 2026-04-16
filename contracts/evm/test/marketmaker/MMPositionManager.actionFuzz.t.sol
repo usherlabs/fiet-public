@@ -10,6 +10,8 @@ import {TransientStateLibrary} from "v4-periphery/lib/v4-core/src/libraries/Tran
 
 import {MarketTestBase} from "../base/MarketTestBase.sol";
 import {MarketMakerTestBase} from "../base/MMTestBase.sol";
+import {IMarketFactory} from "../../src/interfaces/IMarketFactory.sol";
+import {IAllowanceTransfer} from "permit2/src/interfaces/IAllowanceTransfer.sol";
 import {MMPositionManager} from "../../src/MMPositionManager.sol";
 import {MMActionAdapter as MMA} from "../utils/MMActionAdapter.sol";
 import {LiquidityCommitmentCertificate} from "../../src/LCC.sol";
@@ -78,6 +80,17 @@ contract MMPositionManagerActionFuzzTest is MarketTestBase, MarketMakerTestBase 
         _mintAndWrapLccToSelf(address(lcc1), 1_000e18);
         IERC20(address(lcc0)).approve(address(mmpm), type(uint256).max);
         IERC20(address(lcc1)).approve(address(mmpm), type(uint256).max);
+
+        vm.mockCall(
+            marketFactory,
+            abi.encodeWithSelector(IMarketFactory.bounds.selector, liquiditySignal.mmState.advancer),
+            abi.encode(true)
+        );
+        vm.mockCall(
+            marketFactory,
+            abi.encodeWithSelector(IMarketFactory.bounds.selector, renewSignal.mmState.advancer),
+            abi.encode(true)
+        );
     }
 
     // ============================================================
@@ -247,6 +260,13 @@ contract MMPositionManagerActionFuzzTest is MarketTestBase, MarketMakerTestBase 
         address underlying1 = lcc1.underlying();
         require(underlying0 != address(0) && underlying1 != address(0), "requires ERC20 underlyings");
 
+        address locker0 = liquiditySignal.mmState.advancer;
+        address locker1 = renewSignal.mmState.advancer;
+
+        deal(underlying0, locker0, 1e30);
+        deal(underlying1, locker0, 1e30);
+        _permitMMPMForLocker(locker0);
+
         // Commit 1: two positions, then create protocol credits by burning.
         uint256 tokenId1;
         {
@@ -261,6 +281,9 @@ contract MMPositionManagerActionFuzzTest is MarketTestBase, MarketMakerTestBase 
             );
 
             // Mint a 2nd position under the same commit (idx=1).
+            deal(underlying0, locker0, 1e30);
+            deal(underlying1, locker0, 1e30);
+            vm.startPrank(locker0);
             {
                 (uint256 req0, uint256 req1) = _calculateSettlementAmounts(
                     ModifyLiquidityParams({tickLower: -60, tickUpper: 60, liquidityDelta: 1e10, salt: bytes32(0)}),
@@ -274,43 +297,49 @@ contract MMPositionManagerActionFuzzTest is MarketTestBase, MarketMakerTestBase 
                     MMA.prepareSettle(corePoolKey, tokenId1, 1, -int128(int256(req0)), -int128(int256(req1)), false);
                 MMA.executeWithUnlock(mmpm, actions, block.timestamp + 3600);
             }
+            vm.stopPrank();
         }
 
         // (A) payerIsUser=true, shouldTake=false  => net protocol credits into a position via onMMSettle (no token movement)
         // Create protocol credits by burning position 0, then deposit them into position 1.
+        vm.startPrank(locker0);
         {
             MMA.PreparedAction[] memory actions = new MMA.PreparedAction[](6);
             actions[0] = MMA.prepareBurn(corePoolKey, tokenId1, 0);
             actions[1] = MMA.prepareSettleFromDeltas(corePoolKey, tokenId1, 1, true, false);
             // Any fee accrual / LCC credit created by the burn+settle path must be taken to avoid CurrencyNotSettled.
-            actions[2] = MMA.prepareTake(Currency.wrap(address(lcc0)), address(this), 0);
-            actions[3] = MMA.prepareTake(Currency.wrap(address(lcc1)), address(this), 0);
+            actions[2] = MMA.prepareTake(Currency.wrap(address(lcc0)), locker0, 0);
+            actions[3] = MMA.prepareTake(Currency.wrap(address(lcc1)), locker0, 0);
             // If underlying credits were created on the locker, take them too (no-op if none).
-            actions[4] = MMA.prepareTake(Currency.wrap(underlying0), address(this), 0);
-            actions[5] = MMA.prepareTake(Currency.wrap(underlying1), address(this), 0);
+            actions[4] = MMA.prepareTake(Currency.wrap(underlying0), locker0, 0);
+            actions[5] = MMA.prepareTake(Currency.wrap(underlying1), locker0, 0);
             _expectOkOrCurrencyNotSettled(actions, 0);
         }
+        vm.stopPrank();
 
         // (B) payerIsUser=true, shouldTake=true => withdraw protocol credits to locker via _settle (no sync)
         // Burn position 1 to recreate credits, then withdraw them.
+        vm.startPrank(locker0);
         {
             MMA.PreparedAction[] memory actions = new MMA.PreparedAction[](6);
             actions[0] = MMA.prepareBurn(corePoolKey, tokenId1, 1);
             actions[1] = MMA.prepareSettleFromDeltas(corePoolKey, tokenId1, 1, true, true);
-            actions[2] = MMA.prepareTake(Currency.wrap(address(lcc0)), address(this), 0);
-            actions[3] = MMA.prepareTake(Currency.wrap(address(lcc1)), address(this), 0);
-            actions[4] = MMA.prepareTake(Currency.wrap(underlying0), address(this), 0);
-            actions[5] = MMA.prepareTake(Currency.wrap(underlying1), address(this), 0);
+            actions[2] = MMA.prepareTake(Currency.wrap(address(lcc0)), locker0, 0);
+            actions[3] = MMA.prepareTake(Currency.wrap(address(lcc1)), locker0, 0);
+            actions[4] = MMA.prepareTake(Currency.wrap(underlying0), locker0, 0);
+            actions[5] = MMA.prepareTake(Currency.wrap(underlying1), locker0, 0);
             _expectOkOrCurrencyNotSettled(actions, 0);
         }
+        vm.stopPrank();
 
         // (C) payerIsUser=false, shouldTake=false => settle from MMPM balance using locker credit
         // Transfer underlying to MMPM, sync as credit to locker, then deposit into position.
+        vm.startPrank(locker0);
         {
             uint256 amt0 = 123;
             uint256 amt1 = 456;
-            _mintErc20To(underlying0, address(this), amt0);
-            _mintErc20To(underlying1, address(this), amt1);
+            _mintErc20To(underlying0, locker0, amt0);
+            _mintErc20To(underlying1, locker0, amt1);
             IERC20(underlying0).transfer(address(mmpm), amt0);
             IERC20(underlying1).transfer(address(mmpm), amt1);
 
@@ -319,12 +348,13 @@ contract MMPositionManagerActionFuzzTest is MarketTestBase, MarketMakerTestBase 
             actions[1] = MMA.prepareSync(Currency.wrap(underlying1));
             actions[2] = MMA.prepareSettleFromDeltas(corePoolKey, tokenId1, 0, false, false);
             // Drain any credits produced by the settle path (fees / dust).
-            actions[3] = MMA.prepareTake(Currency.wrap(address(lcc0)), address(this), 0);
-            actions[4] = MMA.prepareTake(Currency.wrap(address(lcc1)), address(this), 0);
-            actions[5] = MMA.prepareTake(Currency.wrap(underlying0), address(this), 0);
-            actions[6] = MMA.prepareTake(Currency.wrap(underlying1), address(this), 0);
+            actions[3] = MMA.prepareTake(Currency.wrap(address(lcc0)), locker0, 0);
+            actions[4] = MMA.prepareTake(Currency.wrap(address(lcc1)), locker0, 0);
+            actions[5] = MMA.prepareTake(Currency.wrap(underlying0), locker0, 0);
+            actions[6] = MMA.prepareTake(Currency.wrap(underlying1), locker0, 0);
             _expectOkOrCurrencyNotSettled(actions, 0);
         }
+        vm.stopPrank();
 
         // (D) payerIsUser=false, shouldTake=true => withdraw to MMPM and sync credits to locker, then TAKE to close deltas
         // Use a fresh commit to guarantee protocol credits exist after burn.
@@ -344,6 +374,11 @@ contract MMPositionManagerActionFuzzTest is MarketTestBase, MarketMakerTestBase 
             uint256 bal0Before = IERC20(underlying0).balanceOf(recipient);
             uint256 bal1Before = IERC20(underlying1).balanceOf(recipient);
 
+            deal(underlying0, locker1, 1e30);
+            deal(underlying1, locker1, 1e30);
+            _permitMMPMForLocker(locker1);
+
+            vm.startPrank(locker1);
             MMA.PreparedAction[] memory actions = new MMA.PreparedAction[](6);
             actions[0] = MMA.prepareBurn(corePoolKey, tokenId2, 0);
             actions[1] = MMA.prepareSettleFromDeltas(corePoolKey, tokenId2, 0, false, true);
@@ -352,6 +387,7 @@ contract MMPositionManagerActionFuzzTest is MarketTestBase, MarketMakerTestBase 
             actions[4] = MMA.prepareTake(Currency.wrap(address(lcc0)), recipient, 0);
             actions[5] = MMA.prepareTake(Currency.wrap(address(lcc1)), recipient, 0);
             _expectOkOrCurrencyNotSettled(actions, 0);
+            vm.stopPrank();
 
             assertGe(IERC20(underlying0).balanceOf(recipient), bal0Before);
             assertGe(IERC20(underlying1).balanceOf(recipient), bal1Before);
@@ -385,9 +421,9 @@ contract MMPositionManagerActionFuzzTest is MarketTestBase, MarketMakerTestBase 
         bytes[] memory params = new bytes[](1);
         params[0] = sig;
 
-        // Need positionId for exact revert encoding.
+        // Hardened checkpoint ordering: self-seize hits `RFSNotOpenForPosition` before `InvalidPosition`.
         PositionId posId = vtsOrchestrator.getPositionId(tokenId, 0);
-        vm.expectRevert(abi.encodeWithSelector(Errors.InvalidPosition.selector, tokenId, 0, posId));
+        vm.expectRevert(abi.encodeWithSelector(Errors.RFSNotOpenForPosition.selector, posId));
         mmpm.modifyLiquidities(abi.encode(actions, params), block.timestamp + 3600);
     }
 
@@ -407,8 +443,11 @@ contract MMPositionManagerActionFuzzTest is MarketTestBase, MarketMakerTestBase 
         MMA.PreparedAction[] memory actions = new MMA.PreparedAction[](1);
         actions[0] = MMA.prepareIncrease(corePoolKey, tokenId, 0, tooLarge);
 
+        address locker = liquiditySignal.mmState.advancer;
+        vm.startPrank(locker);
         vm.expectRevert(abi.encodeWithSelector(Errors.InvalidAmount.selector, tooLarge, type(uint128).max));
         MMA.executeWithUnlock(mmpm, actions, block.timestamp + 3600);
+        vm.stopPrank();
     }
 
     /// @notice Decrease should revert when amountToDecrease > current position liquidity.
@@ -427,13 +466,31 @@ contract MMPositionManagerActionFuzzTest is MarketTestBase, MarketMakerTestBase 
         MMA.PreparedAction[] memory actions = new MMA.PreparedAction[](1);
         actions[0] = MMA.prepareDecrease(corePoolKey, tokenId, 0, tooMuch);
         // Exact max in error is position.liquidity (1e10 in this fixture).
+        address locker = liquiditySignal.mmState.advancer;
+        vm.startPrank(locker);
         vm.expectRevert(abi.encodeWithSelector(Errors.InvalidAmount.selector, tooMuch, uint256(1e10)));
         MMA.executeWithUnlock(mmpm, actions, block.timestamp + 3600);
+        vm.stopPrank();
     }
 
     // ============================================================
     // Helpers
     // ============================================================
+
+    function _permitMMPMForLocker(address locker) internal {
+        address u0 = lcc0.underlying();
+        address u1 = lcc1.underlying();
+        vm.startPrank(locker);
+        IERC20(address(lcc0)).approve(address(permit2), type(uint256).max);
+        IERC20(address(lcc1)).approve(address(permit2), type(uint256).max);
+        IERC20(u0).approve(address(permit2), type(uint256).max);
+        IERC20(u1).approve(address(permit2), type(uint256).max);
+        IAllowanceTransfer(permit2).approve(address(lcc0), address(mmpm), type(uint160).max, type(uint48).max);
+        IAllowanceTransfer(permit2).approve(address(lcc1), address(mmpm), type(uint160).max, type(uint48).max);
+        IAllowanceTransfer(permit2).approve(u0, address(mmpm), type(uint160).max, type(uint48).max);
+        IAllowanceTransfer(permit2).approve(u1, address(mmpm), type(uint160).max, type(uint48).max);
+        vm.stopPrank();
+    }
 
     function _tryExecute(MMA.PreparedAction[] memory batch, uint256 value) internal returns (bool) {
         (bytes memory actionsBytes, bytes[] memory params) = MMA.concatPrepared(batch);
