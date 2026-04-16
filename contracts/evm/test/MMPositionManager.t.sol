@@ -118,7 +118,7 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
     function setUp() public {
         _setupMarket();
         _setUpMM();
-        // Commit / renew require `msgSender()` at MMPM to match `mmState.owner` or `mmState.advancer` (tests prank the MM EOA).
+        // Fresh direct commit requires `msgSender() == mmState.owner`; renew requires `msgSender() == mmState.advancer`.
 
         console.log("setUP() mmPositionManager", address(mmPositionManager));
 
@@ -247,17 +247,14 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
         );
     }
 
-    function test_commitSignal_forwardsFactoryAndLockerToVtsOrchestrator() public {
+    function test_commitSignal_forwardsFactoryAndSignalToVtsOrchestrator() public {
         bytes memory liquiditySignalBytes = abi.encode(liquiditySignal);
         uint256 expectedTokenId = positionManager.nextTokenId();
 
         vm.expectCall(
             address(vtsOrchestrator),
             abi.encodeWithSelector(
-                bytes4(keccak256("commitSignal(address,address,bytes)")),
-                IMarketFactory(marketFactory),
-                liquiditySignal.mmState.advancer,
-                liquiditySignalBytes
+                bytes4(keccak256("commitSignal(address,bytes)")), IMarketFactory(marketFactory), liquiditySignalBytes
             )
         );
 
@@ -270,6 +267,20 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
             liquiditySignal.mmState.advancer,
             "commit should mint NFT to expected owner"
         );
+    }
+
+    /// @notice Direct fresh commit reverts when the batch locker is not `mmState.owner`.
+    function test_commitSignal_reverts_whenLockerNotOwner() public {
+        LiquiditySignal memory sig = liquiditySignal;
+        sig.mmState.owner = makeAddr("differentOwner");
+        bytes memory liquiditySignalBytes = abi.encode(sig);
+
+        MMA.PreparedAction[] memory prepared = new MMA.PreparedAction[](1);
+        prepared[0] = MMA.prepareCommit(liquiditySignalBytes);
+
+        vm.expectRevert(Errors.InvalidSender.selector);
+        vm.prank(liquiditySignal.mmState.advancer);
+        MMA.executeWithUnlock(positionManager, prepared, block.timestamp + 3600);
     }
 
     /// @notice Mutation-killer: proves DECOMMIT_SIGNAL emits `SignalDecommitted(tokenId, positionCount)` and burns the NFT.
@@ -354,7 +365,7 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
         assertEq(expiresAtAfter, newTimestamp + 5_000, "renewal should set expiresAt from the renewed leaf expiryAt");
     }
 
-    function test_renewSignal_forwardsFactoryAndLockerToVtsOrchestrator() public {
+    function test_renewSignal_forwardsFactoryTokenIdAndSignalToVtsOrchestrator() public {
         bytes memory liquiditySignalBytes = abi.encode(liquiditySignal);
         uint256 tokenId = positionManager.nextTokenId();
 
@@ -369,9 +380,8 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
         vm.expectCall(
             address(vtsOrchestrator),
             abi.encodeWithSelector(
-                bytes4(keccak256("renewSignal(address,address,uint256,bytes)")),
+                bytes4(keccak256("renewSignal(address,uint256,bytes)")),
                 IMarketFactory(marketFactory),
-                liquiditySignal.mmState.advancer,
                 tokenId,
                 renewBytes
             )

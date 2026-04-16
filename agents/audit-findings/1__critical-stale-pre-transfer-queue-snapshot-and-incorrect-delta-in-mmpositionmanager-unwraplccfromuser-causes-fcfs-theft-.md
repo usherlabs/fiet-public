@@ -1,0 +1,692 @@
+[Critical] Stale pre-transfer queue snapshot and incorrect delta in MMPositionManager._unwrapLccFromUser causes FCFS theft of queued shortfall
+
+# Description
+
+[MMPositionManager._unwrapLccFromUser](https://github.com/usherlabs/fiet-protocol/blob/c4701cca39c86cfb6c6e2b3416fee5d89294b87a/contracts/evm/src/MMPositionManager.sol#L434) snapshots the Hub queue before lcc.transferFrom (which annuls existing queue), then forwards only (after - before). This underflows on some paths or forwards too little, leaving newly queued shortfall as raw LCC on the router that anyone can capture via SYNC/TAKE.
+
+In [_unwrapLccFromUser](https://github.com/usherlabs/fiet-protocol/blob/c4701cca39c86cfb6c6e2b3416fee5d89294b87a/contracts/evm/src/MMPositionManager.sol#L434), the code [records qBefore = LiquidityHub.settleQueue(lcc, payer) before executing lcc.transferFrom(payer, address(this), toUnwrap)](https://github.com/usherlabs/fiet-protocol/blob/c4701cca39c86cfb6c6e2b3416fee5d89294b87a/contracts/evm/src/MMPositionManager.sol#L449-L452). That transfer triggers [LCC._handleNonProtocolToProtocol → LiquidityHub.annulSettlementBeforeTransfer](https://github.com/usherlabs/fiet-protocol/blob/c4701cca39c86cfb6c6e2b3416fee5d89294b87a/contracts/evm/src/LCC.sol#L228-L231), which can reduce settleQueue(lcc, payer) before unwrapTo. After [liquidityHub.unwrapTo](https://github.com/usherlabs/fiet-protocol/blob/c4701cca39c86cfb6c6e2b3416fee5d89294b87a/contracts/evm/src/LiquidityHub.sol#L617-L626), the code [computes queued = settleQueueAfter - qBefore and forwards only this amount](https://github.com/usherlabs/fiet-protocol/blob/c4701cca39c86cfb6c6e2b3416fee5d89294b87a/contracts/evm/src/MMPositionManager.sol#L449-L452) to the MMQueueCustodian. Because qBefore is stale (pre-annul), queued becomes (newly queued shortfall) - (annulled old queue). If annulment exceeds the new queued amount, the subtraction underflows and the unwrap reverts. If not, the code forwards too little and leaves the remainder of the newly queued shortfall as raw LCC on MMPositionManager. Any locker can then call [SYNC(LCC)](https://github.com/usherlabs/fiet-protocol/blob/c4701cca39c86cfb6c6e2b3416fee5d89294b87a/contracts/evm/src/libraries/OwnerCurrencyDelta.sol#L177-L196) and [TAKE(LCC)](https://github.com/usherlabs/fiet-protocol/blob/c4701cca39c86cfb6c6e2b3416fee5d89294b87a/contracts/evm/src/modules/PositionManagerEntrypoint.sol#L79-L92) to first-come-first-serve claim these tokens, depriving the intended beneficiary of the custodied LCC required to redeem their queued settlement.
+
+# Severity
+
+**Impact Explanation:** [High] Misattribution of queued shortfall enables direct, material loss of principal LCC intended for beneficiary-scoped custody and breaks the intended 'no FCFS dust' invariant; in some cases, unwrap DoS occurs.
+
+**Likelihood Explanation:** [High] Pre-existing queues are common; 'max' unwrap is typical; transfer-time annulment on full-balance transfers is expected; any locker can easily SYNC/TAKE; clear profit incentive exists.
+
+# Exploitation
+
+## Exploitation Scenarios:
+
+### Scenario 1.
+Attacker captures mis-forwarded shortfall (Critical): Victim V has LCC balance B and pre-existing queue Q0 > 0. V performs a “max” unwrap via MMPositionManager (payerIsUser=true). lcc.transferFrom annuls Q0; unwrapTo queues newQueued ≥ Q0 due to limited market liquidity. MMPositionManager forwards only (newQueued - Q0), leaving Q0 LCC on the router. Attacker then calls [SYNC(LCC)](https://github.com/usherlabs/fiet-protocol/blob/c4701cca39c86cfb6c6e2b3416fee5d89294b87a/contracts/evm/src/libraries/OwnerCurrencyDelta.sol#L177-L196) to credit their delta from the router’s balance and [TAKE(LCC)](https://github.com/usherlabs/fiet-protocol/blob/c4701cca39c86cfb6c6e2b3416fee5d89294b87a/contracts/evm/src/modules/PositionManagerEntrypoint.sol#L79-L92) to withdraw the leftover Q0, making the victim’s queued settlement under-custodied and unserviceable without replacement LCC.
+#### Preconditions / Assumptions
+- (a). Victim V holds LCC balance B > 0
+- (b). Victim has existing LiquidityHub queue Q0 > 0 for the same LCC
+- (c). Victim uses MMPositionManager UNWRAP_LCC with payerIsUser=true and requested=0 (max), so toUnwrap=B
+- (d). lcc.transferFrom causes LiquidityHub.annulSettlementBeforeTransfer to annul part/all of Q0
+- (e). unwrapTo queues newQueued ≥ Q0 (limited market liquidity now)
+- (f). MMQueueCustodian is set and functional
+- (g). Any locker can call SYNC and TAKE on MMPositionManager
+
+### Scenario 2.
+Underflow revert on max unwrap (High): Victim V has LCC balance B and pre-existing queue Q0 > 0. V performs a “max” unwrap (toUnwrap = B). lcc.transferFrom annuls Q0; unwrapTo finds sufficient liquidity and queues ~0. The code computes queuedToForward = 0 - Q0, which underflows and causes the unwrap to revert, blocking a valid operation.
+#### Preconditions / Assumptions
+- (a). Victim V holds LCC balance B > 0
+- (b). Victim has existing LiquidityHub queue Q0 > 0
+- (c). Victim uses MMPositionManager UNWRAP_LCC with payerIsUser=true and requested=0 (max), so toUnwrap=B
+- (d). lcc.transferFrom annuls Q0
+- (e). unwrapTo finds sufficient liquidity so newQueued ≈ 0
+- (f). Computation queuedToForward = newQueued - Q0 underflows
+
+### Scenario 3.
+Partial unwrap leakage (High): Victim V attempts a partial unwrap A < B that still causes transfer-time annul (e.g., due to intra-batch state). Headroom passes in this specific state, unwrapTo queues newQueued, but MMPositionManager forwards only (newQueued - toAnnul), leaving toAnnul LCC on the router. Another locker SYNC/TAKEs the leftover, again depriving the victim of the custodied LCC needed for later redemption.
+#### Preconditions / Assumptions
+- (a). Victim V holds LCC balance B > 0 and has existing queue Q0 > 0
+- (b). Victim uses MMPositionManager UNWRAP_LCC with payerIsUser=true and a partial amount A where B - Q0 < A < B, and headroom passes due to intra-batch or specific state
+- (c). lcc.transferFrom annuls some of Q0 (toAnnul > 0)
+- (d). unwrapTo queues newQueued
+- (e). MMPositionManager forwards only (newQueued - toAnnul), leaving toAnnul LCC on the router
+- (f). Another locker can call SYNC and TAKE to seize the leftover LCC
+
+# Proposed fix
+
+## MMPositionManager.sol
+
+File: `contracts/evm/src/MMPositionManager.sol`
+
+[Source](https://github.com/usherlabs/fiet-protocol/blob/c4701cca39c86cfb6c6e2b3416fee5d89294b87a/contracts/evm/src/MMPositionManager.sol)
+
+```diff
+ // SPDX-License-Identifier: BUSL-1.1
+ pragma solidity ^0.8.26;
+ 
+ import {IPoolManager} from "v4-periphery/lib/v4-core/src/interfaces/IPoolManager.sol";
+ import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
+ import {Currency, CurrencyLibrary} from "v4-periphery/lib/v4-core/src/types/Currency.sol";
+ import {ERC721Permit_v4} from "v4-periphery/src/base/ERC721Permit_v4.sol";
+ import {ReentrancyLock} from "v4-periphery/src/base/ReentrancyLock.sol";
+ import {Multicall_v4} from "v4-periphery/src/base/Multicall_v4.sol";
+ import {BaseActionsRouter} from "v4-periphery/src/base/BaseActionsRouter.sol";
+ import {FietNativeWrapper} from "./modules/NativeWrapper.sol";
+ import {IWETH9} from "v4-periphery/src/interfaces/external/IWETH9.sol";
+ import {PositionId, Position} from "./types/Position.sol";
+ import {MarketMaker} from "./libraries/MarketMaker.sol";
+ import {ICommitmentDescriptor} from "./interfaces/ICommitmentDescriptor.sol";
+ import {IMMPositionManager} from "./interfaces/IMMPositionManager.sol";
+ import {IMMActionsImpl} from "./interfaces/IMMActionsImpl.sol";
+ import {Errors} from "./libraries/Errors.sol";
+ import {ILCC} from "./interfaces/ILCC.sol";
+ import {PositionManagerBase} from "./modules/PositionManagerBase.sol";
+ import {PositionManagerQueueCustodian} from "./modules/PositionManagerQueueCustodian.sol";
+ import {PositionManagerEntrypoint} from "./modules/PositionManagerEntrypoint.sol";
+ import {Permit2Forwarder} from "v4-periphery/src/base/Permit2Forwarder.sol";
+ import {MMActions} from "./libraries/MMActions.sol";
+ import {MMCalldataDecoder} from "./libraries/MMCalldataDecoder.sol";
+ import {MMHelpers} from "./libraries/MMHelpers.sol";
+ import {IERC20} from "openzeppelin-contracts/contracts/token/ERC20/IERC20.sol";
+ import {Math} from "openzeppelin-contracts/contracts/utils/math/Math.sol";
+ import {StateLibrary} from "v4-periphery/lib/v4-core/src/libraries/StateLibrary.sol";
+ import {TransientStateLibrary} from "v4-periphery/lib/v4-core/src/libraries/TransientStateLibrary.sol";
+ import {CurrencyTransfer} from "./libraries/CurrencyTransfer.sol";
+ import {IMMQueueCustodian} from "./interfaces/IMMQueueCustodian.sol";
+ import {IMarketFactory} from "./interfaces/IMarketFactory.sol";
+ import {ILiquidityHub} from "./interfaces/ILiquidityHub.sol";
+ import {IAllowanceTransfer} from "permit2/src/interfaces/IAllowanceTransfer.sol";
+ 
+ /// @title MMPositionManager
+ /// @notice Entry point for VRL commitment position management
+ /// @dev Handles commitment lifecycle (ERC721) and utility operations locally
+ /// @dev Delegates position operations to MMPMActionsImpl via delegatecall
+ contract MMPositionManager is
+     ERC721Permit_v4,
+     IMMPositionManager,
+     ReentrancyLock,
+     Multicall_v4,
+     Permit2Forwarder,
+     BaseActionsRouter,
+     FietNativeWrapper,
+     PositionManagerEntrypoint,
+     PositionManagerQueueCustodian
+ {
+     /// @dev Aggregates constructor dependencies so unoptimised builds avoid stack-too-deep in the inheritance init list.
+     struct MMPositionManagerInit {
+         IPoolManager poolManager;
+         address marketFactory;
+         address vtsOrchestrator;
+         address canonicalCustody;
+         address descriptor;
+         IWETH9 weth9;
+         IAllowanceTransfer permit2;
+         address actionsImpl;
+         address queueCustodianAddr;
+     }
+ 
+     using MMCalldataDecoder for bytes;
+     using CurrencyTransfer for Currency;
+     using StateLibrary for IPoolManager;
+     using TransientStateLibrary for IPoolManager;
+ 
+     // ═══════════════════════════════════════════════════════════════════════════
+     // Events
+     // ═══════════════════════════════════════════════════════════════════════════
+ 
+     event SignalCommitted(uint256 tokenId);
+     event SignalDecommitted(uint256 tokenId, uint256 positionCount);
+ 
+     // ═══════════════════════════════════════════════════════════════════════════
+     // Immutables
+     // ═══════════════════════════════════════════════════════════════════════════
+ 
+     /// @notice The implementation contract for position operations
+     address public immutable commitmentDescriptor;
+     /// @notice Shared custodian that holds queued MM-backed LCC by commit bucket
+     IMMQueueCustodian public immutable queueCustodian;
+ 
+     /// @dev Custody bucket for `UNWRAP_LCC` shortfalls: not tied to a commitment NFT (`tokenId == 0` matches
+     ///      `COLLECT_AVAILABLE_LIQUIDITY` utility collects).
+     uint256 private constant _UNWRAP_QUEUE_CUSTODY_TOKEN_ID = 0;
+ 
+     // ═══════════════════════════════════════════════════════════════════════════
+     // Constructor
+     // ═══════════════════════════════════════════════════════════════════════════
+ 
+     constructor(MMPositionManagerInit memory p)
+         ERC721Permit_v4("Fiet VRL Commitment Positions Manager", "FIET-VRL-MMP")
+         BaseActionsRouter(p.poolManager)
+         Permit2Forwarder(p.permit2)
+         FietNativeWrapper(p.weth9)
+         PositionManagerEntrypoint(p.marketFactory, p.vtsOrchestrator, p.canonicalCustody, p.actionsImpl)
+     {
+         if (p.queueCustodianAddr == address(0) || p.queueCustodianAddr.code.length == 0) {
+             revert Errors.InvalidAddress(p.queueCustodianAddr);
+         }
+         commitmentDescriptor = p.descriptor;
+         queueCustodian = IMMQueueCustodian(p.queueCustodianAddr);
+     }
+ 
+     // ═══════════════════════════════════════════════════════════════════════════
+     // Modifiers
+     // ═══════════════════════════════════════════════════════════════════════════
+ 
+     modifier checkDeadline(uint256 deadline) {
+         _checkDeadline(deadline);
+         _;
+     }
+ 
+     function _checkDeadline(uint256 deadline) internal view {
+         if (block.timestamp > deadline) revert Errors.DeadlinePassed(deadline);
+     }
+ 
+     /// @notice Requires PoolManager to be locked (not within an active batch)
+     modifier onlyIfPoolManagerLocked() {
+         _onlyIfPoolManagerLocked();
+         _;
+     }
+ 
+     function _onlyIfPoolManagerLocked() internal view {
+         if (poolManager.isUnlocked()) revert Errors.PoolManagerMustBeLocked();
+     }
+ 
+     // ═══════════════════════════════════════════════════════════════════════════
+     // BaseActionsRouter Overrides
+     // ═══════════════════════════════════════════════════════════════════════════
+ 
+     /// @inheritdoc BaseActionsRouter
+     function msgSender() public view override(BaseActionsRouter, PositionManagerBase) returns (address) {
+         return _getLocker();
+     }
+ 
+     /// @inheritdoc PositionManagerQueueCustodian
+     function _queueCustodian() internal view override(PositionManagerQueueCustodian) returns (IMMQueueCustodian) {
+         return queueCustodian;
+     }
+ 
+     /// @inheritdoc FietNativeWrapper
+     function _canonicalMarketFactory() internal view override returns (IMarketFactory) {
+         return marketFactory;
+     }
+ 
+     /// @inheritdoc FietNativeWrapper
+     function _liquidityHub() internal view override returns (ILiquidityHub) {
+         return liquidityHub;
+     }
+ 
+     // ═══════════════════════════════════════════════════════════════════════════
+     // Entry Points with Hooks
+     // ═══════════════════════════════════════════════════════════════════════════
+ 
+     /// @notice Executes a batch of liquidity modifications
+     /// @dev Mirrors v4 PositionManager.modifyLiquidities
+     function modifyLiquidities(bytes calldata unlockData, uint256 deadline)
+         external
+         payable
+         isNotLocked
+         checkDeadline(deadline)
+     {
+         _beforeBatch();
+         _executeActions(unlockData);
+         _afterBatch();
+     }
+ 
+     /// @notice Executes actions without acquiring a new unlock
+     /// @dev Mirrors v4 PositionManager.modifyLiquiditiesWithoutUnlock
+     function modifyLiquiditiesWithoutUnlock(bytes calldata actions, bytes[] calldata params)
+         external
+         payable
+         isNotLocked
+     {
+         _beforeBatch();
+         _executeActionsWithoutUnlock(actions, params);
+         _afterBatch();
+     }
+ 
+     /// @notice Get the next token ID that will be assigned
+     /// @dev Returns the next commit ID from VTSOrchestrator, matching Uniswap PositionManager interface
+     /// @return The next token ID (will be assigned on next commitSignal call)
+     function nextTokenId() public view returns (uint256) {
+         return vtsOrchestrator.nextCommitId();
+     }
+ 
+     // ═══════════════════════════════════════════════════════════════════════════
+     // Action Routing (Comparison-Based)
+     // ═══════════════════════════════════════════════════════════════════════════
+ 
+     /// @notice Handles action execution with comparison-based routing
+     /// @dev Actions <= SETTLE_POSITION_FROM_DELTAS delegate to impl (position operations)
+     /// @dev Actions >= COMMIT_SIGNAL and < TAKE handled locally (commitments)
+     /// @dev Actions >= TAKE handled locally (utilities)
+     function _handleAction(uint256 action, bytes calldata params) internal virtual override {
+         // Position actions (<= SETTLE_POSITION_FROM_DELTAS) → delegate to impl
+         if (action <= MMActions.SETTLE_POSITION_FROM_DELTAS) {
+             _delegateToImpl(abi.encodeWithSelector(IMMActionsImpl.handleAction.selector, action, params));
+             return;
+         }
+ 
+         // Commitment actions (>= COMMIT_SIGNAL and < TAKE) → handle locally
+         if (action >= MMActions.COMMIT_SIGNAL && action < MMActions.TAKE) {
+             _handleCommitmentAction(action, params);
+             return;
+         }
+ 
+         // Currency/utility actions (>= TAKE) → handle locally
+         _handleUtilityAction(action, params);
+     }
+ 
+     // ═══════════════════════════════════════════════════════════════════════════
+     // Commitment Actions (ERC721 + Signal Management)
+     // ═══════════════════════════════════════════════════════════════════════════
+ 
+     /// @notice Handles commitment-level actions
+     /// @param action The action code
+     /// @param params The encoded parameters for the action
+     function _handleCommitmentAction(uint256 action, bytes calldata params) internal {
+         if (action == MMActions.COMMIT_SIGNAL) {
+             (bytes calldata liquiditySignal, bytes calldata relayParams) = params.decodeCommitSignalParams();
+             // Commitment NFT is always minted to the locker; custody separation uses ERC-721 transfer after the batch.
+             _commitSignal(liquiditySignal, msgSender(), relayParams);
+             return;
+         }
+         if (action == MMActions.RENEW_SIGNAL) {
+             (uint256 tokenId, bytes calldata liquiditySignal, bytes calldata relayParams) =
+                 params.decodeTokenIdAndBytes();
+             _renewSignal(tokenId, liquiditySignal, relayParams);
+             return;
+         }
+         if (action == MMActions.DECOMMIT_SIGNAL) {
+             uint256 tokenId = params.decodeDecommitSignalParams();
+             _decommitSignal(tokenId);
+             return;
+         }
+         if (action == MMActions.CHECKPOINT) {
+             (uint256 tokenId, uint256 positionIndex, bool withCommitment) = params.decodeCheckpointParams();
+             _checkpoint(tokenId, positionIndex, withCommitment);
+             return;
+         }
+         if (action == MMActions.EXTEND_GRACE_PERIOD) {
+             (
+                 PoolKey calldata poolKey,
+                 uint256 tokenId,
+                 uint256 positionIndex,
+                 uint8 settlementTokenIndex,
+                 uint32 verifierIndex,
+                 bytes calldata settlementProof
+             ) = params.decodeExtendGracePeriodParams();
+             _extendGracePeriod(poolKey, tokenId, positionIndex, settlementTokenIndex, verifierIndex, settlementProof);
+             return;
+         }
+         revert Errors.UnsupportedAction(action);
+     }
+ 
+     /// @notice Commits a liquidity signal and mints a commitment NFT
+     /// @param liquiditySignal The ABI-encoded LiquiditySignal to verify and record
+     /// @param owner The locker (`msgSender()`); commitment NFT is minted to this address
+     /// @return tokenId The commitment NFT id created
+     function _commitSignal(bytes calldata liquiditySignal, address owner, bytes calldata relayParams)
+         internal
+         returns (uint256 tokenId)
+     {
+         if (relayParams.length == 0) {
+             tokenId = vtsOrchestrator.commitSignal(marketFactory, msgSender(), liquiditySignal);
+         } else {
+             (uint256 deadline, uint256 authNonce, bytes memory authSig) =
+                 abi.decode(relayParams, (uint256, uint256, bytes));
+             tokenId = vtsOrchestrator.commitSignalRelayed(
+                 marketFactory, msgSender(), liquiditySignal, deadline, authNonce, authSig
+             );
+         }
+         _mint(owner, tokenId);
+         emit SignalCommitted(tokenId);
+     }
+ 
+     /// @notice Renews an existing signal with new parameters
+     /// @param tokenId The commitment NFT token ID
+     /// @param liquiditySignal The new liquidity signal
+     function _renewSignal(uint256 tokenId, bytes calldata liquiditySignal, bytes calldata relayParams) internal {
+         if (relayParams.length == 0) {
+             vtsOrchestrator.renewSignal(marketFactory, msgSender(), tokenId, liquiditySignal);
+         } else {
+             (uint256 deadline, uint256 authNonce, bytes memory authSig) =
+                 abi.decode(relayParams, (uint256, uint256, bytes));
+             vtsOrchestrator.renewSignalRelayed(
+                 marketFactory, msgSender(), tokenId, liquiditySignal, deadline, authNonce, authSig
+             );
+         }
+     }
+ 
+     /// @notice Decommits a signal and burns the commitment NFT
+     /// @param tokenId The commitment NFT token ID
+     function _decommitSignal(uint256 tokenId) internal {
+         MMHelpers.assertApprovedOrOwner(msgSender(), tokenId);
+ 
+         // Check if commit has any active positions (burned positions are inactive)
+         (,, uint256 positionCount, uint256 activePositionCount, uint256 inactiveRemnantCount) =
+             vtsOrchestrator.getCommit(tokenId);
+         if (activePositionCount > 0) {
+             revert Errors.CommitNotEmpty(tokenId);
+         }
+         // Inactive positions may still hold withdrawable `pa.settled` (SETTLE-03); burning the NFT would strand it
+         // because MM settlement paths require `assertApprovedOrOwner` against this tokenId. Tracked in O(1) via
+         // `Commit.inactiveRemnantCount` (see VTSPositionLib._syncInactiveRemnantAfterActiveTransition /
+         // `_syncInactiveRemnantAfterSettledPairChange`).
+         if (inactiveRemnantCount > 0) {
+             revert Errors.CommitNotDrained(tokenId);
+         }
+ 
+         _burn(tokenId);
+         emit SignalDecommitted(tokenId, uint256(positionCount));
+     }
+ 
+     /// @notice Marks a checkpoint for a position, optionally running commitment backing checks
+     /// @param tokenId The commitment NFT token ID
+     /// @param positionIndex The position index within the commitment
+     /// @param withCommitment Whether to run commitment backing checks and update deficits
+     function _checkpoint(uint256 tokenId, uint256 positionIndex, bool withCommitment) internal {
+         vtsOrchestrator.checkpoint(tokenId, positionIndex, withCommitment);
+     }
+ 
+     /// @notice Extends grace period for a commitment via proof
+     /// @param poolKey The pool key
+     /// @param tokenId The commitment NFT token ID
+     /// @param positionIndex The position index within the commitment
+     /// @param settlementTokenIndex The settlement token index
+     /// @param verifierIndex The verifier index
+     /// @param settlementProof The settlement proof
+     function _extendGracePeriod(
+         PoolKey calldata poolKey,
+         uint256 tokenId,
+         uint256 positionIndex,
+         uint8 settlementTokenIndex,
+         uint32 verifierIndex,
+         bytes calldata settlementProof
+     ) internal {
+         MMHelpers.assertApprovedOrOwner(msgSender(), tokenId);
+         vtsOrchestrator.extendGracePeriod(
+             marketFactory, poolKey, tokenId, positionIndex, settlementTokenIndex, verifierIndex, settlementProof
+         );
+     }
+ 
+     // ═══════════════════════════════════════════════════════════════════════════
+     // Utility Actions (Currency Operations)
+     // ═══════════════════════════════════════════════════════════════════════════
+ 
+     function _handleUtilityAction(uint256 action, bytes calldata params) internal {
+         if (action == MMActions.TAKE) {
+             (Currency currency, address to, uint256 maxAmount) = params.decodeTakeParams();
+             _take(currency, to, maxAmount);
+             return;
+         }
+         if (action == MMActions.UNWRAP_LCC) {
+             (address lccAddr, uint256 amount, address recipient, bool payerIsUser) = params.decodeUnwrapLccParams();
+             address to = _resolveStrictRecipient(recipient);
+             if (payerIsUser) {
+                 _unwrapLccFromUser(lccAddr, to, amount);
+             } else {
+                 _unwrapLccFromDeltas(lccAddr, to, amount);
+             }
+             return;
+         }
+         if (action == MMActions.WRAP_NATIVE) {
+             uint256 amount = params.decodeUint256();
+             _wrapNative(amount);
+             return;
+         }
+         if (action == MMActions.UNWRAP_NATIVE) {
+             (uint256 amount, bool payerIsUser) = params.decodeUint256AndBool();
+             _unwrapNative(amount, payerIsUser);
+             return;
+         }
+         if (action == MMActions.COLLECT_AVAILABLE_LIQUIDITY) {
+             (address lcc, uint256 tokenId, uint256 maxAmount) = params.decodeCollectLiquidityParams();
+             _collectAvailableLiquidity(lcc, tokenId, maxAmount);
+             return;
+         }
+         if (action == MMActions.SYNC) {
+             Currency currency = params.decodeSyncParams();
+             _sync(currency);
+             return;
+         }
+         revert Errors.UnsupportedAction(action);
+     }
+ 
+     /// @dev UNWRAP_LCC payout may only go to the locker or MMPM; arbitrary third-party recipients are disallowed.
+     function _resolveStrictRecipient(address recipient) internal view returns (address) {
+         address to = _mapRecipient(recipient);
+         if (to != msgSender() && to != address(this)) {
+             revert Errors.NotApproved(to);
+         }
+         return to;
+     }
+ 
+     /// @notice Unwraps LCC tokens to underlying asset using deltas (locker credit)
+     function _unwrapLccFromDeltas(address lccAddr, address to, uint256 requested) internal returns (uint256 unwrapped) {
+         ILCC lcc = ILCC(lccAddr);
+         Currency lccCurrency = Currency.wrap(lccAddr);
+         address underlying = lcc.underlying();
+         bool isNativeUnderlying = underlying == address(0);
+ 
+         uint256 beforeBal = isNativeUnderlying ? to.balance : IERC20(underlying).balanceOf(to);
+         uint256 toUnwrap = vtsOrchestrator.take(lccCurrency, msgSender(), requested);
+ 
+         if (toUnwrap > 0) {
+             address queueTo = msgSender();
+             uint256 qBefore = liquidityHub.settleQueue(lccAddr, queueTo);
+             liquidityHub.unwrapTo(lccAddr, to, queueTo, toUnwrap);
+             uint256 queued = liquidityHub.settleQueue(lccAddr, queueTo) - qBefore;
+             if (queued > 0) {
+                 _forwardUnwrapQueuedLccToCustodian(lccCurrency, queueTo, queued);
+             }
+         }
+ 
+         uint256 afterBal = isNativeUnderlying ? to.balance : IERC20(underlying).balanceOf(to);
+         unwrapped = afterBal - beforeBal;
+ 
+         if (to == address(this) && unwrapped > 0) {
+             if (isNativeUnderlying) {
+                 _creditExact(CurrencyLibrary.ADDRESS_ZERO, unwrapped);
+             } else {
+                 _syncBalanceAsCredit(Currency.wrap(underlying));
+             }
+         }
+     }
+ 
+     /// @notice Unwraps LCC tokens to underlying asset by pulling from the locker/user
+     function _unwrapLccFromUser(address lccAddr, address to, uint256 requested) internal returns (uint256 unwrapped) {
+         ILCC lcc = ILCC(lccAddr);
+         Currency lccCurrency = Currency.wrap(lccAddr);
+         address underlying = lcc.underlying();
+         bool isNativeUnderlying = underlying == address(0);
+ 
+         address payer = msgSender();
+         uint256 toUnwrap = lcc.balanceOf(payer);
+         if (requested > 0) {
+             toUnwrap = Math.min(toUnwrap, requested);
+         }
+ 
+         uint256 beforeBal = isNativeUnderlying ? to.balance : IERC20(underlying).balanceOf(to);
+         if (toUnwrap > 0) {
+             // Pull only from the locker/user (never arbitrary third parties).
++            lccCurrency.transferFrom(payer, address(this), toUnwrap);
+             uint256 qBefore = liquidityHub.settleQueue(lccAddr, payer);
+-            lccCurrency.transferFrom(payer, address(this), toUnwrap);
+             liquidityHub.unwrapTo(lccAddr, to, payer, toUnwrap);
+             uint256 queued = liquidityHub.settleQueue(lccAddr, payer) - qBefore;
+             if (queued > 0) {
+                 _forwardUnwrapQueuedLccToCustodian(lccCurrency, payer, queued);
+             }
+         }
+ 
+         uint256 afterBal = isNativeUnderlying ? to.balance : IERC20(underlying).balanceOf(to);
+         unwrapped = afterBal - beforeBal;
+         if (to == address(this) && unwrapped > 0) {
+             if (isNativeUnderlying) {
+                 _creditExact(CurrencyLibrary.ADDRESS_ZERO, unwrapped);
+             } else {
+                 _syncBalanceAsCredit(Currency.wrap(underlying));
+             }
+         }
+     }
+ 
+     /// @notice Moves Hub-queued shortfall LCC off this contract into beneficiary-scoped custody so it is not FCFS
+     ///         router dust (see `DELTA-02` / `HUB-02A` in `INVARIANTS.md`).
+     /// @dev Caller must have already invoked `liquidityHub.unwrapTo`; `amount` is the incremental queue delta for
+     ///      `beneficiary` on this unwrap.
+     function _forwardUnwrapQueuedLccToCustodian(Currency lccCurrency, address beneficiary, uint256 amount) private {
+         if (amount == 0) return;
+         if (beneficiary == address(0)) revert Errors.InvalidAddress(beneficiary);
+ 
+         IMMQueueCustodian custodian = queueCustodian;
+         address cust = address(custodian);
+         if (cust == address(0) || cust == address(this)) return;
+ 
+         uint256 bal = IERC20(Currency.unwrap(lccCurrency)).balanceOf(address(this));
+         if (bal < amount) revert Errors.InsufficientBalance(bal, amount);
+ 
+         lccCurrency.transfer(cust, amount);
+         custodian.record(_UNWRAP_QUEUE_CUSTODY_TOKEN_ID, Currency.unwrap(lccCurrency), beneficiary, amount);
+     }
+ 
+     /// @notice Collects available liquidity from settlement queue
+     /// @dev Intersects three caps: caller's Hub queue, underlying reserve availability, and this caller's
+     ///      beneficiary-scoped slice in the queue custodian for `tokenId`. Without the beneficiary key, a locker
+     ///      with any queue could pair it with another party's commit custody bucket.
+     ///
+     ///      Intended model (queue-gated collect):
+     ///      - This path exists to release custodied LCC and then call `processSettlementFor`, which burns the
+     ///        caller's LCC and clears their Hub `settleQueue` entry. If `settleQueue(lcc, locker) == 0`, this
+     ///        function is a no-op by design — e.g. some flows (including certain seizure shapes) may record LCC
+     ///        in the custodian for the locker without creating a per-LCC queue entry; those are not settled here.
+     ///      - Arbitrary `processSettlementFor` calls cannot drain another party's custody: settlement still
+     ///        requires the recipient's market-derived LCC balance; beneficiary-scoped custody ensures collect
+     ///        only debits the slice matching the caller's queue.
+     /// @param lcc The LCC token address
+     /// @param tokenId The commitment NFT token ID bucket to collect from
+     /// @param maxAmount The maximum amount to collect
+     function _collectAvailableLiquidity(address lcc, uint256 tokenId, uint256 maxAmount) internal {
+         address locker = msgSender();
+         liquidityHub.settleFromCustodian(lcc, address(queueCustodian), tokenId, locker, maxAmount);
+     }
+ 
+     /// @notice Syncs currency balance as credit to delta
+     /// @param currency The currency to sync
+     /// @dev owner is always address(this) (MMPM) and target is always msgSender() (locker)
+     function _sync(Currency currency) internal {
+         // Native ETH sync must be source-aware (exact amount) and is handled by dedicated flows.
+         if (currency == CurrencyLibrary.ADDRESS_ZERO) {
+             revert Errors.InvalidAddress(address(0));
+         }
+         vtsOrchestrator.sync(marketFactory, currency, address(this), msgSender());
+     }
+ 
+     /// @notice Wraps native ETH to WETH
+     /// @param amount The amount of ETH to wrap (0 for max available from deltas)
+     function _wrapNative(uint256 amount) internal {
+         uint256 takeAmount = vtsOrchestrator.take(CurrencyLibrary.ADDRESS_ZERO, msgSender(), amount);
+         if (amount > 0 && amount > takeAmount) {
+             revert Errors.InsufficientBalance(takeAmount, amount);
+         } else if (amount == 0) {
+             amount = takeAmount;
+         }
+         if (amount == 0) {
+             return;
+         }
+ 
+         _wrap(amount);
+         Currency weth = Currency.wrap(address(WETH9));
+         _syncBalanceAsCredit(weth);
+     }
+ 
+     /// @notice Unwraps WETH to native ETH
+     /// @param amount The amount of WETH to unwrap (0 for max)
+     /// @param payerIsUser Whether the payer is the user (true) or deltas (false)
+     function _unwrapNative(uint256 amount, bool payerIsUser) internal {
+         Currency weth = Currency.wrap(address(WETH9));
+         if (payerIsUser) {
+             address payer = msgSender();
+             if (amount == 0) {
+                 amount = weth.balanceOf(payer);
+             }
+             // Use CurrencyTransfer with Permit2 fallback for user transfers
+             weth.transferFrom(payer, address(this), amount);
+         } else {
+             uint256 takeAmount = vtsOrchestrator.take(weth, msgSender(), amount);
+             if (amount > 0 && amount > takeAmount) {
+                 revert Errors.InsufficientBalance(takeAmount, amount);
+             } else if (amount == 0) {
+                 amount = takeAmount;
+             }
+             if (amount == 0) {
+                 return;
+             }
+         }
+         _unwrap(amount);
+         _creditExact(CurrencyLibrary.ADDRESS_ZERO, amount);
+     }
+ 
+     // ═══════════════════════════════════════════════════════════════════════════
+     // Overrides
+     // ═══════════════════════════════════════════════════════════════════════════
+ 
+     /// @notice Returns the token URI for a given token id using the commitment descriptor contract
+     function tokenURI(uint256 tokenId) public view override returns (string memory) {
+         if (commitmentDescriptor == address(0)) {
+             revert Errors.CommitmentDescriptorNotSet();
+         }
+         return ICommitmentDescriptor(commitmentDescriptor).tokenURI(tokenId);
+     }
+ 
+     /// @dev Overrides transferFrom to revert if pool manager is locked
+     /// @dev Prevents transfers while an unlock session is active (mid-batch)
+     function transferFrom(address from, address to, uint256 id) public virtual override onlyIfPoolManagerLocked {
+         super.transferFrom(from, to, id);
+     }
+ 
+     // ═══════════════════════════════════════════════════════════════════════════
+     // View Functions (delegate to impl via staticcall)
+     // ═══════════════════════════════════════════════════════════════════════════
+ 
+     /// @inheritdoc IMMPositionManager
+     /// @dev Delegates to impl via staticcall to satisfy interface requirements
+     function getPosition(uint256 tokenId, uint256 positionIndex)
+         external
+         view
+         returns (
+             Position memory, /* position */
+             PositionId /* positionId */
+         )
+     {
+         return vtsOrchestrator.getPosition(tokenId, positionIndex);
+     }
+ 
+     /// @inheritdoc IMMPositionManager
+     /// @dev Delegates to impl via staticcall to satisfy interface requirements
+     function getPositionId(uint256 tokenId, uint256 positionIndex) external view returns (PositionId) {
+         return vtsOrchestrator.getPositionId(tokenId, positionIndex);
+     }
+ 
+     /// @inheritdoc IMMPositionManager
+     function commitOf(uint256 tokenId)
+         external
+         view
+         returns (
+             MarketMaker.State memory state,
+             uint256 expiresAt,
+             uint256 positionCount,
+             uint256 activePositionCount,
+             uint256 inactiveRemnantCount
+         )
+     {
+         return vtsOrchestrator.getCommit(tokenId);
+     }
+ 
+     // ═══════════════════════════════════════════════════════════════════════════
+     // No-Locking Checkpoint Functions
+     // ═══════════════════════════════════════════════════════════════════════════
+ 
+     /// @notice Marks a checkpoint for a single position, optionally running backing checks
+     /// @param tokenId The ERC721 token id (commitment NFT id)
+     /// @param positionIndex The index of the position within the commitment
+     /// @param withCommitment Whether to run commitment backing checks and update deficits
+     function checkpoint(uint256 tokenId, uint256 positionIndex, bool withCommitment) external onlyIfPoolManagerLocked {
+         _checkpoint(tokenId, positionIndex, withCommitment);
+     }
+ }
+```

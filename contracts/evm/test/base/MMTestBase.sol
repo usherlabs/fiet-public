@@ -131,11 +131,14 @@ abstract contract MarketMakerTestBase is Test {
 
     /**
      * @dev Single-MM liquidity signal with an explicit `advancer` (must satisfy `VRLSignalManager` advancer policy).
+     *      Sets `mmState.owner == advancer` so direct fresh commit from `MMPositionManager` passes owner authentication
+     *      while the batch locker (`msgSender`) remains the advancer.
      */
     function generateLiquiditySignalWithAdvancer(address advancer) internal returns (LiquiditySignal memory) {
         uint256 proofDeadline = block.timestamp + 180 days;
         uint256 uniquePrivateKey = uint256(keccak256(abi.encodePacked("advancerOverride", advancer)));
         MarketMaker.State memory state = _createMarketMakerState(uniquePrivateKey).state;
+        state.owner = advancer;
         state.advancer = advancer;
         state.expiryAt = proofDeadline;
 
@@ -205,8 +208,7 @@ abstract contract MarketMakerTestBase is Test {
 
     /// @dev Effective MMPM batch locker for MM liquidity ops: hook `locker` must match `mmState.advancer`
     ///      (`VTSLifecycleLinkedLib.validateMMOperation`). Commit mints the NFT to `msgSender()` (same locker).
-    ///      VRL accepts `sender` as owner or advancer — pranking advancer satisfies both when advancer == owner
-    ///      (default in `_createMarketMakerState`).
+    ///      Fresh commit requires `msgSender() == mmState.owner` on the direct path; default signals set `owner == advancer`.
     function _mmBatchLockerFromSignal(bytes memory signalBytes) internal pure returns (address) {
         return abi.decode(signalBytes, (LiquiditySignal)).mmState.advancer;
     }

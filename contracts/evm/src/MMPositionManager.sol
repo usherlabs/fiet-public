@@ -11,6 +11,7 @@ import {BaseActionsRouter} from "v4-periphery/src/base/BaseActionsRouter.sol";
 import {FietNativeWrapper} from "./modules/NativeWrapper.sol";
 import {IWETH9} from "v4-periphery/src/interfaces/external/IWETH9.sol";
 import {PositionId, Position} from "./types/Position.sol";
+import {LiquiditySignal} from "./types/Commit.sol";
 import {MarketMaker} from "./libraries/MarketMaker.sol";
 import {ICommitmentDescriptor} from "./interfaces/ICommitmentDescriptor.sol";
 import {IMMPositionManager} from "./interfaces/IMMPositionManager.sol";
@@ -259,23 +260,28 @@ contract MMPositionManager is
     }
 
     /// @notice Commits a liquidity signal and mints a commitment NFT
+    /// @dev Fresh commit is owner-authenticated: VRL sees `signal.mmState.owner` as the proof principal.
+    ///      Direct commit requires `locker == mmState.owner`. Relayed commit may mint the NFT to a different locker
+    ///      while EIP-712 relay auth is bound to `mmState.owner` via `VRLSignalManager.submitAuthNonce[owner]`.
     /// @param liquiditySignal The ABI-encoded LiquiditySignal to verify and record
-    /// @param owner The locker (`msgSender()`); commitment NFT is minted to this address
+    /// @param locker The batch locker; commitment NFT is minted here (`msgSender()`)
     /// @return tokenId The commitment NFT id created
-    function _commitSignal(bytes calldata liquiditySignal, address owner, bytes calldata relayParams)
+    function _commitSignal(bytes calldata liquiditySignal, address locker, bytes calldata relayParams)
         internal
         returns (uint256 tokenId)
     {
+        LiquiditySignal memory signal = abi.decode(liquiditySignal, (LiquiditySignal));
+        address mmOwner = signal.mmState.owner;
+
         if (relayParams.length == 0) {
-            tokenId = vtsOrchestrator.commitSignal(marketFactory, msgSender(), liquiditySignal);
+            if (msgSender() != mmOwner) revert Errors.InvalidSender();
+            tokenId = vtsOrchestrator.commitSignal(marketFactory, liquiditySignal);
         } else {
             (uint256 deadline, uint256 authNonce, bytes memory authSig) =
                 abi.decode(relayParams, (uint256, uint256, bytes));
-            tokenId = vtsOrchestrator.commitSignalRelayed(
-                marketFactory, msgSender(), liquiditySignal, deadline, authNonce, authSig
-            );
+            tokenId = vtsOrchestrator.commitSignalRelayed(marketFactory, liquiditySignal, deadline, authNonce, authSig);
         }
-        _mint(owner, tokenId);
+        _mint(locker, tokenId);
         emit SignalCommitted(tokenId);
     }
 
@@ -284,13 +290,11 @@ contract MMPositionManager is
     /// @param liquiditySignal The new liquidity signal
     function _renewSignal(uint256 tokenId, bytes calldata liquiditySignal, bytes calldata relayParams) internal {
         if (relayParams.length == 0) {
-            vtsOrchestrator.renewSignal(marketFactory, msgSender(), tokenId, liquiditySignal);
+            vtsOrchestrator.renewSignal(marketFactory, tokenId, liquiditySignal);
         } else {
             (uint256 deadline, uint256 authNonce, bytes memory authSig) =
                 abi.decode(relayParams, (uint256, uint256, bytes));
-            vtsOrchestrator.renewSignalRelayed(
-                marketFactory, msgSender(), tokenId, liquiditySignal, deadline, authNonce, authSig
-            );
+            vtsOrchestrator.renewSignalRelayed(marketFactory, tokenId, liquiditySignal, deadline, authNonce, authSig);
         }
     }
 

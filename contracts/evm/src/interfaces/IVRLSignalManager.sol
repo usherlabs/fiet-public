@@ -17,12 +17,12 @@ interface IVRLSignalManager {
     // External functions
     function setVerifier(address _newVerifier) external;
 
-    // sender-bound bytes verification (reverting option)
+    /// @notice `sender` is the proof-authenticated principal checked against the decoded signal (see implementation).
     function verifyLiquiditySignal(address sender, bytes memory liquiditySignal, bool revertOnInvalid)
         external
         returns (bool, uint256);
 
-    // sender + commit-bound bytes overload with EIP-712 relayer authorisation (reverting version)
+    /// @notice `sender` binds EIP-712 relay auth and `submitAuthNonce[sender]`; for fresh commit `commitId` is 0.
     function verifyLiquiditySignalRelayed(
         address sender,
         uint256 commitId,

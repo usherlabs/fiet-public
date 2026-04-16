@@ -426,7 +426,7 @@ abstract contract MME2EBase is E2EBase {
                 bytes1(uint8(MMActions.TAKE))
             );
             bytes[] memory params = new bytes[](5);
-            params[0] = abi.encode(corePoolKey, commitId, 0);
+            params[0] = abi.encode(corePoolKey, commitId, 0, uint128(0), uint128(0));
             params[1] = abi.encode(corePoolKey, commitId, 0, true, true);
             params[2] = abi.encode(commitId);
             params[3] = abi.encode(corePoolKey.currency0, mm, 0);

@@ -1,40 +1,42 @@
-[Low] Exempt→non-protocol reclassification in LCC and wrapped-only prepareMarketLiquidity cause Core to receive LCC without Hub→Vault conversion, degrading settlement availability
+[High] Unwrap shortfall forwarding to custodian in MMPositionManager without queue reconciliation causes stuck custodied LCC and unwrap DoS
 
 # Description
 
-Direct-backed LCC can be minted to exempt endpoints, reclassified as market-derived on exempt→non-protocol transfer (no prepare), and later sent to the DEX from a non-exempt endpoint with fromWrapped=0 (no prepare). This allows LCC to reach Core without Hub→Vault conversion, stranding direct reserves at the Hub and increasing queues/temporary DoS on redemptions/exact-output swaps.
+The PR makes MMPositionManager forward unwrap-generated shortfall LCC into a custodian (tokenId==0) but LiquidityHub’s headroom and settlement logic remain keyed to the endpoint’s live balance and a live hub queue. This desynchronization allows later queue annulments (via LCC transfer hooks) to leave custodied LCC unreleasable and also reduces or blocks future direct-backed unwraps. Additionally, the payerIsUser unwrap path can revert due to a stale queue delta computation.
 
-LiquidityHub.wrapTo permits minting direct-backed LCC to bucket-exempt endpoints (e.g., ProxyHook). In LCC._handleProtocolToNonProtocol, transfers from an exempt sender to a non-protocol recipient credit the recipient entirely as market-derived and do not call IMarketFactory.prepareMarketLiquidity. Later, when a non-exempt endpoint sends these LCC to the DEX sink (PoolManager), LCC._handleProtocolToProtocol only triggers prepareMarketLiquidity for the wrapped portion (fromWrapped); since the balance was reclassified as market-derived, fromWrapped=0 and no prepare is executed. As a result, LCC can enter Core without the Hub→Vault conversion path (MarketFactory.prepareMarketLiquidity → MarketLiquidityRouterLib.prepareMarketLiquidityIngress → IVaultCoreActionHandler.handleIngress), leaving Hub direct reserves unmobilized. A practical route is: (1) an attacker wraps LCC directly to an exempt endpoint; (2) a ProxyHook swap creates an output deficit that is paid in LCC to a resolved non-protocol recipient (exempt→non-protocol reclassification); (3) the recipient forwards LCC to a non-exempt endpoint (e.g., MMPositionManager) which settles to DEX (fromWrapped=0), bypassing prepare. This strands direct reserves at the Hub while Core is funded by LCC that never increased CanonicalVault reserves, leading to more frequent queues/temporary DoS on redemptions and exact-output swaps.
+After an unwrap shortfall, MMPositionManager now measures the incremental settlement queue and transfers that many LCC to MMQueueCustodian, recording custody under tokenId==0 for the beneficiary. LiquidityHub’s headroom gate still subtracts the beneficiary’s settleQueue from the endpoint’s live ERC20 LCC balance (which no longer includes the forwarded shortfall), and LiquidityHub.settleFromCustodian only releases custody when a matching hub queue exists. LCC transfer hooks (non-protocol→protocol) can annul the beneficiary’s hub queue without adjusting custodian state. This creates two classes of harm: (1) custodied LCC can become unreleasable if the hub queue is reduced to zero, and (2) future direct-backed unwraps can be blocked or capped because headroom subtracts an old queue already backed by custodied LCC. Separately, in the payerIsUser unwrap path, MMPM measures qBefore before transferFrom; the transfer hook annuls the queue pre-unwrap, so computing queued = after - before can underflow and revert. These behaviors are introduced by the new forwarding logic and lack of queue/custody reconciliation, and they affect normal user flows without requiring a malicious actor.
 
 # Severity
 
-**Impact Explanation:** [Low] No direct principal loss or core invariant break; effects are primarily increased queues/temporary availability loss. Hub direct reserves can be mobilized later by unrelated wrapped ingresses, so stranding is not permanent.
+**Impact Explanation:** [High] Custodied LCC can be rendered unreleasable to the user after queue annulment (loss of access to principal). Additionally, unwrap (a core function) can be significantly disrupted or blocked, including a hard revert on the payerIsUser path.
 
-**Likelihood Explanation:** [Medium] Feasible under plausible market conditions (deficits) with attacker capital and routing control; not automatic or trivial but realistically achievable.
+**Likelihood Explanation:** [Medium] The most severe effects require a prior unwrap shortfall and a subsequent non-protocol→protocol transfer that annuls the queue—plausible but not universal. The payerIsUser DoS is common when a preexisting queue exists and the transfer bleeds into it.
 
 # Exploitation
 
 ## Exploitation Scenarios:
 
 ### Scenario 1.
-Multi-hop bypass: (1) Attacker calls LiquidityHub.wrapTo(lcc, proxyHook, D) to seed direct-backed LCC at an exempt endpoint; (2) Executes a ProxyHook swap that creates an LCC-output deficit to a resolved EOA, causing exempt→non-protocol transfer and market-derived reclassification; (3) EOA forwards LCC to a non-exempt endpoint (e.g., MMPositionManager) that settles to PoolManager (DEX). Since fromWrapped=0, prepareMarketLiquidity is not called; Core receives LCC without Hub→Vault conversion, stranding Hub direct reserves.
+Permanent stranding: A user unwraps and incurs shortfall Q; MMPM forwards Q LCC to MMQueueCustodian (tokenId==0). Later, the user transfers LCC to a protocol endpoint, and the LCC transfer hook annuls their hub queue by A. Collecting from custodian releases at most Q–A and leaves A LCC stuck in custody because LiquidityHub.settleFromCustodian requires a live hub queue to release and no user-accessible path exists to release the remainder.
 #### Preconditions / Assumptions
-- (a). Factory and markets initialized (PoolManager BOUND_DEX; LiquidityHub and ProxyHook BOUND_EXEMPT; MMPositionManager BOUND_ENDPOINT)
-- (b). Attacker capital to mint LCC and drive swaps
-- (c). ProxyHook deficit path uses a resolved recipient (hookData) so deficit LCC are transferred to a non-protocol address
-- (d). CanonicalVault reserves insufficient to cover full exact-output leg in at least some swaps
+- (a). A market and LCC exist; MMPositionManager is a bound endpoint with an MMQueueCustodian configured
+- (b). A prior unwrap created a nonzero settleQueue for the user and MMPM forwarded the shortfall LCC into custodian (tokenId==0)
+- (c). Later, the user performs a non-protocol→protocol LCC transfer (e.g., to MMPM), causing hub queue annulment via LCC transfer hook
+- (d). The user attempts to collect from custodian via MMPM; any remaining custody beyond the reduced hub queue becomes unreleasable
 
 ### Scenario 2.
-Systemic skew amplification: The attacker repeats the above cycle to grow Hub direct reserves while routing market-derived-only LCC into Core, progressively increasing reliance on queues/deficits for redemptions and exact-output swaps.
+Headroom block of direct-backed unwrap: After a prior shortfall was forwarded to custody, the user acquires fresh direct-backed LCC and tries to unwrap. LiquidityHub computes headroom as endpoint live balance minus existing hub queue; since the forwarded shortfall is no longer in the endpoint’s balance, availableToUnwrap becomes zero and the unwrap reverts, even though the request is fully direct-backed.
 #### Preconditions / Assumptions
-- (a). Same as Scenario 1
-- (b). Ability to repeat cycles over time (sufficient capital and market conditions that produce deficits)
+- (a). A prior unwrap created a nonzero settleQueue for the user and the corresponding shortfall LCC was forwarded to custodian (tokenId==0)
+- (b). MMPositionManager’s live LCC balance does not include the forwarded shortfall
+- (c). The user attempts a direct-backed unwrap via MMPM while the hub queue remains outstanding
 
 ### Scenario 3.
-Targeted griefing: After stranding direct reserves at the Hub, the attacker times trades and redemptions to exacerbate vault shortfalls, increasing other users’ queued settlements or causing exact-output failures on the proxy path (temporary DoS), despite idle direct reserves at the Hub.
+payerIsUser unwrap DoS via underflow: The user has a nonzero hub queue and calls UNWRAP_LCC with payerIsUser=true. MMPositionManager records qBefore, then transferFrom triggers LCC’s annulSettlementBeforeTransfer to reduce the queue before unwrap. After unwrap, MMPM computes queued = settleQueueAfter – qBefore, which underflows and reverts, DoS’ing this path whenever preexisting queues bleed into transfer.
 #### Preconditions / Assumptions
-- (a). Same as Scenario 1
-- (b). Attacker can time swap sizes/directions relative to vault reserves to increase queuing/temporary DoS for others
+- (a). The user has a nonzero hub queue prior to calling UNWRAP_LCC with payerIsUser=true
+- (b). MMPositionManager records qBefore, then calls lcc.transferFrom(user→MMPM), which annuls the queue via LCC._beforeTransfer
+- (c). The unwrapTo call follows, and the subsequent queued = after – before computation underflows due to the pre-unwrap annulment
 
 # Proposed fix
 
@@ -42,7 +44,7 @@ Targeted griefing: After stranding direct reserves at the Hub, the attacker time
 
 File: `contracts/evm/src/LiquidityHub.sol`
 
-[Source](https://github.com/usherlabs/fiet-protocol/blob/43c9a5549e2b848453d63ca8246ed0db39b18c3b/contracts/evm/src/LiquidityHub.sol)
+[Source](https://github.com/usherlabs/fiet-protocol/blob/c4701cca39c86cfb6c6e2b3416fee5d89294b87a/contracts/evm/src/LiquidityHub.sol)
 
 ```diff
  // SPDX-License-Identifier: BUSL-1.1
@@ -480,15 +482,23 @@ File: `contracts/evm/src/LiquidityHub.sol`
          return LCCFactoryLib.balancesOf(lccToken, account);
      }
  
-     function _assertWrapRecipientNotDexSink(address lcc, address to) internal view {
--        if (Bounds.isDex(boundLevel(s.lccToMarket[lcc].factory, to))) {
-+        uint8 level = boundLevel(s.lccToMarket[lcc].factory, to);
-+        if (Bounds.isDex(level)) {
+     /// @dev Rejects DEX sinks — issuer mints and wrap paths bypass LCC transfer hooks, so DEX ingress must not be bypassed.
+     function _assertRecipientNotDexSink(address lcc, address to) internal view {
+         uint8 level = boundLevel(s.lccToMarket[lcc].factory, to);
+         if (Bounds.isDex(level)) {
              revert Errors.DirectWrapToDexNotAllowed(to);
          }
-+        if (Bounds.isExempt(level)) {
-+            revert Errors.NotApproved(to);
-+        }
+     }
+ 
+     /// @dev Defence in depth for **direct-backed** Hub mints (`_wrap`, etc.): exempt holders skip bucket maps, so
+     ///      `directAmount > 0` must not target them (`LCC.mint` is authoritative; this surfaces a clearer early revert).
+     ///      Do **not** use for `issue` / pure market-derived mints — issuers must still be able to mint to ProxyHook.
+     function _assertDirectBackedMintRecipient(address lcc, address to) internal view {
+         _assertRecipientNotDexSink(lcc, to);
+         uint8 level = boundLevel(s.lccToMarket[lcc].factory, to);
+         if (Bounds.isExempt(level)) {
+             revert Errors.DirectMintToExemptNotAllowed(to);
+         }
      }
  
      // ============ TRADER FUNCTIONS ============
@@ -507,7 +517,8 @@ File: `contracts/evm/src/LiquidityHub.sol`
  
          // Mint-time ingress to the DEX sink bypasses LCC transfer hooks.
          // Reject it until there is a safe settlement path that can run under PoolManager lock constraints.
-         _assertWrapRecipientNotDexSink(lcc, to);
+         // Direct-backed mint to exempt is forbidden (finding 14); pure market issuer mints use `issue` instead.
+         _assertDirectBackedMintRecipient(lcc, to);
  
          // throw error if the native ETH is insufficient and it is a native ETH backed LCC
          if (isNativeAsset) {
@@ -576,8 +587,8 @@ File: `contracts/evm/src/LiquidityHub.sol`
      function _wrapWith(address lcc, address withLCC, address to, uint256 amount) internal onlyValidLcc(lcc) {
          address from = _msgSender();
  
-         // wrapWithTo shares the same mint surface as direct wrap and must not bypass DEX ingress handling.
-         _assertWrapRecipientNotDexSink(lcc, to);
+         // Reject DEX sinks. If the final mint includes a direct-backed leg to an exempt recipient, `LCC.mint` reverts.
+         _assertRecipientNotDexSink(lcc, to);
  
          // Performs all necessary validation and preparation
          LiquidityHubLib.WrapWithContext memory ctx =
@@ -642,7 +653,8 @@ File: `contracts/evm/src/LiquidityHub.sol`
      function _unwrap(address lcc, address to, address queueTo, uint256 amount) internal onlyValidLcc(lcc) {
          address from = _msgSender();
          (uint256 wrappedBalance, uint256 marketDerivedBalance) = _balancesOf(lcc, from);
-         uint256 fromBalance = wrappedBalance + marketDerivedBalance;
+-        uint256 fromBalance = wrappedBalance + marketDerivedBalance;
++        uint256 fromBalance = wrappedBalance + (marketDerivedBalance > s.settleQueue[lcc][queueTo] ? (marketDerivedBalance - s.settleQueue[lcc][queueTo]) : 0);
  
          // Generic queue paths validate queue-owner shape only.
          // Current settleability remains a redemption-time concern for processSettlementFor().
@@ -650,7 +662,8 @@ File: `contracts/evm/src/LiquidityHub.sol`
          // Immediate payout recipient must be serviceable: not Hub, not exempt/DEX sinks (see HUB-02B in INVARIANTS.md).
          _assertValidUnwrapPayoutRecipient(lcc, to);
  
-         _assertUnwrapWithinHeadroom(amount, fromBalance, s.settleQueue[lcc][queueTo]);
+-        _assertUnwrapWithinHeadroom(amount, fromBalance, s.settleQueue[lcc][queueTo]);
++        _assertUnwrapWithinHeadroom(amount, fromBalance, 0);
  
          (uint256 directUnwrapped, uint256 marketUnwrapped, uint256 queuedShortfall) =
              LiquidityHubLinkedLib.unwrapInternalLogic(s, lcc, queueTo, amount, wrappedBalance, marketDerivedBalance);
@@ -777,7 +790,8 @@ File: `contracts/evm/src/LiquidityHub.sol`
      function issue(address lcc, address to, uint256 amount) external onlyIssuer(lcc) nonReentrant {
          // Note: LCC mint path reverts on zero (direct+market) amount.
          // Minting market-derived LCC directly to the DEX sink bypasses transfer hooks and ingress settlement.
-         _assertWrapRecipientNotDexSink(lcc, to);
+         // Issuer mints to bucket-exempt protocol endpoints (eg ProxyHook) remain valid — only DEX sinks are rejected here.
+         _assertRecipientNotDexSink(lcc, to);
          _mint(lcc, to, 0, amount);
      }
  
@@ -1258,11 +1272,655 @@ File: `contracts/evm/src/LiquidityHub.sol`
  }
 ```
 
+## MMPositionManager.sol
+
+File: `contracts/evm/src/MMPositionManager.sol`
+
+[Source](https://github.com/usherlabs/fiet-protocol/blob/c4701cca39c86cfb6c6e2b3416fee5d89294b87a/contracts/evm/src/MMPositionManager.sol)
+
+```diff
+ // SPDX-License-Identifier: BUSL-1.1
+ pragma solidity ^0.8.26;
+ 
+ import {IPoolManager} from "v4-periphery/lib/v4-core/src/interfaces/IPoolManager.sol";
+ import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
+ import {Currency, CurrencyLibrary} from "v4-periphery/lib/v4-core/src/types/Currency.sol";
+ import {ERC721Permit_v4} from "v4-periphery/src/base/ERC721Permit_v4.sol";
+ import {ReentrancyLock} from "v4-periphery/src/base/ReentrancyLock.sol";
+ import {Multicall_v4} from "v4-periphery/src/base/Multicall_v4.sol";
+ import {BaseActionsRouter} from "v4-periphery/src/base/BaseActionsRouter.sol";
+ import {FietNativeWrapper} from "./modules/NativeWrapper.sol";
+ import {IWETH9} from "v4-periphery/src/interfaces/external/IWETH9.sol";
+ import {PositionId, Position} from "./types/Position.sol";
+ import {MarketMaker} from "./libraries/MarketMaker.sol";
+ import {ICommitmentDescriptor} from "./interfaces/ICommitmentDescriptor.sol";
+ import {IMMPositionManager} from "./interfaces/IMMPositionManager.sol";
+ import {IMMActionsImpl} from "./interfaces/IMMActionsImpl.sol";
+ import {Errors} from "./libraries/Errors.sol";
+ import {ILCC} from "./interfaces/ILCC.sol";
+ import {PositionManagerBase} from "./modules/PositionManagerBase.sol";
+ import {PositionManagerQueueCustodian} from "./modules/PositionManagerQueueCustodian.sol";
+ import {PositionManagerEntrypoint} from "./modules/PositionManagerEntrypoint.sol";
+ import {Permit2Forwarder} from "v4-periphery/src/base/Permit2Forwarder.sol";
+ import {MMActions} from "./libraries/MMActions.sol";
+ import {MMCalldataDecoder} from "./libraries/MMCalldataDecoder.sol";
+ import {MMHelpers} from "./libraries/MMHelpers.sol";
+ import {IERC20} from "openzeppelin-contracts/contracts/token/ERC20/IERC20.sol";
+ import {Math} from "openzeppelin-contracts/contracts/utils/math/Math.sol";
+ import {StateLibrary} from "v4-periphery/lib/v4-core/src/libraries/StateLibrary.sol";
+ import {TransientStateLibrary} from "v4-periphery/lib/v4-core/src/libraries/TransientStateLibrary.sol";
+ import {CurrencyTransfer} from "./libraries/CurrencyTransfer.sol";
+ import {IMMQueueCustodian} from "./interfaces/IMMQueueCustodian.sol";
+ import {IMarketFactory} from "./interfaces/IMarketFactory.sol";
+ import {ILiquidityHub} from "./interfaces/ILiquidityHub.sol";
+ import {IAllowanceTransfer} from "permit2/src/interfaces/IAllowanceTransfer.sol";
+ 
+ /// @title MMPositionManager
+ /// @notice Entry point for VRL commitment position management
+ /// @dev Handles commitment lifecycle (ERC721) and utility operations locally
+ /// @dev Delegates position operations to MMPMActionsImpl via delegatecall
+ contract MMPositionManager is
+     ERC721Permit_v4,
+     IMMPositionManager,
+     ReentrancyLock,
+     Multicall_v4,
+     Permit2Forwarder,
+     BaseActionsRouter,
+     FietNativeWrapper,
+     PositionManagerEntrypoint,
+     PositionManagerQueueCustodian
+ {
+     /// @dev Aggregates constructor dependencies so unoptimised builds avoid stack-too-deep in the inheritance init list.
+     struct MMPositionManagerInit {
+         IPoolManager poolManager;
+         address marketFactory;
+         address vtsOrchestrator;
+         address canonicalCustody;
+         address descriptor;
+         IWETH9 weth9;
+         IAllowanceTransfer permit2;
+         address actionsImpl;
+         address queueCustodianAddr;
+     }
+ 
+     using MMCalldataDecoder for bytes;
+     using CurrencyTransfer for Currency;
+     using StateLibrary for IPoolManager;
+     using TransientStateLibrary for IPoolManager;
+ 
+     // ═══════════════════════════════════════════════════════════════════════════
+     // Events
+     // ═══════════════════════════════════════════════════════════════════════════
+ 
+     event SignalCommitted(uint256 tokenId);
+     event SignalDecommitted(uint256 tokenId, uint256 positionCount);
+ 
+     // ═══════════════════════════════════════════════════════════════════════════
+     // Immutables
+     // ═══════════════════════════════════════════════════════════════════════════
+ 
+     /// @notice The implementation contract for position operations
+     address public immutable commitmentDescriptor;
+     /// @notice Shared custodian that holds queued MM-backed LCC by commit bucket
+     IMMQueueCustodian public immutable queueCustodian;
+ 
+     /// @dev Custody bucket for `UNWRAP_LCC` shortfalls: not tied to a commitment NFT (`tokenId == 0` matches
+     ///      `COLLECT_AVAILABLE_LIQUIDITY` utility collects).
+     uint256 private constant _UNWRAP_QUEUE_CUSTODY_TOKEN_ID = 0;
+ 
+     // ═══════════════════════════════════════════════════════════════════════════
+     // Constructor
+     // ═══════════════════════════════════════════════════════════════════════════
+ 
+     constructor(MMPositionManagerInit memory p)
+         ERC721Permit_v4("Fiet VRL Commitment Positions Manager", "FIET-VRL-MMP")
+         BaseActionsRouter(p.poolManager)
+         Permit2Forwarder(p.permit2)
+         FietNativeWrapper(p.weth9)
+         PositionManagerEntrypoint(p.marketFactory, p.vtsOrchestrator, p.canonicalCustody, p.actionsImpl)
+     {
+         if (p.queueCustodianAddr == address(0) || p.queueCustodianAddr.code.length == 0) {
+             revert Errors.InvalidAddress(p.queueCustodianAddr);
+         }
+         commitmentDescriptor = p.descriptor;
+         queueCustodian = IMMQueueCustodian(p.queueCustodianAddr);
+     }
+ 
+     // ═══════════════════════════════════════════════════════════════════════════
+     // Modifiers
+     // ═══════════════════════════════════════════════════════════════════════════
+ 
+     modifier checkDeadline(uint256 deadline) {
+         _checkDeadline(deadline);
+         _;
+     }
+ 
+     function _checkDeadline(uint256 deadline) internal view {
+         if (block.timestamp > deadline) revert Errors.DeadlinePassed(deadline);
+     }
+ 
+     /// @notice Requires PoolManager to be locked (not within an active batch)
+     modifier onlyIfPoolManagerLocked() {
+         _onlyIfPoolManagerLocked();
+         _;
+     }
+ 
+     function _onlyIfPoolManagerLocked() internal view {
+         if (poolManager.isUnlocked()) revert Errors.PoolManagerMustBeLocked();
+     }
+ 
+     // ═══════════════════════════════════════════════════════════════════════════
+     // BaseActionsRouter Overrides
+     // ═══════════════════════════════════════════════════════════════════════════
+ 
+     /// @inheritdoc BaseActionsRouter
+     function msgSender() public view override(BaseActionsRouter, PositionManagerBase) returns (address) {
+         return _getLocker();
+     }
+ 
+     /// @inheritdoc PositionManagerQueueCustodian
+     function _queueCustodian() internal view override(PositionManagerQueueCustodian) returns (IMMQueueCustodian) {
+         return queueCustodian;
+     }
+ 
+     /// @inheritdoc FietNativeWrapper
+     function _canonicalMarketFactory() internal view override returns (IMarketFactory) {
+         return marketFactory;
+     }
+ 
+     /// @inheritdoc FietNativeWrapper
+     function _liquidityHub() internal view override returns (ILiquidityHub) {
+         return liquidityHub;
+     }
+ 
+     // ═══════════════════════════════════════════════════════════════════════════
+     // Entry Points with Hooks
+     // ═══════════════════════════════════════════════════════════════════════════
+ 
+     /// @notice Executes a batch of liquidity modifications
+     /// @dev Mirrors v4 PositionManager.modifyLiquidities
+     function modifyLiquidities(bytes calldata unlockData, uint256 deadline)
+         external
+         payable
+         isNotLocked
+         checkDeadline(deadline)
+     {
+         _beforeBatch();
+         _executeActions(unlockData);
+         _afterBatch();
+     }
+ 
+     /// @notice Executes actions without acquiring a new unlock
+     /// @dev Mirrors v4 PositionManager.modifyLiquiditiesWithoutUnlock
+     function modifyLiquiditiesWithoutUnlock(bytes calldata actions, bytes[] calldata params)
+         external
+         payable
+         isNotLocked
+     {
+         _beforeBatch();
+         _executeActionsWithoutUnlock(actions, params);
+         _afterBatch();
+     }
+ 
+     /// @notice Get the next token ID that will be assigned
+     /// @dev Returns the next commit ID from VTSOrchestrator, matching Uniswap PositionManager interface
+     /// @return The next token ID (will be assigned on next commitSignal call)
+     function nextTokenId() public view returns (uint256) {
+         return vtsOrchestrator.nextCommitId();
+     }
+ 
+     // ═══════════════════════════════════════════════════════════════════════════
+     // Action Routing (Comparison-Based)
+     // ═══════════════════════════════════════════════════════════════════════════
+ 
+     /// @notice Handles action execution with comparison-based routing
+     /// @dev Actions <= SETTLE_POSITION_FROM_DELTAS delegate to impl (position operations)
+     /// @dev Actions >= COMMIT_SIGNAL and < TAKE handled locally (commitments)
+     /// @dev Actions >= TAKE handled locally (utilities)
+     function _handleAction(uint256 action, bytes calldata params) internal virtual override {
+         // Position actions (<= SETTLE_POSITION_FROM_DELTAS) → delegate to impl
+         if (action <= MMActions.SETTLE_POSITION_FROM_DELTAS) {
+             _delegateToImpl(abi.encodeWithSelector(IMMActionsImpl.handleAction.selector, action, params));
+             return;
+         }
+ 
+         // Commitment actions (>= COMMIT_SIGNAL and < TAKE) → handle locally
+         if (action >= MMActions.COMMIT_SIGNAL && action < MMActions.TAKE) {
+             _handleCommitmentAction(action, params);
+             return;
+         }
+ 
+         // Currency/utility actions (>= TAKE) → handle locally
+         _handleUtilityAction(action, params);
+     }
+ 
+     // ═══════════════════════════════════════════════════════════════════════════
+     // Commitment Actions (ERC721 + Signal Management)
+     // ═══════════════════════════════════════════════════════════════════════════
+ 
+     /// @notice Handles commitment-level actions
+     /// @param action The action code
+     /// @param params The encoded parameters for the action
+     function _handleCommitmentAction(uint256 action, bytes calldata params) internal {
+         if (action == MMActions.COMMIT_SIGNAL) {
+             (bytes calldata liquiditySignal, bytes calldata relayParams) = params.decodeCommitSignalParams();
+             // Commitment NFT is always minted to the locker; custody separation uses ERC-721 transfer after the batch.
+             _commitSignal(liquiditySignal, msgSender(), relayParams);
+             return;
+         }
+         if (action == MMActions.RENEW_SIGNAL) {
+             (uint256 tokenId, bytes calldata liquiditySignal, bytes calldata relayParams) =
+                 params.decodeTokenIdAndBytes();
+             _renewSignal(tokenId, liquiditySignal, relayParams);
+             return;
+         }
+         if (action == MMActions.DECOMMIT_SIGNAL) {
+             uint256 tokenId = params.decodeDecommitSignalParams();
+             _decommitSignal(tokenId);
+             return;
+         }
+         if (action == MMActions.CHECKPOINT) {
+             (uint256 tokenId, uint256 positionIndex, bool withCommitment) = params.decodeCheckpointParams();
+             _checkpoint(tokenId, positionIndex, withCommitment);
+             return;
+         }
+         if (action == MMActions.EXTEND_GRACE_PERIOD) {
+             (
+                 PoolKey calldata poolKey,
+                 uint256 tokenId,
+                 uint256 positionIndex,
+                 uint8 settlementTokenIndex,
+                 uint32 verifierIndex,
+                 bytes calldata settlementProof
+             ) = params.decodeExtendGracePeriodParams();
+             _extendGracePeriod(poolKey, tokenId, positionIndex, settlementTokenIndex, verifierIndex, settlementProof);
+             return;
+         }
+         revert Errors.UnsupportedAction(action);
+     }
+ 
+     /// @notice Commits a liquidity signal and mints a commitment NFT
+     /// @param liquiditySignal The ABI-encoded LiquiditySignal to verify and record
+     /// @param owner The locker (`msgSender()`); commitment NFT is minted to this address
+     /// @return tokenId The commitment NFT id created
+     function _commitSignal(bytes calldata liquiditySignal, address owner, bytes calldata relayParams)
+         internal
+         returns (uint256 tokenId)
+     {
+         if (relayParams.length == 0) {
+             tokenId = vtsOrchestrator.commitSignal(marketFactory, msgSender(), liquiditySignal);
+         } else {
+             (uint256 deadline, uint256 authNonce, bytes memory authSig) =
+                 abi.decode(relayParams, (uint256, uint256, bytes));
+             tokenId = vtsOrchestrator.commitSignalRelayed(
+                 marketFactory, msgSender(), liquiditySignal, deadline, authNonce, authSig
+             );
+         }
+         _mint(owner, tokenId);
+         emit SignalCommitted(tokenId);
+     }
+ 
+     /// @notice Renews an existing signal with new parameters
+     /// @param tokenId The commitment NFT token ID
+     /// @param liquiditySignal The new liquidity signal
+     function _renewSignal(uint256 tokenId, bytes calldata liquiditySignal, bytes calldata relayParams) internal {
+         if (relayParams.length == 0) {
+             vtsOrchestrator.renewSignal(marketFactory, msgSender(), tokenId, liquiditySignal);
+         } else {
+             (uint256 deadline, uint256 authNonce, bytes memory authSig) =
+                 abi.decode(relayParams, (uint256, uint256, bytes));
+             vtsOrchestrator.renewSignalRelayed(
+                 marketFactory, msgSender(), tokenId, liquiditySignal, deadline, authNonce, authSig
+             );
+         }
+     }
+ 
+     /// @notice Decommits a signal and burns the commitment NFT
+     /// @param tokenId The commitment NFT token ID
+     function _decommitSignal(uint256 tokenId) internal {
+         MMHelpers.assertApprovedOrOwner(msgSender(), tokenId);
+ 
+         // Check if commit has any active positions (burned positions are inactive)
+         (,, uint256 positionCount, uint256 activePositionCount, uint256 inactiveRemnantCount) =
+             vtsOrchestrator.getCommit(tokenId);
+         if (activePositionCount > 0) {
+             revert Errors.CommitNotEmpty(tokenId);
+         }
+         // Inactive positions may still hold withdrawable `pa.settled` (SETTLE-03); burning the NFT would strand it
+         // because MM settlement paths require `assertApprovedOrOwner` against this tokenId. Tracked in O(1) via
+         // `Commit.inactiveRemnantCount` (see VTSPositionLib._syncInactiveRemnantAfterActiveTransition /
+         // `_syncInactiveRemnantAfterSettledPairChange`).
+         if (inactiveRemnantCount > 0) {
+             revert Errors.CommitNotDrained(tokenId);
+         }
+ 
+         _burn(tokenId);
+         emit SignalDecommitted(tokenId, uint256(positionCount));
+     }
+ 
+     /// @notice Marks a checkpoint for a position, optionally running commitment backing checks
+     /// @param tokenId The commitment NFT token ID
+     /// @param positionIndex The position index within the commitment
+     /// @param withCommitment Whether to run commitment backing checks and update deficits
+     function _checkpoint(uint256 tokenId, uint256 positionIndex, bool withCommitment) internal {
+         vtsOrchestrator.checkpoint(tokenId, positionIndex, withCommitment);
+     }
+ 
+     /// @notice Extends grace period for a commitment via proof
+     /// @param poolKey The pool key
+     /// @param tokenId The commitment NFT token ID
+     /// @param positionIndex The position index within the commitment
+     /// @param settlementTokenIndex The settlement token index
+     /// @param verifierIndex The verifier index
+     /// @param settlementProof The settlement proof
+     function _extendGracePeriod(
+         PoolKey calldata poolKey,
+         uint256 tokenId,
+         uint256 positionIndex,
+         uint8 settlementTokenIndex,
+         uint32 verifierIndex,
+         bytes calldata settlementProof
+     ) internal {
+         MMHelpers.assertApprovedOrOwner(msgSender(), tokenId);
+         vtsOrchestrator.extendGracePeriod(
+             marketFactory, poolKey, tokenId, positionIndex, settlementTokenIndex, verifierIndex, settlementProof
+         );
+     }
+ 
+     // ═══════════════════════════════════════════════════════════════════════════
+     // Utility Actions (Currency Operations)
+     // ═══════════════════════════════════════════════════════════════════════════
+ 
+     function _handleUtilityAction(uint256 action, bytes calldata params) internal {
+         if (action == MMActions.TAKE) {
+             (Currency currency, address to, uint256 maxAmount) = params.decodeTakeParams();
+             _take(currency, to, maxAmount);
+             return;
+         }
+         if (action == MMActions.UNWRAP_LCC) {
+             (address lccAddr, uint256 amount, address recipient, bool payerIsUser) = params.decodeUnwrapLccParams();
+             address to = _resolveStrictRecipient(recipient);
+             if (payerIsUser) {
+                 _unwrapLccFromUser(lccAddr, to, amount);
+             } else {
+                 _unwrapLccFromDeltas(lccAddr, to, amount);
+             }
+             return;
+         }
+         if (action == MMActions.WRAP_NATIVE) {
+             uint256 amount = params.decodeUint256();
+             _wrapNative(amount);
+             return;
+         }
+         if (action == MMActions.UNWRAP_NATIVE) {
+             (uint256 amount, bool payerIsUser) = params.decodeUint256AndBool();
+             _unwrapNative(amount, payerIsUser);
+             return;
+         }
+         if (action == MMActions.COLLECT_AVAILABLE_LIQUIDITY) {
+             (address lcc, uint256 tokenId, uint256 maxAmount) = params.decodeCollectLiquidityParams();
+             _collectAvailableLiquidity(lcc, tokenId, maxAmount);
+             return;
+         }
+         if (action == MMActions.SYNC) {
+             Currency currency = params.decodeSyncParams();
+             _sync(currency);
+             return;
+         }
+         revert Errors.UnsupportedAction(action);
+     }
+ 
+     /// @dev UNWRAP_LCC payout may only go to the locker or MMPM; arbitrary third-party recipients are disallowed.
+     function _resolveStrictRecipient(address recipient) internal view returns (address) {
+         address to = _mapRecipient(recipient);
+         if (to != msgSender() && to != address(this)) {
+             revert Errors.NotApproved(to);
+         }
+         return to;
+     }
+ 
+     /// @notice Unwraps LCC tokens to underlying asset using deltas (locker credit)
+     function _unwrapLccFromDeltas(address lccAddr, address to, uint256 requested) internal returns (uint256 unwrapped) {
+         ILCC lcc = ILCC(lccAddr);
+         Currency lccCurrency = Currency.wrap(lccAddr);
+         address underlying = lcc.underlying();
+         bool isNativeUnderlying = underlying == address(0);
+ 
+         uint256 beforeBal = isNativeUnderlying ? to.balance : IERC20(underlying).balanceOf(to);
+         uint256 toUnwrap = vtsOrchestrator.take(lccCurrency, msgSender(), requested);
+ 
+         if (toUnwrap > 0) {
+             address queueTo = msgSender();
+             uint256 qBefore = liquidityHub.settleQueue(lccAddr, queueTo);
+             liquidityHub.unwrapTo(lccAddr, to, queueTo, toUnwrap);
+             uint256 queued = liquidityHub.settleQueue(lccAddr, queueTo) - qBefore;
+             if (queued > 0) {
+                 _forwardUnwrapQueuedLccToCustodian(lccCurrency, queueTo, queued);
+             }
+         }
+ 
+         uint256 afterBal = isNativeUnderlying ? to.balance : IERC20(underlying).balanceOf(to);
+         unwrapped = afterBal - beforeBal;
+ 
+         if (to == address(this) && unwrapped > 0) {
+             if (isNativeUnderlying) {
+                 _creditExact(CurrencyLibrary.ADDRESS_ZERO, unwrapped);
+             } else {
+                 _syncBalanceAsCredit(Currency.wrap(underlying));
+             }
+         }
+     }
+ 
+     /// @notice Unwraps LCC tokens to underlying asset by pulling from the locker/user
+     function _unwrapLccFromUser(address lccAddr, address to, uint256 requested) internal returns (uint256 unwrapped) {
+         ILCC lcc = ILCC(lccAddr);
+         Currency lccCurrency = Currency.wrap(lccAddr);
+         address underlying = lcc.underlying();
+         bool isNativeUnderlying = underlying == address(0);
+ 
+         address payer = msgSender();
+         uint256 toUnwrap = lcc.balanceOf(payer);
+         if (requested > 0) {
+             toUnwrap = Math.min(toUnwrap, requested);
+         }
+ 
+         uint256 beforeBal = isNativeUnderlying ? to.balance : IERC20(underlying).balanceOf(to);
+         if (toUnwrap > 0) {
+             // Pull only from the locker/user (never arbitrary third parties).
++            lccCurrency.transferFrom(payer, address(this), toUnwrap);
+             uint256 qBefore = liquidityHub.settleQueue(lccAddr, payer);
+-            lccCurrency.transferFrom(payer, address(this), toUnwrap);
+             liquidityHub.unwrapTo(lccAddr, to, payer, toUnwrap);
+-            uint256 queued = liquidityHub.settleQueue(lccAddr, payer) - qBefore;
++            uint256 qAfter = liquidityHub.settleQueue(lccAddr, payer);
++            uint256 queued = qAfter > qBefore ? (qAfter - qBefore) : 0;
+             if (queued > 0) {
+                 _forwardUnwrapQueuedLccToCustodian(lccCurrency, payer, queued);
+             }
+         }
+ 
+         uint256 afterBal = isNativeUnderlying ? to.balance : IERC20(underlying).balanceOf(to);
+         unwrapped = afterBal - beforeBal;
+         if (to == address(this) && unwrapped > 0) {
+             if (isNativeUnderlying) {
+                 _creditExact(CurrencyLibrary.ADDRESS_ZERO, unwrapped);
+             } else {
+                 _syncBalanceAsCredit(Currency.wrap(underlying));
+             }
+         }
+     }
+ 
+     /// @notice Moves Hub-queued shortfall LCC off this contract into beneficiary-scoped custody so it is not FCFS
+     ///         router dust (see `DELTA-02` / `HUB-02A` in `INVARIANTS.md`).
+     /// @dev Caller must have already invoked `liquidityHub.unwrapTo`; `amount` is the incremental queue delta for
+     ///      `beneficiary` on this unwrap.
+     function _forwardUnwrapQueuedLccToCustodian(Currency lccCurrency, address beneficiary, uint256 amount) private {
+         if (amount == 0) return;
+         if (beneficiary == address(0)) revert Errors.InvalidAddress(beneficiary);
+ 
+         IMMQueueCustodian custodian = queueCustodian;
+         address cust = address(custodian);
+         if (cust == address(0) || cust == address(this)) return;
+ 
+         uint256 bal = IERC20(Currency.unwrap(lccCurrency)).balanceOf(address(this));
+         if (bal < amount) revert Errors.InsufficientBalance(bal, amount);
+ 
+         lccCurrency.transfer(cust, amount);
+         custodian.record(_UNWRAP_QUEUE_CUSTODY_TOKEN_ID, Currency.unwrap(lccCurrency), beneficiary, amount);
+     }
+ 
+     /// @notice Collects available liquidity from settlement queue
+     /// @dev Intersects three caps: caller's Hub queue, underlying reserve availability, and this caller's
+     ///      beneficiary-scoped slice in the queue custodian for `tokenId`. Without the beneficiary key, a locker
+     ///      with any queue could pair it with another party's commit custody bucket.
+     ///
+     ///      Intended model (queue-gated collect):
+     ///      - This path exists to release custodied LCC and then call `processSettlementFor`, which burns the
+     ///        caller's LCC and clears their Hub `settleQueue` entry. If `settleQueue(lcc, locker) == 0`, this
+     ///        function is a no-op by design — e.g. some flows (including certain seizure shapes) may record LCC
+     ///        in the custodian for the locker without creating a per-LCC queue entry; those are not settled here.
+     ///      - Arbitrary `processSettlementFor` calls cannot drain another party's custody: settlement still
+     ///        requires the recipient's market-derived LCC balance; beneficiary-scoped custody ensures collect
+     ///        only debits the slice matching the caller's queue.
+     /// @param lcc The LCC token address
+     /// @param tokenId The commitment NFT token ID bucket to collect from
+     /// @param maxAmount The maximum amount to collect
+     function _collectAvailableLiquidity(address lcc, uint256 tokenId, uint256 maxAmount) internal {
+         address locker = msgSender();
+         liquidityHub.settleFromCustodian(lcc, address(queueCustodian), tokenId, locker, maxAmount);
+     }
+ 
+     /// @notice Syncs currency balance as credit to delta
+     /// @param currency The currency to sync
+     /// @dev owner is always address(this) (MMPM) and target is always msgSender() (locker)
+     function _sync(Currency currency) internal {
+         // Native ETH sync must be source-aware (exact amount) and is handled by dedicated flows.
+         if (currency == CurrencyLibrary.ADDRESS_ZERO) {
+             revert Errors.InvalidAddress(address(0));
+         }
+         vtsOrchestrator.sync(marketFactory, currency, address(this), msgSender());
+     }
+ 
+     /// @notice Wraps native ETH to WETH
+     /// @param amount The amount of ETH to wrap (0 for max available from deltas)
+     function _wrapNative(uint256 amount) internal {
+         uint256 takeAmount = vtsOrchestrator.take(CurrencyLibrary.ADDRESS_ZERO, msgSender(), amount);
+         if (amount > 0 && amount > takeAmount) {
+             revert Errors.InsufficientBalance(takeAmount, amount);
+         } else if (amount == 0) {
+             amount = takeAmount;
+         }
+         if (amount == 0) {
+             return;
+         }
+ 
+         _wrap(amount);
+         Currency weth = Currency.wrap(address(WETH9));
+         _syncBalanceAsCredit(weth);
+     }
+ 
+     /// @notice Unwraps WETH to native ETH
+     /// @param amount The amount of WETH to unwrap (0 for max)
+     /// @param payerIsUser Whether the payer is the user (true) or deltas (false)
+     function _unwrapNative(uint256 amount, bool payerIsUser) internal {
+         Currency weth = Currency.wrap(address(WETH9));
+         if (payerIsUser) {
+             address payer = msgSender();
+             if (amount == 0) {
+                 amount = weth.balanceOf(payer);
+             }
+             // Use CurrencyTransfer with Permit2 fallback for user transfers
+             weth.transferFrom(payer, address(this), amount);
+         } else {
+             uint256 takeAmount = vtsOrchestrator.take(weth, msgSender(), amount);
+             if (amount > 0 && amount > takeAmount) {
+                 revert Errors.InsufficientBalance(takeAmount, amount);
+             } else if (amount == 0) {
+                 amount = takeAmount;
+             }
+             if (amount == 0) {
+                 return;
+             }
+         }
+         _unwrap(amount);
+         _creditExact(CurrencyLibrary.ADDRESS_ZERO, amount);
+     }
+ 
+     // ═══════════════════════════════════════════════════════════════════════════
+     // Overrides
+     // ═══════════════════════════════════════════════════════════════════════════
+ 
+     /// @notice Returns the token URI for a given token id using the commitment descriptor contract
+     function tokenURI(uint256 tokenId) public view override returns (string memory) {
+         if (commitmentDescriptor == address(0)) {
+             revert Errors.CommitmentDescriptorNotSet();
+         }
+         return ICommitmentDescriptor(commitmentDescriptor).tokenURI(tokenId);
+     }
+ 
+     /// @dev Overrides transferFrom to revert if pool manager is locked
+     /// @dev Prevents transfers while an unlock session is active (mid-batch)
+     function transferFrom(address from, address to, uint256 id) public virtual override onlyIfPoolManagerLocked {
+         super.transferFrom(from, to, id);
+     }
+ 
+     // ═══════════════════════════════════════════════════════════════════════════
+     // View Functions (delegate to impl via staticcall)
+     // ═══════════════════════════════════════════════════════════════════════════
+ 
+     /// @inheritdoc IMMPositionManager
+     /// @dev Delegates to impl via staticcall to satisfy interface requirements
+     function getPosition(uint256 tokenId, uint256 positionIndex)
+         external
+         view
+         returns (
+             Position memory, /* position */
+             PositionId /* positionId */
+         )
+     {
+         return vtsOrchestrator.getPosition(tokenId, positionIndex);
+     }
+ 
+     /// @inheritdoc IMMPositionManager
+     /// @dev Delegates to impl via staticcall to satisfy interface requirements
+     function getPositionId(uint256 tokenId, uint256 positionIndex) external view returns (PositionId) {
+         return vtsOrchestrator.getPositionId(tokenId, positionIndex);
+     }
+ 
+     /// @inheritdoc IMMPositionManager
+     function commitOf(uint256 tokenId)
+         external
+         view
+         returns (
+             MarketMaker.State memory state,
+             uint256 expiresAt,
+             uint256 positionCount,
+             uint256 activePositionCount,
+             uint256 inactiveRemnantCount
+         )
+     {
+         return vtsOrchestrator.getCommit(tokenId);
+     }
+ 
+     // ═══════════════════════════════════════════════════════════════════════════
+     // No-Locking Checkpoint Functions
+     // ═══════════════════════════════════════════════════════════════════════════
+ 
+     /// @notice Marks a checkpoint for a single position, optionally running backing checks
+     /// @param tokenId The ERC721 token id (commitment NFT id)
+     /// @param positionIndex The index of the position within the commitment
+     /// @param withCommitment Whether to run commitment backing checks and update deficits
+     function checkpoint(uint256 tokenId, uint256 positionIndex, bool withCommitment) external onlyIfPoolManagerLocked {
+         _checkpoint(tokenId, positionIndex, withCommitment);
+     }
+ }
+```
+
 ## LCC.sol
 
 File: `contracts/evm/src/LCC.sol`
 
-[Source](https://github.com/usherlabs/fiet-protocol/blob/43c9a5549e2b848453d63ca8246ed0db39b18c3b/contracts/evm/src/LCC.sol)
+[Source](https://github.com/usherlabs/fiet-protocol/blob/c4701cca39c86cfb6c6e2b3416fee5d89294b87a/contracts/evm/src/LCC.sol)
 
 ```diff
  // SPDX-License-Identifier: BUSL-1.1
@@ -1407,6 +2065,12 @@ File: `contracts/evm/src/LCC.sol`
          if (amount == 0) {
              revert Errors.InvalidAmount(0, 0);
          }
+         // Direct-backed mints require bucket accounting; exempt endpoints skip buckets (see early return below).
+         // Allowing directAmount > 0 to exempt would misalign `directSupply` with per-holder buckets and allow
+         // exempt->non-protocol transfers to reclassify Domain A liquidity as market-derived without `prepareMarketLiquidity`.
+         if (Bounds.isExempt(ILiquidityHub(hub).boundLevel(factory, to)) && directAmount > 0) {
+             revert Errors.DirectMintToExemptNotAllowed(to);
+         }
          _mint(to, amount);
          // Bucket bookkeeping is skipped only for bucket-exempt protocol endpoints.
          // Bound-role changes across the exempt boundary are restricted on-chain (see `BoundRegistry._setBoundLevel` / MKT-04A);
@@ -1462,9 +2126,6 @@ File: `contracts/evm/src/LCC.sol`
          }
  
          if (!fromProtocol && toProtocol) {
-+            if (Bounds.isExempt(toLevel) && !Bounds.isDex(toLevel) && _msgSender() != hub) {
-+                revert Errors.NotApproved(to);
-+            }
              _handleNonProtocolToProtocol(from, to, amount, toLevel);
              return;
          }
@@ -1489,8 +2150,12 @@ File: `contracts/evm/src/LCC.sol`
          // Before adjusting local buckets, annul any portion that bleeds into queued settlements.
          // This preserves queue/backing integrity across protocol-bound transfers; it is not itself
          // a substitute for settlement-time serviceability checks.
-         ILiquidityHub(hub)
-             .annulSettlementBeforeTransfer(from, wrappedBalances[from], marketDerivedBalances[from], amount);
+-        ILiquidityHub(hub)
+-            .annulSettlementBeforeTransfer(from, wrappedBalances[from], marketDerivedBalances[from], amount);
++        // Annul only for DEX/exempt sinks; skip for BOUND_ENDPOINTs to avoid custody/queue desync.
++        if (Bounds.isDex(toLevel) || Bounds.isExempt(toLevel)) {
++            ILiquidityHub(hub).annulSettlementBeforeTransfer(from, wrappedBalances[from], marketDerivedBalances[from], amount);
++        }
  
          // Non-protocol -> Protocol: decrement sender balances (market-derived first, then wrapped).
          uint256 fromMarketDerived = Math.min(marketDerivedBalances[from], amount);

@@ -631,35 +631,34 @@ contract VTSOrchestrator is
     // -----------------------------------------------------------------------------
 
     /// @notice Commit a liquidity signal to the VTS state
-    /// @dev Verifies the signal via SignalManager and stores it in the VTS state
-    /// @param sender The effective caller (locker) for commit authorisation
+    /// @dev Verifies the signal via SignalManager and stores it in the VTS state. `VTSCommitLib` derives the VRL proof
+    ///      principal as `mmState.owner` from `liquiditySignal`.
     /// @param liquiditySignal The liquidity signal to commit
     /// @return commitId The commit identifier for the committed signal
-    function commitSignal(IMarketFactory factory, address sender, bytes memory liquiditySignal)
+    function commitSignal(IMarketFactory factory, bytes memory liquiditySignal)
         external
         onlyIfPoolManagerUnlocked
         onlyIfVRLHandlersRegistered
         nonReentrant
         returns (uint256 commitId)
     {
-        commitId = VTSCommitLib.commitSignal(s, _commitRouterContext(), factory, _msgSender(), sender, liquiditySignal);
+        commitId = VTSCommitLib.commitSignal(s, _commitRouterContext(), factory, _msgSender(), liquiditySignal);
     }
 
     /// @notice Commit a liquidity signal using sender-signed EIP-712 relayer authorisation
-    /// @dev Same factory-bound sender resolution as `commitSignal`: unbound callers may only relay for themselves.
-    /// @param factory Market factory namespace for `_resolveSignalSender` / bound-caller checks only. Signature
+    /// @dev Relay auth nonces and EIP-712 `RelayAuth` recover to `mmState.owner` (derived inside `VTSCommitLib`).
+    /// @param factory Market factory namespace for factory registration and bound-caller checks only. Signature
     ///        verification and replay protection are enforced by `signalManager` (EIP-712 domain bound to
     ///        `verifyingContract`) and per-sender nonces — not by per-factory validation inside the signed payload.
     function commitSignalRelayed(
         IMarketFactory factory,
-        address sender,
         bytes memory liquiditySignal,
         uint256 deadline,
         uint256 authNonce,
         bytes memory authSig
     ) external onlyIfPoolManagerUnlocked onlyIfVRLHandlersRegistered nonReentrant returns (uint256 commitId) {
         commitId = VTSCommitLib.commitSignalRelayed(
-            s, _commitRouterContext(), factory, _msgSender(), sender, liquiditySignal, deadline, authNonce, authSig
+            s, _commitRouterContext(), factory, _msgSender(), liquiditySignal, deadline, authNonce, authSig
         );
     }
 
@@ -796,11 +795,11 @@ contract VTSOrchestrator is
     }
 
     /// @notice Renew a liquidity signal for an existing commit
-    /// @dev Intended for router-style callers (e.g. MMPositionManager) where msg.sender is a forwarding contract.
-    /// @param sender The effective caller (locker) used for advancer validation
+    /// @dev Intended for router-style callers (e.g. MMPositionManager). `VTSCommitLib` derives the VRL proof principal
+    ///      as `mmState.advancer` from `liquiditySignal`.
     /// @param commitId The commit identifier to renew
     /// @param liquiditySignal The new liquidity signal
-    function renewSignal(IMarketFactory factory, address sender, uint256 commitId, bytes memory liquiditySignal)
+    function renewSignal(IMarketFactory factory, uint256 commitId, bytes memory liquiditySignal)
         external
         onlyIfPoolManagerUnlocked
         onlyIfVRLHandlersRegistered
@@ -808,17 +807,16 @@ contract VTSOrchestrator is
     {
         // Validate commit exists (but don't require live signal - expired signals can be seized)
         _assertSignalValid(commitId, false);
-        VTSCommitLib.renewSignal(s, _commitRouterContext(), factory, _msgSender(), sender, commitId, liquiditySignal);
+        VTSCommitLib.renewSignal(s, _commitRouterContext(), factory, _msgSender(), commitId, liquiditySignal);
     }
 
     /// @notice Renew a liquidity signal using sender-signed EIP-712 relayer authorisation
-    /// @dev Same factory-bound sender resolution as `renewSignal`: unbound callers may only relay for themselves.
-    /// @param factory Market factory namespace for `_resolveSignalSender` / bound-caller checks only. EIP-712
+    /// @dev Relay auth recovers to `mmState.advancer` (derived inside `VTSCommitLib`).
+    /// @param factory Market factory namespace for factory registration and bound-caller checks only. EIP-712
     ///        verification remains under `signalManager`; renewals are tied to `commitId` and validated liquidity
     ///        signal ownership within `VTSCommitLib.renewSignalRelayed`.
     function renewSignalRelayed(
         IMarketFactory factory,
-        address sender,
         uint256 commitId,
         bytes memory liquiditySignal,
         uint256 deadline,
@@ -827,16 +825,7 @@ contract VTSOrchestrator is
     ) external onlyIfPoolManagerUnlocked onlyIfVRLHandlersRegistered nonReentrant {
         _assertSignalValid(commitId, false);
         VTSCommitLib.renewSignalRelayed(
-            s,
-            _commitRouterContext(),
-            factory,
-            _msgSender(),
-            sender,
-            commitId,
-            liquiditySignal,
-            deadline,
-            authNonce,
-            authSig
+            s, _commitRouterContext(), factory, _msgSender(), commitId, liquiditySignal, deadline, authNonce, authSig
         );
     }
 

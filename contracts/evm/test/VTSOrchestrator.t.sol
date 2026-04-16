@@ -112,12 +112,7 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
         vm.expectRevert(abi.encodeWithSelector(Errors.InvalidAddress.selector, address(0)));
         unlockCaller.run(
             address(vtsOrchestrator),
-            abi.encodeWithSelector(
-                VTSOrchestrator.commitSignal.selector,
-                IMarketFactory(marketFactory),
-                liquiditySignal.mmState.owner,
-                signalBytes
-            )
+            abi.encodeWithSelector(VTSOrchestrator.commitSignal.selector, IMarketFactory(marketFactory), signalBytes)
         );
     }
 
@@ -130,7 +125,6 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
             abi.encodeWithSelector(
                 VTSOrchestrator.commitSignalRelayed.selector,
                 IMarketFactory(marketFactory),
-                liquiditySignal.mmState.owner,
                 signalBytes,
                 uint256(0),
                 uint256(0),
@@ -165,10 +159,7 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
             unlockCaller.run(
                 address(vtsOrchestrator),
                 abi.encodeWithSelector(
-                    VTSOrchestrator.commitSignal.selector,
-                    IMarketFactory(marketFactory),
-                    liquiditySignal.mmState.owner,
-                    signalBytes
+                    VTSOrchestrator.commitSignal.selector, IMarketFactory(marketFactory), signalBytes
                 )
             ),
             (uint256)
@@ -184,11 +175,7 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
         unlockCaller.run(
             address(vtsOrchestrator),
             abi.encodeWithSelector(
-                bytes4(keccak256("renewSignal(address,address,uint256,bytes)")),
-                IMarketFactory(marketFactory),
-                sameOwnerRenew.mmState.advancer,
-                commitId,
-                renewSignalBytes
+                VTSOrchestrator.renewSignal.selector, IMarketFactory(marketFactory), commitId, renewSignalBytes
             )
         );
     }
@@ -200,10 +187,7 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
             unlockCaller.run(
                 address(vtsOrchestrator),
                 abi.encodeWithSelector(
-                    VTSOrchestrator.commitSignal.selector,
-                    IMarketFactory(marketFactory),
-                    liquiditySignal.mmState.owner,
-                    signalBytes
+                    VTSOrchestrator.commitSignal.selector, IMarketFactory(marketFactory), signalBytes
                 )
             ),
             (uint256)
@@ -220,7 +204,6 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
             abi.encodeWithSelector(
                 VTSOrchestrator.renewSignalRelayed.selector,
                 IMarketFactory(marketFactory),
-                sameOwnerRenew.mmState.advancer,
                 commitId,
                 renewSignalBytes,
                 uint256(0),
@@ -285,7 +268,7 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
     function test_revert_commitSignal_whenPoolManagerLocked() public {
         bytes memory signalBytes = abi.encode(liquiditySignal);
         vm.expectRevert(Errors.PoolManagerMustBeUnlocked.selector);
-        vtsOrchestrator.commitSignal(IMarketFactory(marketFactory), liquiditySignal.mmState.owner, signalBytes);
+        vtsOrchestrator.commitSignal(IMarketFactory(marketFactory), signalBytes);
     }
 
     /// @dev Authorised relayer is the orchestrator `msg.sender` at commit time (here: `unlockCaller`), not the VRL principal.
@@ -293,12 +276,7 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
         bytes memory signalBytes = abi.encode(liquiditySignal);
         unlockCaller.run(
             address(vtsOrchestrator),
-            abi.encodeWithSelector(
-                VTSOrchestrator.commitSignal.selector,
-                IMarketFactory(marketFactory),
-                liquiditySignal.mmState.owner,
-                signalBytes
-            )
+            abi.encodeWithSelector(VTSOrchestrator.commitSignal.selector, IMarketFactory(marketFactory), signalBytes)
         );
         assertEq(vtsOrchestrator.getCommitAuthorisedRelayer(1), address(unlockCaller));
     }
@@ -322,7 +300,6 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
             abi.encodeWithSelector(
                 VTSOrchestrator.commitSignalRelayed.selector,
                 IMarketFactory(marketFactory),
-                adv7702,
                 signalBytes,
                 deadline,
                 authNonce,
@@ -337,17 +314,12 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
         bytes memory signalBytes = abi.encode(liquiditySignal);
         unlockCaller.run(
             address(vtsOrchestrator),
-            abi.encodeWithSelector(
-                VTSOrchestrator.commitSignal.selector,
-                IMarketFactory(marketFactory),
-                liquiditySignal.mmState.owner,
-                signalBytes
-            )
+            abi.encodeWithSelector(VTSOrchestrator.commitSignal.selector, IMarketFactory(marketFactory), signalBytes)
         );
 
         // Now try to renew when locked
         vm.expectRevert(Errors.PoolManagerMustBeUnlocked.selector);
-        vtsOrchestrator.renewSignal(IMarketFactory(marketFactory), liquiditySignal.mmState.advancer, 1, signalBytes);
+        vtsOrchestrator.renewSignal(IMarketFactory(marketFactory), 1, signalBytes);
     }
 
     function test_creditExact_revert_whenCallerUnboundForFactory() public {
@@ -373,12 +345,7 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
         vm.expectRevert(Errors.InvalidSender.selector);
         unlockCaller.run(
             address(vtsOrchestrator),
-            abi.encodeWithSelector(
-                VTSOrchestrator.commitSignal.selector,
-                IMarketFactory(marketFactory),
-                liquiditySignal.mmState.owner,
-                signalBytes
-            )
+            abi.encodeWithSelector(VTSOrchestrator.commitSignal.selector, IMarketFactory(marketFactory), signalBytes)
         );
     }
 
@@ -399,11 +366,7 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
         unlockCaller.run(
             address(vtsOrchestrator),
             abi.encodeWithSelector(
-                bytes4(keccak256("renewSignal(address,address,uint256,bytes)")),
-                address(marketFactory),
-                sameOwnerRenew.mmState.advancer,
-                commitId,
-                renewSignalBytes
+                VTSOrchestrator.renewSignal.selector, address(marketFactory), commitId, renewSignalBytes
             )
         );
     }
@@ -422,7 +385,6 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
             abi.encodeWithSelector(
                 VTSOrchestrator.commitSignalRelayed.selector,
                 IMarketFactory(marketFactory),
-                liquiditySignal.mmState.owner,
                 signalBytes,
                 uint256(0),
                 uint256(0),
@@ -438,10 +400,7 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
             unlockCaller.run(
                 address(vtsOrchestrator),
                 abi.encodeWithSelector(
-                    VTSOrchestrator.commitSignal.selector,
-                    IMarketFactory(marketFactory),
-                    liquiditySignal.mmState.owner,
-                    signalBytes
+                    VTSOrchestrator.commitSignal.selector, IMarketFactory(marketFactory), signalBytes
                 )
             ),
             (uint256)
@@ -463,7 +422,6 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
             abi.encodeWithSelector(
                 VTSOrchestrator.renewSignalRelayed.selector,
                 IMarketFactory(marketFactory),
-                sameOwnerRenew.mmState.advancer,
                 commitId,
                 renewSignalBytes,
                 uint256(0),
@@ -934,12 +892,7 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
 
         bytes memory result = unlockCaller.run(
             address(vtsOrchestrator),
-            abi.encodeWithSelector(
-                VTSOrchestrator.commitSignal.selector,
-                IMarketFactory(marketFactory),
-                liquiditySignal.mmState.owner,
-                signalBytes
-            )
+            abi.encodeWithSelector(VTSOrchestrator.commitSignal.selector, IMarketFactory(marketFactory), signalBytes)
         );
         uint256 commitId = abi.decode(result, (uint256));
 
@@ -963,12 +916,7 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
 
         bytes memory result = unlockCaller.run(
             address(vtsOrchestrator),
-            abi.encodeWithSelector(
-                VTSOrchestrator.commitSignal.selector,
-                IMarketFactory(marketFactory),
-                liquiditySignal.mmState.owner,
-                signalBytes
-            )
+            abi.encodeWithSelector(VTSOrchestrator.commitSignal.selector, IMarketFactory(marketFactory), signalBytes)
         );
         uint256 commitId = abi.decode(result, (uint256));
 
@@ -992,13 +940,7 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
         vm.expectRevert(abi.encodeWithSelector(Errors.InvalidSignal.selector, uint256(0)));
         unlockCaller.run(
             address(vtsOrchestrator),
-            abi.encodeWithSelector(
-                bytes4(keccak256("renewSignal(address,address,uint256,bytes)")),
-                address(marketFactory),
-                address(this),
-                0,
-                signalBytes
-            )
+            abi.encodeWithSelector(VTSOrchestrator.renewSignal.selector, address(marketFactory), 0, signalBytes)
         );
     }
 
@@ -1018,12 +960,7 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
 
         bytes memory result = unlockCaller.run(
             address(vtsOrchestrator),
-            abi.encodeWithSelector(
-                VTSOrchestrator.commitSignal.selector,
-                IMarketFactory(marketFactory),
-                liquiditySignal.mmState.owner,
-                signalBytes
-            )
+            abi.encodeWithSelector(VTSOrchestrator.commitSignal.selector, IMarketFactory(marketFactory), signalBytes)
         );
         uint256 commitId = abi.decode(result, (uint256));
 
@@ -1050,11 +987,7 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
         unlockCaller.run(
             address(vtsOrchestrator),
             abi.encodeWithSelector(
-                bytes4(keccak256("renewSignal(address,address,uint256,bytes)")),
-                address(marketFactory),
-                liquiditySignal.mmState.advancer,
-                commitId,
-                renewSignalBytes
+                VTSOrchestrator.renewSignal.selector, address(marketFactory), commitId, renewSignalBytes
             )
         );
 
@@ -1099,10 +1032,7 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
             unlockCaller.run(
                 address(vtsOrchestrator),
                 abi.encodeWithSelector(
-                    VTSOrchestrator.commitSignal.selector,
-                    IMarketFactory(marketFactory),
-                    baseSig.mmState.owner,
-                    commitBytes
+                    VTSOrchestrator.commitSignal.selector, IMarketFactory(marketFactory), commitBytes
                 )
             ),
             (uint256)
@@ -1123,11 +1053,7 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
         unlockCaller.run(
             address(vtsOrchestrator),
             abi.encodeWithSelector(
-                bytes4(keccak256("renewSignal(address,address,uint256,bytes)")),
-                IMarketFactory(marketFactory),
-                emptyRenew.mmState.advancer,
-                commitId,
-                emptyBytes
+                VTSOrchestrator.renewSignal.selector, IMarketFactory(marketFactory), commitId, emptyBytes
             )
         );
 
@@ -1158,11 +1084,7 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
         unlockCaller.run(
             address(vtsOrchestrator),
             abi.encodeWithSelector(
-                bytes4(keccak256("renewSignal(address,address,uint256,bytes)")),
-                IMarketFactory(marketFactory),
-                restore.mmState.advancer,
-                commitId,
-                restoreBytes
+                VTSOrchestrator.renewSignal.selector, IMarketFactory(marketFactory), commitId, restoreBytes
             )
         );
 
@@ -1192,11 +1114,7 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
         unlockCaller.run(
             address(vtsOrchestrator),
             abi.encodeWithSelector(
-                bytes4(keccak256("renewSignal(address,address,uint256,bytes)")),
-                IMarketFactory(marketFactory),
-                emptyRenew.mmState.advancer,
-                tokenId,
-                emptyBytes
+                VTSOrchestrator.renewSignal.selector, IMarketFactory(marketFactory), tokenId, emptyBytes
             )
         );
 
@@ -1229,11 +1147,7 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
         unlockCaller.run(
             address(vtsOrchestrator),
             abi.encodeWithSelector(
-                bytes4(keccak256("renewSignal(address,address,uint256,bytes)")),
-                IMarketFactory(marketFactory),
-                emptyRenew.mmState.advancer,
-                tokenId,
-                emptyBytes
+                VTSOrchestrator.renewSignal.selector, IMarketFactory(marketFactory), tokenId, emptyBytes
             )
         );
 
@@ -1267,11 +1181,7 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
         unlockCaller.run(
             address(vtsOrchestrator),
             abi.encodeWithSelector(
-                bytes4(keccak256("renewSignal(address,address,uint256,bytes)")),
-                IMarketFactory(marketFactory),
-                emptyRenew.mmState.advancer,
-                tokenId,
-                emptyBytes
+                VTSOrchestrator.renewSignal.selector, IMarketFactory(marketFactory), tokenId, emptyBytes
             )
         );
 
@@ -1311,11 +1221,7 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
         unlockCaller.run(
             address(vtsOrchestrator),
             abi.encodeWithSelector(
-                bytes4(keccak256("renewSignal(address,address,uint256,bytes)")),
-                IMarketFactory(marketFactory),
-                emptyRenew.mmState.advancer,
-                tokenId,
-                emptyBytes
+                VTSOrchestrator.renewSignal.selector, IMarketFactory(marketFactory), tokenId, emptyBytes
             )
         );
 
@@ -1364,11 +1270,7 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
         unlockCaller.run(
             address(vtsOrchestrator),
             abi.encodeWithSelector(
-                bytes4(keccak256("renewSignal(address,address,uint256,bytes)")),
-                IMarketFactory(marketFactory),
-                emptyRenew.mmState.advancer,
-                tokenId,
-                emptyBytes
+                VTSOrchestrator.renewSignal.selector, IMarketFactory(marketFactory), tokenId, emptyBytes
             )
         );
 
@@ -1405,11 +1307,7 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
         unlockCaller.run(
             address(vtsOrchestrator),
             abi.encodeWithSelector(
-                bytes4(keccak256("renewSignal(address,address,uint256,bytes)")),
-                IMarketFactory(marketFactory),
-                emptyRenew.mmState.advancer,
-                tokenId,
-                emptyBytes
+                VTSOrchestrator.renewSignal.selector, IMarketFactory(marketFactory), tokenId, emptyBytes
             )
         );
 
@@ -2639,11 +2537,7 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
         unlockCaller.run(
             address(vtsOrchestrator),
             abi.encodeWithSelector(
-                bytes4(keccak256("renewSignal(address,address,uint256,bytes)")),
-                IMarketFactory(marketFactory),
-                renewSignal.mmState.advancer,
-                tokenId,
-                renewSignalBytes
+                VTSOrchestrator.renewSignal.selector, IMarketFactory(marketFactory), tokenId, renewSignalBytes
             )
         );
     }

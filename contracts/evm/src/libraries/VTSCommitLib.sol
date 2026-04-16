@@ -229,9 +229,12 @@ library VTSCommitLib {
     }
 
     /// @dev Shared body for linked `commitSignal` and orchestrator router overload.
+    /// @param sender Address passed to `VRLSignalManager` as the proof-authenticated principal (must satisfy
+    ///        `_assertSenderAuthorised`). For fresh commit this is always `signal.mmState.owner` (see
+    ///        `_resolveFreshCommitProofPrincipal`).
     /// @param authorisedRelayer The `msg.sender` to `VTSOrchestrator` commit entrypoints (e.g. `MMPositionManager`),
     ///        persisted so CoreHook MM ops can require `processPosition(owner) == authorisedRelayer`. This is distinct
-    ///        from `sender` passed to VRL (effective MM principal for proof verification).
+    ///        from `sender` passed to VRL (proof principal for verification).
     //#olympix-ignore-reentrancy
     function _commitSignalLinked(
         VTSStorage storage s,
@@ -484,21 +487,42 @@ library VTSCommitLib {
         if (!ctx.liquidityHub.isFactory(address(factory))) revert Errors.InvalidSender();
     }
 
-    /// @dev Resolves which address is passed to VRL as the MM principal (`effectiveSender`). Bound callers may forward
-    ///      a different `sender` for proof verification; that does not grant the forwarder rights to operate the commit
-    ///      on the CoreHook path — that is enforced separately via `Commit.authorisedRelayer` (the orchestrator `caller`).
-    function _resolveSignalSender(
+    /// @dev Fresh commit: VRL proof principal is always `signal.mmState.owner`. Factory-bound routers may submit on
+    ///      behalf of that owner; unbound orchestrator callers must be the owner.
+    function _resolveFreshCommitProofPrincipal(
         VTSCommitRouterContext memory ctx,
         IMarketFactory factory,
         address caller,
-        address sender
-    ) private view returns (address effectiveSender) {
-        _assertRegisteredFactory(ctx, factory);
-        if (MarketHandlerLib.isBounds(factory, caller)) {
-            return sender;
+        bytes memory liquiditySignal
+    ) private view returns (address mmOwner) {
+        if (liquiditySignal.length == 0) {
+            revert Errors.InvalidLiquiditySignal(0, 0, 0);
         }
-        if (sender != caller) revert Errors.InvalidSender();
-        return caller;
+        LiquiditySignal memory signal = abi.decode(liquiditySignal, (LiquiditySignal));
+        mmOwner = signal.mmState.owner;
+        _assertRegisteredFactory(ctx, factory);
+        if (!MarketHandlerLib.isBounds(factory, caller)) {
+            if (caller != mmOwner) revert Errors.InvalidSender();
+        }
+    }
+
+    /// @dev Renewal: VRL proof principal is `signal.mmState.advancer`. Factory-bound routers may submit on behalf of
+    ///      that advancer; unbound orchestrator callers must be the advancer.
+    function _resolveRenewProofPrincipal(
+        VTSCommitRouterContext memory ctx,
+        IMarketFactory factory,
+        address caller,
+        bytes memory liquiditySignal
+    ) private view returns (address mmAdvancer) {
+        if (liquiditySignal.length == 0) {
+            revert Errors.InvalidLiquiditySignal(0, 0, 0);
+        }
+        LiquiditySignal memory signal = abi.decode(liquiditySignal, (LiquiditySignal));
+        mmAdvancer = signal.mmState.advancer;
+        _assertRegisteredFactory(ctx, factory);
+        if (!MarketHandlerLib.isBounds(factory, caller)) {
+            if (caller != mmAdvancer) revert Errors.InvalidSender();
+        }
     }
 
     /// @dev Commitment backing (optional) plus RFS checkpoint marking from current stored accounting.
@@ -575,11 +599,10 @@ library VTSCommitLib {
         VTSCommitRouterContext memory ctx,
         IMarketFactory factory,
         address caller,
-        address sender,
         bytes memory liquiditySignal
     ) external returns (uint256 commitId) {
-        address effectiveSender = _resolveSignalSender(ctx, factory, caller, sender);
-        commitId = _commitSignalLinked(s, effectiveSender, ctx.signalManager, ctx.oracleHelper, liquiditySignal, caller);
+        address mmOwner = _resolveFreshCommitProofPrincipal(ctx, factory, caller, liquiditySignal);
+        commitId = _commitSignalLinked(s, mmOwner, ctx.signalManager, ctx.oracleHelper, liquiditySignal, caller);
     }
 
     function commitSignalRelayed(
@@ -587,15 +610,12 @@ library VTSCommitLib {
         VTSCommitRouterContext memory ctx,
         IMarketFactory factory,
         address caller,
-        address sender,
         bytes memory liquiditySignal,
         uint256 deadline,
         uint256 authNonce,
         bytes memory authSig
     ) external returns (uint256 commitId) {
-        return _commitSignalRelayedRouter(
-            s, ctx, factory, caller, sender, liquiditySignal, deadline, authNonce, authSig
-        );
+        return _commitSignalRelayedRouter(s, ctx, factory, caller, liquiditySignal, deadline, authNonce, authSig);
     }
 
     /// @dev Split from `commitSignalRelayed` to avoid stack-too-deep in the external entrypoint.
@@ -604,16 +624,15 @@ library VTSCommitLib {
         VTSCommitRouterContext memory ctx,
         IMarketFactory factory,
         address caller,
-        address sender,
         bytes memory liquiditySignal,
         uint256 deadline,
         uint256 authNonce,
         bytes memory authSig
     ) private returns (uint256 commitId) {
-        address effectiveSender = _resolveSignalSender(ctx, factory, caller, sender);
+        address mmOwner = _resolveFreshCommitProofPrincipal(ctx, factory, caller, liquiditySignal);
         commitId = _commitSignalRelayedLinked(
             s,
-            effectiveSender,
+            mmOwner,
             ctx.signalManager,
             ctx.oracleHelper,
             CommitRelayedBundle({
@@ -631,12 +650,11 @@ library VTSCommitLib {
         VTSCommitRouterContext memory ctx,
         IMarketFactory factory,
         address caller,
-        address sender,
         uint256 commitId,
         bytes memory liquiditySignal
     ) external {
-        address effectiveSender = _resolveSignalSender(ctx, factory, caller, sender);
-        _renewSignalLinked(s, effectiveSender, ctx.signalManager, ctx.oracleHelper, commitId, liquiditySignal);
+        address mmAdvancer = _resolveRenewProofPrincipal(ctx, factory, caller, liquiditySignal);
+        _renewSignalLinked(s, mmAdvancer, ctx.signalManager, ctx.oracleHelper, commitId, liquiditySignal);
     }
 
     function renewSignalRelayed(
@@ -644,24 +662,15 @@ library VTSCommitLib {
         VTSCommitRouterContext memory ctx,
         IMarketFactory factory,
         address caller,
-        address sender,
         uint256 commitId,
         bytes memory liquiditySignal,
         uint256 deadline,
         uint256 authNonce,
         bytes memory authSig
     ) external {
-        address effectiveSender = _resolveSignalSender(ctx, factory, caller, sender);
+        address mmAdvancer = _resolveRenewProofPrincipal(ctx, factory, caller, liquiditySignal);
         _renewSignalRelayedLinked(
-            s,
-            effectiveSender,
-            ctx.signalManager,
-            ctx.oracleHelper,
-            commitId,
-            liquiditySignal,
-            deadline,
-            authNonce,
-            authSig
+            s, mmAdvancer, ctx.signalManager, ctx.oracleHelper, commitId, liquiditySignal, deadline, authNonce, authSig
         );
     }
 }

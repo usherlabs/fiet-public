@@ -112,6 +112,9 @@ contract VRLSignalManager is Ownable, EIP712, IVRLSignalManager {
         emit SubmitAuthNonceSeeded(sender, previousNonce, minimumNonce);
     }
 
+    /// @dev Authorises the address acting as the VRL proof principal. `MMPositionManager` fresh commit supplies
+    ///      `mmState.owner` (direct path: locker must equal owner; relayed: owner signs relay auth, NFT may mint elsewhere).
+    ///      Other orchestrator callers may still pass `owner` or `advancer` per this check.
     function _assertSenderAuthorised(LiquiditySignal memory signal, address sender) internal pure {
         if (sender != signal.mmState.owner && sender != signal.mmState.advancer) {
             revert Errors.InvalidSender();

@@ -109,43 +109,37 @@ contract VTSLifecycleLinkedLibHarness {
         VTSCommitRouterContext memory ctx,
         IMarketFactory factory,
         address caller,
-        address sender,
         bytes memory liquiditySignal
     ) external returns (uint256 commitId) {
-        return VTSCommitLib.commitSignal(s, ctx, factory, caller, sender, liquiditySignal);
+        return VTSCommitLib.commitSignal(s, ctx, factory, caller, liquiditySignal);
     }
 
     function commitSignalRelayed(
         VTSCommitRouterContext memory ctx,
         IMarketFactory factory,
         address caller,
-        address sender,
         bytes memory liquiditySignal,
         uint256 deadline,
         uint256 authNonce,
         bytes memory authSig
     ) external returns (uint256 commitId) {
-        return VTSCommitLib.commitSignalRelayed(
-            s, ctx, factory, caller, sender, liquiditySignal, deadline, authNonce, authSig
-        );
+        return VTSCommitLib.commitSignalRelayed(s, ctx, factory, caller, liquiditySignal, deadline, authNonce, authSig);
     }
 
     function renewSignal(
         VTSCommitRouterContext memory ctx,
         IMarketFactory factory,
         address caller,
-        address sender,
         uint256 commitId,
         bytes memory liquiditySignal
     ) external {
-        VTSCommitLib.renewSignal(s, ctx, factory, caller, sender, commitId, liquiditySignal);
+        VTSCommitLib.renewSignal(s, ctx, factory, caller, commitId, liquiditySignal);
     }
 
     function renewSignalRelayed(
         VTSCommitRouterContext memory ctx,
         IMarketFactory factory,
         address caller,
-        address sender,
         uint256 commitId,
         bytes memory liquiditySignal,
         uint256 deadline,
@@ -153,7 +147,7 @@ contract VTSLifecycleLinkedLibHarness {
         bytes memory authSig
     ) external {
         VTSCommitLib.renewSignalRelayed(
-            s, ctx, factory, caller, sender, commitId, liquiditySignal, deadline, authNonce, authSig
+            s, ctx, factory, caller, commitId, liquiditySignal, deadline, authNonce, authSig
         );
     }
 

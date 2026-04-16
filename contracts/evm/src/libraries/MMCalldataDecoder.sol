@@ -397,7 +397,9 @@ library MMCalldataDecoder {
     /// @dev COMMIT_SIGNAL: (bytes liquiditySignal, bytes relayParams)
     /// @param params The calldata bytes to decode
     /// @return liquiditySignal The liquidity signal bytes
-    /// @return relayParams Optional relayer auth params encoded as (uint256 deadline, uint256 authNonce, bytes authSig)
+    /// @return relayParams Optional relayer auth params encoded as (uint256 deadline, uint256 authNonce, bytes authSig).
+    ///         When non-empty, VRL relay verification uses `mmState.owner` as the proof principal; EIP-712 recovery and
+    ///         `submitAuthNonce` are keyed to that address while the commitment NFT still mints to the batch locker.
     function decodeCommitSignalParams(bytes calldata params)
         internal
         pure
