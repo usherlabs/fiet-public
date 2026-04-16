@@ -1539,6 +1539,75 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
         assertEq(positionManager.queueCustodian().queued(0, lccAddr, locker), amount * 2);
     }
 
+    /// @notice Delta-funded `UNWRAP_LCC` after Hub queue annulment: reconcile releases excess utility custody before
+    ///         `unwrapTo`. Annul by transferring to `liquidityHub` (not MMPM) so the next `SYNC` only credits the new
+    ///         tranche—otherwise residual delta credit breaks batch settlement (`CurrencyNotSettled`).
+    function test_unwrapLcc_fromDeltas_reconcilesExcessAfterQueueAnnulment() public {
+        address locker = makeAddr("lockerDeltaReconcileAfterAnnul");
+        address lccAddr = address(lcc0);
+        uint256 q = 200;
+        uint256 fresh = 50;
+        MockERC20 underlying = MockERC20(lcc0.underlying());
+
+        vm.prank(marketFactory);
+        ILiquidityHub(liquidityHub).setBoundLevel(address(positionManager), Bounds.BOUND_NONE);
+        vm.prank(marketFactory);
+        ILiquidityHub(liquidityHub).setBoundLevel(address(positionManager), Bounds.BOUND_ENDPOINT);
+
+        underlying.mint(address(liquidityHub), q * 3);
+        vm.prank(address(vtsOrchestrator));
+        ILiquidityHub(liquidityHub).confirmTake(lccAddr, q * 3, false);
+        _setDirectSupply(lccAddr, 0);
+
+        lcc0.transfer(liquidityHub, q);
+        vm.prank(liquidityHub);
+        lcc0.transfer(address(positionManager), q);
+
+        vm.mockCall(
+            marketFactory, abi.encodeWithSelector(IMarketFactory.useMarketLiquidity.selector), abi.encode(uint256(0))
+        );
+
+        MMA.PreparedAction[] memory first = new MMA.PreparedAction[](2);
+        first[0] = MMA.prepareSync(Currency.wrap(lccAddr));
+        first[1] = MMA.prepareUnwrapLcc(lccAddr, q, locker, false);
+        _executeLiquidityAs(locker, first);
+
+        assertEq(ILiquidityHub(liquidityHub).settleQueue(lccAddr, locker), q);
+        assertEq(positionManager.queueCustodian().queued(0, lccAddr, locker), q);
+
+        // Full annul: non-protocol -> protocol transfer of `q` while liquid == queued bleeds the full queue off Hub.
+        lcc0.transfer(liquidityHub, q);
+        vm.prank(liquidityHub);
+        lcc0.transfer(locker, q);
+        vm.prank(locker);
+        lcc0.transfer(liquidityHub, q);
+
+        assertEq(ILiquidityHub(liquidityHub).settleQueue(lccAddr, locker), 0, "annulment clears hub queue");
+        assertEq(
+            positionManager.queueCustodian().queued(0, lccAddr, locker), q, "utility custody drift until next unwrap"
+        );
+
+        assertEq(lcc0.balanceOf(locker), 0, "locker spent annul funding");
+
+        lcc0.transfer(liquidityHub, fresh);
+        vm.prank(liquidityHub);
+        lcc0.transfer(address(positionManager), fresh);
+
+        MMA.PreparedAction[] memory second = new MMA.PreparedAction[](2);
+        second[0] = MMA.prepareSync(Currency.wrap(lccAddr));
+        second[1] = MMA.prepareUnwrapLcc(lccAddr, fresh, locker, false);
+        _executeLiquidityAs(locker, second);
+
+        assertEq(ILiquidityHub(liquidityHub).settleQueue(lccAddr, locker), fresh, "second leg shortfall re-queues");
+        assertEq(positionManager.queueCustodian().queued(0, lccAddr, locker), fresh);
+        assertEq(
+            IEndpointUnwrapAdmission(address(positionManager)).unwrapAdmissionCredit(lccAddr, locker),
+            fresh,
+            "admission tracks post-reconcile custody"
+        );
+        assertEq(lcc0.balanceOf(locker), q, "reconcile released custodied excess before delta unwrap");
+    }
+
     /// @notice Control: when MMPM is bucket-tracked (BOUND_ENDPOINT) and holds market-derived balance, unwrap should
     ///         attempt market liquidity when directSupply is 0.
     function test_unwrapLcc_fromDeltas_mmpmBoundEndpoint_marketDerived_callsUseMarketLiquidity_whenDirectSupplyZero()
@@ -1934,8 +2003,8 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
     /// @notice Scan #22 finding #3 (narrowed): utility-bucket custody can exceed live Hub queue after queue annulment;
     ///         the next `UNWRAP_LCC` reconciles by releasing excess LCC to the beneficiary before unwrap.
     /// @dev `_unwrapLccFromDeltas` invokes the same `_reconcileUtilityCustodyWithHubQueue` hook (before `unwrapTo`)
-    ///      when `vtsOrchestrator.take` returns a positive amount; delta-funded batches need the usual `SYNC`/`TAKE`
-    ///      hygiene to end the unlock without `CurrencyNotSettled`, so this file asserts the payer path end-to-end.
+    ///      when `vtsOrchestrator.take` returns a positive amount. See `test_unwrapLcc_fromDeltas_reconcilesExcessAfterQueueAnnulment`
+    ///      for a delta-funded end-to-end case (annul to `liquidityHub` so the follow-on `SYNC` does not over-credit).
     function test_unwrapLcc_utilityCustody_reconcilesExcessAfterQueueAnnulment() public {
         address victim = makeAddr("victimUtilityReconcile");
         address lccAddr = address(lcc0);
