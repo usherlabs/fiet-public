@@ -59,14 +59,15 @@ test = "test/fuzz"
 out = "out-echidna"
 libraries = [
   "src/libraries/LCCFactoryLib.sol:LCCFactoryLinkedLib:0x5a3842f9d1b0f96003669a36ec4a09165bc7de54",
-  "src/libraries/LiquidityHubLinkedLib.sol:LiquidityHubLinkedLib:0xb3a02cd6d8fb5b8fe16dd569edf8be35a87bd0fa",
+  "src/libraries/LiquidityHubLinkedLib.sol:LiquidityHubLinkedLib:0x5be262f2f2f9b3b5c70a256526ee9c6dd8fc9e02",
   # Prevent HEVM crashes by eliminating unlinked placeholders in unrelated contracts (e.g. VTSOrchestrator).
   # Deterministic CREATE2 address deployed by the SIG-BACKING harness (avoids any RPC fetch attempts).
-  "src/libraries/VTSCommitLib.sol:VTSCommitLib:0x6215030bfa6e034ffe347cbe7237e37e5f1eec61",
+  "src/libraries/VTSCommitLib.sol:VTSCommitLib:0x889369e439273e308b0b53a350f8220e43987844",
   "src/libraries/VTSFeeLib.sol:VTSFeeLinkedLib:0xe2f744d132a1b346acd29e304181edf2bf9831b8",
   # Deterministic CREATE2 address deployed by `VTSPositionLibEchidnaHarness` (avoids Echidna RPC fetch attempts).
-  "src/libraries/VTSPositionLib.sol:VTSPositionLib:0x68b09dc7c71462b7652f34f74b10b0e47b61abc4",
-  "src/libraries/VTSLifecycleLinkedLib.sol:VTSLifecycleLinkedLib:0x982a481b4c9f3fd5e732c38c30961c84f3e4f510",
+  "src/libraries/VTSPositionLib.sol:VTSPositionLib:0x96ca0aafff95767ec2b22b752911ade4e0f283cc",
+  "src/libraries/VTSLifecycleLinkedLib.sol:VTSLifecycleLinkedLib:0xd9092aded1e53bcd716e00abff1dd339e09ab083",
+  "src/libraries/VTSPositionMMOpsLib.sol:VTSPositionMMOpsLib:0x70a36438e2102a59c6dd01b9b7c57497ea4154fa",
   # Intentional placeholder for libs not CREATE2-validated by this script.
   "src/libraries/VTSSwapLib.sol:VTSSwapLib:0x1111111111111111111111111111111111111112",
 ]
@@ -74,7 +75,7 @@ libraries = [
 [profile.prod]
 # ! Production deployments will adopt the Profile in contracts/evm-scripts/foundry.toml
 # ! This profile is only used for production builds in local development, and testing.
-optimizer_runs = 100
+optimizer_runs = 25000
 optimizer = true
 via_ir = true
 ffi = true
