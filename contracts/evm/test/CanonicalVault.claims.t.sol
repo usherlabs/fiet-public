@@ -9,10 +9,10 @@ import {CurrencySettler} from "@uniswap/v4-core/test/utils/CurrencySettler.sol";
 import {IERC20Minimal} from "@uniswap/v4-core/src/interfaces/external/IERC20Minimal.sol";
 import {IERC6909Claims} from "@uniswap/v4-core/src/interfaces/external/IERC6909Claims.sol";
 
-import {MarketVaultBase} from "../base/MarketVaultBase.sol";
-import {ICanonicalVault} from "../../src/interfaces/ICanonicalVault.sol";
-import {IMarketFactory} from "../../src/interfaces/IMarketFactory.sol";
-import {CanonicalVault} from "../../src/CanonicalVault.sol";
+import {MarketVaultBase} from "./base/MarketVaultBase.sol";
+import {ICanonicalVault} from "../src/interfaces/ICanonicalVault.sol";
+import {IMarketFactory} from "../src/interfaces/IMarketFactory.sol";
+import {CanonicalVault} from "../src/CanonicalVault.sol";
 
 /// @dev Credits canonical vault via `settleFor`, then facade calls `takeUnderlyingClaims` (same unlock batch).
 contract CanonicalVaultSeedTakeHelper is Test, IUnlockCallback {

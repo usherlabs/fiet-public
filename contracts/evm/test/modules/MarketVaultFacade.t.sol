@@ -32,6 +32,14 @@ interface ICanonicalInMarket {
     function inMarketBalanceOf(bytes32 marketId, Currency currency) external view returns (uint256);
 }
 
+interface ICanonicalReserveInc {
+    function increaseLiquidityReserve(bytes32 marketId, Currency currency, uint256 amount) external;
+}
+
+interface ICanonicalReserveDec {
+    function decreaseLiquidityReserve(bytes32 marketId, Currency currency, uint256 amount) external;
+}
+
 /// @notice Minimal factory surface for `MarketVaultFacade` unit tests.
 contract FacadeUnitTestFactory {
     address public canonicalVaultAddr;
@@ -376,6 +384,41 @@ contract MarketVaultFacadeTest is Test {
         assertEq(canonical.lastModifyRecipient(), recipient);
     }
 
+    /// @dev Full routing for both `tryModifyLiquiditiesWithRecipient` overloads (kills dropped forwarder-field mutants).
+    function test_tryModifyLiquiditiesWithRecipient_fullRouting_balanceDelta_and_intent() public {
+        factory.setBound(boundCaller, true);
+        canonical.setEchoModify(true);
+        address recipient = makeAddr("recipientFull");
+        BalanceDelta bd = toBalanceDelta(4, -2);
+        vm.prank(boundCaller);
+        facade.tryModifyLiquiditiesWithRecipient(bd, recipient);
+        assertEq(canonical.lastModifyKind(), 1);
+        assertEq(canonical.lastModifyMarketId(), MID);
+        assertEq(Currency.unwrap(canonical.lastModifyC0()), uAddr0);
+        assertEq(Currency.unwrap(canonical.lastModifyC1()), uAddr1);
+        assertEq(canonical.lastModifyLcc0(), lccAddr0);
+        assertEq(canonical.lastModifyLcc1(), lccAddr1);
+        assertEq(canonical.lastModifyRecipient(), recipient);
+        assertEq(BalanceDelta.unwrap(canonical.lastModifyBalanceDelta()), BalanceDelta.unwrap(bd));
+
+        VaultSettlementIntent memory vi = VaultSettlementIntent({
+            requestedDelta: toBalanceDelta(2, 3), creditBackedWithdrawal0: 1, creditBackedWithdrawal1: 0
+        });
+        vm.prank(boundCaller);
+        facade.tryModifyLiquiditiesWithRecipient(vi, recipient);
+        assertEq(canonical.lastModifyKind(), 2);
+        assertEq(canonical.lastModifyMarketId(), MID);
+        assertEq(Currency.unwrap(canonical.lastModifyC0()), uAddr0);
+        assertEq(Currency.unwrap(canonical.lastModifyC1()), uAddr1);
+        assertEq(canonical.lastModifyLcc0(), lccAddr0);
+        assertEq(canonical.lastModifyLcc1(), lccAddr1);
+        assertEq(canonical.lastModifyRecipient(), recipient);
+        (BalanceDelta storedRd, uint256 cb0, uint256 cb1) = canonical.lastModifyIntent();
+        assertEq(BalanceDelta.unwrap(storedRd), BalanceDelta.unwrap(vi.requestedDelta));
+        assertEq(cb0, vi.creditBackedWithdrawal0);
+        assertEq(cb1, vi.creditBackedWithdrawal1);
+    }
+
     function test_onlyProtocolBounds_blocks_modifyLiquidities() public {
         canonical.setModifyReturn(toBalanceDelta(1, 0));
         vm.expectRevert(Errors.InvalidSender.selector);
@@ -413,6 +456,12 @@ contract MarketVaultFacadeTest is Test {
         });
         vm.expectRevert(Errors.InvalidSender.selector);
         facade.tryModifyLiquiditiesWithRecipient(vi, recipient);
+    }
+
+    function test_onlyProtocolBounds_blocks_tryModifyLiquiditiesWithRecipient_balanceDelta() public {
+        address recipient = makeAddr("recvBdUnbound");
+        vm.expectRevert(Errors.InvalidSender.selector);
+        facade.tryModifyLiquiditiesWithRecipient(toBalanceDelta(1, 0), recipient);
     }
 
     function test_tryModifyLiquidities_allOverload_successWhenBound() public {
@@ -509,6 +558,22 @@ contract MarketVaultFacadeTest is Test {
 
         vm.prank(vts);
         facade.decreaseLiquidityReserve(Currency.wrap(address(1)), 1);
+    }
+
+    function test_increaseLiquidityReserve_expectCall_forwardsMarketIdCurrencyAmount() public {
+        Currency c = Currency.wrap(uAddr0);
+        uint256 amt = 99;
+        vm.expectCall(address(canonical), abi.encodeCall(ICanonicalReserveInc.increaseLiquidityReserve, (MID, c, amt)));
+        vm.prank(vts);
+        facade.increaseLiquidityReserve(c, amt);
+    }
+
+    function test_decreaseLiquidityReserve_expectCall_forwardsMarketIdCurrencyAmount() public {
+        Currency c = Currency.wrap(uAddr1);
+        uint256 amt = 77;
+        vm.expectCall(address(canonical), abi.encodeCall(ICanonicalReserveDec.decreaseLiquidityReserve, (MID, c, amt)));
+        vm.prank(vts);
+        facade.decreaseLiquidityReserve(c, amt);
     }
 
     function test_receive_acceptsCanonicalBoundsAndSelf() public {

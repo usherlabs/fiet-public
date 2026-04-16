@@ -9,14 +9,14 @@ import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
 import {IERC6909Claims} from "@uniswap/v4-core/src/interfaces/external/IERC6909Claims.sol";
 
-import {CanonicalVault} from "../../src/CanonicalVault.sol";
-import {ICanonicalVault} from "../../src/interfaces/ICanonicalVault.sol";
-import {ILCC} from "../../src/interfaces/ILCC.sol";
-import {Errors} from "../../src/libraries/Errors.sol";
-import {VaultSettlementIntent} from "../../src/types/VTS.sol";
+import {CanonicalVault} from "../src/CanonicalVault.sol";
+import {ICanonicalVault} from "../src/interfaces/ICanonicalVault.sol";
+import {ILCC} from "../src/interfaces/ILCC.sol";
+import {Errors} from "../src/libraries/Errors.sol";
+import {VaultSettlementIntent} from "../src/types/VTS.sol";
 
-import {MockERC20} from "../_mocks/MockERC20.sol";
-import {MockLCC} from "../_mocks/MockLCC.sol";
+import {MockERC20} from "./_mocks/MockERC20.sol";
+import {MockLCC} from "./_mocks/MockLCC.sol";
 
 /// @dev Minimal ERC6909 PoolManager mock for CanonicalVault custody paths.
 contract MockPoolManagerCV is IERC6909Claims {
@@ -621,6 +621,9 @@ contract CanonicalVaultUnitTest is Test {
         pm.setClaimBalance(address(vault), Currency.wrap(u0), 6);
         MockERC20(u0).mint(address(pm), 6);
 
+        vm.expectEmit(true, false, false, true, address(vault));
+        emit CanonicalVault.LiquidityTakenFromVault(MARKET_ID, address(hub), u0, 6);
+
         vm.prank(facade);
         vault.modifyLiquidities(
             MARKET_ID,
@@ -633,6 +636,35 @@ contract CanonicalVaultUnitTest is Test {
         );
 
         assertEq(hub.lastConfirmLcc(), address(l0));
+        assertEq(hub.lastConfirmAmount(), 6);
+    }
+
+    /// @dev Leg1 mirror of `confirmTakeWhenRecipientIsHub` (token0-only positive leg).
+    function test_modifyLiquidities_confirmTakeWhenRecipientIsHub_token1() public {
+        MockERC20 ua = new MockERC20("A", "A", 18);
+        MockERC20 ub = new MockERC20("B", "B", 18);
+        (MockLCC l0, MockLCC l1, address u0, address u1) = _deployRegisteredMarket(MARKET_ID, ua, ub);
+
+        vm.prank(facade);
+        vault.increaseLiquidityReserve(MARKET_ID, Currency.wrap(u1), 6);
+        pm.setClaimBalance(address(vault), Currency.wrap(u1), 6);
+        MockERC20(u1).mint(address(pm), 6);
+
+        vm.expectEmit(true, false, false, true, address(vault));
+        emit CanonicalVault.LiquidityTakenFromVault(MARKET_ID, address(hub), u1, 6);
+
+        vm.prank(facade);
+        vault.modifyLiquidities(
+            MARKET_ID,
+            Currency.wrap(u0),
+            Currency.wrap(u1),
+            address(l0),
+            address(l1),
+            toBalanceDelta(0, 6),
+            address(hub)
+        );
+
+        assertEq(hub.lastConfirmLcc(), address(l1));
         assertEq(hub.lastConfirmAmount(), 6);
     }
 
@@ -811,6 +843,9 @@ contract CanonicalVaultUnitTest is Test {
         int128 dep = 11;
         MockERC20(u0).mint(address(vault), 11);
 
+        vm.expectEmit(true, false, false, true, address(vault));
+        emit CanonicalVault.LiquidityAddedToVault(MARKET_ID, address(vault), u0, 11);
+
         vm.prank(facade);
         BalanceDelta used = vault.modifyLiquidities(
             MARKET_ID,
@@ -825,6 +860,97 @@ contract CanonicalVaultUnitTest is Test {
         assertEq(used.amount0(), -dep);
         assertEq(vault.inMarketBalanceOf(MARKET_ID, Currency.wrap(u0)), 11);
         assertEq(pm.balanceOf(address(vault), Currency.wrap(u0).toId()), 11);
+    }
+
+    /// @dev Leg1 mirror: negative `amount1` deposits underlying1 from the vault and increments reserve.
+    function test_modifyLiquidities_negativeLeg1_depositsUnderlyingAndIncrementsReserve() public {
+        MockERC20 ua = new MockERC20("A", "A", 18);
+        MockERC20 ub = new MockERC20("B", "B", 18);
+        (MockLCC l0, MockLCC l1, address u0, address u1) = _deployRegisteredMarket(MARKET_ID, ua, ub);
+
+        hub.setTotalQueued(address(l1), 0);
+        hub.setMarketReserve(address(l1), 0);
+
+        int128 dep = 9;
+        MockERC20(u1).mint(address(vault), 9);
+
+        vm.expectEmit(true, false, false, true, address(vault));
+        emit CanonicalVault.LiquidityAddedToVault(MARKET_ID, address(vault), u1, 9);
+
+        vm.prank(facade);
+        BalanceDelta used = vault.modifyLiquidities(
+            MARKET_ID,
+            Currency.wrap(u0),
+            Currency.wrap(u1),
+            address(l0),
+            address(l1),
+            toBalanceDelta(0, -dep),
+            makeAddr("recipientNeg1")
+        );
+
+        assertEq(used.amount1(), -dep);
+        assertEq(vault.inMarketBalanceOf(MARKET_ID, Currency.wrap(u1)), 9);
+        assertEq(pm.balanceOf(address(vault), Currency.wrap(u1).toId()), 9);
+    }
+
+    /// @dev Mixed sign: deposit token0 from vault (negative leg0) while withdrawing token1 to a recipient (positive leg1).
+    function test_modifyLiquidities_mixedSign_negativeToken0_positiveToken1() public {
+        MockERC20 ua = new MockERC20("A", "A", 18);
+        MockERC20 ub = new MockERC20("B", "B", 18);
+        (MockLCC l0, MockLCC l1, address u0, address u1) = _deployRegisteredMarket(MARKET_ID, ua, ub);
+
+        hub.setTotalQueued(address(l0), 0);
+        hub.setMarketReserve(address(l0), 0);
+        hub.setTotalQueued(address(l1), 0);
+        hub.setMarketReserve(address(l1), 0);
+
+        MockERC20(u0).mint(address(vault), 3);
+        vm.prank(facade);
+        vault.increaseLiquidityReserve(MARKET_ID, Currency.wrap(u1), 5);
+        pm.setClaimBalance(address(vault), Currency.wrap(u1), 5);
+        MockERC20(u1).mint(address(pm), 5);
+
+        address recv = makeAddr("recvMixed");
+
+        vm.expectEmit(true, false, false, true, address(vault));
+        emit CanonicalVault.LiquidityAddedToVault(MARKET_ID, address(vault), u0, 3);
+        vm.expectEmit(true, false, false, true, address(vault));
+        emit CanonicalVault.LiquidityTakenFromVault(MARKET_ID, recv, u1, 5);
+
+        vm.prank(facade);
+        BalanceDelta used = vault.modifyLiquidities(
+            MARKET_ID,
+            Currency.wrap(u0),
+            Currency.wrap(u1),
+            address(l0),
+            address(l1),
+            toBalanceDelta(-3, 5),
+            recv
+        );
+
+        assertEq(used.amount0(), -3);
+        assertEq(used.amount1(), 5);
+        assertEq(vault.inMarketBalanceOf(MARKET_ID, Currency.wrap(u0)), 3);
+        assertEq(vault.inMarketBalanceOf(MARKET_ID, Currency.wrap(u1)), 0);
+    }
+
+    /// @dev `_assertLccConfigured` rejects addresses that are not the registered LCC pair.
+    function test_foreignLcc_revertsOnHubSettle_obligation_and_cancel() public {
+        MockERC20 ua = new MockERC20("A", "A", 18);
+        MockERC20 ub = new MockERC20("B", "B", 18);
+        _deployRegisteredMarket(MARKET_ID, ua, ub);
+        address foreign = makeAddr("foreignLcc");
+
+        vm.startPrank(facade);
+        vm.expectRevert(Errors.InvalidSender.selector);
+        vault.settleUnderlyingToVaultFromHub(MARKET_ID, foreign, 1);
+
+        vm.expectRevert(Errors.InvalidSender.selector);
+        vault.settleObligationsForLCC(MARKET_ID, foreign);
+
+        vm.expectRevert(Errors.InvalidSender.selector);
+        vault.cancelLCCWithDeficit(MARKET_ID, foreign, 0, address(0));
+        vm.stopPrank();
     }
 
     function _registerNativeErcAligned(CanonicalTestFactory f, address vaultAddr, MockERC20 erc)
