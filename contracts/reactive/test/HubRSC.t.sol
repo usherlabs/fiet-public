@@ -1787,9 +1787,12 @@ contract HubRSCTest is Test {
         }
     }
 
-    function _applyProcessedLogsFromBatch(HubRSC hub, Vm.Log[] memory entries, uint256 txHashBase, uint256 logIndexBase)
-        internal
-    {
+    function _applyProcessedLogsFromBatch(
+        HubRSC hub,
+        Vm.Log[] memory entries,
+        uint256 txHashBase,
+        uint256 logIndexBase
+    ) internal {
         (, address[] memory lccs, address[] memory recipients, uint256[] memory amounts) =
             _decodeProcessSettlementsPayload(entries);
         for (uint256 i = 0; i < lccs.length; i++) {
