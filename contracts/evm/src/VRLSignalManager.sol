@@ -7,6 +7,7 @@ pragma solidity ^0.8.26;
 import {MarketMaker} from "./libraries/MarketMaker.sol";
 import {ISignalVerifier} from "./interfaces/ISignalVerifier.sol";
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
+import {EIP7702Utils} from "@openzeppelin/contracts/account/utils/EIP7702Utils.sol";
 import {EIP712} from "@openzeppelin/contracts/utils/cryptography/EIP712.sol";
 import {ECDSA} from "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
 import {EfficientHashLib} from "solady/utils/EfficientHashLib.sol";
@@ -117,6 +118,19 @@ contract VRLSignalManager is Ownable, EIP712, IVRLSignalManager {
         }
     }
 
+    /// @dev `advancer` must be a plain EOA (`code.length == 0`) or a canonical EIP-7702 delegated EOA
+    ///      (`0xef0100 || delegate`, 23 bytes). Generic contract wallets / ERC-1271 advancers are rejected.
+    function _assertSupportedAdvancer(LiquiditySignal memory signal) internal view {
+        address adv = signal.mmState.advancer;
+        uint256 len = adv.code.length;
+        if (len == 0) return;
+        if (len == 23) {
+            address delegate = EIP7702Utils.fetchDelegate(adv);
+            if (delegate != address(0)) return;
+        }
+        revert Errors.InvalidAdvancer(adv);
+    }
+
     /**
      * @dev This function is used to verify the liquidity signal and return the tickers and amounts of the assets
      * @param signal The liquidity signal to verify
@@ -126,6 +140,8 @@ contract VRLSignalManager is Ownable, EIP712, IVRLSignalManager {
         internal
         returns (bool isProofValid, uint256 _signalExpiryInSeconds)
     {
+        _assertSupportedAdvancer(signal);
+
         // derive the liquidity signal
         // validate the new nonce is greater than than the previous nonce
         if (signal.nonce <= mmNonce[signal.mmState.owner]) {

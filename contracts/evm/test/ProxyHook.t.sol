@@ -1359,20 +1359,35 @@ contract ProxyHookTest is MarketVaultBase {
             "flipped MAX-1 should map to MIN+1"
         );
 
-        // Flipped inversion (non-zero, non-extreme).
+        // Flipped inversion (non-zero, non-extreme): zeroForOne uses ceil reciprocal (min bound), oneForZero floor (max bound).
         uint160 custom = SQRT_PRICE_1_1 + 1;
-        uint160 expectedInverted = uint160((uint256(1) << 192) / uint256(custom));
+        uint256 q192 = uint256(1) << 192;
+        uint160 expectedCeil = uint160((q192 + uint256(custom) - 1) / uint256(custom));
+        uint160 expectedFloor = uint160(q192 / uint256(custom));
         assertEq(
             harness.exposed_calcCoreSqrtPriceLimit(custom, true, true),
-            expectedInverted,
-            "flipped non-zero should invert"
+            expectedCeil,
+            "flipped zeroForOne should use ceil reciprocal"
         );
-        // Same reciprocal mapping when the core swap direction flag differs (proxy/core currency ordering flip).
         assertEq(
             harness.exposed_calcCoreSqrtPriceLimit(custom, true, false),
-            expectedInverted,
-            "flipped non-default limit should still map through the reciprocal helper"
+            expectedFloor,
+            "flipped oneForZero should use floor reciprocal"
         );
+        assertGe(expectedCeil, expectedFloor, "ceil should be >= floor; strict when q192 % custom != 0");
+
+        // Mid-range sqrt price where q192 % p != 0: zeroForOne (ceil) must be strictly above oneForZero (floor).
+        uint160 noisyMid = 79228162514264337593543950337; // tick-0 sqrt ratio + 1
+        assertGt(noisyMid, TickMath.MIN_SQRT_PRICE + 1);
+        assertLt(noisyMid, TickMath.MAX_SQRT_PRICE - 1);
+        assertTrue(
+            (q192 % uint256(noisyMid)) != 0, "precondition: pick a sqrt price with non-zero remainder so ceil != floor"
+        );
+        uint160 ceilNoisy = uint160((q192 + uint256(noisyMid) - 1) / uint256(noisyMid));
+        uint160 floorNoisy = uint160(q192 / uint256(noisyMid));
+        assertGt(ceilNoisy, floorNoisy, "ceil/floor should differ for this fixture");
+        assertEq(harness.exposed_calcCoreSqrtPriceLimit(noisyMid, true, true), ceilNoisy);
+        assertEq(harness.exposed_calcCoreSqrtPriceLimit(noisyMid, true, false), floorNoisy);
 
         // Flipped near-MAX should clamp to MIN+1 instead of producing an out-of-bounds MIN/underflowed value.
         uint160 nearMax = TickMath.MAX_SQRT_PRICE - 2;
@@ -1613,12 +1628,8 @@ contract ProxyHookTest is MarketVaultBase {
     ) internal {
         address ua = lcc.underlying();
         require(ua != address(0), "liveness tests require ERC20 underlyings");
-        IERC20Minimal(ua).transfer(address(proxyHook), amount);
-        vm.startPrank(address(proxyHook));
-        IERC20Minimal(ua).approve(liquidityHub, amount);
-        LiquidityHub(payable(liquidityHub)).wrap(address(lcc), amount);
-        lcc.transfer(address(runner), amount);
-        vm.stopPrank();
+        vm.prank(address(proxyHook));
+        LiquidityHub(payable(liquidityHub)).issue(address(lcc), address(runner), amount);
     }
 
     /// @dev Unwrap market-derived LCC inside PoolManager.unlock; withdraws underlying from the market vault.

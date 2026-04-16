@@ -24,6 +24,9 @@ library TransientSlots {
     // Native Eth/Asset Msg Value helpers
     // ------------------------------
 
+    /// @dev First call in the transaction records `msg.value` and sets the guard; later calls return 0.
+    ///      `PositionManagerEntrypoint` does not clear this at batch end so `Multicall_v4` cannot re-credit the same
+    ///      outer `msg.value` on each inner `delegatecall` batch.
     function readMsgValueOnce() internal returns (uint256) {
         bool isNativeValueRead = TransientSlot.asBoolean(TransientSlots.NATIVE_VALUE_READ_SLOT).tload();
         if (isNativeValueRead == true) {
@@ -32,11 +35,6 @@ library TransientSlots {
             TransientSlot.asBoolean(TransientSlots.NATIVE_VALUE_READ_SLOT).tstore(true);
             return msg.value;
         }
-    }
-
-    /// @dev Clears the native msg.value read guard to keep it scoped to a single batch.
-    function clearMsgValueRead() internal {
-        TransientSlot.asBoolean(TransientSlots.NATIVE_VALUE_READ_SLOT).tstore(false);
     }
 
     // ------------------------------

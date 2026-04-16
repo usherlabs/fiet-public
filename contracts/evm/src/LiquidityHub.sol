@@ -433,9 +433,22 @@ contract LiquidityHub is BoundRegistry, Ownable, ReentrancyGuardTransient {
         return LCCFactoryLib.balancesOf(lccToken, account);
     }
 
-    function _assertWrapRecipientNotDexSink(address lcc, address to) internal view {
-        if (Bounds.isDex(boundLevel(s.lccToMarket[lcc].factory, to))) {
+    /// @dev Rejects DEX sinks — issuer mints and wrap paths bypass LCC transfer hooks, so DEX ingress must not be bypassed.
+    function _assertRecipientNotDexSink(address lcc, address to) internal view {
+        uint8 level = boundLevel(s.lccToMarket[lcc].factory, to);
+        if (Bounds.isDex(level)) {
             revert Errors.DirectWrapToDexNotAllowed(to);
+        }
+    }
+
+    /// @dev Defence in depth for **direct-backed** Hub mints (`_wrap`, etc.): exempt holders skip bucket maps, so
+    ///      `directAmount > 0` must not target them (`LCC.mint` is authoritative; this surfaces a clearer early revert).
+    ///      Do **not** use for `issue` / pure market-derived mints — issuers must still be able to mint to ProxyHook.
+    function _assertDirectBackedMintRecipient(address lcc, address to) internal view {
+        _assertRecipientNotDexSink(lcc, to);
+        uint8 level = boundLevel(s.lccToMarket[lcc].factory, to);
+        if (Bounds.isExempt(level)) {
+            revert Errors.DirectMintToExemptNotAllowed(to);
         }
     }
 
@@ -455,7 +468,8 @@ contract LiquidityHub is BoundRegistry, Ownable, ReentrancyGuardTransient {
 
         // Mint-time ingress to the DEX sink bypasses LCC transfer hooks.
         // Reject it until there is a safe settlement path that can run under PoolManager lock constraints.
-        _assertWrapRecipientNotDexSink(lcc, to);
+        // Direct-backed mint to exempt is forbidden (finding 14); pure market issuer mints use `issue` instead.
+        _assertDirectBackedMintRecipient(lcc, to);
 
         // throw error if the native ETH is insufficient and it is a native ETH backed LCC
         if (isNativeAsset) {
@@ -524,8 +538,8 @@ contract LiquidityHub is BoundRegistry, Ownable, ReentrancyGuardTransient {
     function _wrapWith(address lcc, address withLCC, address to, uint256 amount) internal onlyValidLcc(lcc) {
         address from = _msgSender();
 
-        // wrapWithTo shares the same mint surface as direct wrap and must not bypass DEX ingress handling.
-        _assertWrapRecipientNotDexSink(lcc, to);
+        // Reject DEX sinks. If the final mint includes a direct-backed leg to an exempt recipient, `LCC.mint` reverts.
+        _assertRecipientNotDexSink(lcc, to);
 
         // Performs all necessary validation and preparation
         LiquidityHubLib.WrapWithContext memory ctx =
@@ -725,7 +739,8 @@ contract LiquidityHub is BoundRegistry, Ownable, ReentrancyGuardTransient {
     function issue(address lcc, address to, uint256 amount) external onlyIssuer(lcc) nonReentrant {
         // Note: LCC mint path reverts on zero (direct+market) amount.
         // Minting market-derived LCC directly to the DEX sink bypasses transfer hooks and ingress settlement.
-        _assertWrapRecipientNotDexSink(lcc, to);
+        // Issuer mints to bucket-exempt protocol endpoints (eg ProxyHook) remain valid — only DEX sinks are rejected here.
+        _assertRecipientNotDexSink(lcc, to);
         _mint(lcc, to, 0, amount);
     }
 

@@ -119,12 +119,10 @@ abstract contract LiquidityHubTestBase is Test {
 
     /// @notice Helper function to wrap market-derived LCC for a user
     function _wrapMarketDerivedLCC(address user, address lccToken, uint256 amount) public {
-        // mint lcc to a bucket-exempt protocol address to create market-derived balance on transfer
-        _wrapDirectLCC(proxyHook, lccToken, amount);
-
-        // mock the factory and send to user so that the user has a market balance
+        // Issuer-only market-derived mint (directAmount == 0). Do not seed via exempt direct wrap:
+        // direct-backed mints to exempt endpoints are forbidden (see `DirectMintToExemptNotAllowed`).
         vm.prank(proxyHook);
-        ILCC(lccToken).transfer(user, amount);
+        liquidityHub.issue(lccToken, user, amount);
 
         (uint256 wrappedBal, uint256 marketBal) = ILCC(lccToken).balancesOf(user);
 

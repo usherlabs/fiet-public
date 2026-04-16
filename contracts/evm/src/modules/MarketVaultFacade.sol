@@ -230,6 +230,7 @@ abstract contract MarketVaultFacade is IMarketVault, ImmutableMarketState, Reent
     /// @notice Decreases this market's in-market liquidity reserve for `underlyingCurrency` (routes to `ICanonicalVault`).
     /// @param underlyingCurrency Underlying token currency for the reserve leg.
     /// @param amount Amount to decrease.
+    /// @dev Access: Only callable by VTS (`marketFactory.vts()`). Reverts `Errors.InvalidSender` for any other caller.
     function decreaseLiquidityReserve(Currency underlyingCurrency, uint256 amount) external onlyVTS {
         _decreaseLiquidityReserve(underlyingCurrency, amount);
     }
@@ -237,6 +238,7 @@ abstract contract MarketVaultFacade is IMarketVault, ImmutableMarketState, Reent
     /// @notice Increases this market's in-market liquidity reserve for `underlyingCurrency` (routes to `ICanonicalVault`).
     /// @param underlyingCurrency Underlying token currency for the reserve leg.
     /// @param amount Amount to increase.
+    /// @dev Access: Only callable by VTS (`marketFactory.vts()`). Reverts `Errors.InvalidSender` for any other caller.
     function increaseLiquidityReserve(Currency underlyingCurrency, uint256 amount) external onlyVTS {
         _increaseLiquidityReserve(underlyingCurrency, amount);
     }

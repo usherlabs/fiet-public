@@ -63,7 +63,8 @@ library VTSCommitLib {
         Currency currency1;
     }
 
-    /// @dev Internal struct to reduce stack depth in validateLiquidityDelta
+    /// @dev Internal struct to reduce stack depth in validateLiquidityDelta. Field `liquidityDelta` is the liquidity
+    ///      amount used to compute issued USD (MM increases pass post-add total position liquidity).
     struct LiquidityDeltaParams {
         Currency currency0;
         Currency currency1;

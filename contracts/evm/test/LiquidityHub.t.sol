@@ -241,11 +241,12 @@ contract LiquidityHubTest is LiquidityHubTestBase {
         liquidityHub.initialize(lccNative, lccErc20, bytes32("nativeMarket"), abi.encodePacked(address(0xCAFE)));
         vm.stopPrank();
 
-        // Wrap native ETH into the hub to create reserve.
+        // Wrap native ETH into the hub to create reserve (caller must not be bucket-exempt: direct wrap mints to msg.sender).
         uint256 amount = 1 ether;
         uint256 proxyHookEthBefore = proxyHook.balance;
-        vm.deal(proxyHook, proxyHookEthBefore + amount);
-        vm.prank(proxyHook);
+        uint256 user1EthBefore = user1.balance;
+        vm.deal(user1, user1EthBefore + amount);
+        vm.prank(user1);
         liquidityHub.wrap{value: amount}(lccNative, amount);
         assertEq(liquidityHub.reserveOfUnderlying(lccNative), amount);
         assertEq(liquidityHub.directSupply(lccNative), amount);
@@ -580,10 +581,9 @@ contract LiquidityHubTest is LiquidityHubTestBase {
         // Give user1 wrapped balance via direct wrap.
         _wrapDirectLCC(user1, lccToken1, 40);
 
-        // Create market-derived balance for user1 by transferring from a bucket-exempt endpoint (proxyHook).
-        _wrapDirectLCC(proxyHook, lccToken1, 60);
+        // Market-derived balance for user1 via issuer mint (not exempt direct wrap).
         vm.prank(proxyHook);
-        ILCC(lccToken1).transfer(user1, 60);
+        liquidityHub.issue(lccToken1, user1, 60);
 
         (uint256 wrappedBefore, uint256 marketBefore) = ILCC(lccToken1).balancesOf(user1);
         assertEq(wrappedBefore, 40);

@@ -184,6 +184,21 @@ contract LiquidityCommitmentCertificateTest is Test {
         lcc.mint(alice, 0, 0);
     }
 
+    /// @dev Finding 14: direct-backed mints to bucket-exempt holders misalign `directSupply` with buckets.
+    function test_mint_revertsWhenDirectBackedToExemptRecipient() public {
+        address exempt = makeAddr("exemptRecipient");
+        _setBoundLevel(exempt, BOUND_EXEMPT);
+        vm.expectRevert(abi.encodeWithSelector(Errors.DirectMintToExemptNotAllowed.selector, exempt));
+        lcc.mint(exempt, 1, 0);
+    }
+
+    function test_mint_allowsMarketDerivedOnlyToExemptRecipient() public {
+        address exempt = makeAddr("exemptRecipientMarketOnly");
+        _setBoundLevel(exempt, BOUND_EXEMPT);
+        lcc.mint(exempt, 0, 7);
+        assertEq(lcc.balanceOf(exempt), 7);
+    }
+
     function test_mint_updatesBucketsWhenNotIssued() public {
         lcc.mint(alice, 3, 5);
 

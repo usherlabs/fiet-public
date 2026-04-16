@@ -561,6 +561,34 @@ contract VTSLifecycleLinkedLibTest is Test {
         );
     }
 
+    /// @dev Seizure hook data must still require `owner == authorisedRelayer` when relayer is bound.
+    function test_validateMMOperation_revertsWhenOwnerNotAuthorisedRelayer_seizing() public {
+        address otherBound = makeAddr("otherBoundSeize");
+        uint256 expires = block.timestamp + 7 days;
+        harness.testSeedCommit(9, mmOwner, advancer, expires, boundCaller);
+
+        bytes memory hook = PositionModificationHookDataLib.encodeSeizure(9, 0, makeAddr("seizerLocker"), 0, 0);
+        vm.mockCall(
+            address(hub),
+            abi.encodeWithSelector(ILiquidityHub.getFactory.selector, Currency.unwrap(c0), Currency.unwrap(c1)),
+            abi.encode(address(factory))
+        );
+        factory.setBound(boundCaller, true);
+        factory.setBound(otherBound, true);
+
+        vm.expectRevert(Errors.InvalidSender.selector);
+        harness.validateMMOperation(
+            VTSCoreHookContext({
+                poolManager: IPoolManager(address(0)),
+                liquidityHub: ILiquidityHub(address(hub)),
+                oracleHelper: IOracleHelper(address(0))
+            }),
+            otherBound,
+            poolKey,
+            hook
+        );
+    }
+
     function test_validateMMOperation_revertsWhenLockerNotAdvancer() public {
         uint256 expires = block.timestamp + 7 days;
         harness.testSeedCommit(4, mmOwner, advancer, expires, boundCaller);

@@ -717,7 +717,9 @@ library VTSLifecycleLinkedLib {
             return false;
         }
 
-        if (!isSignalValid(s, mmData.commitId, !mmData.seizure.isSeizing)) {
+        bool isSeizingOp = mmData.seizure.isSeizing;
+
+        if (!isSignalValid(s, mmData.commitId, !isSeizingOp)) {
             revert Errors.InvalidSignal(mmData.commitId);
         }
 
@@ -725,14 +727,14 @@ library VTSLifecycleLinkedLib {
             ctx.liquidityHub.getFactory(Currency.unwrap(poolKey.currency0), Currency.unwrap(poolKey.currency1));
         if (!MarketHandlerLib.isBounds(factory, owner)) revert Errors.InvalidSender();
 
-        if (!mmData.seizure.isSeizing) {
-            // Two-layer authorisation: (1) `owner` must be the router that created this commit (per-commit binding).
-            // Factory `bounds(owner)` alone is too coarse — any bound endpoint could otherwise operate another's commit.
-            // (2) `locker` must still match the designated advancer (batch operator / queue attribution).
-            address relayer = s.commits[mmData.commitId].authorisedRelayer;
-            if (relayer != address(0) && owner != relayer) {
-                revert Errors.InvalidSender();
-            }
+        // Per-commit router binding applies to all MM operations, including seizure decreases.
+        address relayer = s.commits[mmData.commitId].authorisedRelayer;
+        if (relayer != address(0) && owner != relayer) {
+            revert Errors.InvalidSender();
+        }
+
+        if (!isSeizingOp) {
+            // Non-seizing: `locker` must match the designated advancer (batch operator / queue attribution).
             address locker = PositionModificationHookDataLib.getLocker(mmData);
             if (locker != s.commits[mmData.commitId].mmState.advancer) {
                 revert Errors.InvalidSender();

@@ -67,6 +67,10 @@ being an informal “should”.
     - LCC is minted **1:1** against underlying deposited into `LiquidityHub`.
     - This corresponds to the `directSupply` / `wrappedBalances` notion for non-protocol holders.
     - The backing asset is _immediately_ reflected in `LiquidityHub.reserveOfUnderlying(underlying)`.
+    - **Direct-backed** mints (`directAmount > 0` on `LCC.mint`) must **not** target **bucket-exempt** (`BOUND_EXEMPT`)
+      endpoints: exempt holders skip per-address bucket maps, which would desynchronise Domain A from holder buckets and
+      allow exempt→non-protocol transfers to reclassify liquidity as market-derived without the wrapped-only DEX ingress
+      path (`prepareMarketLiquidity` / **LCC-03**).
 
   - **Domain B — In-market (market-derived liquidity claims, including queued settlement claims)**:
 
@@ -89,7 +93,10 @@ being an informal “should”.
 - **Enforced by (authorised mint surfaces)**:
 
   - **Domain A**: `src/LiquidityHub.sol::_wrap` transfers underlying in, increments
-    `directSupply[lcc]` and `reserveOfUnderlying[underlying]`, then mints LCC.
+    `directSupply[lcc]` and `reserveOfUnderlying[underlying]`, then mints LCC; `src/LCC.sol::mint` and
+    `LiquidityHub._assertDirectBackedMintRecipient` reject `directAmount > 0` to `BOUND_EXEMPT` recipients
+    (`Errors.DirectMintToExemptNotAllowed`). `issue` uses `_assertRecipientNotDexSink` only so issuer mints to exempt
+    endpoints (eg ProxyHook) remain valid for pure market-derived balance.
   - **Domain B**: `src/LiquidityHub.sol::issue` is `onlyIssuer(lcc)` and mints market-derived amount via the LCC hub
     mint path; issuer gating is enforced by `LiquidityHub._onlyIssuer` (valid LCC + issuer allowlist).
   - **Domain C**: `src/libraries/VTSPositionMMOpsLib.sol::_handleLiquidityIncrease` calls
@@ -152,6 +159,9 @@ being an informal “should”.
 - **Non-goal**:
   - Non-canonical flows that perform multiple unpaid `LCC -> PoolManager` transfers inside one active `sync(lcc)`
     window are unsupported and intentionally revert.
+- **Ingress amount**: `prepareMarketLiquidity` is invoked with the **wrapped (direct-backed) slice** of the transfer only;
+  market-derived balance does not trigger Hub→vault mobilisation on that hop. Domain A liquidity must therefore remain in
+  bucket-tracked holders until ingress if that mobilisation is required.
 
 ### HUB-01: Wrapping mints 1:1 and increases Hub reserves
 
@@ -163,6 +173,8 @@ being an informal “should”.
 - **Notable guard**:
   - native-asset wrap requires `msg.value == amount`, otherwise `Errors.InvalidAmount`.
   - ERC20-backed wrap requires `msg.value == 0`, otherwise `Errors.InvalidAmount`.
+  - Recipients must not be a DEX ingress sink (`Errors.DirectWrapToDexNotAllowed`) or bucket-exempt
+    (`Errors.DirectMintToExemptNotAllowed`); see **LCC-BACKING-01** Domain A.
 - **Asset-model assumption**:
   - For ERC20 underlyings, this invariant assumes the listed underlying is a **standard, transfer-conservative token**
     whose received amount equals the nominal transfer amount.
@@ -342,8 +354,15 @@ being an informal “should”.
 - **Operating model / protocol assumption**:
   - `mmState.owner` is the durable identity for the market maker's signalled state and is expected to correspond to the
     operator's high-security custody / approval authority.
+  - `mmState.owner` may therefore be a smart contract / hardened custody wallet; it is **not** required to be an EOA.
   - `mmState.advancer` is the lower-friction operational key used to submit / renew VRL-backed MM state and to initiate
     ordinary MM position operations through `MMPositionManager`.
+  - `mmState.advancer` must be an address compatible with **relayed** VRL authorisation using plain ECDSA
+    (`ECDSA.recover(...) == sender` on EIP-712 relay payloads in `VRLSignalManager`): either a **plain EOA**
+    (`code.length == 0`) or a **canonical EIP-7702 delegated EOA** whose runtime code is exactly `0xef0100 || delegate`
+    (23 bytes) with a **non-zero** delegate (see OpenZeppelin `EIP7702Utils.fetchDelegate`). Generic contract wallets,
+    generic bytecode-bearing accounts, and **ERC-1271 / `SignatureChecker` advancers are explicitly unsupported** as
+    advancers (the relay path does not authenticate them).
   - These roles are intentionally **not** interchangeable, but they are expected to remain under the control of the
     same real-world operator / coordinated trust domain.
 - **Practical consequence**:
@@ -358,7 +377,11 @@ being an informal “should”.
     - hot-path MM execution / proof-submission authority (`mmState.advancer`).
   - This lets operators keep asset custody and approval flows on a more secure key while using a lighter operational key
     for maker actions and prover-facing workflows.
+  - Relayed signal authorisation remains **ECDSA-only** (`recover` on the typed-data digest); admitting EIP-7702
+    delegated EOAs does **not** broaden relay auth to ERC-1271 or `SignatureChecker` verifiers.
 - **Expressed by**:
+  - `src/VRLSignalManager.sol::_assertSupportedAdvancer` rejects `mmState.advancer` accounts that are neither plain EOAs
+    nor canonical EIP-7702 delegation stubs, while leaving `mmState.owner` unrestricted.
   - `src/libraries/VTSCommitLib.sol::_renewSignalInternal` preserves `mmState.owner` across renewals and authorises
     renewals via `mmState.advancer`.
   - `src/types/Commit.sol` stores `authorisedRelayer`, set at initial commit creation from the `VTSOrchestrator` caller
@@ -404,6 +427,9 @@ being an informal “should”.
     `Errors.InvalidLiquiditySignal(issuedValue, signalValue, settledValue)` when insufficient.
   - Called during MM increases by `src/libraries/VTSPositionMMOpsLib.sol::_handleLiquidityIncrease` with
     `revertIfInsufficientBacking = true`.
+  - MM increases pass **post-add total position liquidity** into `validateLiquidityDelta` (not the incremental add
+    delta alone), so repeated adds cannot each pass on a per-slice check while cumulative post-add issuance exceeds
+    `(settled + signal)` backing.
 
 ### COMMIT-02: Checkpointing with commitment updates `commitmentDeficit` as an insolvency gate
 

@@ -12,7 +12,6 @@ import {ProxyHook} from "../src/ProxyHook.sol";
 import {IMsgSender} from "v4-periphery/src/interfaces/IMsgSender.sol";
 import {Errors} from "../src/libraries/Errors.sol";
 import {CustomRevert} from "@uniswap/v4-core/src/libraries/CustomRevert.sol";
-import {IERC20Minimal} from "@uniswap/v4-core/src/interfaces/external/IERC20Minimal.sol";
 import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
 import {LiquidityHub} from "../src/LiquidityHub.sol";
 import {LiquidityCommitmentCertificate} from "../src/LCC.sol";
@@ -50,12 +49,8 @@ contract ProxyHookMutationHardeningTest is MarketVaultBase {
     ) internal {
         address ua = lcc.underlying();
         require(ua != address(0), "mutation liveness tests require ERC20 underlyings");
-        IERC20Minimal(ua).transfer(address(proxyHook), amount);
-        vm.startPrank(address(proxyHook));
-        IERC20Minimal(ua).approve(liquidityHub, amount);
-        LiquidityHub(payable(liquidityHub)).wrap(address(lcc), amount);
-        lcc.transfer(address(runner), amount);
-        vm.stopPrank();
+        vm.prank(address(proxyHook));
+        LiquidityHub(payable(liquidityHub)).issue(address(lcc), address(runner), amount);
     }
 
     function _unwrapMarketDerivedFromVault(LiquidityCommitmentCertificate lcc, uint256 amount) internal {

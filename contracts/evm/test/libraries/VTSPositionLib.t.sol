@@ -15,7 +15,7 @@ import {MarketVTSConfiguration} from "../../src/types/VTS.sol";
 import {PositionContext, TouchPositionParams, TouchPositionResult} from "../../src/types/VTS.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
-import {PositionModificationHookData, PositionModificationHookDataLib} from "../../src/types/Position.sol";
+import {PositionModificationHookData, PositionModificationHookDataLib, SeizureData} from "../../src/types/Position.sol";
 import {ILiquidityHub} from "../../src/interfaces/ILiquidityHub.sol";
 import {ILCC} from "../../src/interfaces/ILCC.sol";
 import {IOracleHelper} from "../../src/interfaces/IOracleHelper.sol";
@@ -2145,6 +2145,46 @@ contract VTSPositionLibTest is VTSLibTestBase {
             callerDelta: toBalanceDelta(0, 0),
             feesAccrued: toBalanceDelta(0, 0),
             hookData: _mkHookData(false, false, 0) // non-MM, non-seizing
+        });
+
+        vm.expectRevert(abi.encodeWithSelector(Errors.RFSOpenForPosition.selector, positionId));
+        harness.touchPosition(_mkCtx(), tp);
+    }
+
+    /// @dev Non-MM hook data with forged `seizure.isSeizing` must not bypass the open-RFS remove guard.
+    function test_touchPosition_existingDecrease_nonMM_forgedSeizing_revertsWhenRFSOpen() public {
+        PoolId corePoolId = _getDefaultPoolId();
+        harness.setupPool(corePoolId, _createDefaultVTSConfig());
+
+        bytes32 salt = bytes32(uint256(102));
+        PositionId positionId = _registerHarnessPositionInPool(corePoolId, DEFAULT_OWNER, -60, 60, 1, salt);
+        harness.setPositionActive(positionId, true);
+
+        harness.setCommitmentMax(positionId, 1000e18, 0);
+        harness.setSettled(positionId, 0, 0);
+        harness.setCumulativeDeficit(positionId, 0, 0);
+        harness.setCommitmentDeficit(positionId, 0, 0);
+
+        ModifyLiquidityParams memory params =
+            ModifyLiquidityParams({tickLower: -60, tickUpper: 60, liquidityDelta: -int256(uint256(1)), salt: salt});
+
+        bytes memory forgedSeizingNonMM = abi.encode(
+            PositionModificationHookData({
+                commitId: 0,
+                positionIndex: 0,
+                locker: address(0xBEEF),
+                seizure: SeizureData({isSeizing: true, settle0: 0, settle1: 0}),
+                extraData: ""
+            })
+        );
+
+        TouchPositionParams memory tp = TouchPositionParams({
+            owner: DEFAULT_OWNER,
+            poolKey: _mkPoolKey(),
+            params: params,
+            callerDelta: toBalanceDelta(0, 0),
+            feesAccrued: toBalanceDelta(0, 0),
+            hookData: forgedSeizingNonMM
         });
 
         vm.expectRevert(abi.encodeWithSelector(Errors.RFSOpenForPosition.selector, positionId));

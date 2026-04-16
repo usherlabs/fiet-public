@@ -941,13 +941,15 @@ library VTSPositionLib {
     }
 
     /// @notice Decodes and validates hook data for touch position
+    /// @dev Effective `isSeizing` is only true for MM operations (`commitId > 0`) with `seizure.isSeizing`.
+    ///      Non-MM callers cannot grant seizure semantics by forging hook bytes.
     /// @param hookData The raw hook data bytes
     /// @return data The decoded hook data struct
     function _decodeHookData(bytes calldata hookData) private pure returns (TouchPositionHookData memory data) {
         PositionModificationHookData memory mmData = PositionModificationHookDataLib.decodeCalldata(hookData);
         data.isMMOperation = PositionModificationHookDataLib.isMMOperation(mmData);
         data.commitId = mmData.commitId;
-        data.isSeizing = mmData.seizure.isSeizing;
+        data.isSeizing = data.isMMOperation && mmData.seizure.isSeizing;
     }
 
     /// @notice Handles new position initialization and returns required settlement delta
@@ -1012,7 +1014,9 @@ library VTSPositionLib {
         }
         // Growth is already settled in CoreHook `_beforeRemoveLiquidity`; avoid `calcRFS` here so we do not
         // re-enter `settlePositionGrowths` (would double-apply CISE / growth side-effects in the same modify).
-        if (!hookData.isSeizing) {
+        // RFS-open removes revert unless this is an authorised MM seizure decrease (`isMMOperation && isSeizing`);
+        // non-MM forged `seizure.isSeizing` is cleared in `_decodeHookData`.
+        if (!(hookData.isMMOperation && hookData.isSeizing)) {
             (bool rfsOpen,) = getRFS(s, positionId);
             if (rfsOpen) {
                 revert Errors.RFSOpenForPosition(positionId);

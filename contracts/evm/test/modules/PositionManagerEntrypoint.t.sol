@@ -76,28 +76,31 @@ contract PositionManagerEntrypointHarness is PositionManagerEntrypoint {
         _beforeBatch();
     }
 
-    function exposeAfterBatch() external {
+    /// @dev Payable so `delegatecall` from a payable outer call (e.g. multicall simulation) does not revert on non-zero `msg.value`.
+    function exposeAfterBatch() external payable {
         _afterBatch();
     }
 
     function exposeTake(Currency currency, address to, uint256 maxAmount) external {
         _take(currency, to, maxAmount);
     }
-}
 
-contract BeforeAfterBatchCaller {
-    function callZeroThenOne(PositionManagerEntrypointHarness harness) external payable {
-        if (msg.value != 1) revert();
-        harness.exposeBeforeBatch{value: 0}();
-        harness.exposeAfterBatch();
-        harness.exposeBeforeBatch{value: 1}();
+    /// @dev Mirrors `Multicall_v4`: each inner step is `address(this).delegatecall(...)`, so the outer tx `msg.value`
+    ///      is visible on every inner batch without re-attaching ETH (unlike nested `{value: ...}` calls).
+    function simulateMulticall_twoBatches() external payable {
+        if (msg.value != 1 ether) revert();
+        (bool ok,) = address(this).delegatecall(abi.encodeCall(this.exposeBeforeBatch, ()));
+        require(ok);
+        (ok,) = address(this).delegatecall(abi.encodeCall(this.exposeAfterBatch, ()));
+        require(ok);
+        (ok,) = address(this).delegatecall(abi.encodeCall(this.exposeBeforeBatch, ()));
+        require(ok);
     }
 }
 
 contract PositionManagerEntrypointTest is Test {
     PositionManagerEntrypointHarness internal h;
     DelegationImpl internal impl;
-    BeforeAfterBatchCaller internal caller;
 
     address internal hub;
     address internal factory;
@@ -118,7 +121,6 @@ contract PositionManagerEntrypointTest is Test {
         vm.etch(canonical, hex"00");
         impl = new DelegationImpl();
         h = new PositionManagerEntrypointHarness(factory, orch, canonical, address(impl), locker);
-        caller = new BeforeAfterBatchCaller();
     }
 
     function test_delegateToImpl_success() public {
@@ -149,17 +151,25 @@ contract PositionManagerEntrypointTest is Test {
         h.exposeBeforeBatch{value: 1}();
     }
 
-    function test_beforeBatch_zeroThenNonZero_afterBatchClearsReadGuard_andCreditsSecondCall() public {
+    /// @notice Regression: `Multicall_v4`-style delegatecalls must not each credit the same outer `msg.value`.
+    function test_multicallDelegatecall_twoBatches_creditExactCalledOnce() public {
         vm.mockCall(
             orch,
-            abi.encodeWithSignature("creditExact(address,address,address,uint256)", factory, address(0), locker, 1),
-            abi.encode(int128(1))
+            abi.encodeWithSignature(
+                "creditExact(address,address,address,uint256)", factory, address(0), locker, 1 ether
+            ),
+            abi.encode(int128(int256(1 ether)))
         );
+        vm.mockCall(orch, abi.encodeWithSignature("assertNonZeroDeltas(address)", factory), abi.encode());
         vm.expectCall(
             orch,
-            abi.encodeWithSignature("creditExact(address,address,address,uint256)", factory, address(0), locker, 1)
+            abi.encodeWithSignature(
+                "creditExact(address,address,address,uint256)", factory, address(0), locker, 1 ether
+            ),
+            1
         );
-        caller.callZeroThenOne{value: 1}(h);
+        vm.expectCall(orch, abi.encodeWithSignature("assertNonZeroDeltas(address)", factory), 1);
+        h.simulateMulticall_twoBatches{value: 1 ether}();
     }
 
     function test_afterBatch_callsAssertNonZeroDeltas() public {

@@ -33,6 +33,8 @@ contract AlwaysFalseSignalVerifier is ISignalVerifier {
     }
 }
 
+contract MockSmartAccount {}
+
 contract VRLSignalManagerTest is MarketMakerTestBase {
     using MarketMaker for MarketMaker.State;
     using MerkleProofGenerator for bytes32[];
@@ -47,6 +49,9 @@ contract VRLSignalManagerTest is MarketMakerTestBase {
     function setUp() public {
         // Create and fill in the test state
         _setUpMM();
+        address defaultAdvancer = makeAddr("defaultAdvancer");
+        liquiditySignal.mmState.advancer = defaultAdvancer;
+        renewSignal.mmState.advancer = defaultAdvancer;
         address verifier = address(new ECDSASignatureSignalVerifier(signatureVerifier));
         signalManager = new VRLSignalManager(verifier, address(this), address(this));
     }
@@ -135,6 +140,8 @@ contract VRLSignalManagerTest is MarketMakerTestBase {
     }
 
     function test_canVerifyLiquiditySignal() public {
+        signalManager.setVerifier(address(new AlwaysTrueSignalVerifier()));
+
         // Verify the liquidity signal
         (bool success, uint256 expiry) =
             signalManager.verifyLiquiditySignal(liquiditySignal.mmState.owner, abi.encode(liquiditySignal), true);
@@ -153,6 +160,73 @@ contract VRLSignalManagerTest is MarketMakerTestBase {
         address attacker = makeAddr("attacker");
         vm.expectRevert(Errors.InvalidSender.selector);
         signalManager.verifyLiquiditySignal(attacker, abi.encode(liquiditySignal), true);
+    }
+
+    function test_verifyLiquiditySignal_allowsContractOwner_whenAdvancerIsEOA() public {
+        signalManager.setVerifier(address(new AlwaysTrueSignalVerifier()));
+
+        address contractOwner = address(new MockSmartAccount());
+        address advancer = makeAddr("advancer");
+        LiquiditySignal memory signal = liquiditySignal;
+        signal.mmState.owner = contractOwner;
+        signal.mmState.advancer = advancer;
+
+        (bool ok,) = signalManager.verifyLiquiditySignal(advancer, abi.encode(signal), true);
+
+        assertTrue(ok);
+        assertEq(signalManager.mmNonce(contractOwner), signal.nonce);
+    }
+
+    function test_verifyLiquiditySignal_revertsWhenAdvancerIsContract() public {
+        address contractAdvancer = address(new MockSmartAccount());
+        LiquiditySignal memory signal = liquiditySignal;
+        signal.mmState.advancer = contractAdvancer;
+
+        vm.expectRevert(abi.encodeWithSelector(Errors.InvalidAdvancer.selector, contractAdvancer));
+        signalManager.verifyLiquiditySignal(signal.mmState.owner, abi.encode(signal), true);
+    }
+
+    /// @dev Canonical EIP-7702 delegation: `0xef0100 || delegate` (23 bytes).
+    function _etch7702Delegation(address account, address delegate) internal {
+        vm.etch(account, abi.encodePacked(hex"ef0100", bytes20(uint160(delegate))));
+    }
+
+    function test_verifyLiquiditySignal_allows7702DelegatedAdvancer() public {
+        signalManager.setVerifier(address(new AlwaysTrueSignalVerifier()));
+
+        uint256 advPk = uint256(keccak256(abi.encodePacked("7702_adv_pk")));
+        address adv7702 = vm.addr(advPk);
+        address delegateImpl = makeAddr("eip7702_delegate_impl");
+        _etch7702Delegation(adv7702, delegateImpl);
+
+        LiquiditySignal memory signal = liquiditySignal;
+        signal.mmState.advancer = adv7702;
+
+        (bool ok,) = signalManager.verifyLiquiditySignal(adv7702, abi.encode(signal), true);
+        assertTrue(ok);
+        assertEq(signalManager.mmNonce(signal.mmState.owner), signal.nonce);
+    }
+
+    function test_verifyLiquiditySignal_revertsWhenAdvancer7702DelegateIsZero() public {
+        address adv = makeAddr("adv7702_zero_delegate");
+        vm.etch(adv, abi.encodePacked(hex"ef0100", bytes20(uint160(address(0)))));
+
+        LiquiditySignal memory signal = liquiditySignal;
+        signal.mmState.advancer = adv;
+
+        vm.expectRevert(abi.encodeWithSelector(Errors.InvalidAdvancer.selector, adv));
+        signalManager.verifyLiquiditySignal(signal.mmState.owner, abi.encode(signal), true);
+    }
+
+    function test_verifyLiquiditySignal_revertsWhenAdvancerCodeMalformedLength() public {
+        address adv = makeAddr("adv_bad_len");
+        vm.etch(adv, hex"deadbeef");
+
+        LiquiditySignal memory signal = liquiditySignal;
+        signal.mmState.advancer = adv;
+
+        vm.expectRevert(abi.encodeWithSelector(Errors.InvalidAdvancer.selector, adv));
+        signalManager.verifyLiquiditySignal(signal.mmState.owner, abi.encode(signal), true);
     }
 
     function test_verifyLiquiditySignal_whenVerifierReturnsFalse_returnsFalseAndDoesNotUpdateNonce() public {
@@ -210,6 +284,8 @@ contract VRLSignalManagerTest is MarketMakerTestBase {
     }
 
     function test_canVerifyLiquiditySignalWithBytes() public {
+        signalManager.setVerifier(address(new AlwaysTrueSignalVerifier()));
+
         (bool success, uint256 expiry) =
             signalManager.verifyLiquiditySignal(liquiditySignal.mmState.owner, abi.encode(liquiditySignal), true);
         assertEq(success, true);
@@ -281,6 +357,8 @@ contract VRLSignalManagerTest is MarketMakerTestBase {
     }
 
     function test_verifyLiquiditySignalRelayed_ownerSigner_success() public {
+        signalManager.setVerifier(address(new AlwaysTrueSignalVerifier()));
+
         bytes memory liquiditySignalBytes = abi.encode(liquiditySignal);
         address sender = liquiditySignal.mmState.owner;
         uint256 deadline = block.timestamp + 1 hours;
@@ -294,6 +372,30 @@ contract VRLSignalManagerTest is MarketMakerTestBase {
         assertTrue(ok);
         assertEq(expiry, liquiditySignal.mmState.expiryAt - block.timestamp);
         assertEq(signalManager.submitAuthNonce(sender), authNonce + 1);
+    }
+
+    function test_verifyLiquiditySignalRelayed_allowsContractOwner_whenAdvancerIsEOA() public {
+        signalManager.setVerifier(address(new AlwaysTrueSignalVerifier()));
+
+        uint256 advancerPk = uint256(keccak256(abi.encodePacked("contract_owner_advancer")));
+        address advancer = vm.addr(advancerPk);
+        address contractOwner = address(new MockSmartAccount());
+        LiquiditySignal memory signal = liquiditySignal;
+        signal.mmState.owner = contractOwner;
+        signal.mmState.advancer = advancer;
+
+        bytes memory liquiditySignalBytes = abi.encode(signal);
+        uint256 deadline = block.timestamp + 1 hours;
+        uint256 authNonce = signalManager.submitAuthNonce(advancer);
+        bytes memory authSig = _signRelayAuth(advancerPk, advancer, 0, liquiditySignalBytes, deadline, authNonce);
+
+        (bool ok,) = signalManager.verifyLiquiditySignalRelayed(
+            advancer, 0, liquiditySignalBytes, deadline, authNonce, authSig, true
+        );
+
+        assertTrue(ok);
+        assertEq(signalManager.submitAuthNonce(advancer), authNonce + 1);
+        assertEq(signalManager.mmNonce(contractOwner), signal.nonce);
     }
 
     /// @dev ABI-encoded signal for `test_verifyLiquiditySignalRelayed_advancerSigner_success` (stack-shallow helper).
@@ -351,6 +453,8 @@ contract VRLSignalManagerTest is MarketMakerTestBase {
     }
 
     function test_verifyLiquiditySignalRenewRelayed_ownerSigner_success() public {
+        signalManager.setVerifier(address(new AlwaysTrueSignalVerifier()));
+
         bytes memory liquiditySignalBytes = abi.encode(liquiditySignal);
         address sender = liquiditySignal.mmState.owner;
         uint256 commitId = 42;
@@ -423,6 +527,8 @@ contract VRLSignalManagerTest is MarketMakerTestBase {
     }
 
     function test_verifyLiquiditySignalRelayed_revertsForReplayNonce() public {
+        signalManager.setVerifier(address(new AlwaysTrueSignalVerifier()));
+
         bytes memory liquiditySignalBytes = abi.encode(liquiditySignal);
         address sender = liquiditySignal.mmState.owner;
         uint256 deadline = block.timestamp + 1 hours;
@@ -448,6 +554,44 @@ contract VRLSignalManagerTest is MarketMakerTestBase {
 
         vm.expectRevert(Errors.InvalidSender.selector);
         signalManager.verifyLiquiditySignalRelayed(sender, 0, liquiditySignalBytes, deadline, authNonce, authSig, true);
+    }
+
+    function test_verifyLiquiditySignalRelayed_revertsWhenAdvancerIsContract() public {
+        address contractAdvancer = address(new MockSmartAccount());
+        LiquiditySignal memory signal = liquiditySignal;
+        signal.mmState.advancer = contractAdvancer;
+        bytes memory liquiditySignalBytes = abi.encode(signal);
+        address sender = signal.mmState.owner;
+        uint256 deadline = block.timestamp + 1 hours;
+        uint256 authNonce = signalManager.submitAuthNonce(sender);
+        bytes memory authSig = _signRelayAuth(_ownerPrivateKey(), sender, 0, liquiditySignalBytes, deadline, authNonce);
+
+        vm.expectRevert(abi.encodeWithSelector(Errors.InvalidAdvancer.selector, contractAdvancer));
+        signalManager.verifyLiquiditySignalRelayed(sender, 0, liquiditySignalBytes, deadline, authNonce, authSig, true);
+    }
+
+    function test_verifyLiquiditySignalRelayed_allows7702DelegatedAdvancer() public {
+        signalManager.setVerifier(address(new AlwaysTrueSignalVerifier()));
+
+        uint256 advPk = uint256(keccak256(abi.encodePacked("7702_relay_adv_pk")));
+        address adv7702 = vm.addr(advPk);
+        _etch7702Delegation(adv7702, makeAddr("eip7702_delegate_relay"));
+
+        LiquiditySignal memory signal = liquiditySignal;
+        signal.mmState.advancer = adv7702;
+        bytes memory liquiditySignalBytes = abi.encode(signal);
+
+        uint256 deadline = block.timestamp + 1 hours;
+        uint256 authNonce = signalManager.submitAuthNonce(adv7702);
+        bytes memory authSig = _signRelayAuth(advPk, adv7702, 0, liquiditySignalBytes, deadline, authNonce);
+
+        (bool ok,) = signalManager.verifyLiquiditySignalRelayed(
+            adv7702, 0, liquiditySignalBytes, deadline, authNonce, authSig, true
+        );
+
+        assertTrue(ok);
+        assertEq(signalManager.submitAuthNonce(adv7702), authNonce + 1);
+        assertEq(signalManager.mmNonce(signal.mmState.owner), signal.nonce);
     }
 
     function test_verifyLiquiditySignalRelayed_returnsFalseAndDoesNotAdvanceAuthNonce_whenVerifierReturnsFalse()

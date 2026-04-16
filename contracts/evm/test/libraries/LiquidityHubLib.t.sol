@@ -326,8 +326,10 @@ contract MockSettleCustodian is IMMQueueCustodian {
         function test_processSettlementFor_hub_noopsWhenOnlyDirectReserve() public {
             uint256 queued = 6;
 
-            // Hub holds wrapped LCC only (market-derived is 0).
-            _wrapDirectLCC(address(liquidityHub), lccToken1, queued);
+            // Hub holds wrapped LCC only (market-derived is 0). Cannot wrap directly to exempt Hub; fund via user then transfer.
+            _wrapDirectLCC(user1, lccToken1, queued);
+            vm.prank(user1);
+            ILCC(lccToken1).transfer(address(liquidityHub), queued);
 
             // Seed hub queue with only direct reserve (market-derived reserve stays zero).
             _setSettleQueue(lccToken1, address(liquidityHub), queued);
@@ -605,9 +607,8 @@ contract MockSettleCustodian is IMMQueueCustodian {
             uint256 amount = wrappedAmount + marketAmount;
 
             _wrapDirectLCC(user1, withLcc, wrappedAmount);
-            _wrapDirectLCC(proxyHook, withLcc, marketAmount);
             vm.prank(proxyHook);
-            ILCC(withLcc).transfer(user1, marketAmount);
+            liquidityHub.issue(withLcc, user1, marketAmount);
 
             (uint256 wrappedBal, uint256 marketBal) = ILCC(withLcc).balancesOf(user1);
             assertEq(wrappedBal, wrappedAmount, "precondition: wrapped balance should match");
@@ -794,6 +795,8 @@ contract MockSettleCustodian is IMMQueueCustodian {
             vm.mockCall(factory, abi.encodeWithSelector(IMarketFactory.useMarketLiquidity.selector), abi.encode(used));
             // Simulate confirmTake-side market-derived reserve accrual for the mocked market use.
             _setMarketReserveOfUnderlying(address(underlyingAsset1), used);
+            // Ensure the Hub can actually transfer the paid portion to the user (reserve alone does not mint ERC20).
+            underlyingAsset1.mint(address(liquidityHub), used);
 
             uint256 underlyingBefore = underlyingAsset1.balanceOf(user1);
 
@@ -968,9 +971,8 @@ contract MockSettleCustodian is IMMQueueCustodian {
             uint256 amount = wrappedAmount + marketAmount;
 
             _wrapDirectLCC(user1, withLcc, wrappedAmount);
-            _wrapDirectLCC(proxyHook, withLcc, marketAmount);
             vm.prank(proxyHook);
-            ILCC(withLcc).transfer(user1, marketAmount);
+            liquidityHub.issue(withLcc, user1, marketAmount);
 
             _setDirectSupply(withLcc, wrappedAmount + 6);
 

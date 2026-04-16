@@ -396,9 +396,12 @@ library VTSPositionMMOpsLib {
             if (amount0 == 0 && amount1 == 0) return;
         }
 
-        // Validate commitment backing in scoped block
+        // Validate commitment backing in scoped block.
+        // `touchPosition` updates `positions[positionId].liquidity` to post-modify liquidity before this MM tail runs,
+        // so use that total for issued-value (COMMIT-01), not the incremental `params.liquidityDelta` alone.
         {
             (uint160 sqrtPriceX96, int24 currentTick,,) = ctx.poolManager.getSlot0(poolKey.toId());
+            uint128 postAddLiquidity = s.positions[p.positionId].liquidity;
             VTSCommitLib.validateLiquidityDelta(
                 s,
                 ctx.oracleHelper,
@@ -411,7 +414,7 @@ library VTSPositionMMOpsLib {
                     currentTick: currentTick,
                     tickLower: params.tickLower,
                     tickUpper: params.tickUpper,
-                    liquidityDelta: params.liquidityDelta
+                    liquidityDelta: SafeCast.toInt256(postAddLiquidity)
                 }),
                 true
             );

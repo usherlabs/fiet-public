@@ -50,6 +50,9 @@ library Errors {
     /// @notice Thrown when an invalid address is provided (zero address or invalid for context)
     error InvalidAddress(address self);
 
+    /// @notice Thrown when `mmState.advancer` is not a supported shape (plain EOA or canonical EIP-7702 delegation)
+    error InvalidAdvancer(address advancer);
+
     /// @notice Thrown when an invalid market is provided
     error InvalidMarket(PoolKey poolKey);
 
@@ -158,6 +161,10 @@ library Errors {
 
     /// @notice Thrown when direct wrap minting targets a DEX ingress sink.
     error DirectWrapToDexNotAllowed(address recipient);
+
+    /// @notice Thrown when a direct-backed (wrapped) LCC mint targets a bucket-exempt endpoint.
+    /// @dev Exempt holders skip bucket maps; direct supply there cannot align with Domain A accounting or DEX ingress preparation.
+    error DirectMintToExemptNotAllowed(address recipient);
 
     /// @notice Thrown when native ETH transferFrom is attempted from a non-self source
     error NativeTransferFromUnsupported(address from);
