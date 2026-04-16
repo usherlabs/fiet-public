@@ -940,6 +940,32 @@ contract VTSPositionLibOnMMSettleTest is VTSLibTestBase {
         );
     }
 
+    /// @dev `fromDeltas == true` selects `VTSPositionMMOpsLib.settleFromPositiveUnderlyingDelta` for deposit lanes
+    ///      instead of `_settleDeposits` / `_settleSeizingDeposits`.
+    function test_onMMSettle_fromDeltas_true_depositConsumesProtocolCredit() public {
+        _initMarket();
+        PositionId positionId = _registerActivePosition();
+        address owner = DEFAULT_OWNER;
+
+        harness.setCommitmentMax(positionId, 1000e18, 1000e18);
+        harness.setSettled(positionId, 0, 0);
+        harness.setPositionActive(positionId, false);
+
+        harness.setUnderlyingDelta(underlyingCurrency0, owner, 30e18);
+        harness.addMarketProducedCredit(mockVault, underlyingCurrency0, 30e18);
+        mockVault.setAvailableLiquidity(type(int128).max, type(int128).max);
+
+        BalanceDelta delta = toBalanceDelta(-30e18, 0);
+
+        (BalanceDelta settlementDelta,,) =
+            harness.onMMSettle(manager, mockVault, positionId, lccCurrency0, lccCurrency1, delta, false, true);
+
+        assertEq(settlementDelta.amount0(), -30e18, "deposit should settle via fromDeltas protocol-credit path");
+        assertEq(
+            harness.getUnderlyingDelta(underlyingCurrency0, owner), 0, "positive underlying delta should be consumed"
+        );
+    }
+
     /// @notice Regression for audit finding #9: positive owner underlying credit cannot fund delta-backed withdrawals
     ///         unless matching factory-scoped produced credit exists (reserve export provenance).
     function test_onMMSettle_finding9_crossVaultWithdrawWithoutProduced_reverts() public {

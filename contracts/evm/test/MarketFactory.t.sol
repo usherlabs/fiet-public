@@ -1384,4 +1384,10 @@ contract MarketFactoryUnitTest is Test {
             VTSConfigs.getDefaultConfig()
         );
     }
+
+    /// @dev `isMarketFacade` returns false when `coreToProxy` has no entry (unknown core pool id).
+    function test_isMarketFacade_returnsFalseWhenCorePoolUnknown() public view {
+        bytes32 unknownCore = bytes32(uint256(0x111122223333444455556666777788889999aaaabbbbccccddddeeeeffff));
+        assertFalse(factory.isMarketFacade(unknownCore, address(proxyHook)));
+    }
 }

@@ -277,6 +277,16 @@ contract ProxyHookMutationHardeningTest is MarketVaultBase {
         assertTrue(lockerResolved, "locker sentinel should resolve");
         assertEq(gotLocker, lockerSender.msgSender(), "locker sentinel should map via IMsgSender(sender).msgSender()");
     }
+
+    /// @dev Non-sentinel hookData recipient uses explicit address with `resolved == true` (`ProxyHook` branch).
+    function test_determineExcessRecipient_explicitRecipient_resolves() public {
+        ProxyHookHarness harness = new ProxyHookHarness(address(manager), address(marketFactory));
+        address custom = makeAddr("explicit_deficit_recipient");
+        (address got, bool resolved) =
+            harness.exposed_determineExcessRecipient(makeAddr("swap_sender"), abi.encode(custom));
+        assertTrue(resolved, "explicit recipient should be resolved");
+        assertEq(got, custom, "should return decoded recipient");
+    }
 }
 
 contract ProxyHookHarness is ProxyHook {

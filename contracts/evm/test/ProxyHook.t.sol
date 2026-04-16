@@ -253,6 +253,22 @@ contract ProxyHookTest is MarketVaultBase {
         fresh.handleIngress(address(0xBEEF), 1);
     }
 
+    /// @dev Full fixture: `handleIngress` validates LCC and calls into the canonical vault ingress path.
+    ///      The vault body is mocked here so the test does not require `PoolManager.unlock` (real path would hit `ManagerLocked`).
+    function test_handleIngress_settlesUnderlying_whenWrappedAmountPositive_andLccMatchesCorePair() public {
+        address lcc = Currency.unwrap(corePoolKey.currency0);
+        uint256 amount = 100;
+        bytes32 marketId = PoolId.unwrap(corePoolKey.toId());
+        address canonicalVault_ = IMarketFactory(marketFactory).canonicalVault();
+        vm.mockCall(
+            canonicalVault_,
+            abi.encodeWithSelector(ICanonicalVault.settleUnderlyingToVaultFromHub.selector, marketId, lcc, amount),
+            abi.encode()
+        );
+        vm.prank(marketFactory);
+        proxyHook.handleIngress(lcc, amount);
+    }
+
     function test_handleSwap_revertsWhenInputTokenIsNotInCorePair() public {
         ProxyHookHarness fresh = new ProxyHookHarness(address(manager), address(marketFactory));
 

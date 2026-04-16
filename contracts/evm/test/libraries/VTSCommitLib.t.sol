@@ -428,6 +428,20 @@ contract VTSCommitLibTest is VTSLibTestBase {
         assertEq(harness.getTotalCISEExposureSinceLastMod(poolId, 1), 0, "no CISE denominator should accrue");
     }
 
+    /// @dev DICE index branch is skipped when `totalDeficitPrincipal` is zero; coverage defers to residual bucket.
+    function test_incrementCoverage_token0_residualDice_whenTotalDeficitPrincipalZero_butSettledNonZero() public {
+        uint256 covered = 5e18;
+        harness.setPoolTotalDeficitPrincipal(poolId, 0, 0);
+        harness.setPoolTotalSettled(poolId, 0, 1000e18);
+
+        harness.incrementCoverage(poolId, 0, covered);
+
+        assertEq(
+            harness.getCoverageResidualDICE(poolId, 0), covered, "residual DICE accrues when principal total is zero"
+        );
+        assertGt(harness.getCoveragePerSettledIndexX128(poolId, 0), 0, "CISE index still advances when settled > 0");
+    }
+
     // ============================================================
     // checkpoint
     // ============================================================
