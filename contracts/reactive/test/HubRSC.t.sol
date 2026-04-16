@@ -908,19 +908,15 @@ contract HubRSCTest is Test {
         uint256 boundedDispatchItems = 2;
         MockLiquidityHub liq = new MockLiquidityHub();
         MockSettlementReceiver receiver = new MockSettlementReceiver(address(liq));
-        HubRSC hub =
-            new HubRSC(boundedDispatchItems, originChainId, destinationChainId, address(liq), hubCallback, address(receiver));
+        HubRSC hub = new HubRSC(
+            boundedDispatchItems, originChainId, destinationChainId, address(liq), hubCallback, address(receiver)
+        );
 
         address underlying = makeAddr("underlying");
         address lccA = makeAddr("lccA");
         address lccB = makeAddr("lccB");
-        address[5] memory recipients = [
-            address(uint160(1)),
-            address(uint160(2)),
-            address(uint160(3)),
-            address(uint160(4)),
-            address(uint160(5))
-        ];
+        address[5] memory recipients =
+            [address(uint160(1)), address(uint160(2)), address(uint160(3)), address(uint160(4)), address(uint160(5))];
 
         hub.react(_settlementLog(hub, recipients[0], lccB, 1, 1, 0x8610, 1));
         hub.react(_settlementLog(hub, recipients[1], lccB, 1, 2, 0x8611, 2));
@@ -957,7 +953,7 @@ contract HubRSCTest is Test {
         }
         assertTrue(
             _findCallbackPayloadBySelector(firstEntries, ReactiveConstants.TRIGGER_MORE_LIQUIDITY_AVAILABLE_SELECTOR)
-                .length > 0
+            .length > 0
         );
         assertEq(hub.underlyingBackfillRemainingByLcc(lccB), 1);
 
@@ -980,7 +976,7 @@ contract HubRSCTest is Test {
         }
         assertTrue(
             _findCallbackPayloadBySelector(secondEntries, ReactiveConstants.TRIGGER_MORE_LIQUIDITY_AVAILABLE_SELECTOR)
-                .length > 0
+            .length > 0
         );
         assertEq(hub.underlyingBackfillRemainingByLcc(lccB), 0);
 
@@ -1791,12 +1787,9 @@ contract HubRSCTest is Test {
         }
     }
 
-    function _applyProcessedLogsFromBatch(
-        HubRSC hub,
-        Vm.Log[] memory entries,
-        uint256 txHashBase,
-        uint256 logIndexBase
-    ) internal {
+    function _applyProcessedLogsFromBatch(HubRSC hub, Vm.Log[] memory entries, uint256 txHashBase, uint256 logIndexBase)
+        internal
+    {
         (, address[] memory lccs, address[] memory recipients, uint256[] memory amounts) =
             _decodeProcessSettlementsPayload(entries);
         for (uint256 i = 0; i < lccs.length; i++) {
