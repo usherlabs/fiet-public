@@ -83,6 +83,10 @@ contract MMPositionManager is
     /// @notice Shared custodian that holds queued MM-backed LCC by commit bucket
     IMMQueueCustodian public immutable queueCustodian;
 
+    /// @dev Custody bucket for `UNWRAP_LCC` shortfalls: not tied to a commitment NFT (`tokenId == 0` matches
+    ///      `COLLECT_AVAILABLE_LIQUIDITY` utility collects).
+    uint256 private constant _UNWRAP_QUEUE_CUSTODY_TOKEN_ID = 0;
+
     // ═══════════════════════════════════════════════════════════════════════════
     // Constructor
     // ═══════════════════════════════════════════════════════════════════════════
@@ -406,7 +410,12 @@ contract MMPositionManager is
 
         if (toUnwrap > 0) {
             address queueTo = msgSender();
+            uint256 qBefore = liquidityHub.settleQueue(lccAddr, queueTo);
             liquidityHub.unwrapTo(lccAddr, to, queueTo, toUnwrap);
+            uint256 queued = liquidityHub.settleQueue(lccAddr, queueTo) - qBefore;
+            if (queued > 0) {
+                _forwardUnwrapQueuedLccToCustodian(lccCurrency, queueTo, queued);
+            }
         }
 
         uint256 afterBal = isNativeUnderlying ? to.balance : IERC20(underlying).balanceOf(to);
@@ -437,8 +446,13 @@ contract MMPositionManager is
         uint256 beforeBal = isNativeUnderlying ? to.balance : IERC20(underlying).balanceOf(to);
         if (toUnwrap > 0) {
             // Pull only from the locker/user (never arbitrary third parties).
+            uint256 qBefore = liquidityHub.settleQueue(lccAddr, payer);
             lccCurrency.transferFrom(payer, address(this), toUnwrap);
             liquidityHub.unwrapTo(lccAddr, to, payer, toUnwrap);
+            uint256 queued = liquidityHub.settleQueue(lccAddr, payer) - qBefore;
+            if (queued > 0) {
+                _forwardUnwrapQueuedLccToCustodian(lccCurrency, payer, queued);
+            }
         }
 
         uint256 afterBal = isNativeUnderlying ? to.balance : IERC20(underlying).balanceOf(to);
@@ -450,6 +464,25 @@ contract MMPositionManager is
                 _syncBalanceAsCredit(Currency.wrap(underlying));
             }
         }
+    }
+
+    /// @notice Moves Hub-queued shortfall LCC off this contract into beneficiary-scoped custody so it is not FCFS
+    ///         router dust (see `DELTA-02` / `HUB-02A` in `INVARIANTS.md`).
+    /// @dev Caller must have already invoked `liquidityHub.unwrapTo`; `amount` is the incremental queue delta for
+    ///      `beneficiary` on this unwrap.
+    function _forwardUnwrapQueuedLccToCustodian(Currency lccCurrency, address beneficiary, uint256 amount) private {
+        if (amount == 0) return;
+        if (beneficiary == address(0)) revert Errors.InvalidAddress(beneficiary);
+
+        IMMQueueCustodian custodian = queueCustodian;
+        address cust = address(custodian);
+        if (cust == address(0) || cust == address(this)) return;
+
+        uint256 bal = IERC20(Currency.unwrap(lccCurrency)).balanceOf(address(this));
+        if (bal < amount) revert Errors.InsufficientBalance(bal, amount);
+
+        lccCurrency.transfer(cust, amount);
+        custodian.record(_UNWRAP_QUEUE_CUSTODY_TOKEN_ID, Currency.unwrap(lccCurrency), beneficiary, amount);
     }
 
     /// @notice Collects available liquidity from settlement queue

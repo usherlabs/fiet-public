@@ -29,10 +29,11 @@ import {IPoolManager} from "v4-periphery/lib/v4-core/src/interfaces/IPoolManager
 import {RFSCheckpoint} from "../../src/types/Checkpoint.sol";
 import {IMarketVault} from "../../src/interfaces/IMarketVault.sol";
 import {ILiquidityHub} from "../../src/interfaces/ILiquidityHub.sol";
-import {IOracleHelper} from "../../src/interfaces/IOracleHelper.sol";
 import {IHooks} from "@uniswap/v4-core/src/interfaces/IHooks.sol";
 import {PositionContext, TouchPositionParams, TouchPositionResult} from "../../src/types/VTS.sol";
 import {PositionModificationHookDataLib} from "../../src/types/Position.sol";
+import {IOracleHelper} from "../../src/interfaces/IOracleHelper.sol";
+import {MockOracleHelper} from "../fuzz/mocks/MockOracleHelper.sol";
 
 /// @notice Mutation-focused unit tests for VTSPositionLib that do NOT depend on MarketTestBase/_setupMarket.
 /// @dev Purpose: avoid fixture panics masking kills. These tests aim to kill meaningful mutants via direct harness state.
@@ -1165,19 +1166,15 @@ contract VTSPositionLibMutationUnitTest is Test {
     }
 
     // ============================================================
-    // touchPosition MM decrease: kill feeAdj accounting mutant (1240)
+    // touchPosition MM decrease: pool principal must ignore feeAdj (Scan 21 / SETTLE-03)
     // ============================================================
-    function test_touchPosition_mmDecrease_principalDelta_includesFeeAdj_asFeeComponent() public {
-        // We want a deterministic, non-zero feeAdj during touchPosition.
-        // Easiest way: use `_applyCoverageBurn` to create a positive pendingFeeAdj on token0,
-        // then let `afterTouchPosition()` materialise it into `result.feeAdj`.
+    function test_touchPosition_mmDecrease_principalDelta_isCallerMinusFees_ignoresMaterialisedFeeAdj() public {
+        // Non-zero `result.feeAdj` after coverage slash must not change LCC principal for cancel/queue: PoolManager
+        // passes hook-time `callerDelta = poolPrincipal + feesAccrued` into the hook; feeAdj is applied only after.
+        // Correct principal: `callerDelta - feesAccrued` (not `callerDelta - (feesAccrued - feeAdj)`).
         //
-        // With feeAdj > 0 (slash), the correct principal delta is:
-        //   accruedFeesAfterAdj = feesAccrued - feeAdj
-        //   principalDelta      = callerDelta - accruedFeesAfterAdj
-        //                     = callerDelta - feesAccrued + feeAdj
-        //
-        // The mutant flips to `feesAccrued + feeAdj`, which would *reduce* principalDelta by `2*feeAdj`.
+        // We still use `_applyCoverageBurn` so `afterTouchPosition` materialises a positive `feeAdj` on token0, proving
+        // the planned-cancel principal ignores that adjustment.
 
         // 1) Create a poolKey and use its derived PoolId everywhere.
         // IMPORTANT: `touchPosition` uses `p.poolKey.toId()` for PoolManager reads, so the PoolId used for
@@ -1276,14 +1273,192 @@ contract VTSPositionLibMutationUnitTest is Test {
         });
 
         TouchPositionResult memory result = harness.touchPositionAndFinalizeMM(ctx, tp);
+        assertGt(result.feeAdj.amount0(), 0, "precondition: materialised feeAdj(token0) should be > 0");
 
-        // Assert we planned a cancellation on token0 with principalAmount0 == callerDelta - (feesAccrued - feeAdj).
-        // Use the materialised fee adjustment from `touchPosition` so the check remains valid across fee-adj internals.
         int256 caller0 = int256(tp.callerDelta.amount0());
         int256 accrued0 = int256(tp.feesAccrued.amount0());
-        int256 feeAdj0 = int256(result.feeAdj.amount0());
-        uint256 expectedPrincipal0 = uint256(caller0 - accrued0 + feeAdj0);
-        assertEq(hub.lastPrincipalAmount0(), expectedPrincipal0, "principalAmount0 should include +feeAdj for slash");
+        uint256 expectedPrincipal0 = uint256(caller0 - accrued0);
+        assertEq(
+            hub.lastPrincipalAmount0(),
+            expectedPrincipal0,
+            "planned cancel principal must be pool principal only (callerDelta - feesAccrued)"
+        );
+    }
+
+    /// @notice MM increase: LCC issuance must use `callerDelta - feesAccrued` (pool principal), not net of materialised `feeAdj`.
+    function test_touchPosition_mmIncrease_issueAmount_isCallerMinusFees_ignoresMaterialisedFeeAdj() public {
+        MockLCC lcc0 = new MockLCC(address(0xA0));
+        MockLCC lcc1 = new MockLCC(address(0xA1));
+        PoolKey memory key = PoolKey({
+            currency0: Currency.wrap(address(lcc0)),
+            currency1: Currency.wrap(address(lcc1)),
+            fee: 0,
+            tickSpacing: 60,
+            hooks: IHooks(address(0))
+        });
+        PoolId pId = key.toId();
+        harness.setupPool(pId, _defaultCfg());
+
+        ModifyLiquidityParams memory reg = ModifyLiquidityParams({
+            tickLower: TICK_LOWER,
+            tickUpper: TICK_UPPER,
+            liquidityDelta: int256(uint256(1000)),
+            salt: bytes32(uint256(21))
+        });
+        harness.registerPosition(owner, pId, reg);
+        PositionId id = PositionLibrary.generateId(owner, reg);
+        harness.setCommitmentMax(id, 1e18, 1e18);
+        harness.setSettled(id, 1e18, 1e18);
+        harness.setPoolTotalSettled(pId, 1e18, 1e18);
+        harness.setCumulativeDeficit(id, 0, 0);
+        harness.setCommitmentDeficit(id, 0, 0);
+
+        uint256 commitId = 1;
+        harness.setPositionCommitId(id, commitId);
+
+        _pmSetPositionLiquidity(pId, PositionId.unwrap(id), 1000);
+
+        _pmSetSlot0Tick(pId, 0);
+        _pmSetFeeGrowthGlobals(pId, FixedPoint128.Q128, 0);
+        _pmSetTickFeeGrowthOutside(pId, TICK_LOWER, 0, 0);
+        _pmSetTickFeeGrowthOutside(pId, TICK_UPPER, 0, 0);
+
+        harness.setFeeGrowthInsideLast(id, 0, 0);
+        harness.setCumulativeDeficit(id, 0, 10);
+        harness.setCumulativeOutflows(id, 0, 10);
+        harness.setOutflowsAtFeeSnap(id, 0, 0);
+        harness.applyCoverageBurn(IPoolManager(address(pm)), id, pId, 1, 10, 10_000);
+
+        MockLiquidityHubRecorder hub = new MockLiquidityHubRecorder(address(lcc0), address(lcc1));
+        MockMarketVaultPassthrough vault = new MockMarketVaultPassthrough();
+        MockOracleHelper oracle = new MockOracleHelper(address(0));
+
+        PositionContext memory ctx = PositionContext({
+            poolManager: IPoolManager(address(pm)),
+            liquidityHub: ILiquidityHub(address(hub)),
+            oracleHelper: IOracleHelper(address(oracle)),
+            marketVault: IMarketVault(address(vault))
+        });
+
+        _pmSetPositionLiquidity(pId, PositionId.unwrap(id), 1100);
+
+        TouchPositionParams memory tp = TouchPositionParams({
+            owner: owner,
+            poolKey: key,
+            params: ModifyLiquidityParams({
+                tickLower: reg.tickLower, tickUpper: reg.tickUpper, liquidityDelta: 100, salt: reg.salt
+            }),
+            callerDelta: toBalanceDelta(int128(-1000), 0),
+            feesAccrued: toBalanceDelta(int128(2000), 0),
+            hookData: PositionModificationHookDataLib.encode(commitId, 0, owner)
+        });
+
+        TouchPositionResult memory result = harness.touchPositionAndFinalizeMM(ctx, tp);
+        assertGt(result.feeAdj.amount0(), 0, "precondition: materialised feeAdj(token0) should be > 0");
+
+        int256 caller0 = int256(tp.callerDelta.amount0());
+        int256 accrued0 = int256(tp.feesAccrued.amount0());
+        uint256 expectedIssue0 = uint256(-(caller0 - accrued0));
+        assertEq(expectedIssue0, 3000);
+        assertEq(
+            hub.lastIssueAmount0(),
+            expectedIssue0,
+            "issue must track pool principal (callerDelta - feesAccrued), not adjusted by feeAdj"
+        );
+    }
+
+    /// @notice When pending fee slash materialises to a value far larger than `feesAccrued` on the same touch, issuance stays pool-principal-based.
+    function test_touchPosition_mmIncrease_feeAdjExceedsFeesAccrued_issueStillPoolPrincipal() public {
+        MockLCC lcc0 = new MockLCC(address(0xA0));
+        MockLCC lcc1 = new MockLCC(address(0xA1));
+        PoolKey memory key = PoolKey({
+            currency0: Currency.wrap(address(lcc0)),
+            currency1: Currency.wrap(address(lcc1)),
+            fee: 0,
+            tickSpacing: 60,
+            hooks: IHooks(address(0))
+        });
+        PoolId pId = key.toId();
+        harness.setupPool(pId, _defaultCfg());
+
+        ModifyLiquidityParams memory reg = ModifyLiquidityParams({
+            tickLower: TICK_LOWER,
+            tickUpper: TICK_UPPER,
+            liquidityDelta: int256(uint256(1000)),
+            salt: bytes32(uint256(22))
+        });
+        harness.registerPosition(owner, pId, reg);
+        PositionId id = PositionLibrary.generateId(owner, reg);
+        harness.setCommitmentMax(id, 1e18, 1e18);
+        harness.setSettled(id, 1e18, 1e18);
+        harness.setPoolTotalSettled(pId, 1e18, 1e18);
+        harness.setCumulativeDeficit(id, 0, 0);
+        harness.setCommitmentDeficit(id, 0, 0);
+
+        uint256 commitId = 1;
+        harness.setPositionCommitId(id, commitId);
+
+        _pmSetPositionLiquidity(pId, PositionId.unwrap(id), 1000);
+
+        _pmSetSlot0Tick(pId, 0);
+        _pmSetFeeGrowthGlobals(pId, FixedPoint128.Q128, 0);
+        _pmSetTickFeeGrowthOutside(pId, TICK_LOWER, 0, 0);
+        _pmSetTickFeeGrowthOutside(pId, TICK_UPPER, 0, 0);
+
+        harness.setFeeGrowthInsideLast(id, 0, 0);
+        harness.setCumulativeDeficit(id, 0, 10);
+        harness.setCumulativeOutflows(id, 0, 10);
+        harness.setOutflowsAtFeeSnap(id, 0, 0);
+        harness.applyCoverageBurn(IPoolManager(address(pm)), id, pId, 1, 10, 10_000);
+        harness.setPendingFeeAdj(id, 100_000, 0);
+
+        MockLiquidityHubRecorder hub = new MockLiquidityHubRecorder(address(lcc0), address(lcc1));
+        MockMarketVaultPassthrough vault = new MockMarketVaultPassthrough();
+        MockOracleHelper oracle = new MockOracleHelper(address(0));
+
+        PositionContext memory ctx = PositionContext({
+            poolManager: IPoolManager(address(pm)),
+            liquidityHub: ILiquidityHub(address(hub)),
+            oracleHelper: IOracleHelper(address(oracle)),
+            marketVault: IMarketVault(address(vault))
+        });
+
+        _pmSetPositionLiquidity(pId, PositionId.unwrap(id), 1100);
+
+        TouchPositionParams memory tp = TouchPositionParams({
+            owner: owner,
+            poolKey: key,
+            params: ModifyLiquidityParams({
+                tickLower: reg.tickLower, tickUpper: reg.tickUpper, liquidityDelta: 100, salt: reg.salt
+            }),
+            callerDelta: toBalanceDelta(int128(-2950), 0),
+            feesAccrued: toBalanceDelta(int128(50), 0),
+            hookData: PositionModificationHookDataLib.encode(commitId, 0, owner)
+        });
+
+        TouchPositionResult memory result = harness.touchPositionAndFinalizeMM(ctx, tp);
+        assertGt(
+            result.feeAdj.amount0(), 50, "materialised feeAdj should dwarf informational feesAccrued on this touch"
+        );
+        assertGt(tp.feesAccrued.amount0(), 0);
+
+        int256 caller0 = int256(tp.callerDelta.amount0());
+        int256 accrued0 = int256(tp.feesAccrued.amount0());
+        uint256 expectedIssue0 = uint256(-(caller0 - accrued0));
+        assertEq(expectedIssue0, 3000);
+        assertEq(hub.lastIssueAmount0(), expectedIssue0);
+    }
+
+    /// @dev Algebraic guard: issued LCC on token0 equals absolute pool principal when that leg is a deposit.
+    function testFuzz_mmIncrease_issueAlgebra_callerMinusFees(uint128 poolPrincipal, uint128 feesAccruedAmt) public {
+        uint256 P = bound(uint256(poolPrincipal), 100, uint256(int256(type(int128).max)) / 2);
+        uint256 F = bound(uint256(feesAccruedAmt), 0, P / 4);
+        int256 caller = -int256(P) + int256(F);
+        int256 feesI = int256(F);
+        int256 principal = caller - feesI;
+        assertEq(principal, -int256(P));
+        uint256 issue = uint256(-principal);
+        assertEq(issue, P);
     }
 
     // ------------------------------------------------------------
@@ -2292,13 +2467,18 @@ contract MockLiquidityHubRecorder {
     address public token1;
     uint256 public lastPrincipalAmount0;
     uint256 public lastPrincipalAmount1;
+    uint256 public lastIssueAmount0;
+    uint256 public lastIssueAmount1;
 
     constructor(address token0_, address token1_) {
         token0 = token0_;
         token1 = token1_;
     }
 
-    function issue(address, address, uint256) external {}
+    function issue(address lcc, address, uint256 amount) external {
+        if (lcc == token0) lastIssueAmount0 = amount;
+        if (lcc == token1) lastIssueAmount1 = amount;
+    }
 
     function planCancelWithQueue(address currency, address, address, uint256 principalAmount, uint256, address)
         external

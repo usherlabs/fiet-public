@@ -495,7 +495,7 @@ contract VTSLifecycleLinkedLibTest is Test {
     }
 
     function test_validateMMOperation_revertsWhenSignalInvalid() public {
-        harness.testSeedCommit(5, mmOwner, advancer, block.timestamp + 1 days);
+        harness.testSeedCommit(5, mmOwner, advancer, block.timestamp + 1 days, boundCaller);
         vm.warp(block.timestamp + 2 days);
 
         bytes memory hook = PositionModificationHookDataLib.encode(5, 0, advancer);
@@ -512,7 +512,7 @@ contract VTSLifecycleLinkedLibTest is Test {
 
     function test_validateMMOperation_revertsWhenOwnerNotBound() public {
         uint256 expires = block.timestamp + 7 days;
-        harness.testSeedCommit(3, mmOwner, advancer, expires);
+        harness.testSeedCommit(3, mmOwner, advancer, expires, boundCaller);
 
         bytes memory hook = PositionModificationHookDataLib.encode(3, 0, advancer);
         vm.mockCall(
@@ -534,9 +534,36 @@ contract VTSLifecycleLinkedLibTest is Test {
         );
     }
 
+    function test_validateMMOperation_revertsWhenOwnerNotAuthorisedRelayer() public {
+        address otherBound = makeAddr("otherBound");
+        uint256 expires = block.timestamp + 7 days;
+        harness.testSeedCommit(8, mmOwner, advancer, expires, boundCaller);
+
+        bytes memory hook = PositionModificationHookDataLib.encode(8, 0, advancer);
+        vm.mockCall(
+            address(hub),
+            abi.encodeWithSelector(ILiquidityHub.getFactory.selector, Currency.unwrap(c0), Currency.unwrap(c1)),
+            abi.encode(address(factory))
+        );
+        factory.setBound(boundCaller, true);
+        factory.setBound(otherBound, true);
+
+        vm.expectRevert(Errors.InvalidSender.selector);
+        harness.validateMMOperation(
+            VTSCoreHookContext({
+                poolManager: IPoolManager(address(0)),
+                liquidityHub: ILiquidityHub(address(hub)),
+                oracleHelper: IOracleHelper(address(0))
+            }),
+            otherBound,
+            poolKey,
+            hook
+        );
+    }
+
     function test_validateMMOperation_revertsWhenLockerNotAdvancer() public {
         uint256 expires = block.timestamp + 7 days;
-        harness.testSeedCommit(4, mmOwner, advancer, expires);
+        harness.testSeedCommit(4, mmOwner, advancer, expires, boundCaller);
 
         bytes memory hook = PositionModificationHookDataLib.encode(4, 0, makeAddr("badLocker"));
         vm.mockCall(
@@ -561,7 +588,7 @@ contract VTSLifecycleLinkedLibTest is Test {
 
     function test_validateMMOperation_returnsTrueForSeizureWithoutLockerAdvancerMatch() public {
         uint256 expires = block.timestamp + 7 days;
-        harness.testSeedCommit(6, mmOwner, advancer, expires);
+        harness.testSeedCommit(6, mmOwner, advancer, expires, boundCaller);
 
         bytes memory hook = PositionModificationHookDataLib.encodeSeizure(6, 0, makeAddr("badLocker"), 0, 0);
         vm.mockCall(
@@ -587,7 +614,7 @@ contract VTSLifecycleLinkedLibTest is Test {
 
     function test_validateMMOperation_returnsTrueOnHappyPath() public {
         uint256 expires = block.timestamp + 7 days;
-        harness.testSeedCommit(7, mmOwner, advancer, expires);
+        harness.testSeedCommit(7, mmOwner, advancer, expires, boundCaller);
 
         bytes memory hook = PositionModificationHookDataLib.encode(7, 0, advancer);
         vm.mockCall(

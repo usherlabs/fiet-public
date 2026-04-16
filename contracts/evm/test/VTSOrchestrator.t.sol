@@ -287,6 +287,21 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
         vtsOrchestrator.commitSignal(IMarketFactory(marketFactory), liquiditySignal.mmState.owner, signalBytes);
     }
 
+    /// @dev Authorised relayer is the orchestrator `msg.sender` at commit time (here: `unlockCaller`), not the VRL principal.
+    function test_commitSignal_persistsAuthorisedRelayer_asOrchestratorCaller() public {
+        bytes memory signalBytes = abi.encode(liquiditySignal);
+        unlockCaller.run(
+            address(vtsOrchestrator),
+            abi.encodeWithSelector(
+                VTSOrchestrator.commitSignal.selector,
+                IMarketFactory(marketFactory),
+                liquiditySignal.mmState.owner,
+                signalBytes
+            )
+        );
+        assertEq(vtsOrchestrator.getCommitAuthorisedRelayer(1), address(unlockCaller));
+    }
+
     function test_revert_renewSignal_whenPoolManagerLocked() public {
         // First create a commit
         bytes memory signalBytes = abi.encode(liquiditySignal);

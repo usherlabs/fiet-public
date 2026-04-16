@@ -402,8 +402,11 @@ library LiquidityHubLib {
     /**
      * @notice Core unwrap logic without external transfer
      * @dev Handles the unwrapping of LCC tokens by consuming direct supply first, then market liquidity.
-     *      Any shortfall is queued for settlement. This function does not transfer underlying assets;
-     *      that is handled by the calling contract.
+     *      External settlement queues are market-derived claims only (`processSettlementLogic` burns market-derived LCC).
+     *      The wrapped / direct-backed slice must redeem fully against `directSupply` in this transaction or revert;
+     *      it must not degrade into a queued external settlement. Only the market-derived slice may queue shortfall
+     *      when `useMarketLiquidity` returns less than requested.
+     *      This function does not transfer underlying assets; that is handled by the calling contract.
      * @param s The liquidity hub storage
      * @param lcc The LCC token address
      * @param queueTo The recipient of the underlying asset (used for queueing shortfall)
@@ -423,29 +426,38 @@ library LiquidityHubLib {
         uint256 wrappedBalance,
         uint256 marketDerivedBalance
     ) internal returns (uint256 directUnwrapped, uint256 marketUnwrapped, uint256 queuedShortfall) {
-        // 1) Consume directSupply[lcc] if available
-        if (wrappedBalance > 0) {
+        // 1) Wrapped / direct-backed slice: must fully satisfy `min(amount, wrappedBalance)` against directSupply or revert.
+        uint256 wrappedNeed = Math.min(amount, wrappedBalance);
+        if (wrappedNeed > 0) {
             uint256 directAvail = s.directSupply[lcc];
-            directUnwrapped = Math.min(Math.min(amount, wrappedBalance), directAvail);
+            directUnwrapped = Math.min(wrappedNeed, directAvail);
+            if (wrappedNeed > directUnwrapped) {
+                // This should never happen - as directAvail is the sum of all wrapped balances
+                revert Errors.InvalidAmount(wrappedNeed, directUnwrapped);
+            }
             if (directUnwrapped > 0) {
                 // Underlying already accounted in reserveOfUnderlying (shared pool), no transfer needed
                 s.directSupply[lcc] = directAvail - directUnwrapped;
             }
         }
 
-        // 2) Pull from market liquidity; increases reserves later via confirmTake callbacks
         uint256 remainingToUnwrap = amount - directUnwrapped;
-        if (remainingToUnwrap > 0 && marketDerivedBalance > 0) {
-            // Get the max amount that can be unwrapped from this market
-            uint256 requestFromMarket = Math.min(remainingToUnwrap, marketDerivedBalance);
 
-            // Unwrap from this market's liquidity - call IMarketFactory directly
-            marketUnwrapped = useMarketLiquidity(s, lcc, requestFromMarket);
-
-            remainingToUnwrap -= marketUnwrapped;
+        // 2) Market-derived slice: pull from market liquidity; queue only market shortfall (never wrapped/direct shortfall).
+        if (remainingToUnwrap == 0) {
+            return (directUnwrapped, 0, 0);
         }
 
-        // 3) Queue any shortfall for later processing
+        if (marketDerivedBalance == 0) {
+            // This should not happen, unless unwrap is for amount > balance.
+            revert Errors.InvalidAmount(remainingToUnwrap, 0);
+        }
+
+        uint256 requestFromMarket = Math.min(remainingToUnwrap, marketDerivedBalance);
+        marketUnwrapped = useMarketLiquidity(s, lcc, requestFromMarket);
+
+        remainingToUnwrap -= marketUnwrapped;
+
         if (remainingToUnwrap > 0) {
             queueSettlement(s, lcc, queueTo, remainingToUnwrap);
             queuedShortfall = remainingToUnwrap;

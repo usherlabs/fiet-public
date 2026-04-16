@@ -342,6 +342,11 @@ contract VTSOrchestrator is
         );
     }
 
+    /// @inheritdoc IVTSOrchestrator
+    function getCommitAuthorisedRelayer(uint256 commitId) external view returns (address) {
+        return s.commits[commitId].authorisedRelayer;
+    }
+
     /// @notice Get pool by PoolId
     /// @dev Note: Cannot return Pool directly due to mapping in struct
     /// @param poolId The pool identifier

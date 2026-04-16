@@ -74,6 +74,15 @@ library VTSCommitLib {
         int256 liquidityDelta;
     }
 
+    /// @dev Bundles relayed-commit calldata to keep `_commitSignalRelayedRouter` within stack limits.
+    struct CommitRelayedBundle {
+        bytes liquiditySignal;
+        uint256 deadline;
+        uint256 authNonce;
+        bytes authSig;
+        address authorisedRelayer;
+    }
+
     function _writeCommitmentDeficitToken(PositionAccounting storage pa, uint8 tokenIndex, uint256 nextDeficit)
         internal
     {
@@ -219,20 +228,24 @@ library VTSCommitLib {
     }
 
     /// @dev Shared body for linked `commitSignal` and orchestrator router overload.
+    /// @param authorisedRelayer The `msg.sender` to `VTSOrchestrator` commit entrypoints (e.g. `MMPositionManager`),
+    ///        persisted so CoreHook MM ops can require `processPosition(owner) == authorisedRelayer`. This is distinct
+    ///        from `sender` passed to VRL (effective MM principal for proof verification).
     //#olympix-ignore-reentrancy
     function _commitSignalLinked(
         VTSStorage storage s,
         address sender,
         IVRLSignalManager signalManager,
         IOracleHelper oracleHelper,
-        bytes memory liquiditySignal
+        bytes memory liquiditySignal,
+        address authorisedRelayer
     ) internal returns (uint256 commitId) {
         if (liquiditySignal.length == 0) {
             revert Errors.InvalidLiquiditySignal(0, 0, 0);
         }
         (, uint256 expirySeconds) = signalManager.verifyLiquiditySignal(sender, liquiditySignal, true);
         _assertSignalAdmissible(oracleHelper, liquiditySignal);
-        commitId = _commitSignalInternal(s, liquiditySignal, expirySeconds);
+        commitId = _commitSignalInternal(s, liquiditySignal, expirySeconds, authorisedRelayer);
     }
 
     function _commitSignalRelayedLinked(
@@ -240,18 +253,16 @@ library VTSCommitLib {
         address sender,
         IVRLSignalManager signalManager,
         IOracleHelper oracleHelper,
-        bytes memory liquiditySignal,
-        uint256 deadline,
-        uint256 authNonce,
-        bytes memory authSig
+        CommitRelayedBundle memory b
     ) internal returns (uint256 commitId) {
-        if (liquiditySignal.length == 0) {
+        if (b.liquiditySignal.length == 0) {
             revert Errors.InvalidLiquiditySignal(0, 0, 0);
         }
-        (, uint256 expirySeconds) =
-            signalManager.verifyLiquiditySignalRelayed(sender, 0, liquiditySignal, deadline, authNonce, authSig, true);
-        _assertSignalAdmissible(oracleHelper, liquiditySignal);
-        commitId = _commitSignalInternal(s, liquiditySignal, expirySeconds);
+        (, uint256 expirySeconds) = signalManager.verifyLiquiditySignalRelayed(
+            sender, 0, b.liquiditySignal, b.deadline, b.authNonce, b.authSig, true
+        );
+        _assertSignalAdmissible(oracleHelper, b.liquiditySignal);
+        commitId = _commitSignalInternal(s, b.liquiditySignal, expirySeconds, b.authorisedRelayer);
     }
 
     function _renewSignalLinked(
@@ -291,15 +302,19 @@ library VTSCommitLib {
         _renewSignalInternal(s, sender, commitId, liquiditySignal, expirySeconds);
     }
 
-    function _commitSignalInternal(VTSStorage storage s, bytes memory liquiditySignal, uint256 expirySeconds)
-        internal
-        returns (uint256 commitId)
-    {
+    /// @param authorisedRelayer See `_commitSignalLinked`; immutable per commit after this write.
+    function _commitSignalInternal(
+        VTSStorage storage s,
+        bytes memory liquiditySignal,
+        uint256 expirySeconds,
+        address authorisedRelayer
+    ) internal returns (uint256 commitId) {
         LiquiditySignal memory signal = abi.decode(liquiditySignal, (LiquiditySignal));
         // increment first then assign because nextCommitId starts at 0 and we want to start at 1
         commitId = ++s.nextCommitId;
         // store the signal state (only state and expiresAt are relevant) and bind commit to pool
         MarketMaker.save(s.commits[commitId].mmState, signal.mmState);
+        s.commits[commitId].authorisedRelayer = authorisedRelayer;
         s.commits[commitId].expiresAt = block.timestamp + expirySeconds;
     }
 
@@ -315,6 +330,8 @@ library VTSCommitLib {
         // Invariants:
         // - Commit ownership must be immutable across renewals (prevents commitId hijack)
         // - Only the designated advancer may renew on-chain (reduces mempool proof sniping)
+        // - `authorisedRelayer` is intentionally not updated here: MM execution remains bound to the router that
+        //   created the commit, independent of advancer rotation in `mmState`.
         if (signal.mmState.owner != commit.mmState.owner || sender != signal.mmState.advancer) {
             revert Errors.InvalidSender();
         }
@@ -466,6 +483,9 @@ library VTSCommitLib {
         if (!ctx.liquidityHub.isFactory(address(factory))) revert Errors.InvalidSender();
     }
 
+    /// @dev Resolves which address is passed to VRL as the MM principal (`effectiveSender`). Bound callers may forward
+    ///      a different `sender` for proof verification; that does not grant the forwarder rights to operate the commit
+    ///      on the CoreHook path — that is enforced separately via `Commit.authorisedRelayer` (the orchestrator `caller`).
     function _resolveSignalSender(
         VTSCommitRouterContext memory ctx,
         IMarketFactory factory,
@@ -558,7 +578,7 @@ library VTSCommitLib {
         bytes memory liquiditySignal
     ) external returns (uint256 commitId) {
         address effectiveSender = _resolveSignalSender(ctx, factory, caller, sender);
-        commitId = _commitSignalLinked(s, effectiveSender, ctx.signalManager, ctx.oracleHelper, liquiditySignal);
+        commitId = _commitSignalLinked(s, effectiveSender, ctx.signalManager, ctx.oracleHelper, liquiditySignal, caller);
     }
 
     function commitSignalRelayed(
@@ -572,9 +592,36 @@ library VTSCommitLib {
         uint256 authNonce,
         bytes memory authSig
     ) external returns (uint256 commitId) {
+        return _commitSignalRelayedRouter(
+            s, ctx, factory, caller, sender, liquiditySignal, deadline, authNonce, authSig
+        );
+    }
+
+    /// @dev Split from `commitSignalRelayed` to avoid stack-too-deep in the external entrypoint.
+    function _commitSignalRelayedRouter(
+        VTSStorage storage s,
+        VTSCommitRouterContext memory ctx,
+        IMarketFactory factory,
+        address caller,
+        address sender,
+        bytes memory liquiditySignal,
+        uint256 deadline,
+        uint256 authNonce,
+        bytes memory authSig
+    ) private returns (uint256 commitId) {
         address effectiveSender = _resolveSignalSender(ctx, factory, caller, sender);
         commitId = _commitSignalRelayedLinked(
-            s, effectiveSender, ctx.signalManager, ctx.oracleHelper, liquiditySignal, deadline, authNonce, authSig
+            s,
+            effectiveSender,
+            ctx.signalManager,
+            ctx.oracleHelper,
+            CommitRelayedBundle({
+                liquiditySignal: liquiditySignal,
+                deadline: deadline,
+                authNonce: authNonce,
+                authSig: authSig,
+                authorisedRelayer: caller
+            })
         );
     }
 

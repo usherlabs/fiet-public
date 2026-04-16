@@ -158,13 +158,20 @@ contract VTSLifecycleLinkedLibHarness {
     }
 
     /// @dev TEST-ONLY: minimal commit state for validateMMOperation / signal validity tests
-    function testSeedCommit(uint256 commitId, address owner_, address advancer_, uint256 expiresAt) external {
+    function testSeedCommit(
+        uint256 commitId,
+        address owner_,
+        address advancer_,
+        uint256 expiresAt,
+        address authorisedRelayer_
+    ) external {
         MarketMaker.State storage st = s.commits[commitId].mmState;
         delete st.reserves;
         st.owner = owner_;
         st.advancer = advancer_;
         st.reserves.push(MarketMaker.Reserve({asset: "x", amount: 1}));
         s.commits[commitId].expiresAt = expiresAt;
+        s.commits[commitId].authorisedRelayer = authorisedRelayer_;
     }
 
     function testSeedPool(PoolId poolId, Currency c0, Currency c1) external {

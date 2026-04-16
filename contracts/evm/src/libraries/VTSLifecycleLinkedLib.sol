@@ -726,6 +726,13 @@ library VTSLifecycleLinkedLib {
         if (!MarketHandlerLib.isBounds(factory, owner)) revert Errors.InvalidSender();
 
         if (!mmData.seizure.isSeizing) {
+            // Two-layer authorisation: (1) `owner` must be the router that created this commit (per-commit binding).
+            // Factory `bounds(owner)` alone is too coarse — any bound endpoint could otherwise operate another's commit.
+            // (2) `locker` must still match the designated advancer (batch operator / queue attribution).
+            address relayer = s.commits[mmData.commitId].authorisedRelayer;
+            if (relayer != address(0) && owner != relayer) {
+                revert Errors.InvalidSender();
+            }
             address locker = PositionModificationHookDataLib.getLocker(mmData);
             if (locker != s.commits[mmData.commitId].mmState.advancer) {
                 revert Errors.InvalidSender();

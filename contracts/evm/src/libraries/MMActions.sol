@@ -3,7 +3,8 @@ pragma solidity ^0.8.26;
 
 /// @notice Library to define MM Position Manager actions
 /// @dev These action codes are used by MMPositionManager and MMPMActions for action dispatch
-/// @dev Actions < SETTLE_POSITION_FROM_DELTAS + 1 are delegated to MMPMActionsImpl (position operations)
+/// @dev Actions < SETTLE_POSITION_FROM_DELTAS + 1 are delegated to MMPMActionsImpl (position operations).
+///      `DECREASE_LIQUIDITY` / `BURN_POSITION` calldata includes `amount0Min` / `amount1Min` (Uniswap v4-style min-out).
 /// @dev Actions >= COMMIT_SIGNAL and < TAKE are handled in MMPositionManager (commitments)
 /// @dev Actions >= TAKE are handled in MMPositionManager (utilities)
 library MMActions {

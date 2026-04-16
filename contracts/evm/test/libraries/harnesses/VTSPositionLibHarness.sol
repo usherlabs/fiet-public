@@ -324,6 +324,12 @@ contract VTSPositionLibHarness {
         return (s.positionAccounting[id].pendingFeeAdj.token0, s.positionAccounting[id].pendingFeeAdj.token1);
     }
 
+    /// @notice TEST-ONLY: seeds signed pending fee adjustment before `afterTouchPosition` materialisation.
+    function setPendingFeeAdj(PositionId id, int256 adj0, int256 adj1) external {
+        s.positionAccounting[id].pendingFeeAdj.token0 = adj0;
+        s.positionAccounting[id].pendingFeeAdj.token1 = adj1;
+    }
+
     function getPoolTotalDeficitPrincipal(PoolId poolId)
         external
         view

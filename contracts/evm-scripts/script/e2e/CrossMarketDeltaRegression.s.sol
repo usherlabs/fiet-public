@@ -307,7 +307,7 @@ contract CrossMarketDeltaRegressionE2E is MME2EBase {
     }
 
     function _param0() internal view returns (bytes memory) {
-        return abi.encode(s_keyA, s_commitA, 0, s_decAmount);
+        return abi.encode(s_keyA, s_commitA, 0, s_decAmount, uint128(0), uint128(0));
     }
 
     function _param1() internal view returns (bytes memory) {
@@ -319,7 +319,7 @@ contract CrossMarketDeltaRegressionE2E is MME2EBase {
     }
 
     function _param3() internal view returns (bytes memory) {
-        return abi.encode(s_keyB, s_commitB, 0, s_decAmount);
+        return abi.encode(s_keyB, s_commitB, 0, s_decAmount, uint128(0), uint128(0));
     }
 
     function _param4() internal view returns (bytes memory) {
@@ -331,7 +331,7 @@ contract CrossMarketDeltaRegressionE2E is MME2EBase {
     }
 
     function _param6() internal view returns (bytes memory) {
-        return abi.encode(s_keyB, s_commitB, 0, s_decAmount);
+        return abi.encode(s_keyB, s_commitB, 0, s_decAmount, uint128(0), uint128(0));
     }
 
     function _param7() internal view returns (bytes memory) {
@@ -343,7 +343,7 @@ contract CrossMarketDeltaRegressionE2E is MME2EBase {
     }
 
     function _param9() internal view returns (bytes memory) {
-        return abi.encode(s_keyC, s_commitC, 0, s_decAmount);
+        return abi.encode(s_keyC, s_commitC, 0, s_decAmount, uint128(0), uint128(0));
     }
 
     function _param10() internal view returns (bytes memory) {

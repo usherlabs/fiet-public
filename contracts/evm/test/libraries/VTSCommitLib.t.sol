@@ -159,6 +159,11 @@ contract VTSCommitLibTest is VTSLibTestBase {
         advancer = makeAddr("advancer");
 
         commitId = harness.commitSignal(sigMgr, advancer, oracle, _makeSignal(mmOwner, advancer));
+        assertEq(
+            harness.getCommitAuthorisedRelayer(commitId),
+            address(harness),
+            "authorised relayer is harness (orchestrator caller)"
+        );
 
         positionId = _generatePositionId(DEFAULT_OWNER, TL, TU, DEFAULT_SALT);
         harness.setupPosition(positionId, poolId, commitId, TL, TU, LIQ);
@@ -188,6 +193,7 @@ contract VTSCommitLibTest is VTSLibTestBase {
         assertEq(harness.getNextCommitId(), newCommitId, "nextCommitId should match latest");
         assertEq(harness.getCommitOwner(newCommitId), owner2, "commit owner should be saved");
         assertEq(harness.getCommitAdvancer(newCommitId), adv2, "commit advancer should be saved");
+        assertEq(harness.getCommitAuthorisedRelayer(newCommitId), address(harness), "authorised relayer is harness");
         assertEq(harness.getCommitExpiresAt(newCommitId), block.timestamp + 1234, "expiry should be set");
     }
 

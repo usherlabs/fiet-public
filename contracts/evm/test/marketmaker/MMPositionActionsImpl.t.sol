@@ -541,6 +541,94 @@ contract MMPositionManagerActionsTest is MarketTestBase, MarketMakerTestBase {
         assertGt(newPositionSettledAmount1, 0, "New position should have non-zero settled amount1");
     }
 
+    /// @notice Unreachable min-out on principal (v4 `SlippageCheck`) must revert on DECREASE_LIQUIDITY.
+    function testDecreaseLiquidity_revertsWhenPrincipalMinOutUnreachable() public {
+        uint256 tokenId = 1;
+        uint256 positionIndex = 0;
+
+        _setupCommittedPosition(
+            positionManager,
+            corePoolKey,
+            abi.encode(liquiditySignal),
+            defaultlLiquidityParams,
+            marketVTSConfiguration,
+            address(lcc0),
+            address(lcc1)
+        );
+        approveAndSettleUnderlyingToPosition(tokenId, positionIndex, 1_000_000e18, 1_000_000e18);
+
+        MMA.PreparedAction[] memory actions = new MMA.PreparedAction[](1);
+        actions[0] =
+            MMA.prepareDecrease(corePoolKey, tokenId, positionIndex, 1000, type(uint128).max, type(uint128).max);
+        vm.expectRevert();
+        MMA.executeWithUnlock(positionManager, actions, block.timestamp + 3600);
+    }
+
+    /// @notice Explicit zero min-out preserves pre-slippage exit behaviour (no floor).
+    function testDecreaseLiquidity_succeedsWithExplicitZeroMinOut() public {
+        uint256 tokenId = 1;
+        uint256 positionIndex = 0;
+
+        _setupCommittedPosition(
+            positionManager,
+            corePoolKey,
+            abi.encode(liquiditySignal),
+            defaultlLiquidityParams,
+            marketVTSConfiguration,
+            address(lcc0),
+            address(lcc1)
+        );
+        approveAndSettleUnderlyingToPosition(tokenId, positionIndex, 1_000_000e18, 1_000_000e18);
+
+        MMA.PreparedAction[] memory actions = new MMA.PreparedAction[](2);
+        actions[0] = MMA.prepareDecrease(corePoolKey, tokenId, positionIndex, 1000, 0, 0);
+        actions[1] = MMA.prepareSettleFromDeltas(corePoolKey, tokenId, positionIndex, true, true);
+        MMA.executeWithUnlock(positionManager, actions, block.timestamp + 3600);
+    }
+
+    /// @notice Unreachable min-out on principal must revert on BURN_POSITION.
+    function testBurnPosition_revertsWhenPrincipalMinOutUnreachable() public {
+        uint256 tokenId = 1;
+        uint256 positionIndex = 0;
+
+        _setupCommittedPosition(
+            positionManager,
+            corePoolKey,
+            abi.encode(liquiditySignal),
+            defaultlLiquidityParams,
+            marketVTSConfiguration,
+            address(lcc0),
+            address(lcc1)
+        );
+        approveAndSettleUnderlyingToPosition(tokenId, positionIndex, 1_000_000e18, 1_000_000e18);
+
+        MMA.PreparedAction[] memory actions = new MMA.PreparedAction[](1);
+        actions[0] = MMA.prepareBurn(corePoolKey, tokenId, positionIndex, type(uint128).max, type(uint128).max);
+        vm.expectRevert();
+        MMA.executeWithUnlock(positionManager, actions, block.timestamp + 3600);
+    }
+
+    /// @notice Explicit zero min-out on burn preserves pre-slippage exit behaviour.
+    function testBurnPosition_succeedsWithExplicitZeroMinOut() public {
+        uint256 tokenId = 1;
+        uint256 positionIndex = 0;
+
+        _setupCommittedPosition(
+            positionManager,
+            corePoolKey,
+            abi.encode(liquiditySignal),
+            defaultlLiquidityParams,
+            marketVTSConfiguration,
+            address(lcc0),
+            address(lcc1)
+        );
+
+        MMA.PreparedAction[] memory actions = new MMA.PreparedAction[](2);
+        actions[0] = MMA.prepareBurn(corePoolKey, tokenId, positionIndex, 0, 0);
+        actions[1] = MMA.prepareSettleFromDeltas(corePoolKey, tokenId, positionIndex, true, true);
+        MMA.executeWithUnlock(positionManager, actions, block.timestamp + 3600);
+    }
+
     function testCanSeizeAndTakeDeltasFromPosition() public {
         // Objective:
         // - Prove a guarantor can seize an under-settled position after grace period and withdraw value.

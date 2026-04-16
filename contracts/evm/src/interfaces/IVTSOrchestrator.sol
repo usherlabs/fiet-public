@@ -68,6 +68,10 @@ interface IVTSOrchestrator is IPausableVTS, IVTSCurrencyDelta, IVTSAdmin {
             uint256 inactiveRemnantCount
         );
 
+    /// @notice The address bound at commit creation as the sole CoreHook MM `owner` (router) for this commit.
+    /// @dev `address(0)` denotes a legacy commit created before per-commit relayer binding.
+    function getCommitAuthorisedRelayer(uint256 commitId) external view returns (address);
+
     /// @notice Get pool information by PoolId
     /// @dev Note: Cannot return Pool directly due to mapping in struct
     /// @param poolId The pool identifier

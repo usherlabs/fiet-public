@@ -1164,14 +1164,10 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
         assertEq(underlying.balanceOf(recipient), 500);
     }
 
-    /// @notice Repro: when MMPM is bucket-exempt, it can hold LCC with zero buckets (bucketless ERC20 balance).
-    /// @dev This path used to be unreachable (transfer would revert before protocol-bounds); it now succeeds due to bounds.
-    ///      Current behaviour: LiquidityHub.unwrap treats wrapped-only Hub balances (here: user-wrapped LCC transferred
-    ///      to MMPM) as not requiring market liquidity when directSupply is 0, so the full amount queues.
-    ///      `unwrapTo` is endpoint-only; MMPM must remain `BOUND_ENDPOINT` (EXempt alone cannot call `unwrapTo`).
-    function test_unwrapLcc_fromDeltas_mmpmBoundEndpoint_wrappedTransfer_doesNotUseMarketLiquidity_andQueuesAll()
-        public
-    {
+    /// @notice When directSupply is zero and the caller holds only wrapped LCC, unwrap cannot queue: external queues are
+    ///         market-derived claims only; wrapped shortfall reverts (`InvalidAmount`).
+    /// @dev `unwrapTo` is endpoint-only; MMPM must remain `BOUND_ENDPOINT`.
+    function test_unwrapLcc_fromDeltas_mmpmBoundEndpoint_wrappedOnly_zeroDirectSupply_reverts() public {
         address user = makeAddr("user");
         address locker = makeAddr("locker");
 
@@ -1179,13 +1175,11 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
         MockERC20 underlying = MockERC20(lcc0.underlying());
         uint256 amount = 500;
 
-        // Ensure MMPM is an endpoint (required for Hub `unwrapTo`); reset from bootstrap if needed.
         vm.prank(marketFactory);
         ILiquidityHub(liquidityHub).setBoundLevel(address(positionManager), Bounds.BOUND_NONE);
         vm.prank(marketFactory);
         ILiquidityHub(liquidityHub).setBoundLevel(address(positionManager), Bounds.BOUND_ENDPOINT);
 
-        // Create user wrapped LCC, then transfer to MMPM.
         underlying.mint(user, amount);
         vm.startPrank(user);
         underlying.approve(address(liquidityHub), amount);
@@ -1193,42 +1187,29 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
         lcc0.transfer(address(positionManager), amount);
         vm.stopPrank();
 
-        // Force direct unwrapping to be impossible, so only market-liquidity could satisfy unwrap if it were attempted.
         _setDirectSupply(lccAddr, 0);
 
-        // If market liquidity is attempted, hard fail.
         vm.mockCallRevert(
             marketFactory,
             abi.encodeWithSelector(IMarketFactory.useMarketLiquidity.selector),
             abi.encodeWithSignature("Error(string)", "useMarketLiquidity called")
         );
 
-        // Sync LCC balance as delta credit to locker and attempt unwrap from deltas.
         MMA.PreparedAction[] memory prepared = new MMA.PreparedAction[](2);
         prepared[0] = MMA.prepareSync(Currency.wrap(lccAddr));
         prepared[1] = MMA.prepareUnwrapLcc(lccAddr, amount, locker, false);
 
-        uint256 recipientUnderlyingBefore = underlying.balanceOf(locker);
-
         vm.prank(locker);
+        vm.expectRevert(abi.encodeWithSelector(Errors.InvalidAmount.selector, amount, uint256(0)));
         MMA.execute(positionManager, prepared);
 
-        // No underlying is paid immediately; full amount is queued to the locker.
-        assertEq(underlying.balanceOf(locker), recipientUnderlyingBefore, "should not pay underlying immediately");
-        assertEq(
-            ILiquidityHub(liquidityHub).settleQueue(lccAddr, locker),
-            amount,
-            "should queue full amount when market liquidity is skipped"
-        );
-        // The LCC remains held by MMPM for later settlement processing.
-        assertEq(lcc0.balanceOf(address(positionManager)), amount, "MMPM should still hold queued principal as LCC");
+        assertEq(ILiquidityHub(liquidityHub).settleQueue(lccAddr, locker), 0);
+        assertEq(positionManager.queueCustodian().queued(0, lccAddr, locker), 0);
     }
 
-    /// @dev HUB-02 / HUB-02A: locker queue encumbers MMPM-held LCC; identical second unwrap batch must revert.
-    function test_unwrapLcc_fromDeltas_mmpmBoundEndpoint_secondIdenticalUnwrap_revertsWhenLockerQueueEncumbers()
-        public
-    {
-        address user = makeAddr("userQueueEncumber");
+    /// @dev HUB-02 / HUB-02A: with queue encumbering the locker, a second identical unwrap must not increase the queue
+    ///      (market-derived shortfall path; wrapped-only cannot queue).
+    function test_unwrapLcc_fromDeltas_mmpmBoundEndpoint_secondIdenticalUnwrap_doesNotIncreaseQueue() public {
         address locker = makeAddr("lockerQueueEncumber");
 
         address lccAddr = address(lcc0);
@@ -1240,19 +1221,18 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
         vm.prank(marketFactory);
         ILiquidityHub(liquidityHub).setBoundLevel(address(positionManager), Bounds.BOUND_ENDPOINT);
 
-        underlying.mint(user, amount);
-        vm.startPrank(user);
-        underlying.approve(address(liquidityHub), amount);
-        ILiquidityHub(liquidityHub).wrap(lccAddr, amount);
-        lcc0.transfer(address(positionManager), amount);
-        vm.stopPrank();
+        underlying.mint(address(liquidityHub), amount);
+        vm.prank(address(vtsOrchestrator));
+        ILiquidityHub(liquidityHub).confirmTake(lccAddr, amount, false);
 
         _setDirectSupply(lccAddr, 0);
 
-        vm.mockCallRevert(
-            marketFactory,
-            abi.encodeWithSelector(IMarketFactory.useMarketLiquidity.selector),
-            abi.encodeWithSignature("Error(string)", "useMarketLiquidity called")
+        lcc0.transfer(liquidityHub, amount);
+        vm.prank(liquidityHub);
+        lcc0.transfer(address(positionManager), amount);
+
+        vm.mockCall(
+            marketFactory, abi.encodeWithSelector(IMarketFactory.useMarketLiquidity.selector), abi.encode(uint256(0))
         );
 
         MMA.PreparedAction[] memory prepared = new MMA.PreparedAction[](2);
@@ -1264,8 +1244,12 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
         assertEq(ILiquidityHub(liquidityHub).settleQueue(lccAddr, locker), amount);
 
         vm.prank(locker);
-        vm.expectRevert(abi.encodeWithSelector(Errors.InvalidAmount.selector, amount, uint256(0)));
         MMA.execute(positionManager, prepared);
+        assertEq(
+            ILiquidityHub(liquidityHub).settleQueue(lccAddr, locker),
+            amount,
+            "second batch must not add to queue without new unencumbered LCC"
+        );
     }
 
     /// @notice Control: when MMPM is bucket-tracked (BOUND_ENDPOINT) and holds market-derived balance, unwrap should
@@ -1495,9 +1479,10 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
         assertEq(lcc0.balanceOf(address(positionManager)), 0, "MMPM should burn all LCC it unwrapped");
     }
 
-    /// @notice Regression: if directSupply is constrained, unwrap must use market liquidity up to the market-derived bucket
-    ///         and queue the remainder, without misclassifying bucket balances.
-    function test_unwrap_directFromMmpm_mixedBuckets_constrainedDirectSupply_usesMarketThenQueuesRemainder() public {
+    /// @notice When `directSupply` cannot cover the full wrapped slice, unwrap reverts; it must not queue wrapped/direct shortfall.
+    function test_unwrap_directFromMmpm_mixedBuckets_constrainedDirectSupply_revertsWhenWrappedSliceNotFullyCovered()
+        public
+    {
         address user = makeAddr("user");
 
         MockERC20 underlying = MockERC20(lcc0.underlying());
@@ -1510,7 +1495,7 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
         vm.prank(marketFactory);
         ILiquidityHub(liquidityHub).setBoundLevel(address(positionManager), Bounds.BOUND_ENDPOINT);
 
-        // Fund Hub reserve for the market-derived portion so `_pay()` can transfer it.
+        // Fund Hub reserve for the market-derived portion so `_pay()` could transfer it (not reached on revert).
         underlying.mint(address(liquidityHub), marketAmount);
         vm.prank(address(vtsOrchestrator));
         ILiquidityHub(liquidityHub).confirmTake(address(lcc0), marketAmount, false);
@@ -1537,52 +1522,13 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
             assertEq(pmMarketBefore, marketAmount, "precondition: MMPM should hold market-derived bucket balance");
         }
 
-        // Constrain directSupply so unwrap cannot fully satisfy the wrapped portion.
+        // Constrain directSupply so unwrap cannot fully satisfy the wrapped portion (200 needed, 50 available).
         _setDirectSupply(address(lcc0), constrainedDirectSupply);
 
-        // Market liquidity should be used only up to market-derived bucket balance.
-        {
-            bytes32 marketId = PoolId.unwrap(corePoolKey.toId());
-            vm.mockCall(
-                marketFactory,
-                abi.encodeWithSelector(
-                    IMarketFactory.useMarketLiquidity.selector, address(lcc0), marketId, marketAmount
-                ),
-                abi.encode(marketAmount)
-            );
-            vm.expectCall(
-                marketFactory,
-                abi.encodeWithSelector(
-                    IMarketFactory.useMarketLiquidity.selector, address(lcc0), marketId, marketAmount
-                )
-            );
-        }
+        vm.expectRevert(abi.encodeWithSelector(Errors.InvalidAmount.selector, wrappedAmount, constrainedDirectSupply));
 
-        uint256 recipientUnderlyingBefore = underlying.balanceOf(user);
-
-        // Call Hub unwrap as-if from the MMPM; queue is attributed to the user.
         vm.prank(address(positionManager));
         ILiquidityHub(liquidityHub).unwrapTo(address(lcc0), user, user, totalAmount);
-
-        // Direct portion (constrained) + market portion should be paid immediately.
-        assertEq(
-            underlying.balanceOf(user) - recipientUnderlyingBefore,
-            constrainedDirectSupply + marketAmount,
-            "should pay constrained direct + full market-derived via liquidity"
-        );
-
-        // Remainder is queued to the user and remains as LCC principal held by MMPM.
-        uint256 queued = totalAmount - (constrainedDirectSupply + marketAmount);
-        assertEq(
-            ILiquidityHub(liquidityHub).settleQueue(address(lcc0), user), queued, "should queue the shortfall to user"
-        );
-        assertEq(lcc0.balanceOf(address(positionManager)), queued, "MMPM should retain queued principal as LCC");
-
-        {
-            (uint256 pmWrappedAfter, uint256 pmMarketAfter) = lcc0.balancesOf(address(positionManager));
-            assertEq(pmWrappedAfter, queued, "remaining principal should be tracked as wrapped bucket");
-            assertEq(pmMarketAfter, 0, "market-derived bucket should be fully consumed");
-        }
     }
 
     /// @notice Ensures payer-is-user unwrap works with a mixed balance (wrapped + market-derived).
@@ -1644,6 +1590,112 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
 
         assertEq(underlying.balanceOf(user), totalAmount, "should unwrap full mixed balance");
         assertEq(lcc0.balanceOf(user), 0, "user LCC should be fully burned");
+    }
+
+    /// @notice End-to-end: unwrap-from-deltas shortfall (market-derived on MMPM) forwards backing to custodian;
+    ///         `COLLECT_AVAILABLE_LIQUIDITY` (tokenId 0) clears the queue once reserves are available.
+    /// @dev Wrapped-only queues are not exercised here: `processSettlementFor` settles against market-derived holder
+    ///      balance after custodian release (see `LiquidityHubLib.processSettlementLogic`).
+    function test_unwrapLcc_fromDeltas_shortfall_custody_thenCollectClearsQueue() public {
+        address locker = makeAddr("lockerUnwrapCollect");
+        address lccAddr = address(lcc0);
+        MockERC20 underlying = MockERC20(lcc0.underlying());
+        uint256 amount = 300;
+
+        vm.prank(marketFactory);
+        ILiquidityHub(liquidityHub).setBoundLevel(address(positionManager), Bounds.BOUND_ENDPOINT);
+
+        underlying.mint(address(liquidityHub), amount);
+        vm.prank(address(vtsOrchestrator));
+        ILiquidityHub(liquidityHub).confirmTake(lccAddr, amount, false);
+
+        _setDirectSupply(lccAddr, 0);
+
+        lcc0.transfer(liquidityHub, amount);
+        vm.prank(liquidityHub);
+        lcc0.transfer(address(positionManager), amount);
+
+        (uint256 wBal, uint256 mBal) = lcc0.balancesOf(address(positionManager));
+        assertEq(wBal, 0);
+        assertEq(mBal, amount);
+
+        vm.mockCall(
+            marketFactory, abi.encodeWithSelector(IMarketFactory.useMarketLiquidity.selector), abi.encode(uint256(0))
+        );
+
+        MMA.PreparedAction[] memory unwrapBatch = new MMA.PreparedAction[](2);
+        unwrapBatch[0] = MMA.prepareSync(Currency.wrap(lccAddr));
+        unwrapBatch[1] = MMA.prepareUnwrapLcc(lccAddr, amount, locker, false);
+
+        vm.prank(locker);
+        MMA.execute(positionManager, unwrapBatch);
+
+        assertEq(ILiquidityHub(liquidityHub).settleQueue(lccAddr, locker), amount);
+        assertEq(lcc0.balanceOf(address(positionManager)), 0);
+        assertEq(positionManager.queueCustodian().queued(0, lccAddr, locker), amount);
+
+        underlying.mint(address(liquidityHub), amount);
+        vm.prank(address(vtsOrchestrator));
+        ILiquidityHub(liquidityHub).confirmTake(lccAddr, amount, false);
+
+        uint256 beforeUnderlying = underlying.balanceOf(locker);
+        MMA.PreparedAction[] memory prepared = new MMA.PreparedAction[](1);
+        prepared[0] = MMA.prepareCollectAvailableLiquidity(lccAddr, 0, type(uint256).max);
+        vm.prank(locker);
+        MMA.executeWithUnlock(positionManager, prepared, block.timestamp + 3600);
+
+        assertEq(ILiquidityHub(liquidityHub).settleQueue(lccAddr, locker), 0);
+        assertEq(underlying.balanceOf(locker) - beforeUnderlying, amount);
+    }
+
+    /// @notice Another locker cannot `SYNC` + `TAKE` custodied queued backing after a victim's unwrap shortfall.
+    /// @dev Uses market-derived LCC on the victim so unwrap can queue (wrapped-only shortfall reverts under Scan 21 F3).
+    function test_unwrapLcc_payerIsUser_shortfall_attackerSyncTake_doesNotStealCustodiedLcc() public {
+        address victim = makeAddr("victimSyncTake");
+        address attacker = makeAddr("attackerSyncTake");
+        address lccAddr = address(lcc0);
+        uint256 amount = 200;
+        MockERC20 underlying = MockERC20(lcc0.underlying());
+
+        vm.prank(marketFactory);
+        ILiquidityHub(liquidityHub).setBoundLevel(address(positionManager), Bounds.BOUND_ENDPOINT);
+
+        vm.mockCall(marketFactory, abi.encodeWithSelector(IMarketFactory.bounds.selector, victim), abi.encode(false));
+
+        underlying.mint(address(liquidityHub), amount);
+        vm.prank(address(vtsOrchestrator));
+        ILiquidityHub(liquidityHub).confirmTake(lccAddr, amount, false);
+
+        _setDirectSupply(lccAddr, 0);
+
+        // Victim receives issuer-routed (market-derived) LCC only.
+        lcc0.transfer(liquidityHub, amount);
+        vm.prank(liquidityHub);
+        lcc0.transfer(victim, amount);
+
+        vm.startPrank(victim);
+        lcc0.approve(address(positionManager), type(uint256).max);
+        vm.stopPrank();
+
+        vm.mockCall(
+            marketFactory, abi.encodeWithSelector(IMarketFactory.useMarketLiquidity.selector), abi.encode(uint256(0))
+        );
+
+        vm.prank(victim);
+        MMA.unwrapLcc(positionManager, lccAddr, amount, victim, true);
+
+        assertEq(ILiquidityHub(liquidityHub).settleQueue(lccAddr, victim), amount);
+        assertEq(lcc0.balanceOf(address(positionManager)), 0);
+        assertEq(positionManager.queueCustodian().queued(0, lccAddr, victim), amount);
+
+        uint256 attackerLccBefore = lcc0.balanceOf(attacker);
+        MMA.PreparedAction[] memory steal = new MMA.PreparedAction[](2);
+        steal[0] = MMA.prepareSync(Currency.wrap(lccAddr));
+        steal[1] = MMA.prepareTake(Currency.wrap(lccAddr), attacker, 0);
+        vm.prank(attacker);
+        MMA.execute(positionManager, steal);
+
+        assertEq(lcc0.balanceOf(attacker), attackerLccBefore, "attacker must not take victim custodied LCC");
     }
 
     /// @notice Mutation-killer: when `settleQueue(lcc, sender) == 0`, COLLECT_AVAILABLE_LIQUIDITY must be a no-op.
@@ -2713,6 +2765,82 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
         uint256 slot = _store.target(liquidityHub).sig("directSupply(address)").with_key(lcc).find();
         vm.store(liquidityHub, bytes32(slot), bytes32(value));
     }
+
+    /// @notice End-to-end: `DECREASE_LIQUIDITY` with impossible min-out reverts (Uniswap v4-style `SlippageCheck`).
+    function test_mmDecrease_revertsWhenPrincipalMinOutUnreachable() public {
+        (uint256 tokenId,,,) = _setupCommittedPosition(
+            positionManager,
+            corePoolKey,
+            abi.encode(liquiditySignal),
+            ModifyLiquidityParams({tickLower: -60, tickUpper: 60, liquidityDelta: 1e18, salt: bytes32(0)}),
+            marketVTSConfiguration,
+            address(lcc0),
+            address(lcc1)
+        );
+        (,, uint256 positionCount,,) = positionManager.commitOf(tokenId);
+        uint256 positionIndex = positionCount - 1;
+
+        uint256 settlementAmount = 1_000_000e18;
+        MockERC20(lcc0.underlying()).mint(address(this), settlementAmount);
+        MockERC20(lcc1.underlying()).mint(address(this), settlementAmount);
+        MockERC20(lcc0.underlying()).approve(address(positionManager), settlementAmount);
+        MockERC20(lcc1.underlying()).approve(address(positionManager), settlementAmount);
+
+        MMA.PreparedAction[] memory settleOnly = new MMA.PreparedAction[](1);
+        settleOnly[0] = MMA.prepareSettle(
+            corePoolKey,
+            tokenId,
+            positionIndex,
+            -int128(int256(settlementAmount)),
+            -int128(int256(settlementAmount)),
+            false
+        );
+        MMA.executeWithUnlock(positionManager, settleOnly, block.timestamp + 3600);
+
+        MMA.PreparedAction[] memory actions = new MMA.PreparedAction[](1);
+        actions[0] =
+            MMA.prepareDecrease(corePoolKey, tokenId, positionIndex, 1000, type(uint128).max, type(uint128).max);
+        vm.expectRevert();
+        MMA.executeWithUnlock(positionManager, actions, block.timestamp + 3600);
+    }
+
+    /// @notice End-to-end: same path as `test_mmDecrease_revertsWhenPrincipalMinOutUnreachable` but with loose min-out (Uni-like floor).
+    function test_mmDecrease_succeedsWithLoosePrincipalMinOut() public {
+        (uint256 tokenId,,,) = _setupCommittedPosition(
+            positionManager,
+            corePoolKey,
+            abi.encode(liquiditySignal),
+            ModifyLiquidityParams({tickLower: -60, tickUpper: 60, liquidityDelta: 1e18, salt: bytes32(0)}),
+            marketVTSConfiguration,
+            address(lcc0),
+            address(lcc1)
+        );
+        (,, uint256 positionCount,,) = positionManager.commitOf(tokenId);
+        uint256 positionIndex = positionCount - 1;
+
+        uint256 settlementAmount = 1_000_000e18;
+        MockERC20(lcc0.underlying()).mint(address(this), settlementAmount);
+        MockERC20(lcc1.underlying()).mint(address(this), settlementAmount);
+        MockERC20(lcc0.underlying()).approve(address(positionManager), settlementAmount);
+        MockERC20(lcc1.underlying()).approve(address(positionManager), settlementAmount);
+
+        MMA.PreparedAction[] memory settleOnly = new MMA.PreparedAction[](1);
+        settleOnly[0] = MMA.prepareSettle(
+            corePoolKey,
+            tokenId,
+            positionIndex,
+            -int128(int256(settlementAmount)),
+            -int128(int256(settlementAmount)),
+            false
+        );
+        MMA.executeWithUnlock(positionManager, settleOnly, block.timestamp + 3600);
+
+        // Loose floors: principal from a small decrease should exceed 1 wei on both sides for this in-range shape.
+        MMA.PreparedAction[] memory actions = new MMA.PreparedAction[](2);
+        actions[0] = MMA.prepareDecrease(corePoolKey, tokenId, positionIndex, 1000, 1, 1);
+        actions[1] = MMA.prepareSettleFromDeltas(corePoolKey, tokenId, positionIndex, true, true);
+        MMA.executeWithUnlock(positionManager, actions, block.timestamp + 3600);
+    }
 }
 
 /// @dev Helper to call MMPM functions while PoolManager is in an unlocked state.
@@ -2774,6 +2902,11 @@ contract MockNativeUnwrapHubPayer {
 
     function isFactory(address) external pure returns (bool) {
         return true;
+    }
+
+    /// @dev `MMPositionManager` reads queue delta around `unwrapTo`; return zero so no custody forward is attempted.
+    function settleQueue(address, address) external pure returns (uint256) {
+        return 0;
     }
 
     function unwrapTo(address, address to, address, uint256) external {

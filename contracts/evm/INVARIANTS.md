@@ -181,25 +181,33 @@ being an informal “should”.
 - **Why**: Market liquidity mobilisation sends native ETH from `CanonicalVault` to the Hub before `confirmTake`; Hub
   ingress must bind to that custody address, not to arbitrary contracts or per-market facades.
 
-### HUB-02: Unwrapping cannot exceed liquid (bucketed) balance; shortfalls are explicitly queued
+### HUB-02: Unwrapping cannot exceed liquid (bucketed) balance; only market-derived shortfall may queue
 
 - **Statement**: Unwrap requires `0 < amount <= availableToUnwrap`, where `availableToUnwrap` is the caller’s live
   bucketed balance (`wrappedBalance + marketDerivedBalance` for `msg.sender`) minus any existing settlement queue for
-  the same `(lcc, queueTo)` key: `max(0, fromBalance - settleQueue[lcc][queueTo])`. Any unavailable portion of the
-  requested unwrap is still tracked via the settlement queue rather than silently failing.
+  the same `(lcc, queueTo)` key: `max(0, fromBalance - settleQueue[lcc][queueTo])`. The wrapped / direct-backed slice
+  (`min(amount, wrappedBalance)`) must redeem **in full** against `directSupply` in the same transaction or the call
+  reverts (`Errors.InvalidAmount`); it must **not** degrade into queued external settlement. Only the **market-derived**
+  slice may record a new queue entry when `useMarketLiquidity` returns less than the market-derived remainder (see
+  `LiquidityHubLib.unwrapInternalLogic` and market-derived-only redemption in `processSettlementLogic` for external
+  recipients).
 - **Enforced by**:
   - `src/LiquidityHub.sol::_unwrap` reverts `Errors.InvalidAmount(amount, availableToUnwrap)` when out of bounds.
-  - The split/queue behaviour is implemented in `LiquidityHubLib.unwrapInternalLogic(...)` (called from `_unwrap`).
+  - `LiquidityHubLib.unwrapInternalLogic(...)` reverts when the wrapped slice exceeds `directSupply`, when the
+    market-derived remainder is positive but `marketDerivedBalance == 0`, and only calls `queueSettlement` for
+    unsatisfied **market-derived** remainder after `useMarketLiquidity`.
   - Queue state is observable via `LiquidityHub.settleQueue(lcc, recipient)` and `LiquidityHub.totalQueued(lcc)`.
-- **Why**: Queued shortfall does not burn the holder’s LCC at queue time; without netting, the same balance could back
-  multiple queued claims and inflate `queueOfUnderlying` / vault obligation sizing.
+- **Why**: External settlement queues are **market-derived claims**; allowing wrapped/direct shortfall to queue would
+  desynchronise queue ownership from what `processSettlementFor` can redeem. Headroom netting against
+  `settleQueue[lcc][queueTo]` remains correct because both the liquid balance and the queue refer to the same economic
+  slice for the beneficiary.
 
 ### HUB-02A: `unwrapTo` is endpoint-only (on-behalf-of); direct users use `unwrap`
 
 - **Statement**: Every `LiquidityHub.unwrapTo(...)` overload requires `msg.sender` to be `BOUND_ENDPOINT` in the
   resolved LCC’s market factory namespace (`boundLevelOfLcc(lcc, msg.sender) == BOUND_ENDPOINT`). Bucket-exempt and
   DEX tiers are not admitted via `unwrapTo`. End users unwrap with `unwrap(...)` / `unwrap(underlying, marketId, ...)`,
-  which always queue shortfalls to the caller.
+  which may queue **market-derived** shortfall to the caller (wrapped/direct shortfall reverts instead).
 - **Enforced by**: `src/LiquidityHub.sol::_onlyUnwrapToEndpoint` on each `unwrapTo` entrypoint before `_unwrap`.
 - **Trusted endpoint contract**:
   - `unwrapTo(lcc, to, queueTo, ...)` is an on-behalf-of primitive, not a generic convenience wrapper over `unwrap`.
@@ -209,6 +217,11 @@ being an informal “should”.
     already encumbering the same caller-held slice.
   - Current intended caller: `MMPositionManager`, which consumes locker/user LCC or delta credit before calling
     `unwrapTo`.
+  - **Post-shortfall custody (`UNWRAP_LCC`)**: Queued shortfall does not burn LCC at queue time; any LCC that remains on
+    the endpoint after `unwrapTo` must not sit on `MMPositionManager` as unscoped router residue (**DELTA-02**). After
+    each `unwrapTo`, `MMPositionManager` measures the incremental `settleQueue` delta for `queueTo` and forwards that
+    amount of LCC to `MMQueueCustodian` under beneficiary-scoped storage (`tokenId == 0` utility bucket), matching the
+    MM decrease / `COLLECT_AVAILABLE_LIQUIDITY` model.
   - Any additional `BOUND_ENDPOINT` integration that cannot preserve this coupling must not use `unwrapTo` without
     revisiting HUB-02 netting assumptions.
 - **Rationale**: Splitting immediate payout recipient from queue owner is a trusted endpoint pattern (for example
@@ -348,8 +361,12 @@ being an informal “should”.
 - **Expressed by**:
   - `src/libraries/VTSCommitLib.sol::_renewSignalInternal` preserves `mmState.owner` across renewals and authorises
     renewals via `mmState.advancer`.
+  - `src/types/Commit.sol` stores `authorisedRelayer`, set at initial commit creation from the `VTSOrchestrator` caller
+    (for example `MMPositionManager`). CoreHook MM operations require `processPosition(owner)` to match this address so
+    `factory.bounds(owner)` alone cannot authorise a different bound endpoint to operate under another party's commit.
   - `src/libraries/VTSLifecycleLinkedLib.sol::validateMMOperation` requires the MM batch locker to equal the stored
-    advancer for non-seizure MM operations.
+    advancer for non-seizure MM operations, and (when `authorisedRelayer` is non-zero) requires the CoreHook position
+    `owner` to equal that stored relayer.
   - `src/libraries/MMHelpers.sol::assertApprovedOrOwner` separately enforces ERC-721 owner / approval authority on the
     relevant `MMPositionManager` entrypoints.
 - **Non-goal**:
@@ -757,6 +774,8 @@ being an informal “should”.
   - This FCFS rule applies to **residual dust held by `MMPositionManager` itself**.
   - It does **not** redefine assets held in explicit custody/accounting domains (for example, queue-custodied balances,
     Hub reserves, MarketVault balances, or state tracked by commitment/queue accounting) as public dust.
+  - Queued-backing LCC staged after `UNWRAP_LCC` shortfalls must be forwarded into `MMQueueCustodian` (see **HUB-02A**)
+    rather than left on the router; that principal is beneficiary-scoped, not FCFS dust.
   - In other words, the invariant is about router residue, not about bypassing the protocol’s actual custody systems.
 
 ### DELTA-03: Planned-cancel transient slots are path-scoped only because they are consumed immediately in the same logical flow

@@ -263,9 +263,9 @@ contract MockSettleCustodian is IMMQueueCustodian {
             liquidityHub.prepareSettle(lccToken1, amount + 1);
         }
 
-        function test_unwrap_whenNoMarketBalance_doesNotCallUseMarketLiquidity_andQueuesAll() public {
+        function test_unwrap_whenNoMarketBalance_andZeroDirectSupply_reverts() public {
             // User has wrapped balance, but we set directSupply to 0 so direct-unwrapping is impossible.
-            // With marketDerivedBalance == 0, unwrapInternalLogic must NOT call useMarketLiquidity at all.
+            // With marketDerivedBalance == 0, the remaining unwrap cannot queue (external queues are market-derived only).
             uint256 amount = 1;
             _wrapDirectLCC(user1, lccToken1, amount);
             _setDirectSupply(lccToken1, 0);
@@ -278,10 +278,8 @@ contract MockSettleCustodian is IMMQueueCustodian {
             );
 
             vm.prank(user1);
+            vm.expectRevert(abi.encodeWithSelector(Errors.InvalidAmount.selector, amount, uint256(0)));
             liquidityHub.unwrap(lccToken1, amount);
-
-            assertEq(liquidityHub.settleQueue(lccToken1, user1), amount, "should queue full amount");
-            assertEq(liquidityHub.totalQueued(lccToken1), amount, "totalQueued should equal queued amount");
         }
 
         function test_processSettlementFor_hub_doesNotDecrementReserveOrTransferUnderlying() public {
@@ -402,10 +400,10 @@ contract MockSettleCustodian is IMMQueueCustodian {
             _wrapMarketDerivedLCC(user1, lccToken1, marketAmount);
             _wrapDirectLCC(user1, lccToken1, wrappedAmount);
 
-            // Prevent Step 1 direct conversion; we want Step 3 to queue the wrapped residual to the Hub.
-            _setDirectSupply(lccToken1, 0);
+            // Step 3 must redeem the wrapped residual against directSupply; wrapped shortfall cannot enter the queue path.
+            _setDirectSupply(lccToken1, wrappedAmount);
 
-            // If Step 3 tries to use market liquidity (it shouldn't after Step 2 consumes market-derived),
+            // If Step 3 incorrectly tries to use market liquidity (it shouldn't after Step 2 consumes market-derived),
             // revert hard to kill the mutation.
             vm.mockCallRevert(
                 factory,
@@ -421,16 +419,14 @@ contract MockSettleCustodian is IMMQueueCustodian {
             liquidityHub.wrapWith(lccToken3, lccToken1, amount);
             vm.stopPrank();
 
-            // The wrapped residual should be queued to the Hub exactly.
+            // Wrapped residual is redeemed via directSupply; no wrapped shortfall is queued.
             assertEq(
                 liquidityHub.settleQueue(lccToken1, address(liquidityHub)),
-                queueBefore + wrappedAmount,
-                "hub queue should increase only by wrapped residual"
+                queueBefore,
+                "hub queue should not gain wrapped residual"
             );
             assertEq(
-                liquidityHub.totalQueued(lccToken1),
-                totalQueuedBefore + wrappedAmount,
-                "totalQueued should increase only by wrapped residual"
+                liquidityHub.totalQueued(lccToken1), totalQueuedBefore, "totalQueued should not gain wrapped residual"
             );
         }
 
@@ -508,8 +504,8 @@ contract MockSettleCustodian is IMMQueueCustodian {
             _wrapMarketDerivedLCC(user1, withLcc, netTarget);
             _wrapDirectLCC(user1, withLcc, wrappedRemainder);
 
-            // Prevent Step 1 direct conversion AND prevent Step 3 direct unwrapping, so residual must queue.
-            _setDirectSupply(withLcc, 0);
+            // Step 3 must redeem the wrapped remainder against directSupply; wrapped shortfall cannot queue externally.
+            _setDirectSupply(withLcc, wrappedRemainder);
 
             // If any market liquidity is used, the test should fail (Step 0 should consume all market-derived netTarget).
             vm.mockCallRevert(
@@ -540,16 +536,16 @@ contract MockSettleCustodian is IMMQueueCustodian {
             // Step 2 should NOT have netted anything (market-derived was fully consumed by Step 0).
             assertEq(_getNetted(withLcc), 0, "netted should remain 0 when Step 0 consumes market-derived");
 
-            // Only the WRAPPED remainder should be queued to the Hub (since no liquidity is used).
+            // Wrapped remainder is redeemed via directSupply; no wrapped shortfall is queued to the Hub.
             assertEq(
                 liquidityHub.settleQueue(withLcc, address(liquidityHub)),
-                withQueueBefore + wrappedRemainder,
-                "withLCC queue should increase only by wrapped remainder"
+                withQueueBefore,
+                "withLCC queue should not gain wrapped remainder"
             );
             assertEq(
                 liquidityHub.totalQueued(withLcc),
-                withTotalQueuedBefore + wrappedRemainder,
-                "withLCC totalQueued should increase only by wrapped remainder"
+                withTotalQueuedBefore,
+                "withLCC totalQueued should not gain wrapped remainder"
             );
         }
 
@@ -569,8 +565,11 @@ contract MockSettleCustodian is IMMQueueCustodian {
             _wrapMarketDerivedLCC(user1, withLcc, marketAmount);
             _wrapDirectLCC(user1, withLcc, wrappedAmount);
 
-            // Prevent Step 1 direct conversion.
-            _setDirectSupply(withLcc, 0);
+            // Allow Step 3 to redeem the wrapped slice; market-derived shortfall may still queue when useMarketLiquidity returns 0.
+            _setDirectSupply(withLcc, wrappedAmount);
+            vm.mockCall(
+                factory, abi.encodeWithSelector(IMarketFactory.useMarketLiquidity.selector), abi.encode(uint256(0))
+            );
 
             // Hub is already protocol-bound (bucket-exempt) in test setup.
 
@@ -582,17 +581,18 @@ contract MockSettleCustodian is IMMQueueCustodian {
             liquidityHub.wrapWith(targetLcc, withLcc, amount);
             vm.stopPrank();
 
-            // Only the post-Step 0 residual should queue.
+            // Post-Step 0 residual includes a market-derived leg; only that leg may queue when market liquidity is unavailable.
             uint256 expectedResidual = amount - netTarget;
+            uint256 expectedMarketQueue = expectedResidual > wrappedAmount ? (expectedResidual - wrappedAmount) : 0;
             assertEq(
                 liquidityHub.settleQueue(withLcc, address(liquidityHub)),
-                queueBefore + expectedResidual,
-                "queued residual should match amount - netTarget"
+                queueBefore + expectedMarketQueue,
+                "queued residual should be market-derived shortfall only"
             );
             assertEq(
                 liquidityHub.totalQueued(withLcc),
-                totalQueuedBefore + expectedResidual,
-                "totalQueued should match residual"
+                totalQueuedBefore + expectedMarketQueue,
+                "totalQueued should match market-derived queue"
             );
         }
 
@@ -956,40 +956,38 @@ contract MockSettleCustodian is IMMQueueCustodian {
         // Mutation hardening: kill Step 3 arithmetic mutants (Lines 260, 270, 272)
         // ============================================================
 
-        /// @notice Kills Line 260 arithmetic mutant by inducing an overflow in the mutant expression.
-        /// @dev In `_unwrapResidual`, when `residualWrappedForUnwrap > ctx.directToMint`, the correct code computes:
-        ///      `residualWrappedForUnwrap - ctx.directToMint`.
-        ///      The mutant changes this to `+`, which can overflow under large enough values.
+        /// @notice Regression: `_unwrapResidual` uses `residualWrappedForUnwrap - ctx.directToMint` when `directToMint > 0`.
+        ///      (Historical mutation swapped `-` for `+`.) Large uint256 edge cases are no longer used here because the
+        ///      wrapped leg must redeem fully against `directSupply` in the same transaction (no wrapped shortfall queue).
         function test_wrapWith_step3_residualWrappedForUnwrap_minusDoesNotOverflow_plusWouldOverflow() public {
             (address targetLcc,) = _createSecondLCCPair();
             address withLcc = lccToken1;
 
-            // Choose values so that:
-            // - fromWrappedAmount = amount is very large
-            // - directToMint = directSupplyAvail is slightly smaller (so the `>` branch is taken)
-            // - correct residual = 1
-            // - mutant (`+`) overflows
-            uint256 amount = type(uint256).max - 1;
-            uint256 directSupplyAvail = type(uint256).max - 2;
+            uint256 wrappedAmount = 4;
+            uint256 marketAmount = 6;
+            uint256 amount = wrappedAmount + marketAmount;
 
-            _wrapDirectLCC(user1, withLcc, amount); // user has wrapped balance == amount
-            _setDirectSupply(withLcc, directSupplyAvail); // force partial direct conversion (directAvail < wrapped)
+            _wrapDirectLCC(user1, withLcc, wrappedAmount);
+            _wrapDirectLCC(proxyHook, withLcc, marketAmount);
+            vm.prank(proxyHook);
+            ILCC(withLcc).transfer(user1, marketAmount);
 
-            // Prevent any external market liquidity effects.
+            _setDirectSupply(withLcc, wrappedAmount + 6);
+
             vm.mockCall(
                 factory, abi.encodeWithSelector(IMarketFactory.useMarketLiquidity.selector), abi.encode(uint256(0))
             );
-
-            // Hub is already protocol-bound (bucket-exempt) in test setup.
 
             vm.startPrank(user1);
             ILCC(withLcc).approve(address(liquidityHub), amount);
             liquidityHub.wrapWith(targetLcc, withLcc, amount);
             vm.stopPrank();
 
-            // Sanity: the call succeeded under correct code (i.e. no overflow in residual calc).
-            // Any revert here under mutation run indicates the mutant was killed.
-            assertTrue(true);
+            assertEq(
+                liquidityHub.settleQueue(withLcc, address(liquidityHub)),
+                marketAmount,
+                "market-derived shortfall may queue; wrapped residual must not"
+            );
         }
 
         // ============================================================

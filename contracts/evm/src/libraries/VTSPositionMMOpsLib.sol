@@ -71,8 +71,11 @@ library VTSPositionMMOpsLib {
     }
 
     /// @notice MM liquidity-modify tail: LCC issue/cancel, protocol-credit, vault routing, RFS checkpoint.
-    /// @dev Invoked from `VTSPositionLib.touchPosition` when hook data is an MM operation. CoreHook applies
-    ///      `feeAdj` to caller delta; principal uses `callerDelta - (feesAccrued - feeAdj)`.
+    /// @dev Invoked from `VTSPositionLib.touchPosition` when hook data is an MM operation. `PoolManager.modifyLiquidity`
+    ///      passes hook-time `callerDelta = poolPrincipalDelta + feesAccrued` into `afterModifyLiquidity`; the hook's
+    ///      returned delta is applied only after the hook returns. LCC principal for issue/cancel and queue routing must
+    ///      therefore be `callerDelta - feesAccrued` (pool principal only), not net of `feeAdj`. Fee slash/bonus is
+    ///      reconciled when MMPM takes LCC and classifies fee vs non-fee (`PositionManagerImpl._handleLccBalanceIncrease`).
     /// @param requiredSettlementDelta Required settlement delta computed during the touch accounting phase.
     function processMMOperations(
         VTSStorage storage s,
@@ -84,15 +87,10 @@ library VTSPositionMMOpsLib {
         PositionModificationHookData memory mmData = PositionModificationHookDataLib.decodeCalldata(p.hookData);
         if (!PositionModificationHookDataLib.isMMOperation(mmData)) return;
 
-        // CoreHook applies a feeAdj to the callerDelta. ie.  callerDelta = principalDelta - feesAccrued - feeAdj.
-        // Treat feeAdj as part of fees for cancel/transfer purposes.
-        // ? feeAdj bonus is negative, slash is positive. The result is higher fees for bonus, lower for slash.
-        BalanceDelta accruedFeesAfterAdj = p.feesAccrued - result.feeAdj;
-
-        // positionDelta(a0/a1) are the gross amounts returned by the PoolManager for position modification.
-        // principal0/principal1 = a{0,1} - fees{0,1} reflect the true principal liquidity change
-        // that maps to LCC cancellation. fees are trader-derived, wrapped LCC value and must remain wrapped.
-        BalanceDelta principalDelta = p.callerDelta - accruedFeesAfterAdj;
+        // True principal liquidity change (maps to LCC mint/burn for the position delta). `feesAccrued` is informational
+        // fee collection in this modify; it is not part of principal. Do not subtract `feeAdj` here — that would double-
+        // count hook settlement relative to the post-hook transfer amount the router uses for custodian forwarding.
+        BalanceDelta principalDelta = p.callerDelta - p.feesAccrued;
 
         // NOTE: LCC fee credits are handled at the MMPM level via balance sync pattern.
         // After MMPM takes from PoolManager, it syncs the LCC balance as credit to locker.

@@ -49,53 +49,34 @@ We also use a dedicated Foundry profile (`[profile.echidna]` in `contracts/evm/f
 
 - compile only the harnesses under `test/fuzz` (faster, avoids OOM),
 - build into a separate output directory (`out-echidna/`),
-- hard-link selected libraries for determinism (some harnesses deploy those libraries via `CREATE2` to the linked
+- link selected libraries for determinism (some harnesses deploy those libraries via `CREATE2` to the linked
   addresses during `constructor()`).
 
-### Linked-library wiring and preflight
+### Linked-library wiring (runtime)
 
 Harness constructors call helpers in `test/fuzz/base/EchidnaLinkedLibs.sol` to deploy selected libraries at
 **deterministic CREATE2** addresses (fixed deployer + per-library salts). Foundry must **link** the same addresses
-into bytecode that delegates to those libraries, otherwise HEVM rejects unlinked placeholders. Keep the wiring
-consistent before you run Echidna or CI fuzz jobs.
+into bytecode that delegates to those libraries, otherwise HEVM rejects unlinked placeholders.
 
-**Single source of truth**
+Before each Echidna run, `scripts/echidna.sh` runs `scripts/echidna_prepare_linked_libs.py`, which:
 
-- `test/fuzz/echidna-linked-libs.txt` — one line per library: `src/path/File.sol:Symbol=0x...` (see file header).
-
-That manifest is applied to:
-
-- `foundry.toml` → `[profile.echidna].libraries`
-- `test/fuzz/base/EchidnaLinkedLibs.sol` → `address internal constant ...` values
-
-by `python3 scripts/validate_fuzz_lib_config.py apply` (or the `just` targets below). The script also offers
-`validate` (default) to check the three locations stay in sync.
+1. Writes a converged `[profile.echidna].libraries` map to **`.echidna-gen/foundry.toml`** (gitignored),
+2. Sets **`FOUNDRY_CONFIG`** to that file so `forge build` and Echidna’s Foundry backend use the same linker map,
+3. Runs `forge build`, reads predicted addresses from `EchidnaLinkedLibManifest.printManifest()`, iterates until the
+   VTS fixed-point stabilises,
+4. Runs **`SmokeEchidnaLinkedLibs`** to verify CREATE2 deployment under the Echidna deployer.
 
 **Commands** (from `contracts/evm/`)
 
 | Command | Purpose |
 | ------- | ------- |
-| `just validate-fuzz-libs` | Runs manifest sync check, `ValidateEchidnaLinkedLibs.run()`, then `SmokeEchidnaLinkedLibs.run()` (deployment smoke). |
-| `just recompute-fuzz-lib-addrs` | Applies the manifest, deletes `out-echidna/`, rebuilds with `FOUNDRY_PROFILE=echidna`, then runs `ValidateEchidnaLinkedLibs.run()`. |
-| `just print-echidna-lib-manifest` | Prints machine-readable manifest lines (`FUZZ_LIB_MANIFEST_BEGIN` / `END`) for pasting or tooling. |
-| `just print-fuzz-lib-addrs` | Prints human-readable CREATE2 suggestions and copy-paste blocks (verbose). |
+| `just echidna-prepare` | Same prepare step as `echidna.sh` (useful for debugging). |
 
-**Validation semantics**
+**Notes**
 
-- **Strict checks** (constant must equal CREATE2 prediction): `LCCFactoryLinkedLib`, `LiquidityHubLinkedLib`,
-  `VTSFeeLinkedLib`.
-- **VTS** libraries used heavily across the graph (`VTSCommitLib`, `VTSPositionLib`, `VTSLifecycleLinkedLib`,
-  `VTSPositionMMOpsLib`): addresses in the manifest still **must** match `foundry.toml` and the Solidity constants
-  (so the linker and harness agree). Because `[profile.echidna].libraries` feeds back into linked **initcode**,
-  runtime `type(Lib).creationCode` predictions can **differ** from those literals. `ValidateEchidnaLinkedLibs` logs an
-  informational note for that case; deployment helpers assert the deployed address matches the **runtime** prediction
-  (`predicted*()`), not a stale constant-only equality.
-- **VTSSwapLib** is a **fixed placeholder** in the manifest (not CREATE2-validated by the harness helpers).
-
-**When to refresh**
-
-- After you change any linked library or a dependency that affects its bytecode, or if a harness fails during
-  constructor deployment with a linked-library address mismatch.
+- **VTSSwapLib** remains a **fixed placeholder** address in the linker map (not CREATE2-validated by the deploy helpers).
+- Do not run `FOUNDRY_PROFILE=echidna forge build` without `FOUNDRY_CONFIG` pointing at the generated file; the checked-in
+  profile keeps `libraries = []` on purpose.
 
 More detail lives in `test/fuzz/script/README.md`.
 

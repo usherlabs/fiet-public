@@ -28,7 +28,6 @@ echidna file contract config="echidna.config.yml" *args:
 
 # Run invariant harnesses (default config: `echidna.config.yml`).
 fuzz:
-    @just validate-fuzz-libs
     @just echidna-lcc-backing
     @just echidna-lcc-01
     @just echidna-lcc-02
@@ -77,7 +76,6 @@ fuzz-regressions:
 
 # Longer invariant campaigns (uses `echidna.deep.config.yml`).
 fuzz-deep:
-    @just validate-fuzz-libs
     @just echidna-lcc-backing echidna.deep.config.yml
     @just echidna-lcc-01 echidna.deep.config.yml
     @just echidna-lcc-02 echidna.deep.config.yml
@@ -246,28 +244,6 @@ echidna-wrapwith config="echidna.config.yml":
 echidna-confirmtake-callback config="echidna.config.yml":
     @just echidna test/fuzz/LiquidityHubConfirmTakeCallbackEchidnaTest.sol LiquidityHubConfirmTakeCallbackEchidnaTest {{ config }} -- --disable-slither
 
-# Validate Echidna linked-library wiring and deployment preconditions.
-validate-fuzz-libs:
-    python3 scripts/validate_fuzz_lib_config.py
-    FOUNDRY_PROFILE=echidna forge script \
-      test/fuzz/script/ValidateEchidnaLinkedLibs.s.sol:ValidateEchidnaLinkedLibs \
-      --sig "run()"
-    FOUNDRY_PROFILE=echidna forge script \
-      test/fuzz/script/SmokeEchidnaLinkedLibs.s.sol:SmokeEchidnaLinkedLibs \
-      --sig "run()"
-
-# Apply manifest and iterate until linked initcode matches (updates txt when stable).
-recompute-fuzz-lib-addrs:
-    python3 scripts/validate_fuzz_lib_config.py converge
-
-# Print machine-readable lines for the manifest file (paste into echidna-linked-libs.txt).
-print-echidna-lib-manifest:
-    FOUNDRY_PROFILE=echidna forge script \
-      test/fuzz/script/ValidateEchidnaLinkedLibs.s.sol:ValidateEchidnaLinkedLibs \
-      --sig "printManifest()"
-
-# Print human-readable CREATE2 outputs and copy-paste blocks (verbose).
-print-fuzz-lib-addrs:
-    FOUNDRY_PROFILE=echidna forge script \
-      test/fuzz/script/ValidateEchidnaLinkedLibs.s.sol:ValidateEchidnaLinkedLibs \
-      --sig "printComputed()"
+# Generate `.echidna-gen/foundry.toml`, converge linker addresses, build, and smoke CREATE2 deploys (same as `echidna.sh`).
+echidna-prepare:
+    python3 scripts/echidna_prepare_linked_libs.py

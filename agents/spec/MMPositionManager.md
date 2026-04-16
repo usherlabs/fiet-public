@@ -126,6 +126,8 @@ Decreases liquidity from an existing position.
 | `tokenId` | `uint256` | The commitment NFT token ID |
 | `positionIndex` | `uint256` | The position index within the commitment |
 | `amountToDecrease` | `uint256` | Amount of liquidity units to remove |
+| `amount0Min` | `uint128` | Minimum principal token0 received from removal (v4-style min-out on `liquidityDelta - feesAccrued`) |
+| `amount1Min` | `uint128` | Minimum principal token1 received from removal |
 
 ---
 
@@ -139,6 +141,8 @@ Burns (fully decreases) a position, removing all liquidity.
 | `poolKey` | `PoolKey` | The pool key identifying the market |
 | `tokenId` | `uint256` | The commitment NFT token ID |
 | `positionIndex` | `uint256` | The position index within the commitment |
+| `amount0Min` | `uint128` | Minimum principal token0 received when burning |
+| `amount1Min` | `uint128` | Minimum principal token1 received when burning |
 
 ---
 

@@ -3639,6 +3639,48 @@ contract VTSPositionLibTest is VTSLibTestBase {
         );
     }
 
+    /// @notice Scan 21: queueable shortfall is `min(shortfall, principal)`; `processMMOperations` must pass pool
+    ///         principal (`callerDelta - feesAccrued`). Inflating principal (e.g. by mixing in `feeAdj`) would raise this cap.
+    function test_handleLiquidityDecrease_queueCap_sensitivityToPrincipal_scan21() public {
+        BalanceDelta requiredSettlementDelta = toBalanceDelta(int128(int256(100)), 0);
+
+        VTSPositionLibTest_LiquidityHubCapture hub30 = new VTSPositionLibTest_LiquidityHubCapture();
+        IMarketVault vault30 = new VTSPositionLibTest_VaultClamp(0, 0);
+        PositionContext memory ctx30 = PositionContext({
+            poolManager: manager,
+            liquidityHub: ILiquidityHub(address(hub30)),
+            oracleHelper: IOracleHelper(address(0)),
+            marketVault: vault30
+        });
+        harness.handleLiquidityDecrease(
+            ctx30,
+            DEFAULT_OWNER,
+            corePoolKey,
+            toBalanceDelta(int128(int256(30)), 0),
+            requiredSettlementDelta,
+            DEFAULT_OWNER
+        );
+        assertEq(hub30.lastQueued0(), 30, "queue should cap at principal=30 when shortfall exceeds principal");
+
+        VTSPositionLibTest_LiquidityHubCapture hub40 = new VTSPositionLibTest_LiquidityHubCapture();
+        IMarketVault vault40 = new VTSPositionLibTest_VaultClamp(0, 0);
+        PositionContext memory ctx40 = PositionContext({
+            poolManager: manager,
+            liquidityHub: ILiquidityHub(address(hub40)),
+            oracleHelper: IOracleHelper(address(0)),
+            marketVault: vault40
+        });
+        harness.handleLiquidityDecrease(
+            ctx40,
+            DEFAULT_OWNER,
+            corePoolKey,
+            toBalanceDelta(int128(int256(40)), 0),
+            requiredSettlementDelta,
+            DEFAULT_OWNER
+        );
+        assertEq(hub40.lastQueued0(), 40, "inflated principal would incorrectly raise the queue cap");
+    }
+
     function test_handleLiquidityDecrease_settleableTracksAvailability_whenQueueIsPrincipalCapped() public {
         VTSPositionLibTest_LiquidityHubCapture hub = new VTSPositionLibTest_LiquidityHubCapture();
         // Partial availability with token1 shortfall exceeding principal.
