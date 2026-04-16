@@ -43,6 +43,24 @@ contract MockCanonicalVaultForEthReceive {
     receive() external payable {}
 }
 
+/// @dev Canonical-shaped sender whose `marketFactory()` reverts — Hub `receive` catch path.
+contract MockCanonicalVaultMarketFactoryReverts {
+    function marketFactory() external pure returns (address) {
+        revert("mf revert");
+    }
+
+    function sendEth(address payable to, uint256 amount) external {
+        (bool ok, bytes memory data) = to.call{value: amount}("");
+        if (!ok) {
+            assembly {
+                revert(add(data, 0x20), mload(data))
+            }
+        }
+    }
+
+    receive() external payable {}
+}
+
 contract NonPayableRecipient {}
 
 contract NonPayableCreate2Recipient {}
@@ -290,6 +308,34 @@ contract LiquidityHubTest is LiquidityHubTestBase {
 
         vm.expectRevert(abi.encodeWithSelector(Errors.InvalidEthSender.selector));
         impostor.sendEth(payable(address(liquidityHub)), 1);
+    }
+
+    function test_receive_revertsWhenMarketFactoryStaticCallReverts() public {
+        MockCanonicalVaultMarketFactoryReverts bad = new MockCanonicalVaultMarketFactoryReverts();
+        vm.deal(address(bad), 1 ether);
+        vm.expectRevert(abi.encodeWithSelector(Errors.InvalidEthSender.selector));
+        bad.sendEth(payable(address(liquidityHub)), 1);
+    }
+
+    /// @dev `_assertUnwrapWithinHeadroom` nets `settleQueue[lcc][queueTo]` against the caller balance; excess request reverts.
+    function test_unwrapTo_withQueueTo_revertsWhenAmountExceedsHeadroomAfterPriorQueue() public {
+        uint256 amount = 20;
+        _wrapMarketDerivedLCC(user1, lccToken1, amount);
+
+        vm.mockCall(factory, abi.encodeWithSelector(IMarketFactory.useMarketLiquidity.selector), abi.encode(uint256(0)));
+
+        vm.prank(user1);
+        liquidityHub.unwrap(lccToken1, 15);
+        assertEq(liquidityHub.settleQueue(lccToken1, user1), 15);
+
+        vm.startPrank(factory);
+        liquidityHub.setBoundLevel(user1, Bounds.BOUND_ENDPOINT);
+        vm.stopPrank();
+
+        // `unwrapTo(lcc,to,queueTo,amt)` uses `queueTo` for headroom; attribute shortfall to `user1` to net the prior queue.
+        vm.prank(user1);
+        vm.expectRevert(abi.encodeWithSelector(Errors.InvalidAmount.selector, uint256(10), uint256(5)));
+        liquidityHub.unwrapTo(lccToken1, user2, user1, 10);
     }
 
     function test_wrapTo_overloadByUnderlyingAndMarketId_works() public {

@@ -855,6 +855,35 @@ contract ProxyHookTest is MarketVaultBase {
         assertEq(got, sender, "address(2) should map to sender");
     }
 
+    /// @dev `_resolveLocker` treats staticcall failure as unresolved locker.
+    function test_determineExcessRecipient_lockerUnresolved_whenMsgSenderReverts() public {
+        ProxyHookHarness harness = new ProxyHookHarness(address(manager), address(marketFactory));
+        MockMsgSenderReverting sender = new MockMsgSenderReverting();
+        (address got, bool resolved) = harness.exposed_determineExcessRecipient(address(sender), abi.encode(address(1)));
+        assertFalse(resolved, "reverting msgSender() should leave locker unresolved");
+        assertEq(got, address(0));
+    }
+
+    /// @dev ABI-encoded address requires 32 bytes; shorter return data must not decode as a valid locker.
+    function test_determineExcessRecipient_lockerUnresolved_whenMsgSenderReturnDataTooShort() public {
+        ProxyHookHarness harness = new ProxyHookHarness(address(manager), address(marketFactory));
+        MockMsgSenderShortReturn sender = new MockMsgSenderShortReturn();
+        (address got, bool resolved) = harness.exposed_determineExcessRecipient(address(sender), abi.encode(address(1)));
+        assertFalse(resolved, "short return data should leave locker unresolved");
+        assertEq(got, address(0));
+    }
+
+    /// @dev Explicit non-zero hookData recipient of `address(0)` still routes through locker resolution (not custom).
+    function test_determineExcessRecipient_customHookDataZeroAddress_decodesToZeroRecipient() public {
+        ProxyHookHarness harness = new ProxyHookHarness(address(manager), address(marketFactory));
+        address explicitZeroDecoded = address(uint160(uint256(keccak256("explicit_zero"))));
+        // `abi.encode(address(0))` is what Solidity uses for a typed zero address.
+        (address got, bool resolved) =
+            harness.exposed_determineExcessRecipient(explicitZeroDecoded, abi.encode(address(0)));
+        assertFalse(resolved, "locker resolution should fail for unknown sender");
+        assertEq(got, address(0));
+    }
+
     /**
      * @notice Test exact output swap with limited liquidity (no hookData)
      */
@@ -1321,6 +1350,12 @@ contract ProxyHookTest is MarketVaultBase {
             harness.exposed_calcCoreSqrtPriceLimit(custom, true, true),
             expectedInverted,
             "flipped non-zero should invert"
+        );
+        // Same reciprocal mapping when the core swap direction flag differs (proxy/core currency ordering flip).
+        assertEq(
+            harness.exposed_calcCoreSqrtPriceLimit(custom, true, false),
+            expectedInverted,
+            "flipped non-default limit should still map through the reciprocal helper"
         );
 
         // Flipped near-MAX should clamp to MIN+1 instead of producing an out-of-bounds MIN/underflowed value.
@@ -1877,6 +1912,21 @@ contract MockMsgSender is IMsgSender {
 contract MockMsgSenderZero is IMsgSender {
     function msgSender() external pure returns (address) {
         return address(0);
+    }
+}
+
+contract MockMsgSenderReverting is IMsgSender {
+    function msgSender() external pure returns (address) {
+        revert("MockMsgSenderReverting");
+    }
+}
+
+/// @dev Returns fewer than 32 bytes so `_resolveLocker` cannot ABI-decode an address.
+contract MockMsgSenderShortReturn {
+    fallback() external {
+        assembly {
+            return(0, 16)
+        }
     }
 }
 

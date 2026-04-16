@@ -1411,6 +1411,28 @@ contract MMPositionManagerActionsTest is MarketTestBase, MarketMakerTestBase {
         assertEq(IERC20(underlying0).balanceOf(address(positionManager)), depositAmount0);
     }
 
+    /// @dev Mirrors `test_settle_usePositionManagerBalance_revertsWhenLockerCreditInsufficient_onNegativeDelta` on token1.
+    function test_settle_usePositionManagerBalance_revertsWhenLockerCreditInsufficient_onNegativeDelta_token1() public {
+        uint256 tokenId = 1;
+        uint256 positionIndex = 0;
+        uint256 depositAmount1 = 1e18;
+
+        createPosition(defaultlLiquidityParams, abi.encode(liquiditySignal), tokenId, positionIndex);
+
+        address underlying1 = lcc1.underlying();
+        MockERC20(underlying1).mint(address(positionManager), depositAmount1);
+
+        assertEq(vtsOrchestrator.getFullCredit(Currency.wrap(underlying1), address(this)), 0);
+
+        MMA.PreparedAction[] memory actions = new MMA.PreparedAction[](1);
+        actions[0] = MMA.prepareSettle(corePoolKey, tokenId, positionIndex, 0, -int128(int256(depositAmount1)), true);
+
+        vm.expectPartialRevert(Errors.InsufficientBalance.selector);
+        MMA.executeWithUnlock(positionManager, actions, block.timestamp + 3600);
+
+        assertEq(IERC20(underlying1).balanceOf(address(positionManager)), depositAmount1);
+    }
+
     function test_settle_usePositionManagerBalanceFalse_pullsErc20FromLocker_notPositionManager() public {
         // Ensure the non-MMPM settle path keeps ERC20 behaviour and never spends pooled MMPM balances.
         uint256 tokenId = 1;
@@ -1752,6 +1774,32 @@ contract MMPositionManagerActionsTest is MarketTestBase, MarketMakerTestBase {
         MMA.executeWithUnlock(positionManager, actions, block.timestamp + 3600);
     }
 
+    /// @dev Covers the token1 leg of `_validateMaxIn` (amount0Max is unconstrained so token0 cannot trip first).
+    function test_increaseFromDeltas_revertsWhenAmount1MaxExceeded() public {
+        uint256 tokenId = 1;
+        uint256 positionIndex = 0;
+
+        _setupCommittedPosition(
+            positionManager,
+            corePoolKey,
+            abi.encode(liquiditySignal),
+            defaultlLiquidityParams,
+            marketVTSConfiguration,
+            address(lcc0),
+            address(lcc1)
+        );
+
+        uint256 settlementAmount = 1_000_000e18;
+        approveAndSettleUnderlyingToPosition(tokenId, positionIndex, settlementAmount, settlementAmount);
+
+        MMA.PreparedAction[] memory actions = new MMA.PreparedAction[](2);
+        actions[0] = MMA.prepareDecrease(corePoolKey, tokenId, positionIndex, 1_000_000_000);
+        actions[1] = MMA.prepareIncreaseFromDeltas(corePoolKey, tokenId, positionIndex, type(uint128).max, 0, true);
+
+        vm.expectRevert(abi.encodeWithSelector(Errors.MaximumAmountExceeded.selector, uint128(0), uint128(5_999_709)));
+        MMA.executeWithUnlock(positionManager, actions, block.timestamp + 3600);
+    }
+
     function test_mintFromDeltas_revertsWhenAmountMaxExceeded() public {
         uint256 tokenId = 1;
         uint256 positionIndex = 0;
@@ -1773,6 +1821,40 @@ contract MMPositionManagerActionsTest is MarketTestBase, MarketMakerTestBase {
         actions[0] = MMA.prepareDecrease(corePoolKey, tokenId, positionIndex, 1_000_000_000);
         actions[1] = MMA.prepareMintFromDeltas(
             corePoolKey, tokenId, defaultlLiquidityParams.tickLower, defaultlLiquidityParams.tickUpper, 0, 0, true
+        );
+
+        vm.expectRevert(abi.encodeWithSelector(Errors.MaximumAmountExceeded.selector, uint128(0), uint128(5_999_709)));
+        MMA.executeWithUnlock(positionManager, actions, block.timestamp + 3600);
+    }
+
+    /// @dev Same as `test_mintFromDeltas_revertsWhenAmountMaxExceeded` but forces the token1 `_validateMaxIn` branch.
+    function test_mintFromDeltas_revertsWhenAmount1MaxExceeded() public {
+        uint256 tokenId = 1;
+        uint256 positionIndex = 0;
+
+        _setupCommittedPosition(
+            positionManager,
+            corePoolKey,
+            abi.encode(liquiditySignal),
+            defaultlLiquidityParams,
+            marketVTSConfiguration,
+            address(lcc0),
+            address(lcc1)
+        );
+
+        uint256 settlementAmount = 1_000_000e18;
+        approveAndSettleUnderlyingToPosition(tokenId, positionIndex, settlementAmount, settlementAmount);
+
+        MMA.PreparedAction[] memory actions = new MMA.PreparedAction[](2);
+        actions[0] = MMA.prepareDecrease(corePoolKey, tokenId, positionIndex, 1_000_000_000);
+        actions[1] = MMA.prepareMintFromDeltas(
+            corePoolKey,
+            tokenId,
+            defaultlLiquidityParams.tickLower,
+            defaultlLiquidityParams.tickUpper,
+            type(uint128).max,
+            0,
+            true
         );
 
         vm.expectRevert(abi.encodeWithSelector(Errors.MaximumAmountExceeded.selector, uint128(0), uint128(5_999_709)));

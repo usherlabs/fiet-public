@@ -651,6 +651,9 @@ contract MockCoreHook_MarketFactory is ICoreHook {
 contract MarketFactoryUnitTest is Test {
     using PoolIdLibrary for PoolKey;
 
+    /// @dev Must match `MarketFactory` storage layout (`initialised` slot).
+    uint256 internal constant _MF_UNIT_INITIALISED_SLOT = 4;
+
     // bytes32(uint256(keccak256("Currency")) - 1)
     bytes32 internal constant CURRENCY_SLOT = 0x27e098c505d44ec3574004bca052aabf76bd35004c182099d8c575fb238593b9;
     // bytes32(uint256(keccak256("ReservesOf")) - 1)
@@ -1310,5 +1313,75 @@ contract MarketFactoryUnitTest is Test {
         vm.prank(address(poolManager));
         factory.afterModifyLiquidity(key);
         assertTrue(coreHook.called());
+    }
+
+    function test_prepareMarketLiquidity_revertsWhenCallerIsNotLccToken() public {
+        (MockLCC_MarketFactory lcc0,,) = _prepareMarketWithMockLcc(address(0x100), address(0x200));
+
+        vm.prank(makeAddr("notTheLcc"));
+        vm.expectRevert(Errors.InvalidSender.selector);
+        factory.prepareMarketLiquidity(address(lcc0), 1);
+    }
+
+    function test_prepareMarketLiquidity_revertsWhenHubReportsForeignFactory() public {
+        (MockLCC_MarketFactory lcc0,, PoolId coreId) = _prepareMarketWithMockLcc(address(0x100), address(0x200));
+        address otherFactory = makeAddr("otherFactory");
+        liquidityHub.setLccToMarket(address(lcc0), PoolId.unwrap(coreId), otherFactory);
+
+        vm.prank(address(lcc0));
+        vm.expectRevert(Errors.InvalidSender.selector);
+        factory.prepareMarketLiquidity(address(lcc0), 1);
+    }
+
+    function test_prepareMarketLiquidity_revertsWhenMarketIdUnsetInHub() public {
+        (MockLCC_MarketFactory lcc0,,) = _prepareMarketWithMockLcc(address(0x100), address(0x200));
+        liquidityHub.setLccToMarket(address(lcc0), bytes32(0), address(factory));
+
+        vm.prank(address(lcc0));
+        vm.expectRevert(Errors.InvalidSender.selector);
+        factory.prepareMarketLiquidity(address(lcc0), 1);
+    }
+
+    function test_initialise_nonEmptyInitialBounds_setsEndpointLevelsOnHub() public {
+        address b0 = makeAddr("initialBound0");
+        address b1 = makeAddr("initialBound1");
+        address[] memory ib = new address[](2);
+        ib[0] = b0;
+        ib[1] = b1;
+
+        vm.startPrank(owner);
+        vm.store(address(factory), bytes32(_MF_UNIT_INITIALISED_SLOT), bytes32(uint256(0)));
+        factory.initialise(factory.canonicalVault(), address(coreHook), ib);
+        vm.stopPrank();
+
+        assertEq(liquidityHub.boundLevel(address(factory), b0), 1);
+        assertEq(liquidityHub.boundLevel(address(factory), b1), 1);
+    }
+
+    function test_isMarketFacade_returnsTrueForProxyHookAfterCreateMarket() public {
+        uint160 initial = 79228162514264337593543950336;
+        (PoolId coreId,) = _createMarket(address(0x100), address(0x200), initial);
+
+        assertTrue(factory.isMarketFacade(PoolId.unwrap(coreId), address(proxyHook)));
+        assertFalse(factory.isMarketFacade(PoolId.unwrap(coreId), makeAddr("notFacade")));
+        assertFalse(factory.isMarketFacade(PoolId.unwrap(coreId), address(0)));
+    }
+
+    function test_createMarket_revertsWhenFactoryNeverInitialised() public {
+        vm.prank(owner);
+        MarketFactory fresh =
+            new MarketFactory(address(poolManager), address(liquidityHub), address(oracleHelper), address(vts), owner);
+
+        vm.prank(owner);
+        vm.expectRevert(abi.encodeWithSelector(Errors.InvalidAddress.selector, address(0)));
+        fresh.createMarket(
+            address(0x100),
+            address(0x200),
+            3000,
+            60,
+            79228162514264337593543950336,
+            keccak256("neverInitSalt"),
+            VTSConfigs.getDefaultConfig()
+        );
     }
 }

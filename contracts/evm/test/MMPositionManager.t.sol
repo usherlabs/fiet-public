@@ -763,6 +763,17 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
         positionManager.modifyLiquiditiesWithoutUnlock(actions, params);
     }
 
+    /// @dev Utility namespace gap between `SYNC` (0x45) and the next reserved range.
+    function test_modifyLiquiditiesWithoutUnlock_utilityGap0x46_revertsUnsupportedAction() public {
+        uint256 unknownUtilityAction = 0x46;
+        bytes memory actions = abi.encodePacked(uint8(unknownUtilityAction));
+        bytes[] memory params = new bytes[](1);
+        params[0] = hex"";
+
+        vm.expectRevert(abi.encodeWithSelector(Errors.UnsupportedAction.selector, unknownUtilityAction));
+        positionManager.modifyLiquiditiesWithoutUnlock(actions, params);
+    }
+
     function test_tokenURI_revertsWhenCommitmentDescriptorNotSet() public {
         // Reuse the real actions impl from the already-deployed PositionManager so the constructor succeeds.
         // This test is about `commitmentDescriptor`, not delegation.
@@ -801,6 +812,49 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
         );
 
         assertEq(fresh.commitmentDescriptor(), address(desc), "constructor should set commitmentDescriptor");
+    }
+
+    function test_constructor_revertsWhenQueueCustodianZero() public {
+        MockCommitmentDescriptor desc = new MockCommitmentDescriptor("ipfs://mock/");
+        address canonical = IMarketFactory(marketFactory).canonicalVault();
+        address actionsImplAddr = positionManager.actionsImpl();
+
+        vm.expectRevert(abi.encodeWithSelector(Errors.InvalidAddress.selector, address(0)));
+        new MMPositionManager(
+            MMPositionManager.MMPositionManagerInit({
+                poolManager: manager,
+                marketFactory: address(marketFactory),
+                vtsOrchestrator: address(vtsOrchestrator),
+                canonicalCustody: canonical,
+                descriptor: address(desc),
+                weth9: weth9,
+                permit2: permit2,
+                actionsImpl: actionsImplAddr,
+                queueCustodianAddr: address(0)
+            })
+        );
+    }
+
+    function test_constructor_revertsWhenQueueCustodianIsEoaWithoutCode() public {
+        MockCommitmentDescriptor desc = new MockCommitmentDescriptor("ipfs://mock/");
+        address eoaCustodian = makeAddr("eoaQueueCustodian");
+        address canonical = IMarketFactory(marketFactory).canonicalVault();
+        address actionsImplAddr = positionManager.actionsImpl();
+
+        vm.expectRevert(abi.encodeWithSelector(Errors.InvalidAddress.selector, eoaCustodian));
+        new MMPositionManager(
+            MMPositionManager.MMPositionManagerInit({
+                poolManager: manager,
+                marketFactory: address(marketFactory),
+                vtsOrchestrator: address(vtsOrchestrator),
+                canonicalCustody: canonical,
+                descriptor: address(desc),
+                weth9: weth9,
+                permit2: permit2,
+                actionsImpl: actionsImplAddr,
+                queueCustodianAddr: eoaCustodian
+            })
+        );
     }
 
     function test_tokenURI_returnsDescriptorValue_whenDescriptorSet() public {

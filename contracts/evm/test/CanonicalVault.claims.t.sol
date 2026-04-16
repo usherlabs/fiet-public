@@ -13,6 +13,8 @@ import {MarketVaultBase} from "./base/MarketVaultBase.sol";
 import {ICanonicalVault} from "../src/interfaces/ICanonicalVault.sol";
 import {IMarketFactory} from "../src/interfaces/IMarketFactory.sol";
 import {CanonicalVault} from "../src/CanonicalVault.sol";
+import {Errors} from "../src/libraries/Errors.sol";
+import {MockERC20} from "./_mocks/MockERC20.sol";
 
 /// @dev Credits canonical vault via `settleFor`, then facade calls `takeUnderlyingClaims` (same unlock batch).
 contract CanonicalVaultSeedTakeHelper is Test, IUnlockCallback {
@@ -302,6 +304,16 @@ contract CanonicalVaultClaimsTest is MarketVaultBase {
         assertEq(IERC20Minimal(address(lcc0)).balanceOf(address(canonical)), canonicalLccBefore + amount);
         assertEq(_underlying6909Balance(address(proxyHook), Currency.wrap(ua0)), hookU0Before);
         assertEq(_underlying6909Balance(address(proxyHook), Currency.wrap(ua1)), hookU1Before);
+    }
+
+    /// @dev `inMarketBalanceOf` rejects currencies not in the market's configured underlying pair.
+    function test_inMarketBalanceOf_revertsForForeignUnderlying_integration() public {
+        address payable canonical = payable(IMarketFactory(marketFactory).canonicalVault());
+        bytes32 marketId = _coreMarketId();
+        MockERC20 foreign = new MockERC20("F", "F", 18);
+
+        vm.expectRevert(Errors.InvalidSender.selector);
+        CanonicalVault(canonical).inMarketBalanceOf(marketId, Currency.wrap(address(foreign)));
     }
 
     /// @dev Suite D (plan): operator permission should enable mediated burns while keeping durable ownership on CanonicalVault.

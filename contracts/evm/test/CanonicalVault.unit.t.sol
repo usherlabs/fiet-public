@@ -919,13 +919,7 @@ contract CanonicalVaultUnitTest is Test {
 
         vm.prank(facade);
         BalanceDelta used = vault.modifyLiquidities(
-            MARKET_ID,
-            Currency.wrap(u0),
-            Currency.wrap(u1),
-            address(l0),
-            address(l1),
-            toBalanceDelta(-3, 5),
-            recv
+            MARKET_ID, Currency.wrap(u0), Currency.wrap(u1), address(l0), address(l1), toBalanceDelta(-3, 5), recv
         );
 
         assertEq(used.amount0(), -3);
@@ -950,7 +944,211 @@ contract CanonicalVaultUnitTest is Test {
 
         vm.expectRevert(Errors.InvalidSender.selector);
         vault.cancelLCCWithDeficit(MARKET_ID, foreign, 0, address(0));
+
+        vm.expectRevert(Errors.InvalidSender.selector);
+        vault.issueAndSettleLcc(MARKET_ID, foreign, 1);
+
+        vm.expectRevert(Errors.InvalidSender.selector);
+        vault.takeLccFromPoolManager(MARKET_ID, foreign, 1);
         vm.stopPrank();
+    }
+
+    function test_constructor_revertsWhenLiquidityHubZero() public {
+        MockPoolManagerCV p = new MockPoolManagerCV();
+        CanonicalTestFactory f = new CanonicalTestFactory();
+        vm.expectRevert(abi.encodeWithSelector(Errors.InvalidAddress.selector, address(0)));
+        new CanonicalVault(address(p), address(0), address(f));
+    }
+
+    function test_constructor_revertsWhenMarketFactoryZero() public {
+        MockPoolManagerCV p = new MockPoolManagerCV();
+        MockLiquidityHubCV h = new MockLiquidityHubCV();
+        vm.expectRevert(abi.encodeWithSelector(Errors.InvalidAddress.selector, address(0)));
+        new CanonicalVault(address(p), address(h), address(0));
+    }
+
+    /// @dev State-changing `modifyLiquidities` with `VaultSettlementIntent` (not only `dryModify`).
+    function test_modifyLiquidities_withSettlementIntent_mixedCreditAndReserve_decrementsReserveOnlySettledSlice()
+        public
+    {
+        MockERC20 ua = new MockERC20("A", "A", 18);
+        MockERC20 ub = new MockERC20("B", "B", 18);
+        (MockLCC l0, MockLCC l1, address u0, address u1) = _deployRegisteredMarket(MARKET_ID, ua, ub);
+
+        vm.prank(facade);
+        vault.increaseLiquidityReserve(MARKET_ID, Currency.wrap(u0), 5);
+        pm.setClaimBalance(address(vault), Currency.wrap(u0), 7);
+        MockERC20(u0).mint(address(pm), 7);
+
+        VaultSettlementIntent memory vi = VaultSettlementIntent({
+            requestedDelta: toBalanceDelta(10, 0), creditBackedWithdrawal0: 2, creditBackedWithdrawal1: 0
+        });
+
+        vm.prank(facade);
+        BalanceDelta used = vault.modifyLiquidities(
+            MARKET_ID, Currency.wrap(u0), Currency.wrap(u1), address(l0), address(l1), vi, makeAddr("recvIntent")
+        );
+
+        assertEq(used.amount0(), 7);
+        assertEq(vault.inMarketBalanceOf(MARKET_ID, Currency.wrap(u0)), 0);
+    }
+
+    function test_dryModifyLiquidities_clampsLeg1ToReserve() public {
+        MockERC20 ua = new MockERC20("A", "A", 18);
+        MockERC20 ub = new MockERC20("B", "B", 18);
+        (,, address u0, address u1) = _deployRegisteredMarket(MARKET_ID, ua, ub);
+
+        vm.prank(facade);
+        vault.increaseLiquidityReserve(MARKET_ID, Currency.wrap(u1), 5);
+
+        vm.prank(facade);
+        BalanceDelta d =
+            vault.dryModifyLiquidities(MARKET_ID, Currency.wrap(u0), Currency.wrap(u1), toBalanceDelta(0, 9));
+        assertEq(d.amount1(), 5);
+    }
+
+    function test_dryModify_settlementIntent_creditBackedClampedToRequested_token1() public {
+        MockERC20 ua = new MockERC20("A", "A", 18);
+        MockERC20 ub = new MockERC20("B", "B", 18);
+        (,, address u0, address u1) = _deployRegisteredMarket(MARKET_ID, ua, ub);
+        VaultSettlementIntent memory vi = VaultSettlementIntent({
+            requestedDelta: toBalanceDelta(0, 5), creditBackedWithdrawal0: 0, creditBackedWithdrawal1: 99
+        });
+        vm.prank(facade);
+        BalanceDelta d = vault.dryModifyLiquidities(MARKET_ID, Currency.wrap(u0), Currency.wrap(u1), vi);
+        assertEq(d.amount1(), 5);
+    }
+
+    function test_dryModify_settlementIntent_mixedCreditAndReserve_token1() public {
+        MockERC20 ua = new MockERC20("A", "A", 18);
+        MockERC20 ub = new MockERC20("B", "B", 18);
+        (,, address u0, address u1) = _deployRegisteredMarket(MARKET_ID, ua, ub);
+        vm.prank(facade);
+        vault.increaseLiquidityReserve(MARKET_ID, Currency.wrap(u1), 5);
+        VaultSettlementIntent memory vi = VaultSettlementIntent({
+            requestedDelta: toBalanceDelta(0, 10), creditBackedWithdrawal0: 0, creditBackedWithdrawal1: 2
+        });
+        vm.prank(facade);
+        BalanceDelta d = vault.dryModifyLiquidities(MARKET_ID, Currency.wrap(u0), Currency.wrap(u1), vi);
+        assertEq(d.amount1(), 7);
+    }
+
+    function test_modifyLiquidities_positiveLeg_revertsWhenPoolManagerClaimsInsufficient() public {
+        MockERC20 ua = new MockERC20("A", "A", 18);
+        MockERC20 ub = new MockERC20("B", "B", 18);
+        (MockLCC l0, MockLCC l1, address u0, address u1) = _deployRegisteredMarket(MARKET_ID, ua, ub);
+
+        vm.prank(facade);
+        vault.increaseLiquidityReserve(MARKET_ID, Currency.wrap(u0), 10);
+
+        vm.prank(facade);
+        vm.expectRevert(Errors.InsufficientLiquidityToTake.selector);
+        vault.modifyLiquidities(
+            MARKET_ID,
+            Currency.wrap(u0),
+            Currency.wrap(u1),
+            address(l0),
+            address(l1),
+            toBalanceDelta(1, 0),
+            makeAddr("recvPmShort")
+        );
+    }
+
+    function test_modifyLiquidities_negativeLeg0_revertsWhenVaultUnderlyingBalanceInsufficient() public {
+        MockERC20 ua = new MockERC20("A", "A", 18);
+        MockERC20 ub = new MockERC20("B", "B", 18);
+        (MockLCC l0, MockLCC l1, address u0, address u1) = _deployRegisteredMarket(MARKET_ID, ua, ub);
+
+        hub.setTotalQueued(address(l0), 0);
+        hub.setMarketReserve(address(l0), 0);
+
+        vm.prank(facade);
+        vm.expectRevert(Errors.InsufficientLiquidityToSettle.selector);
+        vault.modifyLiquidities(
+            MARKET_ID,
+            Currency.wrap(u0),
+            Currency.wrap(u1),
+            address(l0),
+            address(l1),
+            toBalanceDelta(-1, 0),
+            makeAddr("recvNeg")
+        );
+    }
+
+    function test_modifyLiquidities_confirmTakeWhenRecipientIsHub_bothLegsPositive() public {
+        MockERC20 ua = new MockERC20("A", "A", 18);
+        MockERC20 ub = new MockERC20("B", "B", 18);
+        (MockLCC l0, MockLCC l1, address u0, address u1) = _deployRegisteredMarket(MARKET_ID, ua, ub);
+
+        vm.prank(facade);
+        vault.increaseLiquidityReserve(MARKET_ID, Currency.wrap(u0), 4);
+        vm.prank(facade);
+        vault.increaseLiquidityReserve(MARKET_ID, Currency.wrap(u1), 5);
+        pm.setClaimBalance(address(vault), Currency.wrap(u0), 4);
+        pm.setClaimBalance(address(vault), Currency.wrap(u1), 5);
+        MockERC20(u0).mint(address(pm), 4);
+        MockERC20(u1).mint(address(pm), 5);
+
+        vm.prank(facade);
+        vault.modifyLiquidities(
+            MARKET_ID,
+            Currency.wrap(u0),
+            Currency.wrap(u1),
+            address(l0),
+            address(l1),
+            toBalanceDelta(4, 5),
+            address(hub)
+        );
+
+        assertEq(hub.confirmCalls(), 2);
+    }
+
+    function test_decreaseLiquidityReserve_zeroAmount_noop() public {
+        MockERC20 ua = new MockERC20("A", "A", 18);
+        MockERC20 ub = new MockERC20("B", "B", 18);
+        (,, address u0,) = _deployRegisteredMarket(MARKET_ID, ua, ub);
+
+        vm.prank(facade);
+        vault.increaseLiquidityReserve(MARKET_ID, Currency.wrap(u0), 100);
+
+        vm.prank(facade);
+        vault.decreaseLiquidityReserve(MARKET_ID, Currency.wrap(u0), 0);
+
+        assertEq(vault.inMarketBalanceOf(MARKET_ID, Currency.wrap(u0)), 100);
+    }
+
+    function test_decreaseLiquidityReserve_revertsWhenReserveInsufficient() public {
+        MockERC20 ua = new MockERC20("A", "A", 18);
+        MockERC20 ub = new MockERC20("B", "B", 18);
+        (,, address u0,) = _deployRegisteredMarket(MARKET_ID, ua, ub);
+
+        vm.prank(facade);
+        vault.increaseLiquidityReserve(MARKET_ID, Currency.wrap(u0), 1);
+
+        vm.prank(facade);
+        vm.expectRevert(Errors.InsufficientLiquidityToTake.selector);
+        vault.decreaseLiquidityReserve(MARKET_ID, Currency.wrap(u0), 2);
+    }
+
+    function test_decreaseLiquidityReserve_revertsWrongUnderlying() public {
+        MockERC20 ua = new MockERC20("A", "A", 18);
+        MockERC20 ub = new MockERC20("B", "B", 18);
+        _deployRegisteredMarket(MARKET_ID, ua, ub);
+        MockERC20 ux = new MockERC20("X", "X", 18);
+
+        vm.prank(facade);
+        vm.expectRevert(Errors.InvalidSender.selector);
+        vault.decreaseLiquidityReserve(MARKET_ID, Currency.wrap(address(ux)), 1);
+    }
+
+    function test_inMarketBalanceOf_revertsWrongUnderlying() public {
+        MockERC20 ua = new MockERC20("A", "A", 18);
+        MockERC20 ub = new MockERC20("B", "B", 18);
+        _deployRegisteredMarket(MARKET_ID, ua, ub);
+        MockERC20 ux = new MockERC20("X", "X", 18);
+
+        vm.expectRevert(Errors.InvalidSender.selector);
+        vault.inMarketBalanceOf(MARKET_ID, Currency.wrap(address(ux)));
     }
 
     function _registerNativeErcAligned(CanonicalTestFactory f, address vaultAddr, MockERC20 erc)

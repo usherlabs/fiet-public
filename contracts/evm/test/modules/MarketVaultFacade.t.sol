@@ -2,9 +2,13 @@
 pragma solidity ^0.8.26;
 
 import "forge-std/Test.sol";
+import {Vm} from "forge-std/Vm.sol";
 
 import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
 import {BalanceDelta, toBalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
+import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
+import {PoolId, PoolIdLibrary} from "@uniswap/v4-core/src/types/PoolId.sol";
+import {IHooks} from "@uniswap/v4-core/src/interfaces/IHooks.sol";
 
 import {MarketVaultFacade} from "../../src/modules/MarketVaultFacade.sol";
 import {ICanonicalVault} from "../../src/interfaces/ICanonicalVault.sol";
@@ -40,6 +44,35 @@ interface ICanonicalReserveDec {
     function decreaseLiquidityReserve(bytes32 marketId, Currency currency, uint256 amount) external;
 }
 
+/// @dev Narrow `IMarketVault` surfaces for `abi.encodeCall` overload resolution in re-entry tests.
+interface IMarketVaultModifyBd {
+    function modifyLiquidities(BalanceDelta balanceDelta) external;
+}
+
+interface IMarketVaultModifyIntent {
+    function modifyLiquidities(VaultSettlementIntent calldata settlementIntent) external;
+}
+
+interface IMarketVaultTryBd {
+    function tryModifyLiquidities(BalanceDelta balanceDelta) external returns (BalanceDelta);
+}
+
+interface IMarketVaultTryIntent {
+    function tryModifyLiquidities(VaultSettlementIntent calldata settlementIntent) external returns (BalanceDelta);
+}
+
+interface IMarketVaultTryRecipBd {
+    function tryModifyLiquiditiesWithRecipient(BalanceDelta balanceDelta, address recipient)
+        external
+        returns (BalanceDelta);
+}
+
+interface IMarketVaultTryRecipIntent {
+    function tryModifyLiquiditiesWithRecipient(VaultSettlementIntent calldata settlementIntent, address recipient)
+        external
+        returns (BalanceDelta);
+}
+
 /// @notice Minimal factory surface for `MarketVaultFacade` unit tests.
 contract FacadeUnitTestFactory {
     address public canonicalVaultAddr;
@@ -72,6 +105,7 @@ contract MockCanonicalForFacade is ICanonicalVault {
     BalanceDelta internal _modifyReturn;
     BalanceDelta internal _dryReturn;
     bool public echoModify;
+    uint256 internal _cancelReturn;
 
     uint8 public lastModifyKind;
     bytes32 public lastModifyMarketId;
@@ -93,6 +127,10 @@ contract MockCanonicalForFacade is ICanonicalVault {
 
     function setEchoModify(bool v) external {
         echoModify = v;
+    }
+
+    function setCancelReturn(uint256 v) external {
+        _cancelReturn = v;
     }
 
     function marketFactory() external view returns (address) {
@@ -125,7 +163,8 @@ contract MockCanonicalForFacade is ICanonicalVault {
         address l1,
         BalanceDelta bd,
         address recipient
-    ) external returns (BalanceDelta) {
+    ) external virtual returns (BalanceDelta) {
+        _hookBeforeModifyBalanceDelta();
         lastModifyKind = 1;
         lastModifyMarketId = mid;
         lastModifyC0 = c0;
@@ -148,7 +187,8 @@ contract MockCanonicalForFacade is ICanonicalVault {
         address l1,
         VaultSettlementIntent calldata vi,
         address recipient
-    ) external returns (BalanceDelta) {
+    ) external virtual returns (BalanceDelta) {
+        _hookBeforeModifyIntent();
         lastModifyKind = 2;
         lastModifyMarketId = mid;
         lastModifyC0 = c0;
@@ -169,8 +209,8 @@ contract MockCanonicalForFacade is ICanonicalVault {
 
     function settleUnderlyingToVaultFromHub(bytes32, address, uint256) external pure {}
 
-    function cancelLCCWithDeficit(bytes32, address, uint256, address) external pure returns (uint256) {
-        return 0;
+    function cancelLCCWithDeficit(bytes32, address, uint256, address) external view returns (uint256) {
+        return _cancelReturn;
     }
 
     function takeUnderlyingClaims(bytes32, Currency, uint256) external pure {}
@@ -184,6 +224,85 @@ contract MockCanonicalForFacade is ICanonicalVault {
     function increaseLiquidityReserve(bytes32, Currency, uint256) external pure {}
 
     function decreaseLiquidityReserve(bytes32, Currency, uint256) external pure {}
+
+    function _hookBeforeModifyBalanceDelta() internal virtual {}
+
+    function _hookBeforeModifyIntent() internal virtual {}
+}
+
+/// @notice Canonical stub that optionally re-enters the facade during `modifyLiquidities` to kill `nonReentrant` mutants.
+contract ReentrantCanonicalForFacade is MockCanonicalForFacade {
+    error Reentered();
+
+    uint256 internal _reDepth;
+    address internal _reFacade;
+    uint8 internal _reMode;
+    BalanceDelta internal _reBd;
+    VaultSettlementIntent internal _reVi;
+    address internal _reRecipient;
+
+    uint8 public constant RM_MODIFY_BD = 1;
+    uint8 public constant RM_TRY_BD = 2;
+    uint8 public constant RM_TRY_RECIP_BD = 3;
+    uint8 public constant RM_MODIFY_INTENT = 4;
+    uint8 public constant RM_TRY_INTENT = 5;
+    uint8 public constant RM_TRY_RECIP_INTENT = 6;
+
+    /// @param recipient Used for `tryModifyLiquiditiesWithRecipient` re-entry modes (must be non-zero for the facade).
+    function setReentry(
+        address facade_,
+        uint8 mode,
+        BalanceDelta bd,
+        VaultSettlementIntent memory vi,
+        address recipient
+    ) external {
+        _reFacade = facade_;
+        _reMode = mode;
+        _reBd = bd;
+        _reVi = vi;
+        _reRecipient = recipient;
+    }
+
+    function clearReentry() external {
+        _reFacade = address(0);
+        _reMode = 0;
+    }
+
+    function _hookBeforeModifyBalanceDelta() internal override {
+        if (_reFacade == address(0) || _reMode == 0 || _reMode > 3) return;
+        if (_reDepth != 0) return;
+        _reDepth = 1;
+        bool ok;
+        if (_reMode == RM_MODIFY_BD) {
+            (ok,) = _reFacade.call(abi.encodeCall(IMarketVaultModifyBd.modifyLiquidities, (_reBd)));
+        } else if (_reMode == RM_TRY_BD) {
+            (ok,) = _reFacade.call(abi.encodeCall(IMarketVaultTryBd.tryModifyLiquidities, (_reBd)));
+        } else if (_reMode == RM_TRY_RECIP_BD) {
+            (ok,) = _reFacade.call(
+                abi.encodeCall(IMarketVaultTryRecipBd.tryModifyLiquiditiesWithRecipient, (_reBd, _reRecipient))
+            );
+        }
+        _reDepth = 0;
+        if (ok) revert Reentered();
+    }
+
+    function _hookBeforeModifyIntent() internal override {
+        if (_reFacade == address(0) || _reMode < 4) return;
+        if (_reDepth != 0) return;
+        _reDepth = 1;
+        bool ok;
+        if (_reMode == RM_MODIFY_INTENT) {
+            (ok,) = _reFacade.call(abi.encodeCall(IMarketVaultModifyIntent.modifyLiquidities, (_reVi)));
+        } else if (_reMode == RM_TRY_INTENT) {
+            (ok,) = _reFacade.call(abi.encodeCall(IMarketVaultTryIntent.tryModifyLiquidities, (_reVi)));
+        } else if (_reMode == RM_TRY_RECIP_INTENT) {
+            (ok,) = _reFacade.call(
+                abi.encodeCall(IMarketVaultTryRecipIntent.tryModifyLiquiditiesWithRecipient, (_reVi, _reRecipient))
+            );
+        }
+        _reDepth = 0;
+        if (ok) revert Reentered();
+    }
 }
 
 /// @notice Concrete facade for tests (fills abstract routing hooks).
@@ -215,9 +334,21 @@ contract MarketVaultFacadeHarness is MarketVaultFacade {
     function _marketId() internal view override returns (bytes32) {
         return marketId_;
     }
+
+    /// @dev Exposes internal `_cancelLCCWithDeficit` for `SwapDeficit` emission coverage.
+    function exposed_cancelLCCWithDeficit(
+        PoolKey calldata poolKey,
+        ILCC lccToken,
+        uint256 amount,
+        address deficitRecipient
+    ) external returns (uint256 amountCancelled) {
+        return _cancelLCCWithDeficit(poolKey, lccToken, amount, deficitRecipient);
+    }
 }
 
 contract MarketVaultFacadeTest is Test {
+    using PoolIdLibrary for PoolKey;
+
     bytes32 internal constant MID = keccak256("facade-unit");
 
     FacadeUnitTestFactory internal factory;
@@ -503,6 +634,41 @@ contract MarketVaultFacadeTest is Test {
         facade.modifyLiquidities(toBalanceDelta(3, 0));
     }
 
+    /// @dev `tryModifyLiquidities` returns the canonical partial delta; strict `modifyLiquidities` reverts on mismatch.
+    function test_tryModifyLiquidities_returnsPartialWhile_modifyLiquidities_reverts() public {
+        factory.setBound(boundCaller, true);
+        canonical.setEchoModify(false);
+        BalanceDelta req = toBalanceDelta(3, 0);
+        BalanceDelta usedPartial = toBalanceDelta(1, 0);
+        canonical.setModifyReturn(usedPartial);
+
+        vm.prank(boundCaller);
+        BalanceDelta got = facade.tryModifyLiquidities(req);
+        assertEq(BalanceDelta.unwrap(got), BalanceDelta.unwrap(usedPartial));
+
+        vm.prank(boundCaller);
+        vm.expectRevert(Errors.InsufficientLiquidityToTake.selector);
+        facade.modifyLiquidities(req);
+    }
+
+    function test_tryModifyLiquidities_intent_returnsPartialWhile_modifyLiquidities_reverts() public {
+        factory.setBound(boundCaller, true);
+        canonical.setEchoModify(false);
+        VaultSettlementIntent memory vi = VaultSettlementIntent({
+            requestedDelta: toBalanceDelta(0, 5), creditBackedWithdrawal0: 0, creditBackedWithdrawal1: 0
+        });
+        BalanceDelta usedPartial = toBalanceDelta(0, 2);
+        canonical.setModifyReturn(usedPartial);
+
+        vm.prank(boundCaller);
+        BalanceDelta got = facade.tryModifyLiquidities(vi);
+        assertEq(BalanceDelta.unwrap(got), BalanceDelta.unwrap(usedPartial));
+
+        vm.prank(boundCaller);
+        vm.expectRevert(Errors.InsufficientLiquidityToTake.selector);
+        facade.modifyLiquidities(vi);
+    }
+
     function test_modifyLiquidities_VTSIntent_revertsOnMismatch() public {
         factory.setBound(boundCaller, true);
         canonical.setModifyReturn(toBalanceDelta(0, 1));
@@ -601,5 +767,194 @@ contract MarketVaultFacadeTest is Test {
         vm.expectRevert(Errors.InvalidEthSender.selector);
         (bool ok,) = address(facade).call{value: 1 wei}("");
         ok;
+    }
+
+    /// @dev Exercises `SwapDeficit` on the facade module path (not only via `CanonicalVault` unit tests).
+    function test_exposed_cancelLCCWithDeficit_partial_emitsSwapDeficit() public {
+        canonical.setCancelReturn(4);
+        address deficitRecipient = makeAddr("deficitRecipient");
+        PoolKey memory pk = PoolKey({
+            currency0: Currency.wrap(uAddr0),
+            currency1: Currency.wrap(uAddr1),
+            fee: 3000,
+            tickSpacing: 60,
+            hooks: IHooks(address(0x1234))
+        });
+        PoolId pid = pk.toId();
+
+        vm.expectEmit(true, true, true, true);
+        emit MarketVaultFacade.SwapDeficit(pid, lccAddr0, deficitRecipient, 6);
+
+        uint256 cancelled = facade.exposed_cancelLCCWithDeficit(pk, ILCC(lccAddr0), 10, deficitRecipient);
+        assertEq(cancelled, 4);
+    }
+
+    /// @dev Full cancel: no `SwapDeficit` (branch requires partial cancel + non-zero recipient).
+    function test_exposed_cancelLCCWithDeficit_fullCancel_nonZeroRecipient_doesNotEmitSwapDeficit() public {
+        canonical.setCancelReturn(10);
+        address deficitRecipient = makeAddr("deficitRecipientFull");
+        PoolKey memory pk = PoolKey({
+            currency0: Currency.wrap(uAddr0),
+            currency1: Currency.wrap(uAddr1),
+            fee: 3000,
+            tickSpacing: 60,
+            hooks: IHooks(address(0x4321))
+        });
+
+        vm.recordLogs();
+        uint256 cancelled = facade.exposed_cancelLCCWithDeficit(pk, ILCC(lccAddr0), 10, deficitRecipient);
+        assertEq(cancelled, 10);
+        assertEq(_countSwapDeficitLogs(address(facade)), 0);
+    }
+
+    /// @dev Partial cancel with zero recipient: must not emit `SwapDeficit` on the facade helper path.
+    function test_exposed_cancelLCCWithDeficit_partial_zeroRecipient_doesNotEmitSwapDeficit() public {
+        canonical.setCancelReturn(4);
+        PoolKey memory pk = PoolKey({
+            currency0: Currency.wrap(uAddr0),
+            currency1: Currency.wrap(uAddr1),
+            fee: 3000,
+            tickSpacing: 60,
+            hooks: IHooks(address(0x2222))
+        });
+
+        vm.recordLogs();
+        uint256 cancelled = facade.exposed_cancelLCCWithDeficit(pk, ILCC(lccAddr0), 10, address(0));
+        assertEq(cancelled, 4);
+        assertEq(_countSwapDeficitLogs(address(facade)), 0);
+    }
+
+    function _countSwapDeficitLogs(address emitter) internal returns (uint256 c) {
+        Vm.Log[] memory logs = vm.getRecordedLogs();
+        bytes32 topic0 = keccak256("SwapDeficit(bytes32,address,address,uint256)");
+        for (uint256 i = 0; i < logs.length; i++) {
+            if (logs[i].emitter == emitter && logs[i].topics.length > 0 && logs[i].topics[0] == topic0) {
+                unchecked {
+                    ++c;
+                }
+            }
+        }
+    }
+}
+
+/// @dev Kills Gambit mutants that drop `nonReentrant` on `MarketVaultFacade` liquidity entrypoints.
+contract MarketVaultFacadeReentrancyMutationTest is Test {
+    bytes32 internal constant MID_RE = keccak256("facade-reentrancy");
+
+    FacadeUnitTestFactory internal factory;
+    ReentrantCanonicalForFacade internal canonical;
+    MarketVaultFacadeHarness internal facade;
+    address internal lccAddr0;
+    address internal lccAddr1;
+    address internal uAddr0;
+    address internal uAddr1;
+
+    address internal boundCaller = makeAddr("boundCallerRe");
+    address internal vts = makeAddr("vtsRe");
+    address internal customRecipient = makeAddr("customRecipientRe");
+
+    function setUp() public {
+        factory = new FacadeUnitTestFactory();
+        canonical = new ReentrantCanonicalForFacade();
+        factory.setCanonicalVault(address(canonical));
+        factory.setVts(vts);
+        factory.setBound(address(canonical), true);
+
+        MockERC20 ua = new MockERC20("AR", "AR", 18);
+        MockERC20 ub = new MockERC20("BR", "BR", 18);
+        uAddr0 = address(ua);
+        uAddr1 = address(ub);
+        if (uAddr0 > uAddr1) (uAddr0, uAddr1) = (uAddr1, uAddr0);
+
+        MockLCC l0;
+        MockLCC l1;
+        for (uint256 i = 0; i < 64; i++) {
+            l0 = new MockLCC("L0R", "L0R", 18, uAddr0);
+            l1 = new MockLCC("L1R", "L1R", 18, uAddr1);
+            if (address(l0) < address(l1)) {
+                lccAddr0 = address(l0);
+                lccAddr1 = address(l1);
+                facade = new MarketVaultFacadeHarness(
+                    address(factory),
+                    Currency.wrap(uAddr0),
+                    Currency.wrap(uAddr1),
+                    ILCC(lccAddr0),
+                    ILCC(lccAddr1),
+                    MID_RE
+                );
+                break;
+            }
+        }
+        require(address(facade) != address(0), "facade deploy");
+
+        canonical.setDryReturn(toBalanceDelta(0, 0));
+        canonical.setModifyReturn(toBalanceDelta(0, 0));
+        canonical.setEchoModify(true);
+    }
+
+    function _emptyIntent() internal pure returns (VaultSettlementIntent memory vi) {
+        vi = VaultSettlementIntent({
+            requestedDelta: toBalanceDelta(0, 0), creditBackedWithdrawal0: 0, creditBackedWithdrawal1: 0
+        });
+    }
+
+    function test_modifyLiquidities_revertsIfNonReentrantRemoved_viaCanonicalReentry() public {
+        factory.setBound(boundCaller, true);
+        BalanceDelta bd = toBalanceDelta(3, -2);
+        canonical.setReentry(address(facade), canonical.RM_MODIFY_BD(), bd, _emptyIntent(), address(0));
+        vm.prank(boundCaller);
+        facade.modifyLiquidities(bd);
+    }
+
+    function test_modifyLiquidities_intent_revertsIfNonReentrantRemoved_viaCanonicalReentry() public {
+        factory.setBound(boundCaller, true);
+        VaultSettlementIntent memory vi = VaultSettlementIntent({
+            requestedDelta: toBalanceDelta(1, -1), creditBackedWithdrawal0: 0, creditBackedWithdrawal1: 0
+        });
+        canonical.setReentry(address(facade), canonical.RM_MODIFY_INTENT(), toBalanceDelta(0, 0), vi, address(0));
+        vm.prank(boundCaller);
+        facade.modifyLiquidities(vi);
+    }
+
+    function test_tryModifyLiquidities_revertsIfNonReentrantRemoved_viaCanonicalReentry() public {
+        factory.setBound(boundCaller, true);
+        BalanceDelta bd = toBalanceDelta(-5, 1);
+        canonical.setReentry(address(facade), canonical.RM_TRY_BD(), bd, _emptyIntent(), address(0));
+        vm.prank(boundCaller);
+        BalanceDelta r = facade.tryModifyLiquidities(bd);
+        assertEq(BalanceDelta.unwrap(r), BalanceDelta.unwrap(bd));
+    }
+
+    function test_tryModifyLiquidities_intent_revertsIfNonReentrantRemoved_viaCanonicalReentry() public {
+        factory.setBound(boundCaller, true);
+        VaultSettlementIntent memory vi = VaultSettlementIntent({
+            requestedDelta: toBalanceDelta(2, 2), creditBackedWithdrawal0: 0, creditBackedWithdrawal1: 0
+        });
+        canonical.setReentry(address(facade), canonical.RM_TRY_INTENT(), toBalanceDelta(0, 0), vi, address(0));
+        vm.prank(boundCaller);
+        BalanceDelta r = facade.tryModifyLiquidities(vi);
+        assertEq(BalanceDelta.unwrap(r), BalanceDelta.unwrap(vi.requestedDelta));
+    }
+
+    function test_tryModifyLiquiditiesWithRecipient_revertsIfNonReentrantRemoved_viaCanonicalReentry() public {
+        factory.setBound(boundCaller, true);
+        BalanceDelta bd = toBalanceDelta(0, 7);
+        canonical.setReentry(address(facade), canonical.RM_TRY_RECIP_BD(), bd, _emptyIntent(), customRecipient);
+        vm.prank(boundCaller);
+        BalanceDelta r = facade.tryModifyLiquiditiesWithRecipient(bd, customRecipient);
+        assertEq(BalanceDelta.unwrap(r), BalanceDelta.unwrap(bd));
+    }
+
+    function test_tryModifyLiquiditiesWithRecipient_intent_revertsIfNonReentrantRemoved_viaCanonicalReentry() public {
+        factory.setBound(boundCaller, true);
+        VaultSettlementIntent memory vi = VaultSettlementIntent({
+            requestedDelta: toBalanceDelta(-1, 4), creditBackedWithdrawal0: 0, creditBackedWithdrawal1: 0
+        });
+        canonical.setReentry(
+            address(facade), canonical.RM_TRY_RECIP_INTENT(), toBalanceDelta(0, 0), vi, customRecipient
+        );
+        vm.prank(boundCaller);
+        BalanceDelta r = facade.tryModifyLiquiditiesWithRecipient(vi, customRecipient);
+        assertEq(BalanceDelta.unwrap(r), BalanceDelta.unwrap(vi.requestedDelta));
     }
 }
