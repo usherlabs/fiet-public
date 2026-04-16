@@ -975,3 +975,9 @@ File: `contracts/evm/src/MMPositionActionsImpl.sol`
      }
  }
 ```
+
+---
+
+# Resolution (implemented)
+
+Min-out on `DECREASE_LIQUIDITY` / `BURN_POSITION` now validates against the **immediate non-fee LCC** amount forwarded to the queue custodian (same basis as `PositionManagerImpl._handleLccBalanceIncrease`), computed as `LiquidityUtils.forwardedNonFeeLccAmount(inc, feesAccrued, hookDelta)` per leg **before** `_afterModifyLiquidity` clears hook deltas. VTS queue / planned-cancel principal remains **`callerDelta - feesAccrued`** (`VTSPositionMMOpsLib`); only the user-facing MMPM slippage floor follows the post-`feeAdj` split. See `LiquidityUtils.forwardedNonFeeLccAmount`, `PositionManagerImpl._mmForwardedNonFeeForMinOut`, and third return of `_modifySyntheticLiquidity`.

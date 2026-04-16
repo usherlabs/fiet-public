@@ -17,6 +17,11 @@ This note captures the intended role model for MM commitments after the owner-au
 
 The important consequence is that the protocol does **not** collapse these into one identity. Some powers are proof-gated, some are NFT-gated, some are locker-gated, and some are relayer-gated.
 
+### Account shape: advancer is not EOA-classified on-chain
+
+- **`mmState.advancer` is account-shape agnostic** for whether a liquidity signal is accepted: there is no protocol-wide requirement that the advancer be a plain EOA or a canonical EIP-7702 delegation stub. Inclusion in the signed Merkle state and `ISignalVerifier` proof checks are what matter.
+- **Relay caveat**: `VRLSignalManager.verifyLiquiditySignalRelayed` still authenticates with **`ECDSA.recover` == `sender`** on the EIP-712 relay digest. That path is therefore naturally limited to signers that can satisfy ECDSA recovery to `sender` (typically EOAs or EIP-7702-delegated accounts in practice). It does **not** implement ERC-1271. Contract advancers that cannot use that relay shape should use the direct `verifyLiquiditySignal` path or a **factory-bound** orchestrator caller that submits on behalf of the advancer (see `VTSCommitLib._resolveRenewProofPrincipal` / `_resolveFreshCommitProofPrincipal`).
+
 ## Core Invariants
 
 ### 1. Commit through `MMPM` always mints the NFT to the locker

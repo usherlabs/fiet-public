@@ -2,12 +2,38 @@
 pragma solidity ^0.8.26;
 
 import {LiquidityHubTestBase} from "./base/LiquidityHubTestBase.sol";
+import {LiquidityHub} from "../src/LiquidityHub.sol";
 import {IMarketFactory} from "../src/interfaces/IMarketFactory.sol";
 import {ILCC} from "../src/interfaces/ILCC.sol";
+import {IEndpointUnwrapAdmission} from "../src/interfaces/IEndpointUnwrapAdmission.sol";
 import {Errors} from "../src/libraries/Errors.sol";
 import {Bounds} from "../src/libraries/Bounds.sol";
 import {Vm} from "forge-std/Vm.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+
+/// @notice Configurable `IEndpointUnwrapAdmission` for Hub admission-credit tests.
+contract MockEndpointUnwrapAdmission is IEndpointUnwrapAdmission {
+    uint256 private _admissionCredit;
+
+    function setAdmissionCredit(uint256 credit) external {
+        _admissionCredit = credit;
+    }
+
+    function unwrapAdmissionCredit(address, address) external view returns (uint256) {
+        return _admissionCredit;
+    }
+
+    function callUnwrapTo(LiquidityHub hub, address lcc, address to, address queueTo, uint256 amount) external {
+        hub.unwrapTo(lcc, to, queueTo, amount);
+    }
+}
+
+/// @notice BOUND_ENDPOINT caller with no `unwrapAdmissionCredit` — Hub staticcall falls back to zero credit.
+contract EndpointCallerSansAdmission {
+    function callUnwrapTo(LiquidityHub hub, address lcc, address to, address queueTo, uint256 amount) external {
+        hub.unwrapTo(lcc, to, queueTo, amount);
+    }
+}
 
 /// @dev Contract with no `ICanonicalVault.marketFactory()` — Hub `receive` must reject.
 contract MockNonCanonicalEthSender {
@@ -1144,6 +1170,79 @@ contract LiquidityHubTest is LiquidityHubTestBase {
         assertEq(liquidityHub.totalQueued(lccToken1), 0, "totalQueued should be decremented");
         assertEq(liquidityHub.queueOfUnderlying(lccToken1), 0, "underlying queue should be decremented");
         assertEq(ILCC(lccToken1).balanceOf(address(liquidityHub)), hubLccBefore - queued, "Hub-held LCC burned");
+    }
+
+    /// @dev Hub must cap endpoint-reported admission credit by `settleQueue[lcc][queueTo]` (not trust `type(uint256).max`).
+    function test_unwrapTo_endpointAdmissionCredit_inflatedReportedCredit_stillAllowsUnwrapUpToLiveBalance() public {
+        uint256 queuedAmt = 15;
+        uint256 endpointBalance = 10;
+        uint256 unwrapAmt = 5;
+
+        _createSettlementQueueEntry(lccToken1, user2, queuedAmt);
+        assertEq(liquidityHub.settleQueue(lccToken1, user2), queuedAmt);
+
+        MockEndpointUnwrapAdmission endpoint = new MockEndpointUnwrapAdmission();
+        vm.prank(proxyHook);
+        liquidityHub.issue(lccToken1, address(endpoint), endpointBalance);
+
+        _setBoundLevel(address(endpoint), Bounds.BOUND_ENDPOINT);
+        endpoint.setAdmissionCredit(type(uint256).max);
+
+        underlyingAsset1.mint(address(liquidityHub), unwrapAmt);
+        vm.prank(proxyHook);
+        liquidityHub.confirmTake(lccToken1, unwrapAmt, false);
+
+        vm.mockCall(
+            factory,
+            abi.encodeWithSelector(IMarketFactory.useMarketLiquidity.selector, lccToken1, marketId1, unwrapAmt),
+            abi.encode(unwrapAmt)
+        );
+
+        uint256 toBefore = underlyingAsset1.balanceOf(user3);
+        vm.prank(address(endpoint));
+        endpoint.callUnwrapTo(liquidityHub, lccToken1, user3, user2, unwrapAmt);
+
+        assertEq(underlyingAsset1.balanceOf(user3) - toBefore, unwrapAmt, "payout should succeed when credit is capped");
+        assertEq(ILCC(lccToken1).balanceOf(address(endpoint)), endpointBalance - unwrapAmt);
+    }
+
+    /// @dev Without admission credit, `fromBalance < settleQueue` implies zero headroom even if endpoint lies off-chain.
+    function test_unwrapTo_endpointAdmissionCredit_zeroCredit_revertsWhenLiveBalanceBelowQueue() public {
+        uint256 queuedAmt = 15;
+        uint256 endpointBalance = 10;
+
+        _createSettlementQueueEntry(lccToken1, user2, queuedAmt);
+
+        MockEndpointUnwrapAdmission endpoint = new MockEndpointUnwrapAdmission();
+        vm.prank(proxyHook);
+        liquidityHub.issue(lccToken1, address(endpoint), endpointBalance);
+
+        _setBoundLevel(address(endpoint), Bounds.BOUND_ENDPOINT);
+        endpoint.setAdmissionCredit(0);
+
+        vm.prank(address(endpoint));
+        vm.expectRevert(abi.encodeWithSelector(Errors.InvalidAmount.selector, uint256(5), uint256(0)));
+        endpoint.callUnwrapTo(liquidityHub, lccToken1, user3, user2, 5);
+    }
+
+    /// @dev `LiquidityHub` staticcall to `unwrapAdmissionCredit` is best-effort: no interface => zero credit.
+    function test_unwrapTo_endpointAdmissionCredit_staticcallNoInterface_zeroCredit_revertsWhenLiveBalanceBelowQueue()
+        public
+    {
+        uint256 queuedAmt = 15;
+        uint256 endpointBalance = 10;
+
+        _createSettlementQueueEntry(lccToken1, user2, queuedAmt);
+
+        EndpointCallerSansAdmission endpoint = new EndpointCallerSansAdmission();
+        vm.prank(proxyHook);
+        liquidityHub.issue(lccToken1, address(endpoint), endpointBalance);
+
+        _setBoundLevel(address(endpoint), Bounds.BOUND_ENDPOINT);
+
+        vm.prank(address(endpoint));
+        vm.expectRevert(abi.encodeWithSelector(Errors.InvalidAmount.selector, uint256(1), uint256(0)));
+        endpoint.callUnwrapTo(liquidityHub, lccToken1, user3, user2, 1);
     }
 }
 

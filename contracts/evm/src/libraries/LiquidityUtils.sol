@@ -266,4 +266,21 @@ library LiquidityUtils {
     function isZeroDelta(BalanceDelta delta) internal pure returns (bool) {
         return BalanceDelta.unwrap(delta) == BalanceDelta.unwrap(BalanceDeltaLibrary.ZERO_DELTA);
     }
+
+    /**
+     * @notice Non-fee LCC amount forwarded to the queue custodian after netting informational fees by hook `feeAdj`.
+     * @dev Matches `PositionManagerImpl._handleLccBalanceIncrease`: `netFee = max(feesAccrued - hookDelta, 0)`,
+     *      `nonFee = max(inc - netFee, 0)`, where `hookDelta` is `PoolManager` transient delta on the hook address
+     *      (CoreHook) for that currency. VTS queue/cancel principal remains hook-time `callerDelta - feesAccrued`;
+     *      this quantity is the MMPM user-facing min-out basis for decrease/burn.
+     */
+    function forwardedNonFeeLccAmount(uint256 inc, int128 feesAccruedAmount, int256 hookDelta)
+        internal
+        pure
+        returns (uint256 nonFee)
+    {
+        int256 netFeei = int256(feesAccruedAmount) - hookDelta;
+        uint256 fee = netFeei > 0 ? uint256(netFeei) : 0;
+        nonFee = inc > fee ? inc - fee : 0;
+    }
 }

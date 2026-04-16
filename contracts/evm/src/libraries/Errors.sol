@@ -50,9 +50,6 @@ library Errors {
     /// @notice Thrown when an invalid address is provided (zero address or invalid for context)
     error InvalidAddress(address self);
 
-    /// @notice Thrown when `mmState.advancer` is not a supported shape (plain EOA or canonical EIP-7702 delegation)
-    error InvalidAdvancer(address advancer);
-
     /// @notice Thrown when an invalid market is provided
     error InvalidMarket(PoolKey poolKey);
 

@@ -81,7 +81,8 @@ abstract contract VTSOrchestratorFixture is MarketTestBase, MarketMakerTestBase 
     Currency public lccCurrency0;
     Currency public lccCurrency1;
 
-    address public testUser = makeAddr("testUser");
+    /// @dev Named without a `test*` prefix so Foundry does not treat the auto-getter as a test function.
+    address internal fixtureTestUser = makeAddr("fixtureTestUser");
     address public guarantor = makeAddr("guarantor");
 
     function setUp() public virtual {

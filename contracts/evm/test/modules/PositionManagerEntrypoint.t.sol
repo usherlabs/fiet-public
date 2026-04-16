@@ -96,6 +96,52 @@ contract PositionManagerEntrypointHarness is PositionManagerEntrypoint {
         (ok,) = address(this).delegatecall(abi.encodeCall(this.exposeBeforeBatch, ()));
         require(ok);
     }
+
+    /// @dev Three inner payable batches under one outer `msg.value` — native credit must apply on the first leg only.
+    function simulateMulticall_threeBatches() external payable {
+        if (msg.value != 1 ether) revert();
+        (bool ok,) = address(this).delegatecall(abi.encodeCall(this.exposeBeforeBatch, ()));
+        require(ok);
+        (ok,) = address(this).delegatecall(abi.encodeCall(this.exposeAfterBatch, ()));
+        require(ok);
+        (ok,) = address(this).delegatecall(abi.encodeCall(this.exposeBeforeBatch, ()));
+        require(ok);
+        (ok,) = address(this).delegatecall(abi.encodeCall(this.exposeAfterBatch, ()));
+        require(ok);
+        (ok,) = address(this).delegatecall(abi.encodeCall(this.exposeBeforeBatch, ()));
+        require(ok);
+    }
+}
+
+/// @dev Two separate external calls in one tx (not `delegatecall`); second call attaches fresh ETH.
+contract TwoTopLevelPayableBatches {
+    function run(PositionManagerEntrypointHarness h) external payable {
+        h.exposeBeforeBatch{value: 0}();
+        h.exposeAfterBatch();
+        h.exposeBeforeBatch{value: 1 ether}();
+    }
+}
+
+/// @dev Two funded top-level batches in one tx (e.g. 0.5 + 0.5 ETH) — each fresh attachment credits once.
+contract TwoTopLevelTwoFundedBatches {
+    function run(PositionManagerEntrypointHarness h) external payable {
+        if (msg.value != 1 ether) revert();
+        h.exposeBeforeBatch{value: 0.5 ether}();
+        h.exposeAfterBatch();
+        h.exposeBeforeBatch{value: 0.5 ether}();
+        h.exposeAfterBatch();
+    }
+}
+
+/// @dev Funded first batch, then zero-value second batch — second leg must not call `creditExact` again.
+contract FundedThenZeroTopLevel {
+    function run(PositionManagerEntrypointHarness h) external payable {
+        if (msg.value != 1 ether) revert();
+        h.exposeBeforeBatch{value: 1 ether}();
+        h.exposeAfterBatch();
+        h.exposeBeforeBatch{value: 0}();
+        h.exposeAfterBatch();
+    }
 }
 
 contract PositionManagerEntrypointTest is Test {
@@ -151,6 +197,94 @@ contract PositionManagerEntrypointTest is Test {
         h.exposeBeforeBatch{value: 1}();
     }
 
+    /// @notice Single payable batch in an isolated tx: full `msg.value` is credited (no prior snapshot).
+    function test_singleBatch_singlePayableCall_creditsFullMsgValue() public {
+        vm.mockCall(
+            orch,
+            abi.encodeWithSignature(
+                "creditExact(address,address,address,uint256)", factory, address(0), locker, 2 ether
+            ),
+            abi.encode(int128(int256(2 ether)))
+        );
+        vm.expectCall(
+            orch,
+            abi.encodeWithSignature(
+                "creditExact(address,address,address,uint256)", factory, address(0), locker, 2 ether
+            )
+        );
+        h.exposeBeforeBatch{value: 2 ether}();
+    }
+
+    /// @notice Single tx, single batch, zero `msg.value`: no credit (ambient-only balance unchanged for credit purposes).
+    function test_singleBatch_zeroMsgValue_noCreditEvenWithAmbientEth() public {
+        vm.deal(address(h), 3 ether);
+        // No creditExact
+        h.exposeBeforeBatch{value: 0}();
+    }
+
+    /// @notice Distinct payable top-level calls in one tx must each credit new ETH (not blocked by tx-scoped boolean guard).
+    function test_balanceDelta_twoTopLevelCalls_creditsSecondFundedOnly() public {
+        vm.mockCall(
+            orch,
+            abi.encodeWithSignature(
+                "creditExact(address,address,address,uint256)", factory, address(0), locker, 1 ether
+            ),
+            abi.encode(int128(int256(1 ether)))
+        );
+        vm.mockCall(orch, abi.encodeWithSignature("assertNonZeroDeltas(address)", factory), abi.encode());
+        vm.expectCall(
+            orch,
+            abi.encodeWithSignature(
+                "creditExact(address,address,address,uint256)", factory, address(0), locker, 1 ether
+            ),
+            1
+        );
+        vm.expectCall(orch, abi.encodeWithSignature("assertNonZeroDeltas(address)", factory), 1);
+        TwoTopLevelPayableBatches router = new TwoTopLevelPayableBatches();
+        router.run{value: 1 ether}(h);
+    }
+
+    /// @notice Two funded top-level batches in one tx: each 0.5 ETH attachment credits separately (1 ETH total credit).
+    function test_balanceDelta_twoTopLevelFundedBatches_eachCreditsHalf() public {
+        vm.mockCall(
+            orch,
+            abi.encodeWithSignature(
+                "creditExact(address,address,address,uint256)", factory, address(0), locker, 0.5 ether
+            ),
+            abi.encode(int128(int256(0.5 ether)))
+        );
+        vm.mockCall(orch, abi.encodeWithSignature("assertNonZeroDeltas(address)", factory), abi.encode());
+        vm.expectCall(
+            orch,
+            abi.encodeWithSignature(
+                "creditExact(address,address,address,uint256)", factory, address(0), locker, 0.5 ether
+            ),
+            2
+        );
+        vm.expectCall(orch, abi.encodeWithSignature("assertNonZeroDeltas(address)", factory), 2);
+        TwoTopLevelTwoFundedBatches router = new TwoTopLevelTwoFundedBatches();
+        router.run{value: 1 ether}(h);
+    }
+
+    /// @notice Ambient ETH on the harness must not be credited; only `msg.value` for this call is.
+    function test_balanceDelta_ambientPlusMsgValue_creditsOnlyMsgValue() public {
+        vm.deal(address(h), 5 ether);
+        vm.mockCall(
+            orch,
+            abi.encodeWithSignature(
+                "creditExact(address,address,address,uint256)", factory, address(0), locker, 1 ether
+            ),
+            abi.encode(int128(int256(1 ether)))
+        );
+        vm.expectCall(
+            orch,
+            abi.encodeWithSignature(
+                "creditExact(address,address,address,uint256)", factory, address(0), locker, 1 ether
+            )
+        );
+        h.exposeBeforeBatch{value: 1 ether}();
+    }
+
     /// @notice Regression: `Multicall_v4`-style delegatecalls must not each credit the same outer `msg.value`.
     function test_multicallDelegatecall_twoBatches_creditExactCalledOnce() public {
         vm.mockCall(
@@ -170,6 +304,49 @@ contract PositionManagerEntrypointTest is Test {
         );
         vm.expectCall(orch, abi.encodeWithSignature("assertNonZeroDeltas(address)", factory), 1);
         h.simulateMulticall_twoBatches{value: 1 ether}();
+    }
+
+    /// @notice Three inner delegatecall batches under one outer ETH: `creditExact` once for that ETH.
+    function test_multicallDelegatecall_threeBatches_creditExactCalledOnce() public {
+        vm.mockCall(
+            orch,
+            abi.encodeWithSignature(
+                "creditExact(address,address,address,uint256)", factory, address(0), locker, 1 ether
+            ),
+            abi.encode(int128(int256(1 ether)))
+        );
+        vm.mockCall(orch, abi.encodeWithSignature("assertNonZeroDeltas(address)", factory), abi.encode());
+        vm.expectCall(
+            orch,
+            abi.encodeWithSignature(
+                "creditExact(address,address,address,uint256)", factory, address(0), locker, 1 ether
+            ),
+            1
+        );
+        vm.expectCall(orch, abi.encodeWithSignature("assertNonZeroDeltas(address)", factory), 2);
+        h.simulateMulticall_threeBatches{value: 1 ether}();
+    }
+
+    /// @notice Asymmetry: funded batch then zero-value batch — only one `creditExact` for the funded attachment.
+    function test_balanceDelta_fundedThenZeroTopLevel_secondBatchDoesNotCreditAgain() public {
+        vm.mockCall(
+            orch,
+            abi.encodeWithSignature(
+                "creditExact(address,address,address,uint256)", factory, address(0), locker, 1 ether
+            ),
+            abi.encode(int128(int256(1 ether)))
+        );
+        vm.mockCall(orch, abi.encodeWithSignature("assertNonZeroDeltas(address)", factory), abi.encode());
+        vm.expectCall(
+            orch,
+            abi.encodeWithSignature(
+                "creditExact(address,address,address,uint256)", factory, address(0), locker, 1 ether
+            ),
+            1
+        );
+        vm.expectCall(orch, abi.encodeWithSignature("assertNonZeroDeltas(address)", factory), 2);
+        FundedThenZeroTopLevel router = new FundedThenZeroTopLevel();
+        router.run{value: 1 ether}(h);
     }
 
     function test_afterBatch_callsAssertNonZeroDeltas() public {

@@ -24,6 +24,11 @@ When a decrease occurs, routing is a **two-step** story (see **SETTLE-03** in `c
 
 The queue should absorb everything that can be backed by same-lane **principal returned on this decrease path**. Fees are deliberately excluded from queueing because fee management is handled separately via the MMPM balance sync path.
 
+### Distinction: VTS queue principal vs MMPM decrease/burn min-out
+
+- **VTS / cancel-with-queue principal** for routing caps remains hook-time **`callerDelta - feesAccrued`** (pool principal for the modify), unchanged by materialised `feeAdj` in `processMMOperations` — see `VTSPositionMMOpsLib` and regression tests (e.g. Scan 21 / `SETTLE-03`).
+- **User-facing `amount0Min` / `amount1Min`** on `DECREASE_LIQUIDITY` and `BURN_POSITION` is a floor on the **immediate non-fee LCC** amount forwarded to the queue custodian after classifying fee vs principal using **`feeAdj`** (hook delta), i.e. the same split as `PositionManagerImpl._handleLccBalanceIncrease` / `LiquidityUtils.forwardedNonFeeLccAmount`. Do not conflate the two formulas in product docs or integrator expectations.
+
 ---
 
 ## 2. How the routing split is implemented today

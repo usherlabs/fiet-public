@@ -233,9 +233,17 @@ being an informal “should”.
     the endpoint after `unwrapTo` must not sit on `MMPositionManager` as unscoped router residue (**DELTA-02**). After
     each `unwrapTo`, `MMPositionManager` measures the incremental `settleQueue` delta for `queueTo` and forwards that
     amount of LCC to `MMQueueCustodian` under beneficiary-scoped storage (`tokenId == 0` utility bucket), matching the
-    MM decrease / `COLLECT_AVAILABLE_LIQUIDITY` model.
+    MM decrease / `COLLECT_AVAILABLE_LIQUIDITY` model. For `payerIsUser` flows, that delta must be measured from the
+    queue state **after** pulling LCC into the endpoint (`transferFrom`), because non-protocol → protocol transfer can
+    annul prior queue entries (**LCC-02**) before `unwrapTo` runs; the deltas path measures from immediately before
+    `unwrapTo` only (no LCC transfer annul in between).
   - Any additional `BOUND_ENDPOINT` integration that cannot preserve this coupling must not use `unwrapTo` without
     revisiting HUB-02 netting assumptions.
+  - **Admission vs custody**: After forwarding, the endpoint’s live LCC balance no longer includes custodied
+    queue-backing. `LiquidityHub` therefore adds optional capped credit from `IEndpointUnwrapAdmission` (implemented by
+    `MMPositionManager` via `MMQueueCustodian.queued(0, lcc, beneficiary)`), bounded by `settleQueue[lcc][queueTo]`, so
+    fresh beneficiary-linked principal can still pass `_unwrap` admission without weakening HUB-02 anti-double-queue
+    semantics.
 - **Rationale**: Splitting immediate payout recipient from queue owner is a trusted endpoint pattern (for example
   `MMPositionManager` after it has consumed the beneficiary’s LCC or delta credit). Exposing that split to arbitrary EOAs
   allowed repeated queue inflation against unchanged holder balance.
@@ -355,14 +363,17 @@ being an informal “should”.
   - `mmState.owner` is the durable identity for the market maker's signalled state and is expected to correspond to the
     operator's high-security custody / approval authority.
   - `mmState.owner` may therefore be a smart contract / hardened custody wallet; it is **not** required to be an EOA.
-  - `mmState.advancer` is the lower-friction operational key used to submit / renew VRL-backed MM state and to initiate
-    ordinary MM position operations through `MMPositionManager`.
-  - `mmState.advancer` must be an address compatible with **relayed** VRL authorisation using plain ECDSA
-    (`ECDSA.recover(...) == sender` on EIP-712 relay payloads in `VRLSignalManager`): either a **plain EOA**
-    (`code.length == 0`) or a **canonical EIP-7702 delegated EOA** whose runtime code is exactly `0xef0100 || delegate`
-    (23 bytes) with a **non-zero** delegate (see OpenZeppelin `EIP7702Utils.fetchDelegate`). Generic contract wallets,
-    generic bytecode-bearing accounts, and **ERC-1271 / `SignatureChecker` advancers are explicitly unsupported** as
-    advancers (the relay path does not authenticate them).
+  - `mmState.advancer` is the lower-friction operational identity used to renew VRL-backed MM state (renew proof
+    principal) and, on-chain, is the required **locker** for ordinary non-seizing MM operations (`locker == advancer`).
+  - **`mmState.advancer` is account-shape agnostic**: the protocol does not require a plain EOA or any particular bytecode
+    at `advancer`. Proof inclusion and `ISignalVerifier` govern whether a signal is accepted; the advancer address is part
+    of the signed Merkle leaf and stored state, not a runtime EOA/7702 classification.
+  - **Relay caveat**: `VRLSignalManager.verifyLiquiditySignalRelayed` still authenticates relay payloads with
+    **`ECDSA.recover(...) == sender`** on the EIP-712 digest. That path is therefore usable only by accounts that can
+    satisfy ECDSA recovery to `sender` (typically EOAs or EIP-7702-delegated accounts that present as EOAs for signing).
+    It does **not** implement ERC-1271 / `SignatureChecker`. Contract-shaped advancers may still verify via the direct
+    submitter path (`verifyLiquiditySignal`) or through a **factory-bound** orchestrator caller that submits on behalf
+    of the advancer per `VTSCommitLib._resolveRenewProofPrincipal`.
   - These roles are intentionally **not** interchangeable, but they are expected to remain under the control of the
     same real-world operator / coordinated trust domain.
 - **Practical consequence**:
@@ -377,11 +388,11 @@ being an informal “should”.
     - hot-path MM execution / proof-submission authority (`mmState.advancer`).
   - This lets operators keep asset custody and approval flows on a more secure key while using a lighter operational key
     for maker actions and prover-facing workflows.
-  - Relayed signal authorisation remains **ECDSA-only** (`recover` on the typed-data digest); admitting EIP-7702
-    delegated EOAs does **not** broaden relay auth to ERC-1271 or `SignatureChecker` verifiers.
+  - Relayed signal authorisation remains **ECDSA-only** (`recover` on the typed-data digest); it does not broaden relay
+    auth to ERC-1271 or `SignatureChecker` verifiers.
 - **Expressed by**:
-  - `src/VRLSignalManager.sol::_assertSupportedAdvancer` rejects `mmState.advancer` accounts that are neither plain EOAs
-    nor canonical EIP-7702 delegation stubs, while leaving `mmState.owner` unrestricted.
+  - `src/VRLSignalManager.sol` verifies signals via `ISignalVerifier` and nonce/expiry checks; it does not classify
+    `mmState.advancer` by bytecode.
   - `src/libraries/VTSCommitLib.sol::_renewSignalInternal` preserves `mmState.owner` across renewals and authorises
     renewals via `mmState.advancer`.
   - `src/types/Commit.sol` stores `authorisedRelayer`, set at initial commit creation from the `VTSOrchestrator` caller
@@ -610,6 +621,9 @@ being an informal “should”.
   - Coupled to **DELTA-01**: transient MMPM underlying deltas must be batch-clearable; only the vault-immediate slice is
     booked as positive owner underlying delta. Any shortfall that cannot be Hub-queued (principal-capped) and cannot be
     paid from the vault in the same unlock **stays in live source `settled`**, not on `OwnerCurrencyDelta`.
+  - **User min-out vs routing principal**: `DECREASE_LIQUIDITY` / `BURN_POSITION` `amountMin` floors the **immediate
+    non-fee LCC** forwarded to the queue custodian after `feeAdj` netting (`LiquidityUtils.forwardedNonFeeLccAmount`), not
+    the same scalar as hook-time pool principal `callerDelta - feesAccrued` used for cancel/queue caps in VTS.
   - **Source-side decrement (routed amount only)**: `_applySettlementClampFromExcess` removes
     `settleableDelta + queuedDelta` from source `pa.settled` / pool `totalSettled` — the value actually routed to the
     vault path or queue in this step — not the full `requiredSettlementDelta` when part of it must remain deferred in
@@ -729,6 +743,11 @@ being an informal “should”.
     non-zero.
 - **Practical implication**: Credits do **not** persist across unlock sessions; they are transient and must be consumed
   (eg via `TAKE`, `SYNC`, unwrap flows) within the same batch.
+- **Native ETH (`msg.value`) on payable batches**: `PositionManagerEntrypoint._beforeBatch` credits the locker using
+  **balance-delta** accounting (transient last-seen `address(this).balance` updated in `_afterBatch`). That prevents
+  `Multicall_v4` inner `delegatecall` batches from each re-crediting the same outer `msg.value`, while still allowing a
+  later **distinct** payable call in the same transaction to credit newly attached ETH. Ambient ETH already on
+  `MMPositionManager` before the batch is not treated as user credit (baseline uses `balance - msg.value` on first touch).
 
 ### DELTA-01A: Produced accounting must stay paired with explicit reserve export and credit-backed withdrawal consumption
 

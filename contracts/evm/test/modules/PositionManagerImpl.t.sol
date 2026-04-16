@@ -312,7 +312,7 @@ contract PositionManagerImplHarness is PositionManagerQueueCustodian, PositionMa
         ModifyLiquidityParams memory params,
         uint256 tokenId,
         bytes memory hookData
-    ) external returns (BalanceDelta, BalanceDelta) {
+    ) external returns (BalanceDelta, BalanceDelta, BalanceDelta) {
         return _modifySyntheticLiquidity(key, params, tokenId, hookData);
     }
 
@@ -656,6 +656,43 @@ contract PositionManagerImplTest is Test {
         assertEq(poolManager.settleCount(), 1);
         // take path for delta1>0 does one take on the pool manager.
         assertEq(poolManager.takeCount(), 1);
+    }
+
+    /// @notice Third return matches `LiquidityUtils.forwardedNonFeeLccAmount` for LCC legs (MM decrease/burn min-out basis).
+    function test_modifySyntheticLiquidity_returnsMmForwardedNonFeeBasis_afterHookDelta() public {
+        PoolKey memory key = _defaultKey();
+        hub.setIsLCC(lcc0, true);
+        hub.setIsLCC(lcc1, true);
+
+        ModifyLiquidityParams memory params = ModifyLiquidityParams({
+            tickLower: -60, tickUpper: 60, liquidityDelta: int128(-10), salt: bytes32(uint256(888))
+        });
+        _seedPositionLiquidity(key, params.tickLower, params.tickUpper, params.salt, 100);
+
+        BalanceDelta callerDelta = toBalanceDelta(int128(500), int128(0));
+        BalanceDelta feesAccrued = toBalanceDelta(int128(200), int128(0));
+        poolManager.setModifyLiquidityReturn(callerDelta, feesAccrued);
+        // Positive hook delta on currency0: netFee = max(200 - 10, 0) = 190 => forwarded = 500 - 190 = 310.
+        poolManager.setHookCurrencyDelta(coreHookAddr, Currency.wrap(lcc0), int256(10));
+
+        MockERC20 token0 = new MockERC20();
+        vm.etch(lcc0, address(token0).code);
+        MockERC20(lcc0).mint(address(h), 1_000_000);
+
+        vm.mockCall(
+            orch, abi.encodeWithSignature("getFullCredit(address,address)", lcc0, locker), abi.encode(uint256(0))
+        );
+        vm.expectCall(
+            orch,
+            abi.encodeWithSignature("sync(address,address,address,address)", address(factory), lcc0, address(h), locker)
+        );
+
+        vm.expectEmit(false, false, false, true, address(factory));
+        emit MockMarketFactory.AfterModifyLiquidityCalled(PoolId.unwrap(key.toId()));
+
+        (,, BalanceDelta mmBasis) = h.exposeModifySyntheticLiquidity(key, params, 0, "");
+        assertEq(mmBasis.amount0(), int128(310));
+        assertEq(mmBasis.amount1(), int128(0));
     }
 }
 

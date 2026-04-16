@@ -175,8 +175,11 @@ abstract contract PositionManagerImpl is PositionManagerBase, ImmutableState {
         // So: netFee = max(feesAccrued - feeAdj, 0)
         uint256 inc = balanceAfter - balanceBefore;
         int256 hookDelta = poolManager.currencyDelta(address(key.hooks), currency);
-        int256 netFeei = int256(feesAccruedAmount) - hookDelta;
-        uint256 fee = netFeei > 0 ? uint256(netFeei) : 0;
+        uint256 fee;
+        {
+            int256 netFeei = int256(feesAccruedAmount) - hookDelta;
+            fee = netFeei > 0 ? uint256(netFeei) : 0;
+        }
         uint256 currentCredit = _getFullCredit(currency, locker);
         uint256 addedCredit = currentCredit > prevCredit ? (currentCredit - prevCredit) : 0;
         uint256 extra = addedCredit > fee ? (addedCredit - fee) : 0;
@@ -184,7 +187,7 @@ abstract contract PositionManagerImpl is PositionManagerBase, ImmutableState {
             vtsOrchestrator.take(currency, locker, extra);
         }
 
-        uint256 nonFee = inc > fee ? (inc - fee) : 0;
+        uint256 nonFee = LiquidityUtils.forwardedNonFeeLccAmount(inc, feesAccruedAmount, hookDelta);
         if (nonFee > 0) {
             _forwardQueuedLccToCustodian(currency, tokenId, locker, nonFee);
         }
@@ -234,6 +237,52 @@ abstract contract PositionManagerImpl is PositionManagerBase, ImmutableState {
         marketFactory.afterModifyLiquidity(key);
     }
 
+    /// @notice Per-leg forwarded non-fee LCC for MM decrease/burn min-out (post `feeAdj`), before `_afterModifyLiquidity`.
+    /// @dev Must match `LiquidityUtils.forwardedNonFeeLccAmount` / `_handleLccBalanceIncrease` splitting. VTS queue
+    ///      principal for routing remains `callerDelta - feesAccrued` (see `VTSPositionMMOpsLib.processMMOperations`).
+    function _mmForwardedNonFeeForMinOut(PoolKey memory key, BalanceDelta callerDelta, BalanceDelta feesAccrued)
+        internal
+        view
+        returns (BalanceDelta)
+    {
+        int128 d0 = callerDelta.amount0();
+        int128 d1 = callerDelta.amount1();
+        uint256 n0;
+        uint256 n1;
+        if (d0 > 0 && _isLCC(key.currency0)) {
+            n0 = LiquidityUtils.forwardedNonFeeLccAmount(
+                uint256(uint128(d0)),
+                feesAccrued.amount0(),
+                poolManager.currencyDelta(address(key.hooks), key.currency0)
+            );
+        }
+        if (d1 > 0 && _isLCC(key.currency1)) {
+            n1 = LiquidityUtils.forwardedNonFeeLccAmount(
+                uint256(uint128(d1)),
+                feesAccrued.amount1(),
+                poolManager.currencyDelta(address(key.hooks), key.currency1)
+            );
+        }
+        return LiquidityUtils.safeToBalanceDelta(n0, n1, false, false);
+    }
+
+    /// @dev Split out to keep `_modifySyntheticLiquidity` stack shallow for Solc.
+    function _settleModifyLiquidityDeltas(
+        PoolKey memory key,
+        address self,
+        BalanceDelta callerDelta,
+        BalanceDelta feesAccrued,
+        uint256 tokenId
+    ) internal {
+        _settleNegativeDeltas(key, self, callerDelta.amount0(), callerDelta.amount1());
+        if (callerDelta.amount0() > 0 || callerDelta.amount1() > 0) {
+            _takePositiveDeltasAndHandleLcc(
+                key, self, callerDelta.amount0(), callerDelta.amount1(), feesAccrued, msgSender(), tokenId
+            );
+        }
+        _afterModifyLiquidity(key);
+    }
+
     /// @notice Modifies liquidity in a Uniswap V4 pool and immediately settles the deltas
     /// @dev This function:
     ///      1. Reads liquidity state before modification
@@ -251,12 +300,13 @@ abstract contract PositionManagerImpl is PositionManagerBase, ImmutableState {
     /// @param hookData Arbitrary data to pass to hooks (contains PositionModificationHookData)
     /// @return callerDelta The principal balance delta - includes liquidity change plus immediate fee/hook deltas
     /// @return feesAccrued Informational delta of fee growth in the modified range for this call
+    /// @return mmForwardedNonFeeForMinOut Per-leg immediate non-fee LCC basis for MM decrease/burn min-out (LCC legs only)
     function _modifySyntheticLiquidity(
         PoolKey memory key,
         ModifyLiquidityParams memory params,
         uint256 tokenId,
         bytes memory hookData
-    ) internal virtual returns (BalanceDelta callerDelta, BalanceDelta feesAccrued) {
+    ) internal virtual returns (BalanceDelta, BalanceDelta, BalanceDelta) {
         // MM liquidity must target the factory-registered canonical core pool so CoreHook runs and VTS registers
         // the position. Otherwise modifyLiquidity can strand tokens in an unmanaged PoolManager position.
         if (address(key.hooks) != MarketHandlerLib.getCoreHook(marketFactory)) {
@@ -276,7 +326,7 @@ abstract contract PositionManagerImpl is PositionManagerBase, ImmutableState {
         // - callerDelta: token0/token1 change plus any immediate fee/hook deltas applied to the caller - ie. if _increase with liq=0, then delta > 0 where fees > 0
         // - feesAccrued: informational delta of fee growth in the modified range for this call
         // This call triggers CoreHook -> VTSOrchestrator.processPosition which handles all delta management
-        (callerDelta, feesAccrued) = poolManager.modifyLiquidity(key, params, hookData);
+        (BalanceDelta callerDelta, BalanceDelta feesAccrued) = poolManager.modifyLiquidity(key, params, hookData);
 
         // Get liquidity state after modification for validation
         (uint128 liquidityAfter,,) =
@@ -287,18 +337,9 @@ abstract contract PositionManagerImpl is PositionManagerBase, ImmutableState {
             revert Errors.InvariantViolated("liquidity change incorrect");
         }
 
-        // Use callerDelta directly for settlement - this is exactly what PoolManager applied to our
-        // transient storage via _accountPoolBalanceDelta(key, callerDelta, msg.sender) in modifyLiquidity.
-        // The callerDelta includes: principalDelta + feesAccrued, adjusted by any hookDelta returned.
-        int128 delta0 = callerDelta.amount0();
-        int128 delta1 = callerDelta.amount1();
-        _settleNegativeDeltas(key, self, delta0, delta1);
-
-        if (delta0 > 0 || delta1 > 0) {
-            _takePositiveDeltasAndHandleLcc(key, self, delta0, delta1, feesAccrued, msgSender(), tokenId);
-        }
-
-        _afterModifyLiquidity(key);
+        BalanceDelta mmBasis = _mmForwardedNonFeeForMinOut(key, callerDelta, feesAccrued);
+        _settleModifyLiquidityDeltas(key, self, callerDelta, feesAccrued, tokenId);
+        return (callerDelta, feesAccrued, mmBasis);
     }
 }
 

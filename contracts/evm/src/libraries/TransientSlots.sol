@@ -2,6 +2,7 @@
 pragma solidity ^0.8.26;
 
 import {TransientSlot} from "openzeppelin-contracts/contracts/utils/TransientSlot.sol";
+import {Math} from "openzeppelin-contracts/contracts/utils/math/Math.sol";
 import {PositionId} from "../types/Position.sol";
 import {EfficientHashLib} from "solady/utils/EfficientHashLib.sol";
 
@@ -15,26 +16,52 @@ library TransientSlots {
     ///      growth attribution. Payload is the low 24-bit two's-complement lane (see `encodeTickBefore` /
     ///      `decodeTickBefore`); use `storeTickBefore` / `loadTickBefore` / `clearTickBefore` at call sites.
     bytes32 internal constant TICK_BEFORE_SLOT = keccak256("TICK_BEFORE");
-    bytes32 internal constant NATIVE_VALUE_READ_SLOT = keccak256("NATIVE_VALUE_READ");
+    /// @dev Whether native balance-delta tracking has been initialised for this transaction (EIP-1153 clears at tx end).
+    bytes32 internal constant NATIVE_BALANCE_TRACKING_INIT_SLOT = keccak256("NATIVE_BALANCE_TRACKING_INIT");
+    /// @dev Last recorded `address(this).balance` after `_afterBatch` (and baseline before first `_beforeBatch`).
+    bytes32 internal constant NATIVE_LAST_SEEN_BALANCE_SLOT = keccak256("NATIVE_LAST_SEEN_BALANCE");
     bytes32 internal constant SEIZED_POSITION_ID_SLOT = keccak256("SEIZED_POSITION_ID");
     bytes32 internal constant PLANNED_CANCEL_SLOT = keccak256("PLANNED_CANCEL");
     bytes32 internal constant PLANNED_CANCEL_WITH_QUEUE_SLOT = keccak256("PLANNED_CANCEL_WITH_QUEUE");
 
     // ------------------------------
-    // Native Eth/Asset Msg Value helpers
+    // Native ETH balance-delta helpers (MM entrypoint native credit)
     // ------------------------------
 
-    /// @dev First call in the transaction records `msg.value` and sets the guard; later calls return 0.
-    ///      `PositionManagerEntrypoint` does not clear this at batch end so `Multicall_v4` cannot re-credit the same
-    ///      outer `msg.value` on each inner `delegatecall` batch.
-    function readMsgValueOnce() internal returns (uint256) {
-        bool isNativeValueRead = TransientSlot.asBoolean(TransientSlots.NATIVE_VALUE_READ_SLOT).tload();
-        if (isNativeValueRead == true) {
-            return 0;
-        } else {
-            TransientSlot.asBoolean(TransientSlots.NATIVE_VALUE_READ_SLOT).tstore(true);
-            return msg.value;
+    /// @dev True after the first `_beforeBatch` in the transaction has established a baseline snapshot.
+    function nativeBalanceTrackingInitialized() internal view returns (bool) {
+        return TransientSlot.asBoolean(TransientSlots.NATIVE_BALANCE_TRACKING_INIT_SLOT).tload();
+    }
+
+    function setNativeBalanceTrackingInitialized(bool v) internal {
+        TransientSlot.asBoolean(TransientSlots.NATIVE_BALANCE_TRACKING_INIT_SLOT).tstore(v);
+    }
+
+    function getNativeLastSeenBalance() internal view returns (uint256) {
+        return TransientSlot.asUint256(TransientSlots.NATIVE_LAST_SEEN_BALANCE_SLOT).tload();
+    }
+
+    function setNativeLastSeenBalance(uint256 v) internal {
+        TransientSlot.asUint256(TransientSlots.NATIVE_LAST_SEEN_BALANCE_SLOT).tstore(v);
+    }
+
+    /// @notice Computes how much native ETH to credit as locker delta for the current payable batch.
+    /// @dev Call from `PositionManagerEntrypoint._beforeBatch` with `balance = address(this).balance` and
+    ///      `msgValue = msg.value`. First batch in the tx sets baseline `lastSeen = balance - msgValue` so ambient ETH
+    ///      is not credited; later batches use `min(msgValue, balance - lastSeen)` so multicall delegatecalls do not
+    ///      re-credit the same outer value while distinct funded calls still credit new wei.
+    /// @param balance Current contract balance (already includes `msgValue` for this call).
+    /// @param msgValue The payable call’s `msg.value`.
+    /// @return creditAmount Wei to pass to `creditExact` for native currency (may be 0).
+    function nativeEthCreditAmountForBatch(uint256 balance, uint256 msgValue) internal returns (uint256 creditAmount) {
+        if (!nativeBalanceTrackingInitialized()) {
+            // `balance` already includes `msgValue` for this payable call.
+            setNativeLastSeenBalance(balance - msgValue);
+            setNativeBalanceTrackingInitialized(true);
         }
+        uint256 lastSeen = getNativeLastSeenBalance();
+        uint256 freshIncrease = balance > lastSeen ? balance - lastSeen : 0;
+        creditAmount = Math.min(msgValue, freshIncrease);
     }
 
     // ------------------------------

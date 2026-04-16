@@ -33,6 +33,7 @@ import {RFSCheckpoint} from "../src/types/Checkpoint.sol";
 import {ILCC} from "../src/interfaces/ILCC.sol";
 import {LiquiditySignal} from "../src/types/Commit.sol";
 import {ILiquidityHub} from "../src/interfaces/ILiquidityHub.sol";
+import {IEndpointUnwrapAdmission} from "../src/interfaces/IEndpointUnwrapAdmission.sol";
 import {IMMQueueCustodian} from "../src/interfaces/IMMQueueCustodian.sol";
 import {IMarketVault} from "../src/interfaces/IMarketVault.sol";
 import {IMarketVaultDryBalanceDelta} from "./_helpers/IMarketVaultDryBalanceDelta.sol";
@@ -41,6 +42,34 @@ import {Bounds} from "../src/libraries/Bounds.sol";
 import {ActionConstants} from "v4-periphery/src/libraries/ActionConstants.sol";
 import {MockCommitmentDescriptor} from "./_mocks/MockCommitmentDescriptor.sol";
 import {IAllowanceTransfer} from "permit2/src/interfaces/IAllowanceTransfer.sol";
+
+/// @title MMPMTwoExternalCallsRouter
+/// @notice Two separate external calls to `modifyLiquiditiesWithoutUnlock` in one transaction (not `multicall` delegatecall).
+contract MMPMTwoExternalCallsRouter {
+    /// @dev First call sends 0 ETH; second forwards the router’s entire `msg.value` to MMPM (funded wrap path).
+    function zeroThenFundedWrapTake(
+        MMPositionManager mmpm,
+        bytes memory actionsEmpty,
+        bytes[] memory paramsEmpty,
+        bytes memory wrapActions,
+        bytes[] memory wrapParams
+    ) external payable {
+        mmpm.modifyLiquiditiesWithoutUnlock(actionsEmpty, paramsEmpty);
+        mmpm.modifyLiquiditiesWithoutUnlock{value: msg.value}(wrapActions, wrapParams);
+    }
+
+    /// @dev Two funded batches (1 ETH + 1 ETH); each leg wraps only its own attachment when balance-delta accounting is correct.
+    function twoFundedWrapTake(
+        MMPositionManager mmpm,
+        bytes memory wrapActions,
+        bytes[] memory wrapParamsFirst,
+        bytes[] memory wrapParamsSecond
+    ) external payable {
+        require(msg.value == 2 ether, "twoFundedWrapTake: expected 2 ether");
+        mmpm.modifyLiquiditiesWithoutUnlock{value: 1 ether}(wrapActions, wrapParamsFirst);
+        mmpm.modifyLiquiditiesWithoutUnlock{value: 1 ether}(wrapActions, wrapParamsSecond);
+    }
+}
 
 contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
     using SafeCast for *;
@@ -1038,6 +1067,72 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
         assertEq(weth9.balanceOf(address(this)) - wethBefore, 1 ether, "only msg.value should be credited");
     }
 
+    /// @notice Regression: one outer ETH on `multicall` must not be re-credited on each inner `delegatecall` batch.
+    /// @dev First leg wraps + `TAKE`s WETH (consumes the single native credit). Second identical leg would mint another
+    ///      1 WETH if each batch re-applied the same outer `msg.value` to delta.
+    function test_multicall_outerEth_notDoubleCreditedAcrossInnerBatches() public {
+        address recipient = makeAddr("mcRecipient");
+
+        MMA.PreparedAction[] memory wrapLeg = new MMA.PreparedAction[](2);
+        wrapLeg[0] = MMA.prepareWrapNative(0);
+        wrapLeg[1] = MMA.prepareTake(Currency.wrap(address(weth9)), recipient, 0);
+        (bytes memory wrapActions, bytes[] memory wrapParams) = MMA.concatPrepared(wrapLeg);
+
+        bytes[] memory calls = new bytes[](2);
+        calls[0] = abi.encodeCall(MMPositionManager.modifyLiquiditiesWithoutUnlock, (wrapActions, wrapParams));
+        calls[1] = abi.encodeCall(MMPositionManager.modifyLiquiditiesWithoutUnlock, (wrapActions, wrapParams));
+
+        vm.prank(liquiditySignal.mmState.advancer);
+        positionManager.multicall{value: 1 ether}(calls);
+
+        assertEq(weth9.balanceOf(recipient), 1 ether, "outer msg.value must credit once across multicall");
+    }
+
+    /// @notice Integration: two top-level MMPM calls in one tx — empty first batch, then funded `WRAP_NATIVE(0)` + WETH `TAKE`.
+    /// @dev Regression for native balance-delta crediting (smart-account / router composition); locker is the router contract.
+    function test_twoTopLevelCalls_sameTx_zeroThenFunded_recipientGetsOnlySecondAttachmentAsWeth() public {
+        address recipient = makeAddr("twoExtRecipient");
+        MMPMTwoExternalCallsRouter router = new MMPMTwoExternalCallsRouter();
+        vm.deal(address(router), 1 ether);
+
+        bytes memory emptyActions;
+        bytes[] memory emptyParams = new bytes[](0);
+
+        MMA.PreparedAction[] memory wrapLeg = new MMA.PreparedAction[](2);
+        wrapLeg[0] = MMA.prepareWrapNative(0);
+        wrapLeg[1] = MMA.prepareTake(Currency.wrap(address(weth9)), recipient, 0);
+        (bytes memory wrapActions, bytes[] memory wrapParams) = MMA.concatPrepared(wrapLeg);
+
+        MMPMTwoExternalCallsRouter(payable(address(router)))
+        .zeroThenFundedWrapTake{value: 1 ether}(positionManager, emptyActions, emptyParams, wrapActions, wrapParams);
+
+        assertEq(weth9.balanceOf(recipient), 1 ether, "only second-call ETH should wrap to WETH");
+    }
+
+    /// @notice Integration: two funded top-level batches in one tx — each 1 ETH should wrap exactly once per recipient.
+    function test_twoTopLevelCalls_sameTx_twoFunded_eachRecipientGetsOneWeth() public {
+        address recipientA = makeAddr("twoFundedA");
+        address recipientB = makeAddr("twoFundedB");
+        MMPMTwoExternalCallsRouter router = new MMPMTwoExternalCallsRouter();
+        vm.deal(address(router), 2 ether);
+
+        MMA.PreparedAction[] memory legA = new MMA.PreparedAction[](2);
+        legA[0] = MMA.prepareWrapNative(0);
+        legA[1] = MMA.prepareTake(Currency.wrap(address(weth9)), recipientA, 0);
+        (bytes memory wrapActions, bytes[] memory paramsA) = MMA.concatPrepared(legA);
+
+        MMA.PreparedAction[] memory legB = new MMA.PreparedAction[](2);
+        legB[0] = MMA.prepareWrapNative(0);
+        legB[1] = MMA.prepareTake(Currency.wrap(address(weth9)), recipientB, 0);
+        (, bytes[] memory paramsB) = MMA.concatPrepared(legB);
+
+        MMPMTwoExternalCallsRouter(payable(address(router)))
+        .twoFundedWrapTake{value: 2 ether}(positionManager, wrapActions, paramsA, paramsB);
+
+        assertEq(weth9.balanceOf(recipientA), 1 ether, "first batch should wrap only its 1 ETH");
+        assertEq(weth9.balanceOf(recipientB), 1 ether, "second batch should wrap only its 1 ETH");
+    }
+
     function test_unwrapNative_ignoresAmbientEthBalance_andCreditsOnlyUnwrappedAmount() public {
         address user = makeAddr("user");
         vm.deal(address(positionManager), 3 ether); // ambient ETH should not be auto-credited
@@ -1357,6 +1452,91 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
             amount,
             "second batch must not add to queue without new unencumbered LCC"
         );
+    }
+
+    /// @notice With outstanding queue fully backed in custodian and zero live LCC on MMPM, Hub admission headroom is
+    ///         zero; a direct `unwrapTo` must revert with `InvalidAmount(amount, 0)` (explicit failure mode).
+    function test_unwrapLcc_fromDeltas_outstandingQueue_zeroLiveBalance_onMmpm_revertsInvalidAmount() public {
+        address locker = makeAddr("lockerZeroHeadroomExplicitRevert");
+        address lccAddr = address(lcc0);
+        MockERC20 underlying = MockERC20(lcc0.underlying());
+        uint256 amount = 500;
+
+        vm.prank(marketFactory);
+        ILiquidityHub(liquidityHub).setBoundLevel(address(positionManager), Bounds.BOUND_NONE);
+        vm.prank(marketFactory);
+        ILiquidityHub(liquidityHub).setBoundLevel(address(positionManager), Bounds.BOUND_ENDPOINT);
+
+        underlying.mint(address(liquidityHub), amount);
+        vm.prank(address(vtsOrchestrator));
+        ILiquidityHub(liquidityHub).confirmTake(lccAddr, amount, false);
+
+        _setDirectSupply(lccAddr, 0);
+
+        lcc0.transfer(liquidityHub, amount);
+        vm.prank(liquidityHub);
+        lcc0.transfer(address(positionManager), amount);
+
+        vm.mockCall(
+            marketFactory, abi.encodeWithSelector(IMarketFactory.useMarketLiquidity.selector), abi.encode(uint256(0))
+        );
+
+        MMA.PreparedAction[] memory prepared = new MMA.PreparedAction[](2);
+        prepared[0] = MMA.prepareSync(Currency.wrap(lccAddr));
+        prepared[1] = MMA.prepareUnwrapLcc(lccAddr, amount, locker, false);
+
+        _executeLiquidityAs(locker, prepared);
+        assertEq(ILiquidityHub(liquidityHub).settleQueue(lccAddr, locker), amount);
+        assertEq(lcc0.balanceOf(address(positionManager)), 0);
+        assertEq(positionManager.queueCustodian().queued(0, lccAddr, locker), amount);
+
+        vm.prank(address(positionManager));
+        vm.expectRevert(abi.encodeWithSelector(Errors.InvalidAmount.selector, uint256(1), uint256(0)));
+        ILiquidityHub(liquidityHub).unwrapTo(lccAddr, locker, locker, 1);
+    }
+
+    /// @notice Outstanding queue with LCC forwarded to custodian: admission counts capped custody credit so a second
+    ///         unwrap with fresh synced LCC can queue incremental shortfall (HUB-02 / endpoint headroom).
+    function test_unwrapLcc_fromDeltas_outstandingQueue_creditedCustody_secondBatchQueuesMore() public {
+        address locker = makeAddr("lockerSecondBatchFreshDelta");
+        address lccAddr = address(lcc0);
+        MockERC20 underlying = MockERC20(lcc0.underlying());
+        uint256 amount = 500;
+
+        vm.prank(marketFactory);
+        ILiquidityHub(liquidityHub).setBoundLevel(address(positionManager), Bounds.BOUND_NONE);
+        vm.prank(marketFactory);
+        ILiquidityHub(liquidityHub).setBoundLevel(address(positionManager), Bounds.BOUND_ENDPOINT);
+
+        underlying.mint(address(liquidityHub), amount * 2);
+        vm.prank(address(vtsOrchestrator));
+        ILiquidityHub(liquidityHub).confirmTake(lccAddr, amount * 2, false);
+
+        _setDirectSupply(lccAddr, 0);
+
+        lcc0.transfer(liquidityHub, amount);
+        vm.prank(liquidityHub);
+        lcc0.transfer(address(positionManager), amount);
+
+        vm.mockCall(
+            marketFactory, abi.encodeWithSelector(IMarketFactory.useMarketLiquidity.selector), abi.encode(uint256(0))
+        );
+
+        MMA.PreparedAction[] memory prepared = new MMA.PreparedAction[](2);
+        prepared[0] = MMA.prepareSync(Currency.wrap(lccAddr));
+        prepared[1] = MMA.prepareUnwrapLcc(lccAddr, amount, locker, false);
+
+        _executeLiquidityAs(locker, prepared);
+        assertEq(ILiquidityHub(liquidityHub).settleQueue(lccAddr, locker), amount);
+        assertEq(IEndpointUnwrapAdmission(address(positionManager)).unwrapAdmissionCredit(lccAddr, locker), amount);
+
+        lcc0.transfer(liquidityHub, amount);
+        vm.prank(liquidityHub);
+        lcc0.transfer(address(positionManager), amount);
+
+        _executeLiquidityAs(locker, prepared);
+        assertEq(ILiquidityHub(liquidityHub).settleQueue(lccAddr, locker), amount * 2);
+        assertEq(positionManager.queueCustodian().queued(0, lccAddr, locker), amount * 2);
     }
 
     /// @notice Control: when MMPM is bucket-tracked (BOUND_ENDPOINT) and holds market-derived balance, unwrap should
@@ -1751,6 +1931,362 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
         assertEq(underlying.balanceOf(locker) - beforeUnderlying, amount);
     }
 
+    /// @notice Scan #22 finding #3 (narrowed): utility-bucket custody can exceed live Hub queue after queue annulment;
+    ///         the next `UNWRAP_LCC` reconciles by releasing excess LCC to the beneficiary before unwrap.
+    /// @dev `_unwrapLccFromDeltas` invokes the same `_reconcileUtilityCustodyWithHubQueue` hook (before `unwrapTo`)
+    ///      when `vtsOrchestrator.take` returns a positive amount; delta-funded batches need the usual `SYNC`/`TAKE`
+    ///      hygiene to end the unlock without `CurrencyNotSettled`, so this file asserts the payer path end-to-end.
+    function test_unwrapLcc_utilityCustody_reconcilesExcessAfterQueueAnnulment() public {
+        address victim = makeAddr("victimUtilityReconcile");
+        address lccAddr = address(lcc0);
+        uint256 q = 200;
+        MockERC20 underlying = MockERC20(lcc0.underlying());
+
+        vm.prank(marketFactory);
+        ILiquidityHub(liquidityHub).setBoundLevel(address(positionManager), Bounds.BOUND_ENDPOINT);
+        vm.mockCall(marketFactory, abi.encodeWithSelector(IMarketFactory.bounds.selector, victim), abi.encode(false));
+
+        underlying.mint(address(liquidityHub), q * 2);
+        vm.prank(address(vtsOrchestrator));
+        ILiquidityHub(liquidityHub).confirmTake(lccAddr, q * 2, false);
+        _setDirectSupply(lccAddr, 0);
+
+        lcc0.transfer(liquidityHub, q);
+        vm.prank(liquidityHub);
+        lcc0.transfer(victim, q);
+        vm.startPrank(victim);
+        lcc0.approve(address(positionManager), type(uint256).max);
+        vm.stopPrank();
+
+        vm.mockCall(
+            marketFactory, abi.encodeWithSelector(IMarketFactory.useMarketLiquidity.selector), abi.encode(uint256(0))
+        );
+        vm.prank(victim);
+        MMA.unwrapLcc(positionManager, lccAddr, q, victim, true);
+
+        assertEq(ILiquidityHub(liquidityHub).settleQueue(lccAddr, victim), q);
+        assertEq(positionManager.queueCustodian().queued(0, lccAddr, victim), q);
+
+        // Fresh LCC then full transfer to MMPM annuls Hub queue without releasing utility custody yet.
+        lcc0.transfer(liquidityHub, q);
+        vm.prank(liquidityHub);
+        lcc0.transfer(victim, q);
+        vm.prank(victim);
+        lcc0.transfer(address(positionManager), q);
+
+        assertEq(ILiquidityHub(liquidityHub).settleQueue(lccAddr, victim), 0, "annulment clears queue");
+        assertEq(positionManager.queueCustodian().queued(0, lccAddr, victim), q, "drift: custody still q");
+
+        // Small unwrap triggers reconciliation (pre-transfer), then normal unwrap bookkeeping.
+        lcc0.transfer(liquidityHub, 50);
+        vm.prank(liquidityHub);
+        lcc0.transfer(victim, 50);
+        // Before second unwrap victim holds only the 50 wei minted for this step; reconcile releases q == custodied
+        // (hub queue 0) before transferFrom, so victim ends with q LCC after transferFrom + unwrap bookkeeping.
+        uint256 victimLccBefore = lcc0.balanceOf(victim);
+        assertEq(victimLccBefore, 50, "precondition: only small unwrap principal on wallet");
+        vm.prank(victim);
+        MMA.unwrapLcc(positionManager, lccAddr, 50, victim, true);
+
+        assertEq(positionManager.queueCustodian().queued(0, lccAddr, victim), 50, "only new shortfall custodied");
+        assertEq(
+            IEndpointUnwrapAdmission(address(positionManager)).unwrapAdmissionCredit(lccAddr, victim),
+            50,
+            "admission credit tracks utility custody after reconcile+shortfall"
+        );
+        assertEq(lcc0.balanceOf(victim), q, "reconcile released full q excess; victim net q after 50 in / 50 unwrap");
+    }
+
+    /// @notice Partial annulment: Hub queue drops by `a` while utility custody still holds the full pre-annul slice;
+    ///         `COLLECT_AVAILABLE_LIQUIDITY` (tokenId 0) reconciles `a` then settles the remaining queue against reserves.
+    function test_collectAvailableLiquidity_tokenIdZero_reconcilesAfterPartialQueueAnnulment() public {
+        address victim = makeAddr("victimPartialAnnulCollect");
+        address lccAddr = address(lcc0);
+        uint256 q = 100;
+        uint256 annulled = 50;
+
+        vm.prank(marketFactory);
+        ILiquidityHub(liquidityHub).setBoundLevel(address(positionManager), Bounds.BOUND_ENDPOINT);
+        vm.mockCall(marketFactory, abi.encodeWithSelector(IMarketFactory.bounds.selector, victim), abi.encode(false));
+
+        MockERC20 underlying = MockERC20(lcc0.underlying());
+        underlying.mint(address(liquidityHub), q * 2);
+        vm.prank(address(vtsOrchestrator));
+        ILiquidityHub(liquidityHub).confirmTake(lccAddr, q * 2, false);
+        _setDirectSupply(lccAddr, 0);
+
+        lcc0.transfer(liquidityHub, q);
+        vm.prank(liquidityHub);
+        lcc0.transfer(victim, q);
+        vm.startPrank(victim);
+        lcc0.approve(address(positionManager), type(uint256).max);
+        vm.stopPrank();
+
+        vm.mockCall(
+            marketFactory, abi.encodeWithSelector(IMarketFactory.useMarketLiquidity.selector), abi.encode(uint256(0))
+        );
+        vm.prank(victim);
+        MMA.unwrapLcc(positionManager, lccAddr, q, victim, true);
+
+        // Fund `liquid > q` so a transfer of `q` bleeds exactly `annulled` wei from the Hub queue (see
+        // `annulSettlementBeforeTransfer`: bleedIntoQueue = transfer - (liquid - queued)).
+        lcc0.transfer(liquidityHub, q + annulled);
+        vm.prank(liquidityHub);
+        lcc0.transfer(victim, q + annulled);
+        vm.prank(victim);
+        lcc0.transfer(address(positionManager), q);
+
+        assertEq(ILiquidityHub(liquidityHub).settleQueue(lccAddr, victim), q - annulled, "partial annul");
+        assertEq(positionManager.queueCustodian().queued(0, lccAddr, victim), q, "custody still full slice");
+
+        underlying.mint(address(liquidityHub), q);
+        vm.prank(address(vtsOrchestrator));
+        ILiquidityHub(liquidityHub).confirmTake(lccAddr, q, false);
+
+        uint256 lccBefore = lcc0.balanceOf(victim);
+        assertEq(lccBefore, annulled, "precondition: wallet LCC after partial transfer");
+
+        MMA.PreparedAction[] memory prepared = new MMA.PreparedAction[](1);
+        prepared[0] = MMA.prepareCollectAvailableLiquidity(lccAddr, 0, type(uint256).max);
+        _executeWithUnlockAs(victim, prepared, block.timestamp + 3600);
+
+        assertEq(ILiquidityHub(liquidityHub).settleQueue(lccAddr, victim), 0);
+        assertEq(positionManager.queueCustodian().queued(0, lccAddr, victim), 0);
+        // Reconcile releases `annulled` to the wallet, then settlement consumes the remaining `q - annulled` queue using
+        // custody + the recipient's market-derived balance (net +annulled LCC vs immediately before collect).
+        assertEq(lcc0.balanceOf(victim) - lccBefore, annulled);
+    }
+
+    /// @notice Same drift as above: `COLLECT_AVAILABLE_LIQUIDITY` with `tokenId == 0` reconciles excess utility custody
+    ///         before `settleFromCustodian` (no Hub queue => no settlement, LCC returned to locker).
+    function test_collectAvailableLiquidity_tokenIdZero_reconcilesExcessUtilityCustodyWhenHubQueueZero() public {
+        address victim = makeAddr("victimCollectReconcile");
+        address lccAddr = address(lcc0);
+        uint256 q = 180;
+
+        vm.prank(marketFactory);
+        ILiquidityHub(liquidityHub).setBoundLevel(address(positionManager), Bounds.BOUND_ENDPOINT);
+        vm.mockCall(marketFactory, abi.encodeWithSelector(IMarketFactory.bounds.selector, victim), abi.encode(false));
+
+        MockERC20 underlying = MockERC20(lcc0.underlying());
+        underlying.mint(address(liquidityHub), q * 2);
+        vm.prank(address(vtsOrchestrator));
+        ILiquidityHub(liquidityHub).confirmTake(lccAddr, q * 2, false);
+        _setDirectSupply(lccAddr, 0);
+
+        lcc0.transfer(liquidityHub, q);
+        vm.prank(liquidityHub);
+        lcc0.transfer(victim, q);
+        vm.startPrank(victim);
+        lcc0.approve(address(positionManager), type(uint256).max);
+        vm.stopPrank();
+
+        vm.mockCall(
+            marketFactory, abi.encodeWithSelector(IMarketFactory.useMarketLiquidity.selector), abi.encode(uint256(0))
+        );
+        vm.prank(victim);
+        MMA.unwrapLcc(positionManager, lccAddr, q, victim, true);
+
+        lcc0.transfer(liquidityHub, q);
+        vm.prank(liquidityHub);
+        lcc0.transfer(victim, q);
+        vm.prank(victim);
+        lcc0.transfer(address(positionManager), q);
+
+        assertEq(ILiquidityHub(liquidityHub).settleQueue(lccAddr, victim), 0);
+        assertEq(positionManager.queueCustodian().queued(0, lccAddr, victim), q);
+
+        uint256 lccBefore = lcc0.balanceOf(victim);
+        MMA.PreparedAction[] memory prepared = new MMA.PreparedAction[](1);
+        prepared[0] = MMA.prepareCollectAvailableLiquidity(lccAddr, 0, type(uint256).max);
+        _executeWithUnlockAs(victim, prepared, block.timestamp + 3600);
+
+        assertEq(positionManager.queueCustodian().queued(0, lccAddr, victim), 0);
+        assertEq(lcc0.balanceOf(victim) - lccBefore, q);
+    }
+
+    /// @notice `COLLECT_AVAILABLE_LIQUIDITY` with `tokenId > 0` does not run utility-bucket reconciliation.
+    function test_collectAvailableLiquidity_commitTokenId_doesNotReconcileUtilityBucket() public {
+        address user = makeAddr("userCommitNoUtilityReconcile");
+        address lccAddr = address(lcc0);
+        uint256 q = 160;
+        uint256 commitTokenId = 999;
+
+        vm.prank(marketFactory);
+        ILiquidityHub(liquidityHub).setBoundLevel(address(positionManager), Bounds.BOUND_ENDPOINT);
+        vm.mockCall(marketFactory, abi.encodeWithSelector(IMarketFactory.bounds.selector, user), abi.encode(false));
+
+        MockERC20 underlying = MockERC20(lcc0.underlying());
+        underlying.mint(address(liquidityHub), q * 2);
+        vm.prank(address(vtsOrchestrator));
+        ILiquidityHub(liquidityHub).confirmTake(lccAddr, q * 2, false);
+        _setDirectSupply(lccAddr, 0);
+
+        lcc0.transfer(liquidityHub, q);
+        vm.prank(liquidityHub);
+        lcc0.transfer(user, q);
+        vm.startPrank(user);
+        lcc0.approve(address(positionManager), type(uint256).max);
+        vm.stopPrank();
+
+        vm.mockCall(
+            marketFactory, abi.encodeWithSelector(IMarketFactory.useMarketLiquidity.selector), abi.encode(uint256(0))
+        );
+        vm.prank(user);
+        MMA.unwrapLcc(positionManager, lccAddr, q, user, true);
+
+        lcc0.transfer(liquidityHub, q);
+        vm.prank(liquidityHub);
+        lcc0.transfer(user, q);
+        vm.prank(user);
+        lcc0.transfer(address(positionManager), q);
+
+        assertEq(ILiquidityHub(liquidityHub).settleQueue(lccAddr, user), 0);
+        assertEq(positionManager.queueCustodian().queued(0, lccAddr, user), q);
+
+        MMA.PreparedAction[] memory prepared = new MMA.PreparedAction[](1);
+        prepared[0] = MMA.prepareCollectAvailableLiquidity(lccAddr, commitTokenId, type(uint256).max);
+        _executeWithUnlockAs(user, prepared, block.timestamp + 3600);
+
+        assertEq(positionManager.queueCustodian().queued(0, lccAddr, user), q, "utility drift untouched");
+    }
+
+    /// @notice After partial collect, utility-bucket custody and `unwrapAdmissionCredit` match the remaining queue; a
+    ///         later delta-funded unwrap with fresh synced LCC queues only the incremental shortfall.
+    function test_unwrapLcc_fromDeltas_afterPartialCollect_admissionCreditAndSecondUnwrap() public {
+        address locker = makeAddr("lockerPartialCollectThenUnwrap");
+        address lccAddr = address(lcc0);
+        MockERC20 underlying = MockERC20(lcc0.underlying());
+        uint256 amount = 250;
+        uint256 available = 100;
+        uint256 freshForSecond = 50;
+
+        vm.prank(marketFactory);
+        ILiquidityHub(liquidityHub).setBoundLevel(address(positionManager), Bounds.BOUND_NONE);
+        vm.prank(marketFactory);
+        ILiquidityHub(liquidityHub).setBoundLevel(address(positionManager), Bounds.BOUND_ENDPOINT);
+
+        // Avoid seeding a large `marketDerived` Hub reserve before the shortfall-only unwrap; otherwise collect can
+        // settle the full queue in one go when reserves dwarf `available`.
+        _setDirectSupply(lccAddr, 0);
+
+        lcc0.transfer(liquidityHub, amount);
+        vm.prank(liquidityHub);
+        lcc0.transfer(address(positionManager), amount);
+
+        vm.mockCall(
+            marketFactory, abi.encodeWithSelector(IMarketFactory.useMarketLiquidity.selector), abi.encode(uint256(0))
+        );
+
+        MMA.PreparedAction[] memory unwrapBatch = new MMA.PreparedAction[](2);
+        unwrapBatch[0] = MMA.prepareSync(Currency.wrap(lccAddr));
+        unwrapBatch[1] = MMA.prepareUnwrapLcc(lccAddr, amount, locker, false);
+
+        _executeLiquidityAs(locker, unwrapBatch);
+
+        assertEq(ILiquidityHub(liquidityHub).settleQueue(lccAddr, locker), amount);
+        assertEq(positionManager.queueCustodian().queued(0, lccAddr, locker), amount);
+
+        underlying.mint(address(liquidityHub), available);
+        vm.prank(address(vtsOrchestrator));
+        ILiquidityHub(liquidityHub).confirmTake(lccAddr, available, false);
+
+        MMA.PreparedAction[] memory collect = new MMA.PreparedAction[](1);
+        collect[0] = MMA.prepareCollectAvailableLiquidity(lccAddr, 0, type(uint256).max);
+        _executeWithUnlockAs(locker, collect, block.timestamp + 3600);
+
+        uint256 remainder = amount - available;
+        assertEq(ILiquidityHub(liquidityHub).settleQueue(lccAddr, locker), remainder);
+        assertEq(positionManager.queueCustodian().queued(0, lccAddr, locker), remainder);
+        assertEq(IEndpointUnwrapAdmission(address(positionManager)).unwrapAdmissionCredit(lccAddr, locker), remainder);
+
+        underlying.mint(address(liquidityHub), freshForSecond);
+        vm.prank(address(vtsOrchestrator));
+        ILiquidityHub(liquidityHub).confirmTake(lccAddr, freshForSecond, false);
+
+        lcc0.transfer(liquidityHub, freshForSecond);
+        vm.prank(liquidityHub);
+        lcc0.transfer(address(positionManager), freshForSecond);
+
+        vm.mockCall(
+            marketFactory, abi.encodeWithSelector(IMarketFactory.useMarketLiquidity.selector), abi.encode(uint256(0))
+        );
+
+        MMA.PreparedAction[] memory second = new MMA.PreparedAction[](2);
+        second[0] = MMA.prepareSync(Currency.wrap(lccAddr));
+        second[1] = MMA.prepareUnwrapLcc(lccAddr, freshForSecond, locker, false);
+
+        _executeLiquidityAs(locker, second);
+
+        assertEq(
+            ILiquidityHub(liquidityHub).settleQueue(lccAddr, locker),
+            remainder + freshForSecond,
+            "incremental shortfall should add to remaining queue"
+        );
+        assertEq(positionManager.queueCustodian().queued(0, lccAddr, locker), remainder + freshForSecond);
+    }
+
+    /// @notice `unwrapAdmissionCredit` is beneficiary-scoped: one locker's custodied queue does not count toward another's.
+    function test_unwrapLcc_fromDeltas_unwrapAdmissionCredit_isolatedPerBeneficiary() public {
+        address lockerA = makeAddr("lockerA_custodyIso");
+        address lockerB = makeAddr("lockerB_custodyIso");
+        address lccAddr = address(lcc0);
+        MockERC20 underlying = MockERC20(lcc0.underlying());
+        uint256 amountA = 200;
+        uint256 amountB = 50;
+
+        vm.prank(marketFactory);
+        ILiquidityHub(liquidityHub).setBoundLevel(address(positionManager), Bounds.BOUND_NONE);
+        vm.prank(marketFactory);
+        ILiquidityHub(liquidityHub).setBoundLevel(address(positionManager), Bounds.BOUND_ENDPOINT);
+
+        underlying.mint(address(liquidityHub), amountA);
+        vm.prank(address(vtsOrchestrator));
+        ILiquidityHub(liquidityHub).confirmTake(lccAddr, amountA, false);
+
+        _setDirectSupply(lccAddr, 0);
+
+        lcc0.transfer(liquidityHub, amountA);
+        vm.prank(liquidityHub);
+        lcc0.transfer(address(positionManager), amountA);
+
+        vm.mockCall(
+            marketFactory, abi.encodeWithSelector(IMarketFactory.useMarketLiquidity.selector), abi.encode(uint256(0))
+        );
+
+        MMA.PreparedAction[] memory batchA = new MMA.PreparedAction[](2);
+        batchA[0] = MMA.prepareSync(Currency.wrap(lccAddr));
+        batchA[1] = MMA.prepareUnwrapLcc(lccAddr, amountA, lockerA, false);
+        _executeLiquidityAs(lockerA, batchA);
+
+        assertEq(ILiquidityHub(liquidityHub).settleQueue(lccAddr, lockerA), amountA);
+        assertEq(positionManager.queueCustodian().queued(0, lccAddr, lockerA), amountA);
+        assertEq(IEndpointUnwrapAdmission(address(positionManager)).unwrapAdmissionCredit(lccAddr, lockerA), amountA);
+        assertEq(IEndpointUnwrapAdmission(address(positionManager)).unwrapAdmissionCredit(lccAddr, lockerB), 0);
+
+        underlying.mint(address(liquidityHub), amountB);
+        vm.prank(address(vtsOrchestrator));
+        ILiquidityHub(liquidityHub).confirmTake(lccAddr, amountB, false);
+
+        lcc0.transfer(liquidityHub, amountB);
+        vm.prank(liquidityHub);
+        lcc0.transfer(address(positionManager), amountB);
+
+        vm.mockCall(
+            marketFactory, abi.encodeWithSelector(IMarketFactory.useMarketLiquidity.selector), abi.encode(uint256(0))
+        );
+
+        MMA.PreparedAction[] memory batchB = new MMA.PreparedAction[](2);
+        batchB[0] = MMA.prepareSync(Currency.wrap(lccAddr));
+        batchB[1] = MMA.prepareUnwrapLcc(lccAddr, amountB, lockerB, false);
+        _executeLiquidityAs(lockerB, batchB);
+
+        assertEq(ILiquidityHub(liquidityHub).settleQueue(lccAddr, lockerB), amountB);
+        assertEq(positionManager.queueCustodian().queued(0, lccAddr, lockerB), amountB);
+        assertEq(IEndpointUnwrapAdmission(address(positionManager)).unwrapAdmissionCredit(lccAddr, lockerB), amountB);
+        assertEq(positionManager.queueCustodian().queued(0, lccAddr, lockerA), amountA);
+    }
+
     /// @notice Another locker cannot `SYNC` + `TAKE` custodied queued backing after a victim's unwrap shortfall.
     /// @dev Uses market-derived LCC on the victim so unwrap can queue (wrapped-only shortfall reverts under Scan 21 F3).
     function test_unwrapLcc_payerIsUser_shortfall_attackerSyncTake_doesNotStealCustodiedLcc() public {
@@ -1798,6 +2334,124 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
         _executeLiquidityAs(attacker, steal);
 
         assertEq(lcc0.balanceOf(attacker), attackerLccBefore, "attacker must not take victim custodied LCC");
+    }
+
+    /// @notice Regression: queue snapshot must be post-transfer (post-annul). Second unwrap with pre-existing queue
+    ///         from first shortfall must forward the full new queued shortfall to custodian, not (newQueue - oldQueue).
+    /// @dev Old bug: qBefore before transfer made `queued = after - before` subtract annulled old queue from new shortfall.
+    function test_unwrapLcc_payerIsUser_secondUnwrap_afterPreExistingQueue_forwardsFullShortfallToCustodian() public {
+        address victim = makeAddr("victimSecondUnwrapQueue");
+        address lccAddr = address(lcc0);
+        uint256 amount = 200;
+        MockERC20 underlying = MockERC20(lcc0.underlying());
+
+        vm.prank(marketFactory);
+        ILiquidityHub(liquidityHub).setBoundLevel(address(positionManager), Bounds.BOUND_ENDPOINT);
+
+        vm.mockCall(marketFactory, abi.encodeWithSelector(IMarketFactory.bounds.selector, victim), abi.encode(false));
+
+        underlying.mint(address(liquidityHub), amount * 2);
+        vm.prank(address(vtsOrchestrator));
+        ILiquidityHub(liquidityHub).confirmTake(lccAddr, amount * 2, false);
+
+        _setDirectSupply(lccAddr, 0);
+
+        // First unwrap: shortfall queues `amount` for victim; victim has no LCC left.
+        lcc0.transfer(liquidityHub, amount);
+        vm.prank(liquidityHub);
+        lcc0.transfer(victim, amount);
+
+        vm.startPrank(victim);
+        lcc0.approve(address(positionManager), type(uint256).max);
+        vm.stopPrank();
+
+        vm.mockCall(
+            marketFactory, abi.encodeWithSelector(IMarketFactory.useMarketLiquidity.selector), abi.encode(uint256(0))
+        );
+
+        vm.prank(victim);
+        MMA.unwrapLcc(positionManager, lccAddr, amount, victim, true);
+
+        assertEq(
+            ILiquidityHub(liquidityHub).settleQueue(lccAddr, victim), amount, "precondition: first shortfall queues"
+        );
+        assertEq(lcc0.balanceOf(victim), 0);
+
+        // Second unwrap: same `amount` LCC again; transfer annuls prior queue then unwrap queues shortfall again.
+        lcc0.transfer(liquidityHub, amount);
+        vm.prank(liquidityHub);
+        lcc0.transfer(victim, amount);
+
+        vm.prank(victim);
+        MMA.unwrapLcc(positionManager, lccAddr, amount, victim, true);
+
+        assertEq(
+            ILiquidityHub(liquidityHub).settleQueue(lccAddr, victim),
+            amount,
+            "Hub queue should be annulled then re-queued to same total"
+        );
+        assertEq(lcc0.balanceOf(address(positionManager)), 0, "no stranded queued-backing LCC on MMPM");
+        assertEq(
+            positionManager.queueCustodian().queued(0, lccAddr, victim),
+            amount * 2,
+            "custodian should record both shortfall tranches"
+        );
+    }
+
+    /// @notice Regression: pre-transfer queue snapshot caused underflow when annul cleared queue and unwrap added none.
+    /// @dev Second unwrap fully satisfies via market liquidity: no new queue; must not revert on queued delta math.
+    function test_unwrapLcc_payerIsUser_secondUnwrap_annulThenFullMarket_doesNotRevert() public {
+        address victim = makeAddr("victimAnnulFullMarket");
+        address lccAddr = address(lcc0);
+        uint256 amount = 200;
+        bytes32 marketId = PoolId.unwrap(corePoolKey.toId());
+        MockERC20 underlying = MockERC20(lcc0.underlying());
+
+        vm.prank(marketFactory);
+        ILiquidityHub(liquidityHub).setBoundLevel(address(positionManager), Bounds.BOUND_ENDPOINT);
+
+        vm.mockCall(marketFactory, abi.encodeWithSelector(IMarketFactory.bounds.selector, victim), abi.encode(false));
+
+        underlying.mint(address(liquidityHub), amount * 2);
+        vm.prank(address(vtsOrchestrator));
+        ILiquidityHub(liquidityHub).confirmTake(lccAddr, amount * 2, false);
+
+        _setDirectSupply(lccAddr, 0);
+
+        lcc0.transfer(liquidityHub, amount);
+        vm.prank(liquidityHub);
+        lcc0.transfer(victim, amount);
+
+        vm.startPrank(victim);
+        lcc0.approve(address(positionManager), type(uint256).max);
+        vm.stopPrank();
+
+        vm.mockCall(
+            marketFactory, abi.encodeWithSelector(IMarketFactory.useMarketLiquidity.selector), abi.encode(uint256(0))
+        );
+
+        vm.prank(victim);
+        MMA.unwrapLcc(positionManager, lccAddr, amount, victim, true);
+
+        assertEq(ILiquidityHub(liquidityHub).settleQueue(lccAddr, victim), amount);
+
+        lcc0.transfer(liquidityHub, amount);
+        vm.prank(liquidityHub);
+        lcc0.transfer(victim, amount);
+
+        vm.mockCall(
+            marketFactory,
+            abi.encodeWithSelector(IMarketFactory.useMarketLiquidity.selector, lccAddr, marketId, amount),
+            abi.encode(amount)
+        );
+
+        vm.prank(victim);
+        MMA.unwrapLcc(positionManager, lccAddr, amount, victim, true);
+
+        assertEq(
+            ILiquidityHub(liquidityHub).settleQueue(lccAddr, victim), 0, "annulled then fully settled; no new queue"
+        );
+        assertEq(lcc0.balanceOf(address(positionManager)), 0);
     }
 
     /// @notice Mutation-killer: when `settleQueue(lcc, sender) == 0`, COLLECT_AVAILABLE_LIQUIDITY must be a no-op.

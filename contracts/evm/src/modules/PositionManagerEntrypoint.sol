@@ -40,25 +40,29 @@ abstract contract PositionManagerEntrypoint is PositionManagerBase {
     // ------------------------------------------------------------------------------------------------
 
     /// @notice Hook called before batch execution
-    /// @dev Credits native ETH to the locker delta at most once per **transaction** (see `readMsgValueOnce`).
-    ///      `MMPositionManager` inherits `Multicall_v4`, which `delegatecall`s into this contract: every inner call
-    ///      shares the outer `msg.value`. If we cleared the read guard at batch end, each inner payable batch would
-    ///      re-credit the same `msg.value` and `TAKE(native, …)` could drain ambient ETH on the router.
+    /// @dev Credits native ETH to the locker delta using **balance-delta** accounting for the batch:
+    ///      - First batch in the tx: baseline `lastSeen = balance - msg.value` so only this call's `msg.value` is
+    ///        treated as new inflow (ambient ETH already on the router is not credited).
+    ///      - Later batches: `fresh = balance - lastSeen`; credit `min(msg.value, fresh)` so:
+    ///        - `Multicall_v4` inner `delegatecall`s share one outer `msg.value` and do not increase balance between
+    ///          batches → second inner batch gets `fresh == 0` (fixes duplicate credit if we cleared a boolean per batch).
+    ///        - Distinct payable top-level calls each add ETH → `fresh` matches the new wei and each call is credited once.
+    ///      `_afterBatch` snapshots `address(this).balance` into transient storage for the rest of the transaction.
     function _beforeBatch() internal {
-        uint256 amount = TransientSlots.readMsgValueOnce();
+        uint256 amount = TransientSlots.nativeEthCreditAmountForBatch(address(this).balance, msg.value);
         if (amount > 0) {
             _creditExact(CurrencyLibrary.ADDRESS_ZERO, amount);
         }
     }
 
     /// @notice Hook called after batch execution
-    /// @dev Clears batch-scoped seizure context, then asserts PoolManager / owner / produced-credit deltas net to zero.
-    ///      Intentionally does **not** call `TransientSlots.clearMsgValueRead()` so the native-value guard stays
-    ///      transaction-scoped (see `_beforeBatch` and multicall / delegatecall semantics).
+    /// @dev Clears batch-scoped seizure context, asserts deltas net to zero, then records native balance for the next
+    ///      `_beforeBatch` in the same transaction (multicall-safe, multi-entrypoint-safe).
     function _afterBatch() internal {
         TransientSlots.clearSeizedPositionId();
         // Owner-scoped and market-scoped transient namespaces both resolve through the orchestrator boundary.
         vtsOrchestrator.assertNonZeroDeltas(marketFactory);
+        TransientSlots.setNativeLastSeenBalance(address(this).balance);
     }
 
     // ------------------------------------------------------------------------------------------------

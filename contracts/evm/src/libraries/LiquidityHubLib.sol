@@ -6,7 +6,7 @@ import {LCCFactoryLib} from "./LCCFactoryLib.sol";
 import {Math} from "openzeppelin-contracts/contracts/utils/math/Math.sol";
 import {Errors} from "./Errors.sol";
 import {IMarketFactory} from "../interfaces/IMarketFactory.sol";
-import {IMMQueueCustodian} from "../interfaces/IMMQueueCustodian.sol";
+import {IQueueCustodian} from "../interfaces/IQueueCustodian.sol";
 import {Currency} from "v4-periphery/lib/v4-core/src/types/Currency.sol";
 import {CurrencyTransfer} from "./CurrencyTransfer.sol";
 import {IWETH9} from "v4-periphery/src/interfaces/external/IWETH9.sol";
@@ -700,6 +700,7 @@ library LiquidityHubLib {
         }
     }
 
+    /// @dev `custodian` must implement `IQueueCustodian`. `tokenId` is the custodian bucket id (commitment id or utility sentinel).
     function settleFromCustodian(
         LiquidityHubStorage storage s,
         address lcc,
@@ -715,7 +716,7 @@ library LiquidityHubLib {
             return 0;
         }
 
-        IMMQueueCustodian queueCustodian = IMMQueueCustodian(custodian);
+        IQueueCustodian queueCustodian = IQueueCustodian(custodian);
         uint256 queued = s.settleQueue[lcc][recipient];
         if (queued == 0) return 0;
 

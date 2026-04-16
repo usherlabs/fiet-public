@@ -619,7 +619,7 @@ contract MMPositionActionsImpl is
         });
 
         positionId = PositionLibrary.generateId(address(this), params);
-        (BalanceDelta liquidityDelta, BalanceDelta feesAccrued) =
+        (BalanceDelta liquidityDelta, BalanceDelta feesAccrued,) =
             _modifySyntheticLiquidity(poolKey, params, tokenId, hookData);
         principalDelta = liquidityDelta - feesAccrued;
     }
@@ -825,10 +825,9 @@ contract MMPositionActionsImpl is
             salt: salt
         });
 
-        (BalanceDelta liquidityDelta, BalanceDelta feesAccrued) =
-            _modifySyntheticLiquidity(poolKey, params, tokenId, hookData);
-        // Match Uniswap v4 PositionManager: slippage on principal = liquidityDelta - feesAccrued
-        (liquidityDelta - feesAccrued).validateMinOut(amount0Min, amount1Min);
+        (,, BalanceDelta mmForwardedNonFeeForMinOut) = _modifySyntheticLiquidity(poolKey, params, tokenId, hookData);
+        // Min-out on immediate non-fee LCC forwarded (post `feeAdj`), not raw `callerDelta - feesAccrued` (VTS queue principal).
+        mmForwardedNonFeeForMinOut.validateMinOut(amount0Min, amount1Min);
     }
 
     /// @notice Decreases liquidity from an existing position
@@ -836,8 +835,8 @@ contract MMPositionActionsImpl is
     /// @param tokenId The commitment NFT token ID
     /// @param positionIndex The position index within the commitment
     /// @param amountToDecrease The amount of liquidity to remove
-    /// @param amount0Min Minimum principal token0 received from removal
-    /// @param amount1Min Minimum principal token1 received from removal
+    /// @param amount0Min Minimum immediate non-fee LCC token0 forwarded to the queue custodian (post `feeAdj` netting).
+    /// @param amount1Min Minimum immediate non-fee LCC token1 forwarded (VTS queue principal remains `callerDelta - feesAccrued`).
     function _decrease(
         PoolKey calldata poolKey,
         uint256 tokenId,
@@ -913,7 +912,7 @@ contract MMPositionActionsImpl is
         });
 
         positionId = PositionLibrary.generateId(address(this), params);
-        (BalanceDelta liquidityDelta, BalanceDelta feesAccrued) =
+        (BalanceDelta liquidityDelta, BalanceDelta feesAccrued,) =
             _modifySyntheticLiquidity(poolKey, params, tokenId, hookData);
         principalDelta = liquidityDelta - feesAccrued;
     }
