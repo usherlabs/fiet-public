@@ -65,6 +65,7 @@ fuzz:
     @just fuzz-regressions
 
 # Targeted regression harnesses that complement canonical `test/fuzz/invariants/*`
+
 # coverage. These focus on specific behavioural paths and historical bug surfaces.
 fuzz-regressions:
     @just echidna-wrapwith
@@ -113,6 +114,7 @@ fuzz-deep:
 
 # Full invariant suite entrypoint for CI:
 # - all Echidna invariant harnesses
+
 # - Foundry evidence tests referenced in fuzz README
 fuzz-invariants:
     @just fuzz
@@ -246,17 +248,26 @@ echidna-confirmtake-callback config="echidna.config.yml":
 
 # Validate Echidna linked-library wiring and deployment preconditions.
 validate-fuzz-libs:
-  python3 scripts/validate_fuzz_lib_config.py
-  FOUNDRY_PROFILE=echidna forge script \
-    test/fuzz/script/SmokeEchidnaLinkedLibs.s.sol:SmokeEchidnaLinkedLibs \
-    --sig "run()"
+    python3 scripts/validate_fuzz_lib_config.py
+    FOUNDRY_PROFILE=echidna forge script \
+      test/fuzz/script/ValidateEchidnaLinkedLibs.s.sol:ValidateEchidnaLinkedLibs \
+      --sig "run()"
+    FOUNDRY_PROFILE=echidna forge script \
+      test/fuzz/script/SmokeEchidnaLinkedLibs.s.sol:SmokeEchidnaLinkedLibs \
+      --sig "run()"
 
-# Recompute deterministic CREATE2 addresses after linked-library bytecode changes.
+# Apply manifest and iterate until linked initcode matches (updates txt when stable).
 recompute-fuzz-lib-addrs:
-  @just print-fuzz-lib-addrs
+    python3 scripts/validate_fuzz_lib_config.py converge
 
-# Print the current fuzz-context CREATE2 outputs for linked libraries.
+# Print machine-readable lines for the manifest file (paste into echidna-linked-libs.txt).
+print-echidna-lib-manifest:
+    FOUNDRY_PROFILE=echidna forge script \
+      test/fuzz/script/ValidateEchidnaLinkedLibs.s.sol:ValidateEchidnaLinkedLibs \
+      --sig "printManifest()"
+
+# Print human-readable CREATE2 outputs and copy-paste blocks (verbose).
 print-fuzz-lib-addrs:
-  FOUNDRY_PROFILE=echidna forge script \
-    test/fuzz/script/ValidateEchidnaLinkedLibs.s.sol:ValidateEchidnaLinkedLibs \
-    --sig "printComputed()"
+    FOUNDRY_PROFILE=echidna forge script \
+      test/fuzz/script/ValidateEchidnaLinkedLibs.s.sol:ValidateEchidnaLinkedLibs \
+      --sig "printComputed()"

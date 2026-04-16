@@ -3341,7 +3341,7 @@ contract VTSPositionLibTest is VTSLibTestBase {
         harness.setUnderlyingDelta(Currency.wrap(u0), DEFAULT_OWNER, int128(int256(100e18)));
         harness.addMarketProducedCredit(IMarketVault(address(vault)), Currency.wrap(u0), 100e18);
 
-        (BalanceDelta settlementDelta,,) = harness.onMMSettle(
+        harness.onMMSettle(
             manager,
             vault,
             positionId,
@@ -3351,7 +3351,13 @@ contract VTSPositionLibTest is VTSLibTestBase {
             false,
             true
         );
-        assertEq(settlementDelta.amount0(), int128(int256(-50e18)), "fromDeltas deposit should apply requested lane");
+
+        (,, uint256 settled0After,,,) = harness.getPositionAccounting(positionId);
+        assertEq(settled0After, 50e18, "fromDeltas deposit should increase position settled0");
+        (uint256 poolSettled0,) = harness.getPoolTotalSettled(corePoolId);
+        assertEq(poolSettled0, 50e18, "pool totalSettled0 should track settled increase");
+        (uint256 deficitPrincipal0,) = harness.getPoolTotalDeficitPrincipal(corePoolId);
+        assertEq(deficitPrincipal0, 0, "deposit path should not create deficit principal");
 
         assertEq(vault.increaseReserveCalls(), 1, "settled increase should bump market liquidity reserve");
         assertEq(Currency.unwrap(vault.lastIncreaseCurrency()), u0, "reserve bump targets token0 underlying");

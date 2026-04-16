@@ -1,0 +1,13 @@
+# Single source of truth for Echidna [profile.echidna] hard-linked libraries.
+# Updated by `just recompute-fuzz-lib-addrs` (converges linked initcode) or `just print-echidna-lib-manifest`.
+# One line per library: src/path/File.sol:Symbol=0x...
+# VTSSwapLib is a fixed placeholder (not CREATE2-validated in harness helpers).
+
+src/libraries/LCCFactoryLib.sol:LCCFactoryLinkedLib=0x5a3842f9d1b0f96003669a36ec4a09165bc7de54
+src/libraries/LiquidityHubLinkedLib.sol:LiquidityHubLinkedLib=0x5be262f2f2f9b3b5c70a256526ee9c6dd8fc9e02
+src/libraries/VTSCommitLib.sol:VTSCommitLib=0xb16a5ac87e14b5e171096526565b24e42d2019ad
+src/libraries/VTSFeeLib.sol:VTSFeeLinkedLib=0xe2f744d132a1b346acd29e304181edf2bf9831b8
+src/libraries/VTSPositionLib.sol:VTSPositionLib=0x1f1b7143fcffb9217100e26d782ff4183a93a784
+src/libraries/VTSLifecycleLinkedLib.sol:VTSLifecycleLinkedLib=0xb58a5b8159a1ac2206a0e123993c2ecc5fda87a7
+src/libraries/VTSPositionMMOpsLib.sol:VTSPositionMMOpsLib=0x0bb8fc108c0adf840f3a14e170108c18429a8d25
+src/libraries/VTSSwapLib.sol:VTSSwapLib=0x1111111111111111111111111111111111111112

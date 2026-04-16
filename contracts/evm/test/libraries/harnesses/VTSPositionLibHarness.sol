@@ -176,9 +176,6 @@ contract VTSPositionLibHarness {
             BalanceDelta underlyingDeltaSettlement
         )
     {
-        if (LiquidityUtils.isZeroDelta(principalDelta) && LiquidityUtils.isZeroDelta(requiredSettlementDelta)) {
-            return (0, 0, BalanceDelta.wrap(0), BalanceDelta.wrap(0), BalanceDelta.wrap(0));
-        }
         BalanceDelta exportedForSettlementClampUnused;
         (
             retainedPrincipal0,

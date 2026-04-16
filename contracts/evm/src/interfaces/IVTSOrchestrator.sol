@@ -119,6 +119,14 @@ interface IVTSOrchestrator is IPausableVTS, IVTSCurrencyDelta, IVTSAdmin {
     /// @return pot1 Slashed pot balance for token1
     function getSlashedPot(PoolId poolId) external view returns (uint256 pot0, uint256 pot1);
 
+    /// @notice Pool-wide CISE total settled aggregate per token lane
+    /// @param poolId The pool identifier
+    function getPoolTotalSettled(PoolId poolId) external view returns (uint256 total0, uint256 total1);
+
+    /// @notice Pool-wide outstanding swap-incurred deficit principal per token (DICE aggregate)
+    /// @param poolId The pool identifier
+    function getPoolTotalDeficitPrincipal(PoolId poolId) external view returns (uint256 principal0, uint256 principal1);
+
     /// @notice Get fee-sharing accounting for a position
     /// @dev `pendingFeeAdj` is signed: +slash (funds pot), -bonus (drains pot when materialised)
     /// @param positionId The position identifier

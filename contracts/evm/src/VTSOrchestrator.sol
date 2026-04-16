@@ -429,6 +429,22 @@ contract VTSOrchestrator is
     }
 
     /// @inheritdoc IVTSOrchestrator
+    function getPoolTotalSettled(PoolId poolId) external view returns (uint256 total0, uint256 total1) {
+        PoolAccounting storage paPool = s.poolAccounting[poolId];
+        return (paPool.totalSettled.token0, paPool.totalSettled.token1);
+    }
+
+    /// @inheritdoc IVTSOrchestrator
+    function getPoolTotalDeficitPrincipal(PoolId poolId)
+        external
+        view
+        returns (uint256 principal0, uint256 principal1)
+    {
+        PoolAccounting storage paPool = s.poolAccounting[poolId];
+        return (paPool.totalDeficitPrincipal.token0, paPool.totalDeficitPrincipal.token1);
+    }
+
+    /// @inheritdoc IVTSOrchestrator
     function getPositionFeeAccounting(PositionId positionId)
         external
         view

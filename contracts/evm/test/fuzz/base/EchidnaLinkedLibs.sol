@@ -9,17 +9,19 @@ import {VTSPositionLib} from "../../../src/libraries/VTSPositionLib.sol";
 import {VTSLifecycleLinkedLib} from "../../../src/libraries/VTSLifecycleLinkedLib.sol";
 import {VTSPositionMMOpsLib} from "../../../src/libraries/VTSPositionMMOpsLib.sol";
 
-/// @notice Single source of truth for Echidna hard-linked library addresses and CREATE2 deploy helpers.
-/// @dev Addresses must match `foundry.toml [profile.echidna].libraries`.
-///      When linked-library bytecode changes, run `just recompute-fuzz-lib-addrs` and update here + foundry.toml.
+/// @notice Hard-linked library addresses for CREATE2 deploy helpers (must match linker output).
+/// @dev Authoritative list: `test/fuzz/echidna-linked-libs.txt`. Run `just recompute-fuzz-lib-addrs` after updating it.
 library EchidnaLinkedLibs {
+    /// @dev Must match `ValidateEchidnaLinkedLibs` / harness etch target (Echidna default deployer).
+    address internal constant ECHIDNA_DEPLOYER = 0x00a329c0648769A73afAc7F9381E08FB43dBEA72;
+
     address internal constant LCC_FACTORY_LINKED_LIB = 0x5A3842F9D1B0F96003669A36Ec4a09165bc7de54;
     address internal constant LIQUIDITY_HUB_LINKED_LIB = 0x5be262F2f2f9B3b5C70a256526eE9C6DD8Fc9E02;
-    address internal constant VTS_COMMIT_LIB = 0xfEd2b7739C0E197a05f0f5820473Fa5E40Afe6Bd;
+    address internal constant VTS_COMMIT_LIB = 0xb16A5AC87e14b5e171096526565b24e42d2019ad;
     address internal constant VTS_FEE_LINKED_LIB = 0xe2F744D132A1B346ACd29E304181EDf2bF9831b8;
-    address internal constant VTS_POSITION_LIB = 0x90c7906f303e369824C8444CF4A72FE0D3500f65;
-    address internal constant VTS_LIFECYCLE_LINKED_LIB = 0x6523d180a6da3e1C5E5D474b03bC292CaD6A9089;
-    address internal constant VTS_POSITION_MM_OPS_LIB = 0x378dD5049f0A8bCf075Ae672f7052D2366a5c5b0;
+    address internal constant VTS_POSITION_LIB = 0x1F1b7143fcFFB9217100E26d782Ff4183A93a784;
+    address internal constant VTS_LIFECYCLE_LINKED_LIB = 0xB58a5b8159a1ac2206a0E123993C2eCc5FDa87A7;
+    address internal constant VTS_POSITION_MM_OPS_LIB = 0x0Bb8FC108C0adf840f3a14e170108C18429a8d25;
 
     error VTSLifecycleLinkedLibAddrMismatch();
     error VTSPositionMMOpsLibAddrMismatch();
@@ -91,6 +93,42 @@ library EchidnaLinkedLibs {
     function deployVTSPositionMMOpsLib() internal {
         address lib = _deploy(keccak256("echidna.VTSPositionMMOpsLib"), type(VTSPositionMMOpsLib).creationCode);
         if (lib != VTS_POSITION_MM_OPS_LIB) revert VTSPositionMMOpsLibAddrMismatch();
+    }
+
+    // --- CREATE2 address prediction (same initCode + salt as deploy*; single source for scripts) ---
+
+    function predictedLCCFactoryLinkedLib() internal pure returns (address) {
+        return _predictCreate2(keccak256("echidna.LCCFactoryLinkedLib"), type(LCCFactoryLinkedLib).creationCode);
+    }
+
+    function predictedLiquidityHubLinkedLib() internal pure returns (address) {
+        return _predictCreate2(keccak256("echidna.LiquidityHubLinkedLib"), type(LiquidityHubLinkedLib).creationCode);
+    }
+
+    function predictedVTSCommitLib() internal pure returns (address) {
+        return _predictCreate2(keccak256("echidna.VTSCommitLib"), type(VTSCommitLib).creationCode);
+    }
+
+    function predictedVTSFeeLinkedLib() internal pure returns (address) {
+        return _predictCreate2(keccak256("echidna.VTSFeeLinkedLib"), type(VTSFeeLinkedLib).creationCode);
+    }
+
+    function predictedVTSPositionLib() internal pure returns (address) {
+        return _predictCreate2(keccak256("echidna.VTSPositionLib"), type(VTSPositionLib).creationCode);
+    }
+
+    function predictedVTSLifecycleLinkedLib() internal pure returns (address) {
+        return _predictCreate2(keccak256("echidna.VTSLifecycleLinkedLib"), type(VTSLifecycleLinkedLib).creationCode);
+    }
+
+    function predictedVTSPositionMMOpsLib() internal pure returns (address) {
+        return _predictCreate2(keccak256("echidna.VTSPositionMMOpsLib"), type(VTSPositionMMOpsLib).creationCode);
+    }
+
+    function _predictCreate2(bytes32 salt, bytes memory initCode) private pure returns (address) {
+        bytes32 initCodeHash = keccak256(initCode);
+        bytes32 digest = keccak256(abi.encodePacked(bytes1(0xff), ECHIDNA_DEPLOYER, salt, initCodeHash));
+        return address(uint160(uint256(digest)));
     }
 
     function _deploy(bytes32 salt, bytes memory initCode) private returns (address lib) {

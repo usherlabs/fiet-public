@@ -101,6 +101,16 @@ contract CrossMarketDeltaRegressionE2E is MME2EBase {
         DurablePositionState posB;
         DurablePositionState posC;
         DurablePositionState posD;
+        /// @dev Keccak over every position index under the commit (not only index 0).
+        bytes32 digestA;
+        bytes32 digestB;
+        bytes32 digestC;
+        bytes32 digestD;
+        /// @dev Pool-level durable aggregates (A–D) for CISE total settled and DICE deficit principal.
+        uint256[4] poolTotalSettled0;
+        uint256[4] poolTotalSettled1;
+        uint256[4] poolDeficitPrincipal0;
+        uint256[4] poolDeficitPrincipal1;
         uint256[4] protocolFee0;
         uint256[4] protocolFee1;
     }
@@ -381,6 +391,19 @@ contract CrossMarketDeltaRegressionE2E is MME2EBase {
         st.tokenOwner = s_mmpm.ownerOf(commitId);
     }
 
+    /// @dev Fingerprint of all position rows for a commit so staged vs compacted cannot diverge on non-zero indices only.
+    function _commitAllPositionsDigest(uint256 commitId) internal view returns (bytes32) {
+        IVTSOrchestrator vts = IVTSOrchestrator(s_vtsOrchestrator);
+        (,, uint256 positionCount,, uint256 inactiveRemnantCount) = vts.getCommit(commitId);
+        bytes32 h = keccak256(abi.encode(commitId, positionCount, inactiveRemnantCount));
+        for (uint256 i = 0; i < positionCount; ++i) {
+            (Position memory p, PositionId pid) = vts.getPosition(commitId, i);
+            (uint256 settled0, uint256 settled1) = vts.getPositionSettledAmounts(pid);
+            h = keccak256(abi.encode(h, i, p, pid, settled0, settled1));
+        }
+        return h;
+    }
+
     function _captureDurableSnapshot(address mm) internal view returns (DurableSnapshot memory snap) {
         IVTSOrchestrator vts = IVTSOrchestrator(s_vtsOrchestrator);
         address[8] memory lanes = _lccLanes();
@@ -395,6 +418,24 @@ contract CrossMarketDeltaRegressionE2E is MME2EBase {
         snap.posB = _capturePositionState(s_commitB);
         snap.posC = _capturePositionState(s_commitC);
         snap.posD = _capturePositionState(s_commitD);
+
+        snap.digestA = _commitAllPositionsDigest(s_commitA);
+        snap.digestB = _commitAllPositionsDigest(s_commitB);
+        snap.digestC = _commitAllPositionsDigest(s_commitC);
+        snap.digestD = _commitAllPositionsDigest(s_commitD);
+
+        (snap.poolTotalSettled0[0], snap.poolTotalSettled1[0]) = vts.getPoolTotalSettled(s_keyA.toId());
+        (snap.poolTotalSettled0[1], snap.poolTotalSettled1[1]) = vts.getPoolTotalSettled(s_keyB.toId());
+        (snap.poolTotalSettled0[2], snap.poolTotalSettled1[2]) = vts.getPoolTotalSettled(s_keyC.toId());
+        (snap.poolTotalSettled0[3], snap.poolTotalSettled1[3]) = vts.getPoolTotalSettled(s_keyD.toId());
+        (snap.poolDeficitPrincipal0[0], snap.poolDeficitPrincipal1[0]) =
+            vts.getPoolTotalDeficitPrincipal(s_keyA.toId());
+        (snap.poolDeficitPrincipal0[1], snap.poolDeficitPrincipal1[1]) =
+            vts.getPoolTotalDeficitPrincipal(s_keyB.toId());
+        (snap.poolDeficitPrincipal0[2], snap.poolDeficitPrincipal1[2]) =
+            vts.getPoolTotalDeficitPrincipal(s_keyC.toId());
+        (snap.poolDeficitPrincipal0[3], snap.poolDeficitPrincipal1[3]) =
+            vts.getPoolTotalDeficitPrincipal(s_keyD.toId());
 
         (snap.protocolFee0[0], snap.protocolFee1[0]) = vts.getProtocolFeeAccrued(s_keyA.toId());
         (snap.protocolFee0[1], snap.protocolFee1[1]) = vts.getProtocolFeeAccrued(s_keyB.toId());
@@ -443,6 +484,22 @@ contract CrossMarketDeltaRegressionE2E is MME2EBase {
         _assertPositionStateEq(staged.posB, compacted.posB, "posB");
         _assertPositionStateEq(staged.posC, compacted.posC, "posC");
         _assertPositionStateEq(staged.posD, compacted.posD, "posD");
+        require(staged.digestA == compacted.digestA, "diff: commit digest A mismatch");
+        require(staged.digestB == compacted.digestB, "diff: commit digest B mismatch");
+        require(staged.digestC == compacted.digestC, "diff: commit digest C mismatch");
+        require(staged.digestD == compacted.digestD, "diff: commit digest D mismatch");
+        for (uint256 p = 0; p < 4; ++p) {
+            require(staged.poolTotalSettled0[p] == compacted.poolTotalSettled0[p], "diff: poolTotalSettled0 mismatch");
+            require(staged.poolTotalSettled1[p] == compacted.poolTotalSettled1[p], "diff: poolTotalSettled1 mismatch");
+            require(
+                staged.poolDeficitPrincipal0[p] == compacted.poolDeficitPrincipal0[p],
+                "diff: poolDeficitPrincipal0 mismatch"
+            );
+            require(
+                staged.poolDeficitPrincipal1[p] == compacted.poolDeficitPrincipal1[p],
+                "diff: poolDeficitPrincipal1 mismatch"
+            );
+        }
         for (uint256 j = 0; j < staged.protocolFee0.length; ++j) {
             require(staged.protocolFee0[j] == compacted.protocolFee0[j], "diff: protocolFee0 mismatch");
             require(staged.protocolFee1[j] == compacted.protocolFee1[j], "diff: protocolFee1 mismatch");
@@ -471,10 +528,22 @@ contract CrossMarketDeltaRegressionE2E is MME2EBase {
         bool unchangedC,
         bool unchangedD
     ) internal pure {
-        if (unchangedA) _assertPositionStateEq(prev.posA, curr.posA, "stage checkpoint: posA should be unchanged");
-        if (unchangedB) _assertPositionStateEq(prev.posB, curr.posB, "stage checkpoint: posB should be unchanged");
-        if (unchangedC) _assertPositionStateEq(prev.posC, curr.posC, "stage checkpoint: posC should be unchanged");
-        if (unchangedD) _assertPositionStateEq(prev.posD, curr.posD, "stage checkpoint: posD should be unchanged");
+        if (unchangedA) {
+            _assertPositionStateEq(prev.posA, curr.posA, "stage checkpoint: posA should be unchanged");
+            require(prev.digestA == curr.digestA, "stage checkpoint: digestA should be unchanged");
+        }
+        if (unchangedB) {
+            _assertPositionStateEq(prev.posB, curr.posB, "stage checkpoint: posB should be unchanged");
+            require(prev.digestB == curr.digestB, "stage checkpoint: digestB should be unchanged");
+        }
+        if (unchangedC) {
+            _assertPositionStateEq(prev.posC, curr.posC, "stage checkpoint: posC should be unchanged");
+            require(prev.digestC == curr.digestC, "stage checkpoint: digestC should be unchanged");
+        }
+        if (unchangedD) {
+            _assertPositionStateEq(prev.posD, curr.posD, "stage checkpoint: posD should be unchanged");
+            require(prev.digestD == curr.digestD, "stage checkpoint: digestD should be unchanged");
+        }
     }
 
     function _assertProtocolFeesUnchangedUnless(
