@@ -22,6 +22,7 @@ import {ModifyLiquidityParams} from "@uniswap/v4-core/src/types/PoolOperation.so
 import {BalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
 import {IPoolManager} from "v4-periphery/lib/v4-core/src/interfaces/IPoolManager.sol";
 import {VTSPositionLib} from "../../../src/libraries/VTSPositionLib.sol";
+import {VTSPositionMMOpsLib} from "../../../src/libraries/VTSPositionMMOpsLib.sol";
 import {VTSLifecycleLinkedLib} from "../../../src/libraries/VTSLifecycleLinkedLib.sol";
 import {VTSFeeLinkedLib} from "../../../src/libraries/VTSFeeLib.sol";
 import {VTSCommitLib} from "../../../src/libraries/VTSCommitLib.sol";
@@ -31,6 +32,7 @@ import {OwnerCurrencyDelta} from "../../../src/libraries/OwnerCurrencyDelta.sol"
 import {MarketCurrencyDelta} from "../../../src/libraries/MarketCurrencyDelta.sol";
 import {ICanonicalVault} from "../../../src/interfaces/ICanonicalVault.sol";
 import {CurrencyDelta} from "v4-periphery/lib/v4-core/src/libraries/CurrencyDelta.sol";
+import {LiquidityUtils} from "../../../src/libraries/LiquidityUtils.sol";
 
 /// @title VTSPositionLibHarness
 /// @notice Exposes internal VTSPositionLib functions for unit testing
@@ -104,6 +106,14 @@ contract VTSPositionLibHarness {
         return VTSPositionLib.touchPosition(s, ctx, p);
     }
 
+    /// @notice Alias for `touchPosition` (MM tail runs inside `touchPosition`; returned `pos` is refreshed from storage).
+    function touchPositionAndFinalizeMM(PositionContext memory ctx, TouchPositionParams calldata p)
+        external
+        returns (TouchPositionResult memory result)
+    {
+        result = VTSPositionLib.touchPosition(s, ctx, p);
+    }
+
     /// @notice Exposes onMMSettle for testing
     function onMMSettle(
         IPoolManager poolManager,
@@ -150,6 +160,33 @@ contract VTSPositionLibHarness {
         return (result.settlementDelta, result.rfsOpen, result.seizedLiquidityUnits, result.vaultSettlementIntent);
     }
 
+    /// @dev Mirrors removed `previewLiquidityDecreaseRouting` early-return + `_computeLiquidityDecreaseRoutingSplit`.
+    function _previewLiquidityDecreaseRoutingHarness(
+        PositionContext memory ctx,
+        BalanceDelta principalDelta,
+        BalanceDelta requiredSettlementDelta
+    )
+        private
+        view
+        returns (
+            uint256 retainedPrincipal0,
+            uint256 retainedPrincipal1,
+            BalanceDelta settleableDelta,
+            BalanceDelta queuedDelta,
+            BalanceDelta underlyingDeltaSettlement
+        )
+    {
+        BalanceDelta exportedForSettlementClampUnused;
+        (
+            retainedPrincipal0,
+            retainedPrincipal1,
+            settleableDelta,
+            queuedDelta,
+            underlyingDeltaSettlement,
+            exportedForSettlementClampUnused
+        ) = VTSPositionMMOpsLib._computeLiquidityDecreaseRoutingSplit(ctx, principalDelta, requiredSettlementDelta);
+    }
+
     /// @notice Exposes internal coverage burn for direct unit testing
     /// @dev Useful to kill mutants around `_calculateFeesBurn` / `_applyCoverageBurn` and outflow-window checkpointing.
     function applyCoverageBurn(
@@ -173,9 +210,9 @@ contract VTSPositionLibHarness {
         address queueRecipient
     ) external returns (BalanceDelta settleableDelta) {
         (,, settleableDelta, lastQueuedDelta, lastUnderlyingDeltaSettlement) =
-            VTSPositionLib._previewLiquidityDecreaseRouting(ctx, principalDelta, requiredSettlementDelta);
+            _previewLiquidityDecreaseRoutingHarness(ctx, principalDelta, requiredSettlementDelta);
         lastSettleableDelta = settleableDelta;
-        VTSPositionLib._handleLiquidityDecrease(
+        VTSPositionMMOpsLib._handleLiquidityDecrease(
             ctx, owner, poolKey, principalDelta, requiredSettlementDelta, queueRecipient
         );
         return settleableDelta;
@@ -195,11 +232,11 @@ contract VTSPositionLibHarness {
     {
         (
             ,, settleableDelta, queuedDelta, underlyingDeltaSettlement
-        ) = VTSPositionLib._previewLiquidityDecreaseRouting(ctx, principalDelta, requiredSettlementDelta);
+        ) = _previewLiquidityDecreaseRoutingHarness(ctx, principalDelta, requiredSettlementDelta);
         lastSettleableDelta = settleableDelta;
         lastQueuedDelta = queuedDelta;
         lastUnderlyingDeltaSettlement = underlyingDeltaSettlement;
-        VTSPositionLib._handleLiquidityDecrease(
+        VTSPositionMMOpsLib._handleLiquidityDecrease(
             ctx, owner, poolKey, principalDelta, requiredSettlementDelta, queueRecipient
         );
         return (settleableDelta, queuedDelta, underlyingDeltaSettlement);

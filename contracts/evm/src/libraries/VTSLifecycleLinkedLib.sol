@@ -13,7 +13,6 @@ import {
     VTSStorage,
     VTSLifecycleContext,
     VTSCoreHookContext,
-    VTSCommitRouterContext,
     PositionContext,
     TouchPositionParams,
     TouchPositionResult,
@@ -38,7 +37,7 @@ import {IMarketFactory} from "../interfaces/IMarketFactory.sol";
 import {IMarketVault} from "../interfaces/IMarketVault.sol";
 import {ICanonicalVault} from "../interfaces/ICanonicalVault.sol";
 import {VTSPositionLib} from "./VTSPositionLib.sol";
-import {VTSCommitLib} from "./VTSCommitLib.sol";
+import {VTSPositionMMOpsLib} from "./VTSPositionMMOpsLib.sol";
 import {CheckpointLibrary} from "./Checkpoint.sol";
 import {MarketHandlerLib} from "./MarketHandlerLib.sol";
 import {MarketMaker} from "./MarketMaker.sol";
@@ -89,24 +88,6 @@ library VTSLifecycleLinkedLib {
         BalanceDelta settlementDelta;
         uint256 creditBackedWithdrawal0;
         uint256 creditBackedWithdrawal1;
-    }
-
-    function _assertRegisteredFactory(VTSCommitRouterContext memory ctx, IMarketFactory factory) internal view {
-        if (!ctx.liquidityHub.isFactory(address(factory))) revert Errors.InvalidSender();
-    }
-
-    function _resolveSignalSender(
-        VTSCommitRouterContext memory ctx,
-        IMarketFactory factory,
-        address caller,
-        address sender
-    ) internal view returns (address effectiveSender) {
-        _assertRegisteredFactory(ctx, factory);
-        if (MarketHandlerLib.isBounds(factory, caller)) {
-            return sender;
-        }
-        if (sender != caller) revert Errors.InvalidSender();
-        return caller;
     }
 
     /// @notice Checks if a commit exists and optionally enforces a live VRL-backed signal
@@ -274,10 +255,10 @@ library VTSLifecycleLinkedLib {
         BalanceDelta depositSettlementDelta;
 
         if (p.fromDeltas) {
-            VTSPositionLib.ProtocolCreditSettlementResult memory protocolCreditSettlement =
-                VTSPositionLib._settleFromPositiveUnderlyingDelta(
+            VTSPositionMMOpsLib.ProtocolCreditSettlementResult memory protocolCreditSettlement =
+                VTSPositionMMOpsLib.settleFromPositiveUnderlyingDelta(
                     s,
-                    VTSPositionLib.ProtocolCreditSettlementParams({
+                    VTSPositionMMOpsLib.ProtocolCreditSettlementParams({
                         marketVault: p.vault,
                         positionId: p.positionId,
                         owner: pos.owner,
@@ -614,16 +595,11 @@ library VTSLifecycleLinkedLib {
     /// @param delta The current currency delta for the owner (negative = owes, positive = owed)
     /// @param amount The settlement amount (negative = deposit, positive = withdrawal)
     /// @return clearance The amount to clear from delta (negative reduces positive delta, positive reduces negative delta)
-    function _calcDeltaClearance(int128 delta, int128 amount) private pure returns (int128 clearance) {
+    function _calcDeltaClearance(int128 delta, int128 amount) internal pure returns (int128 clearance) {
         if (delta < 0 && amount < 0) {
             int128 minMagnitude = delta > amount ? delta : amount;
             clearance = -minMagnitude;
         }
-    }
-
-    /// @notice Harness bridge for delta-clearance truth tables (logic lives with MM settlement).
-    function mmCalcDeltaClearance(int128 delta, int128 amount) external pure returns (int128 clearance) {
-        return _calcDeltaClearance(delta, amount);
     }
 
     /// @notice Calculates liquidity units to seize for a given position and settlement delta
@@ -700,76 +676,15 @@ library VTSLifecycleLinkedLib {
         return total;
     }
 
-    /// @dev Commitment backing (optional) plus RFS checkpoint marking from current stored accounting.
-    ///      Caller must have settled position growths first when pause gating matters (e.g. via
-    ///      `VTSOrchestrator.settlePositionGrowths`).
-    function _checkpointAfterGrowthSettled(
-        VTSStorage storage s,
-        VTSLifecycleContext memory ctx,
-        uint256 commitId,
-        bool withCommitment,
-        PositionId positionId
-    ) private returns (RFSCheckpoint memory checkpointOut) {
-        if (withCommitment) {
-            VTSCommitLib.checkpointWithCommitment(s, ctx.poolManager, ctx.oracleHelper, commitId, positionId);
-        }
+    /// @notice Mark RFS checkpoint from current state without commitment-backed checkpointing (`withCommitment == false`).
+    /// @dev Does not settle growths. The orchestrator must settle growth first where required.
+    function checkpointAfterGrowthNoCommitment(VTSStorage storage s, PositionId positionId)
+        external
+        returns (RFSCheckpoint memory checkpointOut)
+    {
         (, BalanceDelta rfsDelta) = VTSPositionLib.getRFS(s, positionId);
         CheckpointLibrary.markCheckpoint(s, positionId, VTSPositionLib._rfsOpenMask(rfsDelta));
         checkpointOut = s.positions[positionId].checkpoint;
-    }
-
-    /// @notice Optional commitment backing check, then mark the RFS checkpoint from current state
-    /// @dev Does not settle growths. The orchestrator must settle growth first (including its paused
-    ///      `checkpoint(..., true)` path that calls `VTSPositionLib.settlePositionGrowths` directly when the public
-    ///      entrypoint is CoreHook-only).
-    function checkpoint(
-        VTSStorage storage s,
-        VTSLifecycleContext memory ctx,
-        uint256 commitId,
-        bool withCommitment,
-        PositionId positionId
-    ) external returns (RFSCheckpoint memory checkpointOut) {
-        checkpointOut = _checkpointAfterGrowthSettled(s, ctx, commitId, withCommitment, positionId);
-    }
-
-    function extendGracePeriod(
-        VTSStorage storage s,
-        VTSLifecycleContext memory ctx,
-        PoolKey memory poolKey,
-        PositionId positionId,
-        uint8 settlementTokenIndex,
-        uint32 verifierIndex,
-        bytes memory settlementProof
-    ) external returns (RFSCheckpoint memory checkpointOut) {
-        VTSPositionLib.settlePositionGrowths(s, ctx.poolManager, positionId);
-        (, BalanceDelta rfsDelta) = VTSPositionLib.getRFS(s, positionId);
-        CheckpointLibrary.markCheckpoint(s, positionId, VTSPositionLib._rfsOpenMask(rfsDelta));
-        CheckpointLibrary.extendGracePeriod(
-            s, ctx.settlementObserver, poolKey, positionId, settlementTokenIndex, verifierIndex, settlementProof
-        );
-        checkpointOut = s.positions[positionId].checkpoint;
-    }
-
-    function validateSeize(
-        VTSStorage storage s,
-        VTSLifecycleContext memory ctx,
-        uint256 commitId,
-        uint256 positionIndex,
-        PositionId positionId
-    ) external {
-        // When a stored commitment deficit exists, refresh growth and re-run commitment checkpoint before seizability
-        // so bypass eligibility cannot rely on stale `commitmentDeficit` after backing recovers.
-        // We do not always call `_checkpointAfterGrowthSettled(..., true)` here: that would `markCheckpoint` from
-        // live `getRFS` and could materialise the first ordinary RFS checkpoint, which `onSeize` must not do
-        // (see `test_onSeize_doesNotStartOrdinaryGraceWithoutPriorCheckpoint`).
-        bool hasStoredCommitmentDeficit = s.positionAccounting[positionId].commitmentDeficit.token0 > 0
-            || s.positionAccounting[positionId].commitmentDeficit.token1 > 0;
-        if (hasStoredCommitmentDeficit) {
-            VTSPositionLib.settlePositionGrowths(s, ctx.poolManager, positionId);
-            _checkpointAfterGrowthSettled(s, ctx, commitId, true, positionId);
-        }
-
-        CheckpointLibrary.isSeizable(s, commitId, positionIndex, true);
     }
 
     /// @param fromDeltas When true, deposit lanes (negative `amountDelta` components) may settle from existing
@@ -820,6 +735,38 @@ library VTSLifecycleLinkedLib {
         return true;
     }
 
+    function _processPositionTouchValidated(
+        VTSStorage storage s,
+        VTSCoreHookContext memory ctx,
+        address owner,
+        PoolKey calldata poolKey,
+        ModifyLiquidityParams calldata params,
+        BalanceDelta callerDelta,
+        BalanceDelta feesAccrued,
+        bytes calldata hookData
+    ) private returns (TouchPositionResult memory result) {
+        PositionId expectedId = PositionLibrary.generateId(owner, params);
+        if (s.positions[expectedId].owner != address(0)) {
+            _assertPositionValid(s, expectedId, false, poolKey.toId());
+        }
+
+        result = _executeTouchPosition(s, ctx, owner, poolKey, params, callerDelta, feesAccrued, hookData);
+    }
+
+    /// @notice Runs `VTSPositionLib.touchPosition` (includes MM tail via `VTSPositionMMOpsLib` when applicable).
+    function executeProcessPositionTouch(
+        VTSStorage storage s,
+        VTSCoreHookContext memory ctx,
+        address owner,
+        PoolKey calldata poolKey,
+        ModifyLiquidityParams calldata params,
+        BalanceDelta callerDelta,
+        BalanceDelta feesAccrued,
+        bytes calldata hookData
+    ) external returns (TouchPositionResult memory result) {
+        result = _processPositionTouchValidated(s, ctx, owner, poolKey, params, callerDelta, feesAccrued, hookData);
+    }
+
     function processPosition(
         VTSStorage storage s,
         VTSCoreHookContext memory ctx,
@@ -830,83 +777,11 @@ library VTSLifecycleLinkedLib {
         BalanceDelta feesAccrued,
         bytes calldata hookData
     ) external returns (Position memory pos, PositionId id, BalanceDelta feeAdj) {
-        PositionId expectedId = PositionLibrary.generateId(owner, params);
-        if (s.positions[expectedId].owner != address(0)) {
-            _assertPositionValid(s, expectedId, false, poolKey.toId());
-        }
-
-        TouchPositionResult memory result =
-            _executeTouchPosition(s, ctx, owner, poolKey, params, callerDelta, feesAccrued, hookData);
+        TouchPositionResult memory result = _processPositionTouchValidated(
+            s, ctx, owner, poolKey, params, callerDelta, feesAccrued, hookData
+        );
         pos = result.pos;
         id = result.id;
         feeAdj = result.feeAdj;
-    }
-
-    function commitSignal(
-        VTSStorage storage s,
-        VTSCommitRouterContext memory ctx,
-        IMarketFactory factory,
-        address caller,
-        address sender,
-        bytes memory liquiditySignal
-    ) external returns (uint256 commitId) {
-        address effectiveSender = _resolveSignalSender(ctx, factory, caller, sender);
-        commitId = VTSCommitLib.commitSignal(s, effectiveSender, ctx.signalManager, ctx.oracleHelper, liquiditySignal);
-    }
-
-    function commitSignalRelayed(
-        VTSStorage storage s,
-        VTSCommitRouterContext memory ctx,
-        IMarketFactory factory,
-        address caller,
-        address sender,
-        bytes memory liquiditySignal,
-        uint256 deadline,
-        uint256 authNonce,
-        bytes memory authSig
-    ) external returns (uint256 commitId) {
-        address effectiveSender = _resolveSignalSender(ctx, factory, caller, sender);
-        commitId = VTSCommitLib.commitSignalRelayed(
-            s, effectiveSender, ctx.signalManager, ctx.oracleHelper, liquiditySignal, deadline, authNonce, authSig
-        );
-    }
-
-    function renewSignal(
-        VTSStorage storage s,
-        VTSCommitRouterContext memory ctx,
-        IMarketFactory factory,
-        address caller,
-        address sender,
-        uint256 commitId,
-        bytes memory liquiditySignal
-    ) external {
-        address effectiveSender = _resolveSignalSender(ctx, factory, caller, sender);
-        VTSCommitLib.renewSignal(s, effectiveSender, ctx.signalManager, ctx.oracleHelper, commitId, liquiditySignal);
-    }
-
-    function renewSignalRelayed(
-        VTSStorage storage s,
-        VTSCommitRouterContext memory ctx,
-        IMarketFactory factory,
-        address caller,
-        address sender,
-        uint256 commitId,
-        bytes memory liquiditySignal,
-        uint256 deadline,
-        uint256 authNonce,
-        bytes memory authSig
-    ) external {
-        address effectiveSender = _resolveSignalSender(ctx, factory, caller, sender);
-        VTSCommitLib.renewSignalRelayed(
-            s,
-            effectiveSender,
-            ctx.signalManager,
-            ctx.oracleHelper,
-            commitId,
-            liquiditySignal,
-            deadline,
-            authNonce,
-            authSig
-        );
     }
 }

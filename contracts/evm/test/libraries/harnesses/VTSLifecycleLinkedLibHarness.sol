@@ -2,6 +2,7 @@
 pragma solidity ^0.8.26;
 
 import {VTSLifecycleLinkedLib} from "../../../src/libraries/VTSLifecycleLinkedLib.sol";
+import {VTSCommitLib} from "../../../src/libraries/VTSCommitLib.sol";
 import {VTSPositionLib} from "../../../src/libraries/VTSPositionLib.sol";
 import {
     VTSStorage,
@@ -31,7 +32,9 @@ contract VTSLifecycleLinkedLibHarness {
         external
         returns (RFSCheckpoint memory)
     {
-        return VTSLifecycleLinkedLib.checkpoint(s, ctx, commitId, withCommitment, positionId);
+        return withCommitment
+            ? VTSCommitLib.checkpointAfterGrowthWithCommitment(s, ctx, commitId, positionId)
+            : VTSLifecycleLinkedLib.checkpointAfterGrowthNoCommitment(s, positionId);
     }
 
     /// @notice TEST-ONLY helper for legacy flows that still want pre-settlement before checkpointing.
@@ -42,7 +45,9 @@ contract VTSLifecycleLinkedLibHarness {
         PositionId positionId
     ) external returns (RFSCheckpoint memory) {
         VTSPositionLib.settlePositionGrowths(s, ctx.poolManager, positionId);
-        return VTSLifecycleLinkedLib.checkpoint(s, ctx, commitId, withCommitment, positionId);
+        return withCommitment
+            ? VTSCommitLib.checkpointAfterGrowthWithCommitment(s, ctx, commitId, positionId)
+            : VTSLifecycleLinkedLib.checkpointAfterGrowthNoCommitment(s, positionId);
     }
 
     function extendGracePeriod(
@@ -53,7 +58,7 @@ contract VTSLifecycleLinkedLibHarness {
         uint32 verifierIndex,
         bytes memory settlementProof
     ) external returns (RFSCheckpoint memory) {
-        return VTSLifecycleLinkedLib.extendGracePeriod(
+        return VTSCommitLib.extendGracePeriod(
             s, ctx, poolKey, positionId, settlementTokenIndex, verifierIndex, settlementProof
         );
     }
@@ -64,7 +69,7 @@ contract VTSLifecycleLinkedLibHarness {
         uint256 positionIndex,
         PositionId positionId
     ) external {
-        VTSLifecycleLinkedLib.validateSeize(s, ctx, commitId, positionIndex, positionId);
+        VTSCommitLib.validateSeize(s, ctx, commitId, positionIndex, positionId);
     }
 
     function onMMSettle(
@@ -107,7 +112,7 @@ contract VTSLifecycleLinkedLibHarness {
         address sender,
         bytes memory liquiditySignal
     ) external returns (uint256 commitId) {
-        return VTSLifecycleLinkedLib.commitSignal(s, ctx, factory, caller, sender, liquiditySignal);
+        return VTSCommitLib.commitSignal(s, ctx, factory, caller, sender, liquiditySignal);
     }
 
     function commitSignalRelayed(
@@ -120,7 +125,7 @@ contract VTSLifecycleLinkedLibHarness {
         uint256 authNonce,
         bytes memory authSig
     ) external returns (uint256 commitId) {
-        return VTSLifecycleLinkedLib.commitSignalRelayed(
+        return VTSCommitLib.commitSignalRelayed(
             s, ctx, factory, caller, sender, liquiditySignal, deadline, authNonce, authSig
         );
     }
@@ -133,7 +138,7 @@ contract VTSLifecycleLinkedLibHarness {
         uint256 commitId,
         bytes memory liquiditySignal
     ) external {
-        VTSLifecycleLinkedLib.renewSignal(s, ctx, factory, caller, sender, commitId, liquiditySignal);
+        VTSCommitLib.renewSignal(s, ctx, factory, caller, sender, commitId, liquiditySignal);
     }
 
     function renewSignalRelayed(
@@ -147,7 +152,7 @@ contract VTSLifecycleLinkedLibHarness {
         uint256 authNonce,
         bytes memory authSig
     ) external {
-        VTSLifecycleLinkedLib.renewSignalRelayed(
+        VTSCommitLib.renewSignalRelayed(
             s, ctx, factory, caller, sender, commitId, liquiditySignal, deadline, authNonce, authSig
         );
     }

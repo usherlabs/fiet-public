@@ -43,13 +43,13 @@ contract VTSCommitLibHarness {
         external
         returns (uint256)
     {
-        return VTSCommitLib.commitSignal(s, sender, mgr, oracleHelper, sig);
+        return VTSCommitLib._commitSignalLinked(s, sender, mgr, oracleHelper, sig);
     }
 
     function renewSignal(IVRLSignalManager mgr, IOracleHelper oracleHelper, uint256 commitId, bytes memory sig)
         external
     {
-        VTSCommitLib.renewSignal(s, msg.sender, mgr, oracleHelper, commitId, sig);
+        VTSCommitLib._renewSignalLinked(s, msg.sender, mgr, oracleHelper, commitId, sig);
     }
 
     /// @dev TEST-ONLY: overwrite stored commit MM state (e.g. to simulate legacy unpriceable storage).
@@ -60,7 +60,7 @@ contract VTSCommitLibHarness {
     function checkpoint(IPoolManager poolManager, IOracleHelper oracleHelper, uint256 commitId, PositionId positionId)
         external
     {
-        VTSCommitLib.checkpointWithCommitment(s, poolManager, oracleHelper, commitId, positionId);
+        VTSCommitLib._checkpointWithCommitment(s, poolManager, oracleHelper, commitId, positionId);
     }
 
     // ============ Storage Setters (for test setup) ============

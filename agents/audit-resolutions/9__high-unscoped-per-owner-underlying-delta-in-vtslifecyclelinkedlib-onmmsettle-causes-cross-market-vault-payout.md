@@ -179,7 +179,9 @@ forge test --match-path test/modules/VTSCurrencyDelta.t.sol
 This finding is resolved **under the current pairing invariant**:
 
 - produced credit must only be added when durable reserve is explicitly exported; and
-- delta-backed withdrawal must always debit owner delta and consume produced credit together.
+- whenever owner-level same-underlying delta is spent in settlement, `MarketCurrencyDelta.consumeProduced(...)` must run
+  for the matching factory-produced credit slice—covering delta-backed withdrawals **and** positive-underlying-delta
+  deposit / MM-add paths that settle via `VTSPositionLib._settleFromPositiveUnderlyingDelta(...)`, not withdrawal-only flows.
 
 That pairing is now part of the documented invariant set (`DELTA-01A`). A future refactor that broke either half of
 that pairing could re-open the same class of issue, so subsequent settlement-path changes should always be reviewed

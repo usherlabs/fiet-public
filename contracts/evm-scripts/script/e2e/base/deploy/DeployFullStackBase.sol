@@ -12,6 +12,7 @@ import {VTSPositionLib} from "src/libraries/VTSPositionLib.sol";
 import {VTSSwapLib} from "src/libraries/VTSSwapLib.sol";
 import {VTSCommitLib} from "src/libraries/VTSCommitLib.sol";
 import {VTSLifecycleLinkedLib} from "src/libraries/VTSLifecycleLinkedLib.sol";
+import {VTSPositionMMOpsLib} from "src/libraries/VTSPositionMMOpsLib.sol";
 import {LCCFactoryLinkedLib} from "src/libraries/LCCFactoryLib.sol";
 import {LiquidityHubLinkedLib} from "src/libraries/LiquidityHubLinkedLib.sol";
 import {VTSFeeLinkedLib} from "src/libraries/VTSFeeLib.sol";
@@ -29,6 +30,7 @@ abstract contract DeployFullStackBase is DeployProtocolBase {
         address vtsPositionLib;
         address vtsSwapLib;
         address vtsCommitLib;
+        address vtsPositionMMOpsLib;
         address vtsLifecycleLinkedLib;
         address vtsFeeLinkedLib;
         address lccFactoryLinkedLib;
@@ -71,6 +73,7 @@ abstract contract DeployFullStackBase is DeployProtocolBase {
     string internal constant VTS_POSITION_LIB = "VTSPositionLib";
     string internal constant VTS_SWAP_LIB = "VTSSwapLib";
     string internal constant VTS_COMMIT_LIB = "VTSCommitLib";
+    string internal constant VTS_POSITION_MM_OPS_LIB = "VTSPositionMMOpsLib";
     string internal constant VTS_LIFECYCLE_LINKED_LIB = "VTSLifecycleLinkedLib";
     string internal constant LCC_FACTORY_LINKED_LIB = "LCCFactoryLinkedLib";
     string internal constant LIQUIDITY_HUB_LINKED_LIB = "LiquidityHubLinkedLib";
@@ -83,6 +86,8 @@ abstract contract DeployFullStackBase is DeployProtocolBase {
     function _deployAll() internal returns (FullStack memory out) {
         // Load network constants + deployment file path (even though we don't write).
         _initNetwork();
+        _assertCreate3FactoryDeployed();
+        _assertCorePeripheryConfig();
 
         console.log("E2E DeployFullStack on %s", networkName);
         console.log("PoolManager:", config.poolManager);
@@ -99,6 +104,8 @@ abstract contract DeployFullStackBase is DeployProtocolBase {
         out.libs.vtsCommitLib = _deployLibrary(VTS_COMMIT_LIB, type(VTSCommitLib).creationCode);
         out.libs.vtsSwapLib = _deployLibrary(VTS_SWAP_LIB, type(VTSSwapLib).creationCode);
         out.libs.vtsPositionLib = _deployLibrary(VTS_POSITION_LIB, type(VTSPositionLib).creationCode);
+        out.libs.vtsPositionMMOpsLib =
+            _deployLibrary(VTS_POSITION_MM_OPS_LIB, type(VTSPositionMMOpsLib).creationCode);
         out.libs.vtsLifecycleLinkedLib =
             _deployLibrary(VTS_LIFECYCLE_LINKED_LIB, type(VTSLifecycleLinkedLib).creationCode);
 

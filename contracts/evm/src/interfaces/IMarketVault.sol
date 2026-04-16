@@ -70,7 +70,17 @@ interface IMarketVault {
         external
         returns (BalanceDelta);
 
+    /**
+     * @notice Increase the in-market liquidity reserve ledger for an underlying currency (canonical vault accounting).
+     * @param underlyingCurrency Underlying asset the reserve tracks.
+     * @param amount Amount to add to the reserve.
+     */
     function increaseLiquidityReserve(Currency underlyingCurrency, uint256 amount) external;
 
+    /**
+     * @notice Decrease the in-market liquidity reserve ledger for an underlying currency.
+     * @param underlyingCurrency Underlying asset the reserve tracks.
+     * @param amount Amount to remove from the reserve.
+     */
     function decreaseLiquidityReserve(Currency underlyingCurrency, uint256 amount) external;
 }

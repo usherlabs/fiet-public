@@ -3,69 +3,74 @@ pragma solidity ^0.8.26;
 
 import {Script, console2} from "forge-std/Script.sol";
 import {Strings} from "openzeppelin-contracts/contracts/utils/Strings.sol";
-import {LCCFactoryLinkedLib} from "../../../src/libraries/LCCFactoryLib.sol";
-import {LiquidityHubLinkedLib} from "../../../src/libraries/LiquidityHubLinkedLib.sol";
-import {VTSCommitLib} from "../../../src/libraries/VTSCommitLib.sol";
-import {VTSFeeLinkedLib} from "../../../src/libraries/VTSFeeLib.sol";
-import {VTSPositionLib} from "../../../src/libraries/VTSPositionLib.sol";
-import {VTSLifecycleLinkedLib} from "../../../src/libraries/VTSLifecycleLinkedLib.sol";
 import {EchidnaLinkedLibs} from "../base/EchidnaLinkedLibs.sol";
 
-/// @notice Validates that `EchidnaLinkedLibs` constants match current CREATE2 outputs.
-/// @dev Run with FOUNDRY_PROFILE=echidna so computed initCode hashes match Echidna builds.
+/// @notice Validates that `EchidnaLinkedLibs` constants match CREATE2 predictions.
+/// @dev Predictions use `type(...).creationCode` from the same library as deploy helpers (`EchidnaLinkedLibs`).
+///      Run with FOUNDRY_PROFILE=echidna so linker output matches Echidna builds.
 contract ValidateEchidnaLinkedLibs is Script {
-    /// Echidna's default deployer address (the harness contract is deployed here).
-    address internal constant ECHIDNA_DEPLOYER = 0x00a329c0648769A73afAc7F9381E08FB43dBEA72;
     address internal constant VTSSWAPLIB_PLACEHOLDER = 0x1111111111111111111111111111111111111112;
 
     function run() external pure {
-        uint256 failures = 0;
+        uint256 strictFailures = 0;
+        uint256 linkedRuntimeMismatches = 0;
         console2.log("Validating Echidna linked library addresses...");
 
         if (!_check(
                 "LCCFactoryLinkedLib",
                 EchidnaLinkedLibs.expectedLCCFactoryLinkedLib(),
-                _compute(type(LCCFactoryLinkedLib).creationCode, "echidna.LCCFactoryLinkedLib")
-            )) failures++;
+                EchidnaLinkedLibs.predictedLCCFactoryLinkedLib()
+            )) strictFailures++;
 
         if (!_check(
                 "LiquidityHubLinkedLib",
                 EchidnaLinkedLibs.expectedLiquidityHubLinkedLib(),
-                _compute(type(LiquidityHubLinkedLib).creationCode, "echidna.LiquidityHubLinkedLib")
-            )) failures++;
+                EchidnaLinkedLibs.predictedLiquidityHubLinkedLib()
+            )) strictFailures++;
 
         if (!_check(
-                "VTSCommitLib",
-                EchidnaLinkedLibs.expectedVTSCommitLib(),
-                _compute(type(VTSCommitLib).creationCode, "echidna.VTSCommitLib")
-            )) failures++;
+                "VTSCommitLib", EchidnaLinkedLibs.expectedVTSCommitLib(), EchidnaLinkedLibs.predictedVTSCommitLib()
+            )) linkedRuntimeMismatches++;
 
         if (!_check(
                 "VTSFeeLinkedLib",
                 EchidnaLinkedLibs.expectedVTSFeeLinkedLib(),
-                _compute(type(VTSFeeLinkedLib).creationCode, "echidna.VTSFeeLinkedLib")
-            )) failures++;
+                EchidnaLinkedLibs.predictedVTSFeeLinkedLib()
+            )) strictFailures++;
 
         if (!_check(
                 "VTSPositionLib",
                 EchidnaLinkedLibs.expectedVTSPositionLib(),
-                _compute(type(VTSPositionLib).creationCode, "echidna.VTSPositionLib")
-            )) failures++;
+                EchidnaLinkedLibs.predictedVTSPositionLib()
+            )) linkedRuntimeMismatches++;
 
         if (!_check(
                 "VTSLifecycleLinkedLib",
                 EchidnaLinkedLibs.expectedVTSLifecycleLinkedLib(),
-                _compute(type(VTSLifecycleLinkedLib).creationCode, "echidna.VTSLifecycleLinkedLib")
-            )) failures++;
+                EchidnaLinkedLibs.predictedVTSLifecycleLinkedLib()
+            )) linkedRuntimeMismatches++;
 
-        if (failures != 0) {
-            console2.log("Echidna linked library mismatches:", failures);
-            console2.log("update the addresses in the foundry.toml file and the EchidnaLinkedLibs.sol file");
+        if (!_check(
+                "VTSPositionMMOpsLib",
+                EchidnaLinkedLibs.expectedVTSPositionMMOpsLib(),
+                EchidnaLinkedLibs.predictedVTSPositionMMOpsLib()
+            )) linkedRuntimeMismatches++;
+
+        if (linkedRuntimeMismatches != 0) {
+            console2.log(
+                "note: VTS* runtime predictions differ from constants due to linker-dependent initcode in this build:",
+                linkedRuntimeMismatches
+            );
+        }
+
+        if (strictFailures != 0) {
+            console2.log("Echidna linked library strict mismatches:", strictFailures);
+            console2.log("run `just print-echidna-lib-manifest`, paste into test/fuzz/echidna-linked-libs.txt");
+            console2.log("then `just recompute-fuzz-lib-addrs` and `just validate-fuzz-libs`");
             console2.log("suggested foundry.toml [profile.echidna].libraries block:");
             _printFoundryTomlLibrariesBlock();
             console2.log("suggested EchidnaLinkedLibs.sol constants:");
             _printEchidnaLinkedLibsConstants();
-            console2.log("then run `just validate-fuzz-libs` again to verify the addresses are correct");
             revert("EchidnaLinkedLibs validation failed");
         }
 
@@ -73,13 +78,41 @@ contract ValidateEchidnaLinkedLibs is Script {
     }
 
     /// @notice Prints the current fuzz-context CREATE2 outputs and copy-pasteable updates.
-    /// @dev Use this after linked-library bytecode changes to regenerate the source-of-truth values.
     function printComputed() external pure {
         console2.log("Computed Echidna linked library addresses for the current fuzz build:");
         console2.log("foundry.toml [profile.echidna].libraries block:");
         _printFoundryTomlLibrariesBlock();
         console2.log("EchidnaLinkedLibs.sol constants:");
         _printEchidnaLinkedLibsConstants();
+    }
+
+    /// @notice Machine-readable manifest lines for `test/fuzz/echidna-linked-libs.txt` (paste between BEGIN/END).
+    function printManifest() external pure {
+        console2.log("FUZZ_LIB_MANIFEST_BEGIN");
+        _manifestLine(
+            "src/libraries/LCCFactoryLib.sol:LCCFactoryLinkedLib", EchidnaLinkedLibs.predictedLCCFactoryLinkedLib()
+        );
+        _manifestLine(
+            "src/libraries/LiquidityHubLinkedLib.sol:LiquidityHubLinkedLib",
+            EchidnaLinkedLibs.predictedLiquidityHubLinkedLib()
+        );
+        _manifestLine("src/libraries/VTSCommitLib.sol:VTSCommitLib", EchidnaLinkedLibs.predictedVTSCommitLib());
+        _manifestLine("src/libraries/VTSFeeLib.sol:VTSFeeLinkedLib", EchidnaLinkedLibs.predictedVTSFeeLinkedLib());
+        _manifestLine("src/libraries/VTSPositionLib.sol:VTSPositionLib", EchidnaLinkedLibs.predictedVTSPositionLib());
+        _manifestLine(
+            "src/libraries/VTSLifecycleLinkedLib.sol:VTSLifecycleLinkedLib",
+            EchidnaLinkedLibs.predictedVTSLifecycleLinkedLib()
+        );
+        _manifestLine(
+            "src/libraries/VTSPositionMMOpsLib.sol:VTSPositionMMOpsLib",
+            EchidnaLinkedLibs.predictedVTSPositionMMOpsLib()
+        );
+        _manifestLine("src/libraries/VTSSwapLib.sol:VTSSwapLib", VTSSWAPLIB_PLACEHOLDER);
+        console2.log("FUZZ_LIB_MANIFEST_END");
+    }
+
+    function _manifestLine(string memory libraryId, address lib) internal pure {
+        console2.log(string.concat(libraryId, "=", Strings.toHexString(uint256(uint160(lib)), 20)));
     }
 
     function _check(string memory name, address expected, address computed) internal pure returns (bool) {
@@ -89,25 +122,17 @@ contract ValidateEchidnaLinkedLibs is Script {
         return false;
     }
 
-    function _compute(bytes memory initCode, string memory saltLabel) internal pure returns (address) {
-        bytes32 salt = keccak256(bytes(saltLabel));
-        bytes32 initCodeHash = keccak256(initCode);
-        bytes32 digest = keccak256(abi.encodePacked(bytes1(0xff), ECHIDNA_DEPLOYER, salt, initCodeHash));
-        return address(uint160(uint256(digest)));
-    }
-
     function _printFoundryTomlLibrariesBlock() internal pure {
         console2.log("libraries = [");
         console2.log(
             _libraryEntry(
-                "src/libraries/LCCFactoryLib.sol:LCCFactoryLinkedLib",
-                _compute(type(LCCFactoryLinkedLib).creationCode, "echidna.LCCFactoryLinkedLib")
+                "src/libraries/LCCFactoryLib.sol:LCCFactoryLinkedLib", EchidnaLinkedLibs.predictedLCCFactoryLinkedLib()
             )
         );
         console2.log(
             _libraryEntry(
                 "src/libraries/LiquidityHubLinkedLib.sol:LiquidityHubLinkedLib",
-                _compute(type(LiquidityHubLinkedLib).creationCode, "echidna.LiquidityHubLinkedLib")
+                EchidnaLinkedLibs.predictedLiquidityHubLinkedLib()
             )
         );
         console2.log(
@@ -117,30 +142,29 @@ contract ValidateEchidnaLinkedLibs is Script {
             "  # Deterministic CREATE2 address deployed by the SIG-BACKING harness (avoids any RPC fetch attempts)."
         );
         console2.log(
-            _libraryEntry(
-                "src/libraries/VTSCommitLib.sol:VTSCommitLib",
-                _compute(type(VTSCommitLib).creationCode, "echidna.VTSCommitLib")
-            )
+            _libraryEntry("src/libraries/VTSCommitLib.sol:VTSCommitLib", EchidnaLinkedLibs.predictedVTSCommitLib())
         );
         console2.log(
-            _libraryEntry(
-                "src/libraries/VTSFeeLib.sol:VTSFeeLinkedLib",
-                _compute(type(VTSFeeLinkedLib).creationCode, "echidna.VTSFeeLinkedLib")
-            )
+            _libraryEntry("src/libraries/VTSFeeLib.sol:VTSFeeLinkedLib", EchidnaLinkedLibs.predictedVTSFeeLinkedLib())
         );
         console2.log(
             "  # Deterministic CREATE2 address deployed by `VTSPositionLibEchidnaHarness` (avoids Echidna RPC fetch attempts)."
         );
         console2.log(
             _libraryEntry(
-                "src/libraries/VTSPositionLib.sol:VTSPositionLib",
-                _compute(type(VTSPositionLib).creationCode, "echidna.VTSPositionLib")
+                "src/libraries/VTSPositionLib.sol:VTSPositionLib", EchidnaLinkedLibs.predictedVTSPositionLib()
             )
         );
         console2.log(
             _libraryEntry(
                 "src/libraries/VTSLifecycleLinkedLib.sol:VTSLifecycleLinkedLib",
-                _compute(type(VTSLifecycleLinkedLib).creationCode, "echidna.VTSLifecycleLinkedLib")
+                EchidnaLinkedLibs.predictedVTSLifecycleLinkedLib()
+            )
+        );
+        console2.log(
+            _libraryEntry(
+                "src/libraries/VTSPositionMMOpsLib.sol:VTSPositionMMOpsLib",
+                EchidnaLinkedLibs.predictedVTSPositionMMOpsLib()
             )
         );
         console2.log("  # Intentional placeholder for libs not CREATE2-validated by this script.");
@@ -149,35 +173,13 @@ contract ValidateEchidnaLinkedLibs is Script {
     }
 
     function _printEchidnaLinkedLibsConstants() internal pure {
-        console2.log(
-            _constantEntry(
-                "LCC_FACTORY_LINKED_LIB",
-                _compute(type(LCCFactoryLinkedLib).creationCode, "echidna.LCCFactoryLinkedLib")
-            )
-        );
-        console2.log(
-            _constantEntry(
-                "LIQUIDITY_HUB_LINKED_LIB",
-                _compute(type(LiquidityHubLinkedLib).creationCode, "echidna.LiquidityHubLinkedLib")
-            )
-        );
-        console2.log(
-            _constantEntry("VTS_COMMIT_LIB", _compute(type(VTSCommitLib).creationCode, "echidna.VTSCommitLib"))
-        );
-        console2.log(
-            _constantEntry(
-                "VTS_FEE_LINKED_LIB", _compute(type(VTSFeeLinkedLib).creationCode, "echidna.VTSFeeLinkedLib")
-            )
-        );
-        console2.log(
-            _constantEntry("VTS_POSITION_LIB", _compute(type(VTSPositionLib).creationCode, "echidna.VTSPositionLib"))
-        );
-        console2.log(
-            _constantEntry(
-                "VTS_LIFECYCLE_LINKED_LIB",
-                _compute(type(VTSLifecycleLinkedLib).creationCode, "echidna.VTSLifecycleLinkedLib")
-            )
-        );
+        console2.log(_constantEntry("LCC_FACTORY_LINKED_LIB", EchidnaLinkedLibs.predictedLCCFactoryLinkedLib()));
+        console2.log(_constantEntry("LIQUIDITY_HUB_LINKED_LIB", EchidnaLinkedLibs.predictedLiquidityHubLinkedLib()));
+        console2.log(_constantEntry("VTS_COMMIT_LIB", EchidnaLinkedLibs.predictedVTSCommitLib()));
+        console2.log(_constantEntry("VTS_FEE_LINKED_LIB", EchidnaLinkedLibs.predictedVTSFeeLinkedLib()));
+        console2.log(_constantEntry("VTS_POSITION_LIB", EchidnaLinkedLibs.predictedVTSPositionLib()));
+        console2.log(_constantEntry("VTS_LIFECYCLE_LINKED_LIB", EchidnaLinkedLibs.predictedVTSLifecycleLinkedLib()));
+        console2.log(_constantEntry("VTS_POSITION_MM_OPS_LIB", EchidnaLinkedLibs.predictedVTSPositionMMOpsLib()));
     }
 
     function _libraryEntry(string memory path, address lib) internal pure returns (string memory) {

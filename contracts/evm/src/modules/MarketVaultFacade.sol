@@ -227,10 +227,16 @@ abstract contract MarketVaultFacade is IMarketVault, ImmutableMarketState, Reent
         _canonicalVault().decreaseLiquidityReserve(_marketId(), underlyingCurrency, amount);
     }
 
+    /// @notice Decreases this market's in-market liquidity reserve for `underlyingCurrency` (routes to `ICanonicalVault`).
+    /// @param underlyingCurrency Underlying token currency for the reserve leg.
+    /// @param amount Amount to decrease.
     function decreaseLiquidityReserve(Currency underlyingCurrency, uint256 amount) external onlyVTS {
         _decreaseLiquidityReserve(underlyingCurrency, amount);
     }
 
+    /// @notice Increases this market's in-market liquidity reserve for `underlyingCurrency` (routes to `ICanonicalVault`).
+    /// @param underlyingCurrency Underlying token currency for the reserve leg.
+    /// @param amount Amount to increase.
     function increaseLiquidityReserve(Currency underlyingCurrency, uint256 amount) external onlyVTS {
         _increaseLiquidityReserve(underlyingCurrency, amount);
     }

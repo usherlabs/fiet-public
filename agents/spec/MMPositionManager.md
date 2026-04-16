@@ -312,17 +312,18 @@ These actions manage commitment lifecycle and are handled directly in `MMPositio
 
 ### COMMIT_SIGNAL (0x20)
 
-Commits a liquidity signal and mints a commitment NFT to the **locker** (the batch caller). The encoded `owner` word in params is ignored for minting; use ERC-721 `transferFrom` after the batch if custody should differ.
+Commits a liquidity signal and mints a commitment NFT to the **locker** (the batch caller). Params are ABI-encoded as `(bytes liquiditySignal, bytes relayParams)`; there is no separate owner word in the action payload (custody separation uses ERC-721 `transferFrom` after the batch if needed).
 
 **Parameters:**
+
 | Name | Type | Description |
 |------|------|-------------|
 | `liquiditySignal` | `bytes` | ABI-encoded liquidity signal to verify and record |
-| `owner` | `address` | Ignored for mint target (retained for ABI compatibility); NFT mints to locker |
+| `relayParams` | `bytes` | Optional relay authorisation blob; when empty, direct commit path is used |
 
 **Flow:**
 
-```
+```text
 _commitSignal()
   → vtsOrchestrator.commitSignal()      // Validate and record signal
   → _mint(locker, tokenId)              // Mint ERC721 NFT to msgSender() / locker

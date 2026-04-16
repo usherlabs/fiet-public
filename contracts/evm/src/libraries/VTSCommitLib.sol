@@ -1,8 +1,23 @@
 // SPDX-License-Identifier: BUSL-1.1
 pragma solidity ^0.8.26;
 
-import {VTSStorage, PositionAccounting, TokenPairUint, TokenPairLib} from "../types/VTS.sol";
+import {PoolIdLibrary} from "@uniswap/v4-core/src/types/PoolId.sol";
+import {BalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
+import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
+import {
+    VTSStorage,
+    PositionAccounting,
+    TokenPairUint,
+    TokenPairLib,
+    VTSLifecycleContext,
+    VTSCommitRouterContext
+} from "../types/VTS.sol";
 import {PositionId, Position} from "../types/Position.sol";
+import {RFSCheckpoint} from "../types/Checkpoint.sol";
+import {IMarketFactory} from "../interfaces/IMarketFactory.sol";
+import {VTSPositionLib} from "./VTSPositionLib.sol";
+import {CheckpointLibrary} from "./Checkpoint.sol";
+import {MarketHandlerLib} from "./MarketHandlerLib.sol";
 import {FullMath} from "@uniswap/v4-core/src/libraries/FullMath.sol";
 import {FixedPoint128} from "v4-periphery/lib/v4-core/src/libraries/FixedPoint128.sol";
 import {PoolAccounting} from "../types/VTS.sol";
@@ -29,6 +44,7 @@ import {IVRLSignalManager} from "../interfaces/IVRLSignalManager.sol";
 library VTSCommitLib {
     using TokenPairLib for TokenPairUint;
     using StateLibrary for IPoolManager;
+    using PoolIdLibrary for PoolKey;
 
     /// @notice Hard cap on unique reserve tickers per MM signal.
     /// @dev This is a per-MM reserve composition limit, not a global protocol ticker registry limit.
@@ -202,29 +218,24 @@ library VTSCommitLib {
         }
     }
 
-    /// @notice Commits a liquidity signal to the VTS state (linked-library entry)
-    /// @dev Intentionally keeps all commitment logic in the linked library to reduce VTSOrchestrator bytecode size.
+    /// @dev Shared body for linked `commitSignal` and orchestrator router overload.
     //#olympix-ignore-reentrancy
-    function commitSignal(
+    function _commitSignalLinked(
         VTSStorage storage s,
         address sender,
         IVRLSignalManager signalManager,
         IOracleHelper oracleHelper,
         bytes memory liquiditySignal
-    ) external returns (uint256 commitId) {
-        // validate the liquidity signal was actually provided
+    ) internal returns (uint256 commitId) {
         if (liquiditySignal.length == 0) {
             revert Errors.InvalidLiquiditySignal(0, 0, 0);
         }
-
-        // verify the proofs associated with the state
         (, uint256 expirySeconds) = signalManager.verifyLiquiditySignal(sender, liquiditySignal, true);
         _assertSignalAdmissible(oracleHelper, liquiditySignal);
         commitId = _commitSignalInternal(s, liquiditySignal, expirySeconds);
     }
 
-    /// @notice Commits a liquidity signal using sender-signed EIP-712 relayer auth (linked-library entry)
-    function commitSignalRelayed(
+    function _commitSignalRelayedLinked(
         VTSStorage storage s,
         address sender,
         IVRLSignalManager signalManager,
@@ -233,38 +244,33 @@ library VTSCommitLib {
         uint256 deadline,
         uint256 authNonce,
         bytes memory authSig
-    ) external returns (uint256 commitId) {
+    ) internal returns (uint256 commitId) {
         if (liquiditySignal.length == 0) {
             revert Errors.InvalidLiquiditySignal(0, 0, 0);
         }
-
         (, uint256 expirySeconds) =
             signalManager.verifyLiquiditySignalRelayed(sender, 0, liquiditySignal, deadline, authNonce, authSig, true);
         _assertSignalAdmissible(oracleHelper, liquiditySignal);
         commitId = _commitSignalInternal(s, liquiditySignal, expirySeconds);
     }
 
-    /// @notice Renews a liquidity signal for a commit (linked-library entry)
-    //#olympix-ignore-reentrancy
-    function renewSignal(
+    function _renewSignalLinked(
         VTSStorage storage s,
         address sender,
         IVRLSignalManager signalManager,
         IOracleHelper oracleHelper,
         uint256 commitId,
         bytes memory liquiditySignal
-    ) external {
+    ) internal {
         if (liquiditySignal.length == 0) {
             revert Errors.InvalidLiquiditySignal(0, 0, 0);
         }
-
         (, uint256 expirySeconds) = signalManager.verifyLiquiditySignal(sender, liquiditySignal, true);
         _assertSignalAdmissible(oracleHelper, liquiditySignal);
         _renewSignalInternal(s, sender, commitId, liquiditySignal, expirySeconds);
     }
 
-    /// @notice Renews a liquidity signal using sender-signed EIP-712 relayer auth (linked-library entry)
-    function renewSignalRelayed(
+    function _renewSignalRelayedLinked(
         VTSStorage storage s,
         address sender,
         IVRLSignalManager signalManager,
@@ -274,11 +280,10 @@ library VTSCommitLib {
         uint256 deadline,
         uint256 authNonce,
         bytes memory authSig
-    ) external {
+    ) internal {
         if (liquiditySignal.length == 0) {
             revert Errors.InvalidLiquiditySignal(0, 0, 0);
         }
-
         (, uint256 expirySeconds) = signalManager.verifyLiquiditySignalRelayed(
             sender, commitId, liquiditySignal, deadline, authNonce, authSig, true
         );
@@ -317,16 +322,15 @@ library VTSCommitLib {
         commit.expiresAt = block.timestamp + expirySeconds;
     }
 
-    /// @notice Checkpoint with commitment backing checks (single linked-library call)
-    /// @dev Reads stored commit signal state and sets position commitment deficit.
+    /// @dev Core commitment checkpoint; used by growth-settled orchestration and unit tests via internal call.
     //#olympix-ignore-reentrancy
-    function checkpointWithCommitment(
+    function _checkpointWithCommitment(
         VTSStorage storage s,
         IPoolManager poolManager,
         IOracleHelper oracleHelper,
         uint256 commitId,
         PositionId positionId
-    ) external {
+    ) internal {
         // Build checkpoint context in scoped block
         CheckpointContext memory ctx;
         Position memory pos = s.positions[positionId];
@@ -454,5 +458,162 @@ library VTSCommitLib {
         }
 
         totalValue = oracleHelper.getTotalValue(tickers, amounts);
+    }
+
+    // ============ Orchestrator commit-lifecycle ============
+
+    function _assertRegisteredFactory(VTSCommitRouterContext memory ctx, IMarketFactory factory) private view {
+        if (!ctx.liquidityHub.isFactory(address(factory))) revert Errors.InvalidSender();
+    }
+
+    function _resolveSignalSender(
+        VTSCommitRouterContext memory ctx,
+        IMarketFactory factory,
+        address caller,
+        address sender
+    ) private view returns (address effectiveSender) {
+        _assertRegisteredFactory(ctx, factory);
+        if (MarketHandlerLib.isBounds(factory, caller)) {
+            return sender;
+        }
+        if (sender != caller) revert Errors.InvalidSender();
+        return caller;
+    }
+
+    /// @dev Commitment backing (optional) plus RFS checkpoint marking from current stored accounting.
+    ///      Caller must have settled position growths first when pause gating matters (e.g. via
+    ///      `VTSOrchestrator.settlePositionGrowths`).
+    function _checkpointAfterGrowthSettled(
+        VTSStorage storage s,
+        VTSLifecycleContext memory ctx,
+        uint256 commitId,
+        bool withCommitment,
+        PositionId positionId
+    ) private returns (RFSCheckpoint memory checkpointOut) {
+        if (withCommitment) {
+            _checkpointWithCommitment(s, ctx.poolManager, ctx.oracleHelper, commitId, positionId);
+        }
+        (, BalanceDelta rfsDelta) = VTSPositionLib.getRFS(s, positionId);
+        CheckpointLibrary.markCheckpoint(s, positionId, VTSPositionLib._rfsOpenMask(rfsDelta));
+        checkpointOut = s.positions[positionId].checkpoint;
+    }
+
+    /// @notice RFS checkpoint after growth settlement with commitment-backed deficit update.
+    /// @dev Does not settle growths. The orchestrator must settle growth first.
+    function checkpointAfterGrowthWithCommitment(
+        VTSStorage storage s,
+        VTSLifecycleContext memory ctx,
+        uint256 commitId,
+        PositionId positionId
+    ) external returns (RFSCheckpoint memory checkpointOut) {
+        checkpointOut = _checkpointAfterGrowthSettled(s, ctx, commitId, true, positionId);
+    }
+
+    function extendGracePeriod(
+        VTSStorage storage s,
+        VTSLifecycleContext memory ctx,
+        PoolKey memory poolKey,
+        PositionId positionId,
+        uint8 settlementTokenIndex,
+        uint32 verifierIndex,
+        bytes memory settlementProof
+    ) external returns (RFSCheckpoint memory checkpointOut) {
+        VTSPositionLib.settlePositionGrowths(s, ctx.poolManager, positionId);
+        (, BalanceDelta rfsDelta) = VTSPositionLib.getRFS(s, positionId);
+        CheckpointLibrary.markCheckpoint(s, positionId, VTSPositionLib._rfsOpenMask(rfsDelta));
+        CheckpointLibrary.extendGracePeriod(
+            s, ctx.settlementObserver, poolKey, positionId, settlementTokenIndex, verifierIndex, settlementProof
+        );
+        checkpointOut = s.positions[positionId].checkpoint;
+    }
+
+    function validateSeize(
+        VTSStorage storage s,
+        VTSLifecycleContext memory ctx,
+        uint256 commitId,
+        uint256 positionIndex,
+        PositionId positionId
+    ) external {
+        // When a stored commitment deficit exists, refresh growth and re-run commitment checkpoint before seizability
+        // so bypass eligibility cannot rely on stale `commitmentDeficit` after backing recovers.
+        // We do not always call `_checkpointAfterGrowthSettled(..., true)` here: that would `markCheckpoint` from
+        // live `getRFS` and could materialise the first ordinary RFS checkpoint, which `onSeize` must not do
+        // (see `test_onSeize_doesNotStartOrdinaryGraceWithoutPriorCheckpoint`).
+        bool hasStoredCommitmentDeficit = s.positionAccounting[positionId].commitmentDeficit.token0 > 0
+            || s.positionAccounting[positionId].commitmentDeficit.token1 > 0;
+        if (hasStoredCommitmentDeficit) {
+            VTSPositionLib.settlePositionGrowths(s, ctx.poolManager, positionId);
+            _checkpointAfterGrowthSettled(s, ctx, commitId, true, positionId);
+        }
+
+        CheckpointLibrary.isSeizable(s, commitId, positionIndex, true);
+    }
+
+    function commitSignal(
+        VTSStorage storage s,
+        VTSCommitRouterContext memory ctx,
+        IMarketFactory factory,
+        address caller,
+        address sender,
+        bytes memory liquiditySignal
+    ) external returns (uint256 commitId) {
+        address effectiveSender = _resolveSignalSender(ctx, factory, caller, sender);
+        commitId = _commitSignalLinked(s, effectiveSender, ctx.signalManager, ctx.oracleHelper, liquiditySignal);
+    }
+
+    function commitSignalRelayed(
+        VTSStorage storage s,
+        VTSCommitRouterContext memory ctx,
+        IMarketFactory factory,
+        address caller,
+        address sender,
+        bytes memory liquiditySignal,
+        uint256 deadline,
+        uint256 authNonce,
+        bytes memory authSig
+    ) external returns (uint256 commitId) {
+        address effectiveSender = _resolveSignalSender(ctx, factory, caller, sender);
+        commitId = _commitSignalRelayedLinked(
+            s, effectiveSender, ctx.signalManager, ctx.oracleHelper, liquiditySignal, deadline, authNonce, authSig
+        );
+    }
+
+    function renewSignal(
+        VTSStorage storage s,
+        VTSCommitRouterContext memory ctx,
+        IMarketFactory factory,
+        address caller,
+        address sender,
+        uint256 commitId,
+        bytes memory liquiditySignal
+    ) external {
+        address effectiveSender = _resolveSignalSender(ctx, factory, caller, sender);
+        _renewSignalLinked(s, effectiveSender, ctx.signalManager, ctx.oracleHelper, commitId, liquiditySignal);
+    }
+
+    function renewSignalRelayed(
+        VTSStorage storage s,
+        VTSCommitRouterContext memory ctx,
+        IMarketFactory factory,
+        address caller,
+        address sender,
+        uint256 commitId,
+        bytes memory liquiditySignal,
+        uint256 deadline,
+        uint256 authNonce,
+        bytes memory authSig
+    ) external {
+        address effectiveSender = _resolveSignalSender(ctx, factory, caller, sender);
+        _renewSignalRelayedLinked(
+            s,
+            effectiveSender,
+            ctx.signalManager,
+            ctx.oracleHelper,
+            commitId,
+            liquiditySignal,
+            deadline,
+            authNonce,
+            authSig
+        );
     }
 }

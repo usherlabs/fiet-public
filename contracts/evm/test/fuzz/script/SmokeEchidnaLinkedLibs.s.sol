@@ -11,6 +11,7 @@ contract EchidnaLinkedLibSmokeRunner {
         EchidnaLinkedLibs.deployVTSCommitLib();
         EchidnaLinkedLibs.deployVTSFeeLinkedLib();
         EchidnaLinkedLibs.deployVTSPositionLib();
+        EchidnaLinkedLibs.deployVTSPositionMMOpsLib();
         EchidnaLinkedLibs.deployVTSLifecycleLinkedLib();
     }
 }

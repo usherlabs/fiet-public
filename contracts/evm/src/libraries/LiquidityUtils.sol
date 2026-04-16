@@ -31,26 +31,23 @@ library LiquidityUtils {
 
     /**
      * @dev Safely converts int128 to uint256, handling negative values by taking absolute value
+     * @dev Widen to int256 before negation so `type(int128).min` does not overflow unary `-` on int128.
      * @param value The int128 value to convert
      * @return The uint256 representation (absolute value)
      */
     function safeInt128ToUint256(int128 value) internal pure returns (uint256) {
-        if (value < 0) {
-            return SafeCastLib.toUint256(-value);
-        }
-        return SafeCastLib.toUint256(value);
+        int256 v = int256(value);
+        return v < 0 ? uint256(-v) : uint256(v);
     }
 
     /**
      * @dev Safely converts int128 to uint128, handling negative values by taking absolute value
+     * @dev Uses the same widening rule as `safeInt128ToUint256` for `type(int128).min` safety.
      * @param value The int128 value to convert
      * @return The uint128 representation (absolute value)
      */
     function safeInt128ToUint128(int128 value) internal pure returns (uint128) {
-        if (value < 0) {
-            return (-value).toUint128();
-        }
-        return value.toUint128();
+        return SafeCastLib.toUint128(safeInt128ToUint256(value));
     }
 
     /**
@@ -148,7 +145,8 @@ library LiquidityUtils {
      * @return The negated balance delta
      */
     function negateBalanceDelta(BalanceDelta balanceDelta) internal pure returns (BalanceDelta) {
-        return toBalanceDelta(-balanceDelta.amount0(), -balanceDelta.amount1());
+        // Negate in int256 space so `type(int128).min` does not overflow unary `-` on int128.
+        return safeToBalanceDelta(-int256(balanceDelta.amount0()), -int256(balanceDelta.amount1()));
     }
 
     /**

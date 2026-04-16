@@ -7,7 +7,7 @@ import {ILCC} from "../src/interfaces/ILCC.sol";
 import {Errors} from "../src/libraries/Errors.sol";
 import {Bounds} from "../src/libraries/Bounds.sol";
 import {Vm} from "forge-std/Vm.sol";
-import {IERC20} from "openzeppelin-contracts/contracts/token/ERC20/IERC20.sol";
+import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
 /// @dev Contract with no `ICanonicalVault.marketFactory()` — Hub `receive` must reject.
 contract MockNonCanonicalEthSender {

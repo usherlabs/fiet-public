@@ -12,7 +12,7 @@ import {SwapParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
 import {BalanceDelta, toBalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
 import {Errors} from "../../src/libraries/Errors.sol";
 import {MarketVTSConfiguration} from "../../src/types/VTS.sol";
-import {PositionContext, TouchPositionParams} from "../../src/types/VTS.sol";
+import {PositionContext, TouchPositionParams, TouchPositionResult} from "../../src/types/VTS.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
 import {PositionModificationHookData, PositionModificationHookDataLib} from "../../src/types/Position.sol";
@@ -113,6 +113,83 @@ contract VTSPositionLibTest_VaultNoop is IMarketVault {
     function decreaseLiquidityReserve(Currency, uint256) external pure {}
 
     function increaseLiquidityReserve(Currency, uint256) external pure {}
+}
+
+/// @dev Like `VTSPositionLibTest_VaultNoop` but records the last `increaseLiquidityReserve` call for assertions.
+contract VTSPositionLibTest_VaultReserveSpy is IMarketVault {
+    address internal immutable canonical = address(new VTSPositionLibTest_CanonicalVaultRef(address(this)));
+
+    Currency public lastIncreaseCurrency;
+    uint256 public lastIncreaseAmount;
+    uint256 public increaseReserveCalls;
+
+    function marketId() external pure returns (bytes32) {
+        return bytes32(0);
+    }
+
+    function canonicalVault() external view returns (address) {
+        return canonical;
+    }
+
+    function lccs() external pure returns (address, address) {
+        return (address(0), address(0));
+    }
+
+    function inMarketBalanceOf(Currency) external pure returns (uint256) {
+        return 0;
+    }
+
+    function modifyLiquidities(BalanceDelta) external pure {}
+
+    function modifyLiquidities(VaultSettlementIntent calldata) external pure {}
+
+    function tryModifyLiquidities(BalanceDelta balanceDelta) external pure returns (BalanceDelta) {
+        return balanceDelta;
+    }
+
+    function tryModifyLiquidities(VaultSettlementIntent calldata settlementIntent)
+        external
+        pure
+        returns (BalanceDelta)
+    {
+        return settlementIntent.requestedDelta;
+    }
+
+    function tryModifyLiquiditiesWithRecipient(BalanceDelta balanceDelta, address)
+        external
+        pure
+        returns (BalanceDelta)
+    {
+        return balanceDelta;
+    }
+
+    function tryModifyLiquiditiesWithRecipient(VaultSettlementIntent calldata settlementIntent, address)
+        external
+        pure
+        returns (BalanceDelta)
+    {
+        return settlementIntent.requestedDelta;
+    }
+
+    function dryModifyLiquidities(BalanceDelta balanceDelta) external pure returns (BalanceDelta) {
+        return balanceDelta;
+    }
+
+    function dryModifyLiquidities(VaultSettlementIntent calldata settlementIntent)
+        external
+        pure
+        returns (BalanceDelta)
+    {
+        return settlementIntent.requestedDelta;
+    }
+
+    function decreaseLiquidityReserve(Currency, uint256) external pure {}
+
+    function increaseLiquidityReserve(Currency underlyingCurrency, uint256 amount) external {
+        lastIncreaseCurrency = underlyingCurrency;
+        lastIncreaseAmount = amount;
+        increaseReserveCalls++;
+    }
 }
 
 /// @dev Vault that clamps withdrawals to fixed available amounts (used to test onMMSettle phase-2 shortfall correction).
@@ -925,7 +1002,7 @@ contract VTSPositionLibTest is VTSLibTestBase {
         ModifyLiquidityParams memory dec = ModifyLiquidityParams({
             tickLower: -60, tickUpper: 60, liquidityDelta: -int256(uint256(1)), salt: salt
         });
-        harness.touchPosition(
+        harness.touchPositionAndFinalizeMM(
             ctx,
             TouchPositionParams({
                 owner: DEFAULT_OWNER,
@@ -2157,7 +2234,7 @@ contract VTSPositionLibTest is VTSLibTestBase {
             hookData: _mkHookData(true, false, commitId) // MM, not seizing
         });
 
-        harness.touchPosition(ctx, tp);
+        harness.touchPositionAndFinalizeMM(ctx, tp);
 
         // Settled is reduced in `_processMMOperations` by routed amount (settleable + queued); immediate vault slice
         // is mirrored on underlying delta when the vault can supply it.
@@ -2213,7 +2290,7 @@ contract VTSPositionLibTest is VTSLibTestBase {
             hookData: _mkHookData(true, false, commitId)
         });
 
-        harness.touchPosition(ctx, tp);
+        harness.touchPositionAndFinalizeMM(ctx, tp);
 
         (,, uint256 settled0After,,,) = harness.getPositionAccounting(positionId);
         assertEq(
@@ -2268,7 +2345,7 @@ contract VTSPositionLibTest is VTSLibTestBase {
             hookData: _mkHookData(true, false, commitId)
         });
 
-        harness.touchPosition(ctx, tp);
+        harness.touchPositionAndFinalizeMM(ctx, tp);
 
         (,, uint256 settled0After,,,) = harness.getPositionAccounting(positionId);
         assertEq(
@@ -2420,7 +2497,7 @@ contract VTSPositionLibTest is VTSLibTestBase {
             hookData: _mkHookData(true, true, commitId)
         });
 
-        harness.touchPosition(ctx, tp);
+        harness.touchPositionAndFinalizeMM(ctx, tp);
         assertEq(hub.planCancelCalls(), 1, "seizing MM decrease should still plan exactly one cancellation");
     }
 
@@ -2479,9 +2556,14 @@ contract VTSPositionLibTest is VTSLibTestBase {
         });
 
         PositionContext memory ctx = _mkCtx();
-        harness.touchPosition(ctx, tp);
+        TouchPositionResult memory touchResult = harness.touchPositionAndFinalizeMM(ctx, tp);
 
         RFSCheckpoint memory afterCp = harness.getRFSCheckpoint(positionId);
+        assertEq(
+            keccak256(abi.encode(touchResult.pos.checkpoint)),
+            keccak256(abi.encode(afterCp)),
+            "touchPosition return pos.checkpoint must match storage after MM tail"
+        );
         // Poke recomputes `commitmentMax` from live liquidity; narrow two-sided ranges can open both RFS lanes.
         (bool rfsOpen, BalanceDelta rfsDelta) = harness.calcRFS(ctx.poolManager, positionId, false);
         assertTrue(rfsOpen, "RFS should be open with zero settled vs live commitment");
@@ -2545,7 +2627,7 @@ contract VTSPositionLibTest is VTSLibTestBase {
         });
 
         PositionContext memory ctxMm = _mkCtx();
-        harness.touchPosition(ctxMm, tp);
+        harness.touchPositionAndFinalizeMM(ctxMm, tp);
 
         RFSCheckpoint memory afterCp = harness.getRFSCheckpoint(positionId);
         (, BalanceDelta rfsDeltaCd) = harness.calcRFS(ctxMm.poolManager, positionId, false);
@@ -2881,6 +2963,82 @@ contract VTSPositionLibTest is VTSLibTestBase {
         assertFalse(rfsOpen, "RFS should be closed when massively over-settled");
         assertEq(delta.amount0(), type(int128).min, "token0 RFS delta should saturate to int128.min");
         assertEq(delta.amount1(), type(int128).min, "token1 RFS delta should saturate to int128.min");
+    }
+
+    /// @dev Active withdrawals use `_planWithdrawalLane` → `safeInt128ToUint256(rfsLaneDelta)` when `rfsLaneDelta < 0`.
+    ///      Saturated `type(int128).min` must not revert there (regression for int128 unary-negation overflow).
+    function test_onMMSettle_activeWithdrawal_doesNotRevert_whenRfsLaneSaturatesToInt128Min() public {
+        _initMarket();
+        PoolId corePoolId = _getDefaultPoolId();
+        harness.setupPool(corePoolId, _createDefaultVTSConfig());
+
+        bytes32 salt = bytes32(uint256(610));
+        PositionId positionId = _registerHarnessPositionInPool(corePoolId, DEFAULT_OWNER, -60, 60, 1, salt);
+        harness.setPositionActive(positionId, true);
+
+        uint256 int128MaxU = uint256(type(uint128).max) >> 1;
+        uint256 commitmentMax = (int128MaxU + 2) * 20;
+        harness.setCommitmentMax(positionId, commitmentMax, commitmentMax);
+        harness.setSettled(positionId, commitmentMax, commitmentMax);
+        harness.setPoolTotalSettled(corePoolId, commitmentMax, commitmentMax);
+        harness.setCumulativeDeficit(positionId, 0, 0);
+        harness.setCommitmentDeficit(positionId, 0, 0);
+
+        (bool rfsOpen, BalanceDelta rfsDelta) = harness.getRFS(positionId);
+        assertFalse(rfsOpen, "precondition: massively over-settled closes RFS");
+        assertEq(rfsDelta.amount0(), type(int128).min, "precondition: token0 lane saturates to int128.min");
+
+        VTSPositionLibTest_MockLCC lcc0 = new VTSPositionLibTest_MockLCC(address(0xF0));
+        VTSPositionLibTest_MockLCC lcc1 = new VTSPositionLibTest_MockLCC(address(0xF1));
+        IMarketVault vault = new VTSPositionLibTest_VaultNoop();
+
+        harness.onMMSettle(
+            manager,
+            vault,
+            positionId,
+            Currency.wrap(address(lcc0)),
+            Currency.wrap(address(lcc1)),
+            toBalanceDelta(int128(int256(10e18)), 0),
+            false,
+            false
+        );
+    }
+
+    /// @dev `fromDeltas` deposit path converts negative lanes via `safeInt128ToUint256`; clamped `int128.min` must not revert.
+    function test_onMMSettle_fromDeltas_clampedInt128Min_negativeLane_doesNotRevert() public {
+        _initMarket();
+        PoolId corePoolId = _getDefaultPoolId();
+        harness.setupPool(corePoolId, _createDefaultVTSConfig());
+
+        bytes32 salt = bytes32(uint256(611));
+        PositionId positionId = _registerHarnessPositionInPool(corePoolId, DEFAULT_OWNER, -60, 60, 1, salt);
+        harness.setPositionActive(positionId, false);
+
+        harness.setCommitmentMax(positionId, 1000e18, 1000e18);
+        harness.setSettled(positionId, 0, 0);
+        harness.setPoolTotalSettled(corePoolId, 0, 0);
+
+        VTSPositionLibTest_MockLCC lcc0 = new VTSPositionLibTest_MockLCC(address(0xF2));
+        VTSPositionLibTest_MockLCC lcc1 = new VTSPositionLibTest_MockLCC(address(0xF3));
+        VTSPositionLibTest_VaultReserveSpy vault = new VTSPositionLibTest_VaultReserveSpy();
+
+        address u0 = lcc0.underlying();
+        harness.setUnderlyingDelta(Currency.wrap(u0), DEFAULT_OWNER, int128(1));
+        harness.addMarketProducedCredit(IMarketVault(address(vault)), Currency.wrap(u0), 1);
+
+        BalanceDelta clampedNeg = LiquidityUtils.safeToBalanceDelta(int256(type(int128).min) - 1, int256(0));
+        assertEq(clampedNeg.amount0(), type(int128).min, "precondition: int256 clamp maps to int128.min");
+
+        harness.onMMSettle(
+            manager,
+            vault,
+            positionId,
+            Currency.wrap(address(lcc0)),
+            Currency.wrap(address(lcc1)),
+            clampedNeg,
+            false,
+            true
+        );
     }
 
     // ============================================================
@@ -3239,6 +3397,52 @@ contract VTSPositionLibTest is VTSLibTestBase {
 
         (,, uint256 settled0After,,,) = harness.getPositionAccounting(positionId);
         assertEq(settled0After, 50e18, "settled0 should increase by the clamped deposit amount");
+    }
+
+    /// @dev `fromDeltas == true` runs `_settleFromPositiveUnderlyingDelta`, which bumps market liquidity reserve when
+    ///      `settledIncrease` is non-zero (seizing deposit path uses `_settleSeizingDeposits` instead).
+    function test_onMMSettle_fromDeltas_deposit_bumpsLiquidityReserve() public {
+        _initMarket();
+        PoolId corePoolId = _getDefaultPoolId();
+        harness.setupPool(corePoolId, _createDefaultVTSConfig());
+
+        bytes32 salt = bytes32(uint256(608));
+        PositionId positionId = _registerHarnessPositionInPool(corePoolId, DEFAULT_OWNER, -60, 60, 1, salt);
+        harness.setPositionActive(positionId, false);
+
+        harness.setCommitmentMax(positionId, 1000e18, 1000e18);
+        harness.setSettled(positionId, 0, 0);
+        harness.setPoolTotalSettled(corePoolId, 0, 0);
+
+        VTSPositionLibTest_MockLCC lcc0 = new VTSPositionLibTest_MockLCC(address(0xE0));
+        VTSPositionLibTest_MockLCC lcc1 = new VTSPositionLibTest_MockLCC(address(0xE1));
+        VTSPositionLibTest_VaultReserveSpy vault = new VTSPositionLibTest_VaultReserveSpy();
+
+        address u0 = lcc0.underlying();
+        harness.setUnderlyingDelta(Currency.wrap(u0), DEFAULT_OWNER, int128(int256(100e18)));
+        harness.addMarketProducedCredit(IMarketVault(address(vault)), Currency.wrap(u0), 100e18);
+
+        harness.onMMSettle(
+            manager,
+            vault,
+            positionId,
+            Currency.wrap(address(lcc0)),
+            Currency.wrap(address(lcc1)),
+            toBalanceDelta(int128(int256(-50e18)), 0),
+            false,
+            true
+        );
+
+        (,, uint256 settled0After,,,) = harness.getPositionAccounting(positionId);
+        assertEq(settled0After, 50e18, "fromDeltas deposit should increase position settled0");
+        (uint256 poolSettled0,) = harness.getPoolTotalSettled(corePoolId);
+        assertEq(poolSettled0, 50e18, "pool totalSettled0 should track settled increase");
+        (uint256 deficitPrincipal0,) = harness.getPoolTotalDeficitPrincipal(corePoolId);
+        assertEq(deficitPrincipal0, 0, "deposit path should not create deficit principal");
+
+        assertEq(vault.increaseReserveCalls(), 1, "settled increase should bump market liquidity reserve");
+        assertEq(Currency.unwrap(vault.lastIncreaseCurrency()), u0, "reserve bump targets token0 underlying");
+        assertEq(vault.lastIncreaseAmount(), 50e18, "reserve bump matches settled increase");
     }
 
     function test_handleLiquidityDecrease_clampsNegativeQueuedDeltaToZero() public {
