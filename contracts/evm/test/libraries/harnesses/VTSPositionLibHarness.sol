@@ -106,7 +106,7 @@ contract VTSPositionLibHarness {
         return VTSPositionLib.touchPosition(s, ctx, p);
     }
 
-    /// @notice Alias for `touchPosition` (MM tail runs inside `touchPosition`).
+    /// @notice Alias for `touchPosition` (MM tail runs inside `touchPosition`; returned `pos` is refreshed from storage).
     function touchPositionAndFinalizeMM(PositionContext memory ctx, TouchPositionParams calldata p)
         external
         returns (TouchPositionResult memory result)

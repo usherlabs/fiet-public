@@ -97,7 +97,10 @@ struct TouchPositionParams {
 }
 
 /// @notice Result of touchPosition to reduce stack pressure
-/// @dev Bundles return values into a single struct. MM tail (`VTSPositionMMOpsLib.processMMOperations`) runs inside `touchPosition` when hook data indicates an MM operation.
+/// @dev Bundles return values into a single struct. When hook data indicates an MM operation, the MM tail
+///      (`VTSPositionMMOpsLib.processMMOperations`) runs inside `touchPosition` before `pos` is finalised.
+///      `pos` is always reloaded from storage at the end of `touchPosition` so it reflects checkpointing and other
+///      MM-tail updates in the same call.
 struct TouchPositionResult {
     // The position struct
     Position pos;

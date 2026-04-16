@@ -94,6 +94,25 @@ contract LiquidityUtilsTest is Test {
         assertEq(h.safeInt128ToUint128(-int128(9)), 9);
     }
 
+    /// @dev Unary `-` on `type(int128).min` overflows; abs conversion must still return `2^127`.
+    function test_safeInt128ToUint256_int128Min_returnsAbs() public view {
+        uint256 expected = uint256(int256(type(int128).max)) + 1;
+        assertEq(h.safeInt128ToUint256(type(int128).min), expected);
+    }
+
+    function test_safeInt128ToUint128_int128Min_returnsAbs() public view {
+        uint128 expected = uint128(uint256(int256(type(int128).max)) + 1);
+        assertEq(h.safeInt128ToUint128(type(int128).min), expected);
+    }
+
+    /// @dev Negation uses int256 widening; `amount0 == type(int128).min` must not revert.
+    function test_negateBalanceDelta_int128Min_lane() public view {
+        BalanceDelta d = toBalanceDelta(type(int128).min, int128(0));
+        BalanceDelta n = h.negateBalanceDelta(d);
+        assertEq(n.amount0(), type(int128).max);
+        assertEq(n.amount1(), int128(0));
+    }
+
     function test_calculateCommitmentMaxima_nonzeroOverRange() public view {
         (uint256 c0, uint256 c1) = h.calculateCommitmentMaxima(-120, 120, 1e6);
         assertGt(c0, 0);

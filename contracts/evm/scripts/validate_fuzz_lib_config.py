@@ -15,7 +15,6 @@ ECHIDNA_LINKED_LIBS_PATH = ROOT / "test/fuzz/base/EchidnaLinkedLibs.sol"
 FOUNDRY_TOML_PATH = ROOT / "foundry.toml"
 MANIFEST_PATH = ROOT / "test/fuzz/echidna-linked-libs.txt"
 VALIDATE_SCRIPT = "test/fuzz/script/ValidateEchidnaLinkedLibs.s.sol:ValidateEchidnaLinkedLibs"
-MAX_CONVERGE_PASSES = 80
 
 MANIFEST_HEADER = """# Single source of truth for Echidna [profile.echidna] hard-linked libraries.
 # Updated by `just recompute-fuzz-lib-addrs` (converges linked initcode) or `just print-echidna-lib-manifest`.
@@ -350,55 +349,27 @@ def _apply_from_manifest() -> int:
 
 
 def _converge() -> int:
-    """Apply manifest, rebuild, run ValidateEchidnaLinkedLibs.run(); on failure refresh manifest from printManifest() and retry."""
+    """Apply manifest-driven config and verify the resulting build."""
     if not MANIFEST_PATH.exists():
         print(f"Missing `{MANIFEST_PATH.relative_to(ROOT)}`.", file=sys.stderr)
         return 1
 
-    for attempt in range(1, MAX_CONVERGE_PASSES + 1):
-        try:
-            _apply_impl()
-            _forge_build_echidna()
-        except (ValueError, RuntimeError) as exc:
-            print(f"converge: apply/build failed: {exc}", file=sys.stderr)
-            return 1
+    try:
+        _apply_impl()
+        _forge_build_echidna()
+    except (ValueError, RuntimeError) as exc:
+        print(f"converge: apply/build failed: {exc}", file=sys.stderr)
+        return 1
 
-        val = _run_forge_script("run()")
-        if val.returncode == 0:
-            pm = _run_forge_script("printManifest()")
-            if pm.returncode != 0:
-                sys.stderr.write(pm.stdout)
-                sys.stderr.write(pm.stderr)
-                return 1
-            try:
-                m = _parse_manifest_from_forge_output(pm.stdout + pm.stderr)
-            except ValueError as exc:
-                print(f"converge: {exc}", file=sys.stderr)
-                return 1
-            _write_manifest_file(m)
-            print(f"converge: ValidateEchidnaLinkedLibs.run() passed after {attempt} iteration(s).")
-            print(f"converge: normalised `{MANIFEST_PATH.relative_to(ROOT)}` from printManifest().")
-            return 0
+    val = _run_forge_script("run()")
+    if val.returncode != 0:
+        sys.stderr.write(val.stdout)
+        sys.stderr.write(val.stderr)
+        print("converge: ValidateEchidnaLinkedLibs.run() failed after apply/build.", file=sys.stderr)
+        return 1
 
-        pm = _run_forge_script("printManifest()")
-        if pm.returncode != 0:
-            sys.stderr.write(pm.stdout)
-            sys.stderr.write(pm.stderr)
-            return 1
-        try:
-            m = _parse_manifest_from_forge_output(pm.stdout + pm.stderr)
-        except ValueError as exc:
-            print(f"converge: {exc}", file=sys.stderr)
-            sys.stderr.write(val.stdout)
-            sys.stderr.write(val.stderr)
-            return 1
-        _write_manifest_file(m)
-        print(f"converge: iteration {attempt}: run() failed; manifest replaced from printManifest(), retrying...")
-
-    sys.stderr.write(val.stdout)
-    sys.stderr.write(val.stderr)
-    print(f"converge: run() still failing after {MAX_CONVERGE_PASSES} iterations.", file=sys.stderr)
-    return 1
+    print("converge: applied manifest and verified ValidateEchidnaLinkedLibs.run().")
+    return 0
 
 
 def main() -> int:

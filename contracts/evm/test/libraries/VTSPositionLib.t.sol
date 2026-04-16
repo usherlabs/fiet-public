@@ -12,7 +12,7 @@ import {SwapParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
 import {BalanceDelta, toBalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
 import {Errors} from "../../src/libraries/Errors.sol";
 import {MarketVTSConfiguration} from "../../src/types/VTS.sol";
-import {PositionContext, TouchPositionParams} from "../../src/types/VTS.sol";
+import {PositionContext, TouchPositionParams, TouchPositionResult} from "../../src/types/VTS.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
 import {PositionModificationHookData, PositionModificationHookDataLib} from "../../src/types/Position.sol";
@@ -2556,9 +2556,14 @@ contract VTSPositionLibTest is VTSLibTestBase {
         });
 
         PositionContext memory ctx = _mkCtx();
-        harness.touchPositionAndFinalizeMM(ctx, tp);
+        TouchPositionResult memory touchResult = harness.touchPositionAndFinalizeMM(ctx, tp);
 
         RFSCheckpoint memory afterCp = harness.getRFSCheckpoint(positionId);
+        assertEq(
+            keccak256(abi.encode(touchResult.pos.checkpoint)),
+            keccak256(abi.encode(afterCp)),
+            "touchPosition return pos.checkpoint must match storage after MM tail"
+        );
         // Poke recomputes `commitmentMax` from live liquidity; narrow two-sided ranges can open both RFS lanes.
         (bool rfsOpen, BalanceDelta rfsDelta) = harness.calcRFS(ctx.poolManager, positionId, false);
         assertTrue(rfsOpen, "RFS should be open with zero settled vs live commitment");
@@ -2958,6 +2963,82 @@ contract VTSPositionLibTest is VTSLibTestBase {
         assertFalse(rfsOpen, "RFS should be closed when massively over-settled");
         assertEq(delta.amount0(), type(int128).min, "token0 RFS delta should saturate to int128.min");
         assertEq(delta.amount1(), type(int128).min, "token1 RFS delta should saturate to int128.min");
+    }
+
+    /// @dev Active withdrawals use `_planWithdrawalLane` → `safeInt128ToUint256(rfsLaneDelta)` when `rfsLaneDelta < 0`.
+    ///      Saturated `type(int128).min` must not revert there (regression for int128 unary-negation overflow).
+    function test_onMMSettle_activeWithdrawal_doesNotRevert_whenRfsLaneSaturatesToInt128Min() public {
+        _initMarket();
+        PoolId corePoolId = _getDefaultPoolId();
+        harness.setupPool(corePoolId, _createDefaultVTSConfig());
+
+        bytes32 salt = bytes32(uint256(610));
+        PositionId positionId = _registerHarnessPositionInPool(corePoolId, DEFAULT_OWNER, -60, 60, 1, salt);
+        harness.setPositionActive(positionId, true);
+
+        uint256 int128MaxU = uint256(type(uint128).max) >> 1;
+        uint256 commitmentMax = (int128MaxU + 2) * 20;
+        harness.setCommitmentMax(positionId, commitmentMax, commitmentMax);
+        harness.setSettled(positionId, commitmentMax, commitmentMax);
+        harness.setPoolTotalSettled(corePoolId, commitmentMax, commitmentMax);
+        harness.setCumulativeDeficit(positionId, 0, 0);
+        harness.setCommitmentDeficit(positionId, 0, 0);
+
+        (bool rfsOpen, BalanceDelta rfsDelta) = harness.getRFS(positionId);
+        assertFalse(rfsOpen, "precondition: massively over-settled closes RFS");
+        assertEq(rfsDelta.amount0(), type(int128).min, "precondition: token0 lane saturates to int128.min");
+
+        VTSPositionLibTest_MockLCC lcc0 = new VTSPositionLibTest_MockLCC(address(0xF0));
+        VTSPositionLibTest_MockLCC lcc1 = new VTSPositionLibTest_MockLCC(address(0xF1));
+        IMarketVault vault = new VTSPositionLibTest_VaultNoop();
+
+        harness.onMMSettle(
+            manager,
+            vault,
+            positionId,
+            Currency.wrap(address(lcc0)),
+            Currency.wrap(address(lcc1)),
+            toBalanceDelta(int128(int256(10e18)), 0),
+            false,
+            false
+        );
+    }
+
+    /// @dev `fromDeltas` deposit path converts negative lanes via `safeInt128ToUint256`; clamped `int128.min` must not revert.
+    function test_onMMSettle_fromDeltas_clampedInt128Min_negativeLane_doesNotRevert() public {
+        _initMarket();
+        PoolId corePoolId = _getDefaultPoolId();
+        harness.setupPool(corePoolId, _createDefaultVTSConfig());
+
+        bytes32 salt = bytes32(uint256(611));
+        PositionId positionId = _registerHarnessPositionInPool(corePoolId, DEFAULT_OWNER, -60, 60, 1, salt);
+        harness.setPositionActive(positionId, false);
+
+        harness.setCommitmentMax(positionId, 1000e18, 1000e18);
+        harness.setSettled(positionId, 0, 0);
+        harness.setPoolTotalSettled(corePoolId, 0, 0);
+
+        VTSPositionLibTest_MockLCC lcc0 = new VTSPositionLibTest_MockLCC(address(0xF2));
+        VTSPositionLibTest_MockLCC lcc1 = new VTSPositionLibTest_MockLCC(address(0xF3));
+        VTSPositionLibTest_VaultReserveSpy vault = new VTSPositionLibTest_VaultReserveSpy();
+
+        address u0 = lcc0.underlying();
+        harness.setUnderlyingDelta(Currency.wrap(u0), DEFAULT_OWNER, int128(1));
+        harness.addMarketProducedCredit(IMarketVault(address(vault)), Currency.wrap(u0), 1);
+
+        BalanceDelta clampedNeg = LiquidityUtils.safeToBalanceDelta(int256(type(int128).min) - 1, int256(0));
+        assertEq(clampedNeg.amount0(), type(int128).min, "precondition: int256 clamp maps to int128.min");
+
+        harness.onMMSettle(
+            manager,
+            vault,
+            positionId,
+            Currency.wrap(address(lcc0)),
+            Currency.wrap(address(lcc1)),
+            clampedNeg,
+            false,
+            true
+        );
     }
 
     // ============================================================

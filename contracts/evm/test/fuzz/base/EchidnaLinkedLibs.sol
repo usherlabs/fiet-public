@@ -17,11 +17,11 @@ library EchidnaLinkedLibs {
 
     address internal constant LCC_FACTORY_LINKED_LIB = 0x5A3842F9D1B0F96003669A36Ec4a09165bc7de54;
     address internal constant LIQUIDITY_HUB_LINKED_LIB = 0x5be262F2f2f9B3b5C70a256526eE9C6DD8Fc9E02;
-    address internal constant VTS_COMMIT_LIB = 0xb16A5AC87e14b5e171096526565b24e42d2019ad;
+    address internal constant VTS_COMMIT_LIB = 0x889369E439273e308B0b53A350F8220E43987844;
     address internal constant VTS_FEE_LINKED_LIB = 0xe2F744D132A1B346ACd29E304181EDf2bF9831b8;
-    address internal constant VTS_POSITION_LIB = 0x1F1b7143fcFFB9217100E26d782Ff4183A93a784;
-    address internal constant VTS_LIFECYCLE_LINKED_LIB = 0xB58a5b8159a1ac2206a0E123993C2eCc5FDa87A7;
-    address internal constant VTS_POSITION_MM_OPS_LIB = 0x0Bb8FC108C0adf840f3a14e170108C18429a8d25;
+    address internal constant VTS_POSITION_LIB = 0x96CA0AAffF95767eC2B22b752911ADE4e0f283cc;
+    address internal constant VTS_LIFECYCLE_LINKED_LIB = 0xd9092adEd1E53bCD716E00ABFF1dd339e09Ab083;
+    address internal constant VTS_POSITION_MM_OPS_LIB = 0x70A36438E2102a59c6dd01B9B7c57497ea4154Fa;
 
     error VTSLifecycleLinkedLibAddrMismatch();
     error VTSPositionMMOpsLibAddrMismatch();
@@ -72,7 +72,9 @@ library EchidnaLinkedLibs {
 
     function deployVTSCommitLib() internal {
         address lib = _deploy(keccak256("echidna.VTSCommitLib"), type(VTSCommitLib).creationCode);
-        if (lib != VTS_COMMIT_LIB) revert VTSCommitLibAddrMismatch();
+        // VTS* libraries are linked against [profile.echidna].libraries values, so their CREATE2
+        // outputs must be validated against the runtime-linked initcode prediction, not static constants.
+        if (lib != predictedVTSCommitLib()) revert VTSCommitLibAddrMismatch();
     }
 
     function deployVTSFeeLinkedLib() internal {
@@ -82,17 +84,17 @@ library EchidnaLinkedLibs {
 
     function deployVTSPositionLib() internal {
         address lib = _deploy(keccak256("echidna.VTSPositionLib"), type(VTSPositionLib).creationCode);
-        if (lib != VTS_POSITION_LIB) revert VTSPositionLibAddrMismatch();
+        if (lib != predictedVTSPositionLib()) revert VTSPositionLibAddrMismatch();
     }
 
     function deployVTSLifecycleLinkedLib() internal {
         address lib = _deploy(keccak256("echidna.VTSLifecycleLinkedLib"), type(VTSLifecycleLinkedLib).creationCode);
-        if (lib != VTS_LIFECYCLE_LINKED_LIB) revert VTSLifecycleLinkedLibAddrMismatch();
+        if (lib != predictedVTSLifecycleLinkedLib()) revert VTSLifecycleLinkedLibAddrMismatch();
     }
 
     function deployVTSPositionMMOpsLib() internal {
         address lib = _deploy(keccak256("echidna.VTSPositionMMOpsLib"), type(VTSPositionMMOpsLib).creationCode);
-        if (lib != VTS_POSITION_MM_OPS_LIB) revert VTSPositionMMOpsLibAddrMismatch();
+        if (lib != predictedVTSPositionMMOpsLib()) revert VTSPositionMMOpsLibAddrMismatch();
     }
 
     // --- CREATE2 address prediction (same initCode + salt as deploy*; single source for scripts) ---

@@ -443,10 +443,12 @@ contract ProxyHook is BaseHook, VaultCoreActionHandler {
         pure
         returns (uint256 expectedInput)
     {
+        // Use `safeInt128ToUint256` on the raw lane: it returns absolute magnitude. Avoid unary `-` on `int128`
+        // before conversion (`type(int128).min` would overflow).
         if (zeroForOne) {
-            expectedInput = LiquidityUtils.safeInt128ToUint256(-swapDelta.amount0());
+            expectedInput = LiquidityUtils.safeInt128ToUint256(swapDelta.amount0());
         } else {
-            expectedInput = LiquidityUtils.safeInt128ToUint256(-swapDelta.amount1());
+            expectedInput = LiquidityUtils.safeInt128ToUint256(swapDelta.amount1());
         }
     }
 

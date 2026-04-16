@@ -1174,11 +1174,13 @@ library VTSPositionLib {
 
         result.feeAdj = VTSFeeLinkedLib.afterTouchPosition(s, result.id);
 
-        result.pos = posStorage;
-
         if (hookData.isMMOperation) {
             VTSPositionMMOpsLib.processMMOperations(s, ctx, p, result, requiredSettlementDelta);
         }
+
+        // Refresh from storage after the MM tail. `processMMOperations` is an external linked-library call; mutating
+        // `TouchPositionResult` inside it does not update this caller's memory return value.
+        result.pos = s.positions[result.id];
     }
 
     /// @notice Update active status based on liquidity transitions
