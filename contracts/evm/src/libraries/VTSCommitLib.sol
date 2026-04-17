@@ -81,6 +81,8 @@ library VTSCommitLib {
         uint256 deadline;
         uint256 authNonce;
         bytes authSig;
+        /// @dev EIP-712 `RelayAuth.sender`: MM batch locker / NFT recipient (`address(0)` aliases the `signer`).
+        address sender;
         address authorisedRelayer;
     }
 
@@ -254,7 +256,7 @@ library VTSCommitLib {
 
     function _commitSignalRelayedLinked(
         VTSStorage storage s,
-        address sender,
+        address signer,
         IVRLSignalManager signalManager,
         IOracleHelper oracleHelper,
         CommitRelayedBundle memory b
@@ -263,7 +265,7 @@ library VTSCommitLib {
             revert Errors.InvalidLiquiditySignal(0, 0, 0);
         }
         (, uint256 expirySeconds) = signalManager.verifyLiquiditySignalRelayed(
-            sender, 0, b.liquiditySignal, b.deadline, b.authNonce, b.authSig, true
+            signer, 0, b.liquiditySignal, b.deadline, b.authNonce, b.authSig, b.sender, true
         );
         _assertSignalAdmissible(oracleHelper, b.liquiditySignal);
         commitId = _commitSignalInternal(s, b.liquiditySignal, expirySeconds, b.authorisedRelayer);
@@ -287,23 +289,24 @@ library VTSCommitLib {
 
     function _renewSignalRelayedLinked(
         VTSStorage storage s,
-        address sender,
+        address signer,
         IVRLSignalManager signalManager,
         IOracleHelper oracleHelper,
         uint256 commitId,
         bytes memory liquiditySignal,
         uint256 deadline,
         uint256 authNonce,
-        bytes memory authSig
+        bytes memory authSig,
+        address sender
     ) internal {
         if (liquiditySignal.length == 0) {
             revert Errors.InvalidLiquiditySignal(0, 0, 0);
         }
         (, uint256 expirySeconds) = signalManager.verifyLiquiditySignalRelayed(
-            sender, commitId, liquiditySignal, deadline, authNonce, authSig, true
+            signer, commitId, liquiditySignal, deadline, authNonce, authSig, sender, true
         );
         _assertSignalAdmissible(oracleHelper, liquiditySignal);
-        _renewSignalInternal(s, sender, commitId, liquiditySignal, expirySeconds);
+        _renewSignalInternal(s, signer, commitId, liquiditySignal, expirySeconds);
     }
 
     /// @param authorisedRelayer See `_commitSignalLinked`; immutable per commit after this write.
@@ -613,9 +616,12 @@ library VTSCommitLib {
         bytes memory liquiditySignal,
         uint256 deadline,
         uint256 authNonce,
-        bytes memory authSig
+        bytes memory authSig,
+        address sender
     ) external returns (uint256 commitId) {
-        return _commitSignalRelayedRouter(s, ctx, factory, caller, liquiditySignal, deadline, authNonce, authSig);
+        return _commitSignalRelayedRouter(
+            s, ctx, factory, caller, liquiditySignal, deadline, authNonce, authSig, sender
+        );
     }
 
     /// @dev Split from `commitSignalRelayed` to avoid stack-too-deep in the external entrypoint.
@@ -627,7 +633,8 @@ library VTSCommitLib {
         bytes memory liquiditySignal,
         uint256 deadline,
         uint256 authNonce,
-        bytes memory authSig
+        bytes memory authSig,
+        address sender
     ) private returns (uint256 commitId) {
         address mmOwner = _resolveFreshCommitProofPrincipal(ctx, factory, caller, liquiditySignal);
         commitId = _commitSignalRelayedLinked(
@@ -640,6 +647,7 @@ library VTSCommitLib {
                 deadline: deadline,
                 authNonce: authNonce,
                 authSig: authSig,
+                sender: sender,
                 authorisedRelayer: caller
             })
         );
@@ -666,11 +674,21 @@ library VTSCommitLib {
         bytes memory liquiditySignal,
         uint256 deadline,
         uint256 authNonce,
-        bytes memory authSig
+        bytes memory authSig,
+        address sender
     ) external {
         address mmAdvancer = _resolveRenewProofPrincipal(ctx, factory, caller, liquiditySignal);
         _renewSignalRelayedLinked(
-            s, mmAdvancer, ctx.signalManager, ctx.oracleHelper, commitId, liquiditySignal, deadline, authNonce, authSig
+            s,
+            mmAdvancer,
+            ctx.signalManager,
+            ctx.oracleHelper,
+            commitId,
+            liquiditySignal,
+            deadline,
+            authNonce,
+            authSig,
+            sender
         );
     }
 }

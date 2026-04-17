@@ -1,51 +1,43 @@
-[Critical] Stale pre-transfer queue snapshot and incorrect delta in MMPositionManager._unwrapLccFromUser causes FCFS theft of queued shortfall
+[High] Caller-binding removed in renewSignal with proof principal derived from liquiditySignal in VTSCommitLib via bound router causes unauthorized renewals and nonce redirection leading to potential seizure
 
 # Description
 
-[MMPositionManager._unwrapLccFromUser](https://github.com/usherlabs/fiet-protocol/blob/c4701cca39c86cfb6c6e2b3416fee5d89294b87a/contracts/evm/src/MMPositionManager.sol#L434) snapshots the Hub queue before lcc.transferFrom (which annuls existing queue), then forwards only (after - before). This underflows on some paths or forwards too little, leaving newly queued shortfall as raw LCC on the router that anyone can capture via SYNC/TAKE.
+The PR changes the non-relayed renew path to authenticate the VRL proof principal from the supplied liquiditySignal (signal.mmState.advancer) instead of the actual caller. Through factory-bound routers (e.g., MMPositionManager), any caller with a valid fresh liquiditySignal can renew another party’s commit. Since VRL [mmNonce is global per owner](https://github.com/usherlabs/fiet-protocol/blob/03e9e8a46d992ce5f3b5b3add6a13f9bc2565be6/contracts/evm/src/VRLSignalManager.sol#L146-L152), a frontrunner can also consume the nonce on a different commit of the same owner, causing the intended renewal to fail and potentially letting positions become seizable after expiry.
 
-In [_unwrapLccFromUser](https://github.com/usherlabs/fiet-protocol/blob/c4701cca39c86cfb6c6e2b3416fee5d89294b87a/contracts/evm/src/MMPositionManager.sol#L434), the code [records qBefore = LiquidityHub.settleQueue(lcc, payer) before executing lcc.transferFrom(payer, address(this), toUnwrap)](https://github.com/usherlabs/fiet-protocol/blob/c4701cca39c86cfb6c6e2b3416fee5d89294b87a/contracts/evm/src/MMPositionManager.sol#L449-L452). That transfer triggers [LCC._handleNonProtocolToProtocol → LiquidityHub.annulSettlementBeforeTransfer](https://github.com/usherlabs/fiet-protocol/blob/c4701cca39c86cfb6c6e2b3416fee5d89294b87a/contracts/evm/src/LCC.sol#L228-L231), which can reduce settleQueue(lcc, payer) before unwrapTo. After [liquidityHub.unwrapTo](https://github.com/usherlabs/fiet-protocol/blob/c4701cca39c86cfb6c6e2b3416fee5d89294b87a/contracts/evm/src/LiquidityHub.sol#L617-L626), the code [computes queued = settleQueueAfter - qBefore and forwards only this amount](https://github.com/usherlabs/fiet-protocol/blob/c4701cca39c86cfb6c6e2b3416fee5d89294b87a/contracts/evm/src/MMPositionManager.sol#L449-L452) to the MMQueueCustodian. Because qBefore is stale (pre-annul), queued becomes (newly queued shortfall) - (annulled old queue). If annulment exceeds the new queued amount, the subtraction underflows and the unwrap reverts. If not, the code forwards too little and leaves the remainder of the newly queued shortfall as raw LCC on MMPositionManager. Any locker can then call [SYNC(LCC)](https://github.com/usherlabs/fiet-protocol/blob/c4701cca39c86cfb6c6e2b3416fee5d89294b87a/contracts/evm/src/libraries/OwnerCurrencyDelta.sol#L177-L196) and [TAKE(LCC)](https://github.com/usherlabs/fiet-protocol/blob/c4701cca39c86cfb6c6e2b3416fee5d89294b87a/contracts/evm/src/modules/PositionManagerEntrypoint.sol#L79-L92) to first-come-first-serve claim these tokens, depriving the intended beneficiary of the custodied LCC required to redeem their queued settlement.
+In the updated renew flow, [MMPositionManager._renewSignal](https://github.com/usherlabs/fiet-protocol/blob/03e9e8a46d992ce5f3b5b3add6a13f9bc2565be6/contracts/evm/src/MMPositionManager.sol#L300-L318) no longer passes a caller-bound identity; [VTSOrchestrator.renewSignal](https://github.com/usherlabs/fiet-protocol/blob/03e9e8a46d992ce5f3b5b3add6a13f9bc2565be6/contracts/evm/src/VTSOrchestrator.sol#L802-L818) forwards only (factory, commitId, liquiditySignal) to VTSCommitLib. [VTSCommitLib._resolveRenewProofPrincipal](https://github.com/usherlabs/fiet-protocol/blob/03e9e8a46d992ce5f3b5b3add6a13f9bc2565be6/contracts/evm/src/libraries/VTSCommitLib.sol#L520-L527) decodes signal.mmState.advancer and, if the caller is a factory-bound router, returns that advancer without requiring caller == advancer. [VRLSignalManager.verifyLiquiditySignal](https://github.com/usherlabs/fiet-protocol/blob/03e9e8a46d992ce5f3b5b3add6a13f9bc2565be6/contracts/evm/src/VRLSignalManager.sol#L159-L168) (non-relayed) [accepts any supplied sender that matches the owner or advancer embedded in the signal, with no ECDSA signature required](https://github.com/usherlabs/fiet-protocol/blob/03e9e8a46d992ce5f3b5b3add6a13f9bc2565be6/contracts/evm/src/VRLSignalManager.sol#L112-L121). [VTSCommitLib._renewSignalInternal](https://github.com/usherlabs/fiet-protocol/blob/03e9e8a46d992ce5f3b5b3add6a13f9bc2565be6/contracts/evm/src/libraries/VTSCommitLib.sol#L334-L341) then checks sender == signal.mmState.advancer and owner immutability, both satisfied using the derived sender rather than the real caller. This permits unauthorized renewals through bound routers using any valid fresh liquiditySignal for the commit owner. Because VRL [mmNonce is tracked per owner (not per commit)](https://github.com/usherlabs/fiet-protocol/blob/03e9e8a46d992ce5f3b5b3add6a13f9bc2565be6/contracts/evm/src/VRLSignalManager.sol#L146-L152), a frontrunner can redirect a fresh signal to a different commit of the same owner, making the victim’s intended renewal revert due to InvalidNonce. If the target commit then expires, positions under it may become seizable, causing direct loss of principal.
 
 # Severity
 
-**Impact Explanation:** [High] Misattribution of queued shortfall enables direct, material loss of principal LCC intended for beneficiary-scoped custody and breaks the intended 'no FCFS dust' invariant; in some cases, unwrap DoS occurs.
+**Impact Explanation:** [High] Redirecting or blocking timely renewal can lead to commit expiry and subsequent seizure of positions, causing direct, material loss of principal funds. Unauthorized renewals also undermine authorization guarantees and can disrupt MM operations.
 
-**Likelihood Explanation:** [High] Pre-existing queues are common; 'max' unwrap is typical; transfer-time annulment on full-balance transfers is expected; any locker can easily SYNC/TAKE; clear profit incentive exists.
+**Likelihood Explanation:** [Medium] Exploitation requires access to a fresh liquiditySignal and, for the most severe case, timing (front-running) and the target commit being near expiry. These are significant but realistic constraints in public mempool environments with bound routers.
 
 # Exploitation
 
 ## Exploitation Scenarios:
 
 ### Scenario 1.
-Attacker captures mis-forwarded shortfall (Critical): Victim V has LCC balance B and pre-existing queue Q0 > 0. V performs a “max” unwrap via MMPositionManager (payerIsUser=true). lcc.transferFrom annuls Q0; unwrapTo queues newQueued ≥ Q0 due to limited market liquidity. MMPositionManager forwards only (newQueued - Q0), leaving Q0 LCC on the router. Attacker then calls [SYNC(LCC)](https://github.com/usherlabs/fiet-protocol/blob/c4701cca39c86cfb6c6e2b3416fee5d89294b87a/contracts/evm/src/libraries/OwnerCurrencyDelta.sol#L177-L196) to credit their delta from the router’s balance and [TAKE(LCC)](https://github.com/usherlabs/fiet-protocol/blob/c4701cca39c86cfb6c6e2b3416fee5d89294b87a/contracts/evm/src/modules/PositionManagerEntrypoint.sol#L79-L92) to withdraw the leftover Q0, making the victim’s queued settlement under-custodied and unserviceable without replacement LCC.
+Unauthorized renewal via factory-bound router: An attacker obtains a valid fresh liquiditySignal for a victim owner and submits [RENEW_SIGNAL through MMPositionManager](https://github.com/usherlabs/fiet-protocol/blob/03e9e8a46d992ce5f3b5b3add6a13f9bc2565be6/contracts/evm/src/MMPositionManager.sol#L300-L318) for the victim’s commit. Because the router is factory-bound and VTSCommitLib derives sender from the signal, renew succeeds without the attacker being the advancer.
 #### Preconditions / Assumptions
-- (a). Victim V holds LCC balance B > 0
-- (b). Victim has existing LiquidityHub queue Q0 > 0 for the same LCC
-- (c). Victim uses MMPositionManager UNWRAP_LCC with payerIsUser=true and requested=0 (max), so toUnwrap=B
-- (d). lcc.transferFrom causes LiquidityHub.annulSettlementBeforeTransfer to annul part/all of Q0
-- (e). unwrapTo queues newQueued ≥ Q0 (limited market liquidity now)
-- (f). MMQueueCustodian is set and functional
-- (g). Any locker can call SYNC and TAKE on MMPositionManager
+- (a). MMPositionManager (or another router) is factory-bound for the market
+- (b). A victim commit exists with owner matching the liquiditySignal’s mmState.owner
+- (c). A valid fresh liquiditySignal is available to the attacker (e.g., observed in mempool or publicly distributed)
+- (d). Non-relayed renew path is used (no EIP-712 relay signature)
 
 ### Scenario 2.
-Underflow revert on max unwrap (High): Victim V has LCC balance B and pre-existing queue Q0 > 0. V performs a “max” unwrap (toUnwrap = B). lcc.transferFrom annuls Q0; unwrapTo finds sufficient liquidity and queues ~0. The code computes queuedToForward = 0 - Q0, which underflows and causes the unwrap to revert, blocking a valid operation.
+Frontrun/redirect fresh signal to wrong commit, blocking intended renewal and enabling seizure: The victim submits a non-relayed renewal of an expiring commit with a fresh liquiditySignal. The attacker front-runs with the same signal to renew a different commit of the same owner, advancing mmNonce. The victim’s renewal then reverts with InvalidNonce, the target commit remains unrenewed, can expire, and positions become seizable after grace.
 #### Preconditions / Assumptions
-- (a). Victim V holds LCC balance B > 0
-- (b). Victim has existing LiquidityHub queue Q0 > 0
-- (c). Victim uses MMPositionManager UNWRAP_LCC with payerIsUser=true and requested=0 (max), so toUnwrap=B
-- (d). lcc.transferFrom annuls Q0
-- (e). unwrapTo finds sufficient liquidity so newQueued ≈ 0
-- (f). Computation queuedToForward = newQueued - Q0 underflows
+- (a). MMPositionManager is factory-bound
+- (b). Owner has at least two commits; a fresh liquiditySignal for that owner exists
+- (c). The victim’s intended renewal uses the same fresh liquiditySignal (non-relayed) and is near expiry or time-critical
+- (d). Attacker can observe and front-run the victim’s transaction with the same liquiditySignal
 
 ### Scenario 3.
-Partial unwrap leakage (High): Victim V attempts a partial unwrap A < B that still causes transfer-time annul (e.g., due to intra-batch state). Headroom passes in this specific state, unwrapTo queues newQueued, but MMPositionManager forwards only (newQueued - toAnnul), leaving toAnnul LCC on the router. Another locker SYNC/TAKEs the leftover, again depriving the victim of the custodied LCC needed for later redemption.
+Operational DoS via unauthorized advancer rotation: The attacker renews a victim commit using a liquiditySignal that rotates advancer. Subsequent non-seizing MM operations by the victim using the old locker revert (locker must equal the stored advancer), disrupting operations until the victim adapts.
 #### Preconditions / Assumptions
-- (a). Victim V holds LCC balance B > 0 and has existing queue Q0 > 0
-- (b). Victim uses MMPositionManager UNWRAP_LCC with payerIsUser=true and a partial amount A where B - Q0 < A < B, and headroom passes due to intra-batch or specific state
-- (c). lcc.transferFrom annuls some of Q0 (toAnnul > 0)
-- (d). unwrapTo queues newQueued
-- (e). MMPositionManager forwards only (newQueued - toAnnul), leaving toAnnul LCC on the router
-- (f). Another locker can call SYNC and TAKE to seize the leftover LCC
+- (a). MMPositionManager is factory-bound
+- (b). A fresh liquiditySignal exists that rotates mmState.advancer for the victim’s commit
+- (c). Attacker can obtain and submit the liquiditySignal before the victim adapts their locker
 
 # Proposed fix
 
@@ -53,7 +45,7 @@ Partial unwrap leakage (High): Victim V attempts a partial unwrap A < B that sti
 
 File: `contracts/evm/src/MMPositionManager.sol`
 
-[Source](https://github.com/usherlabs/fiet-protocol/blob/c4701cca39c86cfb6c6e2b3416fee5d89294b87a/contracts/evm/src/MMPositionManager.sol)
+[Source](https://github.com/usherlabs/fiet-protocol/blob/03e9e8a46d992ce5f3b5b3add6a13f9bc2565be6/contracts/evm/src/MMPositionManager.sol)
 
 ```diff
  // SPDX-License-Identifier: BUSL-1.1
@@ -69,6 +61,7 @@ File: `contracts/evm/src/MMPositionManager.sol`
  import {FietNativeWrapper} from "./modules/NativeWrapper.sol";
  import {IWETH9} from "v4-periphery/src/interfaces/external/IWETH9.sol";
  import {PositionId, Position} from "./types/Position.sol";
+ import {LiquiditySignal} from "./types/Commit.sol";
  import {MarketMaker} from "./libraries/MarketMaker.sol";
  import {ICommitmentDescriptor} from "./interfaces/ICommitmentDescriptor.sol";
  import {IMMPositionManager} from "./interfaces/IMMPositionManager.sol";
@@ -88,6 +81,7 @@ File: `contracts/evm/src/MMPositionManager.sol`
  import {TransientStateLibrary} from "v4-periphery/lib/v4-core/src/libraries/TransientStateLibrary.sol";
  import {CurrencyTransfer} from "./libraries/CurrencyTransfer.sol";
  import {IMMQueueCustodian} from "./interfaces/IMMQueueCustodian.sol";
+ import {IEndpointUnwrapAdmission} from "./interfaces/IEndpointUnwrapAdmission.sol";
  import {IMarketFactory} from "./interfaces/IMarketFactory.sol";
  import {ILiquidityHub} from "./interfaces/ILiquidityHub.sol";
  import {IAllowanceTransfer} from "permit2/src/interfaces/IAllowanceTransfer.sol";
@@ -99,6 +93,7 @@ File: `contracts/evm/src/MMPositionManager.sol`
  contract MMPositionManager is
      ERC721Permit_v4,
      IMMPositionManager,
+     IEndpointUnwrapAdmission,
      ReentrancyLock,
      Multicall_v4,
      Permit2Forwarder,
@@ -143,6 +138,17 @@ File: `contracts/evm/src/MMPositionManager.sol`
  
      /// @dev Custody bucket for `UNWRAP_LCC` shortfalls: not tied to a commitment NFT (`tokenId == 0` matches
      ///      `COLLECT_AVAILABLE_LIQUIDITY` utility collects).
+     ///
+     ///      `UNWRAP_LCC` forwards the LCC backing each newly queued shortfall from this contract into the queue
+     ///      custodian (`_forwardUnwrapQueuedLccToCustodian`), so physical LCC tracks the Hub obligation for that
+     ///      beneficiary. The Hub queue and custodian are separate ledgers: if `settleQueue[lcc][beneficiary]` is later
+     ///      annulled by other LCC flows (e.g. LCC-02 `annulSettlementBeforeTransfer` on a different transfer), the Hub
+     ///      obligation can drop while utility custody still holds the prior slice. The beneficiary (batch locker)
+     ///      operating through MMPM is then entitled to receive that mismatch as LCC: the delta
+     ///      `custodied - hubQueued` is released to them in `_reconcileUtilityCustodyWithHubQueue` on the next
+     ///      utility `UNWRAP_LCC` or utility collect (`tokenId == 0`). Commit buckets (`tokenId > 0`) are unchanged.
+     ///      Unwrap headroom and post-transfer queue snapshots are handled separately (`LiquidityHub`
+     ///      `_unwrapEffectiveFromBalance`, `_unwrapLccFromUser`).
      uint256 private constant _UNWRAP_QUEUE_CUSTODY_TOKEN_ID = 0;
  
      // ═══════════════════════════════════════════════════════════════════════════
@@ -198,6 +204,11 @@ File: `contracts/evm/src/MMPositionManager.sol`
      /// @inheritdoc PositionManagerQueueCustodian
      function _queueCustodian() internal view override(PositionManagerQueueCustodian) returns (IMMQueueCustodian) {
          return queueCustodian;
+     }
+ 
+     /// @inheritdoc IEndpointUnwrapAdmission
+     function unwrapAdmissionCredit(address lcc, address beneficiary) external view returns (uint256) {
+         return queueCustodian.queued(_UNWRAP_QUEUE_CUSTODY_TOKEN_ID, lcc, beneficiary);
      }
  
      /// @inheritdoc FietNativeWrapper
@@ -317,23 +328,28 @@ File: `contracts/evm/src/MMPositionManager.sol`
      }
  
      /// @notice Commits a liquidity signal and mints a commitment NFT
+     /// @dev Fresh commit is owner-authenticated: VRL sees `signal.mmState.owner` as the proof principal.
+     ///      Direct commit requires `locker == mmState.owner`. Relayed commit may mint the NFT to a different locker
+     ///      while EIP-712 relay auth is bound to `mmState.owner` via `VRLSignalManager.submitAuthNonce[owner]`.
      /// @param liquiditySignal The ABI-encoded LiquiditySignal to verify and record
-     /// @param owner The locker (`msgSender()`); commitment NFT is minted to this address
+     /// @param locker The batch locker; commitment NFT is minted here (`msgSender()`)
      /// @return tokenId The commitment NFT id created
-     function _commitSignal(bytes calldata liquiditySignal, address owner, bytes calldata relayParams)
+     function _commitSignal(bytes calldata liquiditySignal, address locker, bytes calldata relayParams)
          internal
          returns (uint256 tokenId)
      {
+         LiquiditySignal memory signal = abi.decode(liquiditySignal, (LiquiditySignal));
+         address mmOwner = signal.mmState.owner;
+ 
          if (relayParams.length == 0) {
-             tokenId = vtsOrchestrator.commitSignal(marketFactory, msgSender(), liquiditySignal);
+             if (msgSender() != mmOwner) revert Errors.InvalidSender();
+             tokenId = vtsOrchestrator.commitSignal(marketFactory, liquiditySignal);
          } else {
              (uint256 deadline, uint256 authNonce, bytes memory authSig) =
                  abi.decode(relayParams, (uint256, uint256, bytes));
-             tokenId = vtsOrchestrator.commitSignalRelayed(
-                 marketFactory, msgSender(), liquiditySignal, deadline, authNonce, authSig
-             );
+             tokenId = vtsOrchestrator.commitSignalRelayed(marketFactory, liquiditySignal, deadline, authNonce, authSig);
          }
-         _mint(owner, tokenId);
+         _mint(locker, tokenId);
          emit SignalCommitted(tokenId);
      }
  
@@ -342,13 +358,15 @@ File: `contracts/evm/src/MMPositionManager.sol`
      /// @param liquiditySignal The new liquidity signal
      function _renewSignal(uint256 tokenId, bytes calldata liquiditySignal, bytes calldata relayParams) internal {
          if (relayParams.length == 0) {
-             vtsOrchestrator.renewSignal(marketFactory, msgSender(), tokenId, liquiditySignal);
++            LiquiditySignal memory signal = abi.decode(liquiditySignal, (LiquiditySignal));
++            if (msgSender() != signal.mmState.advancer) {
++                revert Errors.InvalidSender();
++            }
+             vtsOrchestrator.renewSignal(marketFactory, tokenId, liquiditySignal);
          } else {
              (uint256 deadline, uint256 authNonce, bytes memory authSig) =
                  abi.decode(relayParams, (uint256, uint256, bytes));
-             vtsOrchestrator.renewSignalRelayed(
-                 marketFactory, msgSender(), tokenId, liquiditySignal, deadline, authNonce, authSig
-             );
+             vtsOrchestrator.renewSignalRelayed(marketFactory, tokenId, liquiditySignal, deadline, authNonce, authSig);
          }
      }
  
@@ -468,6 +486,7 @@ File: `contracts/evm/src/MMPositionManager.sol`
  
          if (toUnwrap > 0) {
              address queueTo = msgSender();
+             _reconcileUtilityCustodyWithHubQueue(lccAddr, queueTo);
              uint256 qBefore = liquidityHub.settleQueue(lccAddr, queueTo);
              liquidityHub.unwrapTo(lccAddr, to, queueTo, toUnwrap);
              uint256 queued = liquidityHub.settleQueue(lccAddr, queueTo) - qBefore;
@@ -503,10 +522,12 @@ File: `contracts/evm/src/MMPositionManager.sol`
  
          uint256 beforeBal = isNativeUnderlying ? to.balance : IERC20(underlying).balanceOf(to);
          if (toUnwrap > 0) {
+             _reconcileUtilityCustodyWithHubQueue(lccAddr, payer);
              // Pull only from the locker/user (never arbitrary third parties).
-+            lccCurrency.transferFrom(payer, address(this), toUnwrap);
+             // Snapshot queue *after* transfer: non-protocol -> protocol triggers annulment of queued
+             // settlement (LCC-02), so the baseline for this unwrap's incremental queue must be post-annul.
+             lccCurrency.transferFrom(payer, address(this), toUnwrap);
              uint256 qBefore = liquidityHub.settleQueue(lccAddr, payer);
--            lccCurrency.transferFrom(payer, address(this), toUnwrap);
              liquidityHub.unwrapTo(lccAddr, to, payer, toUnwrap);
              uint256 queued = liquidityHub.settleQueue(lccAddr, payer) - qBefore;
              if (queued > 0) {
@@ -528,7 +549,14 @@ File: `contracts/evm/src/MMPositionManager.sol`
      /// @notice Moves Hub-queued shortfall LCC off this contract into beneficiary-scoped custody so it is not FCFS
      ///         router dust (see `DELTA-02` / `HUB-02A` in `INVARIANTS.md`).
      /// @dev Caller must have already invoked `liquidityHub.unwrapTo`; `amount` is the incremental queue delta for
-     ///      `beneficiary` on this unwrap.
+     ///      `beneficiary` on this unwrap. For `_unwrapLccFromUser`, the delta is measured from the queue state
+     ///      after `transferFrom` (post-annul) through `unwrapTo`; for `_unwrapLccFromDeltas`, from immediately before
+     ///      `unwrapTo` (no LCC transfer annul in between).
+     ///
+     ///      Because this forwards physical LCC into the custodian while `LiquidityHub` owns queue accounting, a later
+     ///      annulment of `settleQueue` (from unrelated LCC transfers by the same beneficiary) does not automatically
+     ///      pull LCC back out of the custodian. The beneficiary remains entitled to the resulting excess
+     ///      (`custodied - live hubQueued`); see `_reconcileUtilityCustodyWithHubQueue`.
      function _forwardUnwrapQueuedLccToCustodian(Currency lccCurrency, address beneficiary, uint256 amount) private {
          if (amount == 0) return;
          if (beneficiary == address(0)) revert Errors.InvalidAddress(beneficiary);
@@ -542,6 +570,28 @@ File: `contracts/evm/src/MMPositionManager.sol`
  
          lccCurrency.transfer(cust, amount);
          custodian.record(_UNWRAP_QUEUE_CUSTODY_TOKEN_ID, Currency.unwrap(lccCurrency), beneficiary, amount);
+     }
+ 
+     /// @notice If utility-bucket (`tokenId == 0`) custody exceeds the beneficiary's live Hub queue, release the excess
+     ///         LCC to the beneficiary (scan #22 finding #3 narrowed).
+     /// @dev `UNWRAP_LCC` had forwarded queued-backing LCC into the custodian; if `settleQueue` is later reduced
+     ///      independently (annulment via other LCC movements), the custodian can still hold the full prior slice.
+     ///      The beneficiary (batch locker) is entitled to that gap as LCC: we release `custodied - hubQueued`, i.e. the
+     ///      amount that was annulled from the Hub queue without a matching decrement of utility custody. Commit-scoped
+     ///      custody (`tokenId > 0`) is not touched. Called before utility `UNWRAP_LCC` and before
+     ///      `COLLECT_AVAILABLE_LIQUIDITY` when `tokenId == 0`.
+     function _reconcileUtilityCustodyWithHubQueue(address lccAddr, address beneficiary) private {
+         if (beneficiary == address(0)) return;
+         IMMQueueCustodian custodian = queueCustodian;
+         address cust = address(custodian);
+         if (cust == address(0) || cust == address(this)) return;
+ 
+         uint256 hubQueued = liquidityHub.settleQueue(lccAddr, beneficiary);
+         uint256 custodied = custodian.queued(_UNWRAP_QUEUE_CUSTODY_TOKEN_ID, lccAddr, beneficiary);
+         if (custodied <= hubQueued) return;
+ 
+         uint256 excess = custodied - hubQueued;
+         custodian.release(_UNWRAP_QUEUE_CUSTODY_TOKEN_ID, lccAddr, beneficiary, excess);
      }
  
      /// @notice Collects available liquidity from settlement queue
@@ -562,6 +612,9 @@ File: `contracts/evm/src/MMPositionManager.sol`
      /// @param maxAmount The maximum amount to collect
      function _collectAvailableLiquidity(address lcc, uint256 tokenId, uint256 maxAmount) internal {
          address locker = msgSender();
+         if (tokenId == _UNWRAP_QUEUE_CUSTODY_TOKEN_ID) {
+             _reconcileUtilityCustodyWithHubQueue(lcc, locker);
+         }
          liquidityHub.settleFromCustodian(lcc, address(queueCustodian), tokenId, locker, maxAmount);
      }
  

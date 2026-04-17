@@ -40,11 +40,16 @@ contract MockSignalManagerForAdmin is IVRLSignalManager {
         return (false, 0);
     }
 
-    function verifyLiquiditySignalRelayed(address, uint256, bytes memory, uint256, uint256, bytes memory, bool)
-        external
-        pure
-        returns (bool, uint256)
-    {
+    function verifyLiquiditySignalRelayed(
+        address,
+        uint256,
+        bytes memory,
+        uint256,
+        uint256,
+        bytes memory,
+        address,
+        bool
+    ) external pure returns (bool, uint256) {
         return (false, 0);
     }
 }

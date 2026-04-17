@@ -121,9 +121,12 @@ contract VTSLifecycleLinkedLibHarness {
         bytes memory liquiditySignal,
         uint256 deadline,
         uint256 authNonce,
-        bytes memory authSig
+        bytes memory authSig,
+        address sender
     ) external returns (uint256 commitId) {
-        return VTSCommitLib.commitSignalRelayed(s, ctx, factory, caller, liquiditySignal, deadline, authNonce, authSig);
+        return VTSCommitLib.commitSignalRelayed(
+            s, ctx, factory, caller, liquiditySignal, deadline, authNonce, authSig, sender
+        );
     }
 
     function renewSignal(
@@ -144,10 +147,11 @@ contract VTSLifecycleLinkedLibHarness {
         bytes memory liquiditySignal,
         uint256 deadline,
         uint256 authNonce,
-        bytes memory authSig
+        bytes memory authSig,
+        address sender
     ) external {
         VTSCommitLib.renewSignalRelayed(
-            s, ctx, factory, caller, commitId, liquiditySignal, deadline, authNonce, authSig
+            s, ctx, factory, caller, commitId, liquiditySignal, deadline, authNonce, authSig, sender
         );
     }
 

@@ -123,6 +123,7 @@ contract LifecycleTestSignalManager is IVRLSignalManager {
         uint256 deadline,
         uint256 authNonce,
         bytes memory authSig,
+        address,
         bool
     ) external returns (bool, uint256) {
         lastSender = sender;
@@ -364,7 +365,14 @@ contract VTSLifecycleLinkedLibTest is Test {
     function test_commitSignalRelayed_revertsWhenUnboundCallerNotOwner() public {
         vm.expectRevert(Errors.InvalidSender.selector);
         harness.commitSignalRelayed(
-            _routerCtx(), IMarketFactory(address(factory)), unboundCaller, _encodedSignal(), 0, 0, bytes("")
+            _routerCtx(),
+            IMarketFactory(address(factory)),
+            unboundCaller,
+            _encodedSignal(),
+            0,
+            0,
+            bytes(""),
+            makeAddr("commitmentLocker")
         );
     }
 
@@ -373,8 +381,16 @@ contract VTSLifecycleLinkedLibTest is Test {
         uint256 authNonce = 17;
         bytes memory authSig = hex"CAFE";
         factory.setBound(boundCaller, true);
+        address locker = makeAddr("commitmentLocker");
         uint256 id = harness.commitSignalRelayed(
-            _routerCtx(), IMarketFactory(address(factory)), boundCaller, _encodedSignal(), deadline, authNonce, authSig
+            _routerCtx(),
+            IMarketFactory(address(factory)),
+            boundCaller,
+            _encodedSignal(),
+            deadline,
+            authNonce,
+            authSig,
+            locker
         );
         assertEq(id, 1);
         assertEq(harness.getCommitMMOwner(1), mmOwner);
@@ -410,7 +426,15 @@ contract VTSLifecycleLinkedLibTest is Test {
 
         vm.expectRevert(Errors.InvalidSender.selector);
         harness.renewSignalRelayed(
-            _routerCtx(), IMarketFactory(address(factory)), unboundCaller, 1, _renewSignalBytes(2), 0, 0, bytes("")
+            _routerCtx(),
+            IMarketFactory(address(factory)),
+            unboundCaller,
+            1,
+            _renewSignalBytes(2),
+            0,
+            0,
+            bytes(""),
+            address(0)
         );
     }
 
@@ -420,7 +444,14 @@ contract VTSLifecycleLinkedLibTest is Test {
         bytes memory authSig = hex"BEEF";
         factory.setBound(boundCaller, true);
         harness.commitSignalRelayed(
-            _routerCtx(), IMarketFactory(address(factory)), boundCaller, _encodedSignal(), 0, 0, bytes("")
+            _routerCtx(),
+            IMarketFactory(address(factory)),
+            boundCaller,
+            _encodedSignal(),
+            0,
+            0,
+            bytes(""),
+            makeAddr("commitmentLocker2")
         );
 
         uint256 expBefore = harness.getCommitExpiresAt(1);
@@ -433,7 +464,8 @@ contract VTSLifecycleLinkedLibTest is Test {
             _renewSignalBytes(2),
             deadline,
             authNonce,
-            authSig
+            authSig,
+            address(0)
         );
         assertGt(harness.getCommitExpiresAt(1), expBefore);
         assertEq(signalManager.lastSender(), advancer);

@@ -24,16 +24,19 @@ interface IVRLSignalManager {
         external
         returns (bool, uint256);
 
-    /// @notice `sender` binds EIP-712 relay auth and `submitAuthNonce[sender]`; for fresh commit `commitId` is 0.
+    /// @notice `signer` binds EIP-712 relay auth and `submitAuthNonce[signer]`; for fresh commit `commitId` is 0.
     /// @dev Relay auth uses `ECDSA.recover` on the typed-data digest; only accounts that can produce such a signature
     ///      can use this path directly. Generic contract `advancer` values may need non-relayed / bound-router flows.
+    /// @param sender For `commitId == 0`, the MM batch locker / NFT recipient (EIP-712 `RelayAuth.sender`);
+    ///        `address(0)` aliases `signer` (proof principal). For renew relay (`commitId != 0`), must be `address(0)`.
     function verifyLiquiditySignalRelayed(
-        address sender,
+        address signer,
         uint256 commitId,
         bytes memory liquiditySignal,
         uint256 deadline,
         uint256 authNonce,
         bytes memory authSig,
+        address sender,
         bool revertOnInvalid
     ) external returns (bool, uint256);
 }

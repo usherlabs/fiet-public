@@ -149,6 +149,68 @@ abstract contract PositionManagerImpl is PositionManagerBase, ImmutableState {
         }
     }
 
+    /// @dev Split out to keep `_handleLccBalanceIncrease` stack shallow for Solc.
+    function _computeLccNonFeeAndAddedCredit(
+        PoolKey memory key,
+        Currency currency,
+        uint256 balanceBefore,
+        uint256 balanceAfter,
+        int128 feesAccruedAmount,
+        address locker,
+        uint256 prevCredit
+    ) private view returns (uint256 nonFee, uint256 addedCredit, uint256 fee) {
+        uint256 inc = balanceAfter - balanceBefore;
+        int256 hookDelta = poolManager.currencyDelta(address(key.hooks), currency);
+        {
+            int256 netFeei = int256(feesAccruedAmount) - hookDelta;
+            fee = netFeei > 0 ? uint256(netFeei) : 0;
+        }
+        nonFee = LiquidityUtils.forwardedNonFeeLccAmount(inc, feesAccruedAmount, hookDelta);
+        uint256 currentCredit = _getFullCredit(currency, locker);
+        addedCredit = currentCredit > prevCredit ? (currentCredit - prevCredit) : 0;
+    }
+
+    /// @dev Split out to keep `_handleLccBalanceIncrease` stack shallow for Solc.
+    /// @dev Physical commit custody uses `qCommitted` (Hub queue). Min-out / `validateMinOut` uses full per-leg
+    ///      `nonFee` (post-`feeAdj`) — see `INVARIANTS.md` SETTLE-03 user min-out vs routing principal.
+    function _routeLccCustodyTakeAndForward(
+        Currency currency,
+        address locker,
+        uint256 tokenId,
+        uint256 nonFee,
+        uint256 qCommitted,
+        uint256 addedCredit,
+        uint256 fee
+    ) private {
+        uint256 custodyForward;
+        if (tokenId > 0) {
+            custodyForward = qCommitted;
+            if (custodyForward > 0 && nonFee < custodyForward) {
+                // runtime guard: an economic invariant: commit custody must never be smaller than the live Hub queue for that commit leg; and
+                // We cannot forward to custody what part of position delta is non-fee.
+                revert Errors.InsufficientBalance(nonFee, custodyForward);
+            }
+        } else {
+            custodyForward = nonFee;
+        }
+
+        uint256 creditTake = LiquidityUtils.mmLockerCreditTakeForQueuedCustody(addedCredit, fee);
+
+        if (creditTake > 0) {
+            vtsOrchestrator.take(currency, locker, creditTake);
+        }
+
+        if (tokenId > 0) {
+            if (custodyForward > 0) {
+                _forwardQueuedLccToCustodian(currency, tokenId, locker, custodyForward);
+            }
+        } else if (nonFee > 0) {
+            _forwardQueuedLccToCustodian(currency, tokenId, locker, nonFee);
+        }
+    }
+
+    /// @return forwardedNonFee Immediate non-fee LCC forwarded to queue custody for this leg (min-out basis; post-transfer `inc`).
+    /// @param isPoolCurrency0 True when `currency` is `key.currency0` (selects transient queued-principal leg without extra comparisons).
     function _handleLccBalanceIncrease(
         PoolKey memory key,
         Currency currency,
@@ -156,8 +218,9 @@ abstract contract PositionManagerImpl is PositionManagerBase, ImmutableState {
         uint256 balanceAfter,
         int128 feesAccruedAmount,
         address locker,
-        uint256 tokenId
-    ) internal {
+        uint256 tokenId,
+        bool isPoolCurrency0
+    ) internal returns (uint256 forwardedNonFee) {
         // Planned-cancel safety depends on adjacency:
         // this handler runs immediately after the matching PoolManager -> MMPM take and before
         // control returns to any outer MM action, so path-keyed planned cancels are consumed
@@ -168,31 +231,21 @@ abstract contract PositionManagerImpl is PositionManagerBase, ImmutableState {
         uint256 prevCredit = _getFullCredit(currency, locker);
         _syncBalanceAsCredit(currency);
 
-        // IMPORTANT: PoolManager returns `callerDelta` already net of the hook delta.
-        // For our CoreHook, that hook delta is `feeAdj`, and the raw pool fee delta returned as `feesAccrued`
-        // must be netted by `feeAdj` to get the caller's *actual* fee take for this call.
-        //
-        // So: netFee = max(feesAccrued - feeAdj, 0)
-        uint256 inc = balanceAfter - balanceBefore;
-        int256 hookDelta = poolManager.currencyDelta(address(key.hooks), currency);
-        uint256 fee;
-        {
-            int256 netFeei = int256(feesAccruedAmount) - hookDelta;
-            fee = netFeei > 0 ? uint256(netFeei) : 0;
-        }
-        uint256 currentCredit = _getFullCredit(currency, locker);
-        uint256 addedCredit = currentCredit > prevCredit ? (currentCredit - prevCredit) : 0;
-        uint256 extra = addedCredit > fee ? (addedCredit - fee) : 0;
-        if (extra > 0) {
-            vtsOrchestrator.take(currency, locker, extra);
-        }
+        (uint256 nonFee, uint256 addedCredit, uint256 fee) = _computeLccNonFeeAndAddedCredit(
+            key, currency, balanceBefore, balanceAfter, feesAccruedAmount, locker, prevCredit
+        );
 
-        uint256 nonFee = LiquidityUtils.forwardedNonFeeLccAmount(inc, feesAccruedAmount, hookDelta);
-        if (nonFee > 0) {
-            _forwardQueuedLccToCustodian(currency, tokenId, locker, nonFee);
-        }
+        // Commit-bucket custody must match Hub `queueAmount` from `planCancelWithQueue` (see `VTSPositionMMOpsLib`).
+        uint256 qCommitted = isPoolCurrency0
+            ? vtsOrchestrator.takeMMDecreaseQueuedLcc0(marketFactory)
+            : vtsOrchestrator.takeMMDecreaseQueuedLcc1(marketFactory);
+
+        _routeLccCustodyTakeAndForward(currency, locker, tokenId, nonFee, qCommitted, addedCredit, fee);
+        // Slippage floor: immediate post-`feeAdj` non-fee LCC per leg (may exceed queued slice forwarded to custody).
+        forwardedNonFee = nonFee;
     }
 
+    /// @return mmForwardedNonFeeForMinOut Per-leg immediate non-fee LCC actually forwarded (authoritative min-out basis).
     function _takePositiveDeltasAndHandleLcc(
         PoolKey memory key,
         address self,
@@ -201,19 +254,20 @@ abstract contract PositionManagerImpl is PositionManagerBase, ImmutableState {
         BalanceDelta feesAccrued,
         address locker,
         uint256 tokenId
-    ) internal {
+    ) internal returns (BalanceDelta mmForwardedNonFeeForMinOut) {
         // Take positive deltas: receive tokens owed from PoolManager (LP is withdrawing)
         // Queued principal is then forwarded to the queue custodian, where planned cancel executes on the MMPM -> custodian transfer.
         // This immediate post-modify take is the sequencing invariant that makes LiquidityHub's
         // path-keyed planned-cancel transient slots safe in the current MM decrease flow.
+        uint256 n0;
+        uint256 n1;
         if (delta0 > 0) {
             uint256 balance0Before = key.currency0.balanceOfSelf();
             key.currency0.take(poolManager, self, LiquidityUtils.safeInt128ToUint256(delta0), false);
             uint256 balance0After = key.currency0.balanceOfSelf();
-
             if (_isLCC(key.currency0)) {
-                _handleLccBalanceIncrease(
-                    key, key.currency0, balance0Before, balance0After, feesAccrued.amount0(), locker, tokenId
+                n0 = _handleLccBalanceIncrease(
+                    key, key.currency0, balance0Before, balance0After, feesAccrued.amount0(), locker, tokenId, true
                 );
             }
         }
@@ -221,13 +275,13 @@ abstract contract PositionManagerImpl is PositionManagerBase, ImmutableState {
             uint256 balance1Before = key.currency1.balanceOfSelf();
             key.currency1.take(poolManager, self, LiquidityUtils.safeInt128ToUint256(delta1), false);
             uint256 balance1After = key.currency1.balanceOfSelf();
-
             if (_isLCC(key.currency1)) {
-                _handleLccBalanceIncrease(
-                    key, key.currency1, balance1Before, balance1After, feesAccrued.amount1(), locker, tokenId
+                n1 = _handleLccBalanceIncrease(
+                    key, key.currency1, balance1Before, balance1After, feesAccrued.amount1(), locker, tokenId, false
                 );
             }
         }
+        return LiquidityUtils.safeToBalanceDelta(n0, n1, false, false);
     }
 
     function _afterModifyLiquidity(PoolKey memory key) internal {
@@ -237,50 +291,25 @@ abstract contract PositionManagerImpl is PositionManagerBase, ImmutableState {
         marketFactory.afterModifyLiquidity(key);
     }
 
-    /// @notice Per-leg forwarded non-fee LCC for MM decrease/burn min-out (post `feeAdj`), before `_afterModifyLiquidity`.
-    /// @dev Must match `LiquidityUtils.forwardedNonFeeLccAmount` / `_handleLccBalanceIncrease` splitting. VTS queue
-    ///      principal for routing remains `callerDelta - feesAccrued` (see `VTSPositionMMOpsLib.processMMOperations`).
-    function _mmForwardedNonFeeForMinOut(PoolKey memory key, BalanceDelta callerDelta, BalanceDelta feesAccrued)
-        internal
-        view
-        returns (BalanceDelta)
-    {
-        int128 d0 = callerDelta.amount0();
-        int128 d1 = callerDelta.amount1();
-        uint256 n0;
-        uint256 n1;
-        if (d0 > 0 && _isLCC(key.currency0)) {
-            n0 = LiquidityUtils.forwardedNonFeeLccAmount(
-                uint256(uint128(d0)),
-                feesAccrued.amount0(),
-                poolManager.currencyDelta(address(key.hooks), key.currency0)
-            );
-        }
-        if (d1 > 0 && _isLCC(key.currency1)) {
-            n1 = LiquidityUtils.forwardedNonFeeLccAmount(
-                uint256(uint128(d1)),
-                feesAccrued.amount1(),
-                poolManager.currencyDelta(address(key.hooks), key.currency1)
-            );
-        }
-        return LiquidityUtils.safeToBalanceDelta(n0, n1, false, false);
-    }
-
     /// @dev Split out to keep `_modifySyntheticLiquidity` stack shallow for Solc.
+    /// @return mmForwardedNonFeeForMinOut Per-leg immediate non-fee LCC actually forwarded (post-transfer); min-out basis.
     function _settleModifyLiquidityDeltas(
         PoolKey memory key,
         address self,
         BalanceDelta callerDelta,
         BalanceDelta feesAccrued,
         uint256 tokenId
-    ) internal {
+    ) internal returns (BalanceDelta mmForwardedNonFeeForMinOut) {
         _settleNegativeDeltas(key, self, callerDelta.amount0(), callerDelta.amount1());
         if (callerDelta.amount0() > 0 || callerDelta.amount1() > 0) {
-            _takePositiveDeltasAndHandleLcc(
+            // We must accomodate for: min-out was checked against a pre-transfer estimate derived from callerDelta,
+            // even though the real immediate LCC receipt is only known after the PoolManager -> MMPM transfer and any planned-cancel burn.
+            mmForwardedNonFeeForMinOut = _takePositiveDeltasAndHandleLcc(
                 key, self, callerDelta.amount0(), callerDelta.amount1(), feesAccrued, msgSender(), tokenId
             );
         }
         _afterModifyLiquidity(key);
+        vtsOrchestrator.zeroMMDecreaseQueuedLccAmounts(marketFactory);
     }
 
     /// @notice Modifies liquidity in a Uniswap V4 pool and immediately settles the deltas
@@ -300,7 +329,7 @@ abstract contract PositionManagerImpl is PositionManagerBase, ImmutableState {
     /// @param hookData Arbitrary data to pass to hooks (contains PositionModificationHookData)
     /// @return callerDelta The principal balance delta - includes liquidity change plus immediate fee/hook deltas
     /// @return feesAccrued Informational delta of fee growth in the modified range for this call
-    /// @return mmForwardedNonFeeForMinOut Per-leg immediate non-fee LCC basis for MM decrease/burn min-out (LCC legs only)
+    /// @return mmForwardedNonFeeForMinOut Per-leg immediate non-fee LCC actually forwarded to custody (LCC legs only; post-transfer).
     function _modifySyntheticLiquidity(
         PoolKey memory key,
         ModifyLiquidityParams memory params,
@@ -315,6 +344,9 @@ abstract contract PositionManagerImpl is PositionManagerBase, ImmutableState {
         if (MarketHandlerLib.getProxyHook(marketFactory, key) == address(0)) {
             revert Errors.InvalidMarket(key);
         }
+
+        // Per-modify: clear any stale queued-principal snapshot before hook repopulates (EIP-1153 clears at tx end).
+        vtsOrchestrator.zeroMMDecreaseQueuedLccAmounts(marketFactory);
 
         address self = address(this);
 
@@ -337,8 +369,7 @@ abstract contract PositionManagerImpl is PositionManagerBase, ImmutableState {
             revert Errors.InvariantViolated("liquidity change incorrect");
         }
 
-        BalanceDelta mmBasis = _mmForwardedNonFeeForMinOut(key, callerDelta, feesAccrued);
-        _settleModifyLiquidityDeltas(key, self, callerDelta, feesAccrued, tokenId);
+        BalanceDelta mmBasis = _settleModifyLiquidityDeltas(key, self, callerDelta, feesAccrued, tokenId);
         return (callerDelta, feesAccrued, mmBasis);
     }
 }

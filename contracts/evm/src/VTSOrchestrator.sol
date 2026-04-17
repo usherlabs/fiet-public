@@ -655,10 +655,11 @@ contract VTSOrchestrator is
         bytes memory liquiditySignal,
         uint256 deadline,
         uint256 authNonce,
-        bytes memory authSig
+        bytes memory authSig,
+        address sender
     ) external onlyIfPoolManagerUnlocked onlyIfVRLHandlersRegistered nonReentrant returns (uint256 commitId) {
         commitId = VTSCommitLib.commitSignalRelayed(
-            s, _commitRouterContext(), factory, _msgSender(), liquiditySignal, deadline, authNonce, authSig
+            s, _commitRouterContext(), factory, _msgSender(), liquiditySignal, deadline, authNonce, authSig, sender
         );
     }
 
@@ -821,11 +822,21 @@ contract VTSOrchestrator is
         bytes memory liquiditySignal,
         uint256 deadline,
         uint256 authNonce,
-        bytes memory authSig
+        bytes memory authSig,
+        address sender
     ) external onlyIfPoolManagerUnlocked onlyIfVRLHandlersRegistered nonReentrant {
         _assertSignalValid(commitId, false);
         VTSCommitLib.renewSignalRelayed(
-            s, _commitRouterContext(), factory, _msgSender(), commitId, liquiditySignal, deadline, authNonce, authSig
+            s,
+            _commitRouterContext(),
+            factory,
+            _msgSender(),
+            commitId,
+            liquiditySignal,
+            deadline,
+            authNonce,
+            authSig,
+            sender
         );
     }
 
@@ -855,5 +866,27 @@ contract VTSOrchestrator is
             ? VTSCommitLib.checkpointAfterGrowthWithCommitment(s, _lifecycleContext(), commitId, positionId)
             : VTSLifecycleLinkedLib.checkpointAfterGrowthNoCommitment(s, positionId);
         emit Checkpointed(commitId, positionIndex, checkpointOut, withCommitment);
+    }
+
+    // -------------------------------------------------------------------------
+    // MM decrease: queued principal snapshot (transient lives on this contract — see `VTSPositionMMOpsLib`)
+    // -------------------------------------------------------------------------
+
+    /// @inheritdoc IVTSOrchestrator
+    function zeroMMDecreaseQueuedLccAmounts(IMarketFactory factory) external {
+        _assertBoundFactoryCaller(factory);
+        TransientSlots.zeroMMDecreaseQueuedLccAmounts();
+    }
+
+    /// @inheritdoc IVTSOrchestrator
+    function takeMMDecreaseQueuedLcc0(IMarketFactory factory) external returns (uint256 q) {
+        _assertBoundFactoryCaller(factory);
+        q = TransientSlots.takeMMDecreaseQueuedLcc0();
+    }
+
+    /// @inheritdoc IVTSOrchestrator
+    function takeMMDecreaseQueuedLcc1(IMarketFactory factory) external returns (uint256 q) {
+        _assertBoundFactoryCaller(factory);
+        q = TransientSlots.takeMMDecreaseQueuedLcc1();
     }
 }

@@ -207,8 +207,8 @@ abstract contract MarketMakerTestBase is Test {
     // ============ COMMITMENT SETUP HELPERS ============
 
     /// @dev Effective MMPM batch locker for MM liquidity ops: hook `locker` must match `mmState.advancer`
-    ///      (`VTSLifecycleLinkedLib.validateMMOperation`). Commit mints the NFT to `msgSender()` (same locker).
-    ///      Fresh commit requires `msgSender() == mmState.owner` on the direct path; default signals set `owner == advancer`.
+    ///      (`VTSLifecycleLinkedLib.validateMMOperation`). Fresh direct commit mints the commitment NFT to `mmState.owner`.
+    ///      Default signals set `owner == advancer` so the same address is batch locker and NFT holder.
     function _mmBatchLockerFromSignal(bytes memory signalBytes) internal pure returns (address) {
         return abi.decode(signalBytes, (LiquiditySignal)).mmState.advancer;
     }

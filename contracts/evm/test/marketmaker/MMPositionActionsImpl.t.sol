@@ -321,12 +321,8 @@ contract MMPositionManagerActionsTest is MarketTestBase, MarketMakerTestBase {
         assertEq(activePositionCount, 1, "Commit should have exactly 1 active position");
         assertEq(inactiveRemnantCount, 0, "Fresh commit should have no inactive settled remnants");
 
-        // validate the owner of the NFT minted is the caller of the function
-        assertEq(
-            positionManager.ownerOf(tokenId),
-            liquiditySignal.mmState.advancer,
-            "NFT owner should be the MM batch locker (advancer)"
-        );
+        // validate the owner of the NFT minted is `mmState.owner` (direct commit path)
+        assertEq(positionManager.ownerOf(tokenId), liquiditySignal.mmState.owner, "NFT owner should be mmState.owner");
 
         // for minting testing:
         (Position memory positionAfter,) = positionManager.getPosition(tokenId, positionIndex);
@@ -871,10 +867,15 @@ contract MMPositionManagerActionsTest is MarketTestBase, MarketMakerTestBase {
 
         _openSeizeWindow(tokenId, positionIndex);
 
+        _primePositionForQueuedDecrease(tokenId, positionIndex, uint256(defaultlLiquidityParams.liquidityDelta));
+
         vm.mockCall(
             address(mv),
             abi.encodeWithSelector(IMarketVaultDryBalanceDelta.dryModifyLiquidities.selector),
             abi.encode(toBalanceDelta(int128(0), int128(0)))
+        );
+        vm.mockCall(
+            marketFactory, abi.encodeWithSelector(IMarketFactory.useMarketLiquidity.selector), abi.encode(uint256(0))
         );
 
         uint256 settleAmount0 = 5_999_709_018_652_707;
@@ -886,7 +887,6 @@ contract MMPositionManagerActionsTest is MarketTestBase, MarketMakerTestBase {
         uint256 queueBeforeGuarantor = _queuedSumFor(guarantor);
         address batchLocker = liquiditySignal.mmState.advancer;
         uint256 queueBeforeOwner = _queuedSumFor(batchLocker);
-        uint256 custodyBefore = _custodySumFor(tokenId, custodian, guarantor);
 
         vm.startPrank(guarantor);
         IERC20(lcc0.underlying()).approve(address(positionManager), type(uint256).max);
@@ -899,9 +899,17 @@ contract MMPositionManagerActionsTest is MarketTestBase, MarketMakerTestBase {
         MMA.executeWithUnlock(positionManager, actions, block.timestamp + 3600);
         vm.stopPrank();
 
-        uint256 custodyDelta = _custodySumFor(tokenId, custodian, guarantor) - custodyBefore;
-
-        assertGt(custodyDelta, 0, "Seizure retained LCC should be recorded in shared custodian");
+        // Queue/custody parity (commit bucket): custodied LCC must match Hub `settleQueue` per leg for the guarantor.
+        assertEq(
+            IMMQueueCustodian(custodian).queued(tokenId, address(lcc0), guarantor),
+            ILiquidityHub(liquidityHub).settleQueue(address(lcc0), guarantor),
+            "lcc0: MMQueueCustodian must mirror Hub queue for seizure locker"
+        );
+        assertEq(
+            IMMQueueCustodian(custodian).queued(tokenId, address(lcc1), guarantor),
+            ILiquidityHub(liquidityHub).settleQueue(address(lcc1), guarantor),
+            "lcc1: MMQueueCustodian must mirror Hub queue for seizure locker"
+        );
         assertGe(
             _queuedSumFor(guarantor), queueBeforeGuarantor, "Seizure queue ownership should follow locker/guarantor"
         );
@@ -912,9 +920,9 @@ contract MMPositionManagerActionsTest is MarketTestBase, MarketMakerTestBase {
         );
     }
 
-    /// @notice Documents intended behaviour: `_collectAvailableLiquidity` is queue-gated. Custody without a matching
-    ///         per-LCC `settleQueue` for the guarantor is not collected here (no `processSettlementFor` / queue clear).
-    ///         Beneficiary-scoped custody must still not be drainable via collect in that state.
+    /// @notice `COLLECT_AVAILABLE_LIQUIDITY` is queue-gated via `LiquidityHub.settleFromCustodian`. After seizure,
+    ///         commit custody must mirror Hub queues per leg; with no reserves, collect is a no-op and cannot debit
+    ///         custody without a matching queue entry.
     function test_seize_whenGuarantorHasNoHubQueue_collectIsNoop_andDoesNotDrainCustody() public {
         uint256 positionIndex = 0;
 
@@ -930,10 +938,15 @@ contract MMPositionManagerActionsTest is MarketTestBase, MarketMakerTestBase {
 
         _openSeizeWindow(tokenId, positionIndex);
 
+        _primePositionForQueuedDecrease(tokenId, positionIndex, uint256(defaultlLiquidityParams.liquidityDelta));
+
         vm.mockCall(
             address(mv),
             abi.encodeWithSelector(IMarketVaultDryBalanceDelta.dryModifyLiquidities.selector),
             abi.encode(toBalanceDelta(int128(0), int128(0)))
+        );
+        vm.mockCall(
+            marketFactory, abi.encodeWithSelector(IMarketFactory.useMarketLiquidity.selector), abi.encode(uint256(0))
         );
 
         uint256 settleAmount0 = 5_999_709_018_652_707;
@@ -942,7 +955,6 @@ contract MMPositionManagerActionsTest is MarketTestBase, MarketMakerTestBase {
         IERC20(lcc1.underlying()).transfer(guarantor, settleAmount1);
 
         IMMQueueCustodian qc = IMMQueueCustodian(address(positionManager.queueCustodian()));
-        uint256 custodyBefore = _custodySumFor(tokenId, address(qc), guarantor);
 
         vm.startPrank(guarantor);
         IERC20(lcc0.underlying()).approve(address(positionManager), type(uint256).max);
@@ -956,19 +968,14 @@ contract MMPositionManagerActionsTest is MarketTestBase, MarketMakerTestBase {
         vm.stopPrank();
 
         assertEq(
+            qc.queued(tokenId, address(lcc0), guarantor),
             ILiquidityHub(liquidityHub).settleQueue(address(lcc0), guarantor),
-            0,
-            "this seizure fixture does not create lcc0 Hub queue on guarantor"
+            "lcc0 parity after seizure"
         );
         assertEq(
+            qc.queued(tokenId, address(lcc1), guarantor),
             ILiquidityHub(liquidityHub).settleQueue(address(lcc1), guarantor),
-            0,
-            "this seizure fixture does not create lcc1 Hub queue on guarantor"
-        );
-        assertGt(
-            _custodySumFor(tokenId, address(qc), guarantor),
-            custodyBefore,
-            "precondition: seizure should increase guarantor-beneficiary custody"
+            "lcc1 parity after seizure"
         );
 
         uint256 custodyMid = _custodySumFor(tokenId, address(qc), guarantor);

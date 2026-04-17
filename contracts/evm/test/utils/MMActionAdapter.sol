@@ -92,9 +92,10 @@ library MMActionAdapter {
         bytes memory liquiditySignal,
         uint256 deadline,
         uint256 authNonce,
-        bytes memory authSig
+        bytes memory authSig,
+        address sender
     ) internal pure returns (PreparedAction memory) {
-        bytes memory relayParams = abi.encode(deadline, authNonce, authSig);
+        bytes memory relayParams = abi.encode(deadline, authNonce, authSig, sender);
         return PreparedAction({
             action: bytes1(uint8(MMActions.COMMIT_SIGNAL)), params: abi.encode(liquiditySignal, relayParams)
         });
@@ -256,7 +257,7 @@ library MMActionAdapter {
         uint256 authNonce,
         bytes memory authSig
     ) internal pure returns (PreparedAction memory) {
-        bytes memory relayParams = abi.encode(deadline, authNonce, authSig);
+        bytes memory relayParams = abi.encode(deadline, authNonce, authSig, address(0));
         return PreparedAction({
             action: bytes1(uint8(MMActions.RENEW_SIGNAL)), params: abi.encode(tokenId, liquiditySignal, relayParams)
         });

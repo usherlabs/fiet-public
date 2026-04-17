@@ -237,6 +237,10 @@ being an informal “should”.
     queue state **after** pulling LCC into the endpoint (`transferFrom`), because non-protocol → protocol transfer can
     annul prior queue entries (**LCC-02**) before `unwrapTo` runs; the deltas path measures from immediately before
     `unwrapTo` only (no LCC transfer annul in between).
+  - **Native-backed `UNWRAP_LCC` (underlying `address(0)`)**: `MMPositionManager` passes Hub immediate payout
+    `to = address(this)` so `LiquidityHub` does not send native ETH to the locker inside `unwrapTo` (removes a
+    re-entrancy window between queue write and custodian forward). The locker receives native as transient
+    currency-delta credit and withdraws with `TAKE(ADDRESS_ZERO, ...)` in the same batch.
   - Any additional `BOUND_ENDPOINT` integration that cannot preserve this coupling must not use `unwrapTo` without
     revisiting HUB-02 netting assumptions.
   - **Admission vs custody**: After forwarding, the endpoint’s live LCC balance no longer includes custodied
@@ -374,6 +378,11 @@ being an informal “should”.
     It does **not** implement ERC-1271 / `SignatureChecker`. Contract-shaped advancers may still verify via the direct
     submitter path (`verifyLiquiditySignal`) or through a **factory-bound** orchestrator caller that submits on behalf
     of the advancer per `VTSCommitLib._resolveRenewProofPrincipal`.
+  - **Fresh-commit custody**: On the direct `MMPositionManager` fresh-commit path, the commitment NFT is minted to
+    `mmState.owner`. On the relayed fresh-commit path, EIP-712 `RelayAuth` includes a `sender` field: either an
+    explicit recipient (must equal the batch locker) or `address(0)` meaning custody to the proof principal (`mmState.owner`).
+    Renew relay uses `sender == address(0)` in the typed data. The EIP-712 domain uses `VRLSignalManager`
+    version `"1"` (the `RelayAuth` struct adds fields without bumping the domain version).
   - These roles are intentionally **not** interchangeable, but they are expected to remain under the control of the
     same real-world operator / coordinated trust domain.
 - **Practical consequence**:

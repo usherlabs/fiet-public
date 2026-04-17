@@ -242,8 +242,7 @@ contract MMPositionManager is
     function _handleCommitmentAction(uint256 action, bytes calldata params) internal {
         if (action == MMActions.COMMIT_SIGNAL) {
             (bytes calldata liquiditySignal, bytes calldata relayParams) = params.decodeCommitSignalParams();
-            // Commitment NFT is always minted to the locker; custody separation uses ERC-721 transfer after the batch.
-            _commitSignal(liquiditySignal, msgSender(), relayParams);
+            _commitSignal(liquiditySignal, relayParams);
             return;
         }
         if (action == MMActions.RENEW_SIGNAL) {
@@ -279,12 +278,13 @@ contract MMPositionManager is
 
     /// @notice Commits a liquidity signal and mints a commitment NFT
     /// @dev Fresh commit is owner-authenticated: VRL sees `signal.mmState.owner` as the proof principal.
-    ///      Direct commit requires `locker == mmState.owner`. Relayed commit may mint the NFT to a different locker
-    ///      while EIP-712 relay auth is bound to `mmState.owner` via `VRLSignalManager.submitAuthNonce[owner]`.
+    ///      Direct commit requires `msgSender() == mmState.owner` and mints the NFT to `mmState.owner`.
+    ///      Relayed commit passes EIP-712 `RelayAuth.sender` as this `sender` (`address(0)` means `mmState.owner`; otherwise
+    ///      must equal `msgSender()` here).
     /// @param liquiditySignal The ABI-encoded LiquiditySignal to verify and record
-    /// @param locker The batch locker; commitment NFT is minted here (`msgSender()`)
+    /// @param relayParams Empty for direct commit; otherwise `(deadline, authNonce, authSig, sender)`.
     /// @return tokenId The commitment NFT id created
-    function _commitSignal(bytes calldata liquiditySignal, address locker, bytes calldata relayParams)
+    function _commitSignal(bytes calldata liquiditySignal, bytes calldata relayParams)
         internal
         returns (uint256 tokenId)
     {
@@ -294,25 +294,36 @@ contract MMPositionManager is
         if (relayParams.length == 0) {
             if (msgSender() != mmOwner) revert Errors.InvalidSender();
             tokenId = vtsOrchestrator.commitSignal(marketFactory, liquiditySignal);
+            _mint(mmOwner, tokenId);
         } else {
-            (uint256 deadline, uint256 authNonce, bytes memory authSig) =
-                abi.decode(relayParams, (uint256, uint256, bytes));
-            tokenId = vtsOrchestrator.commitSignalRelayed(marketFactory, liquiditySignal, deadline, authNonce, authSig);
+            (uint256 deadline, uint256 authNonce, bytes memory authSig, address sender) =
+                abi.decode(relayParams, (uint256, uint256, bytes, address));
+            address mintRecipient = sender == address(0) ? mmOwner : sender;
+            if (msgSender() != mintRecipient) revert Errors.InvalidSender();
+            tokenId = vtsOrchestrator.commitSignalRelayed(
+                marketFactory, liquiditySignal, deadline, authNonce, authSig, sender
+            );
+            _mint(mintRecipient, tokenId);
         }
-        _mint(locker, tokenId);
         emit SignalCommitted(tokenId);
     }
 
     /// @notice Renews an existing signal with new parameters
+    /// @dev Direct renew (no relay) requires the batch locker to equal `signal.mmState.advancer`, matching ordinary
+    ///      non-seizing MM ops (`locker == advancer`). Relayed renew keeps EIP-712 auth on the advancer path.
     /// @param tokenId The commitment NFT token ID
     /// @param liquiditySignal The new liquidity signal
     function _renewSignal(uint256 tokenId, bytes calldata liquiditySignal, bytes calldata relayParams) internal {
         if (relayParams.length == 0) {
+            LiquiditySignal memory signal = abi.decode(liquiditySignal, (LiquiditySignal));
+            if (msgSender() != signal.mmState.advancer) revert Errors.InvalidSender();
             vtsOrchestrator.renewSignal(marketFactory, tokenId, liquiditySignal);
         } else {
-            (uint256 deadline, uint256 authNonce, bytes memory authSig) =
-                abi.decode(relayParams, (uint256, uint256, bytes));
-            vtsOrchestrator.renewSignalRelayed(marketFactory, tokenId, liquiditySignal, deadline, authNonce, authSig);
+            (uint256 deadline, uint256 authNonce, bytes memory authSig, address sender) =
+                abi.decode(relayParams, (uint256, uint256, bytes, address));
+            vtsOrchestrator.renewSignalRelayed(
+                marketFactory, tokenId, liquiditySignal, deadline, authNonce, authSig, sender
+            );
         }
     }
 
@@ -420,40 +431,57 @@ contract MMPositionManager is
         return to;
     }
 
+    /// @dev Hub `unwrapTo`, measure incremental queue for `queueKey`, forward queued LCC to custodian when needed.
+    ///      Caller must run `_reconcileUtilityCustodyWithHubQueue` first where required (before `transferFrom` on user path).
+    function _unwrapToQueueForward(
+        address lccAddr,
+        Currency lccCurrency,
+        address payoutTo,
+        address queueKey,
+        uint256 toUnwrap
+    ) private {
+        uint256 qBefore = liquidityHub.settleQueue(lccAddr, queueKey);
+        liquidityHub.unwrapTo(lccAddr, payoutTo, queueKey, toUnwrap);
+        uint256 queued = liquidityHub.settleQueue(lccAddr, queueKey) - qBefore;
+        if (queued > 0) {
+            _forwardUnwrapQueuedLccToCustodian(lccCurrency, queueKey, queued);
+        }
+    }
+
     /// @notice Unwraps LCC tokens to underlying asset using deltas (locker credit)
+    /// @dev Native-backed LCC: Hub pays ETH to MMPM only (never direct to the locker during `unwrapTo`), so a payable
+    ///      locker cannot re-enter between queue write and custody forward. The locker receives native credit and must
+    ///      `TAKE(ADDRESS_ZERO, ...)` to withdraw ETH.
     function _unwrapLccFromDeltas(address lccAddr, address to, uint256 requested) internal returns (uint256 unwrapped) {
         ILCC lcc = ILCC(lccAddr);
         Currency lccCurrency = Currency.wrap(lccAddr);
         address underlying = lcc.underlying();
         bool isNativeUnderlying = underlying == address(0);
 
-        uint256 beforeBal = isNativeUnderlying ? to.balance : IERC20(underlying).balanceOf(to);
+        // Native: payout to MMPM first; ERC20: direct payout per `to`.
+        address payoutTo = isNativeUnderlying ? address(this) : to;
+        uint256 beforeBal = isNativeUnderlying ? payoutTo.balance : IERC20(underlying).balanceOf(to);
         uint256 toUnwrap = vtsOrchestrator.take(lccCurrency, msgSender(), requested);
 
         if (toUnwrap > 0) {
             address queueTo = msgSender();
             _reconcileUtilityCustodyWithHubQueue(lccAddr, queueTo);
-            uint256 qBefore = liquidityHub.settleQueue(lccAddr, queueTo);
-            liquidityHub.unwrapTo(lccAddr, to, queueTo, toUnwrap);
-            uint256 queued = liquidityHub.settleQueue(lccAddr, queueTo) - qBefore;
-            if (queued > 0) {
-                _forwardUnwrapQueuedLccToCustodian(lccCurrency, queueTo, queued);
-            }
+            _unwrapToQueueForward(lccAddr, lccCurrency, payoutTo, queueTo, toUnwrap);
         }
 
-        uint256 afterBal = isNativeUnderlying ? to.balance : IERC20(underlying).balanceOf(to);
+        uint256 afterBal = isNativeUnderlying ? payoutTo.balance : IERC20(underlying).balanceOf(to);
         unwrapped = afterBal - beforeBal;
 
-        if (to == address(this) && unwrapped > 0) {
-            if (isNativeUnderlying) {
-                _creditExact(CurrencyLibrary.ADDRESS_ZERO, unwrapped);
-            } else {
-                _syncBalanceAsCredit(Currency.wrap(underlying));
-            }
+        if (isNativeUnderlying && unwrapped > 0) {
+            _creditExact(CurrencyLibrary.ADDRESS_ZERO, unwrapped);
+        } else if (!isNativeUnderlying && to == address(this) && unwrapped > 0) {
+            _syncBalanceAsCredit(Currency.wrap(underlying));
         }
     }
 
     /// @notice Unwraps LCC tokens to underlying asset by pulling from the locker/user
+    /// @dev Native-backed LCC: Hub pays ETH to MMPM only; see `_unwrapLccFromDeltas` NatSpec.
+    ///      Split into a private helper to avoid stack-too-deep in unoptimised builds.
     function _unwrapLccFromUser(address lccAddr, address to, uint256 requested) internal returns (uint256 unwrapped) {
         ILCC lcc = ILCC(lccAddr);
         Currency lccCurrency = Currency.wrap(lccAddr);
@@ -466,29 +494,36 @@ contract MMPositionManager is
             toUnwrap = Math.min(toUnwrap, requested);
         }
 
-        uint256 beforeBal = isNativeUnderlying ? to.balance : IERC20(underlying).balanceOf(to);
+        return _unwrapLccFromUserWithAmount(lccAddr, lccCurrency, to, payer, toUnwrap, isNativeUnderlying, underlying);
+    }
+
+    /// @dev Pull, unwrap-to-queue, and credit; isolated to keep `_unwrapLccFromUser` stack shallow.
+    function _unwrapLccFromUserWithAmount(
+        address lccAddr,
+        Currency lccCurrency,
+        address to,
+        address payer,
+        uint256 toUnwrap,
+        bool isNativeUnderlying,
+        address underlying
+    ) private returns (uint256 unwrapped) {
+        address payoutTo = isNativeUnderlying ? address(this) : to;
+        uint256 beforeBal = isNativeUnderlying ? payoutTo.balance : IERC20(underlying).balanceOf(to);
         if (toUnwrap > 0) {
             _reconcileUtilityCustodyWithHubQueue(lccAddr, payer);
             // Pull only from the locker/user (never arbitrary third parties).
             // Snapshot queue *after* transfer: non-protocol -> protocol triggers annulment of queued
             // settlement (LCC-02), so the baseline for this unwrap's incremental queue must be post-annul.
             lccCurrency.transferFrom(payer, address(this), toUnwrap);
-            uint256 qBefore = liquidityHub.settleQueue(lccAddr, payer);
-            liquidityHub.unwrapTo(lccAddr, to, payer, toUnwrap);
-            uint256 queued = liquidityHub.settleQueue(lccAddr, payer) - qBefore;
-            if (queued > 0) {
-                _forwardUnwrapQueuedLccToCustodian(lccCurrency, payer, queued);
-            }
+            _unwrapToQueueForward(lccAddr, lccCurrency, payoutTo, payer, toUnwrap);
         }
 
-        uint256 afterBal = isNativeUnderlying ? to.balance : IERC20(underlying).balanceOf(to);
+        uint256 afterBal = isNativeUnderlying ? payoutTo.balance : IERC20(underlying).balanceOf(to);
         unwrapped = afterBal - beforeBal;
-        if (to == address(this) && unwrapped > 0) {
-            if (isNativeUnderlying) {
-                _creditExact(CurrencyLibrary.ADDRESS_ZERO, unwrapped);
-            } else {
-                _syncBalanceAsCredit(Currency.wrap(underlying));
-            }
+        if (isNativeUnderlying && unwrapped > 0) {
+            _creditExact(CurrencyLibrary.ADDRESS_ZERO, unwrapped);
+        } else if (!isNativeUnderlying && to == address(this) && unwrapped > 0) {
+            _syncBalanceAsCredit(Currency.wrap(underlying));
         }
     }
 

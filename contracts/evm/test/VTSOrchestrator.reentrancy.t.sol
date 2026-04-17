@@ -213,6 +213,7 @@ contract ReentrantSignalManager {
         uint256,
         uint256,
         bytes memory,
+        address,
         bool
     ) external view returns (bool, uint256) {
         LiquiditySignal memory sig = abi.decode(liquiditySignal, (LiquiditySignal));

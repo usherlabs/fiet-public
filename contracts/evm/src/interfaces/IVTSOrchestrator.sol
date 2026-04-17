@@ -247,12 +247,15 @@ interface IVTSOrchestrator is IPausableVTS, IVTSCurrencyDelta, IVTSAdmin {
     /// @param deadline Relay authorisation deadline
     /// @param authNonce Replay guard nonce for the proof principal (`mmState.owner`)
     /// @param authSig EIP-712 signature over relay authorisation
+    /// @param sender EIP-712 `RelayAuth.sender`: MM batch locker / NFT recipient for fresh relay (`address(0)`
+    ///        means `mmState.owner`); otherwise must equal the `MMPositionManager` batch locker.
     function commitSignalRelayed(
         IMarketFactory factory,
         bytes memory liquiditySignal,
         uint256 deadline,
         uint256 authNonce,
-        bytes memory authSig
+        bytes memory authSig,
+        address sender
     ) external returns (uint256 commitId);
     /// @notice Extend the grace period for a position
     /// @param poolKey The pool key for the position
@@ -313,13 +316,15 @@ interface IVTSOrchestrator is IPausableVTS, IVTSCurrencyDelta, IVTSAdmin {
     /// @notice Renew a liquidity signal using sender-signed EIP-712 relayer authorisation
     /// @param factory The market factory namespace for caller-bound validation (mirrors non-relayed renew)
     /// @param authNonce Replay guard nonce for the proof principal (`mmState.advancer`)
+    /// @param sender Must be `address(0)` in the signed relay payload for renew (EIP-712 `RelayAuth.sender`).
     function renewSignalRelayed(
         IMarketFactory factory,
         uint256 commitId,
         bytes memory liquiditySignal,
         uint256 deadline,
         uint256 authNonce,
-        bytes memory authSig
+        bytes memory authSig,
+        address sender
     ) external;
 
     /// @notice Checkpoint a position and optionally run commitment backing checks
@@ -333,4 +338,17 @@ interface IVTSOrchestrator is IPausableVTS, IVTSCurrencyDelta, IVTSAdmin {
     /// @param positionId The position identifier
     /// @return checkpoint The RFS checkpoint for the position
     function positionToCheckpoint(PositionId positionId) external view returns (RFSCheckpoint memory);
+
+    // -------------------------------------------------------------------------
+    // MM decrease: Hub-queued principal snapshot (transient on orchestrator; hook writes, MMPM reads)
+    // -------------------------------------------------------------------------
+
+    /// @notice Clears stale MM-decrease queued-principal slots before `modifyLiquidity`
+    function zeroMMDecreaseQueuedLccAmounts(IMarketFactory factory) external;
+
+    /// @notice Takes and clears the token0-leg queued principal wei staged for the current decrease
+    function takeMMDecreaseQueuedLcc0(IMarketFactory factory) external returns (uint256 q);
+
+    /// @notice Takes and clears the token1-leg queued principal wei staged for the current decrease
+    function takeMMDecreaseQueuedLcc1(IMarketFactory factory) external returns (uint256 q);
 }

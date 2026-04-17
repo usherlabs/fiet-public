@@ -45,8 +45,10 @@ contract VRLSignalManager is Ownable, EIP712, IVRLSignalManager {
     mapping(address => uint256) public mmNonce;
     mapping(address => uint256) public submitAuthNonce;
     address public immutable submitter;
+    /// @dev EIP-712 `RelayAuth`: `signer` is the proof principal; `sender` is the MM batch locker / NFT recipient
+    ///      (`address(0)` aliases `signer` on fresh relay). For renew (`commitId != 0`), `sender` must be zero.
     bytes32 internal constant RELAY_AUTH_TYPEHASH = keccak256(
-        "RelayAuth(address sender,uint256 commitId,bytes32 liquiditySignalHash,uint256 deadline,uint256 nonce)"
+        "RelayAuth(address signer,uint256 commitId,bytes32 liquiditySignalHash,address sender,uint256 deadline,uint256 nonce)"
     );
 
     constructor(address _verifier, address _submitter, address _initialOwner)
@@ -168,34 +170,43 @@ contract VRLSignalManager is Ownable, EIP712, IVRLSignalManager {
     }
 
     function verifyLiquiditySignalRelayed(
-        address sender,
+        address signer,
         uint256 commitId,
         bytes memory liquiditySignal,
         uint256 deadline,
         uint256 authNonce,
         bytes memory authSig,
+        address sender,
         bool revertOnInvalid
     ) external onlySubmitter returns (bool ok, uint256 _signalExpiryInSeconds) {
         if (block.timestamp > deadline) revert Errors.DeadlinePassed(deadline);
-        if (authNonce != submitAuthNonce[sender]) {
-            revert Errors.InvalidNonce(authNonce, submitAuthNonce[sender]);
+        if (authNonce != submitAuthNonce[signer]) {
+            revert Errors.InvalidNonce(authNonce, submitAuthNonce[signer]);
         }
 
         LiquiditySignal memory signal = abi.decode(liquiditySignal, (LiquiditySignal));
-        _assertSenderAuthorised(signal, sender);
+        _assertSenderAuthorised(signal, signer); // assert signer is owner or advancer
+
+        if (commitId == 0) {
+            // EIP-712 `sender` field: `address(0)` aliases the proof principal (`signer`).
+            address effectiveSigner = sender == address(0) ? signer : sender;
+            if (effectiveSigner == address(0)) revert Errors.InvalidAddress(address(0));
+        } else if (sender != address(0)) {
+            revert Errors.InvalidSender();
+        }
 
         bytes32 structHash = EfficientHashLib.hash(
-            abi.encode(RELAY_AUTH_TYPEHASH, sender, commitId, keccak256(liquiditySignal), deadline, authNonce)
+            abi.encode(RELAY_AUTH_TYPEHASH, signer, commitId, keccak256(liquiditySignal), sender, deadline, authNonce)
         );
 
-        if (_hashTypedDataV4(structHash).recover(authSig) != sender) {
+        if (_hashTypedDataV4(structHash).recover(authSig) != signer) {
             revert Errors.InvalidSender();
         }
 
         (ok, _signalExpiryInSeconds) = _verifyLiquiditySignalInternal(signal);
         if (revertOnInvalid && !ok) revert Errors.InvalidProof();
         if (ok) {
-            submitAuthNonce[sender] = authNonce + 1;
+            submitAuthNonce[signer] = authNonce + 1;
         }
     }
 }

@@ -23,6 +23,7 @@ import {CheckpointLibrary} from "./Checkpoint.sol";
 import {OwnerCurrencyDelta} from "./OwnerCurrencyDelta.sol";
 import {MarketCurrencyDelta} from "./MarketCurrencyDelta.sol";
 import {VTSPositionLib} from "./VTSPositionLib.sol";
+import {TransientSlots} from "./TransientSlots.sol";
 import {IMarketVault} from "../interfaces/IMarketVault.sol";
 import {ICanonicalVault} from "../interfaces/ICanonicalVault.sol";
 
@@ -138,9 +139,13 @@ library VTSPositionMMOpsLib {
                 // - Unwrapping these LCCs draws from the MM settled amounts, either immediately or via settlement queue - allowing protocol coverage to be maintained.
                 // - For any excess, this can also be settled immediately via MM operations.
 
-                // Only cancel excess settled received.
+                // TODO:  When a guarantor seizes a position, they should not be cancelling the full amount, but rather being queued back an amount that covers their original settled amount (during seizure) and the any proportional amount of settled from the counterparty asset / token lane.
+                //
+
+                // Pool principal for cancel/queue routing matches non-seizure (`callerDelta - feesAccrued`). The separate
+                // `requiredSettlementDelta` from touch (excess vs commitment) drives vault shortfall vs `dryModifyLiquidities`.
                 (underlyingDeltaSettlement, exportedForSettlementClamp) = _handleLiquidityDecrease(
-                    ctx, p.owner, p.poolKey, requiredSettlementDelta, requiredSettlementDelta, queueRecipient
+                    ctx, p.owner, p.poolKey, principalDelta, requiredSettlementDelta, queueRecipient
                 );
             } else {
                 // Removing liquidity: Cancel LCCs without seizing.
@@ -511,6 +516,11 @@ library VTSPositionMMOpsLib {
 
         uint256 principalAmount0 = LiquidityUtils.safeInt128ToUint256(principalDelta.amount0());
         uint256 principalAmount1 = LiquidityUtils.safeInt128ToUint256(principalDelta.amount1());
+
+        // TODO: This approach is redundant. We can just allow the planned cancel to be read via Extload.
+        // Router (`PositionManagerImpl._handleLccBalanceIncrease`) forwards commit custody using these exact
+        // queueAmounts so `MMQueueCustodian` matches `LiquidityHub.settleQueue` after `executePlannedCancel`.
+        TransientSlots.setMMDecreaseQueuedLccAmounts(retainedPrincipal0, retainedPrincipal1);
 
         // 3. Queue settlements via cancelWithQueue
         // Burns LCCs on transfer from PoolManager to owner (MMPM) and queues shortfall for queueRecipient (locker).

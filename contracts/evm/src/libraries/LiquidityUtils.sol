@@ -283,4 +283,18 @@ library LiquidityUtils {
         uint256 fee = netFeei > 0 ? uint256(netFeei) : 0;
         nonFee = inc > fee ? inc - fee : 0;
     }
+
+    /// @notice Non-fee slice of the post-sync locker credit to consume via `VTSCurrencyDelta.take` before optional
+    ///         physical forwarding of `custodyForward` wei to `MMQueueCustodian`.
+    /// @dev We always net the full immediate non-fee credit from the locker delta first; the subsequent ERC20 forward
+    ///      of the Hub-queued slice does not go through `take` and therefore must not leave a matching positive delta
+    ///      on the locker (see `OwnerCurrencyDelta.syncBalanceAsCredit` — it never decreases positive credit when
+    ///      balance falls after a transfer).
+    function mmLockerCreditTakeForQueuedCustody(uint256 addedCredit, uint256 feeClassified)
+        internal
+        pure
+        returns (uint256 creditTake)
+    {
+        creditTake = addedCredit > feeClassified ? (addedCredit - feeClassified) : 0;
+    }
 }

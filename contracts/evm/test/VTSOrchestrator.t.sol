@@ -128,7 +128,8 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
                 signalBytes,
                 uint256(0),
                 uint256(0),
-                bytes("")
+                bytes(""),
+                address(0xCAFE)
             )
         );
     }
@@ -208,7 +209,8 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
                 renewSignalBytes,
                 uint256(0),
                 uint256(0),
-                bytes("")
+                bytes(""),
+                address(0)
             )
         );
     }
@@ -292,7 +294,8 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
 
         uint256 deadline = block.timestamp + 1 hours;
         uint256 authNonce = signalManager.submitAuthNonce(adv7702);
-        bytes memory authSig = _orchSignRelayAuth(advPk, adv7702, 0, signalBytes, deadline, authNonce);
+        bytes memory authSig =
+            _orchSignRelayAuth(advPk, adv7702, 0, signalBytes, address(unlockCaller), deadline, authNonce);
 
         uint256 nextBefore = vtsOrchestrator.nextCommitId();
         unlockCaller.run(
@@ -303,7 +306,8 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
                 signalBytes,
                 deadline,
                 authNonce,
-                authSig
+                authSig,
+                address(unlockCaller)
             )
         );
         assertEq(vtsOrchestrator.nextCommitId(), nextBefore + 1);
@@ -388,7 +392,8 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
                 signalBytes,
                 uint256(0),
                 uint256(0),
-                bytes("")
+                bytes(""),
+                address(0xCAFE)
             )
         );
     }
@@ -426,7 +431,8 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
                 renewSignalBytes,
                 uint256(0),
                 uint256(0),
-                bytes("")
+                bytes(""),
+                address(0)
             )
         );
     }
@@ -2625,7 +2631,7 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
     }
 
     bytes32 private constant _ORCH_RELAY_AUTH_TYPEHASH = keccak256(
-        "RelayAuth(address sender,uint256 commitId,bytes32 liquiditySignalHash,uint256 deadline,uint256 nonce)"
+        "RelayAuth(address signer,uint256 commitId,bytes32 liquiditySignalHash,address sender,uint256 deadline,uint256 nonce)"
     );
     bytes32 private constant _ORCH_EIP712_DOMAIN_TYPEHASH =
         keccak256("EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)");
@@ -2635,9 +2641,10 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
     }
 
     function _orchRelayAuthDigest(
-        address sender,
+        address signer,
         uint256 commitId,
         bytes memory liquiditySignalBytes,
+        address sender,
         uint256 deadline,
         uint256 authNonce
     ) private view returns (bytes32) {
@@ -2652,7 +2659,13 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
         );
         bytes32 structHash = keccak256(
             abi.encode(
-                _ORCH_RELAY_AUTH_TYPEHASH, sender, commitId, keccak256(liquiditySignalBytes), deadline, authNonce
+                _ORCH_RELAY_AUTH_TYPEHASH,
+                signer,
+                commitId,
+                keccak256(liquiditySignalBytes),
+                sender,
+                deadline,
+                authNonce
             )
         );
         return keccak256(abi.encodePacked("\x19\x01", domainSeparator, structHash));
@@ -2660,13 +2673,14 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
 
     function _orchSignRelayAuth(
         uint256 signerPk,
-        address sender,
+        address signer,
         uint256 commitId,
         bytes memory liquiditySignalBytes,
+        address sender,
         uint256 deadline,
         uint256 authNonce
     ) private view returns (bytes memory) {
-        bytes32 digest = _orchRelayAuthDigest(sender, commitId, liquiditySignalBytes, deadline, authNonce);
+        bytes32 digest = _orchRelayAuthDigest(signer, commitId, liquiditySignalBytes, sender, deadline, authNonce);
         (uint8 v, bytes32 r, bytes32 s) = vm.sign(signerPk, digest);
         return abi.encodePacked(r, s, v);
     }
