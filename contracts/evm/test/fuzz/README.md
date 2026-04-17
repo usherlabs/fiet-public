@@ -43,7 +43,9 @@ We run Medusa through `contracts/evm/scripts/medusa.sh`, which:
 
 - expects a locally installed `medusa` binary,
 - targets one harness source file at a time so `crytic-compile` exposes the relevant contract artifacts,
-- uses `crytic-compile` with the Foundry backend and the dedicated Medusa output directory.
+- uses `crytic-compile` with the Foundry backend and the dedicated Medusa output directory,
+- resolves `MEDUSA_CORPUS_DIR` to an absolute workspace path so coverage-guided corpus artifacts stay under the repo
+  instead of landing next to the runner's temporary config in `/tmp`.
 
 We also use a dedicated Foundry profile (`[profile.medusa]` in `contracts/evm/foundry.toml`) to:
 
@@ -79,6 +81,7 @@ by `python3 scripts/validate_fuzz_lib_config.py converge` (or the `just` targets
 | `just recompute-fuzz-lib-addrs` | Applies the manifest, deletes `out-medusa/`, rebuilds with `FOUNDRY_PROFILE=medusa`, then runs `ValidateEchidnaLinkedLibs.run()`. |
 | `just print-fuzz-lib-manifest` | Prints machine-readable manifest lines (`FUZZ_LIB_MANIFEST_BEGIN` / `END`) for pasting or tooling. |
 | `just print-fuzz-lib-addrs` | Prints human-readable CREATE2 suggestions and copy-paste blocks (verbose). |
+| `just medusa-coverage-smoke` | Runs a short Medusa smoke campaign and preserves coverage-guided corpus artifacts under `artifacts/medusa-smoke/`. |
 
 **Validation semantics**
 
@@ -108,11 +111,39 @@ From `contracts/evm/`:
 just fuzz
 just fuzz-deep
 just fuzz-invariants
+just medusa-coverage-smoke
 
 # Run individual harnesses
 just medusa-lcc-backing
 just medusa-commit-01
 ```
+
+## Coverage-guided artifacts
+
+Medusa is configured with `coverageEnabled: true`, so coverage still guides the campaign even though the repo’s human-
+readable line/branch/function percentages come from `forge coverage` in `.github/workflows/ci.yml`.
+
+When you want to keep Medusa’s coverage-guided artifacts, set `MEDUSA_CORPUS_DIR` or use the smoke target:
+
+```bash
+cd contracts/evm
+
+# Persist one harness locally
+MEDUSA_CORPUS_DIR=artifacts/medusa-local \
+  just medusa file=test/fuzz/invariants/LCC01.sol contract=LCC01 -- --test-limit 50 --seq-len 5
+
+# Persist a short representative smoke bundle
+just medusa-coverage-smoke
+```
+
+The runner writes each harness to a contract-scoped directory:
+
+- `<dir>/<ContractName>/.medusa-artifact-hash`
+- `<dir>/<ContractName>/call_sequences/*.json`
+- `<dir>/<ContractName>/test_results/`
+
+CI sets `MEDUSA_CORPUS_DIR=artifacts/medusa-ci` and uploads that directory as a workflow artifact so the Medusa path
+keeps a reviewable artifact trail alongside the Forge coverage PR comment.
 
 ### Troubleshooting
 
@@ -124,6 +155,10 @@ cd contracts/evm
 FOUNDRY_PROFILE=medusa FOUNDRY_OUT_DIR=out-medusa \
   sh ./scripts/medusa.sh --file test/fuzz/invariants/LCCBacking01.sol --contract LCCBacking01
 ```
+
+- If you want Medusa artifacts to stay under the repo, prefer `MEDUSA_CORPUS_DIR=artifacts/...` rather than a
+  relative `--corpus-dir` passed directly to the CLI. The wrapper normalises the path before it hands Medusa a
+  temporary config.
 
 ## Checklist
 

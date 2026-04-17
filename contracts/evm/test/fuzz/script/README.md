@@ -38,6 +38,10 @@ This is a fast preflight for the fuzz suite. It validates that:
 
 stay in sync for the hard-linked fuzz libraries, and then smokes the linked-library deployment helpers that the harness constructors rely on.
 
+When you also want Medusa’s coverage-guided corpus artifacts, run the harnesses through `scripts/medusa.sh` with
+`MEDUSA_CORPUS_DIR=artifacts/...` (or use `just medusa-coverage-smoke`). The wrapper resolves that to an absolute
+workspace path before generating its temporary config, so artifact output stays in-tree instead of spilling into `/tmp`.
+
 ## How to Recompute Addresses
 
 When linked-library bytecode changes, recompute the deterministic CREATE2 outputs with:

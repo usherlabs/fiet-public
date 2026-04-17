@@ -24,6 +24,7 @@ default:
 # Pass through extra args via `--`, e.g.:
 #
 # just medusa file=test/fuzz/invariants/LCC01.sol contract=LCC01 -- --test-limit 20000
+# MEDUSA_CORPUS_DIR=artifacts/medusa-local just medusa file=... contract=...
 medusa file contract config="medusa.json" *args:
     FOUNDRY_PROFILE=medusa FOUNDRY_OUT_DIR=out-medusa \
       sh ./scripts/medusa.sh --file {{ file }} --contract {{ contract }} --config {{ config }} {{ args }}
@@ -75,6 +76,18 @@ fuzz-regressions:
     # MKT-05 remains authoritatively gated by `invariant-evidence-foundry`;
     # this Medusa target is retained as a lightweight regression/drift check.
     @just medusa-mkt-05
+
+# Short Medusa campaign that preserves coverage-guided corpus artifacts in-tree.
+# Uses one canonical invariant, one accounting path, and one legacy-named
+# regression harness to catch migration drift without running the full suite.
+medusa-coverage-smoke dir="artifacts/medusa-smoke" config="medusa.json":
+    rm -rf {{ dir }}
+    mkdir -p {{ dir }}
+    @just validate-fuzz-libs
+    MEDUSA_CORPUS_DIR={{ dir }} just medusa test/fuzz/invariants/LCC01.sol LCC01 {{ config }} -- --test-limit 50 --seq-len 5
+    MEDUSA_CORPUS_DIR={{ dir }} just medusa test/fuzz/invariants/COMMIT01.sol COMMIT01 {{ config }} -- --test-limit 50 --seq-len 5
+    MEDUSA_CORPUS_DIR={{ dir }} just medusa test/fuzz/LiquidityHubWrapWithQueueEchidnaTest.sol LiquidityHubWrapWithQueueEchidnaTest {{ config }} -- --test-limit 50 --seq-len 5
+    find {{ dir }} -maxdepth 3 -type f | sort
 
 # Longer invariant campaigns (uses `medusa.deep.json`).
 fuzz-deep:

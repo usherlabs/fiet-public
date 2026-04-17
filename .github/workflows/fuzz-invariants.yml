@@ -95,5 +95,16 @@ jobs:
         env:
           FOUNDRY_PROFILE: medusa
           FOUNDRY_OUT_DIR: out-medusa
+          MEDUSA_CORPUS_DIR: artifacts/medusa-ci
         run: |
+          rm -rf "$MEDUSA_CORPUS_DIR"
+          mkdir -p "$(dirname "$MEDUSA_CORPUS_DIR")"
           bash -lc "$FUZZ_COMMAND"
+
+      - name: Upload Medusa artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: medusa-fuzz-artifacts
+          path: contracts/evm/artifacts/medusa-ci
+          if-no-files-found: warn

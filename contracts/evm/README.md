@@ -254,28 +254,36 @@ forge test --match-contract MarketFactory
 forge test -vvv
 ```
 
-### Fuzzing (Echidna)
+### Fuzzing (Medusa)
 
-Echidna harnesses live in `test/fuzz/`.
+Medusa is the authoritative property-fuzzing path for `contracts/evm/test/fuzz/`. Canonical invariant harnesses live
+under `test/fuzz/invariants/`, and a small set of legacy-named regression harnesses is retained for historical bug
+surfaces that are now also run by Medusa.
 
 ```bash
-# Run all Echidna harnesses (recommended)
+# Run the full Medusa-backed suite
 just fuzz
 just fuzz-deep
+just fuzz-invariants
 
-# Run a single harness
-just echidna-lcc-backing
-just echidna-lcc-transfer
-just echidna-commit-01
-just echidna-commit-02
+# Run a short artifact-preserving smoke campaign
+just medusa-coverage-smoke
+
+# Run individual harnesses
+just medusa-lcc-backing
+just medusa-commit-01
 ```
 
 Notes:
 
-- The runner uses Docker + Crytic/Echidna. If you have a local `echidna` binary installed, `scripts/echidna.sh` will prefer it.
-- We use a dedicated Foundry profile `echidna` (see `foundry.toml`) and output to `out-echidna/` (ignored by git).
-- `echidna:sig-backing-01` runs with `--disable-slither` to avoid instability/OOM in the current toolbox environment.
-- The `Justfile` in `contracts/evm/` provides a stable entrypoint and consistent argument passthrough.
+- Install `medusa` plus `crytic-compile`, or bootstrap with `scripts/codex-setup.sh`.
+- The runner is `scripts/medusa.sh`; it uses `[profile.medusa]` in `foundry.toml` and writes build output to
+  `out-medusa/`.
+- Solidity property functions intentionally retain the `echidna_*` prefix for compatibility, but Echidna is no longer
+  the supported runner for this suite.
+- Set `MEDUSA_CORPUS_DIR=artifacts/medusa-local` to keep per-harness corpus / coverage-guided artifacts in the repo
+  workspace.
+- See `test/fuzz/README.md` for the invariant coverage map and `INVARIANTS.md` for canonical invariant IDs.
 
 ### Mutation Testing (Gambit)
 
