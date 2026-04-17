@@ -2,6 +2,16 @@
 
 **Last updated:** 2026-04-17
 
+## Original finding
+
+[High] Principal/forwarding basis mismatch in MM decrease flow causes stranded custodied LCC or under-collection
+
+### Description
+
+In MM liquidity decreases, the queued "retained principal" is computed from pool principal only ([callerDelta - feesAccrued](https://github.com/usherlabs/fiet-protocol/blob/03e9e8a46d992ce5f3b5b3add6a13f9bc2565be6/contracts/evm/src/libraries/VTSPositionMMOpsLib.sol#L88-L93)), while the router forwards "non-fee" LCC based on post-hook fee netting ([inc - max(feesAccrued - hookDelta, 0)](https://github.com/usherlabs/fiet-protocol/blob/03e9e8a46d992ce5f3b5b3add6a13f9bc2565be6/contracts/evm/src/modules/PositionManagerImpl.sol#L170-L179)). This basis mismatch makes forwarded LCC differ from the queued amount whenever feeAdj (hookDelta) ≠ 0, leading to stranded LCC in commit-bucket custody (slash) or under-collection (bonus).
+
+During MM decreases, VTSPositionMMOpsLib computes [principalDelta = callerDelta - feesAccrued](https://github.com/usherlabs/fiet-protocol/blob/03e9e8a46d992ce5f3b5b3add6a13f9bc2565be6/contracts/evm/src/libraries/VTSPositionMMOpsLib.sol#L88-L93) and stages [LiquidityHub.planCancelWithQueue(principalAmount=P, queueAmount=Q)](https://github.com/usherlabs/fiet-protocol/blob/03e9e8a46d992ce5f3b5b3add6a13f9bc2565be6/contracts/evm/src/libraries/VTSPositionMMOpsLib.sol#L518-L531) for the locker. On the PoolManager → MMPM transfer, [LCC.\_afterTransfer triggers LiquidityHub.executePlannedCancel](https://github.com/usherlabs/fiet-protocol/blob/03e9e8a46d992ce5f3b5b3add6a13f9bc2565be6/contracts/evm/src/LCC.sol#L300-L319), burning (P - Q) and queuing Q. After this burn, PositionManagerImpl.\_handleLccBalanceIncrease [measures inc = balanceAfter - balanceBefore](https://github.com/usherlabs/fiet-protocol/blob/03e9e8a46d992ce5f3b5b3add6a13f9bc2565be6/contracts/evm/src/modules/PositionManagerImpl.sol#L170-L179) = Q + F (F = feesAccrued). It then [classifies fees using hookDelta: netFee = max(F - H, 0)](https://github.com/usherlabs/fiet-protocol/blob/03e9e8a46d992ce5f3b5b3add6a13f9bc2565be6/contracts/evm/src/modules/PositionManagerImpl.sol#L170-L179). The forwarded non-fee LCC to the custodian is [forwardedNonFee = inc - netFee](https://github.com/usherlabs/fiet-protocol/blob/03e9e8a46d992ce5f3b5b3add6a13f9bc2565be6/contracts/evm/src/modules/PositionManagerImpl.sol#L190-L195) = Q + F - max(F - H, 0). Therefore: - If H > 0 (slash): forwardedNonFee = Q + min(H, F) > Q. The extra LCC is forwarded into the commit-bucket custodian beyond the live Hub queue. [LiquidityHub.settleFromCustodian clamps to min(queue, available, maxAmount, custodied)](https://github.com/usherlabs/fiet-protocol/blob/03e9e8a46d992ce5f3b5b3add6a13f9bc2565be6/contracts/evm/src/libraries/LiquidityHubLib.sol#L728-L739) and cannot release this excess. There is [no commit-bucket reconcile path](https://github.com/usherlabs/fiet-protocol/blob/03e9e8a46d992ce5f3b5b3add6a13f9bc2565be6/contracts/evm/src/MMPositionManager.sol#L520-L549), so the excess remains stranded indefinitely unless new queue arises. - If H < 0 (bonus): forwardedNonFee = max(Q - |H|, 0) < Q, starving collection until additional LCC is custodied. This mismatch is introduced by defining queue principal as pool principal only (excluding feeAdj) while forwarding remains post-feeAdj based.
+
 ## Summary
 
 The guard in `PositionManagerImpl._routeLccCustodyTakeAndForward(...)`
@@ -22,6 +32,32 @@ In other words:
 - `nonFee` is the **actual post-hook non-fee LCC** that `MMPositionManager` really received for that leg after `modifyLiquidity(...)` returned.
 
 If the router ever receives less non-fee LCC than the amount VTS routed into the Hub queue, the correct behaviour is to revert rather than create under-collateralised custody.
+
+## How this resolves the finding
+
+The original finding was that MM decrease routing used two different economic bases:
+
+- `VTSPositionMMOpsLib` queued **principal-derived** retained LCC (`Q`)
+- `PositionManagerImpl` forwarded **post-`feeAdj` non-fee** LCC
+
+That mismatch allowed:
+
+- **slash / positive `feeAdj`** paths to over-forward above the live Hub queue, stranding excess LCC in commit custody
+- **bonus / negative `feeAdj`** paths to under-forward below the live Hub queue, causing under-collection
+
+The fix resolves that by making commit-bucket custody use the **same queued-principal basis** as the Hub queue:
+
+1. `VTSPositionMMOpsLib` computes the exact queued principal per leg.
+2. That exact queued amount is surfaced back to the router.
+3. `PositionManagerImpl` forwards **only** that queued amount into `MMQueueCustodian` for `tokenId > 0`.
+4. If the actual post-hook non-fee receipt cannot fund that queued amount, the transaction reverts atomically.
+
+So the fix closes both sides of the original mismatch:
+
+- no more **over-custody / stranded excess** when `feeAdj > 0`
+- no more **under-custody / under-collection** when `feeAdj < 0`
+
+Instead, commit custody is pinned to the live Hub queue, and any inability to fund that queue fails closed.
 
 ## Relevant code paths
 

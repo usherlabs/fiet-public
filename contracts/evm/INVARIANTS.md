@@ -633,10 +633,10 @@ being an informal “should”.
   - **User min-out vs routing principal**: `DECREASE_LIQUIDITY` / `BURN_POSITION` `amountMin` floors the **immediate
     non-fee LCC** forwarded to the queue custodian after `feeAdj` netting (`LiquidityUtils.forwardedNonFeeLccAmount`), not
     the same scalar as hook-time pool principal `callerDelta - feesAccrued` used for cancel/queue caps in VTS.
-  - **Source-side decrement (routed amount only)**: `_applySettlementClampFromExcess` removes
-    `settleableDelta + queuedDelta` from source `pa.settled` / pool `totalSettled` — the value actually routed to the
-    vault path or queue in this step — not the full `requiredSettlementDelta` when part of it must remain deferred in
-    `settled`.
+  - **Source-side decrement (routed amount only)**: `_applySettlementClampFromExcess` removes the **routed export** from
+    source `pa.settled` / pool `totalSettled` — for non-seizure decreases that is `settleableDelta + queuedDelta`; for
+    seizure decreases it is the per-leg seizure export (`min(excess, settleable + burn)`, not the full queued principal
+    remainder) — not the full `requiredSettlementDelta` when part of it must remain deferred in `settled`.
   - **Seizure MM decrease (guarantor)**: routing uses `_handleSeizureLiquidityDecrease` / `_computeSeizureLiquidityDecreaseRoutingSplit`.
     Per leg, `planCancelWithQueue` queues `principal - min(principal, excessSettled)` to the seizer (`locker`) and burns
     `min(principal, excessSettled)`; the settlement clamp uses `min(excess, settleable + burn)` so queued principal
@@ -651,9 +651,9 @@ being an informal “should”.
       residual amount that is still backed by live position settlement.
 - **Enforced / expressed by**:
   - `src/libraries/VTSPositionLib.sol::_touchExistingDecrease` computes `requiredSettlementDelta` for the MM excess.
-  - `src/libraries/VTSPositionMMOpsLib.sol::previewLiquidityDecreaseRouting` (and `_handleLiquidityDecrease` via
-    `_computeLiquidityDecreaseRoutingSplit`) splits vault availability vs Hub-queued principal; `underlyingDeltaSettlement`
-    for dynamic delta accounting equals the vault-immediate slice (`settleableDelta`) only.
+  - `src/libraries/VTSPositionMMOpsLib.sol::_computeLiquidityDecreaseRoutingSplit` (via `_handleLiquidityDecrease`)
+    splits vault availability vs Hub-queued principal; `underlyingDeltaSettlement` for dynamic delta accounting equals
+    the vault-immediate slice (`settleableDelta`) only.
   - Seizure decreases: `_computeSeizureLiquidityDecreaseRoutingSplit` + `_handleSeizureLiquidityDecrease` (same Hub/transient/custody handshake as ordinary decreases).
   - `src/libraries/VTSPositionMMOpsLib.sol::processMMOperations` (decrease branch): calls `_applySettlementClampFromExcess`
     with `exportedForSettlementClamp` from `_handleLiquidityDecrease` (`settleableDelta + queuedDelta`) for non-seizure,
@@ -733,7 +733,7 @@ being an informal “should”.
 ### SEIZE-03: Seizure flows cannot issue LCCs
 
 - **Statement**: While seizing, MM increases that would issue LCC must revert.
-- **Enforced by**: `src/libraries/VTSPositionLib.sol::_touchExistingIncrease` reverts
+- **Enforced by**: `src/libraries/VTSPositionLib.sol::_touchNewPosition` and `_touchExistingIncrease` revert
   `Errors.InvariantViolated("Invalid operation: Seizures cannot issue LCCs")` when `hookData.isSeizing`.
 
 ### SEIZE-04: MM operations must not change commit identity

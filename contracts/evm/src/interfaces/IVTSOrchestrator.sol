@@ -338,17 +338,4 @@ interface IVTSOrchestrator is IPausableVTS, IVTSCurrencyDelta, IVTSAdmin {
     /// @param positionId The position identifier
     /// @return checkpoint The RFS checkpoint for the position
     function positionToCheckpoint(PositionId positionId) external view returns (RFSCheckpoint memory);
-
-    // -------------------------------------------------------------------------
-    // MM decrease: Hub-queued principal snapshot (transient on orchestrator; hook writes, MMPM reads)
-    // -------------------------------------------------------------------------
-
-    /// @notice Clears stale MM-decrease queued-principal slots before `modifyLiquidity`
-    function zeroMMDecreaseQueuedLccAmounts(IMarketFactory factory) external;
-
-    /// @notice Takes and clears the token0-leg queued principal wei staged for the current decrease
-    function takeMMDecreaseQueuedLcc0(IMarketFactory factory) external returns (uint256 q);
-
-    /// @notice Takes and clears the token1-leg queued principal wei staged for the current decrease
-    function takeMMDecreaseQueuedLcc1(IMarketFactory factory) external returns (uint256 q);
 }

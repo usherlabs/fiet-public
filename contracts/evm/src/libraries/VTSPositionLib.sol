@@ -1315,10 +1315,12 @@ library VTSPositionLib {
     }
 
     /// @dev Clamp settled balances downward by precomputed excess values.
-    ///      For MM decreases, callers pass the amount actually routed out of live `settled` in this step: the vault
-    ///      immediate slice plus Hub-queued principal (`settleableDelta + queuedDelta`). Any remainder that could not
-    ///      be queued stays in `pa.settled` until serviceable; only the immediate slice is mirrored on
-    ///      `OwnerCurrencyDelta` (see `_handleLiquidityDecrease`).
+    ///      For **non-seizure** MM decreases, callers pass the routed export from `VTSPositionMMOpsLib`:
+    ///      `settleableDelta + queuedDelta` (vault-immediate plus shortfall-backed queue). For **seizure** MM decreases,
+    ///      callers pass the seizure split export per leg: `min(excessSettled, settleableVaultLeg + burn)` where
+    ///      `burn = min(principal, excessSettled)` — not `settleable + full queued principal`, so guarantor-queued
+    ///      principal does not over-remove live `pa.settled` (SETTLE-03). Any remainder that could not be routed stays
+    ///      in `pa.settled` until serviceable; only the vault-immediate slice is mirrored on `OwnerCurrencyDelta`.
     function _applySettlementClampFromExcess(
         VTSStorage storage s,
         PositionId positionId,

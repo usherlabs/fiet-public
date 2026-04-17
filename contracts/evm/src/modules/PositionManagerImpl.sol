@@ -171,8 +171,8 @@ abstract contract PositionManagerImpl is PositionManagerBase, ImmutableState {
     }
 
     /// @dev Split out to keep `_handleLccBalanceIncrease` stack shallow for Solc.
-    /// @dev Physical commit custody uses `qCommitted` (Hub queue). Min-out / `validateMinOut` uses full per-leg
-    ///      `nonFee` (post-`feeAdj`) — see `INVARIANTS.md` SETTLE-03 user min-out vs routing principal.
+    /// @dev Physical commit custody uses `qCommitted` (Hub queue delta for this leg — see `_takePositiveDeltasAndHandleLcc`).
+    ///      Min-out / `validateMinOut` uses full per-leg `nonFee` (post-`feeAdj`) — see `INVARIANTS.md` SETTLE-03.
     function _routeLccCustodyTakeAndForward(
         Currency currency,
         address locker,
@@ -210,7 +210,9 @@ abstract contract PositionManagerImpl is PositionManagerBase, ImmutableState {
     }
 
     /// @return forwardedNonFee Immediate non-fee LCC forwarded to queue custody for this leg (min-out basis; post-transfer `inc`).
-    /// @param isPoolCurrency0 True when `currency` is `key.currency0` (selects transient queued-principal leg without extra comparisons).
+    /// @param qCommitted Increase in `LiquidityHub.settleQueue(lcc, locker)` caused by the immediately preceding
+    ///        `PoolManager -> MMPM` `take` (planned cancel executes on that transfer). Must equal the staged
+    ///        `queueAmount` from `planCancelWithQueue` when no other Hub queue mutation interleaves for that key.
     function _handleLccBalanceIncrease(
         PoolKey memory key,
         Currency currency,
@@ -219,7 +221,7 @@ abstract contract PositionManagerImpl is PositionManagerBase, ImmutableState {
         int128 feesAccruedAmount,
         address locker,
         uint256 tokenId,
-        bool isPoolCurrency0
+        uint256 qCommitted
     ) internal returns (uint256 forwardedNonFee) {
         // Planned-cancel safety depends on adjacency:
         // this handler runs immediately after the matching PoolManager -> MMPM take and before
@@ -235,14 +237,38 @@ abstract contract PositionManagerImpl is PositionManagerBase, ImmutableState {
             key, currency, balanceBefore, balanceAfter, feesAccruedAmount, locker, prevCredit
         );
 
-        // Commit-bucket custody must match Hub `queueAmount` from `planCancelWithQueue` (see `VTSPositionMMOpsLib`).
-        uint256 qCommitted = isPoolCurrency0
-            ? vtsOrchestrator.takeMMDecreaseQueuedLcc0(marketFactory)
-            : vtsOrchestrator.takeMMDecreaseQueuedLcc1(marketFactory);
-
         _routeLccCustodyTakeAndForward(currency, locker, tokenId, nonFee, qCommitted, addedCredit, fee);
         // Slippage floor: immediate post-`feeAdj` non-fee LCC per leg (may exceed queued slice forwarded to custody).
         forwardedNonFee = nonFee;
+    }
+
+    /// @dev One positive leg: `take` then, for LCC, classify receipt and forward using Hub queue delta for `qCommitted`.
+    ///      `qCommitted = settleQueue_after − settleQueue_before` for `(lcc, locker)`; this attribution is sound only
+    ///      when no other operation mutates that queue entry between the two reads (same adjacency assumption as the
+    ///      former orchestrator transient mirror).
+    function _takePositiveDeltaAndHandleLccIfLcc(
+        PoolKey memory key,
+        address self,
+        Currency currency,
+        int128 delta,
+        int128 feesAccruedAmount,
+        address locker,
+        uint256 tokenId
+    ) private returns (uint256 forwardedNonFeeLeg) {
+        if (delta <= 0) return 0;
+
+        uint256 balanceBefore = currency.balanceOfSelf();
+        address lccAddr = Currency.unwrap(currency);
+        uint256 qBefore = _isLCC(currency) ? liquidityHub.settleQueue(lccAddr, locker) : 0;
+        currency.take(poolManager, self, LiquidityUtils.safeInt128ToUint256(delta), false);
+        uint256 balanceAfter = currency.balanceOfSelf();
+
+        if (!_isLCC(currency)) return 0;
+
+        uint256 qCommitted = liquidityHub.settleQueue(lccAddr, locker) - qBefore;
+        return _handleLccBalanceIncrease(
+            key, currency, balanceBefore, balanceAfter, feesAccruedAmount, locker, tokenId, qCommitted
+        );
     }
 
     /// @return mmForwardedNonFeeForMinOut Per-leg immediate non-fee LCC actually forwarded (authoritative min-out basis).
@@ -255,32 +281,15 @@ abstract contract PositionManagerImpl is PositionManagerBase, ImmutableState {
         address locker,
         uint256 tokenId
     ) internal returns (BalanceDelta mmForwardedNonFeeForMinOut) {
-        // Take positive deltas: receive tokens owed from PoolManager (LP is withdrawing)
-        // Queued principal is then forwarded to the queue custodian, where planned cancel executes on the MMPM -> custodian transfer.
-        // This immediate post-modify take is the sequencing invariant that makes LiquidityHub's
-        // path-keyed planned-cancel transient slots safe in the current MM decrease flow.
-        uint256 n0;
-        uint256 n1;
-        if (delta0 > 0) {
-            uint256 balance0Before = key.currency0.balanceOfSelf();
-            key.currency0.take(poolManager, self, LiquidityUtils.safeInt128ToUint256(delta0), false);
-            uint256 balance0After = key.currency0.balanceOfSelf();
-            if (_isLCC(key.currency0)) {
-                n0 = _handleLccBalanceIncrease(
-                    key, key.currency0, balance0Before, balance0After, feesAccrued.amount0(), locker, tokenId, true
-                );
-            }
-        }
-        if (delta1 > 0) {
-            uint256 balance1Before = key.currency1.balanceOfSelf();
-            key.currency1.take(poolManager, self, LiquidityUtils.safeInt128ToUint256(delta1), false);
-            uint256 balance1After = key.currency1.balanceOfSelf();
-            if (_isLCC(key.currency1)) {
-                n1 = _handleLccBalanceIncrease(
-                    key, key.currency1, balance1Before, balance1After, feesAccrued.amount1(), locker, tokenId, false
-                );
-            }
-        }
+        // Take positive deltas: receive tokens owed from PoolManager (LP is withdrawing).
+        // For LCC legs, `executePlannedCancel` runs during the `take` and bumps `LiquidityHub.settleQueue(lcc, locker)`.
+        // Snapshot queue before/after each `take` so commit custody (`qCommitted`) matches that durable increment.
+        uint256 n0 = _takePositiveDeltaAndHandleLccIfLcc(
+            key, self, key.currency0, delta0, feesAccrued.amount0(), locker, tokenId
+        );
+        uint256 n1 = _takePositiveDeltaAndHandleLccIfLcc(
+            key, self, key.currency1, delta1, feesAccrued.amount1(), locker, tokenId
+        );
         return LiquidityUtils.safeToBalanceDelta(n0, n1, false, false);
     }
 
@@ -309,7 +318,6 @@ abstract contract PositionManagerImpl is PositionManagerBase, ImmutableState {
             );
         }
         _afterModifyLiquidity(key);
-        vtsOrchestrator.zeroMMDecreaseQueuedLccAmounts(marketFactory);
     }
 
     /// @notice Modifies liquidity in a Uniswap V4 pool and immediately settles the deltas
@@ -344,9 +352,6 @@ abstract contract PositionManagerImpl is PositionManagerBase, ImmutableState {
         if (MarketHandlerLib.getProxyHook(marketFactory, key) == address(0)) {
             revert Errors.InvalidMarket(key);
         }
-
-        // Per-modify: clear any stale queued-principal snapshot before hook repopulates (EIP-1153 clears at tx end).
-        vtsOrchestrator.zeroMMDecreaseQueuedLccAmounts(marketFactory);
 
         address self = address(this);
 

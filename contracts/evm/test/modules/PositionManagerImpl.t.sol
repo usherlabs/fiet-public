@@ -17,7 +17,6 @@ import {ModifyLiquidityParams} from "@uniswap/v4-core/src/types/PoolOperation.so
 import {Position} from "v4-periphery/lib/v4-core/src/libraries/Position.sol";
 import {IMarketFactory} from "../../src/interfaces/IMarketFactory.sol";
 import {IVTSCurrencyDelta} from "../../src/interfaces/IVTSCurrencyDelta.sol";
-import {IVTSOrchestrator} from "../../src/interfaces/IVTSOrchestrator.sol";
 
 contract MockERC20 {
     mapping(address => uint256) public balanceOf;
@@ -83,6 +82,7 @@ contract MockMarketFactory {
 contract MockLiquidityHub {
     mapping(address => bool) public isLCC;
     address public factory;
+    mapping(bytes32 => uint256) internal _settleQueue;
 
     function setIsLCC(address token, bool v) external {
         isLCC[token] = v;
@@ -94,6 +94,11 @@ contract MockLiquidityHub {
 
     function getFactory(address, address) external view returns (MockMarketFactory) {
         return MockMarketFactory(factory);
+    }
+
+    /// @dev Minimal `settleQueue` for router queue-delta reconstruction; defaults to 0.
+    function settleQueue(address lcc, address recipient) external view returns (uint256) {
+        return _settleQueue[keccak256(abi.encode(lcc, recipient))];
     }
 }
 
@@ -284,17 +289,6 @@ contract MockOrchestratorHandleLcc {
         lastTakeAmount = maxAmount;
         return maxAmount;
     }
-
-    /// @dev Queued-principal snapshots live on the real `VTSOrchestrator`; harness has no hook staging.
-    function zeroMMDecreaseQueuedLccAmounts(IMarketFactory) external {}
-
-    function takeMMDecreaseQueuedLcc0(IMarketFactory) external pure returns (uint256) {
-        return 0;
-    }
-
-    function takeMMDecreaseQueuedLcc1(IMarketFactory) external pure returns (uint256) {
-        return 0;
-    }
 }
 
 contract PositionManagerImplHarness is PositionManagerQueueCustodian, PositionManagerImpl {
@@ -398,10 +392,10 @@ contract PositionManagerImplRecordingHarness is PositionManagerImplHarness {
         int128 feesAccruedAmount,
         address locker_,
         uint256 tokenId,
-        bool isPoolCurrency0
+        uint256 qCommitted
     ) external {
         _handleLccBalanceIncrease(
-            key, currency, balanceBefore, balanceAfter, feesAccruedAmount, locker_, tokenId, isPoolCurrency0
+            key, currency, balanceBefore, balanceAfter, feesAccruedAmount, locker_, tokenId, qCommitted
         );
     }
 }
@@ -454,23 +448,6 @@ contract PositionManagerImplTest is Test {
 
         h = new PositionManagerImplHarness(
             IPoolManager(address(poolManager)), address(factory), orch, canonicalCustody, locker
-        );
-
-        // `PositionManagerImpl` reads/clears MM-decrease queued principal via `VTSOrchestrator` (correct EIP-1153 ctx).
-        vm.mockCall(
-            orch,
-            abi.encodeCall(IVTSOrchestrator.zeroMMDecreaseQueuedLccAmounts, (IMarketFactory(address(factory)))),
-            abi.encode()
-        );
-        vm.mockCall(
-            orch,
-            abi.encodeCall(IVTSOrchestrator.takeMMDecreaseQueuedLcc0, (IMarketFactory(address(factory)))),
-            abi.encode(uint256(0))
-        );
-        vm.mockCall(
-            orch,
-            abi.encodeCall(IVTSOrchestrator.takeMMDecreaseQueuedLcc1, (IMarketFactory(address(factory)))),
-            abi.encode(uint256(0))
         );
 
         PoolKey memory canonKey = _defaultKey();
@@ -868,13 +845,10 @@ contract PositionManagerHandleLccHardeningTest is Test {
             )
         );
         vm.expectCall(address(orch), abi.encodeCall(IVTSCurrencyDelta.getFullCredit, (Currency.wrap(lcc0), locker)));
-        vm.expectCall(
-            address(orch), abi.encodeCall(IVTSOrchestrator.takeMMDecreaseQueuedLcc0, (IMarketFactory(address(factory))))
-        );
         vm.expectCall(address(orch), abi.encodeCall(IVTSCurrencyDelta.take, (Currency.wrap(lcc0), locker, uint256(80))));
 
-        // tokenId 0: forward `nonFee` (no commit-bucket transient queue in this direct harness).
-        h.exposeHandleLccBalanceIncrease(key, Currency.wrap(lcc0), 0, 100, int128(30), locker, 0, true);
+        // tokenId 0: forward `nonFee` (no commit-bucket queue delta in this direct harness).
+        h.exposeHandleLccBalanceIncrease(key, Currency.wrap(lcc0), 0, 100, int128(30), locker, 0, 0);
 
         // fee = max(30 - 10, 0) = 20; nonFee = 100 - 20 = 80
         assertEq(h.forwardCallCount(), 1);
@@ -915,12 +889,9 @@ contract PositionManagerHandleLccHardeningTest is Test {
             )
         );
         vm.expectCall(address(orch), abi.encodeCall(IVTSCurrencyDelta.getFullCredit, (Currency.wrap(lcc0), locker)));
-        vm.expectCall(
-            address(orch), abi.encodeCall(IVTSOrchestrator.takeMMDecreaseQueuedLcc0, (IMarketFactory(address(factory))))
-        );
         vm.expectCall(address(orch), abi.encodeCall(IVTSCurrencyDelta.take, (Currency.wrap(lcc0), locker, uint256(50))));
 
-        h.exposeHandleLccBalanceIncrease(key, Currency.wrap(lcc0), 0, 50, int128(50), locker, 0, true);
+        h.exposeHandleLccBalanceIncrease(key, Currency.wrap(lcc0), 0, 50, int128(50), locker, 0, 0);
 
         assertEq(h.forwardCallCount(), 0);
         assertEq(h.lastFwdAmount(), 0);

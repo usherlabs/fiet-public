@@ -3754,6 +3754,82 @@ contract VTSPositionLibTest is VTSLibTestBase {
         assertEq(exportedClampC.amount1(), 10, "clamp export token1");
     }
 
+    /// @notice Seizure routing: asymmetric legs — per-lane burn/queue split can differ when excess differs by lane.
+    function test_seizureLiquidityDecreaseRouting_asymmetricTwoLegs() public {
+        VTSPositionLibTest_LiquidityHubCapture hub = new VTSPositionLibTest_LiquidityHubCapture();
+        IMarketVault vault = new VTSPositionLibTest_VaultClamp(0, 0);
+        PositionContext memory ctx = PositionContext({
+            poolManager: manager,
+            liquidityHub: ILiquidityHub(address(hub)),
+            oracleHelper: IOracleHelper(address(0)),
+            marketVault: vault
+        });
+        PoolKey memory pk = corePoolKey;
+        // P0=10, E0=3 => burn 3, queue 7. P1=5, E1=10 => burn 5, queue 0. Vault settleable (0,0).
+        BalanceDelta principalDelta = toBalanceDelta(int128(int256(10)), int128(int256(5)));
+        BalanceDelta requiredSettlementDelta = toBalanceDelta(int128(int256(3)), int128(int256(10)));
+
+        harness.handleSeizureLiquidityDecrease(
+            ctx, DEFAULT_OWNER, pk, principalDelta, requiredSettlementDelta, DEFAULT_OWNER
+        );
+
+        assertEq(hub.lastQueued0(), 7, "token0 queue = P - min(P,E) = 10 - 3");
+        assertEq(hub.lastQueued1(), 0, "token1 queue = P - min(P,E) = 5 - 5");
+        BalanceDelta exportedAsym = harness.getLastSeizureExportedForSettlementClamp();
+        assertEq(exportedAsym.amount0(), 3, "export min(E0, S0 + burn0) = 3");
+        assertEq(exportedAsym.amount1(), 5, "export min(E1, S1 + burn1) = 5");
+    }
+
+    /// @dev Mirrors `VTSPositionMMOpsLib._seizurePerLeg` for property checks (VaultNoop ⇒ settleable leg = excess leg).
+    function _expectedSeizureLeg(uint256 p, uint256 e, uint256 settleableU)
+        private
+        pure
+        returns (uint256 retained, uint256 exportU)
+    {
+        uint256 burn = p < e ? p : e;
+        retained = p > burn ? p - burn : 0;
+        exportU = e;
+        uint256 sum = settleableU + burn;
+        if (sum < exportU) exportU = sum;
+    }
+
+    /// @notice Fuzz: seizure routing matches per-leg burn/queue/export with `VaultNoop` (full vault pass-through ⇒ S = E per leg).
+    function testFuzz_previewSeizureLiquidityDecreaseRouting_matchesPerLegFormula(
+        uint256 p0raw,
+        uint256 p1raw,
+        uint256 e0raw,
+        uint256 e1raw
+    ) public {
+        uint256 maxAmt = uint256(uint128(type(int128).max)) / 2;
+        uint256 p0 = bound(p0raw, 1, maxAmt);
+        uint256 p1 = bound(p1raw, 1, maxAmt);
+        uint256 e0 = bound(e0raw, 0, maxAmt);
+        uint256 e1 = bound(e1raw, 0, maxAmt);
+
+        IMarketVault vault = new VTSPositionLibTest_VaultNoop();
+        PositionContext memory ctx = PositionContext({
+            poolManager: manager,
+            liquidityHub: ILiquidityHub(address(0)),
+            oracleHelper: IOracleHelper(address(0)),
+            marketVault: vault
+        });
+        BalanceDelta principalDelta = toBalanceDelta(int128(int256(p0)), int128(int256(p1)));
+        BalanceDelta requiredSettlementDelta = toBalanceDelta(int128(int256(e0)), int128(int256(e1)));
+
+        (uint256 ret0, uint256 ret1, BalanceDelta underlying, BalanceDelta exported) =
+            harness.previewSeizureLiquidityDecreaseRouting(ctx, principalDelta, requiredSettlementDelta);
+
+        (uint256 expRet0, uint256 expEx0) = _expectedSeizureLeg(p0, e0, e0);
+        (uint256 expRet1, uint256 expEx1) = _expectedSeizureLeg(p1, e1, e1);
+
+        assertEq(ret0, expRet0, "retained0");
+        assertEq(ret1, expRet1, "retained1");
+        assertEq(uint256(int256(exported.amount0())), expEx0, "export0");
+        assertEq(uint256(int256(exported.amount1())), expEx1, "export1");
+        assertEq(uint256(int256(underlying.amount0())), e0, "VaultNoop settleable leg0");
+        assertEq(uint256(int256(underlying.amount1())), e1, "VaultNoop settleable leg1");
+    }
+
     /// @notice Scan 21: queueable shortfall is `min(shortfall, principal)`; `processMMOperations` must pass pool
     ///         principal (`callerDelta - feesAccrued`). Inflating principal (e.g. by mixing in `feeAdj`) would raise this cap.
     function test_handleLiquidityDecrease_queueCap_sensitivityToPrincipal_scan21() public {

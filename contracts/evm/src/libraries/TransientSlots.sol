@@ -23,13 +23,6 @@ library TransientSlots {
     bytes32 internal constant SEIZED_POSITION_ID_SLOT = keccak256("SEIZED_POSITION_ID");
     bytes32 internal constant PLANNED_CANCEL_SLOT = keccak256("PLANNED_CANCEL");
     bytes32 internal constant PLANNED_CANCEL_WITH_QUEUE_SLOT = keccak256("PLANNED_CANCEL_WITH_QUEUE");
-    /// @dev Per-modify queued principal (LCC wei) for MM decreases, matched to Hub `planCancelWithQueue` queueAmount.
-    ///      **Transient is keyed per contract (EIP-1153):** values are written during `PoolManager.modifyLiquidity` from
-    ///      `VTSPositionMMOpsLib` in the **VTSOrchestrator** execution context. The bound **MMPM** must read/clear these
-    ///      slots only via `IVTSOrchestrator.takeMMDecreaseQueuedLcc{0,1}` / `zeroMMDecreaseQueuedLccAmounts` — not by
-    ///      calling this library directly from `PositionManagerImpl` (delegatecall would use the wrong transient owner).
-    bytes32 internal constant MM_DECREASE_QUEUED_LCC0_SLOT = keccak256("fiet.transient.MM_DECREASE_QUEUED_LCC0");
-    bytes32 internal constant MM_DECREASE_QUEUED_LCC1_SLOT = keccak256("fiet.transient.MM_DECREASE_QUEUED_LCC1");
 
     // ------------------------------
     // Native ETH balance-delta helpers (MM entrypoint native credit)
@@ -159,36 +152,6 @@ library TransientSlots {
         TransientSlot.asUint256(baseSlot).tstore(0);
         TransientSlot.asUint256(bytes32(uint256(baseSlot) + 1)).tstore(0);
         TransientSlot.asUint256(bytes32(uint256(baseSlot) + 2)).tstore(0);
-    }
-
-    // ------------------------------
-    // MM decrease: Hub-queued principal (per leg) for commit custody alignment
-    // ------------------------------
-
-    /// @notice Zero both MM decrease queued-LCC slots (call before each `modifyLiquidity`).
-    function zeroMMDecreaseQueuedLccAmounts() internal {
-        TransientSlot.asUint256(MM_DECREASE_QUEUED_LCC0_SLOT).tstore(0);
-        TransientSlot.asUint256(MM_DECREASE_QUEUED_LCC1_SLOT).tstore(0);
-    }
-
-    /// @notice Persist routed queue principal for token0/token1 from `VTSPositionMMOpsLib._handleLiquidityDecrease`.
-    function setMMDecreaseQueuedLccAmounts(uint256 q0, uint256 q1) internal {
-        TransientSlot.asUint256(MM_DECREASE_QUEUED_LCC0_SLOT).tstore(q0);
-        TransientSlot.asUint256(MM_DECREASE_QUEUED_LCC1_SLOT).tstore(q1);
-    }
-
-    /// @dev Read and clear token0 leg; must match at most one `modifyLiquidity` take on that leg.
-    function takeMMDecreaseQueuedLcc0() internal returns (uint256 q) {
-        bytes32 slot = MM_DECREASE_QUEUED_LCC0_SLOT;
-        q = TransientSlot.asUint256(slot).tload();
-        TransientSlot.asUint256(slot).tstore(0);
-    }
-
-    /// @dev Read and clear token1 leg; must match at most one `modifyLiquidity` take on that leg.
-    function takeMMDecreaseQueuedLcc1() internal returns (uint256 q) {
-        bytes32 slot = MM_DECREASE_QUEUED_LCC1_SLOT;
-        q = TransientSlot.asUint256(slot).tload();
-        TransientSlot.asUint256(slot).tstore(0);
     }
 
     // ------------------------------

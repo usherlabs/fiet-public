@@ -46,7 +46,6 @@ import {Ownable} from "openzeppelin-contracts/contracts/access/Ownable.sol";
 import {VTSFeeLib} from "./libraries/VTSFeeLib.sol";
 import {IMarketFactory} from "./interfaces/IMarketFactory.sol";
 import {LiquidityUtils} from "./libraries/LiquidityUtils.sol";
-import {TransientSlots} from "./libraries/TransientSlots.sol";
 import {PoolAccounting} from "./types/VTS.sol";
 import {ReentrancyGuardTransient} from "openzeppelin-contracts/contracts/utils/ReentrancyGuardTransient.sol";
 import {TokenConfiguration} from "./types/VTS.sol";
@@ -866,27 +865,5 @@ contract VTSOrchestrator is
             ? VTSCommitLib.checkpointAfterGrowthWithCommitment(s, _lifecycleContext(), commitId, positionId)
             : VTSLifecycleLinkedLib.checkpointAfterGrowthNoCommitment(s, positionId);
         emit Checkpointed(commitId, positionIndex, checkpointOut, withCommitment);
-    }
-
-    // -------------------------------------------------------------------------
-    // MM decrease: queued principal snapshot (transient lives on this contract — see `VTSPositionMMOpsLib`)
-    // -------------------------------------------------------------------------
-
-    /// @inheritdoc IVTSOrchestrator
-    function zeroMMDecreaseQueuedLccAmounts(IMarketFactory factory) external {
-        _assertBoundFactoryCaller(factory);
-        TransientSlots.zeroMMDecreaseQueuedLccAmounts();
-    }
-
-    /// @inheritdoc IVTSOrchestrator
-    function takeMMDecreaseQueuedLcc0(IMarketFactory factory) external returns (uint256 q) {
-        _assertBoundFactoryCaller(factory);
-        q = TransientSlots.takeMMDecreaseQueuedLcc0();
-    }
-
-    /// @inheritdoc IVTSOrchestrator
-    function takeMMDecreaseQueuedLcc1(IMarketFactory factory) external returns (uint256 q) {
-        _assertBoundFactoryCaller(factory);
-        q = TransientSlots.takeMMDecreaseQueuedLcc1();
     }
 }
