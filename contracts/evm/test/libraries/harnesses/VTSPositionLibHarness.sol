@@ -46,6 +46,7 @@ contract VTSPositionLibHarness {
     BalanceDelta internal lastQueuedDelta;
     BalanceDelta internal lastUnderlyingDeltaSettlement;
     BalanceDelta internal lastSeizureExportedForSettlementClamp;
+    BalanceDelta internal lastNonSeizureExportedForSettlementClamp;
     uint256 internal lastSeizureRetainedPrincipal0;
     uint256 internal lastSeizureRetainedPrincipal1;
     int256 internal lastUnderlyingDeltaSnapshot0;
@@ -190,6 +191,37 @@ contract VTSPositionLibHarness {
         ) = VTSPositionMMOpsLib._computeLiquidityDecreaseRoutingSplit(ctx, principalDelta, requiredSettlementDelta);
     }
 
+    /// @notice Exposes full non-seizure MM decrease routing split (incl. `exportedForSettlementClamp` for SETTLE-03 tests).
+    function previewLiquidityDecreaseRoutingSplitFull(
+        PositionContext memory ctx,
+        BalanceDelta principalDelta,
+        BalanceDelta requiredSettlementDelta
+    )
+        external
+        view
+        returns (
+            uint256 retainedPrincipal0,
+            uint256 retainedPrincipal1,
+            BalanceDelta settleableDelta,
+            BalanceDelta queuedDelta,
+            BalanceDelta underlyingDeltaSettlement,
+            BalanceDelta exportedForSettlementClamp
+        )
+    {
+        return VTSPositionMMOpsLib._computeLiquidityDecreaseRoutingSplit(ctx, principalDelta, requiredSettlementDelta);
+    }
+
+    /// @notice Vault dry-modify view: immediate settleable slice vs per-leg shortfall (shared by decrease + seizure routing).
+    function previewVaultSettleableViewForRequired(PositionContext memory ctx, BalanceDelta requiredSettlementDelta)
+        external
+        view
+        returns (BalanceDelta settleableDelta, uint256 shortfallU0, uint256 shortfallU1)
+    {
+        VTSPositionMMOpsLib.VaultSettleableView memory v =
+            VTSPositionMMOpsLib._vaultSettleableViewForRequired(ctx, requiredSettlementDelta);
+        return (v.settleableDelta, v.shortfallU0, v.shortfallU1);
+    }
+
     /// @notice Exposes internal coverage burn for direct unit testing
     /// @dev Useful to kill mutants around `_calculateFeesBurn` / `_applyCoverageBurn` and outflow-window checkpointing.
     function applyCoverageBurn(
@@ -212,9 +244,11 @@ contract VTSPositionLibHarness {
         BalanceDelta requiredSettlementDelta,
         address queueRecipient
     ) external returns (BalanceDelta settleableDelta) {
-        (,, settleableDelta, lastQueuedDelta, lastUnderlyingDeltaSettlement) =
-            _previewLiquidityDecreaseRoutingHarness(ctx, principalDelta, requiredSettlementDelta);
+        BalanceDelta exported;
+        (,, settleableDelta, lastQueuedDelta, lastUnderlyingDeltaSettlement, exported) =
+            VTSPositionMMOpsLib._computeLiquidityDecreaseRoutingSplit(ctx, principalDelta, requiredSettlementDelta);
         lastSettleableDelta = settleableDelta;
+        lastNonSeizureExportedForSettlementClamp = exported;
         VTSPositionMMOpsLib._handleLiquidityDecrease(
             ctx, owner, poolKey, principalDelta, requiredSettlementDelta, queueRecipient
         );
@@ -233,16 +267,21 @@ contract VTSPositionLibHarness {
         external
         returns (BalanceDelta settleableDelta, BalanceDelta queuedDelta, BalanceDelta underlyingDeltaSettlement)
     {
-        (
-            ,, settleableDelta, queuedDelta, underlyingDeltaSettlement
-        ) = _previewLiquidityDecreaseRoutingHarness(ctx, principalDelta, requiredSettlementDelta);
+        BalanceDelta exported;
+        (,, settleableDelta, queuedDelta, underlyingDeltaSettlement, exported) =
+            VTSPositionMMOpsLib._computeLiquidityDecreaseRoutingSplit(ctx, principalDelta, requiredSettlementDelta);
         lastSettleableDelta = settleableDelta;
         lastQueuedDelta = queuedDelta;
         lastUnderlyingDeltaSettlement = underlyingDeltaSettlement;
+        lastNonSeizureExportedForSettlementClamp = exported;
         VTSPositionMMOpsLib._handleLiquidityDecrease(
             ctx, owner, poolKey, principalDelta, requiredSettlementDelta, queueRecipient
         );
         return (settleableDelta, queuedDelta, underlyingDeltaSettlement);
+    }
+
+    function getLastNonSeizureExportedForSettlementClamp() external view returns (BalanceDelta) {
+        return lastNonSeizureExportedForSettlementClamp;
     }
 
     /// @notice Preview seizure-only routing split (no Hub staging).

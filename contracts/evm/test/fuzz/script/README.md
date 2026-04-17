@@ -7,7 +7,9 @@ deterministically. Harness constructors deploy matching code at the same address
 ## Runtime flow
 
 You normally do **nothing** manually: `scripts/echidna.sh` runs `scripts/echidna_prepare_linked_libs.py`, which generates
-`.echidna-gen/foundry.toml`, converges the linker map, builds, and runs `SmokeEchidnaLinkedLibs`.
+`.echidna-gen/foundry.toml`, converges the linker map using **`GenerateEchidnaLinkedLibAddresses.printManifest()`**
+([`GenerateEchidnaLinkedLibAddresses.s.sol`](./GenerateEchidnaLinkedLibAddresses.s.sol)), builds, and runs
+`SmokeEchidnaLinkedLibs`.
 
 To run only that step:
 

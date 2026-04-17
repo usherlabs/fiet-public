@@ -78,9 +78,11 @@ fi
 # Compute default CryticCompile args so local and Docker runs behave the same.
 OUT_DIR="${FOUNDRY_OUT_DIR:-out}"
 if [ "$COMPILE_BACKEND" = "foundry" ]; then
-  # Generate `.echidna-gen/foundry.toml` with a converged [profile.echidna].libraries map, then compile+smoke.
+  # Generate `.echidna-gen/foundry.toml` with a converged [profile.echidna].libraries map (via
+  # GenerateEchidnaLinkedLibAddresses.printManifest in echidna_prepare_linked_libs.py), then compile+smoke.
   # Skip with ECHIDNA_SKIP_PREPARE=1 (you must set FOUNDRY_CONFIG yourself).
   if [ "${ECHIDNA_SKIP_PREPARE:-}" != "1" ]; then
+    echo "[echidna] preparing linked libraries for Foundry backend (see [echidna-prepare] lines on stderr)..." 1>&2
     FOUNDRY_CONFIG_GEN="$(python3 scripts/echidna_prepare_linked_libs.py)" || exit 1
     export FOUNDRY_CONFIG="$FOUNDRY_CONFIG_GEN"
   fi

@@ -282,6 +282,28 @@ contract ProxyHookMutationHardeningTest is MarketVaultBase {
         assertTrue(resolved, "explicit recipient should be resolved");
         assertEq(got, custom, "should return decoded recipient");
     }
+
+    /// @dev Mutation-suite mirror of `ProxyHook.t.sol::test_harness_calcCoreSqrtPriceLimit_branches` (price-limit inversion).
+    function test_mutationHarness_calcCoreSqrtPriceLimit_reciprocalAndDefaults() public {
+        ProxyHookHarness harness = new ProxyHookHarness(address(manager), address(marketFactory));
+
+        assertEq(harness.exposed_calcCoreSqrtPriceLimit(uint160(42), false, false), uint160(42));
+
+        uint160 minB = TickMath.MIN_SQRT_PRICE + 1;
+        uint160 maxB = TickMath.MAX_SQRT_PRICE - 1;
+        assertEq(harness.exposed_calcCoreSqrtPriceLimit(minB, true, false), maxB);
+        assertEq(harness.exposed_calcCoreSqrtPriceLimit(maxB, true, true), minB);
+
+        uint256 q192 = uint256(1) << 192;
+        uint160 mid = 79228162514264337593543950337;
+        uint160 ceilP = uint160((q192 + uint256(mid) - 1) / uint256(mid));
+        uint160 floorP = uint160(q192 / uint256(mid));
+        assertEq(harness.exposed_calcCoreSqrtPriceLimit(mid, true, true), ceilP);
+        assertEq(harness.exposed_calcCoreSqrtPriceLimit(mid, true, false), floorP);
+
+        assertEq(harness.exposed_calcCoreSqrtPriceLimit(0, true, false), maxB);
+        assertEq(harness.exposed_calcCoreSqrtPriceLimit(0, true, true), minB);
+    }
 }
 
 contract ProxyHookHarness is ProxyHook {
@@ -289,6 +311,14 @@ contract ProxyHookHarness is ProxyHook {
 
     /// @dev Disable hook-address flag validation for harness deployments in unit tests.
     function validateHookAddress(BaseHook) internal pure override {}
+
+    function exposed_calcCoreSqrtPriceLimit(uint160 sqrtPriceLimitX96, bool flipped, bool coreZeroForOne)
+        external
+        pure
+        returns (uint160)
+    {
+        return _calcCoreSqrtPriceLimit(sqrtPriceLimitX96, flipped, coreZeroForOne);
+    }
 
     function exposed_determineExcessRecipient(address sender, bytes calldata hookData)
         external

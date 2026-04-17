@@ -668,6 +668,25 @@ being an informal “should”.
     same batch violates **DELTA-01** (uncleared transient delta at batch end).
   - The stricter withdrawal ordering prevents a later delta-backed settle from deducting the same exported value from
     source `pa.settled` a second time.
+- **Regression / evidence (Foundry + audit)**:
+  - `test/marketmaker/MMPositionMinOutFeeAdjIntegration.t.sol`, `test/modules/PositionManagerImpl.t.sol`,
+    `test/marketmaker/MMPositionManager.t.sol`, `test/marketmaker/MMPositionActionsImpl.t.sol` (min-out vs hook principal;
+    see [agents/audit-resolutions/3__high-mm-min-out-pre-transfer-callerdelta-resolution.md](../../agents/audit-resolutions/3__high-mm-min-out-pre-transfer-callerdelta-resolution.md)).
+  - Decrease routing / `VTSPositionMMOpsLib` integration: `test/libraries/VTSPositionLib.t.sol`,
+    `test/libraries/VTSPositionLib.onMMSettle.t.sol`, harnesses under `test/libraries/harnesses/VTSPositionLibHarness.sol`.
+  - Queue custody vs forwarded non-fee: [agents/audit-resolutions/mm-queue-custody-nonfee-vs-custodyforward-guard-resolution.md](../../agents/audit-resolutions/mm-queue-custody-nonfee-vs-custodyforward-guard-resolution.md) and **MMQ-01** (Echidna) in `test/fuzz/README.md`.
+
+### MMQ-01: Queued principal must not exceed forwarded non-fee LCC on custody take-and-forward
+
+- **Statement**: When routing Hub-queued principal (`qCommitted` / custody-forward) through
+  `PositionManagerImpl._routeLccCustodyTakeAndForward` with a non-zero position-scoped `tokenId`, the slippage-scoped
+  **non-fee** LCC amount (`LiquidityUtils.forwardedNonFeeLccAmount`) must cover the queued slice being taken, or the call
+  reverts with `Errors.InsufficientBalance` (fail-closed vs double-spend).
+- **Enforced by**: `PositionManagerImpl` custody-forward path and `LiquidityUtils.forwardedNonFeeLccAmount` semantics
+  (see audit resolution linked above).
+- **Evidence**:
+  - Echidna: `test/fuzz/invariants/MMQ01.sol` → `echidna_mmq01_*` (run via `just echidna-mmq-01` from `contracts/evm/Justfile`).
+  - Narrative: [agents/audit-resolutions/mm-queue-custody-nonfee-vs-custodyforward-guard-resolution.md](../../agents/audit-resolutions/mm-queue-custody-nonfee-vs-custodyforward-guard-resolution.md).
 
 ### SETTLE-04: MM in-hook protocol credit must not over-clear `requiredSettlementDelta` when deficit is cured first
 

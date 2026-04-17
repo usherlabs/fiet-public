@@ -62,9 +62,11 @@ Before each Echidna run, `scripts/echidna.sh` runs `scripts/echidna_prepare_link
 
 1. Writes a converged `[profile.echidna].libraries` map to **`.echidna-gen/foundry.toml`** (gitignored),
 2. Sets **`FOUNDRY_CONFIG`** to that file so `forge build` and Echidna’s Foundry backend use the same linker map,
-3. Runs `forge build`, reads predicted addresses from `EchidnaLinkedLibManifest.printManifest()`, iterates until the
-   VTS fixed-point stabilises,
+3. Runs `forge build`, reads CREATE2 predictions from `GenerateEchidnaLinkedLibAddresses.printManifest()` (see
+   `test/fuzz/script/GenerateEchidnaLinkedLibAddresses.s.sol`), and repeats until the linker map matches the manifest,
 4. Runs **`SmokeEchidnaLinkedLibs`** to verify CREATE2 deployment under the Echidna deployer.
+
+(Older docs may refer to `EchidnaLinkedLibManifest`; that contract is now a thin alias of `GenerateEchidnaLinkedLibAddresses`.)
 
 **Commands** (from `contracts/evm/`)
 
@@ -156,6 +158,8 @@ view.
 | **SETTLE-01**               | **P1**   | Yes             | **Covered**           | `invariants/SETTLE01.sol` → `echidna_settle_01_withdraw_reverts_when_rfs_open`, `echidna_settle_01_aux_withdraw_succeeds_when_rfs_closed`     | Real `onMMSettle -> _settleActive` path; open-RFS withdrawals revert with the production gate reason, and closed-RFS withdrawals are tracked independently to avoid cross-branch vacuity. |
 | **MKT-05**                  | **P1**   | Yes             | **Covered** (Hybrid)  | `invariants/MKT05.sol` + `test/ProxyHook.t.sol::{testFuzz_swap_exactOutput_*_revertsWhenRequestedExceedsImmediateLiquidity,test_proxySwap_exactInput_keepsProxySlot0Unchanged,test_proxySwap_exactOutput_keepsProxySlot0Unchanged,test_proxySwap_exactInput_oneForZero_keepsProxySlot0Unchanged,test_proxySwap_exactOutput_oneForZero_keepsProxySlot0Unchanged}` | Foundry regressions remain authoritative for strict exact-output hardening and proxy-curve neutralisation; the Echidna harness is retained as a lightweight cancellation/drift check. |
 | **SETTLE-02**               | **P2**   | Yes             | **Covered**           | `invariants/SETTLE02.sol` → `echidna_settle_02_seizing_clamps_hold`, `echidna_settle_02_smoke`                                                 | Real `onMMSettle -> _settleSeizing` path; fuzzes positive-cap and zero-cap seizure branches, asserting returned clamp deltas and withdrawal settlement effects. |
+| **SETTLE-03**               | **P1**   | Partial         | **Covered (Foundry)** | `../libraries/VTSPositionLib.t.sol`, `../libraries/VTSPositionLib.onMMSettle.t.sol`, `../marketmaker/MMPositionMinOutFeeAdjIntegration.t.sol`, `../modules/PositionManagerImpl.t.sol`, `../marketmaker/MMPositionActionsImpl.t.sol` | MM decrease routing splits (`VTSPositionMMOpsLib`), min-out vs hook principal; spec in `INVARIANTS.md` §SETTLE-03. No dedicated Echidna harness — Foundry + harnesses are authoritative. |
+| **MMQ-01**                  | **P1**   | Yes             | **Covered**           | `invariants/MMQ01.sol` → `echidna_mmq01_valid_routes_succeed_when_non_fee_covers_queue`, `echidna_mmq01_underfunded_always_reverts`, `echidna_mmq01_custody_record_equals_q_committed`, `echidna_mmq01_smoke` | Queue custody guard: forwarded non-fee must cover `qCommitted` when `tokenId > 0`; see `agents/audit-resolutions/mm-queue-custody-nonfee-vs-custodyforward-guard-resolution.md`. Run: `just echidna-mmq-01` (see `Justfile`). |
 | **SEIZE-01**                | **P2**   | Yes             | **Covered**           | `invariants/SEIZE01_02.sol` → `echidna_seize_01_token_lane_scoped_and_aggregated`                                                              | Includes bypass bps, token-age gates, threshold lanes, and mixed-lane grace masking checks; vacuity is tracked independently from `SEIZE-02` actions. |
 | **SEIZE-02**                | **P3**   | Yes             | **Covered**           | `invariants/SEIZE01_02.sol` → `echidna_seize_02_valid_verifier_required`                                                                        | Verifier-active + token-allowlist enforcement, invalid token index, and closed-lane extension reverts; vacuity is tracked independently from `SEIZE-01` actions. |
 | **SEIZE-03**                | **P3**   | Yes             | **Covered**           | `invariants/SEIZE03_04.sol` → `echidna_seize_03_no_lcc_issue_during_seizure`                                                                    | Uses `VTSPositionLib.touchPosition` path; MM seizing increase/new-position attempts revert as required.   |
@@ -171,6 +175,16 @@ view.
 | **MKT-03**                  | P3       | No              | **Covered**           | `invariants/MKT03_06.sol` → `echidna_mkt_03_core_pool_unique` + `test/MarketFactory.t.sol::testFuzz_createMarket_revertsWhenCorePoolAlreadyExists` | Echidna model plus MarketFactory duplicate-core reversion fuzz check.                                  |
 | **MKT-04**                  | P3       | No              | **Covered**           | `invariants/MKT04_04A.sol` → `echidna_mkt_04_factory_and_issuer_gating`                                                                         | Factory/issuer matrix extended to issue, cancel, cancelWithQueue, prepareSettle, and confirmTake guards. |
 | **MKT-04A**                 | **P3**   | No              | **Covered**           | `invariants/MKT04_04A.sol` → `echidna_mkt_04a_bound_lifecycle`                                                                                  | Bound-role lifecycle enforces immutable EXEMPT/DEX transitions.                                           |
+
+## Audit resolutions (cross-reference)
+
+Formal write-ups for targeted remediations live under **[`agents/audit-resolutions/`](../../../agents/audit-resolutions/)** at the repo root (not compiled into production). Key entries tied to fuzz harnesses and **SETTLE-03** / **MMQ-01** include:
+
+- `3__high-mm-min-out-pre-transfer-callerdelta-resolution.md` — min-out vs hook-time principal (**SETTLE-03**).
+- `mm-queue-custody-nonfee-vs-custodyforward-guard-resolution.md` — custody forward vs forwarded non-fee (**MMQ-01**).
+- `vulnerability 67-reciprocal-sqrt-price-limit-inversion-clamping-resolution.md` — **ProxyHook** price-limit branches.
+
+See each file for Foundry regression pointers; the table above remains the invariant → harness map.
 
 ## Coverage map (invariant -> harness -> property)
 
@@ -205,6 +219,8 @@ All harnesses live in **`invariants/`**.
 | DELTA-03                | `../DeltaDesignStatements.t.sol` | `test_delta03_planned_cancel_is_path_scoped_and_immediately_consumed` |
 | SETTLE-01               | `SETTLE01.sol`           | `echidna_settle_01_withdraw_reverts_when_rfs_open`, `echidna_settle_01_aux_withdraw_succeeds_when_rfs_closed` |
 | SETTLE-02               | `SETTLE02.sol`           | `echidna_settle_02_seizing_clamps_hold`, `echidna_settle_02_smoke` |
+| SETTLE-03               | Foundry (see checklist)  | See checklist row — `VTSPositionLib.t.sol`, `MMPositionMinOutFeeAdjIntegration.t.sol`, `PositionManagerImpl.t.sol`, `MMPositionActionsImpl.t.sol` |
+| MMQ-01                  | `MMQ01.sol`              | `echidna_mmq01_valid_routes_succeed_when_non_fee_covers_queue`, `echidna_mmq01_underfunded_always_reverts`, `echidna_mmq01_custody_record_equals_q_committed`, `echidna_mmq01_smoke` |
 | LCC-03                  | `LCC03.sol`              | `echidna_lcc_03_sync_windows_hold`, `echidna_lcc_03_revert_guards_hold` |
 | VTS-01                  | `VTS01.sol`              | `echidna_vts_01_settle_growths_before_modify` |
 | SEIZE-01                | `SEIZE01_02.sol`         | `echidna_seize_01_token_lane_scoped_and_aggregated` |

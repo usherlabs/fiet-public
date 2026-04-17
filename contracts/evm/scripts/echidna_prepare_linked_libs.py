@@ -2,8 +2,11 @@
 """Prepare ephemeral Foundry config + linked-library map for Echidna (FOUNDRY_PROFILE=echidna).
 
 Writes `.echidna-gen/foundry.toml` (gitignored) by copying the repo `foundry.toml` and injecting
-`[profile.echidna].libraries` with a fixed-point-converged address map. Then runs `forge build` and
-`SmokeEchidnaLinkedLibs` under the same config.
+`[profile.echidna].libraries` with a fixed-point-converged address map. Addresses come from
+`GenerateEchidnaLinkedLibAddresses.printManifest()` (CREATE2 predictions via `EchidnaLinkedLibs`).
+
+Iterates: write map → `forge build` → read manifest → repeat until the manifest matches the map (library
+linking and CREATE2 predictions stabilise). Then runs `SmokeEchidnaLinkedLibs`.
 
 Run automatically from `scripts/echidna.sh` before Echidna. Override with `ECHIDNA_SKIP_PREPARE=1` to skip.
 """
@@ -14,12 +17,16 @@ import re
 import shutil
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 GEN_DIR = ROOT / ".echidna-gen"
 GEN_FOUNDRY_TOML = GEN_DIR / "foundry.toml"
-MANIFEST_SCRIPT = "test/fuzz/script/EchidnaLinkedLibManifest.s.sol:EchidnaLinkedLibManifest"
+# Canonical CREATE2 manifest emitter (see test/fuzz/script/GenerateEchidnaLinkedLibAddresses.s.sol).
+GENERATE_LINKED_LIB_SCRIPT = (
+    "test/fuzz/script/GenerateEchidnaLinkedLibAddresses.s.sol:GenerateEchidnaLinkedLibAddresses"
+)
 SMOKE_SCRIPT = "test/fuzz/script/SmokeEchidnaLinkedLibs.s.sol:SmokeEchidnaLinkedLibs"
 
 # Bootstrap addresses for the first fixed-point iteration only (replaced after convergence).
@@ -34,6 +41,15 @@ ECHIDNA_LIBRARY_IDS: list[str] = [
     "src/libraries/VTSPositionMMOpsLib.sol:VTSPositionMMOpsLib",
     "src/libraries/VTSSwapLib.sol:VTSSwapLib",
 ]
+
+def _progress(msg: str) -> None:
+    """Human-visible progress on stderr (stdout is reserved for the generated config path)."""
+    print(f"[echidna-prepare] {msg}", file=sys.stderr, flush=True)
+
+
+def _lib_short_name(lib_id: str) -> str:
+    return lib_id.rsplit(":", 1)[-1]
+
 
 BOOTSTRAP_MANIFEST: dict[str, str] = {
     "src/libraries/LCCFactoryLib.sol:LCCFactoryLinkedLib": "0x5a3842f9d1b0f96003669a36ec4a09165bc7de54",
@@ -173,9 +189,9 @@ def _parse_manifest_from_forge_output(text: str) -> dict[str, str]:
     return out
 
 
-def _run_print_manifest() -> dict[str, str]:
+def _run_generate_linked_lib_manifest() -> dict[str, str]:
     result = subprocess.run(
-        ["forge", "script", MANIFEST_SCRIPT, "--sig", "printManifest()"],
+        ["forge", "script", GENERATE_LINKED_LIB_SCRIPT, "--sig", "printManifest()"],
         cwd=ROOT,
         env=_forge_env(),
         capture_output=True,
@@ -185,7 +201,9 @@ def _run_print_manifest() -> dict[str, str]:
     combined = (result.stdout or "") + (result.stderr or "")
     if result.returncode != 0:
         sys.stderr.write(combined)
-        raise RuntimeError("forge script printManifest() failed")
+        raise RuntimeError(
+            "forge script GenerateEchidnaLinkedLibAddresses.printManifest() failed"
+        )
     return _parse_manifest_from_forge_output(combined)
 
 
@@ -206,21 +224,50 @@ def _run_smoke() -> None:
 
 def prepare() -> Path:
     """Converge library map, write `.echidna-gen/foundry.toml`, build, and smoke-test CREATE2 deploys."""
+    _progress(
+        "converging Echidna linker map via GenerateEchidnaLinkedLibAddresses (max 32 rounds) → "
+        f"{GEN_FOUNDRY_TOML.relative_to(ROOT)}"
+    )
     manifest = {k: BOOTSTRAP_MANIFEST[k].lower() for k in ECHIDNA_LIBRARY_IDS}
 
     for iteration in range(32):
+        n = iteration + 1
+        _progress(f"round {n}/32: writing generated Foundry config and cleaning out-echidna/")
         _write_gen_foundry(manifest)
         _clean_out_echidna()
+
+        t_build = time.monotonic()
+        _progress(
+            f"round {n}/32: running forge build (FOUNDRY_PROFILE=echidna, FOUNDRY_CONFIG=.echidna-gen/foundry.toml)"
+        )
         _run_forge_build()
-        new_manifest = _run_print_manifest()
+        _progress(f"round {n}/32: forge build done in {time.monotonic() - t_build:.1f}s")
+
+        t_manifest = time.monotonic()
+        _progress(
+            f"round {n}/32: CREATE2 manifest (forge script GenerateEchidnaLinkedLibAddresses.printManifest)"
+        )
+        new_manifest = _run_generate_linked_lib_manifest()
+        _progress(f"round {n}/32: manifest read in {time.monotonic() - t_manifest:.1f}s")
+
         if new_manifest == manifest:
-            print(f"Echidna linked libraries converged after {iteration + 1} iteration(s).", file=sys.stderr)
+            _progress(f"fixed point reached after {n} round(s); running SmokeEchidnaLinkedLibs")
             break
+
+        changed = [k for k in ECHIDNA_LIBRARY_IDS if new_manifest[k] != manifest[k]]
+        names = ", ".join(_lib_short_name(k) for k in changed)
+        _progress(
+            f"round {n}/32: linker map still moving ({len(changed)} entr"
+            f"{'y' if len(changed) == 1 else 'ies'}): {names}"
+        )
         manifest = new_manifest
     else:
         raise RuntimeError("Echidna linked libraries did not converge within iteration limit")
 
+    t_smoke = time.monotonic()
     _run_smoke()
+    _progress(f"smoke test (CREATE2 deploys) passed in {time.monotonic() - t_smoke:.1f}s")
+    _progress("preparation complete")
     return GEN_FOUNDRY_TOML.resolve()
 
 

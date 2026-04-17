@@ -454,7 +454,7 @@ library VTSPositionMMOpsLib {
 
     /// @dev Single source for `dryModifyLiquidities(required)` → per-leg vault-immediate `settleableDelta` and shortfall.
     function _vaultSettleableViewForRequired(PositionContext memory ctx, BalanceDelta requiredSettlementDelta)
-        private
+        internal
         view
         returns (VaultSettleableView memory v)
     {
