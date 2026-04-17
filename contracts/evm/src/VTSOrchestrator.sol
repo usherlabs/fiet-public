@@ -490,10 +490,10 @@ contract VTSOrchestrator is
     /// @param amount1 Amount to increment for token1
     function incrementCoverage(PoolId poolId, uint256 amount0, uint256 amount1) external onlyFactory {
         if (amount0 > 0) {
-            VTSCommitLib.incrementCoverage(s, poolId, 0, amount0);
+            VTSCommitLib._incrementCoverage(s, poolId, 0, amount0);
         }
         if (amount1 > 0) {
-            VTSCommitLib.incrementCoverage(s, poolId, 1, amount1);
+            VTSCommitLib._incrementCoverage(s, poolId, 1, amount1);
         }
     }
 

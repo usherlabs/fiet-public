@@ -12,6 +12,7 @@ import {Bounds} from "../../../src/libraries/Bounds.sol";
 import {EchidnaLinkedLibs} from "../base/EchidnaLinkedLibs.sol";
 import {Currency} from "v4-periphery/lib/v4-core/src/types/Currency.sol";
 import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
+import {MarketMaker} from "../../../src/libraries/MarketMaker.sol";
 
 /// @notice Incremental Echidna harness for `LCC-BACKING-01`.
 /// @dev Milestone 1 proves direct unauthorised mint/burn into `LCC` cannot succeed.
@@ -70,6 +71,24 @@ contract LCCBacking01 {
     // Action/result cache for the dual-mode commitment gate check.
     bool internal commitGateChecked;
     bool internal commitGateLastOk;
+
+    function _seedCommitState() internal {
+        MarketMaker.Reserve[] memory reserves = new MarketMaker.Reserve[](1);
+        reserves[0] = MarketMaker.Reserve({asset: "USD", amount: 1e18});
+
+        commitHarness.setCommitMmState(
+            COMMIT_ID,
+            MarketMaker.State({
+                owner: address(this),
+                reserves: reserves,
+                sourceState: "",
+                prover: "",
+                nonce: "",
+                advancer: address(this),
+                expiryAt: block.timestamp + 365 days
+            })
+        );
+    }
 
     // ================================================================
     // Helpers
@@ -327,6 +346,7 @@ contract LCCBacking01 {
 
         commitHarness = new VTSCommitLibHarness();
         commitPositionId = PositionId.wrap(keccak256("echidna.lcc-backing-01.commitment"));
+        _seedCommitState();
         commitHarness.setCommitExpiresAt(COMMIT_ID, block.timestamp + 365 days);
 
         _setPositionShape(uint160(1) << 96, 0, -60, 60, 1);

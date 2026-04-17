@@ -152,14 +152,14 @@ library VTSCommitLib {
     /// @param positionId The position ID
     /// @param params Liquidity delta parameters bundled in a struct
     /// @param revertIfInsufficientBacking Whether to revert if backing is insufficient
-    function validateLiquidityDelta(
+    function _validateLiquidityDelta(
         VTSStorage storage s,
         IOracleHelper oracleHelper,
         uint256 commitId,
         PositionId positionId,
         LiquidityDeltaParams memory params,
         bool revertIfInsufficientBacking
-    ) external view returns (bool success, uint256 issuedValue, uint256 settledValue, uint256 signalValue) {
+    ) internal view returns (bool success, uint256 issuedValue, uint256 settledValue, uint256 signalValue) {
         issuedValue = _issuedValueForLiquidity(
             oracleHelper,
             params.currency0,
@@ -179,13 +179,24 @@ library VTSCommitLib {
         }
     }
 
+    function validateLiquidityDelta(
+        VTSStorage storage s,
+        IOracleHelper oracleHelper,
+        uint256 commitId,
+        PositionId positionId,
+        LiquidityDeltaParams memory params,
+        bool revertIfInsufficientBacking
+    ) external view returns (bool success, uint256 issuedValue, uint256 settledValue, uint256 signalValue) {
+        return _validateLiquidityDelta(s, oracleHelper, commitId, positionId, params, revertIfInsufficientBacking);
+    }
+
     /// @notice LCC Unwrap -> Protocol Coverage Function
     /// @notice Increment protocol or proactive excess liquidity coverage on LCC unwrap, consuming proactive pool first
     /// @param s The central VTS storage
     /// @param poolId The pool ID
     /// @param tokenIndex The token index (0 or 1)
     /// @param coveredAmount The amount covered
-    function incrementCoverage(VTSStorage storage s, PoolId poolId, uint8 tokenIndex, uint256 coveredAmount) external {
+    function _incrementCoverage(VTSStorage storage s, PoolId poolId, uint8 tokenIndex, uint256 coveredAmount) internal {
         if (tokenIndex > 1 || coveredAmount == 0) return;
         PoolAccounting storage paPool = s.poolAccounting[poolId];
 
@@ -216,6 +227,10 @@ library VTSCommitLib {
             // Unlike DICE, we intentionally do not defer-and-socialise this later; only coverage exercised
             // while settled liquidity is live contributes to allocatable CISE index/denominator state.
         }
+    }
+
+    function incrementCoverage(VTSStorage storage s, PoolId poolId, uint8 tokenIndex, uint256 coveredAmount) external {
+        _incrementCoverage(s, poolId, tokenIndex, coveredAmount);
     }
 
     /// @dev Shared body for linked `commitSignal` and orchestrator router overload.

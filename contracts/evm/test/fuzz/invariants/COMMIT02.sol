@@ -14,6 +14,7 @@ import {OracleUtils} from "../../../src/libraries/OracleUtils.sol";
 import {LiquidityUtils} from "../../../src/libraries/LiquidityUtils.sol";
 import {FullMath} from "v4-periphery/lib/v4-core/src/libraries/FullMath.sol";
 import {EchidnaLinkedLibs} from "../base/EchidnaLinkedLibs.sol";
+import {MarketMaker} from "../../../src/libraries/MarketMaker.sol";
 
 /// @notice Echidna harness for COMMIT-02: Checkpointing with commitment updates `commitmentDeficit` as an insolvency gate.
 contract COMMIT02 {
@@ -47,6 +48,24 @@ contract COMMIT02 {
     uint256 internal prevDeficit1;
     bool internal signalLive;
 
+    function _seedCommitState() internal {
+        MarketMaker.Reserve[] memory reserves = new MarketMaker.Reserve[](1);
+        reserves[0] = MarketMaker.Reserve({asset: "USD", amount: 1e18});
+
+        commitHarness.setCommitMmState(
+            COMMIT_ID,
+            MarketMaker.State({
+                owner: address(this),
+                reserves: reserves,
+                sourceState: "",
+                prover: "",
+                nonce: "",
+                advancer: address(this),
+                expiryAt: block.timestamp + 365 days
+            })
+        );
+    }
+
     constructor() {
         EchidnaLinkedLibs.deployVTSCommitLib();
 
@@ -78,6 +97,7 @@ contract COMMIT02 {
         signalUsd = 0;
         signalLive = true;
 
+        _seedCommitState();
         commitHarness.setCommitExpiresAt(COMMIT_ID, block.timestamp + 365 days);
     }
 

@@ -82,7 +82,7 @@ contract VTSPositionLibHarness {
 
     /// @notice Exposes incrementCoverage for CISE/DICE routing tests (same storage as position lib)
     function incrementCoverage(PoolId poolId, uint8 tokenIndex, uint256 coveredAmount) external {
-        VTSCommitLib.incrementCoverage(s, poolId, tokenIndex, coveredAmount);
+        VTSCommitLib._incrementCoverage(s, poolId, tokenIndex, coveredAmount);
     }
 
     /// @notice Exposes calcRFS

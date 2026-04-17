@@ -401,7 +401,7 @@ library VTSPositionMMOpsLib {
         // Validate commitment backing in scoped block
         {
             (uint160 sqrtPriceX96, int24 currentTick,,) = ctx.poolManager.getSlot0(poolKey.toId());
-            VTSCommitLib.validateLiquidityDelta(
+            VTSCommitLib._validateLiquidityDelta(
                 s,
                 ctx.oracleHelper,
                 p.commitId,
