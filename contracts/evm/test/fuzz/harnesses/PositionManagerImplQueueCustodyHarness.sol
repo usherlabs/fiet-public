@@ -5,11 +5,7 @@ import {Currency} from "v4-periphery/lib/v4-core/src/types/Currency.sol";
 import {LiquidityUtils} from "../../../src/libraries/LiquidityUtils.sol";
 import {Errors} from "../../../src/libraries/Errors.sol";
 import {IMMQueueCustodian} from "../../../src/interfaces/IMMQueueCustodian.sol";
-
-/// @notice Minimal orchestrator surface used by `PositionManagerImpl._routeLccCustodyTakeAndForward`.
-interface IFuzzTakeOrchestrator {
-    function take(Currency currency, address target, uint256 maxAmount) external returns (uint256);
-}
+import {IFuzzTakeOrchestrator} from "./IFuzzTakeOrchestrator.sol";
 
 /// @notice Thin test harness mirroring `PositionManagerImpl._routeLccCustodyTakeAndForward` and the MM forward path
 ///         (`MMPositionActionsImpl._forwardQueuedLccToCustodian`).

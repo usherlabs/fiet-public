@@ -50,6 +50,7 @@ fuzz:
     @just echidna-vts-02
     @just echidna-vts-03
     @just echidna-delta-01
+    @just echidna-mmq-01
     @just echidna-settle-01
     @just echidna-settle-02
     @just echidna-lcc-03
@@ -98,6 +99,7 @@ fuzz-deep:
     @just echidna-vts-02 echidna.deep.config.yml
     @just echidna-vts-03 echidna.deep.config.yml
     @just echidna-delta-01 echidna.deep.config.yml
+    @just echidna-mmq-01 echidna.deep.config.yml
     @just echidna-settle-01 echidna.deep.config.yml
     @just echidna-settle-02 echidna.deep.config.yml
     @just echidna-lcc-03 echidna.deep.config.yml
@@ -201,6 +203,9 @@ echidna-vts-03 config="echidna.config.yml":
 
 echidna-delta-01 config="echidna.config.yml":
     @just echidna test/fuzz/invariants/DELTA01.sol DELTA01 {{ config }} -- --disable-slither
+
+echidna-mmq-01 config="echidna.config.yml":
+    @just echidna test/fuzz/invariants/MMQ01.sol MMQ01 {{ config }} -- --disable-slither
 
 echidna-settle-01 config="echidna.config.yml":
     @just echidna test/fuzz/invariants/SETTLE01.sol SETTLE01 {{ config }} -- --disable-slither

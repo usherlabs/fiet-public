@@ -2,7 +2,7 @@
 pragma solidity ^0.8.26;
 
 import {Currency} from "v4-periphery/lib/v4-core/src/types/Currency.sol";
-import {IFuzzTakeOrchestrator} from "../harnesses/PositionManagerImplQueueCustodyHarness.sol";
+import {IFuzzTakeOrchestrator} from "../harnesses/IFuzzTakeOrchestrator.sol";
 import {IMMQueueCustodian} from "../../../src/interfaces/IMMQueueCustodian.sol";
 import {Errors} from "../../../src/libraries/Errors.sol";
 
