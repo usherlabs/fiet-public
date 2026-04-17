@@ -10,18 +10,21 @@ import {VTSLifecycleLinkedLib} from "../../../src/libraries/VTSLifecycleLinkedLi
 import {VTSPositionMMOpsLib} from "../../../src/libraries/VTSPositionMMOpsLib.sol";
 
 /// @notice Hard-linked library addresses for CREATE2 deploy helpers (must match linker output).
-/// @dev Authoritative list: `test/fuzz/echidna-linked-libs.txt`. Run `just recompute-fuzz-lib-addrs` after updating it.
+/// @dev Legacy filename retained while the fuzz runner migrated to Medusa.
+///      Authoritative list: `test/fuzz/echidna-linked-libs.txt`. Run
+///      `just recompute-fuzz-lib-addrs` after updating it.
 library EchidnaLinkedLibs {
-    /// @dev Must match `ValidateEchidnaLinkedLibs` / harness etch target (Echidna default deployer).
-    address internal constant ECHIDNA_DEPLOYER = 0x00a329c0648769A73afAc7F9381E08FB43dBEA72;
+    /// @dev Must match the single-target Medusa harness deployment address for
+    ///      deployer `0x30000` at nonce `0`.
+    address internal constant FUZZ_HARNESS_DEPLOYER = 0xA647ff3c36cFab592509E13860ab8c4F28781a66;
 
-    address internal constant LCC_FACTORY_LINKED_LIB = 0x5A3842F9D1B0F96003669A36Ec4a09165bc7de54;
-    address internal constant LIQUIDITY_HUB_LINKED_LIB = 0x5be262F2f2f9B3b5C70a256526eE9C6DD8Fc9E02;
-    address internal constant VTS_COMMIT_LIB = 0x889369E439273e308B0b53A350F8220E43987844;
-    address internal constant VTS_FEE_LINKED_LIB = 0xe2F744D132A1B346ACd29E304181EDf2bF9831b8;
-    address internal constant VTS_POSITION_LIB = 0x96CA0AAffF95767eC2B22b752911ADE4e0f283cc;
-    address internal constant VTS_LIFECYCLE_LINKED_LIB = 0xd9092adEd1E53bCD716E00ABFF1dd339e09Ab083;
-    address internal constant VTS_POSITION_MM_OPS_LIB = 0x70A36438E2102a59c6dd01B9B7c57497ea4154Fa;
+    address internal constant LCC_FACTORY_LINKED_LIB = 0xE34aDBBF5bcd18c90967A8A93346ad99Dc432cf8;
+    address internal constant LIQUIDITY_HUB_LINKED_LIB = 0x71C33cff5828FbE22594F075E009d311A1168515;
+    address internal constant VTS_COMMIT_LIB = 0xc61CbC04A5a8B87fe1Fa8a48F9a7511e5137db61;
+    address internal constant VTS_FEE_LINKED_LIB = 0x8f17762519b9f3c09549f839e17731D9a6ccB815;
+    address internal constant VTS_POSITION_LIB = 0x2c108c1555956645E07966C14aae78E1E5Afd9c8;
+    address internal constant VTS_LIFECYCLE_LINKED_LIB = 0x965b30fE16715Ff9E4A7796de3578bF0e4004C91;
+    address internal constant VTS_POSITION_MM_OPS_LIB = 0x570DCdd5e47aAD6d0C8b1819EC1EE3eEe2E130aC;
 
     error VTSLifecycleLinkedLibAddrMismatch();
     error VTSPositionMMOpsLibAddrMismatch();
@@ -72,7 +75,7 @@ library EchidnaLinkedLibs {
 
     function deployVTSCommitLib() internal {
         address lib = _deploy(keccak256("echidna.VTSCommitLib"), type(VTSCommitLib).creationCode);
-        // VTS* libraries are linked against [profile.echidna].libraries values, so their CREATE2
+        // VTS* libraries are linked against [profile.medusa].libraries values, so their CREATE2
         // outputs must be validated against the runtime-linked initcode prediction, not static constants.
         if (lib != predictedVTSCommitLib()) revert VTSCommitLibAddrMismatch();
     }
@@ -129,7 +132,7 @@ library EchidnaLinkedLibs {
 
     function _predictCreate2(bytes32 salt, bytes memory initCode) private pure returns (address) {
         bytes32 initCodeHash = keccak256(initCode);
-        bytes32 digest = keccak256(abi.encodePacked(bytes1(0xff), ECHIDNA_DEPLOYER, salt, initCodeHash));
+        bytes32 digest = keccak256(abi.encodePacked(bytes1(0xff), FUZZ_HARNESS_DEPLOYER, salt, initCodeHash));
         return address(uint160(uint256(digest)));
     }
 

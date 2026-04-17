@@ -1,54 +1,54 @@
-# Echidna fuzz harnesses
+# Medusa fuzz harnesses
 
-This folder contains **Echidna** fuzzing harnesses for protocol invariants.
+This folder contains Medusa-backed fuzzing harnesses for protocol invariants.
 All invariant harnesses live in **`invariants/`**.
 
-## How Echidna fuzzing works (in this repo)
+## How Medusa fuzzing works (in this repo)
 
-These files are **Echidna harness contracts**, not Foundry unit tests. Each harness is a _stateful Solidity contract_
-that Echidna deploys once, then interacts with by generating sequences of calls. At a high level:
+These files are Solidity property harnesses, not Foundry unit tests. Each harness is a _stateful Solidity contract_
+that Medusa deploys once, then interacts with by generating sequences of calls. At a high level:
 
-- Echidna deploys the harness (runs its `constructor()` to set up initial state).
-- Echidna generates a sequence of "transactions" (function calls) into the harness to mutate state.
-- After and during sequences, Echidna evaluates **properties** (invariants) and fails the run if any property is false.
-- When a property fails, Echidna attempts to **shrink** the call sequence to a minimal reproducer.
+- Medusa deploys the harness (runs its `constructor()` to set up initial state).
+- Medusa generates a sequence of "transactions" (function calls) into the harness to mutate state.
+- After and during sequences, Medusa evaluates **properties** (invariants) and fails the run if any property is false.
+- When a property fails, Medusa attempts to **shrink** the call sequence to a minimal reproducer.
 
 ### Harness structure
 
 In this repository, harnesses follow a consistent pattern:
 
 - **`constructor()`**: deploy real protocol contracts + mocks, configure roles/bounds, seed balances, etc.
-- **`action_*` functions**: state-mutating entrypoints for Echidna to call in arbitrary order with arbitrary inputs.
+- **`action_*` functions**: state-mutating entrypoints for Medusa to call in arbitrary order with arbitrary inputs.
   - Actions often clamp inputs into safe ranges.
   - Actions often use low-level calls / `try/catch` so a revert does not abort the whole fuzz sequence.
-- **`echidna_*` functions**: boolean properties that express invariants; Echidna treats any `echidna_*() -> bool`
-  as "must always hold".
+- **`echidna_*` functions**: boolean properties that express invariants. The legacy prefix is intentionally retained,
+  and Medusa is configured to treat any `echidna_*() -> bool` as "must always hold".
   - Many properties use a `checked`/`lastOk` pattern so the property only becomes meaningful after a relevant action
     has executed (avoids vacuous failures before an action has run).
   - Some harnesses include a second trivial property (`*_smoke`) to avoid rare instability when only one property exists.
 
-### What Echidna considers a "test"
+### What Medusa considers a "test"
 
-The default configuration used by this repo is `contracts/evm/echidna.config.yml`:
+The default configuration used by this repo is `contracts/evm/medusa.json`:
 
-- **`testMode: property`**: treat `echidna_*` as properties/invariants.
-- **`prefix: echidna_`**: the property prefix.
-- **`seqLen`**: the maximum length of call sequences Echidna will explore per run.
-- **`testLimit`**: how many sequences to try.
-- **`maxValue`**: maximum `msg.value` Echidna may use when calling payable actions (used for native wrap flows).
+- **`propertyTesting.enabled: true`**: treat `echidna_*` as properties/invariants.
+- **`propertyTesting.testPrefixes: ["echidna_"]`**: preserve the existing property prefix.
+- **`callSequenceLength`**: the maximum length of call sequences Medusa will explore per run.
+- **`testLimit`**: how many transactions Medusa will execute before halting a campaign.
+- **`deployerAddress: 0x30000`**: fixed deployer used for deterministic harness/library deployment.
 
-### How we run Echidna here
+### How we run Medusa here
 
-We run Echidna through `contracts/evm/scripts/echidna.sh`, which:
+We run Medusa through `contracts/evm/scripts/medusa.sh`, which:
 
-- prefers a locally installed `echidna`/`echidna-test` binary when available,
-- otherwise falls back to Docker (using Trail of Bits' toolbox image),
-- uses `crytic-compile` with the **Foundry backend** by default in our `yarn` scripts.
+- expects a locally installed `medusa` binary,
+- targets one harness source file at a time so `crytic-compile` exposes the relevant contract artifacts,
+- uses `crytic-compile` with the Foundry backend and the dedicated Medusa output directory.
 
-We also use a dedicated Foundry profile (`[profile.echidna]` in `contracts/evm/foundry.toml`) to:
+We also use a dedicated Foundry profile (`[profile.medusa]` in `contracts/evm/foundry.toml`) to:
 
 - compile only the harnesses under `test/fuzz` (faster, avoids OOM),
-- build into a separate output directory (`out-echidna/`),
+- build into a separate output directory (`out-medusa/`),
 - hard-link selected libraries for determinism (some harnesses deploy those libraries via `CREATE2` to the linked
   addresses during `constructor()`).
 
@@ -57,7 +57,7 @@ We also use a dedicated Foundry profile (`[profile.echidna]` in `contracts/evm/f
 Harness constructors call helpers in `test/fuzz/base/EchidnaLinkedLibs.sol` to deploy selected libraries at
 **deterministic CREATE2** addresses (fixed deployer + per-library salts). Foundry must **link** the same addresses
 into bytecode that delegates to those libraries, otherwise HEVM rejects unlinked placeholders. Keep the wiring
-consistent before you run Echidna or CI fuzz jobs.
+consistent before you run Medusa or CI fuzz jobs.
 
 **Single source of truth**
 
@@ -65,10 +65,10 @@ consistent before you run Echidna or CI fuzz jobs.
 
 That manifest is applied to:
 
-- `foundry.toml` → `[profile.echidna].libraries`
+- `foundry.toml` → `[profile.medusa].libraries`
 - `test/fuzz/base/EchidnaLinkedLibs.sol` → `address internal constant ...` values
 
-by `python3 scripts/validate_fuzz_lib_config.py apply` (or the `just` targets below). The script also offers
+by `python3 scripts/validate_fuzz_lib_config.py converge` (or the `just` targets below). The script also offers
 `validate` (default) to check the three locations stay in sync.
 
 **Commands** (from `contracts/evm/`)
@@ -76,8 +76,8 @@ by `python3 scripts/validate_fuzz_lib_config.py apply` (or the `just` targets be
 | Command | Purpose |
 | ------- | ------- |
 | `just validate-fuzz-libs` | Runs manifest sync check, `ValidateEchidnaLinkedLibs.run()`, then `SmokeEchidnaLinkedLibs.run()` (deployment smoke). |
-| `just recompute-fuzz-lib-addrs` | Applies the manifest, deletes `out-echidna/`, rebuilds with `FOUNDRY_PROFILE=echidna`, then runs `ValidateEchidnaLinkedLibs.run()`. |
-| `just print-echidna-lib-manifest` | Prints machine-readable manifest lines (`FUZZ_LIB_MANIFEST_BEGIN` / `END`) for pasting or tooling. |
+| `just recompute-fuzz-lib-addrs` | Applies the manifest, deletes `out-medusa/`, rebuilds with `FOUNDRY_PROFILE=medusa`, then runs `ValidateEchidnaLinkedLibs.run()`. |
+| `just print-fuzz-lib-manifest` | Prints machine-readable manifest lines (`FUZZ_LIB_MANIFEST_BEGIN` / `END`) for pasting or tooling. |
 | `just print-fuzz-lib-addrs` | Prints human-readable CREATE2 suggestions and copy-paste blocks (verbose). |
 
 **Validation semantics**
@@ -86,7 +86,7 @@ by `python3 scripts/validate_fuzz_lib_config.py apply` (or the `just` targets be
   `VTSFeeLinkedLib`.
 - **VTS** libraries used heavily across the graph (`VTSCommitLib`, `VTSPositionLib`, `VTSLifecycleLinkedLib`,
   `VTSPositionMMOpsLib`): addresses in the manifest still **must** match `foundry.toml` and the Solidity constants
-  (so the linker and harness agree). Because `[profile.echidna].libraries` feeds back into linked **initcode**,
+  (so the linker and harness agree). Because `[profile.medusa].libraries` feeds back into linked **initcode**,
   runtime `type(Lib).creationCode` predictions can **differ** from those literals. `ValidateEchidnaLinkedLibs` logs an
   informational note for that case; deployment helpers assert the deployed address matches the **runtime** prediction
   (`predicted*()`), not a stale constant-only equality.
@@ -110,28 +110,28 @@ just fuzz-deep
 just fuzz-invariants
 
 # Run individual harnesses
-just echidna-lcc-backing
-just echidna-commit-01
+just medusa-lcc-backing
+just medusa-commit-01
 ```
 
 ### Troubleshooting
 
-- If you see `error: missing --file or --contract`, it means `scripts/echidna.sh` was invoked without required args.
+- If you see `error: missing --file or --contract`, it means `scripts/medusa.sh` was invoked without required args.
   As a workaround (and for debugging), you can call the runner directly:
 
 ```bash
 cd contracts/evm
-FOUNDRY_PROFILE=echidna FOUNDRY_OUT_DIR=out-echidna ECHIDNA_COMPILE=foundry \
-  sh ./scripts/echidna.sh --file test/fuzz/invariants/LCCBacking01.sol --contract LCCBacking01
+FOUNDRY_PROFILE=medusa FOUNDRY_OUT_DIR=out-medusa \
+  sh ./scripts/medusa.sh --file test/fuzz/invariants/LCCBacking01.sol --contract LCCBacking01
 ```
 
 ## Checklist
 
 The **source of truth** for protocol invariants is `contracts/evm/INVARIANTS.md`.
 
-This README is a **coverage tracker** for:
+This README is a coverage tracker for:
 
-- which `INVARIANTS.md` items are covered by Echidna harnesses in this directory, and
+- which `INVARIANTS.md` items are covered by the Medusa-run harnesses in this directory, and
 - which invariants are still missing (and what the next priorities are).
 
 ### Coverage (from `INVARIANTS.md`)
@@ -139,12 +139,12 @@ This README is a **coverage tracker** for:
 This table is keyed by **canonical** invariant IDs from `INVARIANTS.md`. It is the main "what's done / what's next"
 view.
 
-- **Needs property?**: "Yes" means we should prefer a property-based test (Echidna and/or invariant-style Foundry)
+- **Needs property?**: "Yes" means we should prefer a property-based test (Medusa and/or invariant-style Foundry)
   because manual inspection is unreliable.
 - **Status**: "Covered" means there is at least one non-trivial check; "Partial" means the invariant is exercised but
   not comprehensively (or only in a narrow harness assumption).
 
-| Invariant (`INVARIANTS.md`) | Priority | Needs property? | Status                | Evidence (Echidna)                                                                                                                             | Notes                                                                                                     |
+| Invariant (`INVARIANTS.md`) | Priority | Needs property? | Status                | Evidence (Medusa/Foundry)                                                                                                                      | Notes                                                                                                     |
 | --------------------------- | -------- | --------------- | --------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------- |
 | **LCC-BACKING-01**          | **P1**   | Yes             | **Covered**           | `invariants/LCCBacking01.sol` → `echidna_lcc_backing_01_*` (10 properties)                                                                     | Full domain accounting: supply, reserves, queues, wrapWith conservation, commitment gate.                 |
 | **LCC-01**                  | **P2**   | Yes             | **Covered**           | `invariants/LCC01.sol` → `echidna_lcc_01_*` (7 properties)                                                                                     | Transfer gating: user-to-user blocked, endpoint/exempt routes allowed, approved transfers.                |

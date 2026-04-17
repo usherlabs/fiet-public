@@ -45,43 +45,28 @@ jobs:
       - name: Install crytic-compile
         shell: bash
         run: |
-          sudo apt-get update
+          python -m venv .venv
+          . .venv/bin/activate
           python -m pip install --upgrade pip
           python -m pip install crytic-compile
+          echo "$PWD/.venv/bin" >> "$GITHUB_PATH"
           crytic-compile --version
 
-      - name: Install Echidna (native)
+      - name: Install Medusa (native)
         shell: bash
         run: |
           set -euo pipefail
-          ECHIDNA_VERSION="v2.2.7"
-          ARCHIVE="echidna-${ECHIDNA_VERSION#v}-x86_64-linux.tar.gz"
-          URL="https://github.com/crytic/echidna/releases/download/${ECHIDNA_VERSION}/${ARCHIVE}"
+          MEDUSA_VERSION="v1.5.1"
+          ARCHIVE="medusa-linux-x64.tar.gz"
+          URL="https://github.com/crytic/medusa/releases/download/${MEDUSA_VERSION}/${ARCHIVE}"
 
-          curl -fsSL "$URL" -o /tmp/echidna.tar.gz
-          rm -rf /tmp/echidna-bin
-          mkdir -p /tmp/echidna-bin
-          tar -xzf /tmp/echidna.tar.gz -C /tmp/echidna-bin
+          curl -fsSL "$URL" -o /tmp/medusa.tar.gz
+          rm -rf /tmp/medusa-bin
+          mkdir -p /tmp/medusa-bin
+          tar -xzf /tmp/medusa.tar.gz -C /tmp/medusa-bin
+          sudo install -m 0755 /tmp/medusa-bin/medusa /usr/local/bin/medusa
 
-          if [ -x /tmp/echidna-bin/echidna ]; then
-            sudo install -m 0755 /tmp/echidna-bin/echidna /usr/local/bin/echidna
-          elif [ -x /tmp/echidna-bin/bin/echidna ]; then
-            sudo install -m 0755 /tmp/echidna-bin/bin/echidna /usr/local/bin/echidna
-          else
-            echo "echidna binary not found in release archive"
-            exit 1
-          fi
-
-          if [ -x /tmp/echidna-bin/echidna-test ]; then
-            sudo install -m 0755 /tmp/echidna-bin/echidna-test /usr/local/bin/echidna-test
-          elif [ -x /tmp/echidna-bin/bin/echidna-test ]; then
-            sudo install -m 0755 /tmp/echidna-bin/bin/echidna-test /usr/local/bin/echidna-test
-          else
-            sudo ln -sf /usr/local/bin/echidna /usr/local/bin/echidna-test
-          fi
-
-          echidna --version
-          echidna-test --version || true
+          medusa --version
 
       - name: Select fuzz mode
         env:
@@ -103,14 +88,12 @@ jobs:
         run: |
           forge --version
           just --version
-          python -m pip --version
           crytic-compile --version
-          echidna --version
+          medusa --version
 
       - name: Run full invariant suite
         env:
-          FOUNDRY_PROFILE: echidna
-          ECHIDNA_COMPILE: foundry
-          FOUNDRY_OUT_DIR: out-echidna
+          FOUNDRY_PROFILE: medusa
+          FOUNDRY_OUT_DIR: out-medusa
         run: |
           bash -lc "$FUZZ_COMMAND"

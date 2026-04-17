@@ -7,14 +7,14 @@ import {EchidnaLinkedLibs} from "../base/EchidnaLinkedLibs.sol";
 
 /// @notice Validates that `EchidnaLinkedLibs` constants match CREATE2 predictions.
 /// @dev Predictions use `type(...).creationCode` from the same library as deploy helpers (`EchidnaLinkedLibs`).
-///      Run with FOUNDRY_PROFILE=echidna so linker output matches Echidna builds.
+///      Run with FOUNDRY_PROFILE=medusa so linker output matches Medusa builds.
 contract ValidateEchidnaLinkedLibs is Script {
     address internal constant VTSSWAPLIB_PLACEHOLDER = 0x1111111111111111111111111111111111111112;
 
     function run() external pure {
         uint256 strictFailures = 0;
         uint256 linkedRuntimeMismatches = 0;
-        console2.log("Validating Echidna linked library addresses...");
+        console2.log("Validating fuzz linked library addresses...");
 
         if (!_check(
                 "LCCFactoryLinkedLib",
@@ -64,23 +64,23 @@ contract ValidateEchidnaLinkedLibs is Script {
         }
 
         if (strictFailures != 0) {
-            console2.log("Echidna linked library strict mismatches:", strictFailures);
-            console2.log("run `just print-echidna-lib-manifest`, paste into test/fuzz/echidna-linked-libs.txt");
+            console2.log("Fuzz linked library strict mismatches:", strictFailures);
+            console2.log("run `just print-fuzz-lib-manifest`, paste into test/fuzz/echidna-linked-libs.txt");
             console2.log("then `just recompute-fuzz-lib-addrs` and `just validate-fuzz-libs`");
-            console2.log("suggested foundry.toml [profile.echidna].libraries block:");
+            console2.log("suggested foundry.toml [profile.medusa].libraries block:");
             _printFoundryTomlLibrariesBlock();
             console2.log("suggested EchidnaLinkedLibs.sol constants:");
             _printEchidnaLinkedLibsConstants();
             revert("EchidnaLinkedLibs validation failed");
         }
 
-        console2.log("Echidna linked library addresses are up to date.");
+        console2.log("Fuzz linked library addresses are up to date.");
     }
 
     /// @notice Prints the current fuzz-context CREATE2 outputs and copy-pasteable updates.
     function printComputed() external pure {
-        console2.log("Computed Echidna linked library addresses for the current fuzz build:");
-        console2.log("foundry.toml [profile.echidna].libraries block:");
+        console2.log("Computed fuzz linked library addresses for the current fuzz build:");
+        console2.log("foundry.toml [profile.medusa].libraries block:");
         _printFoundryTomlLibrariesBlock();
         console2.log("EchidnaLinkedLibs.sol constants:");
         _printEchidnaLinkedLibsConstants();
@@ -136,11 +136,9 @@ contract ValidateEchidnaLinkedLibs is Script {
             )
         );
         console2.log(
-            "  # Prevent HEVM crashes by eliminating unlinked placeholders in unrelated contracts (e.g. VTSOrchestrator)."
+            "  # Prevent unlinked placeholders in unrelated contracts (e.g. VTSOrchestrator)."
         );
-        console2.log(
-            "  # Deterministic CREATE2 address deployed by the SIG-BACKING harness (avoids any RPC fetch attempts)."
-        );
+        console2.log("  # Deterministic CREATE2 address deployed by the SIG-BACKING harness.");
         console2.log(
             _libraryEntry("src/libraries/VTSCommitLib.sol:VTSCommitLib", EchidnaLinkedLibs.predictedVTSCommitLib())
         );
@@ -148,7 +146,7 @@ contract ValidateEchidnaLinkedLibs is Script {
             _libraryEntry("src/libraries/VTSFeeLib.sol:VTSFeeLinkedLib", EchidnaLinkedLibs.predictedVTSFeeLinkedLib())
         );
         console2.log(
-            "  # Deterministic CREATE2 address deployed by `VTSPositionLibEchidnaHarness` (avoids Echidna RPC fetch attempts)."
+            "  # Deterministic CREATE2 address deployed by `VTSPositionLibEchidnaHarness`."
         );
         console2.log(
             _libraryEntry(

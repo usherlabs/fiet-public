@@ -1,6 +1,6 @@
-# Maintaining Echidna Linked-Library Wiring
+# Maintaining Medusa Linked-Library Wiring
 
-Echidna fuzz harnesses use **hard-linked library addresses** so that Foundry's linker and HEVM can resolve `DELEGATECALL` targets deterministically. These addresses are computed via CREATE2 from a fixed deployer and salt. When library bytecode changes (e.g. after a refactor or dependency update), the CREATE2 addresses change and must be recomputed.
+The Medusa-backed fuzz harnesses use hard-linked library addresses so that Foundry's linker and HEVM can resolve `DELEGATECALL` targets deterministically. These addresses are computed via CREATE2 from a fixed deployer and salt. When library bytecode changes (e.g. after a refactor or dependency update), the CREATE2 addresses change and must be recomputed.
 
 ## When to Regenerate
 
@@ -8,7 +8,7 @@ Regenerate addresses when:
 
 - You modify any of: `LCCFactoryLinkedLib`, `LiquidityHubLinkedLib`, `VTSCommitLib`, `VTSFeeLinkedLib`, `VTSPositionLib`, `VTSLifecycleLinkedLib`
 - You change dependencies (e.g. Uniswap v4, OpenZeppelin) that affect those libraries
-- Echidna fails with `EchidnaLinkedLibs: * addr mismatch` during harness deployment
+- Medusa fails with `EchidnaLinkedLibs: * addr mismatch` during harness deployment
 
 ### If You See the Mismatch Error
 
@@ -34,9 +34,9 @@ cd contracts/evm && just validate-fuzz-libs
 This is a fast preflight for the fuzz suite. It validates that:
 
 - `test/fuzz/base/EchidnaLinkedLibs.sol`
-- `foundry.toml` `[profile.echidna].libraries`
+- `foundry.toml` `[profile.medusa].libraries`
 
-stay in sync for the hard-linked Echidna libraries, and then smokes the linked-library deployment helpers that the harness constructors rely on.
+stay in sync for the hard-linked fuzz libraries, and then smokes the linked-library deployment helpers that the harness constructors rely on.
 
 ## How to Recompute Addresses
 
@@ -46,7 +46,7 @@ When linked-library bytecode changes, recompute the deterministic CREATE2 output
 cd contracts/evm && just recompute-fuzz-lib-addrs
 ```
 
-This runs `ValidateEchidnaLinkedLibs.s.sol` under `FOUNDRY_PROFILE=echidna` and prints the addresses that should be copied into both source-of-truth files.
+This runs `ValidateEchidnaLinkedLibs.s.sol` under `FOUNDRY_PROFILE=medusa` and prints the addresses that should be copied into both source-of-truth files.
 
 If you only want the generated values without thinking about validation semantics, use:
 
@@ -73,7 +73,7 @@ address internal constant VTS_LIFECYCLE_LINKED_LIB = 0x...;
 
 ### 2. `contracts/evm/foundry.toml`
 
-In the `[profile.echidna]` section, update the `libraries` array. Replace the hex addresses in the computed entries:
+In the `[profile.medusa]` section, update the `libraries` array. Replace the hex addresses in the computed entries:
 
 ```toml
 libraries = [

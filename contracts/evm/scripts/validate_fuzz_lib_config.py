@@ -16,8 +16,8 @@ FOUNDRY_TOML_PATH = ROOT / "foundry.toml"
 MANIFEST_PATH = ROOT / "test/fuzz/echidna-linked-libs.txt"
 VALIDATE_SCRIPT = "test/fuzz/script/ValidateEchidnaLinkedLibs.s.sol:ValidateEchidnaLinkedLibs"
 
-MANIFEST_HEADER = """# Single source of truth for Echidna [profile.echidna] hard-linked libraries.
-# Updated by `just recompute-fuzz-lib-addrs` (converges linked initcode) or `just print-echidna-lib-manifest`.
+MANIFEST_HEADER = """# Single source of truth for Medusa [profile.medusa] hard-linked libraries.
+# Updated by `just recompute-fuzz-lib-addrs` (converges linked initcode) or `just print-fuzz-lib-manifest`.
 # One line per library: src/path/File.sol:Symbol=0x...
 # VTSSwapLib is a fixed placeholder (not CREATE2-validated in harness helpers).
 """
@@ -33,7 +33,7 @@ CONSTANT_TO_LIBRARY: dict[str, str] = {
     "VTS_POSITION_MM_OPS_LIB": "src/libraries/VTSPositionMMOpsLib.sol:VTSPositionMMOpsLib",
 }
 
-# Order and keys written to foundry.toml [profile.echidna].libraries (includes VTSSwap placeholder).
+# Order and keys written to foundry.toml [profile.medusa].libraries (includes VTSSwap placeholder).
 ECHIDNA_LIBRARY_IDS: list[str] = [
     "src/libraries/LCCFactoryLib.sol:LCCFactoryLinkedLib",
     "src/libraries/LiquidityHubLinkedLib.sol:LiquidityHubLinkedLib",
@@ -52,13 +52,13 @@ def _extract_constants(source: str) -> dict[str, str]:
 
 
 def _extract_echidna_libraries(source: str) -> dict[str, str]:
-    profile_match = re.search(r"^\[profile\.echidna\]\n(.*?)(?=^\[|\Z)", source, re.MULTILINE | re.DOTALL)
+    profile_match = re.search(r"^\[profile\.medusa\]\n(.*?)(?=^\[|\Z)", source, re.MULTILINE | re.DOTALL)
     if profile_match is None:
-        raise ValueError("missing [profile.echidna] block")
+        raise ValueError("missing [profile.medusa] block")
 
     libraries_match = re.search(r"libraries\s*=\s*\[(.*?)\]", profile_match.group(1), re.DOTALL)
     if libraries_match is None:
-        raise ValueError("missing [profile.echidna].libraries block")
+        raise ValueError("missing [profile.medusa].libraries block")
 
     entries: dict[str, str] = {}
     for raw_entry in re.findall(r'"([^"]+)"', libraries_match.group(1)):
@@ -90,14 +90,14 @@ def _parse_manifest(text: str) -> dict[str, str]:
 
 def _forge_env() -> dict[str, str]:
     env = os.environ.copy()
-    env["FOUNDRY_PROFILE"] = "echidna"
+    env["FOUNDRY_PROFILE"] = "medusa"
     return env
 
 
 def _forge_build_echidna() -> None:
-    # [profile.echidna] uses `out = "out-echidna"`. Incremental caches can skip recompiling
+    # [profile.medusa] uses `out = "out-medusa"`. Incremental caches can skip recompiling
     # EchidnaLinkedLibs.sol after manifest apply, leaving stale constants in linked artifacts.
-    out_echidna = ROOT / "out-echidna"
+    out_echidna = ROOT / "out-medusa"
     if out_echidna.exists():
         shutil.rmtree(out_echidna)
 
@@ -112,7 +112,7 @@ def _forge_build_echidna() -> None:
     if result.returncode != 0:
         sys.stderr.write(result.stdout)
         sys.stderr.write(result.stderr)
-        raise RuntimeError("forge build (FOUNDRY_PROFILE=echidna) failed")
+        raise RuntimeError("forge build (FOUNDRY_PROFILE=medusa) failed")
 
 
 def _run_forge_script(sig: str) -> subprocess.CompletedProcess[str]:
@@ -203,7 +203,7 @@ def _validate_manifest_against_files(manifest: dict[str, str]) -> list[str]:
 
         t = echidna_libraries.get(library_path)
         if t is None:
-            errors.append(f"missing `{library_path}` in `[profile.echidna].libraries`")
+            errors.append(f"missing `{library_path}` in `[profile.medusa].libraries`")
         elif t != m:
             errors.append(
                 f"manifest `{library_path}` ({m}) does not match foundry.toml ({t})"
@@ -215,7 +215,7 @@ def _validate_manifest_against_files(manifest: dict[str, str]) -> list[str]:
         t = echidna_libraries.get(swap_id)
         m = manifest[swap_id]
         if t is None:
-            errors.append(f"missing `{swap_id}` in `[profile.echidna].libraries`")
+            errors.append(f"missing `{swap_id}` in `[profile.medusa].libraries`")
         elif t != m:
             errors.append(f"manifest `{swap_id}` ({m}) does not match foundry.toml ({t})")
 
@@ -227,7 +227,7 @@ def _validate_sync() -> int:
         manifest = _parse_manifest(MANIFEST_PATH.read_text())
     except FileNotFoundError:
         print(f"Missing manifest `{MANIFEST_PATH.relative_to(ROOT)}`.")
-        print("Create it from `just print-echidna-lib-manifest` output, then `just recompute-fuzz-lib-addrs`.")
+        print("Create it from `just print-fuzz-lib-manifest` output, then `just recompute-fuzz-lib-addrs`.")
         return 1
     except (ValueError, RuntimeError) as exc:
         print(f"Manifest error: {exc}")
@@ -235,14 +235,14 @@ def _validate_sync() -> int:
 
     errors = _validate_manifest_against_files(manifest)
     if errors:
-        print("Echidna linked-library wiring is out of sync with the manifest:")
+        print("Fuzz linked-library wiring is out of sync with the manifest:")
         for error in errors:
             print(f"- {error}")
-        print(f"Update `{MANIFEST_PATH.relative_to(ROOT)}` from `just print-echidna-lib-manifest`, then:")
+        print(f"Update `{MANIFEST_PATH.relative_to(ROOT)}` from `just print-fuzz-lib-manifest`, then:")
         print("  just recompute-fuzz-lib-addrs")
         return 1
 
-    print("Echidna linked-library manifest matches foundry.toml and EchidnaLinkedLibs.sol.")
+    print("Fuzz linked-library manifest matches foundry.toml and EchidnaLinkedLibs.sol.")
     return 0
 
 
@@ -254,15 +254,13 @@ def _build_libraries_toml_inner(manifest: dict[str, str]) -> str:
     lines.append(f'  "src/libraries/LCCFactoryLib.sol:LCCFactoryLinkedLib:{addr("src/libraries/LCCFactoryLib.sol:LCCFactoryLinkedLib")}",')
     lines.append(f'  "src/libraries/LiquidityHubLinkedLib.sol:LiquidityHubLinkedLib:{addr("src/libraries/LiquidityHubLinkedLib.sol:LiquidityHubLinkedLib")}",')
     lines.append(
-        "  # Prevent HEVM crashes by eliminating unlinked placeholders in unrelated contracts (e.g. VTSOrchestrator)."
+        "  # Prevent unlinked placeholders in unrelated contracts (e.g. VTSOrchestrator)."
     )
-    lines.append(
-        "  # Deterministic CREATE2 address deployed by the SIG-BACKING harness (avoids any RPC fetch attempts)."
-    )
+    lines.append("  # Deterministic CREATE2 address deployed by the SIG-BACKING harness.")
     lines.append(f'  "src/libraries/VTSCommitLib.sol:VTSCommitLib:{addr("src/libraries/VTSCommitLib.sol:VTSCommitLib")}",')
     lines.append(f'  "src/libraries/VTSFeeLib.sol:VTSFeeLinkedLib:{addr("src/libraries/VTSFeeLib.sol:VTSFeeLinkedLib")}",')
     lines.append(
-        "  # Deterministic CREATE2 address deployed by `VTSPositionLibEchidnaHarness` (avoids Echidna RPC fetch attempts)."
+        "  # Deterministic CREATE2 address deployed by `VTSPositionLibEchidnaHarness`."
     )
     lines.append(f'  "src/libraries/VTSPositionLib.sol:VTSPositionLib:{addr("src/libraries/VTSPositionLib.sol:VTSPositionLib")}",')
     lines.append(
@@ -277,16 +275,16 @@ def _build_libraries_toml_inner(manifest: dict[str, str]) -> str:
 
 
 def _replace_echidna_libraries_block(foundry_source: str, inner: str) -> str:
-    start_marker = "[profile.echidna]"
+    start_marker = "[profile.medusa]"
     idx = foundry_source.find(start_marker)
     if idx == -1:
-        raise ValueError("missing [profile.echidna] in foundry.toml")
+        raise ValueError("missing [profile.medusa] in foundry.toml")
 
     sub = foundry_source[idx:]
     lib_kw = "libraries = ["
     pos = sub.find(lib_kw)
     if pos == -1:
-        raise ValueError("missing libraries = [ under [profile.echidna]")
+        raise ValueError("missing libraries = [ under [profile.medusa]")
 
     bracket_open = pos + len(lib_kw) - 1
     depth = 0
@@ -301,7 +299,7 @@ def _replace_echidna_libraries_block(foundry_source: str, inner: str) -> str:
                 break
         i += 1
     else:
-        raise ValueError("unclosed libraries = [ array in [profile.echidna]")
+        raise ValueError("unclosed libraries = [ array in [profile.medusa]")
 
     new_block = lib_kw + "\n" + inner + "\n]"
     replacement = sub[:pos] + new_block + sub[bracket_close + 1 :]
@@ -373,7 +371,7 @@ def _converge() -> int:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Echidna linked-library manifest: validate, apply, or converge.")
+    parser = argparse.ArgumentParser(description="Fuzz linked-library manifest: validate, apply, or converge.")
     parser.add_argument(
         "command",
         nargs="?",

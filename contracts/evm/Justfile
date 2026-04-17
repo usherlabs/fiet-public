@@ -1,12 +1,14 @@
 ## Fiet Protocol (EVM) - developer commands
 #
-# This Justfile provides a stable entrypoint for running Echidna harnesses without
-# relying on Yarn argument forwarding behaviour.
+# This Justfile provides stable entrypoints for running the Medusa-backed fuzz
+# harness suite. The Solidity properties intentionally retain their legacy
+# `echidna_*` names so the migration stays focused on tooling rather than broad
+# contract churn.
 #
 # Usage:
 #   just --list
 #   just fuzz
-#   just echidna file=test/fuzz/invariants/LCC01.sol contract=LCC01
+#   just medusa file=test/fuzz/invariants/LCC01.sol contract=LCC01
 #
 
 set export := true
@@ -16,105 +18,103 @@ default:
     @just --list --unsorted
 
 # ----------------------------
-# Echidna (fuzzing) helpers
+# Medusa (fuzzing) helpers
 # ----------------------------
-# Generic Echidna runner wrapper.
+# Generic Medusa runner wrapper.
 # Pass through extra args via `--`, e.g.:
+#
+# just medusa file=test/fuzz/invariants/LCC01.sol contract=LCC01 -- --test-limit 20000
+medusa file contract config="medusa.json" *args:
+    FOUNDRY_PROFILE=medusa FOUNDRY_OUT_DIR=out-medusa \
+      sh ./scripts/medusa.sh --file {{ file }} --contract {{ contract }} --config {{ config }} {{ args }}
 
-# just echidna file=... contract=... -- --test-limit 20000
-echidna file contract config="echidna.config.yml" *args:
-    FOUNDRY_PROFILE=echidna FOUNDRY_OUT_DIR=out-echidna ECHIDNA_COMPILE=foundry \
-      sh ./scripts/echidna.sh --file {{ file }} --contract {{ contract }} --config {{ config }} {{ args }}
-
-# Run invariant harnesses (default config: `echidna.config.yml`).
+# Run invariant harnesses (default config: `medusa.json`).
 fuzz:
     @just validate-fuzz-libs
-    @just echidna-lcc-backing
-    @just echidna-lcc-01
-    @just echidna-lcc-02
-    @just echidna-hub-01
-    @just echidna-hub-02
-    @just echidna-hub-03
-    @just echidna-hub-04
-    @just echidna-hub-05
-    @just echidna-hub-06
-    @just echidna-sig-01-02
-    @just echidna-commit-01
-    @just echidna-commit-02
-    @just echidna-commit-03
-    @just echidna-cov-04
-    @just echidna-cov-01
-    @just echidna-cov-02
-    @just echidna-cov-03
-    @just echidna-fee-01
-    @just echidna-fee-02
-    @just echidna-vts-02
-    @just echidna-vts-03
-    @just echidna-delta-01
-    @just echidna-settle-01
-    @just echidna-settle-02
-    @just echidna-lcc-03
-    @just echidna-vts-01
-    @just echidna-seize-01-02
-    @just echidna-seize-03-04
-    @just echidna-pause-01
-    @just echidna-mkt-01-02
-    @just echidna-mkt-03-06
-    @just echidna-mkt-04-04a
-    @just echidna-auth-01-01a-02
+    @just medusa-lcc-backing
+    @just medusa-lcc-01
+    @just medusa-lcc-02
+    @just medusa-hub-01
+    @just medusa-hub-02
+    @just medusa-hub-03
+    @just medusa-hub-04
+    @just medusa-hub-05
+    @just medusa-hub-06
+    @just medusa-sig-01-02
+    @just medusa-commit-01
+    @just medusa-commit-02
+    @just medusa-commit-03
+    @just medusa-cov-04
+    @just medusa-cov-01
+    @just medusa-cov-02
+    @just medusa-cov-03
+    @just medusa-fee-01
+    @just medusa-fee-02
+    @just medusa-vts-02
+    @just medusa-vts-03
+    @just medusa-delta-01
+    @just medusa-settle-01
+    @just medusa-settle-02
+    @just medusa-lcc-03
+    @just medusa-vts-01
+    @just medusa-seize-01-02
+    @just medusa-seize-03-04
+    @just medusa-pause-01
+    @just medusa-mkt-01-02
+    @just medusa-mkt-03-06
+    @just medusa-mkt-04-04a
+    @just medusa-auth-01-01a-02
     @just fuzz-regressions
 
 # Targeted regression harnesses that complement canonical `test/fuzz/invariants/*`
-
 # coverage. These focus on specific behavioural paths and historical bug surfaces.
 fuzz-regressions:
-    @just echidna-wrapwith
-    @just echidna-lcc-queue-netting
-    @just echidna-confirmtake-callback
+    @just medusa-wrapwith
+    @just medusa-lcc-queue-netting
+    @just medusa-confirmtake-callback
     # MKT-05 remains authoritatively gated by `invariant-evidence-foundry`;
-    # this Echidna target is retained as a lightweight regression/drift check.
-    @just echidna-mkt-05
+    # this Medusa target is retained as a lightweight regression/drift check.
+    @just medusa-mkt-05
 
-# Longer invariant campaigns (uses `echidna.deep.config.yml`).
+# Longer invariant campaigns (uses `medusa.deep.json`).
 fuzz-deep:
     @just validate-fuzz-libs
-    @just echidna-lcc-backing echidna.deep.config.yml
-    @just echidna-lcc-01 echidna.deep.config.yml
-    @just echidna-lcc-02 echidna.deep.config.yml
-    @just echidna-hub-01 echidna.deep.config.yml
-    @just echidna-hub-02 echidna.deep.config.yml
-    @just echidna-hub-03 echidna.deep.config.yml
-    @just echidna-hub-04 echidna.deep.config.yml
-    @just echidna-hub-05 echidna.deep.config.yml
-    @just echidna-hub-06 echidna.deep.config.yml
-    @just echidna-sig-01-02 echidna.deep.config.yml
-    @just echidna-commit-01 echidna.deep.config.yml
-    @just echidna-commit-02 echidna.deep.config.yml
-    @just echidna-commit-03 echidna.deep.config.yml
-    @just echidna-cov-04 echidna.deep.config.yml
-    @just echidna-cov-01 echidna.deep.config.yml
-    @just echidna-cov-02 echidna.deep.config.yml
-    @just echidna-cov-03 echidna.deep.config.yml
-    @just echidna-fee-01 echidna.deep.config.yml
-    @just echidna-fee-02 echidna.deep.config.yml
-    @just echidna-vts-02 echidna.deep.config.yml
-    @just echidna-vts-03 echidna.deep.config.yml
-    @just echidna-delta-01 echidna.deep.config.yml
-    @just echidna-settle-01 echidna.deep.config.yml
-    @just echidna-settle-02 echidna.deep.config.yml
-    @just echidna-lcc-03 echidna.deep.config.yml
-    @just echidna-vts-01 echidna.deep.config.yml
-    @just echidna-seize-01-02 echidna.deep.config.yml
-    @just echidna-seize-03-04 echidna.deep.config.yml
-    @just echidna-pause-01 echidna.deep.config.yml
-    @just echidna-mkt-01-02 echidna.deep.config.yml
-    @just echidna-mkt-03-06 echidna.deep.config.yml
-    @just echidna-mkt-04-04a echidna.deep.config.yml
-    @just echidna-auth-01-01a-02 echidna.deep.config.yml
+    @just medusa-lcc-backing medusa.deep.json
+    @just medusa-lcc-01 medusa.deep.json
+    @just medusa-lcc-02 medusa.deep.json
+    @just medusa-hub-01 medusa.deep.json
+    @just medusa-hub-02 medusa.deep.json
+    @just medusa-hub-03 medusa.deep.json
+    @just medusa-hub-04 medusa.deep.json
+    @just medusa-hub-05 medusa.deep.json
+    @just medusa-hub-06 medusa.deep.json
+    @just medusa-sig-01-02 medusa.deep.json
+    @just medusa-commit-01 medusa.deep.json
+    @just medusa-commit-02 medusa.deep.json
+    @just medusa-commit-03 medusa.deep.json
+    @just medusa-cov-04 medusa.deep.json
+    @just medusa-cov-01 medusa.deep.json
+    @just medusa-cov-02 medusa.deep.json
+    @just medusa-cov-03 medusa.deep.json
+    @just medusa-fee-01 medusa.deep.json
+    @just medusa-fee-02 medusa.deep.json
+    @just medusa-vts-02 medusa.deep.json
+    @just medusa-vts-03 medusa.deep.json
+    @just medusa-delta-01 medusa.deep.json
+    @just medusa-settle-01 medusa.deep.json
+    @just medusa-settle-02 medusa.deep.json
+    @just medusa-lcc-03 medusa.deep.json
+    @just medusa-vts-01 medusa.deep.json
+    @just medusa-seize-01-02 medusa.deep.json
+    @just medusa-seize-03-04 medusa.deep.json
+    @just medusa-pause-01 medusa.deep.json
+    @just medusa-mkt-01-02 medusa.deep.json
+    @just medusa-mkt-03-06 medusa.deep.json
+    @just medusa-mkt-04-04a medusa.deep.json
+    @just medusa-auth-01-01a-02 medusa.deep.json
 
 # Full invariant suite entrypoint for CI:
-# - all Echidna invariant harnesses
-
+# - all Medusa property harnesses
 # - Foundry evidence tests referenced in fuzz README
 fuzz-invariants:
     @just fuzz
@@ -135,124 +135,124 @@ invariant-evidence-foundry:
     FOUNDRY_PROFILE=debug forge test -vvv --match-path test/ProxyHook.t.sol --match-test test_proxySwap_exactInput_oneForZero_keepsProxySlot0Unchanged
     FOUNDRY_PROFILE=debug forge test -vvv --match-path test/ProxyHook.t.sol --match-test test_proxySwap_exactOutput_oneForZero_keepsProxySlot0Unchanged
 
-echidna-lcc-backing config="echidna.config.yml":
-    @just echidna test/fuzz/invariants/LCCBacking01.sol LCCBacking01 {{ config }} -- --disable-slither
+medusa-lcc-backing config="medusa.json":
+    @just medusa test/fuzz/invariants/LCCBacking01.sol LCCBacking01 {{ config }}
 
-echidna-lcc-queue-netting config="echidna.config.yml":
-    @just echidna test/fuzz/LiquidityHubWrapWithQueueEchidnaTest.sol LiquidityHubWrapWithQueueEchidnaTest {{ config }} -- --disable-slither
+medusa-lcc-queue-netting config="medusa.json":
+    @just medusa test/fuzz/LiquidityHubWrapWithQueueEchidnaTest.sol LiquidityHubWrapWithQueueEchidnaTest {{ config }}
 
-echidna-lcc-01 config="echidna.config.yml":
-    @just echidna test/fuzz/invariants/LCC01.sol LCC01 {{ config }} -- --disable-slither
+medusa-lcc-01 config="medusa.json":
+    @just medusa test/fuzz/invariants/LCC01.sol LCC01 {{ config }}
 
-echidna-lcc-02 config="echidna.config.yml":
-    @just echidna test/fuzz/invariants/LCC02.sol LCC02 {{ config }} -- --disable-slither
+medusa-lcc-02 config="medusa.json":
+    @just medusa test/fuzz/invariants/LCC02.sol LCC02 {{ config }}
 
-echidna-hub-01 config="echidna.config.yml":
-    @just echidna test/fuzz/invariants/HUB01.sol HUB01 {{ config }} -- --disable-slither
+medusa-hub-01 config="medusa.json":
+    @just medusa test/fuzz/invariants/HUB01.sol HUB01 {{ config }}
 
-echidna-hub-02 config="echidna.config.yml":
-    @just echidna test/fuzz/invariants/HUB02.sol HUB02 {{ config }} -- --disable-slither
+medusa-hub-02 config="medusa.json":
+    @just medusa test/fuzz/invariants/HUB02.sol HUB02 {{ config }}
 
-echidna-hub-03 config="echidna.config.yml":
-    @just echidna test/fuzz/invariants/HUB03.sol HUB03 {{ config }} -- --disable-slither
+medusa-hub-03 config="medusa.json":
+    @just medusa test/fuzz/invariants/HUB03.sol HUB03 {{ config }}
 
-echidna-hub-04 config="echidna.config.yml":
-    @just echidna test/fuzz/invariants/HUB04.sol HUB04 {{ config }} -- --disable-slither
+medusa-hub-04 config="medusa.json":
+    @just medusa test/fuzz/invariants/HUB04.sol HUB04 {{ config }}
 
-echidna-hub-05 config="echidna.config.yml":
-    @just echidna test/fuzz/invariants/HUB05.sol HUB05 {{ config }} -- --disable-slither
+medusa-hub-05 config="medusa.json":
+    @just medusa test/fuzz/invariants/HUB05.sol HUB05 {{ config }}
 
-echidna-hub-06 config="echidna.config.yml":
-    @just echidna test/fuzz/invariants/HUB06.sol HUB06 {{ config }} -- --disable-slither
+medusa-hub-06 config="medusa.json":
+    @just medusa test/fuzz/invariants/HUB06.sol HUB06 {{ config }}
 
-echidna-commit-03 config="echidna.config.yml":
-    @just echidna test/fuzz/invariants/COMMIT03.sol COMMIT03 {{ config }} -- --disable-slither
+medusa-commit-03 config="medusa.json":
+    @just medusa test/fuzz/invariants/COMMIT03.sol COMMIT03 {{ config }}
 
-echidna-sig-01-02 config="echidna.config.yml":
-    @just echidna test/fuzz/invariants/SIG01_02.sol SIG01_02 {{ config }} -- --disable-slither
+medusa-sig-01-02 config="medusa.json":
+    @just medusa test/fuzz/invariants/SIG01_02.sol SIG01_02 {{ config }}
 
-echidna-cov-04 config="echidna.config.yml":
-    @just echidna test/fuzz/invariants/COV04.sol COV04 {{ config }} -- --disable-slither
+medusa-cov-04 config="medusa.json":
+    @just medusa test/fuzz/invariants/COV04.sol COV04 {{ config }}
 
-echidna-commit-01 config="echidna.config.yml":
-    @just echidna test/fuzz/invariants/COMMIT01.sol COMMIT01 {{ config }} -- --disable-slither
+medusa-commit-01 config="medusa.json":
+    @just medusa test/fuzz/invariants/COMMIT01.sol COMMIT01 {{ config }}
 
-echidna-commit-02 config="echidna.config.yml":
-    @just echidna test/fuzz/invariants/COMMIT02.sol COMMIT02 {{ config }} -- --disable-slither
+medusa-commit-02 config="medusa.json":
+    @just medusa test/fuzz/invariants/COMMIT02.sol COMMIT02 {{ config }}
 
-echidna-cov-01 config="echidna.config.yml":
-    @just echidna test/fuzz/invariants/COV01.sol COV01 {{ config }} -- --disable-slither
+medusa-cov-01 config="medusa.json":
+    @just medusa test/fuzz/invariants/COV01.sol COV01 {{ config }}
 
-echidna-cov-02 config="echidna.config.yml":
-    @just echidna test/fuzz/invariants/COV02.sol COV02 {{ config }} -- --disable-slither
+medusa-cov-02 config="medusa.json":
+    @just medusa test/fuzz/invariants/COV02.sol COV02 {{ config }}
 
-echidna-cov-03 config="echidna.config.yml":
-    @just echidna test/fuzz/invariants/COV03.sol COV03 {{ config }} -- --disable-slither
+medusa-cov-03 config="medusa.json":
+    @just medusa test/fuzz/invariants/COV03.sol COV03 {{ config }}
 
-echidna-fee-01 config="echidna.config.yml":
-    @just echidna test/fuzz/invariants/FEE01.sol FEE01 {{ config }} -- --disable-slither
+medusa-fee-01 config="medusa.json":
+    @just medusa test/fuzz/invariants/FEE01.sol FEE01 {{ config }}
 
-echidna-fee-02 config="echidna.config.yml":
-    @just echidna test/fuzz/invariants/FEE02.sol FEE02 {{ config }} -- --disable-slither
+medusa-fee-02 config="medusa.json":
+    @just medusa test/fuzz/invariants/FEE02.sol FEE02 {{ config }}
 
-echidna-vts-02 config="echidna.config.yml":
-    @just echidna test/fuzz/invariants/VTS02.sol VTS02 {{ config }} -- --disable-slither
+medusa-vts-02 config="medusa.json":
+    @just medusa test/fuzz/invariants/VTS02.sol VTS02 {{ config }}
 
-echidna-vts-03 config="echidna.config.yml":
-    @just echidna test/fuzz/invariants/VTS03.sol VTS03 {{ config }} -- --disable-slither
+medusa-vts-03 config="medusa.json":
+    @just medusa test/fuzz/invariants/VTS03.sol VTS03 {{ config }}
 
-echidna-delta-01 config="echidna.config.yml":
-    @just echidna test/fuzz/invariants/DELTA01.sol DELTA01 {{ config }} -- --disable-slither
+medusa-delta-01 config="medusa.json":
+    @just medusa test/fuzz/invariants/DELTA01.sol DELTA01 {{ config }}
 
-echidna-settle-01 config="echidna.config.yml":
-    @just echidna test/fuzz/invariants/SETTLE01.sol SETTLE01 {{ config }} -- --disable-slither
+medusa-settle-01 config="medusa.json":
+    @just medusa test/fuzz/invariants/SETTLE01.sol SETTLE01 {{ config }}
 
-echidna-settle-02 config="echidna.config.yml":
-    @just echidna test/fuzz/invariants/SETTLE02.sol SETTLE02 {{ config }} -- --disable-slither
+medusa-settle-02 config="medusa.json":
+    @just medusa test/fuzz/invariants/SETTLE02.sol SETTLE02 {{ config }}
 
-echidna-lcc-03 config="echidna.config.yml":
-    @just echidna test/fuzz/invariants/LCC03.sol LCC03 {{ config }} -- --disable-slither
+medusa-lcc-03 config="medusa.json":
+    @just medusa test/fuzz/invariants/LCC03.sol LCC03 {{ config }}
 
-echidna-vts-01 config="echidna.config.yml":
-    @just echidna test/fuzz/invariants/VTS01.sol VTS01 {{ config }} -- --disable-slither
+medusa-vts-01 config="medusa.json":
+    @just medusa test/fuzz/invariants/VTS01.sol VTS01 {{ config }}
 
-echidna-seize-01-02 config="echidna.config.yml":
-    @just echidna test/fuzz/invariants/SEIZE01_02.sol SEIZE01_02 {{ config }} -- --disable-slither
+medusa-seize-01-02 config="medusa.json":
+    @just medusa test/fuzz/invariants/SEIZE01_02.sol SEIZE01_02 {{ config }}
 
-echidna-seize-03-04 config="echidna.config.yml":
-    @just echidna test/fuzz/invariants/SEIZE03_04.sol SEIZE03_04 {{ config }} -- --disable-slither
+medusa-seize-03-04 config="medusa.json":
+    @just medusa test/fuzz/invariants/SEIZE03_04.sol SEIZE03_04 {{ config }}
 
-echidna-pause-01 config="echidna.config.yml":
-    @just echidna test/fuzz/invariants/PAUSE01.sol PAUSE01 {{ config }} -- --disable-slither
+medusa-pause-01 config="medusa.json":
+    @just medusa test/fuzz/invariants/PAUSE01.sol PAUSE01 {{ config }}
 
-echidna-mkt-01-02 config="echidna.config.yml":
-    @just echidna test/fuzz/invariants/MKT01_02.sol MKT01_02 {{ config }} -- --disable-slither
+medusa-mkt-01-02 config="medusa.json":
+    @just medusa test/fuzz/invariants/MKT01_02.sol MKT01_02 {{ config }}
 
-echidna-mkt-03-06 config="echidna.config.yml":
-    @just echidna test/fuzz/invariants/MKT03_06.sol MKT03_06 {{ config }} -- --disable-slither
+medusa-mkt-03-06 config="medusa.json":
+    @just medusa test/fuzz/invariants/MKT03_06.sol MKT03_06 {{ config }}
 
-echidna-mkt-04-04a config="echidna.config.yml":
-    @just echidna test/fuzz/invariants/MKT04_04A.sol MKT04_04A {{ config }} -- --disable-slither
+medusa-mkt-04-04a config="medusa.json":
+    @just medusa test/fuzz/invariants/MKT04_04A.sol MKT04_04A {{ config }}
 
-echidna-mkt-05 config="echidna.config.yml":
-    @just echidna test/fuzz/invariants/MKT05.sol MKT05 {{ config }} -- --disable-slither
+medusa-mkt-05 config="medusa.json":
+    @just medusa test/fuzz/invariants/MKT05.sol MKT05 {{ config }}
 
-echidna-auth-01-01a-02 config="echidna.config.yml":
-    @just echidna test/fuzz/invariants/AUTH01_01A_02.sol AUTH01_01A_02 {{ config }} -- --disable-slither
+medusa-auth-01-01a-02 config="medusa.json":
+    @just medusa test/fuzz/invariants/AUTH01_01A_02.sol AUTH01_01A_02 {{ config }}
 
-echidna-wrapwith config="echidna.config.yml":
-    @just echidna test/fuzz/LiquidityHubWrapWithEchidnaTest.sol LiquidityHubWrapWithEchidnaTest {{ config }} -- --disable-slither
+medusa-wrapwith config="medusa.json":
+    @just medusa test/fuzz/LiquidityHubWrapWithEchidnaTest.sol LiquidityHubWrapWithEchidnaTest {{ config }}
 
-echidna-confirmtake-callback config="echidna.config.yml":
-    @just echidna test/fuzz/LiquidityHubConfirmTakeCallbackEchidnaTest.sol LiquidityHubConfirmTakeCallbackEchidnaTest {{ config }} -- --disable-slither
+medusa-confirmtake-callback config="medusa.json":
+    @just medusa test/fuzz/LiquidityHubConfirmTakeCallbackEchidnaTest.sol LiquidityHubConfirmTakeCallbackEchidnaTest {{ config }}
 
-# Validate Echidna linked-library wiring and deployment preconditions.
+# Validate fuzz linked-library wiring and deployment preconditions.
 validate-fuzz-libs:
     python3 scripts/validate_fuzz_lib_config.py
-    FOUNDRY_PROFILE=echidna forge script \
+    FOUNDRY_PROFILE=medusa forge script \
       test/fuzz/script/ValidateEchidnaLinkedLibs.s.sol:ValidateEchidnaLinkedLibs \
       --sig "run()"
-    FOUNDRY_PROFILE=echidna forge script \
+    FOUNDRY_PROFILE=medusa forge script \
       test/fuzz/script/SmokeEchidnaLinkedLibs.s.sol:SmokeEchidnaLinkedLibs \
       --sig "run()"
 
@@ -261,13 +261,13 @@ recompute-fuzz-lib-addrs:
     python3 scripts/validate_fuzz_lib_config.py converge
 
 # Print machine-readable lines for the manifest file (paste into echidna-linked-libs.txt).
-print-echidna-lib-manifest:
-    FOUNDRY_PROFILE=echidna forge script \
+print-fuzz-lib-manifest:
+    FOUNDRY_PROFILE=medusa forge script \
       test/fuzz/script/ValidateEchidnaLinkedLibs.s.sol:ValidateEchidnaLinkedLibs \
       --sig "printManifest()"
 
 # Print human-readable CREATE2 outputs and copy-paste blocks (verbose).
 print-fuzz-lib-addrs:
-    FOUNDRY_PROFILE=echidna forge script \
+    FOUNDRY_PROFILE=medusa forge script \
       test/fuzz/script/ValidateEchidnaLinkedLibs.s.sol:ValidateEchidnaLinkedLibs \
       --sig "printComputed()"

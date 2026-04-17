@@ -16,24 +16,26 @@ contract EchidnaLinkedLibSmokeRunner {
     }
 }
 
-/// @notice Smokes the Echidna linked-library deployment helpers used by fuzz harness constructors.
+/// @notice Smokes the fuzz linked-library deployment helpers used by harness constructors.
 /// @dev This validates the actual precondition the suite relies on without re-checking CREATE2 maths here.
 contract SmokeEchidnaLinkedLibs is Script {
-    /// @dev Echidna deploys the harness contract at this deterministic address.
-    address internal constant ECHIDNA_DEPLOYER = 0x00a329c0648769A73afAc7F9381E08FB43dBEA72;
+    /// @dev Medusa deploys the single-target harness contract at this deterministic address
+    ///      when using deployer `0x30000` and nonce `0`.
+    address internal constant FUZZ_HARNESS_DEPLOYER = 0xA647ff3c36cFab592509E13860ab8c4F28781a66;
 
     function run() external {
-        console2.log("Smoking Echidna linked library deployments...");
+        console2.log("Smoking fuzz linked library deployments...");
 
-        // Execute the helper calls from the same deterministic address that Echidna assigns
-        // to the harness contract, so CREATE2 uses the real deployer for these libraries.
+        // Execute the helper calls from the same deterministic address Medusa assigns to the
+        // single-target harness contract, so CREATE2 uses the real deployer for these libraries.
         EchidnaLinkedLibSmokeRunner runner = new EchidnaLinkedLibSmokeRunner();
-        vm.etch(ECHIDNA_DEPLOYER, address(runner).code);
+        vm.etch(FUZZ_HARNESS_DEPLOYER, address(runner).code);
 
-        (bool ok, bytes memory revertData) = ECHIDNA_DEPLOYER.call(abi.encodeCall(EchidnaLinkedLibSmokeRunner.run, ()));
+        (bool ok, bytes memory revertData) =
+            FUZZ_HARNESS_DEPLOYER.call(abi.encodeCall(EchidnaLinkedLibSmokeRunner.run, ()));
         if (!ok) _bubbleRevert(revertData);
 
-        console2.log("Echidna linked libraries deployed at the expected addresses.");
+        console2.log("Fuzz linked libraries deployed at the expected addresses.");
     }
 
     function _bubbleRevert(bytes memory revertData) internal pure {

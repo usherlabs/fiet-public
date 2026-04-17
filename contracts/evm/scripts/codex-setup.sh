@@ -2,7 +2,7 @@
 set -euo pipefail
 
 FOUNDRY_VERSION="${FOUNDRY_VERSION:-v1.4.2}"
-ECHIDNA_VERSION="${ECHIDNA_VERSION:-v2.2.7}"
+MEDUSA_VERSION="${MEDUSA_VERSION:-v1.5.1}"
 YARN_VERSION="${YARN_VERSION:-3.2.0}"
 
 REPO_ROOT="${REPO_ROOT:-$(git rev-parse --show-toplevel)}"
@@ -112,14 +112,14 @@ ensure_python_tools() {
   python3 -m pip install --user crytic-compile
 }
 
-ensure_echidna() {
-  local archive="echidna-${ECHIDNA_VERSION#v}-x86_64-linux.tar.gz"
-  local url="https://github.com/crytic/echidna/releases/download/${ECHIDNA_VERSION}/${archive}"
+ensure_medusa() {
+  local archive="medusa-linux-x64.tar.gz"
+  local url="https://github.com/crytic/medusa/releases/download/${MEDUSA_VERSION}/${archive}"
 
   add_path_now "$LOCAL_BIN"
   persist_path "$LOCAL_BIN"
 
-  if command -v echidna >/dev/null 2>&1 && echidna --version 2>/dev/null | grep -q "${ECHIDNA_VERSION#v}"; then
+  if command -v medusa >/dev/null 2>&1 && medusa --version 2>/dev/null | grep -q "${MEDUSA_VERSION#v}"; then
     return
   fi
 
@@ -128,24 +128,16 @@ ensure_echidna() {
     tmp_dir="$(mktemp -d)"
     trap 'rm -rf "$tmp_dir"' EXIT
 
-    curl -fsSL "$url" -o "$tmp_dir/echidna.tar.gz"
-    tar -xzf "$tmp_dir/echidna.tar.gz" -C "$tmp_dir"
+    curl -fsSL "$url" -o "$tmp_dir/medusa.tar.gz"
+    tar -xzf "$tmp_dir/medusa.tar.gz" -C "$tmp_dir"
 
-    if [ -x "$tmp_dir/echidna" ]; then
-      install -m 0755 "$tmp_dir/echidna" "$LOCAL_BIN/echidna"
-    elif [ -x "$tmp_dir/bin/echidna" ]; then
-      install -m 0755 "$tmp_dir/bin/echidna" "$LOCAL_BIN/echidna"
+    if [ -x "$tmp_dir/medusa" ]; then
+      install -m 0755 "$tmp_dir/medusa" "$LOCAL_BIN/medusa"
+    elif [ -x "$tmp_dir/bin/medusa" ]; then
+      install -m 0755 "$tmp_dir/bin/medusa" "$LOCAL_BIN/medusa"
     else
-      echo "echidna binary not found in release archive" >&2
+      echo "medusa binary not found in release archive" >&2
       exit 1
-    fi
-
-    if [ -x "$tmp_dir/echidna-test" ]; then
-      install -m 0755 "$tmp_dir/echidna-test" "$LOCAL_BIN/echidna-test"
-    elif [ -x "$tmp_dir/bin/echidna-test" ]; then
-      install -m 0755 "$tmp_dir/bin/echidna-test" "$LOCAL_BIN/echidna-test"
-    else
-      ln -sf "$LOCAL_BIN/echidna" "$LOCAL_BIN/echidna-test"
     fi
   )
 }
@@ -171,8 +163,7 @@ show_versions() {
   just --version
   python3 -m pip --version
   crytic-compile --version
-  echidna --version
-  echidna-test --version || true
+  medusa --version
   yarn --version
 }
 
@@ -182,7 +173,7 @@ ensure_yarn
 ensure_foundry
 ensure_just
 ensure_python_tools
-ensure_echidna
+ensure_medusa
 sync_repo
 install_js_deps
 warm_build_cache
