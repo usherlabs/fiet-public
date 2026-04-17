@@ -101,9 +101,13 @@ contract LCC03 {
         checkedRevert = false;
         lastRevertOk = true;
 
-        uint256 synced = uint256(syncedRaw % 1e18) + 2;
-        uint256 bal = uint256(balRaw % (synced - 1)) + 1;
-        lccErc20.mint(address(poolManager), bal);
+        uint256 extraBal = uint256(balRaw % 1e18);
+        if (extraBal > 0) {
+            lccErc20.mint(address(poolManager), extraBal);
+        }
+
+        uint256 bal = lccErc20.balanceOf(address(poolManager));
+        uint256 synced = bal + uint256(syncedRaw % 1e18) + 1;
         poolManager.setExttload(MarketLiquidityRouterLib.CURRENCY_SLOT, bytes32(uint256(uint160(address(lccErc20)))));
         poolManager.setExttload(MarketLiquidityRouterLib.RESERVES_OF_SLOT, bytes32(synced));
 
@@ -232,4 +236,3 @@ contract MockLCCIngress is MockERC20Transferable {
         return underlyingAsset;
     }
 }
-
