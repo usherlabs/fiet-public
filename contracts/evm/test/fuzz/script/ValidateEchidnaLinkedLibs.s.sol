@@ -135,9 +135,7 @@ contract ValidateEchidnaLinkedLibs is Script {
                 EchidnaLinkedLibs.predictedLiquidityHubLinkedLib()
             )
         );
-        console2.log(
-            "  # Prevent unlinked placeholders in unrelated contracts (e.g. VTSOrchestrator)."
-        );
+        console2.log("  # Prevent unlinked placeholders in unrelated contracts (e.g. VTSOrchestrator).");
         console2.log("  # Deterministic CREATE2 address deployed by the SIG-BACKING harness.");
         console2.log(
             _libraryEntry("src/libraries/VTSCommitLib.sol:VTSCommitLib", EchidnaLinkedLibs.predictedVTSCommitLib())
@@ -145,9 +143,7 @@ contract ValidateEchidnaLinkedLibs is Script {
         console2.log(
             _libraryEntry("src/libraries/VTSFeeLib.sol:VTSFeeLinkedLib", EchidnaLinkedLibs.predictedVTSFeeLinkedLib())
         );
-        console2.log(
-            "  # Deterministic CREATE2 address deployed by `VTSPositionLibEchidnaHarness`."
-        );
+        console2.log("  # Deterministic CREATE2 address deployed by `VTSPositionLibEchidnaHarness`.");
         console2.log(
             _libraryEntry(
                 "src/libraries/VTSPositionLib.sol:VTSPositionLib", EchidnaLinkedLibs.predictedVTSPositionLib()
