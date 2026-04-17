@@ -685,7 +685,8 @@ being an informal “should”.
 - **Enforced by**: `PositionManagerImpl` custody-forward path and `LiquidityUtils.forwardedNonFeeLccAmount` semantics
   (see audit resolution linked above).
 - **Evidence**:
-  - Echidna: `test/fuzz/invariants/MMQ01.sol` → `echidna_mmq01_*` (run via `just echidna-mmq-01` from `contracts/evm/Justfile`).
+  - Echidna: `test/fuzz/invariants/MMQ01.sol` → `echidna_mmq01_*` (run via `just echidna-mmq-01` from `contracts/evm/Justfile`; implementation is shared with `test/fuzz/FuzzMMQ01.sol`).
+  - Medusa (optional, no linked-library prepare): `test/fuzz/FuzzEntry.sol` → same `echidna_mmq01_*` properties and `action_*` entrypoints (run via `just medusa-mmq-01`; uses `scripts/medusa.sh` and `medusa.json`).
   - Narrative: [agents/audit-resolutions/mm-queue-custody-nonfee-vs-custodyforward-guard-resolution.md](../../agents/audit-resolutions/mm-queue-custody-nonfee-vs-custodyforward-guard-resolution.md).
 
 ### SETTLE-04: MM in-hook protocol credit must not over-clear `requiredSettlementDelta` when deficit is cured first

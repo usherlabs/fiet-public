@@ -1,5 +1,10 @@
 # Echidna linked libraries
 
+**Medusa note:** the [`FuzzEntry`](../FuzzEntry.sol) path (`just medusa-mmq-01`, [`medusa.json`](../../../medusa.json)) does **not**
+use this prepare pipeline — it compiles `FuzzEntry.sol` only and needs no converged linker map.
+
+---
+
 Fuzz harnesses use **hard-linked library addresses** so Foundry’s linker and HEVM resolve `DELEGATECALL` targets
 deterministically. Harness constructors deploy matching code at the same addresses via CREATE2
 (`test/fuzz/base/EchidnaLinkedLibs.sol`).

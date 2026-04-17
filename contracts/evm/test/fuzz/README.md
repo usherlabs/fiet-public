@@ -3,6 +3,22 @@
 This folder contains **Echidna** fuzzing harnesses for protocol invariants.
 All invariant harnesses live in **`invariants/`**.
 
+## Medusa (`FuzzEntry`, no linked-library prepare)
+
+For harnesses that do **not** require the Echidna `[profile.echidna]` linked-library map (for example **MMQ-01**), you can fuzz the Bunni-style entry contract [`FuzzEntry.sol`](FuzzEntry.sol):
+
+- **Why**: [`scripts/echidna.sh`](../scripts/echidna.sh) runs [`echidna_prepare_linked_libs.py`](../scripts/echidna_prepare_linked_libs.py) to converge CREATE2 linker addresses for production `library` dependencies. Thin harnesses that only `new` mocks and use [`PositionManagerImplQueueCustodyHarness.sol`](harnesses/PositionManagerImplQueueCustodyHarness.sol) do not need that pipeline.
+- **How**: [`medusa.json`](../medusa.json) targets `FuzzEntry`. [`scripts/medusa.sh`](../scripts/medusa.sh) passes `--compilation-target ./test/fuzz/FuzzEntry.sol` by default so `crytic-compile` does not try to deploy the entire protocol graph (which can hit library cycle warnings).
+- **Commands** (from `contracts/evm/`):
+
+```bash
+just medusa-mmq-01
+# or
+./scripts/medusa.sh --config medusa.json --test-limit 5000
+```
+
+Requires **`medusa`** and **`crytic-compile`** on `PATH`. Corpus and coverage output go to `medusa-corpus/` (gitignored).
+
 ## How Echidna fuzzing works (in this repo)
 
 These files are **Echidna harness contracts**, not Foundry unit tests. Each harness is a _stateful Solidity contract_
@@ -159,7 +175,7 @@ view.
 | **MKT-05**                  | **P1**   | Yes             | **Covered** (Hybrid)  | `invariants/MKT05.sol` + `test/ProxyHook.t.sol::{testFuzz_swap_exactOutput_*_revertsWhenRequestedExceedsImmediateLiquidity,test_proxySwap_exactInput_keepsProxySlot0Unchanged,test_proxySwap_exactOutput_keepsProxySlot0Unchanged,test_proxySwap_exactInput_oneForZero_keepsProxySlot0Unchanged,test_proxySwap_exactOutput_oneForZero_keepsProxySlot0Unchanged}` | Foundry regressions remain authoritative for strict exact-output hardening and proxy-curve neutralisation; the Echidna harness is retained as a lightweight cancellation/drift check. |
 | **SETTLE-02**               | **P2**   | Yes             | **Covered**           | `invariants/SETTLE02.sol` → `echidna_settle_02_seizing_clamps_hold`, `echidna_settle_02_smoke`                                                 | Real `onMMSettle -> _settleSeizing` path; fuzzes positive-cap and zero-cap seizure branches, asserting returned clamp deltas and withdrawal settlement effects. |
 | **SETTLE-03**               | **P1**   | Partial         | **Covered (Foundry)** | `../libraries/VTSPositionLib.t.sol`, `../libraries/VTSPositionLib.onMMSettle.t.sol`, `../marketmaker/MMPositionMinOutFeeAdjIntegration.t.sol`, `../modules/PositionManagerImpl.t.sol`, `../marketmaker/MMPositionActionsImpl.t.sol` | MM decrease routing splits (`VTSPositionMMOpsLib`), min-out vs hook principal; spec in `INVARIANTS.md` §SETTLE-03. No dedicated Echidna harness — Foundry + harnesses are authoritative. |
-| **MMQ-01**                  | **P1**   | Yes             | **Covered**           | `invariants/MMQ01.sol` → `echidna_mmq01_valid_routes_succeed_when_non_fee_covers_queue`, `echidna_mmq01_underfunded_always_reverts`, `echidna_mmq01_custody_record_equals_q_committed`, `echidna_mmq01_smoke` | Queue custody guard: forwarded non-fee must cover `qCommitted` when `tokenId > 0`; see `agents/audit-resolutions/mm-queue-custody-nonfee-vs-custodyforward-guard-resolution.md`. Run: `just echidna-mmq-01` (see `Justfile`). |
+| **MMQ-01**                  | **P1**   | Yes             | **Covered**           | `invariants/MMQ01.sol` (Echidna) / `FuzzEntry.sol` (Medusa) → `echidna_mmq01_*` + `action_*`; shared logic in `FuzzMMQ01.sol` | Queue custody guard: forwarded non-fee must cover `qCommitted` when `tokenId > 0`; see `agents/audit-resolutions/mm-queue-custody-nonfee-vs-custodyforward-guard-resolution.md`. Run: `just echidna-mmq-01` or `just medusa-mmq-01`. |
 | **SEIZE-01**                | **P2**   | Yes             | **Covered**           | `invariants/SEIZE01_02.sol` → `echidna_seize_01_token_lane_scoped_and_aggregated`                                                              | Includes bypass bps, token-age gates, threshold lanes, and mixed-lane grace masking checks; vacuity is tracked independently from `SEIZE-02` actions. |
 | **SEIZE-02**                | **P3**   | Yes             | **Covered**           | `invariants/SEIZE01_02.sol` → `echidna_seize_02_valid_verifier_required`                                                                        | Verifier-active + token-allowlist enforcement, invalid token index, and closed-lane extension reverts; vacuity is tracked independently from `SEIZE-01` actions. |
 | **SEIZE-03**                | **P3**   | Yes             | **Covered**           | `invariants/SEIZE03_04.sol` → `echidna_seize_03_no_lcc_issue_during_seizure`                                                                    | Uses `VTSPositionLib.touchPosition` path; MM seizing increase/new-position attempts revert as required.   |

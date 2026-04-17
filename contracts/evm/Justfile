@@ -207,6 +207,14 @@ echidna-delta-01 config="echidna.config.yml":
 echidna-mmq-01 config="echidna.config.yml":
     @just echidna test/fuzz/invariants/MMQ01.sol MMQ01 {{ config }} -- --disable-slither
 
+# Medusa: Bunni-style `FuzzEntry` (no `echidna_prepare_linked_libs.py`; compiles `test/fuzz/FuzzEntry.sol` only).
+# Requires `medusa` and `crytic-compile` on PATH. See `test/fuzz/README.md` and `medusa.json`.
+medusa *args:
+    sh ./scripts/medusa.sh --config medusa.json {{ args }}
+
+medusa-mmq-01:
+    sh ./scripts/medusa.sh --config medusa.json --test-limit 5000
+
 echidna-settle-01 config="echidna.config.yml":
     @just echidna test/fuzz/invariants/SETTLE01.sol SETTLE01 {{ config }} -- --disable-slither
 
