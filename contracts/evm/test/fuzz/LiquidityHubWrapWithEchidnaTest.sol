@@ -202,12 +202,18 @@ contract LiquidityHubWrapWithEchidnaTest {
         ok = ok && (hub.totalQueued(address(backing)) == seed);
         ok = ok && (backing.totalSupply() + target.totalSupply() == sumSupplyBefore);
 
-        // Step C: settlement should not burn the netted portion again
+        // Step C: with only direct reserve seeded in this harness, Hub settlement is a no-op because
+        // `processSettlementFor` settles Hub queues only against market-derived reserve.
+        // The important regression here is that this later settlement attempt must not double-burn.
         uint256 supplyBackingBeforeSettle = backing.totalSupply();
+        uint256 sumSupplyBeforeSettle = backing.totalSupply() + target.totalSupply();
+        uint256 queueBeforeSettle = hub.settleQueue(address(backing), address(hub));
+        uint256 totalQueuedBeforeSettle = hub.totalQueued(address(backing));
         hub.processSettlementFor(address(backing), address(hub), net);
-        ok = ok && (hub.settleQueue(address(backing), address(hub)) == seed - net);
-        ok = ok && (hub.totalQueued(address(backing)) == seed - net);
+        ok = ok && (hub.settleQueue(address(backing), address(hub)) == queueBeforeSettle);
+        ok = ok && (hub.totalQueued(address(backing)) == totalQueuedBeforeSettle);
         ok = ok && (backing.totalSupply() == supplyBackingBeforeSettle);
+        ok = ok && (backing.totalSupply() + target.totalSupply() == sumSupplyBeforeSettle);
 
         lastNettingOk = ok;
     }
@@ -245,4 +251,3 @@ contract LiquidityHubWrapWith_Holder {
         (ok,) = hub.call(abi.encodeWithSignature("wrapWith(address,address,uint256)", target, backing, amount));
     }
 }
-
