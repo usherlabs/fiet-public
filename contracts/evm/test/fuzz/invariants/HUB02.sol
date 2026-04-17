@@ -80,7 +80,6 @@ contract HUB02 {
         lcc = LiquidityCommitmentCertificate(hub.getUnderlying(l0) == address(underlying) ? l0 : l1);
 
         holder = new HUB02Holder();
-        hub.setBoundLevel(address(holder), Bounds.BOUND_ENDPOINT);
 
         // Give holder some initial balance for immediate exercisability.
         hub.issue(address(lcc), address(holder), 500e18);
@@ -90,13 +89,13 @@ contract HUB02 {
 
     function _seedGuards() internal {
         // Seed zero-amount guard.
-        bool ok = holder.tryUnwrapTo(address(hub), address(lcc), 0);
+        bool ok = holder.tryUnwrap(address(hub), address(lcc), 0);
         checkedZeroGuard = true;
         lastZeroGuardOk = !ok;
 
         // Seed over-balance guard.
         uint256 bal = lcc.balanceOf(address(holder));
-        ok = holder.tryUnwrapTo(address(hub), address(lcc), bal + 1);
+        ok = holder.tryUnwrap(address(hub), address(lcc), bal + 1);
         checkedOverBalanceGuard = true;
         lastOverBalanceGuardOk = !ok;
     }
@@ -184,7 +183,7 @@ contract HUB02 {
     // Actions — unwrap exercisers
     // ================================================================
 
-    /// @dev Valid unwrap: exercises decomposition and queue accounting.
+    /// @dev Valid self-unwrap: exercises decomposition and queue accounting within current headroom.
     // forge-lint: disable-next-line(mixed-case-function)
     function action_hub_02_unwrap(uint256 amount) external {
         unchecked {
@@ -192,14 +191,16 @@ contract HUB02 {
         }
         uint256 bal = lcc.balanceOf(address(holder));
         if (bal == 0) return;
-        uint256 amt = (amount % bal) + 1;
 
         uint256 queueBefore = hub.settleQueue(address(lcc), address(holder));
+        uint256 availableToUnwrap = bal > queueBefore ? bal - queueBefore : 0;
+        if (availableToUnwrap == 0) return;
+        uint256 amt = (amount % availableToUnwrap) + 1;
         uint256 totalQueuedBefore = hub.totalQueued(address(lcc));
         uint256 balBefore = bal;
         uint256 underlyingBefore = underlying.balanceOf(address(holder));
 
-        if (!holder.tryUnwrapTo(address(hub), address(lcc), amt)) {
+        if (!holder.tryUnwrap(address(hub), address(lcc), amt)) {
             _markUnwrapAttemptFailed();
             return;
         }
@@ -236,7 +237,7 @@ contract HUB02 {
     /// @dev Zero-amount guard: unwrap(0) must revert.
     // forge-lint: disable-next-line(mixed-case-function)
     function action_hub_02_unwrap_zero() external {
-        bool ok = holder.tryUnwrapTo(address(hub), address(lcc), 0);
+        bool ok = holder.tryUnwrap(address(hub), address(lcc), 0);
         checkedZeroGuard = true;
         lastZeroGuardOk = !ok;
     }
@@ -247,7 +248,7 @@ contract HUB02 {
         uint256 bal = lcc.balanceOf(address(holder));
         uint256 excess = (delta % MAX_AMOUNT) + 1;
         uint256 overAmount = bal >= type(uint256).max - excess ? type(uint256).max : bal + excess;
-        bool ok = holder.tryUnwrapTo(address(hub), address(lcc), overAmount);
+        bool ok = holder.tryUnwrap(address(hub), address(lcc), overAmount);
         checkedOverBalanceGuard = true;
         lastOverBalanceGuardOk = !ok;
     }
@@ -312,11 +313,7 @@ contract HUB02 {
 
 /// @dev Non-protocol holder for unwrap testing.
 contract HUB02Holder {
-    function tryUnwrapTo(address hub, address lcc, uint256 amount) external returns (bool ok) {
-        (ok,) = hub.call(
-            abi.encodeWithSignature(
-                "unwrapTo(address,address,address,uint256)", lcc, address(this), address(this), amount
-            )
-        );
+    function tryUnwrap(address hub, address lcc, uint256 amount) external returns (bool ok) {
+        (ok,) = hub.call(abi.encodeWithSignature("unwrap(address,uint256)", lcc, amount));
     }
 }
