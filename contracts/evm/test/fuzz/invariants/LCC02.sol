@@ -86,7 +86,6 @@ contract LCC02 {
 
         holder = new LCC02Holder();
         endpoint = new LCC02Holder();
-        hub.setBoundLevel(address(holder), Bounds.BOUND_ENDPOINT);
         hub.setBoundLevel(address(endpoint), Bounds.BOUND_ENDPOINT);
 
         // Seed holder with market-derived balance.
@@ -136,7 +135,7 @@ contract LCC02 {
         hub.issue(address(lcc), address(holder), _boundAmount(amount));
     }
 
-    /// @dev Holder queues a settlement claim via unwrapTo (burns LCC, creates queue entry).
+    /// @dev Holder queues a settlement claim via direct unwrap (burns LCC, creates queue entry).
     // forge-lint: disable-next-line(mixed-case-function)
     function action_lcc_02_queue_settlement(uint256 amount) external {
         uint256 bal = lcc.balanceOf(address(holder));
@@ -259,10 +258,6 @@ contract LCC02Holder {
     }
 
     function unwrapToQueue(address hub, address lcc, uint256 amount) external returns (bool ok) {
-        (ok,) = hub.call(
-            abi.encodeWithSignature(
-                "unwrapTo(address,address,address,uint256)", lcc, address(this), address(this), amount
-            )
-        );
+        (ok,) = hub.call(abi.encodeWithSignature("unwrap(address,uint256)", lcc, amount));
     }
 }
