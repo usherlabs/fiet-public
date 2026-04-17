@@ -18,13 +18,13 @@ library EchidnaLinkedLibs {
     ///      deployer `0x30000` at nonce `0`.
     address internal constant FUZZ_HARNESS_DEPLOYER = 0xA647ff3c36cFab592509E13860ab8c4F28781a66;
 
-    address internal constant LCC_FACTORY_LINKED_LIB = 0x9304198304aEfBE3399576144D5C18939b2bEe62;
-    address internal constant LIQUIDITY_HUB_LINKED_LIB = 0x87829fc42E8ac3a404C61E5db2694E2fc6d048fe;
-    address internal constant VTS_COMMIT_LIB = 0xa7f6678CF2dC2647238Aaf96FecCbd09AeBd77c4;
+    address internal constant LCC_FACTORY_LINKED_LIB = 0xE34aDBBF5bcd18c90967A8A93346ad99Dc432cf8;
+    address internal constant LIQUIDITY_HUB_LINKED_LIB = 0x71C33cff5828FbE22594F075E009d311A1168515;
+    address internal constant VTS_COMMIT_LIB = 0xC0853909CE464A2C2DbC641800feb4604db779ff;
     address internal constant VTS_FEE_LINKED_LIB = 0x8f17762519b9f3c09549f839e17731D9a6ccB815;
-    address internal constant VTS_POSITION_LIB = 0x15ce4E0A9D55A381212BB89FfA5f7E904b3F9a3B;
-    address internal constant VTS_LIFECYCLE_LINKED_LIB = 0xf6A40392729616a345CC1a120CDBe6066E01f653;
-    address internal constant VTS_POSITION_MM_OPS_LIB = 0x7f7A1035ae9E0aF7368A257d6dc849EEd5cc11C7;
+    address internal constant VTS_POSITION_LIB = 0xFD93e929b1F3c9a73F0f4CB88a6D4c753F13C7cc;
+    address internal constant VTS_LIFECYCLE_LINKED_LIB = 0xDe354b2bE7403312a3aBBd62ffDC0e94924FBA38;
+    address internal constant VTS_POSITION_MM_OPS_LIB = 0xc6Ab7729328C0E7FA54ff21ffcDcE04aDa89668f;
 
     error VTSLifecycleLinkedLibAddrMismatch();
     error VTSPositionMMOpsLibAddrMismatch();

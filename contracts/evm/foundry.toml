@@ -58,16 +58,16 @@ ffi = true
 test = "test/fuzz"
 out = "out-medusa"
 libraries = [
-  "src/libraries/LCCFactoryLib.sol:LCCFactoryLinkedLib:0x9304198304aefbe3399576144d5c18939b2bee62",
-  "src/libraries/LiquidityHubLinkedLib.sol:LiquidityHubLinkedLib:0x87829fc42e8ac3a404c61e5db2694e2fc6d048fe",
+  "src/libraries/LCCFactoryLib.sol:LCCFactoryLinkedLib:0xe34adbbf5bcd18c90967a8a93346ad99dc432cf8",
+  "src/libraries/LiquidityHubLinkedLib.sol:LiquidityHubLinkedLib:0x71c33cff5828fbe22594f075e009d311a1168515",
   # Prevent unlinked placeholders in unrelated contracts (e.g. VTSOrchestrator).
   # Deterministic CREATE2 address deployed by the SIG-BACKING harness.
-  "src/libraries/VTSCommitLib.sol:VTSCommitLib:0xa7f6678cf2dc2647238aaf96feccbd09aebd77c4",
+  "src/libraries/VTSCommitLib.sol:VTSCommitLib:0xc0853909ce464a2c2dbc641800feb4604db779ff",
   "src/libraries/VTSFeeLib.sol:VTSFeeLinkedLib:0x8f17762519b9f3c09549f839e17731d9a6ccb815",
   # Deterministic CREATE2 address deployed by `VTSPositionLibEchidnaHarness`.
-  "src/libraries/VTSPositionLib.sol:VTSPositionLib:0x15ce4e0a9d55a381212bb89ffa5f7e904b3f9a3b",
-  "src/libraries/VTSLifecycleLinkedLib.sol:VTSLifecycleLinkedLib:0xf6a40392729616a345cc1a120cdbe6066e01f653",
-  "src/libraries/VTSPositionMMOpsLib.sol:VTSPositionMMOpsLib:0x7f7a1035ae9e0af7368a257d6dc849eed5cc11c7",
+  "src/libraries/VTSPositionLib.sol:VTSPositionLib:0xfd93e929b1f3c9a73f0f4cb88a6d4c753f13c7cc",
+  "src/libraries/VTSLifecycleLinkedLib.sol:VTSLifecycleLinkedLib:0xde354b2be7403312a3abbd62ffdc0e94924fba38",
+  "src/libraries/VTSPositionMMOpsLib.sol:VTSPositionMMOpsLib:0xc6ab7729328c0e7fa54ff21ffcdce04ada89668f",
   # Intentional placeholder for libs not CREATE2-validated by this script.
   "src/libraries/VTSSwapLib.sol:VTSSwapLib:0x1111111111111111111111111111111111111112",
 ]
