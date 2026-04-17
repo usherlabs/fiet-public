@@ -82,6 +82,7 @@ This project is built for the Reactive Network execution model:
 ### Receiver batch bounds
 
 - `AbstractBatchProcessSettlement.MAX_BATCH_SIZE` is a **hard cap** on the number of settlement calls per receiver batch.
+- `HubRSC.maxDispatchItems` must be configured at or below `AbstractBatchProcessSettlement.MAX_BATCH_SIZE`, or deployment reverts with `InvalidConfig`.
 
 ### Continue-on-error semantics
 
