@@ -637,6 +637,10 @@ being an informal “should”.
     `settleableDelta + queuedDelta` from source `pa.settled` / pool `totalSettled` — the value actually routed to the
     vault path or queue in this step — not the full `requiredSettlementDelta` when part of it must remain deferred in
     `settled`.
+  - **Seizure MM decrease (guarantor)**: routing uses `_handleSeizureLiquidityDecrease` / `_computeSeizureLiquidityDecreaseRoutingSplit`.
+    Per leg, `planCancelWithQueue` queues `principal - min(principal, excessSettled)` to the seizer (`locker`) and burns
+    `min(principal, excessSettled)`; the settlement clamp uses `min(excess, settleable + burn)` so queued principal
+    retained by the guarantor does not over-remove live `pa.settled`. Non-seizure decreases keep the shortfall-queue split unchanged.
   - **Consumption-based target credit**: another position’s `pa.settled` increases only when `_settle()` / `onMMSettle()`
     actually consumes protocol underlying delta or token flow (`MMPositionActionsImpl._netProtocolCredits` path), not
     merely because positive delta exists on MMPM.
@@ -650,9 +654,10 @@ being an informal “should”.
   - `src/libraries/VTSPositionMMOpsLib.sol::previewLiquidityDecreaseRouting` (and `_handleLiquidityDecrease` via
     `_computeLiquidityDecreaseRoutingSplit`) splits vault availability vs Hub-queued principal; `underlyingDeltaSettlement`
     for dynamic delta accounting equals the vault-immediate slice (`settleableDelta`) only.
+  - Seizure decreases: `_computeSeizureLiquidityDecreaseRoutingSplit` + `_handleSeizureLiquidityDecrease` (same Hub/transient/custody handshake as ordinary decreases).
   - `src/libraries/VTSPositionMMOpsLib.sol::processMMOperations` (decrease branch): calls `_applySettlementClampFromExcess`
-    with `exportedForSettlementClamp` from `_handleLiquidityDecrease` (`settleableDelta + queuedDelta`), then
-    `OwnerCurrencyDelta.accountUnderlyingSettlementDelta` for the immediate slice only.
+    with `exportedForSettlementClamp` from `_handleLiquidityDecrease` (`settleableDelta + queuedDelta`) for non-seizure,
+    or from the seizure split for `isSeizing`, then `OwnerCurrencyDelta.accountUnderlyingSettlementDelta` for the immediate slice only.
   - `src/libraries/VTSLifecycleLinkedLib.sol::onMMSettle` plans withdrawals from positive underlying delta and
     settled-backed
     capacity separately, consumes the delta-backed portion first, and only then mutates `pa.settled`.

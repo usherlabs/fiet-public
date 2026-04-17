@@ -45,6 +45,9 @@ contract VTSPositionLibHarness {
     BalanceDelta internal lastSettleableDelta;
     BalanceDelta internal lastQueuedDelta;
     BalanceDelta internal lastUnderlyingDeltaSettlement;
+    BalanceDelta internal lastSeizureExportedForSettlementClamp;
+    uint256 internal lastSeizureRetainedPrincipal0;
+    uint256 internal lastSeizureRetainedPrincipal1;
     int256 internal lastUnderlyingDeltaSnapshot0;
     int256 internal lastUnderlyingDeltaSnapshot1;
 
@@ -240,6 +243,70 @@ contract VTSPositionLibHarness {
             ctx, owner, poolKey, principalDelta, requiredSettlementDelta, queueRecipient
         );
         return (settleableDelta, queuedDelta, underlyingDeltaSettlement);
+    }
+
+    /// @notice Preview seizure-only routing split (no Hub staging).
+    function previewSeizureLiquidityDecreaseRouting(
+        PositionContext memory ctx,
+        BalanceDelta principalDelta,
+        BalanceDelta requiredSettlementDelta
+    )
+        external
+        view
+        returns (
+            uint256 retainedPrincipal0,
+            uint256 retainedPrincipal1,
+            BalanceDelta underlyingDeltaSettlement,
+            BalanceDelta exportedForSettlementClamp
+        )
+    {
+        return VTSPositionMMOpsLib._computeSeizureLiquidityDecreaseRoutingSplit(
+            ctx, principalDelta, requiredSettlementDelta
+        );
+    }
+
+    /// @notice Exposes seizure decrease helper for tests (same Hub staging as production seizure path).
+    function handleSeizureLiquidityDecrease(
+        PositionContext memory ctx,
+        address owner,
+        PoolKey calldata poolKey,
+        BalanceDelta principalDelta,
+        BalanceDelta requiredSettlementDelta,
+        address queueRecipient
+    ) external returns (BalanceDelta underlyingDeltaSettlement) {
+        BalanceDelta exported;
+        (lastSeizureRetainedPrincipal0, lastSeizureRetainedPrincipal1, underlyingDeltaSettlement, exported) =
+            VTSPositionMMOpsLib._computeSeizureLiquidityDecreaseRoutingSplit(
+                ctx, principalDelta, requiredSettlementDelta
+            );
+        lastSeizureExportedForSettlementClamp = exported;
+        lastUnderlyingDeltaSettlement = underlyingDeltaSettlement;
+        VTSPositionMMOpsLib._handleSeizureLiquidityDecrease(
+            ctx, owner, poolKey, principalDelta, requiredSettlementDelta, queueRecipient
+        );
+        return underlyingDeltaSettlement;
+    }
+
+    function getLastSeizureRouting()
+        external
+        view
+        returns (
+            uint256 retainedPrincipal0,
+            uint256 retainedPrincipal1,
+            BalanceDelta exportedForSettlementClamp,
+            BalanceDelta underlyingDeltaSettlement
+        )
+    {
+        return (
+            lastSeizureRetainedPrincipal0,
+            lastSeizureRetainedPrincipal1,
+            lastSeizureExportedForSettlementClamp,
+            lastUnderlyingDeltaSettlement
+        );
+    }
+
+    function getLastSeizureExportedForSettlementClamp() external view returns (BalanceDelta) {
+        return lastSeizureExportedForSettlementClamp;
     }
 
     // ============ Storage Getters (for assertions) ============

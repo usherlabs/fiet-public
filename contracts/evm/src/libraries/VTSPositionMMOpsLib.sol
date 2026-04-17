@@ -134,17 +134,11 @@ library VTSPositionMMOpsLib {
             BalanceDelta underlyingDeltaSettlement;
             BalanceDelta exportedForSettlementClamp;
             if (mmData.seizure.isSeizing) {
-                // @note: For Seizures,
-                // - LCCs are received directly by locker simiarly to fees.
-                // - Unwrapping these LCCs draws from the MM settled amounts, either immediately or via settlement queue - allowing protocol coverage to be maintained.
-                // - For any excess, this can also be settled immediately via MM operations.
-
-                // TODO:  When a guarantor seizes a position, they should not be cancelling the full amount, but rather being queued back an amount that covers their original settled amount (during seizure) and the any proportional amount of settled from the counterparty asset / token lane.
-                //
-
-                // Pool principal for cancel/queue routing matches non-seizure (`callerDelta - feesAccrued`). The separate
-                // `requiredSettlementDelta` from touch (excess vs commitment) drives vault shortfall vs `dryModifyLiquidities`.
-                (underlyingDeltaSettlement, exportedForSettlementClamp) = _handleLiquidityDecrease(
+                // Seizure: cancel `min(principal, excessSettled)` LCC per leg to clear excess settled; queue the remaining
+                // principal to the guarantor (`queueRecipient`) so it is not burned. Settlement clamp uses
+                // `min(excess, settleable + burn)` per leg — not `settleable + queue`, so queued principal does not
+                // over-remove `pa.settled`.
+                (underlyingDeltaSettlement, exportedForSettlementClamp) = _handleSeizureLiquidityDecrease(
                     ctx, p.owner, p.poolKey, principalDelta, requiredSettlementDelta, queueRecipient
                 );
             } else {
@@ -436,6 +430,89 @@ library VTSPositionMMOpsLib {
         }
     }
 
+    /// @dev Isolated vault shortfall vs required settlement (reduces stack pressure in seizure split).
+    function _settleableAndShortfallForRequired(PositionContext memory ctx, BalanceDelta requiredSettlementDelta)
+        private
+        view
+        returns (BalanceDelta settleableDelta, uint256 settleableU0, uint256 settleableU1)
+    {
+        int128 req0 = requiredSettlementDelta.amount0();
+        int128 req1 = requiredSettlementDelta.amount1();
+        BalanceDelta availableDelta = ctx.marketVault.dryModifyLiquidities(requiredSettlementDelta);
+        BalanceDelta rawShortfall = requiredSettlementDelta - availableDelta;
+        int128 sf0 = rawShortfall.amount0();
+        int128 sf1 = rawShortfall.amount1();
+        if (sf0 < 0) sf0 = 0;
+        if (sf1 < 0) sf1 = 0;
+        settleableDelta = toBalanceDelta(req0 - sf0, req1 - sf1);
+        settleableU0 = LiquidityUtils.safeInt128ToUint256(settleableDelta.amount0());
+        settleableU1 = LiquidityUtils.safeInt128ToUint256(settleableDelta.amount1());
+    }
+
+    /// @dev Pure seizure per-leg queue/burn/export (stack-friendly).
+    function _seizurePerLeg(uint256 principal, uint256 excess, uint256 settleableU)
+        private
+        pure
+        returns (uint256 retained, uint256 exportU)
+    {
+        uint256 burn = principal < excess ? principal : excess;
+        retained = principal > burn ? principal - burn : 0;
+        exportU = excess;
+        uint256 sum = settleableU + burn;
+        if (sum < exportU) exportU = sum;
+    }
+
+    /// @dev Finishes seizure split once vault settleable slice is known (isolates stack for `_computeSeizure...`).
+    function _finishSeizureLiquidityDecreaseRoutingSplit(
+        BalanceDelta principalDelta,
+        BalanceDelta requiredSettlementDelta,
+        uint256 settleableU0,
+        uint256 settleableU1
+    )
+        private
+        pure
+        returns (uint256 retainedPrincipal0, uint256 retainedPrincipal1, BalanceDelta exportedForSettlementClamp)
+    {
+        int128 rq0 = requiredSettlementDelta.amount0();
+        int128 rq1 = requiredSettlementDelta.amount1();
+        if (rq0 < 0) rq0 = 0;
+        if (rq1 < 0) rq1 = 0;
+        uint256 e0 = uint256(int256(rq0));
+        uint256 e1 = uint256(int256(rq1));
+        uint256 p0 = LiquidityUtils.safeInt128ToUint256(principalDelta.amount0());
+        uint256 p1 = LiquidityUtils.safeInt128ToUint256(principalDelta.amount1());
+        uint256 x0;
+        uint256 x1;
+        (retainedPrincipal0, x0) = _seizurePerLeg(p0, e0, settleableU0);
+        (retainedPrincipal1, x1) = _seizurePerLeg(p1, e1, settleableU1);
+        exportedForSettlementClamp = toBalanceDelta(SafeCast.toInt128(int256(x0)), SafeCast.toInt128(int256(x1)));
+    }
+
+    /// @dev Seizure-only: principal is routed so the guarantor receives `queueAmount = principal - burnAmount` LCC (queued),
+    ///      and `burnAmount = min(principal, excessSettled)` is cancelled to satisfy excess settled. Vault-immediate
+    ///      settlement (`settleableDelta`) is unchanged. `exportedForSettlementClamp` caps at excess per leg so
+    ///      `pa.settled` is not over-cleared when `settleable + burn` would exceed excess.
+    function _computeSeizureLiquidityDecreaseRoutingSplit(
+        PositionContext memory ctx,
+        BalanceDelta principalDelta,
+        BalanceDelta requiredSettlementDelta
+    )
+        internal
+        view
+        returns (
+            uint256 retainedPrincipal0,
+            uint256 retainedPrincipal1,
+            BalanceDelta underlyingDeltaSettlement,
+            BalanceDelta exportedForSettlementClamp
+        )
+    {
+        (BalanceDelta settleableDelta, uint256 s0, uint256 s1) =
+            _settleableAndShortfallForRequired(ctx, requiredSettlementDelta);
+        underlyingDeltaSettlement = settleableDelta;
+        (retainedPrincipal0, retainedPrincipal1, exportedForSettlementClamp) =
+            _finishSeizureLiquidityDecreaseRoutingSplit(principalDelta, requiredSettlementDelta, s0, s1);
+    }
+
     /// @dev Stack-isolated core for MM decrease vault vs queue split (used by `_handleLiquidityDecrease` and tests).
     // if shortfall <= principal, then yes: settleable + queued == excess
     // if shortfall > principal, then no: settleable + queued < excess
@@ -559,5 +636,53 @@ library VTSPositionMMOpsLib {
         // When _collectAvailableLiquidity is called, underlying is transferred to the recipient.
         // If recipient is MMPM, the balance is synced to the locker's delta.
         // Any shortfall remainder beyond this call's cancellable principal stays in live `settled` (not transient delta).
+    }
+
+    /// @notice Seizure MM decrease: queues `principal - min(principal, excessSettled)` to the guarantor; cancels the burn slice only.
+    /// @dev Same staging contract as `_handleLiquidityDecrease` (planned cancel + transient queue amounts for custody parity).
+    function _handleSeizureLiquidityDecrease(
+        PositionContext memory ctx,
+        address owner,
+        PoolKey memory poolKey,
+        BalanceDelta principalDelta,
+        BalanceDelta requiredSettlementDelta,
+        address queueRecipient
+    ) internal returns (BalanceDelta underlyingDeltaSettlement, BalanceDelta exportedForSettlementClamp) {
+        uint256 retainedPrincipal0;
+        uint256 retainedPrincipal1;
+        (retainedPrincipal0, retainedPrincipal1, underlyingDeltaSettlement, exportedForSettlementClamp) =
+            _computeSeizureLiquidityDecreaseRoutingSplit(ctx, principalDelta, requiredSettlementDelta);
+
+        if (LiquidityUtils.isZeroDelta(principalDelta)) {
+            return (underlyingDeltaSettlement, exportedForSettlementClamp);
+        }
+
+        uint256 principalAmount0 = LiquidityUtils.safeInt128ToUint256(principalDelta.amount0());
+        uint256 principalAmount1 = LiquidityUtils.safeInt128ToUint256(principalDelta.amount1());
+
+        TransientSlots.setMMDecreaseQueuedLccAmounts(retainedPrincipal0, retainedPrincipal1);
+
+        if (principalAmount0 > 0) {
+            ctx.liquidityHub
+                .planCancelWithQueue(
+                    Currency.unwrap(poolKey.currency0),
+                    address(ctx.poolManager),
+                    owner,
+                    principalAmount0,
+                    retainedPrincipal0,
+                    queueRecipient
+                );
+        }
+        if (principalAmount1 > 0) {
+            ctx.liquidityHub
+                .planCancelWithQueue(
+                    Currency.unwrap(poolKey.currency1),
+                    address(ctx.poolManager),
+                    owner,
+                    principalAmount1,
+                    retainedPrincipal1,
+                    queueRecipient
+                );
+        }
     }
 }

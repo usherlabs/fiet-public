@@ -3679,6 +3679,81 @@ contract VTSPositionLibTest is VTSLibTestBase {
         );
     }
 
+    /// @notice Seizure routing: zero excess settled => queue full principal, no burn slice, zero export clamp.
+    function test_seizureLiquidityDecreaseRouting_excessZero_queuesFullPrincipal() public {
+        VTSPositionLibTest_LiquidityHubCapture hub = new VTSPositionLibTest_LiquidityHubCapture();
+        IMarketVault vault = new VTSPositionLibTest_VaultClamp(0, 0);
+        PositionContext memory ctx = PositionContext({
+            poolManager: manager,
+            liquidityHub: ILiquidityHub(address(hub)),
+            oracleHelper: IOracleHelper(address(0)),
+            marketVault: vault
+        });
+        PoolKey memory pk = corePoolKey;
+        BalanceDelta principalDelta = toBalanceDelta(int128(int256(10)), int128(int256(5)));
+        BalanceDelta requiredSettlementDelta = toBalanceDelta(int128(int256(0)), int128(int256(0)));
+
+        harness.handleSeizureLiquidityDecrease(
+            ctx, DEFAULT_OWNER, pk, principalDelta, requiredSettlementDelta, DEFAULT_OWNER
+        );
+
+        assertEq(hub.lastQueued0(), 10, "seizure: queue full token0 principal when excess is zero");
+        assertEq(hub.lastQueued1(), 5, "seizure: queue full token1 principal when excess is zero");
+        BalanceDelta exportedClamp = harness.getLastSeizureExportedForSettlementClamp();
+        assertEq(exportedClamp.amount0(), 0, "seizure clamp token0");
+        assertEq(exportedClamp.amount1(), 0, "seizure clamp token1");
+    }
+
+    /// @notice Seizure routing: burn min(P,E), queue remainder; export min(E, S+burn).
+    function test_seizureLiquidityDecreaseRouting_partialBurn_remainderQueued() public {
+        VTSPositionLibTest_LiquidityHubCapture hub = new VTSPositionLibTest_LiquidityHubCapture();
+        IMarketVault vault = new VTSPositionLibTest_VaultNoop();
+        PositionContext memory ctx = PositionContext({
+            poolManager: manager,
+            liquidityHub: ILiquidityHub(address(hub)),
+            oracleHelper: IOracleHelper(address(0)),
+            marketVault: vault
+        });
+        PoolKey memory pk = corePoolKey;
+        BalanceDelta principalDelta = toBalanceDelta(int128(int256(10)), int128(int256(100)));
+        BalanceDelta requiredSettlementDelta = toBalanceDelta(int128(int256(8)), int128(int256(0)));
+
+        harness.handleSeizureLiquidityDecrease(
+            ctx, DEFAULT_OWNER, pk, principalDelta, requiredSettlementDelta, DEFAULT_OWNER
+        );
+
+        assertEq(hub.lastQueued0(), 2, "token0 queue = P - min(P,E) = 10 - 8");
+        assertEq(hub.lastQueued1(), 100, "token1 excess zero => full principal queued");
+        BalanceDelta exportedClampB = harness.getLastSeizureExportedForSettlementClamp();
+        assertEq(exportedClampB.amount0(), 8, "export min(E, S+burn) = 8 when vault pays full E");
+        assertEq(exportedClampB.amount1(), 0, "token1 export");
+    }
+
+    /// @notice Seizure routing: when vault cannot pay, burn covers min(P,E), queue remainder; export capped.
+    function test_seizureLiquidityDecreaseRouting_noVault_fullBurnWhenPrincipalCoversExcess() public {
+        VTSPositionLibTest_LiquidityHubCapture hub = new VTSPositionLibTest_LiquidityHubCapture();
+        IMarketVault vault = new VTSPositionLibTest_VaultClamp(0, 0);
+        PositionContext memory ctx = PositionContext({
+            poolManager: manager,
+            liquidityHub: ILiquidityHub(address(hub)),
+            oracleHelper: IOracleHelper(address(0)),
+            marketVault: vault
+        });
+        PoolKey memory pk = corePoolKey;
+        BalanceDelta principalDelta = toBalanceDelta(int128(int256(10)), int128(int256(10)));
+        BalanceDelta requiredSettlementDelta = toBalanceDelta(int128(int256(10)), int128(int256(10)));
+
+        harness.handleSeizureLiquidityDecrease(
+            ctx, DEFAULT_OWNER, pk, principalDelta, requiredSettlementDelta, DEFAULT_OWNER
+        );
+
+        assertEq(hub.lastQueued0(), 0, "token0 all principal burned when E=P and no vault liquidity");
+        assertEq(hub.lastQueued1(), 0, "token1 all principal burned when E=P and no vault liquidity");
+        BalanceDelta exportedClampC = harness.getLastSeizureExportedForSettlementClamp();
+        assertEq(exportedClampC.amount0(), 10, "clamp export token0");
+        assertEq(exportedClampC.amount1(), 10, "clamp export token1");
+    }
+
     /// @notice Scan 21: queueable shortfall is `min(shortfall, principal)`; `processMMOperations` must pass pool
     ///         principal (`callerDelta - feesAccrued`). Inflating principal (e.g. by mixing in `feeAdj`) would raise this cap.
     function test_handleLiquidityDecrease_queueCap_sensitivityToPrincipal_scan21() public {
