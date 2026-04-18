@@ -48,9 +48,7 @@ abstract contract FuzzVTSPosition {
         int24 tickUpper,
         int256 liquidityDelta
     ) external {
-        fuzzCommit01.action_validate_liquidity_delta(
-            sqrtPriceX96, currentTick, tickLower, tickUpper, liquidityDelta
-        );
+        fuzzCommit01.action_validate_liquidity_delta(sqrtPriceX96, currentTick, tickLower, tickUpper, liquidityDelta);
     }
 
     function fuzz_commit_01_gate_correct() external view returns (bool) {
