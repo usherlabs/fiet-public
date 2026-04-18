@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.26;
 
-/// @notice Echidna harness for AUTH-01, AUTH-01A, AUTH-02 authorisation invariants.
+/// @notice fuzz harness for AUTH-01, AUTH-01A, AUTH-02 authorisation invariants.
 contract AUTH01_01A_02 {
     AuthHarness internal h;
 
@@ -66,7 +66,7 @@ contract AUTH01_01A_02 {
     }
 
     // forge-lint: disable-next-line(mixed-case-function)
-    function echidna_auth_01_01a_02_hold() external view returns (bool) {
+    function fuzz_auth_01_01a_02_hold() external view returns (bool) {
         return !checked || lastOk;
     }
 }

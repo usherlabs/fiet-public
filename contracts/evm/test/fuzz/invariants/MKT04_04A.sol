@@ -7,9 +7,9 @@ import {MockOracleHelper} from "../mocks/MockOracleHelper.sol";
 import {MockERC20Transferable} from "../mocks/MockERC20Transferable.sol";
 import {Bounds} from "../../../src/libraries/Bounds.sol";
 import {BoundRegistry} from "../../../src/modules/BoundRegistry.sol";
-import {EchidnaLinkedLibs} from "../base/EchidnaLinkedLibs.sol";
+import {FuzzLinkedLibs} from "../base/FuzzLinkedLibs.sol";
 
-/// @notice Echidna harness for MKT-04 and MKT-04A.
+/// @notice fuzz harness for MKT-04 and MKT-04A.
 contract MKT04_04A {
     uint256 internal constant MAX_VACUOUS_ATTEMPTS = 14;
     LiquidityHub internal hub;
@@ -26,8 +26,8 @@ contract MKT04_04A {
     bool internal mkt04aAllOk = true;
 
     constructor() {
-        EchidnaLinkedLibs.deployLCCFactoryLinkedLib();
-        EchidnaLinkedLibs.deployLiquidityHubLinkedLib();
+        FuzzLinkedLibs.deployLCCFactoryLinkedLib();
+        FuzzLinkedLibs.deployLiquidityHubLinkedLib();
         MockOracleHelper oracleHelper = new MockOracleHelper(address(0));
         hub = new LiquidityHub(address(oracleHelper), "Ether", "ETH", 18, address(0), address(this));
         hub.setFactory(address(this), true);
@@ -90,7 +90,7 @@ contract MKT04_04A {
     }
 
     // forge-lint: disable-next-line(mixed-case-function)
-    function echidna_mkt_04_factory_and_issuer_gating() external view returns (bool) {
+    function fuzz_mkt_04_factory_and_issuer_gating() external view returns (bool) {
         if (mkt04Checks == 0) {
             return mkt04Attempts < MAX_VACUOUS_ATTEMPTS;
         }
@@ -98,7 +98,7 @@ contract MKT04_04A {
     }
 
     // forge-lint: disable-next-line(mixed-case-function)
-    function echidna_mkt_04a_bound_lifecycle() external view returns (bool) {
+    function fuzz_mkt_04a_bound_lifecycle() external view returns (bool) {
         if (mkt04aChecks == 0) {
             return mkt04aAttempts < MAX_VACUOUS_ATTEMPTS;
         }

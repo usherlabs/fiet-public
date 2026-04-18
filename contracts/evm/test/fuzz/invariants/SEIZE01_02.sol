@@ -13,7 +13,7 @@ import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
 import {IHooks} from "@uniswap/v4-core/src/interfaces/IHooks.sol";
 import {MockSettlementObserver} from "../mocks/MockSettlementObserver.sol";
 
-/// @notice Echidna harness for SEIZE-01 and SEIZE-02.
+/// @notice fuzz harness for SEIZE-01 and SEIZE-02.
 contract SEIZE01_02 {
     uint256 internal constant MAX_VACUOUS_ATTEMPTS = 14;
     CheckpointHarness internal h;
@@ -201,7 +201,7 @@ contract SEIZE01_02 {
     }
 
     // forge-lint: disable-next-line(mixed-case-function)
-    function echidna_seize_01_token_lane_scoped_and_aggregated() external view returns (bool) {
+    function fuzz_seize_01_token_lane_scoped_and_aggregated() external view returns (bool) {
         if (seize01Checks == 0) {
             return seize01Attempts < MAX_VACUOUS_ATTEMPTS;
         }
@@ -209,7 +209,7 @@ contract SEIZE01_02 {
     }
 
     // forge-lint: disable-next-line(mixed-case-function)
-    function echidna_seize_02_valid_verifier_required() external view returns (bool) {
+    function fuzz_seize_02_valid_verifier_required() external view returns (bool) {
         if (seize02Checks == 0) {
             return seize02Attempts < MAX_VACUOUS_ATTEMPTS;
         }

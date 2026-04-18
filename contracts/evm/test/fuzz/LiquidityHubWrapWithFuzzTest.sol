@@ -13,7 +13,7 @@ import {LiquidityHubLinkedLib} from "../../src/libraries/LiquidityHubLinkedLib.s
 /// @dev This is intentionally scoped as a targeted regression suite for wrapWith-specific
 ///      semantics. Canonical invariant coverage lives under `test/fuzz/invariants/*`.
 ///      We keep this harness to continuously exercise historical wrapWith edge cases.
-contract LiquidityHubWrapWithEchidnaTest {
+contract LiquidityHubWrapWithFuzzTest {
     LiquidityHub internal hub;
     LiquidityCommitmentCertificate internal lccA;
     LiquidityCommitmentCertificate internal lccB;
@@ -25,6 +25,7 @@ contract LiquidityHubWrapWithEchidnaTest {
     bool internal lastNettingOk;
 
     function _deployLinkedLib() internal {
+        // Salt labels stay stable so the regression harness keeps the existing linked-library addresses.
         bytes32 saltLcc = keccak256("echidna.LCCFactoryLinkedLib");
         bytes32 saltLh = keccak256("echidna.LiquidityHubLinkedLib");
         bytes memory initLcc = type(LCCFactoryLinkedLib).creationCode;
@@ -223,18 +224,18 @@ contract LiquidityHubWrapWithEchidnaTest {
     // -------------------------------------------------------------------------
 
     // forge-lint: disable-next-line(mixed-case-function)
-    function echidna_wrapWith_conserves_clean() external view returns (bool) {
+    function fuzz_wrapWith_conserves_clean() external view returns (bool) {
         return !checkedConserve || lastConserveOk;
     }
 
     // forge-lint: disable-next-line(mixed-case-function)
-    function echidna_wrapWith_queue_netting_no_double_burn() external view returns (bool) {
+    function fuzz_wrapWith_queue_netting_no_double_burn() external view returns (bool) {
         return !checkedNetting || lastNettingOk;
     }
 
     // Always-on safety: reserve accounting for native must be <= actual hub ETH.
     // forge-lint: disable-next-line(mixed-case-function)
-    function echidna_hub05_reserve_never_exceeds_hub_balance() external view returns (bool) {
+    function fuzz_hub05_reserve_never_exceeds_hub_balance() external view returns (bool) {
         uint256 reserve = hub.reserveOfUnderlying(address(lccA));
         return reserve <= address(hub).balance;
     }

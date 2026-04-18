@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.26;
 
-import {VTSPositionLibEchidnaHarness} from "../harnesses/VTSPositionLibEchidnaHarness.sol";
+import {VTSPositionLibFuzzHarness} from "../harnesses/VTSPositionLibFuzzHarness.sol";
 import {MockPoolManager} from "../mocks/MockPoolManager.sol";
 import {MockMarketVault} from "../../_mocks/MockMarketVault.sol";
 import {MockLCC} from "../../_mocks/MockLCC.sol";
-import {EchidnaLinkedLibs} from "../base/EchidnaLinkedLibs.sol";
+import {FuzzLinkedLibs} from "../base/FuzzLinkedLibs.sol";
 
 import {
     MarketVTSConfiguration,
@@ -25,11 +25,11 @@ import {IHooks} from "@uniswap/v4-core/src/interfaces/IHooks.sol";
 import {ILiquidityHub} from "../../../src/interfaces/ILiquidityHub.sol";
 import {IOracleHelper} from "../../../src/interfaces/IOracleHelper.sol";
 
-/// @notice Echidna harness for SEIZE-03 and SEIZE-04 using the real `VTSPositionLib.touchPosition` path.
+/// @notice fuzz harness for SEIZE-03 and SEIZE-04 using the real `VTSPositionLib.touchPosition` path.
 contract SEIZE03_04 {
     using PoolIdLibrary for PoolKey;
 
-    VTSPositionLibEchidnaHarness internal harness;
+    VTSPositionLibFuzzHarness internal harness;
     MockPoolManager internal poolManager;
     MockMarketVault internal vault;
     PoolKey internal poolKey;
@@ -41,9 +41,9 @@ contract SEIZE03_04 {
     bool internal lastOk04;
 
     constructor() {
-        EchidnaLinkedLibs.deployVTSFeeLinkedLib();
-        EchidnaLinkedLibs.deployVTSPositionLib();
-        harness = new VTSPositionLibEchidnaHarness();
+        FuzzLinkedLibs.deployVTSFeeLinkedLib();
+        FuzzLinkedLibs.deployVTSPositionLib();
+        harness = new VTSPositionLibFuzzHarness();
         poolManager = new MockPoolManager();
         vault = new MockMarketVault(address(0));
 
@@ -137,13 +137,13 @@ contract SEIZE03_04 {
 
     /// @notice Invariant: seizure flow must not permit LCC issuance during a touch.
     // forge-lint: disable-next-line(mixed-case-function)
-    function echidna_seize_03_no_lcc_issue_during_seizure() external view returns (bool) {
+    function fuzz_seize_03_no_lcc_issue_during_seizure() external view returns (bool) {
         return !checked03 || lastOk03;
     }
 
     /// @notice Invariant: an existing MM position keeps a fixed commit identity during touch.
     // forge-lint: disable-next-line(mixed-case-function)
-    function echidna_seize_04_commit_identity_fixed() external view returns (bool) {
+    function fuzz_seize_04_commit_identity_fixed() external view returns (bool) {
         return !checked04 || lastOk04;
     }
 

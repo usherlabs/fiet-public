@@ -13,10 +13,10 @@ import {IPoolManager} from "v4-periphery/lib/v4-core/src/interfaces/IPoolManager
 import {OracleUtils} from "../../../src/libraries/OracleUtils.sol";
 import {LiquidityUtils} from "../../../src/libraries/LiquidityUtils.sol";
 import {FullMath} from "v4-periphery/lib/v4-core/src/libraries/FullMath.sol";
-import {EchidnaLinkedLibs} from "../base/EchidnaLinkedLibs.sol";
+import {FuzzLinkedLibs} from "../base/FuzzLinkedLibs.sol";
 import {MarketMaker} from "../../../src/libraries/MarketMaker.sol";
 
-/// @notice Echidna harness for COMMIT-02: Checkpointing with commitment updates `commitmentDeficit` as an insolvency gate.
+/// @notice fuzz harness for COMMIT-02: Checkpointing with commitment updates `commitmentDeficit` as an insolvency gate.
 contract COMMIT02 {
     uint256 internal constant MAX_VACUOUS_ATTEMPTS = 16;
     uint128 internal constant MAX_CHECKPOINT_LIQUIDITY = uint128(type(int128).max);
@@ -67,7 +67,7 @@ contract COMMIT02 {
     }
 
     constructor() {
-        EchidnaLinkedLibs.deployVTSCommitLib();
+        FuzzLinkedLibs.deployVTSCommitLib();
 
         oracle = new MockOracleHelper(address(0));
         oracle.setPrices(1e18, 1e18);
@@ -77,7 +77,7 @@ contract COMMIT02 {
         poolManager = new MockPoolManager();
 
         poolId = PoolId.wrap(bytes32(uint256(1)));
-        positionId = PositionId.wrap(keccak256("echidna.commit-02"));
+        positionId = PositionId.wrap(keccak256("fuzz.commit-02"));
 
         commitHarness.setupPool(poolId, Currency.wrap(LCC0), Currency.wrap(LCC1));
 
@@ -210,7 +210,7 @@ contract COMMIT02 {
     /// @notice Invariant: successful checkpoint runs must match the independently modelled deficit math.
     /// @return True when the most recent successful checkpoint matched the expected deficit values.
     // forge-lint: disable-next-line(mixed-case-function)
-    function echidna_commit_02_checkpoint_deficit_math_correct() external view returns (bool) {
+    function fuzz_commit_02_checkpoint_deficit_math_correct() external view returns (bool) {
         if (!checked) {
             return checkpointSuccesses > 0 || checkpointAttempts < MAX_VACUOUS_ATTEMPTS;
         }
@@ -218,7 +218,7 @@ contract COMMIT02 {
     }
 
     // forge-lint: disable-next-line(mixed-case-function)
-    function echidna_commit_02_smoke() external pure returns (bool) {
+    function fuzz_commit_02_smoke() external pure returns (bool) {
         return true;
     }
 

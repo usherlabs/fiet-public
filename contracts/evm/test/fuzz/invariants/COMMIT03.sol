@@ -6,7 +6,7 @@ import {IVRLSignalManager} from "../../../src/interfaces/IVRLSignalManager.sol";
 import {IOracleHelper} from "../../../src/interfaces/IOracleHelper.sol";
 import {LiquiditySignal} from "../../../src/types/Commit.sol";
 import {MarketMaker} from "../../../src/libraries/MarketMaker.sol";
-import {EchidnaLinkedLibs} from "../base/EchidnaLinkedLibs.sol";
+import {FuzzLinkedLibs} from "../base/FuzzLinkedLibs.sol";
 
 /// @dev Minimal mock that always verifies and returns leaf TTL — signal verification
 ///      is not the concern of this harness; advancer binding is.
@@ -101,7 +101,7 @@ contract COMMIT03Actor {
     }
 }
 
-/// @notice Echidna harness for COMMIT-03: "Advancer" binding for checkpoint-with-commitment.
+/// @notice fuzz harness for COMMIT-03: "Advancer" binding for checkpoint-with-commitment.
 /// @dev Statement:
 ///   - The new signal's owner must match the stored commit owner.
 ///   - The sender must equal mmState.advancer.
@@ -148,7 +148,7 @@ contract COMMIT03 {
     bool internal lastRotationOk;
 
     constructor() {
-        EchidnaLinkedLibs.deployVTSCommitLib();
+        FuzzLinkedLibs.deployVTSCommitLib();
 
         harness = new VTSCommitLibHarness();
         sigMgr = new COMMIT03SignalManager();
@@ -342,25 +342,25 @@ contract COMMIT03 {
 
     /// @dev Valid renewal (correct owner + sender == advancer) must always succeed.
     // forge-lint: disable-next-line(mixed-case-function)
-    function echidna_commit_03_valid_renewal_succeeds() external view returns (bool) {
+    function fuzz_commit_03_valid_renewal_succeeds() external view returns (bool) {
         return !checkedValidRenewal || lastValidRenewalOk;
     }
 
     /// @dev Renewal with changed owner must always revert.
     // forge-lint: disable-next-line(mixed-case-function)
-    function echidna_commit_03_owner_hijack_reverts() external view returns (bool) {
+    function fuzz_commit_03_owner_hijack_reverts() external view returns (bool) {
         return !checkedOwnerHijack || lastOwnerHijackOk;
     }
 
     /// @dev Renewal from non-advancer sender must always revert.
     // forge-lint: disable-next-line(mixed-case-function)
-    function echidna_commit_03_non_advancer_reverts() external view returns (bool) {
+    function fuzz_commit_03_non_advancer_reverts() external view returns (bool) {
         return !checkedNonAdvancer || lastNonAdvancerOk;
     }
 
     /// @dev After advancer rotation, old advancer is rejected and new advancer succeeds.
     // forge-lint: disable-next-line(mixed-case-function)
-    function echidna_commit_03_rotation_respects_new_advancer() external view returns (bool) {
+    function fuzz_commit_03_rotation_respects_new_advancer() external view returns (bool) {
         return !checkedRotation || lastRotationOk;
     }
 

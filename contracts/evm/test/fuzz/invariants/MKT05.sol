@@ -18,18 +18,18 @@ import {IERC20Minimal} from "@uniswap/v4-core/src/interfaces/external/IERC20Mini
 import {ILiquidityHub} from "../../../src/interfaces/ILiquidityHub.sol";
 import {VaultSettlementIntent} from "../../../src/types/VTS.sol";
 
-/// @notice Echidna harness for **MKT-05** that drives the `ProxyHook.beforeSwap` execution path in a stubbed environment.
+/// @notice fuzz harness for **MKT-05** that drives the `ProxyHook.beforeSwap` execution path in a stubbed environment.
 ///
-/// ## What Echidna is doing here (stateful fuzzing)
+/// ## What Medusa is doing here (stateful fuzzing)
 ///
-/// Echidna deploys this contract once, then repeatedly calls arbitrary sequences of `action_*` methods with
-/// adversarial inputs. After (and during) those sequences, it evaluates `echidna_*` properties and treats any
+/// Medusa deploys this contract once, then repeatedly calls arbitrary sequences of `action_*` methods with
+/// adversarial inputs. After (and during) those sequences, it evaluates `fuzz_*` properties and treats any
 /// `false` as a counterexample.
 ///
 /// This harness uses a standard "checked/lastOk" pattern:
 /// - Each action attempts a real `ProxyHook.beforeSwap` call and, if it succeeds, records the last inputs/outputs.
 /// - The property asserts the recorded run satisfied the MKT-05 cancellation relation.
-/// - If an action reverts, we mark the run as "not checked" so Echidna can continue exploring other paths in the
+/// - If an action reverts, we mark the run as "not checked" so Medusa can continue exploring other paths in the
 ///   sequence (we still want reachability across different input shapes).
 ///
 /// ## What is actually being tested (behavioural assurance)
@@ -57,7 +57,7 @@ import {VaultSettlementIntent} from "../../../src/types/VTS.sol";
 ///
 /// ## What is deliberately NOT being tested (scope boundaries)
 ///
-/// To keep Echidna runs fast and targeted, the environment is stubbed:
+/// To keep Medusa runs fast and targeted, the environment is stubbed:
 /// - `MockPoolManager.swap` returns a simple 1:1 `BalanceDelta` (it does not simulate price impact, ticks, fees, etc.).
 /// - The mock Hub implements only `issue/cancel/totalQueued` semantics needed for the proxy settlement path.
 /// - We seed "claim balances" so `_cancelLCCWithDeficit` never enters deficit/overflow sub-paths; this harness is
@@ -244,15 +244,15 @@ contract MKT05 is HookMinerBase {
 
     /// @notice MKT-05 live-path property: ProxyHook returns a specified-delta that cancels `amountSpecified`.
     // forge-lint: disable-next-line(mixed-case-function)
-    function echidna_mkt05_live_amountToSwap_is_zero() external view returns (bool) {
+    function fuzz_mkt05_live_amountToSwap_is_zero() external view returns (bool) {
         // Allow the constructor state to pass before any live-path attempt, then require at least one successful
         // exact-input run so the cancellation check is non-vacuous.
         return (!checked || lastOk) && (attempts == 0 || exactInputSuccesses > 0);
     }
 
-    // Keep a second trivial property to avoid rare Echidna instability with single-property targets.
+    // Keep a second trivial property to avoid rare property-runner instability with single-property targets.
     // forge-lint: disable-next-line(mixed-case-function)
-    function echidna_mkt05_live_smoke() external pure returns (bool) {
+    function fuzz_mkt05_live_smoke() external pure returns (bool) {
         return true;
     }
 }

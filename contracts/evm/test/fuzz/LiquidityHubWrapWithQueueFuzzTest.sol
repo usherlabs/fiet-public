@@ -13,7 +13,7 @@ import {LiquidityHubLinkedLib} from "../../src/libraries/LiquidityHubLinkedLib.s
 /// @dev This file is maintained as a targeted regression suite for queue interactions
 ///      around wrapWith and transfer flows. Canonical invariant coverage is under
 ///      `test/fuzz/invariants/*`.
-contract LiquidityHubWrapWithQueueEchidnaTest {
+contract LiquidityHubWrapWithQueueFuzzTest {
     LiquidityHub internal hub;
     LiquidityCommitmentCertificate internal lccNative;
     LiquidityCommitmentCertificate internal lccNative2;
@@ -50,6 +50,7 @@ contract LiquidityHubWrapWithQueueEchidnaTest {
     }
 
     function _deployLinkedLib() internal {
+        // Salt labels stay stable so the regression harness keeps the existing linked-library addresses.
         bytes32 saltLcc = keccak256("echidna.LCCFactoryLinkedLib");
         bytes32 saltLh = keccak256("echidna.LiquidityHubLinkedLib");
         bytes memory initLcc = type(LCCFactoryLinkedLib).creationCode;
@@ -282,25 +283,25 @@ contract LiquidityHubWrapWithQueueEchidnaTest {
 
     /// @dev WRAPWITH-CONS-01: wrapWith must conserve supply across LCCs and not fabricate Hub reserves.
     // forge-lint: disable-next-line(mixed-case-function)
-    function echidna_wrapWith_conserves() external view returns (bool) {
+    function fuzz_wrapWith_conserves() external view returns (bool) {
         return !wrapWithChecked || lastWrapWithOk;
     }
 
     /// @dev WRAPWITH-QUEUE-01: pre-existing Hub queues must not cause double-counting during wrapWith netting.
     // forge-lint: disable-next-line(mixed-case-function)
-    function echidna_wrapWith_queue_netting_no_double_burn() external view returns (bool) {
+    function fuzz_wrapWith_queue_netting_no_double_burn() external view returns (bool) {
         return !wrapWithQueueChecked || lastWrapWithQueueOk;
     }
 
     /// @dev LCC-02: queued settlement must be annulled on non-protocol -> protocol transfers.
     // forge-lint: disable-next-line(mixed-case-function)
-    function echidna_lcc02_annuls_queue_on_protocol_transfer() external view returns (bool) {
+    function fuzz_lcc02_annuls_queue_on_protocol_transfer() external view returns (bool) {
         return !lcc02Checked || lastLcc02Ok;
     }
 
     /// @dev HUB-05: reserves cannot be fabricated; reserve accounting must be <= actual Hub holdings.
     // forge-lint: disable-next-line(mixed-case-function)
-    function echidna_hub05_reserve_never_exceeds_hub_balance() external view returns (bool) {
+    function fuzz_hub05_reserve_never_exceeds_hub_balance() external view returns (bool) {
         uint256 reserve = hub.reserveOfUnderlying(address(lccNative));
         return reserve <= address(hub).balance;
     }

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.26;
 
-import {VTSPositionLibEchidnaHarness} from "../harnesses/VTSPositionLibEchidnaHarness.sol";
+import {VTSPositionLibFuzzHarness} from "../harnesses/VTSPositionLibFuzzHarness.sol";
 import {MockPoolManager} from "../mocks/MockPoolManager.sol";
 import {MockMarketVault} from "../../_mocks/MockMarketVault.sol";
 import {MockLCC} from "../../_mocks/MockLCC.sol";
@@ -14,14 +14,14 @@ import {IPoolManager} from "v4-periphery/lib/v4-core/src/interfaces/IPoolManager
 import {ModifyLiquidityParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
 import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
 import {LiquidityUtils} from "../../../src/libraries/LiquidityUtils.sol";
-import {EchidnaLinkedLibs} from "../base/EchidnaLinkedLibs.sol";
+import {FuzzLinkedLibs} from "../base/FuzzLinkedLibs.sol";
 
-/// @notice Echidna harness for SETTLE-01: Withdrawals from active positions are disallowed while RFS is open.
-///         Uses the production MM settle path via `VTSLifecycleLinkedLib._executeMMSettleFromParams` (Echidna harness).
+/// @notice fuzz harness for SETTLE-01: Withdrawals from active positions are disallowed while RFS is open.
+///         Uses the production MM settle path via `VTSLifecycleLinkedLib._executeMMSettleFromParams` (fuzz harness).
 contract SETTLE01 {
     uint256 internal constant MAX_VACUOUS_ATTEMPTS = 12;
 
-    VTSPositionLibEchidnaHarness internal harness;
+    VTSPositionLibFuzzHarness internal harness;
     MockPoolManager internal poolManager;
     MockMarketVault internal vault;
 
@@ -42,11 +42,11 @@ contract SETTLE01 {
     bool internal closedAllOk = true;
 
     constructor() {
-        EchidnaLinkedLibs.deployVTSFeeLinkedLib();
-        EchidnaLinkedLibs.deployVTSPositionLib();
-        EchidnaLinkedLibs.deployVTSPositionMMOpsLib();
-        EchidnaLinkedLibs.deployVTSLifecycleLinkedLib();
-        harness = new VTSPositionLibEchidnaHarness();
+        FuzzLinkedLibs.deployVTSFeeLinkedLib();
+        FuzzLinkedLibs.deployVTSPositionLib();
+        FuzzLinkedLibs.deployVTSPositionMMOpsLib();
+        FuzzLinkedLibs.deployVTSLifecycleLinkedLib();
+        harness = new VTSPositionLibFuzzHarness();
         poolManager = new MockPoolManager();
         vault = new MockMarketVault(address(0));
 
@@ -184,7 +184,7 @@ contract SETTLE01 {
     /// @notice Property: non-seizing withdrawals revert while RFS is open, and RFS-closed attempts stay within
     ///         settled-accounting bounds.
     // forge-lint: disable-next-line(mixed-case-function)
-    function echidna_settle_01_withdraw_reverts_when_rfs_open() external view returns (bool) {
+    function fuzz_settle_01_withdraw_reverts_when_rfs_open() external view returns (bool) {
         if (openChecks == 0) {
             return openAttempts < MAX_VACUOUS_ATTEMPTS;
         }
@@ -192,7 +192,7 @@ contract SETTLE01 {
     }
 
     // forge-lint: disable-next-line(mixed-case-function)
-    function echidna_settle_01_aux_closed_withdraw_preserves_accounting_bounds() external view returns (bool) {
+    function fuzz_settle_01_aux_closed_withdraw_preserves_accounting_bounds() external view returns (bool) {
         if (closedChecks == 0) {
             return closedAttempts < MAX_VACUOUS_ATTEMPTS;
         }

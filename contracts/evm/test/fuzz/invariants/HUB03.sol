@@ -6,9 +6,9 @@ import {LiquidityCommitmentCertificate} from "../../../src/LCC.sol";
 import {MockOracleHelper} from "../mocks/MockOracleHelper.sol";
 import {MockERC20Transferable} from "../mocks/MockERC20Transferable.sol";
 import {Bounds} from "../../../src/libraries/Bounds.sol";
-import {EchidnaLinkedLibs} from "../base/EchidnaLinkedLibs.sol";
+import {FuzzLinkedLibs} from "../base/FuzzLinkedLibs.sol";
 
-/// @notice Echidna harness for HUB-03: Issuer-gated paths must never operate on invalid LCCs.
+/// @notice fuzz harness for HUB-03: Issuer-gated paths must never operate on invalid LCCs.
 /// @dev "Any issuer-only path must first validate that the target lcc is a valid, initialised LCC."
 ///
 /// Properties tested:
@@ -45,8 +45,8 @@ contract HUB03 {
     // ================================================================
 
     constructor() {
-        EchidnaLinkedLibs.deployLCCFactoryLinkedLib();
-        EchidnaLinkedLibs.deployLiquidityHubLinkedLib();
+        FuzzLinkedLibs.deployLCCFactoryLinkedLib();
+        FuzzLinkedLibs.deployLiquidityHubLinkedLib();
 
         MockOracleHelper oracleHelper = new MockOracleHelper(address(0));
         hub = new LiquidityHub(address(oracleHelper), "Ether", "ETH", 18, address(0), address(this));
@@ -182,19 +182,19 @@ contract HUB03 {
 
     /// @dev Issuer-gated paths with invalid LCC must always revert.
     // forge-lint: disable-next-line(mixed-case-function)
-    function echidna_hub_03_invalid_lcc_always_reverts() external view returns (bool) {
+    function fuzz_hub_03_invalid_lcc_always_reverts() external view returns (bool) {
         return !checkedInvalidLcc || lastInvalidLccOk;
     }
 
     /// @dev Non-issuer calling issuer-gated paths must always revert.
     // forge-lint: disable-next-line(mixed-case-function)
-    function echidna_hub_03_non_issuer_always_reverts() external view returns (bool) {
+    function fuzz_hub_03_non_issuer_always_reverts() external view returns (bool) {
         return !checkedNonIssuer || lastNonIssuerOk;
     }
 
     /// @dev Valid issuer with valid LCC must always succeed.
     // forge-lint: disable-next-line(mixed-case-function)
-    function echidna_hub_03_valid_issuer_succeeds() external view returns (bool) {
+    function fuzz_hub_03_valid_issuer_succeeds() external view returns (bool) {
         return !checkedValidIssuer || lastValidIssuerOk;
     }
 }

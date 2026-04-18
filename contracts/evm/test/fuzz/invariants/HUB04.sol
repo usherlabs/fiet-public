@@ -6,7 +6,7 @@ import {LiquidityCommitmentCertificate} from "../../../src/LCC.sol";
 import {MockOracleHelper} from "../mocks/MockOracleHelper.sol";
 import {MockERC20Transferable} from "../mocks/MockERC20Transferable.sol";
 import {Bounds} from "../../../src/libraries/Bounds.sol";
-import {EchidnaLinkedLibs} from "../base/EchidnaLinkedLibs.sol";
+import {FuzzLinkedLibs} from "../base/FuzzLinkedLibs.sol";
 
 /// @dev Minimal second factory so Market B LCCs have a different factory address.
 contract HUB04FactoryB {
@@ -30,7 +30,7 @@ contract HUB04FactoryB {
     }
 }
 
-/// @notice Echidna harness for HUB-04: LCC pairs must be from the same market factory.
+/// @notice fuzz harness for HUB-04: LCC pairs must be from the same market factory.
 /// @dev "Operations that treat an LCC pair as a market must ensure both LCCs belong to the same factory."
 ///
 /// Properties tested:
@@ -64,8 +64,8 @@ contract HUB04 {
     bool internal lastNonLccOk;
 
     constructor() {
-        EchidnaLinkedLibs.deployLCCFactoryLinkedLib();
-        EchidnaLinkedLibs.deployLiquidityHubLinkedLib();
+        FuzzLinkedLibs.deployLCCFactoryLinkedLib();
+        FuzzLinkedLibs.deployLiquidityHubLinkedLib();
 
         MockOracleHelper oracleHelper = new MockOracleHelper(address(0));
         hub = new LiquidityHub(address(oracleHelper), "Ether", "ETH", 18, address(0), address(this));
@@ -228,19 +228,19 @@ contract HUB04 {
 
     /// @dev Same-market LCC pair must always resolve to the correct factory.
     // forge-lint: disable-next-line(mixed-case-function)
-    function echidna_hub_04_same_market_resolves() external view returns (bool) {
+    function fuzz_hub_04_same_market_resolves() external view returns (bool) {
         return !checkedSameMarket || lastSameMarketOk;
     }
 
     /// @dev Cross-factory LCC pair must always revert.
     // forge-lint: disable-next-line(mixed-case-function)
-    function echidna_hub_04_cross_factory_reverts() external view returns (bool) {
+    function fuzz_hub_04_cross_factory_reverts() external view returns (bool) {
         return !checkedCrossFactory || lastCrossFactoryOk;
     }
 
     /// @dev Non-LCC address in pair must always revert (when paired with a valid LCC).
     // forge-lint: disable-next-line(mixed-case-function)
-    function echidna_hub_04_non_lcc_reverts() external view returns (bool) {
+    function fuzz_hub_04_non_lcc_reverts() external view returns (bool) {
         return !checkedNonLcc || lastNonLccOk;
     }
 }

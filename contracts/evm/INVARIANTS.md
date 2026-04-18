@@ -514,9 +514,9 @@ being an informal “should”.
   - `src/libraries/VTSFeeLib.sol::_processPositionFees` calls `_finaliseFeeAdjustment` during touch.
   - Bonus sizing uses `FullMath.mulDivRoundingUp(potAvail, ciseExposure, totalExposure)` (then caps to `potAvail`) so
     tiny proportional shares are not stranded at zero wei when the position is otherwise eligible.
-- **Echidna harness note**:
+- **fuzz harness note**:
   - `test/fuzz/invariants/FEE01.sol` resets CSI `feesSharedEpoch`, remaining-share factors, and related accounting at the
-    start of each action. Echidna reuses a single deployed harness, so without that reset, `_syncFeesSharedRemainingForToken`
+    start of each action. Medusa reuses a single deployed harness, so without that reset, `_syncFeesSharedRemainingForToken`
     can clear or rescale seeded `feesShared` across steps and desynchronise a naive “expected queue” model from production
     behaviour.
 

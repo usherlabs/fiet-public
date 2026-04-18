@@ -17,7 +17,7 @@ import {LiquidityHubLinkedLib} from "../../src/libraries/LiquidityHubLinkedLib.s
 ///      `unwrap` -> `useMarketLiquidity` (factory callback) -> `confirmTake`.
 ///      It is retained as a targeted regression harness for callback-path behaviour;
 ///      canonical invariant coverage remains in `test/fuzz/invariants/*`.
-contract LiquidityHubConfirmTakeCallbackEchidnaTest {
+contract LiquidityHubConfirmTakeCallbackFuzzTest {
     LiquidityHub internal hub;
     LiquidityCommitmentCertificate internal lccNative;
 
@@ -44,6 +44,7 @@ contract LiquidityHubConfirmTakeCallbackEchidnaTest {
     uint8 internal callbackMode;
 
     function _deployLinkedLib() internal {
+        // Salt labels stay stable so the regression harness keeps the existing linked-library addresses.
         bytes32 saltLcc = keccak256("echidna.LCCFactoryLinkedLib");
         bytes32 saltLh = keccak256("echidna.LiquidityHubLinkedLib");
         bytes memory initLcc = type(LCCFactoryLinkedLib).creationCode;
@@ -272,7 +273,7 @@ contract LiquidityHubConfirmTakeCallbackEchidnaTest {
     }
 
     /// @notice More adversarial seeding: create a large Hub-owned queue by repeated unwrap attempts.
-    /// @dev Keeps loop bounds constant to remain Echidna-friendly.
+    /// @dev Keeps loop bounds constant to remain Medusa-friendly.
     // forge-lint: disable-next-line(mixed-case-function)
     function action_seed_hub_queue_large(uint256 amount) external {
         // Bound per-iteration size and number of iterations.
@@ -328,28 +329,28 @@ contract LiquidityHubConfirmTakeCallbackEchidnaTest {
     /// @dev HUB-05: reserve accounting must be <= actual underlying balance held by the hub.
     ///      For native underlying, this is `reserve <= address(hub).balance`.
     // forge-lint: disable-next-line(mixed-case-function)
-    function echidna_hub05_reserve_never_exceeds_hub_balance() external view returns (bool) {
+    function fuzz_hub05_reserve_never_exceeds_hub_balance() external view returns (bool) {
         uint256 reserve = hub.reserveOfUnderlying(address(lccNative));
         return reserve <= address(hub).balance;
     }
 
     // Optional informational property (non-failing): callback should be reachable in this harness.
     // forge-lint: disable-next-line(mixed-case-function)
-    function echidna_hub05_callback_seen_or_not() external view returns (bool) {
+    function fuzz_hub05_callback_seen_or_not() external view returns (bool) {
         callbackSeen; // ignored; keep as a debuggable state hook
         return true;
     }
 
     // Non-failing reachability hook.
     // forge-lint: disable-next-line(mixed-case-function)
-    function echidna_hub05_hub_queue_seen_or_not() external view returns (bool) {
+    function fuzz_hub05_hub_queue_seen_or_not() external view returns (bool) {
         hubQueueSeen;
         return true;
     }
 
     // Non-failing reachability hook.
     // forge-lint: disable-next-line(mixed-case-function)
-    function echidna_hub05_settlement_attempted_or_not() external view returns (bool) {
+    function fuzz_hub05_settlement_attempted_or_not() external view returns (bool) {
         settlementAttempted;
         return true;
     }
@@ -364,4 +365,3 @@ contract LiquidityHubConfirmTakeCallback_Holder {
         );
     }
 }
-

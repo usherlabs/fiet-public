@@ -6,9 +6,9 @@ import {LiquidityCommitmentCertificate} from "../../../src/LCC.sol";
 import {MockOracleHelper} from "../mocks/MockOracleHelper.sol";
 import {MockERC20Transferable} from "../mocks/MockERC20Transferable.sol";
 import {Bounds} from "../../../src/libraries/Bounds.sol";
-import {EchidnaLinkedLibs} from "../base/EchidnaLinkedLibs.sol";
+import {FuzzLinkedLibs} from "../base/FuzzLinkedLibs.sol";
 
-/// @notice Echidna harness for HUB-02: Unwrapping bounds and queue semantics.
+/// @notice fuzz harness for HUB-02: Unwrapping bounds and queue semantics.
 /// @dev Unwrap requires `0 < amount <= availableToUnwrap`, where `availableToUnwrap` nets the holder's existing
 ///      `settleQueue[lcc][queueTo]` against live bucketed balance; any unavailable portion is still tracked via the
 ///      settlement queue rather than silently failing.
@@ -61,8 +61,8 @@ contract HUB02 {
     // ================================================================
 
     constructor() {
-        EchidnaLinkedLibs.deployLCCFactoryLinkedLib();
-        EchidnaLinkedLibs.deployLiquidityHubLinkedLib();
+        FuzzLinkedLibs.deployLCCFactoryLinkedLib();
+        FuzzLinkedLibs.deployLiquidityHubLinkedLib();
 
         MockOracleHelper oracleHelper = new MockOracleHelper(address(0));
         hub = new LiquidityHub(address(oracleHelper), "Ether", "ETH", 18, address(0), address(this));
@@ -259,13 +259,13 @@ contract HUB02 {
 
     /// @dev Holder's queue must match our independently tracked model.
     // forge-lint: disable-next-line(mixed-case-function)
-    function echidna_hub_02_holder_queue_matches_model() external view returns (bool) {
+    function fuzz_hub_02_holder_queue_matches_model() external view returns (bool) {
         return hub.settleQueue(address(lcc), address(holder)) == modelHolderQueued;
     }
 
     /// @dev totalQueued must match our independently tracked model.
     // forge-lint: disable-next-line(mixed-case-function)
-    function echidna_hub_02_total_queued_matches_model() external view returns (bool) {
+    function fuzz_hub_02_total_queued_matches_model() external view returns (bool) {
         return hub.totalQueued(address(lcc)) == modelTotalQueued;
     }
 
@@ -275,13 +275,13 @@ contract HUB02 {
 
     /// @dev unwrap(0) must always revert.
     // forge-lint: disable-next-line(mixed-case-function)
-    function echidna_hub_02_zero_amount_reverts() external view returns (bool) {
+    function fuzz_hub_02_zero_amount_reverts() external view returns (bool) {
         return !checkedZeroGuard || lastZeroGuardOk;
     }
 
     /// @dev unwrap(amount > balance) must always revert.
     // forge-lint: disable-next-line(mixed-case-function)
-    function echidna_hub_02_over_balance_reverts() external view returns (bool) {
+    function fuzz_hub_02_over_balance_reverts() external view returns (bool) {
         return !checkedOverBalanceGuard || lastOverBalanceGuardOk;
     }
 
@@ -291,14 +291,14 @@ contract HUB02 {
 
     /// @dev paid-out + queued shortfall == requested amount for every valid unwrap.
     // forge-lint: disable-next-line(mixed-case-function)
-    function echidna_hub_02_unwrap_decomposition_holds() external view returns (bool) {
+    function fuzz_hub_02_unwrap_decomposition_holds() external view returns (bool) {
         if (!checkedDecomposition) return unwrapAttempts < MAX_VACUOUS_ATTEMPTS;
         return lastDecompositionOk;
     }
 
     /// @dev LCC balance decreases by exactly the paid-out (non-queued) portion.
     // forge-lint: disable-next-line(mixed-case-function)
-    function echidna_hub_02_balance_decreases_by_paidout() external view returns (bool) {
+    function fuzz_hub_02_balance_decreases_by_paidout() external view returns (bool) {
         if (!checkedBalanceDelta) return unwrapAttempts < MAX_VACUOUS_ATTEMPTS;
         return lastBalanceDeltaOk;
     }

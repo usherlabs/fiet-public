@@ -6,9 +6,9 @@ import {LiquidityCommitmentCertificate} from "../../../src/LCC.sol";
 import {MockOracleHelper} from "../mocks/MockOracleHelper.sol";
 import {MockERC20Transferable} from "../mocks/MockERC20Transferable.sol";
 import {Bounds} from "../../../src/libraries/Bounds.sol";
-import {EchidnaLinkedLibs} from "../base/EchidnaLinkedLibs.sol";
+import {FuzzLinkedLibs} from "../base/FuzzLinkedLibs.sol";
 
-/// @notice Echidna harness for HUB-06: prepareSettle must preserve direct-liquidity accounting consistency.
+/// @notice fuzz harness for HUB-06: prepareSettle must preserve direct-liquidity accounting consistency.
 /// @dev "Preparing direct liquidity for vault settlement must reduce both
 ///      reserveOfUnderlying[underlying].direct and directSupply[lcc] by the same amount."
 ///
@@ -45,8 +45,8 @@ contract HUB06 {
     // ================================================================
 
     constructor() {
-        EchidnaLinkedLibs.deployLCCFactoryLinkedLib();
-        EchidnaLinkedLibs.deployLiquidityHubLinkedLib();
+        FuzzLinkedLibs.deployLCCFactoryLinkedLib();
+        FuzzLinkedLibs.deployLiquidityHubLinkedLib();
 
         MockOracleHelper oracleHelper = new MockOracleHelper(address(0));
         hub = new LiquidityHub(address(oracleHelper), "Ether", "ETH", 18, address(0), address(this));
@@ -183,13 +183,13 @@ contract HUB06 {
 
     /// @dev directSupply must match our independently tracked model.
     // forge-lint: disable-next-line(mixed-case-function)
-    function echidna_hub_06_direct_supply_matches_model() external view returns (bool) {
+    function fuzz_hub_06_direct_supply_matches_model() external view returns (bool) {
         return hub.directSupply(address(lcc)) == modelDirectSupply;
     }
 
     /// @dev reserveOfUnderlying.direct must match our independently tracked model.
     // forge-lint: disable-next-line(mixed-case-function)
-    function echidna_hub_06_reserve_direct_matches_model() external view returns (bool) {
+    function fuzz_hub_06_reserve_direct_matches_model() external view returns (bool) {
         (uint256 rd,) = hub.reserveOfUnderlyingTuple(address(lcc));
         return rd == modelReserveDirect;
     }
@@ -200,19 +200,19 @@ contract HUB06 {
 
     /// @dev prepareSettle must decrement both counters by exactly the requested amount.
     // forge-lint: disable-next-line(mixed-case-function)
-    function echidna_hub_06_prepare_settle_decrements_both() external view returns (bool) {
+    function fuzz_hub_06_prepare_settle_decrements_both() external view returns (bool) {
         return !checkedSettle || lastSettleOk;
     }
 
     /// @dev prepareSettle(0) must always revert.
     // forge-lint: disable-next-line(mixed-case-function)
-    function echidna_hub_06_zero_amount_reverts() external view returns (bool) {
+    function fuzz_hub_06_zero_amount_reverts() external view returns (bool) {
         return !checkedZeroGuard || lastZeroGuardOk;
     }
 
     /// @dev prepareSettle(amount > min(reserveDirect, directSupply)) must always revert.
     // forge-lint: disable-next-line(mixed-case-function)
-    function echidna_hub_06_over_limit_reverts() external view returns (bool) {
+    function fuzz_hub_06_over_limit_reverts() external view returns (bool) {
         return !checkedOverLimitGuard || lastOverLimitGuardOk;
     }
 }

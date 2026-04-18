@@ -64,11 +64,12 @@ libraries = [
   # Deterministic CREATE2 address deployed by the SIG-BACKING harness.
   "src/libraries/VTSCommitLib.sol:VTSCommitLib:0xc0853909ce464a2c2dbc641800feb4604db779ff",
   "src/libraries/VTSFeeLib.sol:VTSFeeLinkedLib:0x8f17762519b9f3c09549f839e17731d9a6ccb815",
-  # Deterministic CREATE2 address deployed by `VTSPositionLibEchidnaHarness`.
+  # Deterministic CREATE2 address deployed by `VTSPositionLibFuzzHarness`.
   "src/libraries/VTSPositionLib.sol:VTSPositionLib:0xfd93e929b1f3c9a73f0f4cb88a6d4c753f13c7cc",
   "src/libraries/VTSLifecycleLinkedLib.sol:VTSLifecycleLinkedLib:0xde354b2be7403312a3abbd62ffdc0e94924fba38",
   "src/libraries/VTSPositionMMOpsLib.sol:VTSPositionMMOpsLib:0xc6ab7729328c0e7fa54ff21ffcdce04ada89668f",
-  # Intentional placeholder for libs not CREATE2-validated by this script.
+  # Intentional placeholder for libs that fuzz harness constructors do not
+  # predeploy at deterministic addresses.
   "src/libraries/VTSSwapLib.sol:VTSSwapLib:0x1111111111111111111111111111111111111112",
 ]
 

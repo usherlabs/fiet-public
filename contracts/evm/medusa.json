@@ -49,7 +49,7 @@
       "propertyTesting": {
         "enabled": true,
         "testPrefixes": [
-          "echidna_"
+          "fuzz_"
         ]
       },
       "optimizationTesting": {

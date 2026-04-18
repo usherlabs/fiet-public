@@ -9,9 +9,7 @@ set -eu
 # Usage:
 #   just medusa file=test/fuzz/invariants/LCC01.sol contract=LCC01
 #
-# The Solidity harness/property names intentionally retain their legacy
-# `echidna_*` prefixes so Medusa can run the existing suite without a broad
-# contract rename.
+# Solidity property functions use the repo-standard `fuzz_*` prefix.
 #
 # If MEDUSA_CORPUS_DIR is set, coverage-guided corpus artifacts are written to
 # <MEDUSA_CORPUS_DIR>/<ContractName>/ using an absolute path rooted at this repo.

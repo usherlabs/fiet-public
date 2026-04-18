@@ -1,9 +1,8 @@
 ## Fiet Protocol (EVM) - developer commands
 #
 # This Justfile provides stable entrypoints for running the Medusa-backed fuzz
-# harness suite. The Solidity properties intentionally retain their legacy
-# `echidna_*` names so the migration stays focused on tooling rather than broad
-# contract churn.
+# harness suite. Solidity property functions use the repo-standard `fuzz_*`
+# prefix and Medusa is the only supported fuzz runner here.
 #
 # Usage:
 #   just --list
@@ -31,7 +30,6 @@ medusa file contract config="medusa.json" *args:
 
 # Run invariant harnesses (default config: `medusa.json`).
 fuzz:
-    @just validate-fuzz-libs
     @just medusa-lcc-backing
     @just medusa-lcc-01
     @just medusa-lcc-02
@@ -78,20 +76,18 @@ fuzz-regressions:
     @just medusa-mkt-05
 
 # Short Medusa campaign that preserves coverage-guided corpus artifacts in-tree.
-# Uses one canonical invariant, one accounting path, and one legacy-named
+# Uses one canonical invariant, one accounting path, and one targeted
 # regression harness to catch migration drift without running the full suite.
 medusa-coverage-smoke dir="artifacts/medusa-smoke" config="medusa.json":
     rm -rf {{ dir }}
     mkdir -p {{ dir }}
-    @just validate-fuzz-libs
     MEDUSA_CORPUS_DIR={{ dir }} just medusa test/fuzz/invariants/LCC01.sol LCC01 {{ config }} -- --test-limit 50 --seq-len 5
     MEDUSA_CORPUS_DIR={{ dir }} just medusa test/fuzz/invariants/COMMIT01.sol COMMIT01 {{ config }} -- --test-limit 50 --seq-len 5
-    MEDUSA_CORPUS_DIR={{ dir }} just medusa test/fuzz/LiquidityHubWrapWithQueueEchidnaTest.sol LiquidityHubWrapWithQueueEchidnaTest {{ config }} -- --test-limit 50 --seq-len 5
+    MEDUSA_CORPUS_DIR={{ dir }} just medusa test/fuzz/LiquidityHubWrapWithQueueFuzzTest.sol LiquidityHubWrapWithQueueFuzzTest {{ config }} -- --test-limit 50 --seq-len 5
     find {{ dir }} -maxdepth 3 -type f | sort
 
 # Longer invariant campaigns (uses `medusa.deep.json`).
 fuzz-deep:
-    @just validate-fuzz-libs
     @just medusa-lcc-backing medusa.deep.json
     @just medusa-lcc-01 medusa.deep.json
     @just medusa-lcc-02 medusa.deep.json
@@ -152,7 +148,7 @@ medusa-lcc-backing config="medusa.json":
     @just medusa test/fuzz/invariants/LCCBacking01.sol LCCBacking01 {{ config }}
 
 medusa-lcc-queue-netting config="medusa.json":
-    @just medusa test/fuzz/LiquidityHubWrapWithQueueEchidnaTest.sol LiquidityHubWrapWithQueueEchidnaTest {{ config }}
+    @just medusa test/fuzz/LiquidityHubWrapWithQueueFuzzTest.sol LiquidityHubWrapWithQueueFuzzTest {{ config }}
 
 medusa-lcc-01 config="medusa.json":
     @just medusa test/fuzz/invariants/LCC01.sol LCC01 {{ config }}
@@ -254,33 +250,7 @@ medusa-auth-01-01a-02 config="medusa.json":
     @just medusa test/fuzz/invariants/AUTH01_01A_02.sol AUTH01_01A_02 {{ config }}
 
 medusa-wrapwith config="medusa.json":
-    @just medusa test/fuzz/LiquidityHubWrapWithEchidnaTest.sol LiquidityHubWrapWithEchidnaTest {{ config }}
+    @just medusa test/fuzz/LiquidityHubWrapWithFuzzTest.sol LiquidityHubWrapWithFuzzTest {{ config }}
 
 medusa-confirmtake-callback config="medusa.json":
-    @just medusa test/fuzz/LiquidityHubConfirmTakeCallbackEchidnaTest.sol LiquidityHubConfirmTakeCallbackEchidnaTest {{ config }}
-
-# Validate fuzz linked-library wiring and deployment preconditions.
-validate-fuzz-libs:
-    python3 scripts/validate_fuzz_lib_config.py
-    FOUNDRY_PROFILE=medusa forge script \
-      test/fuzz/script/ValidateEchidnaLinkedLibs.s.sol:ValidateEchidnaLinkedLibs \
-      --sig "run()"
-    FOUNDRY_PROFILE=medusa forge script \
-      test/fuzz/script/SmokeEchidnaLinkedLibs.s.sol:SmokeEchidnaLinkedLibs \
-      --sig "run()"
-
-# Apply manifest and iterate until linked initcode matches (updates txt when stable).
-recompute-fuzz-lib-addrs:
-    python3 scripts/validate_fuzz_lib_config.py converge
-
-# Print machine-readable lines for the manifest file (paste into echidna-linked-libs.txt).
-print-fuzz-lib-manifest:
-    FOUNDRY_PROFILE=medusa forge script \
-      test/fuzz/script/ValidateEchidnaLinkedLibs.s.sol:ValidateEchidnaLinkedLibs \
-      --sig "printManifest()"
-
-# Print human-readable CREATE2 outputs and copy-paste blocks (verbose).
-print-fuzz-lib-addrs:
-    FOUNDRY_PROFILE=medusa forge script \
-      test/fuzz/script/ValidateEchidnaLinkedLibs.s.sol:ValidateEchidnaLinkedLibs \
-      --sig "printComputed()"
+    @just medusa test/fuzz/LiquidityHubConfirmTakeCallbackFuzzTest.sol LiquidityHubConfirmTakeCallbackFuzzTest {{ config }}

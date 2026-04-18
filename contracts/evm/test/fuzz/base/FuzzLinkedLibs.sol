@@ -9,11 +9,11 @@ import {VTSPositionLib} from "../../../src/libraries/VTSPositionLib.sol";
 import {VTSLifecycleLinkedLib} from "../../../src/libraries/VTSLifecycleLinkedLib.sol";
 import {VTSPositionMMOpsLib} from "../../../src/libraries/VTSPositionMMOpsLib.sol";
 
-/// @notice Hard-linked library addresses for CREATE2 deploy helpers (must match linker output).
-/// @dev Legacy filename retained while the fuzz runner migrated to Medusa.
-///      Authoritative list: `test/fuzz/echidna-linked-libs.txt`. Run
-///      `just recompute-fuzz-lib-addrs` after updating it.
-library EchidnaLinkedLibs {
+/// @notice Hard-linked library addresses for fuzz harness CREATE2 deploy helpers.
+/// @dev Keep these constants aligned with `[profile.medusa].libraries` in
+///      `foundry.toml` because harness constructors deploy the same libraries
+///      at those deterministic addresses.
+library FuzzLinkedLibs {
     /// @dev Must match the single-target Medusa harness deployment address for
     ///      deployer `0x30000` at nonce `0`.
     address internal constant FUZZ_HARNESS_DEPLOYER = 0xA647ff3c36cFab592509E13860ab8c4F28781a66;
@@ -64,6 +64,7 @@ library EchidnaLinkedLibs {
     }
 
     function deployLCCFactoryLinkedLib() internal {
+        // Salt labels stay stable so the prelinked CREATE2 addresses do not rotate across runner migrations.
         address lib = _deploy(keccak256("echidna.LCCFactoryLinkedLib"), type(LCCFactoryLinkedLib).creationCode);
         if (lib != LCC_FACTORY_LINKED_LIB) revert LCCFactoryLinkedLibAddrMismatch();
     }

@@ -279,8 +279,7 @@ Notes:
 - Install `medusa` plus `crytic-compile`, or bootstrap with `scripts/codex-setup.sh`.
 - The runner is `scripts/medusa.sh`; it uses `[profile.medusa]` in `foundry.toml` and writes build output to
   `out-medusa/`.
-- Solidity property functions intentionally retain the `echidna_*` prefix for compatibility, but Echidna is no longer
-  the supported runner for this suite.
+- Solidity property functions use the `fuzz_*` prefix, and Medusa is the only supported runner for this suite.
 - Set `MEDUSA_CORPUS_DIR=artifacts/medusa-local` to keep per-harness corpus / coverage-guided artifacts in the repo
   workspace.
 - See `test/fuzz/README.md` for the invariant coverage map and `INVARIANTS.md` for canonical invariant IDs.

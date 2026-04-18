@@ -9,7 +9,7 @@ import {IVaultCoreActionHandler} from "../../../src/interfaces/IVaultCoreActionH
 import {MockPoolManagerTransient} from "../mocks/MockPoolManagerTransient.sol";
 import {MockERC20Transferable} from "../mocks/MockERC20Transferable.sol";
 
-/// @notice Echidna harness for LCC-03 nested ingress settlement windows.
+/// @notice fuzz harness for LCC-03 nested ingress settlement windows.
 contract LCC03 {
     uint256 internal constant MAX_VACUOUS_ATTEMPTS = 18;
     MockPoolManagerTransient internal poolManager;
@@ -142,7 +142,7 @@ contract LCC03 {
     }
 
     // forge-lint: disable-next-line(mixed-case-function)
-    function echidna_lcc_03_sync_windows_hold() external view returns (bool) {
+    function fuzz_lcc_03_sync_windows_hold() external view returns (bool) {
         if (syncChecks == 0) {
             return syncAttempts < MAX_VACUOUS_ATTEMPTS;
         }
@@ -150,7 +150,7 @@ contract LCC03 {
     }
 
     // forge-lint: disable-next-line(mixed-case-function)
-    function echidna_lcc_03_revert_guards_hold() external view returns (bool) {
+    function fuzz_lcc_03_revert_guards_hold() external view returns (bool) {
         if (revertChecks == 0) {
             return revertAttempts < MAX_VACUOUS_ATTEMPTS;
         }
@@ -158,7 +158,7 @@ contract LCC03 {
     }
 
     // forge-lint: disable-next-line(mixed-case-function)
-    function echidna_lcc_03_smoke() external pure returns (bool) {
+    function fuzz_lcc_03_smoke() external pure returns (bool) {
         return true;
     }
 

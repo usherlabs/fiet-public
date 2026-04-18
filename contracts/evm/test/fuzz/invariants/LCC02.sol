@@ -6,9 +6,9 @@ import {LiquidityCommitmentCertificate} from "../../../src/LCC.sol";
 import {MockOracleHelper} from "../mocks/MockOracleHelper.sol";
 import {MockERC20Transferable} from "../mocks/MockERC20Transferable.sol";
 import {Bounds} from "../../../src/libraries/Bounds.sol";
-import {EchidnaLinkedLibs} from "../base/EchidnaLinkedLibs.sol";
+import {FuzzLinkedLibs} from "../base/FuzzLinkedLibs.sol";
 
-/// @notice Echidna harness for LCC-02: bucket accounting consistency with transfer flow.
+/// @notice fuzz harness for LCC-02: bucket accounting consistency with transfer flow.
 /// @dev "For non-protocol → protocol transfers, queued-settlement ownership must be annulled
 ///      before bucket decrement to prevent bleeding into the queue."
 ///
@@ -65,8 +65,8 @@ contract LCC02 {
     // ================================================================
 
     constructor() {
-        EchidnaLinkedLibs.deployLCCFactoryLinkedLib();
-        EchidnaLinkedLibs.deployLiquidityHubLinkedLib();
+        FuzzLinkedLibs.deployLCCFactoryLinkedLib();
+        FuzzLinkedLibs.deployLiquidityHubLinkedLib();
 
         MockOracleHelper oracleHelper = new MockOracleHelper(address(0));
         hub = new LiquidityHub(address(oracleHelper), "Ether", "ETH", 18, address(0), address(this));
@@ -229,14 +229,14 @@ contract LCC02 {
 
     /// @dev Bucket sum must equal ERC20 balanceOf for the non-exempt holder.
     // forge-lint: disable-next-line(mixed-case-function)
-    function echidna_lcc_02_bucket_sum_equals_balance() external view returns (bool) {
+    function fuzz_lcc_02_bucket_sum_equals_balance() external view returns (bool) {
         (uint256 wrapped, uint256 marketDerived) = lcc.balancesOf(address(holder));
         return wrapped + marketDerived == lcc.balanceOf(address(holder));
     }
 
     /// @dev Holder's queue must match our independently tracked model.
     // forge-lint: disable-next-line(mixed-case-function)
-    function echidna_lcc_02_queue_matches_model() external view returns (bool) {
+    function fuzz_lcc_02_queue_matches_model() external view returns (bool) {
         return hub.settleQueue(address(lcc), address(holder)) == expectedHolderQueued;
     }
 
@@ -246,7 +246,7 @@ contract LCC02 {
 
     /// @dev Non-protocol → protocol transfer must annul queue bleed by exactly the predicted amount.
     // forge-lint: disable-next-line(mixed-case-function)
-    function echidna_lcc_02_transfer_annuls_queue_correctly() external view returns (bool) {
+    function fuzz_lcc_02_transfer_annuls_queue_correctly() external view returns (bool) {
         return !checkedTransferAnnuls || lastTransferAnnulsOk;
     }
 }
