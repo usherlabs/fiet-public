@@ -77,11 +77,12 @@ interface IMinimalLiquidityHub {
     function processSettlementFor(address lcc, address recipient, uint256 maxAmount) external;
 
     /**
-     * @notice Atomically releases queued MM custody and settles it against the recipient's Hub queue.
-     * @dev Best-effort path for MM collection flows. Returns 0 when nothing is currently settleable.
+     * @notice Atomically releases queued custody and settles it against the recipient's Hub queue.
+     * @dev Best-effort path for collection flows (e.g. MM). Returns 0 when nothing is currently settleable.
+     *      `custodian` must implement `IQueueCustodian`.
      * @param lcc The LCC token address
-     * @param custodian The MM queue custodian holding beneficiary-scoped queued LCC
-     * @param tokenId The commitment token id bucket to debit in the custodian
+     * @param custodian The queue custodian holding beneficiary-scoped queued LCC
+     * @param tokenId The custodian bucket id to debit (e.g. commitment NFT id, or utility bucket such as `0`)
      * @param recipient The queue owner and settlement recipient
      * @param maxAmount The maximum amount to settle
      */
