@@ -100,22 +100,34 @@ jobs:
           FUNC_THRESHOLD=90
           FAILED=false
 
-          if [ -n "$LINE_COV" ] && [ "$(echo "$LINE_COV < $LINE_THRESHOLD" | bc -l)" -eq 1 ]; then
+          is_valid_metric() {
+            [[ "$1" =~ ^[0-9]+(\.[0-9]+)?$ ]]
+          }
+
+          for metric in LINE_COV STMT_COV BRANCH_COV FUNC_COV; do
+            value="${!metric:-}"
+            if ! is_valid_metric "$value"; then
+              echo "❌ Failed to parse ${metric} from forge coverage output: '${value}'"
+              FAILED=true
+            fi
+          done
+
+          if is_valid_metric "$LINE_COV" && [ "$(echo "$LINE_COV < $LINE_THRESHOLD" | bc -l)" -eq 1 ]; then
             echo "❌ Line coverage ($LINE_COV%) is below ${LINE_THRESHOLD}%"
             FAILED=true
           fi
 
-          if [ -n "$STMT_COV" ] && [ "$(echo "$STMT_COV < $STMT_THRESHOLD" | bc -l)" -eq 1 ]; then
+          if is_valid_metric "$STMT_COV" && [ "$(echo "$STMT_COV < $STMT_THRESHOLD" | bc -l)" -eq 1 ]; then
             echo "❌ Statement coverage ($STMT_COV%) is below ${STMT_THRESHOLD}%"
             FAILED=true
           fi
 
-          if [ -n "$BRANCH_COV" ] && [ "$(echo "$BRANCH_COV < $BRANCH_THRESHOLD" | bc -l)" -eq 1 ]; then
+          if is_valid_metric "$BRANCH_COV" && [ "$(echo "$BRANCH_COV < $BRANCH_THRESHOLD" | bc -l)" -eq 1 ]; then
             echo "❌ Branch coverage ($BRANCH_COV%) is below ${BRANCH_THRESHOLD}%"
             FAILED=true
           fi
 
-          if [ -n "$FUNC_COV" ] && [ "$(echo "$FUNC_COV < $FUNC_THRESHOLD" | bc -l)" -eq 1 ]; then
+          if is_valid_metric "$FUNC_COV" && [ "$(echo "$FUNC_COV < $FUNC_THRESHOLD" | bc -l)" -eq 1 ]; then
             echo "❌ Function coverage ($FUNC_COV%) is below ${FUNC_THRESHOLD}%"
             FAILED=true
           fi

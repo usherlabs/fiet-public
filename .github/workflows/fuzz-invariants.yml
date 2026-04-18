@@ -64,7 +64,15 @@ jobs:
           rm -rf /tmp/medusa-bin
           mkdir -p /tmp/medusa-bin
           tar -xzf /tmp/medusa.tar.gz -C /tmp/medusa-bin
-          sudo install -m 0755 /tmp/medusa-bin/medusa /usr/local/bin/medusa
+          if [ -x /tmp/medusa-bin/medusa ]; then
+            sudo install -m 0755 /tmp/medusa-bin/medusa /usr/local/bin/medusa
+          elif [ -x /tmp/medusa-bin/bin/medusa ]; then
+            sudo install -m 0755 /tmp/medusa-bin/bin/medusa /usr/local/bin/medusa
+          else
+            echo "medusa binary not found in release archive" >&2
+            find /tmp/medusa-bin -maxdepth 2 -type f | sort >&2
+            exit 1
+          fi
 
           medusa --version
 

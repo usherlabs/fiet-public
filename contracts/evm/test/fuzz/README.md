@@ -78,7 +78,7 @@ by `python3 scripts/validate_fuzz_lib_config.py converge` (or the `just` targets
 | Command | Purpose |
 | ------- | ------- |
 | `just validate-fuzz-libs` | Runs manifest sync check, `ValidateEchidnaLinkedLibs.run()`, then `SmokeEchidnaLinkedLibs.run()` (deployment smoke). |
-| `just recompute-fuzz-lib-addrs` | Applies the manifest, deletes `out-medusa/`, rebuilds with `FOUNDRY_PROFILE=medusa`, then runs `ValidateEchidnaLinkedLibs.run()`. |
+| `just recompute-fuzz-lib-addrs` | Applies the manifest convergence step via `python3 scripts/validate_fuzz_lib_config.py converge`. Follow with `just validate-fuzz-libs` if you also want the Forge validation and smoke deployment checks. |
 | `just print-fuzz-lib-manifest` | Prints machine-readable manifest lines (`FUZZ_LIB_MANIFEST_BEGIN` / `END`) for pasting or tooling. |
 | `just print-fuzz-lib-addrs` | Prints human-readable CREATE2 suggestions and copy-paste blocks (verbose). |
 | `just medusa-coverage-smoke` | Runs a short Medusa smoke campaign and preserves coverage-guided corpus artifacts under `artifacts/medusa-smoke/`. |

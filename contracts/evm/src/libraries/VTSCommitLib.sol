@@ -179,6 +179,17 @@ library VTSCommitLib {
         }
     }
 
+    /// @notice Validates whether a proposed liquidity delta remains fully backed by signal and settled value.
+    /// @param s The central VTS storage
+    /// @param oracleHelper The oracle helper for USD price calculations
+    /// @param commitId The commit NFT id
+    /// @param positionId The position ID
+    /// @param params Liquidity delta parameters bundled in a struct
+    /// @param revertIfInsufficientBacking Whether to revert if backing is insufficient
+    /// @return success True when the issued value is fully backed
+    /// @return issuedValue The USD issued value of the proposed liquidity delta
+    /// @return settledValue The USD settled value already recorded for the position
+    /// @return signalValue The USD value of the commit signal reserves
     function validateLiquidityDelta(
         VTSStorage storage s,
         IOracleHelper oracleHelper,
@@ -229,6 +240,11 @@ library VTSCommitLib {
         }
     }
 
+    /// @notice Increments pool coverage accounting for the requested token lane.
+    /// @param s The central VTS storage
+    /// @param poolId The pool ID
+    /// @param tokenIndex The token index (0 or 1)
+    /// @param coveredAmount The amount covered
     function incrementCoverage(VTSStorage storage s, PoolId poolId, uint8 tokenIndex, uint256 coveredAmount) external {
         _incrementCoverage(s, poolId, tokenIndex, coveredAmount);
     }
