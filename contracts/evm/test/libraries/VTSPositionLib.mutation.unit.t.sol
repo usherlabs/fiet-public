@@ -264,7 +264,7 @@ contract VTSPositionLibMutationUnitTest is Test {
         (uint256 ciseIndexLast0,) = harness.getCISEIndexLastX128(id);
         assertEq(ciseIndexLast0, 0, "position CISE checkpoint matches pool index when pool CISE index never moved");
 
-        harness.setPoolProtocolFeeAccrued(poolId, 0, 777e18);
+        harness.setPoolSlashedPot(poolId, 0, 777e18);
 
         harness.settlePositionGrowths(IPoolManager(address(pm)), id);
 
@@ -278,7 +278,7 @@ contract VTSPositionLibMutationUnitTest is Test {
             ModifyLiquidityParams({tickLower: TICK_LOWER, tickUpper: TICK_UPPER, liquidityDelta: 0, salt: p.salt});
         harness.touchPosition(_defaultPositionContext(), _directRemoveTouchParams(pokeParams));
 
-        (, uint256 protocolFeeAfter1) = harness.getPoolProtocolFeeAccrued(poolId);
+        (, uint256 protocolFeeAfter1) = harness.getPoolSlashedPot(poolId);
         assertEq(protocolFeeAfter1, 777e18, "queued fee pot must remain untouched");
 
         (, int256 pending1) = harness.getPendingFeeAdj(id);
@@ -487,11 +487,11 @@ contract VTSPositionLibMutationUnitTest is Test {
             _expectedFeesBurnToken1(feeGrowthInside1X128, feeGrowthInsideLast1X128, positionLiquidity, cov, ofDelta);
 
         {
-            // Assert pool + position fee tracking moved by feesBurn on the fee token.
-            (, uint256 poolFee1) = harness.getPoolProtocolFeeAccrued(poolId);
+            // Assert position fee tracking moved by feesBurn on the fee token (pool slashedPot materialises on touch).
+            (, uint256 poolFee1) = harness.getPoolSlashedPot(poolId);
             (, uint256 feesShared1) = harness.getFeesShared(id);
             (, int256 pendingAdj1) = harness.getPendingFeeAdj(id);
-            assertEq(poolFee1, feesBurn, "protocolFeeAccrued(token1) should equal feesBurn");
+            assertEq(poolFee1, 0, "slashedPot(token1) is not incremented at applyCoverageBurn time");
             assertEq(feesShared1, feesBurn, "feesShared(token1) should equal feesBurn");
             assertEq(pendingAdj1, int256(feesBurn), "pendingFeeAdj(token1) should equal +feesBurn");
         }
@@ -1051,9 +1051,11 @@ contract VTSPositionLibMutationUnitTest is Test {
         // Run DICE settle (token0 only is meaningful here; token1 has zero deficit).
         ex.settleDeficitIndexedCoverageUsage(IPoolManager(address(pm)), id);
 
-        // Assert some burn happened (protocol fee accrued on fee token1 should be > 0).
-        (, uint256 fee1) = ex.getPoolProtocolFeeAccrued(p);
-        assertGt(fee1, 0, "DICE settle should burn some fees and accrue protocolFee token1");
+        // Assert some burn happened — queued as positive pending (slashedPot updates on later fee-processing touch).
+        (, uint256 fee1) = ex.getPoolSlashedPot(p);
+        (, int256 pending1) = ex.getPendingFeeAdj(id);
+        assertEq(fee1, 0, "slashedPot token1 is not incremented during DICE settle accounting");
+        assertGt(pending1, 0, "DICE settle should queue positive pendingFeeAdj on fee token1");
     }
 
     // ============================================================
@@ -2747,8 +2749,12 @@ contract VTSPositionLibDICEExpose {
         VTSFeeLinkedLib.settleDeficitIndexedCoverageUsage(s, poolManager, id);
     }
 
-    function getPoolProtocolFeeAccrued(PoolId poolId) external view returns (uint256 fee0, uint256 fee1) {
-        return (s.poolAccounting[poolId].protocolFeeAccrued.token0, s.poolAccounting[poolId].protocolFeeAccrued.token1);
+    function getPoolSlashedPot(PoolId poolId) external view returns (uint256 pot0, uint256 pot1) {
+        return (s.poolAccounting[poolId].slashedPot.token0, s.poolAccounting[poolId].slashedPot.token1);
+    }
+
+    function getPendingFeeAdj(PositionId id) external view returns (int256 adj0, int256 adj1) {
+        return (s.positionAccounting[id].pendingFeeAdj.token0, s.positionAccounting[id].pendingFeeAdj.token1);
     }
 }
 

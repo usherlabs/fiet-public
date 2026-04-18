@@ -435,12 +435,12 @@ abstract contract VTSOrchestratorFixture is MarketTestBase, MarketMakerTestBase 
         return manager.balanceOf(address(vtsOrchestrator), lccCurrency.toId());
     }
 
-    /// @notice Helper to get protocol fee accrued for a pool (slashed fees internal accounting)
+    /// @notice Helper to get the materialised slashed pot for a pool
     /// @param poolId The pool identifier
-    /// @return fee0 The accrued fee for token0
-    /// @return fee1 The accrued fee for token1
-    function _protocolFeeAccrued(PoolId poolId) internal view returns (uint256 fee0, uint256 fee1) {
-        return vtsOrchestrator.getProtocolFeeAccrued(poolId);
+    /// @return pot0 Materialised pot for token0
+    /// @return pot1 Materialised pot for token1
+    function _slashedPot(PoolId poolId) internal view returns (uint256 pot0, uint256 pot1) {
+        return vtsOrchestrator.getSlashedPot(poolId);
     }
 
     /// @notice Helper to prepare permits for settle in MM position

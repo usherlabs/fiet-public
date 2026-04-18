@@ -257,7 +257,7 @@ contract MMCoverageE2E is MME2EBase {
         internal
         returns (SwapState memory swapState)
     {
-        (uint256 initialProtoFee0, uint256 initialProtoFee1) = s.vts.getProtocolFeeAccrued(s.key.toId());
+        (uint256 initialProtoFee0, uint256 initialProtoFee1) = s.vts.getSlashedPot(s.key.toId());
         (uint256 initialPot0, uint256 initialPot1) = s.vts.getSlashedPot(s.key.toId());
         require(initialProtoFee0 == 0 && initialProtoFee1 == 0, "initialProtoFee not zero");
         require(initialPot0 == 0 && initialPot1 == 0, "initialPot not zero");
@@ -302,7 +302,7 @@ contract MMCoverageE2E is MME2EBase {
         internal
         returns (SwapState memory)
     {
-        (swapState.protoFee0AfterSwap, swapState.protoFee1AfterSwap) = s.vts.getProtocolFeeAccrued(s.key.toId());
+        (swapState.protoFee0AfterSwap, swapState.protoFee1AfterSwap) = s.vts.getSlashedPot(s.key.toId());
 
         if (swapState.lcc0AfterSwap > 0) {
             require(swapState.protoFee1AfterSwap > 0, "protocol Fee1 AfterSwap not greater than zero");

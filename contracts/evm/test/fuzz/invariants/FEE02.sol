@@ -41,14 +41,14 @@ contract FEE02 {
         _resetFeeShareIsolationBaseline();
 
         // Seed a pot and pool exposure so the only gating factor is the position's zero exposure.
-        feeHarness.setProtocolFeeAccrued(POOL_ID, protocolFee, protocolFee);
+        feeHarness.setSlashedPot(POOL_ID, protocolFee, protocolFee);
         feeHarness.setPoolTotalCISEExposure(POOL_ID, totalExposure, totalExposure);
         // New position: no realised CISE exposure and no pending fee adjustments.
         feeHarness.setCISEExposure(POSITION_ID, 0, 0);
         feeHarness.setPendingFeeAdj(POSITION_ID, 0, 0);
 
         // Snapshot accounting before fee processing.
-        (uint256 fee0Before, uint256 fee1Before) = feeHarness.getProtocolFeeAccrued(POOL_ID);
+        (uint256 fee0Before, uint256 fee1Before) = feeHarness.getSlashedPot(POOL_ID);
         (uint256 pot0Before, uint256 pot1Before) = feeHarness.getSlashedPot(POOL_ID);
         (int256 pend0Before, int256 pend1Before) = feeHarness.getPendingFeeAdj(POSITION_ID);
 
@@ -56,7 +56,7 @@ contract FEE02 {
         feeHarness.afterTouchPosition(POSITION_ID);
 
         // Nothing should move: no bonus allocation and no materialisation.
-        (uint256 fee0After, uint256 fee1After) = feeHarness.getProtocolFeeAccrued(POOL_ID);
+        (uint256 fee0After, uint256 fee1After) = feeHarness.getSlashedPot(POOL_ID);
         (uint256 pot0After, uint256 pot1After) = feeHarness.getSlashedPot(POOL_ID);
         (int256 pend0After, int256 pend1After) = feeHarness.getPendingFeeAdj(POSITION_ID);
 
@@ -77,7 +77,6 @@ contract FEE02 {
     }
 
     function _resetFeeShareIsolationBaseline() internal {
-        feeHarness.setProtocolFeeAccrued(POOL_ID, 0, 0);
         feeHarness.setSlashedPot(POOL_ID, 0, 0);
         feeHarness.setPendingFeeAdj(POSITION_ID, 0, 0);
         feeHarness.setFeesShared(POSITION_ID, 0, 0);

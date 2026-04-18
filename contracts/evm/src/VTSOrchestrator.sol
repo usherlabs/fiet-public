@@ -421,12 +421,6 @@ contract VTSOrchestrator is
     }
 
     /// @inheritdoc IVTSOrchestrator
-    function getProtocolFeeAccrued(PoolId poolId) external view returns (uint256 fee0, uint256 fee1) {
-        PoolAccounting storage paPool = s.poolAccounting[poolId];
-        return (paPool.protocolFeeAccrued.token0, paPool.protocolFeeAccrued.token1);
-    }
-
-    /// @inheritdoc IVTSOrchestrator
     function getSlashedPot(PoolId poolId) external view returns (uint256 pot0, uint256 pot1) {
         PoolAccounting storage paPool = s.poolAccounting[poolId];
         return (paPool.slashedPot.token0, paPool.slashedPot.token1);

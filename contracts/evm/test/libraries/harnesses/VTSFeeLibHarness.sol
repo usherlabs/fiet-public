@@ -118,10 +118,6 @@ contract VTSFeeLibHarness {
         return (s.poolAccounting[poolId].slashedPot.token0, s.poolAccounting[poolId].slashedPot.token1);
     }
 
-    function getProtocolFeeAccrued(PoolId poolId) external view returns (uint256 fee0, uint256 fee1) {
-        return (s.poolAccounting[poolId].protocolFeeAccrued.token0, s.poolAccounting[poolId].protocolFeeAccrued.token1);
-    }
-
     function getFeesShared(PositionId id) external view returns (uint256 fee0, uint256 fee1) {
         return (s.positionAccounting[id].feesShared.token0, s.positionAccounting[id].feesShared.token1);
     }
@@ -265,12 +261,6 @@ contract VTSFeeLibHarness {
     function setSlashedPot(PoolId poolId, uint256 pot0, uint256 pot1) external {
         s.poolAccounting[poolId].slashedPot.token0 = pot0;
         s.poolAccounting[poolId].slashedPot.token1 = pot1;
-    }
-
-    /// @notice Sets protocol fee accrued for a pool
-    function setProtocolFeeAccrued(PoolId poolId, uint256 fee0, uint256 fee1) external {
-        s.poolAccounting[poolId].protocolFeeAccrued.token0 = fee0;
-        s.poolAccounting[poolId].protocolFeeAccrued.token1 = fee1;
     }
 
     /// @notice Sets fees shared for a position

@@ -89,7 +89,9 @@ library VTSFeeLib {
         // CSI: Sync remaining contribution shares before reading selfRemaining
         _syncFeesSharedRemainingForToken(pa, paPool, feeTokenIndex);
 
-        uint256 pot = paPool.protocolFeeAccrued.get(feeTokenIndex);
+        // Bonuses are allocated only against the materialised slashed pot (positive `pendingFeeAdj` must be
+        // materialised in `_processPositionFees` before this runs).
+        uint256 pot = paPool.slashedPot.get(feeTokenIndex);
 
         // CSI: feesShared is stored as remaining self-contribution (not lifetime)
         uint256 selfRemaining = pa.feesShared.get(feeTokenIndex);
@@ -112,10 +114,8 @@ library VTSFeeLib {
         // Note: Under consistent accounting, total remaining shares == current pot (pre-spend).
         if (pot > 0) _advanceFeesSharedFactor(paPool, feeTokenIndex, pot, bonus);
 
-        // Deduct from pot (accounting)
-        paPool.protocolFeeAccrued.set(feeTokenIndex, pot - bonus);
-
-        // Queue negative pending (bonus increases payout at materialisation)
+        // Queue negative pending (bonus increases payout at materialisation); `slashedPot` is drained when
+        // negative `pendingFeeAdj` is materialised in `_finaliseNegativeFeeAdjustment`.
         int256 currentPending = pa.pendingFeeAdj.get(feeTokenIndex);
         pa.pendingFeeAdj.set(feeTokenIndex, currentPending - bonus.toInt256());
         return true;
@@ -214,8 +214,8 @@ library VTSFeeLib {
         }
 
         uint256 factor = paPool.feesSharedRemainingFactorX128.get(tokenIndex);
-        uint256 protocolPot = paPool.protocolFeeAccrued.get(tokenIndex);
-        if (factor == 0 && protocolPot == 0) {
+        uint256 materialPot = paPool.slashedPot.get(tokenIndex);
+        if (factor == 0 && materialPot == 0) {
             paPool.feesSharedEpoch.set(tokenIndex, epoch + 1);
         }
     }
@@ -365,7 +365,6 @@ library VTSFeeLib {
 
         PoolAccounting storage paPool = s.poolAccounting[poolId];
         _prepareFeeShareMint(pa, paPool, feeTokenIndex);
-        paPool.protocolFeeAccrued.set(feeTokenIndex, paPool.protocolFeeAccrued.get(feeTokenIndex) + feesBurn);
         pa.feesShared.set(feeTokenIndex, pa.feesShared.get(feeTokenIndex) + feesBurn);
         pa.pendingFeeAdj.set(feeTokenIndex, pa.pendingFeeAdj.get(feeTokenIndex) + feesBurn.toInt256());
     }
@@ -417,10 +416,92 @@ library VTSFeeLib {
         paPool.slashedPot.set(tokenIndex, pot - amount);
     }
 
+    /// @dev Sum two hook-reported fee materialisation deltas (same-touch composition).
+    function _addFeeMaterialisationDeltas(BalanceDelta a, BalanceDelta b) private pure returns (BalanceDelta) {
+        return LiquidityUtils.safeToBalanceDelta(
+            int256(a.amount0()) + int256(b.amount0()), int256(a.amount1()) + int256(b.amount1())
+        );
+    }
+
+    /// @notice Materialise positive `pendingFeeAdj` into `slashedPot` up to per-leg caps (SETTLE-03 on decreases).
+    function _finalisePositiveFeeAdjustment(
+        VTSStorage storage s,
+        PositionId positionId,
+        PoolId poolId,
+        uint256 positiveCap0,
+        uint256 positiveCap1
+    ) internal returns (BalanceDelta adj) {
+        (int256 pend0, int256 pend1) = _peekFeeAdjustment(s, positionId);
+        int256 mat0 = 0;
+        int256 mat1 = 0;
+
+        if (pend0 > 0) {
+            uint256 pendPos0 = uint256(pend0);
+            uint256 pay0 = pendPos0 < positiveCap0 ? pendPos0 : positiveCap0;
+            if (pay0 > 0) {
+                _fundFeePot(s, poolId, 0, pay0);
+                mat0 = pay0.toInt256();
+            }
+        }
+
+        if (pend1 > 0) {
+            uint256 pendPos1 = uint256(pend1);
+            uint256 pay1 = pendPos1 < positiveCap1 ? pendPos1 : positiveCap1;
+            if (pay1 > 0) {
+                _fundFeePot(s, poolId, 1, pay1);
+                mat1 = pay1.toInt256();
+            }
+        }
+
+        PositionAccounting storage pa = s.positionAccounting[positionId];
+        pa.pendingFeeAdj.token0 = pend0 - mat0;
+        pa.pendingFeeAdj.token1 = pend1 - mat1;
+
+        adj = LiquidityUtils.safeToBalanceDelta(mat0, mat1);
+    }
+
+    /// @notice Materialise negative `pendingFeeAdj` by draining `slashedPot` (bonuses queued after positive phase).
+    function _finaliseNegativeFeeAdjustment(VTSStorage storage s, PositionId positionId, PoolId poolId)
+        internal
+        returns (BalanceDelta adj)
+    {
+        (int256 pend0, int256 pend1) = _peekFeeAdjustment(s, positionId);
+        int256 mat0 = 0;
+        int256 mat1 = 0;
+
+        if (pend0 < 0) {
+            uint256 need0 = uint256(-pend0);
+            PoolAccounting storage paPool = s.poolAccounting[poolId];
+            uint256 pot0 = paPool.slashedPot.token0;
+            uint256 pay0 = pot0 < need0 ? pot0 : need0;
+            if (pay0 > 0) {
+                _drainFeePot(s, poolId, 0, pay0);
+                mat0 = -pay0.toInt256();
+            }
+        }
+
+        if (pend1 < 0) {
+            uint256 need1 = uint256(-pend1);
+            PoolAccounting storage paPool = s.poolAccounting[poolId];
+            uint256 pot1 = paPool.slashedPot.token1;
+            uint256 pay1 = pot1 < need1 ? pot1 : need1;
+            if (pay1 > 0) {
+                _drainFeePot(s, poolId, 1, pay1);
+                mat1 = -pay1.toInt256();
+            }
+        }
+
+        PositionAccounting storage pa = s.positionAccounting[positionId];
+        pa.pendingFeeAdj.token0 = pend0 - mat0;
+        pa.pendingFeeAdj.token1 = pend1 - mat1;
+
+        adj = LiquidityUtils.safeToBalanceDelta(mat0, mat1);
+    }
+
     /// @notice Finalise pending fee adjustments with optional per-leg caps on positive slash materialisation
     /// @dev Positive pending adjustment (`pend > 0`) is materialised at most up to `positiveCap*` for each leg.
     ///      Any unmaterialised remainder stays queued in `pendingFeeAdj` for future touches.
-    ///      Negative pending (`pend < 0`) bonus materialisation remains unchanged.
+    ///      Negative pending (`pend < 0`) bonus materialisation drains `slashedPot`.
     /// @dev Updates accounting state only. Actual ERC6909 mint/burn is handled by CoreHook.settleHookDeltasToPot.
     ///      Positive pending (`pend > 0`) materialises at most `positiveCap*` per leg; pass `type(uint256).max` on both
     ///      legs for uncapped behaviour. Any unmaterialised positive remainder stays in `pendingFeeAdj`.
@@ -436,58 +517,9 @@ library VTSFeeLib {
         uint256 positiveCap0,
         uint256 positiveCap1
     ) internal returns (BalanceDelta adj) {
-        // Materialise pending: fund slashed pot for +ve; drain to LP for -ve
-        (int256 pend0, int256 pend1) = _peekFeeAdjustment(s, positionId);
-        int256 mat0 = 0;
-        int256 mat1 = 0;
-
-        if (pend0 > 0) {
-            uint256 pendPos0 = uint256(pend0);
-            uint256 pay0 = pendPos0 < positiveCap0 ? pendPos0 : positiveCap0;
-            if (pay0 > 0) {
-                _fundFeePot(s, poolId, 0, pay0);
-                mat0 = pay0.toInt256();
-            }
-        } else if (pend0 < 0) {
-            uint256 need0 = uint256(-pend0);
-            PoolAccounting storage paPool = s.poolAccounting[poolId];
-            uint256 pot0 = paPool.slashedPot.token0;
-            uint256 pay0 = pot0 < need0 ? pot0 : need0;
-            if (pay0 > 0) {
-                _drainFeePot(s, poolId, 0, pay0);
-                mat0 = -pay0.toInt256();
-            }
-        }
-
-        if (pend1 > 0) {
-            uint256 pendPos1 = uint256(pend1);
-            uint256 pay1 = pendPos1 < positiveCap1 ? pendPos1 : positiveCap1;
-            if (pay1 > 0) {
-                _fundFeePot(s, poolId, 1, pay1);
-                mat1 = pay1.toInt256();
-            }
-        } else if (pend1 < 0) {
-            uint256 need1 = uint256(-pend1);
-            PoolAccounting storage paPool = s.poolAccounting[poolId];
-            uint256 pot1 = paPool.slashedPot.token1;
-            uint256 pay1 = pot1 < need1 ? pot1 : need1;
-            if (pay1 > 0) {
-                _drainFeePot(s, poolId, 1, pay1);
-                mat1 = -pay1.toInt256();
-            }
-        }
-
-        // Note on clamping:
-        // - pend > 0  => mat0/mat1 are capped by positiveCap* (and by available pending); uncapped when cap is max.
-        // - pend < 0  => mat == -min(pot, -pend) which is always in [pend, 0]
-        // Therefore, mat cannot over-finalise pending on the bonus path, and sign-mismatch clamps are unreachable.
-
-        // Subtract the materialised portion from pending (note: signed arithmetic)
-        PositionAccounting storage pa = s.positionAccounting[positionId];
-        pa.pendingFeeAdj.token0 = pend0 - mat0;
-        pa.pendingFeeAdj.token1 = pend1 - mat1;
-
-        adj = LiquidityUtils.safeToBalanceDelta(mat0, mat1);
+        BalanceDelta adjPos = _finalisePositiveFeeAdjustment(s, positionId, poolId, positiveCap0, positiveCap1);
+        BalanceDelta adjNeg = _finaliseNegativeFeeAdjustment(s, positionId, poolId);
+        return _addFeeMaterialisationDeltas(adjPos, adjNeg);
     }
 
     /// @notice Uncapped finalisation (`positiveCap* = max`).
@@ -498,8 +530,11 @@ library VTSFeeLib {
         return _finaliseFeeAdjustment(s, positionId, poolId, type(uint256).max, type(uint256).max);
     }
 
-    /// @notice Consolidated fee processing for a position during modification: realises CISE exposure and queues bonus
-    /// @dev Updates accounting state only. Actual ERC6909 mint/burn is handled by CoreHook.settleHookDeltasToPot.
+    /// @notice Consolidated fee processing for a position during modification (two-phase)
+    /// @dev Phase 1: materialise positive `pendingFeeAdj` into `slashedPot` (capped per leg on decreases).
+    ///      Phase 2: allocate bonuses from the materialised pot via CISE/CSI (queues negative pending).
+    ///      Phase 3: materialise negative pending by draining `slashedPot`.
+    ///      Updates accounting state only. Actual ERC6909 mint/burn is handled by CoreHook.settleHookDeltasToPot.
     ///      Pass `type(uint256).max` for both caps for uncapped positive slash materialisation.
     /// @param s The central VTS storage
     /// @param positionId The position ID
@@ -521,12 +556,15 @@ library VTSFeeLib {
         PositionAccounting storage pa = s.positionAccounting[positionId];
         PoolAccounting storage paPool = s.poolAccounting[poolId];
 
+        // Phase 1 — fund `slashedPot` from positive pending before bonus allocation.
+        BalanceDelta adjPos = _finalisePositiveFeeAdjustment(s, positionId, poolId, positiveCap0, positiveCap1);
+
         // Read CISE exposure for bonus allocation
         // Note: Raw exposure values per coverage token
         uint256 ciseExposure0 = pa.ciseExposureSinceLastMod.token0;
         uint256 ciseExposure1 = pa.ciseExposureSinceLastMod.token1;
 
-        // Queue bonuses using CISE exposure (coverage-indexed settled exposure)
+        // Phase 2 — queue bonuses using CISE exposure (coverage-indexed settled exposure)
         // Token direction mapping: fee pot in token T is funded by deficits in the opposite token.
         // - token0 pot ← token1 deficit coverage → use token1 exposure for token0 bonus
         // - token1 pot ← token0 deficit coverage → use token0 exposure for token1 bonus
@@ -540,7 +578,9 @@ library VTSFeeLib {
         if (allocated0) _cleanupAfterAllocationForToken(pa, paPool, 1, ciseExposure1);
         if (allocated1) _cleanupAfterAllocationForToken(pa, paPool, 0, ciseExposure0);
 
-        return _finaliseFeeAdjustment(s, positionId, poolId, positiveCap0, positiveCap1);
+        // Phase 3 — drain `slashedPot` for queued bonuses (and any other negative pending).
+        BalanceDelta adjNeg = _finaliseNegativeFeeAdjustment(s, positionId, poolId);
+        return _addFeeMaterialisationDeltas(adjPos, adjNeg);
     }
 
     /// @notice Uncapped fee processing (`positiveCap* = max`).
@@ -821,7 +861,7 @@ library VTSFeeLib {
 library VTSFeeLinkedLib {
     /// @notice Prepares CSI state before minting fresh fee-share contributions for a position
     /// @dev Advances the spend epoch if needed, then syncs the position's remaining self-share
-    ///      against the current pool factor before the caller increases `protocolFeeAccrued` and `feesShared`.
+    ///      against the current pool factor before the caller increases `pendingFeeAdj` / `feesShared`.
     /// @param pa The position accounting storage reference
     /// @param paPool The pool accounting storage reference
     /// @param feeTokenIndex The fee token index receiving the newly minted contribution

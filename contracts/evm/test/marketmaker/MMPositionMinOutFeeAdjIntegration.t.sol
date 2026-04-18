@@ -125,9 +125,9 @@ contract MMPositionMinOutFeeAdjIntegrationTest is VTSOrchestratorFixture {
     function _createMmAndSeedFeeAdjScenario() internal returns (uint256 tokenId, PositionId mmPositionId) {
         (tokenId, mmPositionId,,) = _createCommittedPosition(-60, 60, 50e10);
         (int256 p0, int256 p1) = _seedSlashAndProtocolFeeAccrual(mmPositionId);
-        (uint256 fee0Accrued, uint256 fee1Accrued) = _protocolFeeAccrued(corePoolKey.toId());
-        assertTrue(fee0Accrued > 0 || fee1Accrued > 0, "precondition: protocol fee accrual");
-        assertTrue(p0 > 0 || p1 > 0, "precondition: position pending lane seeded");
+        assertTrue(
+            p0 > 0 || p1 > 0, "precondition: position pending lane seeded (pool slashedPot may be zero until touch)"
+        );
         _closeRfsForNonSeizureDecrease(tokenId, mmPositionId);
     }
 

@@ -411,15 +411,15 @@ contract VTSPositionLibHarness {
         return (s.poolAccounting[poolId].totalSettled.token0, s.poolAccounting[poolId].totalSettled.token1);
     }
 
-    function getPoolProtocolFeeAccrued(PoolId poolId) external view returns (uint256 fee0, uint256 fee1) {
-        return (s.poolAccounting[poolId].protocolFeeAccrued.token0, s.poolAccounting[poolId].protocolFeeAccrued.token1);
+    function getPoolSlashedPot(PoolId poolId) external view returns (uint256 pot0, uint256 pot1) {
+        return (s.poolAccounting[poolId].slashedPot.token0, s.poolAccounting[poolId].slashedPot.token1);
     }
 
-    /// @notice TEST-ONLY: sets `protocolFeeAccrued` for both pool fee-token lanes.
+    /// @notice TEST-ONLY: sets `slashedPot` for both pool fee-token lanes.
     /// @dev TEST-ONLY helper that writes storage directly for unit-test scenario setup.
-    function setPoolProtocolFeeAccrued(PoolId poolId, uint256 fee0, uint256 fee1) external {
-        s.poolAccounting[poolId].protocolFeeAccrued.token0 = fee0;
-        s.poolAccounting[poolId].protocolFeeAccrued.token1 = fee1;
+    function setPoolSlashedPot(PoolId poolId, uint256 pot0, uint256 pot1) external {
+        s.poolAccounting[poolId].slashedPot.token0 = pot0;
+        s.poolAccounting[poolId].slashedPot.token1 = pot1;
     }
 
     function getFeesShared(PositionId id) external view returns (uint256 fee0, uint256 fee1) {

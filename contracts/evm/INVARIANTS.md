@@ -563,20 +563,24 @@ being an informal “should”.
 - **Enforced by**: `src/libraries/VTSPositionLib.sol::_applyBurnBase`, `_initFeeSnapshot`, `touchPosition`,
   `_reconcileLiquidityMirrorAndFeeBurnRemainder`, `settlePositionGrowths`.
 
-### FEE-01: Queued slashes vs materialised slashed pot
+### FEE-01: Two-phase fee processing, materialised pot, and `pendingFeeAdj`
 
 - **Statement**:
-  - `protocolFeeAccrued` represents **queued** fee-pot accounting (used for bonus allocation maths).
-  - `slashedPot` represents **materialised** pot balance (used for actually paying bonuses during fee finalisation).
-  - Therefore, `protocolFeeAccrued` may increase after growth settlement / coverage settlement, while `slashedPot`
-    remains unchanged until the relevant position is fee-processed (“touched”).
+  - Pool-level **bonus economics** are anchored on the **materialised** per-fee-token `slashedPot` balances (not on a
+    separate queued “protocol fee accrued” counter).
+  - **Positive** `pendingFeeAdj` on positions encodes slash / fee-burn obligations that are **materialised** into
+    `slashedPot` on later touches (subject to per-leg caps on decreases — see SETTLE-03).
+  - **Bonus allocation** runs only **after** positive materialisation for that touch: `_processPositionFees` applies
+    Phase 1 (`_finalisePositiveFeeAdjustment`), Phase 2 (`_queueBonusForToken` against `slashedPot` / CSI `potAvail`),
+    then Phase 3 (`_finaliseNegativeFeeAdjustment` draining `slashedPot` for negative pending).
+  - Fee adjustments are **best effort** at the touch granularity: the same pass may fully pay a queued bonus when the
+    materialised pot suffices; otherwise negative `pendingFeeAdj` can remain for later touches.
 - **Enforced by**:
-  - `src/libraries/VTSFeeLib.sol::_queueBonusForToken` allocates bonuses against `protocolFeeAccrued` and queues
-    `pendingFeeAdj` (it does not mint/burn the slashed pot).
-  - `src/libraries/VTSFeeLib.sol::_finaliseFeeAdjustment` is the materialisation point:
-    - **positive** `pendingFeeAdj` funds `slashedPot` (`_fundFeePot`)
-    - **negative** `pendingFeeAdj` drains `slashedPot` up to availability (`_drainFeePot`)
-  - `src/libraries/VTSFeeLib.sol::_processPositionFees` calls `_finaliseFeeAdjustment` during touch.
+  - `src/libraries/VTSFeeLib.sol::_queueBonusForToken` reads allocatable balance from `slashedPot` (with CSI self-exclusion
+    via `feesShared` / remaining-share epochs).
+  - `src/libraries/VTSFeeLib.sol::_finalisePositiveFeeAdjustment` / `_finaliseNegativeFeeAdjustment` move value between
+    `pendingFeeAdj` and `slashedPot` in accounting; CoreHook settles ERC6909 against the hub.
+  - `src/libraries/VTSFeeLib.sol::_processPositionFees` orchestrates the three phases above.
   - Bonus sizing uses `FullMath.mulDivRoundingUp(potAvail, ciseExposure, totalExposure)` (then caps to `potAvail`) so
     tiny proportional shares are not stranded at zero wei when the position is otherwise eligible.
 - **Echidna harness note**:
@@ -588,7 +592,7 @@ being an informal “should”.
 ### FEE-02: New positions must not receive fee-sharing bonuses on creation
 
 - **Statement**: A newly registered position (MM or DirectLP) must not immediately allocate/receive fee-sharing bonuses
-  at the moment it is created, even if the pool has already accumulated `protocolFeeAccrued` or a funded `slashedPot`.
+  at the moment it is created, even if the pool already has a non-zero materialised `slashedPot`.
   Bonus allocation is only possible after the position has accrued non-dust eligibility (CISE exposure) and is later
   fee-processed.
 - **Enforced by**:

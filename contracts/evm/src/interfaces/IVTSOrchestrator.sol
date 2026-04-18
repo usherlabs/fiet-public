@@ -111,12 +111,6 @@ interface IVTSOrchestrator is IPausableVTS, IVTSCurrencyDelta, IVTSAdmin {
     /// @param positionId The position identifier
     function settlePositionGrowths(PositionId positionId) external;
 
-    /// @notice Get the protocol fee accrued (slashed fees) for a pool
-    /// @param poolId The pool identifier
-    /// @return fee0 The accrued fee for token0
-    /// @return fee1 The accrued fee for token1
-    function getProtocolFeeAccrued(PoolId poolId) external view returns (uint256 fee0, uint256 fee1);
-
     /// @notice Get the materialised slashed pot (claimables available for bonus payouts) for a pool
     /// @param poolId The pool identifier
     /// @return pot0 Slashed pot balance for token0

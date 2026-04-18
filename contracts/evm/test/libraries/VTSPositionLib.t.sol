@@ -528,7 +528,7 @@ contract VTSPositionLibTest is VTSLibTestBase {
     }
 
     function _assertDeferredResidualFirstBurnFees(PoolId poolId, PositionId positionId) internal view {
-        (uint256 pf0After1, uint256 pf1After1) = harness.getPoolProtocolFeeAccrued(poolId);
+        (uint256 pf0After1, uint256 pf1After1) = harness.getPoolSlashedPot(poolId);
         (uint256 fs0After1, uint256 fs1After1) = harness.getFeesShared(positionId);
         (int256 pending0After1, int256 pending1After1) = harness.getPendingFeeAdj(positionId);
 
@@ -570,13 +570,11 @@ contract VTSPositionLibTest is VTSLibTestBase {
         internal
         view
     {
-        (, uint256 pf1After2) = harness.getPoolProtocolFeeAccrued(poolId);
+        (, uint256 pf1After2) = harness.getPoolSlashedPot(poolId);
         (, uint256 fs1After2) = harness.getFeesShared(positionId);
         (, int256 pending1After2) = harness.getPendingFeeAdj(positionId);
 
-        assertEq(
-            pf1After2, expectedFeesBurn, "later settle should consume banked residual burn against the larger window"
-        );
+        assertEq(pf1After2, 0, "slashedPot stays 0 until a fee-processing touch materialises positive pendingFeeAdj");
         assertEq(fs1After2, expectedFeesBurn, "feesShared should track the smoothed burn");
         assertEq(pending1After2, int256(expectedFeesBurn), "smoothed burn should queue the slash later");
     }
@@ -2076,10 +2074,10 @@ contract VTSPositionLibTest is VTSLibTestBase {
         }
 
         {
-            (, uint256 protocolFee1After) = harness.getPoolProtocolFeeAccrued(corePoolId);
+            (, uint256 protocolFee1After) = harness.getPoolSlashedPot(corePoolId);
             (, uint256 feesShared1After) = harness.getFeesShared(positionId);
             (, int256 pendingAdj1After) = harness.getPendingFeeAdj(positionId);
-            assertEq(protocolFee1After, expectedFeesBurn, "protocol fee pot should increase by expected slash amount");
+            assertEq(protocolFee1After, 0, "slashedPot is materialised on later fee-processing touches, not here");
             assertEq(feesShared1After, expectedFeesBurn, "position feesShared should track slash funding");
             assertEq(pendingAdj1After, int256(expectedFeesBurn), "pending fee adjustment should queue slash");
         }
@@ -4529,10 +4527,12 @@ contract VTSPositionLibTest is VTSLibTestBase {
 
         harness.settlePositionGrowths(manager, positionId);
 
-        // DICE burn must apply before inflow nets principal, so slash accounting should be non-zero.
-        (, uint256 poolFee1) = harness.getPoolProtocolFeeAccrued(corePoolId);
+        // DICE burn must apply before inflow nets principal — slash is queued on the position (materialised pot updates on touch).
+        (, uint256 poolFee1) = harness.getPoolSlashedPot(corePoolId);
         (, uint256 feesShared1) = harness.getFeesShared(positionId);
-        assertGt(poolFee1, 0, "DICE burn should run before inflow netting principal");
+        (, int256 pending1) = harness.getPendingFeeAdj(positionId);
+        assertEq(poolFee1, 0, "slashedPot is not incremented during growth settlement");
+        assertGt(pending1, 0, "DICE burn should queue positive pendingFeeAdj before inflow netting principal");
         assertGt(feesShared1, 0, "feesShared should track that burn on fee token");
 
         // Inflow still nets deficit and credits the remainder to settled in the same cycle.
@@ -4706,11 +4706,13 @@ contract VTSPositionLibTest is VTSLibTestBase {
         harness.applyCoverageBurn(manager, positionId, corePoolId, 0, exercised, positionLiquidity);
         harness.applyCoverageBurn(manager, positionId, corePoolId, 0, exercised, positionLiquidity);
 
-        (, uint256 protocolFeeAccrued1) = harness.getPoolProtocolFeeAccrued(corePoolId);
+        (, uint256 protocolFeeAccrued1) = harness.getPoolSlashedPot(corePoolId);
+        (, int256 pending1After) = harness.getPendingFeeAdj(positionId);
         (uint256 snapAfter2,) = harness.getOutflowsAtFeeSnap(positionId);
 
         // Regression guard: repeated partial burns in one fee window must not over-slash one-shot equivalent.
-        assertLe(protocolFeeAccrued1, expectedSingleShotBurn, "repeated partial burns must not over-slash");
+        assertEq(protocolFeeAccrued1, 0, "slashedPot is not incremented at burn accounting time");
+        assertLe(uint256(pending1After), expectedSingleShotBurn, "repeated partial burns must not over-slash");
         assertEq(snapAfter2, exercised * 2, "outflow snap should still advance cumulatively");
     }
 
@@ -4738,14 +4740,14 @@ contract VTSPositionLibTest is VTSLibTestBase {
         harness.setFeeGrowthInsideLast(positionId, 0, 0);
 
         (uint256 snap0Before,) = harness.getOutflowsAtFeeSnap(positionId);
-        (uint256 pf0Before, uint256 pf1Before) = harness.getPoolProtocolFeeAccrued(corePoolId);
+        (uint256 pf0Before, uint256 pf1Before) = harness.getPoolSlashedPot(corePoolId);
         (uint256 fs0Before, uint256 fs1Before) = harness.getFeesShared(positionId);
 
         // Should not revert, and should not advance any state (feesBurn must be 0 due to ofDelta==0 early return).
         harness.applyCoverageBurn(manager, positionId, corePoolId, 0, 10e18, uint128(1e18));
 
         (uint256 snap0After,) = harness.getOutflowsAtFeeSnap(positionId);
-        (uint256 pf0After, uint256 pf1After) = harness.getPoolProtocolFeeAccrued(corePoolId);
+        (uint256 pf0After, uint256 pf1After) = harness.getPoolSlashedPot(corePoolId);
         (uint256 fs0After, uint256 fs1After) = harness.getFeesShared(positionId);
 
         assertEq(snap0After, snap0Before, "outflowsAtFeeSnap should not advance when ofDelta is zero");
@@ -4771,7 +4773,7 @@ contract VTSPositionLibTest is VTSLibTestBase {
 
         // Safety assertion: baseline path should be a no-op (no state writes) because positionLiquidity == 0 => fees == 0.
         (uint256 snap0Before,) = harness.getOutflowsAtFeeSnap(positionId);
-        (uint256 pf0Before, uint256 pf1Before) = harness.getPoolProtocolFeeAccrued(corePoolId);
+        (uint256 pf0Before, uint256 pf1Before) = harness.getPoolSlashedPot(corePoolId);
         (uint256 fs0Before, uint256 fs1Before) = harness.getFeesShared(positionId);
         (, uint256 fg1Before) = harness.getFeeGrowthInsideLast(positionId);
 
@@ -4780,7 +4782,7 @@ contract VTSPositionLibTest is VTSLibTestBase {
         harness.applyCoverageBurn(manager, positionId, corePoolId, 0, 3, uint128(0));
 
         (uint256 snap0After,) = harness.getOutflowsAtFeeSnap(positionId);
-        (uint256 pf0After, uint256 pf1After) = harness.getPoolProtocolFeeAccrued(corePoolId);
+        (uint256 pf0After, uint256 pf1After) = harness.getPoolSlashedPot(corePoolId);
         (uint256 fs0After, uint256 fs1After) = harness.getFeesShared(positionId);
         (, uint256 fg1After) = harness.getFeeGrowthInsideLast(positionId);
 
@@ -4838,12 +4840,15 @@ contract VTSPositionLibTest is VTSLibTestBase {
 
         harness.applyCoverageBurn(manager, positionId, corePoolId, 0, cov, positionLiquidity);
 
-        // Fee token is token1 for token0 deficit burns.
-        (, uint256 pf1After) = harness.getPoolProtocolFeeAccrued(corePoolId);
+        // Fee token is token1 for token0 deficit burns — burn accounting queues positive `pendingFeeAdj` (materialised
+        // into `slashedPot` only on a later fee-processing touch).
+        (, uint256 pf1After) = harness.getPoolSlashedPot(corePoolId);
         (, uint256 fs1After) = harness.getFeesShared(positionId);
+        (, int256 pending1After) = harness.getPendingFeeAdj(positionId);
 
-        assertEq(pf1After, expectedFeesBurn, "protocolFeeAccrued1 should equal expected feesBurn");
+        assertEq(pf1After, 0, "slashedPot1 stays 0 until touch materialises pending");
         assertEq(fs1After, expectedFeesBurn, "feesShared1 should equal expected feesBurn");
+        assertEq(pending1After, int256(expectedFeesBurn), "pendingFeeAdj1 should queue expected feesBurn");
     }
 
     // ============================================================

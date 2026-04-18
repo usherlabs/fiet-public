@@ -437,10 +437,10 @@ contract CrossMarketDeltaRegressionE2E is MME2EBase {
         (snap.poolDeficitPrincipal0[3], snap.poolDeficitPrincipal1[3]) =
             vts.getPoolTotalDeficitPrincipal(s_keyD.toId());
 
-        (snap.protocolFee0[0], snap.protocolFee1[0]) = vts.getProtocolFeeAccrued(s_keyA.toId());
-        (snap.protocolFee0[1], snap.protocolFee1[1]) = vts.getProtocolFeeAccrued(s_keyB.toId());
-        (snap.protocolFee0[2], snap.protocolFee1[2]) = vts.getProtocolFeeAccrued(s_keyC.toId());
-        (snap.protocolFee0[3], snap.protocolFee1[3]) = vts.getProtocolFeeAccrued(s_keyD.toId());
+        (snap.protocolFee0[0], snap.protocolFee1[0]) = vts.getSlashedPot(s_keyA.toId());
+        (snap.protocolFee0[1], snap.protocolFee1[1]) = vts.getSlashedPot(s_keyB.toId());
+        (snap.protocolFee0[2], snap.protocolFee1[2]) = vts.getSlashedPot(s_keyC.toId());
+        (snap.protocolFee0[3], snap.protocolFee1[3]) = vts.getSlashedPot(s_keyD.toId());
     }
 
     function _assertPositionStateEq(DurablePositionState memory lhs, DurablePositionState memory rhs, string memory label)

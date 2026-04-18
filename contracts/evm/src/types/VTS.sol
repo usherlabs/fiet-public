@@ -217,9 +217,8 @@ struct PoolAccounting {
     TokenPairUint deficitGrowthGlobal;
     // Inflow growth global per token
     TokenPairUint inflowGrowthGlobal;
-    // Protocol/LPs fee pot accrued from fee sharing per token
-    TokenPairUint protocolFeeAccrued;
-    // Slashed pot balances per token
+    // Materialised slashed-pot balances per token (authoritative budget for bonus allocation after positive
+    // `pendingFeeAdj` materialisation in `VTSFeeLib`; ERC6909 backing is settled via the hook)
     TokenPairUint slashedPot;
     // DICE: Pool-wide outstanding swap-incurred deficit principal per token.
     // Mirrors summed cumulativeDeficit and excludes commitmentDeficit.
