@@ -5,7 +5,6 @@ import {VTSPositionLibFuzzHarness} from "../harnesses/VTSPositionLibFuzzHarness.
 import {MockPoolManager} from "../mocks/MockPoolManager.sol";
 import {MockMarketVault} from "../../_mocks/MockMarketVault.sol";
 import {MockLCC} from "../../_mocks/MockLCC.sol";
-import {FuzzLinkedLibs} from "../base/FuzzLinkedLibs.sol";
 
 import {
     MarketVTSConfiguration,
@@ -41,8 +40,6 @@ contract SEIZE03_04 {
     bool internal lastOk04;
 
     constructor() {
-        FuzzLinkedLibs.deployVTSFeeLinkedLib();
-        FuzzLinkedLibs.deployVTSPositionLib();
         harness = new VTSPositionLibFuzzHarness();
         poolManager = new MockPoolManager();
         vault = new MockMarketVault(address(0));

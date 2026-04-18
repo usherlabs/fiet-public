@@ -7,7 +7,6 @@ import {MockOracleHelper} from "../mocks/MockOracleHelper.sol";
 import {VTSCommitLibHarness} from "../../libraries/harnesses/VTSCommitLibHarness.sol";
 import {Currency} from "v4-periphery/lib/v4-core/src/types/Currency.sol";
 import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
-import {FuzzLinkedLibs} from "../base/FuzzLinkedLibs.sol";
 import {MarketMaker} from "../../../src/libraries/MarketMaker.sol";
 
 /// @notice fuzz harness for COMMIT-01 / SIG-BACKING-01 (Domain C):
@@ -92,8 +91,6 @@ contract COMMIT01 {
     }
 
     constructor() {
-        FuzzLinkedLibs.deployVTSCommitLib();
-
         oracle = new MockOracleHelper(address(0));
         oracle.setPrices(1e18, 1e18);
         oracle.setTotalValue(0);

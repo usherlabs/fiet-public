@@ -28,12 +28,6 @@ import {IOracleHelper} from "../../../src/interfaces/IOracleHelper.sol";
 contract VTSPositionLibFuzzHarness {
     VTSStorage internal s;
 
-    constructor() {
-        // VTSPositionLib must already be deployed at the FuzzLinkedLibs address before
-        // this harness is constructed. Callers should call FuzzLinkedLibs.deployVTSPositionLib()
-        // before `new VTSPositionLibFuzzHarness()`.
-    }
-
     // -------------------------------------------------------------------------
     // Setup / internal-library calls (safe: internal functions are inlined)
     // -------------------------------------------------------------------------
@@ -202,4 +196,3 @@ contract VTSPositionLibFuzzHarness {
         });
     }
 }
-

@@ -7,7 +7,7 @@ import {FuzzVTSPosition} from "./FuzzVTSPosition.sol";
 /// @notice Composition root for repo-owned Medusa fuzzing.
 /// @dev The supported Medusa path now targets this contract directly via `medusa.json`.
 contract FuzzEntry is FuzzMMQ01, FuzzVTSPosition {
-    constructor() FuzzMMQ01() {}
+    constructor() FuzzMMQ01() FuzzVTSPosition() {}
 
     /// @notice MMQ-01 valid routes succeed when non-fee proceeds cover queued custody.
     function fuzz_mmq01_valid_routes_succeed_when_non_fee_covers_queue() external view returns (bool) {

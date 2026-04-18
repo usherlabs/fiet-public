@@ -3,7 +3,6 @@ pragma solidity ^0.8.26;
 
 import {VTSCommitLib} from "../../../src/libraries/VTSCommitLib.sol";
 import {VTSCommitLibHarness} from "../../libraries/harnesses/VTSCommitLibHarness.sol";
-import {FuzzLinkedLibs} from "../base/FuzzLinkedLibs.sol";
 import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {FullMath} from "v4-periphery/lib/v4-core/src/libraries/FullMath.sol";
 import {FixedPoint128} from "v4-periphery/lib/v4-core/src/libraries/FixedPoint128.sol";
@@ -36,7 +35,6 @@ contract COV03 {
     Snap internal afterSnap;
 
     constructor() {
-        FuzzLinkedLibs.deployVTSCommitLib();
         commitHarness = new VTSCommitLibHarness();
     }
 

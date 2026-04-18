@@ -6,7 +6,6 @@ import {IVRLSignalManager} from "../../../src/interfaces/IVRLSignalManager.sol";
 import {IOracleHelper} from "../../../src/interfaces/IOracleHelper.sol";
 import {LiquiditySignal} from "../../../src/types/Commit.sol";
 import {MarketMaker} from "../../../src/libraries/MarketMaker.sol";
-import {FuzzLinkedLibs} from "../base/FuzzLinkedLibs.sol";
 
 /// @dev Minimal mock that always verifies and returns leaf TTL — signal verification
 ///      is not the concern of this harness; advancer binding is.
@@ -148,8 +147,6 @@ contract COMMIT03 {
     bool internal lastRotationOk;
 
     constructor() {
-        FuzzLinkedLibs.deployVTSCommitLib();
-
         harness = new VTSCommitLibHarness();
         sigMgr = new COMMIT03SignalManager();
         admissionOracle = new COMMIT03Oracle();

@@ -9,9 +9,10 @@ import {VTSPositionLib} from "../../../src/libraries/VTSPositionLib.sol";
 import {VTSLifecycleLinkedLib} from "../../../src/libraries/VTSLifecycleLinkedLib.sol";
 import {VTSPositionMMOpsLib} from "../../../src/libraries/VTSPositionMMOpsLib.sol";
 
-/// @notice Legacy hard-linked library addresses for deferred fuzz harness CREATE2 deploy helpers.
-/// @dev `FuzzEntry` is now the supported Medusa path and does not use this helper.
-///      This file remains only for deferred harnesses that have not yet been migrated away from linked libraries.
+/// @notice Legacy hard-linked library addresses for the remaining deferred fuzz harness CREATE2 deploy helpers.
+/// @dev `FuzzEntry` now covers MMQ-01 plus the migrated COMMIT / COV / SEIZE surfaces and does not use this helper.
+///      This file remains only for the deferred Hub/LCC harnesses and MM-settle flows that still depend on runtime
+///      deployment of production external libraries under Medusa.
 library FuzzLinkedLibs {
     /// @dev Must match the single-target Medusa harness deployment address for
     ///      deployer `0x30000` at nonce `0`.

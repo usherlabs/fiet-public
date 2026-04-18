@@ -13,7 +13,6 @@ import {IPoolManager} from "v4-periphery/lib/v4-core/src/interfaces/IPoolManager
 import {OracleUtils} from "../../../src/libraries/OracleUtils.sol";
 import {LiquidityUtils} from "../../../src/libraries/LiquidityUtils.sol";
 import {FullMath} from "v4-periphery/lib/v4-core/src/libraries/FullMath.sol";
-import {FuzzLinkedLibs} from "../base/FuzzLinkedLibs.sol";
 import {MarketMaker} from "../../../src/libraries/MarketMaker.sol";
 
 /// @notice fuzz harness for COMMIT-02: Checkpointing with commitment updates `commitmentDeficit` as an insolvency gate.
@@ -67,8 +66,6 @@ contract COMMIT02 {
     }
 
     constructor() {
-        FuzzLinkedLibs.deployVTSCommitLib();
-
         oracle = new MockOracleHelper(address(0));
         oracle.setPrices(1e18, 1e18);
         oracle.setTotalValue(0);
