@@ -62,23 +62,24 @@ Status meanings:
 | SETTLE-01 | Migrated | `FuzzMMSettle.sol`, `invariants/SETTLE01.sol` | Old helper deployment removed; harness now runs directly under the composed Medusa path. |
 | SETTLE-02 | Migrated | `FuzzMMSettle.sol`, `invariants/SETTLE02.sol` | Old helper deployment removed; harness now runs directly under the composed Medusa path. |
 | VTS composed module | Migrated | `FuzzVTSPosition.sol` | `FuzzEntry` composes the repo-owned COMMIT / COV / SEIZE child harnesses directly. |
+| VTS core tail composed module | Migrated | `FuzzVTSCoreTail.sol` | `FuzzVTSPosition` inherits this Worker A tail module so `FuzzEntry` gains the remaining core/accounting/VTS surfaces without root-level rewiring. |
 | COMMIT-01 | Migrated | `FuzzVTSPosition.sol`, `invariants/COMMIT01.sol` | Composed into `FuzzEntry`; no linked-library predeploy remains in the harness. |
 | COMMIT-02 | Migrated | `FuzzVTSPosition.sol`, `invariants/COMMIT02.sol` | Composed into `FuzzEntry`; no linked-library predeploy remains in the harness. |
 | COMMIT-03 | Migrated | `FuzzVTSPosition.sol`, `invariants/COMMIT03.sol` | Composed into `FuzzEntry`; no linked-library predeploy remains in the harness. |
 | COV-03 | Migrated | `FuzzVTSPosition.sol`, `invariants/COV03.sol` | Composed into `FuzzEntry`; no linked-library predeploy remains in the harness. |
 | SEIZE-03 / SEIZE-04 | Migrated | `FuzzVTSPosition.sol`, `invariants/SEIZE03_04.sol` | Composed into `FuzzEntry`; the harness now uses only the inlined touch-position path. |
-| SIG-01 / SIG-02 | Blocked | `invariants/SIG01_02.sol` | Not yet refactored into a `FuzzEntry` module. |
-| COV-01 | Blocked | `invariants/COV01.sol` | Not yet refactored into a `FuzzEntry` module. |
-| COV-02 | Blocked | `invariants/COV02.sol` | Hybrid evidence still lives outside `FuzzEntry`. |
-| COV-04 | Blocked | `invariants/COV04.sol` | Hybrid evidence still lives outside `FuzzEntry`. |
-| FEE-01 | Blocked | `invariants/FEE01.sol` | Not yet refactored into a `FuzzEntry` module. |
-| FEE-02 | Blocked | `invariants/FEE02.sol` | Not yet refactored into a `FuzzEntry` module. |
-| VTS-01 | Blocked | `invariants/VTS01.sol` | Depends on the remaining VTS wrapper migration. |
-| VTS-02 | Blocked | `invariants/VTS02.sol` | Depends on the remaining VTS wrapper migration. |
-| VTS-03 | Blocked | `invariants/VTS03.sol` | Depends on the remaining VTS wrapper migration. |
-| DELTA-01 | Blocked | `invariants/DELTA01.sol` | Not yet refactored into a `FuzzEntry` module. |
-| SEIZE-01 / SEIZE-02 | Blocked | `invariants/SEIZE01_02.sol` | Not yet refactored into a `FuzzEntry` module. |
-| PAUSE-01 | Blocked | `invariants/PAUSE01.sol` | Not yet refactored into a `FuzzEntry` module. |
+| SIG-01 / SIG-02 | Migrated | `FuzzVTSCoreTail.sol`, `invariants/SIG01_02.sol` | Composed into `FuzzEntry` through the Worker A tail module; no linked-library prep or repo-owned salt wiring is involved. |
+| COV-01 | Migrated | `FuzzVTSCoreTail.sol`, `invariants/COV01.sol` | Composed into `FuzzEntry` through the Worker A tail module. |
+| COV-02 | Migrated | `FuzzVTSCoreTail.sol`, `invariants/COV02.sol` | The hook-order evidence now runs through the supported `FuzzEntry` path instead of living outside composition. |
+| COV-04 | Migrated | `FuzzVTSCoreTail.sol`, `invariants/COV04.sol` | The fee-burn remainder math harness now runs through the supported `FuzzEntry` path. |
+| FEE-01 | Migrated | `FuzzVTSCoreTail.sol`, `invariants/FEE01.sol` | Composed into `FuzzEntry` through the Worker A tail module. |
+| FEE-02 | Migrated | `FuzzVTSCoreTail.sol`, `invariants/FEE02.sol` | Composed into `FuzzEntry` through the Worker A tail module. |
+| VTS-01 | Migrated | `FuzzVTSCoreTail.sol`, `invariants/VTS01.sol` | Composed into `FuzzEntry` through the Worker A tail module. |
+| VTS-02 | Migrated | `FuzzVTSCoreTail.sol`, `invariants/VTS02.sol` | Composed into `FuzzEntry` through the Worker A tail module. |
+| VTS-03 | Migrated | `FuzzVTSCoreTail.sol`, `invariants/VTS03.sol` | Composed into `FuzzEntry` through the Worker A tail module. |
+| DELTA-01 | Migrated | `FuzzVTSCoreTail.sol`, `invariants/DELTA01.sol` | Composed into `FuzzEntry` through the Worker A tail module. |
+| SEIZE-01 / SEIZE-02 | Migrated | `FuzzVTSCoreTail.sol`, `invariants/SEIZE01_02.sol` | Composed into `FuzzEntry` through the Worker A tail module. |
+| PAUSE-01 | Migrated | `FuzzVTSCoreTail.sol`, `invariants/PAUSE01.sol` | Composed into `FuzzEntry` through the Worker A tail module. |
 | MKT-01 / MKT-02 | Blocked | `invariants/MKT01_02.sol` | Not yet refactored into a `FuzzEntry` module. |
 | MKT-03 / MKT-06 | Blocked | `invariants/MKT03_06.sol` | Not yet refactored into a `FuzzEntry` module. |
 | MKT-05 | Blocked | `invariants/MKT05.sol` | Foundry regressions remain authoritative; not yet composed into `FuzzEntry`. |

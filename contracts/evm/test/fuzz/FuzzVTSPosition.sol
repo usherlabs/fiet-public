@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.26;
 
+import {FuzzVTSCoreTail} from "./FuzzVTSCoreTail.sol";
 import {COMMIT01} from "./invariants/COMMIT01.sol";
 import {COMMIT02} from "./invariants/COMMIT02.sol";
 import {COMMIT03} from "./invariants/COMMIT03.sol";
@@ -10,14 +11,14 @@ import {SEIZE03_04} from "./invariants/SEIZE03_04.sol";
 /// @notice Composed Medusa module for repo-owned VTS commit, coverage, and seize fuzz harnesses.
 /// @dev These surfaces no longer rely on linked-library CREATE2 preparation and are routed through
 ///      `FuzzEntry` via child harness composition.
-abstract contract FuzzVTSPosition {
+abstract contract FuzzVTSPosition is FuzzVTSCoreTail {
     COMMIT01 internal fuzzCommit01;
     COMMIT02 internal fuzzCommit02;
     COMMIT03 internal fuzzCommit03;
     COV03 internal fuzzCov03;
     SEIZE03_04 internal fuzzSeize0304;
 
-    constructor() {
+    constructor() FuzzVTSCoreTail() {
         fuzzCommit01 = new COMMIT01();
         fuzzCommit02 = new COMMIT02();
         fuzzCommit03 = new COMMIT03();
