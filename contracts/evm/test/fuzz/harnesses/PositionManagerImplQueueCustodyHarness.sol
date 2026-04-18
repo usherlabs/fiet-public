@@ -11,6 +11,8 @@ import {IFuzzTakeOrchestrator} from "./IFuzzTakeOrchestrator.sol";
 ///         (`MMPositionActionsImpl._forwardQueuedLccToCustodian`).
 /// @dev Logic MUST stay aligned with `PositionManagerImpl._routeLccCustodyTakeAndForward` (custody guard + take + forward)
 ///      and `MMPositionActionsImpl._forwardQueuedLccToCustodian` (ERC20 transfer + conditional `record`).
+///      `nonFee < custodyForward` reverts `InsufficientBalance` as a defensive check (queued principal must be fundable by
+///      immediate post-`feeAdj` non-fee receipt under **SETTLE-03** / **MMQ-01**).
 ///      Related audit note: `agents/audit-resolutions/mm-queue-custody-nonfee-vs-custodyforward-guard-resolution.md`.
 contract PositionManagerImplQueueCustodyHarness {
     IFuzzTakeOrchestrator public immutable vtsOrchestrator;
@@ -46,9 +48,11 @@ contract PositionManagerImplQueueCustodyHarness {
             custodyForward = nonFee;
         }
 
-        uint256 creditTake = LiquidityUtils.mmLockerCreditTakeForQueuedCustody(addedCredit, fee);
+        uint256 creditTake =
+            LiquidityUtils.lockerLccTakeAmountBeforeCustodyForward(tokenId > 0, addedCredit, fee, custodyForward);
 
         if (creditTake > 0) {
+            // Surplus (nonFee - qCommitted) is not a separate field: it is whatever positive LCC delta remains on the locker after that partial take (qCommitted) — i.e. the amount that was not debited, including the economic slice nonFee - qCommitted (and, depending on timing vs classification, the rest of the balance story still held on MMPM until TAKE / UNWRAP_LCC clears it).
             vtsOrchestrator.take(currency, locker, creditTake);
         }
 

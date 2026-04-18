@@ -686,7 +686,8 @@ contract VRLSignalManagerTest is MarketMakerTestBase {
         assertEq(signalManager.submitAuthNonce(sender), authNonce + 1);
     }
 
-    function test_verifyLiquiditySignalRelayed_revertsForNonZeroCommitmentLocker_onRenew() public {
+    /// @dev Renew relay `sender` must be `address(0)`, legacy, or `signal.mmState.advancer`; arbitrary non-zero fails.
+    function test_verifyLiquiditySignalRelayed_revertsForRenewRelaySenderNotZeroNorAdvancer() public {
         bytes memory liquiditySignalBytes = abi.encode(liquiditySignal);
         address sender = liquiditySignal.mmState.owner;
         uint256 commitId = 42;
@@ -697,6 +698,22 @@ contract VRLSignalManagerTest is MarketMakerTestBase {
         signalManager.verifyLiquiditySignalRelayed(
             sender, commitId, liquiditySignalBytes, deadline, authNonce, bytes(""), _CL, true
         );
+    }
+
+    function test_verifyLiquiditySignalRenewRelayed_senderEqualsAdvancer_success() public {
+        signalManager.setVerifier(address(new AlwaysTrueSignalVerifier()));
+
+        (bytes memory liquiditySignalBytes, address adv, uint256 advPk) = _advancerRelayedLiquiditySignal();
+        uint256 commitId = 42;
+        uint256 deadline = block.timestamp + 1 hours;
+        uint256 authNonce = signalManager.submitAuthNonce(adv);
+        bytes memory authSig = _signRelayAuth(advPk, adv, commitId, liquiditySignalBytes, adv, deadline, authNonce);
+
+        (bool ok,) = signalManager.verifyLiquiditySignalRelayed(
+            adv, commitId, liquiditySignalBytes, deadline, authNonce, authSig, adv, true
+        );
+        assertTrue(ok);
+        assertEq(signalManager.submitAuthNonce(adv), authNonce + 1);
     }
 
     function _ownerPrivateKey() internal pure returns (uint256) {

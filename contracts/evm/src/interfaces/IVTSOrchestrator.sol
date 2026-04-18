@@ -316,7 +316,8 @@ interface IVTSOrchestrator is IPausableVTS, IVTSCurrencyDelta, IVTSAdmin {
     /// @notice Renew a liquidity signal using sender-signed EIP-712 relayer authorisation
     /// @param factory The market factory namespace for caller-bound validation (mirrors non-relayed renew)
     /// @param authNonce Replay guard nonce for the proof principal (`mmState.advancer`)
-    /// @param sender Must be `address(0)` in the signed relay payload for renew (EIP-712 `RelayAuth.sender`).
+    /// @param sender EIP-712 `RelayAuth.sender` for renew: `address(0)` (legacy) or `mmState.advancer`; `MMPositionManager`
+    ///        enforces the batch locker matches the signed sender or advancer.
     function renewSignalRelayed(
         IMarketFactory factory,
         uint256 commitId,

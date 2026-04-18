@@ -46,7 +46,8 @@ contract VRLSignalManager is Ownable, EIP712, IVRLSignalManager {
     mapping(address => uint256) public submitAuthNonce;
     address public immutable submitter;
     /// @dev EIP-712 `RelayAuth`: `signer` is the proof principal; `sender` is the MM batch locker / NFT recipient
-    ///      (`address(0)` aliases `signer` on fresh relay). For renew (`commitId != 0`), `sender` must be zero.
+    ///      (`address(0)` aliases `signer` on fresh relay). For renew (`commitId != 0`), `sender` is either legacy
+    ///      `address(0)` or must equal `signal.mmState.advancer` so the signed payload binds to the batch locker.
     bytes32 internal constant RELAY_AUTH_TYPEHASH = keccak256(
         "RelayAuth(address signer,uint256 commitId,bytes32 liquiditySignalHash,address sender,uint256 deadline,uint256 nonce)"
     );
@@ -191,8 +192,11 @@ contract VRLSignalManager is Ownable, EIP712, IVRLSignalManager {
             // EIP-712 `sender` field: `address(0)` aliases the proof principal (`signer`).
             address effectiveSigner = sender == address(0) ? signer : sender;
             if (effectiveSigner == address(0)) revert Errors.InvalidAddress(address(0));
-        } else if (sender != address(0)) {
-            revert Errors.InvalidSender();
+        } else {
+            // Renew: legacy `address(0)` (MMPM must still bind locker to advancer), or explicit `sender == advancer`.
+            if (sender != address(0) && sender != signal.mmState.advancer) {
+                revert Errors.InvalidSender();
+            }
         }
 
         bytes32 structHash = EfficientHashLib.hash(

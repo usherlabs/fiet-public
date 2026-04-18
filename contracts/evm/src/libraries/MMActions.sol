@@ -4,8 +4,9 @@ pragma solidity ^0.8.26;
 /// @notice Library to define MM Position Manager actions
 /// @dev These action codes are used by MMPositionManager and MMPMActions for action dispatch
 /// @dev Actions < SETTLE_POSITION_FROM_DELTAS + 1 are delegated to MMPMActionsImpl (position operations).
-///      `DECREASE_LIQUIDITY` / `BURN_POSITION` calldata includes `amount0Min` / `amount1Min` (floor on immediate non-fee LCC
-///      after `feeAdj` netting — see `LiquidityUtils.forwardedNonFeeLccAmount`; not identical to raw `callerDelta - feesAccrued`).
+///      `DECREASE_LIQUIDITY` / `BURN_POSITION` calldata includes `amount0Min` / `amount1Min` (floor on per-leg immediate
+///      post-`feeAdj` non-fee LCC — see `LiquidityUtils.forwardedNonFeeLccAmount`; commit surplus is locker credit; not
+///      identical to raw `callerDelta - feesAccrued`).
 /// @dev Actions >= COMMIT_SIGNAL and < TAKE are handled in MMPositionManager (commitments)
 /// @dev Actions >= TAKE are handled in MMPositionManager (utilities)
 library MMActions {

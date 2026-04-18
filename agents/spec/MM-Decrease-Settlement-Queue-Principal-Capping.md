@@ -27,7 +27,7 @@ The queue should absorb everything that can be backed by same-lane **principal r
 ### Distinction: VTS queue principal vs MMPM decrease/burn min-out
 
 - **VTS / cancel-with-queue principal** for routing caps remains hook-time **`callerDelta - feesAccrued`** (pool principal for the modify), unchanged by materialised `feeAdj` in `processMMOperations` — see `VTSPositionMMOpsLib` and regression tests (e.g. Scan 21 / `SETTLE-03`).
-- **User-facing `amount0Min` / `amount1Min`** on `DECREASE_LIQUIDITY` and `BURN_POSITION` is a floor on the **immediate non-fee LCC** amount forwarded to the queue custodian after classifying fee vs principal using **`feeAdj`** (hook delta), i.e. the same split as `PositionManagerImpl._handleLccBalanceIncrease` / `LiquidityUtils.forwardedNonFeeLccAmount`. Do not conflate the two formulas in product docs or integrator expectations.
+- **User-facing `amount0Min` / `amount1Min`** on `DECREASE_LIQUIDITY` and `BURN_POSITION` is a floor on the per-leg **immediate post-`feeAdj` non-fee LCC** (`LiquidityUtils.forwardedNonFeeLccAmount`), i.e. the same split as `PositionManagerImpl._handleLccBalanceIncrease`. For **commit buckets** (`tokenId > 0`), only the Hub-queued slice `qCommitted` is physically forwarded to `MMQueueCustodian`; any surplus `nonFee - qCommitted` stays as **locker transient LCC credit** (cleared via `TAKE` / `UNWRAP_LCC`). Do not conflate VTS queue principal with min-out in product docs or integrator expectations.
 
 ---
 
@@ -61,7 +61,7 @@ The queue should absorb everything that can be backed by same-lane **principal r
 ```
 
 Key points:
-- `principalDelta` = `callerDelta - accruedFeesAfterAdj` (fees are deliberately excluded from queue cap).
+- `principalDelta` = `callerDelta - feesAccrued` (pool principal only; **not** net of `feeAdj` — fee slash/bonus is reconciled when MMPM takes LCC and classifies fee vs non-fee; see `VTSPositionMMOpsLib.processMMOperations`).
 - `retainedPrincipal` (what becomes queued) is **capped by same-lane principal**.
 - `underlyingDeltaSettlement` = `settleableDelta` only (the vault-immediate slice).
 - The clamp on `pa.settled` uses `settleable + queued`, **not** the full `requiredSettlementDelta`.

@@ -381,7 +381,9 @@ being an informal “should”.
   - **Fresh-commit custody**: On the direct `MMPositionManager` fresh-commit path, the commitment NFT is minted to
     `mmState.owner`. On the relayed fresh-commit path, EIP-712 `RelayAuth` includes a `sender` field: either an
     explicit recipient (must equal the batch locker) or `address(0)` meaning custody to the proof principal (`mmState.owner`).
-    Renew relay uses `sender == address(0)` in the typed data. The EIP-712 domain uses `VRLSignalManager`
+    Renew relay: EIP-712 `RelayAuth.sender` is `address(0)` (legacy) or `mmState.advancer`; `MMPositionManager` requires the
+    batch locker (`msgSender()`) to match the signed sender when non-zero, or to be the advancer when the signed sender is zero.
+    The EIP-712 domain uses `VRLSignalManager`
     version `"1"` (the `RelayAuth` struct adds fields without bumping the domain version).
   - These roles are intentionally **not** interchangeable, but they are expected to remain under the control of the
     same real-world operator / coordinated trust domain.
@@ -630,9 +632,13 @@ being an informal “should”.
   - Coupled to **DELTA-01**: transient MMPM underlying deltas must be batch-clearable; only the vault-immediate slice is
     booked as positive owner underlying delta. Any shortfall that cannot be Hub-queued (principal-capped) and cannot be
     paid from the vault in the same unlock **stays in live source `settled`**, not on `OwnerCurrencyDelta`.
-  - **User min-out vs routing principal**: `DECREASE_LIQUIDITY` / `BURN_POSITION` `amountMin` floors the **immediate
-    non-fee LCC** forwarded to the queue custodian after `feeAdj` netting (`LiquidityUtils.forwardedNonFeeLccAmount`), not
-    the same scalar as hook-time pool principal `callerDelta - feesAccrued` used for cancel/queue caps in VTS.
+  - **User min-out vs routing principal**: `DECREASE_LIQUIDITY` / `BURN_POSITION` `amountMin` floors the per-leg **immediate
+    post-`feeAdj` non-fee LCC** (`LiquidityUtils.forwardedNonFeeLccAmount`), not hook-time pool principal
+    `callerDelta - feesAccrued` used for cancel/queue caps in VTS. For **commit buckets** (`tokenId > 0`), only the
+    Hub-queued slice `qCommitted` is physically forwarded to `MMQueueCustodian`; any surplus
+    `nonFee - qCommitted` remains as **locker transient LCC credit** on `MMPositionManager` (cleared via `TAKE` /
+    `UNWRAP_LCC` in the same batch). `feeAdj` reclassifies only the informational **fee** slice vs non-fee receipt; it does
+    not redefine queue principal, which stays principal-bounded from `callerDelta - feesAccrued`.
   - **Source-side decrement (routed amount only)**: `_applySettlementClampFromExcess` removes the **routed export** from
     source `pa.settled` / pool `totalSettled` — for non-seizure decreases that is `settleableDelta + queuedDelta`; for
     seizure decreases it is the per-leg seizure export (`min(excess, settleable + burn)`, not the full queued principal
@@ -679,11 +685,16 @@ being an informal “should”.
 ### MMQ-01: Queued principal must not exceed forwarded non-fee LCC on custody take-and-forward
 
 - **Statement**: When routing Hub-queued principal (`qCommitted` / custody-forward) through
-  `PositionManagerImpl._routeLccCustodyTakeAndForward` with a non-zero position-scoped `tokenId`, the slippage-scoped
-  **non-fee** LCC amount (`LiquidityUtils.forwardedNonFeeLccAmount`) must cover the queued slice being taken, or the call
-  reverts with `Errors.InsufficientBalance` (fail-closed vs double-spend).
+  `PositionManagerImpl._routeLccCustodyTakeAndForward` with a non-zero position-scoped `tokenId`, the immediate
+  post-`feeAdj` **non-fee** LCC amount (`LiquidityUtils.forwardedNonFeeLccAmount`) must cover the queued slice being
+  custodied, or the call reverts with `Errors.InsufficientBalance` (fail-closed vs under-collateralised commit custody).
+  Under sound routing, queued principal is bounded by pool principal `callerDelta - feesAccrued`, while `feeAdj` applies
+  only to the fee-classified slice relative to informational `feesAccrued` — not as a separate “tax” on principal — so
+  `nonFee < custodyForward` should be **unreachable** in valid states and indicates a regression, sequencing bug, or
+  inconsistent coupling between VTS queue staging and the router’s actual post-hook receipt.
 - **Enforced by**: `PositionManagerImpl` custody-forward path and `LiquidityUtils.forwardedNonFeeLccAmount` semantics
-  (see audit resolution linked above).
+  (see audit resolution linked above). Locker delta is debited via `LiquidityUtils.lockerLccTakeAmountBeforeCustodyForward`
+  only by the custodied amount for commit buckets; surplus non-fee LCC remains locker credit.
 - **Evidence**:
   - Echidna: `test/fuzz/invariants/MMQ01.sol` → `echidna_mmq01_*` (run via `just echidna-mmq-01` from `contracts/evm/Justfile`; implementation is shared with `test/fuzz/FuzzMMQ01.sol`).
   - Medusa (optional, no linked-library prepare): `test/fuzz/FuzzEntry.sol` → same `echidna_mmq01_*` properties and `action_*` entrypoints (run via `just medusa-mmq-01`; uses `scripts/medusa.sh` and `medusa.json`).

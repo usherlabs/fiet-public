@@ -1176,7 +1176,15 @@ library VTSPositionLib {
             _updateStatus(s, result.id, posStorage, initialLiquidity, liq);
         }
 
-        result.feeAdj = VTSFeeLinkedLib.afterTouchPosition(s, result.id);
+        if (hookData.isMMOperation && p.params.liquidityDelta < 0) {
+            int128 feesAccrued0 = p.feesAccrued.amount0();
+            int128 feesAccrued1 = p.feesAccrued.amount1();
+            uint256 positiveCap0 = feesAccrued0 > 0 ? uint256(uint128(feesAccrued0)) : 0;
+            uint256 positiveCap1 = feesAccrued1 > 0 ? uint256(uint128(feesAccrued1)) : 0;
+            result.feeAdj = VTSFeeLinkedLib.afterTouchPositionWithPositiveCaps(s, result.id, positiveCap0, positiveCap1);
+        } else {
+            result.feeAdj = VTSFeeLinkedLib.afterTouchPosition(s, result.id);
+        }
 
         if (hookData.isMMOperation) {
             VTSPositionMMOpsLib.processMMOperations(s, ctx, p, result, requiredSettlementDelta);

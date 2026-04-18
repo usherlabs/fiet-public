@@ -310,7 +310,9 @@ contract MMPositionManager is
 
     /// @notice Renews an existing signal with new parameters
     /// @dev Direct renew (no relay) requires the batch locker to equal `signal.mmState.advancer`, matching ordinary
-    ///      non-seizing MM ops (`locker == advancer`). Relayed renew keeps EIP-712 auth on the advancer path.
+    ///      non-seizing MM ops (`locker == advancer`). Relayed renew: EIP-712 `RelayAuth.sender` must be `address(0)`
+    ///      (locker must still be advancer) or `signal.mmState.advancer`; the batch locker (`msgSender()`) must match
+    ///      the signed sender when non-zero, or be the advancer when the signed sender is zero.
     /// @param tokenId The commitment NFT token ID
     /// @param liquiditySignal The new liquidity signal
     function _renewSignal(uint256 tokenId, bytes calldata liquiditySignal, bytes calldata relayParams) internal {
@@ -319,10 +321,13 @@ contract MMPositionManager is
             if (msgSender() != signal.mmState.advancer) revert Errors.InvalidSender();
             vtsOrchestrator.renewSignal(marketFactory, tokenId, liquiditySignal);
         } else {
-            (uint256 deadline, uint256 authNonce, bytes memory authSig, address sender) =
+            LiquiditySignal memory signal = abi.decode(liquiditySignal, (LiquiditySignal));
+            (uint256 deadline, uint256 authNonce, bytes memory authSig, address relaySender) =
                 abi.decode(relayParams, (uint256, uint256, bytes, address));
+            address adv = signal.mmState.advancer;
+            if (msgSender() != adv && msgSender() != relaySender) revert Errors.InvalidSender();
             vtsOrchestrator.renewSignalRelayed(
-                marketFactory, tokenId, liquiditySignal, deadline, authNonce, authSig, sender
+                marketFactory, tokenId, liquiditySignal, deadline, authNonce, authSig, relaySender
             );
         }
     }

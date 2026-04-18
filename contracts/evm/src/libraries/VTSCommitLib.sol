@@ -287,6 +287,7 @@ library VTSCommitLib {
         _renewSignalInternal(s, sender, commitId, liquiditySignal, expirySeconds);
     }
 
+    /// @dev `sender` is EIP-712 `RelayAuth.sender`: for renew, `address(0)` or `signal.mmState.advancer` (see `VRLSignalManager`).
     function _renewSignalRelayedLinked(
         VTSStorage storage s,
         address signer,

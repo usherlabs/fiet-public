@@ -815,6 +815,7 @@ contract VTSOrchestrator is
     /// @param factory Market factory namespace for factory registration and bound-caller checks only. EIP-712
     ///        verification remains under `signalManager`; renewals are tied to `commitId` and validated liquidity
     ///        signal ownership within `VTSCommitLib.renewSignalRelayed`.
+    /// @param sender EIP-712 `RelayAuth.sender`: `address(0)` or `mmState.advancer` (see `VRLSignalManager`); MMPM binds locker.
     function renewSignalRelayed(
         IMarketFactory factory,
         uint256 commitId,

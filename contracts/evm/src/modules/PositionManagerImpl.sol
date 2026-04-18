@@ -186,15 +186,18 @@ abstract contract PositionManagerImpl is PositionManagerBase, ImmutableState {
         if (tokenId > 0) {
             custodyForward = qCommitted;
             if (custodyForward > 0 && nonFee < custodyForward) {
-                // runtime guard: an economic invariant: commit custody must never be smaller than the live Hub queue for that commit leg; and
-                // We cannot forward to custody what part of position delta is non-fee.
+                // Fail-closed: Hub-queued principal for this leg cannot exceed immediate post-`feeAdj` non-fee receipt.
+                // Queue routing uses pool principal `callerDelta - feesAccrued`; `feeAdj` applies only to the fee slice
+                // (see `forwardedNonFeeLccAmount`). Under aligned routing this path should not trigger; it catches
+                // regressions or sequencing bugs rather than ordinary fee economics.
                 revert Errors.InsufficientBalance(nonFee, custodyForward);
             }
         } else {
             custodyForward = nonFee;
         }
 
-        uint256 creditTake = LiquidityUtils.mmLockerCreditTakeForQueuedCustody(addedCredit, fee);
+        uint256 creditTake =
+            LiquidityUtils.lockerLccTakeAmountBeforeCustodyForward(tokenId > 0, addedCredit, fee, custodyForward);
 
         if (creditTake > 0) {
             vtsOrchestrator.take(currency, locker, creditTake);
@@ -209,7 +212,8 @@ abstract contract PositionManagerImpl is PositionManagerBase, ImmutableState {
         }
     }
 
-    /// @return forwardedNonFee Immediate non-fee LCC forwarded to queue custody for this leg (min-out basis; post-transfer `inc`).
+    /// @return forwardedNonFee Per-leg immediate post-`feeAdj` non-fee LCC (min-out basis; post-transfer `inc`). For
+    ///         commit buckets, only `qCommitted` is custodied; the remainder stays as locker transient LCC credit.
     /// @param qCommitted Increase in `LiquidityHub.settleQueue(lcc, locker)` caused by the immediately preceding
     ///        `PoolManager -> MMPM` `take` (planned cancel executes on that transfer). Must equal the staged
     ///        `queueAmount` from `planCancelWithQueue` when no other Hub queue mutation interleaves for that key.
@@ -271,7 +275,7 @@ abstract contract PositionManagerImpl is PositionManagerBase, ImmutableState {
         );
     }
 
-    /// @return mmForwardedNonFeeForMinOut Per-leg immediate non-fee LCC actually forwarded (authoritative min-out basis).
+    /// @return mmForwardedNonFeeForMinOut Per-leg immediate post-`feeAdj` non-fee LCC (authoritative min-out basis).
     function _takePositiveDeltasAndHandleLcc(
         PoolKey memory key,
         address self,
@@ -301,7 +305,7 @@ abstract contract PositionManagerImpl is PositionManagerBase, ImmutableState {
     }
 
     /// @dev Split out to keep `_modifySyntheticLiquidity` stack shallow for Solc.
-    /// @return mmForwardedNonFeeForMinOut Per-leg immediate non-fee LCC actually forwarded (post-transfer); min-out basis.
+    /// @return mmForwardedNonFeeForMinOut Per-leg immediate post-`feeAdj` non-fee LCC (post-transfer min-out basis).
     function _settleModifyLiquidityDeltas(
         PoolKey memory key,
         address self,
@@ -337,7 +341,8 @@ abstract contract PositionManagerImpl is PositionManagerBase, ImmutableState {
     /// @param hookData Arbitrary data to pass to hooks (contains PositionModificationHookData)
     /// @return callerDelta The principal balance delta - includes liquidity change plus immediate fee/hook deltas
     /// @return feesAccrued Informational delta of fee growth in the modified range for this call
-    /// @return mmForwardedNonFeeForMinOut Per-leg immediate non-fee LCC actually forwarded to custody (LCC legs only; post-transfer).
+    /// @return mmForwardedNonFeeForMinOut Per-leg immediate post-`feeAdj` non-fee LCC (min-out basis; LCC legs only). Commit
+    ///         buckets custodian-forward only `qCommitted`; surplus is locker credit.
     function _modifySyntheticLiquidity(
         PoolKey memory key,
         ModifyLiquidityParams memory params,

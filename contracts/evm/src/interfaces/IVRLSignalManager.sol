@@ -28,7 +28,8 @@ interface IVRLSignalManager {
     /// @dev Relay auth uses `ECDSA.recover` on the typed-data digest; only accounts that can produce such a signature
     ///      can use this path directly. Generic contract `advancer` values may need non-relayed / bound-router flows.
     /// @param sender For `commitId == 0`, the MM batch locker / NFT recipient (EIP-712 `RelayAuth.sender`);
-    ///        `address(0)` aliases `signer` (proof principal). For renew relay (`commitId != 0`), must be `address(0)`.
+    ///        `address(0)` aliases `signer` (proof principal). For renew relay (`commitId != 0`), `address(0)` (legacy)
+    ///        or `signal.mmState.advancer` to bind the signed payload to the batch locker.
     function verifyLiquiditySignalRelayed(
         address signer,
         uint256 commitId,

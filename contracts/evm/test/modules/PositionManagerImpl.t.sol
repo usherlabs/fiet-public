@@ -868,6 +868,35 @@ contract PositionManagerHandleLccHardeningTest is Test {
         assertEq(orch.lastTakeLocker(), locker);
     }
 
+    /// @notice Commit bucket (`tokenId > 0`): debit locker delta only by `qCommitted` forwarded to custody; surplus
+    ///         `nonFee - qCommitted` remains as locker transient LCC credit for `TAKE` / `UNWRAP_LCC`.
+    function test_handleLccBalanceIncrease_commitBucket_takesOnlyCustodyForwardNotFullNonFee() public {
+        hub.setIsLCC(lcc0, true);
+        address hooksAddr = makeAddr("hooksHccCommit");
+        PoolKey memory key = _key(hooksAddr);
+
+        MockERC20 token = new MockERC20();
+        vm.etch(lcc0, address(token).code);
+        MockERC20(lcc0).mint(address(h), 100);
+
+        orch.resetCredit();
+        poolManager.setHookCurrencyDelta(hooksAddr, Currency.wrap(lcc0), int256(10));
+
+        vm.expectCall(address(orch), abi.encodeCall(IVTSCurrencyDelta.take, (Currency.wrap(lcc0), locker, uint256(50))));
+
+        uint256 tokenId = 1;
+        uint256 qCommitted = 50;
+        h.exposeHandleLccBalanceIncrease(key, Currency.wrap(lcc0), 0, 100, int128(30), locker, tokenId, qCommitted);
+
+        // fee = max(30 - 10, 0) = 20; nonFee = 80; only 50 is custodied; take debits 50 not 80
+        assertEq(h.forwardCallCount(), 1);
+        assertEq(h.lastFwdAmount(), 50);
+        assertEq(h.lastFwdTokenId(), tokenId);
+        assertEq(orch.lastTakeAmount(), 50);
+        assertEq(orch.lastTakeCurrency(), lcc0);
+        assertEq(orch.lastTakeLocker(), locker);
+    }
+
     /// @notice When `inc <= fee`, `nonFee` is zero and no forward occurs.
     function test_handleLccBalanceIncrease_noForwardWhenNonFeeZero() public {
         hub.setIsLCC(lcc0, true);

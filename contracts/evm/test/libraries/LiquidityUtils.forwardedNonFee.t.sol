@@ -24,4 +24,16 @@ contract LiquidityUtilsForwardedNonFeeTest is Test {
     function test_forwardedNonFeeLccAmount_oneSided_zeroInc() public pure {
         assertEq(LiquidityUtils.forwardedNonFeeLccAmount(0, int128(100), int256(0)), 0);
     }
+
+    function test_lockerLccTakeAmountBeforeCustodyForward_commit_usesCustodyForward() public pure {
+        assertEq(LiquidityUtils.lockerLccTakeAmountBeforeCustodyForward(true, 100, 20, 50), 50);
+    }
+
+    function test_lockerLccTakeAmountBeforeCustodyForward_utility_nonFeeSlice() public pure {
+        assertEq(LiquidityUtils.lockerLccTakeAmountBeforeCustodyForward(false, 100, 20, 80), 80);
+    }
+
+    function test_lockerLccTakeAmountBeforeCustodyForward_utility_zeroWhenFeeCoversAll() public pure {
+        assertEq(LiquidityUtils.lockerLccTakeAmountBeforeCustodyForward(false, 20, 20, 0), 0);
+    }
 }

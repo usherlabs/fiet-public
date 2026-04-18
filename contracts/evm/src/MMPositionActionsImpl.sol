@@ -835,8 +835,9 @@ contract MMPositionActionsImpl is
     /// @param tokenId The commitment NFT token ID
     /// @param positionIndex The position index within the commitment
     /// @param amountToDecrease The amount of liquidity to remove
-    /// @param amount0Min Minimum immediate non-fee LCC token0 forwarded to the queue custodian (post `feeAdj` netting).
-    /// @param amount1Min Minimum immediate non-fee LCC token1 forwarded (VTS queue principal remains `callerDelta - feesAccrued`).
+    /// @param amount0Min Minimum per-leg immediate post-`feeAdj` non-fee LCC token0 (`LiquidityUtils.forwardedNonFeeLccAmount`).
+    ///        For commit positions, only the Hub-queued slice is custodied; surplus remains locker transient LCC credit.
+    /// @param amount1Min Minimum per-leg immediate post-`feeAdj` non-fee LCC token1 (VTS queue principal remains `callerDelta - feesAccrued`).
     function _decrease(
         PoolKey calldata poolKey,
         uint256 tokenId,

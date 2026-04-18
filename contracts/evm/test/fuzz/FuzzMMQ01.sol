@@ -12,6 +12,8 @@ import {Errors} from "../../src/libraries/Errors.sol";
 /// @notice Medusa / FuzzEntry module: MM queue custody guard (same semantics as `invariants/MMQ01.sol`).
 /// @dev Runtime `new` for orchestrator, custodian, harness, and LCC — no Echidna linked-library map.
 ///      Mirrors `PositionManagerImpl._routeLccCustodyTakeAndForward` via `PositionManagerImplQueueCustodyHarness`.
+///      Production routing debits locker delta only by `custodyForward` for commit buckets; surplus `nonFee - qCommitted`
+///      stays as locker credit (see `LiquidityUtils.lockerLccTakeAmountBeforeCustodyForward`).
 abstract contract FuzzMMQ01 is FuzzHelper {
     uint256 internal constant DOMAIN_CAP = 1e24;
 

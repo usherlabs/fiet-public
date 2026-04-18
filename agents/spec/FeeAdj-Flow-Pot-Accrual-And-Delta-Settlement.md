@@ -51,7 +51,7 @@ The “happy path” is:
 7. `MarketFactory.afterModifyLiquidity` calls `CoreHook.settleHookDeltasToPot(key)`
 8. `CoreHook.settleHookDeltasToPot` reads its transient deltas and **mints/burns ERC6909 claims** to net them to zero.
 
-**MM decrease / burn min-out:** `MMPositionActionsImpl` enforces `amount0Min` / `amount1Min` against the per-leg **non-fee LCC forwarded** to the custodian (`LiquidityUtils.forwardedNonFeeLccAmount`), not against raw `callerDelta - feesAccrued`. VTS settlement routing still uses hook-time pool principal `callerDelta - feesAccrued` for queue caps (`SETTLE-03`).
+**MM decrease / burn min-out:** `MMPositionActionsImpl` enforces `amount0Min` / `amount1Min` against the per-leg **immediate post-`feeAdj` non-fee LCC** (`LiquidityUtils.forwardedNonFeeLccAmount`), not against raw `callerDelta - feesAccrued`. For commit buckets, only the Hub-queued slice is physically forwarded to `MMQueueCustodian`; surplus non-fee LCC remains **locker transient credit** (`TAKE` / `UNWRAP_LCC`). VTS settlement routing still uses hook-time pool principal `callerDelta - feesAccrued` for queue caps; `feeAdj` reclassifies fee vs non-fee on the actual receipt, not principal (`SETTLE-03`, **MMQ-01**).
 
 ### Sequence diagram (current architecture)
 

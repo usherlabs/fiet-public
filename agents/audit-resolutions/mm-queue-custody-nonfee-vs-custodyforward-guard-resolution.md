@@ -196,6 +196,8 @@ The guard is therefore best understood as:
 
 > "This should never succeed unless the queued principal can be fully funded by the actual non-fee LCC received for that leg."
 
+**Principal bound vs fee-only `feeAdj`:** VTS queue routing uses hook-time pool principal `callerDelta - feesAccrued`. The hook’s `feeAdj` is applied after the hook returns and only affects how much of the **actual LCC receipt** is classified as informational fee vs immediate non-fee (`LiquidityUtils.forwardedNonFeeLccAmount`). It does **not** redefine the principal basis used for `planCancelWithQueue`. In aligned implementations, queued principal never exceeds that principal slice, and the immediate non-fee receipt after fee classification should always cover the custodied queue slice — so `nonFee < custodyForward` is a **defensive** signal (regression / bug), not ordinary bonus economics. Surplus `nonFee - custodyForward`, when present, is left as locker transient LCC credit rather than FCFS residue on the router.
+
 ## Practical interpretation
 
 This line should be treated as a **protocol invariant with runtime enforcement**, not as dead code and not as a user-facing slippage check.

@@ -474,6 +474,29 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
         MMA.renew(positionManager, tokenId, renewBytes);
     }
 
+    /// @notice Relayed renew with legacy `relaySender == 0` requires the batch locker to be `mmState.advancer`.
+    function test_renewSignal_relayed_reverts_whenLockerNotAdvancer_legacyZeroSender() public {
+        bytes memory liquiditySignalBytes = abi.encode(liquiditySignal);
+        uint256 tokenId = positionManager.nextTokenId();
+
+        MMA.PreparedAction[] memory prepared = new MMA.PreparedAction[](1);
+        prepared[0] = MMA.prepareCommit(liquiditySignalBytes);
+        _executeWithUnlockLiquidity(prepared, block.timestamp + 3600);
+
+        LiquiditySignal memory sameOwnerRenew = liquiditySignal;
+        sameOwnerRenew.nonce += 1;
+        bytes memory relayParams = abi.encode(block.timestamp + 3600, uint256(0), bytes(""), address(0));
+        prepared = new MMA.PreparedAction[](1);
+        prepared[0] = MMA.PreparedAction({
+            action: bytes1(uint8(MMActions.RENEW_SIGNAL)),
+            params: abi.encode(tokenId, abi.encode(sameOwnerRenew), relayParams)
+        });
+
+        vm.expectRevert(Errors.InvalidSender.selector);
+        vm.prank(makeAddr("notAdvancer"));
+        MMA.executeWithUnlock(positionManager, prepared, block.timestamp + 3600);
+    }
+
     function testCanWrapAndUnwrapNativeAsset() public {
         // NOTE: Following Uniswap v4 PositionManager pattern, wrap/unwrap are now simple
         // WETH9 deposit/withdraw operations without delta accounting.

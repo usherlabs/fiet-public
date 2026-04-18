@@ -284,17 +284,31 @@ library LiquidityUtils {
         nonFee = inc > fee ? inc - fee : 0;
     }
 
-    /// @notice Non-fee slice of the post-sync locker credit to consume via `VTSCurrencyDelta.take` before optional
-    ///         physical forwarding of `custodyForward` wei to `MMQueueCustodian`.
-    /// @dev We always net the full immediate non-fee credit from the locker delta first; the subsequent ERC20 forward
-    ///      of the Hub-queued slice does not go through `take` and therefore must not leave a matching positive delta
-    ///      on the locker (see `OwnerCurrencyDelta.syncBalanceAsCredit` — it never decreases positive credit when
-    ///      balance falls after a transfer).
-    function mmLockerCreditTakeForQueuedCustody(uint256 addedCredit, uint256 feeClassified)
-        internal
-        pure
-        returns (uint256 creditTake)
-    {
-        creditTake = addedCredit > feeClassified ? (addedCredit - feeClassified) : 0;
+    /**
+     * @notice How much of the locker’s LCC credit (after `_syncBalanceAsCredit`) to debit via `VTSCurrencyDelta.take`
+     *         before the matching ERC20 forward to `MMQueueCustodian`.
+     * @dev The forward does not go through `take`, so this debit keeps locker delta aligned with tokens still on MMPM.
+     *
+     *      **Commit bucket** (`isCommitBucket == true`): debit exactly `custodyForward` (Hub-queued principal, usually
+     *      `qCommitted`). Surplus immediate non-fee LCC (`nonFee - custodyForward`) stays as locker transient credit.
+     *
+     *      **Utility bucket** (`isCommitBucket == false`): debit the immediate non-fee slice
+     *      `addedCreditAfterSync - classifiedInformationalFee` (same basis as `forwardedNonFeeLccAmount`), matching the
+     *      full `nonFee` forwarded for `tokenId == 0`.
+     *
+     *      Queue principal for routing remains hook-time `callerDelta - feesAccrued`; `feeAdj` only affects fee vs
+     *      non-fee classification, not that principal basis.
+     */
+    function lockerLccTakeAmountBeforeCustodyForward(
+        bool isCommitBucket,
+        uint256 addedCreditAfterSync,
+        uint256 classifiedInformationalFee,
+        uint256 custodyForward
+    ) internal pure returns (uint256 creditTake) {
+        if (isCommitBucket) {
+            return custodyForward;
+        }
+        if (addedCreditAfterSync <= classifiedInformationalFee) return 0;
+        return addedCreditAfterSync - classifiedInformationalFee;
     }
 }

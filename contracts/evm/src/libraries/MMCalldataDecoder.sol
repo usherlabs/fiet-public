@@ -118,7 +118,7 @@ library MMCalldataDecoder {
     /// @return tokenId The commitment NFT token ID
     /// @return positionIndex The position index within the commitment
     /// @return amountToDecrease The amount of liquidity to remove
-    /// @return amount0Min Minimum immediate non-fee LCC token0 out (post-`feeAdj`; see `LiquidityUtils.forwardedNonFeeLccAmount`)
+    /// @return amount0Min Minimum per-leg immediate post-`feeAdj` non-fee LCC token0 out (see `LiquidityUtils.forwardedNonFeeLccAmount`; commit surplus is locker credit)
     /// @return amount1Min Minimum immediate non-fee LCC token1 out
     function decodeDecreaseLiquidityParams(bytes calldata params)
         internal
@@ -153,7 +153,7 @@ library MMCalldataDecoder {
     /// @return poolKey The pool key (calldata pointer)
     /// @return tokenId The commitment NFT token ID
     /// @return positionIndex The position index within the commitment
-    /// @return amount0Min Minimum immediate non-fee LCC token0 out when burning (same semantics as decrease min-out)
+    /// @return amount0Min Minimum per-leg immediate post-`feeAdj` non-fee LCC token0 when burning (same semantics as decrease min-out)
     /// @return amount1Min Minimum immediate non-fee LCC token1 out
     function decodeBurnPositionParams(bytes calldata params)
         internal

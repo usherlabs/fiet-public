@@ -49,7 +49,7 @@ Fields:
 - **signer**: the proof principal (must equal either `mmState.owner` or `mmState.advancer` in the decoded signal)
 - **commitId**: `0` for fresh commit relay; existing commit id for renew relay
 - **liquiditySignalHash**: `keccak256(liquiditySignal)` where `liquiditySignal` is the ABI-encoded `LiquiditySignal` bytes blob
-- **sender**: for **fresh commit** (`commitId == 0`), the MM batch locker / NFT recipient — either the explicit address, or **`address(0)`** meaning custody to **`signer`** (i.e. `mmState.owner` when `signer` is owner). For **renew** (`commitId != 0`), must be **`address(0)`** in the signed payload.
+- **sender**: for **fresh commit** (`commitId == 0`), the MM batch locker / NFT recipient — either the explicit address, or **`address(0)`** meaning custody to **`signer`** (i.e. `mmState.owner` when `signer` is owner). For **renew** (`commitId != 0`), **`address(0)`** (legacy) or **`mmState.advancer`** so the signed payload binds to the batch locker; `MMPositionManager` requires the batch locker to match.
 - **deadline**: unix timestamp; verification reverts if `block.timestamp > deadline`
 - **nonce**: must equal `VRLSignalManager.submitAuthNonce(signer)` at submission time (same address as the typed-data `sender` field)
 
@@ -101,7 +101,7 @@ const value: RelayAuth = {
   signer: "0xSigner",       // must be owner or advancer from mmState
   commitId: 0n,             // 0 for fresh commit; existing id for renew
   liquiditySignalHash,
-  sender: "0xLocker", // fresh: batch locker, or ethers.ZeroAddress to alias signer; renew: ethers.ZeroAddress
+  sender: "0xLocker", // fresh: batch locker, or ethers.ZeroAddress to alias signer; renew: ZeroAddress or advancer
   deadline: 1710000000n,    // replace
   nonce: 0n,                // VRLSignalManager.submitAuthNonce(signer address)
 };
@@ -140,7 +140,7 @@ The function will:
 relayParams := abi.encode(uint256 deadline, uint256 authNonce, bytes authSig, address sender)
 ```
 
-The fourth word is the EIP-712 `RelayAuth.sender` value. For renew relay, pass `address(0)` (must match the signed typed data).
+The fourth word is the EIP-712 `RelayAuth.sender` value. For renew relay, pass `address(0)` (legacy) or `mmState.advancer` (must match the signed typed data); the batch locker must match per `MMPositionManager`.
 
 ### COMMIT_SIGNAL params
 
@@ -166,7 +166,7 @@ abi.encode(uint256 tokenId, bytes liquiditySignal, bytes relayParams)
 Behaviour:
 
 - if `relayParams.length == 0`: calls `VTSOrchestrator.renewSignal(sender, tokenId, liquiditySignal)`
-- else: decodes `(deadline, authNonce, authSig, sender)` and calls `VTSOrchestrator.renewSignalRelayed(..., sender)` (renew signatures use typed-data `sender == 0`)
+- else: decodes `(deadline, authNonce, authSig, sender)` and requires the batch locker to match `sender` when non-zero or to be `mmState.advancer` when `sender == 0`, then calls `VTSOrchestrator.renewSignalRelayed(..., sender)`
 
 ## Operational checklist
 
