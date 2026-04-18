@@ -357,6 +357,12 @@ Use the **provided wrapper** to generate a summary plus `lcov` output:
 
 This writes `./lcov.info` and prints a coverage summary to stdout.
 
+For **branch coverage vs mutation testing** (and when to trust “effective 100%” scores), see [`MUTATION_COVERAGE.md`](./MUTATION_COVERAGE.md). For a **faster subset** of tests aimed at low-coverage hotspots during development, run:
+
+```bash
+./scripts/coverage-hotspots.sh
+```
+
 ## Troubleshooting
 
 ### Common Issues

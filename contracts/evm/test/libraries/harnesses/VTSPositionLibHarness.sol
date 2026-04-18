@@ -45,6 +45,10 @@ contract VTSPositionLibHarness {
     BalanceDelta internal lastSettleableDelta;
     BalanceDelta internal lastQueuedDelta;
     BalanceDelta internal lastUnderlyingDeltaSettlement;
+    BalanceDelta internal lastSeizureExportedForSettlementClamp;
+    BalanceDelta internal lastNonSeizureExportedForSettlementClamp;
+    uint256 internal lastSeizureRetainedPrincipal0;
+    uint256 internal lastSeizureRetainedPrincipal1;
     int256 internal lastUnderlyingDeltaSnapshot0;
     int256 internal lastUnderlyingDeltaSnapshot1;
 
@@ -187,6 +191,37 @@ contract VTSPositionLibHarness {
         ) = VTSPositionMMOpsLib._computeLiquidityDecreaseRoutingSplit(ctx, principalDelta, requiredSettlementDelta);
     }
 
+    /// @notice Exposes full non-seizure MM decrease routing split (incl. `exportedForSettlementClamp` for SETTLE-03 tests).
+    function previewLiquidityDecreaseRoutingSplitFull(
+        PositionContext memory ctx,
+        BalanceDelta principalDelta,
+        BalanceDelta requiredSettlementDelta
+    )
+        external
+        view
+        returns (
+            uint256 retainedPrincipal0,
+            uint256 retainedPrincipal1,
+            BalanceDelta settleableDelta,
+            BalanceDelta queuedDelta,
+            BalanceDelta underlyingDeltaSettlement,
+            BalanceDelta exportedForSettlementClamp
+        )
+    {
+        return VTSPositionMMOpsLib._computeLiquidityDecreaseRoutingSplit(ctx, principalDelta, requiredSettlementDelta);
+    }
+
+    /// @notice Vault dry-modify view: immediate settleable slice vs per-leg shortfall (shared by decrease + seizure routing).
+    function previewVaultSettleableViewForRequired(PositionContext memory ctx, BalanceDelta requiredSettlementDelta)
+        external
+        view
+        returns (BalanceDelta settleableDelta, uint256 shortfallU0, uint256 shortfallU1)
+    {
+        VTSPositionMMOpsLib.VaultSettleableView memory v =
+            VTSPositionMMOpsLib._vaultSettleableViewForRequired(ctx, requiredSettlementDelta);
+        return (v.settleableDelta, v.shortfallU0, v.shortfallU1);
+    }
+
     /// @notice Exposes internal coverage burn for direct unit testing
     /// @dev Useful to kill mutants around `_calculateFeesBurn` / `_applyCoverageBurn` and outflow-window checkpointing.
     function applyCoverageBurn(
@@ -209,9 +244,11 @@ contract VTSPositionLibHarness {
         BalanceDelta requiredSettlementDelta,
         address queueRecipient
     ) external returns (BalanceDelta settleableDelta) {
-        (,, settleableDelta, lastQueuedDelta, lastUnderlyingDeltaSettlement) =
-            _previewLiquidityDecreaseRoutingHarness(ctx, principalDelta, requiredSettlementDelta);
+        BalanceDelta exported;
+        (,, settleableDelta, lastQueuedDelta, lastUnderlyingDeltaSettlement, exported) =
+            VTSPositionMMOpsLib._computeLiquidityDecreaseRoutingSplit(ctx, principalDelta, requiredSettlementDelta);
         lastSettleableDelta = settleableDelta;
+        lastNonSeizureExportedForSettlementClamp = exported;
         VTSPositionMMOpsLib._handleLiquidityDecrease(
             ctx, owner, poolKey, principalDelta, requiredSettlementDelta, queueRecipient
         );
@@ -230,16 +267,85 @@ contract VTSPositionLibHarness {
         external
         returns (BalanceDelta settleableDelta, BalanceDelta queuedDelta, BalanceDelta underlyingDeltaSettlement)
     {
-        (
-            ,, settleableDelta, queuedDelta, underlyingDeltaSettlement
-        ) = _previewLiquidityDecreaseRoutingHarness(ctx, principalDelta, requiredSettlementDelta);
+        BalanceDelta exported;
+        (,, settleableDelta, queuedDelta, underlyingDeltaSettlement, exported) =
+            VTSPositionMMOpsLib._computeLiquidityDecreaseRoutingSplit(ctx, principalDelta, requiredSettlementDelta);
         lastSettleableDelta = settleableDelta;
         lastQueuedDelta = queuedDelta;
         lastUnderlyingDeltaSettlement = underlyingDeltaSettlement;
+        lastNonSeizureExportedForSettlementClamp = exported;
         VTSPositionMMOpsLib._handleLiquidityDecrease(
             ctx, owner, poolKey, principalDelta, requiredSettlementDelta, queueRecipient
         );
         return (settleableDelta, queuedDelta, underlyingDeltaSettlement);
+    }
+
+    function getLastNonSeizureExportedForSettlementClamp() external view returns (BalanceDelta) {
+        return lastNonSeizureExportedForSettlementClamp;
+    }
+
+    /// @notice Preview seizure-only routing split (no Hub staging).
+    function previewSeizureLiquidityDecreaseRouting(
+        PositionContext memory ctx,
+        BalanceDelta principalDelta,
+        BalanceDelta requiredSettlementDelta
+    )
+        external
+        view
+        returns (
+            uint256 retainedPrincipal0,
+            uint256 retainedPrincipal1,
+            BalanceDelta underlyingDeltaSettlement,
+            BalanceDelta exportedForSettlementClamp
+        )
+    {
+        return VTSPositionMMOpsLib._computeSeizureLiquidityDecreaseRoutingSplit(
+            ctx, principalDelta, requiredSettlementDelta
+        );
+    }
+
+    /// @notice Exposes seizure decrease helper for tests (same Hub staging as production seizure path).
+    function handleSeizureLiquidityDecrease(
+        PositionContext memory ctx,
+        address owner,
+        PoolKey calldata poolKey,
+        BalanceDelta principalDelta,
+        BalanceDelta requiredSettlementDelta,
+        address queueRecipient
+    ) external returns (BalanceDelta underlyingDeltaSettlement) {
+        BalanceDelta exported;
+        (lastSeizureRetainedPrincipal0, lastSeizureRetainedPrincipal1, underlyingDeltaSettlement, exported) =
+            VTSPositionMMOpsLib._computeSeizureLiquidityDecreaseRoutingSplit(
+                ctx, principalDelta, requiredSettlementDelta
+            );
+        lastSeizureExportedForSettlementClamp = exported;
+        lastUnderlyingDeltaSettlement = underlyingDeltaSettlement;
+        VTSPositionMMOpsLib._handleSeizureLiquidityDecrease(
+            ctx, owner, poolKey, principalDelta, requiredSettlementDelta, queueRecipient
+        );
+        return underlyingDeltaSettlement;
+    }
+
+    function getLastSeizureRouting()
+        external
+        view
+        returns (
+            uint256 retainedPrincipal0,
+            uint256 retainedPrincipal1,
+            BalanceDelta exportedForSettlementClamp,
+            BalanceDelta underlyingDeltaSettlement
+        )
+    {
+        return (
+            lastSeizureRetainedPrincipal0,
+            lastSeizureRetainedPrincipal1,
+            lastSeizureExportedForSettlementClamp,
+            lastUnderlyingDeltaSettlement
+        );
+    }
+
+    function getLastSeizureExportedForSettlementClamp() external view returns (BalanceDelta) {
+        return lastSeizureExportedForSettlementClamp;
     }
 
     // ============ Storage Getters (for assertions) ============
@@ -305,15 +411,15 @@ contract VTSPositionLibHarness {
         return (s.poolAccounting[poolId].totalSettled.token0, s.poolAccounting[poolId].totalSettled.token1);
     }
 
-    function getPoolProtocolFeeAccrued(PoolId poolId) external view returns (uint256 fee0, uint256 fee1) {
-        return (s.poolAccounting[poolId].protocolFeeAccrued.token0, s.poolAccounting[poolId].protocolFeeAccrued.token1);
+    function getPoolSlashedPot(PoolId poolId) external view returns (uint256 pot0, uint256 pot1) {
+        return (s.poolAccounting[poolId].slashedPot.token0, s.poolAccounting[poolId].slashedPot.token1);
     }
 
-    /// @notice TEST-ONLY: sets `protocolFeeAccrued` for both pool fee-token lanes.
+    /// @notice TEST-ONLY: sets `slashedPot` for both pool fee-token lanes.
     /// @dev TEST-ONLY helper that writes storage directly for unit-test scenario setup.
-    function setPoolProtocolFeeAccrued(PoolId poolId, uint256 fee0, uint256 fee1) external {
-        s.poolAccounting[poolId].protocolFeeAccrued.token0 = fee0;
-        s.poolAccounting[poolId].protocolFeeAccrued.token1 = fee1;
+    function setPoolSlashedPot(PoolId poolId, uint256 pot0, uint256 pot1) external {
+        s.poolAccounting[poolId].slashedPot.token0 = pot0;
+        s.poolAccounting[poolId].slashedPot.token1 = pot1;
     }
 
     function getFeesShared(PositionId id) external view returns (uint256 fee0, uint256 fee1) {
@@ -322,6 +428,12 @@ contract VTSPositionLibHarness {
 
     function getPendingFeeAdj(PositionId id) external view returns (int256 adj0, int256 adj1) {
         return (s.positionAccounting[id].pendingFeeAdj.token0, s.positionAccounting[id].pendingFeeAdj.token1);
+    }
+
+    /// @notice TEST-ONLY: seeds signed pending fee adjustment before `afterTouchPosition` materialisation.
+    function setPendingFeeAdj(PositionId id, int256 adj0, int256 adj1) external {
+        s.positionAccounting[id].pendingFeeAdj.token0 = adj0;
+        s.positionAccounting[id].pendingFeeAdj.token1 = adj1;
     }
 
     function getPoolTotalDeficitPrincipal(PoolId poolId)

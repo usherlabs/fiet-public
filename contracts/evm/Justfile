@@ -1,8 +1,7 @@
 ## Fiet Protocol (EVM) - developer commands
 #
 # This Justfile provides stable entrypoints for the supported Medusa-backed
-# FuzzEntry composition root. Deferred linked-library harnesses are documented
-# in `test/fuzz/README.md` but are not part of the default workflow.
+# FuzzEntry composition root.
 #
 # Usage:
 #   just --list
@@ -56,7 +55,7 @@ fuzz-deep:
 
 # Full CI entrypoint:
 # - supported Medusa FuzzEntry path
-# - Foundry evidence tests that remain authoritative for deferred surfaces
+# - Foundry evidence tests that remain complementary regression evidence
 fuzz-invariants:
     @just fuzz
     @just invariant-evidence-foundry

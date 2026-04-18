@@ -26,7 +26,6 @@ contract PausedMMTrace is MarketTestBase, MarketMakerTestBase {
     function setUp() public {
         _setupMarket();
         _setUpMM();
-        liquiditySignal.mmState.advancer = address(this);
         positionManager = MMPositionManager(payable(mmPositionManager));
         lcc0 = LiquidityCommitmentCertificate(payable(Currency.unwrap(_currency2)));
         lcc1 = LiquidityCommitmentCertificate(payable(Currency.unwrap(_currency3)));
@@ -38,6 +37,11 @@ contract PausedMMTrace is MarketTestBase, MarketMakerTestBase {
         );
         vm.mockCall(
             address(oracleHelper), abi.encodeWithSelector(IOracleHelper.getTotalValue.selector), abi.encode(1e18)
+        );
+        vm.mockCall(
+            marketFactory,
+            abi.encodeWithSelector(IMarketFactory.bounds.selector, liquiditySignal.mmState.advancer),
+            abi.encode(true)
         );
     }
 
@@ -70,10 +74,14 @@ contract PausedMMTrace is MarketTestBase, MarketMakerTestBase {
         );
         vtsOrchestrator.pausePool(corePoolKey.toId());
         uint256 amountToDecrease = 5e9;
+        address locker = liquiditySignal.mmState.advancer;
+        vm.mockCall(marketFactory, abi.encodeWithSelector(IMarketFactory.bounds.selector, locker), abi.encode(true));
         MMA.PreparedAction[] memory setup = new MMA.PreparedAction[](3);
         setup[0] = MMA.prepareDecrease(corePoolKey, tokenId, positionIndex, amountToDecrease);
         setup[1] = MMA.prepareTake(Currency.wrap(address(lcc0)), address(this), 0);
         setup[2] = MMA.prepareTake(Currency.wrap(address(lcc1)), address(this), 0);
+        vm.startPrank(locker);
         MMA.executeWithUnlock(positionManager, setup, block.timestamp + 3600);
+        vm.stopPrank();
     }
 }

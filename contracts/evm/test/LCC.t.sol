@@ -145,6 +145,21 @@ contract LiquidityCommitmentCertificateTest is Test {
         assertEq(lccNative.underlying(), OracleUtils.RESILIENT_ORACLE_NATIVE_TOKEN_ADDR);
     }
 
+    function test_underlying_whenCallerIsOracle_erc20_returnsUnderlyingUnchanged() public {
+        vm.prank(oracle);
+        assertEq(lcc.underlying(), address(0xBEEF));
+    }
+
+    function test_constructor_revertsWhenHubZero() public {
+        vm.expectRevert(abi.encodeWithSelector(Errors.InvalidAddress.selector, address(0)));
+        new LiquidityCommitmentCertificate(address(0xBEEF), "LCC", "LCC", 18, oracle, address(0), address(this));
+    }
+
+    function test_constructor_revertsWhenFactoryZero() public {
+        vm.expectRevert(abi.encodeWithSelector(Errors.InvalidAddress.selector, address(0)));
+        new LiquidityCommitmentCertificate(address(0xBEEF), "LCC", "LCC", 18, oracle, address(this), address(0));
+    }
+
     function test_decimals_returnsConstructorValue() public {
         LiquidityCommitmentCertificate lcc6 = new LiquidityCommitmentCertificate(
             address(0xBEEF), "LCC6", "LCC6", 6, oracle, address(this), address(this)
@@ -167,6 +182,21 @@ contract LiquidityCommitmentCertificateTest is Test {
     function test_mint_revertsWhenAmountIsZero() public {
         vm.expectRevert(abi.encodeWithSelector(Errors.InvalidAmount.selector, uint256(0), uint256(0)));
         lcc.mint(alice, 0, 0);
+    }
+
+    /// @dev Finding 14: direct-backed mints to bucket-exempt holders misalign `directSupply` with buckets.
+    function test_mint_revertsWhenDirectBackedToExemptRecipient() public {
+        address exempt = makeAddr("exemptRecipient");
+        _setBoundLevel(exempt, BOUND_EXEMPT);
+        vm.expectRevert(abi.encodeWithSelector(Errors.DirectMintToExemptNotAllowed.selector, exempt));
+        lcc.mint(exempt, 1, 0);
+    }
+
+    function test_mint_allowsMarketDerivedOnlyToExemptRecipient() public {
+        address exempt = makeAddr("exemptRecipientMarketOnly");
+        _setBoundLevel(exempt, BOUND_EXEMPT);
+        lcc.mint(exempt, 0, 7);
+        assertEq(lcc.balanceOf(exempt), 7);
     }
 
     function test_mint_updatesBucketsWhenNotIssued() public {
@@ -532,6 +562,37 @@ contract LiquidityCommitmentCertificateTest is Test {
         assertEq(wrappedIngressCalls, 1);
         assertEq(lastWrappedIngressLcc, address(lcc));
         assertEq(lastWrappedIngressWrapped, 4);
+    }
+
+    /// @dev Market-derived-only ingress to DEX still notifies factory with zero wrapped slice.
+    function test_transfer_toDexSink_marketDerivedOnly_reportsPrepareWithZeroWrapped() public {
+        address dexSink = makeAddr("dexSinkMd");
+        _setBoundLevel(dexSink, BOUND_DEX);
+        lcc.mint(alice, 0, 10);
+
+        vm.prank(alice);
+        lcc.transfer(dexSink, 4);
+
+        assertEq(wrappedIngressCalls, 1);
+        assertEq(lastWrappedIngressWrapped, 0);
+    }
+
+    /// @dev Protocol bucket-tracked endpoint to DEX: wrapped slice is passed to `prepareMarketLiquidity`.
+    function test_transfer_protocolEndpointToDex_mixedBuckets_preparesWrappedSlice() public {
+        address dexSink = makeAddr("dexSinkProt");
+        address mmpm = makeAddr("mmpmDexFrom");
+        _setBoundLevel(dexSink, BOUND_DEX);
+        _setBoundLevel(mmpm, BOUND_ENDPOINT);
+
+        lcc.mint(alice, 40, 60);
+        vm.prank(alice);
+        lcc.transfer(mmpm, 100);
+
+        vm.prank(mmpm);
+        lcc.transfer(dexSink, 70);
+
+        assertEq(wrappedIngressCalls, 1);
+        assertEq(lastWrappedIngressWrapped, 10);
     }
 
     /// @dev Mutation-hardening: bucket-tracked protocol -> protocol transfer must:

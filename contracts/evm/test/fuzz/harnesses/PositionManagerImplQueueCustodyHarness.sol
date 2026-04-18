@@ -1,19 +1,24 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.26;
 
-import {IERC20Minimal} from "@uniswap/v4-core/src/interfaces/external/IERC20Minimal.sol";
-import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
+import {Currency} from "v4-periphery/lib/v4-core/src/types/Currency.sol";
+import {LiquidityUtils} from "../../../src/libraries/LiquidityUtils.sol";
 import {Errors} from "../../../src/libraries/Errors.sol";
 import {IMMQueueCustodian} from "../../../src/interfaces/IMMQueueCustodian.sol";
 import {IFuzzTakeOrchestrator} from "./IFuzzTakeOrchestrator.sol";
 
-/// @notice Thin harness for `PositionManagerImpl._routeLccCustodyTakeAndForward`.
-/// @dev This mirrors the custody guard and MM forward path without any linked-library deployment assumptions.
+/// @notice Thin test harness mirroring `PositionManagerImpl._routeLccCustodyTakeAndForward` and the MM forward path
+///         (`MMPositionActionsImpl._forwardQueuedLccToCustodian`).
+/// @dev Logic MUST stay aligned with `PositionManagerImpl._routeLccCustodyTakeAndForward` (custody guard + take + forward)
+///      and `MMPositionActionsImpl._forwardQueuedLccToCustodian` (ERC20 transfer + conditional `record`).
+///      `nonFee < custodyForward` reverts `InsufficientBalance` as a defensive check (queued principal must be fundable by
+///      immediate post-`feeAdj` non-fee receipt under **SETTLE-03** / **MMQ-01**).
+///      Related audit note: `agents/audit-resolutions/mm-queue-custody-nonfee-vs-custodyforward-guard-resolution.md`.
 contract PositionManagerImplQueueCustodyHarness {
     IFuzzTakeOrchestrator public immutable vtsOrchestrator;
     IMMQueueCustodian public immutable queueCustodian;
 
-    /// @notice Last amount forwarded to `queueCustodian` in the most recent route call.
+    /// @notice Last amount forwarded toward `queueCustodian` in the most recent `route` call (observable by properties).
     uint256 public lastCustodyForwarded;
 
     constructor(IFuzzTakeOrchestrator vtsOrchestrator_, IMMQueueCustodian queueCustodian_) {
@@ -21,7 +26,7 @@ contract PositionManagerImplQueueCustodyHarness {
         queueCustodian = queueCustodian_;
     }
 
-    /// @notice Mirror the queue-custody routing branch used by MM queue settlement.
+    /// @dev Copy of `PositionManagerImpl._routeLccCustodyTakeAndForward` routing + MM-style forward.
     function routeLccCustodyTakeAndForward(
         Currency currency,
         address locker,
@@ -43,8 +48,11 @@ contract PositionManagerImplQueueCustodyHarness {
             custodyForward = nonFee;
         }
 
-        uint256 creditTake = addedCredit > fee ? addedCredit - fee : 0;
+        uint256 creditTake =
+            LiquidityUtils.lockerLccTakeAmountBeforeCustodyForward(tokenId > 0, addedCredit, fee, custodyForward);
+
         if (creditTake > 0) {
+            // Surplus (nonFee - qCommitted) is not a separate field: it is whatever positive LCC delta remains on the locker after that partial take (qCommitted) — i.e. the amount that was not debited, including the economic slice nonFee - qCommitted (and, depending on timing vs classification, the rest of the balance story still held on MMPM until TAKE / UNWRAP_LCC clears it).
             vtsOrchestrator.take(currency, locker, creditTake);
         }
 
@@ -57,14 +65,14 @@ contract PositionManagerImplQueueCustodyHarness {
         }
     }
 
+    /// @dev Mirrors `MMPositionActionsImpl._forwardQueuedLccToCustodian` when custodian is external.
     function _forwardQueuedLccToCustodian(Currency currency, uint256 tokenId, address beneficiary, uint256 amount)
         internal
     {
         lastCustodyForwarded = amount;
-
         address custodianAddr = address(queueCustodian);
         if (custodianAddr != address(0) && custodianAddr != address(this)) {
-            IERC20Minimal(Currency.unwrap(currency)).transfer(custodianAddr, amount);
+            currency.transfer(custodianAddr, amount);
             if (tokenId > 0) {
                 queueCustodian.record(tokenId, Currency.unwrap(currency), beneficiary, amount);
             }

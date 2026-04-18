@@ -261,7 +261,7 @@ contract COV01 {
     }
 
     function _snapshot(uint8 tokenIndex, uint8 feeTokenIndex) internal view returns (Snap memory s) {
-        (uint256 poolFee0, uint256 poolFee1) = harness.getPoolProtocolFeeAccrued(POOL_ID);
+        (uint256 poolFee0, uint256 poolFee1) = harness.getPoolSlashedPot(POOL_ID);
         (uint256 shared0, uint256 shared1) = harness.getFeesShared(positionId);
         (int256 pending0, int256 pending1) = harness.getPendingFeeAdj(positionId);
         (uint256 snap0, uint256 snap1) = harness.getOutflowsAtFeeSnap(positionId);

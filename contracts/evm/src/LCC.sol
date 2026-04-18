@@ -140,6 +140,12 @@ contract LiquidityCommitmentCertificate is ERC20, ILCC {
         if (amount == 0) {
             revert Errors.InvalidAmount(0, 0);
         }
+        // Direct-backed mints require bucket accounting; exempt endpoints skip buckets (see early return below).
+        // Allowing directAmount > 0 to exempt would misalign `directSupply` with per-holder buckets and allow
+        // exempt->non-protocol transfers to reclassify Domain A liquidity as market-derived without `prepareMarketLiquidity`.
+        if (Bounds.isExempt(ILiquidityHub(hub).boundLevel(factory, to)) && directAmount > 0) {
+            revert Errors.DirectMintToExemptNotAllowed(to);
+        }
         _mint(to, amount);
         // Bucket bookkeeping is skipped only for bucket-exempt protocol endpoints.
         // Bound-role changes across the exempt boundary are restricted on-chain (see `BoundRegistry._setBoundLevel` / MKT-04A);

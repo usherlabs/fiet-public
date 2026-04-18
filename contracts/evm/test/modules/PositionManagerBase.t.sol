@@ -31,6 +31,10 @@ contract PositionManagerBaseHarness is PositionManagerBase {
     function exposeSyncBalanceAsCredit(Currency currency) external {
         _syncBalanceAsCredit(currency);
     }
+
+    function exposeCreditExact(Currency currency, uint256 amount) external {
+        _creditExact(currency, amount);
+    }
 }
 
 contract PositionManagerBaseTest is Test {
@@ -89,6 +93,23 @@ contract PositionManagerBaseTest is Test {
             orch, abi.encodeWithSignature("sync(address,address,address,address)", factory, token, address(h), locker)
         );
         h.exposeSyncBalanceAsCredit(c);
+    }
+
+    function test_creditExact_callsOrchestratorCreditExact() public {
+        address token = makeAddr("tokenCredit");
+        Currency c = Currency.wrap(token);
+        uint256 amount = 42;
+
+        vm.mockCall(
+            orch,
+            abi.encodeWithSignature("creditExact(address,address,address,uint256)", factory, token, locker, amount),
+            abi.encode(int128(0))
+        );
+        vm.expectCall(
+            orch,
+            abi.encodeWithSignature("creditExact(address,address,address,uint256)", factory, token, locker, amount)
+        );
+        h.exposeCreditExact(c, amount);
     }
 }
 

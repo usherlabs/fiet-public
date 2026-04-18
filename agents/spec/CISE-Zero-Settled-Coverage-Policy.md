@@ -1,5 +1,7 @@
 # CISE Zero-Settled Coverage Policy
 
+> **Fee-pot redesign:** Slash-side accounting queues **`pendingFeeAdj`**; materialised pool budget is **`slashedPot`**, not `protocolFeeAccrued`. See [`Fee-Pot-Materialisation-And-DirectLP-Policy.md`](./Fee-Pot-Materialisation-And-DirectLP-Policy.md). Older mentions of `protocolFeeAccrued` below are historical.
+
 Date: 9th April 2026.
 
 ## Status

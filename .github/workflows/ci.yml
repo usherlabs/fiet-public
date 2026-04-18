@@ -133,6 +133,7 @@ jobs:
           fi
 
           echo "coverage_failed=$FAILED" >> $GITHUB_OUTPUT
+          echo "Note: Forge branch % vs mutation kill-rate — see contracts/evm/MUTATION_COVERAGE.md"
 
       - name: Generate coverage comment body
         if: github.event_name == 'pull_request'

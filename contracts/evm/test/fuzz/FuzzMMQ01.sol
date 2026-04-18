@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.26;
 
-import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
+import {Currency} from "v4-periphery/lib/v4-core/src/types/Currency.sol";
 import {Errors} from "../../src/libraries/Errors.sol";
+import {LiquidityUtils} from "../../src/libraries/LiquidityUtils.sol";
 import {MockLCC} from "../_mocks/MockLCC.sol";
 import {FuzzHelper} from "./FuzzHelper.sol";
 import {PositionManagerImplQueueCustodyHarness} from "./harnesses/PositionManagerImplQueueCustodyHarness.sol";
@@ -11,6 +12,7 @@ import {FuzzMMQueueCustodian, FuzzTakeOrchestratorMock} from "./mocks/FuzzQueueC
 /// @notice Medusa module for the MM queue custody guard from MMQ-01.
 /// @dev This module deploys its harness and mocks with ordinary `new` calls so the
 ///      supported Medusa path no longer depends on linked-library CREATE2 preparation.
+///      Valid-route accounting follows the current `develop` semantics in `LiquidityUtils`.
 abstract contract FuzzMMQ01 is FuzzHelper {
     uint256 internal constant DOMAIN_CAP = 1e24;
 
@@ -172,10 +174,7 @@ abstract contract FuzzMMQ01 is FuzzHelper {
 
         uint256 extra = extraNonFeeRaw % DOMAIN_CAP;
         uint256 inc = inputs.qCommitted + extra;
-        int256 netFee = int256(feesAccruedRaw) - hookDeltaRaw;
-        uint256 fee = netFee > 0 ? uint256(netFee) : 0;
-
-        inputs.nonFee = inc > fee ? inc - fee : 0;
+        inputs.nonFee = LiquidityUtils.forwardedNonFeeLccAmount(inc, feesAccruedRaw, hookDeltaRaw);
         inputs.addedCredit = addedCreditRaw % DOMAIN_CAP;
         inputs.feeClassified = feeClassifiedRaw % DOMAIN_CAP;
     }

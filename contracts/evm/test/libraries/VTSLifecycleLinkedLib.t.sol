@@ -123,6 +123,7 @@ contract LifecycleTestSignalManager is IVRLSignalManager {
         uint256 deadline,
         uint256 authNonce,
         bytes memory authSig,
+        address,
         bool
     ) external returns (bool, uint256) {
         lastSender = sender;
@@ -336,54 +337,60 @@ contract VTSLifecycleLinkedLibTest is Test {
         });
     }
 
-    // --- commitSignal / sender resolution ---
+    // --- commitSignal / renewSignal proof principals (owner for commit, advancer for renew) ---
 
     function test_commitSignal_revertsWhenFactoryNotRegistered() public {
         vm.expectRevert(Errors.InvalidSender.selector);
-        harness.commitSignal(_routerCtx(), IMarketFactory(address(0xBAD)), boundCaller, mmOwner, _encodedSignal());
+        harness.commitSignal(_routerCtx(), IMarketFactory(address(0xBAD)), boundCaller, _encodedSignal());
     }
 
-    function test_commitSignal_revertsWhenUnboundCallerForwardsDifferentSender() public {
+    function test_commitSignal_revertsWhenUnboundCallerNotOwner() public {
         vm.expectRevert(Errors.InvalidSender.selector);
-        harness.commitSignal(_routerCtx(), IMarketFactory(address(factory)), unboundCaller, mmOwner, _encodedSignal());
+        harness.commitSignal(_routerCtx(), IMarketFactory(address(factory)), unboundCaller, _encodedSignal());
     }
 
-    function test_commitSignal_succeedsWhenUnboundCallerActsAsSelf() public {
-        uint256 id = harness.commitSignal(
-            _routerCtx(), IMarketFactory(address(factory)), unboundCaller, unboundCaller, _encodedSignal()
-        );
+    function test_commitSignal_succeedsWhenUnboundCallerIsMmOwner() public {
+        uint256 id = harness.commitSignal(_routerCtx(), IMarketFactory(address(factory)), mmOwner, _encodedSignal());
         assertEq(id, 1);
-        assertEq(signalManager.lastSender(), unboundCaller);
+        assertEq(signalManager.lastSender(), mmOwner);
     }
 
-    function test_commitSignal_usesForwardedSenderWhenCallerIsBound() public {
+    function test_commitSignal_usesDecodedOwnerWhenCallerIsBound() public {
         factory.setBound(boundCaller, true);
-        harness.commitSignal(_routerCtx(), IMarketFactory(address(factory)), boundCaller, mmOwner, _encodedSignal());
+        harness.commitSignal(_routerCtx(), IMarketFactory(address(factory)), boundCaller, _encodedSignal());
         assertEq(harness.getCommitMMOwner(1), mmOwner);
         assertEq(signalManager.lastSender(), mmOwner);
     }
 
-    function test_commitSignalRelayed_revertsWhenUnboundCallerForwardsDifferentSender() public {
+    function test_commitSignalRelayed_revertsWhenUnboundCallerNotOwner() public {
         vm.expectRevert(Errors.InvalidSender.selector);
         harness.commitSignalRelayed(
-            _routerCtx(), IMarketFactory(address(factory)), unboundCaller, mmOwner, _encodedSignal(), 0, 0, bytes("")
+            _routerCtx(),
+            IMarketFactory(address(factory)),
+            unboundCaller,
+            _encodedSignal(),
+            0,
+            0,
+            bytes(""),
+            makeAddr("commitmentLocker")
         );
     }
 
-    function test_commitSignalRelayed_succeedsWhenBoundCallerForwardsMMOwner() public {
+    function test_commitSignalRelayed_succeedsWhenBoundCallerUsesDecodedOwner() public {
         uint256 deadline = block.timestamp + 1 hours;
         uint256 authNonce = 17;
         bytes memory authSig = hex"CAFE";
         factory.setBound(boundCaller, true);
+        address locker = makeAddr("commitmentLocker");
         uint256 id = harness.commitSignalRelayed(
             _routerCtx(),
             IMarketFactory(address(factory)),
             boundCaller,
-            mmOwner,
             _encodedSignal(),
             deadline,
             authNonce,
-            authSig
+            authSig,
+            locker
         );
         assertEq(id, 1);
         assertEq(harness.getCommitMMOwner(1), mmOwner);
@@ -394,55 +401,57 @@ contract VTSLifecycleLinkedLibTest is Test {
         assertEq(signalManager.lastAuthSig(), authSig);
     }
 
-    function test_renewSignal_revertsWhenUnboundCallerForwardsDifferentSender() public {
+    function test_renewSignal_revertsWhenUnboundCallerNotAdvancer() public {
         factory.setBound(boundCaller, true);
-        harness.commitSignal(_routerCtx(), IMarketFactory(address(factory)), boundCaller, mmOwner, _encodedSignal());
+        harness.commitSignal(_routerCtx(), IMarketFactory(address(factory)), boundCaller, _encodedSignal());
 
         vm.expectRevert(Errors.InvalidSender.selector);
-        harness.renewSignal(
-            _routerCtx(), IMarketFactory(address(factory)), unboundCaller, mmOwner, 1, _renewSignalBytes(2)
-        );
+        harness.renewSignal(_routerCtx(), IMarketFactory(address(factory)), unboundCaller, 1, _renewSignalBytes(2));
     }
 
-    function test_renewSignal_succeedsWhenBoundCallerForwardsAdvancer() public {
+    function test_renewSignal_succeedsWhenBoundCallerRelaysDecodedAdvancer() public {
         factory.setBound(boundCaller, true);
-        harness.commitSignal(_routerCtx(), IMarketFactory(address(factory)), boundCaller, mmOwner, _encodedSignal());
+        harness.commitSignal(_routerCtx(), IMarketFactory(address(factory)), boundCaller, _encodedSignal());
 
         uint256 expBefore = harness.getCommitExpiresAt(1);
         vm.warp(block.timestamp + 100);
-        // Bound caller may relay `sender`; renew internal auth requires sender == mmState.advancer
-        harness.renewSignal(
-            _routerCtx(), IMarketFactory(address(factory)), boundCaller, advancer, 1, _renewSignalBytes(2)
-        );
+        harness.renewSignal(_routerCtx(), IMarketFactory(address(factory)), boundCaller, 1, _renewSignalBytes(2));
         assertGt(harness.getCommitExpiresAt(1), expBefore);
         assertEq(signalManager.lastSender(), advancer);
     }
 
-    function test_renewSignalRelayed_revertsWhenUnboundCallerForwardsDifferentSender() public {
+    function test_renewSignalRelayed_revertsWhenUnboundCallerNotAdvancer() public {
         factory.setBound(boundCaller, true);
-        harness.commitSignal(_routerCtx(), IMarketFactory(address(factory)), boundCaller, mmOwner, _encodedSignal());
+        harness.commitSignal(_routerCtx(), IMarketFactory(address(factory)), boundCaller, _encodedSignal());
 
         vm.expectRevert(Errors.InvalidSender.selector);
         harness.renewSignalRelayed(
             _routerCtx(),
             IMarketFactory(address(factory)),
             unboundCaller,
-            mmOwner,
             1,
             _renewSignalBytes(2),
             0,
             0,
-            bytes("")
+            bytes(""),
+            address(0)
         );
     }
 
-    function test_renewSignalRelayed_succeedsWhenBoundCallerForwardsAdvancer() public {
+    function test_renewSignalRelayed_succeedsWhenBoundCallerRelaysDecodedAdvancer() public {
         uint256 deadline = block.timestamp + 1 hours;
         uint256 authNonce = 29;
         bytes memory authSig = hex"BEEF";
         factory.setBound(boundCaller, true);
         harness.commitSignalRelayed(
-            _routerCtx(), IMarketFactory(address(factory)), boundCaller, mmOwner, _encodedSignal(), 0, 0, bytes("")
+            _routerCtx(),
+            IMarketFactory(address(factory)),
+            boundCaller,
+            _encodedSignal(),
+            0,
+            0,
+            bytes(""),
+            makeAddr("commitmentLocker2")
         );
 
         uint256 expBefore = harness.getCommitExpiresAt(1);
@@ -451,12 +460,12 @@ contract VTSLifecycleLinkedLibTest is Test {
             _routerCtx(),
             IMarketFactory(address(factory)),
             boundCaller,
-            advancer,
             1,
             _renewSignalBytes(2),
             deadline,
             authNonce,
-            authSig
+            authSig,
+            address(0)
         );
         assertGt(harness.getCommitExpiresAt(1), expBefore);
         assertEq(signalManager.lastSender(), advancer);
@@ -495,7 +504,7 @@ contract VTSLifecycleLinkedLibTest is Test {
     }
 
     function test_validateMMOperation_revertsWhenSignalInvalid() public {
-        harness.testSeedCommit(5, mmOwner, advancer, block.timestamp + 1 days);
+        harness.testSeedCommit(5, mmOwner, advancer, block.timestamp + 1 days, boundCaller);
         vm.warp(block.timestamp + 2 days);
 
         bytes memory hook = PositionModificationHookDataLib.encode(5, 0, advancer);
@@ -512,7 +521,7 @@ contract VTSLifecycleLinkedLibTest is Test {
 
     function test_validateMMOperation_revertsWhenOwnerNotBound() public {
         uint256 expires = block.timestamp + 7 days;
-        harness.testSeedCommit(3, mmOwner, advancer, expires);
+        harness.testSeedCommit(3, mmOwner, advancer, expires, boundCaller);
 
         bytes memory hook = PositionModificationHookDataLib.encode(3, 0, advancer);
         vm.mockCall(
@@ -534,9 +543,64 @@ contract VTSLifecycleLinkedLibTest is Test {
         );
     }
 
+    function test_validateMMOperation_revertsWhenOwnerNotAuthorisedRelayer() public {
+        address otherBound = makeAddr("otherBound");
+        uint256 expires = block.timestamp + 7 days;
+        harness.testSeedCommit(8, mmOwner, advancer, expires, boundCaller);
+
+        bytes memory hook = PositionModificationHookDataLib.encode(8, 0, advancer);
+        vm.mockCall(
+            address(hub),
+            abi.encodeWithSelector(ILiquidityHub.getFactory.selector, Currency.unwrap(c0), Currency.unwrap(c1)),
+            abi.encode(address(factory))
+        );
+        factory.setBound(boundCaller, true);
+        factory.setBound(otherBound, true);
+
+        vm.expectRevert(Errors.InvalidSender.selector);
+        harness.validateMMOperation(
+            VTSCoreHookContext({
+                poolManager: IPoolManager(address(0)),
+                liquidityHub: ILiquidityHub(address(hub)),
+                oracleHelper: IOracleHelper(address(0))
+            }),
+            otherBound,
+            poolKey,
+            hook
+        );
+    }
+
+    /// @dev Seizure hook data must still require `owner == authorisedRelayer` when relayer is bound.
+    function test_validateMMOperation_revertsWhenOwnerNotAuthorisedRelayer_seizing() public {
+        address otherBound = makeAddr("otherBoundSeize");
+        uint256 expires = block.timestamp + 7 days;
+        harness.testSeedCommit(9, mmOwner, advancer, expires, boundCaller);
+
+        bytes memory hook = PositionModificationHookDataLib.encodeSeizure(9, 0, makeAddr("seizerLocker"), 0, 0);
+        vm.mockCall(
+            address(hub),
+            abi.encodeWithSelector(ILiquidityHub.getFactory.selector, Currency.unwrap(c0), Currency.unwrap(c1)),
+            abi.encode(address(factory))
+        );
+        factory.setBound(boundCaller, true);
+        factory.setBound(otherBound, true);
+
+        vm.expectRevert(Errors.InvalidSender.selector);
+        harness.validateMMOperation(
+            VTSCoreHookContext({
+                poolManager: IPoolManager(address(0)),
+                liquidityHub: ILiquidityHub(address(hub)),
+                oracleHelper: IOracleHelper(address(0))
+            }),
+            otherBound,
+            poolKey,
+            hook
+        );
+    }
+
     function test_validateMMOperation_revertsWhenLockerNotAdvancer() public {
         uint256 expires = block.timestamp + 7 days;
-        harness.testSeedCommit(4, mmOwner, advancer, expires);
+        harness.testSeedCommit(4, mmOwner, advancer, expires, boundCaller);
 
         bytes memory hook = PositionModificationHookDataLib.encode(4, 0, makeAddr("badLocker"));
         vm.mockCall(
@@ -561,7 +625,7 @@ contract VTSLifecycleLinkedLibTest is Test {
 
     function test_validateMMOperation_returnsTrueForSeizureWithoutLockerAdvancerMatch() public {
         uint256 expires = block.timestamp + 7 days;
-        harness.testSeedCommit(6, mmOwner, advancer, expires);
+        harness.testSeedCommit(6, mmOwner, advancer, expires, boundCaller);
 
         bytes memory hook = PositionModificationHookDataLib.encodeSeizure(6, 0, makeAddr("badLocker"), 0, 0);
         vm.mockCall(
@@ -587,7 +651,7 @@ contract VTSLifecycleLinkedLibTest is Test {
 
     function test_validateMMOperation_returnsTrueOnHappyPath() public {
         uint256 expires = block.timestamp + 7 days;
-        harness.testSeedCommit(7, mmOwner, advancer, expires);
+        harness.testSeedCommit(7, mmOwner, advancer, expires, boundCaller);
 
         bytes memory hook = PositionModificationHookDataLib.encode(7, 0, advancer);
         vm.mockCall(

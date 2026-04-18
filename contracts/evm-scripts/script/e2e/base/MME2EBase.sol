@@ -27,6 +27,7 @@ import {MarketVTSConfiguration} from "src/types/VTS.sol";
 import {ILiquidityHub} from "src/interfaces/ILiquidityHub.sol";
 import {IVRLSignalManager} from "src/interfaces/IVRLSignalManager.sol";
 import {MMActions} from "src/libraries/MMActions.sol";
+import {Errors} from "src/libraries/Errors.sol";
 
 abstract contract MME2EBase is E2EBase {
     using MarketMaker for MarketMaker.State;
@@ -38,6 +39,12 @@ abstract contract MME2EBase is E2EBase {
         uint256 queue;
         uint256 lcc;
         uint256 underlying;
+    }
+
+    struct PositionSeed {
+        int24 tickLower;
+        int24 tickUpper;
+        uint128 liquidity;
     }
 
     function _assertUnwrapInvariant(
@@ -170,7 +177,7 @@ abstract contract MME2EBase is E2EBase {
         console.log("fee lcc1 taken:", amount1);
     }
 
-    /// @dev CHECKPOINT a position via MMPositionManager. Pass `liquiditySignal = bytes("")` to skip commitment validation.
+    /// @dev CHECKPOINT a position via MMPositionManager. Pass non-empty `bytes` to run commitment backing (`withCommitment=true`).
     function _checkpointPosition(
         StandaloneMarket memory m,
         uint256 mmPk,
@@ -184,6 +191,347 @@ abstract contract MME2EBase is E2EBase {
             mmpm.checkpoint(commitId, positionIndex, liquiditySignal.length > 0);
         }
         vm.stopBroadcast();
+    }
+
+    /// @dev Explicit checkpoint variant (avoids the non-empty-bytes sentinel).
+    function _checkpointPosition(
+        StandaloneMarket memory m,
+        uint256 mmPk,
+        uint256 commitId,
+        uint256 positionIndex,
+        bool withCommitment
+    ) internal {
+        vm.startBroadcast(mmPk);
+        {
+            MMPositionManager mmpm = MMPositionManager(payable(m.stack.contracts.mmPositionManager));
+            mmpm.checkpoint(commitId, positionIndex, withCommitment);
+        }
+        vm.stopBroadcast();
+    }
+
+    // --- Seizure E2E helpers (guarantor path; mirrors `contracts/evm/test/marketmaker/MMPositionActionsImpl.t.sol`) ---
+
+    /// @dev Warp duration past RFS grace used in protocol tests (`_openSeizeWindow`).
+    uint256 internal constant SEIZURE_GRACE_WARP = 300_000 + 1;
+
+    /// @dev Default swap size to open RFS on a stressed MM position (exact-input on core pool).
+    uint128 internal constant SEIZURE_SWAP_AMOUNT_IN = 1 ether;
+
+    /// @dev Generous seizure settlement caps (orchestrator clamps to required settlement).
+    uint256 internal constant SEIZURE_SETTLE_AMOUNT_MAX = 10_000 ether;
+
+    /// @notice Deficit-causing swap + checkpoint + time warp so `onSeize` can succeed (per-position).
+    function _openSeizeWindowForPosition(
+        StandaloneMarket memory m,
+        uint256 takerPk,
+        uint256 mmPk,
+        uint256 commitId,
+        uint256 positionIndex,
+        uint256 wrapForSwap
+    ) internal {
+        _mintAndSwap(m, takerPk, wrapForSwap, true, SEIZURE_SWAP_AMOUNT_IN);
+        IVTSOrchestrator vts = IVTSOrchestrator(m.stack.contracts.vtsOrchestrator);
+        (, bool rfsOpen,) = vts.calcRFS(commitId, positionIndex, false);
+        require(rfsOpen, "e2e seizure: expected RFS open after stress swap");
+        _checkpointPosition(m, mmPk, commitId, positionIndex, false);
+        vm.warp(block.timestamp + SEIZURE_GRACE_WARP);
+    }
+
+    /// @notice After a single swap, checkpoint multiple position indices then warp once (same RFS episode).
+    function _openSeizeWindowForPositions(
+        StandaloneMarket memory m,
+        uint256 takerPk,
+        uint256 mmPk,
+        uint256 commitId,
+        uint256[] memory positionIndices,
+        uint256 wrapForSwap
+    ) internal {
+        _mintAndSwap(m, takerPk, wrapForSwap, true, SEIZURE_SWAP_AMOUNT_IN);
+        IVTSOrchestrator vts = IVTSOrchestrator(m.stack.contracts.vtsOrchestrator);
+        for (uint256 i = 0; i < positionIndices.length; i++) {
+            (, bool rfsOpen,) = vts.calcRFS(commitId, positionIndices[i], false);
+            require(rfsOpen, "e2e seizure: expected RFS open for each position index after stress swap");
+        }
+        _checkpointPositionsBatch(m, mmPk, commitId, positionIndices, false);
+        vm.warp(block.timestamp + SEIZURE_GRACE_WARP);
+    }
+
+    /// @dev Batch checkpoint for one commitment across multiple position indices.
+    function _checkpointPositionsBatch(
+        StandaloneMarket memory m,
+        uint256 mmPk,
+        uint256 commitId,
+        uint256[] memory positionIndices,
+        bool withCommitment
+    ) internal {
+        vm.startBroadcast(mmPk);
+        {
+            MMPositionManager mmpm = MMPositionManager(payable(m.stack.contracts.mmPositionManager));
+            uint256 actionCount = positionIndices.length;
+            bytes memory actions = new bytes(actionCount);
+            bytes[] memory params = new bytes[](actionCount);
+            for (uint256 i = 0; i < actionCount; i++) {
+                actions[i] = bytes1(uint8(MMActions.CHECKPOINT));
+                params[i] = abi.encode(commitId, positionIndices[i], withCommitment);
+            }
+            _executeMMActions(mmpm, actions, params, block.timestamp + 3600);
+        }
+        vm.stopBroadcast();
+    }
+
+    /// @dev Mint an additional MM pool position on an existing commitment (`MINT_POSITION` + `SETTLE_POSITION`).
+    function _mintAdditionalMmPosition(
+        StandaloneMarket memory m,
+        uint256 mmPk,
+        uint256 commitId,
+        int24 tickLower,
+        int24 tickUpper,
+        uint128 liq
+    ) internal {
+        address mm = vm.addr(mmPk);
+        MMPositionManager mmpm = MMPositionManager(payable(m.stack.contracts.mmPositionManager));
+        PoolKey memory key = _corePoolKey(m);
+        IVTSOrchestrator vts = IVTSOrchestrator(m.stack.contracts.vtsOrchestrator);
+
+        (, , uint256 positionCount,,) = vts.getCommit(commitId);
+        uint256 newIndex = positionCount;
+
+        (uint256 settle0, uint256 settle1) =
+            _baseSettlementAmounts(m.stack.contracts.vtsOrchestrator, key, tickLower, tickUpper, liq);
+
+        vm.startBroadcast(mmPk);
+        Token(m.underlying0).mint(mm, settle0);
+        Token(m.underlying1).mint(mm, settle1);
+        IERC20(m.underlying0).approve(address(mmpm), settle0);
+        IERC20(m.underlying1).approve(address(mmpm), settle1);
+
+        bytes memory actions = abi.encodePacked(bytes1(uint8(MMActions.MINT_POSITION)), bytes1(uint8(MMActions.SETTLE_POSITION)));
+        bytes[] memory params = new bytes[](2);
+        params[0] = abi.encode(key, commitId, tickLower, tickUpper, uint256(liq));
+        params[1] = abi.encode(key, commitId, newIndex, -int128(int256(settle0)), -int128(int256(settle1)), false);
+        _executeMMActions(mmpm, actions, params, block.timestamp + 3600);
+        vm.stopBroadcast();
+    }
+
+    /// @dev Commit + mint + settle many positions in one MM batch.
+    function _createMmPositionBatch(StandaloneMarket memory m, uint256 mmPk, PositionSeed[] memory seeds)
+        internal
+        returns (uint256 commitId)
+    {
+        address mm = vm.addr(mmPk);
+        uint256 lastVerified = IVRLSignalManager(m.stack.contracts.signalManager).mmNonce(mm);
+        return _createMmPositionBatch(m, mmPk, seeds, lastVerified + 1);
+    }
+
+    /// @dev Commit + mint + settle many positions in one MM batch, with explicit signal nonce.
+    function _createMmPositionBatch(
+        StandaloneMarket memory m,
+        uint256 mmPk,
+        PositionSeed[] memory seeds,
+        uint256 signalNonce
+    ) internal returns (uint256 commitId) {
+        require(seeds.length > 0, "mmpm: empty position seed set");
+        address mm = vm.addr(mmPk);
+        bytes memory liquiditySignalBytes = _buildSingleLeafLiquiditySignal(mmPk, signalNonce);
+        MMPositionManager mmpm = MMPositionManager(payable(m.stack.contracts.mmPositionManager));
+        commitId = mmpm.nextTokenId();
+        _fundAndExecuteCreateMmPositionBatch(m, mmPk, commitId, liquiditySignalBytes, seeds);
+
+        require(mmpm.ownerOf(commitId) == mm, "mmpm: owner mismatch");
+    }
+
+    function _fundAndExecuteCreateMmPositionBatch(
+        StandaloneMarket memory m,
+        uint256 mmPk,
+        uint256 commitId,
+        bytes memory liquiditySignalBytes,
+        PositionSeed[] memory seeds
+    ) internal {
+        MMPositionManager mmpm = MMPositionManager(payable(m.stack.contracts.mmPositionManager));
+        PoolKey memory key = _corePoolKey(m);
+        address mm = vm.addr(mmPk);
+        (uint256[] memory settle0, uint256[] memory settle1, uint256 totalSettle0, uint256 totalSettle1) =
+            _computeSeedSettlements(m.stack.contracts.vtsOrchestrator, key, seeds);
+
+        vm.startBroadcast(mmPk);
+        Token(m.underlying0).mint(mm, totalSettle0);
+        Token(m.underlying1).mint(mm, totalSettle1);
+        IERC20(m.underlying0).approve(address(mmpm), totalSettle0);
+        IERC20(m.underlying1).approve(address(mmpm), totalSettle1);
+        (bytes memory actions, bytes[] memory params) =
+            _buildCreateMmBatch(key, commitId, liquiditySignalBytes, seeds, settle0, settle1);
+        _executeMMActions(mmpm, actions, params, block.timestamp + 3600);
+        vm.stopBroadcast();
+    }
+
+    function _computeSeedSettlements(address vtsOrchestrator, PoolKey memory key, PositionSeed[] memory seeds)
+        internal
+        view
+        returns (uint256[] memory settle0, uint256[] memory settle1, uint256 totalSettle0, uint256 totalSettle1)
+    {
+        uint256 positionCount = seeds.length;
+        settle0 = new uint256[](positionCount);
+        settle1 = new uint256[](positionCount);
+        for (uint256 i = 0; i < positionCount; i++) {
+            (settle0[i], settle1[i]) = _baseSettlementAmounts(
+                vtsOrchestrator, key, seeds[i].tickLower, seeds[i].tickUpper, seeds[i].liquidity
+            );
+            totalSettle0 += settle0[i];
+            totalSettle1 += settle1[i];
+        }
+    }
+
+    function _buildCreateMmBatch(
+        PoolKey memory key,
+        uint256 commitId,
+        bytes memory liquiditySignalBytes,
+        PositionSeed[] memory seeds,
+        uint256[] memory settle0,
+        uint256[] memory settle1
+    ) internal pure returns (bytes memory actions, bytes[] memory params) {
+        uint256 positionCount = seeds.length;
+        uint256 actionCount = 1 + (positionCount * 2);
+        actions = new bytes(actionCount);
+        params = new bytes[](actionCount);
+        actions[0] = bytes1(uint8(MMActions.COMMIT_SIGNAL));
+        params[0] = abi.encode(liquiditySignalBytes, bytes(""));
+        for (uint256 i = 0; i < positionCount; i++) {
+            uint256 mintIdx = 1 + (2 * i);
+            uint256 settleIdx = mintIdx + 1;
+            actions[mintIdx] = bytes1(uint8(MMActions.MINT_POSITION));
+            actions[settleIdx] = bytes1(uint8(MMActions.SETTLE_POSITION));
+            params[mintIdx] = abi.encode(key, commitId, seeds[i].tickLower, seeds[i].tickUpper, uint256(seeds[i].liquidity));
+            params[settleIdx] =
+                abi.encode(key, commitId, i, -int128(int256(settle0[i])), -int128(int256(settle1[i])), false);
+        }
+    }
+
+    /// @dev Guarantor batch: `SEIZE_POSITION` -> `SETTLE_FROM_DELTAS` -> `TAKE` x2 (clears v4 deltas per DELTA-01).
+    function _guarantorSeizeSettleFromDeltasAndTake(
+        StandaloneMarket memory m,
+        uint256 guarantorPk,
+        uint256 commitId,
+        uint256 positionIndex,
+        uint256 amount0,
+        uint256 amount1
+    ) internal {
+        uint256[] memory positionIndices = new uint256[](1);
+        uint256[] memory amount0Caps = new uint256[](1);
+        uint256[] memory amount1Caps = new uint256[](1);
+        positionIndices[0] = positionIndex;
+        amount0Caps[0] = amount0;
+        amount1Caps[0] = amount1;
+        _guarantorSeizeManySettleFromDeltasAndTake(m, guarantorPk, commitId, positionIndices, amount0Caps, amount1Caps);
+    }
+
+    /// @dev Multi-position guarantor seize batch:
+    ///      (SEIZE_POSITION -> SETTLE_POSITION_FROM_DELTAS) x N, then TAKE x2 once.
+    function _guarantorSeizeManySettleFromDeltasAndTake(
+        StandaloneMarket memory m,
+        uint256 guarantorPk,
+        uint256 commitId,
+        uint256[] memory positionIndices,
+        uint256[] memory amount0Caps,
+        uint256[] memory amount1Caps
+    ) internal {
+        uint256 positionCount = positionIndices.length;
+        require(positionCount > 0, "e2e seize: empty position set");
+        require(positionCount == amount0Caps.length && positionCount == amount1Caps.length, "e2e seize: array length mismatch");
+        address guarantor = vm.addr(guarantorPk);
+        PoolKey memory key = _corePoolKey(m);
+
+        uint256 totalAmount0;
+        uint256 totalAmount1;
+        for (uint256 i = 0; i < positionCount; i++) {
+            totalAmount0 += amount0Caps[i];
+            totalAmount1 += amount1Caps[i];
+        }
+
+        vm.startBroadcast(guarantorPk);
+        Token(m.underlying0).mint(guarantor, totalAmount0);
+        Token(m.underlying1).mint(guarantor, totalAmount1);
+        IERC20(m.underlying0).approve(address(m.stack.contracts.mmPositionManager), totalAmount0);
+        IERC20(m.underlying1).approve(address(m.stack.contracts.mmPositionManager), totalAmount1);
+
+        MMPositionManager mmpm = MMPositionManager(payable(m.stack.contracts.mmPositionManager));
+        (bytes memory actions, bytes[] memory params) = _buildGuarantorMultiSeizeBatch(
+            key, commitId, positionIndices, amount0Caps, amount1Caps, guarantor
+        );
+        _executeMMActions(mmpm, actions, params, block.timestamp + 3600);
+        vm.stopBroadcast();
+    }
+
+    function _buildGuarantorMultiSeizeBatch(
+        PoolKey memory key,
+        uint256 commitId,
+        uint256[] memory positionIndices,
+        uint256[] memory amount0Caps,
+        uint256[] memory amount1Caps,
+        address guarantor
+    ) internal pure returns (bytes memory actions, bytes[] memory params) {
+        uint256 positionCount = positionIndices.length;
+        uint256 actionCount = (positionCount * 2) + 2;
+        actions = new bytes(actionCount);
+        params = new bytes[](actionCount);
+        for (uint256 i = 0; i < positionCount; i++) {
+            uint256 actionBase = 2 * i;
+            actions[actionBase] = bytes1(uint8(MMActions.SEIZE_POSITION));
+            actions[actionBase + 1] = bytes1(uint8(MMActions.SETTLE_POSITION_FROM_DELTAS));
+            params[actionBase] = _encodeSeizePositionParams(
+                key, commitId, positionIndices[i], amount0Caps[i], amount1Caps[i]
+            );
+            params[actionBase + 1] = _encodeSettleFromDeltasParams(key, commitId, positionIndices[i]);
+        }
+        actions[actionCount - 2] = bytes1(uint8(MMActions.TAKE));
+        actions[actionCount - 1] = bytes1(uint8(MMActions.TAKE));
+        params[actionCount - 2] = abi.encode(key.currency0, guarantor, 0);
+        params[actionCount - 1] = abi.encode(key.currency1, guarantor, 0);
+    }
+
+    function _encodeSeizePositionParams(
+        PoolKey memory key,
+        uint256 commitId,
+        uint256 positionIndex,
+        uint256 amount0Cap,
+        uint256 amount1Cap
+    ) internal pure returns (bytes memory) {
+        return abi.encode(key, commitId, positionIndex, amount0Cap, amount1Cap, false);
+    }
+
+    function _encodeSettleFromDeltasParams(PoolKey memory key, uint256 commitId, uint256 positionIndex)
+        internal
+        pure
+        returns (bytes memory)
+    {
+        return abi.encode(key, commitId, positionIndex, true, true);
+    }
+
+    /// @dev AUTH-01A regression: unapproved `SETTLE_POSITION` on the same commitment must revert `NotApproved` after a completed seize batch.
+    function _assertNotApprovedOnGuarantorSettleAfterSeize(
+        StandaloneMarket memory m,
+        uint256 guarantorPk,
+        uint256 commitId,
+        uint256 positionIndex
+    ) internal {
+        address guarantor = vm.addr(guarantorPk);
+        PoolKey memory key = _corePoolKey(m);
+        MMPositionManager mmpm = MMPositionManager(payable(m.stack.contracts.mmPositionManager));
+
+        bytes memory actions = abi.encodePacked(bytes1(uint8(MMActions.SETTLE_POSITION)));
+        bytes[] memory params = new bytes[](1);
+        params[0] = abi.encode(key, commitId, positionIndex, -int128(1), -int128(1), false);
+        // Keep this as a local assertion (no broadcast tx), otherwise replay simulation fails on the intentional revert.
+        vm.prank(guarantor);
+        try mmpm.modifyLiquidities(abi.encode(actions, params), block.timestamp + 3600) {
+            revert("e2e: expected NotApproved on post-seize settle");
+        } catch (bytes memory err) {
+            require(err.length >= 4, "e2e: empty revert");
+            bytes4 sel;
+            assembly {
+                sel := mload(add(err, 32))
+            }
+            require(sel == Errors.NotApproved.selector, "e2e: expected NotApproved selector");
+        }
     }
 
     /// @dev Optionally fund+wrap for a taker, then execute a single exact-input swap.
@@ -426,7 +774,7 @@ abstract contract MME2EBase is E2EBase {
                 bytes1(uint8(MMActions.TAKE))
             );
             bytes[] memory params = new bytes[](5);
-            params[0] = abi.encode(corePoolKey, commitId, 0);
+            params[0] = abi.encode(corePoolKey, commitId, 0, uint128(0), uint128(0));
             params[1] = abi.encode(corePoolKey, commitId, 0, true, true);
             params[2] = abi.encode(commitId);
             params[3] = abi.encode(corePoolKey.currency0, mm, 0);

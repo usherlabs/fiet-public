@@ -67,6 +67,10 @@ being an informal “should”.
     - LCC is minted **1:1** against underlying deposited into `LiquidityHub`.
     - This corresponds to the `directSupply` / `wrappedBalances` notion for non-protocol holders.
     - The backing asset is _immediately_ reflected in `LiquidityHub.reserveOfUnderlying(underlying)`.
+    - **Direct-backed** mints (`directAmount > 0` on `LCC.mint`) must **not** target **bucket-exempt** (`BOUND_EXEMPT`)
+      endpoints: exempt holders skip per-address bucket maps, which would desynchronise Domain A from holder buckets and
+      allow exempt→non-protocol transfers to reclassify liquidity as market-derived without the wrapped-only DEX ingress
+      path (`prepareMarketLiquidity` / **LCC-03**).
 
   - **Domain B — In-market (market-derived liquidity claims, including queued settlement claims)**:
 
@@ -89,7 +93,10 @@ being an informal “should”.
 - **Enforced by (authorised mint surfaces)**:
 
   - **Domain A**: `src/LiquidityHub.sol::_wrap` transfers underlying in, increments
-    `directSupply[lcc]` and `reserveOfUnderlying[underlying]`, then mints LCC.
+    `directSupply[lcc]` and `reserveOfUnderlying[underlying]`, then mints LCC; `src/LCC.sol::mint` and
+    `LiquidityHub._assertDirectBackedMintRecipient` reject `directAmount > 0` to `BOUND_EXEMPT` recipients
+    (`Errors.DirectMintToExemptNotAllowed`). `issue` uses `_assertRecipientNotDexSink` only so issuer mints to exempt
+    endpoints (eg ProxyHook) remain valid for pure market-derived balance.
   - **Domain B**: `src/LiquidityHub.sol::issue` is `onlyIssuer(lcc)` and mints market-derived amount via the LCC hub
     mint path; issuer gating is enforced by `LiquidityHub._onlyIssuer` (valid LCC + issuer allowlist).
   - **Domain C**: `src/libraries/VTSPositionMMOpsLib.sol::_handleLiquidityIncrease` calls
@@ -152,6 +159,9 @@ being an informal “should”.
 - **Non-goal**:
   - Non-canonical flows that perform multiple unpaid `LCC -> PoolManager` transfers inside one active `sync(lcc)`
     window are unsupported and intentionally revert.
+- **Ingress amount**: `prepareMarketLiquidity` is invoked with the **wrapped (direct-backed) slice** of the transfer only;
+  market-derived balance does not trigger Hub→vault mobilisation on that hop. Domain A liquidity must therefore remain in
+  bucket-tracked holders until ingress if that mobilisation is required.
 
 ### HUB-01: Wrapping mints 1:1 and increases Hub reserves
 
@@ -163,6 +173,8 @@ being an informal “should”.
 - **Notable guard**:
   - native-asset wrap requires `msg.value == amount`, otherwise `Errors.InvalidAmount`.
   - ERC20-backed wrap requires `msg.value == 0`, otherwise `Errors.InvalidAmount`.
+  - Recipients must not be a DEX ingress sink (`Errors.DirectWrapToDexNotAllowed`) or bucket-exempt
+    (`Errors.DirectMintToExemptNotAllowed`); see **LCC-BACKING-01** Domain A.
 - **Asset-model assumption**:
   - For ERC20 underlyings, this invariant assumes the listed underlying is a **standard, transfer-conservative token**
     whose received amount equals the nominal transfer amount.
@@ -181,25 +193,33 @@ being an informal “should”.
 - **Why**: Market liquidity mobilisation sends native ETH from `CanonicalVault` to the Hub before `confirmTake`; Hub
   ingress must bind to that custody address, not to arbitrary contracts or per-market facades.
 
-### HUB-02: Unwrapping cannot exceed liquid (bucketed) balance; shortfalls are explicitly queued
+### HUB-02: Unwrapping cannot exceed liquid (bucketed) balance; only market-derived shortfall may queue
 
 - **Statement**: Unwrap requires `0 < amount <= availableToUnwrap`, where `availableToUnwrap` is the caller’s live
   bucketed balance (`wrappedBalance + marketDerivedBalance` for `msg.sender`) minus any existing settlement queue for
-  the same `(lcc, queueTo)` key: `max(0, fromBalance - settleQueue[lcc][queueTo])`. Any unavailable portion of the
-  requested unwrap is still tracked via the settlement queue rather than silently failing.
+  the same `(lcc, queueTo)` key: `max(0, fromBalance - settleQueue[lcc][queueTo])`. The wrapped / direct-backed slice
+  (`min(amount, wrappedBalance)`) must redeem **in full** against `directSupply` in the same transaction or the call
+  reverts (`Errors.InvalidAmount`); it must **not** degrade into queued external settlement. Only the **market-derived**
+  slice may record a new queue entry when `useMarketLiquidity` returns less than the market-derived remainder (see
+  `LiquidityHubLib.unwrapInternalLogic` and market-derived-only redemption in `processSettlementLogic` for external
+  recipients).
 - **Enforced by**:
   - `src/LiquidityHub.sol::_unwrap` reverts `Errors.InvalidAmount(amount, availableToUnwrap)` when out of bounds.
-  - The split/queue behaviour is implemented in `LiquidityHubLib.unwrapInternalLogic(...)` (called from `_unwrap`).
+  - `LiquidityHubLib.unwrapInternalLogic(...)` reverts when the wrapped slice exceeds `directSupply`, when the
+    market-derived remainder is positive but `marketDerivedBalance == 0`, and only calls `queueSettlement` for
+    unsatisfied **market-derived** remainder after `useMarketLiquidity`.
   - Queue state is observable via `LiquidityHub.settleQueue(lcc, recipient)` and `LiquidityHub.totalQueued(lcc)`.
-- **Why**: Queued shortfall does not burn the holder’s LCC at queue time; without netting, the same balance could back
-  multiple queued claims and inflate `queueOfUnderlying` / vault obligation sizing.
+- **Why**: External settlement queues are **market-derived claims**; allowing wrapped/direct shortfall to queue would
+  desynchronise queue ownership from what `processSettlementFor` can redeem. Headroom netting against
+  `settleQueue[lcc][queueTo]` remains correct because both the liquid balance and the queue refer to the same economic
+  slice for the beneficiary.
 
 ### HUB-02A: `unwrapTo` is endpoint-only (on-behalf-of); direct users use `unwrap`
 
 - **Statement**: Every `LiquidityHub.unwrapTo(...)` overload requires `msg.sender` to be `BOUND_ENDPOINT` in the
   resolved LCC’s market factory namespace (`boundLevelOfLcc(lcc, msg.sender) == BOUND_ENDPOINT`). Bucket-exempt and
   DEX tiers are not admitted via `unwrapTo`. End users unwrap with `unwrap(...)` / `unwrap(underlying, marketId, ...)`,
-  which always queue shortfalls to the caller.
+  which may queue **market-derived** shortfall to the caller (wrapped/direct shortfall reverts instead).
 - **Enforced by**: `src/LiquidityHub.sol::_onlyUnwrapToEndpoint` on each `unwrapTo` entrypoint before `_unwrap`.
 - **Trusted endpoint contract**:
   - `unwrapTo(lcc, to, queueTo, ...)` is an on-behalf-of primitive, not a generic convenience wrapper over `unwrap`.
@@ -209,8 +229,25 @@ being an informal “should”.
     already encumbering the same caller-held slice.
   - Current intended caller: `MMPositionManager`, which consumes locker/user LCC or delta credit before calling
     `unwrapTo`.
+  - **Post-shortfall custody (`UNWRAP_LCC`)**: Queued shortfall does not burn LCC at queue time; any LCC that remains on
+    the endpoint after `unwrapTo` must not sit on `MMPositionManager` as unscoped router residue (**DELTA-02**). After
+    each `unwrapTo`, `MMPositionManager` measures the incremental `settleQueue` delta for `queueTo` and forwards that
+    amount of LCC to `MMQueueCustodian` under beneficiary-scoped storage (`tokenId == 0` utility bucket), matching the
+    MM decrease / `COLLECT_AVAILABLE_LIQUIDITY` model. For `payerIsUser` flows, that delta must be measured from the
+    queue state **after** pulling LCC into the endpoint (`transferFrom`), because non-protocol → protocol transfer can
+    annul prior queue entries (**LCC-02**) before `unwrapTo` runs; the deltas path measures from immediately before
+    `unwrapTo` only (no LCC transfer annul in between).
+  - **Native-backed `UNWRAP_LCC` (underlying `address(0)`)**: `MMPositionManager` passes Hub immediate payout
+    `to = address(this)` so `LiquidityHub` does not send native ETH to the locker inside `unwrapTo` (removes a
+    re-entrancy window between queue write and custodian forward). The locker receives native as transient
+    currency-delta credit and withdraws with `TAKE(ADDRESS_ZERO, ...)` in the same batch.
   - Any additional `BOUND_ENDPOINT` integration that cannot preserve this coupling must not use `unwrapTo` without
     revisiting HUB-02 netting assumptions.
+  - **Admission vs custody**: After forwarding, the endpoint’s live LCC balance no longer includes custodied
+    queue-backing. `LiquidityHub` therefore adds optional capped credit from `IEndpointUnwrapAdmission` (implemented by
+    `MMPositionManager` via `MMQueueCustodian.queued(0, lcc, beneficiary)`), bounded by `settleQueue[lcc][queueTo]`, so
+    fresh beneficiary-linked principal can still pass `_unwrap` admission without weakening HUB-02 anti-double-queue
+    semantics.
 - **Rationale**: Splitting immediate payout recipient from queue owner is a trusted endpoint pattern (for example
   `MMPositionManager` after it has consumed the beneficiary’s LCC or delta credit). Exposing that split to arbitrary EOAs
   allowed repeated queue inflation against unchanged holder balance.
@@ -329,8 +366,25 @@ being an informal “should”.
 - **Operating model / protocol assumption**:
   - `mmState.owner` is the durable identity for the market maker's signalled state and is expected to correspond to the
     operator's high-security custody / approval authority.
-  - `mmState.advancer` is the lower-friction operational key used to submit / renew VRL-backed MM state and to initiate
-    ordinary MM position operations through `MMPositionManager`.
+  - `mmState.owner` may therefore be a smart contract / hardened custody wallet; it is **not** required to be an EOA.
+  - `mmState.advancer` is the lower-friction operational identity used to renew VRL-backed MM state (renew proof
+    principal) and, on-chain, is the required **locker** for ordinary non-seizing MM operations (`locker == advancer`).
+  - **`mmState.advancer` is account-shape agnostic**: the protocol does not require a plain EOA or any particular bytecode
+    at `advancer`. Proof inclusion and `ISignalVerifier` govern whether a signal is accepted; the advancer address is part
+    of the signed Merkle leaf and stored state, not a runtime EOA/7702 classification.
+  - **Relay caveat**: `VRLSignalManager.verifyLiquiditySignalRelayed` still authenticates relay payloads with
+    **`ECDSA.recover(...) == sender`** on the EIP-712 digest. That path is therefore usable only by accounts that can
+    satisfy ECDSA recovery to `sender` (typically EOAs or EIP-7702-delegated accounts that present as EOAs for signing).
+    It does **not** implement ERC-1271 / `SignatureChecker`. Contract-shaped advancers may still verify via the direct
+    submitter path (`verifyLiquiditySignal`) or through a **factory-bound** orchestrator caller that submits on behalf
+    of the advancer per `VTSCommitLib._resolveRenewProofPrincipal`.
+  - **Fresh-commit custody**: On the direct `MMPositionManager` fresh-commit path, the commitment NFT is minted to
+    `mmState.owner`. On the relayed fresh-commit path, EIP-712 `RelayAuth` includes a `sender` field: either an
+    explicit recipient (must equal the batch locker) or `address(0)` meaning custody to the proof principal (`mmState.owner`).
+    Renew relay: EIP-712 `RelayAuth.sender` is `address(0)` (legacy) or `mmState.advancer`; `MMPositionManager` requires the
+    batch locker (`msgSender()`) to match the signed sender when non-zero, or to be the advancer when the signed sender is zero.
+    The EIP-712 domain uses `VRLSignalManager`
+    version `"1"` (the `RelayAuth` struct adds fields without bumping the domain version).
   - These roles are intentionally **not** interchangeable, but they are expected to remain under the control of the
     same real-world operator / coordinated trust domain.
 - **Practical consequence**:
@@ -345,11 +399,19 @@ being an informal “should”.
     - hot-path MM execution / proof-submission authority (`mmState.advancer`).
   - This lets operators keep asset custody and approval flows on a more secure key while using a lighter operational key
     for maker actions and prover-facing workflows.
+  - Relayed signal authorisation remains **ECDSA-only** (`recover` on the typed-data digest); it does not broaden relay
+    auth to ERC-1271 or `SignatureChecker` verifiers.
 - **Expressed by**:
+  - `src/VRLSignalManager.sol` verifies signals via `ISignalVerifier` and nonce/expiry checks; it does not classify
+    `mmState.advancer` by bytecode.
   - `src/libraries/VTSCommitLib.sol::_renewSignalInternal` preserves `mmState.owner` across renewals and authorises
     renewals via `mmState.advancer`.
+  - `src/types/Commit.sol` stores `authorisedRelayer`, set at initial commit creation from the `VTSOrchestrator` caller
+    (for example `MMPositionManager`). CoreHook MM operations require `processPosition(owner)` to match this address so
+    `factory.bounds(owner)` alone cannot authorise a different bound endpoint to operate under another party's commit.
   - `src/libraries/VTSLifecycleLinkedLib.sol::validateMMOperation` requires the MM batch locker to equal the stored
-    advancer for non-seizure MM operations.
+    advancer for non-seizure MM operations, and (when `authorisedRelayer` is non-zero) requires the CoreHook position
+    `owner` to equal that stored relayer.
   - `src/libraries/MMHelpers.sol::assertApprovedOrOwner` separately enforces ERC-721 owner / approval authority on the
     relevant `MMPositionManager` entrypoints.
 - **Non-goal**:
@@ -387,6 +449,9 @@ being an informal “should”.
     `Errors.InvalidLiquiditySignal(issuedValue, signalValue, settledValue)` when insufficient.
   - Called during MM increases by `src/libraries/VTSPositionMMOpsLib.sol::_handleLiquidityIncrease` with
     `revertIfInsufficientBacking = true`.
+  - MM increases pass **post-add total position liquidity** into `validateLiquidityDelta` (not the incremental add
+    delta alone), so repeated adds cannot each pass on a per-slice check while cumulative post-add issuance exceeds
+    `(settled + signal)` backing.
 
 ### COMMIT-02: Checkpointing with commitment updates `commitmentDeficit` as an insolvency gate
 
@@ -498,20 +563,24 @@ being an informal “should”.
 - **Enforced by**: `src/libraries/VTSPositionLib.sol::_applyBurnBase`, `_initFeeSnapshot`, `touchPosition`,
   `_reconcileLiquidityMirrorAndFeeBurnRemainder`, `settlePositionGrowths`.
 
-### FEE-01: Queued slashes vs materialised slashed pot
+### FEE-01: Two-phase fee processing, materialised pot, and `pendingFeeAdj`
 
 - **Statement**:
-  - `protocolFeeAccrued` represents **queued** fee-pot accounting (used for bonus allocation maths).
-  - `slashedPot` represents **materialised** pot balance (used for actually paying bonuses during fee finalisation).
-  - Therefore, `protocolFeeAccrued` may increase after growth settlement / coverage settlement, while `slashedPot`
-    remains unchanged until the relevant position is fee-processed (“touched”).
+  - Pool-level **bonus economics** are anchored on the **materialised** per-fee-token `slashedPot` balances (not on a
+    separate queued “protocol fee accrued” counter).
+  - **Positive** `pendingFeeAdj` on positions encodes slash / fee-burn obligations that are **materialised** into
+    `slashedPot` on later touches (subject to per-leg caps on decreases — see SETTLE-03).
+  - **Bonus allocation** runs only **after** positive materialisation for that touch: `_processPositionFees` applies
+    Phase 1 (`_finalisePositiveFeeAdjustment`), Phase 2 (`_queueBonusForToken` against `slashedPot` / CSI `potAvail`),
+    then Phase 3 (`_finaliseNegativeFeeAdjustment` draining `slashedPot` for negative pending).
+  - Fee adjustments are **best effort** at the touch granularity: the same pass may fully pay a queued bonus when the
+    materialised pot suffices; otherwise negative `pendingFeeAdj` can remain for later touches.
 - **Enforced by**:
-  - `src/libraries/VTSFeeLib.sol::_queueBonusForToken` allocates bonuses against `protocolFeeAccrued` and queues
-    `pendingFeeAdj` (it does not mint/burn the slashed pot).
-  - `src/libraries/VTSFeeLib.sol::_finaliseFeeAdjustment` is the materialisation point:
-    - **positive** `pendingFeeAdj` funds `slashedPot` (`_fundFeePot`)
-    - **negative** `pendingFeeAdj` drains `slashedPot` up to availability (`_drainFeePot`)
-  - `src/libraries/VTSFeeLib.sol::_processPositionFees` calls `_finaliseFeeAdjustment` during touch.
+  - `src/libraries/VTSFeeLib.sol::_queueBonusForToken` reads allocatable balance from `slashedPot` (with CSI self-exclusion
+    via `feesShared` / remaining-share epochs).
+  - `src/libraries/VTSFeeLib.sol::_finalisePositiveFeeAdjustment` / `_finaliseNegativeFeeAdjustment` move value between
+    `pendingFeeAdj` and `slashedPot` in accounting; CoreHook settles ERC6909 against the hub.
+  - `src/libraries/VTSFeeLib.sol::_processPositionFees` orchestrates the three phases above.
   - Bonus sizing uses `FullMath.mulDivRoundingUp(potAvail, ciseExposure, totalExposure)` (then caps to `potAvail`) so
     tiny proportional shares are not stranded at zero wei when the position is otherwise eligible.
 - **fuzz harness note**:
@@ -523,7 +592,7 @@ being an informal “should”.
 ### FEE-02: New positions must not receive fee-sharing bonuses on creation
 
 - **Statement**: A newly registered position (MM or DirectLP) must not immediately allocate/receive fee-sharing bonuses
-  at the moment it is created, even if the pool has already accumulated `protocolFeeAccrued` or a funded `slashedPot`.
+  at the moment it is created, even if the pool already has a non-zero materialised `slashedPot`.
   Bonus allocation is only possible after the position has accrued non-dust eligibility (CISE exposure) and is later
   fee-processed.
 - **Enforced by**:
@@ -567,10 +636,27 @@ being an informal “should”.
   - Coupled to **DELTA-01**: transient MMPM underlying deltas must be batch-clearable; only the vault-immediate slice is
     booked as positive owner underlying delta. Any shortfall that cannot be Hub-queued (principal-capped) and cannot be
     paid from the vault in the same unlock **stays in live source `settled`**, not on `OwnerCurrencyDelta`.
-  - **Source-side decrement (routed amount only)**: `_applySettlementClampFromExcess` removes
-    `settleableDelta + queuedDelta` from source `pa.settled` / pool `totalSettled` — the value actually routed to the
-    vault path or queue in this step — not the full `requiredSettlementDelta` when part of it must remain deferred in
-    `settled`.
+  - **User min-out vs routing principal**: `DECREASE_LIQUIDITY` / `BURN_POSITION` `amountMin` floors the per-leg **immediate
+    post-`feeAdj` non-fee LCC** (`LiquidityUtils.forwardedNonFeeLccAmount`), not hook-time pool principal
+    `callerDelta - feesAccrued` used for cancel/queue caps in VTS. For **commit buckets** (`tokenId > 0`), only the
+    Hub-queued slice `qCommitted` is physically forwarded to `MMQueueCustodian`; any surplus
+    `nonFee - qCommitted` remains as **locker transient LCC credit** on `MMPositionManager` (cleared via `TAKE` /
+    `UNWRAP_LCC` in the same batch). `feeAdj` reclassifies only the informational **fee** slice vs non-fee receipt; it does
+    not redefine queue principal, which stays principal-bounded from `callerDelta - feesAccrued`.
+  - **Same-touch positive slash vs fee slice (finding #4 / policy B)**: On any **liquidity decrease** (`liquidityDelta < 0`),
+    including MM and direct-LP paths, materialisation of positive `pendingFeeAdj` in `VTSFeeLib._finaliseFeeAdjustment` is
+    **capped per leg** to the current modify’s informational `feesAccrued` amount for that leg. Any excess positive slash
+    stays banked in `pendingFeeAdj` for later touches — it is **not** moved into residual-fee backing buckets. Increases and
+    no-op modifies keep uncapped materialisation (`type(uint256).max` caps). This aligns the hook-reported `feeAdj` with the
+    fee slice of the receipt without changing MM principal staging (`callerDelta - feesAccrued` in `VTSPositionMMOpsLib`).
+  - **Source-side decrement (routed amount only)**: `_applySettlementClampFromExcess` removes the **routed export** from
+    source `pa.settled` / pool `totalSettled` — for non-seizure decreases that is `settleableDelta + queuedDelta`; for
+    seizure decreases it is the per-leg seizure export (`min(excess, settleable + burn)`, not the full queued principal
+    remainder) — not the full `requiredSettlementDelta` when part of it must remain deferred in `settled`.
+  - **Seizure MM decrease (guarantor)**: routing uses `_handleSeizureLiquidityDecrease` / `_computeSeizureLiquidityDecreaseRoutingSplit`.
+    Per leg, `planCancelWithQueue` queues `principal - min(principal, excessSettled)` to the seizer (`locker`) and burns
+    `min(principal, excessSettled)`; the settlement clamp uses `min(excess, settleable + burn)` so queued principal
+    retained by the guarantor does not over-remove live `pa.settled`. Non-seizure decreases keep the shortfall-queue split unchanged.
   - **Consumption-based target credit**: another position’s `pa.settled` increases only when `_settle()` / `onMMSettle()`
     actually consumes protocol underlying delta or token flow (`MMPositionActionsImpl._netProtocolCredits` path), not
     merely because positive delta exists on MMPM.
@@ -581,12 +667,13 @@ being an informal “should”.
       residual amount that is still backed by live position settlement.
 - **Enforced / expressed by**:
   - `src/libraries/VTSPositionLib.sol::_touchExistingDecrease` computes `requiredSettlementDelta` for the MM excess.
-  - `src/libraries/VTSPositionMMOpsLib.sol::previewLiquidityDecreaseRouting` (and `_handleLiquidityDecrease` via
-    `_computeLiquidityDecreaseRoutingSplit`) splits vault availability vs Hub-queued principal; `underlyingDeltaSettlement`
-    for dynamic delta accounting equals the vault-immediate slice (`settleableDelta`) only.
+  - `src/libraries/VTSPositionMMOpsLib.sol::_computeLiquidityDecreaseRoutingSplit` (via `_handleLiquidityDecrease`)
+    splits vault availability vs Hub-queued principal; `underlyingDeltaSettlement` for dynamic delta accounting equals
+    the vault-immediate slice (`settleableDelta`) only.
+  - Seizure decreases: `_computeSeizureLiquidityDecreaseRoutingSplit` + `_handleSeizureLiquidityDecrease` (same Hub/transient/custody handshake as ordinary decreases).
   - `src/libraries/VTSPositionMMOpsLib.sol::processMMOperations` (decrease branch): calls `_applySettlementClampFromExcess`
-    with `exportedForSettlementClamp` from `_handleLiquidityDecrease` (`settleableDelta + queuedDelta`), then
-    `OwnerCurrencyDelta.accountUnderlyingSettlementDelta` for the immediate slice only.
+    with `exportedForSettlementClamp` from `_handleLiquidityDecrease` (`settleableDelta + queuedDelta`) for non-seizure,
+    or from the seizure split for `isSeizing`, then `OwnerCurrencyDelta.accountUnderlyingSettlementDelta` for the immediate slice only.
   - `src/libraries/VTSLifecycleLinkedLib.sol::onMMSettle` plans withdrawals from positive underlying delta and
     settled-backed
     capacity separately, consumes the delta-backed portion first, and only then mutates `pa.settled`.
@@ -597,6 +684,32 @@ being an informal “should”.
     same batch violates **DELTA-01** (uncleared transient delta at batch end).
   - The stricter withdrawal ordering prevents a later delta-backed settle from deducting the same exported value from
     source `pa.settled` a second time.
+- **Regression / evidence (Foundry + audit)**:
+  - `test/marketmaker/MMPositionMinOutFeeAdjIntegration.t.sol`, `test/modules/PositionManagerImpl.t.sol`,
+    `test/marketmaker/MMPositionManager.t.sol`, `test/marketmaker/MMPositionActionsImpl.t.sol` (min-out vs hook principal;
+    see [agents/audit-resolutions/3__high-mm-min-out-pre-transfer-callerdelta-resolution.md](../../agents/audit-resolutions/3__high-mm-min-out-pre-transfer-callerdelta-resolution.md)).
+  - Fee-slice slash cap (finding #4): [agents/audit-resolutions/4__medium-not-netting-feeadj-from-mm-decrease-principal-resolution.md](../../agents/audit-resolutions/4__medium-not-netting-feeadj-from-mm-decrease-principal-resolution.md); `test/libraries/VTSPositionLib.mutation.unit.t.sol` (`test_touchPosition_*_positiveSlash_capped_to_feesAccrued`).
+  - Decrease routing / `VTSPositionMMOpsLib` integration: `test/libraries/VTSPositionLib.t.sol`,
+    `test/libraries/VTSPositionLib.onMMSettle.t.sol`, harnesses under `test/libraries/harnesses/VTSPositionLibHarness.sol`.
+  - Queue custody vs forwarded non-fee: [agents/audit-resolutions/mm-queue-custody-nonfee-vs-custodyforward-guard-resolution.md](../../agents/audit-resolutions/mm-queue-custody-nonfee-vs-custodyforward-guard-resolution.md) and **MMQ-01** (Echidna) in `test/fuzz/README.md`.
+
+### MMQ-01: Queued principal must not exceed forwarded non-fee LCC on custody take-and-forward
+
+- **Statement**: When routing Hub-queued principal (`qCommitted` / custody-forward) through
+  `PositionManagerImpl._routeLccCustodyTakeAndForward` with a non-zero position-scoped `tokenId`, the immediate
+  post-`feeAdj` **non-fee** LCC amount (`LiquidityUtils.forwardedNonFeeLccAmount`) must cover the queued slice being
+  custodied, or the call reverts with `Errors.InsufficientBalance` (fail-closed vs under-collateralised commit custody).
+  Under sound routing, queued principal is bounded by pool principal `callerDelta - feesAccrued`, while `feeAdj` applies
+  only to the fee-classified slice relative to informational `feesAccrued` — not as a separate “tax” on principal — so
+  `nonFee < custodyForward` should be **unreachable** in valid states and indicates a regression, sequencing bug, or
+  inconsistent coupling between VTS queue staging and the router’s actual post-hook receipt.
+- **Enforced by**: `PositionManagerImpl` custody-forward path and `LiquidityUtils.forwardedNonFeeLccAmount` semantics
+  (see audit resolution linked above). Locker delta is debited via `LiquidityUtils.lockerLccTakeAmountBeforeCustodyForward`
+  only by the custodied amount for commit buckets; surplus non-fee LCC remains locker credit.
+- **Evidence**:
+  - Echidna: `test/fuzz/invariants/MMQ01.sol` → `echidna_mmq01_*` (run via `just echidna-mmq-01` from `contracts/evm/Justfile`; implementation is shared with `test/fuzz/FuzzMMQ01.sol`).
+  - Medusa (optional, no linked-library prepare): `test/fuzz/FuzzEntry.sol` → same `echidna_mmq01_*` properties and `action_*` entrypoints (run via `just medusa-mmq-01`; uses `scripts/medusa.sh` and `medusa.json`).
+  - Narrative: [agents/audit-resolutions/mm-queue-custody-nonfee-vs-custodyforward-guard-resolution.md](../../agents/audit-resolutions/mm-queue-custody-nonfee-vs-custodyforward-guard-resolution.md).
 
 ### SETTLE-04: MM in-hook protocol credit must not over-clear `requiredSettlementDelta` when deficit is cured first
 
@@ -662,7 +775,7 @@ being an informal “should”.
 ### SEIZE-03: Seizure flows cannot issue LCCs
 
 - **Statement**: While seizing, MM increases that would issue LCC must revert.
-- **Enforced by**: `src/libraries/VTSPositionLib.sol::_touchExistingIncrease` reverts
+- **Enforced by**: `src/libraries/VTSPositionLib.sol::_touchNewPosition` and `_touchExistingIncrease` revert
   `Errors.InvariantViolated("Invalid operation: Seizures cannot issue LCCs")` when `hookData.isSeizing`.
 
 ### SEIZE-04: MM operations must not change commit identity
@@ -686,6 +799,11 @@ being an informal “should”.
     non-zero.
 - **Practical implication**: Credits do **not** persist across unlock sessions; they are transient and must be consumed
   (eg via `TAKE`, `SYNC`, unwrap flows) within the same batch.
+- **Native ETH (`msg.value`) on payable batches**: `PositionManagerEntrypoint._beforeBatch` credits the locker using
+  **balance-delta** accounting (transient last-seen `address(this).balance` updated in `_afterBatch`). That prevents
+  `Multicall_v4` inner `delegatecall` batches from each re-crediting the same outer `msg.value`, while still allowing a
+  later **distinct** payable call in the same transaction to credit newly attached ETH. Ambient ETH already on
+  `MMPositionManager` before the batch is not treated as user credit (baseline uses `balance - msg.value` on first touch).
 
 ### DELTA-01A: Produced accounting must stay paired with explicit reserve export and credit-backed withdrawal consumption
 
@@ -757,6 +875,8 @@ being an informal “should”.
   - This FCFS rule applies to **residual dust held by `MMPositionManager` itself**.
   - It does **not** redefine assets held in explicit custody/accounting domains (for example, queue-custodied balances,
     Hub reserves, MarketVault balances, or state tracked by commitment/queue accounting) as public dust.
+  - Queued-backing LCC staged after `UNWRAP_LCC` shortfalls must be forwarded into `MMQueueCustodian` (see **HUB-02A**)
+    rather than left on the router; that principal is beneficiary-scoped, not FCFS dust.
   - In other words, the invariant is about router residue, not about bypassing the protocol’s actual custody systems.
 
 ### DELTA-03: Planned-cancel transient slots are path-scoped only because they are consumed immediately in the same logical flow

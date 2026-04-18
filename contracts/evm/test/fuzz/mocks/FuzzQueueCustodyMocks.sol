@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.26;
 
-import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
+import {Currency} from "v4-periphery/lib/v4-core/src/types/Currency.sol";
+import {IFuzzTakeOrchestrator} from "../harnesses/IFuzzTakeOrchestrator.sol";
 import {IMMQueueCustodian} from "../../../src/interfaces/IMMQueueCustodian.sol";
 import {Errors} from "../../../src/libraries/Errors.sol";
-import {IFuzzTakeOrchestrator} from "../harnesses/IFuzzTakeOrchestrator.sol";
 
-/// @notice Records `take` calls for MMQ-01 visibility without moving funds.
+/// @notice Records `take` calls for fuzz visibility; does not move tokens (sufficient for routing-guard coverage).
 contract FuzzTakeOrchestratorMock is IFuzzTakeOrchestrator {
     Currency public lastCurrency;
     address public lastTarget;
@@ -22,9 +22,10 @@ contract FuzzTakeOrchestratorMock is IFuzzTakeOrchestrator {
     }
 }
 
-/// @notice Minimal `IMMQueueCustodian` used by the composed MMQ-01 fuzz module.
+/// @notice Minimal `IMMQueueCustodian` for the composed Medusa fuzz harnesses.
 contract FuzzMMQueueCustodian is IMMQueueCustodian {
     address public immutable authorisedBinder;
+
     address public override positionManager;
 
     mapping(uint256 tokenId => mapping(address lcc => mapping(address beneficiary => uint256 amount))) private _queued;
@@ -39,13 +40,13 @@ contract FuzzMMQueueCustodian is IMMQueueCustodian {
         authorisedBinder = authorisedBinder_;
     }
 
-    function setPositionManager(address positionManager_) external override {
+    function setPositionManager(address _positionManager) external override {
         if (msg.sender != authorisedBinder) revert Errors.InvalidSender();
         if (positionManager != address(0)) revert Errors.InvalidSender();
-        if (positionManager_ == address(0) || positionManager_.code.length == 0) {
-            revert Errors.InvalidAddress(positionManager_);
+        if (_positionManager == address(0) || _positionManager.code.length == 0) {
+            revert Errors.InvalidAddress(_positionManager);
         }
-        positionManager = positionManager_;
+        positionManager = _positionManager;
     }
 
     function record(uint256 tokenId, address lcc, address beneficiary, uint256 amount)

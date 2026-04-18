@@ -39,6 +39,7 @@ contract COMMIT03SignalManager is IVRLSignalManager {
         uint256,
         uint256,
         bytes memory,
+        address,
         bool
     ) external view returns (bool, uint256) {
         LiquiditySignal memory signal = abi.decode(liquiditySignal, (LiquiditySignal));

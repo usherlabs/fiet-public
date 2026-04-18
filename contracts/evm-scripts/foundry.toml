@@ -16,12 +16,30 @@ ignored_error_codes = [
 solc_version = '0.8.26'
 evm_version = "cancun"
 gas_limit = "3000000000"
-optimizer_runs = 25000
+optimizer_runs = 20000
 optimizer = true
 via_ir = true
 ffi = true
 
 bytecode_hash = "none"
+
+additional_compiler_profiles = [
+  { name = "script_ir", via_ir = true },
+  { name = "e2e_non_ir", via_ir = false },
+  { name = "cold_linked", via_ir = true, optimizer_runs = 2000 },
+  { name = "hot_linked", via_ir = true, optimizer_runs = 25000 },
+]
+compilation_restrictions = [
+  { paths = "src/MMPositionManager.sol", optimizer_runs = 2000 },
+  { paths = "src/VTSOrchestrator.sol", optimizer_runs = 25000 },
+  { paths = "src/libraries/MMPositionActionsImpl.sol", optimizer_runs = 25000 },
+  { paths = "src/libraries/MMQueueCustodian.sol", optimizer_runs = 25000 },
+  { paths = "src/libraries/VTSSwapLib.sol", optimizer_runs = 25000 },
+  { paths = "src/libraries/VTSPositionLib.sol", optimizer_runs = 25000 },
+  { paths = "src/libraries/VTSPositionMMOpsLib.sol", optimizer_runs = 25000 },
+  { paths = "src/libraries/VTSFeeLib.sol", optimizer_runs = 25000 },
+  { paths = "src/libraries/VTSLifecycleLinkedLib.sol", optimizer_runs = 25000 },
+]
 
 fs_permissions = [
   { access = "read-write", path = "../evm/deployments" },
@@ -52,6 +70,7 @@ remappings = [
   "halmos-cheatcodes/=../evm/lib/openzeppelin-contracts/lib/halmos-cheatcodes/src/",
   "forge-std/=../evm/lib/forge-std/src/",
 ]
+
 
 #
 # NOTE: Keep `profile.default` unlinked. Hard-linking here can make local script dry-runs

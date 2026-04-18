@@ -74,6 +74,7 @@ interface IMarketVault {
      * @notice Increase the in-market liquidity reserve ledger for an underlying currency (canonical vault accounting).
      * @param underlyingCurrency Underlying asset the reserve tracks.
      * @param amount Amount to add to the reserve.
+     * @dev Access: Only callable by VTS (`marketFactory.vts()`). Reverts `Errors.InvalidSender` for any other caller.
      */
     function increaseLiquidityReserve(Currency underlyingCurrency, uint256 amount) external;
 
@@ -81,6 +82,7 @@ interface IMarketVault {
      * @notice Decrease the in-market liquidity reserve ledger for an underlying currency.
      * @param underlyingCurrency Underlying asset the reserve tracks.
      * @param amount Amount to remove from the reserve.
+     * @dev Access: Only callable by VTS (`marketFactory.vts()`). Reverts `Errors.InvalidSender` for any other caller.
      */
     function decreaseLiquidityReserve(Currency underlyingCurrency, uint256 amount) external;
 }

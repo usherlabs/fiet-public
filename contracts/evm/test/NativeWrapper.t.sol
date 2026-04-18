@@ -425,6 +425,25 @@ contract NativeWrapperTest is Test {
         // If we reach here, the function returned successfully
     }
 
+    function test_modules_assertValidEthSender_returns_whenSenderIsLiquidityHub() public {
+        vm.prank(liquidityHub);
+        modulesHarness.assertValidEthSender();
+    }
+
+    function test_modules_receive_acceptsEth_fromLiquidityHub() public {
+        uint256 sendAmount = 1 ether;
+        uint256 harnessBalanceBefore = address(modulesHarness).balance;
+        vm.deal(liquidityHub, sendAmount);
+        vm.prank(liquidityHub);
+        (bool success,) = address(modulesHarness).call{value: sendAmount}("");
+        assertTrue(success, "ETH transfer from LiquidityHub should succeed");
+        assertEq(
+            address(modulesHarness).balance,
+            harnessBalanceBefore + sendAmount,
+            "Harness should receive ETH from LiquidityHub"
+        );
+    }
+
     function test_modules_assertValidEthSender_reverts_whenSenderNotInFactoryRegistry() public {
         vm.mockCall(
             marketFactory,

@@ -10,6 +10,7 @@ forge.lock
 contracts/**/deployments/**
 contracts/**/deployments/.keep
 contracts/**/out/
+contracts/evm/.echidna-gen/
 contracts/**/cache/
 reports
 contracts/evm-scripts/cache/
