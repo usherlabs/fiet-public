@@ -127,7 +127,7 @@ keeps a reviewable artifact trail alongside the Forge coverage PR comment.
 ```bash
 cd contracts/evm
 FOUNDRY_PROFILE=medusa FOUNDRY_OUT_DIR=out-medusa \
-  sh ./scripts/medusa.sh --file test/fuzz/invariants/LCCBacking01.sol --contract LCCBacking01
+  bash ./scripts/medusa.sh --file test/fuzz/invariants/LCCBacking01.sol --contract LCCBacking01
 ```
 
 - If you want Medusa artifacts to stay under the repo, prefer `MEDUSA_CORPUS_DIR=artifacts/...` rather than a

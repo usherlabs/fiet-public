@@ -1,5 +1,5 @@
-#!/usr/bin/env sh
-set -eu
+#!/usr/bin/env bash
+set -euo pipefail
 
 # -----------------------------------------------------------------------------
 # Purpose and high-level behavior
@@ -7,7 +7,7 @@ set -eu
 # Generic Medusa runner for this repo.
 #
 # Usage:
-#   just medusa file=test/fuzz/invariants/LCC01.sol contract=LCC01
+#   just medusa test/fuzz/invariants/LCC01.sol LCC01 medusa.json
 #
 # Solidity property functions use the repo-standard `fuzz_*` prefix.
 #
@@ -17,6 +17,11 @@ set -eu
 # Run from repo root or from contracts/evm/; normalize to contracts/evm.
 if [ -d "contracts/evm" ]; then
   cd "contracts/evm"
+fi
+
+if ! command -v medusa >/dev/null 2>&1; then
+  echo "error: medusa binary not found in PATH" 1>&2
+  exit 1
 fi
 
 FILE=""
@@ -51,11 +56,11 @@ while [ $# -gt 0 ]; do
   esac
 done
 
-EXTRA_ARGS="$*"
+EXTRA_ARGS=("$@")
 
 if [ -z "$FILE" ] || [ -z "$CONTRACT" ]; then
   echo "error: missing --file or --contract" 1>&2
-  echo "example: just medusa file=test/fuzz/invariants/LCC01.sol contract=LCC01" 1>&2
+  echo "example: just medusa test/fuzz/invariants/LCC01.sol LCC01 medusa.json" 1>&2
   exit 2
 fi
 
@@ -86,11 +91,6 @@ if [ "${MEDUSA_CORPUS_DIR:-}" != "" ]; then
   mkdir -p "$CORPUS_DIR"
 fi
 
-if ! command -v medusa >/dev/null 2>&1; then
-  echo "error: medusa binary not found in PATH" 1>&2
-  exit 1
-fi
-
 TMP_CONFIG="$(mktemp "${TMPDIR:-/tmp}/medusa.${CONTRACT}.XXXXXX.json")"
 cleanup() {
   rm -f "$TMP_CONFIG"
@@ -116,5 +116,4 @@ config.setdefault("compilation", {}).setdefault("platformConfig", {})["target"] 
 dst.write_text(json.dumps(config, indent=2) + "\n")
 PY
 
-# shellcheck disable=SC2086
-medusa fuzz --config "$TMP_CONFIG" $EXTRA_ARGS
+medusa fuzz --config "$TMP_CONFIG" "${EXTRA_ARGS[@]}"
