@@ -1,4 +1,4 @@
-# Medusa fuzz migration
+ # Medusa fuzz migration
 
 `test/fuzz/FuzzEntry.sol` is the repo-owned Medusa composition root. The supported workflow now runs Medusa against
 that concrete target model rather than against per-harness CREATE2-prepared linked-library deployments.
@@ -10,7 +10,9 @@ Medusa now runs through a composed runtime tree:
 - `contracts/evm/medusa.json` and `contracts/evm/medusa.deep.json` target `FuzzEntry`
 - `contracts/evm/scripts/medusa.sh` reads the target contract from config instead of patching in ad hoc harness pairs
 - `[profile.medusa]` in `contracts/evm/foundry.toml` is scoped to the supported `FuzzEntry` path
-- `FuzzEntry` composes `FuzzMMQ01`, `FuzzHubLCC`, `FuzzMMSettle`, and `FuzzVTSPosition`
+- `FuzzEntry` composes `FuzzMMQ01`, `FuzzHubLCC`, `FuzzMMSettle`, `FuzzMarketAuth`, and `FuzzVTSPosition`
+- `FuzzVTSPosition` inherits `FuzzVTSCoreTail` so the remaining core/accounting/VTS tail surfaces route through the
+  same supported target without root-level helper plumbing
 
 From `contracts/evm/`:
 
@@ -19,7 +21,6 @@ just fuzz
 just fuzz-deep
 just fuzz-invariants
 just medusa-entry
-just medusa-mmq-01
 
 MEDUSA_CORPUS_DIR=artifacts/medusa-local \
   just medusa-entry -- --test-limit 50 --seq-len 5
@@ -35,15 +36,18 @@ Completion for this migration is evaluated only by the checklist below.
 Status meanings:
 
 - `Migrated`: composed into `FuzzEntry` and part of the supported Medusa path
-- `Blocked`: not yet composed because there is still a concrete technical dependency to remove
 
 | Surface | Status | Current location | Notes |
 | ------- | ------ | ---------------- | ----- |
 | Fuzz composition root | Migrated | `FuzzEntry.sol` | Supported Medusa target. |
 | Shared helper utilities | Migrated | `FuzzHelper.sol` | Shared by composed modules. |
 | MMQ-01 queue custody guard | Migrated | `FuzzMMQ01.sol` | Runtime `new` composition; no CREATE2 linker prep. |
-| Hub / LCC composed module | Migrated | `FuzzHubLCC.sol` | `FuzzEntry` now composes the Hub, LCC, wrap, and confirmTake regression harnesses directly. |
-| Hub fuzz adapter | Migrated | `harnesses/FuzzLiquidityHub.sol` | Fuzz-only adapter inlines the former linked-library call surfaces so Hub/LCC harnesses no longer need deterministic library deployment. |
+| Hub / LCC composed module | Migrated | `FuzzHubLCC.sol` | `FuzzEntry` composes the Hub, LCC, wrap, and confirmTake regressions directly. |
+| Hub fuzz adapter | Migrated | `harnesses/FuzzLiquidityHub.sol` | Fuzz-only adapter inlines the former linked-library call surfaces for the Hub/LCC harnesses. |
+| MM-settle composed module | Migrated | `FuzzMMSettle.sol` | `FuzzEntry` composes the repo-owned settle harnesses directly. |
+| Market/auth composed module | Migrated | `FuzzMarketAuth.sol` | `FuzzEntry` composes the repo-owned signal, market, and auth harnesses directly. |
+| VTS composed module | Migrated | `FuzzVTSPosition.sol` | `FuzzEntry` composes the repo-owned commit / coverage / seize harnesses directly. |
+| VTS core tail composed module | Migrated | `FuzzVTSCoreTail.sol` | `FuzzVTSPosition` inherits the remaining core/accounting/VTS tail module. |
 | HUB-01 | Migrated | `FuzzHubLCC.sol`, `invariants/HUB01.sol` | Runs through `FuzzLiquidityHub`; no CREATE2 prep remains. |
 | HUB-02 | Migrated | `FuzzHubLCC.sol`, `invariants/HUB02.sol` | Runs through `FuzzLiquidityHub`; no CREATE2 prep remains. |
 | HUB-03 | Migrated | `FuzzHubLCC.sol`, `invariants/HUB03.sol` | Runs through `FuzzLiquidityHub`; no CREATE2 prep remains. |
@@ -58,32 +62,31 @@ Status meanings:
 | Wrap regression | Migrated | `FuzzHubLCC.sol`, `LiquidityHubWrapWithFuzzTest.sol` | Composed into `FuzzEntry`; no linked-library salts remain. |
 | Queue netting regression | Migrated | `FuzzHubLCC.sol`, `LiquidityHubWrapWithQueueFuzzTest.sol` | Composed into `FuzzEntry`; no linked-library salts remain. |
 | confirmTake regression | Migrated | `FuzzHubLCC.sol`, `LiquidityHubConfirmTakeCallbackFuzzTest.sol` | Composed into `FuzzEntry`; no linked-library salts remain. |
-| MM-settle composed module | Migrated | `FuzzMMSettle.sol` | `FuzzEntry` now composes the repo-owned settle harnesses directly. |
 | SETTLE-01 | Migrated | `FuzzMMSettle.sol`, `invariants/SETTLE01.sol` | Old helper deployment removed; harness now runs directly under the composed Medusa path. |
 | SETTLE-02 | Migrated | `FuzzMMSettle.sol`, `invariants/SETTLE02.sol` | Old helper deployment removed; harness now runs directly under the composed Medusa path. |
-| VTS composed module | Migrated | `FuzzVTSPosition.sol` | `FuzzEntry` composes the repo-owned COMMIT / COV / SEIZE child harnesses directly. |
-| VTS core tail composed module | Migrated | `FuzzVTSCoreTail.sol` | `FuzzVTSPosition` inherits this Worker A tail module so `FuzzEntry` gains the remaining core/accounting/VTS surfaces without root-level rewiring. |
+| SIG-01 / SIG-02 | Migrated | `FuzzMarketAuth.sol`, `invariants/SIG01_02.sol` | Composed into `FuzzEntry`; signal verification remains self-hosted with no linked-library prep. |
+| MKT-01 / MKT-02 | Migrated | `FuzzMarketAuth.sol`, `invariants/MKT01_02.sol` | Proxy add-liquidity and core-pool-key guards now flow through the supported target. |
+| MKT-03 / MKT-06 | Migrated | `FuzzMarketAuth.sol`, `invariants/MKT03_06.sol` | Registry uniqueness and canonical ordering now flow through the supported target. |
+| MKT-05 | Migrated | `FuzzMarketAuth.sol`, `invariants/MKT05.sol` | The lightweight cancellation check now flows through `FuzzEntry`; Foundry remains authoritative for the stricter real-path regression evidence. |
+| AUTH-01 / AUTH-01A / AUTH-02 | Migrated | `FuzzMarketAuth.sol`, `invariants/AUTH01_01A_02.sol` | The supported path now exposes the auth guards; Foundry remains authoritative for the deeper batch-scoped regression evidence. |
 | COMMIT-01 | Migrated | `FuzzVTSPosition.sol`, `invariants/COMMIT01.sol` | Composed into `FuzzEntry`; no linked-library predeploy remains in the harness. |
 | COMMIT-02 | Migrated | `FuzzVTSPosition.sol`, `invariants/COMMIT02.sol` | Composed into `FuzzEntry`; no linked-library predeploy remains in the harness. |
 | COMMIT-03 | Migrated | `FuzzVTSPosition.sol`, `invariants/COMMIT03.sol` | Composed into `FuzzEntry`; no linked-library predeploy remains in the harness. |
+| COV-01 | Migrated | `FuzzVTSCoreTail.sol`, `invariants/COV01.sol` | Composed into `FuzzEntry` through the core tail module. |
+| COV-02 | Migrated | `FuzzVTSCoreTail.sol`, `invariants/COV02.sol` | The hook-order evidence now runs through the supported path. |
 | COV-03 | Migrated | `FuzzVTSPosition.sol`, `invariants/COV03.sol` | Composed into `FuzzEntry`; no linked-library predeploy remains in the harness. |
-| SEIZE-03 / SEIZE-04 | Migrated | `FuzzVTSPosition.sol`, `invariants/SEIZE03_04.sol` | Composed into `FuzzEntry`; the harness now uses only the inlined touch-position path. |
-| SIG-01 / SIG-02 | Migrated | `FuzzVTSCoreTail.sol`, `invariants/SIG01_02.sol` | Composed into `FuzzEntry` through the Worker A tail module; no linked-library prep or repo-owned salt wiring is involved. |
-| COV-01 | Migrated | `FuzzVTSCoreTail.sol`, `invariants/COV01.sol` | Composed into `FuzzEntry` through the Worker A tail module. |
-| COV-02 | Migrated | `FuzzVTSCoreTail.sol`, `invariants/COV02.sol` | The hook-order evidence now runs through the supported `FuzzEntry` path instead of living outside composition. |
-| COV-04 | Migrated | `FuzzVTSCoreTail.sol`, `invariants/COV04.sol` | The fee-burn remainder math harness now runs through the supported `FuzzEntry` path. |
-| FEE-01 | Migrated | `FuzzVTSCoreTail.sol`, `invariants/FEE01.sol` | Composed into `FuzzEntry` through the Worker A tail module. |
-| FEE-02 | Migrated | `FuzzVTSCoreTail.sol`, `invariants/FEE02.sol` | Composed into `FuzzEntry` through the Worker A tail module. |
-| VTS-01 | Migrated | `FuzzVTSCoreTail.sol`, `invariants/VTS01.sol` | Composed into `FuzzEntry` through the Worker A tail module. |
-| VTS-02 | Migrated | `FuzzVTSCoreTail.sol`, `invariants/VTS02.sol` | Composed into `FuzzEntry` through the Worker A tail module. |
-| VTS-03 | Migrated | `FuzzVTSCoreTail.sol`, `invariants/VTS03.sol` | Composed into `FuzzEntry` through the Worker A tail module. |
-| DELTA-01 | Migrated | `FuzzVTSCoreTail.sol`, `invariants/DELTA01.sol` | Composed into `FuzzEntry` through the Worker A tail module. |
-| SEIZE-01 / SEIZE-02 | Migrated | `FuzzVTSCoreTail.sol`, `invariants/SEIZE01_02.sol` | Composed into `FuzzEntry` through the Worker A tail module. |
-| PAUSE-01 | Migrated | `FuzzVTSCoreTail.sol`, `invariants/PAUSE01.sol` | Composed into `FuzzEntry` through the Worker A tail module. |
-| MKT-01 / MKT-02 | Blocked | `invariants/MKT01_02.sol` | Not yet refactored into a `FuzzEntry` module. |
-| MKT-03 / MKT-06 | Blocked | `invariants/MKT03_06.sol` | Not yet refactored into a `FuzzEntry` module. |
-| MKT-05 | Blocked | `invariants/MKT05.sol` | Foundry regressions remain authoritative; not yet composed into `FuzzEntry`. |
-| AUTH-01 / AUTH-01A / AUTH-02 | Blocked | `invariants/AUTH01_01A_02.sol` | Not yet refactored into a `FuzzEntry` module. |
+| COV-04 | Migrated | `FuzzVTSCoreTail.sol`, `invariants/COV04.sol` | The fee-burn remainder math harness now runs through the supported path. |
+| FEE-01 | Migrated | `FuzzVTSCoreTail.sol`, `invariants/FEE01.sol` | Composed into `FuzzEntry` through the core tail module. |
+| FEE-02 | Migrated | `FuzzVTSCoreTail.sol`, `invariants/FEE02.sol` | Composed into `FuzzEntry` through the core tail module. |
+| VTS-01 | Migrated | `FuzzVTSCoreTail.sol`, `invariants/VTS01.sol` | Composed into `FuzzEntry` through the core tail module. |
+| VTS-02 | Migrated | `FuzzVTSCoreTail.sol`, `invariants/VTS02.sol` | Composed into `FuzzEntry` through the core tail module. |
+| VTS-03 | Migrated | `FuzzVTSCoreTail.sol`, `invariants/VTS03.sol` | Composed into `FuzzEntry` through the core tail module. |
+| DELTA-01 | Migrated | `FuzzVTSCoreTail.sol`, `invariants/DELTA01.sol` | Composed into `FuzzEntry` through the core tail module. |
+| SEIZE-01 / SEIZE-02 | Migrated | `FuzzVTSCoreTail.sol`, `invariants/SEIZE01_02.sol` | Composed into `FuzzEntry` through the core tail module. |
+| SEIZE-03 / SEIZE-04 | Migrated | `FuzzVTSPosition.sol`, `invariants/SEIZE03_04.sol` | Composed into `FuzzEntry`; the harness uses only the inlined touch-position path. |
+| PAUSE-01 | Migrated | `FuzzVTSCoreTail.sol`, `invariants/PAUSE01.sol` | Composed into `FuzzEntry` through the core tail module. |
+
+The checklist is now complete for the repo-owned fuzz suite.
 
 ## Removed remnants
 
@@ -94,7 +97,9 @@ Removed from the repo-owned supported path:
 - linked-library CREATE2 prepare and validation assumptions in the supported `just fuzz`, `just fuzz-deep`, and
   `just medusa-entry` flows
 - the old linked-library deployment helper
-- repo-owned CREATE2 salt wiring from the migrated Hub/LCC and MM-settle harnesses
+- repo-owned CREATE2 salt wiring from the supported fuzz workflow
 
-Remaining migration debt is now the blocked checklist above. Those surfaces are not part of the full migration claim
-until they are composed into `FuzzEntry`.
+Current counts in `contracts/evm/test/fuzz/**/*.sol`:
+
+- `FuzzLinkedLibs` references: `0`
+- `echidna.` salt references: `0`

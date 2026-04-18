@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.26;
 
-import {SIG01_02} from "./invariants/SIG01_02.sol";
 import {COV01} from "./invariants/COV01.sol";
 import {COV02} from "./invariants/COV02.sol";
 import {COV04} from "./invariants/COV04.sol";
@@ -18,7 +17,6 @@ import {PAUSE01} from "./invariants/PAUSE01.sol";
 /// @dev This keeps the remaining repo-owned tail surfaces on the same child-harness pattern
 ///      already used by the other migrated Medusa modules.
 abstract contract FuzzVTSCoreTail {
-    SIG01_02 internal childSIG0102;
     COV01 internal childCOV01;
     COV02 internal childCOV02;
     COV04 internal childCOV04;
@@ -32,7 +30,6 @@ abstract contract FuzzVTSCoreTail {
     PAUSE01 internal childPAUSE01;
 
     constructor() {
-        childSIG0102 = new SIG01_02();
         childCOV01 = new COV01();
         childCOV02 = new COV02();
         childCOV04 = new COV04();
@@ -44,46 +41,6 @@ abstract contract FuzzVTSCoreTail {
         childDELTA01 = new DELTA01();
         childSEIZE0102 = new SEIZE01_02();
         childPAUSE01 = new PAUSE01();
-    }
-
-    // -------------------------------------------------------------------------
-    // SIG-01 / SIG-02
-    // -------------------------------------------------------------------------
-
-    function action_sig_01_valid_signal(uint256 delta) external {
-        childSIG0102.action_sig_01_valid_signal(delta);
-    }
-
-    function action_sig_01_stale_nonce(uint256 offset) external {
-        childSIG0102.action_sig_01_stale_nonce(offset);
-    }
-
-    function action_sig_02_invalid_proof_reverts() external {
-        childSIG0102.action_sig_02_invalid_proof_reverts();
-    }
-
-    function action_sig_02_invalid_proof_no_revert() external {
-        childSIG0102.action_sig_02_invalid_proof_no_revert();
-    }
-
-    function fuzz_sig_01_nonce_never_decreases() external view returns (bool) {
-        return childSIG0102.fuzz_sig_01_nonce_never_decreases();
-    }
-
-    function fuzz_sig_01_valid_signal_succeeds() external view returns (bool) {
-        return childSIG0102.fuzz_sig_01_valid_signal_succeeds();
-    }
-
-    function fuzz_sig_01_stale_nonce_reverts() external view returns (bool) {
-        return childSIG0102.fuzz_sig_01_stale_nonce_reverts();
-    }
-
-    function fuzz_sig_02_invalid_proof_reverts() external view returns (bool) {
-        return childSIG0102.fuzz_sig_02_invalid_proof_reverts();
-    }
-
-    function fuzz_sig_02_invalid_proof_returns_false() external view returns (bool) {
-        return childSIG0102.fuzz_sig_02_invalid_proof_returns_false();
     }
 
     // -------------------------------------------------------------------------
@@ -100,13 +57,7 @@ abstract contract FuzzVTSCoreTail {
         uint256 feeGrowthInsideRaw
     ) external {
         childCOV01.action_apply_coverage_burn_bounds(
-            tokenIndexRaw,
-            covRaw,
-            deficitRaw,
-            settledRaw,
-            feeShareBpsRaw,
-            positionLiquidityRaw,
-            feeGrowthInsideRaw
+            tokenIndexRaw, covRaw, deficitRaw, settledRaw, feeShareBpsRaw, positionLiquidityRaw, feeGrowthInsideRaw
         );
     }
 
@@ -122,22 +73,15 @@ abstract contract FuzzVTSCoreTail {
         childCOV02.action_before_add_modify(tickLower, tickUpper, liquidityDelta, salt);
     }
 
-    function action_before_remove_modify(
-        int24 tickLower,
-        int24 tickUpper,
-        int256 liquidityDelta,
-        bytes32 salt
-    ) external {
+    function action_before_remove_modify(int24 tickLower, int24 tickUpper, int256 liquidityDelta, bytes32 salt)
+        external
+    {
         childCOV02.action_before_remove_modify(tickLower, tickUpper, liquidityDelta, salt);
     }
 
-    function action_before_modify(
-        bool isAdd,
-        int24 tickLower,
-        int24 tickUpper,
-        int256 liquidityDelta,
-        bytes32 salt
-    ) external {
+    function action_before_modify(bool isAdd, int24 tickLower, int24 tickUpper, int256 liquidityDelta, bytes32 salt)
+        external
+    {
         childCOV02.action_before_modify(isAdd, tickLower, tickUpper, liquidityDelta, salt);
     }
 
@@ -207,9 +151,7 @@ abstract contract FuzzVTSCoreTail {
         uint256 slashedPotRaw,
         uint256 protocolFeeAccruedRaw
     ) external {
-        childFEE01.action_finalise_materialisation(
-            tokenIndexRaw, pendingRaw, slashedPotRaw, protocolFeeAccruedRaw
-        );
+        childFEE01.action_finalise_materialisation(tokenIndexRaw, pendingRaw, slashedPotRaw, protocolFeeAccruedRaw);
     }
 
     function fuzz_fee_01_queue_vs_pot() external view returns (bool) {
@@ -240,21 +182,15 @@ abstract contract FuzzVTSCoreTail {
     // VTS-01 / VTS-02 / VTS-03
     // -------------------------------------------------------------------------
 
-    function action_vts_01_before_add_modify(
-        int24 tickLower,
-        int24 tickUpper,
-        int256 liquidityDelta,
-        bytes32 salt
-    ) external {
+    function action_vts_01_before_add_modify(int24 tickLower, int24 tickUpper, int256 liquidityDelta, bytes32 salt)
+        external
+    {
         childVTS01.action_vts_01_before_add_modify(tickLower, tickUpper, liquidityDelta, salt);
     }
 
-    function action_vts_01_before_remove_modify(
-        int24 tickLower,
-        int24 tickUpper,
-        int256 liquidityDelta,
-        bytes32 salt
-    ) external {
+    function action_vts_01_before_remove_modify(int24 tickLower, int24 tickUpper, int256 liquidityDelta, bytes32 salt)
+        external
+    {
         childVTS01.action_vts_01_before_remove_modify(tickLower, tickUpper, liquidityDelta, salt);
     }
 
@@ -276,12 +212,9 @@ abstract contract FuzzVTSCoreTail {
         return true;
     }
 
-    function action_flip_outside(
-        uint8 tokenIndexRaw,
-        uint8 growthTypeRaw,
-        uint256 globalRaw,
-        uint256 outsideRaw
-    ) external {
+    function action_flip_outside(uint8 tokenIndexRaw, uint8 growthTypeRaw, uint256 globalRaw, uint256 outsideRaw)
+        external
+    {
         childVTS02.action_flip_outside(tokenIndexRaw, growthTypeRaw, globalRaw, outsideRaw);
     }
 
@@ -320,15 +253,7 @@ abstract contract FuzzVTSCoreTail {
         uint256 infOutside1
     ) external {
         childVTS03.action_tick_cross_flip(
-            tickRaw,
-            defGlobal0,
-            defGlobal1,
-            infGlobal0,
-            infGlobal1,
-            defOutside0,
-            defOutside1,
-            infOutside0,
-            infOutside1
+            tickRaw, defGlobal0, defGlobal1, infGlobal0, infGlobal1, defOutside0, defOutside1, infOutside0, infOutside1
         );
     }
 
@@ -377,16 +302,7 @@ abstract contract FuzzVTSCoreTail {
         uint96 threshold1
     ) external {
         childSEIZE0102.action_seize_01_commitment_bypass(
-            deficitBps,
-            deficit0,
-            deficit1,
-            since0,
-            since1,
-            bypassBps,
-            bypassTime0,
-            bypassTime1,
-            threshold0,
-            threshold1
+            deficitBps, deficit0, deficit1, since0, since1, bypassBps, bypassTime0, bypassTime1, threshold0, threshold1
         );
     }
 

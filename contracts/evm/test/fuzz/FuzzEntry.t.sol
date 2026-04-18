@@ -35,5 +35,15 @@ contract FuzzEntryTest is Test {
         assertTrue(entry.fuzz_pause_01_proc_swap_guards_hold());
         assertTrue(entry.fuzz_pause_01_active_settle_guard_holds());
         assertTrue(entry.fuzz_pause_01_inactive_settle_guard_holds());
+        assertTrue(entry.fuzz_sig_01_valid_signal_succeeds());
+        assertTrue(entry.fuzz_sig_01_stale_nonce_reverts());
+        assertTrue(entry.fuzz_sig_02_invalid_proof_reverts());
+        assertTrue(entry.fuzz_mkt_01_proxy_rejects_add_liquidity());
+        assertTrue(entry.fuzz_mkt_02_core_pool_key_write_once());
+        assertTrue(entry.fuzz_mkt_03_core_pool_unique());
+        assertTrue(entry.fuzz_mkt_06_core_order_canonical());
+        assertTrue(entry.fuzz_mkt05_live_amountToSwap_is_zero());
+        assertTrue(entry.fuzz_mkt05_live_smoke());
+        assertTrue(entry.fuzz_auth_01_01a_02_hold());
     }
 }

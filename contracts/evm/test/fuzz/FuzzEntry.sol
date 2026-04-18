@@ -4,12 +4,13 @@ pragma solidity ^0.8.26;
 import {FuzzMMQ01} from "./FuzzMMQ01.sol";
 import {FuzzHubLCC} from "./FuzzHubLCC.sol";
 import {FuzzMMSettle} from "./FuzzMMSettle.sol";
+import {FuzzMarketAuth} from "./FuzzMarketAuth.sol";
 import {FuzzVTSPosition} from "./FuzzVTSPosition.sol";
 
 /// @notice Composition root for repo-owned Medusa fuzzing.
 /// @dev The supported Medusa path now targets this contract directly via `medusa.json`.
-contract FuzzEntry is FuzzMMQ01, FuzzHubLCC, FuzzMMSettle, FuzzVTSPosition {
-    constructor() FuzzMMQ01() FuzzHubLCC() FuzzMMSettle() FuzzVTSPosition() {}
+contract FuzzEntry is FuzzMMQ01, FuzzHubLCC, FuzzMMSettle, FuzzMarketAuth, FuzzVTSPosition {
+    constructor() FuzzMMQ01() FuzzHubLCC() FuzzMMSettle() FuzzMarketAuth() FuzzVTSPosition() {}
 
     /// @notice MMQ-01 valid routes succeed when non-fee proceeds cover queued custody.
     function fuzz_mmq01_valid_routes_succeed_when_non_fee_covers_queue() external view returns (bool) {
