@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.26;
 
-import {LiquidityHub} from "../../../src/LiquidityHub.sol";
+import {FuzzLiquidityHub} from "../harnesses/FuzzLiquidityHub.sol";
 import {LiquidityCommitmentCertificate} from "../../../src/LCC.sol";
 import {VTSCommitLib} from "../../../src/libraries/VTSCommitLib.sol";
 import {PositionId} from "../../../src/types/Position.sol";
@@ -9,7 +9,6 @@ import {MockOracleHelper} from "../mocks/MockOracleHelper.sol";
 import {MockERC20Transferable} from "../mocks/MockERC20Transferable.sol";
 import {VTSCommitLibHarness} from "../../libraries/harnesses/VTSCommitLibHarness.sol";
 import {Bounds} from "../../../src/libraries/Bounds.sol";
-import {FuzzLinkedLibs} from "../base/FuzzLinkedLibs.sol";
 import {Currency} from "v4-periphery/lib/v4-core/src/types/Currency.sol";
 import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
 import {MarketMaker} from "../../../src/libraries/MarketMaker.sol";
@@ -29,7 +28,7 @@ contract LCCBacking01 {
     uint256 internal constant COMMIT_ID = 1;
 
     // ----- Core protocol objects under test -----
-    LiquidityHub internal hub;
+    FuzzLiquidityHub internal hub;
     LiquidityCommitmentCertificate internal lccNative;
     LiquidityCommitmentCertificate internal lccTracked;
     LiquidityCommitmentCertificate internal lccConvA;
@@ -306,12 +305,8 @@ contract LCCBacking01 {
     // ================================================================
 
     constructor() {
-        FuzzLinkedLibs.deployLCCFactoryLinkedLib();
-        FuzzLinkedLibs.deployLiquidityHubLinkedLib();
-        FuzzLinkedLibs.deployVTSCommitLib();
-
         MockOracleHelper oracleHelper = new MockOracleHelper(address(0xB0B));
-        hub = new LiquidityHub(address(oracleHelper), "Ether", "ETH", 18, address(0), address(this));
+        hub = new FuzzLiquidityHub(address(oracleHelper), "Ether", "ETH", 18, address(0), address(this));
         hub.setFactory(address(this), true);
         hub.setBoundLevel(address(hub), Bounds.BOUND_EXEMPT);
 

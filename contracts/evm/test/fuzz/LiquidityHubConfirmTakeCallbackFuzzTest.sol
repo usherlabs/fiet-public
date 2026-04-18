@@ -1,24 +1,22 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.26;
 
-import {LiquidityHub} from "../../src/LiquidityHub.sol";
+import {FuzzLiquidityHub} from "./harnesses/FuzzLiquidityHub.sol";
 import {LiquidityCommitmentCertificate} from "../../src/LCC.sol";
 import {MockOracleHelper} from "./mocks/MockOracleHelper.sol";
 import {MockERC20Transferable} from "./mocks/MockERC20Transferable.sol";
 import {Bounds} from "../../src/libraries/Bounds.sol";
-import {LCCFactoryLinkedLib} from "../../src/libraries/LCCFactoryLib.sol";
-import {LiquidityHubLinkedLib} from "../../src/libraries/LiquidityHubLinkedLib.sol";
 
 /// @notice Micro-harness for HUB-05 (balance-backed reserves) under callback-style flows.
 ///
-/// @dev `LiquidityHub.confirmTake` is intentionally NOT `nonReentrant` and relies on a balance-backed invariant:
+/// @dev `FuzzLiquidityHub.confirmTake` is intentionally NOT `nonReentrant` and relies on a balance-backed invariant:
 ///      reserve accounting must never exceed actual Hub underlying balance.
 ///      This harness forces `confirmTake` to be reachable from within the unwrap call chain:
 ///      `unwrap` -> `useMarketLiquidity` (factory callback) -> `confirmTake`.
 ///      It is retained as a targeted regression harness for callback-path behaviour;
 ///      canonical invariant coverage remains in `test/fuzz/invariants/*`.
 contract LiquidityHubConfirmTakeCallbackFuzzTest {
-    LiquidityHub internal hub;
+    FuzzLiquidityHub internal hub;
     LiquidityCommitmentCertificate internal lccNative;
 
     LiquidityHubConfirmTakeCallback_Holder internal holder;
@@ -43,30 +41,6 @@ contract LiquidityHubConfirmTakeCallbackFuzzTest {
     // bit3: attempt a queue-settling confirmTake (takes up to queue size, slack-limited)
     uint8 internal callbackMode;
 
-    function _deployLinkedLib() internal {
-        // Salt labels stay stable so the regression harness keeps the existing linked-library addresses.
-        bytes32 saltLcc = keccak256("echidna.LCCFactoryLinkedLib");
-        bytes32 saltLh = keccak256("echidna.LiquidityHubLinkedLib");
-        bytes memory initLcc = type(LCCFactoryLinkedLib).creationCode;
-        bytes memory initLh = type(LiquidityHubLinkedLib).creationCode;
-        address expectedLcc = address(
-            uint160(uint256(keccak256(abi.encodePacked(bytes1(0xff), address(this), saltLcc, keccak256(initLcc)))))
-        );
-        address expectedLh = address(
-            uint160(uint256(keccak256(abi.encodePacked(bytes1(0xff), address(this), saltLh, keccak256(initLh)))))
-        );
-        address lcc;
-        address lhl;
-        assembly {
-            lcc := create2(0, add(initLcc, 0x20), mload(initLcc), saltLcc)
-            lhl := create2(0, add(initLh, 0x20), mload(initLh), saltLh)
-        }
-        require(lcc != address(0), "LCCFactoryLinkedLib deploy failed");
-        require(lhl != address(0), "LiquidityHubLinkedLib deploy failed");
-        require(lcc == expectedLcc, "LCCFactoryLinkedLib addr mismatch");
-        require(lhl == expectedLh, "LiquidityHubLinkedLib addr mismatch");
-    }
-
     function _initIssuers() internal view returns (address[] memory issuers) {
         issuers = new address[](1);
         issuers[0] = address(this);
@@ -87,10 +61,8 @@ contract LiquidityHubConfirmTakeCallbackFuzzTest {
     }
 
     constructor() {
-        _deployLinkedLib();
-
         MockOracleHelper oracleHelper = new MockOracleHelper(address(0xB0B));
-        hub = new LiquidityHub(address(oracleHelper), "Ether", "ETH", 18, address(0), address(this));
+        hub = new FuzzLiquidityHub(address(oracleHelper), "Ether", "ETH", 18, address(0), address(this));
 
         // Factory + issuer setup.
         hub.setFactory(address(this), true);

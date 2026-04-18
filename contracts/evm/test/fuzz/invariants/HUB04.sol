@@ -1,17 +1,16 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.26;
 
-import {LiquidityHub} from "../../../src/LiquidityHub.sol";
+import {FuzzLiquidityHub} from "../harnesses/FuzzLiquidityHub.sol";
 import {LiquidityCommitmentCertificate} from "../../../src/LCC.sol";
 import {MockOracleHelper} from "../mocks/MockOracleHelper.sol";
 import {MockERC20Transferable} from "../mocks/MockERC20Transferable.sol";
 import {Bounds} from "../../../src/libraries/Bounds.sol";
-import {FuzzLinkedLibs} from "../base/FuzzLinkedLibs.sol";
 
 /// @dev Minimal second factory so Market B LCCs have a different factory address.
 contract HUB04FactoryB {
     function createPair(
-        LiquidityHub hub,
+        FuzzLiquidityHub hub,
         bytes memory ref,
         address underlying,
         address other,
@@ -21,7 +20,9 @@ contract HUB04FactoryB {
         return hub.createLCCPair(ref, underlying, other, name, issuers);
     }
 
-    function initializePair(LiquidityHub hub, address lcc0, address lcc1, bytes32 marketId, bytes memory ref) external {
+    function initializePair(FuzzLiquidityHub hub, address lcc0, address lcc1, bytes32 marketId, bytes memory ref)
+        external
+    {
         hub.initialize(lcc0, lcc1, marketId, ref);
     }
 
@@ -38,7 +39,7 @@ contract HUB04FactoryB {
 ///   2. getFactory(lccA, lccFromDifferentFactory) always reverts
 ///   3. getFactory(lccA, randomNonLcc) always reverts (mismatched zero vs real factory)
 contract HUB04 {
-    LiquidityHub internal hub;
+    FuzzLiquidityHub internal hub;
     HUB04FactoryB internal factoryB;
 
     // Market A: two LCCs from factory = address(this).
@@ -64,11 +65,8 @@ contract HUB04 {
     bool internal lastNonLccOk;
 
     constructor() {
-        FuzzLinkedLibs.deployLCCFactoryLinkedLib();
-        FuzzLinkedLibs.deployLiquidityHubLinkedLib();
-
         MockOracleHelper oracleHelper = new MockOracleHelper(address(0));
-        hub = new LiquidityHub(address(oracleHelper), "Ether", "ETH", 18, address(0), address(this));
+        hub = new FuzzLiquidityHub(address(oracleHelper), "Ether", "ETH", 18, address(0), address(this));
 
         // Register two factory addresses.
         hub.setFactory(address(this), true);

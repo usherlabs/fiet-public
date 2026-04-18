@@ -14,7 +14,6 @@ import {IPoolManager} from "v4-periphery/lib/v4-core/src/interfaces/IPoolManager
 import {ModifyLiquidityParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
 import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
 import {LiquidityUtils} from "../../../src/libraries/LiquidityUtils.sol";
-import {FuzzLinkedLibs} from "../base/FuzzLinkedLibs.sol";
 
 /// @notice fuzz harness for SETTLE-01: Withdrawals from active positions are disallowed while RFS is open.
 ///         Uses the production MM settle path via `VTSLifecycleLinkedLib._executeMMSettleFromParams` (fuzz harness).
@@ -42,10 +41,6 @@ contract SETTLE01 {
     bool internal closedAllOk = true;
 
     constructor() {
-        FuzzLinkedLibs.deployVTSFeeLinkedLib();
-        FuzzLinkedLibs.deployVTSPositionLib();
-        FuzzLinkedLibs.deployVTSPositionMMOpsLib();
-        FuzzLinkedLibs.deployVTSLifecycleLinkedLib();
         harness = new VTSPositionLibFuzzHarness();
         poolManager = new MockPoolManager();
         vault = new MockMarketVault(address(0));

@@ -1,20 +1,18 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.26;
 
-import {LiquidityHub} from "../../src/LiquidityHub.sol";
+import {FuzzLiquidityHub} from "./harnesses/FuzzLiquidityHub.sol";
 import {LiquidityCommitmentCertificate} from "../../src/LCC.sol";
 import {MockOracleHelper} from "./mocks/MockOracleHelper.sol";
 import {MockERC20Transferable} from "./mocks/MockERC20Transferable.sol";
 import {Bounds} from "../../src/libraries/Bounds.sol";
-import {LCCFactoryLinkedLib} from "../../src/libraries/LCCFactoryLib.sol";
-import {LiquidityHubLinkedLib} from "../../src/libraries/LiquidityHubLinkedLib.sol";
 
-/// @notice Regression harness focused on `LiquidityHub.wrapWith` behaviour (Domain conversion).
+/// @notice Regression harness focused on `FuzzLiquidityHub.wrapWith` behaviour (Domain conversion).
 /// @dev This is intentionally scoped as a targeted regression suite for wrapWith-specific
 ///      semantics. Canonical invariant coverage lives under `test/fuzz/invariants/*`.
 ///      We keep this harness to continuously exercise historical wrapWith edge cases.
 contract LiquidityHubWrapWithFuzzTest {
-    LiquidityHub internal hub;
+    FuzzLiquidityHub internal hub;
     LiquidityCommitmentCertificate internal lccA;
     LiquidityCommitmentCertificate internal lccB;
 
@@ -23,30 +21,6 @@ contract LiquidityHubWrapWithFuzzTest {
 
     bool internal checkedNetting;
     bool internal lastNettingOk;
-
-    function _deployLinkedLib() internal {
-        // Salt labels stay stable so the regression harness keeps the existing linked-library addresses.
-        bytes32 saltLcc = keccak256("echidna.LCCFactoryLinkedLib");
-        bytes32 saltLh = keccak256("echidna.LiquidityHubLinkedLib");
-        bytes memory initLcc = type(LCCFactoryLinkedLib).creationCode;
-        bytes memory initLh = type(LiquidityHubLinkedLib).creationCode;
-        address expectedLcc = address(
-            uint160(uint256(keccak256(abi.encodePacked(bytes1(0xff), address(this), saltLcc, keccak256(initLcc)))))
-        );
-        address expectedLh = address(
-            uint160(uint256(keccak256(abi.encodePacked(bytes1(0xff), address(this), saltLh, keccak256(initLh)))))
-        );
-        address lcc;
-        address lhl;
-        assembly {
-            lcc := create2(0, add(initLcc, 0x20), mload(initLcc), saltLcc)
-            lhl := create2(0, add(initLh, 0x20), mload(initLh), saltLh)
-        }
-        require(lcc != address(0), "LCCFactoryLinkedLib deploy failed");
-        require(lhl != address(0), "LiquidityHubLinkedLib deploy failed");
-        require(lcc == expectedLcc, "LCCFactoryLinkedLib addr mismatch");
-        require(lhl == expectedLh, "LiquidityHubLinkedLib addr mismatch");
-    }
 
     function _initIssuers() internal view returns (address[] memory issuers) {
         issuers = new address[](1);
@@ -68,10 +42,8 @@ contract LiquidityHubWrapWithFuzzTest {
     }
 
     constructor() {
-        _deployLinkedLib();
-
         MockOracleHelper oracleHelper = new MockOracleHelper(address(0xB0B));
-        hub = new LiquidityHub(address(oracleHelper), "Ether", "ETH", 18, address(0), address(this));
+        hub = new FuzzLiquidityHub(address(oracleHelper), "Ether", "ETH", 18, address(0), address(this));
 
         // Harness as factory + issuer so we can create markets and mint market-derived balances for holders.
         hub.setFactory(address(this), true);

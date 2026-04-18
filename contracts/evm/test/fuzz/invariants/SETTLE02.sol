@@ -14,7 +14,6 @@ import {IPoolManager} from "v4-periphery/lib/v4-core/src/interfaces/IPoolManager
 import {ModifyLiquidityParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
 import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
 import {LiquidityUtils} from "../../../src/libraries/LiquidityUtils.sol";
-import {FuzzLinkedLibs} from "../base/FuzzLinkedLibs.sol";
 
 /// @notice fuzz harness for SETTLE-02: seizure settlement clamps deposit/withdraw bounds.
 /// @dev Exercises the production MM settle seizing branch via `VTSLifecycleLinkedLib._executeMMSettleFromParams`.
@@ -52,10 +51,6 @@ contract SETTLE02 {
     bool internal withdrawAllOk = true;
 
     constructor() {
-        FuzzLinkedLibs.deployVTSFeeLinkedLib();
-        FuzzLinkedLibs.deployVTSPositionLib();
-        FuzzLinkedLibs.deployVTSPositionMMOpsLib();
-        FuzzLinkedLibs.deployVTSLifecycleLinkedLib();
         harness = new VTSPositionLibFuzzHarness();
         poolManager = new MockPoolManager();
         vault = new MockMarketVault(address(0));

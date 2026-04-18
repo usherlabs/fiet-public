@@ -1,12 +1,11 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.26;
 
-import {LiquidityHub} from "../../../src/LiquidityHub.sol";
+import {FuzzLiquidityHub} from "../harnesses/FuzzLiquidityHub.sol";
 import {LiquidityCommitmentCertificate} from "../../../src/LCC.sol";
 import {MockOracleHelper} from "../mocks/MockOracleHelper.sol";
 import {MockERC20Transferable} from "../mocks/MockERC20Transferable.sol";
 import {Bounds} from "../../../src/libraries/Bounds.sol";
-import {FuzzLinkedLibs} from "../base/FuzzLinkedLibs.sol";
 
 /// @notice fuzz harness for HUB-02: Unwrapping bounds and queue semantics.
 /// @dev Unwrap requires `0 < amount <= availableToUnwrap`, where `availableToUnwrap` nets the holder's existing
@@ -25,7 +24,7 @@ contract HUB02 {
     uint256 internal constant MAX_VACUOUS_ATTEMPTS = 12;
     uint256 internal constant BPS_SCALE = 10_000;
 
-    LiquidityHub internal hub;
+    FuzzLiquidityHub internal hub;
     LiquidityCommitmentCertificate internal lcc;
     MockERC20Transferable internal underlying;
 
@@ -61,11 +60,8 @@ contract HUB02 {
     // ================================================================
 
     constructor() {
-        FuzzLinkedLibs.deployLCCFactoryLinkedLib();
-        FuzzLinkedLibs.deployLiquidityHubLinkedLib();
-
         MockOracleHelper oracleHelper = new MockOracleHelper(address(0));
-        hub = new LiquidityHub(address(oracleHelper), "Ether", "ETH", 18, address(0), address(this));
+        hub = new FuzzLiquidityHub(address(oracleHelper), "Ether", "ETH", 18, address(0), address(this));
         hub.setFactory(address(this), true);
         hub.setBoundLevel(address(hub), Bounds.BOUND_EXEMPT);
 

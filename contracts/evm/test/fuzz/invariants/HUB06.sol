@@ -1,12 +1,11 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.26;
 
-import {LiquidityHub} from "../../../src/LiquidityHub.sol";
+import {FuzzLiquidityHub} from "../harnesses/FuzzLiquidityHub.sol";
 import {LiquidityCommitmentCertificate} from "../../../src/LCC.sol";
 import {MockOracleHelper} from "../mocks/MockOracleHelper.sol";
 import {MockERC20Transferable} from "../mocks/MockERC20Transferable.sol";
 import {Bounds} from "../../../src/libraries/Bounds.sol";
-import {FuzzLinkedLibs} from "../base/FuzzLinkedLibs.sol";
 
 /// @notice fuzz harness for HUB-06: prepareSettle must preserve direct-liquidity accounting consistency.
 /// @dev "Preparing direct liquidity for vault settlement must reduce both
@@ -20,7 +19,7 @@ import {FuzzLinkedLibs} from "../base/FuzzLinkedLibs.sol";
 contract HUB06 {
     uint256 internal constant MAX_AMOUNT = 1e24;
 
-    LiquidityHub internal hub;
+    FuzzLiquidityHub internal hub;
     LiquidityCommitmentCertificate internal lcc;
     MockERC20Transferable internal underlying;
 
@@ -45,11 +44,8 @@ contract HUB06 {
     // ================================================================
 
     constructor() {
-        FuzzLinkedLibs.deployLCCFactoryLinkedLib();
-        FuzzLinkedLibs.deployLiquidityHubLinkedLib();
-
         MockOracleHelper oracleHelper = new MockOracleHelper(address(0));
-        hub = new LiquidityHub(address(oracleHelper), "Ether", "ETH", 18, address(0), address(this));
+        hub = new FuzzLiquidityHub(address(oracleHelper), "Ether", "ETH", 18, address(0), address(this));
         hub.setFactory(address(this), true);
         hub.setBoundLevel(address(hub), Bounds.BOUND_EXEMPT);
 

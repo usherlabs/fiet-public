@@ -1,20 +1,18 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.26;
 
-import {LiquidityHub} from "../../src/LiquidityHub.sol";
+import {FuzzLiquidityHub} from "./harnesses/FuzzLiquidityHub.sol";
 import {LiquidityCommitmentCertificate} from "../../src/LCC.sol";
 import {MockOracleHelper} from "./mocks/MockOracleHelper.sol";
 import {MockERC20Transferable} from "./mocks/MockERC20Transferable.sol";
 import {Bounds} from "../../src/libraries/Bounds.sol";
-import {LCCFactoryLinkedLib} from "../../src/libraries/LCCFactoryLib.sol";
-import {LiquidityHubLinkedLib} from "../../src/libraries/LiquidityHubLinkedLib.sol";
 
 /// @notice Regression harness for wrapWith + queue/transfer semantics (Domain conversion).
 /// @dev This file is maintained as a targeted regression suite for queue interactions
 ///      around wrapWith and transfer flows. Canonical invariant coverage is under
 ///      `test/fuzz/invariants/*`.
 contract LiquidityHubWrapWithQueueFuzzTest {
-    LiquidityHub internal hub;
+    FuzzLiquidityHub internal hub;
     LiquidityCommitmentCertificate internal lccNative;
     LiquidityCommitmentCertificate internal lccNative2;
 
@@ -49,35 +47,9 @@ contract LiquidityHubWrapWithQueueFuzzTest {
         nativeLcc = LiquidityCommitmentCertificate(underlying0 == address(0) ? l0 : l1);
     }
 
-    function _deployLinkedLib() internal {
-        // Salt labels stay stable so the regression harness keeps the existing linked-library addresses.
-        bytes32 saltLcc = keccak256("echidna.LCCFactoryLinkedLib");
-        bytes32 saltLh = keccak256("echidna.LiquidityHubLinkedLib");
-        bytes memory initLcc = type(LCCFactoryLinkedLib).creationCode;
-        bytes memory initLh = type(LiquidityHubLinkedLib).creationCode;
-        address expectedLcc = address(
-            uint160(uint256(keccak256(abi.encodePacked(bytes1(0xff), address(this), saltLcc, keccak256(initLcc)))))
-        );
-        address expectedLh = address(
-            uint160(uint256(keccak256(abi.encodePacked(bytes1(0xff), address(this), saltLh, keccak256(initLh)))))
-        );
-        address lcc;
-        address lhl;
-        assembly {
-            lcc := create2(0, add(initLcc, 0x20), mload(initLcc), saltLcc)
-            lhl := create2(0, add(initLh, 0x20), mload(initLh), saltLh)
-        }
-        require(lcc != address(0), "LCCFactoryLinkedLib deploy failed");
-        require(lhl != address(0), "LiquidityHubLinkedLib deploy failed");
-        require(lcc == expectedLcc, "LCCFactoryLinkedLib addr mismatch");
-        require(lhl == expectedLh, "LiquidityHubLinkedLib addr mismatch");
-    }
-
     constructor() {
-        _deployLinkedLib();
-
         MockOracleHelper oracleHelper = new MockOracleHelper(address(0xB0B));
-        hub = new LiquidityHub(address(oracleHelper), "Ether", "ETH", 18, address(0), address(this));
+        hub = new FuzzLiquidityHub(address(oracleHelper), "Ether", "ETH", 18, address(0), address(this));
 
         hub.setFactory(address(this), true);
         // Allow LCC transfers into the Hub (needed for wrapWith which pulls backing LCC via transferFrom).
