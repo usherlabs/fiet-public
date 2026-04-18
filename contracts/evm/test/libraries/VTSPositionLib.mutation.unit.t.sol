@@ -1285,6 +1285,139 @@ contract VTSPositionLibMutationUnitTest is Test {
         );
     }
 
+    /// @notice Policy B (finding #4): on MM decrease, same-touch positive slash materialises at most `feesAccrued` per leg.
+    function test_touchPosition_mmDecrease_positiveSlash_capped_to_feesAccrued() public {
+        MockLCC lcc0 = new MockLCC(address(0xA0));
+        MockLCC lcc1 = new MockLCC(address(0xA1));
+        PoolKey memory key = PoolKey({
+            currency0: Currency.wrap(address(lcc0)),
+            currency1: Currency.wrap(address(lcc1)),
+            fee: 0,
+            tickSpacing: 60,
+            hooks: IHooks(address(0))
+        });
+        PoolId pId = key.toId();
+        harness.setupPool(pId, _defaultCfg());
+
+        ModifyLiquidityParams memory reg = ModifyLiquidityParams({
+            tickLower: TICK_LOWER,
+            tickUpper: TICK_UPPER,
+            liquidityDelta: int256(uint256(1000)),
+            salt: bytes32(uint256(23))
+        });
+        harness.registerPosition(owner, pId, reg);
+        PositionId id = PositionLibrary.generateId(owner, reg);
+        harness.setCommitmentMax(id, 1e18, 1e18);
+        harness.setSettled(id, 1e18, 1e18);
+        harness.setPoolTotalSettled(pId, 1e18, 1e18);
+        harness.setCumulativeDeficit(id, 0, 0);
+        harness.setCommitmentDeficit(id, 0, 0);
+
+        uint256 commitId = 1;
+        harness.setPositionCommitId(id, commitId);
+
+        _pmSetPositionLiquidity(pId, PositionId.unwrap(id), 1000);
+        _pmSetSlot0Tick(pId, 0);
+        _pmSetFeeGrowthGlobals(pId, FixedPoint128.Q128, 0);
+        _pmSetTickFeeGrowthOutside(pId, TICK_LOWER, 0, 0);
+        _pmSetTickFeeGrowthOutside(pId, TICK_UPPER, 0, 0);
+
+        harness.setPendingFeeAdj(id, 50_000, 0);
+
+        MockLiquidityHubRecorder hub = new MockLiquidityHubRecorder(address(lcc0), address(lcc1));
+        MockMarketVaultPassthrough vault = new MockMarketVaultPassthrough();
+        PositionContext memory ctx = PositionContext({
+            poolManager: IPoolManager(address(pm)),
+            liquidityHub: ILiquidityHub(address(hub)),
+            oracleHelper: IOracleHelper(address(0)),
+            marketVault: IMarketVault(address(vault))
+        });
+
+        TouchPositionParams memory tp = TouchPositionParams({
+            owner: owner,
+            poolKey: key,
+            params: ModifyLiquidityParams({
+                tickLower: reg.tickLower, tickUpper: reg.tickUpper, liquidityDelta: -100, salt: reg.salt
+            }),
+            callerDelta: toBalanceDelta(int128(int256(5000)), 0),
+            feesAccrued: toBalanceDelta(int128(int256(2000)), 0),
+            hookData: PositionModificationHookDataLib.encode(commitId, 0, owner)
+        });
+
+        TouchPositionResult memory result = harness.touchPositionAndFinalizeMM(ctx, tp);
+
+        assertEq(
+            uint256(uint128(result.feeAdj.amount0())),
+            2000,
+            "materialised feeAdj(token0) must be capped to feesAccrued on decrease"
+        );
+        (int256 pendAfter0,) = harness.getPendingFeeAdj(id);
+        assertEq(pendAfter0, 48_000, "excess positive pending must remain banked in pendingFeeAdj");
+    }
+
+    /// @notice Policy B applies to non-MM (direct LP) decreases as well: cap materialisation to the fee slice.
+    function test_touchPosition_directLpDecrease_positiveSlash_capped_to_feesAccrued() public {
+        MockLCC lcc0 = new MockLCC(address(0xA0));
+        MockLCC lcc1 = new MockLCC(address(0xA1));
+        PoolKey memory key = PoolKey({
+            currency0: Currency.wrap(address(lcc0)),
+            currency1: Currency.wrap(address(lcc1)),
+            fee: 0,
+            tickSpacing: 60,
+            hooks: IHooks(address(0))
+        });
+        PoolId pId = key.toId();
+        harness.setupPool(pId, _defaultCfg());
+
+        ModifyLiquidityParams memory reg = ModifyLiquidityParams({
+            tickLower: TICK_LOWER,
+            tickUpper: TICK_UPPER,
+            liquidityDelta: int256(uint256(1000)),
+            salt: bytes32(uint256(24))
+        });
+        harness.registerPosition(owner, pId, reg);
+        PositionId id = PositionLibrary.generateId(owner, reg);
+        harness.setCommitmentMax(id, 1e18, 1e18);
+        harness.setSettled(id, 1e18, 1e18);
+        harness.setPoolTotalSettled(pId, 1e18, 1e18);
+        harness.setCumulativeDeficit(id, 0, 0);
+        harness.setCommitmentDeficit(id, 0, 0);
+
+        _pmSetPositionLiquidity(pId, PositionId.unwrap(id), 1000);
+        _pmSetSlot0Tick(pId, 0);
+        _pmSetFeeGrowthGlobals(pId, FixedPoint128.Q128, 0);
+        _pmSetTickFeeGrowthOutside(pId, TICK_LOWER, 0, 0);
+        _pmSetTickFeeGrowthOutside(pId, TICK_UPPER, 0, 0);
+
+        harness.setPendingFeeAdj(id, 50_000, 0);
+
+        MockLiquidityHubRecorder hub = new MockLiquidityHubRecorder(address(lcc0), address(lcc1));
+        MockMarketVaultPassthrough vault = new MockMarketVaultPassthrough();
+        PositionContext memory ctx = PositionContext({
+            poolManager: IPoolManager(address(pm)),
+            liquidityHub: ILiquidityHub(address(hub)),
+            oracleHelper: IOracleHelper(address(0)),
+            marketVault: IMarketVault(address(vault))
+        });
+
+        TouchPositionParams memory tp = TouchPositionParams({
+            owner: owner,
+            poolKey: key,
+            params: ModifyLiquidityParams({
+                tickLower: reg.tickLower, tickUpper: reg.tickUpper, liquidityDelta: -100, salt: reg.salt
+            }),
+            callerDelta: toBalanceDelta(int128(int256(5000)), 0),
+            feesAccrued: toBalanceDelta(int128(int256(2000)), 0),
+            hookData: bytes("")
+        });
+
+        TouchPositionResult memory result = harness.touchPosition(ctx, tp);
+
+        assertEq(uint256(uint128(result.feeAdj.amount0())), 2000);
+        (int256 pendAfter0,) = harness.getPendingFeeAdj(id);
+        assertEq(pendAfter0, 48_000);
+    }
+
     /// @notice MM increase: LCC issuance must use `callerDelta - feesAccrued` (pool principal), not net of materialised `feeAdj`.
     function test_touchPosition_mmIncrease_issueAmount_isCallerMinusFees_ignoresMaterialisedFeeAdj() public {
         MockLCC lcc0 = new MockLCC(address(0xA0));

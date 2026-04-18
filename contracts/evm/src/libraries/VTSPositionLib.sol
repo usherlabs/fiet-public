@@ -1077,6 +1077,23 @@ library VTSPositionLib {
         }
     }
 
+    /// @dev Extracted to keep `touchPosition` stack-safe when branching on fee-cap policy.
+    function _afterTouchPositionFees(
+        VTSStorage storage s,
+        PositionId positionId,
+        BalanceDelta feesAccrued,
+        bool capPositiveSlashToFeesAccrued
+    ) private returns (BalanceDelta feeAdj) {
+        if (!capPositiveSlashToFeesAccrued) {
+            return VTSFeeLinkedLib.afterTouchPosition(s, positionId);
+        }
+        int128 fa0 = feesAccrued.amount0();
+        int128 fa1 = feesAccrued.amount1();
+        uint256 positiveCap0 = fa0 > 0 ? uint256(uint128(fa0)) : 0;
+        uint256 positiveCap1 = fa1 > 0 ? uint256(uint128(fa1)) : 0;
+        return VTSFeeLinkedLib.afterTouchPositionWithPositiveCaps(s, positionId, positiveCap0, positiveCap1);
+    }
+
     //#olympix-ignore-reentrancy
     function touchPosition(VTSStorage storage s, PositionContext memory ctx, TouchPositionParams calldata p)
         external
@@ -1176,15 +1193,9 @@ library VTSPositionLib {
             _updateStatus(s, result.id, posStorage, initialLiquidity, liq);
         }
 
-        if (hookData.isMMOperation && p.params.liquidityDelta < 0) {
-            int128 feesAccrued0 = p.feesAccrued.amount0();
-            int128 feesAccrued1 = p.feesAccrued.amount1();
-            uint256 positiveCap0 = feesAccrued0 > 0 ? uint256(uint128(feesAccrued0)) : 0;
-            uint256 positiveCap1 = feesAccrued1 > 0 ? uint256(uint128(feesAccrued1)) : 0;
-            result.feeAdj = VTSFeeLinkedLib.afterTouchPositionWithPositiveCaps(s, result.id, positiveCap0, positiveCap1);
-        } else {
-            result.feeAdj = VTSFeeLinkedLib.afterTouchPosition(s, result.id);
-        }
+        // On any liquidity decrease, cap same-touch positive `pendingFeeAdj` materialisation to the
+        // per-leg informational `feesAccrued` slice; excess remains banked in `pendingFeeAdj` (SETTLE-03).
+        result.feeAdj = _afterTouchPositionFees(s, result.id, p.feesAccrued, p.params.liquidityDelta < 0);
 
         if (hookData.isMMOperation) {
             VTSPositionMMOpsLib.processMMOperations(s, ctx, p, result, requiredSettlementDelta);

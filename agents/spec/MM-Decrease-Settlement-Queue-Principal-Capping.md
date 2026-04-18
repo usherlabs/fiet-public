@@ -3,7 +3,7 @@
 > **Module**: `VTSPositionLib`, `LiquidityHub`, `MarketVault`  
 > **Author**: Grok (research synthesis)  
 > **Last Updated**: 12 April 2026  
-> **Status**: Research complete. Design decision documented. No code change required.  
+> **Status**: Research complete. Queue principal design unchanged; **finding #4** adds a fee-layer policy (same-touch positive slash capped to `feesAccrued` on decreases) — see `INVARIANTS.md` SETTLE-03 and [4__medium-not-netting-feeadj-from-mm-decrease-principal-resolution.md](../audit-resolutions/4__medium-not-netting-feeadj-from-mm-decrease-principal-resolution.md).  
 > **Related**: Audit finding 4, `Currency-Delta-Accounting.md`, `INVARIANTS.md` (SETTLE-03, DELTA-01, HUB-02)
 
 This note consolidates the research that led to the current implementation of `_previewLiquidityDecreaseRouting` / `_computeLiquidityDecreaseRoutingSplit` in `VTSPositionLib.sol`.
@@ -28,6 +28,7 @@ The queue should absorb everything that can be backed by same-lane **principal r
 
 - **VTS / cancel-with-queue principal** for routing caps remains hook-time **`callerDelta - feesAccrued`** (pool principal for the modify), unchanged by materialised `feeAdj` in `processMMOperations` — see `VTSPositionMMOpsLib` and regression tests (e.g. Scan 21 / `SETTLE-03`).
 - **User-facing `amount0Min` / `amount1Min`** on `DECREASE_LIQUIDITY` and `BURN_POSITION` is a floor on the per-leg **immediate post-`feeAdj` non-fee LCC** (`LiquidityUtils.forwardedNonFeeLccAmount`), i.e. the same split as `PositionManagerImpl._handleLccBalanceIncrease`. For **commit buckets** (`tokenId > 0`), only the Hub-queued slice `qCommitted` is physically forwarded to `MMQueueCustodian`; any surplus `nonFee - qCommitted` stays as **locker transient LCC credit** (cleared via `TAKE` / `UNWRAP_LCC`). Do not conflate VTS queue principal with min-out in product docs or integrator expectations.
+- **Same-touch positive slash (finding #4):** On any **liquidity decrease**, materialisation of positive `pendingFeeAdj` is capped per leg to that touch’s informational `feesAccrued`; excess slash stays in `pendingFeeAdj`. This does **not** change queue principal maths above; it aligns hook `feeAdj` with the fee slice of the receipt so `nonFee` can fund `qCommitted` under slash-heavy conditions.
 
 ---
 

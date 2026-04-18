@@ -129,6 +129,8 @@ Decreases liquidity from an existing position.
 | `amount0Min` | `uint128` | Minimum per-leg **immediate post-`feeAdj` non-fee LCC** token0 (`LiquidityUtils.forwardedNonFeeLccAmount`). For commit positions, only the Hub-queued slice is forwarded to the queue custodian; any surplus remains as locker transient LCC credit (`TAKE` / `UNWRAP_LCC`). **Not** the same scalar as VTS queue principal (`callerDelta - feesAccrued`). |
 | `amount1Min` | `uint128` | Minimum per-leg **immediate post-`feeAdj` non-fee LCC** token1 (same semantics as `amount0Min`). |
 
+**Protocol note (fee slash):** VTS caps same-touch materialisation of positive pending fee slashes to the per-leg **informational `feesAccrued`** slice on decreases (see **SETTLE-03** in `contracts/evm/INVARIANTS.md`). Queue principal from VTS remains `callerDelta - feesAccrued`; this rule only bounds how much historical `pendingFeeAdj` can become `feeAdj` on that touch.
+
 ---
 
 ### BURN_POSITION (0x04)

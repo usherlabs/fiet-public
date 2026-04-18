@@ -639,6 +639,12 @@ being an informal “should”.
     `nonFee - qCommitted` remains as **locker transient LCC credit** on `MMPositionManager` (cleared via `TAKE` /
     `UNWRAP_LCC` in the same batch). `feeAdj` reclassifies only the informational **fee** slice vs non-fee receipt; it does
     not redefine queue principal, which stays principal-bounded from `callerDelta - feesAccrued`.
+  - **Same-touch positive slash vs fee slice (finding #4 / policy B)**: On any **liquidity decrease** (`liquidityDelta < 0`),
+    including MM and direct-LP paths, materialisation of positive `pendingFeeAdj` in `VTSFeeLib._finaliseFeeAdjustment` is
+    **capped per leg** to the current modify’s informational `feesAccrued` amount for that leg. Any excess positive slash
+    stays banked in `pendingFeeAdj` for later touches — it is **not** moved into residual-fee backing buckets. Increases and
+    no-op modifies keep uncapped materialisation (`type(uint256).max` caps). This aligns the hook-reported `feeAdj` with the
+    fee slice of the receipt without changing MM principal staging (`callerDelta - feesAccrued` in `VTSPositionMMOpsLib`).
   - **Source-side decrement (routed amount only)**: `_applySettlementClampFromExcess` removes the **routed export** from
     source `pa.settled` / pool `totalSettled` — for non-seizure decreases that is `settleableDelta + queuedDelta`; for
     seizure decreases it is the per-leg seizure export (`min(excess, settleable + burn)`, not the full queued principal
@@ -678,6 +684,7 @@ being an informal “should”.
   - `test/marketmaker/MMPositionMinOutFeeAdjIntegration.t.sol`, `test/modules/PositionManagerImpl.t.sol`,
     `test/marketmaker/MMPositionManager.t.sol`, `test/marketmaker/MMPositionActionsImpl.t.sol` (min-out vs hook principal;
     see [agents/audit-resolutions/3__high-mm-min-out-pre-transfer-callerdelta-resolution.md](../../agents/audit-resolutions/3__high-mm-min-out-pre-transfer-callerdelta-resolution.md)).
+  - Fee-slice slash cap (finding #4): [agents/audit-resolutions/4__medium-not-netting-feeadj-from-mm-decrease-principal-resolution.md](../../agents/audit-resolutions/4__medium-not-netting-feeadj-from-mm-decrease-principal-resolution.md); `test/libraries/VTSPositionLib.mutation.unit.t.sol` (`test_touchPosition_*_positiveSlash_capped_to_feesAccrued`).
   - Decrease routing / `VTSPositionMMOpsLib` integration: `test/libraries/VTSPositionLib.t.sol`,
     `test/libraries/VTSPositionLib.onMMSettle.t.sol`, harnesses under `test/libraries/harnesses/VTSPositionLibHarness.sol`.
   - Queue custody vs forwarded non-fee: [agents/audit-resolutions/mm-queue-custody-nonfee-vs-custodyforward-guard-resolution.md](../../agents/audit-resolutions/mm-queue-custody-nonfee-vs-custodyforward-guard-resolution.md) and **MMQ-01** (Echidna) in `test/fuzz/README.md`.

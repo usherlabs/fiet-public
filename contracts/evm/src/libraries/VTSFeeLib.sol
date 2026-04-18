@@ -417,25 +417,19 @@ library VTSFeeLib {
         paPool.slashedPot.set(tokenIndex, pot - amount);
     }
 
-    /// @notice Finalise a portion of the pending fee adjustment as materialised in the current hook call
-    /// @dev Updates accounting state only. Actual ERC6909 mint/burn is handled by CoreHook.settleHookDeltasToPot
+    /// @notice Finalise pending fee adjustments with optional per-leg caps on positive slash materialisation
+    /// @dev Positive pending adjustment (`pend > 0`) is materialised at most up to `positiveCap*` for each leg.
+    ///      Any unmaterialised remainder stays queued in `pendingFeeAdj` for future touches.
+    ///      Negative pending (`pend < 0`) bonus materialisation remains unchanged.
+    /// @dev Updates accounting state only. Actual ERC6909 mint/burn is handled by CoreHook.settleHookDeltasToPot.
+    ///      Positive pending (`pend > 0`) materialises at most `positiveCap*` per leg; pass `type(uint256).max` on both
+    ///      legs for uncapped behaviour. Any unmaterialised positive remainder stays in `pendingFeeAdj`.
     /// @param s The central VTS storage
     /// @param positionId The position ID
     /// @param poolId The pool ID
     /// @return adj The materialised delta as BalanceDelta for the hook to apply this call only
     //#olympix-ignore-reentrancy
-    function _finaliseFeeAdjustment(VTSStorage storage s, PositionId positionId, PoolId poolId)
-        internal
-        returns (BalanceDelta adj)
-    {
-        return _finaliseFeeAdjustmentWithPositiveCaps(s, positionId, poolId, type(uint256).max, type(uint256).max);
-    }
-
-    /// @notice Finalise pending fee adjustments with optional per-leg caps on positive slash materialisation
-    /// @dev Positive pending adjustment (`pend > 0`) is materialised at most up to `positiveCap*` for each leg.
-    ///      Any unmaterialised remainder stays queued in `pendingFeeAdj` for future touches.
-    ///      Negative pending (`pend < 0`) bonus materialisation remains unchanged.
-    function _finaliseFeeAdjustmentWithPositiveCaps(
+    function _finaliseFeeAdjustment(
         VTSStorage storage s,
         PositionId positionId,
         PoolId poolId,
@@ -484,10 +478,9 @@ library VTSFeeLib {
         }
 
         // Note on clamping:
-        // Under the current construction:
-        // - pend > 0  => mat == pend
+        // - pend > 0  => mat0/mat1 are capped by positiveCap* (and by available pending); uncapped when cap is max.
         // - pend < 0  => mat == -min(pot, -pend) which is always in [pend, 0]
-        // Therefore, mat cannot over-finalise pending, and sign-mismatch clamps are unreachable.
+        // Therefore, mat cannot over-finalise pending on the bonus path, and sign-mismatch clamps are unreachable.
 
         // Subtract the materialised portion from pending (note: signed arithmetic)
         PositionAccounting storage pa = s.positionAccounting[positionId];
@@ -497,12 +490,26 @@ library VTSFeeLib {
         adj = LiquidityUtils.safeToBalanceDelta(mat0, mat1);
     }
 
+    /// @notice Uncapped finalisation (`positiveCap* = max`).
+    function _finaliseFeeAdjustment(VTSStorage storage s, PositionId positionId, PoolId poolId)
+        internal
+        returns (BalanceDelta adj)
+    {
+        return _finaliseFeeAdjustment(s, positionId, poolId, type(uint256).max, type(uint256).max);
+    }
+
     /// @notice Consolidated fee processing for a position during modification: realises CISE exposure and queues bonus
-    /// @dev Updates accounting state only. Actual ERC6909 mint/burn is handled by CoreHook.settleHookDeltasToPot
+    /// @dev Updates accounting state only. Actual ERC6909 mint/burn is handled by CoreHook.settleHookDeltasToPot.
+    ///      Pass `type(uint256).max` for both caps for uncapped positive slash materialisation.
     /// @param s The central VTS storage
     /// @param positionId The position ID
     /// @return adj The materialised fee adjustment delta
-    function _processPositionFees(VTSStorage storage s, PositionId positionId) internal returns (BalanceDelta adj) {
+    function _processPositionFees(
+        VTSStorage storage s,
+        PositionId positionId,
+        uint256 positiveCap0,
+        uint256 positiveCap1
+    ) internal returns (BalanceDelta adj) {
         Position memory pos = s.positions[positionId];
         PoolId poolId = pos.poolId;
 
@@ -533,43 +540,12 @@ library VTSFeeLib {
         if (allocated0) _cleanupAfterAllocationForToken(pa, paPool, 1, ciseExposure1);
         if (allocated1) _cleanupAfterAllocationForToken(pa, paPool, 0, ciseExposure0);
 
-        return _finaliseFeeAdjustment(s, positionId, poolId);
+        return _finaliseFeeAdjustment(s, positionId, poolId, positiveCap0, positiveCap1);
     }
 
-    /// @notice Consolidated fee processing for a position during modification with per-leg caps on positive slash
-    ///         materialisation for the current touch.
-    /// @dev Caps only apply to positive `pendingFeeAdj` materialisation. Bonus path and bonus queueing order remain
-    ///      unchanged. Unmaterialised positive remainder stays queued in `pendingFeeAdj`.
-    function _processPositionFeesWithPositiveCaps(
-        VTSStorage storage s,
-        PositionId positionId,
-        uint256 positiveCap0,
-        uint256 positiveCap1
-    ) internal returns (BalanceDelta adj) {
-        Position memory pos = s.positions[positionId];
-        PoolId poolId = pos.poolId;
-
-        // If fee sharing is disabled, skip processing (fees handled natively by Uniswap)
-        if (!_isFeeSharingEnabled(s, poolId)) {
-            return toBalanceDelta(0, 0);
-        }
-
-        PositionAccounting storage pa = s.positionAccounting[positionId];
-        PoolAccounting storage paPool = s.poolAccounting[poolId];
-
-        // Read CISE exposure for bonus allocation
-        uint256 ciseExposure0 = pa.ciseExposureSinceLastMod.token0;
-        uint256 ciseExposure1 = pa.ciseExposureSinceLastMod.token1;
-
-        // Queue bonuses using CISE exposure (coverage-indexed settled exposure)
-        bool allocated0 = _queueBonusForToken(pa, paPool, 0, 1, ciseExposure1);
-        bool allocated1 = _queueBonusForToken(pa, paPool, 1, 0, ciseExposure0);
-
-        // Banked exposure: clear/decrement windows only when we actually queued a bonus.
-        if (allocated0) _cleanupAfterAllocationForToken(pa, paPool, 1, ciseExposure1);
-        if (allocated1) _cleanupAfterAllocationForToken(pa, paPool, 0, ciseExposure0);
-
-        return _finaliseFeeAdjustmentWithPositiveCaps(s, positionId, poolId, positiveCap0, positiveCap1);
+    /// @notice Uncapped fee processing (`positiveCap* = max`).
+    function _processPositionFees(VTSStorage storage s, PositionId positionId) internal returns (BalanceDelta adj) {
+        return _processPositionFees(s, positionId, type(uint256).max, type(uint256).max);
     }
 
     /// @dev Check if fee sharing is enabled for a pool
@@ -873,7 +849,7 @@ library VTSFeeLinkedLib {
         uint256 positiveCap0,
         uint256 positiveCap1
     ) external returns (BalanceDelta adj) {
-        return VTSFeeLib._processPositionFeesWithPositiveCaps(s, positionId, positiveCap0, positiveCap1);
+        return VTSFeeLib._processPositionFees(s, positionId, positiveCap0, positiveCap1);
     }
 
     /// @notice Apply the fee-burn pipeline for a position and return the consumed outflow share
