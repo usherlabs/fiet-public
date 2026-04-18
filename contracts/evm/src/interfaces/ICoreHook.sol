@@ -15,7 +15,8 @@ interface ICoreHook {
     ///      called from outside the hook callback (e.g. from PositionManagerImpl).
     ///      Settles deltas for both:
     ///      - CoreHook: from hook delta adjustment (feeAdj returned by afterModifyLiquidity)
-    ///      - VTSOrchestrator: from _fundFeePot/_drainFeePot calls in _finaliseFeeAdjustment
+    ///      - VTSOrchestrator: from `_fundFeePot` / `_drainFeePot` during `_finalisePositiveFeeAdjustment` /
+    ///        `_finaliseNegativeFeeAdjustment` (composed by `_processPositionFees` and test harnesses)
     ///      - If delta > 0 (credit): mint ERC6909 claims (consumes positive delta)
     ///      - If delta < 0 (debt): burn ERC6909 claims to clear negative delta
     /// @param key The pool key for the currencies to settle

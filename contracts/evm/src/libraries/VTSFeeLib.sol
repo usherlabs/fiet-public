@@ -416,13 +416,6 @@ library VTSFeeLib {
         paPool.slashedPot.set(tokenIndex, pot - amount);
     }
 
-    /// @dev Sum two hook-reported fee materialisation deltas (same-touch composition).
-    function _addFeeMaterialisationDeltas(BalanceDelta a, BalanceDelta b) private pure returns (BalanceDelta) {
-        return LiquidityUtils.safeToBalanceDelta(
-            int256(a.amount0()) + int256(b.amount0()), int256(a.amount1()) + int256(b.amount1())
-        );
-    }
-
     /// @notice Materialise positive `pendingFeeAdj` into `slashedPot` up to per-leg caps (SETTLE-03 on decreases).
     function _finalisePositiveFeeAdjustment(
         VTSStorage storage s,
@@ -505,6 +498,9 @@ library VTSFeeLib {
     /// @dev Updates accounting state only. Actual ERC6909 mint/burn is handled by CoreHook.settleHookDeltasToPot.
     ///      Positive pending (`pend > 0`) materialises at most `positiveCap*` per leg; pass `type(uint256).max` on both
     ///      legs for uncapped behaviour. Any unmaterialised positive remainder stays in `pendingFeeAdj`.
+    /// @dev Not used on the production fee-sharing path: `_processPositionFees` runs Phase 2 (bonus allocation)
+    ///      between `_finalisePositiveFeeAdjustment` and `_finaliseNegativeFeeAdjustment`. Exposed for
+    ///      `VTSFeeLibHarness` / unit tests that exercise positive+negative materialisation without Phase 2.
     /// @param s The central VTS storage
     /// @param positionId The position ID
     /// @param poolId The pool ID
@@ -519,7 +515,7 @@ library VTSFeeLib {
     ) internal returns (BalanceDelta adj) {
         BalanceDelta adjPos = _finalisePositiveFeeAdjustment(s, positionId, poolId, positiveCap0, positiveCap1);
         BalanceDelta adjNeg = _finaliseNegativeFeeAdjustment(s, positionId, poolId);
-        return _addFeeMaterialisationDeltas(adjPos, adjNeg);
+        return adjPos + adjNeg;
     }
 
     /// @notice Uncapped finalisation (`positiveCap* = max`).
@@ -530,7 +526,7 @@ library VTSFeeLib {
         return _finaliseFeeAdjustment(s, positionId, poolId, type(uint256).max, type(uint256).max);
     }
 
-    /// @notice Consolidated fee processing for a position during modification (two-phase)
+    /// @notice Consolidated fee processing for a position during modification (three phases)
     /// @dev Phase 1: materialise positive `pendingFeeAdj` into `slashedPot` (capped per leg on decreases).
     ///      Phase 2: allocate bonuses from the materialised pot via CISE/CSI (queues negative pending).
     ///      Phase 3: materialise negative pending by draining `slashedPot`.
@@ -580,7 +576,7 @@ library VTSFeeLib {
 
         // Phase 3 — drain `slashedPot` for queued bonuses (and any other negative pending).
         BalanceDelta adjNeg = _finaliseNegativeFeeAdjustment(s, positionId, poolId);
-        return _addFeeMaterialisationDeltas(adjPos, adjNeg);
+        return adjPos + adjNeg;
     }
 
     /// @notice Uncapped fee processing (`positiveCap* = max`).

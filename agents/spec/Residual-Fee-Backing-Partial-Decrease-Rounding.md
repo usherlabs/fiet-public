@@ -1,5 +1,7 @@
 # Residual Fee Backing Partial-Decrease Rounding (Nice-to-Have)
 
+> **Fee-pot redesign:** Burns queue **`pendingFeeAdj`**; pool **`slashedPot`** materialises on fee-processing touches. Canonical: [`Fee-Pot-Materialisation-And-DirectLP-Policy.md`](./Fee-Pot-Materialisation-And-DirectLP-Policy.md). References to `protocolFeeAccrued` below predate that model.
+
 > **Module**: `VTSFeeLib`, `VTSPositionLib`, `PositionAccounting`  
 > **Author**: Grok (research synthesis)  
 > **Last Updated**: 12 April 2026  

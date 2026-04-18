@@ -351,10 +351,10 @@ contract VTSFeeLibScenarioTest is VTSOrchestratorFixture {
         uint256 mm2;
         uint256 mm3;
         uint256 potBefore;
-        uint256 protocolFeeAccruedBefore0;
-        uint256 protocolFeeAccruedBefore1;
-        uint256 protocolFeeAccruedAfter0;
-        uint256 protocolFeeAccruedAfter1;
+        uint256 slashedPotBefore0;
+        uint256 slashedPotBefore1;
+        uint256 slashedPotAfter0;
+        uint256 slashedPotAfter1;
         int256 mm1PendingBefore;
         int256 mm1PendingAfter;
 
@@ -379,12 +379,12 @@ contract VTSFeeLibScenarioTest is VTSOrchestratorFixture {
             _mmSettle(mm3, 0, _negInt128Capped(5e18), _negInt128Capped(5e18));
 
             potBefore = _slashedPot1();
-            (protocolFeeAccruedBefore0, protocolFeeAccruedBefore1) = _slashedPot(corePoolKey.toId());
+            (slashedPotBefore0, slashedPotBefore1) = _slashedPot(corePoolKey.toId());
             mm1PendingBefore = _pendingFeeAdj1(mm1PositionId);
 
             // Swap to accrue fees + outflow growth (choose direction that accrues token0 outflow)
             // Fee pot should be affected on swap, not on position modification
-            _swapCore(false, -int256(5e18)); // ? one for zero, therefore protocolFeeAccruedBefore1 should increase
+            _swapCore(false, -int256(5e18)); // one-for-zero: accrues token1 fees / deficit path used by DICE below
 
             vtsOrchestrator.settlePositionGrowths(mm2PositionId);
             vtsOrchestrator.settlePositionGrowths(mm3PositionId);
@@ -402,7 +402,7 @@ contract VTSFeeLibScenarioTest is VTSOrchestratorFixture {
             vtsOrchestrator.settlePositionGrowths(mm3PositionId);
             vtsOrchestrator.settlePositionGrowths(mm1PositionId);
 
-            (protocolFeeAccruedAfter0, protocolFeeAccruedAfter1) = _slashedPot(corePoolKey.toId());
+            (slashedPotAfter0, slashedPotAfter1) = _slashedPot(corePoolKey.toId());
             mm1PendingAfter = _pendingFeeAdj1(mm1PositionId);
 
             // Debug logging (scoped so these locals die immediately)
@@ -444,12 +444,9 @@ contract VTSFeeLibScenarioTest is VTSOrchestratorFixture {
             "Self LCC balance should be greater than slashed pot because feeCoverage < 50%"
         );
 
-        // DICE: Protocol fee accrued for token0 should now increase because MM1 has deficit
-        // and coverage was applied. The old tick-indexed model incorrectly showed no increase
-        // because coverage was attributed to whoever was in-range at coverage time.
-        assertEq(
-            protocolFeeAccruedAfter0, protocolFeeAccruedBefore0, "DICE: materialised slashedPot0 unchanged until touch"
-        );
+        // DICE: Token0 leg of materialised `slashedPot` is unchanged by swap+coverage alone (Phase 1 runs on touch).
+        // The old tick-indexed model incorrectly showed no slash attribution for deficit MM1.
+        assertEq(slashedPotAfter0, slashedPotBefore0, "DICE: materialised slashedPot0 unchanged until touch");
         assertGt(mm1PendingAfter, mm1PendingBefore, "Queued slash pending should increase on deficit MM (token1 lane)");
     }
 
@@ -466,7 +463,7 @@ contract VTSFeeLibScenarioTest is VTSOrchestratorFixture {
     ///      - Fee pot increases after swap + coverage (from slashes)
     ///      - When MM0 processes fees later, it should NOT receive bonuses from its own contribution
     ///      - MM3 (beneficiary) can receive bonuses from both MM0 and MM1's contributions
-    ///      - Self-exclusion ensures: potAvail = protocolFeeAccrued - feesShared(position), so MM0's potAvail excludes its own slash
+    ///      - Self-exclusion ensures: `potAvail = slashedPot - feesShared(self)` (CSI), so MM0 cannot reclaim its own contribution
     function test_multiMM_twoDeficits_protocolCovers_bothSlashed_selfExcludedFromOwnPot() public {
         (uint256 tokenId,) = _commitAndMintFirstMM(); // idx0
         _mintAdditionalMM(tokenId, -60, 60, 1e10); // idx1
@@ -594,7 +591,7 @@ contract VTSFeeLibScenarioTest is VTSOrchestratorFixture {
         PositionId directPosId = PositionLibrary.generateId(address(modifyLiquidityRouter), directParams);
         assertTrue(vtsOrchestrator.isPositionValid(directPosId, true), "DirectLP should be registered");
 
-        // New-position gate: even if protocolFeeAccrued is already > 0, a freshly created DirectLP must not
+        // New-position gate: even if `slashedPot` is already funded, a freshly created DirectLP must not
         // immediately accrue/allocate any fee-sharing bonuses.
         (uint256 feesShared0, uint256 feesShared1, int256 pending0, int256 pending1) =
             vtsOrchestrator.getPositionFeeAccounting(directPosId);
@@ -751,7 +748,7 @@ contract VTSFeeLibScenarioTest is VTSOrchestratorFixture {
     ///      Setup:
     ///      - Add a DirectLP position that starts in-range (so it can accrue native fees on swaps)
     ///      - Perform a small swap (in-range) to accrue native Uniswap fees (token1 fees for one-for-zero swaps)
-    ///      - Create an MM and slash it via swap + incrementCoverage + settle (queues slashes into protocolFeeAccrued)
+    ///      - Create an MM and slash it via swap + incrementCoverage + settle (queues positive `pendingFeeAdj`)
     ///      - Poke MM to materialise pending into slashedPot
     ///      - Push tick out-of-range for DirectLP, then poke DirectLP
     ///      Expected:
@@ -853,7 +850,7 @@ contract VTSFeeLibScenarioTest is VTSOrchestratorFixture {
     // ============================================================
 
     /// @notice Edge Case 1: Self-exclusion when potAvail is zero
-    /// @dev Tests that a position cannot receive bonuses when all protocolFeeAccrued comes from its own slashes.
+    /// @dev Tests that a position cannot receive bonuses when materialised `slashedPot` is entirely attributable to its own slashes (CSI self-exclusion).
     ///      This ensures positions cannot reclaim their own penalties.
     ///      Setup:
     ///      - Single MM position
@@ -861,7 +858,7 @@ contract VTSFeeLibScenarioTest is VTSOrchestratorFixture {
     ///      - Slash materialises, funding pot
     ///      Actions:
     ///      - Run reverse swap to create inflow (generates positive net settlement)
-    ///      - Process fees: position should compute potAvail = protocolFeeAccrued - feesShared(self)
+    ///      - Process fees: position should compute `potAvail = max(slashedPot - feesShared(self), 0)`
     ///      Expected:
     ///      - potAvail should be zero (or very small) since all fees came from this position
     ///      - No bonus should be allocated (potAvail == 0 guard)
@@ -902,17 +899,13 @@ contract VTSFeeLibScenarioTest is VTSOrchestratorFixture {
         // ============================================================================================================
         // KEY ASSERTION: Self-exclusion invariant verification
         // ============================================================================================================
-        // The core self-exclusion mechanism in VTSFeeLib.processPositionFees() computes:
-        //   potAvail = protocolFeeAccrued - feesShared(self)
+        // CSI self-exclusion in `_queueBonusForToken` uses materialised `slashedPot` and synced `feesShared`:
+        //   potAvail = slashedPot(token1) > feesShared(self) ? slashedPot - feesShared(self) : 0
         //
-        // For self-exclusion to prevent bonus allocation, we require:
-        //   potAvail == 0  =>  protocolFeeAccrued == feesShared(self)
+        // For “no self-bonus” we arrange: materialised pot equals this MM's slash contribution (`feesShared`), so potAvail == 0.
         //
-        // IMPLICIT ASSUMPTION: This test assumes that ONLY the MM position contributes to protocolFeeAccrued
-        // for the fee token (token1). While MarketTestBase seeds initial liquidity (full-range DirectLP),
-        // that seed position remains solvent (no deficit, no slash) and thus does NOT contribute to
-        // protocolFeeAccrued. If other positions were slashed, protocolFeeAccrued > feesShared(self),
-        // and potAvail > 0, allowing the MM to receive bonus from others' contributions.
+        // IMPLICIT ASSUMPTION: Only this MM's slash funds token1 `slashedPot` here; other seeded LPs are not slashed. If
+        // unrelated positions also materialised into `slashedPot`, potAvail could be positive and the MM could earn bonus from others' contributions.
         //
         // This assertion verifies the precondition: materialised slashedPot1 matches self slash (potAvail == 0 for bonus).
         // ============================================================================================================
@@ -934,7 +927,7 @@ contract VTSFeeLibScenarioTest is VTSOrchestratorFixture {
         // ============================================================================================================
         // KEY ASSERTION: Self-exclusion prevents bonus allocation when potAvail == 0
         // ============================================================================================================
-        // Since potAvail = protocolFeeAccrued - feesShared(self) == 0 (verified above), VTSFeeLib.processPositionFees()
+        // Since potAvail from materialised `slashedPot` vs self contribution is 0 (verified above), `_processPositionFees`
         // should skip bonus allocation (potAvail == 0 guard at line 177). Therefore:
         //   1. No pot drain (bonus materialisation requires draining slashedPot)
         //   2. No negative pendingFeeAdj queued (bonus would queue negative pending)
@@ -946,23 +939,18 @@ contract VTSFeeLibScenarioTest is VTSOrchestratorFixture {
     }
 
     /// @notice Edge Case 2: Partial bonus materialisation when pot not yet funded
-    /// @dev Tests the ordering dependency: bonuses can be queued before slashes are materialised,
-    ///      but actual payout requires the pot to be funded first.
+    /// @dev Historical name: under the materialised-pot model, **bonuses allocate only after Phase 1** has funded
+    ///      `slashedPot` on some touch (often the slasher’s poke). This regression instead asserts **`slashedPot`
+    ///      movement from swap/coverage paths** in the current harness.
     ///      Setup:
     ///      - Two MMs: MM0 (will be slashed), MM1 (beneficiary with positive net)
     ///      - MM1 has positive net settlement from deposits
     ///      Actions:
-    ///      - Create slash on MM0 via swap + coverage (protocolFeeAccrued increases, pendingFeeAdj queued)
-    ///      - Do NOT poke MM0 yet (so pot not funded via _finaliseFeeAdjustment)
-    ///      - Poke MM1 first: should queue bonus but cannot drain (pot == 0)
-    ///      - Then poke MM0 to fund pot
-    ///      - Poke MM1 again to receive bonus
+    ///      - Create slash on MM0 via swap + coverage (queues positive `pendingFeeAdj` on slasher)
+    ///      - (Ordering tests that require “poke beneficiary before slasher” live in `test_bonusAllocatedBeforeSlashMaterialised_*`.)
     ///      Expected:
-    ///      - First MM1 poke: pot unchanged, no bonus materialised (pot not funded)
-    ///      - After MM0 poke: pot increases (slash materialised)
-    ///      - Second MM1 poke: pot decreases (bonus materialised), MM1 receives credit
-    /// @dev Note: Current implementation funds pot during swap+coverage, so this test verifies
-    ///      that pot increases after swap + coverage operations rather than testing the ordering dependency.
+    ///      - Pot observability: see assertions below (harness may fund accounting during swap + coverage)
+    /// @dev Note: This test currently verifies that `slashedPot` does not decrease from the setup swap+coverage path.
     function test_partialBonusMaterialisation_whenPotNotYetFunded() public {
         (uint256 tokenId,) = _commitAndMintFirstMM();
         (uint256 idx1,) = _mintAdditionalMM(tokenId, -60, 60, 1e10);
@@ -1067,14 +1055,14 @@ contract VTSFeeLibScenarioTest is VTSOrchestratorFixture {
     }
 
     /// @notice Edge Case 5: A beneficiary can queue a bonus before the slashed pot is funded, then later materialise it.
-    /// @dev Correct sequencing under CSI/CISE/DICE:
-    ///      - DICE: `settlePositionGrowths` after `incrementCoverage` queues a slash (+pendingFeeAdj) on the slasher and
-    ///        increases `protocolFeeAccrued` (accounting pot), but does NOT yet fund `slashedPot`.
+    /// @dev Correct sequencing under CSI/CISE/DICE and the materialised-pot model:
+    ///      - DICE: after `incrementCoverage` + `settlePositionGrowths`, the slasher queues positive `pendingFeeAdj`
+    ///        (slash), but **Phase 1** has not yet moved that value into `slashedPot` until the slasher is fee-processed.
     ///      - CISE exposure accrues ONLY at `incrementCoverage` (not on swaps), so we must ensure a post-existence coverage
     ///        event creates positive exposure for the beneficiary.
-    ///      - CSI: bonus allocation can be QUEUED against `protocolFeeAccrued` (pendingFeeAdj < 0, remaining factor advances)
-    ///        even while `slashedPot == 0` (materialisation is separate).
-    ///      - Materialisation happens only after the slasher is fee-processed (e.g. `_pokeMM`) which funds `slashedPot`.
+    ///      - CSI: bonus **allocation** (Phase 2) can record spend against CSI indices while `slashedPot == 0`; payout
+    ///        (Phase 3) still needs `slashedPot` funded by the slasher’s Phase 1 materialisation.
+    ///      - Ordering: beneficiary poke first → no pot drain; slasher poke → funds `slashedPot`; beneficiary poke again → bonus pays out.
     function test_bonusAllocatedBeforeSlashMaterialised_whenBeneficiaryPokesFirst() public {
         // Values needed across scoped blocks (declared at function level)
         uint256 tokenId;
@@ -1129,14 +1117,14 @@ contract VTSFeeLibScenarioTest is VTSOrchestratorFixture {
             }
             vtsOrchestrator.settlePositionGrowths(slasherPosId);
 
-            // Sanity: slashed pot should still be 0 (slasher not poked -> no _finaliseFeeAdjustment funding)
+            // Sanity: slashed pot should still be 0 (slasher not poked -> no Phase 1 materialisation into slashedPot)
             assertEq(_slashedPot1(), 0, "Precondition: slashed pot must be 0 before any slasher position poke");
 
             // Sanity: slasher has a queued positive slash (pendingFeeAdj1 > 0)
             (,,, int256 slasherPending1Before) = _testableOrchestrator().getPositionFeeAccounting(slasherPosId);
             assertGt(slasherPending1Before, 0, "Precondition: slasher must have pendingFeeAdj1 > 0");
 
-            // ? At this point, the slashed pot is still 0, but protocolFeeAccrued > 0 AND slasher pendingFeeAdj > 0 (queued slash).
+            // Slashed pot still 0; slasher has queued positive pending (not yet materialised into slashedPot).
             (, uint256 remainingFactor1Before) = _testableOrchestrator().getPoolCSIAccounting(corePoolKey.toId());
 
             // Beneficiary processes fees FIRST while slashedPot is still 0: bonus allocation requires a materialised pot.
@@ -1214,7 +1202,7 @@ contract VTSFeeLibScenarioTest is VTSOrchestratorFixture {
         /**
          *   If swap amount is too large (eg. 50e18),
          *   The swap will have the pool tick sitting above your DirectLP's tickUpper = 960 (e.g. it shows tick: 972 then tick: 1010), so the position is out-of-range during the "accrue token1 fees" swap.
-         *   slashedPot only affects materialisation in _finaliseFeeAdjustment (paying down negative pending).
+         *   Bonus payout drains `slashedPot` in `_processPositionFees` Phase 3 after Phase 1 funded the pot.
          */
         _swapCore(false, -int256(30e18));
 
@@ -1243,7 +1231,7 @@ contract VTSFeeLibScenarioTest is VTSOrchestratorFixture {
             // ------------------------------------------------------------
             // 2) Create a DirectLP beneficiary.
             // IMPORTANT: Creating a *new* DirectLP position must NOT allocate bonuses immediately,
-            // even if protocolFeeAccrued is already > 0. Bonus allocation is reserved for existing positions.
+            // even if the pool already has materialised `slashedPot` from others. Bonus allocation is reserved for existing positions.
             // ------------------------------------------------------------
             // Use an in-range DirectLP so it can accrue native fees (feeWeight) from swaps.
             int24 dlTickLower = -960;

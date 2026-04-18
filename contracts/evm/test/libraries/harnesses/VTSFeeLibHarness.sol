@@ -35,7 +35,7 @@ contract VTSFeeLibHarness {
         VTSFeeLib._drainFeePot(s, poolId, tokenIndex, amount);
     }
 
-    /// @notice Exposes _finaliseFeeAdjustment (accounting only, no PoolManager interaction)
+    /// @notice Exposes `_finaliseFeeAdjustment` (positive then negative materialisation only; no Phase 2 bonus allocation)
     function finaliseFeeAdjustment(PositionId positionId, PoolId poolId) external returns (BalanceDelta adj) {
         return VTSFeeLib._finaliseFeeAdjustment(s, positionId, poolId);
     }

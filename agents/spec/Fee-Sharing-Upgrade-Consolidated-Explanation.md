@@ -1,5 +1,8 @@
 # Fee-Sharing Upgrade: Consolidated Explanation
 
+> **Fee-pot redesign (supersedes `protocolFeeAccrued` in older sections below)**  
+> Current implementation: [`Fee-Pot-Materialisation-And-DirectLP-Policy.md`](./Fee-Pot-Materialisation-And-DirectLP-Policy.md). Sections that still describe `protocolFeeAccrued` as the allocation pot are **historical**; reconcile with that note.
+
 This document consolidates the current fee-sharing design and the recent fee upgrade into one explanation.
 
 It is intended to sit alongside, and summarise the combined effect of, the more focused research notes:

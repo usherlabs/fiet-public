@@ -1,5 +1,8 @@
 # Tick-Indexed Coverage and Fee-Sharing Mechanics in VTSManager — Research Document
 
+> **Fee-pot redesign (supersedes `protocolFeeAccrued` in older text below)**  
+> Pool-level bonus allocation uses materialised **`slashedPot`** and CSI self-exclusion, not a separate `protocolFeeAccrued` counter. Canonical semantics: [`Fee-Pot-Materialisation-And-DirectLP-Policy.md`](./Fee-Pot-Materialisation-And-DirectLP-Policy.md).
+
 ## Introduction
 
 The VTSManager contract is integral to the Fiet Protocol, overseeing Value-to-Signal (VTS) calculations, position settlements, and fee-sharing mechanisms for liquidity positions. It employs a tick-indexed growth accounting system, akin to that in Uniswap v3, to attribute coverage usage and fees equitably across in-range positions. Coverage mechanisms track settlements that support outflows, such as those occurring during Liquidity Commitment Certificate (LCC) unwraps, via tick-indexed usage growth with residuals for zero-liquidity cases. Meanwhile, fee-sharing penalises positions that incur deficits through slashes and rewards contributors via bonuses drawn from a shared pot. The primary objectives are to ensure fair attribution of obligations and rewards based on actual contributions to coverage, prevent positions from benefiting from their own penalties, and materialise adjustments during liquidity modification hooks.

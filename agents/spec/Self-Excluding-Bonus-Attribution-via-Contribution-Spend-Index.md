@@ -1,5 +1,8 @@
 # Self‑Excluding Bonus Attribution via Contribution Spend Index (CSI): O(1) Self‑Exclusion Without Iteration
 
+> **Fee-pot redesign (supersedes `protocolFeeAccrued` in older formulas below)**  
+> CSI `potAvail` uses materialised **`slashedPot`** and remaining-share epochs. Canonical reference: [`Fee-Pot-Materialisation-And-DirectLP-Policy.md`](./Fee-Pot-Materialisation-And-DirectLP-Policy.md).
+
 This document is a **research spec** for upgrading the fee‑sharing bonus mechanism described in:
 
 - `agents/spec/Tick-Indexed-Coverage-and-Fee-Sharing-in-VTSManager.md`

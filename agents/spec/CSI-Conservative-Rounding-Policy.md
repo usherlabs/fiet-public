@@ -1,5 +1,7 @@
 # CSI Conservative Rounding Policy
 
+> **Fee-pot redesign:** Allocation budget is materialised **`slashedPot`** (see [`Fee-Pot-Materialisation-And-DirectLP-Policy.md`](./Fee-Pot-Materialisation-And-DirectLP-Policy.md)). Any `protocolFeeAccrued` wording below is legacy.
+
 Date: 3rd April 2026
 
 This note records the accepted runtime policy for the CSI remaining-share model after fixing the micro-share self-exclusion bug.
