@@ -23,8 +23,8 @@ default:
 # Generic Medusa runner wrapper.
 # Pass through extra args via `--`, e.g.:
 #
-# just medusa file=test/fuzz/invariants/LCC01.sol contract=LCC01 -- --test-limit 20000
-# MEDUSA_CORPUS_DIR=artifacts/medusa-local just medusa file=... contract=...
+# just medusa test/fuzz/invariants/LCC01.sol LCC01 medusa.json -- --test-limit 20000
+# MEDUSA_CORPUS_DIR=artifacts/medusa-local just medusa <file> <contract> medusa.json -- ...
 medusa file contract config="medusa.json" *args:
     FOUNDRY_PROFILE=medusa FOUNDRY_OUT_DIR=out-medusa \
       sh ./scripts/medusa.sh --file {{ file }} --contract {{ contract }} --config {{ config }} {{ args }}

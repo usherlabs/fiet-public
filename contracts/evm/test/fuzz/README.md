@@ -130,7 +130,7 @@ cd contracts/evm
 
 # Persist one harness locally
 MEDUSA_CORPUS_DIR=artifacts/medusa-local \
-  just medusa file=test/fuzz/invariants/LCC01.sol contract=LCC01 -- --test-limit 50 --seq-len 5
+  just medusa test/fuzz/invariants/LCC01.sol LCC01 medusa.json -- --test-limit 50 --seq-len 5
 
 # Persist a short representative smoke bundle
 just medusa-coverage-smoke
