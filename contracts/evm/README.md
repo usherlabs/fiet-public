@@ -256,12 +256,12 @@ forge test -vvv
 
 ### Fuzzing (Medusa)
 
-Medusa is the authoritative property-fuzzing path for `contracts/evm/test/fuzz/`. Canonical invariant harnesses live
-under `test/fuzz/invariants/`, and a small set of legacy-named regression harnesses is retained for historical bug
-surfaces that are now also run by Medusa.
+Medusa is the supported property-fuzzing path for the repo-owned `FuzzEntry` composition root under
+`contracts/evm/test/fuzz/`. Deferred linked-library harnesses remain in the tree as migration backlog only; they are
+not part of the default Medusa workflow.
 
 ```bash
-# Run the full Medusa-backed suite
+# Run the supported Medusa-backed entry contract
 just fuzz
 just fuzz-deep
 just fuzz-invariants
@@ -269,9 +269,8 @@ just fuzz-invariants
 # Run a short artifact-preserving smoke campaign
 just medusa-coverage-smoke
 
-# Run individual harnesses
-just medusa-lcc-backing
-just medusa-commit-01
+# Run the current migrated module directly
+just medusa-mmq-01
 ```
 
 Notes:
@@ -279,10 +278,12 @@ Notes:
 - Install `medusa` plus `crytic-compile`, or bootstrap with `scripts/codex-setup.sh`.
 - The runner is `scripts/medusa.sh`; it uses `[profile.medusa]` in `foundry.toml` and writes build output to
   `out-medusa/`.
+- `medusa.json` targets `test/fuzz/FuzzEntry.sol` directly; the supported path no longer relies on linked-library
+  CREATE2 preparation.
 - Solidity property functions use the `fuzz_*` prefix, and Medusa is the only supported runner for this suite.
 - Set `MEDUSA_CORPUS_DIR=artifacts/medusa-local` to keep per-harness corpus / coverage-guided artifacts in the repo
   workspace.
-- See `test/fuzz/README.md` for the invariant coverage map and `INVARIANTS.md` for canonical invariant IDs.
+- See `test/fuzz/README.md` for the migration checklist and `INVARIANTS.md` for canonical invariant IDs.
 
 ### Mutation Testing (Gambit)
 

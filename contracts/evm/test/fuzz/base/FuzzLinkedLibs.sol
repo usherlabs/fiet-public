@@ -9,10 +9,9 @@ import {VTSPositionLib} from "../../../src/libraries/VTSPositionLib.sol";
 import {VTSLifecycleLinkedLib} from "../../../src/libraries/VTSLifecycleLinkedLib.sol";
 import {VTSPositionMMOpsLib} from "../../../src/libraries/VTSPositionMMOpsLib.sol";
 
-/// @notice Hard-linked library addresses for fuzz harness CREATE2 deploy helpers.
-/// @dev Keep these constants aligned with `[profile.medusa].libraries` in
-///      `foundry.toml` because harness constructors deploy the same libraries
-///      at those deterministic addresses.
+/// @notice Legacy hard-linked library addresses for deferred fuzz harness CREATE2 deploy helpers.
+/// @dev `FuzzEntry` is now the supported Medusa path and does not use this helper.
+///      This file remains only for deferred harnesses that have not yet been migrated away from linked libraries.
 library FuzzLinkedLibs {
     /// @dev Must match the single-target Medusa harness deployment address for
     ///      deployer `0x30000` at nonce `0`.

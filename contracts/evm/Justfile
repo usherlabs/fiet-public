@@ -1,13 +1,13 @@
 ## Fiet Protocol (EVM) - developer commands
 #
-# This Justfile provides stable entrypoints for running the Medusa-backed fuzz
-# harness suite. Solidity property functions use the repo-standard `fuzz_*`
-# prefix and Medusa is the only supported fuzz runner here.
+# This Justfile provides stable entrypoints for the supported Medusa-backed
+# FuzzEntry composition root. Deferred linked-library harnesses are documented
+# in `test/fuzz/README.md` but are not part of the default workflow.
 #
 # Usage:
 #   just --list
 #   just fuzz
-#   just medusa test/fuzz/invariants/LCC01.sol LCC01 medusa.json
+#   just medusa-entry
 #
 
 set export := true
@@ -19,114 +19,44 @@ default:
 # ----------------------------
 # Medusa (fuzzing) helpers
 # ----------------------------
-# Generic Medusa runner wrapper.
+# Config-driven Medusa runner wrapper.
 # Pass through extra args via `--`, e.g.:
 #
-# just medusa test/fuzz/invariants/LCC01.sol LCC01 medusa.json -- --test-limit 20000
-# MEDUSA_CORPUS_DIR=artifacts/medusa-local just medusa <file> <contract> medusa.json -- ...
-medusa file contract config="medusa.json" *args:
+# just medusa-entry -- --test-limit 20000
+# MEDUSA_CORPUS_DIR=artifacts/medusa-local just medusa-entry -- --test-limit 50 --seq-len 5
+medusa config="medusa.json" *args:
     FOUNDRY_PROFILE=medusa FOUNDRY_OUT_DIR=out-medusa \
-      bash ./scripts/medusa.sh --file {{ file }} --contract {{ contract }} --config {{ config }} {{ args }}
+      bash ./scripts/medusa.sh --config {{ config }} {{ args }}
 
-# Run invariant harnesses (default config: `medusa.json`).
+medusa-entry *args:
+    @just medusa medusa.json {{ args }}
+
+medusa-entry-deep *args:
+    @just medusa medusa.deep.json {{ args }}
+
+medusa-mmq-01 *args:
+    @just medusa-entry {{ args }}
+
+# Run the supported Medusa entry contract (default config: `medusa.json`).
 fuzz:
-    @just medusa-lcc-backing
-    @just medusa-lcc-01
-    @just medusa-lcc-02
-    @just medusa-hub-01
-    @just medusa-hub-02
-    @just medusa-hub-03
-    @just medusa-hub-04
-    @just medusa-hub-05
-    @just medusa-hub-06
-    @just medusa-sig-01-02
-    @just medusa-commit-01
-    @just medusa-commit-02
-    @just medusa-commit-03
-    @just medusa-cov-04
-    @just medusa-cov-01
-    @just medusa-cov-02
-    @just medusa-cov-03
-    @just medusa-fee-01
-    @just medusa-fee-02
-    @just medusa-vts-02
-    @just medusa-vts-03
-    @just medusa-delta-01
-    @just medusa-settle-01
-    @just medusa-settle-02
-    @just medusa-lcc-03
-    @just medusa-vts-01
-    @just medusa-seize-01-02
-    @just medusa-seize-03-04
-    @just medusa-pause-01
-    @just medusa-mkt-01-02
-    @just medusa-mkt-03-06
-    @just medusa-mkt-04-04a
-    @just medusa-auth-01-01a-02
-    @just fuzz-regressions
-
-# Targeted regression harnesses that complement canonical `test/fuzz/invariants/*`
-# coverage. These focus on specific behavioural paths and historical bug surfaces.
-fuzz-regressions:
-    @just medusa-wrapwith
-    @just medusa-lcc-queue-netting
-    @just medusa-confirmtake-callback
-    # MKT-05 remains authoritatively gated by `invariant-evidence-foundry`;
-    # this Medusa target is retained as a lightweight regression/drift check.
-    @just medusa-mkt-05
+    @just medusa-entry
 
 # Short Medusa campaign that preserves coverage-guided corpus artifacts in-tree.
-# Uses one canonical invariant, one accounting path, and one targeted
-# regression harness to catch migration drift without running the full suite.
 medusa-coverage-smoke dir="artifacts/medusa-smoke" config="medusa.json":
     test -n "{{ dir }}"
     case "{{ dir }}" in /*) echo "dir must be repo-relative" >&2; exit 1 ;; esac
     rm -rf -- "{{ dir }}"
     mkdir -p -- "{{ dir }}"
-    MEDUSA_CORPUS_DIR="{{ dir }}" just medusa test/fuzz/invariants/LCC01.sol LCC01 {{ config }} -- --test-limit 50 --seq-len 5
-    MEDUSA_CORPUS_DIR="{{ dir }}" just medusa test/fuzz/invariants/COMMIT01.sol COMMIT01 {{ config }} -- --test-limit 50 --seq-len 5
-    MEDUSA_CORPUS_DIR="{{ dir }}" just medusa test/fuzz/LiquidityHubWrapWithQueueFuzzTest.sol LiquidityHubWrapWithQueueFuzzTest {{ config }} -- --test-limit 50 --seq-len 5
+    MEDUSA_CORPUS_DIR="{{ dir }}" just medusa {{ config }} -- --test-limit 50 --seq-len 5
     find "{{ dir }}" -maxdepth 3 -type f | sort
 
-# Longer invariant campaigns (uses `medusa.deep.json`).
+# Longer campaign for the supported entry contract (uses `medusa.deep.json`).
 fuzz-deep:
-    @just medusa-lcc-backing medusa.deep.json
-    @just medusa-lcc-01 medusa.deep.json
-    @just medusa-lcc-02 medusa.deep.json
-    @just medusa-hub-01 medusa.deep.json
-    @just medusa-hub-02 medusa.deep.json
-    @just medusa-hub-03 medusa.deep.json
-    @just medusa-hub-04 medusa.deep.json
-    @just medusa-hub-05 medusa.deep.json
-    @just medusa-hub-06 medusa.deep.json
-    @just medusa-sig-01-02 medusa.deep.json
-    @just medusa-commit-01 medusa.deep.json
-    @just medusa-commit-02 medusa.deep.json
-    @just medusa-commit-03 medusa.deep.json
-    @just medusa-cov-04 medusa.deep.json
-    @just medusa-cov-01 medusa.deep.json
-    @just medusa-cov-02 medusa.deep.json
-    @just medusa-cov-03 medusa.deep.json
-    @just medusa-fee-01 medusa.deep.json
-    @just medusa-fee-02 medusa.deep.json
-    @just medusa-vts-02 medusa.deep.json
-    @just medusa-vts-03 medusa.deep.json
-    @just medusa-delta-01 medusa.deep.json
-    @just medusa-settle-01 medusa.deep.json
-    @just medusa-settle-02 medusa.deep.json
-    @just medusa-lcc-03 medusa.deep.json
-    @just medusa-vts-01 medusa.deep.json
-    @just medusa-seize-01-02 medusa.deep.json
-    @just medusa-seize-03-04 medusa.deep.json
-    @just medusa-pause-01 medusa.deep.json
-    @just medusa-mkt-01-02 medusa.deep.json
-    @just medusa-mkt-03-06 medusa.deep.json
-    @just medusa-mkt-04-04a medusa.deep.json
-    @just medusa-auth-01-01a-02 medusa.deep.json
+    @just medusa-entry-deep
 
-# Full invariant suite entrypoint for CI:
-# - all Medusa property harnesses
-# - Foundry evidence tests referenced in fuzz README
+# Full CI entrypoint:
+# - supported Medusa FuzzEntry path
+# - Foundry evidence tests that remain authoritative for deferred surfaces
 fuzz-invariants:
     @just fuzz
     @just invariant-evidence-foundry
@@ -145,114 +75,3 @@ invariant-evidence-foundry:
     FOUNDRY_PROFILE=debug forge test -vvv --match-path test/ProxyHook.t.sol --match-test test_proxySwap_exactOutput_keepsProxySlot0Unchanged
     FOUNDRY_PROFILE=debug forge test -vvv --match-path test/ProxyHook.t.sol --match-test test_proxySwap_exactInput_oneForZero_keepsProxySlot0Unchanged
     FOUNDRY_PROFILE=debug forge test -vvv --match-path test/ProxyHook.t.sol --match-test test_proxySwap_exactOutput_oneForZero_keepsProxySlot0Unchanged
-
-medusa-lcc-backing config="medusa.json":
-    @just medusa test/fuzz/invariants/LCCBacking01.sol LCCBacking01 {{ config }}
-
-medusa-lcc-queue-netting config="medusa.json":
-    @just medusa test/fuzz/LiquidityHubWrapWithQueueFuzzTest.sol LiquidityHubWrapWithQueueFuzzTest {{ config }}
-
-medusa-lcc-01 config="medusa.json":
-    @just medusa test/fuzz/invariants/LCC01.sol LCC01 {{ config }}
-
-medusa-lcc-02 config="medusa.json":
-    @just medusa test/fuzz/invariants/LCC02.sol LCC02 {{ config }}
-
-medusa-hub-01 config="medusa.json":
-    @just medusa test/fuzz/invariants/HUB01.sol HUB01 {{ config }}
-
-medusa-hub-02 config="medusa.json":
-    @just medusa test/fuzz/invariants/HUB02.sol HUB02 {{ config }}
-
-medusa-hub-03 config="medusa.json":
-    @just medusa test/fuzz/invariants/HUB03.sol HUB03 {{ config }}
-
-medusa-hub-04 config="medusa.json":
-    @just medusa test/fuzz/invariants/HUB04.sol HUB04 {{ config }}
-
-medusa-hub-05 config="medusa.json":
-    @just medusa test/fuzz/invariants/HUB05.sol HUB05 {{ config }}
-
-medusa-hub-06 config="medusa.json":
-    @just medusa test/fuzz/invariants/HUB06.sol HUB06 {{ config }}
-
-medusa-commit-03 config="medusa.json":
-    @just medusa test/fuzz/invariants/COMMIT03.sol COMMIT03 {{ config }}
-
-medusa-sig-01-02 config="medusa.json":
-    @just medusa test/fuzz/invariants/SIG01_02.sol SIG01_02 {{ config }}
-
-medusa-cov-04 config="medusa.json":
-    @just medusa test/fuzz/invariants/COV04.sol COV04 {{ config }}
-
-medusa-commit-01 config="medusa.json":
-    @just medusa test/fuzz/invariants/COMMIT01.sol COMMIT01 {{ config }}
-
-medusa-commit-02 config="medusa.json":
-    @just medusa test/fuzz/invariants/COMMIT02.sol COMMIT02 {{ config }}
-
-medusa-cov-01 config="medusa.json":
-    @just medusa test/fuzz/invariants/COV01.sol COV01 {{ config }}
-
-medusa-cov-02 config="medusa.json":
-    @just medusa test/fuzz/invariants/COV02.sol COV02 {{ config }}
-
-medusa-cov-03 config="medusa.json":
-    @just medusa test/fuzz/invariants/COV03.sol COV03 {{ config }}
-
-medusa-fee-01 config="medusa.json":
-    @just medusa test/fuzz/invariants/FEE01.sol FEE01 {{ config }}
-
-medusa-fee-02 config="medusa.json":
-    @just medusa test/fuzz/invariants/FEE02.sol FEE02 {{ config }}
-
-medusa-vts-02 config="medusa.json":
-    @just medusa test/fuzz/invariants/VTS02.sol VTS02 {{ config }}
-
-medusa-vts-03 config="medusa.json":
-    @just medusa test/fuzz/invariants/VTS03.sol VTS03 {{ config }}
-
-medusa-delta-01 config="medusa.json":
-    @just medusa test/fuzz/invariants/DELTA01.sol DELTA01 {{ config }}
-
-medusa-settle-01 config="medusa.json":
-    @just medusa test/fuzz/invariants/SETTLE01.sol SETTLE01 {{ config }}
-
-medusa-settle-02 config="medusa.json":
-    @just medusa test/fuzz/invariants/SETTLE02.sol SETTLE02 {{ config }}
-
-medusa-lcc-03 config="medusa.json":
-    @just medusa test/fuzz/invariants/LCC03.sol LCC03 {{ config }}
-
-medusa-vts-01 config="medusa.json":
-    @just medusa test/fuzz/invariants/VTS01.sol VTS01 {{ config }}
-
-medusa-seize-01-02 config="medusa.json":
-    @just medusa test/fuzz/invariants/SEIZE01_02.sol SEIZE01_02 {{ config }}
-
-medusa-seize-03-04 config="medusa.json":
-    @just medusa test/fuzz/invariants/SEIZE03_04.sol SEIZE03_04 {{ config }}
-
-medusa-pause-01 config="medusa.json":
-    @just medusa test/fuzz/invariants/PAUSE01.sol PAUSE01 {{ config }}
-
-medusa-mkt-01-02 config="medusa.json":
-    @just medusa test/fuzz/invariants/MKT01_02.sol MKT01_02 {{ config }}
-
-medusa-mkt-03-06 config="medusa.json":
-    @just medusa test/fuzz/invariants/MKT03_06.sol MKT03_06 {{ config }}
-
-medusa-mkt-04-04a config="medusa.json":
-    @just medusa test/fuzz/invariants/MKT04_04A.sol MKT04_04A {{ config }}
-
-medusa-mkt-05 config="medusa.json":
-    @just medusa test/fuzz/invariants/MKT05.sol MKT05 {{ config }}
-
-medusa-auth-01-01a-02 config="medusa.json":
-    @just medusa test/fuzz/invariants/AUTH01_01A_02.sol AUTH01_01A_02 {{ config }}
-
-medusa-wrapwith config="medusa.json":
-    @just medusa test/fuzz/LiquidityHubWrapWithFuzzTest.sol LiquidityHubWrapWithFuzzTest {{ config }}
-
-medusa-confirmtake-callback config="medusa.json":
-    @just medusa test/fuzz/LiquidityHubConfirmTakeCallbackFuzzTest.sol LiquidityHubConfirmTakeCallbackFuzzTest {{ config }}

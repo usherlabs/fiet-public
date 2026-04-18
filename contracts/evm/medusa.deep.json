@@ -10,7 +10,9 @@
     "coverageEnabled": true,
     "coverageFormats": [],
     "revertReporterEnabled": false,
-    "targetContracts": [],
+    "targetContracts": [
+      "FuzzEntry"
+    ],
     "predeployedContracts": {},
     "targetContractsBalances": [],
     "constructorArgs": {},
@@ -79,13 +81,12 @@
   "compilation": {
     "platform": "crytic-compile",
     "platformConfig": {
-      "target": ".",
+      "target": "./test/fuzz/FuzzEntry.sol",
       "solcVersion": "",
       "exportDirectory": "",
       "args": [
         "--compile-force-framework",
         "foundry",
-        "--foundry-compile-all",
         "--foundry-out-directory",
         "out-medusa"
       ]
