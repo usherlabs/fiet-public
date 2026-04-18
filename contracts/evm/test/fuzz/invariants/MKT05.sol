@@ -191,7 +191,9 @@ contract MKT05 is HookMinerBase {
         // This avoids deficit-recipient semantics that this lightweight stub model cannot represent faithfully.
         bytes memory hookData = bytes("");
 
-        try manager.callBeforeSwap(hook, address(unresolvedSender), proxyKey, params, hookData) returns (BeforeSwapDelta delta) {
+        try manager.callBeforeSwap(hook, address(unresolvedSender), proxyKey, params, hookData) returns (
+            BeforeSwapDelta delta
+        ) {
             lastAmountSpecified = params.amountSpecified;
             lastDelta = delta;
             checked = true;
@@ -229,7 +231,9 @@ contract MKT05 is HookMinerBase {
         // This avoids deficit-recipient semantics that this lightweight stub model cannot represent faithfully.
         bytes memory hookData = bytes("");
 
-        try manager.callBeforeSwap(hook, address(unresolvedSender), proxyKey, params, hookData) returns (BeforeSwapDelta delta) {
+        try manager.callBeforeSwap(hook, address(unresolvedSender), proxyKey, params, hookData) returns (
+            BeforeSwapDelta delta
+        ) {
             lastDelta = delta;
         } catch {
             unchecked {
