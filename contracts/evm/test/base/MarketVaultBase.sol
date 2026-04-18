@@ -163,7 +163,10 @@ abstract contract MarketVaultBase is MarketTestBase {
         if (sqrtPriceLimitX96 == minValid) return maxValid;
         if (sqrtPriceLimitX96 == maxValid) return minValid;
 
-        uint256 inverted = (uint256(1) << 192) / uint256(sqrtPriceLimitX96);
+        uint256 q192 = uint256(1) << 192;
+        uint256 inverted = coreZeroForOne
+            ? (q192 + uint256(sqrtPriceLimitX96) - 1) / uint256(sqrtPriceLimitX96)
+            : q192 / uint256(sqrtPriceLimitX96);
         if (inverted < minValid) return minValid;
         if (inverted > maxValid) return maxValid;
         return SafeCastLib.toUint160(inverted);

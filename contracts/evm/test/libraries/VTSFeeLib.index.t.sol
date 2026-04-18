@@ -78,6 +78,125 @@ contract VTSFeeLibIndexTest is VTSOrchestratorFixture {
         (, feesShared1,, factorLast1) = _testableOrchestrator().getPositionCSIAccounting(posId);
     }
 
+    /// @dev Stack helper: assert deficit MM queues extra slash pending on second growth settle after coverage.
+    function _assertMm1PendingIncreasesOnSecondSettleAfterCoverage(PositionId mm1PositionId) internal {
+        (,,, int256 beforeP) = _testableOrchestrator().getPositionFeeAccounting(mm1PositionId);
+        vtsOrchestrator.settlePositionGrowths(mm1PositionId);
+        (,,, int256 afterP) = _testableOrchestrator().getPositionFeeAccounting(mm1PositionId);
+        assertGt(afterP, beforeP, "DICE: Deficit MM should queue additional slash pending from coverage");
+    }
+
+    /// @dev Stack helper for `test_csi_newSharesNotRetroactivelyConsumed`.
+    function _csiNewSharesNotRetroactivelyConsumed_round1(
+        uint256 mmA,
+        PositionId posIdA,
+        uint256 mmB,
+        PositionId posIdB
+    ) internal {
+        _swapCore(false, -int256(15e18));
+        vtsOrchestrator.settlePositionGrowths(posIdA);
+        vm.prank(marketFactory);
+        vtsOrchestrator.incrementCoverage(corePoolKey.toId(), 2e18, 0);
+        vtsOrchestrator.settlePositionGrowths(posIdA);
+
+        (uint256 aFeesShared1First, uint256 factorLast1First) = _csiFeesShared1AndFactorLast1(posIdA);
+        assertGt(aFeesShared1First, 0, "A should have fees shared after first slash");
+        assertEq(
+            factorLast1First,
+            0,
+            "A should still hold the baseline matching-epoch CSI factor before any bonus spend is synced"
+        );
+
+        uint256 lcc1BalanceBefore = _selfLccBalance(lccCurrency1);
+        // Materialise A's queued slash into the pool slashed pot before B can allocate bonuses from it.
+        _pokeMM(mmA, 0);
+        (, uint256 pot1BeforeBonus) = _slashedPot(corePoolKey.toId());
+        assertGt(pot1BeforeBonus, 0, "token1 slashed pot must be funded before beneficiary poke");
+
+        vtsOrchestrator.settlePositionGrowths(posIdB);
+        (uint256 cise0,) = _testableOrchestrator().getPositionBonusWeights(posIdB);
+        assertGt(cise0, 0, "B must realise token0 CISE exposure after settle before poke");
+
+        _pokeMM(mmB, 0);
+        assertGt(_selfLccBalance(lccCurrency1), lcc1BalanceBefore, "LCC balance will be greater after poke B");
+
+        (, uint256 spendIndex1AfterFirstBonus) = _testableOrchestrator().getPoolCSIAccounting(corePoolKey.toId());
+        assertGt(spendIndex1AfterFirstBonus, 0, "CSI: Spend index should advance after bonus allocation");
+
+        (, uint256 pot1AfterBonus) = _slashedPot(corePoolKey.toId());
+        assertLt(pot1AfterBonus, pot1BeforeBonus, "CSI: Bonus should drain materialised slashed pot (token1)");
+
+        (uint256 def0, uint256 def1,,,,) = _testableOrchestrator().getPositionAccounting(posIdA);
+        assertGt(def0, 0, "A should have a cumulative deficit after first slash");
+        assertEq(def1, 0, "A should have no cumulative deficit after first slash");
+    }
+
+    /// @dev Stack helper: first poke round for mixed-pot CSI test.
+    function _csiMixedPot_phase1Pokes(
+        uint256 mmA,
+        PositionId posIdA,
+        uint256 mmB,
+        PositionId posIdB,
+        uint256 mmC,
+        PositionId posIdC
+    ) internal {
+        uint256 aFeesShared1 = _csiFeesShared1(posIdA);
+        uint256 bFeesShared1 = _csiFeesShared1(posIdB);
+        uint256 cFeesShared1 = _csiFeesShared1(posIdC);
+        (,,, int256 pA1) = _testableOrchestrator().getPositionFeeAccounting(posIdA);
+        (,,, int256 pB1) = _testableOrchestrator().getPositionFeeAccounting(posIdB);
+        (,,, int256 pC1) = _testableOrchestrator().getPositionFeeAccounting(posIdC);
+
+        assertGt(aFeesShared1, 0, "CSI: A should have contributed to pot");
+        assertGt(bFeesShared1, 0, "CSI: B should have contributed to pot");
+        assertGt(cFeesShared1, 0, "CSI: C should have contributed to pot");
+
+        assertEq(
+            uint256(pA1) + uint256(pB1) + uint256(pC1),
+            aFeesShared1 + bFeesShared1 + cFeesShared1,
+            "CSI: Queued pending should match sum of contributions before materialisation"
+        );
+
+        assertLt(
+            cFeesShared1,
+            aFeesShared1,
+            "CSI: Settled amounts differ, therefore C fees shared should be less than A fees shared"
+        );
+
+        (,,, int256 cPendingBefore) = _testableOrchestrator().getPositionFeeAccounting(posIdC);
+
+        _pokeMM(mmC, 0);
+
+        (,,, int256 cPendingAfterPoke) = _testableOrchestrator().getPositionFeeAccounting(posIdC);
+
+        assertLt(cPendingAfterPoke, cPendingBefore, "CSI: C should have materialised fee share ONLY.");
+
+        console.log("-------------------------------- Poke A");
+        _pokeMM(mmA, 0);
+        console.log("-------------------------------- END Poke A");
+
+        uint256 aRemaining1After = _csiRemainingShares1(posIdA);
+        assertGt(
+            aRemaining1After,
+            0,
+            "CSI: contributor A should remain self-excluded after unseen partial spend until full exhaustion"
+        );
+
+        console.log("-------------------------------- Poke B");
+        _pokeMM(mmB, 0);
+        console.log("-------------------------------- END Poke B");
+
+        uint256 bRemaining1After = _csiRemainingShares1(posIdB);
+        assertGt(
+            bRemaining1After,
+            0,
+            "CSI: contributor B should remain self-excluded after unseen partial spend until full exhaustion"
+        );
+
+        aRemaining1After;
+        bRemaining1After;
+    }
+
     /// @notice Creates a new MM commit with a unique signal (supports multiple independent commits)
     /// @dev Uses default range (-60, 60) and default liquidity (1e10)
     /// @return tokenId The commitment NFT token ID
@@ -110,11 +229,11 @@ contract VTSFeeLibIndexTest is VTSOrchestratorFixture {
         // Record initial state
         // Note: For a "one for zero" swap (token1 -> token0), fees accrue on token1 (input token)
         // So we check token1 fees, not token0
-        (, uint256 feeAccruedBefore1) = _protocolFeeAccrued(corePoolKey.toId());
+        (,,, int256 mmPending1Before) = _testableOrchestrator().getPositionFeeAccounting(mmPositionId);
         (, int24 tickInitial,,) = StateLibrary.getSlot0(manager, corePoolKey.toId());
 
         console.log("====== INITIAL STATE ======");
-        console.log("feeAccruedBefore1:", feeAccruedBefore1);
+        console.log("mmPending1Before:", mmPending1Before);
         console.log("tickInitial:", tickInitial);
 
         // Swap to create deficit - this also moves the tick
@@ -233,16 +352,16 @@ contract VTSFeeLibIndexTest is VTSOrchestratorFixture {
         // DICE: MM should be slashed because it has deficit principal,
         // regardless of whether it's currently in-range
         // For token0 deficit (from token1->token0 swap), fees accrue on token1
-        (, uint256 feeAccruedAfter1) = _protocolFeeAccrued(corePoolKey.toId());
+        (,,, int256 mmPending1After) = _testableOrchestrator().getPositionFeeAccounting(mmPositionId);
 
         console.log("====== FINAL STATE ======");
-        console.log("feeAccruedBefore1:", feeAccruedBefore1);
-        console.log("feeAccruedAfter1:", feeAccruedAfter1);
-        console.log("delta:", feeAccruedAfter1 - feeAccruedBefore1);
+        console.log("mmPending1Before:", mmPending1Before);
+        console.log("mmPending1After:", mmPending1After);
+        console.log("delta:", mmPending1After - mmPending1Before);
 
         assertGt(
-            feeAccruedAfter1,
-            feeAccruedBefore1,
+            mmPending1After,
+            mmPending1Before,
             "DICE: Position with deficit should be slashed regardless of current tick"
         );
 
@@ -269,7 +388,7 @@ contract VTSFeeLibIndexTest is VTSOrchestratorFixture {
         vtsOrchestrator.settlePositionGrowths(mm1PositionId);
 
         // Record pool + MM2 fee accounting baseline (should not move when settling a solvent MM after coverage).
-        (, uint256 feeAccruedBefore1) = _protocolFeeAccrued(corePoolKey.toId());
+        (, uint256 poolPot1Before) = _testableOrchestrator().getSlashedPot(corePoolKey.toId());
         (
             uint256 mm2FeesShared0Before,
             uint256 mm2FeesShared1Before,
@@ -284,13 +403,13 @@ contract VTSFeeLibIndexTest is VTSOrchestratorFixture {
         // Settle MM2 after coverage: MM2 has no deficit principal, so it must NOT be slashed.
         vtsOrchestrator.settlePositionGrowths(mm2PositionId);
 
-        (, uint256 feeAccruedAfter1) = _protocolFeeAccrued(corePoolKey.toId());
+        (, uint256 poolPot1AfterMm2Settle) = _testableOrchestrator().getSlashedPot(corePoolKey.toId());
 
-        // DICE: No pool protocolFeeAccrued increase should occur from settling a solvent position.
+        // DICE: No materialised pool pot increase from settling a solvent position (slashes stay queued per-position).
         assertEq(
-            feeAccruedAfter1,
-            feeAccruedBefore1,
-            "DICE: Settling a solvent position must not increase protocolFeeAccrued"
+            poolPot1AfterMm2Settle,
+            poolPot1Before,
+            "DICE: Settling a solvent position must not increase materialised slashedPot"
         );
 
         // And MM2 should not have been attributed any slashed fees or pending adjustments.
@@ -301,12 +420,8 @@ contract VTSFeeLibIndexTest is VTSOrchestratorFixture {
         assertEq(mm2Pending0After, mm2Pending0Before, "DICE: Solvent MM2 must not be slashed (pendingFeeAdj0)");
         assertEq(mm2Pending1After, mm2Pending1Before, "DICE: Solvent MM2 must not be slashed (pendingFeeAdj1)");
 
-        // Settling MM1 again should now apply DICE coverage burn and increase protocolFeeAccrued (fee token = token1).
-        vtsOrchestrator.settlePositionGrowths(mm1PositionId);
-        (, uint256 feeAccruedAfter2) = _protocolFeeAccrued(corePoolKey.toId());
-        assertGt(
-            feeAccruedAfter2, feeAccruedAfter1, "DICE: Protocol fee should reflect coverage from deficit positions"
-        );
+        // Settling MM1 again should now apply DICE coverage burn and queue further slash on MM1 (fee token = token1).
+        _assertMm1PendingIncreasesOnSecondSettleAfterCoverage(mm1PositionId);
 
         // Suppress unused variable warning
         mm1;
@@ -324,13 +439,13 @@ contract VTSFeeLibIndexTest is VTSOrchestratorFixture {
         // Settle to ensure no deficit exists yet
         vtsOrchestrator.settlePositionGrowths(positionId);
 
-        (, uint256 feeAccruedBeforeCoverage) = _protocolFeeAccrued(corePoolKey.toId());
+        (, uint256 feeAccruedBeforeCoverage) = _slashedPot(corePoolKey.toId());
 
         // Coverage event with no deficit in pool (should go to DICE residual)
         vm.prank(marketFactory);
         vtsOrchestrator.incrementCoverage(corePoolKey.toId(), 5e18, 0);
 
-        (, uint256 feeAccruedAfterFirstCoverage) = _protocolFeeAccrued(corePoolKey.toId());
+        (, uint256 feeAccruedAfterFirstCoverage) = _slashedPot(corePoolKey.toId());
 
         assertEq(
             feeAccruedAfterFirstCoverage,
@@ -388,7 +503,7 @@ contract VTSFeeLibIndexTest is VTSOrchestratorFixture {
             coverageResidual1;
         }
 
-        (, uint256 feeAccruedAfterSettle) = _protocolFeeAccrued(corePoolKey.toId());
+        (, uint256 feeAccruedAfterSettle) = _slashedPot(corePoolKey.toId());
         assertEq(
             feeAccruedAfterSettle,
             feeAccruedAfterFirstCoverage,
@@ -481,7 +596,7 @@ contract VTSFeeLibIndexTest is VTSOrchestratorFixture {
         );
 
         // Record pot and CSI state
-        (, uint256 potBefore) = _protocolFeeAccrued(corePoolKey.toId());
+        (, uint256 potBefore) = _slashedPot(corePoolKey.toId());
         // Fee token for one-for-zero swaps is token1, so we track token1's remaining factor.
         (, uint256 poolRemainingFactor1Before) = _testableOrchestrator().getPoolCSIAccounting(corePoolKey.toId());
 
@@ -574,75 +689,7 @@ contract VTSFeeLibIndexTest is VTSOrchestratorFixture {
         // ? At this stage:
         // mmA, mmB, mmC are all in a deficit. Fees are slashed. But mmC earns a bonus relative to their settled. Pots not allocated.
 
-        // Keep the first phase in a scoped block to reduce stack pressure under coverage (viaIR disabled).
-        uint256 potAfterSlashes;
-        int256 cPendingAfter;
-        {
-            // Record contributions
-            // Fee token for one-for-zero swaps is token1.
-            uint256 aFeesShared1 = _csiFeesShared1(posIdA);
-            uint256 bFeesShared1 = _csiFeesShared1(posIdB);
-            uint256 cFeesShared1 = _csiFeesShared1(posIdC);
-            (, potAfterSlashes) = _protocolFeeAccrued(corePoolKey.toId());
-
-            // Both A and B contributed to the pot
-            assertGt(aFeesShared1, 0, "CSI: A should have contributed to pot");
-            assertGt(bFeesShared1, 0, "CSI: B should have contributed to pot");
-            assertGt(cFeesShared1, 0, "CSI: C should have contributed to pot");
-
-            // Total pot should be sum of contributions (before any bonuses)
-            assertEq(
-                potAfterSlashes, aFeesShared1 + bFeesShared1 + cFeesShared1, "CSI: Pot should be sum of contributions"
-            );
-
-            assertLt(
-                cFeesShared1,
-                aFeesShared1,
-                "CSI: Settled amounts differ, therefore C fees shared should be less than A fees shared"
-            );
-
-            // C pokes and receives a bonus
-            (,,, int256 cPendingBefore) = _testableOrchestrator().getPositionFeeAccounting(posIdC);
-
-            _pokeMM(mmC, 0);
-
-            (,,, cPendingAfter) = _testableOrchestrator().getPositionFeeAccounting(posIdC);
-
-            assertLt(cPendingAfter, cPendingBefore, "CSI: C should have materialised fee share ONLY.");
-            // ? Bonus cannot be queued to MM3 at this stage, as the potAvail == 0.
-
-            // Now A pokes - A can receive bonus from B's contribution, but not its own
-            console.log("-------------------------------- Poke A");
-            _pokeMM(mmA, 0);
-            console.log("-------------------------------- END Poke A");
-
-            // With remaining-shares CSI, A's remaining shares should decrease after C consumes from the pot.
-            uint256 aRemaining1After = _csiRemainingShares1(posIdA);
-            assertGt(
-                aRemaining1After,
-                0,
-                "CSI: contributor A should remain self-excluded after unseen partial spend until full exhaustion"
-            );
-
-            // Similarly B pokes
-            console.log("-------------------------------- Poke B");
-            _pokeMM(mmB, 0);
-            console.log("-------------------------------- END Poke B");
-
-            uint256 bRemaining1After = _csiRemainingShares1(posIdB);
-            assertGt(
-                bRemaining1After,
-                0,
-                "CSI: contributor B should remain self-excluded after unseen partial spend until full exhaustion"
-            );
-
-            (, uint256 pot1) = _testableOrchestrator().getSlashedPot(corePoolKey.toId());
-            assertEq(pot1, potAfterSlashes, "CSI: Slashed pot should increase after poke");
-
-            // Silence warnings in a way that keeps variables block-scoped.
-            aRemaining1After;
-            bRemaining1After;
-        }
+        _csiMixedPot_phase1Pokes(mmA, posIdA, mmB, posIdB, mmC, posIdC);
 
         // ? At this stage, C has feesShared > 0.
         // ? Given how deficits are settled, if a position actually has deficit principal for (say) token0,
@@ -667,7 +714,7 @@ contract VTSFeeLibIndexTest is VTSOrchestratorFixture {
         _pokeMM(mmC, 0);
         console.log("-------------------------------- END Poke C");
 
-        (,,, cPendingAfter) = _testableOrchestrator().getPositionFeeAccounting(posIdC);
+        (,,, int256 cPendingAfter) = _testableOrchestrator().getPositionFeeAccounting(posIdC);
         assertEq(cPendingAfter, 0, "CSI: C should have materialised and cleared its bonus.");
 
         uint256 lcc1BalanceAfter = _selfLccBalance(lccCurrency1);
@@ -678,7 +725,6 @@ contract VTSFeeLibIndexTest is VTSOrchestratorFixture {
         mmA;
         mmB;
         mmC;
-        potAfterSlashes;
     }
 
     /// @notice CSI Test 3: Bonus allocation advances the pool remaining factor (integration)
@@ -693,42 +739,7 @@ contract VTSFeeLibIndexTest is VTSOrchestratorFixture {
 
         _mmSettle(mmB, 0, _negInt128Capped(30e18), _negInt128Capped(30e18));
 
-        {
-            _swapCore(false, -int256(15e18));
-            vtsOrchestrator.settlePositionGrowths(posIdA);
-            vm.prank(marketFactory);
-            vtsOrchestrator.incrementCoverage(corePoolKey.toId(), 2e18, 0);
-            vtsOrchestrator.settlePositionGrowths(posIdA);
-
-            (uint256 aFeesShared1First, uint256 factorLast1First) = _csiFeesShared1AndFactorLast1(posIdA);
-            assertGt(aFeesShared1First, 0, "A should have fees shared after first slash");
-            assertEq(
-                factorLast1First,
-                0,
-                "A should still hold the baseline matching-epoch CSI factor before any bonus spend is synced"
-            );
-
-            uint256 lcc1BalanceBefore = _selfLccBalance(lccCurrency1);
-            (, uint256 pot1BeforeBonus) = _protocolFeeAccrued(corePoolKey.toId());
-            assertGt(pot1BeforeBonus, 0, "token1 protocol fee pot must be non-zero before beneficiary poke");
-
-            vtsOrchestrator.settlePositionGrowths(posIdB);
-            (uint256 cise0,) = _testableOrchestrator().getPositionBonusWeights(posIdB);
-            assertGt(cise0, 0, "B must realise token0 CISE exposure after settle before poke");
-
-            _pokeMM(mmB, 0);
-            assertGt(_selfLccBalance(lccCurrency1), lcc1BalanceBefore, "LCC balance will be greater after poke B");
-
-            (, uint256 spendIndex1AfterFirstBonus) = _testableOrchestrator().getPoolCSIAccounting(corePoolKey.toId());
-            assertGt(spendIndex1AfterFirstBonus, 0, "CSI: Spend index should advance after bonus allocation");
-
-            (, uint256 pot1AfterBonus) = _protocolFeeAccrued(corePoolKey.toId());
-            assertLt(pot1AfterBonus, pot1BeforeBonus, "CSI: Bonus should drain protocol fee pot (token1)");
-
-            (uint256 def0, uint256 def1,,,,) = _testableOrchestrator().getPositionAccounting(posIdA);
-            assertGt(def0, 0, "A should have a cumulative deficit after first slash");
-            assertEq(def1, 0, "A should have no cumulative deficit after first slash");
-        }
+        _csiNewSharesNotRetroactivelyConsumed_round1(mmA, posIdA, mmB, posIdB);
 
         mmA;
         mmB;

@@ -448,10 +448,9 @@ contract LiquidityHubWrapTest is LiquidityHubTestBase {
         // Create mixed balance: first wrapped (direct)
         _wrapDirectLCC(user1, lccToken1, directAmount);
 
-        // Then add market-derived balance manually (don't use helper as it has assertions that conflict)
-        _wrapDirectLCC(proxyHook, lccToken1, marketAmount);
+        // Then add market-derived balance via issuer mint
         vm.prank(proxyHook);
-        ILCC(lccToken1).transfer(user1, marketAmount);
+        liquidityHub.issue(lccToken1, user1, marketAmount);
 
         // Verify user has both balances
         (uint256 userWrapped, uint256 userMarket) = ILCC(lccToken1).balancesOf(user1);
@@ -517,10 +516,9 @@ contract LiquidityHubWrapTest is LiquidityHubTestBase {
         // Create mixed balance: first wrapped (direct)
         _wrapDirectLCC(user1, lccToken1, directAmount);
 
-        // Then add market-derived balance manually (don't use helper as it has assertions that conflict)
-        _wrapDirectLCC(proxyHook, lccToken1, marketAmount);
+        // Then add market-derived balance via issuer mint
         vm.prank(proxyHook);
-        ILCC(lccToken1).transfer(user1, marketAmount);
+        liquidityHub.issue(lccToken1, user1, marketAmount);
 
         // Verify user has both balances
         (uint256 userWrappedBefore, uint256 userMarketBefore) = ILCC(lccToken1).balancesOf(user1);
@@ -653,5 +651,26 @@ contract LiquidityHubWrapTest is LiquidityHubTestBase {
         // user2 should have the LCC, not user1
         assertEq(ILCC(lccToken1).balanceOf(user2), wrapAmount, "user2 should receive LCC");
         assertEq(ILCC(lccToken1).balanceOf(user1), 0, "user1 should not have LCC");
+    }
+
+    /// @dev Regression: direct-backed wrap must not target bucket-exempt endpoints (no per-holder buckets; see INVARIANTS LCC-BACKING-01).
+    function test_wrapTo_revertsWhenRecipientIsBucketExempt_hub() public {
+        uint256 amount = 100;
+        underlyingAsset1.mint(user1, amount);
+        vm.startPrank(user1);
+        underlyingAsset1.approve(address(liquidityHub), amount);
+        vm.expectRevert(abi.encodeWithSelector(Errors.DirectMintToExemptNotAllowed.selector, address(liquidityHub)));
+        liquidityHub.wrapTo(lccToken1, address(liquidityHub), amount);
+        vm.stopPrank();
+    }
+
+    function test_wrapTo_revertsWhenRecipientIsBucketExempt_proxyHook() public {
+        uint256 amount = 100;
+        underlyingAsset1.mint(user1, amount);
+        vm.startPrank(user1);
+        underlyingAsset1.approve(address(liquidityHub), amount);
+        vm.expectRevert(abi.encodeWithSelector(Errors.DirectMintToExemptNotAllowed.selector, proxyHook));
+        liquidityHub.wrapTo(lccToken1, proxyHook, amount);
+        vm.stopPrank();
     }
 }

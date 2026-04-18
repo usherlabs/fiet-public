@@ -90,7 +90,6 @@ contract DeltaDesignStatementsTest is MarketTestBase, MarketMakerTestBase {
             address(lcc1)
         );
 
-        positionManager.approve(recipient, tokenId);
         vm.mockCall(
             address(mv),
             abi.encodeWithSelector(IMarketVaultDryBalanceDelta.dryModifyLiquidities.selector),
@@ -103,8 +102,10 @@ contract DeltaDesignStatementsTest is MarketTestBase, MarketMakerTestBase {
         MMA.PreparedAction[] memory actions = new MMA.PreparedAction[](2);
         actions[0] = MMA.prepareDecrease(corePoolKey, tokenId, 0, uint256(liquidityParams.liquidityDelta));
         actions[1] = MMA.prepareSettle(corePoolKey, tokenId, 0, int128(uint128(req0)), int128(uint128(req1)), false);
-        vm.prank(recipient);
+        // Batch must execute as the MM locker (`advancer`); NFT is minted to that EOA by `_setupCommittedPosition`.
+        vm.startPrank(recipient);
         MMA.executeWithUnlock(positionManager, actions, block.timestamp + 3600);
+        vm.stopPrank();
 
         uint256 queued0 = ILiquidityHub(liquidityHub).settleQueue(address(lcc0), recipient);
         uint256 queued1 = ILiquidityHub(liquidityHub).settleQueue(address(lcc1), recipient);

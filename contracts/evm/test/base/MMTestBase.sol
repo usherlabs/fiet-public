@@ -130,11 +130,47 @@ abstract contract MarketMakerTestBase is Test {
     }
 
     /**
+     * @dev Single-MM liquidity signal with an explicit `advancer` (must satisfy `VRLSignalManager` advancer policy).
+     *      Sets `mmState.owner == advancer` so direct fresh commit from `MMPositionManager` passes owner authentication
+     *      while the batch locker (`msgSender`) remains the advancer.
+     */
+    function generateLiquiditySignalWithAdvancer(address advancer) internal returns (LiquiditySignal memory) {
+        uint256 proofDeadline = block.timestamp + 180 days;
+        uint256 uniquePrivateKey = uint256(keccak256(abi.encodePacked("advancerOverride", advancer)));
+        MarketMaker.State memory state = _createMarketMakerState(uniquePrivateKey).state;
+        state.owner = advancer;
+        state.advancer = advancer;
+        state.expiryAt = proofDeadline;
+
+        bytes32[] memory merkleLeaves = new bytes32[](1);
+        merkleLeaves[0] = state.toLeafHash();
+        bytes32 merkleRootHash = merkleLeaves.generateMerkleRoot();
+
+        bytes memory liquidityPayloadSignature = _signEthMessage(uniquePrivateKey, state.toLeafHash());
+
+        uint256 signalNonce = nonce;
+        bytes32 tssMessageHash = EfficientHashLib.hash(abi.encodePacked(signalNonce, merkleRootHash));
+        bytes memory signatureVerifierMerkleRootHashSignature =
+            _signEthMessage(signatureVerifierPrivateKey, tssMessageHash);
+
+        LiquiditySignal memory out = LiquiditySignal({
+            rootHash: merkleRootHash,
+            rootHashSignature: signatureVerifierMerkleRootHashSignature,
+            merkleProof: merkleLeaves.generateProof(0),
+            mmState: state,
+            mmSignature: liquidityPayloadSignature,
+            nonce: signalNonce
+        });
+        nonce = signalNonce + 1;
+        return out;
+    }
+
+    /**
      * @dev given a private key, generate a state for this market maker
      * @param privateKey The private key to generate the state for
      * @return The state payload
      */
-    function _createMarketMakerState(uint256 privateKey) internal returns (StatePayload memory) {
+    function _createMarketMakerState(uint256 privateKey) internal view returns (StatePayload memory) {
         // use private key to get the address of the owner
         address owner = vm.addr(privateKey);
         // create a state for the owner
@@ -143,9 +179,9 @@ abstract contract MarketMakerTestBase is Test {
         state.sourceState = "0xstate.sourceState";
         state.prover = "state.prover";
         state.nonce = "nonce123";
-        // Default advancer to the calling test contract to model the common
-        // "router forwards on behalf of locker" path used in protocol tests.
-        state.advancer = address(this);
+        // Advancer must be a plain EOA or canonical EIP-7702 delegated account (see `VRLSignalManager`).
+        // Align advancer with owner so `msgSender()` (MM locker) can match via `vm.startPrank(owner)` in tests.
+        state.advancer = owner;
 
         // Add reserves
         state.reserves = new MarketMaker.Reserve[](2);
@@ -169,6 +205,13 @@ abstract contract MarketMakerTestBase is Test {
     }
 
     // ============ COMMITMENT SETUP HELPERS ============
+
+    /// @dev Effective MMPM batch locker for MM liquidity ops: hook `locker` must match `mmState.advancer`
+    ///      (`VTSLifecycleLinkedLib.validateMMOperation`). Fresh direct commit mints the commitment NFT to `mmState.owner`.
+    ///      Default signals set `owner == advancer` so the same address is batch locker and NFT holder.
+    function _mmBatchLockerFromSignal(bytes memory signalBytes) internal pure returns (address) {
+        return abi.decode(signalBytes, (LiquiditySignal)).mmState.advancer;
+    }
 
     /**
      * @notice Calculates the base settlement amounts required for a given liquidity position
@@ -203,8 +246,19 @@ abstract contract MarketMakerTestBase is Test {
         uint256 amount0,
         uint256 amount1
     ) internal {
-        IERC20(token0).approve(positionManager, amount0);
-        IERC20(token1).approve(positionManager, amount1);
+        if (token0 != address(0)) IERC20(token0).approve(positionManager, amount0);
+        if (token1 != address(0)) IERC20(token1).approve(positionManager, amount1);
+    }
+
+    /// @dev Funds `locker` with settlement underlyings; native underlyings use `vm.deal`.
+    function _fundLockerForSettlement(address locker, address token0, address token1, uint256 amount0, uint256 amount1)
+        internal
+    {
+        if (token0 != address(0) && amount0 > 0) deal(token0, locker, amount0);
+        if (token1 != address(0) && amount1 > 0) deal(token1, locker, amount1);
+        // If either side is native ETH backing, ensure the locker can pay value the PM may pull.
+        if (token0 == address(0) && amount0 > 0) vm.deal(locker, locker.balance + amount0);
+        if (token1 == address(0) && amount1 > 0) vm.deal(locker, locker.balance + amount1);
     }
 
     /**
@@ -242,20 +296,46 @@ abstract contract MarketMakerTestBase is Test {
         (requiredSettlementAmount0, requiredSettlementAmount1) =
             _calculateSettlementAmounts(liquidityParams, marketVTSConfiguration);
 
-        // Approve tokens
-        _approveTokenForPositionManager(
-            ILCC(lcc0).underlying(),
-            ILCC(lcc1).underlying(),
-            address(positionManager),
+        address locker = _mmBatchLockerFromSignal(signalBytes);
+
+        tokenId = _setupCommittedPositionAsLocker(
+            positionManager,
+            corePoolKey,
+            signalBytes,
+            liquidityParams,
+            lcc0,
+            lcc1,
+            locker,
             requiredSettlementAmount0,
             requiredSettlementAmount1
         );
 
-        // Get the next commit ID before committing (so we can reference it in prepareMint)
+        positionId = positionManager.getPositionId(tokenId, 0);
+    }
+
+    /// @dev Funds the MM locker EOA, pranks it, and runs commit+mint+settle (see `VRLSignalManager` advancer policy).
+    function _setupCommittedPositionAsLocker(
+        MMPositionManager positionManager,
+        PoolKey memory corePoolKey,
+        bytes memory signalBytes,
+        ModifyLiquidityParams memory liquidityParams,
+        address lcc0,
+        address lcc1,
+        address locker,
+        uint256 requiredSettlementAmount0,
+        uint256 requiredSettlementAmount1
+    ) private returns (uint256 tokenId) {
+        address u0 = ILCC(lcc0).underlying();
+        address u1 = ILCC(lcc1).underlying();
+        _fundLockerForSettlement(locker, u0, u1, requiredSettlementAmount0, requiredSettlementAmount1);
+
+        vm.startPrank(locker);
+        _approveTokenForPositionManager(
+            u0, u1, address(positionManager), requiredSettlementAmount0, requiredSettlementAmount1
+        );
+
         tokenId = positionManager.nextTokenId();
 
-        // Commit and mint
-        // Batch commit and mint
         MMA.PreparedAction[] memory actions = new MMA.PreparedAction[](3);
         actions[0] = MMA.prepareCommit(signalBytes);
         actions[1] = MMA.prepareMint(
@@ -274,11 +354,8 @@ abstract contract MarketMakerTestBase is Test {
             false
         );
 
-        // Use modifyLiquidities which handles unlocking automatically
         (bytes memory actionsBytes, bytes[] memory params) = MMA.concatPrepared(actions);
-        bytes memory unlockData = abi.encode(actionsBytes, params);
-        positionManager.modifyLiquidities(unlockData, block.timestamp + 3600);
-
-        positionId = positionManager.getPositionId(tokenId, 0);
+        positionManager.modifyLiquidities(abi.encode(actionsBytes, params), block.timestamp + 3600);
+        vm.stopPrank();
     }
 }

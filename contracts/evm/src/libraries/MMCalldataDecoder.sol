@@ -112,21 +112,30 @@ library MMCalldataDecoder {
         }
     }
 
-    /// @dev DECREASE_LIQUIDITY: (PoolKey, uint256, uint256, uint256)
+    /// @dev DECREASE_LIQUIDITY: (PoolKey, uint256, uint256, uint256, uint128, uint128)
     /// @param params The calldata bytes to decode
     /// @return poolKey The pool key (calldata pointer)
     /// @return tokenId The commitment NFT token ID
     /// @return positionIndex The position index within the commitment
     /// @return amountToDecrease The amount of liquidity to remove
+    /// @return amount0Min Minimum per-leg immediate post-`feeAdj` non-fee LCC token0 out (see `LiquidityUtils.forwardedNonFeeLccAmount`; commit surplus is locker credit)
+    /// @return amount1Min Minimum immediate non-fee LCC token1 out
     function decodeDecreaseLiquidityParams(bytes calldata params)
         internal
         pure
-        returns (PoolKey calldata poolKey, uint256 tokenId, uint256 positionIndex, uint256 amountToDecrease)
+        returns (
+            PoolKey calldata poolKey,
+            uint256 tokenId,
+            uint256 positionIndex,
+            uint256 amountToDecrease,
+            uint128 amount0Min,
+            uint128 amount1Min
+        )
     {
         assembly ("memory-safe") {
-            // PoolKey: 5 slots (0xa0), then tokenId, positionIndex, amountToDecrease
-            // Minimum length: 0xa0 + 0x20*3 = 0x100
-            if lt(params.length, 0x100) {
+            // PoolKey: 5 slots (0xa0), then tokenId, positionIndex, amountToDecrease, amount0Min, amount1Min
+            // Minimum length: 0xa0 + 0x20*5 = 0x140
+            if lt(params.length, 0x140) {
                 mstore(0, SLICE_ERROR_SELECTOR)
                 revert(0x1c, 4)
             }
@@ -134,29 +143,41 @@ library MMCalldataDecoder {
             tokenId := calldataload(add(params.offset, 0xa0))
             positionIndex := calldataload(add(params.offset, 0xc0))
             amountToDecrease := calldataload(add(params.offset, 0xe0))
+            amount0Min := calldataload(add(params.offset, 0x100))
+            amount1Min := calldataload(add(params.offset, 0x120))
         }
     }
 
-    /// @dev BURN_POSITION: (PoolKey, uint256, uint256)
+    /// @dev BURN_POSITION: (PoolKey, uint256, uint256, uint128, uint128)
     /// @param params The calldata bytes to decode
     /// @return poolKey The pool key (calldata pointer)
     /// @return tokenId The commitment NFT token ID
     /// @return positionIndex The position index within the commitment
+    /// @return amount0Min Minimum per-leg immediate post-`feeAdj` non-fee LCC token0 when burning (same semantics as decrease min-out)
+    /// @return amount1Min Minimum immediate non-fee LCC token1 out
     function decodeBurnPositionParams(bytes calldata params)
         internal
         pure
-        returns (PoolKey calldata poolKey, uint256 tokenId, uint256 positionIndex)
+        returns (
+            PoolKey calldata poolKey,
+            uint256 tokenId,
+            uint256 positionIndex,
+            uint128 amount0Min,
+            uint128 amount1Min
+        )
     {
         assembly ("memory-safe") {
-            // PoolKey: 5 slots (0xa0), then tokenId, positionIndex
-            // Minimum length: 0xa0 + 0x20*2 = 0xe0
-            if lt(params.length, 0xe0) {
+            // PoolKey: 5 slots (0xa0), then tokenId, positionIndex, amount0Min, amount1Min
+            // Minimum length: 0xa0 + 0x20*4 = 0x120
+            if lt(params.length, 0x120) {
                 mstore(0, SLICE_ERROR_SELECTOR)
                 revert(0x1c, 4)
             }
             poolKey := params.offset
             tokenId := calldataload(add(params.offset, 0xa0))
             positionIndex := calldataload(add(params.offset, 0xc0))
+            amount0Min := calldataload(add(params.offset, 0xe0))
+            amount1Min := calldataload(add(params.offset, 0x100))
         }
     }
 
@@ -376,7 +397,11 @@ library MMCalldataDecoder {
     /// @dev COMMIT_SIGNAL: (bytes liquiditySignal, bytes relayParams)
     /// @param params The calldata bytes to decode
     /// @return liquiditySignal The liquidity signal bytes
-    /// @return relayParams Optional relayer auth params encoded as (uint256 deadline, uint256 authNonce, bytes authSig)
+    /// @return relayParams Optional relayer auth params encoded as
+    ///         `(uint256 deadline, uint256 authNonce, bytes authSig, address sender)`.
+    ///         When non-empty, EIP-712 `RelayAuth.sender` is supplied as `sender` (`address(0)` means mint to
+    ///         `mmState.owner`; otherwise must equal the batch locker / NFT recipient) while VRL `signer` remains
+    ///         `mmState.owner`.
     function decodeCommitSignalParams(bytes calldata params)
         internal
         pure
@@ -402,7 +427,9 @@ library MMCalldataDecoder {
     /// @param params The calldata bytes to decode
     /// @return tokenId The commitment NFT token ID
     /// @return data The liquidity signal bytes
-    /// @return relayParams Optional relayer auth params encoded as (uint256 deadline, uint256 authNonce, bytes authSig)
+    /// @return relayParams Optional relayer auth params encoded as
+    ///         `(uint256 deadline, uint256 authNonce, bytes authSig, address sender)` (renew: typed-data
+    ///         `RelayAuth.sender` must be `address(0)`).
     function decodeTokenIdAndBytes(bytes calldata params)
         internal
         pure

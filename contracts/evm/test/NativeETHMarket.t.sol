@@ -135,6 +135,22 @@ contract NativeETHMarket is MarketTestBase, MarketMakerTestBase {
             abi.encodeWithSelector(IOracleHelper.getTotalValue.selector),
             abi.encode(ETH_PRICE_USD)
         );
+        {
+            string[] memory tickers = new string[](2);
+            tickers[0] = "BTC";
+            tickers[1] = "USDT";
+            uint256[] memory amounts = new uint256[](2);
+            amounts[0] = 1e20;
+            amounts[1] = 5e18;
+            vm.mockCall(
+                address(oracleHelper),
+                abi.encodeWithSelector(IOracleHelper.getTotalValue.selector, tickers, amounts),
+                abi.encode(ETH_PRICE_USD)
+            );
+        }
+        address mmLocker = liquiditySignal.mmState.advancer;
+        vm.mockCall(marketFactory, abi.encodeWithSelector(IMarketFactory.bounds.selector, mmLocker), abi.encode(true));
+        vm.deal(mmLocker, 100_000 ether);
 
         console.log("=== Native ETH Market Setup ===");
         console.log("lcc0 (native ETH underlying)", address(lcc0));
@@ -445,12 +461,47 @@ contract NativeETHMarket is MarketTestBase, MarketMakerTestBase {
 
     /// @dev Balance snapshot struct to reduce stack depth
     struct BalanceSnapshot {
-        uint256 selfEth;
+        uint256 lockerEth;
         uint256 pmLcc0;
         uint256 pmLcc1;
         uint256 canonicalCurrency0;
         uint256 canonicalCurrency1;
-        uint256 lcc1UnderlyingAsset;
+        uint256 lcc1UnderlyingLocker;
+    }
+
+    function _assertPmAndCanonicalAfterNativeCommit(
+        int24 tickLower,
+        int24 tickUpper,
+        uint256 liqDeltaU,
+        BalanceSnapshot memory balancesBefore,
+        BalanceSnapshot memory balancesAfter,
+        uint256 requiredSettlementAmount0,
+        uint256 requiredSettlementAmount1
+    ) internal view {
+        (uint160 sqrtPriceX96, int24 currentTick,,) = manager.getSlot0(corePoolKey.toId());
+        (uint256 token0EffectiveLiquidity, uint256 token1EffectiveLiquidity) = LiquidityUtils.calculateEffectiveTokenAmounts(
+            sqrtPriceX96, currentTick, tickLower, tickUpper, int256(liqDeltaU)
+        );
+
+        assertEq(
+            balancesAfter.lcc1UnderlyingLocker,
+            balancesBefore.lcc1UnderlyingLocker - requiredSettlementAmount1,
+            "Token1 settlement amount mismatch"
+        );
+
+        assertEq(balancesAfter.pmLcc0, balancesBefore.pmLcc0 + token0EffectiveLiquidity, "LCC0 balance mismatch");
+        assertEq(balancesAfter.pmLcc1, balancesBefore.pmLcc1 + token1EffectiveLiquidity, "LCC1 balance mismatch");
+
+        assertEq(
+            balancesAfter.canonicalCurrency0,
+            balancesBefore.canonicalCurrency0 + requiredSettlementAmount0,
+            "Canonical currency0 balance mismatch"
+        );
+        assertEq(
+            balancesAfter.canonicalCurrency1,
+            balancesBefore.canonicalCurrency1 + requiredSettlementAmount1,
+            "Canonical currency1 balance mismatch"
+        );
     }
 
     /// @notice Tests creating a position in a native ETH market via MMPM with excess msg.value refund
@@ -458,6 +509,9 @@ contract NativeETHMarket is MarketTestBase, MarketMakerTestBase {
     function test_swapWithNativeAsUnderlyingAsset_CanCommitPosition_withRefund() public {
         ModifyLiquidityParams memory liquidityParams =
             ModifyLiquidityParams({tickLower: -60, tickUpper: 60, liquidityDelta: 1e10, salt: bytes32(0)});
+        int24 tickLower = liquidityParams.tickLower;
+        int24 tickUpper = liquidityParams.tickUpper;
+        uint256 liqDeltaU = uint256(liquidityParams.liquidityDelta);
 
         bytes memory signalBytes = abi.encode(liquiditySignal);
 
@@ -472,18 +526,22 @@ contract NativeETHMarket is MarketTestBase, MarketMakerTestBase {
         // Calculate ETH amounts
         uint256 ethToSend = requiredSettlementAmount0 + 1 ether;
 
+        address locker = liquiditySignal.mmState.advancer;
+        deal(lcc1.underlying(), locker, requiredSettlementAmount1);
+
         // Record balances before the operation
         BalanceSnapshot memory balancesBefore;
         {
-            balancesBefore.selfEth = address(this).balance;
+            balancesBefore.lockerEth = locker.balance;
             balancesBefore.pmLcc0 = IERC20(address(lcc0)).balanceOf(address(manager));
             balancesBefore.pmLcc1 = IERC20(address(lcc1)).balanceOf(address(manager));
             balancesBefore.canonicalCurrency0 = manager.balanceOf(mv.canonicalVault(), proxyPoolKey.currency0.toId());
             balancesBefore.canonicalCurrency1 = manager.balanceOf(mv.canonicalVault(), proxyPoolKey.currency1.toId());
-            balancesBefore.lcc1UnderlyingAsset = Currency.wrap(lcc1.underlying()).balanceOfSelf();
+            balancesBefore.lcc1UnderlyingLocker = IERC20(lcc1.underlying()).balanceOf(locker);
         }
 
         // Setup approvals and transfer counterparty asset to MMPM in scoped block
+        vm.startPrank(locker);
         {
             Currency underlyingCurrency1 = Currency.wrap(lcc1.underlying());
             underlyingCurrency1.approve(address(vtsOrchestrator), requiredSettlementAmount1);
@@ -500,66 +558,44 @@ contract NativeETHMarket is MarketTestBase, MarketMakerTestBase {
                 value: ethToSend
             }(abi.encode(actionsBytes, params), block.timestamp + 3600);
         }
+        vm.stopPrank();
 
         // Record balances after the operation
         BalanceSnapshot memory balancesAfter;
         {
-            balancesAfter.selfEth = address(this).balance;
+            balancesAfter.lockerEth = locker.balance;
             balancesAfter.pmLcc0 = IERC20(address(lcc0)).balanceOf(address(manager));
             balancesAfter.pmLcc1 = IERC20(address(lcc1)).balanceOf(address(manager));
             balancesAfter.canonicalCurrency0 = manager.balanceOf(mv.canonicalVault(), proxyPoolKey.currency0.toId());
             balancesAfter.canonicalCurrency1 = manager.balanceOf(mv.canonicalVault(), proxyPoolKey.currency1.toId());
-            balancesAfter.lcc1UnderlyingAsset = Currency.wrap(lcc1.underlying()).balanceOfSelf();
+            balancesAfter.lcc1UnderlyingLocker = IERC20(lcc1.underlying()).balanceOf(locker);
         }
 
         // Validate ETH refund
         assertEq(
-            balancesAfter.selfEth, balancesBefore.selfEth - requiredSettlementAmount0, "Excess ETH should be refunded"
+            balancesAfter.lockerEth,
+            balancesBefore.lockerEth - requiredSettlementAmount0,
+            "Excess ETH should be refunded"
         );
 
-        // Validate balances and calculate effective liquidity
-        {
-            (uint160 sqrtPriceX96, int24 currentTick,,) = manager.getSlot0(corePoolKey.toId());
-            (uint256 token0EffectiveLiquidity, uint256 token1EffectiveLiquidity) = LiquidityUtils.calculateEffectiveTokenAmounts(
-                sqrtPriceX96,
-                currentTick,
-                liquidityParams.tickLower,
-                liquidityParams.tickUpper,
-                int256(uint256(liquidityParams.liquidityDelta))
-            );
-
-            // Validate token1 liquidity has been taken from user's balance
-            assertEq(
-                balancesAfter.lcc1UnderlyingAsset,
-                balancesBefore.lcc1UnderlyingAsset - requiredSettlementAmount1,
-                "Token1 settlement amount mismatch"
-            );
-
-            // Validate LCC tokens have been added to the pool manager
-            assertEq(balancesAfter.pmLcc0, balancesBefore.pmLcc0 + token0EffectiveLiquidity, "LCC0 balance mismatch");
-            assertEq(balancesAfter.pmLcc1, balancesBefore.pmLcc1 + token1EffectiveLiquidity, "LCC1 balance mismatch");
-
-            // Validate underlying claims were custody-transferred into CanonicalVault.
-            assertEq(
-                balancesAfter.canonicalCurrency0,
-                balancesBefore.canonicalCurrency0 + requiredSettlementAmount0,
-                "Canonical currency0 balance mismatch"
-            );
-            assertEq(
-                balancesAfter.canonicalCurrency1,
-                balancesBefore.canonicalCurrency1 + requiredSettlementAmount1,
-                "Canonical currency1 balance mismatch"
-            );
-        }
+        _assertPmAndCanonicalAfterNativeCommit(
+            tickLower,
+            tickUpper,
+            liqDeltaU,
+            balancesBefore,
+            balancesAfter,
+            requiredSettlementAmount0,
+            requiredSettlementAmount1
+        );
 
         // Validate position was created
         (Position memory position,) = positionManager.getPosition(1, 0);
         {
             assertEq(position.isActive, true, "Position should be active");
             assertEq(PoolId.unwrap(position.poolId), PoolId.unwrap(corePoolKey.toId()), "Pool ID mismatch");
-            assertEq(position.tickLower, liquidityParams.tickLower, "Tick lower mismatch");
-            assertEq(position.tickUpper, liquidityParams.tickUpper, "Tick upper mismatch");
-            assertEq(position.liquidity, uint128(uint256(liquidityParams.liquidityDelta)), "Liquidity mismatch");
+            assertEq(position.tickLower, tickLower, "Tick lower mismatch");
+            assertEq(position.tickUpper, tickUpper, "Tick upper mismatch");
+            assertEq(position.liquidity, uint128(liqDeltaU), "Liquidity mismatch");
             assertEq(position.owner, address(mmPositionManager), "Position owner mismatch");
         }
     }
@@ -597,8 +633,8 @@ contract NativeETHMarket is MarketTestBase, MarketMakerTestBase {
         actions[3] = MMA.prepareSettle(
             corePoolKey, 1, 0, -requiredSettlementAmount0.toInt128(), -requiredSettlementAmount1.toInt128(), true
         );
-        // Take any remaining native ETH delta back to self (0 = max available)
-        actions[4] = MMA.prepareTake(CurrencyLibrary.ADDRESS_ZERO, address(this), 0);
+        // Take any remaining native ETH delta back to the MM locker (advancer EOA).
+        actions[4] = MMA.prepareTake(CurrencyLibrary.ADDRESS_ZERO, liquiditySignal.mmState.advancer, 0);
     }
 
     // @notice Tests creating a position in a native ETH market via MMPM with excess msg.value refund
@@ -608,6 +644,7 @@ contract NativeETHMarket is MarketTestBase, MarketMakerTestBase {
             ModifyLiquidityParams({tickLower: -60, tickUpper: 60, liquidityDelta: 1e10, salt: bytes32(0)});
 
         bytes memory signalBytes = abi.encode(liquiditySignal);
+        address locker = liquiditySignal.mmState.advancer;
 
         // Calculate settlement amounts based on commitment maxima
         (, uint256 requiredSettlementAmount1) = _calculateSettlementAmounts(liquidityParams, marketVTSConfiguration);
@@ -616,14 +653,16 @@ contract NativeETHMarket is MarketTestBase, MarketMakerTestBase {
             liquidityParams.tickLower, liquidityParams.tickUpper, uint128(uint256(liquidityParams.liquidityDelta))
         );
 
-        // Approve token1 (non-native) to the vtsOrchestrator
-        Currency underlyingCurrency1 = Currency.wrap(lcc1.underlying());
-        underlyingCurrency1.approve(address(vtsOrchestrator), requiredSettlementAmount1);
-        uint256 selfEthBalanceBefore = address(this).balance;
-
         uint256 excessEth = 1 ether;
         uint256 ethToSend = c0 + excessEth;
 
+        uint256 selfEthBalanceBefore = locker.balance;
+        deal(lcc1.underlying(), locker, requiredSettlementAmount1);
+
+        vm.startPrank(locker);
+        // Approve token1 (non-native) to the vtsOrchestrator
+        Currency underlyingCurrency1 = Currency.wrap(lcc1.underlying());
+        underlyingCurrency1.approve(address(vtsOrchestrator), requiredSettlementAmount1);
         // Transfer counterparty asset (token1 underlying) to MMPM so that payerIsUser = false
         // (usePositionManagerBalance) functions as expected. This allows settlement to use
         // MMPM's balance instead of requiring user to transfer during settlement.
@@ -648,35 +687,38 @@ contract NativeETHMarket is MarketTestBase, MarketMakerTestBase {
         // owner=MMPM (address(this)), target=locker (msgSender())
         actions[2] = MMA.prepareSync(underlyingCurrency1);
         actions[3] = MMA.prepareSettleFromDeltas(corePoolKey, 1, 0, false, false);
-        // Take any remaining native ETH delta back to self (0 = max available)
-        actions[4] = MMA.prepareTake(CurrencyLibrary.ADDRESS_ZERO, address(this), 0);
+        // Take any remaining native ETH delta back to locker (0 = max available)
+        actions[4] = MMA.prepareTake(CurrencyLibrary.ADDRESS_ZERO, locker, 0);
 
         // Execute with unlock, sending excess ETH to test the refund
         (bytes memory actionsBytes, bytes[] memory params) = MMA.concatPrepared(actions);
         bytes memory unlockData = abi.encode(actionsBytes, params);
         positionManager.modifyLiquidities{value: ethToSend}(unlockData, block.timestamp + 3600);
+        vm.stopPrank();
 
-        uint256 selfEthBalanceAfter = address(this).balance;
+        uint256 selfEthBalanceAfter = locker.balance;
 
         // Validate ETH was consumed for settlement: only the required amount was used
         // The excess ETH should have been returned via the TAKE action
         assertEq(selfEthBalanceAfter, selfEthBalanceBefore - c0, "Some excess ETH should be refunded");
     }
 
-    function test_settle_nativeNegativeDelta_usePositionManagerBalanceFalse_reverts_andDoesNotDrainMmpmEth() public {
-        ModifyLiquidityParams memory liquidityParams =
-            ModifyLiquidityParams({tickLower: -60, tickUpper: 60, liquidityDelta: 1e10, salt: bytes32(0)});
-        bytes memory signalBytes = abi.encode(liquiditySignal);
-
+    /// @dev Reduces stack depth in `test_settle_nativeNegativeDelta_usePositionManagerBalanceFalse_reverts_andDoesNotDrainMmpmEth`.
+    function _setupNativeNegativeDeltaPosition(
+        bytes memory signalBytes,
+        ModifyLiquidityParams memory liquidityParams,
+        address locker
+    ) internal returns (uint256 mmpmEthBefore, bytes memory unlockData) {
         (uint256 requiredSettlementAmount0, uint256 requiredSettlementAmount1) =
             _calculateSettlementAmounts(liquidityParams, marketVTSConfiguration);
 
-        // Seed token1-side funding for initial position settlement setup.
+        deal(lcc1.underlying(), locker, requiredSettlementAmount1);
+
+        vm.startPrank(locker);
         Currency underlyingCurrency1 = Currency.wrap(lcc1.underlying());
         underlyingCurrency1.approve(address(vtsOrchestrator), requiredSettlementAmount1);
         underlyingCurrency1.transfer(address(positionManager), requiredSettlementAmount1);
 
-        // Create an active position first, then try the unsupported native transferFrom settle branch.
         MMA.PreparedAction[] memory setupActions = _commitMintSettleFromPositionManager(
             signalBytes, liquidityParams, requiredSettlementAmount0, requiredSettlementAmount1
         );
@@ -684,10 +726,10 @@ contract NativeETHMarket is MarketTestBase, MarketMakerTestBase {
         positionManager.modifyLiquidities{
             value: requiredSettlementAmount0
         }(abi.encode(setupActionsBytes, setupParams), block.timestamp + 3600);
+        vm.stopPrank();
 
-        // Pre-existing ETH balance on MMPM must remain untouched when native transferFrom is unsupported.
         vm.deal(address(positionManager), 1 ether);
-        uint256 mmpmEthBefore = address(positionManager).balance;
+        mmpmEthBefore = address(positionManager).balance;
 
         address underlying0 = ILCC(payable(Currency.unwrap(corePoolKey.currency0))).underlying();
         bool nativeIsToken0 = underlying0 == address(0);
@@ -697,10 +739,22 @@ contract NativeETHMarket is MarketTestBase, MarketMakerTestBase {
         MMA.PreparedAction[] memory actions = new MMA.PreparedAction[](1);
         actions[0] = MMA.prepareSettle(corePoolKey, 1, 0, amount0, amount1, false);
         (bytes memory actionsBytes, bytes[] memory params) = MMA.concatPrepared(actions);
-        bytes memory unlockData = abi.encode(actionsBytes, params);
+        unlockData = abi.encode(actionsBytes, params);
+    }
 
+    function test_settle_nativeNegativeDelta_usePositionManagerBalanceFalse_reverts_andDoesNotDrainMmpmEth() public {
+        ModifyLiquidityParams memory liquidityParams =
+            ModifyLiquidityParams({tickLower: -60, tickUpper: 60, liquidityDelta: 1e10, salt: bytes32(0)});
+        bytes memory signalBytes = abi.encode(liquiditySignal);
+        address locker = liquiditySignal.mmState.advancer;
+
+        (uint256 mmpmEthBefore, bytes memory unlockData) =
+            _setupNativeNegativeDeltaPosition(signalBytes, liquidityParams, locker);
+
+        vm.startPrank(locker);
         vm.expectPartialRevert(Errors.NativeTransferFromUnsupported.selector);
         positionManager.modifyLiquidities(unlockData, block.timestamp + 3600);
+        vm.stopPrank();
 
         assertEq(address(positionManager).balance, mmpmEthBefore, "MMPM ETH should not be drained on unsupported path");
     }

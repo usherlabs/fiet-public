@@ -122,6 +122,7 @@ contract MockSignalManager is IVRLSignalManager {
         uint256,
         uint256,
         bytes memory,
+        address,
         bool
     ) external view returns (bool, uint256) {
         LiquiditySignal memory signal = abi.decode(liquiditySignal, (LiquiditySignal));
@@ -159,6 +160,11 @@ contract VTSCommitLibTest is VTSLibTestBase {
         advancer = makeAddr("advancer");
 
         commitId = harness.commitSignal(sigMgr, advancer, oracle, _makeSignal(mmOwner, advancer));
+        assertEq(
+            harness.getCommitAuthorisedRelayer(commitId),
+            address(harness),
+            "authorised relayer is harness (orchestrator caller)"
+        );
 
         positionId = _generatePositionId(DEFAULT_OWNER, TL, TU, DEFAULT_SALT);
         harness.setupPosition(positionId, poolId, commitId, TL, TU, LIQ);
@@ -188,6 +194,7 @@ contract VTSCommitLibTest is VTSLibTestBase {
         assertEq(harness.getNextCommitId(), newCommitId, "nextCommitId should match latest");
         assertEq(harness.getCommitOwner(newCommitId), owner2, "commit owner should be saved");
         assertEq(harness.getCommitAdvancer(newCommitId), adv2, "commit advancer should be saved");
+        assertEq(harness.getCommitAuthorisedRelayer(newCommitId), address(harness), "authorised relayer is harness");
         assertEq(harness.getCommitExpiresAt(newCommitId), block.timestamp + 1234, "expiry should be set");
     }
 
@@ -314,6 +321,49 @@ contract VTSCommitLibTest is VTSLibTestBase {
         harness.validateLiquidityDelta(oracle, commitId, positionId, p, true);
     }
 
+    /// @notice Regression (COMMIT-01): cumulative post-add issuance must be checked, not incremental slice alone.
+    /// @dev Uses a fixed reference liquidity `LIQ`, measures `issued(LIQ)`, sets signal `S` between ~54% and ~70% of
+    ///      that issued value, splits `LIQ` into `L1` and `d` (~6:5) so each slice’s isolated issued USD stays below
+    ///      `S` while `issued(LIQ)` exceeds `S`. Hard-revert mode must reject the post-add total but accept each slice.
+    function test_validateLiquidityDelta_postAddTotal_notIncrementalSliceAlone() public {
+        harness.setPositionSettled(positionId, 0, 0);
+
+        int256 LtotI = int256(uint256(LIQ));
+        uint256 issuedRef = _issuedUsdForLiquidity(LtotI);
+        assertGt(issuedRef, 0, "pre: issued USD at LIQ must be non-zero");
+
+        uint256 S = (issuedRef * 7) / 10;
+        assertGt(issuedRef, S);
+        oracle.setTotalValue(S);
+
+        uint256 LtotU = uint256(LIQ);
+        uint256 L1 = (LtotU * 6) / 11;
+        uint256 d = LtotU - L1;
+        assertGt(L1, 0);
+        assertGt(d, 0);
+
+        uint256 issuedTot = _issuedUsdForLiquidity(LtotI);
+        uint256 issued1 = _issuedUsdForLiquidity(int256(L1));
+        uint256 issuedD = _issuedUsdForLiquidity(int256(d));
+
+        assertEq(issuedTot, issuedRef, "total issued at LIQ should match reference");
+        assertGt(issuedTot, S, "post-add total issued must exceed signal backing");
+        assertLt(issued1, S, "6/11 slice issued alone must stay under signal");
+        assertLt(issuedD, S, "5/11 slice issued in isolation must stay under signal");
+
+        // Build params before `expectRevert` so argument evaluation does not consume the expected revert slot.
+        VTSCommitLib.LiquidityDeltaParams memory pTot = _liquidityDeltaParamsForLiquidity(LtotI);
+        VTSCommitLib.LiquidityDeltaParams memory pD = _liquidityDeltaParamsForLiquidity(int256(d));
+        VTSCommitLib.LiquidityDeltaParams memory p1 = _liquidityDeltaParamsForLiquidity(int256(L1));
+
+        // Full encoded error: `expectRevert(bytes4)` only matches a 4-byte revert, not custom-error calldata.
+        vm.expectRevert(abi.encodeWithSelector(Errors.InvalidLiquiditySignal.selector, issuedTot, S, uint256(0)));
+        harness.validateLiquidityDelta(oracle, commitId, positionId, pTot, true);
+
+        harness.validateLiquidityDelta(oracle, commitId, positionId, pD, true);
+        harness.validateLiquidityDelta(oracle, commitId, positionId, p1, true);
+    }
+
     function test_validateLiquidityDelta_reverts_whenSignalHasTooManyUniqueReserveTickers() public {
         LiquiditySignal memory poisonSig =
             abi.decode(_makeSignalWithUniqueReserveCount(mmOwner, address(this), 101), (LiquiditySignal));
@@ -426,6 +476,20 @@ contract VTSCommitLibTest is VTSLibTestBase {
         assertEq(harness.getCoveragePerDeficitIndexX128(poolId, 1), 0, "no DICE index");
         assertEq(harness.getCoveragePerSettledIndexX128(poolId, 1), 0, "no CISE index");
         assertEq(harness.getTotalCISEExposureSinceLastMod(poolId, 1), 0, "no CISE denominator should accrue");
+    }
+
+    /// @dev DICE index branch is skipped when `totalDeficitPrincipal` is zero; coverage defers to residual bucket.
+    function test_incrementCoverage_token0_residualDice_whenTotalDeficitPrincipalZero_butSettledNonZero() public {
+        uint256 covered = 5e18;
+        harness.setPoolTotalDeficitPrincipal(poolId, 0, 0);
+        harness.setPoolTotalSettled(poolId, 0, 1000e18);
+
+        harness.incrementCoverage(poolId, 0, covered);
+
+        assertEq(
+            harness.getCoverageResidualDICE(poolId, 0), covered, "residual DICE accrues when principal total is zero"
+        );
+        assertGt(harness.getCoveragePerSettledIndexX128(poolId, 0), 0, "CISE index still advances when settled > 0");
     }
 
     // ============================================================
@@ -717,7 +781,11 @@ contract VTSCommitLibTest is VTSLibTestBase {
         return abi.encode(sig);
     }
 
-    function _defaultLiquidityDeltaParams() internal view returns (VTSCommitLib.LiquidityDeltaParams memory p) {
+    function _liquidityDeltaParamsForLiquidity(int256 liquidityAmount)
+        internal
+        view
+        returns (VTSCommitLib.LiquidityDeltaParams memory p)
+    {
         (uint160 sqrtPriceX96, int24 tick,,) = _getSlot0(poolId);
         p = VTSCommitLib.LiquidityDeltaParams({
             currency0: corePoolKey.currency0,
@@ -726,8 +794,18 @@ contract VTSCommitLibTest is VTSLibTestBase {
             currentTick: tick,
             tickLower: TL,
             tickUpper: TU,
-            liquidityDelta: int256(uint256(LIQ))
+            liquidityDelta: liquidityAmount
         });
+    }
+
+    function _issuedUsdForLiquidity(int256 liquidityAmount) internal view returns (uint256 issued) {
+        (, issued,,) = harness.validateLiquidityDelta(
+            oracle, commitId, positionId, _liquidityDeltaParamsForLiquidity(liquidityAmount), false
+        );
+    }
+
+    function _defaultLiquidityDeltaParams() internal view returns (VTSCommitLib.LiquidityDeltaParams memory p) {
+        return _liquidityDeltaParamsForLiquidity(int256(uint256(LIQ)));
     }
 
     function _computeIssuedUsd() internal view returns (uint256 issuedUsd) {

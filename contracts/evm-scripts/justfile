@@ -758,6 +758,13 @@ e2e-mm-coverage:
         --rpc-url {{ rpc_url }} \
         {{ broadcast_flag }} -vvv
 
+# E2E: Seizure (guarantor path — single / two-position / four-position commit scenarios).
+# Requires PRIVATE_KEY, LP_PRIVATE_KEY; guarantor is GUARANTOR_PRIVATE_KEY, else LP2_PRIVATE_KEY, else LP3_PRIVATE_KEY (must differ from LP_PRIVATE_KEY).
+e2e-seizure:
+    FOUNDRY_PROFILE={{ foundry_profile }} forge script {{ script_dir }}/e2e/Seizure.s.sol:SeizureE2E \
+        --rpc-url {{ rpc_url }} \
+        {{ broadcast_flag }} -vvv
+
 # === Admin ===
 #
 # All admin scripts are under `script/admin/` and are intended to call `onlyOwner` functions.

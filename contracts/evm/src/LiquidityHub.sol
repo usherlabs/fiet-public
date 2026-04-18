@@ -16,6 +16,7 @@ import {Errors} from "./libraries/Errors.sol";
 import {ICanonicalVault} from "./interfaces/ICanonicalVault.sol";
 import {TransientSlots} from "./libraries/TransientSlots.sol";
 import {ILiquidityHub} from "./interfaces/ILiquidityHub.sol";
+import {IEndpointUnwrapAdmission} from "./interfaces/IEndpointUnwrapAdmission.sol";
 import {ILCC} from "./interfaces/ILCC.sol";
 import {BoundRegistry} from "./modules/BoundRegistry.sol";
 import {Bounds} from "./libraries/Bounds.sol";
@@ -433,9 +434,22 @@ contract LiquidityHub is BoundRegistry, Ownable, ReentrancyGuardTransient {
         return LCCFactoryLib.balancesOf(lccToken, account);
     }
 
-    function _assertWrapRecipientNotDexSink(address lcc, address to) internal view {
-        if (Bounds.isDex(boundLevel(s.lccToMarket[lcc].factory, to))) {
+    /// @dev Rejects DEX sinks — issuer mints and wrap paths bypass LCC transfer hooks, so DEX ingress must not be bypassed.
+    function _assertRecipientNotDexSink(address lcc, address to) internal view {
+        uint8 level = boundLevel(s.lccToMarket[lcc].factory, to);
+        if (Bounds.isDex(level)) {
             revert Errors.DirectWrapToDexNotAllowed(to);
+        }
+    }
+
+    /// @dev Defence in depth for **direct-backed** Hub mints (`_wrap`, etc.): exempt holders skip bucket maps, so
+    ///      `directAmount > 0` must not target them (`LCC.mint` is authoritative; this surfaces a clearer early revert).
+    ///      Do **not** use for `issue` / pure market-derived mints — issuers must still be able to mint to ProxyHook.
+    function _assertDirectBackedMintRecipient(address lcc, address to) internal view {
+        _assertRecipientNotDexSink(lcc, to);
+        uint8 level = boundLevel(s.lccToMarket[lcc].factory, to);
+        if (Bounds.isExempt(level)) {
+            revert Errors.DirectMintToExemptNotAllowed(to);
         }
     }
 
@@ -455,7 +469,8 @@ contract LiquidityHub is BoundRegistry, Ownable, ReentrancyGuardTransient {
 
         // Mint-time ingress to the DEX sink bypasses LCC transfer hooks.
         // Reject it until there is a safe settlement path that can run under PoolManager lock constraints.
-        _assertWrapRecipientNotDexSink(lcc, to);
+        // Direct-backed mint to exempt is forbidden (finding 14); pure market issuer mints use `issue` instead.
+        _assertDirectBackedMintRecipient(lcc, to);
 
         // throw error if the native ETH is insufficient and it is a native ETH backed LCC
         if (isNativeAsset) {
@@ -524,8 +539,8 @@ contract LiquidityHub is BoundRegistry, Ownable, ReentrancyGuardTransient {
     function _wrapWith(address lcc, address withLCC, address to, uint256 amount) internal onlyValidLcc(lcc) {
         address from = _msgSender();
 
-        // wrapWithTo shares the same mint surface as direct wrap and must not bypass DEX ingress handling.
-        _assertWrapRecipientNotDexSink(lcc, to);
+        // Reject DEX sinks. If the final mint includes a direct-backed leg to an exempt recipient, `LCC.mint` reverts.
+        _assertRecipientNotDexSink(lcc, to);
 
         // Performs all necessary validation and preparation
         LiquidityHubLib.WrapWithContext memory ctx =
@@ -580,7 +595,9 @@ contract LiquidityHub is BoundRegistry, Ownable, ReentrancyGuardTransient {
      *        against the same user's live balance.
      *      - Endpoint `unwrapTo(lcc, to, queueTo, ...)`: supported only when the endpoint acts on behalf of the
      *        beneficiary named by `queueTo`; caller-held balance is treated as representing that beneficiary for this
-     *        unwrap (see HUB-02A in INVARIANTS.md).
+     *        unwrap (see HUB-02A in INVARIANTS.md). If the endpoint implements `IEndpointUnwrapAdmission`, admission
+     *        headroom also counts capped beneficiary-scoped custody credit against the same queue key (e.g. custodied
+     *        queued shortfall not on the endpoint balance).
      *      - Immediate payout `to` must be serviceable: not Hub, not exempt/DEX sinks (HUB-02B).
      * @param lcc The LCC token address to unwrap
      * @param to The recipient of the underlying asset
@@ -598,16 +615,27 @@ contract LiquidityHub is BoundRegistry, Ownable, ReentrancyGuardTransient {
         // Immediate payout recipient must be serviceable: not Hub, not exempt/DEX sinks (see HUB-02B in INVARIANTS.md).
         _assertValidUnwrapPayoutRecipient(lcc, to);
 
-        _assertUnwrapWithinHeadroom(amount, fromBalance, s.settleQueue[lcc][queueTo]);
+        (uint256 effectiveFromBalance, uint256 existingQueue) =
+            _unwrapEffectiveFromBalance(lcc, from, queueTo, fromBalance);
+        _assertUnwrapWithinHeadroom(amount, effectiveFromBalance, existingQueue);
 
-        (uint256 directUnwrapped, uint256 marketUnwrapped, uint256 queuedShortfall) =
-            LiquidityHubLinkedLib.unwrapInternalLogic(s, lcc, queueTo, amount, wrappedBalance, marketDerivedBalance);
+        _unwrapAndPay(lcc, from, to, queueTo, amount, wrappedBalance, marketDerivedBalance);
+    }
 
-        // `unwrapInternalLogic` updates queue state directly in library storage.
-        // Queue owner shape is validated at write time; present settleability is enforced on settlement.
+    /// @dev Executes `unwrapInternalLogic`, underlying payout, and events after admission checks pass.
+    function _unwrapAndPay(
+        address lcc,
+        address from,
+        address to,
+        address queueTo,
+        uint256 amount,
+        uint256 wrappedBalance,
+        uint256 marketDerivedBalance
+    ) private {
+        (uint256 directUnwrapped, uint256 marketUnwrapped, uint256 queuedShortfall) = LiquidityHubLinkedLib.unwrapInternalLogic(
+            s, lcc, queueTo, amount, wrappedBalance, marketDerivedBalance
+        );
 
-        // Burn the amount that was unwrapped
-        // and transfer the underlying assets to the account
         if (directUnwrapped + marketUnwrapped > 0) {
             _pay(lcc, from, to, directUnwrapped, marketUnwrapped);
         }
@@ -725,7 +753,8 @@ contract LiquidityHub is BoundRegistry, Ownable, ReentrancyGuardTransient {
     function issue(address lcc, address to, uint256 amount) external onlyIssuer(lcc) nonReentrant {
         // Note: LCC mint path reverts on zero (direct+market) amount.
         // Minting market-derived LCC directly to the DEX sink bypasses transfer hooks and ingress settlement.
-        _assertWrapRecipientNotDexSink(lcc, to);
+        // Issuer mints to bucket-exempt protocol endpoints (eg ProxyHook) remain valid — only DEX sinks are rejected here.
+        _assertRecipientNotDexSink(lcc, to);
         _mint(lcc, to, 0, amount);
     }
 
@@ -989,12 +1018,12 @@ contract LiquidityHub is BoundRegistry, Ownable, ReentrancyGuardTransient {
     }
 
     /**
-     * @notice Atomically releases queued MM custody and settles it against the recipient's Hub queue
-     * @dev Best-effort path for MM collection flows. Returns 0 when the queue, reserve, or custody
-     *      currently cannot support settlement, instead of reverting.
+     * @notice Atomically releases queued custody and settles it against the recipient's Hub queue
+     * @dev Best-effort path for collection flows (e.g. MM). Returns 0 when the queue, reserve, or custody
+     *      currently cannot support settlement, instead of reverting. `custodian` must implement `IQueueCustodian`.
      * @param lcc The LCC token address
-     * @param custodian The MM queue custodian holding beneficiary-scoped queued LCC
-     * @param tokenId The commitment token id bucket to debit in the custodian
+     * @param custodian The queue custodian holding beneficiary-scoped queued LCC
+     * @param tokenId The custodian bucket id to debit (e.g. commitment NFT id, or utility bucket such as `0`)
      * @param recipient The queue owner and settlement recipient
      * @param maxAmount The maximum amount to settle
      */
@@ -1171,7 +1200,35 @@ contract LiquidityHub is BoundRegistry, Ownable, ReentrancyGuardTransient {
 
     // ============ INTERNAL FUNCTIONS ============
 
+    /// @dev Computes admission `fromBalance` for `_unwrap`, including capped endpoint custody credit when applicable.
+    function _unwrapEffectiveFromBalance(address lcc, address from, address queueTo, uint256 fromBalance)
+        private
+        view
+        returns (uint256 effectiveFromBalance, uint256 existingQueue)
+    {
+        existingQueue = s.settleQueue[lcc][queueTo];
+        effectiveFromBalance = fromBalance;
+        if (boundLevelOfLcc(lcc, from) == Bounds.BOUND_ENDPOINT) {
+            uint256 credit = _endpointUnwrapAdmissionCredit(from, lcc, queueTo);
+            credit = Math.min(credit, existingQueue);
+            effectiveFromBalance = fromBalance + credit;
+        }
+    }
+
+    /// @dev Best-effort staticcall to optional `IEndpointUnwrapAdmission` on `BOUND_ENDPOINT` unwrap callers.
+    function _endpointUnwrapAdmissionCredit(address endpoint, address lcc, address beneficiary)
+        private
+        view
+        returns (uint256)
+    {
+        (bool ok, bytes memory data) =
+            endpoint.staticcall(abi.encodeCall(IEndpointUnwrapAdmission.unwrapAdmissionCredit, (lcc, beneficiary)));
+        if (!ok || data.length < 32) return 0;
+        return abi.decode(data, (uint256));
+    }
+
     /// @dev Reverts unless `0 < amount <= availableToUnwrap` where `availableToUnwrap = max(0, fromBalance - existingQueue)`.
+    ///      For endpoint flows, `fromBalance` may already include capped custody credit (see `_unwrap`).
     function _assertUnwrapWithinHeadroom(uint256 amount, uint256 fromBalance, uint256 existingQueue) private pure {
         uint256 availableToUnwrap = fromBalance > existingQueue ? fromBalance - existingQueue : 0;
         if (amount == 0 || amount > availableToUnwrap) {

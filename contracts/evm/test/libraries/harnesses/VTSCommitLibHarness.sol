@@ -43,7 +43,7 @@ contract VTSCommitLibHarness {
         external
         returns (uint256)
     {
-        return VTSCommitLib._commitSignalLinked(s, sender, mgr, oracleHelper, sig);
+        return VTSCommitLib._commitSignalLinked(s, sender, mgr, oracleHelper, sig, address(this));
     }
 
     function renewSignal(IVRLSignalManager mgr, IOracleHelper oracleHelper, uint256 commitId, bytes memory sig)
@@ -137,6 +137,10 @@ contract VTSCommitLibHarness {
 
     function getCommitAdvancer(uint256 commitId) external view returns (address) {
         return s.commits[commitId].mmState.advancer;
+    }
+
+    function getCommitAuthorisedRelayer(uint256 commitId) external view returns (address) {
+        return s.commits[commitId].authorisedRelayer;
     }
 
     function getCoveragePerDeficitIndexX128(PoolId poolId, uint8 tokenIndex) external view returns (uint256) {

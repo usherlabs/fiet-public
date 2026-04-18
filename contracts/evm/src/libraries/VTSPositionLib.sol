@@ -941,13 +941,15 @@ library VTSPositionLib {
     }
 
     /// @notice Decodes and validates hook data for touch position
+    /// @dev Effective `isSeizing` is only true for MM operations (`commitId > 0`) with `seizure.isSeizing`.
+    ///      Non-MM callers cannot grant seizure semantics by forging hook bytes.
     /// @param hookData The raw hook data bytes
     /// @return data The decoded hook data struct
     function _decodeHookData(bytes calldata hookData) private pure returns (TouchPositionHookData memory data) {
         PositionModificationHookData memory mmData = PositionModificationHookDataLib.decodeCalldata(hookData);
         data.isMMOperation = PositionModificationHookDataLib.isMMOperation(mmData);
         data.commitId = mmData.commitId;
-        data.isSeizing = mmData.seizure.isSeizing;
+        data.isSeizing = data.isMMOperation && mmData.seizure.isSeizing;
     }
 
     /// @notice Handles new position initialization and returns required settlement delta
@@ -1012,7 +1014,9 @@ library VTSPositionLib {
         }
         // Growth is already settled in CoreHook `_beforeRemoveLiquidity`; avoid `calcRFS` here so we do not
         // re-enter `settlePositionGrowths` (would double-apply CISE / growth side-effects in the same modify).
-        if (!hookData.isSeizing) {
+        // RFS-open removes revert unless this is an authorised MM seizure decrease (`isMMOperation && isSeizing`);
+        // non-MM forged `seizure.isSeizing` is cleared in `_decodeHookData`.
+        if (!(hookData.isMMOperation && hookData.isSeizing)) {
             (bool rfsOpen,) = getRFS(s, positionId);
             if (rfsOpen) {
                 revert Errors.RFSOpenForPosition(positionId);
@@ -1071,6 +1075,23 @@ library VTSPositionLib {
             _sUpdateSettlement(s, positionId, 1, SafeCast.toInt256(commitmentMaxima.token1) - SafeCast.toInt256(s1));
             requiredSettlementDelta = BalanceDelta.wrap(0);
         }
+    }
+
+    /// @dev Extracted to keep `touchPosition` stack-safe when branching on fee-cap policy.
+    function _afterTouchPositionFees(
+        VTSStorage storage s,
+        PositionId positionId,
+        BalanceDelta feesAccrued,
+        bool capPositiveSlashToFeesAccrued
+    ) private returns (BalanceDelta feeAdj) {
+        if (!capPositiveSlashToFeesAccrued) {
+            return VTSFeeLinkedLib.afterTouchPosition(s, positionId);
+        }
+        int128 fa0 = feesAccrued.amount0();
+        int128 fa1 = feesAccrued.amount1();
+        uint256 positiveCap0 = fa0 > 0 ? uint256(uint128(fa0)) : 0;
+        uint256 positiveCap1 = fa1 > 0 ? uint256(uint128(fa1)) : 0;
+        return VTSFeeLinkedLib.afterTouchPositionWithPositiveCaps(s, positionId, positiveCap0, positiveCap1);
     }
 
     //#olympix-ignore-reentrancy
@@ -1172,7 +1193,9 @@ library VTSPositionLib {
             _updateStatus(s, result.id, posStorage, initialLiquidity, liq);
         }
 
-        result.feeAdj = VTSFeeLinkedLib.afterTouchPosition(s, result.id);
+        // On any liquidity decrease, cap same-touch positive `pendingFeeAdj` materialisation to the
+        // per-leg informational `feesAccrued` slice; excess remains banked in `pendingFeeAdj` (SETTLE-03).
+        result.feeAdj = _afterTouchPositionFees(s, result.id, p.feesAccrued, p.params.liquidityDelta < 0);
 
         if (hookData.isMMOperation) {
             VTSPositionMMOpsLib.processMMOperations(s, ctx, p, result, requiredSettlementDelta);
@@ -1311,10 +1334,12 @@ library VTSPositionLib {
     }
 
     /// @dev Clamp settled balances downward by precomputed excess values.
-    ///      For MM decreases, callers pass the amount actually routed out of live `settled` in this step: the vault
-    ///      immediate slice plus Hub-queued principal (`settleableDelta + queuedDelta`). Any remainder that could not
-    ///      be queued stays in `pa.settled` until serviceable; only the immediate slice is mirrored on
-    ///      `OwnerCurrencyDelta` (see `_handleLiquidityDecrease`).
+    ///      For **non-seizure** MM decreases, callers pass the routed export from `VTSPositionMMOpsLib`:
+    ///      `settleableDelta + queuedDelta` (vault-immediate plus shortfall-backed queue). For **seizure** MM decreases,
+    ///      callers pass the seizure split export per leg: `min(excessSettled, settleableVaultLeg + burn)` where
+    ///      `burn = min(principal, excessSettled)` — not `settleable + full queued principal`, so guarantor-queued
+    ///      principal does not over-remove live `pa.settled` (SETTLE-03). Any remainder that could not be routed stays
+    ///      in `pa.settled` until serviceable; only the vault-immediate slice is mirrored on `OwnerCurrencyDelta`.
     function _applySettlementClampFromExcess(
         VTSStorage storage s,
         PositionId positionId,

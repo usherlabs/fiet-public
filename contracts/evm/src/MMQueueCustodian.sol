@@ -66,6 +66,7 @@ contract MMQueueCustodian is IMMQueueCustodian {
         emit CustodyRecorded(tokenId, lcc, beneficiary, amount);
     }
 
+    // Releases LCC to recipient before processSettlementFor is called.
     function release(uint256 tokenId, address lcc, address beneficiary, uint256 maxAmount)
         external
         override

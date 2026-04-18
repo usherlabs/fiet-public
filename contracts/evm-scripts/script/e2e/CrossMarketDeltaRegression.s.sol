@@ -307,7 +307,7 @@ contract CrossMarketDeltaRegressionE2E is MME2EBase {
     }
 
     function _param0() internal view returns (bytes memory) {
-        return abi.encode(s_keyA, s_commitA, 0, s_decAmount);
+        return abi.encode(s_keyA, s_commitA, 0, s_decAmount, uint128(0), uint128(0));
     }
 
     function _param1() internal view returns (bytes memory) {
@@ -319,7 +319,7 @@ contract CrossMarketDeltaRegressionE2E is MME2EBase {
     }
 
     function _param3() internal view returns (bytes memory) {
-        return abi.encode(s_keyB, s_commitB, 0, s_decAmount);
+        return abi.encode(s_keyB, s_commitB, 0, s_decAmount, uint128(0), uint128(0));
     }
 
     function _param4() internal view returns (bytes memory) {
@@ -331,7 +331,7 @@ contract CrossMarketDeltaRegressionE2E is MME2EBase {
     }
 
     function _param6() internal view returns (bytes memory) {
-        return abi.encode(s_keyB, s_commitB, 0, s_decAmount);
+        return abi.encode(s_keyB, s_commitB, 0, s_decAmount, uint128(0), uint128(0));
     }
 
     function _param7() internal view returns (bytes memory) {
@@ -343,7 +343,7 @@ contract CrossMarketDeltaRegressionE2E is MME2EBase {
     }
 
     function _param9() internal view returns (bytes memory) {
-        return abi.encode(s_keyC, s_commitC, 0, s_decAmount);
+        return abi.encode(s_keyC, s_commitC, 0, s_decAmount, uint128(0), uint128(0));
     }
 
     function _param10() internal view returns (bytes memory) {
@@ -437,10 +437,10 @@ contract CrossMarketDeltaRegressionE2E is MME2EBase {
         (snap.poolDeficitPrincipal0[3], snap.poolDeficitPrincipal1[3]) =
             vts.getPoolTotalDeficitPrincipal(s_keyD.toId());
 
-        (snap.protocolFee0[0], snap.protocolFee1[0]) = vts.getProtocolFeeAccrued(s_keyA.toId());
-        (snap.protocolFee0[1], snap.protocolFee1[1]) = vts.getProtocolFeeAccrued(s_keyB.toId());
-        (snap.protocolFee0[2], snap.protocolFee1[2]) = vts.getProtocolFeeAccrued(s_keyC.toId());
-        (snap.protocolFee0[3], snap.protocolFee1[3]) = vts.getProtocolFeeAccrued(s_keyD.toId());
+        (snap.protocolFee0[0], snap.protocolFee1[0]) = vts.getSlashedPot(s_keyA.toId());
+        (snap.protocolFee0[1], snap.protocolFee1[1]) = vts.getSlashedPot(s_keyB.toId());
+        (snap.protocolFee0[2], snap.protocolFee1[2]) = vts.getSlashedPot(s_keyC.toId());
+        (snap.protocolFee0[3], snap.protocolFee1[3]) = vts.getSlashedPot(s_keyD.toId());
     }
 
     function _assertPositionStateEq(DurablePositionState memory lhs, DurablePositionState memory rhs, string memory label)

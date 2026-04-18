@@ -1,5 +1,8 @@
 ## Coverage‑Indexed Bonus Allocation Upgrade (Settled‑Exposure Indexed, Clamp‑Resilient)
 
+> **Fee-pot redesign (supersedes `protocolFeeAccrued` in older text below)**  
+> Bonus `potAvail` is derived from materialised **`slashedPot`**, not `protocolFeeAccrued`. See [`Fee-Pot-Materialisation-And-DirectLP-Policy.md`](./Fee-Pot-Materialisation-And-DirectLP-Policy.md).
+
 This document complements the existing research notes in `agents/spec/`, in particular:
 
 - `agents/spec/Tick-Indexed-Coverage-and-Fee-Sharing-in-VTSManager.md`

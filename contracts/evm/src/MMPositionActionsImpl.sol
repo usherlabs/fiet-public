@@ -31,6 +31,7 @@ import {MMHelpers} from "./libraries/MMHelpers.sol";
 import {Locker} from "v4-periphery/src/libraries/Locker.sol";
 import {DelegateCallGuard} from "./modules/DelegateCallGuard.sol";
 import {VaultSettlementIntent} from "./types/VTS.sol";
+import {SlippageCheck} from "v4-periphery/src/libraries/SlippageCheck.sol";
 
 /// @title MMPositionActionsImpl
 /// @notice Implementation contract for MMPositionManager position operations
@@ -50,6 +51,7 @@ contract MMPositionActionsImpl is
     using CurrencySettler for Currency;
     using CurrencyTransfer for Currency;
     using MMCalldataDecoder for bytes;
+    using SlippageCheck for BalanceDelta;
 
     // ═══════════════════════════════════════════════════════════════════════════
     // Internal Structs
@@ -152,14 +154,21 @@ contract MMPositionActionsImpl is
             return;
         }
         if (action == MMActions.DECREASE_LIQUIDITY) {
-            (PoolKey calldata poolKey, uint256 tokenId, uint256 positionIndex, uint256 amountToDecrease) =
-                params.decodeDecreaseLiquidityParams();
-            _decrease(poolKey, tokenId, positionIndex, amountToDecrease);
+            (
+                PoolKey calldata poolKey,
+                uint256 tokenId,
+                uint256 positionIndex,
+                uint256 amountToDecrease,
+                uint128 amount0Min,
+                uint128 amount1Min
+            ) = params.decodeDecreaseLiquidityParams();
+            _decrease(poolKey, tokenId, positionIndex, amountToDecrease, amount0Min, amount1Min);
             return;
         }
         if (action == MMActions.BURN_POSITION) {
-            (PoolKey calldata poolKey, uint256 tokenId, uint256 positionIndex) = params.decodeBurnPositionParams();
-            _burnPosition(poolKey, tokenId, positionIndex);
+            (PoolKey calldata poolKey, uint256 tokenId, uint256 positionIndex, uint128 amount0Min, uint128 amount1Min) =
+                params.decodeBurnPositionParams();
+            _burnPosition(poolKey, tokenId, positionIndex, amount0Min, amount1Min);
             return;
         }
         if (action == MMActions.SEIZE_POSITION) {
@@ -336,7 +345,9 @@ contract MMPositionActionsImpl is
             PositionLibrary.generateSalt(tokenId, positionIndex),
             tokenId,
             seizedLiquidityUnits,
-            hookData
+            hookData,
+            0,
+            0
         );
     }
 
@@ -521,7 +532,13 @@ contract MMPositionActionsImpl is
     /// @param poolKey The pool key
     /// @param tokenId The commitment NFT token ID
     /// @param positionIndex The position index within the commitment
-    function _burnPosition(PoolKey calldata poolKey, uint256 tokenId, uint256 positionIndex) internal {
+    function _burnPosition(
+        PoolKey calldata poolKey,
+        uint256 tokenId,
+        uint256 positionIndex,
+        uint128 amount0Min,
+        uint128 amount1Min
+    ) internal {
         MMHelpers.assertApprovedOrOwner(msgSender(), tokenId);
 
         (Position memory position,) = getPosition(tokenId, positionIndex);
@@ -534,7 +551,9 @@ contract MMPositionActionsImpl is
             PositionLibrary.generateSalt(tokenId, positionIndex),
             tokenId,
             completeLiquidity,
-            PositionModificationHookDataLib.encode(tokenId, positionIndex, msgSender())
+            PositionModificationHookDataLib.encode(tokenId, positionIndex, msgSender()),
+            amount0Min,
+            amount1Min
         );
     }
 
@@ -600,7 +619,7 @@ contract MMPositionActionsImpl is
         });
 
         positionId = PositionLibrary.generateId(address(this), params);
-        (BalanceDelta liquidityDelta, BalanceDelta feesAccrued) =
+        (BalanceDelta liquidityDelta, BalanceDelta feesAccrued,) =
             _modifySyntheticLiquidity(poolKey, params, tokenId, hookData);
         principalDelta = liquidityDelta - feesAccrued;
     }
@@ -786,7 +805,9 @@ contract MMPositionActionsImpl is
         bytes32 salt,
         uint256 tokenId,
         uint256 amountToDecrease,
-        bytes memory hookData
+        bytes memory hookData,
+        uint128 amount0Min,
+        uint128 amount1Min
     ) internal {
         uint256 posLiq = uint256(position.liquidity);
         if (amountToDecrease > posLiq) {
@@ -804,7 +825,9 @@ contract MMPositionActionsImpl is
             salt: salt
         });
 
-        _modifySyntheticLiquidity(poolKey, params, tokenId, hookData);
+        (,, BalanceDelta mmForwardedNonFeeForMinOut) = _modifySyntheticLiquidity(poolKey, params, tokenId, hookData);
+        // Min-out on immediate non-fee LCC forwarded (post `feeAdj`), not raw `callerDelta - feesAccrued` (VTS queue principal).
+        mmForwardedNonFeeForMinOut.validateMinOut(amount0Min, amount1Min);
     }
 
     /// @notice Decreases liquidity from an existing position
@@ -812,9 +835,17 @@ contract MMPositionActionsImpl is
     /// @param tokenId The commitment NFT token ID
     /// @param positionIndex The position index within the commitment
     /// @param amountToDecrease The amount of liquidity to remove
-    function _decrease(PoolKey calldata poolKey, uint256 tokenId, uint256 positionIndex, uint256 amountToDecrease)
-        internal
-    {
+    /// @param amount0Min Minimum per-leg immediate post-`feeAdj` non-fee LCC token0 (`LiquidityUtils.forwardedNonFeeLccAmount`).
+    ///        For commit positions, only the Hub-queued slice is custodied; surplus remains locker transient LCC credit.
+    /// @param amount1Min Minimum per-leg immediate post-`feeAdj` non-fee LCC token1 (VTS queue principal remains `callerDelta - feesAccrued`).
+    function _decrease(
+        PoolKey calldata poolKey,
+        uint256 tokenId,
+        uint256 positionIndex,
+        uint256 amountToDecrease,
+        uint128 amount0Min,
+        uint128 amount1Min
+    ) internal {
         MMHelpers.assertApprovedOrOwner(msgSender(), tokenId);
 
         (Position memory position,) = getPosition(tokenId, positionIndex);
@@ -826,7 +857,9 @@ contract MMPositionActionsImpl is
             PositionLibrary.generateSalt(tokenId, positionIndex),
             tokenId,
             amountToDecrease,
-            PositionModificationHookDataLib.encode(tokenId, positionIndex, msgSender())
+            PositionModificationHookDataLib.encode(tokenId, positionIndex, msgSender()),
+            amount0Min,
+            amount1Min
         );
     }
 
@@ -880,7 +913,7 @@ contract MMPositionActionsImpl is
         });
 
         positionId = PositionLibrary.generateId(address(this), params);
-        (BalanceDelta liquidityDelta, BalanceDelta feesAccrued) =
+        (BalanceDelta liquidityDelta, BalanceDelta feesAccrued,) =
             _modifySyntheticLiquidity(poolKey, params, tokenId, hookData);
         principalDelta = liquidityDelta - feesAccrued;
     }

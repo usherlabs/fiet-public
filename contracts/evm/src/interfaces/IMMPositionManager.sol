@@ -59,6 +59,6 @@ interface IMMPositionManager {
     /// @return The next token ID (will be assigned on next commitSignal call)
     function nextTokenId() external view returns (uint256);
 
-    /// @notice Shared queue custodian used for queued MM-backed LCC custody
+    /// @notice Shared queue custodian (`IMMQueueCustodian` / `IQueueCustodian`) for queued MM-backed LCC custody
     function queueCustodian() external view returns (IMMQueueCustodian);
 }

@@ -202,13 +202,9 @@ contract MarketVaultTest is MarketVaultBase {
         uint256 amount = 1e9;
         UnwrapInUnlockRunner runner = new UnwrapInUnlockRunner(manager, liquidityHub);
 
-        // Create market-derived LCC for the runner via protocol transfer (proxyHook is bucket-exempt).
-        IERC20(underlying0).transfer(address(proxyHook), amount);
-        vm.startPrank(address(proxyHook));
-        IERC20(underlying0).approve(liquidityHub, amount);
-        LiquidityHub(payable(liquidityHub)).wrap(address(lccToken0), amount);
-        lccToken0.transfer(address(runner), amount);
-        vm.stopPrank();
+        // Market-derived balance only (direct wrap to bucket-exempt proxyHook is forbidden — finding 14).
+        vm.prank(address(proxyHook));
+        LiquidityHub(payable(liquidityHub)).issue(address(lccToken0), address(runner), amount);
 
         (uint256 wrappedBal, uint256 marketBal) = lccToken0.balancesOf(address(runner));
         assertEq(wrappedBal, 0);

@@ -15,7 +15,7 @@ import {MarketVTSConfiguration} from "../../src/types/VTS.sol";
 import {PositionContext, TouchPositionParams, TouchPositionResult} from "../../src/types/VTS.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
-import {PositionModificationHookData, PositionModificationHookDataLib} from "../../src/types/Position.sol";
+import {PositionModificationHookData, PositionModificationHookDataLib, SeizureData} from "../../src/types/Position.sol";
 import {ILiquidityHub} from "../../src/interfaces/ILiquidityHub.sol";
 import {ILCC} from "../../src/interfaces/ILCC.sol";
 import {IOracleHelper} from "../../src/interfaces/IOracleHelper.sol";
@@ -528,7 +528,7 @@ contract VTSPositionLibTest is VTSLibTestBase {
     }
 
     function _assertDeferredResidualFirstBurnFees(PoolId poolId, PositionId positionId) internal view {
-        (uint256 pf0After1, uint256 pf1After1) = harness.getPoolProtocolFeeAccrued(poolId);
+        (uint256 pf0After1, uint256 pf1After1) = harness.getPoolSlashedPot(poolId);
         (uint256 fs0After1, uint256 fs1After1) = harness.getFeesShared(positionId);
         (int256 pending0After1, int256 pending1After1) = harness.getPendingFeeAdj(positionId);
 
@@ -570,13 +570,11 @@ contract VTSPositionLibTest is VTSLibTestBase {
         internal
         view
     {
-        (, uint256 pf1After2) = harness.getPoolProtocolFeeAccrued(poolId);
+        (, uint256 pf1After2) = harness.getPoolSlashedPot(poolId);
         (, uint256 fs1After2) = harness.getFeesShared(positionId);
         (, int256 pending1After2) = harness.getPendingFeeAdj(positionId);
 
-        assertEq(
-            pf1After2, expectedFeesBurn, "later settle should consume banked residual burn against the larger window"
-        );
+        assertEq(pf1After2, 0, "slashedPot stays 0 until a fee-processing touch materialises positive pendingFeeAdj");
         assertEq(fs1After2, expectedFeesBurn, "feesShared should track the smoothed burn");
         assertEq(pending1After2, int256(expectedFeesBurn), "smoothed burn should queue the slash later");
     }
@@ -2076,10 +2074,10 @@ contract VTSPositionLibTest is VTSLibTestBase {
         }
 
         {
-            (, uint256 protocolFee1After) = harness.getPoolProtocolFeeAccrued(corePoolId);
+            (, uint256 protocolFee1After) = harness.getPoolSlashedPot(corePoolId);
             (, uint256 feesShared1After) = harness.getFeesShared(positionId);
             (, int256 pendingAdj1After) = harness.getPendingFeeAdj(positionId);
-            assertEq(protocolFee1After, expectedFeesBurn, "protocol fee pot should increase by expected slash amount");
+            assertEq(protocolFee1After, 0, "slashedPot is materialised on later fee-processing touches, not here");
             assertEq(feesShared1After, expectedFeesBurn, "position feesShared should track slash funding");
             assertEq(pendingAdj1After, int256(expectedFeesBurn), "pending fee adjustment should queue slash");
         }
@@ -2145,6 +2143,46 @@ contract VTSPositionLibTest is VTSLibTestBase {
             callerDelta: toBalanceDelta(0, 0),
             feesAccrued: toBalanceDelta(0, 0),
             hookData: _mkHookData(false, false, 0) // non-MM, non-seizing
+        });
+
+        vm.expectRevert(abi.encodeWithSelector(Errors.RFSOpenForPosition.selector, positionId));
+        harness.touchPosition(_mkCtx(), tp);
+    }
+
+    /// @dev Non-MM hook data with forged `seizure.isSeizing` must not bypass the open-RFS remove guard.
+    function test_touchPosition_existingDecrease_nonMM_forgedSeizing_revertsWhenRFSOpen() public {
+        PoolId corePoolId = _getDefaultPoolId();
+        harness.setupPool(corePoolId, _createDefaultVTSConfig());
+
+        bytes32 salt = bytes32(uint256(102));
+        PositionId positionId = _registerHarnessPositionInPool(corePoolId, DEFAULT_OWNER, -60, 60, 1, salt);
+        harness.setPositionActive(positionId, true);
+
+        harness.setCommitmentMax(positionId, 1000e18, 0);
+        harness.setSettled(positionId, 0, 0);
+        harness.setCumulativeDeficit(positionId, 0, 0);
+        harness.setCommitmentDeficit(positionId, 0, 0);
+
+        ModifyLiquidityParams memory params =
+            ModifyLiquidityParams({tickLower: -60, tickUpper: 60, liquidityDelta: -int256(uint256(1)), salt: salt});
+
+        bytes memory forgedSeizingNonMM = abi.encode(
+            PositionModificationHookData({
+                commitId: 0,
+                positionIndex: 0,
+                locker: address(0xBEEF),
+                seizure: SeizureData({isSeizing: true, settle0: 0, settle1: 0}),
+                extraData: ""
+            })
+        );
+
+        TouchPositionParams memory tp = TouchPositionParams({
+            owner: DEFAULT_OWNER,
+            poolKey: _mkPoolKey(),
+            params: params,
+            callerDelta: toBalanceDelta(0, 0),
+            feesAccrued: toBalanceDelta(0, 0),
+            hookData: forgedSeizingNonMM
         });
 
         vm.expectRevert(abi.encodeWithSelector(Errors.RFSOpenForPosition.selector, positionId));
@@ -3639,6 +3677,199 @@ contract VTSPositionLibTest is VTSLibTestBase {
         );
     }
 
+    /// @notice Seizure routing: zero excess settled => queue full principal, no burn slice, zero export clamp.
+    function test_seizureLiquidityDecreaseRouting_excessZero_queuesFullPrincipal() public {
+        VTSPositionLibTest_LiquidityHubCapture hub = new VTSPositionLibTest_LiquidityHubCapture();
+        IMarketVault vault = new VTSPositionLibTest_VaultClamp(0, 0);
+        PositionContext memory ctx = PositionContext({
+            poolManager: manager,
+            liquidityHub: ILiquidityHub(address(hub)),
+            oracleHelper: IOracleHelper(address(0)),
+            marketVault: vault
+        });
+        PoolKey memory pk = corePoolKey;
+        BalanceDelta principalDelta = toBalanceDelta(int128(int256(10)), int128(int256(5)));
+        BalanceDelta requiredSettlementDelta = toBalanceDelta(int128(int256(0)), int128(int256(0)));
+
+        harness.handleSeizureLiquidityDecrease(
+            ctx, DEFAULT_OWNER, pk, principalDelta, requiredSettlementDelta, DEFAULT_OWNER
+        );
+
+        assertEq(hub.lastQueued0(), 10, "seizure: queue full token0 principal when excess is zero");
+        assertEq(hub.lastQueued1(), 5, "seizure: queue full token1 principal when excess is zero");
+        BalanceDelta exportedClamp = harness.getLastSeizureExportedForSettlementClamp();
+        assertEq(exportedClamp.amount0(), 0, "seizure clamp token0");
+        assertEq(exportedClamp.amount1(), 0, "seizure clamp token1");
+    }
+
+    /// @notice Seizure routing: burn min(P,E), queue remainder; export min(E, S+burn).
+    function test_seizureLiquidityDecreaseRouting_partialBurn_remainderQueued() public {
+        VTSPositionLibTest_LiquidityHubCapture hub = new VTSPositionLibTest_LiquidityHubCapture();
+        IMarketVault vault = new VTSPositionLibTest_VaultNoop();
+        PositionContext memory ctx = PositionContext({
+            poolManager: manager,
+            liquidityHub: ILiquidityHub(address(hub)),
+            oracleHelper: IOracleHelper(address(0)),
+            marketVault: vault
+        });
+        PoolKey memory pk = corePoolKey;
+        BalanceDelta principalDelta = toBalanceDelta(int128(int256(10)), int128(int256(100)));
+        BalanceDelta requiredSettlementDelta = toBalanceDelta(int128(int256(8)), int128(int256(0)));
+
+        harness.handleSeizureLiquidityDecrease(
+            ctx, DEFAULT_OWNER, pk, principalDelta, requiredSettlementDelta, DEFAULT_OWNER
+        );
+
+        assertEq(hub.lastQueued0(), 2, "token0 queue = P - min(P,E) = 10 - 8");
+        assertEq(hub.lastQueued1(), 100, "token1 excess zero => full principal queued");
+        BalanceDelta exportedClampB = harness.getLastSeizureExportedForSettlementClamp();
+        assertEq(exportedClampB.amount0(), 8, "export min(E, S+burn) = 8 when vault pays full E");
+        assertEq(exportedClampB.amount1(), 0, "token1 export");
+    }
+
+    /// @notice Seizure routing: when vault cannot pay, burn covers min(P,E), queue remainder; export capped.
+    function test_seizureLiquidityDecreaseRouting_noVault_fullBurnWhenPrincipalCoversExcess() public {
+        VTSPositionLibTest_LiquidityHubCapture hub = new VTSPositionLibTest_LiquidityHubCapture();
+        IMarketVault vault = new VTSPositionLibTest_VaultClamp(0, 0);
+        PositionContext memory ctx = PositionContext({
+            poolManager: manager,
+            liquidityHub: ILiquidityHub(address(hub)),
+            oracleHelper: IOracleHelper(address(0)),
+            marketVault: vault
+        });
+        PoolKey memory pk = corePoolKey;
+        BalanceDelta principalDelta = toBalanceDelta(int128(int256(10)), int128(int256(10)));
+        BalanceDelta requiredSettlementDelta = toBalanceDelta(int128(int256(10)), int128(int256(10)));
+
+        harness.handleSeizureLiquidityDecrease(
+            ctx, DEFAULT_OWNER, pk, principalDelta, requiredSettlementDelta, DEFAULT_OWNER
+        );
+
+        assertEq(hub.lastQueued0(), 0, "token0 all principal burned when E=P and no vault liquidity");
+        assertEq(hub.lastQueued1(), 0, "token1 all principal burned when E=P and no vault liquidity");
+        BalanceDelta exportedClampC = harness.getLastSeizureExportedForSettlementClamp();
+        assertEq(exportedClampC.amount0(), 10, "clamp export token0");
+        assertEq(exportedClampC.amount1(), 10, "clamp export token1");
+    }
+
+    /// @notice Seizure routing: asymmetric legs — per-lane burn/queue split can differ when excess differs by lane.
+    function test_seizureLiquidityDecreaseRouting_asymmetricTwoLegs() public {
+        VTSPositionLibTest_LiquidityHubCapture hub = new VTSPositionLibTest_LiquidityHubCapture();
+        IMarketVault vault = new VTSPositionLibTest_VaultClamp(0, 0);
+        PositionContext memory ctx = PositionContext({
+            poolManager: manager,
+            liquidityHub: ILiquidityHub(address(hub)),
+            oracleHelper: IOracleHelper(address(0)),
+            marketVault: vault
+        });
+        PoolKey memory pk = corePoolKey;
+        // P0=10, E0=3 => burn 3, queue 7. P1=5, E1=10 => burn 5, queue 0. Vault settleable (0,0).
+        BalanceDelta principalDelta = toBalanceDelta(int128(int256(10)), int128(int256(5)));
+        BalanceDelta requiredSettlementDelta = toBalanceDelta(int128(int256(3)), int128(int256(10)));
+
+        harness.handleSeizureLiquidityDecrease(
+            ctx, DEFAULT_OWNER, pk, principalDelta, requiredSettlementDelta, DEFAULT_OWNER
+        );
+
+        assertEq(hub.lastQueued0(), 7, "token0 queue = P - min(P,E) = 10 - 3");
+        assertEq(hub.lastQueued1(), 0, "token1 queue = P - min(P,E) = 5 - 5");
+        BalanceDelta exportedAsym = harness.getLastSeizureExportedForSettlementClamp();
+        assertEq(exportedAsym.amount0(), 3, "export min(E0, S0 + burn0) = 3");
+        assertEq(exportedAsym.amount1(), 5, "export min(E1, S1 + burn1) = 5");
+    }
+
+    /// @dev Mirrors `VTSPositionMMOpsLib._seizurePerLeg` for property checks (VaultNoop ⇒ settleable leg = excess leg).
+    function _expectedSeizureLeg(uint256 p, uint256 e, uint256 settleableU)
+        private
+        pure
+        returns (uint256 retained, uint256 exportU)
+    {
+        uint256 burn = p < e ? p : e;
+        retained = p > burn ? p - burn : 0;
+        exportU = e;
+        uint256 sum = settleableU + burn;
+        if (sum < exportU) exportU = sum;
+    }
+
+    /// @notice Fuzz: seizure routing matches per-leg burn/queue/export with `VaultNoop` (full vault pass-through ⇒ S = E per leg).
+    function testFuzz_previewSeizureLiquidityDecreaseRouting_matchesPerLegFormula(
+        uint256 p0raw,
+        uint256 p1raw,
+        uint256 e0raw,
+        uint256 e1raw
+    ) public {
+        uint256 maxAmt = uint256(uint128(type(int128).max)) / 2;
+        uint256 p0 = bound(p0raw, 1, maxAmt);
+        uint256 p1 = bound(p1raw, 1, maxAmt);
+        uint256 e0 = bound(e0raw, 0, maxAmt);
+        uint256 e1 = bound(e1raw, 0, maxAmt);
+
+        IMarketVault vault = new VTSPositionLibTest_VaultNoop();
+        PositionContext memory ctx = PositionContext({
+            poolManager: manager,
+            liquidityHub: ILiquidityHub(address(0)),
+            oracleHelper: IOracleHelper(address(0)),
+            marketVault: vault
+        });
+        BalanceDelta principalDelta = toBalanceDelta(int128(int256(p0)), int128(int256(p1)));
+        BalanceDelta requiredSettlementDelta = toBalanceDelta(int128(int256(e0)), int128(int256(e1)));
+
+        (uint256 ret0, uint256 ret1, BalanceDelta underlying, BalanceDelta exported) =
+            harness.previewSeizureLiquidityDecreaseRouting(ctx, principalDelta, requiredSettlementDelta);
+
+        (uint256 expRet0, uint256 expEx0) = _expectedSeizureLeg(p0, e0, e0);
+        (uint256 expRet1, uint256 expEx1) = _expectedSeizureLeg(p1, e1, e1);
+
+        assertEq(ret0, expRet0, "retained0");
+        assertEq(ret1, expRet1, "retained1");
+        assertEq(uint256(int256(exported.amount0())), expEx0, "export0");
+        assertEq(uint256(int256(exported.amount1())), expEx1, "export1");
+        assertEq(uint256(int256(underlying.amount0())), e0, "VaultNoop settleable leg0");
+        assertEq(uint256(int256(underlying.amount1())), e1, "VaultNoop settleable leg1");
+    }
+
+    /// @notice Scan 21: queueable shortfall is `min(shortfall, principal)`; `processMMOperations` must pass pool
+    ///         principal (`callerDelta - feesAccrued`). Inflating principal (e.g. by mixing in `feeAdj`) would raise this cap.
+    function test_handleLiquidityDecrease_queueCap_sensitivityToPrincipal_scan21() public {
+        BalanceDelta requiredSettlementDelta = toBalanceDelta(int128(int256(100)), 0);
+
+        VTSPositionLibTest_LiquidityHubCapture hub30 = new VTSPositionLibTest_LiquidityHubCapture();
+        IMarketVault vault30 = new VTSPositionLibTest_VaultClamp(0, 0);
+        PositionContext memory ctx30 = PositionContext({
+            poolManager: manager,
+            liquidityHub: ILiquidityHub(address(hub30)),
+            oracleHelper: IOracleHelper(address(0)),
+            marketVault: vault30
+        });
+        harness.handleLiquidityDecrease(
+            ctx30,
+            DEFAULT_OWNER,
+            corePoolKey,
+            toBalanceDelta(int128(int256(30)), 0),
+            requiredSettlementDelta,
+            DEFAULT_OWNER
+        );
+        assertEq(hub30.lastQueued0(), 30, "queue should cap at principal=30 when shortfall exceeds principal");
+
+        VTSPositionLibTest_LiquidityHubCapture hub40 = new VTSPositionLibTest_LiquidityHubCapture();
+        IMarketVault vault40 = new VTSPositionLibTest_VaultClamp(0, 0);
+        PositionContext memory ctx40 = PositionContext({
+            poolManager: manager,
+            liquidityHub: ILiquidityHub(address(hub40)),
+            oracleHelper: IOracleHelper(address(0)),
+            marketVault: vault40
+        });
+        harness.handleLiquidityDecrease(
+            ctx40,
+            DEFAULT_OWNER,
+            corePoolKey,
+            toBalanceDelta(int128(int256(40)), 0),
+            requiredSettlementDelta,
+            DEFAULT_OWNER
+        );
+        assertEq(hub40.lastQueued0(), 40, "inflated principal would incorrectly raise the queue cap");
+    }
+
     function test_handleLiquidityDecrease_settleableTracksAvailability_whenQueueIsPrincipalCapped() public {
         VTSPositionLibTest_LiquidityHubCapture hub = new VTSPositionLibTest_LiquidityHubCapture();
         // Partial availability with token1 shortfall exceeding principal.
@@ -4296,10 +4527,12 @@ contract VTSPositionLibTest is VTSLibTestBase {
 
         harness.settlePositionGrowths(manager, positionId);
 
-        // DICE burn must apply before inflow nets principal, so slash accounting should be non-zero.
-        (, uint256 poolFee1) = harness.getPoolProtocolFeeAccrued(corePoolId);
+        // DICE burn must apply before inflow nets principal — slash is queued on the position (materialised pot updates on touch).
+        (, uint256 poolFee1) = harness.getPoolSlashedPot(corePoolId);
         (, uint256 feesShared1) = harness.getFeesShared(positionId);
-        assertGt(poolFee1, 0, "DICE burn should run before inflow netting principal");
+        (, int256 pending1) = harness.getPendingFeeAdj(positionId);
+        assertEq(poolFee1, 0, "slashedPot is not incremented during growth settlement");
+        assertGt(pending1, 0, "DICE burn should queue positive pendingFeeAdj before inflow netting principal");
         assertGt(feesShared1, 0, "feesShared should track that burn on fee token");
 
         // Inflow still nets deficit and credits the remainder to settled in the same cycle.
@@ -4473,11 +4706,13 @@ contract VTSPositionLibTest is VTSLibTestBase {
         harness.applyCoverageBurn(manager, positionId, corePoolId, 0, exercised, positionLiquidity);
         harness.applyCoverageBurn(manager, positionId, corePoolId, 0, exercised, positionLiquidity);
 
-        (, uint256 protocolFeeAccrued1) = harness.getPoolProtocolFeeAccrued(corePoolId);
+        (, uint256 protocolFeeAccrued1) = harness.getPoolSlashedPot(corePoolId);
+        (, int256 pending1After) = harness.getPendingFeeAdj(positionId);
         (uint256 snapAfter2,) = harness.getOutflowsAtFeeSnap(positionId);
 
         // Regression guard: repeated partial burns in one fee window must not over-slash one-shot equivalent.
-        assertLe(protocolFeeAccrued1, expectedSingleShotBurn, "repeated partial burns must not over-slash");
+        assertEq(protocolFeeAccrued1, 0, "slashedPot is not incremented at burn accounting time");
+        assertLe(uint256(pending1After), expectedSingleShotBurn, "repeated partial burns must not over-slash");
         assertEq(snapAfter2, exercised * 2, "outflow snap should still advance cumulatively");
     }
 
@@ -4505,14 +4740,14 @@ contract VTSPositionLibTest is VTSLibTestBase {
         harness.setFeeGrowthInsideLast(positionId, 0, 0);
 
         (uint256 snap0Before,) = harness.getOutflowsAtFeeSnap(positionId);
-        (uint256 pf0Before, uint256 pf1Before) = harness.getPoolProtocolFeeAccrued(corePoolId);
+        (uint256 pf0Before, uint256 pf1Before) = harness.getPoolSlashedPot(corePoolId);
         (uint256 fs0Before, uint256 fs1Before) = harness.getFeesShared(positionId);
 
         // Should not revert, and should not advance any state (feesBurn must be 0 due to ofDelta==0 early return).
         harness.applyCoverageBurn(manager, positionId, corePoolId, 0, 10e18, uint128(1e18));
 
         (uint256 snap0After,) = harness.getOutflowsAtFeeSnap(positionId);
-        (uint256 pf0After, uint256 pf1After) = harness.getPoolProtocolFeeAccrued(corePoolId);
+        (uint256 pf0After, uint256 pf1After) = harness.getPoolSlashedPot(corePoolId);
         (uint256 fs0After, uint256 fs1After) = harness.getFeesShared(positionId);
 
         assertEq(snap0After, snap0Before, "outflowsAtFeeSnap should not advance when ofDelta is zero");
@@ -4538,7 +4773,7 @@ contract VTSPositionLibTest is VTSLibTestBase {
 
         // Safety assertion: baseline path should be a no-op (no state writes) because positionLiquidity == 0 => fees == 0.
         (uint256 snap0Before,) = harness.getOutflowsAtFeeSnap(positionId);
-        (uint256 pf0Before, uint256 pf1Before) = harness.getPoolProtocolFeeAccrued(corePoolId);
+        (uint256 pf0Before, uint256 pf1Before) = harness.getPoolSlashedPot(corePoolId);
         (uint256 fs0Before, uint256 fs1Before) = harness.getFeesShared(positionId);
         (, uint256 fg1Before) = harness.getFeeGrowthInsideLast(positionId);
 
@@ -4547,7 +4782,7 @@ contract VTSPositionLibTest is VTSLibTestBase {
         harness.applyCoverageBurn(manager, positionId, corePoolId, 0, 3, uint128(0));
 
         (uint256 snap0After,) = harness.getOutflowsAtFeeSnap(positionId);
-        (uint256 pf0After, uint256 pf1After) = harness.getPoolProtocolFeeAccrued(corePoolId);
+        (uint256 pf0After, uint256 pf1After) = harness.getPoolSlashedPot(corePoolId);
         (uint256 fs0After, uint256 fs1After) = harness.getFeesShared(positionId);
         (, uint256 fg1After) = harness.getFeeGrowthInsideLast(positionId);
 
@@ -4605,12 +4840,15 @@ contract VTSPositionLibTest is VTSLibTestBase {
 
         harness.applyCoverageBurn(manager, positionId, corePoolId, 0, cov, positionLiquidity);
 
-        // Fee token is token1 for token0 deficit burns.
-        (, uint256 pf1After) = harness.getPoolProtocolFeeAccrued(corePoolId);
+        // Fee token is token1 for token0 deficit burns — burn accounting queues positive `pendingFeeAdj` (materialised
+        // into `slashedPot` only on a later fee-processing touch).
+        (, uint256 pf1After) = harness.getPoolSlashedPot(corePoolId);
         (, uint256 fs1After) = harness.getFeesShared(positionId);
+        (, int256 pending1After) = harness.getPendingFeeAdj(positionId);
 
-        assertEq(pf1After, expectedFeesBurn, "protocolFeeAccrued1 should equal expected feesBurn");
+        assertEq(pf1After, 0, "slashedPot1 stays 0 until touch materialises pending");
         assertEq(fs1After, expectedFeesBurn, "feesShared1 should equal expected feesBurn");
+        assertEq(pending1After, int256(expectedFeesBurn), "pendingFeeAdj1 should queue expected feesBurn");
     }
 
     // ============================================================

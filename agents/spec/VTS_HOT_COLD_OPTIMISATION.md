@@ -59,7 +59,7 @@ This document pins the **canonical function inventory**, **compiler buckets**, *
 1. Update **`contracts/evm-scripts/foundry.toml`** `libraries` entries for every affected profile (`deploy`, `ci`, `deploy-eth-sepolia`, `deploy-arbitrum-sepolia`).  
 2. Re-run **`DeployLibraries.s.sol`** (or predict `getCreate3Contract` + deployer) and paste addresses.  
 3. Refresh **`deployments/*_libraries_deployments.json`** / JSON outputs from the script.  
-4. If Echidna linked addresses move, run **`just validate-fuzz-libs`** / `ValidateEchidnaLinkedLibs`.  
+4. If Echidna linked addresses move, re-run **`just echidna-prepare`** (or any `just echidna …` target, which runs prepare via `echidna.sh`).  
 5. Review CI/E2E assumptions (`FOUNDRY_PROFILE=ci` in `.github/workflows/e2e.yml`).
 
 **Note:** Pinned addresses are **deployer- and factory-specific**. Testnet profiles may use placeholders until the library is deployed on that chain; replace with the value printed by `DeployLibraries` for the same `PRIVATE_KEY` + `CREATE3_FACTORY` as other libs on that network.

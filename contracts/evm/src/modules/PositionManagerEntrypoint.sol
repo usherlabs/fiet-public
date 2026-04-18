@@ -40,23 +40,29 @@ abstract contract PositionManagerEntrypoint is PositionManagerBase {
     // ------------------------------------------------------------------------------------------------
 
     /// @notice Hook called before batch execution
-    /// @dev Handles native value sent with the transaction and credits the exact msg.value amount
+    /// @dev Credits native ETH to the locker delta using **balance-delta** accounting for the batch:
+    ///      - First batch in the tx: baseline `lastSeen = balance - msg.value` so only this call's `msg.value` is
+    ///        treated as new inflow (ambient ETH already on the router is not credited).
+    ///      - Later batches: `fresh = balance - lastSeen`; credit `min(msg.value, fresh)` so:
+    ///        - `Multicall_v4` inner `delegatecall`s share one outer `msg.value` and do not increase balance between
+    ///          batches → second inner batch gets `fresh == 0` (fixes duplicate credit if we cleared a boolean per batch).
+    ///        - Distinct payable top-level calls each add ETH → `fresh` matches the new wei and each call is credited once.
+    ///      `_afterBatch` snapshots `address(this).balance` into transient storage for the rest of the transaction.
     function _beforeBatch() internal {
-        // Handle native value EXACTLY once per batch.
-        uint256 amount = TransientSlots.readMsgValueOnce();
+        uint256 amount = TransientSlots.nativeEthCreditAmountForBatch(address(this).balance, msg.value);
         if (amount > 0) {
             _creditExact(CurrencyLibrary.ADDRESS_ZERO, amount);
         }
     }
 
     /// @notice Hook called after batch execution
-    /// @dev Asserts that deltas are non-zero after batch execution
+    /// @dev Clears batch-scoped seizure context, asserts deltas net to zero, then records native balance for the next
+    ///      `_beforeBatch` in the same transaction (multicall-safe, multi-entrypoint-safe).
     function _afterBatch() internal {
-        // Clear any per-batch transient context to avoid same-tx leakage into subsequent batches.
         TransientSlots.clearSeizedPositionId();
-        TransientSlots.clearMsgValueRead();
         // Owner-scoped and market-scoped transient namespaces both resolve through the orchestrator boundary.
         vtsOrchestrator.assertNonZeroDeltas(marketFactory);
+        TransientSlots.setNativeLastSeenBalance(address(this).balance);
     }
 
     // ------------------------------------------------------------------------------------------------
@@ -71,7 +77,13 @@ abstract contract PositionManagerEntrypoint is PositionManagerBase {
     /// @param currency The currency to take
     /// @param to The recipient address
     /// @param maxAmount The maximum amount to take (0 = take full available credit)
+    /// @dev Native `TAKE` to `address(this)` is disallowed: it would debit the locker's delta without moving ETH,
+    ///      stranding balance on MMPM with no native `SYNC` path (see `INVARIANTS.md` DELTA-02 / audit finding on
+    ///      native self-take). ERC20 self-take remains valid and recoverable via `SYNC`.
     function _take(Currency currency, address to, uint256 maxAmount) internal {
+        if (currency == CurrencyLibrary.ADDRESS_ZERO && to == address(this)) {
+            revert Errors.InvalidAddress(to);
+        }
         address locker = msgSender();
         uint256 bal = currency.balanceOfSelf();
         // maxAmount == 0 means "take full available credit", but still cap to the actual ERC20 balance held by MMPM.
