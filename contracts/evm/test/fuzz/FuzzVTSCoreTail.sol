@@ -13,7 +13,7 @@ import {DELTA01} from "./invariants/DELTA01.sol";
 import {SEIZE01_02} from "./invariants/SEIZE01_02.sol";
 import {PAUSE01} from "./invariants/PAUSE01.sol";
 
-/// @notice Composed Medusa module for the Worker A core/accounting/VTS tail invariants.
+/// @notice Composed Medusa module for the remaining core/accounting/VTS tail invariants.
 /// @dev This keeps the remaining repo-owned tail surfaces on the same child-harness pattern
 ///      already used by the other migrated Medusa modules.
 abstract contract FuzzVTSCoreTail {
