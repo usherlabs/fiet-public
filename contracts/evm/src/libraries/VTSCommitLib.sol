@@ -164,14 +164,14 @@ library VTSCommitLib {
     /// @param positionId The position ID
     /// @param params Liquidity delta parameters bundled in a struct
     /// @param revertIfInsufficientBacking Whether to revert if backing is insufficient
-    function _validateLiquidityDelta(
+    function validateLiquidityDelta(
         VTSStorage storage s,
         IOracleHelper oracleHelper,
         uint256 commitId,
         PositionId positionId,
         LiquidityDeltaParams memory params,
         bool revertIfInsufficientBacking
-    ) internal view returns (bool success, uint256 issuedValue, uint256 settledValue, uint256 signalValue) {
+    ) external view returns (bool success, uint256 issuedValue, uint256 settledValue, uint256 signalValue) {
         issuedValue = _issuedValueForLiquidity(
             oracleHelper,
             params.currency0,
@@ -191,35 +191,13 @@ library VTSCommitLib {
         }
     }
 
-    /// @notice Validates whether a proposed liquidity delta remains fully backed by signal and settled value.
-    /// @param s The central VTS storage
-    /// @param oracleHelper The oracle helper for USD price calculations
-    /// @param commitId The commit NFT id
-    /// @param positionId The position ID
-    /// @param params Liquidity delta parameters bundled in a struct
-    /// @param revertIfInsufficientBacking Whether to revert if backing is insufficient
-    /// @return success True when the issued value is fully backed
-    /// @return issuedValue The USD issued value of the proposed liquidity delta
-    /// @return settledValue The USD settled value already recorded for the position
-    /// @return signalValue The USD value of the commit signal reserves
-    function validateLiquidityDelta(
-        VTSStorage storage s,
-        IOracleHelper oracleHelper,
-        uint256 commitId,
-        PositionId positionId,
-        LiquidityDeltaParams memory params,
-        bool revertIfInsufficientBacking
-    ) external view returns (bool success, uint256 issuedValue, uint256 settledValue, uint256 signalValue) {
-        return _validateLiquidityDelta(s, oracleHelper, commitId, positionId, params, revertIfInsufficientBacking);
-    }
-
     /// @notice LCC Unwrap -> Protocol Coverage Function
     /// @notice Increment protocol or proactive excess liquidity coverage on LCC unwrap, consuming proactive pool first
     /// @param s The central VTS storage
     /// @param poolId The pool ID
     /// @param tokenIndex The token index (0 or 1)
     /// @param coveredAmount The amount covered
-    function _incrementCoverage(VTSStorage storage s, PoolId poolId, uint8 tokenIndex, uint256 coveredAmount) internal {
+    function incrementCoverage(VTSStorage storage s, PoolId poolId, uint8 tokenIndex, uint256 coveredAmount) external {
         if (tokenIndex > 1 || coveredAmount == 0) return;
         PoolAccounting storage paPool = s.poolAccounting[poolId];
 
@@ -250,15 +228,6 @@ library VTSCommitLib {
             // Unlike DICE, we intentionally do not defer-and-socialise this later; only coverage exercised
             // while settled liquidity is live contributes to allocatable CISE index/denominator state.
         }
-    }
-
-    /// @notice Increments pool coverage accounting for the requested token lane.
-    /// @param s The central VTS storage
-    /// @param poolId The pool ID
-    /// @param tokenIndex The token index (0 or 1)
-    /// @param coveredAmount The amount covered
-    function incrementCoverage(VTSStorage storage s, PoolId poolId, uint8 tokenIndex, uint256 coveredAmount) external {
-        _incrementCoverage(s, poolId, tokenIndex, coveredAmount);
     }
 
     /// @dev Shared body for linked `commitSignal` and orchestrator router overload.

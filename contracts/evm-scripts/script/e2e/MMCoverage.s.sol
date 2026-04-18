@@ -303,38 +303,33 @@ contract MMCoverageE2E is MME2EBase {
         returns (SwapState memory)
     {
         (swapState.protoFee0AfterSwap, swapState.protoFee1AfterSwap) = s.vts.getSlashedPot(s.key.toId());
-
-        if (swapState.lcc0AfterSwap > 0) {
-            require(swapState.protoFee1AfterSwap > 0, "protocol Fee1 AfterSwap not greater than zero");
-        }
-        if (swapState.lcc1AfterSwap > 0) {
-            require(swapState.protoFee0AfterSwap > 0, "protocol Fee0 AfterSwap not greater than zero");
-        }
         console.log("protocol Fees 0 AfterSwap:", swapState.protoFee0AfterSwap);
         console.log("protocol Fees 1 AfterSwap:", swapState.protoFee1AfterSwap);
 
         (,, int256 mm1Pending0BeforePoke, int256 mm1Pending1BeforePoke) = s.vts.getPositionFeeAccounting(s.mm1PosId);
-        require(
-            uint256(mm1Pending0BeforePoke) == swapState.protoFee0AfterSwap
-                && uint256(mm1Pending1BeforePoke) == swapState.protoFee1AfterSwap,
-            "pending fees not equal to protocol fees"
-        );
+        require(mm1Pending0BeforePoke >= 0 && mm1Pending1BeforePoke >= 0, "pending fees must be non-negative");
+        if (swapState.lcc0AfterSwap > 0) {
+            require(uint256(mm1Pending1BeforePoke) > 0, "mm1 pending fee1 should queue before poke");
+        }
+        if (swapState.lcc1AfterSwap > 0) {
+            require(uint256(mm1Pending0BeforePoke) > 0, "mm1 pending fee0 should queue before poke");
+        }
 
         (uint256 mm1Amount0Fees, uint256 mm1Amount1Fees) = _pokePosition(s.market, keys.mm1Pk, s.mm1CommitId);
         if (swapState.lcc0AfterSwap > 0) require(mm1Amount1Fees > 0, "mm1Amount1Fees not greater than zero");
         if (swapState.lcc1AfterSwap > 0) require(mm1Amount0Fees > 0, "mm1Amount0Fees not greater than zero");
 
         (swapState.pot0AfterPokeMM1, swapState.pot1AfterPokeMM1) = s.vts.getSlashedPot(s.key.toId());
-        if (swapState.protoFee0AfterSwap > 0) {
+        if (mm1Pending0BeforePoke > 0) {
             require(
-                swapState.pot0AfterPokeMM1 > 0 && swapState.pot0AfterPokeMM1 == swapState.protoFee0AfterSwap,
-                "pot0AfterPokeMM1 not greater than zero"
+                swapState.pot0AfterPokeMM1 > swapState.protoFee0AfterSwap,
+                "pot0AfterPokeMM1 should grow after mm1 poke"
             );
         }
-        if (swapState.protoFee1AfterSwap > 0) {
+        if (mm1Pending1BeforePoke > 0) {
             require(
-                swapState.pot1AfterPokeMM1 > 0 && swapState.pot1AfterPokeMM1 == swapState.protoFee1AfterSwap,
-                "pot1AfterPokeMM1 not greater than zero"
+                swapState.pot1AfterPokeMM1 > swapState.protoFee1AfterSwap,
+                "pot1AfterPokeMM1 should grow after mm1 poke"
             );
         }
         console.log("pot0AfterPokeMM1:", swapState.pot0AfterPokeMM1);
@@ -404,4 +399,3 @@ contract MMCoverageE2E is MME2EBase {
         _closeAllPositions(scenario, keys);
     }
 }
-

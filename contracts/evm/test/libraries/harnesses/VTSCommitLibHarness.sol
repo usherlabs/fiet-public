@@ -30,13 +30,13 @@ contract VTSCommitLibHarness {
         VTSCommitLib.LiquidityDeltaParams memory params,
         bool revertIfInsufficientBacking
     ) external view returns (bool, uint256, uint256, uint256) {
-        return VTSCommitLib._validateLiquidityDelta(
+        return VTSCommitLib.validateLiquidityDelta(
             s, oracleHelper, commitId, positionId, params, revertIfInsufficientBacking
         );
     }
 
     function incrementCoverage(PoolId poolId, uint8 tokenIndex, uint256 coveredAmount) external {
-        VTSCommitLib._incrementCoverage(s, poolId, tokenIndex, coveredAmount);
+        VTSCommitLib.incrementCoverage(s, poolId, tokenIndex, coveredAmount);
     }
 
     function commitSignal(IVRLSignalManager mgr, address sender, IOracleHelper oracleHelper, bytes memory sig)
