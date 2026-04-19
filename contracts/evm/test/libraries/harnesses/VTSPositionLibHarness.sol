@@ -517,6 +517,20 @@ contract VTSPositionLibHarness {
         );
     }
 
+    function getDiceOrdinaryRealisationCarry(PositionId id) external view returns (uint256 c0, uint256 c1) {
+        return (
+            s.positionAccounting[id].diceOrdinaryRealisationCarry.token0,
+            s.positionAccounting[id].diceOrdinaryRealisationCarry.token1
+        );
+    }
+
+    function getDiceResidualRealisationCarry(PositionId id) external view returns (uint256 c0, uint256 c1) {
+        return (
+            s.positionAccounting[id].diceResidualRealisationCarry.token0,
+            s.positionAccounting[id].diceResidualRealisationCarry.token1
+        );
+    }
+
     function getCISEIndexLastX128(PositionId id) external view returns (uint256 idx0, uint256 idx1) {
         return (s.positionAccounting[id].ciseIndexLastX128.token0, s.positionAccounting[id].ciseIndexLastX128.token1);
     }

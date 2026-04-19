@@ -5,6 +5,7 @@ Date: 18th April 2026
 Amendments:
 
 - 19th April 2026 — clarified full-decommit / exit semantics for unresolved `pendingFeeAdj`
+- 19th April 2026 — distinguished banked DICE burn from `pendingFeeAdj` (see below)
 
 **Canonical reference:** use this document for post-redesign fee-pot semantics. Older research specs that still mention `protocolFeeAccrued` carry a callout at the top pointing here; treat their `protocolFeeAccrued` formulas as historical unless reconciled with this note.
 
@@ -30,6 +31,16 @@ Concretely:
 - This is intentional product behaviour: blocking decommit on unresolved `pendingFeeAdj` would turn a touch-mediated,
   best-effort mechanism into a forced post-exit settlement obligation and would create an incentive to keep an otherwise
   empty commitment NFT alive purely to chase optional future materialisation.
+
+## Banked DICE burn versus `pendingFeeAdj`
+
+Deficit-indexed coverage exercise (DICE) can **bank** a slash obligation in `pendingResidualBurnBase` (shared ordinary +
+residual realisation) when the fee-burn path cannot consume it on the same touch (for example empty outflow windows or
+insufficient fresh fees). That banked base is still ultimately expressed through the same fee pipeline as other coverage
+burns (`_applyBurnBase` → positive `pendingFeeAdj` once consumable), but it is **not** the same object as the
+best-effort, touch-mediated `pendingFeeAdj` queue described above: exit semantics that intentionally allow unresolved
+`pendingFeeAdj` after decommit do **not** imply that banked DICE burn is silently discarded. See **COV-05** in
+`contracts/evm/INVARIANTS.md` and `agents/spec/Deficit-Indexed-Coverage-Exercise.md` for the position-side model.
 
 ## Why touch order matters
 

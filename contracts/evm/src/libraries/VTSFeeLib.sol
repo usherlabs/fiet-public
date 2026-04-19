@@ -590,16 +590,111 @@ library VTSFeeLib {
     }
 
     // --------------------------------------------------
-    // Residual / coverage burn orchestration (linked from VTSPositionLib)
+    // DICE (deficit-indexed coverage exercise) — position settlement
+    //
+    // In practice: pool commits move coverage indices; each `settlePositionGrowths` touch reconciles the position
+    // against those indices, turns the implied coverage into a fee-slash obligation, and runs it through the same
+    // delayed burn path as historical “residual” DICE — bank in `pendingResidualBurnBase`, then try `_applyBurnBase`.
+    // Ordinary and residual index legs both bank here; naming on pending fields is legacy for layout compatibility.
+    // (Linked from `VTSPositionLib.settlePositionGrowths`, before inflow nets deficit principal.)
     // --------------------------------------------------
 
-    /// @dev Residual fee backing is episode-scoped: once the matching burn base is exhausted,
-    ///      any leftover backing on the opposite fee lane must not survive into a later residual episode.
+    /// @dev Fee backing is episode-scoped: once the matching banked DICE burn base is exhausted,
+    ///      any leftover backing on the opposite fee lane must not survive into a later episode.
     function _clearResolvedResidualFeeBacking(PositionAccounting storage pa, uint8 deficitTokenIndex) internal {
         if (pa.pendingResidualBurnBase.get(deficitTokenIndex) != 0) return;
 
         uint8 feeTokenIndex = deficitTokenIndex == 0 ? 1 : 0;
         pa.pendingResidualFeeBacking.set(feeTokenIndex, 0);
+    }
+
+    /// @notice Chained floor realisation for `deficitPrincipal * deltaIndex / Q128`.
+    /// @dev In practice: many small index moves across separate settles must assign the same total raw coverage as one
+    ///      big move. Without `carryIn`/`carryOut`, independent `floor` per touch loses dust to rounding; this matches
+    ///      the fee-burn remainder story (COV-04 / INVARIANTS COV-05).
+    function _realisedCoverageWithCarry(uint256 deficitPrincipal, uint256 deltaIndex, uint256 carryIn)
+        private
+        pure
+        returns (uint256 covOut, uint256 carryOut)
+    {
+        if (deltaIndex == 0 || deficitPrincipal == 0) {
+            return (0, carryIn);
+        }
+        uint256 q = FullMath.mulDiv(deficitPrincipal, deltaIndex, FixedPoint128.Q128);
+        uint256 r = mulmod(deficitPrincipal, deltaIndex, FixedPoint128.Q128);
+        unchecked {
+            uint256 sum = r + carryIn;
+            covOut = q + sum / FixedPoint128.Q128;
+            carryOut = sum % FixedPoint128.Q128;
+        }
+    }
+
+    /// @dev Same clamp as `_applyCoverageBurn`: burn base is min(min(cov, d+settled), d).
+    function _effectiveDiceBurnBase(PositionAccounting storage pa, uint8 tokenIndex, uint256 cov)
+        private
+        view
+        returns (uint256 burnBase)
+    {
+        uint256 d = pa.cumulativeDeficit.get(tokenIndex);
+        uint256 settled = pa.settled.get(tokenIndex);
+        if (d == 0 && settled == 0) return 0;
+        uint256 cEff = cov <= (d + settled) ? cov : (d + settled);
+        if (d == 0) return 0;
+        burnBase = cEff < d ? cEff : d;
+    }
+
+    /// @dev In practice: each touch only adds incremental coverage `incremCov`, but the slash is capped by current
+    ///      deficit (and settled) via `_effectiveDiceBurnBase`. Naively banking `min(incremCov, D)` every touch can
+    ///      over-bank when many touches sum to more assigned coverage than `D` allows; we therefore track cumulative
+    ///      assigned coverage in `dice*CovAgg` and bank only `f(newAgg) - f(oldAgg)` where `f` is that clamp.
+    function _bankDiceBurnFromCovWaterfall(
+        PositionAccounting storage pa,
+        uint8 tokenIndex,
+        uint256 incremCov,
+        bool residualLeg
+    ) private returns (uint256 burnDelta) {
+        if (incremCov == 0) return 0;
+        TokenPairUint storage aggSlot = residualLeg ? pa.diceResidualCovAgg : pa.diceOrdinaryCovAgg;
+        uint256 oldAgg = aggSlot.get(tokenIndex);
+        uint256 newAgg = oldAgg + incremCov;
+        aggSlot.set(tokenIndex, newAgg);
+        uint256 burnOld = _effectiveDiceBurnBase(pa, tokenIndex, oldAgg);
+        uint256 burnNew = _effectiveDiceBurnBase(pa, tokenIndex, newAgg);
+        if (burnNew <= burnOld) return 0;
+        unchecked {
+            return burnNew - burnOld;
+        }
+    }
+
+    /// @dev Append to shared banked DICE burn and optionally refresh the outflow watermark.
+    /// @param useCumulativeOutflowsFloor If true (residual-index realisation), raise floor toward `cumulativeOutflows`
+    ///        so burn consumes only on **new** outflows after the event. If false (ordinary index realisation), align
+    ///        floor with `outflowsAtFeeSnap` so the same window as immediate `_applyCoverageBurn` remains eligible.
+    ///      In practice: residual-backed banks behave like “only after fresh outflows”; ordinary-backed banks behave
+    ///      like the legacy immediate path’s outflow snapshot, and overwrite the floor so a residual high-water mark
+    ///      cannot strand ordinary burn in the same pass.
+    function _bankPendingDiceBurn(
+        PositionAccounting storage pa,
+        uint8 tokenIndex,
+        uint256 burnBase,
+        bool useCumulativeOutflowsFloor
+    ) private {
+        if (burnBase == 0) return;
+        pa.pendingResidualBurnBase.set(tokenIndex, pa.pendingResidualBurnBase.get(tokenIndex) + burnBase);
+
+        uint256 existingFloor = pa.pendingResidualBurnOutflowsFloor.get(tokenIndex);
+        if (useCumulativeOutflowsFloor) {
+            uint256 curOutflows = pa.cumulativeOutflows.get(tokenIndex);
+            if (curOutflows > existingFloor) {
+                pa.pendingResidualBurnOutflowsFloor.set(tokenIndex, curOutflows);
+            }
+        } else {
+            // Ordinary-index realisation: align with `outflowsAtFeeSnap` (same as immediate `_applyCoverageBurn` with
+            // `outflowFloor == 0`). Overwrite any residual-only cumulative watermark so mixed residual+ordinary banks
+            // in the same `_settleDICEForToken` pass remain consumable on the current outflow window.
+            uint256 snapNow = pa.outflowsAtFeeSnap.get(tokenIndex);
+            pa.pendingResidualBurnOutflowsFloor.set(tokenIndex, snapNow);
+        }
     }
 
     /// @dev Shared residual-backing capture: banks `liquidityScale * (fg - feeGrowthInsideLast)` per fee lane when
@@ -683,7 +778,10 @@ library VTSFeeLib {
         _captureResidualFeeBackingForLiquidityScale(s, poolManager, id, removedLiquidity, false);
     }
 
-    /// @notice Apply banked residual-derived DICE burn against later outflow windows only
+    /// @notice Apply banked DICE burn (ordinary + residual realisation) against eligible fee/outflow windows.
+    /// @dev In practice: whatever is sitting in `pendingResidualBurnBase` (from either index leg) is fed to
+    ///      `_applyBurnBase` once per token per settle. If fees/outflows are insufficient, nothing is consumed and the
+    ///      obligation stays pending for a later touch; fee-backing hooks still treat this as one “episode”.
     function _applyBankedResidualBurn(
         VTSStorage storage s,
         IPoolManager poolManager,
@@ -746,6 +844,11 @@ library VTSFeeLib {
         }
     }
 
+    /// @notice Reconcile one deficit-token lane for DICE: realise pool index deltas, bank slash obligation, consume.
+    /// @dev Order is fixed: (1) residual-only pool index into shared pending, (2) ordinary per-deficit index into the
+    ///      same pending, (3) one consumption attempt. In practice this means value is not dropped when the burn
+    ///      cannot run on this touch (`feesBurn == 0` / outflow gating); it waits in `pendingResidualBurnBase` like
+    ///      pre-existing residual DICE behaviour.
     function _settleDICEForToken(
         VTSStorage storage s,
         IPoolManager poolManager,
@@ -759,6 +862,7 @@ library VTSFeeLib {
 
         _clearResolvedResidualFeeBacking(pa, tokenIndex);
 
+        // Residual-index leg (pool had no deficit principal when coverage landed; later socialised via residual index).
         {
             uint256 residualIndexNow = s.poolAccounting[poolId].coveragePerResidualDeficitIndexX128.get(tokenIndex);
             uint256 residualIndexLast = pa.residualCoverageIndexLastX128.get(tokenIndex);
@@ -769,19 +873,19 @@ library VTSFeeLib {
 
             uint256 deltaResidualIndex = residualIndexNow - residualIndexLast;
             if (deltaResidualIndex > 0 && deficitPrincipal > 0) {
-                uint256 residualCov = FullMath.mulDiv(deficitPrincipal, deltaResidualIndex, FixedPoint128.Q128);
-                if (residualCov > 0) {
-                    pa.pendingResidualBurnBase.set(tokenIndex, pa.pendingResidualBurnBase.get(tokenIndex) + residualCov);
+                uint256 carryResIn = pa.diceResidualRealisationCarry.get(tokenIndex);
+                (uint256 residualCov, uint256 carryResOut) =
+                    _realisedCoverageWithCarry(deficitPrincipal, deltaResidualIndex, carryResIn);
+                pa.diceResidualRealisationCarry.set(tokenIndex, carryResOut);
 
-                    uint256 curOutflows = pa.cumulativeOutflows.get(tokenIndex);
-                    uint256 existingFloor = pa.pendingResidualBurnOutflowsFloor.get(tokenIndex);
-                    if (curOutflows > existingFloor) {
-                        pa.pendingResidualBurnOutflowsFloor.set(tokenIndex, curOutflows);
-                    }
+                if (residualCov > 0) {
+                    uint256 burnDelta = _bankDiceBurnFromCovWaterfall(pa, tokenIndex, residualCov, true);
+                    _bankPendingDiceBurn(pa, tokenIndex, burnDelta, true);
                 }
             }
         }
 
+        // Ordinary per-deficit-index leg (principal existed when pool bumped `coveragePerDeficitIndexX128`).
         {
             uint256 indexNow = s.poolAccounting[poolId].coveragePerDeficitIndexX128.get(tokenIndex);
             uint256 indexLast = pa.coverageIndexLastX128.get(tokenIndex);
@@ -792,13 +896,19 @@ library VTSFeeLib {
 
             uint256 deltaIndex = indexNow - indexLast;
             if (deltaIndex > 0 && deficitPrincipal > 0) {
-                uint256 cov = FullMath.mulDiv(deficitPrincipal, deltaIndex, FixedPoint128.Q128);
+                uint256 carryOrdIn = pa.diceOrdinaryRealisationCarry.get(tokenIndex);
+                (uint256 cov, uint256 carryOrdOut) =
+                    _realisedCoverageWithCarry(deficitPrincipal, deltaIndex, carryOrdIn);
+                pa.diceOrdinaryRealisationCarry.set(tokenIndex, carryOrdOut);
+
                 if (cov > 0) {
-                    _applyCoverageBurn(s, poolManager, positionId, poolId, tokenIndex, cov, liq);
+                    uint256 burnDelta = _bankDiceBurnFromCovWaterfall(pa, tokenIndex, cov, false);
+                    _bankPendingDiceBurn(pa, tokenIndex, burnDelta, false);
                 }
             }
         }
 
+        // Single consumption pass for whatever accumulated on this lane (ordinary + residual banks are additive).
         _applyBankedResidualBurn(s, poolManager, positionId, poolId, tokenIndex, liq);
     }
 
@@ -938,7 +1048,7 @@ library VTSFeeLinkedLib {
         VTSFeeLib._captureResidualFeeBackingOnPartialDecrease(s, poolManager, id, removedLiquidity);
     }
 
-    /// @notice Apply banked residual-derived burn against eligible outflow windows
+    /// @notice Apply banked DICE burn (ordinary + residual realisation) against eligible outflow windows
     function applyBankedResidualBurn(
         VTSStorage storage s,
         IPoolManager poolManager,

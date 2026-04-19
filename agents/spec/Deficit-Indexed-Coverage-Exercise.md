@@ -170,6 +170,8 @@ j*{i,k} \leftarrow J*{p,k}
 
 This \(\mathrm{cov}\_{i,k}\) is then fed into the existing fee‑burn logic (see below), which already clamps to the realised “exercisable” region (deficit + settled).
 
+**Implementation note (19th April 2026)**: when coverage is realised over **several** position settlements while the pool index moves in small steps, incremental \(\mathrm{cov}\) pieces are chained with a Q128 remainder (`diceOrdinaryRealisationCarry` / `diceResidualRealisationCarry`) so \(\sum \mathrm{cov}_i\) matches one aggregate floor. **Burn banking** then applies a **waterfall** against cumulative realised coverage (`diceOrdinaryCovAgg` / `diceResidualCovAgg`) so the amount added to `pendingResidualBurnBase` each touch is the marginal \(\Delta \min(\cdot, D)\), not \(\min(\mathrm{cov}_i, D)\) summed independently (which would over-bank when \(\sum \mathrm{cov}_i > D\)).
+
 ### Integration with the existing fee‑burn model
 
 The prior spec defines fee burning on “exercised deficits” as:
