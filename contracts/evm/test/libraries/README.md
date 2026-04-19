@@ -1,6 +1,6 @@
 # VTS Library Unit Testing Suite
 
-This directory contains comprehensive unit tests for the VTS (Variable Token Staking) libraries, specifically `VTSPositionLib` and `VTSFeeLib`.
+This directory contains unit tests for VTS libraries, primarily `VTSPositionLib` and related harnesses.
 
 ## Architecture
 
@@ -18,7 +18,6 @@ Located at `test/modules/VTSLibTestBase.sol`, this abstract contract provides:
 Located in `test/libraries/harnesses/`:
 
 - **`VTSPositionLibHarness.sol`**: Exposes internal `VTSPositionLib` functions for testing
-- **`VTSFeeLibHarness.sol`**: Exposes internal `VTSFeeLib` functions for testing
 
 These harnesses use the DELEGATECALL pattern, allowing library functions to operate directly on the harness contract's storage.
 
@@ -63,36 +62,6 @@ Comprehensive tests covering:
   - Symmetric add/remove operations
   - Settlement never exceeds commitment
   - VTS ratio invariants
-
-### `VTSFeeLib.t.sol`
-
-Comprehensive tests covering:
-
-- **Fee Adjustment Peeking** (`_peekFeeAdjustment`):
-  - Returns current pending adjustments
-  - Handles zero values
-
-- **Fee Pot Management**:
-  - Storage access for slashed pot
-  - Protocol fee accrued tracking
-
-- **Fee Processing** (`processPositionFees`):
-  - Fee sharing disabled returns zero
-  - Positive net settlement allocates bonuses
-  - Zero net settlement no bonus
-  - Negative net settlement no bonus
-  - Dust net settlement skipped
-  - Self-contribution excluded from bonus calculation
-
-- **Fee Finalisation** (`_finaliseFeeAdjustment`):
-  - Positive pending funds pot
-  - Negative pending drains pot
-  - Insufficient pot clamps drain
-  - No incremental funding snapshot (proactive funding removed)
-
-- **Fuzz Tests**:
-  - Fee adjustment invariants
-  - Bonus allocation proportionality
 
 ## Usage
 

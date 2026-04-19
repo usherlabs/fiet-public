@@ -826,7 +826,7 @@ contract MMPositionActionsImpl is
         });
 
         (,, BalanceDelta mmForwardedNonFeeForMinOut) = _modifySyntheticLiquidity(poolKey, params, tokenId, hookData);
-        // Min-out on immediate non-fee LCC forwarded (post `feeAdj`), not raw `callerDelta - feesAccrued` (VTS queue principal).
+        // Min-out on immediate non-fee LCC after fee netting, not raw `callerDelta - feesAccrued` (VTS queue principal).
         mmForwardedNonFeeForMinOut.validateMinOut(amount0Min, amount1Min);
     }
 
@@ -835,9 +835,9 @@ contract MMPositionActionsImpl is
     /// @param tokenId The commitment NFT token ID
     /// @param positionIndex The position index within the commitment
     /// @param amountToDecrease The amount of liquidity to remove
-    /// @param amount0Min Minimum per-leg immediate post-`feeAdj` non-fee LCC token0 (`LiquidityUtils.forwardedNonFeeLccAmount`).
+    /// @param amount0Min Minimum per-leg immediate non-fee LCC token0 after fee netting (`LiquidityUtils.forwardedNonFeeLccAmount`).
     ///        For commit positions, only the Hub-queued slice is custodied; surplus remains locker transient LCC credit.
-    /// @param amount1Min Minimum per-leg immediate post-`feeAdj` non-fee LCC token1 (VTS queue principal remains `callerDelta - feesAccrued`).
+    /// @param amount1Min Minimum per-leg immediate non-fee LCC token1 after fee netting (VTS queue principal remains `callerDelta - feesAccrued`).
     function _decrease(
         PoolKey calldata poolKey,
         uint256 tokenId,

@@ -48,7 +48,7 @@ import {DeployPermit2} from "permit2/test/utils/DeployPermit2.sol";
 import {MarketFactory} from "../../src/MarketFactory.sol";
 import {PositionManager} from "v4-periphery/src/PositionManager.sol";
 import {IPositionDescriptor} from "v4-periphery/src/interfaces/IPositionDescriptor.sol";
-import {DirectLPDeltaResolver} from "../../src/DirectLPDeltaResolver.sol";
+import {DirectLPDeltaResolver} from "../../src/periphery/DirectLPDeltaResolver.sol";
 import {IPositionManager} from "v4-periphery/src/interfaces/IPositionManager.sol";
 import {MockPositionDescriptor} from "../_mocks/MockPositionDescriptor.sol";
 import {Bounds} from "../../src/libraries/Bounds.sol";

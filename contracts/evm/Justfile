@@ -171,29 +171,11 @@ echidna-commit-03 config="echidna.config.yml":
 echidna-sig-01-02 config="echidna.config.yml":
     @just echidna test/fuzz/invariants/SIG01_02.sol SIG01_02 {{ config }} -- --disable-slither
 
-echidna-cov-04 config="echidna.config.yml":
-    @just echidna test/fuzz/invariants/COV04.sol COV04 {{ config }} -- --disable-slither
-
 echidna-commit-01 config="echidna.config.yml":
     @just echidna test/fuzz/invariants/COMMIT01.sol COMMIT01 {{ config }} -- --disable-slither
 
 echidna-commit-02 config="echidna.config.yml":
     @just echidna test/fuzz/invariants/COMMIT02.sol COMMIT02 {{ config }} -- --disable-slither
-
-echidna-cov-01 config="echidna.config.yml":
-    @just echidna test/fuzz/invariants/COV01.sol COV01 {{ config }} -- --disable-slither
-
-echidna-cov-02 config="echidna.config.yml":
-    @just echidna test/fuzz/invariants/COV02.sol COV02 {{ config }} -- --disable-slither
-
-echidna-cov-03 config="echidna.config.yml":
-    @just echidna test/fuzz/invariants/COV03.sol COV03 {{ config }} -- --disable-slither
-
-echidna-fee-01 config="echidna.config.yml":
-    @just echidna test/fuzz/invariants/FEE01.sol FEE01 {{ config }} -- --disable-slither
-
-echidna-fee-02 config="echidna.config.yml":
-    @just echidna test/fuzz/invariants/FEE02.sol FEE02 {{ config }} -- --disable-slither
 
 echidna-vts-02 config="echidna.config.yml":
     @just echidna test/fuzz/invariants/VTS02.sol VTS02 {{ config }} -- --disable-slither

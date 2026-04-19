@@ -126,10 +126,10 @@ Decreases liquidity from an existing position.
 | `tokenId` | `uint256` | The commitment NFT token ID |
 | `positionIndex` | `uint256` | The position index within the commitment |
 | `amountToDecrease` | `uint256` | Amount of liquidity units to remove |
-| `amount0Min` | `uint128` | Minimum per-leg **immediate post-`feeAdj` non-fee LCC** token0 (`LiquidityUtils.forwardedNonFeeLccAmount`). For commit positions, only the Hub-queued slice is forwarded to the queue custodian; any surplus remains as locker transient LCC credit (`TAKE` / `UNWRAP_LCC`). **Not** the same scalar as VTS queue principal (`callerDelta - feesAccrued`). |
-| `amount1Min` | `uint128` | Minimum per-leg **immediate post-`feeAdj` non-fee LCC** token1 (same semantics as `amount0Min`). |
+| `amount0Min` | `uint128` | Minimum per-leg **immediate non-fee LCC after informational fee netting** token0 (`LiquidityUtils.forwardedNonFeeLccAmount`). For commit positions, only the Hub-queued slice is forwarded to the queue custodian; any surplus remains as locker transient LCC credit (`TAKE` / `UNWRAP_LCC`). **Not** the same scalar as VTS queue principal (`callerDelta - feesAccrued`). |
+| `amount1Min` | `uint128` | Minimum per-leg **immediate non-fee LCC after informational fee netting** token1 (same semantics as `amount0Min`). |
 
-**Protocol note (fee slash):** VTS caps same-touch materialisation of positive pending fee slashes to the per-leg **informational `feesAccrued`** slice on decreases (see **SETTLE-03** in `contracts/evm/INVARIANTS.md`). Queue principal from VTS remains `callerDelta - feesAccrued`; this rule only bounds how much historical `pendingFeeAdj` can become `feeAdj` on that touch.
+**Protocol note:** Min-out protects the user-facing LCC receipt after the PoolManager → MMPM transfer and planned-cancel path; VTS queue/cancel caps still use hook-time principal `callerDelta - feesAccrued` (see **SETTLE-03** / **MMQ-01** in `contracts/evm/INVARIANTS.md`).
 
 ---
 
@@ -143,8 +143,8 @@ Burns (fully decreases) a position, removing all liquidity.
 | `poolKey` | `PoolKey` | The pool key identifying the market |
 | `tokenId` | `uint256` | The commitment NFT token ID |
 | `positionIndex` | `uint256` | The position index within the commitment |
-| `amount0Min` | `uint128` | Minimum per-leg **immediate post-`feeAdj` non-fee LCC** token0 when burning (same decrease/burn min-out semantics as `DECREASE_LIQUIDITY`). |
-| `amount1Min` | `uint128` | Minimum per-leg **immediate post-`feeAdj` non-fee LCC** token1 when burning. |
+| `amount0Min` | `uint128` | Minimum per-leg **immediate non-fee LCC after informational fee netting** token0 when burning (same decrease/burn min-out semantics as `DECREASE_LIQUIDITY`). |
+| `amount1Min` | `uint128` | Minimum per-leg **immediate non-fee LCC after informational fee netting** token1 when burning. |
 
 ---
 
@@ -371,10 +371,6 @@ Decommits a signal and burns the commitment NFT. Requires all positions to be re
 
 - `DECOMMIT_SIGNAL` is a valid **terminal exit** for an MM commitment once the active-position and inactive-live-`settled`
   gates above are satisfied.
-- It does **not** additionally require all historical positions under the commit to have `pendingFeeAdj == 0`.
-- Under the fee-pot design, `pendingFeeAdj` is a **best-effort, touch-mediated** queue. If a maker fully exits and
-  decommits before a later touch would materialise some queued positive or negative `pendingFeeAdj`, that unresolved
-  remainder is intentionally **abandoned**, not converted into a mandatory post-exit settlement obligation.
 - Historical `positionCount` may remain non-zero because the commit retains position history; decommit is not gated on
   `positionCount == 0`.
 

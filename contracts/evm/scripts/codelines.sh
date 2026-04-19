@@ -48,7 +48,7 @@ FILES=(
 
   src/MarketFactory.sol
   src/MarketVaultDeployer.sol
-  src/DirectLPDeltaResolver.sol
+  src/periphery/DirectLPDeltaResolver.sol
 
   src/MMPositionManager.sol
   src/MMPositionActionsImpl.sol
