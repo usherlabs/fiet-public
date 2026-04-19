@@ -185,10 +185,10 @@ contract VTSPositionLibEchidnaHarness {
 
     function touchPosition(PositionContext calldata ctx, TouchPositionParams calldata params)
         external
-        returns (Position memory pos, PositionId id, BalanceDelta feeAdj)
+        returns (Position memory pos, PositionId id)
     {
         TouchPositionResult memory out = VTSPositionLib.touchPosition(s, ctx, params);
-        return (out.pos, out.id, out.feeAdj);
+        return (out.pos, out.id);
     }
 
     function buildPositionContext(

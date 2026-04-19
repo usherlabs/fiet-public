@@ -791,12 +791,11 @@ library VTSLifecycleLinkedLib {
         BalanceDelta callerDelta,
         BalanceDelta feesAccrued,
         bytes calldata hookData
-    ) external returns (Position memory pos, PositionId id, BalanceDelta feeAdj) {
+    ) external returns (Position memory pos, PositionId id) {
         TouchPositionResult memory result = _processPositionTouchValidated(
             s, ctx, owner, poolKey, params, callerDelta, feesAccrued, hookData
         );
         pos = result.pos;
         id = result.id;
-        feeAdj = result.feeAdj;
     }
 }

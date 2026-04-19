@@ -12,10 +12,9 @@ import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
 import {IHooks} from "@uniswap/v4-core/src/interfaces/IHooks.sol";
 import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
 
-/// @notice Echidna harness for COV-02 sequencing: `CoreHook` calls settlePositionGrowths before modify.
-/// @dev This harness validates hook-level call ordering against a mock orchestrator.
-///      It does not model full settlement netting order inside `VTSPositionLib.settlePositionGrowths`.
-contract COV02 is HookMinerBase {
+/// @notice Shared Echidna fixture: `CoreHook` calls `settlePositionGrowths` before add/remove modify hooks.
+/// @dev Validates hook-level call ordering against a mock orchestrator (VTS-01).
+contract SettleBeforeModifyHarness is HookMinerBase {
     uint256 internal constant MAX_VACUOUS_ATTEMPTS = 10;
 
     CoreHook internal hook;
@@ -47,29 +46,6 @@ contract COV02 is HookMinerBase {
         });
     }
 
-    /// @notice Exercise beforeAdd/RemoveLiquidity and verify CoreHook settles growths for the
-    ///         exact PositionId derived from params. This enforces the "settle before modify"
-    ///         sequencing that coverage burns rely on.
-    // forge-lint: disable-next-line(mixed-case-function)
-    function action_before_add_modify(int24 tickLower, int24 tickUpper, int256 liquidityDelta, bytes32 salt) external {
-        _exerciseBeforeModify(true, tickLower, tickUpper, liquidityDelta, salt);
-    }
-
-    // forge-lint: disable-next-line(mixed-case-function)
-    function action_before_remove_modify(int24 tickLower, int24 tickUpper, int256 liquidityDelta, bytes32 salt)
-        external
-    {
-        _exerciseBeforeModify(false, tickLower, tickUpper, liquidityDelta, salt);
-    }
-
-    // Retain the bool-shaped action as a compatibility shim for any existing corpora or local scripts.
-    // forge-lint: disable-next-line(mixed-case-function)
-    function action_before_modify(bool isAdd, int24 tickLower, int24 tickUpper, int256 liquidityDelta, bytes32 salt)
-        external
-    {
-        _exerciseBeforeModify(isAdd, tickLower, tickUpper, liquidityDelta, salt);
-    }
-
     function _exerciseBeforeModify(bool isAdd, int24 tickLower, int24 tickUpper, int256 liquidityDelta, bytes32 salt)
         internal
     {
@@ -81,29 +57,19 @@ contract COV02 is HookMinerBase {
         ModifyLiquidityParams memory params =
             ModifyLiquidityParams({tickLower: tl, tickUpper: tu, liquidityDelta: liquidityDelta, salt: salt});
 
-        // Compute the PositionId CoreHook should settle (must match pre-modify params).
         PositionId expected = PositionLibrary.generateId(address(this), params);
-        // Snapshot the settle call count to ensure exactly one settle occurs per action.
         uint256 beforeCount = mockOrch.settleCount();
 
         if (isAdd) {
-            // Simulate add-liquidity path; must call settlePositionGrowths first.
             hook.beforeAddLiquidity(address(this), poolKey, params, bytes(""));
         } else {
-            // Simulate remove-liquidity path; must call settlePositionGrowths first.
             hook.beforeRemoveLiquidity(address(this), poolKey, params, bytes(""));
         }
 
-        // Assert a single settle call with the expected PositionId.
         checks++;
         bool lastOk = mockOrch.settleCount() == beforeCount + 1
             && PositionId.unwrap(mockOrch.lastSettled()) == PositionId.unwrap(expected);
         allOk = allOk && lastOk;
-    }
-
-    // forge-lint: disable-next-line(mixed-case-function)
-    function echidna_cov_02_settle_before_modify() external view returns (bool) {
-        return _settleBeforeModifyHolds();
     }
 
     function _settleBeforeModifyHolds() internal view returns (bool) {
@@ -111,12 +77,6 @@ contract COV02 is HookMinerBase {
             return attempts < MAX_VACUOUS_ATTEMPTS;
         }
         return allOk;
-    }
-
-    // Keep a second trivial property to avoid rare Echidna instability with single-property targets.
-    // forge-lint: disable-next-line(mixed-case-function)
-    function echidna_cov_02_smoke() external pure returns (bool) {
-        return true;
     }
 
     function _clampTicks(int24 tickLower, int24 tickUpper) internal pure returns (int24 tl, int24 tu) {

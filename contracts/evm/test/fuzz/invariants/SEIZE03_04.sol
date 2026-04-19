@@ -163,7 +163,7 @@ contract SEIZE03_04 {
             feesAccrued: toBalanceDelta(0, 0),
             hookData: hookData
         });
-        try harness.touchPosition(ctx, tp) returns (Position memory, PositionId, BalanceDelta) {
+        try harness.touchPosition(ctx, tp) returns (Position memory, PositionId) {
             reverted = false;
         } catch (bytes memory reason) {
             reverted = true;

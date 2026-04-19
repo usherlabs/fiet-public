@@ -529,7 +529,6 @@ contract VTSOrchestrator is
     /// @param hookData The hook data containing PositionModificationHookData for MM operations
     /// @return pos The position struct
     /// @return id The position identifier
-    /// @return feeAdj The fee adjustment delta
     /// @return isMMPosition True if this is an MM position operation with valid signal
     function processPosition(
         address owner,
@@ -541,10 +540,10 @@ contract VTSOrchestrator is
     )
         external
         onlyCoreHook(poolKey.currency0, poolKey.currency1)
-        returns (Position memory pos, PositionId id, BalanceDelta feeAdj, bool isMMPosition)
+        returns (Position memory pos, PositionId id, bool isMMPosition)
     {
         isMMPosition = _validateMMOperationLinked(owner, poolKey, hookData);
-        (pos, id, feeAdj) = _processPositionLinked(owner, poolKey, params, callerDelta, feesAccrued, hookData);
+        (pos, id) = _processPositionLinked(owner, poolKey, params, callerDelta, feesAccrued, hookData);
     }
 
     function _validateMMOperationLinked(address owner, PoolKey calldata poolKey, bytes calldata hookData)
@@ -563,14 +562,13 @@ contract VTSOrchestrator is
         BalanceDelta callerDelta,
         BalanceDelta feesAccrued,
         bytes calldata hookData
-    ) private returns (Position memory pos, PositionId id, BalanceDelta feeAdj) {
+    ) private returns (Position memory pos, PositionId id) {
         VTSCoreHookContext memory ctx = _coreHookContext();
         TouchPositionResult memory result = VTSLifecycleLinkedLib.executeProcessPositionTouch(
             s, ctx, owner, poolKey, params, callerDelta, feesAccrued, hookData
         );
         pos = result.pos;
         id = result.id;
-        feeAdj = result.feeAdj;
     }
 
     /// @notice Called by CoreHook after a swap to process swap-related accounting

@@ -5,7 +5,7 @@ import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {Hooks} from "@uniswap/v4-core/src/libraries/Hooks.sol";
 import {BaseHook} from "v4-periphery/src/utils/BaseHook.sol";
-import {BalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
+import {BalanceDelta, toBalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
 import {ModifyLiquidityParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
 
 import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
@@ -166,15 +166,14 @@ contract CoreHook is BaseHook, ImmutableMarketState, ImmutableVTSState, ICoreHoo
         // Update VTS position state with registration/update based on actual pool id
         // Pass callerDelta and feesAccrued for consolidated delta management
         // Note: Pause check is enforced in VTSOrchestrator.processPosition
-        (,, BalanceDelta feeAdj, bool isMMPosition) =
-            vtsOrchestrator.processPosition(sender, key, params, delta, feesAccrued, hookData);
+        (,, bool isMMPosition) = vtsOrchestrator.processPosition(sender, key, params, delta, feesAccrued, hookData);
 
         // only add direct liquidity if this is not an MM position operation
         if (!isMMPosition) {
             IVaultCoreActionHandler(_getProxyHook(key)).handleAddLiquidity();
         }
 
-        return (this.afterAddLiquidity.selector, feeAdj);
+        return (this.afterAddLiquidity.selector, toBalanceDelta(0, 0));
     }
 
     /// @notice The hook called after liquidity is removed
@@ -196,12 +195,12 @@ contract CoreHook is BaseHook, ImmutableMarketState, ImmutableVTSState, ICoreHoo
         bytes calldata hookData
     ) internal virtual override returns (bytes4, BalanceDelta) {
         // All liquidity modifications now share the same VTS entrypoint; pause policy is enforced in touchPosition.
-        (,, BalanceDelta feeAdj,) = vtsOrchestrator.processPosition(sender, key, params, delta, feesAccrued, hookData);
+        vtsOrchestrator.processPosition(sender, key, params, delta, feesAccrued, hookData);
 
         // NOTE: We deliberately do NOT notify ProxyHook on direct-LP removals.
         // Underlying liquidity is sourced during unwrap via market liquidity, keeping a single settlement conduit.
 
-        return (this.afterRemoveLiquidity.selector, feeAdj);
+        return (this.afterRemoveLiquidity.selector, toBalanceDelta(0, 0));
     }
 
     // Helper function to get the proxy hook address from the core pool key

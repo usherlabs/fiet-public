@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.26;
 
-import {BalanceDelta, toBalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
+import {toBalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
 
 import {VTSOrchestratorFixture} from "./base/VTSOrchestratorFixture.sol";
 import {VTSOrchestratorTestable} from "./base/VTSOrchestratorTestable.sol";
@@ -10,7 +10,7 @@ import {PoolId, PoolIdLibrary} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {ModifyLiquidityParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
 import {PositionId, Position, PositionLibrary, PositionModificationHookDataLib} from "../src/types/Position.sol";
 
-/// @notice Smoke regressions after fee-disablement: base pool aggregates stable; `feeAdj` remains zero on poke.
+/// @notice Smoke regressions after fee-disablement: base pool aggregates stable; MM poke path still returns position id.
 contract Phase1QuarantineTest is VTSOrchestratorFixture {
     using PoolIdLibrary for PoolId;
 
@@ -39,7 +39,7 @@ contract Phase1QuarantineTest is VTSOrchestratorFixture {
         assertEq(h1, h2);
     }
 
-    function test_processPosition_mmPoke_returnsZeroFeeAdj() public {
+    function test_processPosition_mmPoke_smoke() public {
         (uint256 tokenId, PositionId positionId,,) = _createCommittedPosition();
 
         ModifyLiquidityParams memory params = ModifyLiquidityParams({
@@ -50,13 +50,11 @@ contract Phase1QuarantineTest is VTSOrchestratorFixture {
         bytes memory hookData = PositionModificationHookDataLib.encode(tokenId, 0, locker);
 
         vm.prank(coreHookAddress);
-        (, PositionId id, BalanceDelta feeAdj, bool isMMPosition) = vtsOrchestrator.processPosition(
+        (, PositionId id, bool isMMPosition) = vtsOrchestrator.processPosition(
             address(positionManager), corePoolKey, params, toBalanceDelta(0, 0), toBalanceDelta(0, 0), hookData
         );
 
         assertTrue(isMMPosition);
         assertEq(PositionId.unwrap(id), PositionId.unwrap(positionId));
-        assertEq(feeAdj.amount0(), 0);
-        assertEq(feeAdj.amount1(), 0);
     }
 }

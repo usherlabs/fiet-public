@@ -95,14 +95,9 @@ struct TouchPositionParams {
 }
 
 /// @notice Result of touchPosition to reduce stack pressure
-/// @dev Bundles return values for position processing. `feeAdj` is always zero (reserved for hook delta shape).
 struct TouchPositionResult {
-    // The position struct
     Position pos;
-    // The position id
     PositionId id;
-    // Hook delta slot (always zero; legacy fee-adjust removed)
-    BalanceDelta feeAdj;
 }
 
 /// @notice Parameters for onMMSettle to reduce stack pressure

@@ -179,7 +179,6 @@ interface IVTSOrchestrator is IPausableVTS, IVTSCurrencyDelta, IVTSAdmin, IExtsl
     /// @param hookData The hook data containing PositionModificationHookData for MM operations
     /// @return pos The position struct
     /// @return id The position id
-    /// @return feeAdj The fee adjustment delta
     /// @return isMMPosition True if this is an MM position operation with valid signal
     function processPosition(
         address owner,
@@ -188,7 +187,7 @@ interface IVTSOrchestrator is IPausableVTS, IVTSCurrencyDelta, IVTSAdmin, IExtsl
         BalanceDelta callerDelta,
         BalanceDelta feesAccrued,
         bytes calldata hookData
-    ) external returns (Position memory pos, PositionId id, BalanceDelta feeAdj, bool isMMPosition);
+    ) external returns (Position memory pos, PositionId id, bool isMMPosition);
 
     /// @notice Called by CoreHook after a swap to process swap-related accounting
     /// @param key The pool key

@@ -101,7 +101,7 @@ contract VTSLifecycleLinkedLibHarness {
         BalanceDelta callerDelta,
         BalanceDelta feesAccrued,
         bytes calldata hookData
-    ) external returns (Position memory pos, PositionId id, BalanceDelta feeAdj) {
+    ) external returns (Position memory pos, PositionId id) {
         return VTSLifecycleLinkedLib.processPosition(s, ctx, owner, poolKey, params, callerDelta, feesAccrued, hookData);
     }
 

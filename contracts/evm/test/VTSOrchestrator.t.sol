@@ -1426,7 +1426,7 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
     // For MM positions: fees are credited as LCC delta to MMPositionManager
     // For DirectLP with fee-sharing: fees are shared via the fee pot mechanism
     //
-    // See: VTSPositionLib.processPosition() and VTSFeeLib.processPositionFees()
+    // See: VTSPositionLib.touchPosition()
     // ============================================================
 
     /// @notice Helper to get test contract's fee collection mechanic
@@ -1759,7 +1759,7 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
         BalanceDelta callerDelta = toBalanceDelta(0, 0);
         BalanceDelta feesAccrued = toBalanceDelta(0, 0);
 
-        (Position memory pos, PositionId id, BalanceDelta feeAdj, bool isMMPosition) = vtsOrchestrator.processPosition(
+        (Position memory pos, PositionId id, bool isMMPosition) = vtsOrchestrator.processPosition(
             address(positionManager), corePoolKey, params, callerDelta, feesAccrued, hookData
         );
 
@@ -1768,14 +1768,10 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
         assertEq(pos.commitId, tokenId, "Returned position should reference commitId");
         assertEq(pos.owner, address(positionManager), "Returned position owner should be positionManager");
 
-        // Include explicit assertions for the CoreHook inputs and expected fee adjustment in this scenario.
-        // With no swaps/fees in this test path, we pass zero deltas and expect no fee adjustment to be applied.
         assertEq(callerDelta.amount0(), 0, "callerDelta0 should be 0 for poke");
         assertEq(callerDelta.amount1(), 0, "callerDelta1 should be 0 for poke");
         assertEq(feesAccrued.amount0(), 0, "feesAccrued0 should be 0 for poke");
         assertEq(feesAccrued.amount1(), 0, "feesAccrued1 should be 0 for poke");
-        assertEq(feeAdj.amount0(), 0, "feeAdj0 should be 0 when feesAccrued is 0");
-        assertEq(feeAdj.amount1(), 0, "feeAdj1 should be 0 when feesAccrued is 0");
     }
 
     function test_revert_onMMSettle_whenCommitInvalid_insideUnlock() public {
