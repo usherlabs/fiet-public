@@ -58,10 +58,17 @@ contract MMCalldataDecoderHarness {
     function decodeDecreaseLiquidityParams(bytes calldata params)
         external
         pure
-        returns (PoolKey memory poolKey, uint256 tokenId, uint256 positionIndex, uint256 amountToDecrease)
+        returns (
+            PoolKey memory poolKey,
+            uint256 tokenId,
+            uint256 positionIndex,
+            uint256 amountToDecrease,
+            uint128 amount0Min,
+            uint128 amount1Min
+        )
     {
         PoolKey calldata pk;
-        (pk, tokenId, positionIndex, amountToDecrease) = params.decodeDecreaseLiquidityParams();
+        (pk, tokenId, positionIndex, amountToDecrease, amount0Min, amount1Min) = params.decodeDecreaseLiquidityParams();
         poolKey = PoolKey({
             currency0: pk.currency0, currency1: pk.currency1, fee: pk.fee, tickSpacing: pk.tickSpacing, hooks: pk.hooks
         });
@@ -70,10 +77,10 @@ contract MMCalldataDecoderHarness {
     function decodeBurnPositionParams(bytes calldata params)
         external
         pure
-        returns (PoolKey memory poolKey, uint256 tokenId, uint256 positionIndex)
+        returns (PoolKey memory poolKey, uint256 tokenId, uint256 positionIndex, uint128 amount0Min, uint128 amount1Min)
     {
         PoolKey calldata pk;
-        (pk, tokenId, positionIndex) = params.decodeBurnPositionParams();
+        (pk, tokenId, positionIndex, amount0Min, amount1Min) = params.decodeBurnPositionParams();
         poolKey = PoolKey({
             currency0: pk.currency0, currency1: pk.currency1, fee: pk.fee, tickSpacing: pk.tickSpacing, hooks: pk.hooks
         });
@@ -319,19 +326,39 @@ contract MMCalldataDecoderTest is Test {
 
     function test_decodeDecreaseLiquidityParams_ok() public view {
         PoolKey memory key = _poolKey();
-        bytes memory params = abi.encode(key, uint256(10), uint256(2), uint256(5));
-        (, uint256 tokenId, uint256 positionIndex, uint256 amountToDecrease) = h.decodeDecreaseLiquidityParams(params);
+        bytes memory params = abi.encode(key, uint256(10), uint256(2), uint256(5), uint128(7), uint128(11));
+        (, uint256 tokenId, uint256 positionIndex, uint256 amountToDecrease, uint128 a0, uint128 a1) =
+            h.decodeDecreaseLiquidityParams(params);
         assertEq(tokenId, 10);
         assertEq(positionIndex, 2);
         assertEq(amountToDecrease, 5);
+        assertEq(a0, 7);
+        assertEq(a1, 11);
     }
 
     function test_decodeBurnPositionParams_ok() public view {
         PoolKey memory key = _poolKey();
-        bytes memory params = abi.encode(key, uint256(10), uint256(2));
-        (, uint256 tokenId, uint256 positionIndex) = h.decodeBurnPositionParams(params);
+        bytes memory params = abi.encode(key, uint256(10), uint256(2), uint128(3), uint128(4));
+        (, uint256 tokenId, uint256 positionIndex, uint128 a0, uint128 a1) = h.decodeBurnPositionParams(params);
         assertEq(tokenId, 10);
         assertEq(positionIndex, 2);
+        assertEq(a0, 3);
+        assertEq(a1, 4);
+    }
+
+    function test_decodeDecreaseLiquidityParams_revertsOnLegacyEncodingWithoutMinOut() public {
+        PoolKey memory key = _poolKey();
+        // Pre–min-out ABI: (PoolKey, tokenId, positionIndex, amount) => 0x100 bytes; decoder now requires 0x140.
+        bytes memory legacy = abi.encode(key, uint256(10), uint256(2), uint256(5));
+        vm.expectRevert(MMCalldataDecoder.SliceOutOfBounds.selector);
+        h.decodeDecreaseLiquidityParams(legacy);
+    }
+
+    function test_decodeBurnPositionParams_revertsOnLegacyEncodingWithoutMinOut() public {
+        PoolKey memory key = _poolKey();
+        bytes memory legacy = abi.encode(key, uint256(10), uint256(2));
+        vm.expectRevert(MMCalldataDecoder.SliceOutOfBounds.selector);
+        h.decodeBurnPositionParams(legacy);
     }
 
     function test_decodeSeizePositionParams_ok() public view {

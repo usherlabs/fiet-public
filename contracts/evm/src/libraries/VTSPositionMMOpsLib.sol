@@ -70,9 +70,20 @@ library VTSPositionMMOpsLib {
         bool isSeizing;
     }
 
+    /// @dev Result of querying how much of `requiredSettlementDelta` the vault can satisfy immediately vs defer as shortfall.
+    ///      Shared by non-seizure and seizure MM decrease routing (`dryModifyLiquidities` + per-leg shortfall clamped to zero).
+    struct VaultSettleableView {
+        BalanceDelta settleableDelta;
+        uint256 shortfallU0;
+        uint256 shortfallU1;
+    }
+
     /// @notice MM liquidity-modify tail: LCC issue/cancel, protocol-credit, vault routing, RFS checkpoint.
-    /// @dev Invoked from `VTSPositionLib.touchPosition` when hook data is an MM operation. CoreHook applies
-    ///      `feeAdj` to caller delta; principal uses `callerDelta - (feesAccrued - feeAdj)`.
+    /// @dev Invoked from `VTSPositionLib.touchPosition` when hook data is an MM operation. `PoolManager.modifyLiquidity`
+    ///      passes hook-time `callerDelta = poolPrincipalDelta + feesAccrued` into `afterModifyLiquidity`; the hook's
+    ///      returned delta is applied only after the hook returns. LCC principal for issue/cancel and queue routing must
+    ///      therefore be `callerDelta - feesAccrued` (pool principal only), not net of `feeAdj`. Fee slash/bonus is
+    ///      reconciled when MMPM takes LCC and classifies fee vs non-fee (`PositionManagerImpl._handleLccBalanceIncrease`).
     /// @param requiredSettlementDelta Required settlement delta computed during the touch accounting phase.
     function processMMOperations(
         VTSStorage storage s,
@@ -84,15 +95,10 @@ library VTSPositionMMOpsLib {
         PositionModificationHookData memory mmData = PositionModificationHookDataLib.decodeCalldata(p.hookData);
         if (!PositionModificationHookDataLib.isMMOperation(mmData)) return;
 
-        // CoreHook applies a feeAdj to the callerDelta. ie.  callerDelta = principalDelta - feesAccrued - feeAdj.
-        // Treat feeAdj as part of fees for cancel/transfer purposes.
-        // ? feeAdj bonus is negative, slash is positive. The result is higher fees for bonus, lower for slash.
-        BalanceDelta accruedFeesAfterAdj = p.feesAccrued - result.feeAdj;
-
-        // positionDelta(a0/a1) are the gross amounts returned by the PoolManager for position modification.
-        // principal0/principal1 = a{0,1} - fees{0,1} reflect the true principal liquidity change
-        // that maps to LCC cancellation. fees are trader-derived, wrapped LCC value and must remain wrapped.
-        BalanceDelta principalDelta = p.callerDelta - accruedFeesAfterAdj;
+        // True principal liquidity change (maps to LCC mint/burn for the position delta). `feesAccrued` is informational
+        // fee collection in this modify; it is not part of principal. Do not subtract `feeAdj` here — that would double-
+        // count hook settlement relative to the post-hook transfer amount the router uses for custodian forwarding.
+        BalanceDelta principalDelta = p.callerDelta - p.feesAccrued;
 
         // NOTE: LCC fee credits are handled at the MMPM level via balance sync pattern.
         // After MMPM takes from PoolManager, it syncs the LCC balance as credit to locker.
@@ -128,21 +134,18 @@ library VTSPositionMMOpsLib {
                 queueRecipient = PositionModificationHookDataLib.getLocker(mmData);
             }
 
-            // Snapshot routing: `_handleLiquidityDecrease` splits vault-immediate vs Hub queue. Only the sum of
-            // those two leaves live `settled` here; any shortfall that cannot be queued stays in `pa.settled`
-            // until later liquidity. Booking that remainder on `DynamicCurrencyDelta` would create batch uncleared
-            // positive underlying delta (DELTA-01) while the vault cannot pay it in the same unlock.
+            // Snapshot routing: vault-immediate slice vs Hub queue (non-seizure) or burn vs queued principal (seizure).
+            // Only routed value leaves live `pa.settled` via `_applySettlementClampFromExcess`; the vault-immediate slice
+            // alone becomes `OwnerCurrencyDelta` below. Deferred shortfall stays in `pa.settled` (DELTA-01).
             BalanceDelta underlyingDeltaSettlement;
             BalanceDelta exportedForSettlementClamp;
             if (mmData.seizure.isSeizing) {
-                // @note: For Seizures,
-                // - LCCs are received directly by locker simiarly to fees.
-                // - Unwrapping these LCCs draws from the MM settled amounts, either immediately or via settlement queue - allowing protocol coverage to be maintained.
-                // - For any excess, this can also be settled immediately via MM operations.
-
-                // Only cancel excess settled received.
-                (underlyingDeltaSettlement, exportedForSettlementClamp) = _handleLiquidityDecrease(
-                    ctx, p.owner, p.poolKey, requiredSettlementDelta, requiredSettlementDelta, queueRecipient
+                // Seizure: cancel `min(principal, excessSettled)` LCC per leg to clear excess settled; queue the remaining
+                // principal to the guarantor (`queueRecipient`) so it is not burned. Settlement clamp uses
+                // `min(excess, settleable + burn)` per leg — not `settleable + queue`, so queued principal does not
+                // over-remove `pa.settled`.
+                (underlyingDeltaSettlement, exportedForSettlementClamp) = _handleSeizureLiquidityDecrease(
+                    ctx, p.owner, p.poolKey, principalDelta, requiredSettlementDelta, queueRecipient
                 );
             } else {
                 // Removing liquidity: Cancel LCCs without seizing.
@@ -163,60 +166,74 @@ library VTSPositionMMOpsLib {
                 LiquidityUtils.safeInt128ToUint256(exportedForSettlementClamp.amount1())
             );
 
+            // Replace touch-phase required delta with vault-immediate slice only for downstream reserve / MMPM credit.
             requiredSettlementDelta = underlyingDeltaSettlement;
         }
 
-        if (!LiquidityUtils.isZeroDelta(requiredSettlementDelta)) {
-            // Account underlying currency settlement obligations to MMPositionManager
-            // Split model: Underlying settlement deltas on MMPM represent market liquidity claims (settle-only)
-            // Balance syncs from wrap/unwrap target locker (msgSender) for takeable credits
-            //
-            // Accumulate per-batch: `accountUnderlyingSettlementDelta` is setter-style (targets absolute pair), so
-            // multiple MM ops in the same unlock for the same owner/currency lane must add onto the current pair.
-            BalanceDelta currentUnderlying =
-                OwnerCurrencyDelta.getUnderlyingDeltaPair(p.owner, p.poolKey.currency0, p.poolKey.currency1);
-            OwnerCurrencyDelta.accountUnderlyingSettlementDelta(
-                p.owner,
-                LiquidityUtils.safeToBalanceDelta(
-                    int256(currentUnderlying.amount0()) + int256(requiredSettlementDelta.amount0()),
-                    int256(currentUnderlying.amount1()) + int256(requiredSettlementDelta.amount1())
-                ),
-                p.poolKey.currency0,
-                p.poolKey.currency1
-            );
-
-            if (requiredSettlementDelta.amount0() > 0) {
-                Currency underlyingCurrency0 = OwnerCurrencyDelta.lccToUnderlyingCurrency(p.poolKey.currency0);
-                ctx.marketVault
-                    .decreaseLiquidityReserve(
-                        underlyingCurrency0, LiquidityUtils.safeInt128ToUint256(requiredSettlementDelta.amount0())
-                    );
-                MarketCurrencyDelta.addProduced(
-                    ICanonicalVault(ctx.marketVault.canonicalVault()).marketFactory(),
-                    underlyingCurrency0,
-                    LiquidityUtils.safeInt128ToUint256(requiredSettlementDelta.amount0())
-                );
-            }
-            if (requiredSettlementDelta.amount1() > 0) {
-                Currency underlyingCurrency1 = OwnerCurrencyDelta.lccToUnderlyingCurrency(p.poolKey.currency1);
-                ctx.marketVault
-                    .decreaseLiquidityReserve(
-                        underlyingCurrency1, LiquidityUtils.safeInt128ToUint256(requiredSettlementDelta.amount1())
-                    );
-                MarketCurrencyDelta.addProduced(
-                    ICanonicalVault(ctx.marketVault.canonicalVault()).marketFactory(),
-                    underlyingCurrency1,
-                    LiquidityUtils.safeInt128ToUint256(requiredSettlementDelta.amount1())
-                );
-            }
-        }
+        _applyPositiveRequiredSettlementToOwnerAndVault(ctx, p.owner, p.poolKey, requiredSettlementDelta);
 
         // Mark RFS checkpoint
         (, BalanceDelta rfsDelta) = VTSPositionLib.getRFS(s, result.id);
         CheckpointLibrary.markCheckpoint(s, result.id, VTSPositionLib._rfsOpenMask(rfsDelta));
     }
 
-    /// @dev Shared protocol-credit deposit primitive reused by MM add and explicit settle-from-deltas paths.
+    /// @dev Books vault-immediate settlement only: `OwnerCurrencyDelta`, market vault reserve, and `MarketCurrencyDelta`
+    ///      produced credit. Hub-queued LCC and deferred `pa.settled` are not represented here (SETTLE-03).
+    function _applyPositiveRequiredSettlementToOwnerAndVault(
+        PositionContext memory ctx,
+        address owner,
+        PoolKey memory poolKey,
+        BalanceDelta requiredSettlementDelta
+    ) private {
+        if (LiquidityUtils.isZeroDelta(requiredSettlementDelta)) {
+            return;
+        }
+        // Account underlying currency settlement obligations to MMPositionManager
+        // Split model: Underlying settlement deltas on MMPM represent market liquidity claims (settle-only)
+        // Balance syncs from wrap/unwrap target locker (msgSender) for takeable credits
+        //
+        // Accumulate per-batch: `accountUnderlyingSettlementDelta` is setter-style (targets absolute pair), so
+        // multiple MM ops in the same unlock for the same owner/currency lane must add onto the current pair.
+
+        BalanceDelta currentUnderlying =
+            OwnerCurrencyDelta.getUnderlyingDeltaPair(owner, poolKey.currency0, poolKey.currency1);
+        OwnerCurrencyDelta.accountUnderlyingSettlementDelta(
+            owner,
+            LiquidityUtils.safeToBalanceDelta(
+                int256(currentUnderlying.amount0()) + int256(requiredSettlementDelta.amount0()),
+                int256(currentUnderlying.amount1()) + int256(requiredSettlementDelta.amount1())
+            ),
+            poolKey.currency0,
+            poolKey.currency1
+        );
+
+        if (requiredSettlementDelta.amount0() > 0) {
+            Currency underlyingCurrency0 = OwnerCurrencyDelta.lccToUnderlyingCurrency(poolKey.currency0);
+            ctx.marketVault
+                .decreaseLiquidityReserve(
+                    underlyingCurrency0, LiquidityUtils.safeInt128ToUint256(requiredSettlementDelta.amount0())
+                );
+            MarketCurrencyDelta.addProduced(
+                ICanonicalVault(ctx.marketVault.canonicalVault()).marketFactory(),
+                underlyingCurrency0,
+                LiquidityUtils.safeInt128ToUint256(requiredSettlementDelta.amount0())
+            );
+        }
+        if (requiredSettlementDelta.amount1() > 0) {
+            Currency underlyingCurrency1 = OwnerCurrencyDelta.lccToUnderlyingCurrency(poolKey.currency1);
+            ctx.marketVault
+                .decreaseLiquidityReserve(
+                    underlyingCurrency1, LiquidityUtils.safeInt128ToUint256(requiredSettlementDelta.amount1())
+                );
+            MarketCurrencyDelta.addProduced(
+                ICanonicalVault(ctx.marketVault.canonicalVault()).marketFactory(),
+                underlyingCurrency1,
+                LiquidityUtils.safeInt128ToUint256(requiredSettlementDelta.amount1())
+            );
+        }
+    }
+
+    /// @notice External entry for linked callers: settle protocol credit from positive owner underlying delta.
     function settleFromPositiveUnderlyingDelta(VTSStorage storage s, ProtocolCreditSettlementParams memory p)
         external
         returns (ProtocolCreditSettlementResult memory result)
@@ -225,6 +242,8 @@ library VTSPositionMMOpsLib {
     }
 
     /// @dev Applies one protocol-credit deposit lane by consuming live positive underlying delta.
+    /// @dev Early exit when no credit or no intended deposit; when `clampToRequiredSettlement` and the lane's
+    ///      `requiredSettlementDelta >= 0`, the position owes no deposit on that lane — skip consumption (MM in-hook).
     function _consumePositiveUnderlyingDeltaForSettlementLane(
         VTSStorage storage s,
         ProtocolCreditSettlementLaneParams memory p
@@ -270,7 +289,7 @@ library VTSPositionMMOpsLib {
         }
     }
 
-    /// @dev Shared protocol-credit deposit primitive reused by MM add and explicit settle-from-deltas paths.
+    /// @dev Implementation of `settleFromPositiveUnderlyingDelta` (two-lane vault reserve + produced credit).
     function _settleFromPositiveUnderlyingDelta(VTSStorage storage s, ProtocolCreditSettlementParams memory p)
         private
         returns (ProtocolCreditSettlementResult memory result)
@@ -398,9 +417,12 @@ library VTSPositionMMOpsLib {
             if (amount0 == 0 && amount1 == 0) return;
         }
 
-        // Validate commitment backing in scoped block
+        // Validate commitment backing in scoped block.
+        // `touchPosition` updates `positions[positionId].liquidity` to post-modify liquidity before this MM tail runs,
+        // so use that total for issued-value (COMMIT-01), not the incremental `params.liquidityDelta` alone.
         {
             (uint160 sqrtPriceX96, int24 currentTick,,) = ctx.poolManager.getSlot0(poolKey.toId());
+            uint128 postAddLiquidity = s.positions[p.positionId].liquidity;
             VTSCommitLib.validateLiquidityDelta(
                 s,
                 ctx.oracleHelper,
@@ -413,7 +435,7 @@ library VTSPositionMMOpsLib {
                     currentTick: currentTick,
                     tickLower: params.tickLower,
                     tickUpper: params.tickUpper,
-                    liquidityDelta: params.liquidityDelta
+                    liquidityDelta: SafeCast.toInt256(postAddLiquidity)
                 }),
                 true
             );
@@ -430,10 +452,93 @@ library VTSPositionMMOpsLib {
         }
     }
 
-    /// @dev Stack-isolated core for MM decrease vault vs queue split (used by `_handleLiquidityDecrease` and tests).
-    // if shortfall <= principal, then yes: settleable + queued == excess
-    // if shortfall > principal, then no: settleable + queued < excess
-    // Therefore export != excess, and we must accomodate.
+    /// @dev Single source for `dryModifyLiquidities(required)` → per-leg vault-immediate `settleableDelta` and shortfall.
+    function _vaultSettleableViewForRequired(PositionContext memory ctx, BalanceDelta requiredSettlementDelta)
+        internal
+        view
+        returns (VaultSettleableView memory v)
+    {
+        int128 req0 = requiredSettlementDelta.amount0();
+        int128 req1 = requiredSettlementDelta.amount1();
+        BalanceDelta availableDelta = ctx.marketVault.dryModifyLiquidities(requiredSettlementDelta);
+        BalanceDelta rawShortfall = requiredSettlementDelta - availableDelta;
+        int128 sf0 = rawShortfall.amount0();
+        int128 sf1 = rawShortfall.amount1();
+        if (sf0 < 0) sf0 = 0;
+        if (sf1 < 0) sf1 = 0;
+        v.settleableDelta = toBalanceDelta(req0 - sf0, req1 - sf1);
+        v.shortfallU0 = LiquidityUtils.safeInt128ToUint256(sf0);
+        v.shortfallU1 = LiquidityUtils.safeInt128ToUint256(sf1);
+    }
+
+    /// @dev Pure seizure per-leg: `burn = min(principal, excess)`, `retained = principal - burn` (queued to guarantor),
+    ///      `exportForClamp = min(excess, settleableVaultLeg + burn)` so clamp does not strip queued principal from `pa.settled`.
+    function _seizurePerLeg(uint256 principal, uint256 excess, uint256 settleableU)
+        private
+        pure
+        returns (uint256 retained, uint256 exportU)
+    {
+        uint256 burn = principal < excess ? principal : excess;
+        retained = principal > burn ? principal - burn : 0;
+        exportU = excess;
+        uint256 sum = settleableU + burn;
+        if (sum < exportU) exportU = sum;
+    }
+
+    /// @dev Finishes seizure split once vault settleable slice is known (isolates stack for `_computeSeizure...`).
+    function _finishSeizureLiquidityDecreaseRoutingSplit(
+        BalanceDelta principalDelta,
+        BalanceDelta requiredSettlementDelta,
+        uint256 settleableU0,
+        uint256 settleableU1
+    )
+        private
+        pure
+        returns (uint256 retainedPrincipal0, uint256 retainedPrincipal1, BalanceDelta exportedForSettlementClamp)
+    {
+        int128 rq0 = requiredSettlementDelta.amount0();
+        int128 rq1 = requiredSettlementDelta.amount1();
+        if (rq0 < 0) rq0 = 0;
+        if (rq1 < 0) rq1 = 0;
+        uint256 e0 = uint256(int256(rq0));
+        uint256 e1 = uint256(int256(rq1));
+        uint256 p0 = LiquidityUtils.safeInt128ToUint256(principalDelta.amount0());
+        uint256 p1 = LiquidityUtils.safeInt128ToUint256(principalDelta.amount1());
+        uint256 x0;
+        uint256 x1;
+        (retainedPrincipal0, x0) = _seizurePerLeg(p0, e0, settleableU0);
+        (retainedPrincipal1, x1) = _seizurePerLeg(p1, e1, settleableU1);
+        exportedForSettlementClamp = toBalanceDelta(SafeCast.toInt128(int256(x0)), SafeCast.toInt128(int256(x1)));
+    }
+
+    /// @dev Seizure-only: principal is routed so the guarantor receives `queueAmount = principal - burnAmount` LCC (queued),
+    ///      and `burnAmount = min(principal, excessSettled)` is cancelled to satisfy excess settled. Vault-immediate
+    ///      settlement (`settleableDelta`) is unchanged. `exportedForSettlementClamp` caps at excess per leg so
+    ///      `pa.settled` is not over-cleared when `settleable + burn` would exceed excess.
+    function _computeSeizureLiquidityDecreaseRoutingSplit(
+        PositionContext memory ctx,
+        BalanceDelta principalDelta,
+        BalanceDelta requiredSettlementDelta
+    )
+        internal
+        view
+        returns (
+            uint256 retainedPrincipal0,
+            uint256 retainedPrincipal1,
+            BalanceDelta underlyingDeltaSettlement,
+            BalanceDelta exportedForSettlementClamp
+        )
+    {
+        VaultSettleableView memory v = _vaultSettleableViewForRequired(ctx, requiredSettlementDelta);
+        underlyingDeltaSettlement = v.settleableDelta;
+        uint256 s0 = LiquidityUtils.safeInt128ToUint256(v.settleableDelta.amount0());
+        uint256 s1 = LiquidityUtils.safeInt128ToUint256(v.settleableDelta.amount1());
+        (retainedPrincipal0, retainedPrincipal1, exportedForSettlementClamp) =
+            _finishSeizureLiquidityDecreaseRoutingSplit(principalDelta, requiredSettlementDelta, s0, s1);
+    }
+
+    /// @dev Non-seizure MM decrease: queue `min(shortfall, principal)` per leg; export for clamp is `settleable + queued`.
+    ///      When `shortfall > principal`, `settleable + queued < excess` for that leg — the uncancellable remainder stays in `pa.settled`.
     function _computeLiquidityDecreaseRoutingSplit(
         PositionContext memory ctx,
         BalanceDelta principalDelta,
@@ -450,26 +555,13 @@ library VTSPositionMMOpsLib {
             BalanceDelta exportedForSettlementClamp
         )
     {
+        VaultSettleableView memory v = _vaultSettleableViewForRequired(ctx, requiredSettlementDelta);
+        settleableDelta = v.settleableDelta;
+
         uint256 principalAmount0 = LiquidityUtils.safeInt128ToUint256(principalDelta.amount0());
         uint256 principalAmount1 = LiquidityUtils.safeInt128ToUint256(principalDelta.amount1());
-        int128 req0 = requiredSettlementDelta.amount0();
-        int128 req1 = requiredSettlementDelta.amount1();
-
-        {
-            BalanceDelta availableDelta = ctx.marketVault.dryModifyLiquidities(requiredSettlementDelta);
-            BalanceDelta rawShortfall = requiredSettlementDelta - availableDelta;
-            int128 shortfall0 = rawShortfall.amount0();
-            int128 shortfall1 = rawShortfall.amount1();
-            if (shortfall0 < 0) shortfall0 = 0;
-            if (shortfall1 < 0) shortfall1 = 0;
-
-            settleableDelta = toBalanceDelta(req0 - shortfall0, req1 - shortfall1);
-
-            uint256 shortfallAmount0 = LiquidityUtils.safeInt128ToUint256(shortfall0);
-            uint256 shortfallAmount1 = LiquidityUtils.safeInt128ToUint256(shortfall1);
-            retainedPrincipal0 = shortfallAmount0 > principalAmount0 ? principalAmount0 : shortfallAmount0;
-            retainedPrincipal1 = shortfallAmount1 > principalAmount1 ? principalAmount1 : shortfallAmount1;
-        }
+        retainedPrincipal0 = v.shortfallU0 > principalAmount0 ? principalAmount0 : v.shortfallU0;
+        retainedPrincipal1 = v.shortfallU1 > principalAmount1 ? principalAmount1 : v.shortfallU1;
 
         queuedDelta = LiquidityUtils.safeToBalanceDelta(retainedPrincipal0, retainedPrincipal1, false, false);
         underlyingDeltaSettlement = settleableDelta;
@@ -479,6 +571,49 @@ library VTSPositionMMOpsLib {
         );
     }
 
+    /// @dev Stages `planCancelWithQueue` for MM decreases (non-seizure and seizure). Durable `settleQueue` is updated
+    ///      when the matching `PoolManager -> MMPM` transfer runs (`executePlannedCancel`). The router reconstructs the
+    ///      per-leg queued principal as the increment to `LiquidityHub.settleQueue(lcc, queueRecipient)` across that take.
+    function _stageMMDecreasePlannedCancels(
+        PositionContext memory ctx,
+        address owner,
+        PoolKey memory poolKey,
+        BalanceDelta principalDelta,
+        uint256 retainedPrincipal0,
+        uint256 retainedPrincipal1,
+        address queueRecipient
+    ) private {
+        if (LiquidityUtils.isZeroDelta(principalDelta)) {
+            return;
+        }
+
+        uint256 principalAmount0 = LiquidityUtils.safeInt128ToUint256(principalDelta.amount0());
+        uint256 principalAmount1 = LiquidityUtils.safeInt128ToUint256(principalDelta.amount1());
+
+        if (principalAmount0 > 0) {
+            ctx.liquidityHub
+                .planCancelWithQueue(
+                    Currency.unwrap(poolKey.currency0),
+                    address(ctx.poolManager),
+                    owner,
+                    principalAmount0,
+                    retainedPrincipal0,
+                    queueRecipient
+                );
+        }
+        if (principalAmount1 > 0) {
+            ctx.liquidityHub
+                .planCancelWithQueue(
+                    Currency.unwrap(poolKey.currency1),
+                    address(ctx.poolManager),
+                    owner,
+                    principalAmount1,
+                    retainedPrincipal1,
+                    queueRecipient
+                );
+        }
+    }
+
     /// @notice Handle liquidity decrease (remove liquidity or burn) - cancels LCCs
     /// @dev Stages path-keyed planned cancels for the subsequent PoolManager -> MMPM LCC transfer.
     ///      This helper is correct only because the surrounding MM decrease flow immediately
@@ -486,11 +621,11 @@ library VTSPositionMMOpsLib {
     /// @param ctx The position context
     /// @param owner The position owner
     /// @param poolKey The pool key
-    /// @param principalDelta The principal delta after fee adjustments
+    /// @param principalDelta Pool principal delta: `callerDelta - feesAccrued` (not net of `feeAdj`; see `processMMOperations`).
     /// @param requiredSettlementDelta The required settlement delta from touchPosition
     /// @param queueRecipient The recipient for settlement queue (locker)
-    /// @return underlyingDeltaSettlement Portion routed to `DynamicCurrencyDelta` (vault-immediate slice only).
-    /// @return exportedForSettlementClamp Amount to remove from live `settled`: immediate slice plus queued principal.
+    /// @return underlyingDeltaSettlement Portion routed to `OwnerCurrencyDelta` / vault reserve (vault-immediate slice only).
+    /// @return exportedForSettlementClamp Amount passed to `_applySettlementClampFromExcess`: `settleable + queued` per leg.
     function _handleLiquidityDecrease(
         PositionContext memory ctx,
         address owner,
@@ -504,49 +639,29 @@ library VTSPositionMMOpsLib {
         (retainedPrincipal0, retainedPrincipal1,,, underlyingDeltaSettlement, exportedForSettlementClamp) =
             _computeLiquidityDecreaseRoutingSplit(ctx, principalDelta, requiredSettlementDelta);
 
-        if (LiquidityUtils.isZeroDelta(principalDelta)) {
-            return (underlyingDeltaSettlement, exportedForSettlementClamp);
-        }
+        _stageMMDecreasePlannedCancels(
+            ctx, owner, poolKey, principalDelta, retainedPrincipal0, retainedPrincipal1, queueRecipient
+        );
+    }
 
-        uint256 principalAmount0 = LiquidityUtils.safeInt128ToUint256(principalDelta.amount0());
-        uint256 principalAmount1 = LiquidityUtils.safeInt128ToUint256(principalDelta.amount1());
+    /// @notice Seizure MM decrease: queues `principal - min(principal, excessSettled)` to the guarantor; cancels the burn slice only.
+    /// @dev Same staging contract as `_handleLiquidityDecrease` (planned cancel + transient queue amounts for custody parity).
+    /// @param principalDelta Pool principal delta: `callerDelta - feesAccrued` (not net of `feeAdj`; see `processMMOperations`).
+    function _handleSeizureLiquidityDecrease(
+        PositionContext memory ctx,
+        address owner,
+        PoolKey memory poolKey,
+        BalanceDelta principalDelta,
+        BalanceDelta requiredSettlementDelta,
+        address queueRecipient
+    ) internal returns (BalanceDelta underlyingDeltaSettlement, BalanceDelta exportedForSettlementClamp) {
+        uint256 retainedPrincipal0;
+        uint256 retainedPrincipal1;
+        (retainedPrincipal0, retainedPrincipal1, underlyingDeltaSettlement, exportedForSettlementClamp) =
+            _computeSeizureLiquidityDecreaseRoutingSplit(ctx, principalDelta, requiredSettlementDelta);
 
-        // 3. Queue settlements via cancelWithQueue
-        // Burns LCCs on transfer from PoolManager to owner (MMPM) and queues shortfall for queueRecipient (locker).
-        // Only cancel LCCs for tokens that have non-zero principal delta (tokens actually removed from liquidity)
-        // Process token0 cancellation
-        {
-            if (principalAmount0 > 0) {
-                ctx.liquidityHub
-                    .planCancelWithQueue(
-                        Currency.unwrap(poolKey.currency0),
-                        address(ctx.poolManager),
-                        owner,
-                        principalAmount0,
-                        retainedPrincipal0,
-                        queueRecipient
-                    );
-            }
-        }
-
-        // Process token1 cancellation
-        {
-            if (principalAmount1 > 0) {
-                ctx.liquidityHub
-                    .planCancelWithQueue(
-                        Currency.unwrap(poolKey.currency1),
-                        address(ctx.poolManager),
-                        owner,
-                        principalAmount1,
-                        retainedPrincipal1,
-                        queueRecipient
-                    );
-            }
-        }
-
-        // 4. Actual queued amounts are tracked in LiquidityHub as owed to queueRecipient.
-        // When _collectAvailableLiquidity is called, underlying is transferred to the recipient.
-        // If recipient is MMPM, the balance is synced to the locker's delta.
-        // Any shortfall remainder beyond this call's cancellable principal stays in live `settled` (not transient delta).
+        _stageMMDecreasePlannedCancels(
+            ctx, owner, poolKey, principalDelta, retainedPrincipal0, retainedPrincipal1, queueRecipient
+        );
     }
 }

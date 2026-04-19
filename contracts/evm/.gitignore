@@ -203,3 +203,6 @@ gambit_out/
 crytic-export/
 out-echidna-min/
 out-echidna/
+
+# Medusa (FuzzEntry / crytic-compile)
+medusa-corpus/

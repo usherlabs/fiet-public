@@ -1,5 +1,8 @@
 # Fee-Sharing Upgrade: Consolidated Explanation
 
+> **Fee-pot redesign (supersedes `protocolFeeAccrued` in older sections below)**  
+> Current implementation: [`Fee-Pot-Materialisation-And-DirectLP-Policy.md`](./Fee-Pot-Materialisation-And-DirectLP-Policy.md). Sections that still describe `protocolFeeAccrued` as the allocation pot are **historical**; reconcile with that note.
+
 This document consolidates the current fee-sharing design and the recent fee upgrade into one explanation.
 
 It is intended to sit alongside, and summarise the combined effect of, the more focused research notes:
@@ -27,11 +30,12 @@ The upgraded fee-sharing model has three distinct economic layers:
 2. **CISE** decides who deserves bonus weight.
 3. **CSI** decides how much of the current accounting pot must still be excluded as a position's own contribution.
 
-The runtime settlement pipeline remains the same:
+The runtime settlement pipeline:
 
-- slashes increase `protocolFeeAccrued` and queue positive `pendingFeeAdj`;
-- bonuses decrease `protocolFeeAccrued` and queue negative `pendingFeeAdj`;
-- `_finaliseFeeAdjustment(...)` materialises those signed adjustments against `slashedPot`.
+- slashes queue positive `pendingFeeAdj` and materialise into `slashedPot` on fee-processing (Phase 1);
+- bonuses allocate against **`slashedPot`** (Phase 2) and queue negative `pendingFeeAdj`, then Phase 3 drains `slashedPot` to pay.
+
+A subsequent **fee-pot redesign** removed a separate pool-level `protocolFeeAccrued` counter: CSI `potAvail` is computed from **`slashedPot` and self-remaining shares**, not from a distinct queued “protocol fee accrued” field.
 
 The fee upgrade did **not** change the core pot materialisation architecture. It corrected and completed the attribution logic around:
 

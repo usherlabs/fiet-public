@@ -186,7 +186,12 @@ contract ProxyHook is BaseHook, VaultCoreActionHandler {
         if (sqrtPriceLimitX96 == minValid) return maxValid;
         if (sqrtPriceLimitX96 == maxValid) return minValid;
 
-        uint256 inverted = (uint256(1) << 192) / sqrtPriceLimitX96;
+        // Direction-aware reciprocal: v4 uses min-price bound for zeroForOne and max-price bound for oneForZero.
+        // Ceil the reciprocal for the min bound; floor for the max bound (conservative vs user intent).
+        uint256 q192 = uint256(1) << 192;
+        uint256 inverted = coreZeroForOne
+            ? (q192 + uint256(sqrtPriceLimitX96) - 1) / uint256(sqrtPriceLimitX96)
+            : q192 / uint256(sqrtPriceLimitX96);
         if (inverted < minValid) return minValid;
         if (inverted > maxValid) return maxValid;
         return SafeCastLib.toUint160(inverted);

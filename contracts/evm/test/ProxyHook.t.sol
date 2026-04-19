@@ -253,6 +253,22 @@ contract ProxyHookTest is MarketVaultBase {
         fresh.handleIngress(address(0xBEEF), 1);
     }
 
+    /// @dev Full fixture: `handleIngress` validates LCC and calls into the canonical vault ingress path.
+    ///      The vault body is mocked here so the test does not require `PoolManager.unlock` (real path would hit `ManagerLocked`).
+    function test_handleIngress_settlesUnderlying_whenWrappedAmountPositive_andLccMatchesCorePair() public {
+        address lcc = Currency.unwrap(corePoolKey.currency0);
+        uint256 amount = 100;
+        bytes32 marketId = PoolId.unwrap(corePoolKey.toId());
+        address canonicalVault_ = IMarketFactory(marketFactory).canonicalVault();
+        vm.mockCall(
+            canonicalVault_,
+            abi.encodeWithSelector(ICanonicalVault.settleUnderlyingToVaultFromHub.selector, marketId, lcc, amount),
+            abi.encode()
+        );
+        vm.prank(marketFactory);
+        proxyHook.handleIngress(lcc, amount);
+    }
+
     function test_handleSwap_revertsWhenInputTokenIsNotInCorePair() public {
         ProxyHookHarness fresh = new ProxyHookHarness(address(manager), address(marketFactory));
 
@@ -855,6 +871,35 @@ contract ProxyHookTest is MarketVaultBase {
         assertEq(got, sender, "address(2) should map to sender");
     }
 
+    /// @dev `_resolveLocker` treats staticcall failure as unresolved locker.
+    function test_determineExcessRecipient_lockerUnresolved_whenMsgSenderReverts() public {
+        ProxyHookHarness harness = new ProxyHookHarness(address(manager), address(marketFactory));
+        MockMsgSenderReverting sender = new MockMsgSenderReverting();
+        (address got, bool resolved) = harness.exposed_determineExcessRecipient(address(sender), abi.encode(address(1)));
+        assertFalse(resolved, "reverting msgSender() should leave locker unresolved");
+        assertEq(got, address(0));
+    }
+
+    /// @dev ABI-encoded address requires 32 bytes; shorter return data must not decode as a valid locker.
+    function test_determineExcessRecipient_lockerUnresolved_whenMsgSenderReturnDataTooShort() public {
+        ProxyHookHarness harness = new ProxyHookHarness(address(manager), address(marketFactory));
+        MockMsgSenderShortReturn sender = new MockMsgSenderShortReturn();
+        (address got, bool resolved) = harness.exposed_determineExcessRecipient(address(sender), abi.encode(address(1)));
+        assertFalse(resolved, "short return data should leave locker unresolved");
+        assertEq(got, address(0));
+    }
+
+    /// @dev Explicit non-zero hookData recipient of `address(0)` still routes through locker resolution (not custom).
+    function test_determineExcessRecipient_customHookDataZeroAddress_decodesToZeroRecipient() public {
+        ProxyHookHarness harness = new ProxyHookHarness(address(manager), address(marketFactory));
+        address explicitZeroDecoded = address(uint160(uint256(keccak256("explicit_zero"))));
+        // `abi.encode(address(0))` is what Solidity uses for a typed zero address.
+        (address got, bool resolved) =
+            harness.exposed_determineExcessRecipient(explicitZeroDecoded, abi.encode(address(0)));
+        assertFalse(resolved, "locker resolution should fail for unknown sender");
+        assertEq(got, address(0));
+    }
+
     /**
      * @notice Test exact output swap with limited liquidity (no hookData)
      */
@@ -1314,14 +1359,35 @@ contract ProxyHookTest is MarketVaultBase {
             "flipped MAX-1 should map to MIN+1"
         );
 
-        // Flipped inversion (non-zero, non-extreme).
+        // Flipped inversion (non-zero, non-extreme): zeroForOne uses ceil reciprocal (min bound), oneForZero floor (max bound).
         uint160 custom = SQRT_PRICE_1_1 + 1;
-        uint160 expectedInverted = uint160((uint256(1) << 192) / uint256(custom));
+        uint256 q192 = uint256(1) << 192;
+        uint160 expectedCeil = uint160((q192 + uint256(custom) - 1) / uint256(custom));
+        uint160 expectedFloor = uint160(q192 / uint256(custom));
         assertEq(
             harness.exposed_calcCoreSqrtPriceLimit(custom, true, true),
-            expectedInverted,
-            "flipped non-zero should invert"
+            expectedCeil,
+            "flipped zeroForOne should use ceil reciprocal"
         );
+        assertEq(
+            harness.exposed_calcCoreSqrtPriceLimit(custom, true, false),
+            expectedFloor,
+            "flipped oneForZero should use floor reciprocal"
+        );
+        assertGe(expectedCeil, expectedFloor, "ceil should be >= floor; strict when q192 % custom != 0");
+
+        // Mid-range sqrt price where q192 % p != 0: zeroForOne (ceil) must be strictly above oneForZero (floor).
+        uint160 noisyMid = 79228162514264337593543950337; // tick-0 sqrt ratio + 1
+        assertGt(noisyMid, TickMath.MIN_SQRT_PRICE + 1);
+        assertLt(noisyMid, TickMath.MAX_SQRT_PRICE - 1);
+        assertTrue(
+            (q192 % uint256(noisyMid)) != 0, "precondition: pick a sqrt price with non-zero remainder so ceil != floor"
+        );
+        uint160 ceilNoisy = uint160((q192 + uint256(noisyMid) - 1) / uint256(noisyMid));
+        uint160 floorNoisy = uint160(q192 / uint256(noisyMid));
+        assertGt(ceilNoisy, floorNoisy, "ceil/floor should differ for this fixture");
+        assertEq(harness.exposed_calcCoreSqrtPriceLimit(noisyMid, true, true), ceilNoisy);
+        assertEq(harness.exposed_calcCoreSqrtPriceLimit(noisyMid, true, false), floorNoisy);
 
         // Flipped near-MAX should clamp to MIN+1 instead of producing an out-of-bounds MIN/underflowed value.
         uint160 nearMax = TickMath.MAX_SQRT_PRICE - 2;
@@ -1562,12 +1628,8 @@ contract ProxyHookTest is MarketVaultBase {
     ) internal {
         address ua = lcc.underlying();
         require(ua != address(0), "liveness tests require ERC20 underlyings");
-        IERC20Minimal(ua).transfer(address(proxyHook), amount);
-        vm.startPrank(address(proxyHook));
-        IERC20Minimal(ua).approve(liquidityHub, amount);
-        LiquidityHub(payable(liquidityHub)).wrap(address(lcc), amount);
-        lcc.transfer(address(runner), amount);
-        vm.stopPrank();
+        vm.prank(address(proxyHook));
+        LiquidityHub(payable(liquidityHub)).issue(address(lcc), address(runner), amount);
     }
 
     /// @dev Unwrap market-derived LCC inside PoolManager.unlock; withdraws underlying from the market vault.
@@ -1877,6 +1939,21 @@ contract MockMsgSender is IMsgSender {
 contract MockMsgSenderZero is IMsgSender {
     function msgSender() external pure returns (address) {
         return address(0);
+    }
+}
+
+contract MockMsgSenderReverting is IMsgSender {
+    function msgSender() external pure returns (address) {
+        revert("MockMsgSenderReverting");
+    }
+}
+
+/// @dev Returns fewer than 32 bytes so `_resolveLocker` cannot ABI-decode an address.
+contract MockMsgSenderShortReturn {
+    fallback() external {
+        assembly {
+            return(0, 16)
+        }
     }
 }
 

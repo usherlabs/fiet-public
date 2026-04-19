@@ -68,6 +68,10 @@ interface IVTSOrchestrator is IPausableVTS, IVTSCurrencyDelta, IVTSAdmin {
             uint256 inactiveRemnantCount
         );
 
+    /// @notice The address bound at commit creation as the sole CoreHook MM `owner` (router) for this commit.
+    /// @dev `address(0)` denotes a legacy commit created before per-commit relayer binding.
+    function getCommitAuthorisedRelayer(uint256 commitId) external view returns (address);
+
     /// @notice Get pool information by PoolId
     /// @dev Note: Cannot return Pool directly due to mapping in struct
     /// @param poolId The pool identifier
@@ -106,12 +110,6 @@ interface IVTSOrchestrator is IPausableVTS, IVTSCurrencyDelta, IVTSAdmin {
     /// @dev Called by CoreHook to settle position growths before adding or removing liquidity
     /// @param positionId The position identifier
     function settlePositionGrowths(PositionId positionId) external;
-
-    /// @notice Get the protocol fee accrued (slashed fees) for a pool
-    /// @param poolId The pool identifier
-    /// @return fee0 The accrued fee for token0
-    /// @return fee1 The accrued fee for token1
-    function getProtocolFeeAccrued(PoolId poolId) external view returns (uint256 fee0, uint256 fee1);
 
     /// @notice Get the materialised slashed pot (claimables available for bonus payouts) for a pool
     /// @param poolId The pool identifier
@@ -233,21 +231,25 @@ interface IVTSOrchestrator is IPausableVTS, IVTSCurrencyDelta, IVTSAdmin {
 
     // MMPositionManager Functions
     /// @notice Commit a liquidity signal to the VTS state
-    /// @param sender The effective caller (locker) for commit authorisation
+    /// @param factory The market factory namespace for caller-bound validation
     /// @param liquiditySignal The liquidity signal to commit
     /// @return commitId The commit identifier for the committed signal
-    function commitSignal(IMarketFactory factory, address sender, bytes memory liquiditySignal)
-        external
-        returns (uint256 commitId);
+    function commitSignal(IMarketFactory factory, bytes memory liquiditySignal) external returns (uint256 commitId);
     /// @notice Commit a liquidity signal using sender-signed EIP-712 relayer authorisation
     /// @param factory The market factory namespace for caller-bound validation (mirrors non-relayed commit)
+    /// @param liquiditySignal The ABI-encoded liquidity signal
+    /// @param deadline Relay authorisation deadline
+    /// @param authNonce Replay guard nonce for the proof principal (`mmState.owner`)
+    /// @param authSig EIP-712 signature over relay authorisation
+    /// @param sender EIP-712 `RelayAuth.sender`: MM batch locker / NFT recipient for fresh relay (`address(0)`
+    ///        means `mmState.owner`); otherwise must equal the `MMPositionManager` batch locker.
     function commitSignalRelayed(
         IMarketFactory factory,
-        address sender,
         bytes memory liquiditySignal,
         uint256 deadline,
         uint256 authNonce,
-        bytes memory authSig
+        bytes memory authSig,
+        address sender
     ) external returns (uint256 commitId);
     /// @notice Extend the grace period for a position
     /// @param poolKey The pool key for the position
@@ -300,23 +302,24 @@ interface IVTSOrchestrator is IPausableVTS, IVTSCurrencyDelta, IVTSAdmin {
     /// @param positionIndex The position index within the commit
     function onSeize(uint256 commitId, uint256 positionIndex) external;
 
-    /// @notice Renew a liquidity signal for an existing commit, using an explicit sender for advancer validation
-    /// @dev Useful for router-style callers where msg.sender is a forwarding contract
-    /// @param sender The effective caller (locker) used for advancer validation
+    /// @notice Renew a liquidity signal for an existing commit
+    /// @dev VRL proof principal is `mmState.advancer` (derived inside `VTSCommitLib`).
     /// @param commitId The commit identifier to renew
     /// @param liquiditySignal The new liquidity signal
-    function renewSignal(IMarketFactory factory, address sender, uint256 commitId, bytes memory liquiditySignal)
-        external;
+    function renewSignal(IMarketFactory factory, uint256 commitId, bytes memory liquiditySignal) external;
     /// @notice Renew a liquidity signal using sender-signed EIP-712 relayer authorisation
     /// @param factory The market factory namespace for caller-bound validation (mirrors non-relayed renew)
+    /// @param authNonce Replay guard nonce for the proof principal (`mmState.advancer`)
+    /// @param sender EIP-712 `RelayAuth.sender` for renew: `address(0)` (legacy) or `mmState.advancer`; `MMPositionManager`
+    ///        enforces the batch locker matches the signed sender or advancer.
     function renewSignalRelayed(
         IMarketFactory factory,
-        address sender,
         uint256 commitId,
         bytes memory liquiditySignal,
         uint256 deadline,
         uint256 authNonce,
-        bytes memory authSig
+        bytes memory authSig,
+        address sender
     ) external;
 
     /// @notice Checkpoint a position and optionally run commitment backing checks

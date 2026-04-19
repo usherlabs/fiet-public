@@ -78,6 +78,14 @@ fi
 # Compute default CryticCompile args so local and Docker runs behave the same.
 OUT_DIR="${FOUNDRY_OUT_DIR:-out}"
 if [ "$COMPILE_BACKEND" = "foundry" ]; then
+  # Generate `.echidna-gen/foundry.toml` with a converged [profile.echidna].libraries map (via
+  # GenerateEchidnaLinkedLibAddresses.printManifest in echidna_prepare_linked_libs.py), then compile+smoke.
+  # Skip with ECHIDNA_SKIP_PREPARE=1 (you must set FOUNDRY_CONFIG yourself).
+  if [ "${ECHIDNA_SKIP_PREPARE:-}" != "1" ]; then
+    echo "[echidna] preparing linked libraries for Foundry backend (see [echidna-prepare] lines on stderr)..." 1>&2
+    FOUNDRY_CONFIG_GEN="$(python3 scripts/echidna_prepare_linked_libs.py)" || exit 1
+    export FOUNDRY_CONFIG="$FOUNDRY_CONFIG_GEN"
+  fi
   # IMPORTANT: crytic-compile needs --foundry-out-directory to find build-info/artifacts if we use a non-default out dir.
   CRYTIC_ARGS="${ECHIDNA_CRYTIC_ARGS:---compile-force-framework foundry --foundry-compile-all --foundry-out-directory $OUT_DIR}"
 else
@@ -142,6 +150,7 @@ if command -v docker >/dev/null 2>&1; then
     -w /src \
     ${FOUNDRY_PROFILE:+-e FOUNDRY_PROFILE=$FOUNDRY_PROFILE} \
     ${FOUNDRY_OUT_DIR:+-e FOUNDRY_OUT_DIR=$FOUNDRY_OUT_DIR} \
+    ${FOUNDRY_CONFIG:+-e FOUNDRY_CONFIG=/src/.echidna-gen/foundry.toml} \
     "$IMAGE" \
     echidna "$ECHIDNA_TARGET" --contract "$CONTRACT" --config "$CONFIG" \
       --crytic-args "$CRYTIC_ARGS" \

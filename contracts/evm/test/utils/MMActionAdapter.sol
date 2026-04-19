@@ -92,9 +92,10 @@ library MMActionAdapter {
         bytes memory liquiditySignal,
         uint256 deadline,
         uint256 authNonce,
-        bytes memory authSig
+        bytes memory authSig,
+        address sender
     ) internal pure returns (PreparedAction memory) {
-        bytes memory relayParams = abi.encode(deadline, authNonce, authSig);
+        bytes memory relayParams = abi.encode(deadline, authNonce, authSig, sender);
         return PreparedAction({
             action: bytes1(uint8(MMActions.COMMIT_SIGNAL)), params: abi.encode(liquiditySignal, relayParams)
         });
@@ -159,16 +160,30 @@ library MMActionAdapter {
     }
 
     /**
-     * @notice Prepares a DECREASE_LIQUIDITY action
+     * @notice Prepares a DECREASE_LIQUIDITY action (no min-out; same as amount0Min=amount1Min=0)
      */
     function prepareDecrease(PoolKey memory poolKey, uint256 tokenId, uint256 positionIndex, uint256 amount)
         internal
         pure
         returns (PreparedAction memory)
     {
+        return prepareDecrease(poolKey, tokenId, positionIndex, amount, 0, 0);
+    }
+
+    /**
+     * @notice Prepares a DECREASE_LIQUIDITY action with Uniswap-style principal min-out bounds
+     */
+    function prepareDecrease(
+        PoolKey memory poolKey,
+        uint256 tokenId,
+        uint256 positionIndex,
+        uint256 amount,
+        uint128 amount0Min,
+        uint128 amount1Min
+    ) internal pure returns (PreparedAction memory) {
         return PreparedAction({
             action: bytes1(uint8(MMActions.DECREASE_LIQUIDITY)),
-            params: abi.encode(poolKey, tokenId, positionIndex, amount)
+            params: abi.encode(poolKey, tokenId, positionIndex, amount, amount0Min, amount1Min)
         });
     }
 
@@ -189,15 +204,29 @@ library MMActionAdapter {
     }
 
     /**
-     * @notice Prepares a BURN_POSITION action
+     * @notice Prepares a BURN_POSITION action (no min-out; same as amount0Min=amount1Min=0)
      */
     function prepareBurn(PoolKey memory poolKey, uint256 tokenId, uint256 positionIndex)
         internal
         pure
         returns (PreparedAction memory)
     {
+        return prepareBurn(poolKey, tokenId, positionIndex, 0, 0);
+    }
+
+    /**
+     * @notice Prepares a BURN_POSITION action with Uniswap-style principal min-out bounds
+     */
+    function prepareBurn(
+        PoolKey memory poolKey,
+        uint256 tokenId,
+        uint256 positionIndex,
+        uint128 amount0Min,
+        uint128 amount1Min
+    ) internal pure returns (PreparedAction memory) {
         return PreparedAction({
-            action: bytes1(uint8(MMActions.BURN_POSITION)), params: abi.encode(poolKey, tokenId, positionIndex)
+            action: bytes1(uint8(MMActions.BURN_POSITION)),
+            params: abi.encode(poolKey, tokenId, positionIndex, amount0Min, amount1Min)
         });
     }
 
@@ -228,7 +257,7 @@ library MMActionAdapter {
         uint256 authNonce,
         bytes memory authSig
     ) internal pure returns (PreparedAction memory) {
-        bytes memory relayParams = abi.encode(deadline, authNonce, authSig);
+        bytes memory relayParams = abi.encode(deadline, authNonce, authSig, address(0));
         return PreparedAction({
             action: bytes1(uint8(MMActions.RENEW_SIGNAL)), params: abi.encode(tokenId, liquiditySignal, relayParams)
         });

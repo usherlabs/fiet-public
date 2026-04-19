@@ -13,10 +13,10 @@ It focuses on the **runtime flow of `feeAdj`**, how **slashes accrue into claima
 - **LP / MM caller**: The account whose liquidity is being modified (in this repo that’s typically `MMPositionManager` via `MMPositionActionsImpl`).
 - **Uniswap v4 `PoolManager`**: Maintains *transient* per-(address,currency) deltas during `unlock`.
 - **`CoreHook`**: Returns `feeAdj` as hook delta; later clears its own transient deltas by minting/burning ERC6909 claims.
-- **`VTSOrchestrator` + libs**: Computes slashes/bonuses, updates accounting (`pendingFeeAdj`, `protocolFeeAccrued`, `slashedPot`, etc.), returns `feeAdj`.
+- **`VTSOrchestrator` + libs**: Computes slashes/bonuses, updates accounting (`pendingFeeAdj`, pool `slashedPot`, etc.), returns `feeAdj`.
 - **Fee pot state**:
-  - `protocolFeeAccrued`: accounting of “fees burned / slashed” (used as the *source* for allocating bonuses, excluding self-contrib).
-  - `slashedPot`: accounting of “materialized claimables available for paying bonuses”.
+  - `slashedPot` (per fee token, pool-level): **materialised** accounting balance used for CSI bonus allocation (`potAvail` after self-exclusion) and for paying negative `pendingFeeAdj` in the same touch’s Phase 3 finalisation.
+  - Positive `pendingFeeAdj` on positions queues slash-side obligations until materialised into `slashedPot` on touches (subject to decrease caps — SETTLE-03).
 - **ERC6909 claims (LCC claims)**: minted/burned *inside PoolManager* to represent claimable balances without moving ERC20s.
 
 ---
@@ -50,6 +50,8 @@ The “happy path” is:
    - then calls `MarketFactory.afterModifyLiquidity(key)`
 7. `MarketFactory.afterModifyLiquidity` calls `CoreHook.settleHookDeltasToPot(key)`
 8. `CoreHook.settleHookDeltasToPot` reads its transient deltas and **mints/burns ERC6909 claims** to net them to zero.
+
+**MM decrease / burn min-out:** `MMPositionActionsImpl` enforces `amount0Min` / `amount1Min` against the per-leg **immediate post-`feeAdj` non-fee LCC** (`LiquidityUtils.forwardedNonFeeLccAmount`), not against raw `callerDelta - feesAccrued`. For commit buckets, only the Hub-queued slice is physically forwarded to `MMQueueCustodian`; surplus non-fee LCC remains **locker transient credit** (`TAKE` / `UNWRAP_LCC`). VTS settlement routing still uses hook-time pool principal `callerDelta - feesAccrued` for queue caps; `feeAdj` reclassifies fee vs non-fee on the actual receipt, not principal (`SETTLE-03`, **MMQ-01**).
 
 ### Sequence diagram (current architecture)
 
@@ -88,8 +90,7 @@ Slashes are ultimately derived from coverage usage and deficits (see the spec do
 
 Operationally in VTS:
 
-- slashes increment `protocolFeeAccrued` (pool-level), and
-- slashes are queued on the position as `pendingFeeAdj += slashAmount` (per token).
+- slashes queue on the position as `pendingFeeAdj += slashAmount` (per token), and are **materialised** into `slashedPot` on later fee-processing (Phase 1 of `_processPositionFees`), before bonus allocation (Phase 2) runs against the materialised pot.
 
 ### 2) Materialization into `feeAdj` (hook-time)
 
@@ -126,28 +127,18 @@ The key point: **the slash itself creates a credit (positive delta) to CoreHook*
 
 ## How Pot Distribution Works (Bonuses)
 
-### 1) Bonus allocation (accounting) can happen independently of immediate payout
+### 1) Bonus allocation (accounting) uses the materialised pot
 
-During `processPositionFees(...)`, bonuses are computed from:
+During `processPositionFees(...)`, Phase 2 bonuses are computed from:
 
-- `potAvail = max(protocolFeeAccrued - selfContrib, 0)`
-- weighted by `selfNet / totalNet`
+- `potAvail = max(slashedPot - selfRemaining, 0)` (CSI self-exclusion via `feesShared` / remaining-share epochs),
+- weighted by CISE exposure vs pool `totalCISEExposureSinceLastMod`.
 
-This **allocates** a bonus by:
-
-- reducing `protocolFeeAccrued` (accounting),
-- and queuing `pendingFeeAdj -= bonus` (negative pending).
-
-This is “who deserves what”, not yet “who got paid”.
+This **allocates** a bonus by queuing `pendingFeeAdj -= bonus` (negative pending). The pool `slashedPot` is not reduced at allocation time; Phase 3 then drains `slashedPot` to pay down negative pending in the same touch, up to availability.
 
 ### 2) Bonus materialization into `feeAdj` (hook-time)
 
-When a position with negative `pendingFeeAdj` is modified:
-
-- the system attempts to materialize a negative `feeAdj` (hook owes caller),
-- but clamps the payout by available `slashedPot` (the materialized pot).
-
-So even if a bonus is allocated, it **may not be payable yet** if `slashedPot` is empty.
+Phase 3 (`_finaliseNegativeFeeAdjustment`) materialises negative `pendingFeeAdj` into a negative `feeAdj`, clamped by current `slashedPot`. If the pot is insufficient, unpaid negative pending remains for later touches.
 
 ### 3) PoolManager transient delta + CoreHook settlement
 
@@ -184,84 +175,14 @@ So the batch should end with **no outstanding transient deltas**, avoiding `Curr
 
 ---
 
-## The Ordering Edge Case: “Bonus Allocated Before Slashing Materializes”
+## Ordering: touches that fund `slashedPot` vs beneficiaries
 
-Here's a subtle but real ordering scenario:
-> bonuses could be allocated despite there being no slashing, because positions with bonuses modify and settle fee growth before positions that are to be slashed do.
+Under the **two-phase** `_processPositionFees` ordering (Phase 1 materialise positive `pendingFeeAdj` into `slashedPot`, Phase 2 allocate bonuses from `slashedPot`, Phase 3 pay negative pending from `slashedPot`):
 
-This happens because **allocation** (reducing `protocolFeeAccrued` and setting `pendingFeeAdj -= bonus`) can occur as soon as:
+- A beneficiary touch **before** any slashed position has materialised positive pending into `slashedPot` will see **`potAvail == 0`** (empty materialised pot), so Phase 2 **does not** allocate a bonus; CISE windows can remain **banked** for a later touch.
+- After a slashed position is touched and Phase 1 increases `slashedPot`, a subsequent beneficiary touch can run Phase 2+3 and pay out (subject to CSI rounding and caps).
 
-- `protocolFeeAccrued` is non-zero, and
-- the position has positive `selfNet`,
-even if the positions responsible for the slashes haven’t yet performed the subsequent modifications that would **materialize** their own positive `pendingFeeAdj` into **`slashedPot` claimables**.
-
-### What actually occurs
-
-1) **Coverage event / settlement** increases `protocolFeeAccrued` and queues slashes as positive `pendingFeeAdj` on the slashed positions.
-
-2) A “good actor” position B modifies liquidity first:
-   - it runs `processPositionFees`
-   - it sees `protocolFeeAccrued > 0`
-   - it allocates itself a bonus:
-     - `protocolFeeAccrued` decreases
-     - `pendingFeeAdj_B` becomes negative (queued bonus)
-
-3) Position B tries to materialize bonus in the same modification:
-   - payout is **clamped by `slashedPot`**
-   - if the slashed positions haven’t modified yet, `slashedPot` may still be **0**
-   - so **no bonus is actually paid** (or only partially paid), and the remaining negative pending stays queued.
-
-4) Later, a slashed position A modifies:
-   - it materializes its positive pending into `feeAdj > 0`
-   - hook receives transient credit and mints claims → `slashedPot` effectively becomes fundable/payable over time
-
-5) On a subsequent modification of B (or another bonus claimant):
-   - the queued negative `pendingFeeAdj` can now be materialized (up to available `slashedPot`)
-   - the hook burns claims to pay it out.
-
-### Sequence diagram for the edge case
-
-```mermaid
-sequenceDiagram
-    autonumber
-    participant PM as PoolManager
-    participant CH as CoreHook
-    participant VTS as VTSOrchestrator
-    participant A as Slashed Position A
-    participant B as Bonus Position B
-
-    Note over VTS: Coverage event queues slashes (A.pending += +slash)\nprotocolFeeAccrued += slash
-
-    B->>PM: modifyLiquidity (B)
-    PM->>CH: after* hook (B)
-    CH->>VTS: processPositionFees(B)
-    Note over VTS: Allocates bonus from protocolFeeAccrued\nB.pending += -bonus
-    VTS-->>CH: feeAdj (tries to materialize bonus)
-    Note over VTS: materialization is clamped by slashedPot\n(if slashedPot==0 => feeAdj bonus may be 0)
-    CH-->>PM: return feeAdj
-    Note over PM: hook delta applied, then CH delta settled (claims burn)\n(if feeAdj==0 => nothing to burn)
-
-    A->>PM: modifyLiquidity (A)
-    PM->>CH: after* hook (A)
-    CH->>VTS: processPositionFees(A)
-    VTS-->>CH: feeAdj > 0 (slash materializes)
-    CH-->>PM: return feeAdj
-    Note over PM: hook receives credit; CH later mints claims to flush delta
-
-    B->>PM: modifyLiquidity (B again)
-    PM->>CH: after* hook (B)
-    CH->>VTS: processPositionFees(B)
-    VTS-->>CH: feeAdj < 0 (bonus now payable up to slashedPot)
-    CH-->>PM: return feeAdj
-    Note over PM: hook owes; CH burns claims to flush delta
-```
-
-### Practical implication
-
-This ordering does **not** break delta settlement, but it does affect **when** bonuses become payable:
-
-- bonuses can be **allocated** early (accounting),
-- but payouts should remain **bounded by available materialized pot (`slashedPot`)**, ensuring the hook never needs external funding.
+Payout remains **bounded by `slashedPot`**; the hook never requires external LCC funding beyond claim mint/burn mechanics.
 
 ---
 
@@ -273,4 +194,4 @@ This ordering does **not** break delta settlement, but it does affect **when** b
   - caller deltas are settled via ERC20 settlement in `PositionManagerImpl`, and
   - hook deltas are settled via ERC6909 mint/burn in `CoreHook.settleHookDeltasToPot`.
 - Pot accrual results in **minted claims** (not extra tokens), and pot distribution burns those claims.
-- Ordering effects can cause **bonus allocation before pot materialization**, but payout remains safe if clamped by pot availability.
+- Bonus allocation is tied to the **materialised** `slashedPot`; ordering across positions affects **when** Phase 2 can first run, not whether payouts can exceed the pot.

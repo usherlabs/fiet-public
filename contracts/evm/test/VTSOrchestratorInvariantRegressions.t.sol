@@ -23,17 +23,23 @@ contract VTSOrchestratorInvariantRegressionsTest is VTSOrchestratorFixture {
     }
 
     function _decreasePosition(uint256 tokenId, uint256 amountToDecrease) internal {
+        address locker = _lockerForToken(tokenId);
         MMA.PreparedAction[] memory actions = new MMA.PreparedAction[](3);
         actions[0] = MMA.prepareDecrease(corePoolKey, tokenId, 0, amountToDecrease);
         actions[1] = MMA.prepareTake(lccCurrency0, address(this), 0);
         actions[2] = MMA.prepareTake(lccCurrency1, address(this), 0);
+        vm.startPrank(locker);
         MMA.executeWithUnlock(positionManager, actions, block.timestamp + 3600);
+        vm.stopPrank();
     }
 
     function _increasePosition(uint256 tokenId, uint256 amountToIncrease) internal {
+        address locker = _lockerForToken(tokenId);
         MMA.PreparedAction[] memory actions = new MMA.PreparedAction[](1);
         actions[0] = MMA.prepareIncrease(corePoolKey, tokenId, 0, amountToIncrease);
+        vm.startPrank(locker);
         MMA.executeWithUnlock(positionManager, actions, block.timestamp + 3600);
+        vm.stopPrank();
     }
 
     function increasePositionExternal(uint256 tokenId, uint256 amountToIncrease) external {

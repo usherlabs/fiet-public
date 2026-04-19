@@ -1,5 +1,7 @@
 ## Fee-Accrual-Weighted Bonus Allocation Upgrade (SelfNet-Gated, Product-Weighted)
 
+> **Fee-pot redesign (deprecated doc):** Bonus allocation is tied to materialised **`slashedPot`**, not `protocolFeeAccrued`. See [`Fee-Pot-Materialisation-And-DirectLP-Policy.md`](./Fee-Pot-Materialisation-And-DirectLP-Policy.md).
+
 This document proposes an upgrade to the fee-sharing **bonus** mechanism described in:
 
 - `agents/spec/Tick-Indexed-Coverage-and-Fee-Sharing-in-VTSManager.md`

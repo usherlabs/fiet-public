@@ -81,16 +81,13 @@ abstract contract VTSOrchestratorFixture is MarketTestBase, MarketMakerTestBase 
     Currency public lccCurrency0;
     Currency public lccCurrency1;
 
-    address public testUser = makeAddr("testUser");
+    /// @dev Named without a `test*` prefix so Foundry does not treat the auto-getter as a test function.
+    address internal fixtureTestUser = makeAddr("fixtureTestUser");
     address public guarantor = makeAddr("guarantor");
 
     function setUp() public virtual {
         _setupMarket();
         _setUpMM();
-        // Commit creation is now restricted to `owner || advancer`.
-        // Fixture-driven commits are initiated by this test contract via MMPositionManager.
-        liquiditySignal.mmState.advancer = address(this);
-        renewSignal.mmState.advancer = address(this);
 
         // Deploy unlock caller helper
         unlockCaller = new UnlockCaller(manager);
@@ -149,6 +146,18 @@ abstract contract VTSOrchestratorFixture is MarketTestBase, MarketMakerTestBase 
         vm.mockCall(
             address(oracleHelper), abi.encodeWithSelector(IOracleHelper.getTotalValue.selector), abi.encode(1e18)
         );
+
+        // MM batch locker EOAs must read as factory-bound (mirrors production + `MMPositionManager.t.sol` pattern).
+        vm.mockCall(
+            marketFactory,
+            abi.encodeWithSelector(IMarketFactory.bounds.selector, liquiditySignal.mmState.advancer),
+            abi.encode(true)
+        );
+        vm.mockCall(
+            marketFactory,
+            abi.encodeWithSelector(IMarketFactory.bounds.selector, renewSignal.mmState.advancer),
+            abi.encode(true)
+        );
     }
 
     // ============================================================
@@ -156,10 +165,11 @@ abstract contract VTSOrchestratorFixture is MarketTestBase, MarketMakerTestBase 
     // ============================================================
 
     /// @notice Helper to mint underlying tokens and approve them for settlement via Permit2
-    /// @dev Mints underlying tokens to this contract and sets up Permit2 approvals for positionManager
+    /// @dev Mints underlying tokens to `payer` and sets up Permit2 approvals for positionManager
     /// @param requiredSettlementAmount0 Amount of token0 to mint and approve
     /// @param requiredSettlementAmount1 Amount of token1 to mint and approve
-    function _mintAndApproveUnderlyingForSettlement(
+    function _mintAndApproveUnderlyingForSettlementTo(
+        address payer,
         uint256 requiredSettlementAmount0,
         uint256 requiredSettlementAmount1
     ) internal {
@@ -167,20 +177,26 @@ abstract contract VTSOrchestratorFixture is MarketTestBase, MarketMakerTestBase 
         address underlying1 = lcc1.underlying();
         IAllowanceTransfer permit2 = positionManager.permit2();
 
+        vm.startPrank(payer);
         if (underlying0 != address(0) && requiredSettlementAmount0 > 0) {
-            MockERC20(underlying0).mint(address(this), requiredSettlementAmount0);
-            // Approve Permit2 on the token
+            MockERC20(underlying0).mint(payer, requiredSettlementAmount0);
             IERC20(underlying0).approve(address(permit2), type(uint256).max);
-            // Approve positionManager via Permit2
             permit2.approve(underlying0, address(positionManager), type(uint160).max, type(uint48).max);
         }
         if (underlying1 != address(0) && requiredSettlementAmount1 > 0) {
-            MockERC20(underlying1).mint(address(this), requiredSettlementAmount1);
-            // Approve Permit2 on the token
+            MockERC20(underlying1).mint(payer, requiredSettlementAmount1);
             IERC20(underlying1).approve(address(permit2), type(uint256).max);
-            // Approve positionManager via Permit2
             permit2.approve(underlying1, address(positionManager), type(uint160).max, type(uint48).max);
         }
+        vm.stopPrank();
+    }
+
+    /// @dev Backwards compatible: fund test contract (legacy tests that run batches as `address(this)`).
+    function _mintAndApproveUnderlyingForSettlement(
+        uint256 requiredSettlementAmount0,
+        uint256 requiredSettlementAmount1
+    ) internal {
+        _mintAndApproveUnderlyingForSettlementTo(address(this), requiredSettlementAmount0, requiredSettlementAmount1);
     }
 
     /// @notice Helper to mint LCC tokens to a user via LiquidityHub
@@ -240,8 +256,11 @@ abstract contract VTSOrchestratorFixture is MarketTestBase, MarketMakerTestBase 
         (requiredSettlementAmount0, requiredSettlementAmount1) =
             _calculateSettlementAmounts(liquidityParams, marketVTSConfiguration);
 
-        // Mint underlying tokens and approve via Permit2 for settlement
-        _mintAndApproveUnderlyingForSettlement(requiredSettlementAmount0, requiredSettlementAmount1);
+        address batchLocker = signal.mmState.advancer;
+        vm.mockCall(
+            marketFactory, abi.encodeWithSelector(IMarketFactory.bounds.selector, batchLocker), abi.encode(true)
+        );
+        _mintAndApproveUnderlyingForSettlementTo(batchLocker, requiredSettlementAmount0, requiredSettlementAmount1);
 
         return _setupCommittedPosition(
             positionManager,
@@ -328,6 +347,16 @@ abstract contract VTSOrchestratorFixture is MarketTestBase, MarketMakerTestBase 
     // Common Helper Functions
     // ============================================================
 
+    /// @dev MM batch locker (`msgSender` in `MMPositionManager`) — must match `mmState.advancer` for MM hook validation.
+    function _signalLocker() internal view returns (address) {
+        return liquiditySignal.mmState.advancer;
+    }
+
+    /// @dev Commitment NFT owner — the effective locker for batched PM actions (works for `renewSignal`-minted commits too).
+    function _lockerForToken(uint256 tokenId) internal view returns (address) {
+        return positionManager.ownerOf(tokenId);
+    }
+
     /// @notice Helper to get swap settings consistent with integration tests
     function _swapSettings() internal pure returns (PoolSwapTest.TestSettings memory) {
         return PoolSwapTest.TestSettings({takeClaims: false, settleUsingBurn: false});
@@ -373,12 +402,15 @@ abstract contract VTSOrchestratorFixture is MarketTestBase, MarketMakerTestBase 
         internal
         returns (MMA.PreparedAction[] memory)
     {
+        address locker = _lockerForToken(tokenId);
         MMA.PreparedAction[] memory actions = new MMA.PreparedAction[](3);
         actions[0] = MMA.prepareIncrease(corePoolKey, tokenId, positionIndex, 0);
         actions[1] = MMA.prepareTake(lccCurrency0, address(this), 0);
         actions[2] = MMA.prepareTake(lccCurrency1, address(this), 0);
         if (execute) {
+            vm.startPrank(locker);
             MMA.executeWithUnlock(positionManager, actions, block.timestamp + 3600);
+            vm.stopPrank();
         }
         return actions;
     }
@@ -403,12 +435,12 @@ abstract contract VTSOrchestratorFixture is MarketTestBase, MarketMakerTestBase 
         return manager.balanceOf(address(vtsOrchestrator), lccCurrency.toId());
     }
 
-    /// @notice Helper to get protocol fee accrued for a pool (slashed fees internal accounting)
+    /// @notice Helper to get the materialised slashed pot for a pool
     /// @param poolId The pool identifier
-    /// @return fee0 The accrued fee for token0
-    /// @return fee1 The accrued fee for token1
-    function _protocolFeeAccrued(PoolId poolId) internal view returns (uint256 fee0, uint256 fee1) {
-        return vtsOrchestrator.getProtocolFeeAccrued(poolId);
+    /// @return pot0 Materialised pot for token0
+    /// @return pot1 Materialised pot for token1
+    function _slashedPot(PoolId poolId) internal view returns (uint256 pot0, uint256 pot1) {
+        return vtsOrchestrator.getSlashedPot(poolId);
     }
 
     /// @notice Helper to prepare permits for settle in MM position
@@ -416,7 +448,11 @@ abstract contract VTSOrchestratorFixture is MarketTestBase, MarketMakerTestBase 
     /// @param amount0 Amount of token0 to settle (negative = deposit, positive = withdraw)
     /// @param amount1 Amount of token1 to settle (negative = deposit, positive = withdraw)
     function _permitSettle(int128 amount0, int128 amount1) internal {
-        // Get Permit2 instance once if we need to approve tokens
+        _permitSettleFor(address(this), amount0, amount1);
+    }
+
+    /// @dev Like `_permitSettle` but funds and approves Permit2 from `payer` (the MM locker EOA for real commits).
+    function _permitSettleFor(address payer, int128 amount0, int128 amount1) internal {
         IAllowanceTransfer permit2;
         bool needsPermit2 =
             (amount0 < 0 && lcc0.underlying() != address(0)) || (amount1 < 0 && lcc1.underlying() != address(0));
@@ -424,12 +460,12 @@ abstract contract VTSOrchestratorFixture is MarketTestBase, MarketMakerTestBase 
             permit2 = positionManager.permit2();
         }
 
-        // If depositing (negative amounts), mint and approve underlying tokens
+        vm.startPrank(payer);
         if (amount0 < 0) {
             uint256 amount0Abs = uint256(uint128(-amount0));
             address underlying0 = lcc0.underlying();
             if (underlying0 != address(0) && amount0Abs > 0) {
-                MockERC20(underlying0).mint(address(this), amount0Abs);
+                MockERC20(underlying0).mint(payer, amount0Abs);
                 IERC20(underlying0).approve(address(permit2), type(uint256).max);
                 permit2.approve(underlying0, address(positionManager), type(uint160).max, type(uint48).max);
             }
@@ -438,11 +474,12 @@ abstract contract VTSOrchestratorFixture is MarketTestBase, MarketMakerTestBase 
             uint256 amount1Abs = uint256(uint128(-amount1));
             address underlying1 = lcc1.underlying();
             if (underlying1 != address(0) && amount1Abs > 0) {
-                MockERC20(underlying1).mint(address(this), amount1Abs);
+                MockERC20(underlying1).mint(payer, amount1Abs);
                 IERC20(underlying1).approve(address(permit2), type(uint256).max);
                 permit2.approve(underlying1, address(positionManager), type(uint160).max, type(uint48).max);
             }
         }
+        vm.stopPrank();
     }
 
     /// @notice Helper to settle an MM position using prepareSettle
@@ -452,11 +489,13 @@ abstract contract VTSOrchestratorFixture is MarketTestBase, MarketMakerTestBase 
     /// @param amount0 Amount of token0 to settle (negative = deposit, positive = withdraw)
     /// @param amount1 Amount of token1 to settle (negative = deposit, positive = withdraw)
     function _mmSettle(uint256 tokenId, uint256 positionIndex, int128 amount0, int128 amount1) internal {
-        _permitSettle(amount0, amount1);
+        address locker = _lockerForToken(tokenId);
+        _permitSettleFor(locker, amount0, amount1);
 
-        // Prepare and execute settle action
         MMA.PreparedAction[] memory actions = new MMA.PreparedAction[](1);
         actions[0] = MMA.prepareSettle(corePoolKey, tokenId, positionIndex, amount0, amount1, false);
+        vm.startPrank(locker);
         MMA.executeWithUnlock(positionManager, actions, block.timestamp + 3600);
+        vm.stopPrank();
     }
 }

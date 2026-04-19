@@ -266,4 +266,49 @@ library LiquidityUtils {
     function isZeroDelta(BalanceDelta delta) internal pure returns (bool) {
         return BalanceDelta.unwrap(delta) == BalanceDelta.unwrap(BalanceDeltaLibrary.ZERO_DELTA);
     }
+
+    /**
+     * @notice Non-fee LCC amount forwarded to the queue custodian after netting informational fees by hook `feeAdj`.
+     * @dev Matches `PositionManagerImpl._handleLccBalanceIncrease`: `netFee = max(feesAccrued - hookDelta, 0)`,
+     *      `nonFee = max(inc - netFee, 0)`, where `hookDelta` is `PoolManager` transient delta on the hook address
+     *      (CoreHook) for that currency. VTS queue/cancel principal remains hook-time `callerDelta - feesAccrued`;
+     *      this quantity is the MMPM user-facing min-out basis for decrease/burn.
+     */
+    function forwardedNonFeeLccAmount(uint256 inc, int128 feesAccruedAmount, int256 hookDelta)
+        internal
+        pure
+        returns (uint256 nonFee)
+    {
+        int256 netFeei = int256(feesAccruedAmount) - hookDelta;
+        uint256 fee = netFeei > 0 ? uint256(netFeei) : 0;
+        nonFee = inc > fee ? inc - fee : 0;
+    }
+
+    /**
+     * @notice How much of the locker’s LCC credit (after `_syncBalanceAsCredit`) to debit via `VTSCurrencyDelta.take`
+     *         before the matching ERC20 forward to `MMQueueCustodian`.
+     * @dev The forward does not go through `take`, so this debit keeps locker delta aligned with tokens still on MMPM.
+     *
+     *      **Commit bucket** (`isCommitBucket == true`): debit exactly `custodyForward` (Hub-queued principal, usually
+     *      `qCommitted`). Surplus immediate non-fee LCC (`nonFee - custodyForward`) stays as locker transient credit.
+     *
+     *      **Utility bucket** (`isCommitBucket == false`): debit the immediate non-fee slice
+     *      `addedCreditAfterSync - classifiedInformationalFee` (same basis as `forwardedNonFeeLccAmount`), matching the
+     *      full `nonFee` forwarded for `tokenId == 0`.
+     *
+     *      Queue principal for routing remains hook-time `callerDelta - feesAccrued`; `feeAdj` only affects fee vs
+     *      non-fee classification, not that principal basis.
+     */
+    function lockerLccTakeAmountBeforeCustodyForward(
+        bool isCommitBucket,
+        uint256 addedCreditAfterSync,
+        uint256 classifiedInformationalFee,
+        uint256 custodyForward
+    ) internal pure returns (uint256 creditTake) {
+        if (isCommitBucket) {
+            return custodyForward;
+        }
+        if (addedCreditAfterSync <= classifiedInformationalFee) return 0;
+        return addedCreditAfterSync - classifiedInformationalFee;
+    }
 }

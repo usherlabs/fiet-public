@@ -1,5 +1,8 @@
 # Self‑Excluding Bonus Attribution via Contribution Spend Index (CSI): O(1) Self‑Exclusion Without Iteration
 
+> **Fee-pot redesign (supersedes `protocolFeeAccrued` in older formulas below)**  
+> CSI `potAvail` uses materialised **`slashedPot`** and remaining-share epochs. Canonical reference: [`Fee-Pot-Materialisation-And-DirectLP-Policy.md`](./Fee-Pot-Materialisation-And-DirectLP-Policy.md).
+
 This document is a **research spec** for upgrading the fee‑sharing bonus mechanism described in:
 
 - `agents/spec/Tick-Indexed-Coverage-and-Fee-Sharing-in-VTSManager.md`
@@ -18,21 +21,21 @@ The focus here is narrower:
 
 The baseline fee‑sharing model is:
 
-- Slashes (fee burns) accrue into a pool‑level accounting pot `protocolFeeAccrued_t` (per fee token \(t\)).
-- Bonuses are allocated from that accounting pot, weighted by some eligibility/weight quantity (historically `selfNet`; upgraded to CISE exposure in `Coverage-Indexed-Bonus-Allocation-Upgrade.md`).
-- To enforce self‑exclusion, the *available pot* for a position is reduced by its own contribution:
+- Slashes (fee burns) queue as positive `pendingFeeAdj` and are **materialised** into the pool‑level `slashedPot_t` (per fee token \(t\)) on touches.
+- Bonuses are allocated from **`slashedPot`** (after CSI self‑exclusion), weighted by CISE exposure (see `Coverage-Indexed-Bonus-Allocation-Upgrade.md`).
+- To enforce self‑exclusion, the *available pot* for a position is reduced by its own contribution (tracked via CSI remaining‑share epochs and `feesShared`):
 
 \[
-\mathrm{potAvail}_t = \max(\mathrm{protocolFeeAccrued}_t - \mathrm{selfContrib}_t, 0)
+\mathrm{potAvail}_t = \max(\mathrm{slashedPot}_t - \mathrm{selfRemaining}_t, 0)
 \]
 
-where \(\mathrm{selfContrib}_t\) is “fees this position contributed to the pot” (per token \(t\)).
+where \(\mathrm{selfRemaining}_t\) is the CSI‑tracked remainder of this position’s own contribution still embedded in the materialised pot (per token \(t\)).
 
-### 1.1 The observed failure mode (lifetime selfContrib)
+### 1.1 The observed failure mode (stale self‑remaining)
 
-If \(\mathrm{selfContrib}_t\) is implemented as a **lifetime monotonically increasing counter** (e.g. `feesShared`), and `protocolFeeAccrued_t` decreases as bonuses are allocated, then over time:
+If remaining self‑contribution is tracked in a way that is not re‑synced across CSI epochs, then over time:
 
-- \(\mathrm{selfContrib}_t\) can remain larger than the current pot,
+- \(\mathrm{selfRemaining}_t\) can remain larger than \(\mathrm{slashedPot}_t\),
 - causing \(\mathrm{potAvail}_t = 0\) for that position indefinitely, even when the *remaining* pot is no longer attributable to that position’s own slashes.
 
 This violates the intended meaning of self‑exclusion: the position should be excluded only from the **currently remaining** portion of its own contributed slashes, not from “ever receiving bonuses until others have slashed more than it ever has”.
@@ -44,9 +47,9 @@ We want:
 1. **Correctness of self‑exclusion over time**: only the *remaining* self‑contribution currently in the pot should be excluded.
 2. **No iteration**: all updates are \(O(1)\) per event/touch.
 3. **Compatibility** with existing fee‑sharing pot flow:
-   - `protocolFeeAccrued` as the accounting source for allocation,
-   - negative `pendingFeeAdj` for bonus queuing,
-   - `slashedPot` as the materialisation constraint.
+   - `slashedPot` as the **allocation** source (materialised pot),
+   - negative `pendingFeeAdj` for bonus queuing before Phase 3 payout,
+   - Phase 3 draining `slashedPot` when paying negative pending.
 4. **Composability**: self‑exclusion should be orthogonal to the choice of bonus weight (selfNet, CISE exposure, fee‑weighted exposure, etc.).
 
 Non‑goals:

@@ -109,24 +109,23 @@ contract VTSLifecycleLinkedLibHarness {
         VTSCommitRouterContext memory ctx,
         IMarketFactory factory,
         address caller,
-        address sender,
         bytes memory liquiditySignal
     ) external returns (uint256 commitId) {
-        return VTSCommitLib.commitSignal(s, ctx, factory, caller, sender, liquiditySignal);
+        return VTSCommitLib.commitSignal(s, ctx, factory, caller, liquiditySignal);
     }
 
     function commitSignalRelayed(
         VTSCommitRouterContext memory ctx,
         IMarketFactory factory,
         address caller,
-        address sender,
         bytes memory liquiditySignal,
         uint256 deadline,
         uint256 authNonce,
-        bytes memory authSig
+        bytes memory authSig,
+        address sender
     ) external returns (uint256 commitId) {
         return VTSCommitLib.commitSignalRelayed(
-            s, ctx, factory, caller, sender, liquiditySignal, deadline, authNonce, authSig
+            s, ctx, factory, caller, liquiditySignal, deadline, authNonce, authSig, sender
         );
     }
 
@@ -134,37 +133,43 @@ contract VTSLifecycleLinkedLibHarness {
         VTSCommitRouterContext memory ctx,
         IMarketFactory factory,
         address caller,
-        address sender,
         uint256 commitId,
         bytes memory liquiditySignal
     ) external {
-        VTSCommitLib.renewSignal(s, ctx, factory, caller, sender, commitId, liquiditySignal);
+        VTSCommitLib.renewSignal(s, ctx, factory, caller, commitId, liquiditySignal);
     }
 
     function renewSignalRelayed(
         VTSCommitRouterContext memory ctx,
         IMarketFactory factory,
         address caller,
-        address sender,
         uint256 commitId,
         bytes memory liquiditySignal,
         uint256 deadline,
         uint256 authNonce,
-        bytes memory authSig
+        bytes memory authSig,
+        address sender
     ) external {
         VTSCommitLib.renewSignalRelayed(
-            s, ctx, factory, caller, sender, commitId, liquiditySignal, deadline, authNonce, authSig
+            s, ctx, factory, caller, commitId, liquiditySignal, deadline, authNonce, authSig, sender
         );
     }
 
     /// @dev TEST-ONLY: minimal commit state for validateMMOperation / signal validity tests
-    function testSeedCommit(uint256 commitId, address owner_, address advancer_, uint256 expiresAt) external {
+    function testSeedCommit(
+        uint256 commitId,
+        address owner_,
+        address advancer_,
+        uint256 expiresAt,
+        address authorisedRelayer_
+    ) external {
         MarketMaker.State storage st = s.commits[commitId].mmState;
         delete st.reserves;
         st.owner = owner_;
         st.advancer = advancer_;
         st.reserves.push(MarketMaker.Reserve({asset: "x", amount: 1}));
         s.commits[commitId].expiresAt = expiresAt;
+        s.commits[commitId].authorisedRelayer = authorisedRelayer_;
     }
 
     function testSeedPool(PoolId poolId, Currency c0, Currency c1) external {

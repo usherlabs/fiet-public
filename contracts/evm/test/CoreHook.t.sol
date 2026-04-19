@@ -969,13 +969,9 @@ contract CoreHookDirectLPRemoveBucketingTest is MarketTestBase {
         uint256 amount = 1e9;
         UnwrapInUnlockRunner runner = new UnwrapInUnlockRunner(IPoolManager(address(manager)), liquidityHub);
 
-        // Manufacture market-derived LCC for this contract via protocol (proxyHook) -> non-protocol transfer.
-        IERC20Minimal(underlying0).transfer(address(proxyHook), amount);
-        vm.startPrank(address(proxyHook));
-        IERC20Minimal(underlying0).approve(liquidityHub, amount);
-        LiquidityHub(payable(liquidityHub)).wrap(address(lcc0), amount);
-        IERC20Minimal(address(lcc0)).transfer(address(runner), amount);
-        vm.stopPrank();
+        // Market-derived LCC: use issuer mint (`issue`) so we do not hit direct-backed mint restrictions on exempt endpoints.
+        vm.prank(address(proxyHook));
+        LiquidityHub(payable(liquidityHub)).issue(address(lcc0), address(runner), amount);
 
         (uint256 wrappedBal, uint256 marketBal) = ILCC(address(lcc0)).balancesOf(address(runner));
         assertEq(wrappedBal, 0, "precondition: holder should have wrapped=0");
