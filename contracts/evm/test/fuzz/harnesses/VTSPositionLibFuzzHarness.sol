@@ -23,16 +23,10 @@ import {IMarketVault} from "../../../src/interfaces/IMarketVault.sol";
 import {ILiquidityHub} from "../../../src/interfaces/ILiquidityHub.sol";
 import {IOracleHelper} from "../../../src/interfaces/IOracleHelper.sol";
 
-/// @notice Minimal Echidna-oriented harness that avoids calling `public`/`external` functions on `VTSPositionLib`.
-///         This prevents linked-library DELEGATECALLs that cause Echidna/HEVM to attempt RPC bytecode fetches.
-contract VTSPositionLibEchidnaHarness {
+/// @notice Minimal fuzz-oriented harness that avoids calling `public`/`external` functions on `VTSPositionLib`.
+///         This prevents linked-library DELEGATECALLs that cause Medusa/HEVM to attempt RPC bytecode fetches.
+contract VTSPositionLibFuzzHarness {
     VTSStorage internal s;
-
-    constructor() {
-        // VTSPositionLib must already be deployed at the EchidnaLinkedLibs address before
-        // this harness is constructed. Callers should call EchidnaLinkedLibs.deployVTSPositionLib()
-        // before `new VTSPositionLibEchidnaHarness()`.
-    }
 
     // -------------------------------------------------------------------------
     // Setup / internal-library calls (safe: internal functions are inlined)
@@ -149,7 +143,7 @@ contract VTSPositionLibEchidnaHarness {
     // -------------------------------------------------------------------------
 
     function getRFS(PositionId positionId) external view returns (bool rfsOpen, BalanceDelta delta) {
-        // NOTE: This is safe in Echidna because `getRFS` takes a `VTSStorage storage` pointer,
+        // NOTE: This is safe in Medusa because `getRFS` takes a `VTSStorage storage` pointer,
         // so the compiler inlines it (no linked-library DELEGATECALL).
         return VTSPositionLib.getRFS(s, positionId);
     }
@@ -202,4 +196,3 @@ contract VTSPositionLibEchidnaHarness {
         });
     }
 }
-

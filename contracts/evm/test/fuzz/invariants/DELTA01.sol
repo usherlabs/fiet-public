@@ -5,7 +5,7 @@ import {VTSCurrencyDeltaHarness} from "../../libraries/harnesses/VTSCurrencyDelt
 import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
 import {IMarketFactory} from "../../../src/interfaces/IMarketFactory.sol";
 
-/// @notice Echidna harness for DELTA-01: Deltas must net to zero per unlock/batch.
+/// @notice fuzz harness for DELTA-01: Deltas must net to zero per unlock/batch.
 ///         Any non-zero currency delta at end-of-batch must cause CurrencyNotSettled().
 contract DELTA01 {
     VTSCurrencyDeltaHarness internal deltaHarness;
@@ -48,13 +48,13 @@ contract DELTA01 {
     }
 
     // forge-lint: disable-next-line(mixed-case-function)
-    function echidna_delta_01_nonzero_deltas_revert() external view returns (bool) {
+    function fuzz_delta_01_nonzero_deltas_revert() external view returns (bool) {
         return !checked || lastOk;
     }
 
-    // Keep a second trivial property to avoid rare Echidna instability with single-property targets.
+    // Keep a second trivial property to avoid rare property-runner instability with single-property targets.
     // forge-lint: disable-next-line(mixed-case-function)
-    function echidna_delta_01_smoke() external pure returns (bool) {
+    function fuzz_delta_01_smoke() external pure returns (bool) {
         return true;
     }
 }

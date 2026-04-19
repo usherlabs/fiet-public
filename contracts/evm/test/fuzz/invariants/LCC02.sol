@@ -1,14 +1,13 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.26;
 
-import {LiquidityHub} from "../../../src/LiquidityHub.sol";
+import {FuzzLiquidityHub} from "../harnesses/FuzzLiquidityHub.sol";
 import {LiquidityCommitmentCertificate} from "../../../src/LCC.sol";
 import {MockOracleHelper} from "../mocks/MockOracleHelper.sol";
 import {MockERC20Transferable} from "../mocks/MockERC20Transferable.sol";
 import {Bounds} from "../../../src/libraries/Bounds.sol";
-import {EchidnaLinkedLibs} from "../base/EchidnaLinkedLibs.sol";
 
-/// @notice Echidna harness for LCC-02: bucket accounting consistency with transfer flow.
+/// @notice fuzz harness for LCC-02: bucket accounting consistency with transfer flow.
 /// @dev "For non-protocol → protocol transfers, queued-settlement ownership must be annulled
 ///      before bucket decrement to prevent bleeding into the queue."
 ///
@@ -21,7 +20,7 @@ contract LCC02 {
     uint256 internal constant MAX_ACTION_AMOUNT = 1e24;
     uint256 internal constant SEED_BALANCE = 500e18;
 
-    LiquidityHub internal hub;
+    FuzzLiquidityHub internal hub;
     LiquidityCommitmentCertificate internal lcc;
     MockERC20Transferable internal underlying;
 
@@ -65,11 +64,8 @@ contract LCC02 {
     // ================================================================
 
     constructor() {
-        EchidnaLinkedLibs.deployLCCFactoryLinkedLib();
-        EchidnaLinkedLibs.deployLiquidityHubLinkedLib();
-
         MockOracleHelper oracleHelper = new MockOracleHelper(address(0));
-        hub = new LiquidityHub(address(oracleHelper), "Ether", "ETH", 18, address(0), address(this));
+        hub = new FuzzLiquidityHub(address(oracleHelper), "Ether", "ETH", 18, address(0), address(this));
         hub.setFactory(address(this), true);
         hub.setBoundLevel(address(hub), Bounds.BOUND_EXEMPT);
 
@@ -86,7 +82,6 @@ contract LCC02 {
 
         holder = new LCC02Holder();
         endpoint = new LCC02Holder();
-        hub.setBoundLevel(address(holder), Bounds.BOUND_ENDPOINT);
         hub.setBoundLevel(address(endpoint), Bounds.BOUND_ENDPOINT);
 
         // Seed holder with market-derived balance.
@@ -136,7 +131,7 @@ contract LCC02 {
         hub.issue(address(lcc), address(holder), _boundAmount(amount));
     }
 
-    /// @dev Holder queues a settlement claim via unwrapTo (burns LCC, creates queue entry).
+    /// @dev Holder queues a settlement claim via direct unwrap (burns LCC, creates queue entry).
     // forge-lint: disable-next-line(mixed-case-function)
     function action_lcc_02_queue_settlement(uint256 amount) external {
         uint256 bal = lcc.balanceOf(address(holder));
@@ -230,14 +225,14 @@ contract LCC02 {
 
     /// @dev Bucket sum must equal ERC20 balanceOf for the non-exempt holder.
     // forge-lint: disable-next-line(mixed-case-function)
-    function echidna_lcc_02_bucket_sum_equals_balance() external view returns (bool) {
+    function fuzz_lcc_02_bucket_sum_equals_balance() external view returns (bool) {
         (uint256 wrapped, uint256 marketDerived) = lcc.balancesOf(address(holder));
         return wrapped + marketDerived == lcc.balanceOf(address(holder));
     }
 
     /// @dev Holder's queue must match our independently tracked model.
     // forge-lint: disable-next-line(mixed-case-function)
-    function echidna_lcc_02_queue_matches_model() external view returns (bool) {
+    function fuzz_lcc_02_queue_matches_model() external view returns (bool) {
         return hub.settleQueue(address(lcc), address(holder)) == expectedHolderQueued;
     }
 
@@ -247,7 +242,7 @@ contract LCC02 {
 
     /// @dev Non-protocol → protocol transfer must annul queue bleed by exactly the predicted amount.
     // forge-lint: disable-next-line(mixed-case-function)
-    function echidna_lcc_02_transfer_annuls_queue_correctly() external view returns (bool) {
+    function fuzz_lcc_02_transfer_annuls_queue_correctly() external view returns (bool) {
         return !checkedTransferAnnuls || lastTransferAnnulsOk;
     }
 }
@@ -259,10 +254,6 @@ contract LCC02Holder {
     }
 
     function unwrapToQueue(address hub, address lcc, uint256 amount) external returns (bool ok) {
-        (ok,) = hub.call(
-            abi.encodeWithSignature(
-                "unwrapTo(address,address,address,uint256)", lcc, address(this), address(this), amount
-            )
-        );
+        (ok,) = hub.call(abi.encodeWithSignature("unwrap(address,uint256)", lcc, amount));
     }
 }

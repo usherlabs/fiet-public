@@ -8,7 +8,7 @@ import {MarketVTSConfiguration, TokenConfiguration} from "../../../src/types/VTS
 import {FullMath} from "v4-periphery/lib/v4-core/src/libraries/FullMath.sol";
 import {FixedPoint128} from "v4-periphery/lib/v4-core/src/libraries/FixedPoint128.sol";
 
-/// @notice Echidna harness for FEE-01: Bonus queue vs materialised slashed pot.
+/// @notice Fuzz harness for FEE-01: bonus queue vs materialised slashed pot.
 ///         Bonuses are allocated against `slashedPot` after positive pending is materialised; queueing only
 ///         adjusts `pendingFeeAdj` (and CSI factor) while `slashedPot` stays fixed until negative finalisation.
 ///         This is split into two actions:
@@ -16,7 +16,7 @@ import {FixedPoint128} from "v4-periphery/lib/v4-core/src/libraries/FixedPoint12
 ///         - finalise: moves `slashedPot` when materialising pending (positive funds / negative drains).
 ///
 /// @dev Each action resets CSI epoch / remaining-factor state so expectations match `VTSFeeLib._queueBonusForToken`
-///      without implicit carry-over from prior fuzz steps (Echidna reuses one contract instance).
+///      without implicit carry-over from prior fuzz steps (Medusa reuses one contract instance).
 contract FEE01 {
     VTSFeeLibHarness internal feeHarness;
 
@@ -116,18 +116,18 @@ contract FEE01 {
     }
 
     // forge-lint: disable-next-line(mixed-case-function)
-    function echidna_fee_01_queue_vs_pot() external view returns (bool) {
+    function fuzz_fee_01_queue_vs_pot() external view returns (bool) {
         return !checkedQueue || lastOkQueue;
     }
 
     // forge-lint: disable-next-line(mixed-case-function)
-    function echidna_fee_01_materialise_updates_pot_only() external view returns (bool) {
+    function fuzz_fee_01_materialise_updates_pot_only() external view returns (bool) {
         return !checkedFinalise || lastOkFinalise;
     }
 
-    // Keep a second trivial property to avoid rare Echidna instability with single-property targets.
+    // Keep a second trivial property to avoid rare property-runner instability with single-property targets.
     // forge-lint: disable-next-line(mixed-case-function)
-    function echidna_fee_01_smoke() external pure returns (bool) {
+    function fuzz_fee_01_smoke() external pure returns (bool) {
         return true;
     }
 

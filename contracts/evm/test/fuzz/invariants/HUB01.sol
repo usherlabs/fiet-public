@@ -1,14 +1,13 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.26;
 
-import {LiquidityHub} from "../../../src/LiquidityHub.sol";
+import {FuzzLiquidityHub} from "../harnesses/FuzzLiquidityHub.sol";
 import {LiquidityCommitmentCertificate} from "../../../src/LCC.sol";
 import {MockOracleHelper} from "../mocks/MockOracleHelper.sol";
 import {MockERC20Transferable} from "../mocks/MockERC20Transferable.sol";
 import {Bounds} from "../../../src/libraries/Bounds.sol";
-import {EchidnaLinkedLibs} from "../base/EchidnaLinkedLibs.sol";
 
-/// @notice Echidna harness for HUB-01: Wrapping mints 1:1 and increases Hub reserves.
+/// @notice fuzz harness for HUB-01: Wrapping mints 1:1 and increases Hub reserves.
 /// @dev "wrap/wrapTo must transfer `amount` underlying into the hub, increment
 ///      directSupply[lcc] and reserveOfUnderlying[underlying] by `amount`,
 ///      and mint `amount` LCC to the recipient."
@@ -23,7 +22,7 @@ import {EchidnaLinkedLibs} from "../base/EchidnaLinkedLibs.sol";
 contract HUB01 {
     uint256 internal constant MAX_AMOUNT = 1e24;
 
-    LiquidityHub internal hub;
+    FuzzLiquidityHub internal hub;
 
     LiquidityCommitmentCertificate internal lccNative;
     LiquidityCommitmentCertificate internal lccErc20;
@@ -61,11 +60,8 @@ contract HUB01 {
     // ================================================================
 
     constructor() {
-        EchidnaLinkedLibs.deployLCCFactoryLinkedLib();
-        EchidnaLinkedLibs.deployLiquidityHubLinkedLib();
-
         MockOracleHelper oracleHelper = new MockOracleHelper(address(0));
-        hub = new LiquidityHub(address(oracleHelper), "Ether", "ETH", 18, address(0), address(this));
+        hub = new FuzzLiquidityHub(address(oracleHelper), "Ether", "ETH", 18, address(0), address(this));
         hub.setFactory(address(this), true);
         hub.setBoundLevel(address(hub), Bounds.BOUND_EXEMPT);
 
@@ -264,49 +260,49 @@ contract HUB01 {
 
     /// @dev directSupply[lccNative] must equal our cumulative wrap model.
     // forge-lint: disable-next-line(mixed-case-function)
-    function echidna_hub_01_direct_supply_native_matches_model() external view returns (bool) {
+    function fuzz_hub_01_direct_supply_native_matches_model() external view returns (bool) {
         return hub.directSupply(address(lccNative)) == modelDirectSupplyNative;
     }
 
     /// @dev directSupply[lccErc20] must equal our cumulative wrap model.
     // forge-lint: disable-next-line(mixed-case-function)
-    function echidna_hub_01_direct_supply_erc20_matches_model() external view returns (bool) {
+    function fuzz_hub_01_direct_supply_erc20_matches_model() external view returns (bool) {
         return hub.directSupply(address(lccErc20)) == modelDirectSupplyErc20;
     }
 
     /// @dev reserveOfUnderlying for native LCC must equal our cumulative wrap model.
     // forge-lint: disable-next-line(mixed-case-function)
-    function echidna_hub_01_reserve_native_matches_model() external view returns (bool) {
+    function fuzz_hub_01_reserve_native_matches_model() external view returns (bool) {
         return hub.reserveOfUnderlying(address(lccNative)) == modelReserveNative;
     }
 
     /// @dev reserveOfUnderlying for ERC20 LCC must equal our cumulative wrap model.
     // forge-lint: disable-next-line(mixed-case-function)
-    function echidna_hub_01_reserve_erc20_matches_model() external view returns (bool) {
+    function fuzz_hub_01_reserve_erc20_matches_model() external view returns (bool) {
         return hub.reserveOfUnderlying(address(lccErc20)) == modelReserveErc20;
     }
 
     /// @dev totalSupply of native LCC must equal our cumulative wrap model.
     // forge-lint: disable-next-line(mixed-case-function)
-    function echidna_hub_01_total_supply_native_matches_model() external view returns (bool) {
+    function fuzz_hub_01_total_supply_native_matches_model() external view returns (bool) {
         return lccNative.totalSupply() == modelTotalSupplyNative;
     }
 
     /// @dev totalSupply of ERC20 LCC must equal our cumulative wrap model.
     // forge-lint: disable-next-line(mixed-case-function)
-    function echidna_hub_01_total_supply_erc20_matches_model() external view returns (bool) {
+    function fuzz_hub_01_total_supply_erc20_matches_model() external view returns (bool) {
         return lccErc20.totalSupply() == modelTotalSupplyErc20;
     }
 
     /// @dev Hub's actual ETH balance must be at least the modeled native reserve.
     // forge-lint: disable-next-line(mixed-case-function)
-    function echidna_hub_01_hub_eth_balance_covers_native_reserve() external view returns (bool) {
+    function fuzz_hub_01_hub_eth_balance_covers_native_reserve() external view returns (bool) {
         return address(hub).balance >= modelReserveNative;
     }
 
     /// @dev Hub's actual ERC20 balance must be at least the modeled ERC20 reserve.
     // forge-lint: disable-next-line(mixed-case-function)
-    function echidna_hub_01_hub_erc20_balance_covers_erc20_reserve() external view returns (bool) {
+    function fuzz_hub_01_hub_erc20_balance_covers_erc20_reserve() external view returns (bool) {
         return erc20Underlying.balanceOf(address(hub)) >= modelReserveErc20;
     }
 
@@ -316,13 +312,13 @@ contract HUB01 {
 
     /// @dev Each native wrap must increase supply and recipient balance by exactly the amount.
     // forge-lint: disable-next-line(mixed-case-function)
-    function echidna_hub_01_native_wrap_is_one_to_one() external view returns (bool) {
+    function fuzz_hub_01_native_wrap_is_one_to_one() external view returns (bool) {
         return !checkedNativeWrap || lastNativeWrapOk;
     }
 
     /// @dev Each ERC20 wrap must increase supply and recipient balance by exactly the amount.
     // forge-lint: disable-next-line(mixed-case-function)
-    function echidna_hub_01_erc20_wrap_is_one_to_one() external view returns (bool) {
+    function fuzz_hub_01_erc20_wrap_is_one_to_one() external view returns (bool) {
         return !checkedErc20Wrap || lastErc20WrapOk;
     }
 
@@ -332,13 +328,13 @@ contract HUB01 {
 
     /// @dev Native wrap with msg.value != amount must always revert.
     // forge-lint: disable-next-line(mixed-case-function)
-    function echidna_hub_01_native_guard_rejects_mismatch() external view returns (bool) {
+    function fuzz_hub_01_native_guard_rejects_mismatch() external view returns (bool) {
         return !checkedNativeGuard || lastNativeGuardOk;
     }
 
     /// @dev ERC20 wrap with nonzero msg.value must always revert.
     // forge-lint: disable-next-line(mixed-case-function)
-    function echidna_hub_01_erc20_guard_rejects_value() external view returns (bool) {
+    function fuzz_hub_01_erc20_guard_rejects_value() external view returns (bool) {
         return !checkedErc20Guard || lastErc20GuardOk;
     }
 

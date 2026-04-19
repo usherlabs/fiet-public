@@ -19,7 +19,7 @@ interface IPoolManagerMockSlot0 {
     function extsload(bytes32 s, uint256 nSlots) external view returns (bytes32[] memory);
 }
 
-/// @notice Echidna harness for COV-01: Coverage burn is bounded by `(deficit + settled)`; fee burn is capped by deficit.
+/// @notice fuzz harness for COV-01: Coverage burn is bounded by `(deficit + settled)`; fee burn is capped by deficit.
 ///         Clamps inputs, seeds a deterministic fee-growth window, applies coverage burn,
 ///         then asserts the burn is bounded by min(cov, deficit + settled) and the outflow
 ///         snap/fee deltas advance exactly by the bounded burnBase on the correct token.
@@ -103,13 +103,13 @@ contract COV01 {
     // -------------------------------------------------------------------------
 
     // forge-lint: disable-next-line(mixed-case-function)
-    function echidna_cov_01_burn_base_bounded() external view returns (bool) {
+    function fuzz_cov_01_burn_base_bounded() external view returns (bool) {
         return !checked || lastOk;
     }
 
-    // Keep a second trivial property to avoid rare Echidna instability with single-property targets.
+    // Keep a second trivial property to avoid rare property-runner instability with single-property targets.
     // forge-lint: disable-next-line(mixed-case-function)
-    function echidna_cov_01_smoke() external pure returns (bool) {
+    function fuzz_cov_01_smoke() external pure returns (bool) {
         return true;
     }
 

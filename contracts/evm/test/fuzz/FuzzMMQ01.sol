@@ -1,21 +1,28 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.26;
 
+import {Currency} from "v4-periphery/lib/v4-core/src/types/Currency.sol";
+import {Errors} from "../../src/libraries/Errors.sol";
+import {LiquidityUtils} from "../../src/libraries/LiquidityUtils.sol";
+import {MockLCC} from "../_mocks/MockLCC.sol";
 import {FuzzHelper} from "./FuzzHelper.sol";
 import {PositionManagerImplQueueCustodyHarness} from "./harnesses/PositionManagerImplQueueCustodyHarness.sol";
-import {FuzzTakeOrchestratorMock, FuzzMMQueueCustodian} from "./mocks/FuzzQueueCustodyMocks.sol";
-import {MockLCC} from "../_mocks/MockLCC.sol";
-import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
-import {LiquidityUtils} from "../../src/libraries/LiquidityUtils.sol";
-import {Errors} from "../../src/libraries/Errors.sol";
+import {FuzzMMQueueCustodian, FuzzTakeOrchestratorMock} from "./mocks/FuzzQueueCustodyMocks.sol";
 
-/// @notice Medusa / FuzzEntry module: MM queue custody guard (same semantics as `invariants/MMQ01.sol`).
-/// @dev Runtime `new` for orchestrator, custodian, harness, and LCC — no Echidna linked-library map.
-///      Mirrors `PositionManagerImpl._routeLccCustodyTakeAndForward` via `PositionManagerImplQueueCustodyHarness`.
-///      Production routing debits locker delta only by `custodyForward` for commit buckets; surplus `nonFee - qCommitted`
-///      stays as locker credit (see `LiquidityUtils.lockerLccTakeAmountBeforeCustodyForward`).
+/// @notice Medusa module for the MM queue custody guard from MMQ-01.
+/// @dev This module deploys its harness and mocks with ordinary `new` calls so the
+///      supported Medusa path no longer depends on linked-library CREATE2 preparation.
+///      Valid-route accounting follows the current `develop` semantics in `LiquidityUtils`.
 abstract contract FuzzMMQ01 is FuzzHelper {
     uint256 internal constant DOMAIN_CAP = 1e24;
+
+    struct ValidInputs {
+        uint256 tokenId;
+        uint256 qCommitted;
+        uint256 nonFee;
+        uint256 addedCredit;
+        uint256 feeClassified;
+    }
 
     PositionManagerImplQueueCustodyHarness internal harness;
     FuzzTakeOrchestratorMock internal orchestrator;
@@ -48,11 +55,9 @@ abstract contract FuzzMMQ01 is FuzzHelper {
     }
 
     /// @notice Valid region: `nonFee >= qCommitted` when `tokenId > 0` and `qCommitted > 0`.
-    // forge-lint: disable-next-line(mixed-case-function)
-    function action_valid_commit_custody_guard_holds(
+    function action_mmq01_valid_commit_custody_guard_holds(
         uint256 tokenIdRaw,
         uint256,
-        /* qCommittedRaw */
         uint256 principalRaw,
         uint256 shortfallRaw,
         uint256 extraNonFeeRaw,
@@ -65,38 +70,28 @@ abstract contract FuzzMMQ01 is FuzzHelper {
             validAttempts++;
         }
 
-        uint256 tokenId = (tokenIdRaw % 1000) + 1;
-        uint256 qCommitted = _retainedPrincipal(principalRaw % DOMAIN_CAP, shortfallRaw % DOMAIN_CAP);
+        ValidInputs memory inputs = _buildValidInputs(
+            tokenIdRaw,
+            principalRaw,
+            shortfallRaw,
+            extraNonFeeRaw,
+            feesAccruedRaw,
+            hookDeltaRaw,
+            addedCreditRaw,
+            feeClassifiedRaw
+        );
 
-        uint256 extra = extraNonFeeRaw % DOMAIN_CAP;
-        uint256 inc = qCommitted + extra;
-        int128 feesAccrued = feesAccruedRaw;
-        int256 hookDelta = hookDeltaRaw;
-        uint256 nonFee = LiquidityUtils.forwardedNonFeeLccAmount(inc, feesAccrued, hookDelta);
-
-        if (qCommitted > 0 && nonFee < qCommitted) {
+        if (inputs.qCommitted > 0 && inputs.nonFee < inputs.qCommitted) {
             return;
         }
 
-        uint256 addedCredit = addedCreditRaw % DOMAIN_CAP;
-        uint256 feeClassified = feeClassifiedRaw % DOMAIN_CAP;
-
-        bool ok;
-        try harness.routeLccCustodyTakeAndForward(
-            lccCurrency, LOCKER, tokenId, nonFee, qCommitted, addedCredit, feeClassified
-        ) {
-            ok = true;
-        } catch {
-            ok = false;
-        }
-
-        if (!ok) {
+        if (!_tryRouteValid(inputs)) {
             validAllOk = false;
             return;
         }
 
-        if (qCommitted > 0) {
-            if (harness.lastCustodyForwarded() != qCommitted) {
+        if (inputs.qCommitted > 0) {
+            if (harness.lastCustodyForwarded() != inputs.qCommitted) {
                 validAllOk = false;
             }
         } else if (harness.lastCustodyForwarded() != 0) {
@@ -104,11 +99,12 @@ abstract contract FuzzMMQ01 is FuzzHelper {
         }
     }
 
-    /// @notice Invalid region: `nonFee < qCommitted` with `tokenId > 0` — must revert `InsufficientBalance`.
-    // forge-lint: disable-next-line(mixed-case-function)
-    function action_invalid_underfunded_non_fee_reverts(uint256 tokenIdRaw, uint256 qCommittedRaw, uint256 nonFeeRaw)
-        external
-    {
+    /// @notice Invalid region: `nonFee < qCommitted` with `tokenId > 0` must revert `InsufficientBalance`.
+    function action_mmq01_invalid_underfunded_non_fee_reverts(
+        uint256 tokenIdRaw,
+        uint256 qCommittedRaw,
+        uint256 nonFeeRaw
+    ) external {
         unchecked {
             invalidAttempts++;
         }
@@ -133,8 +129,7 @@ abstract contract FuzzMMQ01 is FuzzHelper {
     }
 
     /// @notice Custodian slice increases by `qCommitted` on successful commit-leg forwards.
-    // forge-lint: disable-next-line(mixed-case-function)
-    function action_custody_record_matches_q_committed(
+    function action_mmq01_custody_record_matches_q_committed(
         uint256 tokenIdRaw,
         uint256 qCommittedRaw,
         uint256 extraNonFeeRaw
@@ -164,23 +159,55 @@ abstract contract FuzzMMQ01 is FuzzHelper {
         return shortfallU > principal ? principal : shortfallU;
     }
 
-    // forge-lint: disable-next-line(mixed-case-function)
-    function echidna_mmq01_valid_routes_succeed_when_non_fee_covers_queue() external view returns (bool) {
+    function _buildValidInputs(
+        uint256 tokenIdRaw,
+        uint256 principalRaw,
+        uint256 shortfallRaw,
+        uint256 extraNonFeeRaw,
+        int128 feesAccruedRaw,
+        int256 hookDeltaRaw,
+        uint256 addedCreditRaw,
+        uint256 feeClassifiedRaw
+    ) internal pure returns (ValidInputs memory inputs) {
+        inputs.tokenId = (tokenIdRaw % 1000) + 1;
+        inputs.qCommitted = _retainedPrincipal(principalRaw % DOMAIN_CAP, shortfallRaw % DOMAIN_CAP);
+
+        uint256 extra = extraNonFeeRaw % DOMAIN_CAP;
+        uint256 inc = inputs.qCommitted + extra;
+        inputs.nonFee = LiquidityUtils.forwardedNonFeeLccAmount(inc, feesAccruedRaw, hookDeltaRaw);
+        inputs.addedCredit = addedCreditRaw % DOMAIN_CAP;
+        inputs.feeClassified = feeClassifiedRaw % DOMAIN_CAP;
+    }
+
+    function _tryRouteValid(ValidInputs memory inputs) internal returns (bool ok) {
+        try harness.routeLccCustodyTakeAndForward(
+            lccCurrency,
+            LOCKER,
+            inputs.tokenId,
+            inputs.nonFee,
+            inputs.qCommitted,
+            inputs.addedCredit,
+            inputs.feeClassified
+        ) {
+            return true;
+        } catch {
+            return false;
+        }
+    }
+
+    function _fuzzMMQ01ValidRoutesSucceedWhenNonFeeCoversQueue() internal view returns (bool) {
         return validAttempts == 0 || validAllOk;
     }
 
-    // forge-lint: disable-next-line(mixed-case-function)
-    function echidna_mmq01_underfunded_always_reverts() external view returns (bool) {
+    function _fuzzMMQ01UnderfundedAlwaysReverts() internal view returns (bool) {
         return invalidAttempts == 0 || invalidAllOk;
     }
 
-    // forge-lint: disable-next-line(mixed-case-function)
-    function echidna_mmq01_custody_record_equals_q_committed() external view returns (bool) {
+    function _fuzzMMQ01CustodyRecordEqualsQCommitted() internal view returns (bool) {
         return matchAttempts == 0 || matchAllOk;
     }
 
-    // forge-lint: disable-next-line(mixed-case-function)
-    function echidna_mmq01_smoke() external pure returns (bool) {
+    function _fuzzMMQ01Smoke() internal pure returns (bool) {
         return true;
     }
 }

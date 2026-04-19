@@ -3,12 +3,11 @@ pragma solidity ^0.8.26;
 
 import {VTSCommitLib} from "../../../src/libraries/VTSCommitLib.sol";
 import {VTSCommitLibHarness} from "../../libraries/harnesses/VTSCommitLibHarness.sol";
-import {EchidnaLinkedLibs} from "../base/EchidnaLinkedLibs.sol";
 import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {FullMath} from "v4-periphery/lib/v4-core/src/libraries/FullMath.sol";
 import {FixedPoint128} from "v4-periphery/lib/v4-core/src/libraries/FixedPoint128.sol";
 
-/// @notice Echidna harness for COV-03: Coverage increments are meaningful only when there is principal/settled to index against.
+/// @notice fuzz harness for COV-03: Coverage increments are meaningful only when there is principal/settled to index against.
 ///         Exercises VTSCommitLib.incrementCoverage and asserts the conditional routing:
 ///         - DICE: if totalDeficitPrincipal > 0, bump coveragePerDeficitIndexX128; else add to coverageResidualDICE.
 ///         - CISE: if totalSettled > 0, bump coveragePerSettledIndexX128; else do nothing.
@@ -36,7 +35,6 @@ contract COV03 {
     Snap internal afterSnap;
 
     constructor() {
-        EchidnaLinkedLibs.deployVTSCommitLib();
         commitHarness = new VTSCommitLibHarness();
     }
 
@@ -58,13 +56,13 @@ contract COV03 {
     }
 
     // forge-lint: disable-next-line(mixed-case-function)
-    function echidna_cov_03_conditional_index_increment() external view returns (bool) {
+    function fuzz_cov_03_conditional_index_increment() external view returns (bool) {
         return !checked || lastOk;
     }
 
-    // Keep a second trivial property to avoid rare Echidna instability with single-property targets.
+    // Keep a second trivial property to avoid rare property-runner instability with single-property targets.
     // forge-lint: disable-next-line(mixed-case-function)
-    function echidna_cov_03_smoke() external pure returns (bool) {
+    function fuzz_cov_03_smoke() external pure returns (bool) {
         return true;
     }
 

@@ -761,7 +761,7 @@ contract VTSFeeLibTest is VTSLibTestBase {
         assertFalse(allocated);
     }
 
-    /// @notice Regression for Echidna `FEE01`: without per-action CSI baseline reset, a second `queueBonusForToken`
+    /// @notice Regression for fuzz `FEE01`: without per-action CSI baseline reset, a second `queueBonusForToken`
     ///         can allocate after `_syncFeesSharedRemainingForToken` clears seeded `feesShared` on epoch mismatch.
     /// @dev Mirrors shrunk counterexample `action_queue_bonus(0,1,0,1,1)` then `(0,1,266,1,1)` on a reused harness.
     function test_queueBonusForToken_FEE01_staleEpoch_secondCall_allocates_isolatedBaseline_prevents() public {

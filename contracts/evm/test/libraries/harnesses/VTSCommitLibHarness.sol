@@ -198,4 +198,3 @@ contract VTSCommitLibHarness {
         });
     }
 }
-

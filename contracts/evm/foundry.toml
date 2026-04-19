@@ -47,18 +47,16 @@ fuzz.runs = 1000
 optimizer = true
 ffi = true
 
-[profile.echidna]
-# Dedicated profile for Echidna's Foundry backend:
-# - compile only the echidna harnesses under `test/fuzz` (avoids OOM / exit-137)
+[profile.medusa]
+# Dedicated profile for the supported Medusa `FuzzEntry` path:
+# - compile only the FuzzEntry smoke target
 # - output to a separate directory so crytic-compile can consume it deterministically
-# - linker map is injected at runtime: run `scripts/echidna_prepare_linked_libs.py` (via `echidna.sh`),
-#   which writes `.echidna-gen/foundry.toml` and sets `FOUNDRY_CONFIG` for that file. Do not run
-#   `FOUNDRY_PROFILE=echidna forge build` without that generated config.
+# - avoid legacy hard-linked library assumptions in the supported workflow
 optimizer = true
 optimizer_runs = 200
 ffi = true
-test = "test/fuzz"
-out = "out-echidna"
+test = "test/fuzz/FuzzEntry.t.sol"
+out = "out-medusa"
 libraries = []
 
 [profile.prod]
@@ -69,15 +67,15 @@ optimizer = true
 via_ir = true
 ffi = true
 
-
 additional_compiler_profiles = [
   { name = "script_ir", via_ir = true },
   { name = "e2e_non_ir", via_ir = false },
+  { name = "tight_linked", via_ir = true, optimizer_runs = 1000 },
   { name = "cold_linked", via_ir = true, optimizer_runs = 2000 },
   { name = "hot_linked", via_ir = true, optimizer_runs = 25000 },
 ]
 compilation_restrictions = [
-  { paths = "src/MMPositionManager.sol", optimizer_runs = 2000 },
+  { paths = "src/MMPositionManager.sol", optimizer_runs = 1000 },
   { paths = "src/VTSOrchestrator.sol", optimizer_runs = 25000 },
   { paths = "src/libraries/MMPositionActionsImpl.sol", optimizer_runs = 25000 },
   { paths = "src/libraries/MMQueueCustodian.sol", optimizer_runs = 25000 },
@@ -87,7 +85,6 @@ compilation_restrictions = [
   { paths = "src/libraries/VTSFeeLib.sol", optimizer_runs = 25000 },
   { paths = "src/libraries/VTSLifecycleLinkedLib.sol", optimizer_runs = 25000 },
 ]
-
 
 [rpc_endpoints]
 local = "${ANVIL_FORK_URL}"

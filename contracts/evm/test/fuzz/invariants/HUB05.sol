@@ -1,14 +1,13 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.26;
 
-import {LiquidityHub} from "../../../src/LiquidityHub.sol";
+import {FuzzLiquidityHub} from "../harnesses/FuzzLiquidityHub.sol";
 import {LiquidityCommitmentCertificate} from "../../../src/LCC.sol";
 import {MockOracleHelper} from "../mocks/MockOracleHelper.sol";
 import {MockERC20Transferable} from "../mocks/MockERC20Transferable.sol";
 import {Bounds} from "../../../src/libraries/Bounds.sol";
-import {EchidnaLinkedLibs} from "../base/EchidnaLinkedLibs.sol";
 
-/// @notice Echidna harness for HUB-05: confirmTake is balance-backed (reserves cannot be fabricated).
+/// @notice fuzz harness for HUB-05: confirmTake is balance-backed (reserves cannot be fabricated).
 /// @dev "confirmTake must never increase reserveOfUnderlying beyond the Hub's actual underlying balance.
 ///      This must hold even under nested call flows (callback-style paths)."
 ///
@@ -20,7 +19,7 @@ import {EchidnaLinkedLibs} from "../base/EchidnaLinkedLibs.sol";
 ///   5. Valid confirmTake increases reserve by exactly the confirmed amount (action/result)
 contract HUB05 {
     uint256 internal constant MAX_AMOUNT = 1e24;
-    LiquidityHub internal hub;
+    FuzzLiquidityHub internal hub;
 
     LiquidityCommitmentCertificate internal lccErc20;
     LiquidityCommitmentCertificate internal lccNative;
@@ -51,11 +50,8 @@ contract HUB05 {
     // ================================================================
 
     constructor() {
-        EchidnaLinkedLibs.deployLCCFactoryLinkedLib();
-        EchidnaLinkedLibs.deployLiquidityHubLinkedLib();
-
         MockOracleHelper oracleHelper = new MockOracleHelper(address(0));
-        hub = new LiquidityHub(address(oracleHelper), "Ether", "ETH", 18, address(0), address(this));
+        hub = new FuzzLiquidityHub(address(oracleHelper), "Ether", "ETH", 18, address(0), address(this));
         hub.setFactory(address(this), true);
         hub.setBoundLevel(address(hub), Bounds.BOUND_EXEMPT);
 
@@ -234,14 +230,14 @@ contract HUB05 {
 
     /// @dev ERC20 reserve must never exceed actual hub ERC20 balance.
     // forge-lint: disable-next-line(mixed-case-function)
-    function echidna_hub_05_erc20_reserve_never_exceeds_balance() external view returns (bool) {
+    function fuzz_hub_05_erc20_reserve_never_exceeds_balance() external view returns (bool) {
         uint256 reserve = hub.reserveOfUnderlying(address(lccErc20));
         return reserve <= erc20Underlying.balanceOf(address(hub));
     }
 
     /// @dev Native reserve must never exceed actual hub ETH balance.
     // forge-lint: disable-next-line(mixed-case-function)
-    function echidna_hub_05_native_reserve_never_exceeds_balance() external view returns (bool) {
+    function fuzz_hub_05_native_reserve_never_exceeds_balance() external view returns (bool) {
         uint256 reserve = hub.reserveOfUnderlying(address(lccNative));
         return reserve <= address(hub).balance;
     }
@@ -252,13 +248,13 @@ contract HUB05 {
 
     /// @dev If the deterministic market-derived unwrap action executed, callback must be reached.
     // forge-lint: disable-next-line(mixed-case-function)
-    function echidna_hub_05_callback_path_reached_when_expected() external view returns (bool) {
+    function fuzz_hub_05_callback_path_reached_when_expected() external view returns (bool) {
         return !callbackExpected || callbackSeen;
     }
 
     /// @dev Valid confirmTake must increase reserve by exactly the confirmed amount.
     // forge-lint: disable-next-line(mixed-case-function)
-    function echidna_hub_05_valid_take_increments_correctly() external view returns (bool) {
+    function fuzz_hub_05_valid_take_increments_correctly() external view returns (bool) {
         bool erc20Ok = !checkedValidTakeErc20 || lastValidTakeOkErc20;
         bool nativeOk = !checkedValidTakeNative || lastValidTakeOkNative;
         return erc20Ok && nativeOk;
@@ -266,7 +262,7 @@ contract HUB05 {
 
     /// @dev confirmTake exceeding slack must always revert.
     // forge-lint: disable-next-line(mixed-case-function)
-    function echidna_hub_05_over_balance_take_reverts() external view returns (bool) {
+    function fuzz_hub_05_over_balance_take_reverts() external view returns (bool) {
         return !checkedOverBalanceTake || lastOverBalanceTakeOk;
     }
 

@@ -1,20 +1,18 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.26;
 
-import {LiquidityHub} from "../../src/LiquidityHub.sol";
+import {FuzzLiquidityHub} from "./harnesses/FuzzLiquidityHub.sol";
 import {LiquidityCommitmentCertificate} from "../../src/LCC.sol";
 import {MockOracleHelper} from "./mocks/MockOracleHelper.sol";
 import {MockERC20Transferable} from "./mocks/MockERC20Transferable.sol";
 import {Bounds} from "../../src/libraries/Bounds.sol";
-import {LCCFactoryLinkedLib} from "../../src/libraries/LCCFactoryLib.sol";
-import {LiquidityHubLinkedLib} from "../../src/libraries/LiquidityHubLinkedLib.sol";
 
-/// @notice Regression harness focused on `LiquidityHub.wrapWith` behaviour (Domain conversion).
+/// @notice Regression harness focused on `FuzzLiquidityHub.wrapWith` behaviour (Domain conversion).
 /// @dev This is intentionally scoped as a targeted regression suite for wrapWith-specific
 ///      semantics. Canonical invariant coverage lives under `test/fuzz/invariants/*`.
 ///      We keep this harness to continuously exercise historical wrapWith edge cases.
-contract LiquidityHubWrapWithEchidnaTest {
-    LiquidityHub internal hub;
+contract LiquidityHubWrapWithFuzzTest {
+    FuzzLiquidityHub internal hub;
     LiquidityCommitmentCertificate internal lccA;
     LiquidityCommitmentCertificate internal lccB;
 
@@ -23,29 +21,6 @@ contract LiquidityHubWrapWithEchidnaTest {
 
     bool internal checkedNetting;
     bool internal lastNettingOk;
-
-    function _deployLinkedLib() internal {
-        bytes32 saltLcc = keccak256("echidna.LCCFactoryLinkedLib");
-        bytes32 saltLh = keccak256("echidna.LiquidityHubLinkedLib");
-        bytes memory initLcc = type(LCCFactoryLinkedLib).creationCode;
-        bytes memory initLh = type(LiquidityHubLinkedLib).creationCode;
-        address expectedLcc = address(
-            uint160(uint256(keccak256(abi.encodePacked(bytes1(0xff), address(this), saltLcc, keccak256(initLcc)))))
-        );
-        address expectedLh = address(
-            uint160(uint256(keccak256(abi.encodePacked(bytes1(0xff), address(this), saltLh, keccak256(initLh)))))
-        );
-        address lcc;
-        address lhl;
-        assembly {
-            lcc := create2(0, add(initLcc, 0x20), mload(initLcc), saltLcc)
-            lhl := create2(0, add(initLh, 0x20), mload(initLh), saltLh)
-        }
-        require(lcc != address(0), "LCCFactoryLinkedLib deploy failed");
-        require(lhl != address(0), "LiquidityHubLinkedLib deploy failed");
-        require(lcc == expectedLcc, "LCCFactoryLinkedLib addr mismatch");
-        require(lhl == expectedLh, "LiquidityHubLinkedLib addr mismatch");
-    }
 
     function _initIssuers() internal view returns (address[] memory issuers) {
         issuers = new address[](1);
@@ -67,10 +42,8 @@ contract LiquidityHubWrapWithEchidnaTest {
     }
 
     constructor() {
-        _deployLinkedLib();
-
         MockOracleHelper oracleHelper = new MockOracleHelper(address(0xB0B));
-        hub = new LiquidityHub(address(oracleHelper), "Ether", "ETH", 18, address(0), address(this));
+        hub = new FuzzLiquidityHub(address(oracleHelper), "Ether", "ETH", 18, address(0), address(this));
 
         // Harness as factory + issuer so we can create markets and mint market-derived balances for holders.
         hub.setFactory(address(this), true);
@@ -202,12 +175,18 @@ contract LiquidityHubWrapWithEchidnaTest {
         ok = ok && (hub.totalQueued(address(backing)) == seed);
         ok = ok && (backing.totalSupply() + target.totalSupply() == sumSupplyBefore);
 
-        // Step C: settlement should not burn the netted portion again
+        // Step C: with only direct reserve seeded in this harness, Hub settlement is a no-op because
+        // `processSettlementFor` settles Hub queues only against market-derived reserve.
+        // The important regression here is that this later settlement attempt must not double-burn.
         uint256 supplyBackingBeforeSettle = backing.totalSupply();
+        uint256 sumSupplyBeforeSettle = backing.totalSupply() + target.totalSupply();
+        uint256 queueBeforeSettle = hub.settleQueue(address(backing), address(hub));
+        uint256 totalQueuedBeforeSettle = hub.totalQueued(address(backing));
         hub.processSettlementFor(address(backing), address(hub), net);
-        ok = ok && (hub.settleQueue(address(backing), address(hub)) == seed - net);
-        ok = ok && (hub.totalQueued(address(backing)) == seed - net);
+        ok = ok && (hub.settleQueue(address(backing), address(hub)) == queueBeforeSettle);
+        ok = ok && (hub.totalQueued(address(backing)) == totalQueuedBeforeSettle);
         ok = ok && (backing.totalSupply() == supplyBackingBeforeSettle);
+        ok = ok && (backing.totalSupply() + target.totalSupply() == sumSupplyBeforeSettle);
 
         lastNettingOk = ok;
     }
@@ -217,18 +196,18 @@ contract LiquidityHubWrapWithEchidnaTest {
     // -------------------------------------------------------------------------
 
     // forge-lint: disable-next-line(mixed-case-function)
-    function echidna_wrapWith_conserves_clean() external view returns (bool) {
+    function fuzz_wrapWith_conserves_clean() external view returns (bool) {
         return !checkedConserve || lastConserveOk;
     }
 
     // forge-lint: disable-next-line(mixed-case-function)
-    function echidna_wrapWith_queue_netting_no_double_burn() external view returns (bool) {
+    function fuzz_wrapWith_queue_netting_no_double_burn() external view returns (bool) {
         return !checkedNetting || lastNettingOk;
     }
 
     // Always-on safety: reserve accounting for native must be <= actual hub ETH.
     // forge-lint: disable-next-line(mixed-case-function)
-    function echidna_hub05_reserve_never_exceeds_hub_balance() external view returns (bool) {
+    function fuzz_hub05_reserve_never_exceeds_hub_balance() external view returns (bool) {
         uint256 reserve = hub.reserveOfUnderlying(address(lccA));
         return reserve <= address(hub).balance;
     }
@@ -245,4 +224,3 @@ contract LiquidityHubWrapWith_Holder {
         (ok,) = hub.call(abi.encodeWithSignature("wrapWith(address,address,uint256)", target, backing, amount));
     }
 }
-

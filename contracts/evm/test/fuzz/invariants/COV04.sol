@@ -4,7 +4,7 @@ pragma solidity ^0.8.26;
 import {LiquidityUtils} from "../../../src/libraries/LiquidityUtils.sol";
 import {FullMath} from "v4-periphery/lib/v4-core/src/libraries/FullMath.sol";
 
-/// @notice Echidna utility harness for COV-04 fee-burn remainder maths.
+/// @notice fuzz utility harness for COV-04 fee-burn remainder maths.
 /// @dev Tests the pure math in `LiquidityUtils.feeBurnGrowthIncWithRemainder`:
 ///   - Repeated partial burns with carry must accumulate the same total growthInc as a single-shot burn.
 ///   - Carry is always < positionLiquidity.
@@ -150,28 +150,28 @@ contract COV04 {
 
     /// @dev Carry must always be less than liquidity.
     // forge-lint: disable-next-line(mixed-case-function)
-    function echidna_cov_04_carry_lt_liquidity() external view returns (bool) {
+    function fuzz_cov_04_carry_lt_liquidity() external view returns (bool) {
         if (!hasLiquidity) return true;
         return modelCarry < modelLiquidity;
     }
 
     /// @dev Two-part split must equal single-shot (no dust loss from independent flooring).
     // forge-lint: disable-next-line(mixed-case-function)
-    function echidna_cov_04_split_equals_single() external view returns (bool) {
+    function fuzz_cov_04_split_equals_single() external view returns (bool) {
         if (!checkedSplit) return attempts < MAX_VACUOUS_ATTEMPTS;
         return lastSplitOk;
     }
 
     /// @dev Accumulated N burns must match single-shot for total fees.
     // forge-lint: disable-next-line(mixed-case-function)
-    function echidna_cov_04_accumulated_matches_single() external view returns (bool) {
+    function fuzz_cov_04_accumulated_matches_single() external view returns (bool) {
         if (!checkedAccum) return attempts < MAX_VACUOUS_ATTEMPTS;
         return lastAccumOk;
     }
 
     /// @dev Zero-fee burn must not change carry and must produce zero growth.
     // forge-lint: disable-next-line(mixed-case-function)
-    function echidna_cov_04_zero_fees_preserves_carry() external view returns (bool) {
+    function fuzz_cov_04_zero_fees_preserves_carry() external view returns (bool) {
         if (!checkedZeroFees) return attempts < MAX_VACUOUS_ATTEMPTS;
         return lastZeroFeesOk;
     }

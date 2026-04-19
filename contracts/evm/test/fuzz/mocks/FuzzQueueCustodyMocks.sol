@@ -22,7 +22,7 @@ contract FuzzTakeOrchestratorMock is IFuzzTakeOrchestrator {
     }
 }
 
-/// @notice Minimal `IMMQueueCustodian` for Echidna: binder authorises a single `positionManager` binding.
+/// @notice Minimal `IMMQueueCustodian` for the composed Medusa fuzz harnesses.
 contract FuzzMMQueueCustodian is IMMQueueCustodian {
     address public immutable authorisedBinder;
 

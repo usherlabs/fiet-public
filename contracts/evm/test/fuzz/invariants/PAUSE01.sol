@@ -6,7 +6,7 @@ import {VTSStorage} from "../../../src/types/VTS.sol";
 import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {Ownable} from "openzeppelin-contracts/contracts/access/Ownable.sol";
 
-/// @notice Echidna harness for PAUSE-01 global/pool pause guards.
+/// @notice fuzz harness for PAUSE-01 global/pool pause guards.
 contract PAUSE01 {
     uint256 internal constant MAX_VACUOUS_ATTEMPTS = 12;
 
@@ -80,7 +80,7 @@ contract PAUSE01 {
     }
 
     // forge-lint: disable-next-line(mixed-case-function)
-    function echidna_pause_01_proc_swap_guards_hold() external view returns (bool) {
+    function fuzz_pause_01_proc_swap_guards_hold() external view returns (bool) {
         if (procSwapChecks == 0) {
             return procSwapAttempts < MAX_VACUOUS_ATTEMPTS;
         }
@@ -88,7 +88,7 @@ contract PAUSE01 {
     }
 
     // forge-lint: disable-next-line(mixed-case-function)
-    function echidna_pause_01_active_settle_guard_holds() external view returns (bool) {
+    function fuzz_pause_01_active_settle_guard_holds() external view returns (bool) {
         if (activeSettleChecks == 0) {
             return activeSettleAttempts < MAX_VACUOUS_ATTEMPTS;
         }
@@ -96,7 +96,7 @@ contract PAUSE01 {
     }
 
     // forge-lint: disable-next-line(mixed-case-function)
-    function echidna_pause_01_inactive_settle_guard_holds() external view returns (bool) {
+    function fuzz_pause_01_inactive_settle_guard_holds() external view returns (bool) {
         if (inactiveSettleChecks == 0) {
             return inactiveSettleAttempts < MAX_VACUOUS_ATTEMPTS;
         }

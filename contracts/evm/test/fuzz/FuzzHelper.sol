@@ -1,8 +1,7 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.26;
 
-/// @notice Shared helpers for Bunni-style `FuzzEntry` modules (Medusa / optional Foundry smoke tests).
-/// @dev Keep helpers `internal` so inheritors share one linearisation root without diamond issues.
+/// @notice Shared helpers for composed Medusa fuzz modules.
 abstract contract FuzzHelper {
     function clampBetween(uint256 x, uint256 min, uint256 max) internal pure returns (uint256) {
         if (x < min) return min;

@@ -12,7 +12,7 @@ import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
 import {IHooks} from "@uniswap/v4-core/src/interfaces/IHooks.sol";
 import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
 
-/// @notice Echidna harness for COV-02 sequencing: `CoreHook` calls settlePositionGrowths before modify.
+/// @notice fuzz harness for COV-02 sequencing: `CoreHook` calls settlePositionGrowths before modify.
 /// @dev This harness validates hook-level call ordering against a mock orchestrator.
 ///      It does not model full settlement netting order inside `VTSPositionLib.settlePositionGrowths`.
 contract COV02 is HookMinerBase {
@@ -102,7 +102,7 @@ contract COV02 is HookMinerBase {
     }
 
     // forge-lint: disable-next-line(mixed-case-function)
-    function echidna_cov_02_settle_before_modify() external view returns (bool) {
+    function fuzz_cov_02_settle_before_modify() external view returns (bool) {
         return _settleBeforeModifyHolds();
     }
 
@@ -113,9 +113,9 @@ contract COV02 is HookMinerBase {
         return allOk;
     }
 
-    // Keep a second trivial property to avoid rare Echidna instability with single-property targets.
+    // Keep a second trivial property to avoid rare property-runner instability with single-property targets.
     // forge-lint: disable-next-line(mixed-case-function)
-    function echidna_cov_02_smoke() external pure returns (bool) {
+    function fuzz_cov_02_smoke() external pure returns (bool) {
         return true;
     }
 

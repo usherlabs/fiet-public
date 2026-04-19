@@ -3,7 +3,7 @@ pragma solidity ^0.8.26;
 
 import {IOracleHelper} from "../../../src/interfaces/IOracleHelper.sol";
 
-/// @notice Minimal oracle helper stub for Echidna harnesses.
+/// @notice Minimal oracle helper stub for fuzz harnesses.
 /// @dev This mock is intentionally flexible:
 ///      - If your harness doesn't care about prices/values, you can leave everything at 0.
 ///      - If your harness needs pricing/signal values (e.g. COMMIT/SIG backing tests),

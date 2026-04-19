@@ -6,13 +6,13 @@ import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {PositionId} from "../../../src/types/Position.sol";
 import {MarketVTSConfiguration, TokenConfiguration} from "../../../src/types/VTS.sol";
 
-/// @notice Echidna harness for FEE-02: New positions must not receive fee-sharing bonuses on creation.
+/// @notice fuzz harness for FEE-02: New positions must not receive fee-sharing bonuses on creation.
 ///         New positions (zero CISE exposure) must not receive bonuses on creation.
 ///         This checks that touching a fresh position cannot allocate bonuses or
 ///         mutate pot/protocolFee/pending state without prior exposure.
 ///
 /// @dev Each action resets CSI epoch / remaining-factor baseline so prior fuzz steps cannot desynchronise
-///      harness expectations from `VTSFeeLib` (Echidna reuses one contract instance).
+///      harness expectations from `VTSFeeLib` (Medusa reuses one contract instance).
 contract FEE02 {
     VTSFeeLibHarness internal feeHarness;
 
@@ -66,13 +66,13 @@ contract FEE02 {
     }
 
     // forge-lint: disable-next-line(mixed-case-function)
-    function echidna_fee_02_no_bonus_on_creation() external view returns (bool) {
+    function fuzz_fee_02_no_bonus_on_creation() external view returns (bool) {
         return !checked || lastOk;
     }
 
-    // Keep a second trivial property to avoid rare Echidna instability with single-property targets.
+    // Keep a second trivial property to avoid rare property-runner instability with single-property targets.
     // forge-lint: disable-next-line(mixed-case-function)
-    function echidna_fee_02_smoke() external pure returns (bool) {
+    function fuzz_fee_02_smoke() external pure returns (bool) {
         return true;
     }
 

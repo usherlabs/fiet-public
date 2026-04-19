@@ -8,7 +8,7 @@ import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
 import {FullMath} from "v4-periphery/lib/v4-core/src/libraries/FullMath.sol";
 import {FixedPoint128} from "v4-periphery/lib/v4-core/src/libraries/FixedPoint128.sol";
 
-/// @notice Echidna harness for VTS-03 segment-growth accounting.
+/// @notice fuzz harness for VTS-03 segment-growth accounting.
 /// @dev Uses `VTSSwapLibHarness` wrappers over real VTSSwapLib internals (`_accrueSegmentGrowth`, `_flipOutside`).
 ///      This is still narrower than full `afterCoreSwap -> processSwap` integration but now anchors assertions
 ///      to the production growth update helpers instead of a duplicated local implementation.
@@ -119,7 +119,7 @@ contract VTS03 {
     }
 
     // forge-lint: disable-next-line(mixed-case-function)
-    function echidna_vts_03_segment_growth_accounting() external view returns (bool) {
+    function fuzz_vts_03_segment_growth_accounting() external view returns (bool) {
         if (segmentChecks == 0) {
             return segmentAttempts < MAX_VACUOUS_ATTEMPTS;
         }
@@ -128,16 +128,16 @@ contract VTS03 {
 
     // Auxiliary flip identity check retained in this harness so flip calls don't become unverified.
     // forge-lint: disable-next-line(mixed-case-function)
-    function echidna_vts_03_aux_flip_identity() external view returns (bool) {
+    function fuzz_vts_03_aux_flip_identity() external view returns (bool) {
         if (!checkedFlip) {
             return flipAttempts < MAX_VACUOUS_ATTEMPTS;
         }
         return lastFlipOk;
     }
 
-    // Keep a second trivial property to avoid rare Echidna instability with single-property targets.
+    // Keep a second trivial property to avoid rare property-runner instability with single-property targets.
     // forge-lint: disable-next-line(mixed-case-function)
-    function echidna_vts_03_smoke() external pure returns (bool) {
+    function fuzz_vts_03_smoke() external pure returns (bool) {
         return true;
     }
 
