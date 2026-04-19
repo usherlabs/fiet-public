@@ -89,6 +89,12 @@ being an informal “should”.
   - **Domain conversion — LCC↔LCC wrapWith (domain-preserving re-expression)**:
     - `wrapWith` must conserve value by converting one LCC claim into another without creating net backing; it may
       reclassify between “wrapped” and “market-derived” buckets, but must not mint value from nothing.
+    - **Step-2 Hub queue netting (backing LCC)**: when market-derived balance nets against
+      `settleQueue[withLCC][address(this)]`, the implementation must **eagerly** decrement the same durable triple as
+      other queue paths (`settleQueue`, `totalQueued`, `queueOfUnderlying` for the shared underlying). This keeps
+      `unfundedQueueOfUnderlying` and vault funding logic aligned with economically outstanding queue debt (no separate
+      shadow “lazy claim” overlay in live logic; the `nettedLCCsAsUnderlying` storage slot is deprecated and retained
+      only for layout compatibility).
 
 - **Enforced by (authorised mint surfaces)**:
 
@@ -573,6 +579,24 @@ being an informal “should”.
 - **Enforced by**: `src/libraries/VTSPositionLib.sol::_applyBurnBase`, `_initFeeSnapshot`, `touchPosition`,
   `_reconcileLiquidityMirrorAndFeeBurnRemainder`, `settlePositionGrowths`.
 
+### COV-05: DICE ordinary realisation carry and shared banked burn (not residual-only)
+
+- **Statement**:
+  - Ordinary coverage-per-deficit index deltas realise \(\lfloor D \cdot \Delta J / Q128 \rfloor\) with a **chained
+    remainder** (`diceOrdinaryRealisationCarry`, `< Q128`) so many small settlements match a single aggregate index
+    move (same spirit as **COV-04** for fee-burn growth).
+  - Residual-index realisation uses the same carry pattern on `diceResidualRealisationCarry`.
+  - Realised burn base is **banked** in `pendingResidualBurnBase` (name retained for layout compatibility) and consumed
+    through the same `_applyBankedResidualBurn` / `_applyBurnBase` path as residual-derived DICE, including outflow-floor
+    semantics: residual-index banking may raise `pendingResidualBurnOutflowsFloor` toward `cumulativeOutflows`; ordinary-index
+    banking **aligns the floor with `outflowsAtFeeSnap`** for the current window so mixed residual+ordinary realisation in one
+    pass remains consumable.
+  - `pendingFeeAdj` remains **best-effort** and self-forfeitable on exit (**FEE-01**); banked DICE burn is **not** the same
+    queue and is preserved across fee/outflow windows until consumed or cleared by lifecycle rules.
+- **Enforced by**: `src/libraries/VTSFeeLib.sol::_realisedCoverageWithCarry`, `_bankPendingDiceBurn`,
+  `_settleDICEForToken`, `_applyBankedResidualBurn`; `src/libraries/VTSPositionLib.sol` (zero-principal lane checkpointing
+  clears realisation carry).
+
 ### FEE-01: Two-phase fee processing, materialised pot, and `pendingFeeAdj`
 
 - **Statement**:
@@ -710,8 +734,8 @@ being an informal “should”.
 - **Regression / evidence (Foundry + audit)**:
   - `test/marketmaker/MMPositionMinOutFeeAdjIntegration.t.sol`, `test/modules/PositionManagerImpl.t.sol`,
     `test/marketmaker/MMPositionManager.t.sol`, `test/marketmaker/MMPositionActionsImpl.t.sol` (min-out vs hook principal;
-    see [agents/audit-resolutions/3__high-mm-min-out-pre-transfer-callerdelta-resolution.md](../../agents/audit-resolutions/3__high-mm-min-out-pre-transfer-callerdelta-resolution.md)).
-  - Fee-slice slash cap (finding #4): [agents/audit-resolutions/4__medium-not-netting-feeadj-from-mm-decrease-principal-resolution.md](../../agents/audit-resolutions/4__medium-not-netting-feeadj-from-mm-decrease-principal-resolution.md); `test/libraries/VTSPositionLib.mutation.unit.t.sol` (`test_touchPosition_*_positiveSlash_capped_to_feesAccrued`).
+    see [agents/audit-resolutions/3\_\_high-mm-min-out-pre-transfer-callerdelta-resolution.md](../../agents/audit-resolutions/3__high-mm-min-out-pre-transfer-callerdelta-resolution.md)).
+  - Fee-slice slash cap (finding #4): [agents/audit-resolutions/4\_\_medium-not-netting-feeadj-from-mm-decrease-principal-resolution.md](../../agents/audit-resolutions/4__medium-not-netting-feeadj-from-mm-decrease-principal-resolution.md); `test/libraries/VTSPositionLib.mutation.unit.t.sol` (`test_touchPosition_*_positiveSlash_capped_to_feesAccrued`).
   - Decrease routing / `VTSPositionMMOpsLib` integration: `test/libraries/VTSPositionLib.t.sol`,
     `test/libraries/VTSPositionLib.onMMSettle.t.sol`, harnesses under `test/libraries/harnesses/VTSPositionLibHarness.sol`.
   - Queue custody vs forwarded non-fee: [agents/audit-resolutions/mm-queue-custody-nonfee-vs-custodyforward-guard-resolution.md](../../agents/audit-resolutions/mm-queue-custody-nonfee-vs-custodyforward-guard-resolution.md) and **MMQ-01** (Echidna) in `test/fuzz/README.md`.

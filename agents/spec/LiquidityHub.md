@@ -14,7 +14,9 @@ The LiquidityHub maintains several critical state mappings that enable its funct
 
 Settlement queues are managed through three related mappings: `settleQueue[lcc][recipient]` tracks pending settlements owed to specific recipients, `totalQueued[lcc]` provides aggregate tracking per LCC, and `queueOfUnderlying[underlying]` aggregates queued debt across all LCCs sharing an underlying. These queues represent commitments to provide underlying assets when liquidity becomes available, created during unwrap operations when immediate liquidity is insufficient.
 
-A critical innovation is the `nettedLCCsAsUnderlying` mapping, which implements lazy claiming for LCC-backing-LCC operations. This prevents over-netting across concurrent wrap operations by tracking claimed but unreconciled portions of settlement queues, enabling efficient netting without immediate queue modifications.
+The `nettedLCCsAsUnderlying` storage slot is **deprecated** (retained for layout compatibility only). `wrapWith` Step-2
+netting against the Hub’s queue for the backing LCC **eagerly** decrements `settleQueue`, `totalQueued`, and
+`queueOfUnderlying`, matching Step 0, so shared-underlying funding views stay aligned with durable queue debt.
 
 The fundamental invariant maintained throughout is that total LCC supply for any underlying asset must not exceed the sum of direct supply, market liquidity, and queued settlements. This ensures 1:1 backing ratios are preserved across all operations.
 
@@ -58,18 +60,18 @@ Following Step 0, if the user has wrapped (direct) balances in the backing LCC, 
 
 This optimisation is efficient and valid because direct supply represents liquidity already held in the Hub's reserves (not requiring market interaction). Transferring it flattens the backing without redundant operations, preserving bucket semantics and 1:1 ratios. The direct supply transfer maintains the invariant that total direct supply across all LCCs sharing an underlying asset equals the shared reserve, ensuring no liquidity is lost or duplicated in the process.
 
-### Step 2: Netting Against Backing LCC's Effective Queue (Lazy Claiming of Pre-Utilised Backing)
+### Step 2: Netting Against Backing LCC Hub Queue (Eager Durable Queue Updates)
 
-For the remaining amount (prioritising market-derived portions), the mechanism nets against the backing LCC's own Hub queue (`settleQueue[withLCC][address(this)]`). This queue indicates pending underlying owed to the Hub due to prior unwrap shortfalls of `withLCC`. To prevent over-netting across concurrent wraps, a lazy-claimed mapping (`nettedLCCsAsUnderlying[withLCC]`) tracks previously claimed but unreconciled portions. The effective queue is computed as `max(0, queue - claimed)`.
+For the remaining amount (prioritising market-derived portions), the mechanism nets against the backing LCC's own Hub queue (`settleQueue[withLCC][address(this)]`). The nettable amount is capped by the minimum of the remainder, the user's market-derived balance, and the **current** on-chain queue size.
 
-The nettable amount is capped by the minimum of the remainder, the user's market-derived balance, and the effective queue. For this amount:
+For this amount:
 
-- The claimed mapping is incremented (lazy claim).
-- The backing `withLCC` is burned (market bucket, protocol-bound).
+- The durable queue triple is decremented immediately (`settleQueue`, `totalQueued`, `queueOfUnderlying`), matching Step 0.
+- The backing `withLCC` is burned (market bucket, protocol-bound) during finalisation.
 - The target LCC is tracked for minting as market-derived.
 - The user's market-derived amount is reduced.
 
-This works because the queue represents "pre-unwrapped" capacity—amounts already utilised as backing for other LCCs (via prior shortfalls). Netting incoming `withLCC` avoids re-unwrapping these, treating the queue as reusable backing for new mints. The lazy claim ensures no over-claiming: total claims <= queue, reconciled during settlement (in `processSettlementFor`, decrementing claims before burning only unclaimed portions). This integrates with ProxyHook/CoreHook (e.g., `onCorePoolDirectSwap` settles underlying to vault, triggering MarketVault's `_settleObligationsForLCC` to clear queues via `confirmTake`). By burning `withLCC` now and minting target, it flattens chains 1:1 without immediate market pulls (via `useMarketLiquidity`), reducing costs while keeping supply <= underlying (reserves + market + queues). It's like merging backings at the Hub for same-underlying LCCs, valid as queues guarantee future replenishment.
+This keeps `unfundedQueueOfUnderlying` and CanonicalVault obligation settlement consistent with economically outstanding debt. Later `processSettlementFor(Hub)` clears any **remaining** on-chain queue and burns Hub-held LCC for that slice.
 
 ### Step 3: Residual Unwrap and Shortfall Queuing
 
@@ -105,7 +107,9 @@ The `processSettlementFor` function provides a permissionless mechanism for proc
 
 For external recipients, the function checks the holder's market-derived balance, burns their LCC tokens, transfers underlying assets, and decrements reserves. This is the standard path for user-initiated unwraps that encountered shortfalls.
 
-For Hub settlements (used in LCC-backing-LCC scenarios), the function reconciles lazy netted claims first. It decrements the `nettedLCCsAsUnderlying` mapping by the settlement amount, then burns only the unclaimed portion of Hub-held LCC tokens. This ensures that amounts already claimed during `_wrapWith` operations are properly accounted for, preventing double-burning while maintaining supply invariants.
+For Hub settlements (used in LCC-backing-LCC scenarios), the function burns Hub-held LCC for the full `toSettle`
+amount (subject to reserve and balance caps). Step-2 `wrapWith` netting has already reduced the on-chain queue for
+the portion satisfied by incoming user backing in the same transaction.
 
 ### Settlement Preparation
 

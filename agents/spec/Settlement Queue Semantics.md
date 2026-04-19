@@ -2,7 +2,7 @@
 
 > **Modules**: `LiquidityHub`, `LiquidityHubLib`, `LCC`, `MMPositionManager`, `MMQueueCustodian`  
 > **Author**: Fiet Protocol  
-> **Last Updated**: March 2026
+> **Last Updated**: April 2026
 
 ## Overview
 
@@ -28,7 +28,9 @@ The model is intentionally eventual rather than eager: queue writes are accounti
 1. `settleQueue[lcc][recipient]`, `totalQueued[lcc]`, and `queueOfUnderlying[underlying]` move together for queue increments/decrements/de-annulments.
 2. Queue ownership is a claim attribution primitive, not proof of immediate redeemability.
 3. External settlement burns market-derived balance only.
-4. Hub settlement follows separate rules (`recipient == address(this)`), including lazy-netting reconciliation.
+4. Hub settlement follows separate rules (`recipient == address(this)`): it burns Hub-held LCC and does not transfer
+   underlying; `wrapWith` Step-2 netting against the backing Hub queue updates durable queue state eagerly (same
+   triple as other queue mutations), so settlement clears the remaining on-chain queue only.
 5. Administrative bound transitions must not move a queued owner into an exempt role while queue is outstanding (operational constraint).
 
 ## Queue Validity vs Present Settleability
@@ -97,9 +99,8 @@ Enforced in `processSettlementFor(...)` -> `LiquidityHubLib.processSettlementLog
 
 For `recipient == address(this)`:
 
-- reconciles lazy-netted claims first,
-- burns Hub-held LCC as required,
-- does not transfer underlying out to external recipient.
+- burns Hub-held LCC for the settled slice (reserve is not decremented; underlying stays in the shared pool),
+- does not transfer underlying out to an external recipient.
 
 ## Bound-Level Constraints
 

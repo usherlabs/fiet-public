@@ -122,11 +122,10 @@ contract LiquidityHubWrapWithFuzzTest {
         lastConserveOk = ok;
     }
 
-    /// @notice WRAPWITH-QUEUE-01: Step-2 netting must not double-burn on later settlement.
-    /// @dev This reproduces the intended netting path in a minimal harness:
-    ///      1) Create a Hub queue on `backing` by doing wrapWith(seed)
-    ///      2) Do wrapWith(net) which should net against the queue without mutating it
-    ///      3) Process settlement for Hub and ensure netting isn't burned again
+    /// @notice WRAPWITH-QUEUE-01: Step-2 netting updates durable queue; settlement clears remainder without double-counting.
+    /// @dev 1) Create a Hub queue on `backing` via wrapWith(seed)
+    ///      2) wrapWith(net) eagerly reduces the Hub queue by `net`
+    ///      3) processSettlementFor clears the remaining queue (`seed - net`)
     // forge-lint: disable-next-line(mixed-case-function)
     function action_wrapWith_queue_netting(uint256 seedAmount, uint256 netAmount, bool dir) external {
         checkedNetting = true;
@@ -171,8 +170,9 @@ contract LiquidityHubWrapWithFuzzTest {
         }
 
         bool ok = true;
-        ok = ok && (hub.settleQueue(address(backing), address(hub)) == seed);
-        ok = ok && (hub.totalQueued(address(backing)) == seed);
+        uint256 remaining = seed - net;
+        ok = ok && (hub.settleQueue(address(backing), address(hub)) == remaining);
+        ok = ok && (hub.totalQueued(address(backing)) == remaining);
         ok = ok && (backing.totalSupply() + target.totalSupply() == sumSupplyBefore);
 
         // Step C: with only direct reserve seeded in this harness, Hub settlement is a no-op because

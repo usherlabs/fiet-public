@@ -179,8 +179,9 @@ contract LiquidityHubWrapWithQueueFuzzTest {
         hub.wrapWith(address(target), address(backing), amt);
 
         bool ok = true;
-        ok = ok && (hub.settleQueue(address(backing), address(hub)) == seed);
-        ok = ok && (hub.totalQueued(address(backing)) == seed);
+        uint256 remaining = seed - amt;
+        ok = ok && (hub.settleQueue(address(backing), address(hub)) == remaining);
+        ok = ok && (hub.totalQueued(address(backing)) == remaining);
         ok = ok && (backing.totalSupply() + target.totalSupply() == sumSupplyBefore);
 
         // With only direct reserve seeded in this harness, Hub settlement is a no-op because
