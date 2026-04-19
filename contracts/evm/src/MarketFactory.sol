@@ -438,6 +438,9 @@ contract MarketFactory is IMarketFactory, Ownable, ImmutableState, ImmutableVTSS
         BalanceDelta usedDelta =
             MarketLiquidityRouterLib.useWithOptionalUnlock(poolManager, proxyHook, balanceDelta, address(liquidityHub));
 
+        // DICE/CISE coverage indexing is part of the legacy fee capability: `VTSOrchestrator.incrementCoverage` is a
+        // no-op when `coverageFeeShare == 0` (default `VTSConfigs.getDefaultConfig()`), so unwrap consumption does not
+        // move quarantined indices on the base product line.
         vtsOrchestrator.incrementCoverage(
             pId,
             LiquidityUtils.safeInt128ToUint256(usedDelta.amount0()),

@@ -261,4 +261,16 @@ contract VTSOrchestratorTestable is VTSOrchestrator {
             pa.feesSharedRemainingFactorLastX128.token1
         );
     }
+
+    /// @notice Pool materialised slash pot (debug / Phase 1 quarantine assertions)
+    function getPoolSlashedPot(PoolId poolId) external view returns (uint256 pot0, uint256 pot1) {
+        PoolAccounting storage paPool = s.poolAccounting[poolId];
+        return (paPool.slashedPot.token0, paPool.slashedPot.token1);
+    }
+
+    /// @notice Position pending fee adjustment queue (debug / Phase 1 quarantine assertions)
+    function getPositionPendingFeeAdj(PositionId positionId) external view returns (int256 adj0, int256 adj1) {
+        PositionAccounting storage pa = s.positionAccounting[positionId];
+        return (pa.pendingFeeAdj.token0, pa.pendingFeeAdj.token1);
+    }
 }

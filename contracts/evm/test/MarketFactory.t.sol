@@ -200,7 +200,7 @@ contract MarketFactoryTest is Test, Deployers {
             60,
             79228162514264337593543950336, // 1:1 price
             salt,
-            VTSConfigs.getDefaultConfig()
+            VTSConfigs.getFeeSharingDefaultConfig()
         );
 
         assertTrue(PoolId.unwrap(coreId) != bytes32(0));
@@ -230,7 +230,7 @@ contract MarketFactoryTest is Test, Deployers {
             60,
             79228162514264337593543950336, // 1:1 price
             salt,
-            VTSConfigs.getDefaultConfig()
+            VTSConfigs.getFeeSharingDefaultConfig()
         );
 
         // get proxy hook address
@@ -251,7 +251,7 @@ contract MarketFactoryTest is Test, Deployers {
             60,
             79228162514264337593543950336,
             salt,
-            VTSConfigs.getDefaultConfig()
+            VTSConfigs.getFeeSharingDefaultConfig()
         );
 
         address[] memory newBounds = new address[](1);
@@ -279,7 +279,7 @@ contract MarketFactoryTest is Test, Deployers {
             60,
             79228162514264337593543950336,
             salt,
-            VTSConfigs.getDefaultConfig()
+            VTSConfigs.getFeeSharingDefaultConfig()
         );
 
         address boundAddr = makeAddr("bound");
@@ -718,7 +718,7 @@ contract MarketFactoryUnitTest is Test {
     {
         vm.prank(owner);
         (coreId, proxyId) = factory.createMarket(
-            ua0, ua1, 3000, 60, initialSqrtPriceX96, keccak256("salt"), VTSConfigs.getDefaultConfig()
+            ua0, ua1, 3000, 60, initialSqrtPriceX96, keccak256("salt"), VTSConfigs.getFeeSharingDefaultConfig()
         );
     }
 
@@ -832,7 +832,7 @@ contract MarketFactoryUnitTest is Test {
             60,
             79228162514264337593543950336,
             keccak256("salt"),
-            VTSConfigs.getDefaultConfig()
+            VTSConfigs.getFeeSharingDefaultConfig()
         );
     }
 
@@ -851,7 +851,7 @@ contract MarketFactoryUnitTest is Test {
             60,
             79228162514264337593543950336,
             keccak256("salt"),
-            VTSConfigs.getDefaultConfig()
+            VTSConfigs.getFeeSharingDefaultConfig()
         );
     }
 
@@ -865,7 +865,7 @@ contract MarketFactoryUnitTest is Test {
             60,
             0, // zero initialSqrtPriceX96
             keccak256("salt"),
-            VTSConfigs.getDefaultConfig()
+            VTSConfigs.getFeeSharingDefaultConfig()
         );
     }
 
@@ -939,7 +939,13 @@ contract MarketFactoryUnitTest is Test {
         vm.prank(owner);
         vm.expectRevert(Errors.CorePoolAlreadyExists.selector);
         factory.createMarket(
-            address(0x100), address(0x200), 3000, 60, initial, keccak256("salt2"), VTSConfigs.getDefaultConfig()
+            address(0x100),
+            address(0x200),
+            3000,
+            60,
+            initial,
+            keccak256("salt2"),
+            VTSConfigs.getFeeSharingDefaultConfig()
         );
     }
 
@@ -952,7 +958,9 @@ contract MarketFactoryUnitTest is Test {
 
         vm.prank(owner);
         vm.expectRevert(Errors.CorePoolAlreadyExists.selector);
-        factory.createMarket(ua0, ua1, 3000, 60, initial, keccak256("salt-fuzz"), VTSConfigs.getDefaultConfig());
+        factory.createMarket(
+            ua0, ua1, 3000, 60, initial, keccak256("salt-fuzz"), VTSConfigs.getFeeSharingDefaultConfig()
+        );
     }
 
     function testFuzz_createMarket_corePairOrderingMatchesStored(address ua0Raw, address ua1Raw) public {
@@ -1381,7 +1389,7 @@ contract MarketFactoryUnitTest is Test {
             60,
             79228162514264337593543950336,
             keccak256("neverInitSalt"),
-            VTSConfigs.getDefaultConfig()
+            VTSConfigs.getFeeSharingDefaultConfig()
         );
     }
 

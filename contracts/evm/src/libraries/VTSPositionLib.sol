@@ -550,7 +550,9 @@ library VTSPositionLib {
                 // DICE: Track pool-wide deficit principal increase
                 paPool.totalDeficitPrincipal.token0 += deficitIncrease;
                 // DICE: Flush any pending coverage residual now that principal exists
-                VTSFeeLinkedLib.flushCoverageResidualIfNeeded(s, poolId, 0);
+                if (VTSFeeLinkedLib.isFeeCapabilityEnabled(s, poolId)) {
+                    VTSFeeLinkedLib.flushCoverageResidualIfNeeded(s, poolId, 0);
+                }
                 _sUpdateSettlement(s, positionId, 0, -s0.toInt256());
             }
         }
@@ -567,7 +569,9 @@ library VTSPositionLib {
                 // DICE: Track pool-wide deficit principal increase
                 paPool.totalDeficitPrincipal.token1 += deficitIncrease;
                 // DICE: Flush any pending coverage residual now that principal exists
-                VTSFeeLinkedLib.flushCoverageResidualIfNeeded(s, poolId, 1);
+                if (VTSFeeLinkedLib.isFeeCapabilityEnabled(s, poolId)) {
+                    VTSFeeLinkedLib.flushCoverageResidualIfNeeded(s, poolId, 1);
+                }
                 _sUpdateSettlement(s, positionId, 1, -s1.toInt256());
             }
         }
@@ -643,9 +647,13 @@ library VTSPositionLib {
     /// @param positionId The position ID
     //#olympix-ignore-reentrancy
     function settlePositionGrowths(VTSStorage storage s, IPoolManager poolManager, PositionId positionId) public {
-        _reconcileLiquidityMirrorAndFeeBurnRemainder(s, poolManager, positionId);
+        PoolId poolId = s.positions[positionId].poolId;
+        bool feeCap = VTSFeeLinkedLib.isFeeCapabilityEnabled(s, poolId);
 
-        VTSFeeLinkedLib.settleSettledIndexedCoverageUsage(s, positionId);
+        if (feeCap) {
+            _reconcileLiquidityMirrorAndFeeBurnRemainder(s, poolManager, positionId);
+            VTSFeeLinkedLib.settleSettledIndexedCoverageUsage(s, positionId);
+        }
 
         _settlePositionDeficitGrowth(s, poolManager, positionId);
         // DICE ordering invariant:
@@ -653,7 +661,9 @@ library VTSPositionLib {
         // coverage-per-deficit index. If inflow netting runs first, the position shrinks principal
         // before we apply already-exercised coverage, understating burn and letting it evade charges
         // incurred while that principal was outstanding.
-        VTSFeeLinkedLib.settleDeficitIndexedCoverageUsage(s, poolManager, positionId);
+        if (feeCap) {
+            VTSFeeLinkedLib.settleDeficitIndexedCoverageUsage(s, poolManager, positionId);
+        }
         // Only after DICE has been settled may inflow repay/net principal.
         _settlePositionInflowGrowth(s, poolManager, positionId);
     }
@@ -1094,6 +1104,36 @@ library VTSPositionLib {
         }
     }
 
+    /// @dev Fee-era residual capture on decrease; no-op when fee capability is disabled (Phase 1 quarantine).
+    function _feeCapabilityDecreaseResidualCapture(
+        VTSStorage storage s,
+        IPoolManager poolManager,
+        PoolId poolId,
+        PositionId positionId,
+        uint128 liq,
+        int256 liquidityDelta
+    ) private {
+        if (!VTSFeeLinkedLib.isFeeCapabilityEnabled(s, poolId)) return;
+        if (liq == 0) {
+            _captureResidualFeeBackingOnFullDeactivation(s, poolManager, positionId, liq, liquidityDelta);
+        } else {
+            uint128 removedLiquidity = uint256(-liquidityDelta).toUint128();
+            VTSFeeLinkedLib.captureResidualFeeBackingOnPartialDecrease(s, poolManager, positionId, removedLiquidity);
+        }
+    }
+
+    /// @dev Rebase residual fee growth on active increase when fee capability is enabled.
+    function _maybeRebaseResidualFeeGrowthOnActiveIncrease(
+        VTSStorage storage s,
+        IPoolManager poolManager,
+        PoolId poolId,
+        PositionId positionId,
+        uint128 liveLiquidityBeforeAdd
+    ) private {
+        if (!VTSFeeLinkedLib.isFeeCapabilityEnabled(s, poolId) || liveLiquidityBeforeAdd == 0) return;
+        _rebaseResidualFeeGrowthOnActiveIncrease(s, poolManager, poolId, positionId, liveLiquidityBeforeAdd);
+    }
+
     /// @dev Extracted to keep `touchPosition` stack-safe when branching on fee-cap policy.
     function _afterTouchPositionFees(
         VTSStorage storage s,
@@ -1101,6 +1141,9 @@ library VTSPositionLib {
         BalanceDelta feesAccrued,
         bool capPositiveSlashToFeesAccrued
     ) private returns (BalanceDelta feeAdj) {
+        if (!VTSFeeLinkedLib.isFeeCapabilityEnabled(s, s.positions[positionId].poolId)) {
+            return toBalanceDelta(0, 0);
+        }
         if (!capPositiveSlashToFeesAccrued) {
             return VTSFeeLinkedLib.afterTouchPosition(s, positionId);
         }
@@ -1109,6 +1152,74 @@ library VTSPositionLib {
         uint256 positiveCap0 = fa0 > 0 ? uint256(uint128(fa0)) : 0;
         uint256 positiveCap1 = fa1 > 0 ? uint256(uint128(fa1)) : 0;
         return VTSFeeLinkedLib.afterTouchPositionWithPositiveCaps(s, positionId, positiveCap0, positiveCap1);
+    }
+
+    /// @dev Isolates the existing-position branch of `touchPosition` in its own stack frame (avoids "stack too deep"
+    ///      when Phase 1 fee-capability helpers are composed with mirror transitions).
+    function _touchExistingPositionPath(
+        VTSStorage storage s,
+        PositionContext memory ctx,
+        PoolId poolId,
+        TouchPositionParams calldata p,
+        PositionId positionId,
+        Position storage posStorage,
+        uint256 initialLiquidity,
+        uint128 liq,
+        TouchPositionHookData memory hookData
+    ) private returns (BalanceDelta requiredSettlementDelta) {
+        // EXISTING POSITION (active or previously inactive)
+
+        // Validate no mismatch if commit ID present.
+        if (hookData.isMMOperation && hookData.commitId != posStorage.commitId) {
+            revert Errors.InvariantViolated("Invalid operation: Commit ID mismatch");
+        }
+
+        // Insolvency freeze: do not allow non-seizure MM liquidity changes while commitment deficit persists.
+        // Settlement, checkpoint(withCommitment), and seizure paths remain the intended cure/formalise surfaces.
+        if (hookData.isMMOperation && !hookData.isSeizing && p.params.liquidityDelta != 0) {
+            PositionAccounting storage paGuard = s.positionAccounting[positionId];
+            if (paGuard.commitmentDeficit.token0 > 0 || paGuard.commitmentDeficit.token1 > 0) {
+                revert Errors.CommitmentDeficitBlocksLiquidityChange(positionId);
+            }
+        }
+
+        if (p.params.liquidityDelta < 0) {
+            // Disallow decreases on previously-inactive positions. (If liq == 0, Uniswap will revert anyway.)
+            if (!posStorage.isActive) revert Errors.NotActive(positionId);
+            requiredSettlementDelta = _touchExistingDecrease(s, positionId, p.params, liq, hookData);
+            // Mirror using live PoolManager liquidity post-modify for both paused and unpaused removes.
+            PositionAccounting storage paDec = s.positionAccounting[positionId];
+            _feeCapabilityDecreaseResidualCapture(s, ctx.poolManager, poolId, positionId, liq, p.params.liquidityDelta);
+            _applyLiquidityMirrorTransition(s, positionId, paDec, posStorage, initialLiquidity, liq);
+        } else {
+            (uint128 liveLiquidityBeforeAdd, uint128 nextLiquidity) =
+                _deriveIncreaseTransitionLiquidity(liq, p.params.liquidityDelta);
+            if (p.params.liquidityDelta > 0) {
+                // Allow re-activating a previously inactive position by adding liquidity.
+                // Logically required to build on value routing while collecting fees on inactive positions.
+                // Rebase tick-indexed snapshots first so the zero-liquidity interval is not charged/credited to
+                // the newly reactivated liquidity.
+                if (liveLiquidityBeforeAdd == 0) {
+                    _checkpointTickIndexedSnapshots(s, ctx.poolManager, positionId);
+                    _checkpointZeroPrincipalSettlementSnapshots(s, positionId);
+                }
+                requiredSettlementDelta =
+                    _touchExistingIncrease(s, poolId, positionId, p.params, nextLiquidity, hookData);
+                _maybeRebaseResidualFeeGrowthOnActiveIncrease(
+                    s, ctx.poolManager, poolId, positionId, liveLiquidityBeforeAdd
+                );
+            } else {
+                // Allow a no-op when active (Uniswap v4 disallows this when initial liq == 0).
+                // See https://github.com/Uniswap/v4-core/blob/36d790b1a3af38461453a13a6ff395290fbc11b2/src/libraries/Position.sol#L86
+                // Refresh commitment maxima from live liquidity (e.g. mirror desync or post-migration).
+                _trackCommitment(s, positionId, liq);
+                requiredSettlementDelta = BalanceDelta.wrap(0);
+            }
+            PositionAccounting storage paRem = s.positionAccounting[positionId];
+            _applyLiquidityMirrorTransition(
+                s, positionId, paRem, posStorage, uint256(liveLiquidityBeforeAdd), nextLiquidity
+            );
+        }
     }
 
     //#olympix-ignore-reentrancy
@@ -1140,70 +1251,8 @@ library VTSPositionLib {
             requiredSettlementDelta =
                 _touchNewPosition(s, ctx.poolManager, poolId, p.owner, p.params, result.id, liq, hookData);
         } else {
-            // EXISTING POSITION (active or previously inactive)
-
-            // Validate no mismatch if commit ID present.
-            if (hookData.isMMOperation && hookData.commitId != posStorage.commitId) {
-                revert Errors.InvariantViolated("Invalid operation: Commit ID mismatch");
-            }
-
-            // Insolvency freeze: do not allow non-seizure MM liquidity changes while commitment deficit persists.
-            // Settlement, checkpoint(withCommitment), and seizure paths remain the intended cure/formalise surfaces.
-            if (hookData.isMMOperation && !hookData.isSeizing && p.params.liquidityDelta != 0) {
-                PositionAccounting storage paGuard = s.positionAccounting[result.id];
-                if (paGuard.commitmentDeficit.token0 > 0 || paGuard.commitmentDeficit.token1 > 0) {
-                    revert Errors.CommitmentDeficitBlocksLiquidityChange(result.id);
-                }
-            }
-
-            if (p.params.liquidityDelta < 0) {
-                // Disallow decreases on previously-inactive positions. (If liq == 0, Uniswap will revert anyway.)
-                if (!posStorage.isActive) revert Errors.NotActive(result.id);
-                requiredSettlementDelta = _touchExistingDecrease(s, result.id, p.params, liq, hookData);
-                // Mirror using live PoolManager liquidity post-modify for both paused and unpaused removes.
-                PositionAccounting storage paDec = s.positionAccounting[result.id];
-                if (liq == 0) {
-                    _captureResidualFeeBackingOnFullDeactivation(
-                        s, ctx.poolManager, result.id, liq, p.params.liquidityDelta
-                    );
-                } else {
-                    uint128 removedLiquidity = uint256(-p.params.liquidityDelta).toUint128();
-                    VTSFeeLinkedLib.captureResidualFeeBackingOnPartialDecrease(
-                        s, ctx.poolManager, result.id, removedLiquidity
-                    );
-                }
-                _applyLiquidityMirrorTransition(s, result.id, paDec, posStorage, initialLiquidity, liq);
-            } else {
-                (uint128 liveLiquidityBeforeAdd, uint128 nextLiquidity) =
-                    _deriveIncreaseTransitionLiquidity(liq, p.params.liquidityDelta);
-                if (p.params.liquidityDelta > 0) {
-                    // Allow re-activating a previously inactive position by adding liquidity.
-                    // Logically required to build on value routing while collecting fees on inactive positions.
-                    // Rebase tick-indexed snapshots first so the zero-liquidity interval is not charged/credited to
-                    // the newly reactivated liquidity.
-                    if (liveLiquidityBeforeAdd == 0) {
-                        _checkpointTickIndexedSnapshots(s, ctx.poolManager, result.id);
-                        _checkpointZeroPrincipalSettlementSnapshots(s, result.id);
-                    }
-                    requiredSettlementDelta =
-                        _touchExistingIncrease(s, poolId, result.id, p.params, nextLiquidity, hookData);
-                    if (liveLiquidityBeforeAdd > 0) {
-                        _rebaseResidualFeeGrowthOnActiveIncrease(
-                            s, ctx.poolManager, poolId, result.id, liveLiquidityBeforeAdd
-                        );
-                    }
-                } else {
-                    // Allow a no-op when active (Uniswap v4 disallows this when initial liq == 0).
-                    // See https://github.com/Uniswap/v4-core/blob/36d790b1a3af38461453a13a6ff395290fbc11b2/src/libraries/Position.sol#L86
-                    // Refresh commitment maxima from live liquidity (e.g. mirror desync or post-migration).
-                    _trackCommitment(s, result.id, liq);
-                    requiredSettlementDelta = BalanceDelta.wrap(0);
-                }
-                PositionAccounting storage paRem = s.positionAccounting[result.id];
-                _applyLiquidityMirrorTransition(
-                    s, result.id, paRem, posStorage, uint256(liveLiquidityBeforeAdd), nextLiquidity
-                );
-            }
+            requiredSettlementDelta =
+                _touchExistingPositionPath(s, ctx, poolId, p, result.id, posStorage, initialLiquidity, liq, hookData);
         }
 
         if (isNewPosition) {

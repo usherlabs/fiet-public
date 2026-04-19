@@ -29,6 +29,7 @@ import {WETH} from "@uniswap/v4-core/lib/solmate/src/tokens/WETH.sol";
 import {IWETH9} from "v4-periphery/src/interfaces/external/IWETH9.sol";
 import {IAllowanceTransfer} from "permit2/src/interfaces/IAllowanceTransfer.sol";
 import {VTSConfigs} from "../../src/libraries/VTSConfigs.sol";
+import {MarketVTSConfiguration} from "../../src/types/VTS.sol";
 import {VRLSignalManager} from "../../src/VRLSignalManager.sol";
 import {VRLSettlementObserver} from "../../src/VRLSettlementObserver.sol";
 import {IVRLSettlementObserver} from "../../src/interfaces/IVRLSettlementObserver.sol";
@@ -265,6 +266,12 @@ abstract contract MarketTestBase is Test, Deployers, DeployPermit2 {
         MarketFactory(marketFactory).initialise(canonicalVaultAddr, coreHookAddress, initialBounds);
     }
 
+    /// @dev VTS configuration supplied to `MarketFactory.createMarket` during test setup. Override for the
+    ///      conservative base line (`VTSConfigs.getDefaultConfig()`, `coverageFeeShare == 0`).
+    function _marketVTSConfigurationForCreate() internal pure virtual returns (MarketVTSConfiguration memory) {
+        return VTSConfigs.getFeeSharingDefaultConfig();
+    }
+
     // Create and initialize the market i.e deploy core and proxy pools using the market factory
     function _createAndInitializeMarket(uint24 corePoolFee, int24 tickSpacing, uint160 initialSqrtPriceX96) internal {
         // Mock validateMarketOracles call that is made when we create the market
@@ -291,7 +298,7 @@ abstract contract MarketTestBase is Test, Deployers, DeployPermit2 {
                 tickSpacing,
                 initialSqrtPriceX96,
                 proxySalt,
-                VTSConfigs.getDefaultConfig()
+                _marketVTSConfigurationForCreate()
             );
 
         // set the deployed proxy hook address
