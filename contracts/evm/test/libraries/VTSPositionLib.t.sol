@@ -2835,9 +2835,10 @@ contract VTSPositionLibTest is VTSLibTestBase {
         VTSPositionLibTest_MockLCC lcc0 = new VTSPositionLibTest_MockLCC(address(0x5555));
         VTSPositionLibTest_MockLCC lcc1 = new VTSPositionLibTest_MockLCC(address(0x6666));
 
-        // Deposit <50% of RFS on token0 so RFS stays open, but remaining liquidity is below minResidual.
-        // With baseVTSRate floored to 100%, exposure is maxed, so seizure is driven mainly by phi.
-        BalanceDelta delta = toBalanceDelta(int128(-40), int128(0));
+        // Partial cure of token0 RFS such that seized units leave (liq - seized) < minResidualUnits, triggering
+        // promotion to full position liquidity. With φ = S/R_pre (pre-intervention RFS), a -40 deposit no longer
+        // satisfies that; -61 of 100 does (remainder 390 < minResidual 400).
+        BalanceDelta delta = toBalanceDelta(int128(-61), int128(0));
         (,, uint256 seized) = harness.onMMSettle(
             manager, vault, positionId, Currency.wrap(address(lcc0)), Currency.wrap(address(lcc1)), delta, true, false
         );
