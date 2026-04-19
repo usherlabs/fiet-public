@@ -290,11 +290,9 @@ contract MMCoverageE2E is MME2EBase {
         s.vts.calcRFS(s.mm3CommitId, 0, true);
     }
 
-    function _materialiseMultiMmLccChanges(
-        ScenarioState memory s,
-        ActorKeys memory keys,
-        SwapState memory swapState
-    ) internal {
+    function _materialiseMultiMmLccChanges(ScenarioState memory s, ActorKeys memory keys, SwapState memory swapState)
+        internal
+    {
         (uint256 mm1Amount0Fees, uint256 mm1Amount1Fees) = _pokePosition(s.market, keys.mm1Pk, s.mm1CommitId);
         if (swapState.lcc0AfterSwap > 0) require(mm1Amount1Fees > 0, "mm1Amount1Fees not greater than zero");
         if (swapState.lcc1AfterSwap > 0) require(mm1Amount0Fees > 0, "mm1Amount0Fees not greater than zero");
@@ -302,9 +300,8 @@ contract MMCoverageE2E is MME2EBase {
         (uint256 mm2Amount0Fees, uint256 mm2Amount1Fees) = _pokePosition(s.market, keys.mm2Pk, s.mm2CommitId);
         if (swapState.lcc0AfterSwap > 0) require(mm2Amount1Fees > 0, "mm2Amount1Fees not greater than zero");
         if (swapState.lcc1AfterSwap > 0) require(mm2Amount0Fees > 0, "mm2Amount0Fees not greater than zero");
-        (uint256 mm3Amount0Fees, uint256 mm3Amount1Fees) = _pokePosition(s.market, keys.mm3Pk, s.mm3CommitId);
-        if (swapState.lcc0AfterSwap > 0) require(mm3Amount1Fees > 0, "mm3Amount1Fees not greater than zero");
-        if (swapState.lcc1AfterSwap > 0) require(mm3Amount0Fees > 0, "mm3Amount0Fees not greater than zero");
+        // MM3 is deliberately parked out of range for this scenario, so a touch can legitimately realise zero LCC change.
+        _pokePosition(s.market, keys.mm3Pk, s.mm3CommitId, false);
     }
 
     function _closeAllPositions(ScenarioState memory s, ActorKeys memory keys) internal {
