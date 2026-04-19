@@ -252,6 +252,13 @@ library VTSLifecycleLinkedLib {
         VTSPositionLib.settlePositionGrowths(s, poolManager, p.positionId);
         (result.rfsOpen, rfsDelta) = VTSPositionLib.getRFS(s, p.positionId);
 
+        // Snapshot pre-intervention RFS for seizure sizing (`agents/spec/Seizure-and-Base-Tranche-Policy.md`): cured
+        // fraction uses S/R_pre, not post-settlement remainder.
+        BalanceDelta rfsPreForSeizure;
+        if (p.isSeizing) {
+            rfsPreForSeizure = rfsDelta;
+        }
+
         BalanceDelta depositSettlementDelta;
 
         if (p.fromDeltas) {
@@ -318,7 +325,7 @@ library VTSLifecycleLinkedLib {
         });
 
         if (p.isSeizing) {
-            result.seizedLiquidityUnits = _calcSeizure(s, poolManager, p.positionId, result.settlementDelta);
+            result.seizedLiquidityUnits = _calcSeizure(s, p.positionId, result.settlementDelta, rfsPreForSeizure);
         } else {
             result.seizedLiquidityUnits = 0;
         }
@@ -603,32 +610,25 @@ library VTSLifecycleLinkedLib {
     }
 
     /// @notice Calculates liquidity units to seize for a given position and settlement delta
+    /// @dev Uses pre-intervention RFS (`rfsPre`) for exposure and cured-fraction denominators so `φ = S/R_pre`
+    ///      matches `agents/spec/Seizure-and-Base-Tranche-Policy.md`. Full RfS close in the same transaction still
+    ///      yields non-zero seizure (no reliance on post-settlement `getRFS` remaining open). Growth is settled in
+    ///      `_executeMMSettleFromParams` before the snapshot; do not re-enter here.
     /// @param s The central VTS storage
-    /// @param poolManager The pool manager contract
     /// @param positionId The position id
-    /// @param settlementDelta The settlement delta applied during seizure
+    /// @param settlementDelta The settlement delta applied during seizure (deposit magnitudes on negative lanes)
+    /// @param rfsPre RFS delta immediately before this intervention's deposit settlement (same ordering as outer flow)
     /// @return seizedLiquidityUnits The liquidity units to seize
     function _calcSeizure(
         VTSStorage storage s,
-        IPoolManager poolManager,
         PositionId positionId,
-        BalanceDelta settlementDelta
-    ) private returns (uint256 seizedLiquidityUnits) {
-        VTSPositionLib.settlePositionGrowths(s, poolManager, positionId);
-
-        BalanceDelta rfsDelta;
-        {
-            bool rfsOpen;
-            (rfsOpen, rfsDelta) = VTSPositionLib.getRFS(s, positionId);
-            if (!rfsOpen) {
-                return 0;
-            }
-        }
-
+        BalanceDelta settlementDelta,
+        BalanceDelta rfsPre
+    ) private view returns (uint256 seizedLiquidityUnits) {
         uint256 c0;
         uint256 c1;
-        uint256 r0;
-        uint256 r1;
+        uint256 r0pre;
+        uint256 r1pre;
         uint256 s0;
         uint256 s1;
         {
@@ -636,13 +636,17 @@ library VTSLifecycleLinkedLib {
             c0 = pa.commitmentMax.token0;
             c1 = pa.commitmentMax.token1;
 
-            int128 rfs0 = rfsDelta.amount0();
-            int128 rfs1 = rfsDelta.amount1();
-            r0 = rfs0 > 0 ? LiquidityUtils.safeInt128ToUint256(rfs0) : 0;
-            r1 = rfs1 > 0 ? LiquidityUtils.safeInt128ToUint256(rfs1) : 0;
+            int128 rfs0 = rfsPre.amount0();
+            int128 rfs1 = rfsPre.amount1();
+            r0pre = rfs0 > 0 ? LiquidityUtils.safeInt128ToUint256(rfs0) : 0;
+            r1pre = rfs1 > 0 ? LiquidityUtils.safeInt128ToUint256(rfs1) : 0;
 
             s0 = settlementDelta.amount0() < 0 ? LiquidityUtils.safeInt128ToUint256(settlementDelta.amount0()) : 0;
             s1 = settlementDelta.amount1() < 0 ? LiquidityUtils.safeInt128ToUint256(settlementDelta.amount1()) : 0;
+        }
+
+        if (r0pre == 0 && r1pre == 0) {
+            return 0;
         }
 
         Position memory pos = s.positions[positionId];
@@ -652,16 +656,18 @@ library VTSLifecycleLinkedLib {
 
         uint256 total;
         {
-            uint256 e0bps = LiquidityUtils.exposureBps(r0, c0);
-            uint256 e1bps = LiquidityUtils.exposureBps(r1, c1);
-            if (cfg.token0.baseVTSRate > e0bps) e0bps = cfg.token0.baseVTSRate;
-            if (cfg.token1.baseVTSRate > e1bps) e1bps = cfg.token1.baseVTSRate;
-
-            uint256 p0bps = LiquidityUtils.settleOfRfsBps(s0, r0);
-            uint256 p1bps = LiquidityUtils.settleOfRfsBps(s1, r1);
-
-            total = LiquidityUtils.seizedUnitsFromBps(liq, e0bps, p0bps)
-                + LiquidityUtils.seizedUnitsFromBps(liq, e1bps, p1bps);
+            if (r0pre > 0) {
+                uint256 e0bps = LiquidityUtils.exposureBps(r0pre, c0);
+                if (cfg.token0.baseVTSRate > e0bps) e0bps = cfg.token0.baseVTSRate;
+                uint256 p0bps = LiquidityUtils.settleOfRfsBps(s0, r0pre);
+                total += LiquidityUtils.seizedUnitsFromBps(liq, e0bps, p0bps);
+            }
+            if (r1pre > 0) {
+                uint256 e1bps = LiquidityUtils.exposureBps(r1pre, c1);
+                if (cfg.token1.baseVTSRate > e1bps) e1bps = cfg.token1.baseVTSRate;
+                uint256 p1bps = LiquidityUtils.settleOfRfsBps(s1, r1pre);
+                total += LiquidityUtils.seizedUnitsFromBps(liq, e1bps, p1bps);
+            }
         }
 
         {

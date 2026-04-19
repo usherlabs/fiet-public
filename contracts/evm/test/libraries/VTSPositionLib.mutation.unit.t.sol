@@ -1097,10 +1097,8 @@ contract VTSPositionLibMutationUnitTest is Test {
         MockLCC lcc0 = new MockLCC(address(0xA0));
         MockLCC lcc1 = new MockLCC(address(0xA1));
 
-        // IMPORTANT: `_calcSeizure` returns 0 if RFS is *not* open at seizure time.
-        // So we must deposit *less than* the pre-settle RFS requirement, leaving a positive remainder.
-        // This remainder (r1) is what `_calcSeizure` will use to compute exposureBps, which should be
-        // floored by baseVTSRate when rounding makes exposureBps(r1,c1) < baseVTSRate.
+        // Partial deposit so RFS stays open after settle. Seizure sizing uses **pre-intervention** RFS (`R_pre`) for
+        // exposure and φ = S/R_pre; exposureBps(R_pre,c1) may round down below baseVTSRate, so the base floor applies.
         (, BalanceDelta rfsDelta) = harness.getRFS(id);
         uint256 r1Before = uint256(int256(rfsDelta.amount1()));
         assertGt(r1Before, 1e18, "precondition: rfs1 should be > 1e18");
@@ -1127,35 +1125,31 @@ contract VTSPositionLibMutationUnitTest is Test {
         }
 
         {
-            // Recompute inputs the same way `_calcSeizure` does *after* settlement.
-            (bool rfsOpenAfter, BalanceDelta rfsAfter) = harness.getRFS(id);
-            assertTrue(rfsOpenAfter, "precondition: RFS must remain open to compute seizure");
+            (bool rfsOpenAfter,) = harness.getRFS(id);
+            assertTrue(rfsOpenAfter, "precondition: RFS must remain open after partial deposit");
 
-            // Remaining requirement after deposit (what `_calcSeizure` uses).
-            uint256 r1 = uint256(int256(rfsAfter.amount1()));
-            // Absolute deposited amount (negative means deposit).
             uint256 s1 = uint256(uint128(-settleAmount1));
-
             uint256 liqUnits = uint256(harness.getPosition(id).liquidity);
             uint256 expected = _expectedSeizedToken1Only(
-                liqUnits, SEIZURE_BASE_VTS_RATE1, SEIZURE_C1, r1, s1, SEIZURE_MIN_RESIDUAL_UNITS
+                liqUnits, SEIZURE_BASE_VTS_RATE1, SEIZURE_C1, r1Before, s1, SEIZURE_MIN_RESIDUAL_UNITS
             );
 
             assertEq(seized, expected, "seized liquidity should use base-rate floor when rounding reduces exposureBps");
         }
     }
 
+    /// @param r1Pre Outstanding RFS on token1 **before** the intervention (denominator for φ = S/R_pre).
     function _expectedSeizedToken1Only(
         uint256 liqUnits,
         uint256 baseVTSRate1,
         uint256 c1,
-        uint256 r1,
+        uint256 r1Pre,
         uint256 s1,
         uint256 minResidualUnits
     ) internal pure returns (uint256 expected) {
-        uint256 e1bpsRaw = LiquidityUtils.exposureBps(r1, c1);
+        uint256 e1bpsRaw = LiquidityUtils.exposureBps(r1Pre, c1);
         uint256 e1bps = baseVTSRate1 > e1bpsRaw ? baseVTSRate1 : e1bpsRaw;
-        uint256 p1bps = LiquidityUtils.settleOfRfsBps(s1, r1);
+        uint256 p1bps = LiquidityUtils.settleOfRfsBps(s1, r1Pre);
         expected = LiquidityUtils.seizedUnitsFromBps(liqUnits, e1bps, p1bps);
 
         // Apply the same residual-threshold logic as `_calcSeizure`.
@@ -1165,6 +1159,168 @@ contract VTSPositionLibMutationUnitTest is Test {
         } else if (expected > liqUnits) {
             expected = liqUnits;
         }
+    }
+
+    /// @dev Full RfS close in one seizure settle must yield non-zero seized units (no early return on closed RFS).
+    function test_onMMSettle_seizure_nonZero_whenRfSFullyClosedInSameTx_token1() public {
+        {
+            MarketVTSConfiguration memory cfg = _defaultCfg();
+            cfg.token1.baseVTSRate = SEIZURE_BASE_VTS_RATE1;
+            cfg.minResidualUnits = SEIZURE_MIN_RESIDUAL_UNITS;
+            harness.setupPool(poolId, cfg);
+        }
+
+        (PositionId id,) = _register(bytes32(uint256(13)), 1000);
+        harness.setCommitmentMax(id, 1e18, SEIZURE_C1);
+        // Satisfy token0 lane so only token1 remains overdue; otherwise a token1-only deposit cannot fully close RFS.
+        harness.setSettled(id, 1e18, 0);
+        harness.setCumulativeDeficit(id, 0, 0);
+        harness.setCommitmentDeficit(id, 0, 0);
+        harness.setCoverageIndexLastX128(id, 0, 0);
+        harness.setCISEIndexLastX128(id, 0, 0);
+        harness.setPoolCoveragePerDeficitIndexX128(poolId, 0, 0);
+        harness.setPoolCoveragePerSettledIndexX128(poolId, 0, 0);
+        harness.setDeficitGrowthGlobal(poolId, 0, 0);
+        harness.setInflowGrowthGlobal(poolId, 0, 0);
+        harness.setDeficitGrowthInsideLast(id, 0, 0);
+        harness.setInflowGrowthInsideLast(id, 0, 0);
+        _pmSetSlot0Tick(poolId, 0);
+        _pmSetPositionLiquidity(poolId, PositionId.unwrap(id), 0);
+
+        MockLCC lcc0 = new MockLCC(address(0xC0));
+        MockLCC lcc1 = new MockLCC(address(0xC1));
+
+        (, BalanceDelta rfsDelta) = harness.getRFS(id);
+        uint256 r1Full = uint256(int256(rfsDelta.amount1()));
+        assertGt(r1Full, 0, "precondition: token1 RFS open");
+
+        BalanceDelta delta = toBalanceDelta(0, -SafeCast.toInt128(r1Full));
+        MockMarketVaultNoop vault = new MockMarketVaultNoop();
+        (,, uint256 seized) = harness.onMMSettle(
+            IPoolManager(address(pm)),
+            IMarketVault(address(vault)),
+            id,
+            Currency.wrap(address(lcc0)),
+            Currency.wrap(address(lcc1)),
+            delta,
+            true,
+            false
+        );
+        assertGt(seized, 0, "full close should still size seizure from R_pre");
+        (bool openAfter,) = harness.getRFS(id);
+        assertFalse(openAfter, "RFS fully closed");
+    }
+
+    /// @dev Cured fraction uses S/R_pre: half of pre-intervention obligation yields partial seizure, not remainder-based 100%.
+    function test_onMMSettle_seizure_phiUsesRPre_halfCure_token1() public {
+        {
+            MarketVTSConfiguration memory cfg = _defaultCfg();
+            cfg.token1.baseVTSRate = 1000;
+            cfg.minResidualUnits = SEIZURE_MIN_RESIDUAL_UNITS;
+            harness.setupPool(poolId, cfg);
+        }
+
+        (PositionId id,) = _register(bytes32(uint256(14)), 1000);
+        harness.setCommitmentMax(id, 1e18, 100e18);
+        harness.setSettled(id, 0, 0);
+        harness.setCumulativeDeficit(id, 0, 0);
+        harness.setCommitmentDeficit(id, 0, 0);
+        harness.setCoverageIndexLastX128(id, 0, 0);
+        harness.setCISEIndexLastX128(id, 0, 0);
+        harness.setPoolCoveragePerDeficitIndexX128(poolId, 0, 0);
+        harness.setPoolCoveragePerSettledIndexX128(poolId, 0, 0);
+        harness.setDeficitGrowthGlobal(poolId, 0, 0);
+        harness.setInflowGrowthGlobal(poolId, 0, 0);
+        harness.setDeficitGrowthInsideLast(id, 0, 0);
+        harness.setInflowGrowthInsideLast(id, 0, 0);
+        _pmSetSlot0Tick(poolId, 0);
+        _pmSetPositionLiquidity(poolId, PositionId.unwrap(id), 0);
+
+        MockLCC lcc0 = new MockLCC(address(0xD0));
+        MockLCC lcc1 = new MockLCC(address(0xD1));
+
+        (, BalanceDelta rfsDelta) = harness.getRFS(id);
+        uint256 r1Pre = uint256(int256(rfsDelta.amount1()));
+        assertGt(r1Pre, 10, "precondition: token1 RFS");
+        uint256 half = r1Pre / 2;
+
+        BalanceDelta delta = toBalanceDelta(0, -SafeCast.toInt128(half));
+        MockMarketVaultNoop vault = new MockMarketVaultNoop();
+        (,, uint256 seizedHalf) = harness.onMMSettle(
+            IPoolManager(address(pm)),
+            IMarketVault(address(vault)),
+            id,
+            Currency.wrap(address(lcc0)),
+            Currency.wrap(address(lcc1)),
+            delta,
+            true,
+            false
+        );
+
+        // Reset position accounting for apples-to-apples full cure on fresh clone is heavy; compare to closed-form full-lane seizure.
+        uint256 liqUnits = uint256(harness.getPosition(id).liquidity);
+        uint256 c1 = 100e18;
+        uint256 e1bps = LiquidityUtils.exposureBps(r1Pre, c1);
+        if (1000 > e1bps) e1bps = 1000;
+        uint256 phiHalf = LiquidityUtils.settleOfRfsBps(half, r1Pre);
+        uint256 phiFull = LiquidityUtils.settleOfRfsBps(r1Pre, r1Pre);
+        uint256 expectHalf = LiquidityUtils.seizedUnitsFromBps(liqUnits, e1bps, phiHalf);
+        uint256 expectFull = LiquidityUtils.seizedUnitsFromBps(liqUnits, e1bps, phiFull);
+        assertEq(seizedHalf, expectHalf, "half cure should match phi=S/R_pre");
+        assertLt(seizedHalf, expectFull, "half cure should seize less than full cure");
+    }
+
+    /// @dev Fully curing one lane while the other remains open: only the cured lane contributes; RFS stays open.
+    function test_onMMSettle_seizure_oneLaneFullCure_otherLaneStillOpen() public {
+        {
+            MarketVTSConfiguration memory cfg = _defaultCfg();
+            cfg.token0.baseVTSRate = 10_000;
+            cfg.token1.baseVTSRate = 10_000;
+            cfg.minResidualUnits = 1;
+            harness.setupPool(poolId, cfg);
+        }
+
+        (PositionId id,) = _register(bytes32(uint256(15)), 1000);
+        harness.setCommitmentMax(id, 100, 100);
+        harness.setSettled(id, 0, 0);
+        harness.setCumulativeDeficit(id, 0, 0);
+        harness.setCommitmentDeficit(id, 0, 0);
+        harness.setCoverageIndexLastX128(id, 0, 0);
+        harness.setCISEIndexLastX128(id, 0, 0);
+        harness.setPoolCoveragePerDeficitIndexX128(poolId, 0, 0);
+        harness.setPoolCoveragePerSettledIndexX128(poolId, 0, 0);
+        harness.setDeficitGrowthGlobal(poolId, 0, 0);
+        harness.setInflowGrowthGlobal(poolId, 0, 0);
+        harness.setDeficitGrowthInsideLast(id, 0, 0);
+        harness.setInflowGrowthInsideLast(id, 0, 0);
+        _pmSetSlot0Tick(poolId, 0);
+        _pmSetPositionLiquidity(poolId, PositionId.unwrap(id), 0);
+
+        MockLCC lcc0 = new MockLCC(address(0xE0));
+        MockLCC lcc1 = new MockLCC(address(0xE1));
+
+        uint256 seized;
+        {
+            (, BalanceDelta rfsPre) = harness.getRFS(id);
+            assertTrue(rfsPre.amount0() > 0 && rfsPre.amount1() > 0, "both lanes need RFS");
+            uint256 r0pre = uint256(int256(rfsPre.amount0()));
+            BalanceDelta delta = toBalanceDelta(-SafeCast.toInt128(r0pre), int128(0));
+            MockMarketVaultNoop vault = new MockMarketVaultNoop();
+            (,, seized) = harness.onMMSettle(
+                IPoolManager(address(pm)),
+                IMarketVault(address(vault)),
+                id,
+                Currency.wrap(address(lcc0)),
+                Currency.wrap(address(lcc1)),
+                delta,
+                true,
+                false
+            );
+        }
+
+        assertEq(seized, 1000, "single fully cured lane hits full liq (100% exposure, minResidual)");
+        (bool stillOpen,) = harness.getRFS(id);
+        assertTrue(stillOpen, "token1 lane should keep RFS open");
     }
 
     // ============================================================
