@@ -478,7 +478,7 @@ being an informal “should”.
 - **Ordering (growth before commitment)**: `checkpointWithCommitment` values backing from stored `pa.settled` (and
   effective issued amounts). Therefore `src/VTSOrchestrator.sol::checkpoint(..., withCommitment: true)` must settle
   position growths **before** delegating to `VTSLifecycleLinkedLib.checkpointAfterGrowthNoCommitment` / `VTSCommitLib.checkpointAfterGrowthWithCommitment` (commitment path uses `VTSCommitLib.checkpointWithCommitment`), so
-  uncrystallised deficit/inflow/fee growth cannot make the commitment gate read stale-high `settled`. While the pool
+  uncrystallised deficit/inflow growth cannot make the commitment gate read stale-high `settled`. While the pool
   (or VTS globally) is paused, public `VTSOrchestrator.settlePositionGrowths` remains restricted to the canonical
   `CoreHook` for that market; the orchestrator-only helper `_settleGrowthsBeforeCheckpoint` performs the same
   `VTSPositionLib.settlePositionGrowths` work for paused commitment checkpoints only, without widening arbitrary
@@ -662,7 +662,7 @@ being an informal “should”.
   - Commitment-deficit bypass is evaluated per token lane using token-specific deficit age and thresholds.
   - `commitmentDeficit` bypass is distinct from swap-incurred `cumulativeDeficit` accounting:
     - `commitmentDeficit` hardens solvency enforcement (RFS/seizability),
-    - `cumulativeDeficit` drives DICE slash attribution and pool deficit principal.
+    - `cumulativeDeficit` drives swap-attributed pool deficit principal (`totalDeficitPrincipal`).
   - Normal grace-path seizability is evaluated only for token lanes currently marked open in the checkpoint mask.
   - For normal grace-path checks, open-lane eligibility uses each lane's configured grace plus lane-local extension
     against the canonical checkpointed episode timestamp on that lane.
@@ -1027,10 +1027,7 @@ being an informal “should”.
 
 ## Notes for test authors
 
-- **Phase 1 config split**: `VTSConfigs.getDefaultConfig()` is the conservative base line (`coverageFeeShare == 0`).
-  Scenarios that still exercise legacy DICE/CISE/fee-sharing economics should use `getFeeSharingDefaultConfig()` (or
-  otherwise set `coverageFeeShare > 0`). Capability-specific expectations are spelled out in
-  [`ANNEXED-INVARIANTS.md`](./ANNEXED-INVARIANTS.md).
+- **Config**: use `VTSConfigs.getDefaultConfig()` unless a test intentionally constructs a custom `VTSConfig`.
 - Many invariants above are **batch-scoped** (PoolManager unlock sessions) rather than “global over time”.
 - When writing tests that exercise settlement/credit paths, prefer asserting on **balance deltas** and **explicit revert
   selectors** (eg `Errors.CurrencyNotSettled()`, `Errors.TransferNotAllowed()`, `DelegateCallGuard.OnlyDelegateCall()`).

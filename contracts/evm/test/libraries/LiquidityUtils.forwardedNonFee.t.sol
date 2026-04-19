@@ -5,7 +5,7 @@ import {Test} from "forge-std/Test.sol";
 
 import {LiquidityUtils} from "../../src/libraries/LiquidityUtils.sol";
 
-/// @notice Pure regression tests for MMPM forwarded non-fee LCC (post `feeAdj`) used in decrease/burn min-out.
+/// @notice Pure regression tests for MMPM forwarded non-fee LCC after fee netting used in decrease/burn min-out.
 contract LiquidityUtilsForwardedNonFeeTest is Test {
     function test_forwardedNonFeeLccAmount_slash_reducesClassifiedFees() public pure {
         // inc=500, feesAccrued=200, hookDelta=+10 => netFee=190 => nonFee=310

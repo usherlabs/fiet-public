@@ -297,7 +297,6 @@ abstract contract E2EBase is DeployFullStackBase {
         cfg = MarketVTSConfiguration({
             token0: token0,
             token1: token1,
-            coverageFeeShare: 5000,
             minResidualUnits: 1,
             unbackedCommitmentGraceBypassBps: 500
         });

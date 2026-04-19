@@ -172,7 +172,7 @@ abstract contract PositionManagerImpl is PositionManagerBase, ImmutableState {
 
     /// @dev Split out to keep `_handleLccBalanceIncrease` stack shallow for Solc.
     /// @dev Physical commit custody uses `qCommitted` (Hub queue delta for this leg — see `_takePositiveDeltasAndHandleLcc`).
-    ///      Min-out / `validateMinOut` uses full per-leg `nonFee` (post-`feeAdj`) — see `INVARIANTS.md` SETTLE-03.
+    ///      Min-out / `validateMinOut` uses full per-leg `nonFee` (post informational fee netting) — see `INVARIANTS.md` SETTLE-03.
     function _routeLccCustodyTakeAndForward(
         Currency currency,
         address locker,
@@ -186,10 +186,9 @@ abstract contract PositionManagerImpl is PositionManagerBase, ImmutableState {
         if (tokenId > 0) {
             custodyForward = qCommitted;
             if (custodyForward > 0 && nonFee < custodyForward) {
-                // Fail-closed: Hub-queued principal for this leg cannot exceed immediate post-`feeAdj` non-fee receipt.
-                // Queue routing uses pool principal `callerDelta - feesAccrued`; `feeAdj` applies only to the fee slice
-                // (see `forwardedNonFeeLccAmount`). Under aligned routing this path should not trigger; it catches
-                // regressions or sequencing bugs rather than ordinary fee economics.
+                // Fail-closed: Hub-queued principal for this leg cannot exceed immediate non-fee LCC after fee netting.
+                // Queue routing uses pool principal `callerDelta - feesAccrued`; see `forwardedNonFeeLccAmount`. Under
+                // aligned routing this path should not trigger; it catches regressions or sequencing bugs.
                 revert Errors.InsufficientBalance(nonFee, custodyForward);
             }
         } else {
@@ -212,7 +211,7 @@ abstract contract PositionManagerImpl is PositionManagerBase, ImmutableState {
         }
     }
 
-    /// @return forwardedNonFee Per-leg immediate post-`feeAdj` non-fee LCC (min-out basis; post-transfer `inc`). For
+    /// @return forwardedNonFee Per-leg immediate non-fee LCC after informational fee netting (min-out basis; post-transfer `inc`). For
     ///         commit buckets, only `qCommitted` is custodied; the remainder stays as locker transient LCC credit.
     /// @param qCommitted Increase in `LiquidityHub.settleQueue(lcc, locker)` caused by the immediately preceding
     ///        `PoolManager -> MMPM` `take` (planned cancel executes on that transfer). Must equal the staged
@@ -242,7 +241,7 @@ abstract contract PositionManagerImpl is PositionManagerBase, ImmutableState {
         );
 
         _routeLccCustodyTakeAndForward(currency, locker, tokenId, nonFee, qCommitted, addedCredit, fee);
-        // Slippage floor: immediate post-`feeAdj` non-fee LCC per leg (may exceed queued slice forwarded to custody).
+        // Slippage floor: immediate non-fee LCC per leg after fee netting (may exceed queued slice forwarded to custody).
         forwardedNonFee = nonFee;
     }
 
@@ -275,7 +274,7 @@ abstract contract PositionManagerImpl is PositionManagerBase, ImmutableState {
         );
     }
 
-    /// @return mmForwardedNonFeeForMinOut Per-leg immediate post-`feeAdj` non-fee LCC (authoritative min-out basis).
+    /// @return mmForwardedNonFeeForMinOut Per-leg immediate non-fee LCC after fee netting (authoritative min-out basis).
     function _takePositiveDeltasAndHandleLcc(
         PoolKey memory key,
         address self,
@@ -299,13 +298,12 @@ abstract contract PositionManagerImpl is PositionManagerBase, ImmutableState {
 
     function _afterModifyLiquidity(PoolKey memory key) internal {
         // Settle CoreHook's PoolManager deltas (hook delta applied after hook returned)
-        // This ensures feeAdj-based claims are minted/burned to/from the fee pot held by CoreHook
         // Must be called within PoolManager.unlockCallback, but outside of modifyLiquidity hook
         marketFactory.afterModifyLiquidity(key);
     }
 
     /// @dev Split out to keep `_modifySyntheticLiquidity` stack shallow for Solc.
-    /// @return mmForwardedNonFeeForMinOut Per-leg immediate post-`feeAdj` non-fee LCC (post-transfer min-out basis).
+    /// @return mmForwardedNonFeeForMinOut Per-leg immediate non-fee LCC after fee netting (post-transfer min-out basis).
     function _settleModifyLiquidityDeltas(
         PoolKey memory key,
         address self,
@@ -341,7 +339,7 @@ abstract contract PositionManagerImpl is PositionManagerBase, ImmutableState {
     /// @param hookData Arbitrary data to pass to hooks (contains PositionModificationHookData)
     /// @return callerDelta The principal balance delta - includes liquidity change plus immediate fee/hook deltas
     /// @return feesAccrued Informational delta of fee growth in the modified range for this call
-    /// @return mmForwardedNonFeeForMinOut Per-leg immediate post-`feeAdj` non-fee LCC (min-out basis; LCC legs only). Commit
+    /// @return mmForwardedNonFeeForMinOut Per-leg immediate non-fee LCC after fee netting (min-out basis; LCC legs only). Commit
     ///         buckets custodian-forward only `qCommitted`; surplus is locker credit.
     function _modifySyntheticLiquidity(
         PoolKey memory key,

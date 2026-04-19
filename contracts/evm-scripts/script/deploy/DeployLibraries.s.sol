@@ -13,7 +13,6 @@ import {VTSLifecycleLinkedLib} from "src/libraries/VTSLifecycleLinkedLib.sol";
 import {VTSPositionMMOpsLib} from "src/libraries/VTSPositionMMOpsLib.sol";
 import {LCCFactoryLinkedLib} from "src/libraries/LCCFactoryLib.sol";
 import {LiquidityHubLinkedLib} from "src/libraries/LiquidityHubLinkedLib.sol";
-import {VTSFeeLinkedLib} from "src/libraries/VTSFeeLib.sol";
 
 /**
  * @title DeployLibraries
@@ -25,22 +24,19 @@ import {VTSFeeLinkedLib} from "src/libraries/VTSFeeLib.sol";
  *      - VTSCommitLib (used by VTSOrchestrator, VTSPositionLib)
  *      - VTSPositionMMOpsLib (used by VTSOrchestrator, VTSLifecycleLinkedLib)
  *      - VTSLifecycleLinkedLib (used by VTSOrchestrator)
- *      - VTSFeeLinkedLib (used by VTSPositionLib)
  *      - LCCFactoryLinkedLib (used by LiquidityHub)
  *      - LiquidityHubLinkedLib (used by LiquidityHub)
  *
- *      Note: VTSFeeLib (internal-only) and LCCFactoryLib only have internal functions
- *      and are inlined at compile time, so they don't require separate deployment.
+ *      Note: LCCFactoryLib only has internal functions and is inlined at compile time where applicable.
  *      LiquidityHubLib remains internal-only; LiquidityHubLinkedLib exposes external entrypoints.
  *
  * Deployment Order:
  * 1. Deploy LCCFactoryLinkedLib (no dependencies on VTS libs)
  * 1b. Deploy LiquidityHubLinkedLib (no dependencies on VTS libs)
- * 2. Deploy VTSFeeLinkedLib (no dependencies on other VTS libs)
- * 3. Deploy VTSCommitLib (no dependencies on other VTS libs)
- * 4. Deploy VTSSwapLib (no dependencies on other VTS libs)
- * 5. Deploy VTSPositionLib (uses VTSCommitLib, VTSFeeLinkedLib)
- * 5b. Deploy VTSPositionMMOpsLib (uses VTSCommitLib, VTSPositionLib)
+ * 2. Deploy VTSCommitLib (no dependencies on other VTS libs)
+ * 3. Deploy VTSSwapLib (no dependencies on other VTS libs)
+ * 4. Deploy VTSPositionLib (uses VTSCommitLib)
+ * 5. Deploy VTSPositionMMOpsLib (uses VTSCommitLib, VTSPositionLib)
  * 6. Deploy VTSLifecycleLinkedLib (uses VTSPositionLib, VTSPositionMMOpsLib)
  * Usage:
  *   PRIVATE_KEY=<key> forge script script/deploy/DeployLibraries.s.sol \
@@ -54,7 +50,6 @@ import {VTSFeeLinkedLib} from "src/libraries/VTSFeeLib.sol";
  *     "src/libraries/VTSCommitLib.sol:VTSCommitLib:<address>",
  *     "src/libraries/VTSPositionMMOpsLib.sol:VTSPositionMMOpsLib:<address>",
  *     "src/libraries/VTSLifecycleLinkedLib.sol:VTSLifecycleLinkedLib:<address>",
- *     "src/libraries/VTSFeeLib.sol:VTSFeeLinkedLib:<address>",
  *     "src/libraries/LCCFactoryLib.sol:LCCFactoryLinkedLib:<address>",
  *     "src/libraries/LiquidityHubLinkedLib.sol:LiquidityHubLinkedLib:<address>",
  *   ]
@@ -66,7 +61,6 @@ contract DeployLibraries is CREATE3Script, NetworkConfig {
     address public vtsCommitLib;
     address public vtsPositionMMOpsLib;
     address public vtsLifecycleLinkedLib;
-    address public vtsFeeLinkedLib;
     address public lccFactoryLinkedLib;
     address public liquidityHubLinkedLib;
 
@@ -78,7 +72,6 @@ contract DeployLibraries is CREATE3Script, NetworkConfig {
     string constant VTS_LIFECYCLE_LINKED_LIB = "VTSLifecycleLinkedLib";
     string constant LCC_FACTORY_LINKED_LIB = "LCCFactoryLinkedLib";
     string constant LIQUIDITY_HUB_LINKED_LIB = "LiquidityHubLinkedLib";
-    string constant VTS_FEE_LINKED_LIB = "VTSFeeLinkedLib";
 
     constructor() CREATE3Script("1") {}
 
@@ -105,29 +98,22 @@ contract DeployLibraries is CREATE3Script, NetworkConfig {
         liquidityHubLinkedLib = _deployLibrary(LIQUIDITY_HUB_LINKED_LIB, type(LiquidityHubLinkedLib).creationCode);
         console.log("LiquidityHubLinkedLib deployed at:", liquidityHubLinkedLib);
 
-        // Step 2: Deploy VTSFeeLinkedLib (no dependencies)
-        console.log("\n=== Step 2: Deploying VTSFeeLinkedLib ===");
-        vtsFeeLinkedLib = _deployLibrary(VTS_FEE_LINKED_LIB, type(VTSFeeLinkedLib).creationCode);
-        console.log("VTSFeeLinkedLib deployed at:", vtsFeeLinkedLib);
-
-        // Step 3: Deploy VTSCommitLib (no dependencies)
-        console.log("\n=== Step 3: Deploying VTSCommitLib ===");
+        // Step 2: Deploy VTSCommitLib (no dependencies)
+        console.log("\n=== Step 2: Deploying VTSCommitLib ===");
         vtsCommitLib = _deployLibrary(VTS_COMMIT_LIB, type(VTSCommitLib).creationCode);
         console.log("VTSCommitLib deployed at:", vtsCommitLib);
 
-        // Step 4: Deploy VTSSwapLib (no dependencies)
-        console.log("\n=== Step 4: Deploying VTSSwapLib ===");
+        // Step 3: Deploy VTSSwapLib (no dependencies)
+        console.log("\n=== Step 3: Deploying VTSSwapLib ===");
         vtsSwapLib = _deployLibrary(VTS_SWAP_LIB, type(VTSSwapLib).creationCode);
         console.log("VTSSwapLib deployed at:", vtsSwapLib);
 
-        // Step 5: Deploy VTSPositionLib
-        // Note: VTSPositionLib imports VTSCommitLib and VTSFeeLinkedLib
-        // The compiler will handle the linking for VTSCommitLib and VTSFeeLinkedLib if they're already deployed
-        console.log("\n=== Step 5: Deploying VTSPositionLib ===");
+        // Step 4: Deploy VTSPositionLib (links VTSCommitLib)
+        console.log("\n=== Step 4: Deploying VTSPositionLib ===");
         vtsPositionLib = _deployLibrary(VTS_POSITION_LIB, type(VTSPositionLib).creationCode);
         console.log("VTSPositionLib deployed at:", vtsPositionLib);
 
-        console.log("\n=== Step 5b: Deploying VTSPositionMMOpsLib ===");
+        console.log("\n=== Step 5: Deploying VTSPositionMMOpsLib ===");
         vtsPositionMMOpsLib = _deployLibrary(VTS_POSITION_MM_OPS_LIB, type(VTSPositionMMOpsLib).creationCode);
         console.log("VTSPositionMMOpsLib deployed at:", vtsPositionMMOpsLib);
 
@@ -166,7 +152,6 @@ contract DeployLibraries is CREATE3Script, NetworkConfig {
         console.log("\n=== Predicted Addresses ===");
         console.log("LCCFactoryLinkedLib:", getCreate3Contract(LCC_FACTORY_LINKED_LIB));
         console.log("LiquidityHubLinkedLib:", getCreate3Contract(LIQUIDITY_HUB_LINKED_LIB));
-        console.log("VTSFeeLinkedLib:", getCreate3Contract(VTS_FEE_LINKED_LIB));
         console.log("VTSCommitLib:", getCreate3Contract(VTS_COMMIT_LIB));
         console.log("VTSSwapLib:", getCreate3Contract(VTS_SWAP_LIB));
         console.log("VTSPositionLib:", getCreate3Contract(VTS_POSITION_LIB));
@@ -184,7 +169,6 @@ contract DeployLibraries is CREATE3Script, NetworkConfig {
         writeAddress("vtsCommitLib", vtsCommitLib);
         writeAddress("vtsPositionMMOpsLib", vtsPositionMMOpsLib);
         writeAddress("vtsLifecycleLinkedLib", vtsLifecycleLinkedLib);
-        writeAddress("vtsFeeLinkedLib", vtsFeeLinkedLib);
         writeAddress("lccFactoryLinkedLib", lccFactoryLinkedLib);
         writeAddress("liquidityHubLinkedLib", liquidityHubLinkedLib);
 
@@ -202,7 +186,6 @@ contract DeployLibraries is CREATE3Script, NetworkConfig {
         console.log('  "src/libraries/VTSCommitLib.sol:VTSCommitLib:%s",', vtsCommitLib);
         console.log('  "src/libraries/VTSPositionMMOpsLib.sol:VTSPositionMMOpsLib:%s",', vtsPositionMMOpsLib);
         console.log('  "src/libraries/VTSLifecycleLinkedLib.sol:VTSLifecycleLinkedLib:%s",', vtsLifecycleLinkedLib);
-        console.log('  "src/libraries/VTSFeeLib.sol:VTSFeeLinkedLib:%s",', vtsFeeLinkedLib);
         console.log('  "src/libraries/LCCFactoryLib.sol:LCCFactoryLinkedLib:%s",', lccFactoryLinkedLib);
         console.log('  "src/libraries/LiquidityHubLinkedLib.sol:LiquidityHubLinkedLib:%s",', liquidityHubLinkedLib);
         console.log("]");
@@ -220,7 +203,6 @@ contract DeployLibraries is CREATE3Script, NetworkConfig {
             address commitLib,
             address positionMMOpsLib,
             address lifecycleLinkedLib,
-            address feeLinkedLib,
             address lccFactoryLib,
             address liquidityHubLib
         )
@@ -230,7 +212,6 @@ contract DeployLibraries is CREATE3Script, NetworkConfig {
         commitLib = getCreate3Contract(VTS_COMMIT_LIB);
         positionMMOpsLib = getCreate3Contract(VTS_POSITION_MM_OPS_LIB);
         lifecycleLinkedLib = getCreate3Contract(VTS_LIFECYCLE_LINKED_LIB);
-        feeLinkedLib = getCreate3Contract(VTS_FEE_LINKED_LIB);
         lccFactoryLib = getCreate3Contract(LCC_FACTORY_LINKED_LIB);
         liquidityHubLib = getCreate3Contract(LIQUIDITY_HUB_LINKED_LIB);
     }

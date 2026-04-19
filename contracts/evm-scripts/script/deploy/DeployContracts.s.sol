@@ -21,12 +21,12 @@ import {HookFlags} from "src/libraries/HookFlags.sol";
  * 4. Deploy VTSOrchestrator (with GlobalConfig as initialOwner)
  * 5. Deploy Verifiers (submitter-bound to VTSOrchestrator, with GlobalConfig as initialOwner)
  * 6. Register VRL proof handlers in VTSOrchestrator
- * 7. Deploy DirectLPDeltaResolver
- * 8. Deploy MarketFactory (with GlobalConfig as initialOwner)
+ * 7. Deploy MarketFactory (with GlobalConfig as initialOwner)
+ * 8. Deploy CanonicalVault
  * 9. Enable MarketFactory in LiquidityHub
- * 10. Deploy MMPositionManager (requires MarketFactory in constructor path)
+ * 10. Deploy MMPositionManager stack (requires MarketFactory in constructor path)
  * 11. Deploy CoreHook (with proper flags and MarketFactory address) - uses CREATE2 for hook flags
- * 12. Initialise MarketFactory (set hooks + bounds)
+ * 12. Initialise MarketFactory (set hooks + bounds; no `DirectLPDeltaResolver` bound endpoint by default)
  * 13. Verify hooks (set cross-references)
  *
  * @notice Most contracts use CREATE3 for deterministic addresses across chains.
@@ -51,7 +51,6 @@ contract DeployContracts is DeployProtocolBase {
     address public commitmentDescriptor;
     address public vtsOrchestrator;
     address public actionsImpl;
-    address public directLPDeltaResolver;
     address public queueCustodian;
     address public canonicalVault;
 
@@ -70,7 +69,6 @@ contract DeployContracts is DeployProtocolBase {
         console.log("MMPositionActionsImpl:", getCreate3Contract(ACTIONS_IMPL));
         console.log("MMQueueCustodian:", getCreate3Contract(QUEUE_CUSTODIAN));
         console.log("MMPositionManager:", getCreate3Contract(MM_POSITION_MANAGER));
-        console.log("DirectLPDeltaResolver:", getCreate3Contract(DIRECT_LP_DELTA_RESOLVER));
         console.log("MarketFactory:", getCreate3Contract(MARKET_FACTORY));
         console.log("CanonicalVault:", getCreate3Contract(CANONICAL_VAULT));
         console.log("GlobalConfig:", getCreate3Contract(GLOBAL_CONFIG));
@@ -148,29 +146,24 @@ contract DeployContracts is DeployProtocolBase {
         _registerVRLProofHandlers(globalConfig, vtsOrchestrator, signalManager, settlementObserver);
         console.log("VRL proof handlers registered in VTSOrchestrator (via GlobalConfig.proxyCall)");
 
-        // Step 7: Deploy DirectLPDeltaResolver (must be protocol-bound for afterModifyLiquidity)
-        console.log("\n=== Step 7: Deploying DirectLPDeltaResolver ===");
-        directLPDeltaResolver = _deployDirectLPDeltaResolver(liquidityHub);
-        console.log("DirectLPDeltaResolver deployed at:", directLPDeltaResolver);
-
-        // Step 8: Deploy MarketFactory (with GlobalConfig as initialOwner)
-        console.log("\n=== Step 8: Deploying MarketFactory ===");
+        // Step 7: Deploy MarketFactory (with GlobalConfig as initialOwner)
+        console.log("\n=== Step 7: Deploying MarketFactory ===");
         marketFactory = _deployMarketFactory(liquidityHub, oracleHelper, vtsOrchestrator, globalConfig);
         console.log("MarketFactory deployed at:", marketFactory);
         console.log("MarketFactory owner:", globalConfig);
 
-        // Step 9: Deploy CanonicalVault
-        console.log("\n=== Step 9: Deploying CanonicalVault ===");
+        // Step 8: Deploy CanonicalVault
+        console.log("\n=== Step 8: Deploying CanonicalVault ===");
         canonicalVault = _deployCanonicalVault(liquidityHub, marketFactory);
         console.log("CanonicalVault deployed at:", canonicalVault);
 
-        // Step 10: Enable MarketFactory in LiquidityHub
-        console.log("\n=== Step 10: Enabling MarketFactory in LiquidityHub ===");
+        // Step 9: Enable MarketFactory in LiquidityHub
+        console.log("\n=== Step 9: Enabling MarketFactory in LiquidityHub ===");
         _enableFactoryInLiquidityHub(globalConfig, liquidityHub, marketFactory);
         console.log("MarketFactory enabled in LiquidityHub (via GlobalConfig.proxyCall)");
 
-        // Step 11: Deploy MMPositionManager
-        console.log("\n=== Step 11: Deploying MMPositionManager ===");
+        // Step 10: Deploy MMPositionManager
+        console.log("\n=== Step 10: Deploying MMPositionManager ===");
         commitmentDescriptor = _deployCommitmentDescriptor();
         (actionsImpl, queueCustodian, mmPositionManager) =
             _deployMMStack(marketFactory, vtsOrchestrator, commitmentDescriptor, deployer, canonicalVault);
@@ -181,20 +174,18 @@ contract DeployContracts is DeployProtocolBase {
         console.log("MMPositionManager deployed at:", mmPositionManager);
         console.log("MMQueueCustodian positionManager bound to:", mmPositionManager);
 
-        // Step 12: Deploy CoreHook
-        console.log("\n=== Step 12: Deploying CoreHook ===");
+        // Step 11: Deploy CoreHook
+        console.log("\n=== Step 11: Deploying CoreHook ===");
         coreHook = _deployCoreHook(marketFactory, vtsOrchestrator);
         console.log("CoreHook deployed at:", coreHook);
 
-        // Step 13: Initialise MarketFactory
-        console.log("\n=== Step 13: Initialising MarketFactory ===");
-        _initialiseFactory(
-            globalConfig, marketFactory, canonicalVault, coreHook, mmPositionManager, queueCustodian, directLPDeltaResolver
-        );
+        // Step 12: Initialise MarketFactory (`DirectLPDeltaResolver` not deployed — pass `address(0)`; see `src/periphery/DirectLPDeltaResolver.sol` devdoc)
+        console.log("\n=== Step 12: Initialising MarketFactory ===");
+        _initialiseFactory(globalConfig, marketFactory, canonicalVault, coreHook, mmPositionManager, queueCustodian, address(0));
         console.log("MarketFactory initialised successfully (via GlobalConfig.proxyCall)");
 
-        // Step 14: Verify hooks addresses across the contracts
-        console.log("\n=== Step 14: Verifying Hooks ===");
+        // Step 13: Verify hooks addresses across the contracts
+        console.log("\n=== Step 13: Verifying Hooks ===");
         _verifyHooks();
 
         vm.stopBroadcast();
@@ -243,7 +234,7 @@ contract DeployContracts is DeployProtocolBase {
         writeAddress("liquidityHub", liquidityHub);
         writeAddress("positionManager", mmPositionManager); // legacy key (actually MMPositionManager)
         writeAddress("mmPositionManager", mmPositionManager);
-        writeAddress("directLPDeltaResolver", directLPDeltaResolver);
+        writeAddress("directLPDeltaResolver", address(0));
         writeAddress("oracleHelper", oracleHelper);
         writeAddress("globalConfig", globalConfig);
         writeAddress("vtsOrchestrator", vtsOrchestrator);

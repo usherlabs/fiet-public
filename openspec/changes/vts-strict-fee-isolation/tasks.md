@@ -38,3 +38,12 @@
   - surviving Medusa/FuzzEntry files are deliberately woven to the new fee-less APIs instead of reverting to older Echidna-linked shapes
   - branch-local CI sharding (`3fefbead`) and Medusa/FuzzEntry migration work stay preserved
 - 2026-04-19: The main conflict clusters were `VTSOrchestrator` / `IVTSOrchestrator` / `VTSCommitLib` / `VTSLifecycleLinkedLib` / `VTSPositionLib` / `VTSPositionMMOpsLib`, fee-era tests and harnesses (`VTSFeeLib*`, `VTSFeeLibHarness`, `MMPositionMinOutFeeAdjIntegration`, `COV01`, `COV03`, `COV04`, `FEE01`, `FEE02`), and the Medusa aggregators/harnesses (`FuzzVTSCoreTail`, `FuzzVTSPosition`, `FuzzMMSettle`, `VTSPositionLibFuzzHarness`, `SETTLE01`, `SETTLE02`, `SEIZE03_04`, `VTS01`, `SettleBeforeModifyHarness`).
+- 2026-04-19: The authoritative upstream anchor advanced again and this branch now absorbs the full disable-feelib tail through:
+  - `f54edc46` `next refactor around cleanup and docs adjustments`
+  - `e8ef35fa` `disable MMCoverage for now.`
+- 2026-04-19: The `f54edc46..e8ef35fa` merge was deliberately woven rather than taken blindly. Exact conflict/override decisions:
+  - `contracts/evm-scripts/script/e2e/MMCoverage.s.sol`: took upstream retirement stub from `e8ef35fa`; the previous fee-pot scenario is intentionally gone.
+  - `contracts/evm/Justfile`: kept the branch-local Medusa/FuzzEntry entrypoints over the upstream Echidna-oriented rewrite so `just fuzz`, `just fuzz-deep`, `just fuzz-invariants`, and `just medusa-entry` remain the supported workflow.
+  - `contracts/evm/test/fuzz/invariants/MMQ01.sol`: restored the upstream thin compatibility wrapper so older `contract MMQ01` / Echidna-targeted workflows still resolve, while Medusa continues to target `FuzzEntry`.
+  - `contracts/evm/test/fuzz/README.md`: manually rewrote the matrix to drop deleted fee-era surfaces (`COV-01`, `COV-03`, `COV-04`, `FEE-01`, `FEE-02`, `VTSFeeLib.index.t.sol`, `MMCoverage.s.sol`) and keep the supported Medusa/FuzzEntry path as the source of truth.
+- 2026-04-19: Upstream deployment/periphery cleanup from `f54edc46` was taken as-is outside those conflict points, including the `DirectLPDeltaResolver` move into `src/periphery/`, evm-scripts deploy/config cleanup, and deletion of fee-era spec/docs under `agents/spec/`.

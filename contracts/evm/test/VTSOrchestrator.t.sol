@@ -2539,7 +2539,7 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
     /// @dev Separated so tests can resolve `locker` before `vm.expectRevert()` (the next external call must be the reverting one).
     function _decreasePositionFor(address locker, uint256 tokenId, uint256 amountToDecrease) internal {
         // Decrease can leave MMPM underlying credits; drain them after LCC `take`s so batch deltas net to zero
-        // (ordering mirrors full withdrawal flows in MMPositionActionsImpl.t.sol / VTSFeeLib.scenario.t.sol).
+        // (ordering mirrors full withdrawal flows in MMPositionActionsImpl.t.sol).
         vm.startPrank(locker);
         MMA.PreparedAction[] memory actions = new MMA.PreparedAction[](4);
         actions[0] = MMA.prepareDecrease(corePoolKey, tokenId, 0, amountToDecrease);
