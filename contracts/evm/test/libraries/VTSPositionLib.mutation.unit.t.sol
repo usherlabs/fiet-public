@@ -7,6 +7,7 @@ import {VTSPositionLibHarness} from "./harnesses/VTSPositionLibHarness.sol";
 
 import {MarketVTSConfiguration, TokenConfiguration, VaultSettlementIntent} from "../../src/types/VTS.sol";
 import {VTSStorage} from "../../src/types/VTS.sol";
+import {VTSFeeStorage} from "../../src/types/VTSFee.sol";
 import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {ModifyLiquidityParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
 import {PositionId, PositionLibrary} from "../../src/types/Position.sol";
@@ -2544,23 +2545,24 @@ contract VTSPositionLibDeltaClearanceExpose {
 /// @notice Exposes internal residual flushers with a minimal standalone VTSStorage.
 contract VTSPositionLibResidualFlushExpose {
     VTSStorage internal s;
+    VTSFeeStorage internal f;
 
     function getPoolTotalCISEExposureSinceLastMod(PoolId poolId, uint8 tokenIndex) external view returns (uint256) {
         return tokenIndex == 0
-            ? s.poolAccounting[poolId].totalCISEExposureSinceLastMod.token0
-            : s.poolAccounting[poolId].totalCISEExposureSinceLastMod.token1;
+            ? f.poolFeeAccounting[poolId].totalCISEExposureSinceLastMod.token0
+            : f.poolFeeAccounting[poolId].totalCISEExposureSinceLastMod.token1;
     }
 
     function setDICE(PoolId poolId, uint8 tokenIndex, uint256 residual, uint256 principal, uint256 indexNow) external {
         if (tokenIndex == 0) {
-            s.poolAccounting[poolId].coverageResidualDICE.token0 = residual;
+            f.poolFeeAccounting[poolId].coverageResidualDICE.token0 = residual;
             s.poolAccounting[poolId].totalDeficitPrincipal.token0 = principal;
             // `_flushCoverageResidualIfNeeded` advances `coveragePerResidualDeficitIndexX128`, not `coveragePerDeficitIndexX128`.
-            s.poolAccounting[poolId].coveragePerResidualDeficitIndexX128.token0 = indexNow;
+            f.poolFeeAccounting[poolId].coveragePerResidualDeficitIndexX128.token0 = indexNow;
         } else {
-            s.poolAccounting[poolId].coverageResidualDICE.token1 = residual;
+            f.poolFeeAccounting[poolId].coverageResidualDICE.token1 = residual;
             s.poolAccounting[poolId].totalDeficitPrincipal.token1 = principal;
-            s.poolAccounting[poolId].coveragePerResidualDeficitIndexX128.token1 = indexNow;
+            f.poolFeeAccounting[poolId].coveragePerResidualDeficitIndexX128.token1 = indexNow;
         }
     }
 
@@ -2570,18 +2572,18 @@ contract VTSPositionLibResidualFlushExpose {
         returns (uint256 indexNow, uint256 residual, uint256 principal)
     {
         if (tokenIndex == 0) {
-            indexNow = s.poolAccounting[poolId].coveragePerResidualDeficitIndexX128.token0;
-            residual = s.poolAccounting[poolId].coverageResidualDICE.token0;
+            indexNow = f.poolFeeAccounting[poolId].coveragePerResidualDeficitIndexX128.token0;
+            residual = f.poolFeeAccounting[poolId].coverageResidualDICE.token0;
             principal = s.poolAccounting[poolId].totalDeficitPrincipal.token0;
         } else {
-            indexNow = s.poolAccounting[poolId].coveragePerResidualDeficitIndexX128.token1;
-            residual = s.poolAccounting[poolId].coverageResidualDICE.token1;
+            indexNow = f.poolFeeAccounting[poolId].coveragePerResidualDeficitIndexX128.token1;
+            residual = f.poolFeeAccounting[poolId].coverageResidualDICE.token1;
             principal = s.poolAccounting[poolId].totalDeficitPrincipal.token1;
         }
     }
 
     function flushDICE(PoolId poolId, uint8 tokenIndex) external {
-        VTSFeeLinkedLib.flushCoverageResidualIfNeeded(s, poolId, tokenIndex);
+        VTSFeeLinkedLib.flushCoverageResidualIfNeeded(s, f, poolId, tokenIndex);
     }
 }
 
@@ -2782,6 +2784,7 @@ contract MockLiquidityHubRecorder {
 /// @notice Exposes internal CISE settle with a minimal standalone VTSStorage.
 contract VTSPositionLibCISEExpose {
     VTSStorage internal s;
+    VTSFeeStorage internal f;
 
     function setupPool(PoolId poolId, MarketVTSConfiguration memory config) external {
         s.pools[poolId] = Pool({
@@ -2814,30 +2817,30 @@ contract VTSPositionLibCISEExpose {
     }
 
     function setCISEIndexLastX128(PositionId id, uint256 idx0, uint256 idx1) external {
-        s.positionAccounting[id].ciseIndexLastX128.token0 = idx0;
-        s.positionAccounting[id].ciseIndexLastX128.token1 = idx1;
+        f.positionFeeAccounting[id].ciseIndexLastX128.token0 = idx0;
+        f.positionFeeAccounting[id].ciseIndexLastX128.token1 = idx1;
     }
 
     function setPoolCoveragePerSettledIndexX128(PoolId poolId, uint256 idx0, uint256 idx1) external {
-        s.poolAccounting[poolId].coveragePerSettledIndexX128.token0 = idx0;
-        s.poolAccounting[poolId].coveragePerSettledIndexX128.token1 = idx1;
+        f.poolFeeAccounting[poolId].coveragePerSettledIndexX128.token0 = idx0;
+        f.poolFeeAccounting[poolId].coveragePerSettledIndexX128.token1 = idx1;
     }
 
     function settleSettledIndexedCoverageUsage(PositionId id) external {
-        VTSFeeLinkedLib.settleSettledIndexedCoverageUsage(s, id);
+        VTSFeeLinkedLib.settleSettledIndexedCoverageUsage(s, f, id);
     }
 
     function getCISEExposure(PositionId id) external view returns (uint256 e0, uint256 e1) {
         return (
-            s.positionAccounting[id].ciseExposureSinceLastMod.token0,
-            s.positionAccounting[id].ciseExposureSinceLastMod.token1
+            f.positionFeeAccounting[id].ciseExposureSinceLastMod.token0,
+            f.positionFeeAccounting[id].ciseExposureSinceLastMod.token1
         );
     }
 
     function getPoolTotalCISEExposure(PoolId poolId) external view returns (uint256 e0, uint256 e1) {
         return (
-            s.poolAccounting[poolId].totalCISEExposureSinceLastMod.token0,
-            s.poolAccounting[poolId].totalCISEExposureSinceLastMod.token1
+            f.poolFeeAccounting[poolId].totalCISEExposureSinceLastMod.token0,
+            f.poolFeeAccounting[poolId].totalCISEExposureSinceLastMod.token1
         );
     }
 }
@@ -2845,6 +2848,7 @@ contract VTSPositionLibCISEExpose {
 /// @notice Exposes internal DICE settle with a minimal standalone VTSStorage.
 contract VTSPositionLibDICEExpose {
     VTSStorage internal s;
+    VTSFeeStorage internal f;
 
     function setupPool(PoolId poolId, MarketVTSConfiguration memory config) external {
         s.pools[poolId] = Pool({
@@ -2877,13 +2881,13 @@ contract VTSPositionLibDICEExpose {
     }
 
     function setCoverageIndexLastX128(PositionId id, uint256 idx0, uint256 idx1) external {
-        s.positionAccounting[id].coverageIndexLastX128.token0 = idx0;
-        s.positionAccounting[id].coverageIndexLastX128.token1 = idx1;
+        f.positionFeeAccounting[id].coverageIndexLastX128.token0 = idx0;
+        f.positionFeeAccounting[id].coverageIndexLastX128.token1 = idx1;
     }
 
     function setPoolCoveragePerDeficitIndexX128(PoolId poolId, uint256 idx0, uint256 idx1) external {
-        s.poolAccounting[poolId].coveragePerDeficitIndexX128.token0 = idx0;
-        s.poolAccounting[poolId].coveragePerDeficitIndexX128.token1 = idx1;
+        f.poolFeeAccounting[poolId].coveragePerDeficitIndexX128.token0 = idx0;
+        f.poolFeeAccounting[poolId].coveragePerDeficitIndexX128.token1 = idx1;
     }
 
     function setCumulativeOutflows(PositionId id, uint256 o0, uint256 o1) external {
@@ -2892,25 +2896,25 @@ contract VTSPositionLibDICEExpose {
     }
 
     function setOutflowsAtFeeSnap(PositionId id, uint256 snap0, uint256 snap1) external {
-        s.positionAccounting[id].outflowsAtFeeSnap.token0 = snap0;
-        s.positionAccounting[id].outflowsAtFeeSnap.token1 = snap1;
+        f.positionFeeAccounting[id].outflowsAtFeeSnap.token0 = snap0;
+        f.positionFeeAccounting[id].outflowsAtFeeSnap.token1 = snap1;
     }
 
     function setFeeGrowthInsideLast(PositionId id, uint256 fg0, uint256 fg1) external {
-        s.positionAccounting[id].feeGrowthInsideLast.token0 = fg0;
-        s.positionAccounting[id].feeGrowthInsideLast.token1 = fg1;
+        f.positionFeeAccounting[id].feeGrowthInsideLast.token0 = fg0;
+        f.positionFeeAccounting[id].feeGrowthInsideLast.token1 = fg1;
     }
 
     function settleDeficitIndexedCoverageUsage(IPoolManager poolManager, PositionId id) external {
-        VTSFeeLinkedLib.settleDeficitIndexedCoverageUsage(s, poolManager, id);
+        VTSFeeLinkedLib.settleDeficitIndexedCoverageUsage(s, f, poolManager, id);
     }
 
     function getPoolSlashedPot(PoolId poolId) external view returns (uint256 pot0, uint256 pot1) {
-        return (s.poolAccounting[poolId].slashedPot.token0, s.poolAccounting[poolId].slashedPot.token1);
+        return (f.poolFeeAccounting[poolId].slashedPot.token0, f.poolFeeAccounting[poolId].slashedPot.token1);
     }
 
     function getPendingFeeAdj(PositionId id) external view returns (int256 adj0, int256 adj1) {
-        return (s.positionAccounting[id].pendingFeeAdj.token0, s.positionAccounting[id].pendingFeeAdj.token1);
+        return (f.positionFeeAccounting[id].pendingFeeAdj.token0, f.positionFeeAccounting[id].pendingFeeAdj.token1);
     }
 }
 

@@ -33,6 +33,7 @@ import {MarketCurrencyDelta} from "../../../src/libraries/MarketCurrencyDelta.so
 import {ICanonicalVault} from "../../../src/interfaces/ICanonicalVault.sol";
 import {CurrencyDelta} from "v4-periphery/lib/v4-core/src/libraries/CurrencyDelta.sol";
 import {LiquidityUtils} from "../../../src/libraries/LiquidityUtils.sol";
+import {VTSFeeStorage} from "../../../src/types/VTSFee.sol";
 
 /// @title VTSPositionLibHarness
 /// @notice Exposes internal VTSPositionLib functions for unit testing
@@ -42,6 +43,9 @@ contract VTSPositionLibHarness {
 
     /// @notice Internal VTSStorage for testing
     VTSStorage internal s;
+
+    /// @notice Fee-era storage mirror (`VTSOrchestrator.feeS`); required by fee/DICE/CISE library paths.
+    VTSFeeStorage internal f;
     BalanceDelta internal lastSettleableDelta;
     BalanceDelta internal lastQueuedDelta;
     BalanceDelta internal lastUnderlyingDeltaSettlement;
@@ -61,7 +65,7 @@ contract VTSPositionLibHarness {
 
     /// @notice Exposes _updateSettlement
     function updateSettlement(PositionId id, uint8 tokenIndex, int256 delta) external returns (int256 applied) {
-        return VTSPositionLib._updateSettlement(s, id, tokenIndex, delta);
+        return VTSPositionLib._updateSettlement(s, f, id, tokenIndex, delta);
     }
 
     /// @notice Exposes _registerPosition
@@ -76,17 +80,17 @@ contract VTSPositionLibHarness {
 
     /// @notice Exposes _initPositionSnapshots
     function initPositionSnapshots(IPoolManager poolManager, PositionId id) external {
-        VTSPositionLib._initPositionSnapshots(s, poolManager, id);
+        VTSPositionLib._initPositionSnapshots(s, f, poolManager, id);
     }
 
     /// @notice Exposes settlePositionGrowths
     function settlePositionGrowths(IPoolManager poolManager, PositionId positionId) external {
-        VTSPositionLib.settlePositionGrowths(s, poolManager, positionId);
+        VTSPositionLib.settlePositionGrowths(s, f, poolManager, positionId);
     }
 
     /// @notice Exposes incrementCoverage for CISE/DICE routing tests (same storage as position lib)
     function incrementCoverage(PoolId poolId, uint8 tokenIndex, uint256 coveredAmount) external {
-        VTSCommitLib.incrementCoverage(s, poolId, tokenIndex, coveredAmount);
+        VTSCommitLib.incrementCoverage(s, f, poolId, tokenIndex, coveredAmount);
     }
 
     /// @notice Exposes calcRFS
@@ -94,7 +98,7 @@ contract VTSPositionLibHarness {
         external
         returns (bool rfsOpen, BalanceDelta delta)
     {
-        return VTSPositionLib.calcRFS(s, poolManager, id, requireClosedRfS);
+        return VTSPositionLib.calcRFS(s, f, poolManager, id, requireClosedRfS);
     }
 
     /// @notice Exposes getRFS (view)
@@ -107,7 +111,7 @@ contract VTSPositionLibHarness {
         external
         returns (TouchPositionResult memory result)
     {
-        return VTSPositionLib.touchPosition(s, ctx, p);
+        return VTSPositionLib.touchPosition(s, f, ctx, p);
     }
 
     /// @notice Alias for `touchPosition` (MM tail runs inside `touchPosition`; returned `pos` is refreshed from storage).
@@ -115,10 +119,22 @@ contract VTSPositionLibHarness {
         external
         returns (TouchPositionResult memory result)
     {
-        result = VTSPositionLib.touchPosition(s, ctx, p);
+        result = VTSPositionLib.touchPosition(s, f, ctx, p);
     }
 
-    /// @notice Exposes onMMSettle for testing
+    /// @dev Bundles MM settle harness args so the default (non-IR) compiler stays under the stack limit.
+    struct OnMMSettleHarnessInput {
+        IPoolManager poolManager;
+        IMarketVault vault;
+        PositionId positionId;
+        Currency lccCurrency0;
+        Currency lccCurrency1;
+        BalanceDelta delta;
+        bool isSeizing;
+        bool fromDeltas;
+    }
+
+    /// @notice Exposes onMMSettle for testing (delegates through calldata struct overload to avoid stack-too-deep).
     function onMMSettle(
         IPoolManager poolManager,
         IMarketVault vault,
@@ -129,15 +145,33 @@ contract VTSPositionLibHarness {
         bool isSeizing,
         bool fromDeltas
     ) external returns (BalanceDelta settlementDelta, bool rfsOpen, uint256 seizedLiquidityUnits) {
+        return this.onMMSettle(
+            OnMMSettleHarnessInput({
+                poolManager: poolManager,
+                vault: vault,
+                positionId: positionId,
+                lccCurrency0: lccCurrency0,
+                lccCurrency1: lccCurrency1,
+                delta: delta,
+                isSeizing: isSeizing,
+                fromDeltas: fromDeltas
+            })
+        );
+    }
+
+    function onMMSettle(OnMMSettleHarnessInput calldata c)
+        external
+        returns (BalanceDelta settlementDelta, bool rfsOpen, uint256 seizedLiquidityUnits)
+    {
         SettleParams memory params;
-        params.vault = vault;
-        params.positionId = positionId;
-        params.lccCurrency0 = lccCurrency0;
-        params.lccCurrency1 = lccCurrency1;
-        params.delta = delta;
-        params.isSeizing = isSeizing;
-        params.fromDeltas = fromDeltas;
-        SettleResult memory result = VTSLifecycleLinkedLib._executeMMSettleFromParams(s, poolManager, params);
+        params.vault = c.vault;
+        params.positionId = c.positionId;
+        params.lccCurrency0 = c.lccCurrency0;
+        params.lccCurrency1 = c.lccCurrency1;
+        params.delta = c.delta;
+        params.isSeizing = c.isSeizing;
+        params.fromDeltas = c.fromDeltas;
+        SettleResult memory result = VTSLifecycleLinkedLib._executeMMSettleFromParams(s, f, c.poolManager, params);
         return (result.settlementDelta, result.rfsOpen, result.seizedLiquidityUnits);
     }
 
@@ -151,16 +185,34 @@ contract VTSPositionLibHarness {
         bool isSeizing,
         bool fromDeltas
     ) external returns (BalanceDelta, bool, uint256, VaultSettlementIntent memory) {
+        return this.onMMSettleWithIntent(
+            OnMMSettleHarnessInput({
+                poolManager: poolManager,
+                vault: vault,
+                positionId: positionId,
+                lccCurrency0: lccCurrency0,
+                lccCurrency1: lccCurrency1,
+                delta: delta,
+                isSeizing: isSeizing,
+                fromDeltas: fromDeltas
+            })
+        );
+    }
+
+    function onMMSettleWithIntent(OnMMSettleHarnessInput calldata c)
+        external
+        returns (BalanceDelta, bool, uint256, VaultSettlementIntent memory)
+    {
         SettleParams memory params = SettleParams({
-            vault: vault,
-            positionId: positionId,
-            lccCurrency0: lccCurrency0,
-            lccCurrency1: lccCurrency1,
-            delta: delta,
-            isSeizing: isSeizing,
-            fromDeltas: fromDeltas
+            vault: c.vault,
+            positionId: c.positionId,
+            lccCurrency0: c.lccCurrency0,
+            lccCurrency1: c.lccCurrency1,
+            delta: c.delta,
+            isSeizing: c.isSeizing,
+            fromDeltas: c.fromDeltas
         });
-        SettleResult memory result = VTSLifecycleLinkedLib._executeMMSettleFromParams(s, poolManager, params);
+        SettleResult memory result = VTSLifecycleLinkedLib._executeMMSettleFromParams(s, f, c.poolManager, params);
         return (result.settlementDelta, result.rfsOpen, result.seizedLiquidityUnits, result.vaultSettlementIntent);
     }
 
@@ -232,7 +284,7 @@ contract VTSPositionLibHarness {
         uint256 cov,
         uint128 positionLiquidity
     ) external {
-        VTSFeeLinkedLib.applyCoverageBurn(s, poolManager, positionId, poolId, tokenIndex, cov, positionLiquidity);
+        VTSFeeLinkedLib.applyCoverageBurn(s, f, poolManager, positionId, poolId, tokenIndex, cov, positionLiquidity);
     }
 
     /// @notice Exposes internal liquidity decrease helper for unit tests (queue clamping, settleableDelta)
@@ -395,15 +447,15 @@ contract VTSPositionLibHarness {
 
     function getCISEExposure(PositionId id) external view returns (uint256 exposure0, uint256 exposure1) {
         return (
-            s.positionAccounting[id].ciseExposureSinceLastMod.token0,
-            s.positionAccounting[id].ciseExposureSinceLastMod.token1
+            f.positionFeeAccounting[id].ciseExposureSinceLastMod.token0,
+            f.positionFeeAccounting[id].ciseExposureSinceLastMod.token1
         );
     }
 
     function getPoolTotalCISEExposure(PoolId poolId) external view returns (uint256 exposure0, uint256 exposure1) {
         return (
-            s.poolAccounting[poolId].totalCISEExposureSinceLastMod.token0,
-            s.poolAccounting[poolId].totalCISEExposureSinceLastMod.token1
+            f.poolFeeAccounting[poolId].totalCISEExposureSinceLastMod.token0,
+            f.poolFeeAccounting[poolId].totalCISEExposureSinceLastMod.token1
         );
     }
 
@@ -412,28 +464,28 @@ contract VTSPositionLibHarness {
     }
 
     function getPoolSlashedPot(PoolId poolId) external view returns (uint256 pot0, uint256 pot1) {
-        return (s.poolAccounting[poolId].slashedPot.token0, s.poolAccounting[poolId].slashedPot.token1);
+        return (f.poolFeeAccounting[poolId].slashedPot.token0, f.poolFeeAccounting[poolId].slashedPot.token1);
     }
 
     /// @notice TEST-ONLY: sets `slashedPot` for both pool fee-token lanes.
     /// @dev TEST-ONLY helper that writes storage directly for unit-test scenario setup.
     function setPoolSlashedPot(PoolId poolId, uint256 pot0, uint256 pot1) external {
-        s.poolAccounting[poolId].slashedPot.token0 = pot0;
-        s.poolAccounting[poolId].slashedPot.token1 = pot1;
+        f.poolFeeAccounting[poolId].slashedPot.token0 = pot0;
+        f.poolFeeAccounting[poolId].slashedPot.token1 = pot1;
     }
 
     function getFeesShared(PositionId id) external view returns (uint256 fee0, uint256 fee1) {
-        return (s.positionAccounting[id].feesShared.token0, s.positionAccounting[id].feesShared.token1);
+        return (f.positionFeeAccounting[id].feesShared.token0, f.positionFeeAccounting[id].feesShared.token1);
     }
 
     function getPendingFeeAdj(PositionId id) external view returns (int256 adj0, int256 adj1) {
-        return (s.positionAccounting[id].pendingFeeAdj.token0, s.positionAccounting[id].pendingFeeAdj.token1);
+        return (f.positionFeeAccounting[id].pendingFeeAdj.token0, f.positionFeeAccounting[id].pendingFeeAdj.token1);
     }
 
     /// @notice TEST-ONLY: seeds signed pending fee adjustment before `afterTouchPosition` materialisation.
     function setPendingFeeAdj(PositionId id, int256 adj0, int256 adj1) external {
-        s.positionAccounting[id].pendingFeeAdj.token0 = adj0;
-        s.positionAccounting[id].pendingFeeAdj.token1 = adj1;
+        f.positionFeeAccounting[id].pendingFeeAdj.token0 = adj0;
+        f.positionFeeAccounting[id].pendingFeeAdj.token1 = adj1;
     }
 
     function getPoolTotalDeficitPrincipal(PoolId poolId)
@@ -447,26 +499,28 @@ contract VTSPositionLibHarness {
     }
 
     function getPoolCoverageResidualDICE(PoolId poolId) external view returns (uint256 residual0, uint256 residual1) {
-        return
-            (s.poolAccounting[poolId].coverageResidualDICE.token0, s.poolAccounting[poolId].coverageResidualDICE.token1);
+        return (
+            f.poolFeeAccounting[poolId].coverageResidualDICE.token0,
+            f.poolFeeAccounting[poolId].coverageResidualDICE.token1
+        );
     }
 
     function getPoolCoveragePerSettledIndexX128(PoolId poolId) external view returns (uint256 idx0, uint256 idx1) {
         return (
-            s.poolAccounting[poolId].coveragePerSettledIndexX128.token0,
-            s.poolAccounting[poolId].coveragePerSettledIndexX128.token1
+            f.poolFeeAccounting[poolId].coveragePerSettledIndexX128.token0,
+            f.poolFeeAccounting[poolId].coveragePerSettledIndexX128.token1
         );
     }
 
     function setPoolCoveragePerSettledIndexX128(PoolId poolId, uint256 idx0, uint256 idx1) external {
-        s.poolAccounting[poolId].coveragePerSettledIndexX128.token0 = idx0;
-        s.poolAccounting[poolId].coveragePerSettledIndexX128.token1 = idx1;
+        f.poolFeeAccounting[poolId].coveragePerSettledIndexX128.token0 = idx0;
+        f.poolFeeAccounting[poolId].coveragePerSettledIndexX128.token1 = idx1;
     }
 
     function getPoolCoveragePerDeficitIndexX128(PoolId poolId) external view returns (uint256 idx0, uint256 idx1) {
         return (
-            s.poolAccounting[poolId].coveragePerDeficitIndexX128.token0,
-            s.poolAccounting[poolId].coveragePerDeficitIndexX128.token1
+            f.poolFeeAccounting[poolId].coveragePerDeficitIndexX128.token0,
+            f.poolFeeAccounting[poolId].coveragePerDeficitIndexX128.token1
         );
     }
 
@@ -476,63 +530,63 @@ contract VTSPositionLibHarness {
         returns (uint256 idx0, uint256 idx1)
     {
         return (
-            s.poolAccounting[poolId].coveragePerResidualDeficitIndexX128.token0,
-            s.poolAccounting[poolId].coveragePerResidualDeficitIndexX128.token1
+            f.poolFeeAccounting[poolId].coveragePerResidualDeficitIndexX128.token0,
+            f.poolFeeAccounting[poolId].coveragePerResidualDeficitIndexX128.token1
         );
     }
 
     function getCoverageIndexLastX128(PositionId id) external view returns (uint256 idx0, uint256 idx1) {
-        return
-            (
-                s.positionAccounting[id].coverageIndexLastX128.token0,
-                s.positionAccounting[id].coverageIndexLastX128.token1
-            );
+        return (
+            f.positionFeeAccounting[id].coverageIndexLastX128.token0,
+            f.positionFeeAccounting[id].coverageIndexLastX128.token1
+        );
     }
 
     function getResidualCoverageIndexLastX128(PositionId id) external view returns (uint256 idx0, uint256 idx1) {
         return (
-            s.positionAccounting[id].residualCoverageIndexLastX128.token0,
-            s.positionAccounting[id].residualCoverageIndexLastX128.token1
+            f.positionFeeAccounting[id].residualCoverageIndexLastX128.token0,
+            f.positionFeeAccounting[id].residualCoverageIndexLastX128.token1
         );
     }
 
     function getPendingResidualBurnBase(PositionId id) external view returns (uint256 burn0, uint256 burn1) {
         return (
-            s.positionAccounting[id].pendingResidualBurnBase.token0,
-            s.positionAccounting[id].pendingResidualBurnBase.token1
+            f.positionFeeAccounting[id].pendingResidualBurnBase.token0,
+            f.positionFeeAccounting[id].pendingResidualBurnBase.token1
         );
     }
 
     function getPendingResidualFeeBacking(PositionId id) external view returns (uint256 fee0, uint256 fee1) {
         return (
-            s.positionAccounting[id].pendingResidualFeeBacking.token0,
-            s.positionAccounting[id].pendingResidualFeeBacking.token1
+            f.positionFeeAccounting[id].pendingResidualFeeBacking.token0,
+            f.positionFeeAccounting[id].pendingResidualFeeBacking.token1
         );
     }
 
     function getPendingResidualBurnOutflowsFloor(PositionId id) external view returns (uint256 floor0, uint256 floor1) {
         return (
-            s.positionAccounting[id].pendingResidualBurnOutflowsFloor.token0,
-            s.positionAccounting[id].pendingResidualBurnOutflowsFloor.token1
+            f.positionFeeAccounting[id].pendingResidualBurnOutflowsFloor.token0,
+            f.positionFeeAccounting[id].pendingResidualBurnOutflowsFloor.token1
         );
     }
 
     function getDiceOrdinaryRealisationCarry(PositionId id) external view returns (uint256 c0, uint256 c1) {
         return (
-            s.positionAccounting[id].diceOrdinaryRealisationCarry.token0,
-            s.positionAccounting[id].diceOrdinaryRealisationCarry.token1
+            f.positionFeeAccounting[id].diceOrdinaryRealisationCarry.token0,
+            f.positionFeeAccounting[id].diceOrdinaryRealisationCarry.token1
         );
     }
 
     function getDiceResidualRealisationCarry(PositionId id) external view returns (uint256 c0, uint256 c1) {
         return (
-            s.positionAccounting[id].diceResidualRealisationCarry.token0,
-            s.positionAccounting[id].diceResidualRealisationCarry.token1
+            f.positionFeeAccounting[id].diceResidualRealisationCarry.token0,
+            f.positionFeeAccounting[id].diceResidualRealisationCarry.token1
         );
     }
 
     function getCISEIndexLastX128(PositionId id) external view returns (uint256 idx0, uint256 idx1) {
-        return (s.positionAccounting[id].ciseIndexLastX128.token0, s.positionAccounting[id].ciseIndexLastX128.token1);
+        return
+            (f.positionFeeAccounting[id].ciseIndexLastX128.token0, f.positionFeeAccounting[id].ciseIndexLastX128.token1);
     }
 
     function getCumulativeOutflows(PositionId id) external view returns (uint256 out0, uint256 out1) {
@@ -540,12 +594,15 @@ contract VTSPositionLibHarness {
     }
 
     function getOutflowsAtFeeSnap(PositionId id) external view returns (uint256 snap0, uint256 snap1) {
-        return (s.positionAccounting[id].outflowsAtFeeSnap.token0, s.positionAccounting[id].outflowsAtFeeSnap.token1);
+        return
+            (f.positionFeeAccounting[id].outflowsAtFeeSnap.token0, f.positionFeeAccounting[id].outflowsAtFeeSnap.token1);
     }
 
     function getFeeGrowthInsideLast(PositionId id) external view returns (uint256 fg0, uint256 fg1) {
-        return
-            (s.positionAccounting[id].feeGrowthInsideLast.token0, s.positionAccounting[id].feeGrowthInsideLast.token1);
+        return (
+            f.positionFeeAccounting[id].feeGrowthInsideLast.token0,
+            f.positionFeeAccounting[id].feeGrowthInsideLast.token1
+        );
     }
 
     function getDeficitGrowthInsideLast(PositionId id) external view returns (uint256 dg0, uint256 dg1) {
@@ -624,14 +681,14 @@ contract VTSPositionLibHarness {
 
     /// @notice Sets CISE exposure for a position
     function setCISEExposure(PositionId id, uint256 exposure0, uint256 exposure1) external {
-        s.positionAccounting[id].ciseExposureSinceLastMod.token0 = exposure0;
-        s.positionAccounting[id].ciseExposureSinceLastMod.token1 = exposure1;
+        f.positionFeeAccounting[id].ciseExposureSinceLastMod.token0 = exposure0;
+        f.positionFeeAccounting[id].ciseExposureSinceLastMod.token1 = exposure1;
     }
 
     /// @notice Sets pool total CISE exposure
     function setPoolTotalCISEExposure(PoolId poolId, uint256 exposure0, uint256 exposure1) external {
-        s.poolAccounting[poolId].totalCISEExposureSinceLastMod.token0 = exposure0;
-        s.poolAccounting[poolId].totalCISEExposureSinceLastMod.token1 = exposure1;
+        f.poolFeeAccounting[poolId].totalCISEExposureSinceLastMod.token0 = exposure0;
+        f.poolFeeAccounting[poolId].totalCISEExposureSinceLastMod.token1 = exposure1;
     }
 
     function setPoolTotalSettled(PoolId poolId, uint256 total0, uint256 total1) external {
@@ -645,48 +702,48 @@ contract VTSPositionLibHarness {
     }
 
     function setPoolCoverageResidualDICE(PoolId poolId, uint256 residual0, uint256 residual1) external {
-        s.poolAccounting[poolId].coverageResidualDICE.token0 = residual0;
-        s.poolAccounting[poolId].coverageResidualDICE.token1 = residual1;
+        f.poolFeeAccounting[poolId].coverageResidualDICE.token0 = residual0;
+        f.poolFeeAccounting[poolId].coverageResidualDICE.token1 = residual1;
     }
 
     function setPoolCoveragePerDeficitIndexX128(PoolId poolId, uint256 idx0, uint256 idx1) external {
-        s.poolAccounting[poolId].coveragePerDeficitIndexX128.token0 = idx0;
-        s.poolAccounting[poolId].coveragePerDeficitIndexX128.token1 = idx1;
+        f.poolFeeAccounting[poolId].coveragePerDeficitIndexX128.token0 = idx0;
+        f.poolFeeAccounting[poolId].coveragePerDeficitIndexX128.token1 = idx1;
     }
 
     function setPoolCoveragePerResidualDeficitIndexX128(PoolId poolId, uint256 idx0, uint256 idx1) external {
-        s.poolAccounting[poolId].coveragePerResidualDeficitIndexX128.token0 = idx0;
-        s.poolAccounting[poolId].coveragePerResidualDeficitIndexX128.token1 = idx1;
+        f.poolFeeAccounting[poolId].coveragePerResidualDeficitIndexX128.token0 = idx0;
+        f.poolFeeAccounting[poolId].coveragePerResidualDeficitIndexX128.token1 = idx1;
     }
 
     function setCoverageIndexLastX128(PositionId id, uint256 idx0, uint256 idx1) external {
-        s.positionAccounting[id].coverageIndexLastX128.token0 = idx0;
-        s.positionAccounting[id].coverageIndexLastX128.token1 = idx1;
+        f.positionFeeAccounting[id].coverageIndexLastX128.token0 = idx0;
+        f.positionFeeAccounting[id].coverageIndexLastX128.token1 = idx1;
     }
 
     function setResidualCoverageIndexLastX128(PositionId id, uint256 idx0, uint256 idx1) external {
-        s.positionAccounting[id].residualCoverageIndexLastX128.token0 = idx0;
-        s.positionAccounting[id].residualCoverageIndexLastX128.token1 = idx1;
+        f.positionFeeAccounting[id].residualCoverageIndexLastX128.token0 = idx0;
+        f.positionFeeAccounting[id].residualCoverageIndexLastX128.token1 = idx1;
     }
 
     function setPendingResidualBurnBase(PositionId id, uint256 burn0, uint256 burn1) external {
-        s.positionAccounting[id].pendingResidualBurnBase.token0 = burn0;
-        s.positionAccounting[id].pendingResidualBurnBase.token1 = burn1;
+        f.positionFeeAccounting[id].pendingResidualBurnBase.token0 = burn0;
+        f.positionFeeAccounting[id].pendingResidualBurnBase.token1 = burn1;
     }
 
     function setPendingResidualFeeBacking(PositionId id, uint256 fee0, uint256 fee1) external {
-        s.positionAccounting[id].pendingResidualFeeBacking.token0 = fee0;
-        s.positionAccounting[id].pendingResidualFeeBacking.token1 = fee1;
+        f.positionFeeAccounting[id].pendingResidualFeeBacking.token0 = fee0;
+        f.positionFeeAccounting[id].pendingResidualFeeBacking.token1 = fee1;
     }
 
     function setPendingResidualBurnOutflowsFloor(PositionId id, uint256 floor0, uint256 floor1) external {
-        s.positionAccounting[id].pendingResidualBurnOutflowsFloor.token0 = floor0;
-        s.positionAccounting[id].pendingResidualBurnOutflowsFloor.token1 = floor1;
+        f.positionFeeAccounting[id].pendingResidualBurnOutflowsFloor.token0 = floor0;
+        f.positionFeeAccounting[id].pendingResidualBurnOutflowsFloor.token1 = floor1;
     }
 
     function setCISEIndexLastX128(PositionId id, uint256 idx0, uint256 idx1) external {
-        s.positionAccounting[id].ciseIndexLastX128.token0 = idx0;
-        s.positionAccounting[id].ciseIndexLastX128.token1 = idx1;
+        f.positionFeeAccounting[id].ciseIndexLastX128.token0 = idx0;
+        f.positionFeeAccounting[id].ciseIndexLastX128.token1 = idx1;
     }
 
     function setCumulativeOutflows(PositionId id, uint256 out0, uint256 out1) external {
@@ -695,27 +752,27 @@ contract VTSPositionLibHarness {
     }
 
     function setOutflowsAtFeeSnap(PositionId id, uint256 snap0, uint256 snap1) external {
-        s.positionAccounting[id].outflowsAtFeeSnap.token0 = snap0;
-        s.positionAccounting[id].outflowsAtFeeSnap.token1 = snap1;
+        f.positionFeeAccounting[id].outflowsAtFeeSnap.token0 = snap0;
+        f.positionFeeAccounting[id].outflowsAtFeeSnap.token1 = snap1;
     }
 
     function setFeeGrowthInsideLast(PositionId id, uint256 fg0, uint256 fg1) external {
-        s.positionAccounting[id].feeGrowthInsideLast.token0 = fg0;
-        s.positionAccounting[id].feeGrowthInsideLast.token1 = fg1;
-        s.positionAccounting[id].feeBurnGrowthRemainder.token0 = 0;
-        s.positionAccounting[id].feeBurnGrowthRemainder.token1 = 0;
+        f.positionFeeAccounting[id].feeGrowthInsideLast.token0 = fg0;
+        f.positionFeeAccounting[id].feeGrowthInsideLast.token1 = fg1;
+        f.positionFeeAccounting[id].feeBurnGrowthRemainder.token0 = 0;
+        f.positionFeeAccounting[id].feeBurnGrowthRemainder.token1 = 0;
     }
 
     /// @notice TEST-ONLY: set fee-burn remainder (used to assert touchPosition clears it on liquidity change)
     function setFeeBurnGrowthRemainder(PositionId id, uint256 r0, uint256 r1) external {
-        s.positionAccounting[id].feeBurnGrowthRemainder.token0 = r0;
-        s.positionAccounting[id].feeBurnGrowthRemainder.token1 = r1;
+        f.positionFeeAccounting[id].feeBurnGrowthRemainder.token0 = r0;
+        f.positionFeeAccounting[id].feeBurnGrowthRemainder.token1 = r1;
     }
 
     function getFeeBurnGrowthRemainder(PositionId id) external view returns (uint256 r0, uint256 r1) {
         return (
-            s.positionAccounting[id].feeBurnGrowthRemainder.token0,
-            s.positionAccounting[id].feeBurnGrowthRemainder.token1
+            f.positionFeeAccounting[id].feeBurnGrowthRemainder.token0,
+            f.positionFeeAccounting[id].feeBurnGrowthRemainder.token1
         );
     }
 

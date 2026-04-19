@@ -132,7 +132,16 @@ contract SETTLE02 {
 
             BalanceDelta delta = toBalanceDelta(-int128(uint128(c.requested0)), -int128(uint128(c.requested1)));
             try harness.onMMSettle(
-                IPoolManager(address(poolManager)), vault, positionId, lccCurrency0, lccCurrency1, delta, true, false
+                VTSPositionLibFuzzHarness.OnMMSettleInput({
+                    poolManager: IPoolManager(address(poolManager)),
+                    vault: vault,
+                    positionId: positionId,
+                    lccCurrency0: lccCurrency0,
+                    lccCurrency1: lccCurrency1,
+                    delta: delta,
+                    isSeizing: true,
+                    fromDeltas: false
+                })
             ) returns (
                 BalanceDelta settlementDelta, bool, uint256
             ) {
@@ -193,7 +202,16 @@ contract SETTLE02 {
 
             BalanceDelta delta = toBalanceDelta(int128(uint128(c.requested0)), int128(uint128(c.requested1)));
             try harness.onMMSettle(
-                IPoolManager(address(poolManager)), vault, positionId, lccCurrency0, lccCurrency1, delta, true, false
+                VTSPositionLibFuzzHarness.OnMMSettleInput({
+                    poolManager: IPoolManager(address(poolManager)),
+                    vault: vault,
+                    positionId: positionId,
+                    lccCurrency0: lccCurrency0,
+                    lccCurrency1: lccCurrency1,
+                    delta: delta,
+                    isSeizing: true,
+                    fromDeltas: false
+                })
             ) returns (
                 BalanceDelta settlementDelta, bool, uint256
             ) {

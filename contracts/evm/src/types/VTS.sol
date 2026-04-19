@@ -16,6 +16,8 @@ import {ModifyLiquidityParams} from "@uniswap/v4-core/src/types/PoolOperation.so
 import {BalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
 import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
 
+import {GrowthPair, TokenPairUint, TokenPairInt, TokenPairLib} from "./VTSPairTypes.sol";
+
 struct TokenConfiguration {
     // Grace period time
     uint256 gracePeriodTime;
@@ -155,9 +157,7 @@ struct SettleResult {
 /// @notice Per-position accounting data (mirrors VTSManager per-position mappings)
 /// @dev Split out of VTSManager to follow the Bunni-style storage pattern
 ///
-///      Layout intent (Phase 1): storage order is fixed; see `VTS-INERT-STATE-ISOLATION.md` for the conceptual split.
-///      **Legacy fee / DICE / CISE / CSI** fields are grouped below with inline labels; ambient mutation of that cluster
-///      is gated by `coverageFeeShare > 0` (`VTSFeeLinkedLib.isFeeCapabilityEnabled`).
+///      Fee-era / DICE / CISE / CSI fields live in `PositionFeeAccounting` (`types/VTSFee.sol`).
 struct PositionAccounting {
     // Commitment maxima per token
     TokenPairUint commitmentMax;
@@ -169,12 +169,8 @@ struct PositionAccounting {
     TokenPairUint deficitGrowthInsideLast;
     // Inflow growth snapshots per token
     TokenPairUint inflowGrowthInsideLast;
-    // Fee growth snapshots per token (legacy fee / coverage-fee-burn path)
-    TokenPairUint feeGrowthInsideLast;
     // Cumulative outflows per token
     TokenPairUint cumulativeOutflows;
-    // Outflow snapshots at last fee snap per token
-    TokenPairUint outflowsAtFeeSnap;
     // Commitment-scoped deficit (insolvency gate) per token.
     // Derived from checkpoint backing shortfall; not part of DICE principal accounting.
     TokenPairUint commitmentDeficit;
@@ -182,155 +178,22 @@ struct PositionAccounting {
     uint16 commitmentDeficitBps;
     // Timestamp at which commitment deficit became non-zero per token (0 when token deficit is zero)
     TokenPairUint commitmentDeficitSince;
-
-    // --- Legacy fee-sharing / DICE / CISE / CSI (quarantined; ambient only when fee capability enabled) ---
-    // Fees shared by position per token
-    TokenPairUint feesShared;
-    // Pending fee adjustments per token: +slash (reduces payout), -bonus (increases payout)
-    TokenPairInt pendingFeeAdj;
-    // DICE: Coverage index checkpoint per token (snapshot of pool index at last settlement)
-    TokenPairUint coverageIndexLastX128;
-    // DICE: Residual-only coverage index checkpoint per token
-    TokenPairUint residualCoverageIndexLastX128;
-    // DICE: Banked burn base awaiting a later fee/outflow window (ordinary + residual index realisation).
-    // Naming retains `Residual` for storage-layout compatibility with prior deployments.
-    TokenPairUint pendingResidualBurnBase;
-    // DICE: Historical fee backing frozen for the currently unresolved DICE-burn episode across
-    // zero-liquidity intervals and partial liquidity decreases (removed slice). Stored by fee token lane
-    // (opposite the deficit token lane) and cleared once that matching burn base is fully consumed.
-    TokenPairUint pendingResidualFeeBacking;
-    // DICE: Outflow watermark captured when banked burn base is increased
-    TokenPairUint pendingResidualBurnOutflowsFloor;
-    // DICE: Q128 remainder so split index deltas do not lose wei to repeated `floor(D * Δ / Q128)` (ordinary lane).
-    TokenPairUint diceOrdinaryRealisationCarry;
-    // DICE: Same as above for the residual-only coverage-per-residual-deficit index lane.
-    TokenPairUint diceResidualRealisationCarry;
-    // DICE: Cumulative assigned coverage (raw units) since the lane last had zero `cumulativeDeficit`; paired with
-    //        `_effectiveDiceBurnBase` in `VTSFeeLib` so we bank marginal burn `f(agg) - f(prev)` and never exceed the
-    //        deficit clamp across many small settles (ordinary lane).
-    TokenPairUint diceOrdinaryCovAgg;
-    // DICE: Same cumulative bookkeeping for the residual-index leg (symmetry with ordinary).
-    TokenPairUint diceResidualCovAgg;
-    // CISE: Position checkpoint of pool coverage-per-settled index (Q128)
-    TokenPairUint ciseIndexLastX128;
-    // CISE: Banked realised exposure since last bonus allocation
-    TokenPairUint ciseExposureSinceLastMod;
-    // CSI: Position checkpoint of the pool remaining-share factor (Q128), last synced from pool for this position.
-    // Interpret `feesSharedRemainingFactorLastX128` together with `feesSharedEpoch` on the same token lane:
-    // when the position epoch matches the pool epoch, `factor == 0` is the baseline sentinel meaning "no prior
-    // remaining-share checkpoint in this epoch yet" and the next sync should adopt the pool factor, not treat the
-    // position as fully spent. Fully spent state is represented by `feesShared == 0`, not by a zero factor alone.
-    TokenPairUint feesSharedRemainingFactorLastX128;
-    // CSI: Position checkpoint of the pool spend epoch (per token), advanced with the pool on sync / setup.
-    TokenPairUint feesSharedEpoch;
-    // Remainder numerator for coverage fee-burn baseline checkpoint (see VTSFeeLib._applyBurnBase).
-    TokenPairUint feeBurnGrowthRemainder;
 }
 
 /// @notice Per-pool accounting data (mirrors VTSManager per-pool mappings)
 /// @dev Split out of VTSManager to follow the Bunni-style storage pattern
 ///
-///      Layout intent (Phase 1): swap growth globals first; from `slashedPot` onward is the **legacy fee / DICE / CISE /
-///      CSI** group (quarantined from the default path when `coverageFeeShare == 0`). See
-///      `contracts/evm/VTS-INERT-STATE-ISOLATION.md`.
+///      Fee-era indices and CSI state live in `PoolFeeAccounting` (`types/VTSFee.sol`).
 struct PoolAccounting {
-    // --- Base v1 (swap attribution growth) ---
     // Deficit growth global per token
     TokenPairUint deficitGrowthGlobal;
     // Inflow growth global per token
     TokenPairUint inflowGrowthGlobal;
-
-    // --- Legacy fee-sharing / DICE / CISE / CSI (quarantined; ambient only when fee capability enabled) ---
-    // Materialised slashed-pot balances per token (authoritative budget for bonus allocation after positive
-    // `pendingFeeAdj` materialisation in `VTSFeeLib`; ERC6909 backing is settled via the hook)
-    TokenPairUint slashedPot;
     // DICE: Pool-wide outstanding swap-incurred deficit principal per token.
     // Mirrors summed cumulativeDeficit and excludes commitmentDeficit.
     TokenPairUint totalDeficitPrincipal;
-    // DICE: Coverage-per-deficit-unit index (Q128) per token
-    TokenPairUint coveragePerDeficitIndexX128;
-    // DICE: Residual-only coverage-per-deficit-unit index (Q128) per token
-    TokenPairUint coveragePerResidualDeficitIndexX128;
-    // DICE: Deferred coverage residual (socialised when totalDeficitPrincipal = 0 at exercise time)
-    TokenPairUint coverageResidualDICE;
     // CISE: Pool-wide total settled aggregate per token
     TokenPairUint totalSettled;
-    // CISE: Coverage-per-settled index (Q128) per token
-    TokenPairUint coveragePerSettledIndexX128;
-    // CISE: Pool-wide bonus denominator window: incremented by coveredAmount on each allocatable coverage index step
-    // and decremented when bonuses are allocated. Position numerators accrue lazily. Coverage exercised while
-    // `totalSettled == 0` is intentionally excluded from CISE rather than being deferred and socialised later.
-    TokenPairUint totalCISEExposureSinceLastMod;
-    // CSI: Pool-wide remaining-share factor (Q128). Zero means either "no spend this epoch yet" or
-    // "epoch fully spent"; `feesSharedEpoch` disambiguates replacement epochs.
-    TokenPairUint feesSharedRemainingFactorX128;
-    // CSI: Pool-wide spend epoch, incremented when a fully-spent epoch is replaced by fresh contributions.
-    TokenPairUint feesSharedEpoch;
-}
-
-/// @notice Simple pair struct for per-tick growth (replaces uint256[2] arrays)
-struct GrowthPair {
-    uint256 token0;
-    uint256 token1;
-}
-
-/// @notice Pair struct for uint256 values per token (token0 and token1)
-/// @dev Similar to GrowthPair but used for general accounting fields
-struct TokenPairUint {
-    uint256 token0;
-    uint256 token1;
-}
-
-/// @notice Pair struct for int256 values per token (token0 and token1)
-/// @dev Used for signed accounting fields like net settlement and fee adjustments
-struct TokenPairInt {
-    int256 token0;
-    int256 token1;
-}
-
-/// @title TokenPairLib
-/// @notice Library for accessing TokenPair fields by tokenIndex
-/// @dev Provides get/set helpers to replace manual if (tokenIndex == 0) branching
-library TokenPairLib {
-    /// @notice Get the value for a specific token index from a TokenPairUint
-    /// @param self The TokenPairUint storage reference
-    /// @param tokenIndex The token index (0 or 1)
-    /// @return The value for the specified token
-    function get(TokenPairUint storage self, uint8 tokenIndex) internal view returns (uint256) {
-        return tokenIndex == 0 ? self.token0 : self.token1;
-    }
-
-    /// @notice Set the value for a specific token index in a TokenPairUint
-    /// @param self The TokenPairUint storage reference
-    /// @param tokenIndex The token index (0 or 1)
-    /// @param value The value to set
-    function set(TokenPairUint storage self, uint8 tokenIndex, uint256 value) internal {
-        if (tokenIndex == 0) {
-            self.token0 = value;
-        } else {
-            self.token1 = value;
-        }
-    }
-
-    /// @notice Get the value for a specific token index from a TokenPairInt
-    /// @param self The TokenPairInt storage reference
-    /// @param tokenIndex The token index (0 or 1)
-    /// @return The value for the specified token
-    function get(TokenPairInt storage self, uint8 tokenIndex) internal view returns (int256) {
-        return tokenIndex == 0 ? self.token0 : self.token1;
-    }
-
-    /// @notice Set the value for a specific token index in a TokenPairInt
-    /// @param self The TokenPairInt storage reference
-    /// @param tokenIndex The token index (0 or 1)
-    /// @param value The value to set
-    function set(TokenPairInt storage self, uint8 tokenIndex, int256 value) internal {
-        if (tokenIndex == 0) {
-            self.token0 = value;
-        } else {
-            self.token1 = value;
-        }
-    }
 }
 
 /// @notice Central storage struct (like Bunni's HubStorage)

@@ -46,6 +46,7 @@ import {PositionLibrary} from "../types/Position.sol";
 import {OwnerCurrencyDelta} from "./OwnerCurrencyDelta.sol";
 import {MarketCurrencyDelta} from "./MarketCurrencyDelta.sol";
 import {LiquidityUtils} from "./LiquidityUtils.sol";
+import {VTSFeeStorage} from "../types/VTSFee.sol";
 
 /// @title VTSLifecycleLinkedLib
 /// @notice Linked orchestration entrypoints for orchestrator lifecycle, CoreHook, and commit-routing paths.
@@ -145,43 +146,26 @@ library VTSLifecycleLinkedLib {
         if (PoolId.unwrap(pos.poolId) != PoolId.unwrap(poolId)) revert Errors.InvalidPosition(0, 0, id);
     }
 
-    function _resolveVault(VTSCoreHookContext memory ctx, PoolKey calldata poolKey)
-        internal
-        view
-        returns (IMarketVault)
-    {
-        IMarketFactory factory = ctx.liquidityHub
-            .getFactory(Currency.unwrap(poolKey.currency0), Currency.unwrap(poolKey.currency1));
+    function _resolveVault(VTSCoreHookContext memory ctx, PoolKey memory poolKey) internal view returns (IMarketVault) {
+        IMarketFactory factory =
+            ctx.liquidityHub.getFactory(Currency.unwrap(poolKey.currency0), Currency.unwrap(poolKey.currency1));
         return MarketHandlerLib.getVault(factory, poolKey.toId());
     }
 
     function _executeTouchPosition(
         VTSStorage storage s,
+        VTSFeeStorage storage f,
         VTSCoreHookContext memory ctx,
-        address owner,
-        PoolKey calldata poolKey,
-        ModifyLiquidityParams calldata params,
-        BalanceDelta callerDelta,
-        BalanceDelta feesAccrued,
-        bytes calldata hookData
+        TouchPositionParams memory p
     ) private returns (TouchPositionResult memory result) {
         PositionContext memory positionCtx = PositionContext({
             poolManager: ctx.poolManager,
             liquidityHub: ctx.liquidityHub,
             oracleHelper: ctx.oracleHelper,
-            marketVault: _resolveVault(ctx, poolKey)
+            marketVault: _resolveVault(ctx, p.poolKey)
         });
 
-        TouchPositionParams memory tpParams = TouchPositionParams({
-            owner: owner,
-            poolKey: poolKey,
-            params: params,
-            callerDelta: callerDelta,
-            feesAccrued: feesAccrued,
-            hookData: hookData
-        });
-
-        result = VTSPositionLib.touchPosition(s, positionCtx, tpParams);
+        result = VTSPositionLib.touchPosition(s, f, positionCtx, p);
     }
 
     function _buildMMSettleParams(
@@ -235,10 +219,12 @@ library VTSLifecycleLinkedLib {
     /// @param p The MM settle parameters (vault, positionId, currencies, delta, isSeizing)
     /// @return result The MM settle result (settlementDelta, rfsOpen, seizedLiquidityUnits)
     //#olympix-ignore-reentrancy
-    function _executeMMSettleFromParams(VTSStorage storage s, IPoolManager poolManager, SettleParams memory p)
-        internal
-        returns (SettleResult memory result)
-    {
+    function _executeMMSettleFromParams(
+        VTSStorage storage s,
+        VTSFeeStorage storage f,
+        IPoolManager poolManager,
+        SettleParams memory p
+    ) internal returns (SettleResult memory result) {
         Position memory pos = s.positions[p.positionId];
 
         if (pos.owner == address(0)) {
@@ -249,7 +235,7 @@ library VTSLifecycleLinkedLib {
             OwnerCurrencyDelta.getUnderlyingDeltaPair(pos.owner, p.lccCurrency0, p.lccCurrency1);
 
         BalanceDelta rfsDelta;
-        VTSPositionLib.settlePositionGrowths(s, poolManager, p.positionId);
+        VTSPositionLib.settlePositionGrowths(s, f, poolManager, p.positionId);
         (result.rfsOpen, rfsDelta) = VTSPositionLib.getRFS(s, p.positionId);
 
         // Snapshot pre-intervention RFS for seizure sizing (`agents/spec/Seizure-and-Base-Tranche-Policy.md`): cured
@@ -265,6 +251,7 @@ library VTSLifecycleLinkedLib {
             VTSPositionMMOpsLib.ProtocolCreditSettlementResult memory protocolCreditSettlement =
                 VTSPositionMMOpsLib.settleFromPositiveUnderlyingDelta(
                     s,
+                    f,
                     VTSPositionMMOpsLib.ProtocolCreditSettlementParams({
                         marketVault: p.vault,
                         positionId: p.positionId,
@@ -285,11 +272,12 @@ library VTSLifecycleLinkedLib {
                 );
             depositSettlementDelta = protocolCreditSettlement.settlementDelta;
         } else if (p.isSeizing) {
-            depositSettlementDelta =
-                _settleSeizingDeposits(s, p.positionId, int256(p.delta.amount0()), int256(p.delta.amount1()), rfsDelta);
+            depositSettlementDelta = _settleSeizingDeposits(
+                s, f, p.positionId, int256(p.delta.amount0()), int256(p.delta.amount1()), rfsDelta
+            );
         } else {
             depositSettlementDelta =
-                _settleDeposits(s, p.positionId, int256(p.delta.amount0()), int256(p.delta.amount1()));
+                _settleDeposits(s, f, p.positionId, int256(p.delta.amount0()), int256(p.delta.amount1()));
         }
 
         // Refresh RFS allows a mixed settle like token0 deposit + token1 withdrawal on an active position to flip RFS open guard if token0 was the only open lane and _settleDeposits just closed it.
@@ -297,6 +285,7 @@ library VTSLifecycleLinkedLib {
 
         WithdrawalExecutionResult memory withdrawalExecution = _executeWithdrawals(
             s,
+            f,
             WithdrawalExecutionParams({
                 positionId: p.positionId,
                 owner: pos.owner,
@@ -342,17 +331,20 @@ library VTSLifecycleLinkedLib {
     /// @notice Handle deposit settlement for non-seizing MM settles
     /// @dev Deposits preserve the original settlement-first behaviour: book into position accounting immediately,
     ///      then clear any negative underlying delta in Phase 4.
-    function _settleDeposits(VTSStorage storage s, PositionId positionId, int256 amount0, int256 amount1)
-        private
-        returns (BalanceDelta settlementDelta)
-    {
+    function _settleDeposits(
+        VTSStorage storage s,
+        VTSFeeStorage storage f,
+        PositionId positionId,
+        int256 amount0,
+        int256 amount1
+    ) private returns (BalanceDelta settlementDelta) {
         int128 settleAmount0;
         int128 settleAmount1;
         if (amount0 < 0) {
-            settleAmount0 = -VTSPositionLib._updateSettlement(s, positionId, 0, -amount0).toInt128();
+            settleAmount0 = -VTSPositionLib._updateSettlement(s, f, positionId, 0, -amount0).toInt128();
         }
         if (amount1 < 0) {
-            settleAmount1 = -VTSPositionLib._updateSettlement(s, positionId, 1, -amount1).toInt128();
+            settleAmount1 = -VTSPositionLib._updateSettlement(s, f, positionId, 1, -amount1).toInt128();
         }
         settlementDelta = toBalanceDelta(settleAmount0, settleAmount1);
     }
@@ -364,6 +356,7 @@ library VTSLifecycleLinkedLib {
     ///      that used to live inline on the deposit path).
     function _settleSeizingDeposits(
         VTSStorage storage s,
+        VTSFeeStorage storage f,
         PositionId positionId,
         int256 amount0,
         int256 amount1,
@@ -380,7 +373,7 @@ library VTSLifecycleLinkedLib {
                 if (amount0 < maxDeposit0) {
                     amount0 = maxDeposit0;
                 }
-                settleAmount0 = -VTSPositionLib._updateSettlement(s, positionId, 0, -amount0).toInt128();
+                settleAmount0 = -VTSPositionLib._updateSettlement(s, f, positionId, 0, -amount0).toInt128();
             }
         }
 
@@ -390,7 +383,7 @@ library VTSLifecycleLinkedLib {
                 if (amount1 < maxDeposit1) {
                     amount1 = maxDeposit1;
                 }
-                settleAmount1 = -VTSPositionLib._updateSettlement(s, positionId, 1, -amount1).toInt128();
+                settleAmount1 = -VTSPositionLib._updateSettlement(s, f, positionId, 1, -amount1).toInt128();
             }
         }
 
@@ -473,6 +466,7 @@ library VTSLifecycleLinkedLib {
     /// @notice Execute withdrawal settlement with strict ordering: delta first, settled second.
     function _executeWithdrawals(
         VTSStorage storage s,
+        VTSFeeStorage storage f,
         WithdrawalExecutionParams memory p,
         BalanceDelta rfsDelta,
         BalanceDelta positionRequiredSettlementDelta
@@ -522,22 +516,23 @@ library VTSLifecycleLinkedLib {
         if (actualWithdrawal1 > plannedWithdrawal1) actualWithdrawal1 = plannedWithdrawal1;
 
         WithdrawalActuals memory actuals = WithdrawalActuals({amount0: actualWithdrawal0, amount1: actualWithdrawal1});
-        (result.creditBackedWithdrawal0, result.creditBackedWithdrawal1) = _applyWithdrawalPlan(s, p, plan, actuals);
+        (result.creditBackedWithdrawal0, result.creditBackedWithdrawal1) = _applyWithdrawalPlan(s, f, p, plan, actuals);
         result.settlementDelta = toBalanceDelta(actualWithdrawal0.toInt128(), actualWithdrawal1.toInt128());
     }
 
     /// @notice Apply both withdrawal lanes after final vault clamping.
     function _applyWithdrawalPlan(
         VTSStorage storage s,
+        VTSFeeStorage storage f,
         WithdrawalExecutionParams memory p,
         WithdrawalPlan memory plan,
         WithdrawalActuals memory actuals
     ) private returns (uint256 creditBacked0, uint256 creditBacked1) {
         creditBacked0 = _applyWithdrawalLane(
-            s, p.vault, p.positionId, 0, actuals.amount0, plan.deltaBacked0, p.lccCurrency0, p.owner
+            s, f, p.vault, p.positionId, 0, actuals.amount0, plan.deltaBacked0, p.lccCurrency0, p.owner
         );
         creditBacked1 = _applyWithdrawalLane(
-            s, p.vault, p.positionId, 1, actuals.amount1, plan.deltaBacked1, p.lccCurrency1, p.owner
+            s, f, p.vault, p.positionId, 1, actuals.amount1, plan.deltaBacked1, p.lccCurrency1, p.owner
         );
     }
 
@@ -545,6 +540,7 @@ library VTSLifecycleLinkedLib {
     /// @dev Delta-backed value is consumed first; only the residual touches live `pa.settled`.
     function _applyWithdrawalLane(
         VTSStorage storage s,
+        VTSFeeStorage storage f,
         IMarketVault vault,
         PositionId positionId,
         uint8 tokenIndex,
@@ -566,7 +562,7 @@ library VTSLifecycleLinkedLib {
 
         uint256 settledBackedWithdrawal = actualWithdrawal - deltaBackedWithdrawal;
         if (settledBackedWithdrawal > 0) {
-            VTSPositionLib._sUpdateSettlement(s, positionId, tokenIndex, -settledBackedWithdrawal.toInt256());
+            VTSPositionLib._sUpdateSettlement(s, f, positionId, tokenIndex, -settledBackedWithdrawal.toInt256());
         }
     }
 
@@ -697,6 +693,7 @@ library VTSLifecycleLinkedLib {
     ///        positive underlying delta. Withdrawal lanes are unchanged; see `_executeMMSettleFromParams`.
     function onMMSettle(
         VTSStorage storage s,
+        VTSFeeStorage storage f,
         VTSLifecycleContext memory ctx,
         IMarketFactory factory,
         PositionId positionId,
@@ -708,7 +705,7 @@ library VTSLifecycleLinkedLib {
         SettleParams memory params = _buildMMSettleParams(
             s, ctx, factory, positionId, poolId, amountDelta, isSeizing, fromDeltas
         );
-        result = _executeMMSettleFromParams(s, ctx.poolManager, params);
+        result = _executeMMSettleFromParams(s, f, ctx.poolManager, params);
     }
 
     function validateMMOperation(
@@ -752,49 +749,35 @@ library VTSLifecycleLinkedLib {
 
     function _processPositionTouchValidated(
         VTSStorage storage s,
+        VTSFeeStorage storage f,
         VTSCoreHookContext memory ctx,
-        address owner,
-        PoolKey calldata poolKey,
-        ModifyLiquidityParams calldata params,
-        BalanceDelta callerDelta,
-        BalanceDelta feesAccrued,
-        bytes calldata hookData
+        TouchPositionParams memory p
     ) private returns (TouchPositionResult memory result) {
-        PositionId expectedId = PositionLibrary.generateId(owner, params);
+        PositionId expectedId = PositionLibrary.generateId(p.owner, p.params);
         if (s.positions[expectedId].owner != address(0)) {
-            _assertPositionValid(s, expectedId, false, poolKey.toId());
+            _assertPositionValid(s, expectedId, false, p.poolKey.toId());
         }
 
-        result = _executeTouchPosition(s, ctx, owner, poolKey, params, callerDelta, feesAccrued, hookData);
+        result = _executeTouchPosition(s, f, ctx, p);
     }
 
     /// @notice Runs `VTSPositionLib.touchPosition` (includes MM tail via `VTSPositionMMOpsLib` when applicable).
     function executeProcessPositionTouch(
         VTSStorage storage s,
+        VTSFeeStorage storage f,
         VTSCoreHookContext memory ctx,
-        address owner,
-        PoolKey calldata poolKey,
-        ModifyLiquidityParams calldata params,
-        BalanceDelta callerDelta,
-        BalanceDelta feesAccrued,
-        bytes calldata hookData
+        TouchPositionParams memory p
     ) external returns (TouchPositionResult memory result) {
-        result = _processPositionTouchValidated(s, ctx, owner, poolKey, params, callerDelta, feesAccrued, hookData);
+        result = _processPositionTouchValidated(s, f, ctx, p);
     }
 
     function processPosition(
         VTSStorage storage s,
+        VTSFeeStorage storage f,
         VTSCoreHookContext memory ctx,
-        address owner,
-        PoolKey calldata poolKey,
-        ModifyLiquidityParams calldata params,
-        BalanceDelta callerDelta,
-        BalanceDelta feesAccrued,
-        bytes calldata hookData
+        TouchPositionParams memory p
     ) external returns (Position memory pos, PositionId id, BalanceDelta feeAdj) {
-        TouchPositionResult memory result = _processPositionTouchValidated(
-            s, ctx, owner, poolKey, params, callerDelta, feesAccrued, hookData
-        );
+        TouchPositionResult memory result = _processPositionTouchValidated(s, f, ctx, p);
         pos = result.pos;
         id = result.id;
         feeAdj = result.feeAdj;

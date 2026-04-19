@@ -10,6 +10,7 @@ import {VTSFeeLib} from "../../../src/libraries/VTSFeeLib.sol";
 import {RFSCheckpoint} from "../../../src/types/Checkpoint.sol";
 import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
 import {IPoolManager} from "v4-periphery/lib/v4-core/src/interfaces/IPoolManager.sol";
+import {VTSFeeStorage} from "../../../src/types/VTSFee.sol";
 
 /// @title VTSFeeLibHarness
 /// @notice Exposes internal VTSFeeLib functions for unit testing
@@ -17,32 +18,33 @@ import {IPoolManager} from "v4-periphery/lib/v4-core/src/interfaces/IPoolManager
 contract VTSFeeLibHarness {
     /// @notice Internal VTSStorage for testing
     VTSStorage internal s;
+    VTSFeeStorage internal f;
 
     // ============ Library Function Exposers ============
 
     /// @notice Exposes _peekFeeAdjustment
     function peekFeeAdjustment(PositionId positionId) external view returns (int256 adj0, int256 adj1) {
-        return VTSFeeLib._peekFeeAdjustment(s, positionId);
+        return VTSFeeLib._peekFeeAdjustment(f, positionId);
     }
 
     /// @notice Exposes _fundFeePot (accounting only, no PoolManager interaction)
     function fundFeePot(PoolId poolId, uint8 tokenIndex, uint256 amount) external {
-        VTSFeeLib._fundFeePot(s, poolId, tokenIndex, amount);
+        VTSFeeLib._fundFeePot(f, poolId, tokenIndex, amount);
     }
 
     /// @notice Exposes _drainFeePot (accounting only, no PoolManager interaction)
     function drainFeePot(PoolId poolId, uint8 tokenIndex, uint256 amount) external {
-        VTSFeeLib._drainFeePot(s, poolId, tokenIndex, amount);
+        VTSFeeLib._drainFeePot(f, poolId, tokenIndex, amount);
     }
 
     /// @notice Exposes `_finaliseFeeAdjustment` (positive then negative materialisation only; no Phase 2 bonus allocation)
     function finaliseFeeAdjustment(PositionId positionId, PoolId poolId) external returns (BalanceDelta adj) {
-        return VTSFeeLib._finaliseFeeAdjustment(s, positionId, poolId);
+        return VTSFeeLib._finaliseFeeAdjustment(f, positionId, poolId);
     }
 
     /// @notice Exposes processPositionFees via the linked library (accounting only, no PoolManager interaction)
     function afterTouchPosition(PositionId positionId) external returns (BalanceDelta adj) {
-        return VTSFeeLib._processPositionFees(s, positionId);
+        return VTSFeeLib._processPositionFees(s, f, positionId);
     }
 
     // ============ Internal Helper Exposers (for branch coverage) ============
@@ -50,13 +52,13 @@ contract VTSFeeLibHarness {
     /// @notice Exposes VTSFeeLib._syncFeesSharedRemainingForToken
     function syncFeesSharedRemainingForToken(PositionId positionId, PoolId poolId, uint8 tokenIndex) external {
         VTSFeeLib._syncFeesSharedRemainingForToken(
-            s.positionAccounting[positionId], s.poolAccounting[poolId], tokenIndex
+            f.positionFeeAccounting[positionId], f.poolFeeAccounting[poolId], tokenIndex
         );
     }
 
     /// @notice Exposes VTSFeeLib._prepareFeeShareMint
     function prepareFeeShareMint(PositionId positionId, PoolId poolId, uint8 feeTokenIndex) external {
-        VTSFeeLib._prepareFeeShareMint(s.positionAccounting[positionId], s.poolAccounting[poolId], feeTokenIndex);
+        VTSFeeLib._prepareFeeShareMint(f, positionId, poolId, feeTokenIndex);
     }
 
     /// @notice Exposes VTSFeeLib._queueBonusForToken
@@ -68,7 +70,11 @@ contract VTSFeeLibHarness {
         uint256 ciseExposure
     ) external returns (bool allocated) {
         return VTSFeeLib._queueBonusForToken(
-            s.positionAccounting[positionId], s.poolAccounting[poolId], feeTokenIndex, coverageTokenIndex, ciseExposure
+            f.positionFeeAccounting[positionId],
+            f.poolFeeAccounting[poolId],
+            feeTokenIndex,
+            coverageTokenIndex,
+            ciseExposure
         );
     }
 
@@ -80,7 +86,7 @@ contract VTSFeeLibHarness {
         uint256 ciseExposure
     ) external {
         VTSFeeLib._cleanupAfterAllocationForToken(
-            s.positionAccounting[positionId], s.poolAccounting[poolId], coverageTokenIndex, ciseExposure
+            f.positionFeeAccounting[positionId], f.poolFeeAccounting[poolId], coverageTokenIndex, ciseExposure
         );
     }
 
@@ -97,6 +103,7 @@ contract VTSFeeLibHarness {
     ) external returns (uint256 consumedBurnBase) {
         return VTSFeeLib._applyBurnBase(
             s,
+            f,
             poolManager,
             positionId,
             poolId,
@@ -111,28 +118,28 @@ contract VTSFeeLibHarness {
     // ============ Storage Getters (for assertions) ============
 
     function getPendingFeeAdj(PositionId id) external view returns (int256 adj0, int256 adj1) {
-        return (s.positionAccounting[id].pendingFeeAdj.token0, s.positionAccounting[id].pendingFeeAdj.token1);
+        return (f.positionFeeAccounting[id].pendingFeeAdj.token0, f.positionFeeAccounting[id].pendingFeeAdj.token1);
     }
 
     function getSlashedPot(PoolId poolId) external view returns (uint256 pot0, uint256 pot1) {
-        return (s.poolAccounting[poolId].slashedPot.token0, s.poolAccounting[poolId].slashedPot.token1);
+        return (f.poolFeeAccounting[poolId].slashedPot.token0, f.poolFeeAccounting[poolId].slashedPot.token1);
     }
 
     function getFeesShared(PositionId id) external view returns (uint256 fee0, uint256 fee1) {
-        return (s.positionAccounting[id].feesShared.token0, s.positionAccounting[id].feesShared.token1);
+        return (f.positionFeeAccounting[id].feesShared.token0, f.positionFeeAccounting[id].feesShared.token1);
     }
 
     function getCISEExposure(PositionId id) external view returns (uint256 exposure0, uint256 exposure1) {
         return (
-            s.positionAccounting[id].ciseExposureSinceLastMod.token0,
-            s.positionAccounting[id].ciseExposureSinceLastMod.token1
+            f.positionFeeAccounting[id].ciseExposureSinceLastMod.token0,
+            f.positionFeeAccounting[id].ciseExposureSinceLastMod.token1
         );
     }
 
     function getPoolTotalCISEExposure(PoolId poolId) external view returns (uint256 exposure0, uint256 exposure1) {
         return (
-            s.poolAccounting[poolId].totalCISEExposureSinceLastMod.token0,
-            s.poolAccounting[poolId].totalCISEExposureSinceLastMod.token1
+            f.poolFeeAccounting[poolId].totalCISEExposureSinceLastMod.token0,
+            f.poolFeeAccounting[poolId].totalCISEExposureSinceLastMod.token1
         );
     }
 
@@ -142,8 +149,8 @@ contract VTSFeeLibHarness {
         returns (uint256 factor0, uint256 factor1)
     {
         return (
-            s.poolAccounting[poolId].feesSharedRemainingFactorX128.token0,
-            s.poolAccounting[poolId].feesSharedRemainingFactorX128.token1
+            f.poolFeeAccounting[poolId].feesSharedRemainingFactorX128.token0,
+            f.poolFeeAccounting[poolId].feesSharedRemainingFactorX128.token1
         );
     }
 
@@ -153,17 +160,17 @@ contract VTSFeeLibHarness {
         returns (uint256 factor0, uint256 factor1)
     {
         return (
-            s.positionAccounting[id].feesSharedRemainingFactorLastX128.token0,
-            s.positionAccounting[id].feesSharedRemainingFactorLastX128.token1
+            f.positionFeeAccounting[id].feesSharedRemainingFactorLastX128.token0,
+            f.positionFeeAccounting[id].feesSharedRemainingFactorLastX128.token1
         );
     }
 
     function getPoolFeesSharedEpoch(PoolId poolId) external view returns (uint256 epoch0, uint256 epoch1) {
-        return (s.poolAccounting[poolId].feesSharedEpoch.token0, s.poolAccounting[poolId].feesSharedEpoch.token1);
+        return (f.poolFeeAccounting[poolId].feesSharedEpoch.token0, f.poolFeeAccounting[poolId].feesSharedEpoch.token1);
     }
 
     function getPositionFeesSharedEpoch(PositionId id) external view returns (uint256 epoch0, uint256 epoch1) {
-        return (s.positionAccounting[id].feesSharedEpoch.token0, s.positionAccounting[id].feesSharedEpoch.token1);
+        return (f.positionFeeAccounting[id].feesSharedEpoch.token0, f.positionFeeAccounting[id].feesSharedEpoch.token1);
     }
 
     /// @notice Returns the position's pending residual fee backing balances.
@@ -172,8 +179,8 @@ contract VTSFeeLibHarness {
     /// @return fee1 The token1 residual fee backing.
     function getPendingResidualFeeBacking(PositionId id) external view returns (uint256 fee0, uint256 fee1) {
         return (
-            s.positionAccounting[id].pendingResidualFeeBacking.token0,
-            s.positionAccounting[id].pendingResidualFeeBacking.token1
+            f.positionFeeAccounting[id].pendingResidualFeeBacking.token0,
+            f.positionFeeAccounting[id].pendingResidualFeeBacking.token1
         );
     }
 
@@ -182,7 +189,8 @@ contract VTSFeeLibHarness {
     /// @return snap0 The token0 outflow snapshot.
     /// @return snap1 The token1 outflow snapshot.
     function getOutflowsAtFeeSnap(PositionId id) external view returns (uint256 snap0, uint256 snap1) {
-        return (s.positionAccounting[id].outflowsAtFeeSnap.token0, s.positionAccounting[id].outflowsAtFeeSnap.token1);
+        return
+            (f.positionFeeAccounting[id].outflowsAtFeeSnap.token0, f.positionFeeAccounting[id].outflowsAtFeeSnap.token1);
     }
 
     /// @notice Returns the last fee-growth-inside snapshot stored for the position.
@@ -190,8 +198,10 @@ contract VTSFeeLibHarness {
     /// @return fg0 The token0 fee growth inside snapshot.
     /// @return fg1 The token1 fee growth inside snapshot.
     function getFeeGrowthInsideLast(PositionId id) external view returns (uint256 fg0, uint256 fg1) {
-        return
-            (s.positionAccounting[id].feeGrowthInsideLast.token0, s.positionAccounting[id].feeGrowthInsideLast.token1);
+        return (
+            f.positionFeeAccounting[id].feeGrowthInsideLast.token0,
+            f.positionFeeAccounting[id].feeGrowthInsideLast.token1
+        );
     }
 
     // ============ Storage Setters (for test setup) ============
@@ -221,8 +231,8 @@ contract VTSFeeLibHarness {
                 openMask: 0, openSince0: 0, openSince1: 0, gracePeriodExtension0: 0, gracePeriodExtension1: 0
             })
         });
-        s.positionAccounting[id].feesSharedEpoch.token0 = s.poolAccounting[poolId].feesSharedEpoch.token0;
-        s.positionAccounting[id].feesSharedEpoch.token1 = s.poolAccounting[poolId].feesSharedEpoch.token1;
+        f.positionFeeAccounting[id].feesSharedEpoch.token0 = f.poolFeeAccounting[poolId].feesSharedEpoch.token0;
+        f.positionFeeAccounting[id].feesSharedEpoch.token1 = f.poolFeeAccounting[poolId].feesSharedEpoch.token1;
     }
 
     /// @notice Registers a position with explicit pool geometry for live PoolManager-backed fee tests.
@@ -247,58 +257,58 @@ contract VTSFeeLibHarness {
                 openMask: 0, openSince0: 0, openSince1: 0, gracePeriodExtension0: 0, gracePeriodExtension1: 0
             })
         });
-        s.positionAccounting[id].feesSharedEpoch.token0 = s.poolAccounting[poolId].feesSharedEpoch.token0;
-        s.positionAccounting[id].feesSharedEpoch.token1 = s.poolAccounting[poolId].feesSharedEpoch.token1;
+        f.positionFeeAccounting[id].feesSharedEpoch.token0 = f.poolFeeAccounting[poolId].feesSharedEpoch.token0;
+        f.positionFeeAccounting[id].feesSharedEpoch.token1 = f.poolFeeAccounting[poolId].feesSharedEpoch.token1;
     }
 
     /// @notice Sets pending fee adjustment for a position
     function setPendingFeeAdj(PositionId id, int256 adj0, int256 adj1) external {
-        s.positionAccounting[id].pendingFeeAdj.token0 = adj0;
-        s.positionAccounting[id].pendingFeeAdj.token1 = adj1;
+        f.positionFeeAccounting[id].pendingFeeAdj.token0 = adj0;
+        f.positionFeeAccounting[id].pendingFeeAdj.token1 = adj1;
     }
 
     /// @notice Sets slashed pot for a pool
     function setSlashedPot(PoolId poolId, uint256 pot0, uint256 pot1) external {
-        s.poolAccounting[poolId].slashedPot.token0 = pot0;
-        s.poolAccounting[poolId].slashedPot.token1 = pot1;
+        f.poolFeeAccounting[poolId].slashedPot.token0 = pot0;
+        f.poolFeeAccounting[poolId].slashedPot.token1 = pot1;
     }
 
     /// @notice Sets fees shared for a position
     function setFeesShared(PositionId id, uint256 fee0, uint256 fee1) external {
-        s.positionAccounting[id].feesShared.token0 = fee0;
-        s.positionAccounting[id].feesShared.token1 = fee1;
+        f.positionFeeAccounting[id].feesShared.token0 = fee0;
+        f.positionFeeAccounting[id].feesShared.token1 = fee1;
     }
 
     /// @notice Sets CISE exposure for a position
     function setCISEExposure(PositionId id, uint256 exposure0, uint256 exposure1) external {
-        s.positionAccounting[id].ciseExposureSinceLastMod.token0 = exposure0;
-        s.positionAccounting[id].ciseExposureSinceLastMod.token1 = exposure1;
+        f.positionFeeAccounting[id].ciseExposureSinceLastMod.token0 = exposure0;
+        f.positionFeeAccounting[id].ciseExposureSinceLastMod.token1 = exposure1;
     }
 
     /// @notice Sets pool total CISE exposure
     function setPoolTotalCISEExposure(PoolId poolId, uint256 exposure0, uint256 exposure1) external {
-        s.poolAccounting[poolId].totalCISEExposureSinceLastMod.token0 = exposure0;
-        s.poolAccounting[poolId].totalCISEExposureSinceLastMod.token1 = exposure1;
+        f.poolFeeAccounting[poolId].totalCISEExposureSinceLastMod.token0 = exposure0;
+        f.poolFeeAccounting[poolId].totalCISEExposureSinceLastMod.token1 = exposure1;
     }
 
     function setPoolFeesSharedRemainingFactorX128(PoolId poolId, uint256 factor0, uint256 factor1) external {
-        s.poolAccounting[poolId].feesSharedRemainingFactorX128.token0 = factor0;
-        s.poolAccounting[poolId].feesSharedRemainingFactorX128.token1 = factor1;
+        f.poolFeeAccounting[poolId].feesSharedRemainingFactorX128.token0 = factor0;
+        f.poolFeeAccounting[poolId].feesSharedRemainingFactorX128.token1 = factor1;
     }
 
     function setPositionFeesSharedRemainingFactorLastX128(PositionId id, uint256 factor0, uint256 factor1) external {
-        s.positionAccounting[id].feesSharedRemainingFactorLastX128.token0 = factor0;
-        s.positionAccounting[id].feesSharedRemainingFactorLastX128.token1 = factor1;
+        f.positionFeeAccounting[id].feesSharedRemainingFactorLastX128.token0 = factor0;
+        f.positionFeeAccounting[id].feesSharedRemainingFactorLastX128.token1 = factor1;
     }
 
     function setPoolFeesSharedEpoch(PoolId poolId, uint256 epoch0, uint256 epoch1) external {
-        s.poolAccounting[poolId].feesSharedEpoch.token0 = epoch0;
-        s.poolAccounting[poolId].feesSharedEpoch.token1 = epoch1;
+        f.poolFeeAccounting[poolId].feesSharedEpoch.token0 = epoch0;
+        f.poolFeeAccounting[poolId].feesSharedEpoch.token1 = epoch1;
     }
 
     function setPositionFeesSharedEpoch(PositionId id, uint256 epoch0, uint256 epoch1) external {
-        s.positionAccounting[id].feesSharedEpoch.token0 = epoch0;
-        s.positionAccounting[id].feesSharedEpoch.token1 = epoch1;
+        f.positionFeeAccounting[id].feesSharedEpoch.token0 = epoch0;
+        f.positionFeeAccounting[id].feesSharedEpoch.token1 = epoch1;
     }
 
     /// @notice Sets the position's pending residual fee backing balances.
@@ -306,8 +316,8 @@ contract VTSFeeLibHarness {
     /// @param fee0 The token0 residual fee backing.
     /// @param fee1 The token1 residual fee backing.
     function setPendingResidualFeeBacking(PositionId id, uint256 fee0, uint256 fee1) external {
-        s.positionAccounting[id].pendingResidualFeeBacking.token0 = fee0;
-        s.positionAccounting[id].pendingResidualFeeBacking.token1 = fee1;
+        f.positionFeeAccounting[id].pendingResidualFeeBacking.token0 = fee0;
+        f.positionFeeAccounting[id].pendingResidualFeeBacking.token1 = fee1;
     }
 
     function setCumulativeOutflows(PositionId id, uint256 out0, uint256 out1) external {
@@ -320,8 +330,8 @@ contract VTSFeeLibHarness {
     /// @param snap0 The token0 outflow snapshot.
     /// @param snap1 The token1 outflow snapshot.
     function setOutflowsAtFeeSnap(PositionId id, uint256 snap0, uint256 snap1) external {
-        s.positionAccounting[id].outflowsAtFeeSnap.token0 = snap0;
-        s.positionAccounting[id].outflowsAtFeeSnap.token1 = snap1;
+        f.positionFeeAccounting[id].outflowsAtFeeSnap.token0 = snap0;
+        f.positionFeeAccounting[id].outflowsAtFeeSnap.token1 = snap1;
     }
 
     /// @notice Sets the last fee-growth-inside snapshot stored for the position.
@@ -329,7 +339,7 @@ contract VTSFeeLibHarness {
     /// @param fg0 The token0 fee growth inside snapshot.
     /// @param fg1 The token1 fee growth inside snapshot.
     function setFeeGrowthInsideLast(PositionId id, uint256 fg0, uint256 fg1) external {
-        s.positionAccounting[id].feeGrowthInsideLast.token0 = fg0;
-        s.positionAccounting[id].feeGrowthInsideLast.token1 = fg1;
+        f.positionFeeAccounting[id].feeGrowthInsideLast.token0 = fg0;
+        f.positionFeeAccounting[id].feeGrowthInsideLast.token1 = fg1;
     }
 }

@@ -9,7 +9,8 @@ import {
     VTSLifecycleContext,
     VTSCoreHookContext,
     VTSCommitRouterContext,
-    SettleResult
+    SettleResult,
+    TouchPositionParams
 } from "../../../src/types/VTS.sol";
 import {PositionId, Position} from "../../../src/types/Position.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
@@ -22,11 +23,13 @@ import {Pool} from "../../../src/types/Pool.sol";
 import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
 import {MarketMaker} from "../../../src/libraries/MarketMaker.sol";
 import {VTSConfigs} from "../../../src/libraries/VTSConfigs.sol";
+import {VTSFeeStorage} from "../../../src/types/VTSFee.sol";
 
 /// @title VTSLifecycleLinkedLibHarness
 /// @notice Delegates to VTSLifecycleLinkedLib against isolated `VTSStorage` for unit tests
 contract VTSLifecycleLinkedLibHarness {
     VTSStorage internal s;
+    VTSFeeStorage internal f;
 
     function checkpoint(VTSLifecycleContext memory ctx, uint256 commitId, bool withCommitment, PositionId positionId)
         external
@@ -44,7 +47,7 @@ contract VTSLifecycleLinkedLibHarness {
         bool withCommitment,
         PositionId positionId
     ) external returns (RFSCheckpoint memory) {
-        VTSPositionLib.settlePositionGrowths(s, ctx.poolManager, positionId);
+        VTSPositionLib.settlePositionGrowths(s, f, ctx.poolManager, positionId);
         return withCommitment
             ? VTSCommitLib.checkpointAfterGrowthWithCommitment(s, ctx, commitId, positionId)
             : VTSLifecycleLinkedLib.checkpointAfterGrowthNoCommitment(s, positionId);
@@ -59,7 +62,7 @@ contract VTSLifecycleLinkedLibHarness {
         bytes memory settlementProof
     ) external returns (RFSCheckpoint memory) {
         return VTSCommitLib.extendGracePeriod(
-            s, ctx, poolKey, positionId, settlementTokenIndex, verifierIndex, settlementProof
+            s, f, ctx, poolKey, positionId, settlementTokenIndex, verifierIndex, settlementProof
         );
     }
 
@@ -69,7 +72,7 @@ contract VTSLifecycleLinkedLibHarness {
         uint256 positionIndex,
         PositionId positionId
     ) external {
-        VTSCommitLib.validateSeize(s, ctx, commitId, positionIndex, positionId);
+        VTSCommitLib.validateSeize(s, f, ctx, commitId, positionIndex, positionId);
     }
 
     function onMMSettle(
@@ -81,7 +84,9 @@ contract VTSLifecycleLinkedLibHarness {
         bool isSeizing,
         bool fromDeltas
     ) external returns (SettleResult memory) {
-        return VTSLifecycleLinkedLib.onMMSettle(s, ctx, factory, positionId, poolId, amountDelta, isSeizing, fromDeltas);
+        return VTSLifecycleLinkedLib.onMMSettle(
+            s, f, ctx, factory, positionId, poolId, amountDelta, isSeizing, fromDeltas
+        );
     }
 
     function validateMMOperation(
@@ -102,7 +107,15 @@ contract VTSLifecycleLinkedLibHarness {
         BalanceDelta feesAccrued,
         bytes calldata hookData
     ) external returns (Position memory pos, PositionId id, BalanceDelta feeAdj) {
-        return VTSLifecycleLinkedLib.processPosition(s, ctx, owner, poolKey, params, callerDelta, feesAccrued, hookData);
+        TouchPositionParams memory tp = TouchPositionParams({
+            owner: owner,
+            poolKey: poolKey,
+            params: params,
+            callerDelta: callerDelta,
+            feesAccrued: feesAccrued,
+            hookData: hookData
+        });
+        return VTSLifecycleLinkedLib.processPosition(s, f, ctx, tp);
     }
 
     function commitSignal(

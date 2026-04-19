@@ -13,6 +13,7 @@ import {IOracleHelper} from "../../../src/interfaces/IOracleHelper.sol";
 import {MarketMaker} from "../../../src/libraries/MarketMaker.sol";
 import {IPoolManager} from "v4-periphery/lib/v4-core/src/interfaces/IPoolManager.sol";
 import {StateLibrary} from "v4-periphery/lib/v4-core/src/libraries/StateLibrary.sol";
+import {VTSFeeStorage} from "../../../src/types/VTSFee.sol";
 
 /// @title VTSCommitLibHarness
 /// @notice Exposes VTSCommitLib functions for unit testing with an isolated VTSStorage
@@ -20,6 +21,7 @@ contract VTSCommitLibHarness {
     using StateLibrary for IPoolManager;
 
     VTSStorage internal s;
+    VTSFeeStorage internal f;
 
     // ============ Library Function Exposers ============
 
@@ -36,7 +38,7 @@ contract VTSCommitLibHarness {
     }
 
     function incrementCoverage(PoolId poolId, uint8 tokenIndex, uint256 coveredAmount) external {
-        VTSCommitLib.incrementCoverage(s, poolId, tokenIndex, coveredAmount);
+        VTSCommitLib.incrementCoverage(s, f, poolId, tokenIndex, coveredAmount);
     }
 
     function commitSignal(IVRLSignalManager mgr, address sender, IOracleHelper oracleHelper, bytes memory sig)
@@ -145,26 +147,26 @@ contract VTSCommitLibHarness {
 
     function getCoveragePerDeficitIndexX128(PoolId poolId, uint8 tokenIndex) external view returns (uint256) {
         return tokenIndex == 0
-            ? s.poolAccounting[poolId].coveragePerDeficitIndexX128.token0
-            : s.poolAccounting[poolId].coveragePerDeficitIndexX128.token1;
+            ? f.poolFeeAccounting[poolId].coveragePerDeficitIndexX128.token0
+            : f.poolFeeAccounting[poolId].coveragePerDeficitIndexX128.token1;
     }
 
     function getCoverageResidualDICE(PoolId poolId, uint8 tokenIndex) external view returns (uint256) {
         return tokenIndex == 0
-            ? s.poolAccounting[poolId].coverageResidualDICE.token0
-            : s.poolAccounting[poolId].coverageResidualDICE.token1;
+            ? f.poolFeeAccounting[poolId].coverageResidualDICE.token0
+            : f.poolFeeAccounting[poolId].coverageResidualDICE.token1;
     }
 
     function getCoveragePerSettledIndexX128(PoolId poolId, uint8 tokenIndex) external view returns (uint256) {
         return tokenIndex == 0
-            ? s.poolAccounting[poolId].coveragePerSettledIndexX128.token0
-            : s.poolAccounting[poolId].coveragePerSettledIndexX128.token1;
+            ? f.poolFeeAccounting[poolId].coveragePerSettledIndexX128.token0
+            : f.poolFeeAccounting[poolId].coveragePerSettledIndexX128.token1;
     }
 
     function getTotalCISEExposureSinceLastMod(PoolId poolId, uint8 tokenIndex) external view returns (uint256) {
         return tokenIndex == 0
-            ? s.poolAccounting[poolId].totalCISEExposureSinceLastMod.token0
-            : s.poolAccounting[poolId].totalCISEExposureSinceLastMod.token1;
+            ? f.poolFeeAccounting[poolId].totalCISEExposureSinceLastMod.token0
+            : f.poolFeeAccounting[poolId].totalCISEExposureSinceLastMod.token1;
     }
 
     function getPositionCommitmentDeficit(PositionId id) external view returns (uint256 deficit0, uint256 deficit1) {

@@ -3,6 +3,7 @@ pragma solidity ^0.8.26;
 
 import {VTSOrchestrator} from "../../src/VTSOrchestrator.sol";
 import {PositionAccounting, PoolAccounting} from "../../src/types/VTS.sol";
+import {PoolFeeAccounting, PositionFeeAccounting} from "../../src/types/VTSFee.sol";
 import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {PositionId} from "../../src/types/Position.sol";
 import {IVRLSignalManager} from "../../src/interfaces/IVRLSignalManager.sol";
@@ -98,13 +99,14 @@ contract VTSOrchestratorTestable is VTSOrchestrator {
         )
     {
         PoolAccounting storage paPool = s.poolAccounting[poolId];
+        PoolFeeAccounting storage pfPool = feeS.poolFeeAccounting[poolId];
         return (
             paPool.totalDeficitPrincipal.token0,
             paPool.totalDeficitPrincipal.token1,
-            paPool.coveragePerDeficitIndexX128.token0,
-            paPool.coveragePerDeficitIndexX128.token1,
-            paPool.coverageResidualDICE.token0,
-            paPool.coverageResidualDICE.token1
+            pfPool.coveragePerDeficitIndexX128.token0,
+            pfPool.coveragePerDeficitIndexX128.token1,
+            pfPool.coverageResidualDICE.token0,
+            pfPool.coverageResidualDICE.token1
         );
     }
 
@@ -114,8 +116,8 @@ contract VTSOrchestratorTestable is VTSOrchestrator {
         view
         returns (uint256 residualIndex0, uint256 residualIndex1)
     {
-        PoolAccounting storage paPool = s.poolAccounting[poolId];
-        return (paPool.coveragePerResidualDeficitIndexX128.token0, paPool.coveragePerResidualDeficitIndexX128.token1);
+        PoolFeeAccounting storage pfPool = feeS.poolFeeAccounting[poolId];
+        return (pfPool.coveragePerResidualDeficitIndexX128.token0, pfPool.coveragePerResidualDeficitIndexX128.token1);
     }
 
     /// @notice Get position's DICE coverage index checkpoint for debugging
@@ -127,8 +129,8 @@ contract VTSOrchestratorTestable is VTSOrchestrator {
         view
         returns (uint256 coverageIndexLast0, uint256 coverageIndexLast1)
     {
-        PositionAccounting storage pa = s.positionAccounting[positionId];
-        return (pa.coverageIndexLastX128.token0, pa.coverageIndexLastX128.token1);
+        PositionFeeAccounting storage pf = feeS.positionFeeAccounting[positionId];
+        return (pf.coverageIndexLastX128.token0, pf.coverageIndexLastX128.token1);
     }
 
     /// @notice Get position's commitment deficit (backing insolvency gate) for debugging
@@ -168,8 +170,8 @@ contract VTSOrchestratorTestable is VTSOrchestrator {
         view
         returns (uint256 ciseExposure0, uint256 ciseExposure1)
     {
-        PositionAccounting storage pa = s.positionAccounting[positionId];
-        return (pa.ciseExposureSinceLastMod.token0, pa.ciseExposureSinceLastMod.token1);
+        PositionFeeAccounting storage pf = feeS.positionFeeAccounting[positionId];
+        return (pf.ciseExposureSinceLastMod.token0, pf.ciseExposureSinceLastMod.token1);
     }
 
     /// @notice Get pool-wide CISE bonus weighting totals (debug/observability)
@@ -181,8 +183,8 @@ contract VTSOrchestratorTestable is VTSOrchestrator {
         view
         returns (uint256 totalCISEExposure0, uint256 totalCISEExposure1)
     {
-        PoolAccounting storage paPool = s.poolAccounting[poolId];
-        return (paPool.totalCISEExposureSinceLastMod.token0, paPool.totalCISEExposureSinceLastMod.token1);
+        PoolFeeAccounting storage pfPool = feeS.poolFeeAccounting[poolId];
+        return (pfPool.totalCISEExposureSinceLastMod.token0, pfPool.totalCISEExposureSinceLastMod.token1);
     }
 
     /// @notice Get pool CISE (Coverage-Indexed Settled Exposure) accounting for debugging
@@ -206,13 +208,14 @@ contract VTSOrchestratorTestable is VTSOrchestrator {
         )
     {
         PoolAccounting storage paPool = s.poolAccounting[poolId];
+        PoolFeeAccounting storage pfPool = feeS.poolFeeAccounting[poolId];
         return (
             paPool.totalSettled.token0,
             paPool.totalSettled.token1,
-            paPool.coveragePerSettledIndexX128.token0,
-            paPool.coveragePerSettledIndexX128.token1,
-            paPool.totalCISEExposureSinceLastMod.token0,
-            paPool.totalCISEExposureSinceLastMod.token1
+            pfPool.coveragePerSettledIndexX128.token0,
+            pfPool.coveragePerSettledIndexX128.token1,
+            pfPool.totalCISEExposureSinceLastMod.token0,
+            pfPool.totalCISEExposureSinceLastMod.token1
         );
     }
 
@@ -225,8 +228,8 @@ contract VTSOrchestratorTestable is VTSOrchestrator {
         view
         returns (uint256 ciseIndexLast0, uint256 ciseIndexLast1)
     {
-        PositionAccounting storage pa = s.positionAccounting[positionId];
-        return (pa.ciseIndexLastX128.token0, pa.ciseIndexLastX128.token1);
+        PositionFeeAccounting storage pf = feeS.positionFeeAccounting[positionId];
+        return (pf.ciseIndexLastX128.token0, pf.ciseIndexLastX128.token1);
     }
 
     /// @notice Get pool CSI accounting for debugging
@@ -238,8 +241,8 @@ contract VTSOrchestratorTestable is VTSOrchestrator {
         view
         returns (uint256 feesSharedRemainingFactor0, uint256 feesSharedRemainingFactor1)
     {
-        PoolAccounting storage paPool = s.poolAccounting[poolId];
-        return (paPool.feesSharedRemainingFactorX128.token0, paPool.feesSharedRemainingFactorX128.token1);
+        PoolFeeAccounting storage pfPool = feeS.poolFeeAccounting[poolId];
+        return (pfPool.feesSharedRemainingFactorX128.token0, pfPool.feesSharedRemainingFactorX128.token1);
     }
 
     /// @notice Get position CSI accounting for debugging
@@ -253,24 +256,24 @@ contract VTSOrchestratorTestable is VTSOrchestrator {
         view
         returns (uint256 feesShared0, uint256 feesShared1, uint256 feesSharedFactorLast0, uint256 feesSharedFactorLast1)
     {
-        PositionAccounting storage pa = s.positionAccounting[positionId];
+        PositionFeeAccounting storage pf = feeS.positionFeeAccounting[positionId];
         return (
-            pa.feesShared.token0,
-            pa.feesShared.token1,
-            pa.feesSharedRemainingFactorLastX128.token0,
-            pa.feesSharedRemainingFactorLastX128.token1
+            pf.feesShared.token0,
+            pf.feesShared.token1,
+            pf.feesSharedRemainingFactorLastX128.token0,
+            pf.feesSharedRemainingFactorLastX128.token1
         );
     }
 
     /// @notice Pool materialised slash pot (debug / Phase 1 quarantine assertions)
     function getPoolSlashedPot(PoolId poolId) external view returns (uint256 pot0, uint256 pot1) {
-        PoolAccounting storage paPool = s.poolAccounting[poolId];
-        return (paPool.slashedPot.token0, paPool.slashedPot.token1);
+        PoolFeeAccounting storage pfPool = feeS.poolFeeAccounting[poolId];
+        return (pfPool.slashedPot.token0, pfPool.slashedPot.token1);
     }
 
     /// @notice Position pending fee adjustment queue (debug / Phase 1 quarantine assertions)
     function getPositionPendingFeeAdj(PositionId positionId) external view returns (int256 adj0, int256 adj1) {
-        PositionAccounting storage pa = s.positionAccounting[positionId];
-        return (pa.pendingFeeAdj.token0, pa.pendingFeeAdj.token1);
+        PositionFeeAccounting storage pf = feeS.positionFeeAccounting[positionId];
+        return (pf.pendingFeeAdj.token0, pf.pendingFeeAdj.token1);
     }
 }
