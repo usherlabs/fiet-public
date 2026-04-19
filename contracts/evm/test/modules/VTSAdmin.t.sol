@@ -190,7 +190,7 @@ contract MockSignalManagerForAdmin is IVRLSignalManager {
             }
 
             function test_setMarketVTSConfiguration_revertsWhenNotOwner() public {
-                MarketVTSConfiguration memory cfg = VTSConfigs.getFeeSharingDefaultConfig();
+                MarketVTSConfiguration memory cfg = VTSConfigs.getDefaultConfig();
 
                 vm.prank(attacker);
                 vm.expectRevert(Errors.InvalidSender.selector);
@@ -198,7 +198,7 @@ contract MockSignalManagerForAdmin is IVRLSignalManager {
             }
 
             function test_setMarketVTSConfiguration_revertsWhenConfigInvalid() public {
-                MarketVTSConfiguration memory cfg = VTSConfigs.getFeeSharingDefaultConfig();
+                MarketVTSConfiguration memory cfg = VTSConfigs.getDefaultConfig();
                 cfg.token0.gracePeriodTime = 10;
                 cfg.token0.maxGracePeriodTime = 9;
 
@@ -208,7 +208,7 @@ contract MockSignalManagerForAdmin is IVRLSignalManager {
             }
 
             function test_setMarketVTSConfiguration_updatesStorageAndEmitsEvent() public {
-                MarketVTSConfiguration memory cfg = VTSConfigs.getFeeSharingDefaultConfig();
+                MarketVTSConfiguration memory cfg = VTSConfigs.getDefaultConfig();
                 cfg.token0.baseVTSRate += 1;
 
                 vm.expectEmit(true, false, false, true, address(harness));

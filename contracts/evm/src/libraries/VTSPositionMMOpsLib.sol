@@ -23,7 +23,6 @@ import {CheckpointLibrary} from "./Checkpoint.sol";
 import {OwnerCurrencyDelta} from "./OwnerCurrencyDelta.sol";
 import {MarketCurrencyDelta} from "./MarketCurrencyDelta.sol";
 import {VTSPositionLib} from "./VTSPositionLib.sol";
-import {VTSFeeStorage} from "../types/VTSFee.sol";
 import {IMarketVault} from "../interfaces/IMarketVault.sol";
 import {ICanonicalVault} from "../interfaces/ICanonicalVault.sol";
 
@@ -88,7 +87,6 @@ library VTSPositionMMOpsLib {
     /// @param requiredSettlementDelta Required settlement delta computed during the touch accounting phase.
     function processMMOperations(
         VTSStorage storage s,
-        VTSFeeStorage storage f,
         PositionContext memory ctx,
         TouchPositionParams memory p,
         TouchPositionResult memory result,
@@ -110,7 +108,7 @@ library VTSPositionMMOpsLib {
         if (p.params.liquidityDelta > 0) {
             // Adding liquidity: settle any hook-carried protocol credit before backing validation/LCC issuance.
             requiredSettlementDelta = _applyInHookProtocolSettlementForMmIncrease(
-                s, f, ctx, p.owner, result.id, p.poolKey, p.hookData, requiredSettlementDelta
+                s, ctx, p.owner, result.id, p.poolKey, p.hookData, requiredSettlementDelta
             );
             _handleLiquidityIncrease(
                 s,
@@ -163,7 +161,6 @@ library VTSPositionMMOpsLib {
             }
             VTSPositionLib._applySettlementClampFromExcess(
                 s,
-                f,
                 result.id,
                 LiquidityUtils.safeInt128ToUint256(exportedForSettlementClamp.amount0()),
                 LiquidityUtils.safeInt128ToUint256(exportedForSettlementClamp.amount1())
@@ -239,10 +236,9 @@ library VTSPositionMMOpsLib {
     /// @notice External entry for linked callers: settle protocol credit from positive owner underlying delta.
     function settleFromPositiveUnderlyingDelta(
         VTSStorage storage s,
-        VTSFeeStorage storage f,
         ProtocolCreditSettlementParams memory p
     ) external returns (ProtocolCreditSettlementResult memory result) {
-        result = _settleFromPositiveUnderlyingDelta(s, f, p);
+        result = _settleFromPositiveUnderlyingDelta(s, p);
     }
 
     /// @dev Applies one protocol-credit deposit lane by consuming live positive underlying delta.
@@ -250,7 +246,6 @@ library VTSPositionMMOpsLib {
     ///      `requiredSettlementDelta >= 0`, the position owes no deposit on that lane — skip consumption (MM in-hook).
     function _consumePositiveUnderlyingDeltaForSettlementLane(
         VTSStorage storage s,
-        VTSFeeStorage storage f,
         ProtocolCreditSettlementLaneParams memory p
     ) private returns (int128 settlementDelta, int128 remainingRequiredSettlementDelta, uint256 settledIncrease) {
         remainingRequiredSettlementDelta = p.requiredSettlementDelta;
@@ -276,7 +271,7 @@ library VTSPositionMMOpsLib {
         if (requestedAmount == 0) return (0, remainingRequiredSettlementDelta, 0);
 
         (int256 totalApplied, int256 settledDeltaOnly) =
-            VTSPositionLib._vUpdateSettlement(s, f, p.positionId, p.tokenIndex, requestedAmount.toInt256());
+            VTSPositionLib._vUpdateSettlement(s, p.positionId, p.tokenIndex, requestedAmount.toInt256());
         if (totalApplied <= 0) return (0, remainingRequiredSettlementDelta, 0);
 
         uint256 creditConsumed = uint256(totalApplied);
@@ -297,7 +292,6 @@ library VTSPositionMMOpsLib {
     /// @dev Implementation of `settleFromPositiveUnderlyingDelta` (two-lane vault reserve + produced credit).
     function _settleFromPositiveUnderlyingDelta(
         VTSStorage storage s,
-        VTSFeeStorage storage f,
         ProtocolCreditSettlementParams memory p
     ) private returns (ProtocolCreditSettlementResult memory result) {
         BalanceDelta currentUnderlying = OwnerCurrencyDelta.getUnderlyingDeltaPair(
@@ -305,7 +299,6 @@ library VTSPositionMMOpsLib {
         );
         (int128 settle0, int128 remaining0, uint256 settledIncrease0) = _consumePositiveUnderlyingDeltaForSettlementLane(
             s,
-            f,
             ProtocolCreditSettlementLaneParams({
                 positionId: p.positionId,
                 owner: p.owner,
@@ -321,7 +314,6 @@ library VTSPositionMMOpsLib {
         );
         (int128 settle1, int128 remaining1, uint256 settledIncrease1) = _consumePositiveUnderlyingDeltaForSettlementLane(
             s,
-            f,
             ProtocolCreditSettlementLaneParams({
                 positionId: p.positionId,
                 owner: p.owner,
@@ -366,7 +358,6 @@ library VTSPositionMMOpsLib {
     /// @dev Settles protocol credit inside the MM add-liquidity hook path before LCC issuance/backing validation.
     function _applyInHookProtocolSettlementForMmIncrease(
         VTSStorage storage s,
-        VTSFeeStorage storage f,
         PositionContext memory ctx,
         address owner,
         PositionId positionId,
@@ -380,7 +371,6 @@ library VTSPositionMMOpsLib {
 
         ProtocolCreditSettlementResult memory settled = _settleFromPositiveUnderlyingDelta(
             s,
-            f,
             ProtocolCreditSettlementParams({
                 marketVault: ctx.marketVault,
                 positionId: positionId,

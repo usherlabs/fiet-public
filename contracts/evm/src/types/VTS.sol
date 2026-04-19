@@ -16,8 +16,6 @@ import {ModifyLiquidityParams} from "@uniswap/v4-core/src/types/PoolOperation.so
 import {BalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
 import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
 
-import {GrowthPair, TokenPairUint, TokenPairInt, TokenPairLib} from "./VTSPairTypes.sol";
-
 struct TokenConfiguration {
     // Grace period time
     uint256 gracePeriodTime;
@@ -37,8 +35,6 @@ struct MarketVTSConfiguration {
     TokenConfiguration token0;
     // Token configuration for token1
     TokenConfiguration token1;
-    // Fee share applied to LP fees when protocol covers deficits (in basis points)
-    uint16 coverageFeeShare;
     // Minimum residual liquidity units threshold for full position closure during seizure
     uint256 minResidualUnits;
     // Commitment deficit severity threshold (bps) above which grace bypass is allowed
@@ -99,17 +95,9 @@ struct TouchPositionParams {
 }
 
 /// @notice Result of touchPosition to reduce stack pressure
-/// @dev Bundles return values into a single struct. When hook data indicates an MM operation, the MM tail
-///      (`VTSPositionMMOpsLib.processMMOperations`) runs inside `touchPosition` before `pos` is finalised.
-///      `pos` is always reloaded from storage at the end of `touchPosition` so it reflects checkpointing and other
-///      MM-tail updates in the same call.
 struct TouchPositionResult {
-    // The position struct
     Position pos;
-    // The position id
     PositionId id;
-    // The fee adjustment delta
-    BalanceDelta feeAdj;
 }
 
 /// @notice Parameters for onMMSettle to reduce stack pressure
@@ -156,8 +144,6 @@ struct SettleResult {
 
 /// @notice Per-position accounting data (mirrors VTSManager per-position mappings)
 /// @dev Split out of VTSManager to follow the Bunni-style storage pattern
-///
-///      Fee-era / DICE / CISE / CSI fields live in `PositionFeeAccounting` (`types/VTSFee.sol`).
 struct PositionAccounting {
     // Commitment maxima per token
     TokenPairUint commitmentMax;
@@ -172,7 +158,7 @@ struct PositionAccounting {
     // Cumulative outflows per token
     TokenPairUint cumulativeOutflows;
     // Commitment-scoped deficit (insolvency gate) per token.
-    // Derived from checkpoint backing shortfall; not part of DICE principal accounting.
+    // Derived from checkpoint backing shortfall.
     TokenPairUint commitmentDeficit;
     // Commitment deficit severity in bps (0-10000), updated by commitment checkpoints
     uint16 commitmentDeficitBps;
@@ -181,19 +167,81 @@ struct PositionAccounting {
 }
 
 /// @notice Per-pool accounting data (mirrors VTSManager per-pool mappings)
-/// @dev Split out of VTSManager to follow the Bunni-style storage pattern
-///
-///      Fee-era indices and CSI state live in `PoolFeeAccounting` (`types/VTSFee.sol`).
+/// @dev Swap growth globals plus pool-wide aggregates for deficit principal and settled liquidity.
 struct PoolAccounting {
     // Deficit growth global per token
     TokenPairUint deficitGrowthGlobal;
     // Inflow growth global per token
     TokenPairUint inflowGrowthGlobal;
-    // DICE: Pool-wide outstanding swap-incurred deficit principal per token.
-    // Mirrors summed cumulativeDeficit and excludes commitmentDeficit.
+    // Pool-wide outstanding swap-incurred deficit principal per token (mirrors summed position cumulativeDeficit, excludes commitmentDeficit)
     TokenPairUint totalDeficitPrincipal;
-    // CISE: Pool-wide total settled aggregate per token
+    // Pool-wide total settled aggregate per token
     TokenPairUint totalSettled;
+}
+
+/// @notice Simple pair struct for per-tick growth (replaces uint256[2] arrays)
+struct GrowthPair {
+    uint256 token0;
+    uint256 token1;
+}
+
+/// @notice Pair struct for uint256 values per token (token0 and token1)
+/// @dev Similar to GrowthPair but used for general accounting fields
+struct TokenPairUint {
+    uint256 token0;
+    uint256 token1;
+}
+
+/// @notice Pair struct for int256 values per token (token0 and token1)
+/// @dev Used for signed accounting fields like net settlement
+struct TokenPairInt {
+    int256 token0;
+    int256 token1;
+}
+
+/// @title TokenPairLib
+/// @notice Library for accessing TokenPair fields by tokenIndex
+/// @dev Provides get/set helpers to replace manual if (tokenIndex == 0) branching
+library TokenPairLib {
+    /// @notice Get the value for a specific token index from a TokenPairUint
+    /// @param self The TokenPairUint storage reference
+    /// @param tokenIndex The token index (0 or 1)
+    /// @return The value for the specified token
+    function get(TokenPairUint storage self, uint8 tokenIndex) internal view returns (uint256) {
+        return tokenIndex == 0 ? self.token0 : self.token1;
+    }
+
+    /// @notice Set the value for a specific token index in a TokenPairUint
+    /// @param self The TokenPairUint storage reference
+    /// @param tokenIndex The token index (0 or 1)
+    /// @param value The value to set
+    function set(TokenPairUint storage self, uint8 tokenIndex, uint256 value) internal {
+        if (tokenIndex == 0) {
+            self.token0 = value;
+        } else {
+            self.token1 = value;
+        }
+    }
+
+    /// @notice Get the value for a specific token index from a TokenPairInt
+    /// @param self The TokenPairInt storage reference
+    /// @param tokenIndex The token index (0 or 1)
+    /// @return The value for the specified token
+    function get(TokenPairInt storage self, uint8 tokenIndex) internal view returns (int256) {
+        return tokenIndex == 0 ? self.token0 : self.token1;
+    }
+
+    /// @notice Set the value for a specific token index in a TokenPairInt
+    /// @param self The TokenPairInt storage reference
+    /// @param tokenIndex The token index (0 or 1)
+    /// @param value The value to set
+    function set(TokenPairInt storage self, uint8 tokenIndex, int256 value) internal {
+        if (tokenIndex == 0) {
+            self.token0 = value;
+        } else {
+            self.token1 = value;
+        }
+    }
 }
 
 /// @notice Central storage struct (like Bunni's HubStorage)

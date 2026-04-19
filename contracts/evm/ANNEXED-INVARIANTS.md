@@ -142,9 +142,9 @@ Core guarantees that remain unconditional on the default path (for example **VTS
   - `src/MMPositionManager.sol::_decommitSignal` intentionally gates burn only on commit emptiness in the supported
     economic sense (`activePositionCount == 0` and `inactiveRemnantCount == 0`), not on clearing historical
     `pendingFeeAdj`.
-- **fuzz harness note**:
+- **Echidna harness note**:
   - `test/fuzz/invariants/FEE01.sol` resets CSI `feesSharedEpoch`, remaining-share factors, and related accounting at the
-    start of each action. Medusa reuses a single deployed harness, so without that reset, `_syncFeesSharedRemainingForToken`
+    start of each action. Echidna reuses a single deployed harness, so without that reset, `_syncFeesSharedRemainingForToken`
     can clear or rescale seeded `feesShared` across steps and desynchronise a naive “expected queue” model from production
     behaviour.
 
@@ -159,3 +159,4 @@ Core guarantees that remain unconditional on the default path (for example **VTS
     (dust guard). New positions start with `ciseExposureSinceLastMod == 0`.
   - CISE exposure accrues only when coverage is incremented (`VTSCommitLib.incrementCoverage`) **after** the position
     exists; it is then realised/consumed on subsequent fee-processing touches.
+

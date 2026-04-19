@@ -5,7 +5,6 @@ import {FuzzVTSCoreTail} from "./FuzzVTSCoreTail.sol";
 import {COMMIT01} from "./invariants/COMMIT01.sol";
 import {COMMIT02} from "./invariants/COMMIT02.sol";
 import {COMMIT03} from "./invariants/COMMIT03.sol";
-import {COV03} from "./invariants/COV03.sol";
 import {SEIZE03_04} from "./invariants/SEIZE03_04.sol";
 
 /// @notice Composed Medusa module for repo-owned VTS commit, coverage, and seize fuzz harnesses.
@@ -15,14 +14,12 @@ abstract contract FuzzVTSPosition is FuzzVTSCoreTail {
     COMMIT01 internal fuzzCommit01;
     COMMIT02 internal fuzzCommit02;
     COMMIT03 internal fuzzCommit03;
-    COV03 internal fuzzCov03;
     SEIZE03_04 internal fuzzSeize0304;
 
     constructor() FuzzVTSCoreTail() {
         fuzzCommit01 = new COMMIT01();
         fuzzCommit02 = new COMMIT02();
         fuzzCommit03 = new COMMIT03();
-        fuzzCov03 = new COV03();
         fuzzSeize0304 = new SEIZE03_04();
     }
 
@@ -134,27 +131,6 @@ abstract contract FuzzVTSPosition is FuzzVTSCoreTail {
 
     function fuzz_commit_03_rotation_respects_new_advancer() external view returns (bool) {
         return fuzzCommit03.fuzz_commit_03_rotation_respects_new_advancer();
-    }
-
-    // -------------------------------------------------------------------------
-    // COV-03
-    // -------------------------------------------------------------------------
-
-    function action_increment_coverage(
-        uint8 tokenIndexRaw,
-        uint256 totalPrincipalRaw,
-        uint256 totalSettledRaw,
-        uint256 coveredRaw
-    ) external {
-        fuzzCov03.action_increment_coverage(tokenIndexRaw, totalPrincipalRaw, totalSettledRaw, coveredRaw);
-    }
-
-    function fuzz_cov_03_conditional_index_increment() external view returns (bool) {
-        return fuzzCov03.fuzz_cov_03_conditional_index_increment();
-    }
-
-    function fuzz_cov_03_smoke() external pure returns (bool) {
-        return true;
     }
 
     // -------------------------------------------------------------------------

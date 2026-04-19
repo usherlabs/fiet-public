@@ -317,6 +317,7 @@ contract LCC01Actor {
     }
 
     function approve(address lcc, address spender) external {
-        lcc.call(abi.encodeWithSignature("approve(address,uint256)", spender, type(uint256).max));
+        (bool ok,) = lcc.call(abi.encodeWithSignature("approve(address,uint256)", spender, type(uint256).max));
+        ok;
     }
 }

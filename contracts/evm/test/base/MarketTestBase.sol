@@ -266,10 +266,9 @@ abstract contract MarketTestBase is Test, Deployers, DeployPermit2 {
         MarketFactory(marketFactory).initialise(canonicalVaultAddr, coreHookAddress, initialBounds);
     }
 
-    /// @dev VTS configuration supplied to `MarketFactory.createMarket` during test setup. Override for the
-    ///      conservative base line (`VTSConfigs.getDefaultConfig()`, `coverageFeeShare == 0`).
+    /// @dev VTS configuration supplied to `MarketFactory.createMarket` during test setup.
     function _marketVTSConfigurationForCreate() internal pure virtual returns (MarketVTSConfiguration memory) {
-        return VTSConfigs.getFeeSharingDefaultConfig();
+        return VTSConfigs.getDefaultConfig();
     }
 
     // Create and initialize the market i.e deploy core and proxy pools using the market factory

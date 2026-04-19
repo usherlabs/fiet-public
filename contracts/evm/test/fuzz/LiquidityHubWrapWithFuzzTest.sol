@@ -217,7 +217,8 @@ contract LiquidityHubWrapWithFuzzTest {
 contract LiquidityHubWrapWith_Holder {
     function approve(address token, address spender) external {
         // best-effort approve (ignore failure)
-        token.call(abi.encodeWithSignature("approve(address,uint256)", spender, type(uint256).max));
+        (bool ok,) = token.call(abi.encodeWithSignature("approve(address,uint256)", spender, type(uint256).max));
+        ok;
     }
 
     function wrapWith(address hub, address target, address backing, uint256 amount) external returns (bool ok) {

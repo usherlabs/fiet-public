@@ -90,7 +90,6 @@ FILES=(
   src/libraries/TransientSlots.sol
   src/libraries/VTSCommitLib.sol
   src/libraries/VTSConfigs.sol
-  src/libraries/VTSFeeLib.sol
   src/libraries/VTSPositionLib.sol
   src/libraries/VTSSwapLib.sol
 )

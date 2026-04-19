@@ -55,21 +55,6 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
         bool rfsOpen
     );
 
-    struct DICEAccounting {
-        uint256 totalDeficitPrincipal1;
-        uint256 diceIndex1;
-        uint256 diceResidual1;
-    }
-
-    struct CISEAccounting {
-        uint256 totalSettled0;
-        uint256 totalSettled1;
-        uint256 ciseIndex0;
-        uint256 ciseIndex1;
-        uint256 totalCISEExposure0;
-        uint256 totalCISEExposure1;
-    }
-
     // ============================================================
     // Deploy VTSOrchestratorTestable for storage inspection
     // ============================================================
@@ -459,7 +444,7 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
         });
 
         // Ensure VTS has configuration for poolKeyA so the call is well-formed, even though it should revert earlier.
-        MarketVTSConfiguration memory cfg = VTSConfigs.getFeeSharingDefaultConfig();
+        MarketVTSConfiguration memory cfg = VTSConfigs.getDefaultConfig();
         vm.prank(marketFactory);
         vtsOrchestrator.initPool(poolKeyA, cfg);
 
@@ -505,13 +490,13 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
     // ============================================================
 
     function test_revert_initPool_whenNotFactory() public {
-        MarketVTSConfiguration memory config = VTSConfigs.getFeeSharingDefaultConfig();
+        MarketVTSConfiguration memory config = VTSConfigs.getDefaultConfig();
         vm.expectRevert(Errors.InvalidSender.selector);
         vtsOrchestrator.initPool(corePoolKey, config);
     }
 
     function test_initPool_whenFactory() public {
-        MarketVTSConfiguration memory config = VTSConfigs.getFeeSharingDefaultConfig();
+        MarketVTSConfiguration memory config = VTSConfigs.getDefaultConfig();
         PoolKey memory freshPoolKey = PoolKey({
             currency0: Currency.wrap(address(0x33333333)),
             currency1: Currency.wrap(address(0x44444444)),
@@ -525,7 +510,7 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
     }
 
     function test_revert_initPool_whenAlreadyInitialized() public {
-        MarketVTSConfiguration memory config = VTSConfigs.getFeeSharingDefaultConfig();
+        MarketVTSConfiguration memory config = VTSConfigs.getDefaultConfig();
         PoolKey memory poolKeyA = PoolKey({
             currency0: Currency.wrap(address(0x11111111)),
             currency1: Currency.wrap(address(0x22222222)),
@@ -542,85 +527,8 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
         vm.stopPrank();
     }
 
-    function test_revert_incrementCoverage_whenNotFactory() public {
-        vm.expectRevert(Errors.InvalidSender.selector);
-        vtsOrchestrator.incrementCoverage(corePoolKey.toId(), 100, 100);
-    }
-
-    function test_incrementCoverage_whenFactory() public {
-        vm.prank(marketFactory);
-        vtsOrchestrator.incrementCoverage(corePoolKey.toId(), 100, 100);
-        // Should not revert
-    }
-
-    function test_incrementCoverage_amount1_incrementsToken1CoverageAccounting() public {
-        PoolId poolId = corePoolKey.toId();
-
-        DICEAccounting memory diceBefore = _getPoolDICEAccounting(poolId);
-        CISEAccounting memory ciseBefore = _getPoolCISEAccounting(poolId);
-
-        uint256 amount1 = 123;
-        vm.prank(marketFactory);
-        vtsOrchestrator.incrementCoverage(poolId, 0, amount1);
-
-        DICEAccounting memory diceAfter = _getPoolDICEAccounting(poolId);
-        CISEAccounting memory ciseAfter = _getPoolCISEAccounting(poolId);
-
-        // Totals should not change due to incrementCoverage.
-        assertEq(
-            diceAfter.totalDeficitPrincipal1,
-            diceBefore.totalDeficitPrincipal1,
-            "totalDeficitPrincipal1 should not change"
-        );
-        assertEq(ciseAfter.totalSettled0, ciseBefore.totalSettled0, "totalSettled0 should not change");
-        assertEq(ciseAfter.totalSettled1, ciseBefore.totalSettled1, "totalSettled1 should not change");
-        assertEq(ciseAfter.ciseIndex0, ciseBefore.ciseIndex0, "ciseIndex0 should not change");
-        assertEq(ciseAfter.totalCISEExposure0, ciseBefore.totalCISEExposure0, "totalCISEExposure0 should not change");
-        // Token1 coverage: when pool totalSettled1 > 0, incrementCoverage eagerly bumps CISE exposure (see VTSCommitLib).
-        if (ciseBefore.totalSettled1 > 0) {
-            assertEq(
-                ciseAfter.totalCISEExposure1,
-                ciseBefore.totalCISEExposure1 + amount1,
-                "totalCISEExposure1 should increase by covered amount when settled1 > 0"
-            );
-        } else {
-            assertEq(
-                ciseAfter.totalCISEExposure1,
-                ciseBefore.totalCISEExposure1,
-                "totalCISEExposure1 should not change when settled1 == 0"
-            );
-        }
-
-        // Coverage routing differs by mechanism:
-        // - DICE defers into residuals when no deficit principal exists.
-        // - CISE only advances when settled liquidity is already live; zero-settled coverage is ignored.
-        if (diceBefore.totalDeficitPrincipal1 > 0) {
-            assertGt(diceAfter.diceIndex1, diceBefore.diceIndex1, "DICE index1 should increase when deficits exist");
-        } else {
-            assertGt(
-                diceAfter.diceResidual1,
-                diceBefore.diceResidual1,
-                "DICE residual1 should increase when no deficits exist"
-            );
-        }
-
-        if (ciseBefore.totalSettled1 > 0) {
-            assertGt(ciseAfter.ciseIndex1, ciseBefore.ciseIndex1, "CISE index1 should increase when settled > 0");
-        } else {
-            assertEq(
-                ciseAfter.ciseIndex1, ciseBefore.ciseIndex1, "CISE index1 should not change when no settled exists"
-            );
-        }
-    }
-
-    function _getPoolDICEAccounting(PoolId poolId) internal view returns (DICEAccounting memory a) {
-        (, a.totalDeficitPrincipal1,, a.diceIndex1,, a.diceResidual1) =
-            _testableOrchestrator().getPoolDICEAccounting(poolId);
-    }
-
-    function _getPoolCISEAccounting(PoolId poolId) internal view returns (CISEAccounting memory a) {
-        (a.totalSettled0, a.totalSettled1, a.ciseIndex0, a.ciseIndex1, a.totalCISEExposure0, a.totalCISEExposure1) =
-            _testableOrchestrator().getPoolCISEAccounting(poolId);
+    function test_extsload_isCallable_onOrchestrator() public view {
+        vtsOrchestrator.extsload(bytes32(uint256(0)));
     }
 
     // ============================================================
@@ -1518,7 +1426,7 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
     // For MM positions: fees are credited as LCC delta to MMPositionManager
     // For DirectLP with fee-sharing: fees are shared via the fee pot mechanism
     //
-    // See: VTSPositionLib.processPosition() and VTSFeeLib.processPositionFees()
+    // See: VTSPositionLib.touchPosition()
     // ============================================================
 
     /// @notice Helper to get test contract's fee collection mechanic
@@ -1851,7 +1759,7 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
         BalanceDelta callerDelta = toBalanceDelta(0, 0);
         BalanceDelta feesAccrued = toBalanceDelta(0, 0);
 
-        (Position memory pos, PositionId id, BalanceDelta feeAdj, bool isMMPosition) = vtsOrchestrator.processPosition(
+        (Position memory pos, PositionId id, bool isMMPosition) = vtsOrchestrator.processPosition(
             address(positionManager), corePoolKey, params, callerDelta, feesAccrued, hookData
         );
 
@@ -1860,14 +1768,10 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
         assertEq(pos.commitId, tokenId, "Returned position should reference commitId");
         assertEq(pos.owner, address(positionManager), "Returned position owner should be positionManager");
 
-        // Include explicit assertions for the CoreHook inputs and expected fee adjustment in this scenario.
-        // With no swaps/fees in this test path, we pass zero deltas and expect no fee adjustment to be applied.
         assertEq(callerDelta.amount0(), 0, "callerDelta0 should be 0 for poke");
         assertEq(callerDelta.amount1(), 0, "callerDelta1 should be 0 for poke");
         assertEq(feesAccrued.amount0(), 0, "feesAccrued0 should be 0 for poke");
         assertEq(feesAccrued.amount1(), 0, "feesAccrued1 should be 0 for poke");
-        assertEq(feeAdj.amount0(), 0, "feeAdj0 should be 0 when feesAccrued is 0");
-        assertEq(feeAdj.amount1(), 0, "feeAdj1 should be 0 when feesAccrued is 0");
     }
 
     function test_revert_onMMSettle_whenCommitInvalid_insideUnlock() public {
@@ -2245,63 +2149,6 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
         );
 
         vtsOrchestrator.unpausePool(corePoolKey.toId());
-    }
-
-    /// @dev Regression for finding 6: paused remove must materialise queued positive slashes.
-    function test_pausedRemoveLiquidity_materialisesPositivePendingSlash() public {
-        uint256 liquidity = 1e10;
-        uint256 amountToDecrease = liquidity / 2;
-        (uint256 tokenId, PositionId positionId,,) =
-            _createCommittedPosition(renewSignal, -60, 60, liquidity, bytes32(uint256(77)));
-
-        // Build slashable state: create deficit, exercise coverage, then settle growths.
-        _swapCore(true, -int256(2e18));
-        vm.prank(marketFactory);
-        vtsOrchestrator.incrementCoverage(corePoolKey.toId(), 2e18, 2e18);
-        vtsOrchestrator.settlePositionGrowths(positionId);
-
-        // Ensure we have a positive pending slash lane; if not, try once in the opposite swap direction.
-        (,, int256 pending0Seed, int256 pending1Seed) = vtsOrchestrator.getPositionFeeAccounting(positionId);
-        if (pending0Seed <= 0 && pending1Seed <= 0) {
-            _swapCore(false, -int256(2e18));
-            vm.prank(marketFactory);
-            vtsOrchestrator.incrementCoverage(corePoolKey.toId(), 2e18, 2e18);
-            vtsOrchestrator.settlePositionGrowths(positionId);
-            (,, pending0Seed, pending1Seed) = vtsOrchestrator.getPositionFeeAccounting(positionId);
-        }
-        assertTrue(pending0Seed > 0 || pending1Seed > 0, "precondition: expected positive pending slash");
-
-        // Non-seizure remove requires closed RFS. If open, settle exactly the required positive lanes.
-        (bool rfsOpenBefore, BalanceDelta rfsDeltaBefore) = vtsOrchestrator.calcRFS(positionId, false);
-        if (rfsOpenBefore) {
-            int128 settle0 = rfsDeltaBefore.amount0() > 0 ? -rfsDeltaBefore.amount0() : int128(0);
-            int128 settle1 = rfsDeltaBefore.amount1() > 0 ? -rfsDeltaBefore.amount1() : int128(0);
-            if (settle0 != 0 || settle1 != 0) {
-                _mmSettle(tokenId, 0, settle0, settle1);
-            }
-        }
-
-        (bool rfsOpenAfterClose,) = vtsOrchestrator.calcRFS(positionId, false);
-        assertFalse(rfsOpenAfterClose, "precondition: RFS must be closed before paused remove");
-
-        (,, int256 pending0Before, int256 pending1Before) = vtsOrchestrator.getPositionFeeAccounting(positionId);
-        (uint256 pot0Before, uint256 pot1Before) = vtsOrchestrator.getSlashedPot(corePoolKey.toId());
-
-        vtsOrchestrator.pausePool(corePoolKey.toId());
-        _decreasePosition(tokenId, amountToDecrease);
-        vtsOrchestrator.unpausePool(corePoolKey.toId());
-
-        (,, int256 pending0After, int256 pending1After) = vtsOrchestrator.getPositionFeeAccounting(positionId);
-        (uint256 pot0After, uint256 pot1After) = vtsOrchestrator.getSlashedPot(corePoolKey.toId());
-
-        if (pending0Before > 0) {
-            assertLt(pending0After, pending0Before, "paused remove should materialise token0 pending slash");
-            assertGt(pot0After, pot0Before, "paused remove should fund token0 slashed pot");
-        }
-        if (pending1Before > 0) {
-            assertLt(pending1After, pending1Before, "paused remove should materialise token1 pending slash");
-            assertGt(pot1After, pot1Before, "paused remove should fund token1 slashed pot");
-        }
     }
 
     function test_pausedRemoveLiquidity_reconcilesSettledCommitmentOnPartialRemove() public {
@@ -2729,4 +2576,3 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
         if (delta.amount1() > 0) openMask |= 2;
     }
 }
-

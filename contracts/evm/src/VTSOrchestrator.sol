@@ -14,7 +14,6 @@ import {
     MarketVTSConfiguration,
     PositionAccounting,
     SettleResult,
-    TouchPositionParams,
     TouchPositionResult,
     VaultSettlementIntent,
     VTSLifecycleContext,
@@ -24,7 +23,6 @@ import {
 import {MarketMaker} from "./libraries/MarketMaker.sol";
 import {IPoolManager} from "v4-periphery/lib/v4-core/src/interfaces/IPoolManager.sol";
 import {VTSStorage} from "./types/VTS.sol";
-import {VTSFeeStorage} from "./types/VTSFee.sol";
 import {IVTSOrchestrator} from "./interfaces/IVTSOrchestrator.sol";
 import {VTSPositionLib} from "./libraries/VTSPositionLib.sol";
 import {VTSSwapLib} from "./libraries/VTSSwapLib.sol";
@@ -45,13 +43,13 @@ import {SwapParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
 import {MarketHandlerLib} from "./libraries/MarketHandlerLib.sol";
 import {VTSCurrencyDelta} from "./modules/VTSCurrencyDelta.sol";
 import {Ownable} from "openzeppelin-contracts/contracts/access/Ownable.sol";
-import {VTSFeeLib} from "./libraries/VTSFeeLib.sol";
 import {IMarketFactory} from "./interfaces/IMarketFactory.sol";
 import {LiquidityUtils} from "./libraries/LiquidityUtils.sol";
 import {PoolAccounting} from "./types/VTS.sol";
 import {ReentrancyGuardTransient} from "openzeppelin-contracts/contracts/utils/ReentrancyGuardTransient.sol";
 import {TokenConfiguration} from "./types/VTS.sol";
 import {VTSAdmin} from "./modules/VTSAdmin.sol";
+import {Extsload} from "v4-periphery/lib/v4-core/src/Extsload.sol";
 
 /// @title VTSOrchestrator
 /// @notice Central state management layer and orchestrator for VTS logic
@@ -61,6 +59,7 @@ contract VTSOrchestrator is
     PausableVTS,
     VTSAdmin,
     VTSCurrencyDelta,
+    Extsload,
     ImmutableState,
     IVTSOrchestrator,
     ReentrancyGuardTransient
@@ -72,9 +71,6 @@ contract VTSOrchestrator is
 
     /// @notice Central storage pointer (passed to libraries)
     VTSStorage internal s;
-
-    /// @notice Fee-era storage (DICE/CISE/CSI indices, pots, position fee scratch); owned by this orchestrator.
-    VTSFeeStorage internal feeS;
 
     /// @notice OracleHelper address for price oracle operations
     IOracleHelper public immutable oracleHelper;
@@ -426,11 +422,6 @@ contract VTSOrchestrator is
     }
 
     /// @inheritdoc IVTSOrchestrator
-    function getSlashedPot(PoolId poolId) external view returns (uint256 pot0, uint256 pot1) {
-        return (feeS.poolFeeAccounting[poolId].slashedPot.token0, feeS.poolFeeAccounting[poolId].slashedPot.token1);
-    }
-
-    /// @inheritdoc IVTSOrchestrator
     function getPoolTotalSettled(PoolId poolId) external view returns (uint256 total0, uint256 total1) {
         PoolAccounting storage paPool = s.poolAccounting[poolId];
         return (paPool.totalSettled.token0, paPool.totalSettled.token1);
@@ -444,20 +435,6 @@ contract VTSOrchestrator is
     {
         PoolAccounting storage paPool = s.poolAccounting[poolId];
         return (paPool.totalDeficitPrincipal.token0, paPool.totalDeficitPrincipal.token1);
-    }
-
-    /// @inheritdoc IVTSOrchestrator
-    function getPositionFeeAccounting(PositionId positionId)
-        external
-        view
-        returns (uint256 feesShared0, uint256 feesShared1, int256 pendingFeeAdj0, int256 pendingFeeAdj1)
-    {
-        return (
-            feeS.positionFeeAccounting[positionId].feesShared.token0,
-            feeS.positionFeeAccounting[positionId].feesShared.token1,
-            feeS.positionFeeAccounting[positionId].pendingFeeAdj.token0,
-            feeS.positionFeeAccounting[positionId].pendingFeeAdj.token1
-        );
     }
 
     /// @notice Get the checkpoint for a given position
@@ -490,23 +467,6 @@ contract VTSOrchestrator is
         });
     }
 
-    /// @notice Increment coverage amounts for a pool
-    /// @param poolId The pool identifier
-    /// @param amount0 Amount to increment for token0
-    /// @param amount1 Amount to increment for token1
-    function incrementCoverage(PoolId poolId, uint256 amount0, uint256 amount1) external onlyFactory {
-        // Phase 1 quarantine: coverage indices for DICE/CISE are part of the fee capability; skip when disabled.
-        if (s.pools[poolId].vtsConfig.coverageFeeShare == 0) {
-            return;
-        }
-        if (amount0 > 0) {
-            VTSCommitLib.incrementCoverage(s, feeS, poolId, 0, amount0);
-        }
-        if (amount1 > 0) {
-            VTSCommitLib.incrementCoverage(s, feeS, poolId, 1, amount1);
-        }
-    }
-
     // --------------------------------------------------
     // CoreHook VTS Functionality
     // --------------------------------------------------
@@ -535,7 +495,7 @@ contract VTSOrchestrator is
             } else {
                 _notPoolPaused(poolId);
             }
-            VTSPositionLib.settlePositionGrowths(s, feeS, poolManager, positionId);
+            VTSPositionLib.settlePositionGrowths(s, poolManager, positionId);
         }
     }
 
@@ -550,7 +510,7 @@ contract VTSOrchestrator is
         PoolId poolId = s.positions[positionId].poolId;
         bool poolOrGlobalPaused = s.isPaused || s.pools[poolId].isPaused;
         if (poolOrGlobalPaused && withCommitment) {
-            VTSPositionLib.settlePositionGrowths(s, feeS, poolManager, positionId);
+            VTSPositionLib.settlePositionGrowths(s, poolManager, positionId);
         } else {
             settlePositionGrowths(positionId);
         }
@@ -569,7 +529,6 @@ contract VTSOrchestrator is
     /// @param hookData The hook data containing PositionModificationHookData for MM operations
     /// @return pos The position struct
     /// @return id The position identifier
-    /// @return feeAdj The fee adjustment delta
     /// @return isMMPosition True if this is an MM position operation with valid signal
     function processPosition(
         address owner,
@@ -581,10 +540,10 @@ contract VTSOrchestrator is
     )
         external
         onlyCoreHook(poolKey.currency0, poolKey.currency1)
-        returns (Position memory pos, PositionId id, BalanceDelta feeAdj, bool isMMPosition)
+        returns (Position memory pos, PositionId id, bool isMMPosition)
     {
         isMMPosition = _validateMMOperationLinked(owner, poolKey, hookData);
-        (pos, id, feeAdj) = _processPositionLinked(owner, poolKey, params, callerDelta, feesAccrued, hookData);
+        (pos, id) = _processPositionLinked(owner, poolKey, params, callerDelta, feesAccrued, hookData);
     }
 
     function _validateMMOperationLinked(address owner, PoolKey calldata poolKey, bytes calldata hookData)
@@ -603,20 +562,13 @@ contract VTSOrchestrator is
         BalanceDelta callerDelta,
         BalanceDelta feesAccrued,
         bytes calldata hookData
-    ) private returns (Position memory pos, PositionId id, BalanceDelta feeAdj) {
+    ) private returns (Position memory pos, PositionId id) {
         VTSCoreHookContext memory ctx = _coreHookContext();
-        TouchPositionParams memory tp = TouchPositionParams({
-            owner: owner,
-            poolKey: poolKey,
-            params: params,
-            callerDelta: callerDelta,
-            feesAccrued: feesAccrued,
-            hookData: hookData
-        });
-        TouchPositionResult memory result = VTSLifecycleLinkedLib.executeProcessPositionTouch(s, feeS, ctx, tp);
+        TouchPositionResult memory result = VTSLifecycleLinkedLib.executeProcessPositionTouch(
+            s, ctx, owner, poolKey, params, callerDelta, feesAccrued, hookData
+        );
         pos = result.pos;
         id = result.id;
-        feeAdj = result.feeAdj;
     }
 
     /// @notice Called by CoreHook after a swap to process swap-related accounting
@@ -702,7 +654,7 @@ contract VTSOrchestrator is
         _assertBoundFactoryCaller(canonicalFactory);
 
         RFSCheckpoint memory checkpointOut = VTSCommitLib.extendGracePeriod(
-            s, feeS, _lifecycleContext(), poolKey, positionId, settlementTokenIndex, verifierIndex, settlementProof
+            s, _lifecycleContext(), poolKey, positionId, settlementTokenIndex, verifierIndex, settlementProof
         );
         emit GracePeriodExtended(commitId, positionIndex, settlementTokenIndex, checkpointOut);
     }
@@ -716,7 +668,7 @@ contract VTSOrchestrator is
         bool fromDeltas
     ) internal returns (SettleResult memory result) {
         return VTSLifecycleLinkedLib.onMMSettle(
-            s, feeS, _lifecycleContext(), factory, positionId, poolId, amountDelta, isSeizing, fromDeltas
+            s, _lifecycleContext(), factory, positionId, poolId, amountDelta, isSeizing, fromDeltas
         );
     }
 
@@ -803,7 +755,7 @@ contract VTSOrchestrator is
         PositionId positionId = getPositionId(commitId, positionIndex);
         _assertPositionValid(positionId, true);
 
-        VTSCommitLib.validateSeize(s, feeS, _lifecycleContext(), commitId, positionIndex, positionId);
+        VTSCommitLib.validateSeize(s, _lifecycleContext(), commitId, positionIndex, positionId);
     }
 
     /// @notice Renew a liquidity signal for an existing commit

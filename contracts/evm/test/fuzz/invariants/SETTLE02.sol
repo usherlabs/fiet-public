@@ -83,7 +83,6 @@ contract SETTLE02 {
                 unbackedCommitmentGraceBypassTime: 0,
                 unbackedCommitmentGraceBypassThreshold: 0
             }),
-            coverageFeeShare: 5000,
             minResidualUnits: 1000,
             unbackedCommitmentGraceBypassBps: 500
         });

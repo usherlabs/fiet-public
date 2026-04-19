@@ -21,3 +21,20 @@
 - [ ] 4.1 Update fee/position/quarantine harnesses and Medusa fuzz callers to the new boundary.
 - [ ] 4.2 Update invariants, isolation docs, and deployment notes to describe the strict owner split.
 - [ ] 4.3 Run `forge build`, targeted fee/position/quarantine tests, and Medusa/fuzz smoke validation on the refactored branch.
+
+## Implementation Notes
+
+- 2026-04-19: The active source of truth changed away from this capability-engine proposal. Current implementation follows `origin/refactor/disable-feelib` plus `.cursor/plans/fee_disablement_plan_4ed47903.plan.md`, with the newer tip commit `41b8a60a` treated as authoritative on top of `f5856ec4`.
+- 2026-04-19: The branch was refreshed against Linear `FIET-773` / TASK-25 context. The ticket was already `In Progress` rather than `Backlog`, so no state transition was applied.
+- 2026-04-19: Absorbing upstream disable-feelib work is being done by merging `origin/refactor/disable-feelib` into `tasks/TASK-25-remove-feelib-rebase-fee-isolation`, preserving branch-local Medusa/CI work where still relevant. The absorbed upstream commit sequence is:
+  - `c7b32149` `do some quarantine on fee-path activation first.`
+  - `26627ece` `disabling via stubs so far.`
+  - `8e7227d7` `include final disable plan`
+  - `f5856ec4` `massive culling of vtsfeelib`
+  - `41b8a60a` `file/test cleanup`
+- 2026-04-19: Conflict resolution policy for the merge:
+  - core source and fee-surface deletions follow `origin/refactor/disable-feelib`
+  - deleted fee-era tests/harnesses/invariants stay deleted
+  - surviving Medusa/FuzzEntry files are deliberately woven to the new fee-less APIs instead of reverting to older Echidna-linked shapes
+  - branch-local CI sharding (`3fefbead`) and Medusa/FuzzEntry migration work stay preserved
+- 2026-04-19: The main conflict clusters were `VTSOrchestrator` / `IVTSOrchestrator` / `VTSCommitLib` / `VTSLifecycleLinkedLib` / `VTSPositionLib` / `VTSPositionMMOpsLib`, fee-era tests and harnesses (`VTSFeeLib*`, `VTSFeeLibHarness`, `MMPositionMinOutFeeAdjIntegration`, `COV01`, `COV03`, `COV04`, `FEE01`, `FEE02`), and the Medusa aggregators/harnesses (`FuzzVTSCoreTail`, `FuzzVTSPosition`, `FuzzMMSettle`, `VTSPositionLibFuzzHarness`, `SETTLE01`, `SETTLE02`, `SEIZE03_04`, `VTS01`, `SettleBeforeModifyHarness`).

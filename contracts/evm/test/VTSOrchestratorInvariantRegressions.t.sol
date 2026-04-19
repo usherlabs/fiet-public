@@ -127,28 +127,4 @@ contract VTSOrchestratorInvariantRegressionsTest is VTSOrchestratorFixture {
             || settledAfter1 != settledBefore1;
         assertTrue(accountingChanged, "oneForZero swap+settle should mutate position accounting");
     }
-
-    function test_cov04_splitDecrease_monotonicFeeShareBurn_andIndexProgress() public {
-        (uint256 tokenId, PositionId positionId,,) = _createCommittedPosition(-60, 60, 1e12);
-
-        (uint256 fees0Before, uint256 fees1Before, uint256 idx0Before, uint256 idx1Before) =
-            _testable().getPositionCSIAccounting(positionId);
-
-        _decreasePosition(tokenId, 1e8);
-        (uint256 fees0Mid, uint256 fees1Mid, uint256 idx0Mid, uint256 idx1Mid) =
-            _testable().getPositionCSIAccounting(positionId);
-
-        _decreasePosition(tokenId, 1e8);
-        (uint256 fees0After, uint256 fees1After, uint256 idx0After, uint256 idx1After) =
-            _testable().getPositionCSIAccounting(positionId);
-
-        assertLe(fees0Mid, fees0Before, "token0 feesShared must not increase after first decrease");
-        assertLe(fees1Mid, fees1Before, "token1 feesShared must not increase after first decrease");
-        assertLe(fees0After, fees0Mid, "token0 feesShared must be monotonic non-increasing");
-        assertLe(fees1After, fees1Mid, "token1 feesShared must be monotonic non-increasing");
-        assertGe(idx0Mid, idx0Before, "token0 remaining factor should not go backwards");
-        assertGe(idx1Mid, idx1Before, "token1 remaining factor should not go backwards");
-        assertGe(idx0After, idx0Mid, "token0 remaining factor should progress monotonically");
-        assertGe(idx1After, idx1Mid, "token1 remaining factor should progress monotonically");
-    }
 }

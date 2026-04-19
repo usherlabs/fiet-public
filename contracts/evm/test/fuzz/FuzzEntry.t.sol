@@ -18,12 +18,6 @@ contract FuzzEntryTest is Test {
         assertTrue(entry.fuzz_commit_03_valid_renewal_succeeds());
         assertTrue(entry.fuzz_sig_01_nonce_never_decreases());
         assertTrue(entry.fuzz_sig_02_invalid_proof_returns_false());
-        assertTrue(entry.fuzz_cov_01_burn_base_bounded());
-        assertTrue(entry.fuzz_cov_02_settle_before_modify());
-        assertTrue(entry.fuzz_cov_03_conditional_index_increment());
-        assertTrue(entry.fuzz_cov_04_carry_lt_liquidity());
-        assertTrue(entry.fuzz_fee_01_queue_vs_pot());
-        assertTrue(entry.fuzz_fee_02_no_bonus_on_creation());
         assertTrue(entry.fuzz_vts_01_settle_growths_before_modify());
         assertTrue(entry.fuzz_vts_02_flip_identity());
         assertTrue(entry.fuzz_vts_03_segment_growth_accounting());

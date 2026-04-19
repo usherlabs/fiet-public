@@ -12,10 +12,9 @@ import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
 import {IHooks} from "@uniswap/v4-core/src/interfaces/IHooks.sol";
 import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
 
-/// @notice fuzz harness for COV-02 sequencing: `CoreHook` calls settlePositionGrowths before modify.
-/// @dev This harness validates hook-level call ordering against a mock orchestrator.
-///      It does not model full settlement netting order inside `VTSPositionLib.settlePositionGrowths`.
-contract COV02 is HookMinerBase {
+/// @notice Shared fuzz fixture: `CoreHook` calls `settlePositionGrowths` before add/remove modify hooks.
+/// @dev Validates hook-level call ordering against a mock orchestrator.
+contract SettleBeforeModifyHarness is HookMinerBase {
     uint256 internal constant MAX_VACUOUS_ATTEMPTS = 10;
 
     CoreHook internal hook;
@@ -45,29 +44,6 @@ contract COV02 is HookMinerBase {
             tickSpacing: 60,
             hooks: IHooks(address(hook))
         });
-    }
-
-    /// @notice Exercise beforeAdd/RemoveLiquidity and verify CoreHook settles growths for the
-    ///         exact PositionId derived from params. This enforces the "settle before modify"
-    ///         sequencing that coverage burns rely on.
-    // forge-lint: disable-next-line(mixed-case-function)
-    function action_before_add_modify(int24 tickLower, int24 tickUpper, int256 liquidityDelta, bytes32 salt) external {
-        _exerciseBeforeModify(true, tickLower, tickUpper, liquidityDelta, salt);
-    }
-
-    // forge-lint: disable-next-line(mixed-case-function)
-    function action_before_remove_modify(int24 tickLower, int24 tickUpper, int256 liquidityDelta, bytes32 salt)
-        external
-    {
-        _exerciseBeforeModify(false, tickLower, tickUpper, liquidityDelta, salt);
-    }
-
-    // Retain the bool-shaped action as a compatibility shim for any existing corpora or local scripts.
-    // forge-lint: disable-next-line(mixed-case-function)
-    function action_before_modify(bool isAdd, int24 tickLower, int24 tickUpper, int256 liquidityDelta, bytes32 salt)
-        external
-    {
-        _exerciseBeforeModify(isAdd, tickLower, tickUpper, liquidityDelta, salt);
     }
 
     function _exerciseBeforeModify(bool isAdd, int24 tickLower, int24 tickUpper, int256 liquidityDelta, bytes32 salt)
@@ -101,22 +77,11 @@ contract COV02 is HookMinerBase {
         allOk = allOk && lastOk;
     }
 
-    // forge-lint: disable-next-line(mixed-case-function)
-    function fuzz_cov_02_settle_before_modify() external view returns (bool) {
-        return _settleBeforeModifyHolds();
-    }
-
     function _settleBeforeModifyHolds() internal view returns (bool) {
         if (checks == 0) {
             return attempts < MAX_VACUOUS_ATTEMPTS;
         }
         return allOk;
-    }
-
-    // Keep a second trivial property to avoid rare property-runner instability with single-property targets.
-    // forge-lint: disable-next-line(mixed-case-function)
-    function fuzz_cov_02_smoke() external pure returns (bool) {
-        return true;
     }
 
     function _clampTicks(int24 tickLower, int24 tickUpper) internal pure returns (int24 tl, int24 tu) {

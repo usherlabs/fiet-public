@@ -96,27 +96,25 @@ contract CoreHookTest is Test {
     }
 
     // ------------------------------------------------------------
-    // Mutants: delta - feeAdj -> delta + feeAdj (afterAdd/afterRemove)
-    // Mutant: !isMMPosition -> isMMPosition (afterRemove gate)
+    // afterAddLiquidity / afterRemoveLiquidity: hook return delta is zero; MM gate on add only
     // ------------------------------------------------------------
 
-    function test_afterAddLiquidity_forwardsEffectiveDelta_minusFeeAdj_whenNotMM() public {
+    function test_afterAddLiquidity_returnsZeroHookDelta_andNotifiesVault_whenNotMM() public {
         // Add-liquidity caller legs are negative deltas.
         BalanceDelta delta = toBalanceDelta(int128(-10), int128(-20));
-        BalanceDelta feeAdj = toBalanceDelta(int128(3), int128(5));
 
-        vts.setReturn(feeAdj, false);
+        vts.setReturn(false);
 
-        (bytes4 sel, BalanceDelta returnedFeeAdj) =
+        (bytes4 sel, BalanceDelta hookDelta) =
             hook.exposed_afterAddLiquidity(address(this), key, _dummyParams(), delta, BalanceDelta.wrap(0), "");
         assertEq(sel, hook.afterAddLiquidity.selector);
-        assertEq(BalanceDelta.unwrap(returnedFeeAdj), BalanceDelta.unwrap(feeAdj));
+        assertEq(BalanceDelta.unwrap(hookDelta), BalanceDelta.unwrap(toBalanceDelta(0, 0)));
 
         assertEq(spy.calls(), 1, "spy should be called once");
     }
 
     function test_afterRemoveLiquidity_doesNotForward_whenMM() public {
-        vts.setReturn(toBalanceDelta(int128(1), int128(1)), true);
+        vts.setReturn(true);
 
         hook.exposed_afterRemoveLiquidity(
             address(this), key, _dummyRemoveParams(), toBalanceDelta(int128(7), int128(9)), BalanceDelta.wrap(0), ""
@@ -125,16 +123,15 @@ contract CoreHookTest is Test {
         assertEq(spy.calls(), 0, "spy should not be called for MM operations");
     }
 
-    function test_afterRemoveLiquidity_doesNotForward_whenNotMM() public {
+    function test_afterRemoveLiquidity_returnsZeroHookDelta_whenNotMM() public {
         BalanceDelta delta = toBalanceDelta(int128(7), int128(9));
-        BalanceDelta feeAdj = toBalanceDelta(int128(2), int128(4));
 
-        vts.setReturn(feeAdj, false);
+        vts.setReturn(false);
 
-        (bytes4 sel, BalanceDelta returnedFeeAdj) =
+        (bytes4 sel, BalanceDelta hookDelta) =
             hook.exposed_afterRemoveLiquidity(address(this), key, _dummyRemoveParams(), delta, BalanceDelta.wrap(0), "");
         assertEq(sel, hook.afterRemoveLiquidity.selector);
-        assertEq(BalanceDelta.unwrap(returnedFeeAdj), BalanceDelta.unwrap(feeAdj));
+        assertEq(BalanceDelta.unwrap(hookDelta), BalanceDelta.unwrap(toBalanceDelta(0, 0)));
 
         assertEq(spy.calls(), 0, "spy must not be called on remove-liquidity");
     }
@@ -421,7 +418,6 @@ contract ProxyHookSpy {
 }
 
 contract MockVTSOrchestrator {
-    BalanceDelta internal _feeAdj;
     bool internal _isMM;
     bool internal _paused;
 
@@ -431,8 +427,7 @@ contract MockVTSOrchestrator {
     PositionId internal _lastSettledPositionId;
     uint256 internal _settlePositionGrowthsCalls;
 
-    function setReturn(BalanceDelta feeAdj, bool isMMPosition) external {
-        _feeAdj = feeAdj;
+    function setReturn(bool isMMPosition) external {
         _isMM = isMMPosition;
     }
 
@@ -447,15 +442,11 @@ contract MockVTSOrchestrator {
         BalanceDelta,
         BalanceDelta,
         bytes calldata
-    ) external view returns (Position memory pos, PositionId id, BalanceDelta feeAdj, bool isMMPosition) {
+    ) external view returns (Position memory pos, PositionId id, bool isMMPosition) {
         return _positionReturn();
     }
 
-    function _positionReturn()
-        private
-        view
-        returns (Position memory pos, PositionId id, BalanceDelta feeAdj, bool isMMPosition)
-    {
+    function _positionReturn() private view returns (Position memory pos, PositionId id, bool isMMPosition) {
         pos = Position({
             owner: address(0),
             poolId: PoolId.wrap(bytes32(0)),
@@ -470,7 +461,6 @@ contract MockVTSOrchestrator {
             })
         });
         id = PositionId.wrap(bytes32(0));
-        feeAdj = _feeAdj;
         isMMPosition = _isMM;
     }
 

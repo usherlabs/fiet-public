@@ -22,11 +22,9 @@ import {OwnerCurrencyDelta} from "../../../src/libraries/OwnerCurrencyDelta.sol"
 import {IMarketVault} from "../../../src/interfaces/IMarketVault.sol";
 import {ILiquidityHub} from "../../../src/interfaces/ILiquidityHub.sol";
 import {IOracleHelper} from "../../../src/interfaces/IOracleHelper.sol";
-import {VTSFeeStorage} from "../../../src/types/VTSFee.sol";
 
 /// @notice Minimal fuzz-oriented harness that avoids calling `public`/`external` functions on `VTSPositionLib`.
-///         This prevents linked-library DELEGATECALLs that cause Medusa/HEVM to attempt RPC bytecode fetches while
-///         still exposing the fee-threaded signatures needed by the quarantined VTS paths.
+/// @dev Keeps the Medusa-facing shape while targeting the fee-less VTS library signatures.
 contract VTSPositionLibFuzzHarness {
     /// @dev Bundles `onMMSettle` calldata so non-IR builds do not hit stack-too-deep in the harness.
     struct OnMMSettleInput {
@@ -40,7 +38,6 @@ contract VTSPositionLibFuzzHarness {
         bool fromDeltas;
     }
     VTSStorage internal s;
-    VTSFeeStorage internal f;
 
     // -------------------------------------------------------------------------
     // Setup / internal-library calls (safe: internal functions are inlined)
@@ -60,7 +57,7 @@ contract VTSPositionLibFuzzHarness {
     }
 
     function initPositionSnapshots(IPoolManager poolManager, PositionId id) external {
-        VTSPositionLib._initPositionSnapshots(s, f, poolManager, id);
+        VTSPositionLib._initPositionSnapshots(s, poolManager, id);
     }
 
     // -------------------------------------------------------------------------
@@ -180,16 +177,16 @@ contract VTSPositionLibFuzzHarness {
         p.delta = c.delta;
         p.isSeizing = c.isSeizing;
         p.fromDeltas = c.fromDeltas;
-        SettleResult memory result = VTSLifecycleLinkedLib._executeMMSettleFromParams(s, f, c.poolManager, p);
+        SettleResult memory result = VTSLifecycleLinkedLib._executeMMSettleFromParams(s, c.poolManager, p);
         return (result.settlementDelta, result.rfsOpen, result.seizedLiquidityUnits);
     }
 
     function touchPosition(PositionContext calldata ctx, TouchPositionParams calldata params)
         external
-        returns (Position memory pos, PositionId id, BalanceDelta feeAdj)
+        returns (Position memory pos, PositionId id)
     {
-        TouchPositionResult memory out = VTSPositionLib.touchPosition(s, f, ctx, params);
-        return (out.pos, out.id, out.feeAdj);
+        TouchPositionResult memory out = VTSPositionLib.touchPosition(s, ctx, params);
+        return (out.pos, out.id);
     }
 
     function buildPositionContext(

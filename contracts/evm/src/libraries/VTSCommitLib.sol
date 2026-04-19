@@ -19,8 +19,6 @@ import {VTSPositionLib} from "./VTSPositionLib.sol";
 import {CheckpointLibrary} from "./Checkpoint.sol";
 import {MarketHandlerLib} from "./MarketHandlerLib.sol";
 import {FullMath} from "@uniswap/v4-core/src/libraries/FullMath.sol";
-import {FixedPoint128} from "v4-periphery/lib/v4-core/src/libraries/FixedPoint128.sol";
-import {PoolAccounting} from "../types/VTS.sol";
 import {LiquidityUtils} from "./LiquidityUtils.sol";
 import {Errors} from "../libraries/Errors.sol";
 import {LiquiditySignal} from "../types/Commit.sol";
@@ -35,7 +33,6 @@ import {IPoolManager} from "v4-periphery/lib/v4-core/src/interfaces/IPoolManager
 import {StateLibrary} from "v4-periphery/lib/v4-core/src/libraries/StateLibrary.sol";
 import {SafeCast} from "v4-periphery/lib/v4-core/src/libraries/SafeCast.sol";
 import {IVRLSignalManager} from "../interfaces/IVRLSignalManager.sol";
-import {VTSFeeStorage, PoolFeeAccounting} from "../types/VTSFee.sol";
 
 /// @title VTSCommitLib
 /// @notice Commit and commitment deficit management helpers for VTS, operating on VTSStorage
@@ -189,52 +186,6 @@ library VTSCommitLib {
 
         if (revertIfInsufficientBacking && !success) {
             revert Errors.InvalidLiquiditySignal(issuedValue, signalValue, settledValue);
-        }
-    }
-
-    /// @notice LCC Unwrap -> Protocol Coverage Function
-    /// @notice Increment protocol or proactive excess liquidity coverage on LCC unwrap, consuming proactive pool first
-    /// @param s The central VTS storage
-    /// @param poolId The pool ID
-    /// @param tokenIndex The token index (0 or 1)
-    /// @param coveredAmount The amount covered
-    function incrementCoverage(
-        VTSStorage storage s,
-        VTSFeeStorage storage f,
-        PoolId poolId,
-        uint8 tokenIndex,
-        uint256 coveredAmount
-    ) external {
-        if (tokenIndex > 1 || coveredAmount == 0) return;
-        PoolAccounting storage paPool = s.poolAccounting[poolId];
-        PoolFeeAccounting storage pfPool = f.poolFeeAccounting[poolId];
-
-        // DICE: Increment coverage-per-deficit index (for slash attribution)
-        uint256 totalPrincipal = paPool.totalDeficitPrincipal.get(tokenIndex);
-        if (totalPrincipal > 0) {
-            uint256 deltaIndex = FullMath.mulDiv(coveredAmount, FixedPoint128.Q128, totalPrincipal);
-            uint256 currentIndex = pfPool.coveragePerDeficitIndexX128.get(tokenIndex);
-            pfPool.coveragePerDeficitIndexX128.set(tokenIndex, currentIndex + deltaIndex);
-        } else {
-            // No materialised deficit principal: defer to residual (socialised)
-            uint256 currentResidual = pfPool.coverageResidualDICE.get(tokenIndex);
-            pfPool.coverageResidualDICE.set(tokenIndex, currentResidual + coveredAmount);
-        }
-
-        // CISE: Increment coverage-per-settled index (for bonus allocation)
-        uint256 totalSettled = paPool.totalSettled.get(tokenIndex);
-        if (totalSettled > 0) {
-            uint256 deltaIndexCISE = FullMath.mulDiv(coveredAmount, FixedPoint128.Q128, totalSettled);
-            uint256 currentIndexCISE = pfPool.coveragePerSettledIndexX128.get(tokenIndex);
-            pfPool.coveragePerSettledIndexX128.set(tokenIndex, currentIndexCISE + deltaIndexCISE);
-            // Eager bonus denominator: sum_i (settled_i * deltaIndex / Q128) == coveredAmount when pool totalSettled
-            // matches the sum of position settled amounts. Realising exposure on touch only updates numerators.
-            uint256 curTotalCISE = pfPool.totalCISEExposureSinceLastMod.get(tokenIndex);
-            pfPool.totalCISEExposureSinceLastMod.set(tokenIndex, curTotalCISE + coveredAmount);
-        } else {
-            // No settled liquidity existed during this coverage event, so there is no valid CISE claimant.
-            // Unlike DICE, we intentionally do not defer-and-socialise this later; only coverage exercised
-            // while settled liquidity is live contributes to allocatable CISE index/denominator state.
         }
     }
 
@@ -568,7 +519,6 @@ library VTSCommitLib {
 
     function extendGracePeriod(
         VTSStorage storage s,
-        VTSFeeStorage storage f,
         VTSLifecycleContext memory ctx,
         PoolKey memory poolKey,
         PositionId positionId,
@@ -576,7 +526,7 @@ library VTSCommitLib {
         uint32 verifierIndex,
         bytes memory settlementProof
     ) external returns (RFSCheckpoint memory checkpointOut) {
-        VTSPositionLib.settlePositionGrowths(s, f, ctx.poolManager, positionId);
+        VTSPositionLib.settlePositionGrowths(s, ctx.poolManager, positionId);
         (, BalanceDelta rfsDelta) = VTSPositionLib.getRFS(s, positionId);
         CheckpointLibrary.markCheckpoint(s, positionId, VTSPositionLib._rfsOpenMask(rfsDelta));
         CheckpointLibrary.extendGracePeriod(
@@ -587,7 +537,6 @@ library VTSCommitLib {
 
     function validateSeize(
         VTSStorage storage s,
-        VTSFeeStorage storage f,
         VTSLifecycleContext memory ctx,
         uint256 commitId,
         uint256 positionIndex,
@@ -601,7 +550,7 @@ library VTSCommitLib {
         bool hasStoredCommitmentDeficit = s.positionAccounting[positionId].commitmentDeficit.token0 > 0
             || s.positionAccounting[positionId].commitmentDeficit.token1 > 0;
         if (hasStoredCommitmentDeficit) {
-            VTSPositionLib.settlePositionGrowths(s, f, ctx.poolManager, positionId);
+            VTSPositionLib.settlePositionGrowths(s, ctx.poolManager, positionId);
             _checkpointAfterGrowthSettled(s, ctx, commitId, true, positionId);
         }
 

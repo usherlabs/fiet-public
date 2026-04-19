@@ -23,6 +23,7 @@ import {IPoolManager} from "v4-periphery/lib/v4-core/src/interfaces/IPoolManager
 import {IHooks} from "@uniswap/v4-core/src/interfaces/IHooks.sol";
 import {ILiquidityHub} from "../../../src/interfaces/ILiquidityHub.sol";
 import {IOracleHelper} from "../../../src/interfaces/IOracleHelper.sol";
+import {Errors} from "../../../src/libraries/Errors.sol";
 
 /// @notice fuzz harness for SEIZE-03 and SEIZE-04 using the real `VTSPositionLib.touchPosition` path.
 contract SEIZE03_04 {
@@ -64,7 +65,6 @@ contract SEIZE03_04 {
                 unbackedCommitmentGraceBypassTime: 0,
                 unbackedCommitmentGraceBypassThreshold: 0
             }),
-            coverageFeeShare: 5000,
             minResidualUnits: 1000,
             unbackedCommitmentGraceBypassBps: 500
         });
@@ -97,9 +97,9 @@ contract SEIZE03_04 {
             ModifyLiquidityParams({tickLower: tl, tickUpper: tu, liquidityDelta: int256(liq), salt: salt});
         bytes memory hookData = PositionModificationHookDataLib.encodeSeizure(1, 0, address(this), 0, 0);
 
-        (bool reverted,) = _touchReverts(address(this), params, hookData);
+        (bool reverted, bytes4 selector) = _touchReverts(address(this), params, hookData);
         checked03 = true;
-        lastOk03 = reverted;
+        lastOk03 = reverted && selector == Errors.InvariantViolated.selector;
     }
 
     /// @notice Verify that touching an existing MM position with a mismatched commit id reverts.
@@ -127,9 +127,9 @@ contract SEIZE03_04 {
         harness.setPositionCommitId(id, stored);
 
         bytes memory hookData = PositionModificationHookDataLib.encode(provided, 0, address(this));
-        (bool reverted,) = _touchReverts(address(this), params, hookData);
+        (bool reverted, bytes4 selector) = _touchReverts(address(this), params, hookData);
         checked04 = true;
-        lastOk04 = reverted;
+        lastOk04 = reverted && selector == Errors.InvariantViolated.selector;
     }
 
     /// @notice Invariant: seizure flow must not permit LCC issuance during a touch.
@@ -162,7 +162,7 @@ contract SEIZE03_04 {
             feesAccrued: toBalanceDelta(0, 0),
             hookData: hookData
         });
-        try harness.touchPosition(ctx, tp) returns (Position memory, PositionId, BalanceDelta) {
+        try harness.touchPosition(ctx, tp) returns (Position memory, PositionId) {
             reverted = false;
         } catch (bytes memory reason) {
             reverted = true;

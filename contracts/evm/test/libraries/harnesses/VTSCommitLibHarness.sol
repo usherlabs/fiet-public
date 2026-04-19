@@ -13,7 +13,6 @@ import {IOracleHelper} from "../../../src/interfaces/IOracleHelper.sol";
 import {MarketMaker} from "../../../src/libraries/MarketMaker.sol";
 import {IPoolManager} from "v4-periphery/lib/v4-core/src/interfaces/IPoolManager.sol";
 import {StateLibrary} from "v4-periphery/lib/v4-core/src/libraries/StateLibrary.sol";
-import {VTSFeeStorage} from "../../../src/types/VTSFee.sol";
 
 /// @title VTSCommitLibHarness
 /// @notice Exposes VTSCommitLib functions for unit testing with an isolated VTSStorage
@@ -21,7 +20,6 @@ contract VTSCommitLibHarness {
     using StateLibrary for IPoolManager;
 
     VTSStorage internal s;
-    VTSFeeStorage internal f;
 
     // ============ Library Function Exposers ============
 
@@ -35,10 +33,6 @@ contract VTSCommitLibHarness {
         return VTSCommitLib.validateLiquidityDelta(
             s, oracleHelper, commitId, positionId, params, revertIfInsufficientBacking
         );
-    }
-
-    function incrementCoverage(PoolId poolId, uint8 tokenIndex, uint256 coveredAmount) external {
-        VTSCommitLib.incrementCoverage(s, f, poolId, tokenIndex, coveredAmount);
     }
 
     function commitSignal(IVRLSignalManager mgr, address sender, IOracleHelper oracleHelper, bytes memory sig)
@@ -145,30 +139,6 @@ contract VTSCommitLibHarness {
         return s.commits[commitId].authorisedRelayer;
     }
 
-    function getCoveragePerDeficitIndexX128(PoolId poolId, uint8 tokenIndex) external view returns (uint256) {
-        return tokenIndex == 0
-            ? f.poolFeeAccounting[poolId].coveragePerDeficitIndexX128.token0
-            : f.poolFeeAccounting[poolId].coveragePerDeficitIndexX128.token1;
-    }
-
-    function getCoverageResidualDICE(PoolId poolId, uint8 tokenIndex) external view returns (uint256) {
-        return tokenIndex == 0
-            ? f.poolFeeAccounting[poolId].coverageResidualDICE.token0
-            : f.poolFeeAccounting[poolId].coverageResidualDICE.token1;
-    }
-
-    function getCoveragePerSettledIndexX128(PoolId poolId, uint8 tokenIndex) external view returns (uint256) {
-        return tokenIndex == 0
-            ? f.poolFeeAccounting[poolId].coveragePerSettledIndexX128.token0
-            : f.poolFeeAccounting[poolId].coveragePerSettledIndexX128.token1;
-    }
-
-    function getTotalCISEExposureSinceLastMod(PoolId poolId, uint8 tokenIndex) external view returns (uint256) {
-        return tokenIndex == 0
-            ? f.poolFeeAccounting[poolId].totalCISEExposureSinceLastMod.token0
-            : f.poolFeeAccounting[poolId].totalCISEExposureSinceLastMod.token1;
-    }
-
     function getPositionCommitmentDeficit(PositionId id) external view returns (uint256 deficit0, uint256 deficit1) {
         return (s.positionAccounting[id].commitmentDeficit.token0, s.positionAccounting[id].commitmentDeficit.token1);
     }
@@ -187,7 +157,6 @@ contract VTSCommitLibHarness {
     // ============ Internal Helpers ============
 
     function _emptyConfig() internal pure returns (MarketVTSConfiguration memory cfg) {
-        // Keep the harness independent from MarketTestBase defaults; commit lib doesn't read config.
         TokenConfiguration memory tc = TokenConfiguration({
             gracePeriodTime: 0,
             baseVTSRate: 0,
@@ -195,8 +164,6 @@ contract VTSCommitLibHarness {
             unbackedCommitmentGraceBypassTime: 0,
             unbackedCommitmentGraceBypassThreshold: 0
         });
-        cfg = MarketVTSConfiguration({
-            token0: tc, token1: tc, coverageFeeShare: 0, minResidualUnits: 0, unbackedCommitmentGraceBypassBps: 0
-        });
+        cfg = MarketVTSConfiguration({token0: tc, token1: tc, minResidualUnits: 0, unbackedCommitmentGraceBypassBps: 0});
     }
 }
