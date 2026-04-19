@@ -120,4 +120,3 @@ abstract contract VTSConfigFileBase is Script {
         return true;
     }
 }
-

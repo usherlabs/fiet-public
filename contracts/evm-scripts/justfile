@@ -656,7 +656,7 @@ read-deployment:
 
 # === E2E ===
 # Note: Make sure fork is running
-e2e: e2e-deploy e2e-normal-lp e2e-market-maker e2e-cross-market-delta
+e2e: e2e-deploy e2e-normal-lp e2e-market-maker e2e-mm-coverage e2e-cross-market-delta
 
 # E2E: Multi-market MM regression (shared underlyings across four markets; decrease/mint-from-deltas/settle-from-deltas).
 e2e-cross-market-delta:
@@ -752,10 +752,11 @@ e2e-market-maker:
         --rpc-url {{ rpc_url }} \
         {{ broadcast_flag }} -vvv
 
-# E2E: MMCoverage is retired after fee disablement removed the fee-pot/accounting lenses.
-# Kept as a stable entrypoint so existing docs/scripts do not fail on a missing recipe.
+# E2E: MMCoverage (fee-free multi-MM settlement / checkpoint / poke / exit path).
 e2e-mm-coverage:
-    @echo "MMCoverageE2E retired: fee-pot and position fee-accounting lens removed from IVTSOrchestrator"
+    FOUNDRY_PROFILE={{ foundry_profile }} forge script {{ script_dir }}/e2e/MMCoverage.s.sol:MMCoverageE2E \
+        --rpc-url {{ rpc_url }} \
+        {{ broadcast_flag }} -vvv
 
 # E2E: Seizure (guarantor path — single / two-position / four-position commit scenarios).
 # Requires PRIVATE_KEY, LP_PRIVATE_KEY; guarantor is GUARANTOR_PRIVATE_KEY, else LP2_PRIVATE_KEY, else LP3_PRIVATE_KEY (must differ from LP_PRIVATE_KEY).

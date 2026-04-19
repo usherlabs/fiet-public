@@ -53,3 +53,10 @@
   - deleted `contracts/evm/src/types/VTSFee.sol` because no live source or test code imported `VTSFeeStorage`, `PositionFeeAccounting`, or `PoolFeeAccounting` after fee disablement
   - deleted `contracts/evm/src/types/VTSPairTypes.sol` because it had become redundant with the canonical `GrowthPair`, `TokenPairUint`, `TokenPairInt`, and `TokenPairLib` definitions already owned by `contracts/evm/src/types/VTS.sol`
   - no import rewrites were required because the live graph was already canonicalized onto `VTS.sol`; the duplicate files were unreachable remnants rather than active dependencies
+- 2026-04-19: PR #201 / branch `fix/TASK-25-mmcoverage-e2e` is being absorbed into the TASK-25 delivery branch via cherry-pick of `865b5f1c` (`fix: restore evm script coverage after fee lib removal`).
+- 2026-04-19: PR #201 conflict inventory and deliberate resolutions:
+  - `contracts/evm-scripts/script/e2e/MMCoverage.s.sol`: took the PR #201 restored fee-free multi-MM scenario over the temporary `e8ef35fa` retirement stub, with no fee-pot / fee-accounting assertions reintroduced.
+  - `contracts/evm-scripts/script/e2e/CrossMarketDeltaRegression.s.sol`: kept the current TASK-25 content; the only conflict was a trivial empty-line/context hunk around the pool total-deficit snapshot block.
+  - `contracts/evm-scripts/justfile`: deliberately re-enabled `e2e-mm-coverage` and restored it to the default `e2e` aggregate so the MMCoverage restoration is part of the supported E2E surface again rather than a dormant script.
+  - `contracts/evm-scripts/README.md`: retained the fee-free MMCoverage description and the fee-disabled VTS config key documentation from the cherry-picked PR commit.
+- 2026-04-19: Once the cherry-pick is committed on this branch, `fix/TASK-25-mmcoverage-e2e` / PR #201 can be retired because its intended E2E/MMCoverage restoration will be fully subsumed by the TASK-25 delivery lane.
