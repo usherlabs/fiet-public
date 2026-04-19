@@ -493,8 +493,8 @@ contract CanonicalVault is ICanonicalVault, ImmutableState, ReentrancyGuardTrans
     }
 
     /// @notice Accepts native ETH only from PoolManager, LiquidityHub, or factory-registered protocol bounds.
-    /// @dev Unlike `MarketVaultFacade.receive`, `address(0)` is not whitelisted: canonical custody rejects unknown
-    ///      ETH origins (including selfdestruct-style zero-address sends) while per-market facades remain more permissive.
+    /// @dev Unlike `MarketVaultFacade.receive` (fail-closed for all senders), canonical custody allows these trusted
+    ///      origins; `address(0)` is not whitelisted here (see `INVARIANTS.md` HUB-02B).
     receive() external payable {
         if (
             msg.sender != address(poolManager) && msg.sender != address(liquidityHub)

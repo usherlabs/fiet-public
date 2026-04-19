@@ -2,7 +2,7 @@
 
 > **Module**: `MMPositionManager`, `MMPositionActionsImpl`, `MMActions`  
 > **Author**: Fiet Protocol  
-> **Last Updated**: December 2024
+> **Last Updated**: 19th April 2026
 
 ## Overview
 
@@ -151,6 +151,8 @@ Burns (fully decreases) a position, removing all liquidity.
 ### SEIZE_POSITION (0x05)
 
 Seizes a position that has failed to meet its backing requirements after the grace period. This is a third-party guarantor action.
+
+**Amendment (2026-04-19).** Economic intent for **how much** liquidity may be seized and how that relates to the **base VTS rate** and **proportional cure** of overdue RfS is documented in [`Seizure-and-Base-Tranche-Policy.md`](./Seizure-and-Base-Tranche-Policy.md). Execution still flows through `onMMSettle` → `_calcSeizure` as implemented in `VTSLifecycleLinkedLib`.
 
 **Parameters:**
 | Name | Type | Description |
@@ -362,7 +364,19 @@ Decommits a signal and burns the commitment NFT. Requires all positions to be re
 **Requirements:**
 
 - Caller must be approved or owner of the NFT
-- Commitment must have zero positions (`positionCount == 0`)
+- Commitment must have zero **active** positions (`activePositionCount == 0`)
+- Commitment must have zero inactive live-`settled` remnants (`inactiveRemnantCount == 0`)
+
+**Exit semantics (amended 19th April 2026):**
+
+- `DECOMMIT_SIGNAL` is a valid **terminal exit** for an MM commitment once the active-position and inactive-live-`settled`
+  gates above are satisfied.
+- It does **not** additionally require all historical positions under the commit to have `pendingFeeAdj == 0`.
+- Under the fee-pot design, `pendingFeeAdj` is a **best-effort, touch-mediated** queue. If a maker fully exits and
+  decommits before a later touch would materialise some queued positive or negative `pendingFeeAdj`, that unresolved
+  remainder is intentionally **abandoned**, not converted into a mandatory post-exit settlement obligation.
+- Historical `positionCount` may remain non-zero because the commit retains position history; decommit is not gated on
+  `positionCount == 0`.
 
 ---
 

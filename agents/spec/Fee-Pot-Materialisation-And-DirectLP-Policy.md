@@ -2,12 +2,34 @@
 
 Date: 18th April 2026
 
+Amendments:
+
+- 19th April 2026 — clarified full-decommit / exit semantics for unresolved `pendingFeeAdj`
+
 **Canonical reference:** use this document for post-redesign fee-pot semantics. Older research specs that still mention `protocolFeeAccrued` carry a callout at the top pointing here; treat their `protocolFeeAccrued` formulas as historical unless reconciled with this note.
 
 This note records the **fee-pot redesign** implemented in `VTSFeeLib` and related contracts. It complements:
 
 - `agents/spec/FeeAdj-Flow-Pot-Accrual-And-Delta-Settlement.md`
 - `contracts/evm/INVARIANTS.md` (FEE-01, FEE-02, SETTLE-03)
+
+## Amendment: exit and decommit semantics (19th April 2026)
+
+The best-effort fee-pot model applies to **touch opportunities while a position / commit remains live enough to be
+touched**. It does **not** mean the protocol guarantees eventual materialisation of every queued `pendingFeeAdj` before a
+maker may fully exit.
+
+Concretely:
+
+- Full MM decommit remains a valid terminal exit once the commit has **no active positions** and **no inactive live
+  `settled` remnants**.
+- The protocol does **not** additionally require `pendingFeeAdj == 0` across all historical positions before
+  `DECOMMIT_SIGNAL`.
+- If a maker fully exits and decommits before later touches would have materialised some queued `pendingFeeAdj`, that
+  unresolved remainder is **abandoned by design** rather than converted into a mandatory exit debt.
+- This is intentional product behaviour: blocking decommit on unresolved `pendingFeeAdj` would turn a touch-mediated,
+  best-effort mechanism into a forced post-exit settlement obligation and would create an incentive to keep an otherwise
+  empty commitment NFT alive purely to chase optional future materialisation.
 
 ## Why touch order matters
 
@@ -46,6 +68,9 @@ Fee adjustment materialisation is **best effort** at the granularity of a liquid
 
 - Same-touch Phase 2+3 can **fully** pay an allocated bonus when `slashedPot` suffices.
 - If the pot is insufficient, negative `pendingFeeAdj` can remain for later touches; this is ordinary queuing, not a guarantee of same-touch payout.
+- Likewise, positive `pendingFeeAdj` may remain queued until a later touch materialises it into `slashedPot`; if the
+  maker fully exits and validly decommits first, that unresolved remainder is intentionally not preserved as an
+  exit-blocking obligation.
 
 ## Public / operator observability
 

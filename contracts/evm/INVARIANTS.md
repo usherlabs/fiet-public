@@ -261,6 +261,9 @@ being an informal “should”.
 - **Enforced by**: `src/LiquidityHub.sol::_assertValidUnwrapPayoutRecipient` inside `_unwrap` before `_pay`.
 - **Why**: Exempt endpoints are not unwrap payout targets; paying them strands underlying outside durable custody and
   settlement accounting.
+- **Implementation note**: `MarketVaultFacade.receive()` is fail-closed and reverts **all** plain ETH ingress
+  (`Errors.InvalidEthSender`), including for `ProxyHook`. Native market liquidity is accounted via `CanonicalVault` /
+  `PoolManager` claims, not unbooked ETH balance on the facade.
 
 ### HUB-02C: Native queue settlement remains serviceable if recipient shape changes after queueing
 
@@ -417,6 +420,13 @@ being an informal “should”.
 - **Non-goal**:
   - The protocol does **not** guarantee that transferring an active commitment NFT alone transfers full MM operating
     authority to the recipient.
+
+### SIG-00: VRL root signatures are deployment-agnostic (cross-chain syndication)
+
+- **Statement**: The `ECDSASignatureSignalVerifier` root attestation signs `(nonce, rootStateHash)` under `eth_sign` without `chainId` or verifying-contract binding. **This is intentional:** VRL state is treated as a single source of truth off-chain; the same signed proof may verify on multiple Market Chain deployments as **state synchronisation**, not as accidental cross-deployment replay. Per-deployment freshness is `mmNonce[mmState.owner]` in **each** `VRLSignalManager` instance only.
+- **Enforced by (signature shape)**: `src/verifiers/ECDSASignatureSignalVerifier.sol::verifyProof`.
+- **Enforced by (local replay floor)**: `src/VRLSignalManager.sol::_verifyLiquiditySignalInternal` and optional `seedMMNonce` / `seedSubmitAuthNonce` for replacement deployments.
+- **Authoritative note**: `agents/spec/VRL-Cross-Chain-Proof-Syndication.md` (amendment 2026-04-19).
 
 ### SIG-01: VRL nonce must be strictly monotonically increasing per MM
 
@@ -575,6 +585,11 @@ being an informal “should”.
     then Phase 3 (`_finaliseNegativeFeeAdjustment` draining `slashedPot` for negative pending).
   - Fee adjustments are **best effort** at the touch granularity: the same pass may fully pay a queued bonus when the
     materialised pot suffices; otherwise negative `pendingFeeAdj` can remain for later touches.
+  - **19th April 2026 clarification — exit semantics**: best-effort fee processing is **not** an exit guarantee.
+    `pendingFeeAdj` is a touch-mediated per-position queue, not an independently exit-blocking claim. Full MM decommit
+    may occur with unresolved `pendingFeeAdj` once the commit has no active positions and no inactive live `settled`
+    remnants; any unmaterialised remainder is intentionally abandoned rather than forcing further touches or blocking
+    decommit.
 - **Enforced by**:
   - `src/libraries/VTSFeeLib.sol::_queueBonusForToken` reads allocatable balance from `slashedPot` (with CSI self-exclusion
     via `feesShared` / remaining-share epochs).
@@ -583,6 +598,9 @@ being an informal “should”.
   - `src/libraries/VTSFeeLib.sol::_processPositionFees` orchestrates the three phases above.
   - Bonus sizing uses `FullMath.mulDivRoundingUp(potAvail, ciseExposure, totalExposure)` (then caps to `potAvail`) so
     tiny proportional shares are not stranded at zero wei when the position is otherwise eligible.
+  - `src/MMPositionManager.sol::_decommitSignal` intentionally gates burn only on commit emptiness in the supported
+    economic sense (`activePositionCount == 0` and `inactiveRemnantCount == 0`), not on clearing historical
+    `pendingFeeAdj`.
 - **Echidna harness note**:
   - `test/fuzz/invariants/FEE01.sol` resets CSI `feesSharedEpoch`, remaining-share factors, and related accounting at the
     start of each action. Echidna reuses a single deployed harness, so without that reset, `_syncFeesSharedRemainingForToken`
@@ -602,6 +620,11 @@ being an informal “should”.
     exists; it is then realised/consumed on subsequent fee-processing touches.
 
 ## Settlement, RFS, and seizure safety
+
+### Policy reference: seizure economics (amendment 2026-04-19)
+
+- **Agents/spec**: Normative **economic intent** for guarantor seizure (base tranche, proportional cure of overdue RfS, position-wide aggregation) is documented in `agents/spec/Seizure-and-Base-Tranche-Policy.md`. That document supersedes older narrative in `agents/spec/Settlements.md` that described time-linear seizure sizing after grace.
+- **Implementation note**: On-chain seized liquidity units are computed in `src/libraries/VTSLifecycleLinkedLib.sol::_calcSeizure` and may **diverge** from that policy in edge cases (for example, sizing uses post-settlement RfS; if a settle **fully closes** all RfS, `_calcSeizure` returns zero because `getRFS` reports no open RfS). Treat `INVARIANTS.md` enforcement points as authoritative for **what reverts**; treat the agents spec as authoritative for **intended economics** pending explicit alignment refactors.
 
 ### SETTLE-01: Withdrawals from active positions are disallowed while RFS is open
 

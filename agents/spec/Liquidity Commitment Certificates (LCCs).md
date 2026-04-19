@@ -1,6 +1,10 @@
 # Liquidity Commitment Certificates (LCCs)
 
-Market makers (MMs) partition their Verified Reserve Liquidity (VRL) into commitments to Fiet Markets across blockchains. These commitments are represented as Liquidity Commitment Certificates (LCCs).
+Market makers (MMs) allocate Verified Reserve Liquidity (VRL) into commitments to Fiet Markets across blockchains. These commitments are represented as Liquidity Commitment Certificates (LCCs).
+
+### Amendment (19 April 2026)
+
+**Partitioning vs proof syndication:** Economically, MMs split total VRL across markets and chains according to risk and operational limits. **Cryptographically**, the same verified VRL state update (same Merkle root and threshold-signed `(nonce, root)` payload) may be accepted on **more than one** Market Chain by design — VRL is a cross-chain source of truth, and on-chain verification **syncs** that state per chain rather than requiring a chain-exclusive signature. See `agents/spec/VRL-Cross-Chain-Proof-Syndication.md`.
 
 ## What is a Liquidity Commitment Certificate?
 
@@ -101,7 +105,7 @@ Distinctions include:
 - Absence of Borrowing: Unlike perpetual futures platforms, where collateral (e.g., $2,000) supports borrowing $98,000 for 50x leverage, Fiet requires no loans. MMs facilitate liquidity from their verified reserves, without third-party funding.
 - Operational Risk Focus: Seizure arises from failure to settle, an operational lapse, rather than price-driven liquidations. While price fluctuations can indirectly contribute — if a mismatch exists between the signal reserve currency (e.g., USD) and settlement token (e.g., ETH), such as an ETH price spike rendering the committed amount insolvent relative to the signalled value — this triggers seizure only through resultant non-delivery, not automated margin calls.
 - Protocol-Bound Synthetic: lcc-USDC functions as a non-transferable token bound to Fiet’s ecosystem, backed by attested reserves, not a derivative position betting on asset prices.
-- Collateral Function: The initial base Value-to-Signal rate (eg., 2%) serves to anchor the commitment and incentivise guarantors, not as margin against borrowed funds.
+- Collateral Function: The initial base Value-to-Signal rate (eg., 2%) serves to anchor the commitment and incentivise guarantors, not as margin against borrowed funds. **(Amendment 2026-04-19.)** The normative **seizure / base-tranche** intent (how much of a position is at risk when overdue and how guarantor reward scales with cure) is stated in [`Seizure-and-Base-Tranche-Policy.md`](./Seizure-and-Base-Tranche-Policy.md).
 - Demand-Driven Settlement: MMs deliver tokens from reserves in response to trader activity, without repayment obligations. Settlement Guarantors intervene for non-fulfilment, claiming proportional position shares, distinct from closing leveraged trades.
 
 This framework supports substantial liquidity facilitation without introducing debt or speculative amplification, prioritising verified commitments over financial gearing.
