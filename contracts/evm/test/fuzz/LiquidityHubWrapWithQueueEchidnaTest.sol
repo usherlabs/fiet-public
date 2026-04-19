@@ -206,16 +206,15 @@ contract LiquidityHubWrapWithQueueEchidnaTest {
         hub.wrapWith(address(target), address(backing), amt);
 
         bool ok = true;
-        ok = ok && (hub.settleQueue(address(backing), address(hub)) == seed);
-        ok = ok && (hub.totalQueued(address(backing)) == seed);
+        uint256 remaining = seed - amt;
+        ok = ok && (hub.settleQueue(address(backing), address(hub)) == remaining);
+        ok = ok && (hub.totalQueued(address(backing)) == remaining);
         ok = ok && (backing.totalSupply() + target.totalSupply() == sumSupplyBefore);
 
-        uint256 supplyBackingBeforeSettle = backing.totalSupply();
-        hub.processSettlementFor(address(backing), address(hub), amt);
+        hub.processSettlementFor(address(backing), address(hub), remaining);
 
-        ok = ok && (hub.settleQueue(address(backing), address(hub)) == seed - amt);
-        ok = ok && (hub.totalQueued(address(backing)) == seed - amt);
-        ok = ok && (backing.totalSupply() == supplyBackingBeforeSettle);
+        ok = ok && (hub.settleQueue(address(backing), address(hub)) == 0);
+        ok = ok && (hub.totalQueued(address(backing)) == 0);
 
         wrapWithQueueChecked = true;
         lastWrapWithQueueOk = ok;
