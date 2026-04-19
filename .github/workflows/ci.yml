@@ -54,8 +54,35 @@ jobs:
         working-directory: contracts/evm
         id: build
 
-      - name: Run Forge heavy position-library tests
-        run: forge test -vvv --match-path 'test/libraries/VTSPositionLib*.t.sol'
+      - name: Run Forge onMMSettle deposit/cross position-library tests
+        run: |
+          forge test -vvv -j 1 \
+            --match-path 'test/libraries/VTSPositionLib.onMMSettle.t.sol' \
+            --match-test 'test_onMMSettle_(deposits|crossMarket|fromDeltas|finding9|revertsOnInvalidPosition).*'
+        working-directory: contracts/evm
+        id: test_position_lib_on_mm_settle_deposit_cross
+
+      - name: Run Forge onMMSettle active/withdraw position-library tests
+        run: |
+          forge test -vvv -j 1 \
+            --match-path 'test/libraries/VTSPositionLib.onMMSettle.t.sol' \
+            --match-test 'test_onMMSettle_(active|mixedDepositAndWithdrawal|withdrawals).*'
+        working-directory: contracts/evm
+        id: test_position_lib_on_mm_settle_active_withdraw
+
+      - name: Run Forge onMMSettle seizing position-library tests
+        run: |
+          forge test -vvv -j 1 \
+            --match-path 'test/libraries/VTSPositionLib.onMMSettle.t.sol' \
+            --match-test 'test_onMMSettle_seizing_.*'
+        working-directory: contracts/evm
+        id: test_position_lib_on_mm_settle_seizing
+
+      - name: Run remaining position-library tests
+        run: |
+          forge test -vvv \
+            --match-path 'test/libraries/VTSPositionLib*.t.sol' \
+            --no-match-path 'test/libraries/VTSPositionLib.onMMSettle.t.sol'
         working-directory: contracts/evm
         id: test_position_lib
 
