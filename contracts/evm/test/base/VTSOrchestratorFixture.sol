@@ -435,12 +435,9 @@ abstract contract VTSOrchestratorFixture is MarketTestBase, MarketMakerTestBase 
         return manager.balanceOf(address(vtsOrchestrator), lccCurrency.toId());
     }
 
-    /// @notice Helper to get the materialised slashed pot for a pool
-    /// @param poolId The pool identifier
-    /// @return pot0 Materialised pot for token0
-    /// @return pot1 Materialised pot for token1
-    function _slashedPot(PoolId poolId) internal view returns (uint256 pot0, uint256 pot1) {
-        return vtsOrchestrator.getSlashedPot(poolId);
+    /// @notice Legacy helper name retained for older tests; fee-era `slashedPot` storage was removed.
+    function _slashedPot(PoolId) internal pure returns (uint256 pot0, uint256 pot1) {
+        return (0, 0);
     }
 
     /// @notice Helper to prepare permits for settle in MM position

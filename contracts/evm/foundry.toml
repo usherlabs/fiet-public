@@ -84,7 +84,6 @@ compilation_restrictions = [
   { paths = "src/libraries/VTSSwapLib.sol", optimizer_runs = 25000 },
   { paths = "src/libraries/VTSPositionLib.sol", optimizer_runs = 25000 },
   { paths = "src/libraries/VTSPositionMMOpsLib.sol", optimizer_runs = 25000 },
-  { paths = "src/libraries/VTSFeeLib.sol", optimizer_runs = 25000 },
   { paths = "src/libraries/VTSLifecycleLinkedLib.sol", optimizer_runs = 25000 },
 ]
 

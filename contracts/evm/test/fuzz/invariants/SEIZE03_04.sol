@@ -42,7 +42,6 @@ contract SEIZE03_04 {
     bool internal lastOk04;
 
     constructor() {
-        EchidnaLinkedLibs.deployVTSFeeLinkedLib();
         EchidnaLinkedLibs.deployVTSPositionLib();
         harness = new VTSPositionLibEchidnaHarness();
         poolManager = new MockPoolManager();
@@ -68,7 +67,6 @@ contract SEIZE03_04 {
                 unbackedCommitmentGraceBypassTime: 0,
                 unbackedCommitmentGraceBypassThreshold: 0
             }),
-            coverageFeeShare: 5000,
             minResidualUnits: 1000,
             unbackedCommitmentGraceBypassBps: 500
         });

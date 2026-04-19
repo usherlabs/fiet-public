@@ -120,7 +120,7 @@ library LiquidityUtils {
      *      Decomposition (equivalent for all uint256 inputs):
      *      - `q0 = floor(consumedFees * Q128 / L)`, `r0 = mulmod(consumedFees, Q128, L)`
      *      - `growthInc = q0 + (r0 + carryIn) / L`, `newCarry = (r0 + carryIn) % L`
-     * @param consumedFees Fee-token amount attributed to this burn (before coverageFeeShare bps)
+     * @param consumedFees Fee-token amount attributed to this burn (raw units)
      * @param positionLiquidity Position liquidity L; must be > 0
      * @param carryIn Remainder carried from the prior burn; invariant `carryIn < L` when used correctly
      * @return growthInc Q128-scaled growth to add to `feeGrowthInsideLast` on the fee token

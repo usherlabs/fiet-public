@@ -23,7 +23,6 @@ contract GenerateEchidnaLinkedLibAddresses is Script {
             EchidnaLinkedLibs.predictedLiquidityHubLinkedLib()
         );
         _manifestLine("src/libraries/VTSCommitLib.sol:VTSCommitLib", EchidnaLinkedLibs.predictedVTSCommitLib());
-        _manifestLine("src/libraries/VTSFeeLib.sol:VTSFeeLinkedLib", EchidnaLinkedLibs.predictedVTSFeeLinkedLib());
         _manifestLine("src/libraries/VTSPositionLib.sol:VTSPositionLib", EchidnaLinkedLibs.predictedVTSPositionLib());
         _manifestLine(
             "src/libraries/VTSLifecycleLinkedLib.sol:VTSLifecycleLinkedLib",

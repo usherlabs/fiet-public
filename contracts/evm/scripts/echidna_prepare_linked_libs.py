@@ -35,7 +35,6 @@ ECHIDNA_LIBRARY_IDS: list[str] = [
     "src/libraries/LCCFactoryLib.sol:LCCFactoryLinkedLib",
     "src/libraries/LiquidityHubLinkedLib.sol:LiquidityHubLinkedLib",
     "src/libraries/VTSCommitLib.sol:VTSCommitLib",
-    "src/libraries/VTSFeeLib.sol:VTSFeeLinkedLib",
     "src/libraries/VTSPositionLib.sol:VTSPositionLib",
     "src/libraries/VTSLifecycleLinkedLib.sol:VTSLifecycleLinkedLib",
     "src/libraries/VTSPositionMMOpsLib.sol:VTSPositionMMOpsLib",
@@ -55,7 +54,6 @@ BOOTSTRAP_MANIFEST: dict[str, str] = {
     "src/libraries/LCCFactoryLib.sol:LCCFactoryLinkedLib": "0x5a3842f9d1b0f96003669a36ec4a09165bc7de54",
     "src/libraries/LiquidityHubLinkedLib.sol:LiquidityHubLinkedLib": "0x5be262f2f2f9b3b5c70a256526ee9c6dd8fc9e02",
     "src/libraries/VTSCommitLib.sol:VTSCommitLib": "0x6603f397b11b2392c245cc0c7570f6110233a473",
-    "src/libraries/VTSFeeLib.sol:VTSFeeLinkedLib": "0xe2f744d132a1b346acd29e304181edf2bf9831b8",
     "src/libraries/VTSPositionLib.sol:VTSPositionLib": "0x1eb3ddb04f2ac30a033f17d6f78a1a9fb676cc14",
     "src/libraries/VTSLifecycleLinkedLib.sol:VTSLifecycleLinkedLib": "0xc40e390701f867fe2afb676bd694826ed5e4b868",
     "src/libraries/VTSPositionMMOpsLib.sol:VTSPositionMMOpsLib": "0x96148e6576bb664ac0fb79537835eb167b629cb9",
@@ -120,7 +118,6 @@ def _build_libraries_toml_inner(manifest: dict[str, str]) -> str:
         "  # Deterministic CREATE2 address deployed by the SIG-BACKING harness (avoids any RPC fetch attempts)."
     )
     lines.append(f'  "src/libraries/VTSCommitLib.sol:VTSCommitLib:{addr("src/libraries/VTSCommitLib.sol:VTSCommitLib")}",')
-    lines.append(f'  "src/libraries/VTSFeeLib.sol:VTSFeeLinkedLib:{addr("src/libraries/VTSFeeLib.sol:VTSFeeLinkedLib")}",')
     lines.append(
         "  # Deterministic CREATE2 address deployed by `VTSPositionLibEchidnaHarness` (avoids Echidna RPC fetch attempts)."
     )

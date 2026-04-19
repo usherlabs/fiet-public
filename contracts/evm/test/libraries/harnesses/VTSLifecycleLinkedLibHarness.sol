@@ -174,7 +174,7 @@ contract VTSLifecycleLinkedLibHarness {
 
     function testSeedPool(PoolId poolId, Currency c0, Currency c1) external {
         s.pools[poolId] =
-            Pool({currency0: c0, currency1: c1, vtsConfig: VTSConfigs.getFeeSharingDefaultConfig(), isPaused: false});
+            Pool({currency0: c0, currency1: c1, vtsConfig: VTSConfigs.getDefaultConfig(), isPaused: false});
     }
 
     function testSeedPosition(PositionId pid, address owner_, PoolId poolId_, uint256 commitId_, bool active) external {

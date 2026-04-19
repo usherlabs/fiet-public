@@ -55,21 +55,6 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
         bool rfsOpen
     );
 
-    struct DICEAccounting {
-        uint256 totalDeficitPrincipal1;
-        uint256 diceIndex1;
-        uint256 diceResidual1;
-    }
-
-    struct CISEAccounting {
-        uint256 totalSettled0;
-        uint256 totalSettled1;
-        uint256 ciseIndex0;
-        uint256 ciseIndex1;
-        uint256 totalCISEExposure0;
-        uint256 totalCISEExposure1;
-    }
-
     // ============================================================
     // Deploy VTSOrchestratorTestable for storage inspection
     // ============================================================
@@ -459,7 +444,7 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
         });
 
         // Ensure VTS has configuration for poolKeyA so the call is well-formed, even though it should revert earlier.
-        MarketVTSConfiguration memory cfg = VTSConfigs.getFeeSharingDefaultConfig();
+        MarketVTSConfiguration memory cfg = VTSConfigs.getDefaultConfig();
         vm.prank(marketFactory);
         vtsOrchestrator.initPool(poolKeyA, cfg);
 
@@ -505,13 +490,13 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
     // ============================================================
 
     function test_revert_initPool_whenNotFactory() public {
-        MarketVTSConfiguration memory config = VTSConfigs.getFeeSharingDefaultConfig();
+        MarketVTSConfiguration memory config = VTSConfigs.getDefaultConfig();
         vm.expectRevert(Errors.InvalidSender.selector);
         vtsOrchestrator.initPool(corePoolKey, config);
     }
 
     function test_initPool_whenFactory() public {
-        MarketVTSConfiguration memory config = VTSConfigs.getFeeSharingDefaultConfig();
+        MarketVTSConfiguration memory config = VTSConfigs.getDefaultConfig();
         PoolKey memory freshPoolKey = PoolKey({
             currency0: Currency.wrap(address(0x33333333)),
             currency1: Currency.wrap(address(0x44444444)),
@@ -525,7 +510,7 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
     }
 
     function test_revert_initPool_whenAlreadyInitialized() public {
-        MarketVTSConfiguration memory config = VTSConfigs.getFeeSharingDefaultConfig();
+        MarketVTSConfiguration memory config = VTSConfigs.getDefaultConfig();
         PoolKey memory poolKeyA = PoolKey({
             currency0: Currency.wrap(address(0x11111111)),
             currency1: Currency.wrap(address(0x22222222)),
@@ -542,85 +527,8 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
         vm.stopPrank();
     }
 
-    function test_revert_incrementCoverage_whenNotFactory() public {
-        vm.expectRevert(Errors.InvalidSender.selector);
-        vtsOrchestrator.incrementCoverage(corePoolKey.toId(), 100, 100);
-    }
-
-    function test_incrementCoverage_whenFactory() public {
-        vm.prank(marketFactory);
-        vtsOrchestrator.incrementCoverage(corePoolKey.toId(), 100, 100);
-        // Should not revert
-    }
-
-    function test_incrementCoverage_amount1_incrementsToken1CoverageAccounting() public {
-        PoolId poolId = corePoolKey.toId();
-
-        DICEAccounting memory diceBefore = _getPoolDICEAccounting(poolId);
-        CISEAccounting memory ciseBefore = _getPoolCISEAccounting(poolId);
-
-        uint256 amount1 = 123;
-        vm.prank(marketFactory);
-        vtsOrchestrator.incrementCoverage(poolId, 0, amount1);
-
-        DICEAccounting memory diceAfter = _getPoolDICEAccounting(poolId);
-        CISEAccounting memory ciseAfter = _getPoolCISEAccounting(poolId);
-
-        // Totals should not change due to incrementCoverage.
-        assertEq(
-            diceAfter.totalDeficitPrincipal1,
-            diceBefore.totalDeficitPrincipal1,
-            "totalDeficitPrincipal1 should not change"
-        );
-        assertEq(ciseAfter.totalSettled0, ciseBefore.totalSettled0, "totalSettled0 should not change");
-        assertEq(ciseAfter.totalSettled1, ciseBefore.totalSettled1, "totalSettled1 should not change");
-        assertEq(ciseAfter.ciseIndex0, ciseBefore.ciseIndex0, "ciseIndex0 should not change");
-        assertEq(ciseAfter.totalCISEExposure0, ciseBefore.totalCISEExposure0, "totalCISEExposure0 should not change");
-        // Token1 coverage: when pool totalSettled1 > 0, incrementCoverage eagerly bumps CISE exposure (see VTSCommitLib).
-        if (ciseBefore.totalSettled1 > 0) {
-            assertEq(
-                ciseAfter.totalCISEExposure1,
-                ciseBefore.totalCISEExposure1 + amount1,
-                "totalCISEExposure1 should increase by covered amount when settled1 > 0"
-            );
-        } else {
-            assertEq(
-                ciseAfter.totalCISEExposure1,
-                ciseBefore.totalCISEExposure1,
-                "totalCISEExposure1 should not change when settled1 == 0"
-            );
-        }
-
-        // Coverage routing differs by mechanism:
-        // - DICE defers into residuals when no deficit principal exists.
-        // - CISE only advances when settled liquidity is already live; zero-settled coverage is ignored.
-        if (diceBefore.totalDeficitPrincipal1 > 0) {
-            assertGt(diceAfter.diceIndex1, diceBefore.diceIndex1, "DICE index1 should increase when deficits exist");
-        } else {
-            assertGt(
-                diceAfter.diceResidual1,
-                diceBefore.diceResidual1,
-                "DICE residual1 should increase when no deficits exist"
-            );
-        }
-
-        if (ciseBefore.totalSettled1 > 0) {
-            assertGt(ciseAfter.ciseIndex1, ciseBefore.ciseIndex1, "CISE index1 should increase when settled > 0");
-        } else {
-            assertEq(
-                ciseAfter.ciseIndex1, ciseBefore.ciseIndex1, "CISE index1 should not change when no settled exists"
-            );
-        }
-    }
-
-    function _getPoolDICEAccounting(PoolId poolId) internal view returns (DICEAccounting memory a) {
-        (, a.totalDeficitPrincipal1,, a.diceIndex1,, a.diceResidual1) =
-            _testableOrchestrator().getPoolDICEAccounting(poolId);
-    }
-
-    function _getPoolCISEAccounting(PoolId poolId) internal view returns (CISEAccounting memory a) {
-        (a.totalSettled0, a.totalSettled1, a.ciseIndex0, a.ciseIndex1, a.totalCISEExposure0, a.totalCISEExposure1) =
-            _testableOrchestrator().getPoolCISEAccounting(poolId);
+    function test_extsload_isCallable_onOrchestrator() public view {
+        vtsOrchestrator.extsload(bytes32(uint256(0)));
     }
 
     // ============================================================

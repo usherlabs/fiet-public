@@ -4,19 +4,19 @@ overview: Remove legacy fee-adjust / DICE / CISE / CSI behaviour structurally fr
 todos:
   - id: reshape-storage-and-config
     content: Remove legacy fee fields from VTS storage/config types while retaining base pool aggregates and aligning comments/docs.
-    status: pending
+    status: completed
   - id: strip-runtime-fee-logic
     content: Delete fee-adjust, DICE, CISE, and CSI runtime paths from VTSPositionLib, VTSCommitLib, and VTSOrchestrator while preserving base settlement behaviour.
-    status: pending
+    status: completed
   - id: remove-fee-abi-surface
     content: Break the VTSOrchestrator ABI intentionally by deleting legacy fee and coverage entrypoints/getters and wiring in Extsload.
-    status: pending
+    status: completed
   - id: delete-fee-library-and-harnesses
     content: Remove VTSFeeLib and clean any remaining harness, fuzz-linking, or test dependencies on VTSFeeLinkedLib.
-    status: pending
+    status: completed
   - id: retarget-verification
     content: Rewrite the suite around the reduced storage/ABI model and keep only base-engine and Extsload verification.
-    status: pending
+    status: completed
 isProject: false
 ---
 

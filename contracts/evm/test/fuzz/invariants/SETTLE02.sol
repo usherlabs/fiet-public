@@ -52,7 +52,6 @@ contract SETTLE02 {
     bool internal withdrawAllOk = true;
 
     constructor() {
-        EchidnaLinkedLibs.deployVTSFeeLinkedLib();
         EchidnaLinkedLibs.deployVTSPositionLib();
         EchidnaLinkedLibs.deployVTSPositionMMOpsLib();
         EchidnaLinkedLibs.deployVTSLifecycleLinkedLib();
@@ -88,7 +87,6 @@ contract SETTLE02 {
                 unbackedCommitmentGraceBypassTime: 0,
                 unbackedCommitmentGraceBypassThreshold: 0
             }),
-            coverageFeeShare: 5000,
             minResidualUnits: 1000,
             unbackedCommitmentGraceBypassBps: 500
         });

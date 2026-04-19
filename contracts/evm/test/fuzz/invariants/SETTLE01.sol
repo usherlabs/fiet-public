@@ -43,7 +43,6 @@ contract SETTLE01 {
     bool internal closedAllOk = true;
 
     constructor() {
-        EchidnaLinkedLibs.deployVTSFeeLinkedLib();
         EchidnaLinkedLibs.deployVTSPositionLib();
         EchidnaLinkedLibs.deployVTSPositionMMOpsLib();
         EchidnaLinkedLibs.deployVTSLifecycleLinkedLib();
@@ -81,7 +80,6 @@ contract SETTLE01 {
                 unbackedCommitmentGraceBypassTime: 0,
                 unbackedCommitmentGraceBypassThreshold: 0
             }),
-            coverageFeeShare: 5000, // 50%
             minResidualUnits: 1000,
             unbackedCommitmentGraceBypassBps: 500
         });

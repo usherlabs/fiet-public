@@ -4,7 +4,6 @@ pragma solidity ^0.8.26;
 import {LCCFactoryLinkedLib} from "../../../src/libraries/LCCFactoryLib.sol";
 import {LiquidityHubLinkedLib} from "../../../src/libraries/LiquidityHubLinkedLib.sol";
 import {VTSCommitLib} from "../../../src/libraries/VTSCommitLib.sol";
-import {VTSFeeLinkedLib} from "../../../src/libraries/VTSFeeLib.sol";
 import {VTSPositionLib} from "../../../src/libraries/VTSPositionLib.sol";
 import {VTSLifecycleLinkedLib} from "../../../src/libraries/VTSLifecycleLinkedLib.sol";
 import {VTSPositionMMOpsLib} from "../../../src/libraries/VTSPositionMMOpsLib.sol";
@@ -22,7 +21,6 @@ library EchidnaLinkedLibs {
     error LCCFactoryLinkedLibAddrMismatch();
     error LiquidityHubLinkedLibAddrMismatch();
     error VTSCommitLibAddrMismatch();
-    error VTSFeeLinkedLibAddrMismatch();
     error VTSPositionLibAddrMismatch();
     error DeployFailed();
 
@@ -39,11 +37,6 @@ library EchidnaLinkedLibs {
     function deployVTSCommitLib() internal {
         address lib = _deploy(keccak256("echidna.VTSCommitLib"), type(VTSCommitLib).creationCode);
         if (lib != predictedVTSCommitLib()) revert VTSCommitLibAddrMismatch();
-    }
-
-    function deployVTSFeeLinkedLib() internal {
-        address lib = _deploy(keccak256("echidna.VTSFeeLinkedLib"), type(VTSFeeLinkedLib).creationCode);
-        if (lib != predictedVTSFeeLinkedLib()) revert VTSFeeLinkedLibAddrMismatch();
     }
 
     function deployVTSPositionLib() internal {
@@ -73,10 +66,6 @@ library EchidnaLinkedLibs {
 
     function predictedVTSCommitLib() internal pure returns (address) {
         return _predictCreate2(keccak256("echidna.VTSCommitLib"), type(VTSCommitLib).creationCode);
-    }
-
-    function predictedVTSFeeLinkedLib() internal pure returns (address) {
-        return _predictCreate2(keccak256("echidna.VTSFeeLinkedLib"), type(VTSFeeLinkedLib).creationCode);
     }
 
     function predictedVTSPositionLib() internal pure returns (address) {

@@ -49,6 +49,7 @@ import {PoolAccounting} from "./types/VTS.sol";
 import {ReentrancyGuardTransient} from "openzeppelin-contracts/contracts/utils/ReentrancyGuardTransient.sol";
 import {TokenConfiguration} from "./types/VTS.sol";
 import {VTSAdmin} from "./modules/VTSAdmin.sol";
+import {Extsload} from "v4-periphery/lib/v4-core/src/Extsload.sol";
 
 /// @title VTSOrchestrator
 /// @notice Central state management layer and orchestrator for VTS logic
@@ -58,6 +59,7 @@ contract VTSOrchestrator is
     PausableVTS,
     VTSAdmin,
     VTSCurrencyDelta,
+    Extsload,
     ImmutableState,
     IVTSOrchestrator,
     ReentrancyGuardTransient
@@ -420,12 +422,6 @@ contract VTSOrchestrator is
     }
 
     /// @inheritdoc IVTSOrchestrator
-    function getSlashedPot(PoolId poolId) external view returns (uint256 pot0, uint256 pot1) {
-        PoolAccounting storage paPool = s.poolAccounting[poolId];
-        return (paPool.slashedPot.token0, paPool.slashedPot.token1);
-    }
-
-    /// @inheritdoc IVTSOrchestrator
     function getPoolTotalSettled(PoolId poolId) external view returns (uint256 total0, uint256 total1) {
         PoolAccounting storage paPool = s.poolAccounting[poolId];
         return (paPool.totalSettled.token0, paPool.totalSettled.token1);
@@ -439,16 +435,6 @@ contract VTSOrchestrator is
     {
         PoolAccounting storage paPool = s.poolAccounting[poolId];
         return (paPool.totalDeficitPrincipal.token0, paPool.totalDeficitPrincipal.token1);
-    }
-
-    /// @inheritdoc IVTSOrchestrator
-    function getPositionFeeAccounting(PositionId positionId)
-        external
-        view
-        returns (uint256 feesShared0, uint256 feesShared1, int256 pendingFeeAdj0, int256 pendingFeeAdj1)
-    {
-        PositionAccounting storage pa = s.positionAccounting[positionId];
-        return (pa.feesShared.token0, pa.feesShared.token1, pa.pendingFeeAdj.token0, pa.pendingFeeAdj.token1);
     }
 
     /// @notice Get the checkpoint for a given position
@@ -479,23 +465,6 @@ contract VTSOrchestrator is
             vtsConfig: vtsConfiguration,
             isPaused: false
         });
-    }
-
-    /// @notice Increment coverage amounts for a pool
-    /// @param poolId The pool identifier
-    /// @param amount0 Amount to increment for token0
-    /// @param amount1 Amount to increment for token1
-    function incrementCoverage(PoolId poolId, uint256 amount0, uint256 amount1) external onlyFactory {
-        // Phase 1 quarantine: coverage indices for DICE/CISE are part of the fee capability; skip when disabled.
-        if (s.pools[poolId].vtsConfig.coverageFeeShare == 0) {
-            return;
-        }
-        if (amount0 > 0) {
-            VTSCommitLib.incrementCoverage(s, poolId, 0, amount0);
-        }
-        if (amount1 > 0) {
-            VTSCommitLib.incrementCoverage(s, poolId, 1, amount1);
-        }
     }
 
     // --------------------------------------------------
