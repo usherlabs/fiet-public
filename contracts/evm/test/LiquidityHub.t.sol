@@ -1129,8 +1129,8 @@ contract LiquidityHubTest is LiquidityHubTestBase {
         }
     }
 
-    function test_confirmTake_doesNotEmitWhenShouldEmitButFullyConsumedByHubQueue() public {
-        // Create a hub queue equal to the amount (so hubQueue < amount is false).
+    /// @dev Hub self-queue can equal the incoming take; reserve still increases and must wake dispatch (no suppression).
+    function test_confirmTake_emitsWhenShouldEmitEvenWhenHubSelfQueueCoversFullIncomingAmount() public {
         uint256 hubQueue = 10;
         _createSettlementQueueEntry(lccToken1, address(liquidityHub), hubQueue);
 
@@ -1140,7 +1140,9 @@ contract LiquidityHubTest is LiquidityHubTestBase {
         uint256 bal = underlyingAsset1.balanceOf(address(liquidityHub));
         if (bal < needed) underlyingAsset1.mint(address(liquidityHub), needed - bal);
 
-        // If this emitted, the test would fail; keep it silent.
+        vm.expectEmit(true, false, false, true, address(liquidityHub));
+        emit LiquidityAvailable(lccToken1, address(underlyingAsset1), hubQueue, marketId1);
+
         vm.prank(proxyHook);
         liquidityHub.confirmTake(lccToken1, hubQueue, true);
     }
