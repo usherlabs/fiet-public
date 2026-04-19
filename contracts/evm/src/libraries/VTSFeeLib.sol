@@ -965,6 +965,12 @@ library VTSFeeLib {
 /// @notice Library for VTS fee processing
 /// @dev Operates on VTSStorage storage struct via storage pointers
 library VTSFeeLinkedLib {
+    /// @notice Returns true when the fee-sharing / coverage-fee capability is enabled for a pool.
+    /// @dev Phase 1 quarantine: `coverageFeeShare == 0` is the base market line; DICE/CISE/fee-adjustment paths are skipped.
+    function isFeeCapabilityEnabled(VTSStorage storage s, PoolId poolId) external view returns (bool enabled) {
+        return s.pools[poolId].vtsConfig.coverageFeeShare > 0;
+    }
+
     /// @notice Prepares CSI state before minting fresh fee-share contributions for a position
     /// @dev Advances the spend epoch if needed, then syncs the position's remaining self-share
     ///      against the current pool factor before the caller increases `pendingFeeAdj` / `feesShared`.

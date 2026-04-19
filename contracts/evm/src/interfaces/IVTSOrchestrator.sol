@@ -178,7 +178,9 @@ interface IVTSOrchestrator is IPausableVTS, IVTSCurrencyDelta, IVTSAdmin {
     /// @return amount1 Settled amount for token1
     function getPositionSettledAmounts(PositionId positionId) external view returns (uint256 amount0, uint256 amount1);
 
-    /// @notice Increment coverage amounts for a pool
+    /// @notice Increment coverage amounts for a pool (legacy fee / DICE / CISE capability)
+    /// @dev Phase 1 quarantine: when `coverageFeeShare == 0` on the pool, implementations must treat this as a no-op
+    ///      (no DICE/CISE index movement). Non-zero share opts into the annexed COV-* behaviour (see `ANNEXED-INVARIANTS.md`).
     /// @param poolId The pool identifier
     /// @param amount0 Amount to increment for token0
     /// @param amount1 Amount to increment for token1

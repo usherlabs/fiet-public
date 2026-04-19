@@ -154,6 +154,10 @@ struct SettleResult {
 
 /// @notice Per-position accounting data (mirrors VTSManager per-position mappings)
 /// @dev Split out of VTSManager to follow the Bunni-style storage pattern
+///
+///      Layout intent (Phase 1): storage order is fixed; see `VTS-INERT-STATE-ISOLATION.md` for the conceptual split.
+///      **Legacy fee / DICE / CISE / CSI** fields are grouped below with inline labels; ambient mutation of that cluster
+///      is gated by `coverageFeeShare > 0` (`VTSFeeLinkedLib.isFeeCapabilityEnabled`).
 struct PositionAccounting {
     // Commitment maxima per token
     TokenPairUint commitmentMax;
@@ -165,7 +169,7 @@ struct PositionAccounting {
     TokenPairUint deficitGrowthInsideLast;
     // Inflow growth snapshots per token
     TokenPairUint inflowGrowthInsideLast;
-    // Fee growth snapshots per token
+    // Fee growth snapshots per token (legacy fee / coverage-fee-burn path)
     TokenPairUint feeGrowthInsideLast;
     // Cumulative outflows per token
     TokenPairUint cumulativeOutflows;
@@ -178,6 +182,8 @@ struct PositionAccounting {
     uint16 commitmentDeficitBps;
     // Timestamp at which commitment deficit became non-zero per token (0 when token deficit is zero)
     TokenPairUint commitmentDeficitSince;
+
+    // --- Legacy fee-sharing / DICE / CISE / CSI (quarantined; ambient only when fee capability enabled) ---
     // Fees shared by position per token
     TokenPairUint feesShared;
     // Pending fee adjustments per token: +slash (reduces payout), -bonus (increases payout)
@@ -223,11 +229,18 @@ struct PositionAccounting {
 
 /// @notice Per-pool accounting data (mirrors VTSManager per-pool mappings)
 /// @dev Split out of VTSManager to follow the Bunni-style storage pattern
+///
+///      Layout intent (Phase 1): swap growth globals first; from `slashedPot` onward is the **legacy fee / DICE / CISE /
+///      CSI** group (quarantined from the default path when `coverageFeeShare == 0`). See
+///      `contracts/evm/VTS-INERT-STATE-ISOLATION.md`.
 struct PoolAccounting {
+    // --- Base v1 (swap attribution growth) ---
     // Deficit growth global per token
     TokenPairUint deficitGrowthGlobal;
     // Inflow growth global per token
     TokenPairUint inflowGrowthGlobal;
+
+    // --- Legacy fee-sharing / DICE / CISE / CSI (quarantined; ambient only when fee capability enabled) ---
     // Materialised slashed-pot balances per token (authoritative budget for bonus allocation after positive
     // `pendingFeeAdj` materialisation in `VTSFeeLib`; ERC6909 backing is settled via the hook)
     TokenPairUint slashedPot;

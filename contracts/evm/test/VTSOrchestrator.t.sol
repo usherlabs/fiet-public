@@ -459,7 +459,7 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
         });
 
         // Ensure VTS has configuration for poolKeyA so the call is well-formed, even though it should revert earlier.
-        MarketVTSConfiguration memory cfg = VTSConfigs.getDefaultConfig();
+        MarketVTSConfiguration memory cfg = VTSConfigs.getFeeSharingDefaultConfig();
         vm.prank(marketFactory);
         vtsOrchestrator.initPool(poolKeyA, cfg);
 
@@ -505,13 +505,13 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
     // ============================================================
 
     function test_revert_initPool_whenNotFactory() public {
-        MarketVTSConfiguration memory config = VTSConfigs.getDefaultConfig();
+        MarketVTSConfiguration memory config = VTSConfigs.getFeeSharingDefaultConfig();
         vm.expectRevert(Errors.InvalidSender.selector);
         vtsOrchestrator.initPool(corePoolKey, config);
     }
 
     function test_initPool_whenFactory() public {
-        MarketVTSConfiguration memory config = VTSConfigs.getDefaultConfig();
+        MarketVTSConfiguration memory config = VTSConfigs.getFeeSharingDefaultConfig();
         PoolKey memory freshPoolKey = PoolKey({
             currency0: Currency.wrap(address(0x33333333)),
             currency1: Currency.wrap(address(0x44444444)),
@@ -525,7 +525,7 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
     }
 
     function test_revert_initPool_whenAlreadyInitialized() public {
-        MarketVTSConfiguration memory config = VTSConfigs.getDefaultConfig();
+        MarketVTSConfiguration memory config = VTSConfigs.getFeeSharingDefaultConfig();
         PoolKey memory poolKeyA = PoolKey({
             currency0: Currency.wrap(address(0x11111111)),
             currency1: Currency.wrap(address(0x22222222)),

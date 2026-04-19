@@ -487,6 +487,10 @@ contract VTSOrchestrator is
     /// @param amount0 Amount to increment for token0
     /// @param amount1 Amount to increment for token1
     function incrementCoverage(PoolId poolId, uint256 amount0, uint256 amount1) external onlyFactory {
+        // Phase 1 quarantine: coverage indices for DICE/CISE are part of the fee capability; skip when disabled.
+        if (s.pools[poolId].vtsConfig.coverageFeeShare == 0) {
+            return;
+        }
         if (amount0 > 0) {
             VTSCommitLib.incrementCoverage(s, poolId, 0, amount0);
         }
