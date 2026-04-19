@@ -122,7 +122,7 @@ interface ILiquidityHub is IBoundRegistry, IMinimalLiquidityHub {
      * @notice Called by MarketVault after taking underlying liquidity from the market to LCC
      * @param lcc The LCC token address
      * @param amount The amount of underlying liquidity taken
-     * @param shouldEmit Whether to emit LiquidityAvailable event
+     * @param shouldEmit If true, emit `LiquidityAvailable` when amount > 0 (dispatch wake-up; see event NatSpec)
      */
     function confirmTake(address lcc, uint256 amount, bool shouldEmit) external;
 

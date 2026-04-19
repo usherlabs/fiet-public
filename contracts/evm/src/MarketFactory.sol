@@ -229,8 +229,10 @@ contract MarketFactory is IMarketFactory, Ownable, ImmutableState, ImmutableVTSS
             lcc0 = Currency.unwrap(corePoolKey.currency0);
             lcc1 = Currency.unwrap(corePoolKey.currency1);
 
-            // For swap deficits overflow, and LCC transfer to recipient the proxy hook must be within protocol bounds.
-            // Use BOUND_EXEMPT as LCCs are issued from ProxyHook, are never unwrapped/wrapped, and sent always as market-derived.
+            // ProxyHook must be protocol-bound for deficit routing and LCC settlement. BOUND_EXEMPT matches issuer-only
+            // `issue` to the hook (market-derived; hub forbids direct-backed mint to exempt). Users can still transfer
+            // bucketed LCC to the hook under LCC-01; that is not the intended holder mode. Swap `cancel` burns LCC taken
+            // from PoolManager for that swap — it does not orphan hub direct reserves by burning unrelated pre-seeded balance.
             liquidityHub.setBoundLevel(ctx.proxyHookAddress, Bounds.BOUND_EXEMPT);
 
             // Activate proxy hook and initialise

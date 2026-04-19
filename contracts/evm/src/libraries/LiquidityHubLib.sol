@@ -651,7 +651,10 @@ library LiquidityHubLib {
 
     // ============ ISSUER / CUSTODIAN HELPERS (called via LiquidityHubLinkedLib) ============
 
-    /// @dev Snapshot for `confirmTake`: reserve bump and whether `LiquidityAvailable` should emit (before Hub settlement).
+    /// @dev Snapshot for `confirmTake`: reserve bump, Hub self-queue before best-effort Hub settlement, and whether
+    ///      `LiquidityAvailable` should emit. Hub self-settlement does not consume underlying reserve; it only
+    ///      collapses Hub-held LCC against queue. The wake-up event must still fire when new reserve arrives that may
+    ///      now service queued external settlements (reactive dispatch listens on this log).
     struct ConfirmTakeContext {
         uint256 hubQueueBeforeSettlement;
         address underlying;
@@ -667,7 +670,10 @@ library LiquidityHubLib {
         s.reserveOfUnderlying[ctx.underlying].marketDerived += amount;
         ctx.hubQueueBeforeSettlement = s.settleQueue[lcc][address(this)];
         ctx.marketId = s.lccToMarket[lcc].id;
-        ctx.emitLiquidityAvailable = shouldEmit && ctx.hubQueueBeforeSettlement < amount;
+        // Intent: `LiquidityAvailable` is a dispatch wake-up, not "reserve minus Hub self-queue". Suppressing emission
+        // when `hubQueueBeforeSettlement >= amount` would strand automation: reserve increased but external queues never
+        // get a liquidity signal because Hub-path settlement does not decrement reserve.
+        ctx.emitLiquidityAvailable = shouldEmit && amount > 0;
     }
 
     function confirmTakeBalanceInvariant(LiquidityHubStorage storage s, address underlying) internal view {
