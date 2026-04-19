@@ -1,5 +1,7 @@
 [Low] Pre-claim holder-balance cap in LiquidityHubLib.processSettlementLogic (Hub path) causes phantom Hub queue and unnecessary intra-protocol reserve shifts
 
+> **RESOLVED** — See [agents/audit-resolutions/12__low-pre-claim-holder-balance-cap-in-liquidityhublib-processsettlementlogic-hub-path-resolution.md](../audit-resolutions/12__low-pre-claim-holder-balance-cap-in-liquidityhublib-processsettlementlogic-hub-path-resolution.md). The "Fix Hub Queue Accounting" work replaced the lazy-claim overlay with eager durable queue updates in Step 2, eliminating the phantom queue root cause.
+
 # Description
 
 In the Hub self-settlement path, settlement is [pre-capped by the Hub’s current LCC balance](https://github.com/usherlabs/fiet-protocol/blob/8cefc80d0a77f70260d5024395fd7d64d8747a8f/contracts/evm/src/libraries/LiquidityHubLib.sol#L534-L556) before [consuming already-netted (claimed) amounts](https://github.com/usherlabs/fiet-protocol/blob/8cefc80d0a77f70260d5024395fd7d64d8747a8f/contracts/evm/src/libraries/LiquidityHubLib.sol#L561-L571). This blocks clearing the claimed slice (which needs no burn), leaving phantom queue and potentially causing CanonicalVault to overfund the Hub.

@@ -277,6 +277,13 @@ library VTSPositionLib {
         // Write back updated settlement
         pa.settled.set(tokenIndex, next);
         pa.cumulativeDeficit.set(tokenIndex, cumulativeDef);
+        // Lane fully repaid: drop DICE scratch state so the next deficit episode does not inherit stale carry/agg.
+        if (cumulativeDef == 0) {
+            pa.diceOrdinaryRealisationCarry.set(tokenIndex, 0);
+            pa.diceResidualRealisationCarry.set(tokenIndex, 0);
+            pa.diceOrdinaryCovAgg.set(tokenIndex, 0);
+            pa.diceResidualCovAgg.set(tokenIndex, 0);
+        }
 
         settledDeltaOnly = next.toInt256() - cur.toInt256();
 
@@ -884,6 +891,8 @@ library VTSPositionLib {
     /// @notice Rebase zero-principal settlement snapshots during inactive-position reactivation.
     /// @dev Only lanes with no current settled / deficit principal are checkpointed to current pool indices.
     ///      Non-zero lanes keep their historical checkpoints so previously-earned DICE / CISE state is preserved.
+    ///      For a zero-deficit lane we also clear DICE carry/agg scratch fields so reactivation does not replay stale
+    ///      partial realisation state against fresh pool indices.
     function _checkpointZeroPrincipalSettlementSnapshots(VTSStorage storage s, PositionId id) internal {
         Position memory pos = s.positions[id];
         PositionAccounting storage pa = s.positionAccounting[id];
@@ -892,10 +901,18 @@ library VTSPositionLib {
         if (pa.cumulativeDeficit.token0 == 0) {
             pa.coverageIndexLastX128.token0 = paPool.coveragePerDeficitIndexX128.token0;
             pa.residualCoverageIndexLastX128.token0 = paPool.coveragePerResidualDeficitIndexX128.token0;
+            pa.diceOrdinaryRealisationCarry.token0 = 0;
+            pa.diceResidualRealisationCarry.token0 = 0;
+            pa.diceOrdinaryCovAgg.token0 = 0;
+            pa.diceResidualCovAgg.token0 = 0;
         }
         if (pa.cumulativeDeficit.token1 == 0) {
             pa.coverageIndexLastX128.token1 = paPool.coveragePerDeficitIndexX128.token1;
             pa.residualCoverageIndexLastX128.token1 = paPool.coveragePerResidualDeficitIndexX128.token1;
+            pa.diceOrdinaryRealisationCarry.token1 = 0;
+            pa.diceResidualRealisationCarry.token1 = 0;
+            pa.diceOrdinaryCovAgg.token1 = 0;
+            pa.diceResidualCovAgg.token1 = 0;
         }
         if (pa.settled.token0 == 0) {
             pa.ciseIndexLastX128.token0 = paPool.coveragePerSettledIndexX128.token0;

@@ -186,14 +186,25 @@ struct PositionAccounting {
     TokenPairUint coverageIndexLastX128;
     // DICE: Residual-only coverage index checkpoint per token
     TokenPairUint residualCoverageIndexLastX128;
-    // DICE: Banked residual-derived burn base awaiting a later outflow window
+    // DICE: Banked burn base awaiting a later fee/outflow window (ordinary + residual index realisation).
+    // Naming retains `Residual` for storage-layout compatibility with prior deployments.
     TokenPairUint pendingResidualBurnBase;
-    // DICE: Historical fee backing frozen for the currently unresolved residual-burn episode across
+    // DICE: Historical fee backing frozen for the currently unresolved DICE-burn episode across
     // zero-liquidity intervals and partial liquidity decreases (removed slice). Stored by fee token lane
-    // (opposite the deficit token lane) and cleared once that matching residual burn base is fully consumed.
+    // (opposite the deficit token lane) and cleared once that matching burn base is fully consumed.
     TokenPairUint pendingResidualFeeBacking;
-    // DICE: Outflow watermark captured when residual burn base is banked
+    // DICE: Outflow watermark captured when banked burn base is increased
     TokenPairUint pendingResidualBurnOutflowsFloor;
+    // DICE: Q128 remainder so split index deltas do not lose wei to repeated `floor(D * Δ / Q128)` (ordinary lane).
+    TokenPairUint diceOrdinaryRealisationCarry;
+    // DICE: Same as above for the residual-only coverage-per-residual-deficit index lane.
+    TokenPairUint diceResidualRealisationCarry;
+    // DICE: Cumulative assigned coverage (raw units) since the lane last had zero `cumulativeDeficit`; paired with
+    //        `_effectiveDiceBurnBase` in `VTSFeeLib` so we bank marginal burn `f(agg) - f(prev)` and never exceed the
+    //        deficit clamp across many small settles (ordinary lane).
+    TokenPairUint diceOrdinaryCovAgg;
+    // DICE: Same cumulative bookkeeping for the residual-index leg (symmetry with ordinary).
+    TokenPairUint diceResidualCovAgg;
     // CISE: Position checkpoint of pool coverage-per-settled index (Q128)
     TokenPairUint ciseIndexLastX128;
     // CISE: Banked realised exposure since last bonus allocation

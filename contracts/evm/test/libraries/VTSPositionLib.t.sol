@@ -3965,6 +3965,65 @@ contract VTSPositionLibTest is VTSLibTestBase {
         assertEq(idx1After, FixedPoint128.Q128, "token1 coverage indexLast should checkpoint to pool index");
     }
 
+    /// @notice Ordinary DICE realisation uses chained floor carry; N small index steps must bank the same burn base as one jump.
+    /// @dev Shared pool state: run one-shot before multi-step, then reset `coveragePerDeficitIndexX128` token1 to 0.
+    function test_settlePositionGrowths_DICE_ordinaryRepeatedIndexSteps_matchedBankedBurn_oneShot() public {
+        _initMarket();
+        PoolId corePoolId = _getDefaultPoolId();
+        harness.setupPool(corePoolId, _createDefaultVTSConfig());
+
+        uint256 constResidualIdx = 777e18;
+        harness.setPoolCoveragePerResidualDeficitIndexX128(corePoolId, 0, constResidualIdx);
+        harness.setPoolTotalDeficitPrincipal(corePoolId, 0, 100e18);
+
+        uint256 n = 37;
+        uint256 step = FixedPoint128.Q128 / 19;
+        uint256 total = n * step;
+
+        // --- One aggregate index move (token1 deficit lane only) ---
+        harness.setPoolCoveragePerDeficitIndexX128(corePoolId, 0, 0);
+
+        PositionId posOne =
+            _registerHarnessPositionInPool(corePoolId, DEFAULT_OWNER, -60, 60, 1, bytes32(uint256(0xD1CE0001)));
+        harness.setCumulativeDeficit(posOne, 0, 100e18);
+        harness.setCoverageIndexLastX128(posOne, 0, 0);
+        harness.setResidualCoverageIndexLastX128(posOne, 0, constResidualIdx);
+        harness.setCISEIndexLastX128(posOne, 0, 0);
+        harness.setCumulativeOutflows(posOne, 0, 0);
+        harness.setOutflowsAtFeeSnap(posOne, 0, 0);
+        harness.setFeeGrowthInsideLast(posOne, 0, 0);
+
+        harness.setPoolCoveragePerDeficitIndexX128(corePoolId, 0, total);
+        harness.settlePositionGrowths(manager, posOne);
+        (, uint256 pendingBurnOne1) = harness.getPendingResidualBurnBase(posOne);
+
+        // --- Many small steps with a fresh position (reset pool ordinary index) ---
+        harness.setPoolCoveragePerDeficitIndexX128(corePoolId, 0, 0);
+
+        PositionId posMulti =
+            _registerHarnessPositionInPool(corePoolId, DEFAULT_OWNER, -60, 60, 1, bytes32(uint256(0xD1CE0002)));
+        harness.setCumulativeDeficit(posMulti, 0, 100e18);
+        harness.setCoverageIndexLastX128(posMulti, 0, 0);
+        harness.setResidualCoverageIndexLastX128(posMulti, 0, constResidualIdx);
+        harness.setCISEIndexLastX128(posMulti, 0, 0);
+        harness.setCumulativeOutflows(posMulti, 0, 0);
+        harness.setOutflowsAtFeeSnap(posMulti, 0, 0);
+        harness.setFeeGrowthInsideLast(posMulti, 0, 0);
+
+        for (uint256 i = 1; i <= n; i++) {
+            harness.setPoolCoveragePerDeficitIndexX128(corePoolId, 0, i * step);
+            harness.settlePositionGrowths(manager, posMulti);
+        }
+        (, uint256 pendingBurnMulti1) = harness.getPendingResidualBurnBase(posMulti);
+
+        assertEq(
+            pendingBurnMulti1, pendingBurnOne1, "chained ordinary DICE realisation must match one-shot banked burn"
+        );
+        (uint256 carry0, uint256 carry1) = harness.getDiceOrdinaryRealisationCarry(posMulti);
+        assertEq(carry0, 0);
+        assertLt(carry1, FixedPoint128.Q128, "ordinary carry must stay sub-Q128");
+    }
+
     function test_settlePositionGrowths_DICE_firstDeficitResidualFlush_requiresNewOutflowWindowBeforeBurn() public {
         _initMarket();
         PoolId corePoolId = _getDefaultPoolId();

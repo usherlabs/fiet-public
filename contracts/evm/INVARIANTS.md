@@ -586,6 +586,10 @@ being an informal “should”.
     remainder** (`diceOrdinaryRealisationCarry`, `< Q128`) so many small settlements match a single aggregate index
     move (same spirit as **COV-04** for fee-burn growth).
   - Residual-index realisation uses the same carry pattern on `diceResidualRealisationCarry`.
+  - Incremental **burn** banking uses `diceOrdinaryCovAgg` / `diceResidualCovAgg` with a **waterfall** against
+    `_effectiveDiceBurnBase` so the marginal banked amount is \(f(c*{\mathrm{cum}}) - f(c*{\mathrm{prev}})\)
+    where \(f(c)=\min(\min(c, D+S), D)\), preventing \(\sum_i \min(\mathrm{piece}\_i, D)\) from exceeding \(\min(\sum_i \mathrm{piece}\_i, D)\)
+    when aggregate assigned coverage exceeds deficit principal \(D\).
   - Realised burn base is **banked** in `pendingResidualBurnBase` (name retained for layout compatibility) and consumed
     through the same `_applyBankedResidualBurn` / `_applyBurnBase` path as residual-derived DICE, including outflow-floor
     semantics: residual-index banking may raise `pendingResidualBurnOutflowsFloor` toward `cumulativeOutflows`; ordinary-index
