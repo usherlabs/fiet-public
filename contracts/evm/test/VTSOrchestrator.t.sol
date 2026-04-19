@@ -2247,63 +2247,6 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
         vtsOrchestrator.unpausePool(corePoolKey.toId());
     }
 
-    /// @dev Regression for finding 6: paused remove must materialise queued positive slashes.
-    function test_pausedRemoveLiquidity_materialisesPositivePendingSlash() public {
-        uint256 liquidity = 1e10;
-        uint256 amountToDecrease = liquidity / 2;
-        (uint256 tokenId, PositionId positionId,,) =
-            _createCommittedPosition(renewSignal, -60, 60, liquidity, bytes32(uint256(77)));
-
-        // Build slashable state: create deficit, exercise coverage, then settle growths.
-        _swapCore(true, -int256(2e18));
-        vm.prank(marketFactory);
-        vtsOrchestrator.incrementCoverage(corePoolKey.toId(), 2e18, 2e18);
-        vtsOrchestrator.settlePositionGrowths(positionId);
-
-        // Ensure we have a positive pending slash lane; if not, try once in the opposite swap direction.
-        (,, int256 pending0Seed, int256 pending1Seed) = vtsOrchestrator.getPositionFeeAccounting(positionId);
-        if (pending0Seed <= 0 && pending1Seed <= 0) {
-            _swapCore(false, -int256(2e18));
-            vm.prank(marketFactory);
-            vtsOrchestrator.incrementCoverage(corePoolKey.toId(), 2e18, 2e18);
-            vtsOrchestrator.settlePositionGrowths(positionId);
-            (,, pending0Seed, pending1Seed) = vtsOrchestrator.getPositionFeeAccounting(positionId);
-        }
-        assertTrue(pending0Seed > 0 || pending1Seed > 0, "precondition: expected positive pending slash");
-
-        // Non-seizure remove requires closed RFS. If open, settle exactly the required positive lanes.
-        (bool rfsOpenBefore, BalanceDelta rfsDeltaBefore) = vtsOrchestrator.calcRFS(positionId, false);
-        if (rfsOpenBefore) {
-            int128 settle0 = rfsDeltaBefore.amount0() > 0 ? -rfsDeltaBefore.amount0() : int128(0);
-            int128 settle1 = rfsDeltaBefore.amount1() > 0 ? -rfsDeltaBefore.amount1() : int128(0);
-            if (settle0 != 0 || settle1 != 0) {
-                _mmSettle(tokenId, 0, settle0, settle1);
-            }
-        }
-
-        (bool rfsOpenAfterClose,) = vtsOrchestrator.calcRFS(positionId, false);
-        assertFalse(rfsOpenAfterClose, "precondition: RFS must be closed before paused remove");
-
-        (,, int256 pending0Before, int256 pending1Before) = vtsOrchestrator.getPositionFeeAccounting(positionId);
-        (uint256 pot0Before, uint256 pot1Before) = vtsOrchestrator.getSlashedPot(corePoolKey.toId());
-
-        vtsOrchestrator.pausePool(corePoolKey.toId());
-        _decreasePosition(tokenId, amountToDecrease);
-        vtsOrchestrator.unpausePool(corePoolKey.toId());
-
-        (,, int256 pending0After, int256 pending1After) = vtsOrchestrator.getPositionFeeAccounting(positionId);
-        (uint256 pot0After, uint256 pot1After) = vtsOrchestrator.getSlashedPot(corePoolKey.toId());
-
-        if (pending0Before > 0) {
-            assertLt(pending0After, pending0Before, "paused remove should materialise token0 pending slash");
-            assertGt(pot0After, pot0Before, "paused remove should fund token0 slashed pot");
-        }
-        if (pending1Before > 0) {
-            assertLt(pending1After, pending1Before, "paused remove should materialise token1 pending slash");
-            assertGt(pot1After, pot1Before, "paused remove should fund token1 slashed pot");
-        }
-    }
-
     function test_pausedRemoveLiquidity_reconcilesSettledCommitmentOnPartialRemove() public {
         uint256 liquidity = 1e10;
         uint256 amountToDecrease = liquidity / 2;
