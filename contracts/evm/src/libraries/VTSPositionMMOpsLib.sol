@@ -234,10 +234,10 @@ library VTSPositionMMOpsLib {
     }
 
     /// @notice External entry for linked callers: settle protocol credit from positive owner underlying delta.
-    function settleFromPositiveUnderlyingDelta(
-        VTSStorage storage s,
-        ProtocolCreditSettlementParams memory p
-    ) external returns (ProtocolCreditSettlementResult memory result) {
+    function settleFromPositiveUnderlyingDelta(VTSStorage storage s, ProtocolCreditSettlementParams memory p)
+        external
+        returns (ProtocolCreditSettlementResult memory result)
+    {
         result = _settleFromPositiveUnderlyingDelta(s, p);
     }
 
@@ -290,13 +290,12 @@ library VTSPositionMMOpsLib {
     }
 
     /// @dev Implementation of `settleFromPositiveUnderlyingDelta` (two-lane vault reserve + produced credit).
-    function _settleFromPositiveUnderlyingDelta(
-        VTSStorage storage s,
-        ProtocolCreditSettlementParams memory p
-    ) private returns (ProtocolCreditSettlementResult memory result) {
-        BalanceDelta currentUnderlying = OwnerCurrencyDelta.getUnderlyingDeltaPair(
-            p.owner, p.lccCurrency0, p.lccCurrency1
-        );
+    function _settleFromPositiveUnderlyingDelta(VTSStorage storage s, ProtocolCreditSettlementParams memory p)
+        private
+        returns (ProtocolCreditSettlementResult memory result)
+    {
+        BalanceDelta currentUnderlying =
+            OwnerCurrencyDelta.getUnderlyingDeltaPair(p.owner, p.lccCurrency0, p.lccCurrency1);
         (int128 settle0, int128 remaining0, uint256 settledIncrease0) = _consumePositiveUnderlyingDeltaForSettlementLane(
             s,
             ProtocolCreditSettlementLaneParams({

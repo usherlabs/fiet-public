@@ -126,7 +126,9 @@ contract SETTLE01 {
                 isSeizing: false,
                 fromDeltas: false
             })
-        ) returns (BalanceDelta, bool, uint256) {
+        ) returns (
+            BalanceDelta, bool, uint256
+        ) {
             revertedWithExpectedReason = false;
         } catch (bytes memory reason) {
             revertedWithExpectedReason = _selectorOf(reason) == Errors.RFSOpenForPosition.selector;

@@ -925,13 +925,7 @@ contract MarketFactoryUnitTest is Test {
         vm.prank(owner);
         vm.expectRevert(Errors.CorePoolAlreadyExists.selector);
         factory.createMarket(
-            address(0x100),
-            address(0x200),
-            3000,
-            60,
-            initial,
-            keccak256("salt2"),
-            VTSConfigs.getDefaultConfig()
+            address(0x100), address(0x200), 3000, 60, initial, keccak256("salt2"), VTSConfigs.getDefaultConfig()
         );
     }
 
@@ -944,9 +938,7 @@ contract MarketFactoryUnitTest is Test {
 
         vm.prank(owner);
         vm.expectRevert(Errors.CorePoolAlreadyExists.selector);
-        factory.createMarket(
-            ua0, ua1, 3000, 60, initial, keccak256("salt-fuzz"), VTSConfigs.getDefaultConfig()
-        );
+        factory.createMarket(ua0, ua1, 3000, 60, initial, keccak256("salt-fuzz"), VTSConfigs.getDefaultConfig());
     }
 
     function testFuzz_createMarket_corePairOrderingMatchesStored(address ua0Raw, address ua1Raw) public {
