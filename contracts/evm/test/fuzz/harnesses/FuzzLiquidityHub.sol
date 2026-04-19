@@ -23,7 +23,15 @@ import {IWETH9} from "v4-periphery/src/interfaces/external/IWETH9.sol";
 /**
  * @title FuzzLiquidityHub
  * @notice Fuzz-only Hub adapter that inlines the linked-library surfaces used by the Medusa harnesses.
- * @dev This preserves Hub/LCC behavior for fuzzing without deterministic external-library deployment.
+ * @dev `LiquidityHub` cannot simply be inherited here: the production contract dispatches through
+ *      `LCCFactoryLinkedLib` / `LiquidityHubLinkedLib` from non-virtual functions, so a derived contract would still
+ *      hit the linked-library deployment path that the repo-owned Medusa workflow is removing.
+ *
+ *      This adapter therefore stays intentionally close to `src/LiquidityHub.sol` and only swaps the linked-library
+ *      call sites to their direct library equivalents (`LCCFactoryLib` / `LiquidityHubLib`) so the fuzz harnesses keep
+ *      current Hub semantics without deterministic external-library deployment. If the production Hub later exposes
+ *      overridable/internal seams for those call sites, this file should collapse back to inheritance rather than
+ *      continue as a long-lived fork.
  */
 contract FuzzLiquidityHub is BoundRegistry, Ownable, ReentrancyGuardTransient {
     using CurrencyTransfer for Currency;
