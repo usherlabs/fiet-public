@@ -6,7 +6,9 @@ import {console} from "forge-std/Script.sol";
 import {E2EBase} from "./E2EBase.sol";
 
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
+import {PoolId, PoolIdLibrary} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
+import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
 import {BalanceDelta, BalanceDeltaLibrary} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
 import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
 import {StateLibrary} from "@uniswap/v4-core/src/libraries/StateLibrary.sol";
@@ -23,7 +25,7 @@ import {MessageHashUtils} from "@openzeppelin/contracts/utils/cryptography/Messa
 import {ILCC} from "src/interfaces/ILCC.sol";
 import {MMPositionManager} from "src/MMPositionManager.sol";
 import {IVTSOrchestrator} from "src/interfaces/IVTSOrchestrator.sol";
-import {PositionId} from "src/types/Position.sol";
+import {Position, PositionId} from "src/types/Position.sol";
 import {LiquidityUtils} from "src/libraries/LiquidityUtils.sol";
 import {MarketVTSConfiguration} from "src/types/VTS.sol";
 import {ILiquidityHub} from "src/interfaces/ILiquidityHub.sol";
@@ -35,6 +37,7 @@ abstract contract MME2EBase is E2EBase {
     using MarketMaker for MarketMaker.State;
     using BalanceDeltaLibrary for BalanceDelta;
     using StateLibrary for IPoolManager;
+    using PoolIdLibrary for PoolKey;
 
     struct UnwrapSnapshot {
         uint256 liquid;
@@ -47,6 +50,391 @@ abstract contract MME2EBase is E2EBase {
         int24 tickLower;
         int24 tickUpper;
         uint128 liquidity;
+    }
+
+    // ============================================================
+    // MM matrix E2E: scenario kinds, position/buffer profiles, snapshots
+    // ============================================================
+
+    enum MME2EScenarioKind {
+        ExtremeUnserviceableRemnant,
+        ServiceableRoundTrip,
+        ServiceableReserveShaped,
+        ModestNonExtreme,
+        WideOrDeepStress
+    }
+
+    /// @dev Optional bundle for future scenario runners (wrap/swap sizing × scenario kind).
+    struct ScenarioProfileE2E {
+        string name;
+        uint256 wrapAmount;
+        uint128 swapAmount;
+        MME2EScenarioKind kind;
+    }
+
+    struct PositionProfileE2E {
+        string name;
+        int24 tickLower;
+        int24 tickUpper;
+        uint128 liquidity;
+    }
+
+    struct BufferModeE2E {
+        string name;
+        bool seedDirectLP;
+        uint256 wrapAmountPerAsset;
+        uint256 amountMaxPerAsset;
+    }
+
+    struct ExitSnapshotE2E {
+        uint256 positionIndex;
+        uint256 eff0;
+        uint256 eff1;
+        uint256 overflow0;
+        uint256 overflow1;
+        uint256 inactiveRemnantCount;
+    }
+
+    struct MakerHealthSnapshotE2E {
+        int24 tickCurrent;
+        uint256 eff0;
+        uint256 eff1;
+        uint256 overflow0;
+        uint256 overflow1;
+        uint256 commitment0;
+        uint256 commitment1;
+        /// @dev False after burn or whenever `getCommitmentMaxima` cannot be queried (active-position-only lens).
+        bool commitmentMaximaAvailable;
+        uint256 poolTotalSettled0;
+        uint256 poolTotalSettled1;
+        uint256 poolTotalDeficitPrincipal0;
+        uint256 poolTotalDeficitPrincipal1;
+        uint256 inactiveRemnantCount;
+    }
+
+    /// @dev Matches the legacy `MarketMaker.s.sol` large-sweep trading phase.
+    uint256 internal constant MM_E2E_WRAP_FOR_SWAPS_LARGE = 50_000e18;
+    uint128 internal constant MM_E2E_BIG_SWAP_IN = 5_000e18;
+
+    uint256 internal constant MM_E2E_WRAP_FOR_MODEST = 1_200e18;
+    uint128 internal constant MM_E2E_MODEST_SWAP_IN = 10e18;
+
+    /// @dev Gentler “reserve-shaped” cumulative swap size per leg (both directions) per round.
+    uint128 internal constant MM_E2E_RESERVE_SHAPED_LEG_SWAP = 500e18;
+
+    /// @dev Default DirectLP full-range buffer (aligned with `Swap.s.sol` seeding caps).
+    uint256 internal constant MM_E2E_BUFFER_WRAP_PER_ASSET = 1_200e18;
+    uint256 internal constant MM_E2E_BUFFER_AMOUNT_MAX_PER_ASSET = 1_000e18;
+
+    /// @dev Reserve-replenishing swaps after an inactive drain stall (see Endogenous vs Exogenous Liquidity spec).
+    uint256 internal constant MM_E2E_REBALANCE_WRAP_PER_LEG = 50_000e18;
+    uint128 internal constant MM_E2E_REBALANCE_SWAP_CHUNK = 2_500e18;
+    uint256 internal constant MM_E2E_REBALANCE_MAX_ROUNDS = 4;
+
+    function _mmPositionProfilesAll() internal pure returns (PositionProfileE2E[] memory p) {
+        p = new PositionProfileE2E[](4);
+        p[0] = PositionProfileE2E({name: "tightTiny", tickLower: -60, tickUpper: 60, liquidity: 1e10});
+        p[1] = PositionProfileE2E({name: "tightMaterial", tickLower: -60, tickUpper: 60, liquidity: 1e15});
+        p[2] = PositionProfileE2E({name: "wideMaterial", tickLower: -600, tickUpper: 600, liquidity: 1e12});
+        p[3] = PositionProfileE2E({name: "wideDeep", tickLower: -1200, tickUpper: 1200, liquidity: 1e15});
+    }
+
+    function _mmBufferModesAll() internal pure returns (BufferModeE2E[] memory b) {
+        b = new BufferModeE2E[](2);
+        b[0] = BufferModeE2E({
+            name: "NoDirectLPBuffer",
+            seedDirectLP: false,
+            wrapAmountPerAsset: 0,
+            amountMaxPerAsset: 0
+        });
+        b[1] = BufferModeE2E({
+            name: "FullRangeDirectLPBuffer",
+            seedDirectLP: true,
+            wrapAmountPerAsset: MM_E2E_BUFFER_WRAP_PER_ASSET,
+            amountMaxPerAsset: MM_E2E_BUFFER_AMOUNT_MAX_PER_ASSET
+        });
+    }
+
+    function _createMmPositionFromProfile(StandaloneMarket memory m, uint256 mmPk, PositionProfileE2E memory profile)
+        internal
+        returns (uint256 commitId)
+    {
+        return _createMmPosition(m, mmPk, profile.tickLower, profile.tickUpper, profile.liquidity);
+    }
+
+    /// @dev Seeds exogenous full-range core liquidity when `buf.seedDirectLP` is enabled.
+    function _seedDirectLPBufferIfEnabled(StandaloneMarket memory m, uint256 directLpPk, BufferModeE2E memory buf)
+        internal
+        returns (uint256 tokenId)
+    {
+        if (!buf.seedDirectLP) return 0;
+        return _addCoreLiquidityFullRange(m, directLpPk, buf.wrapAmountPerAsset, buf.amountMaxPerAsset);
+    }
+
+    function _snapshotExitState(StandaloneMarket memory m, uint256 commitId, uint256 positionIndex)
+        internal
+        view
+        returns (ExitSnapshotE2E memory s)
+    {
+        IVTSOrchestrator vts = IVTSOrchestrator(m.stack.contracts.vtsOrchestrator);
+        PositionId pid = vts.getPositionId(commitId, positionIndex);
+        (s.eff0, s.eff1) = vts.getPositionSettledAmounts(pid);
+        (s.overflow0, s.overflow1) = vts.getPositionSettledOverflowAmounts(pid);
+        (, , , , s.inactiveRemnantCount) = vts.getCommit(commitId);
+        s.positionIndex = positionIndex;
+    }
+
+    /// @notice Snapshots tick, per-position accounting, pool totals, and commitment maxima when the position is still active.
+    /// @dev `IVTSOrchestrator.getCommitmentMaxima` is `onlyPositionValid(..., requireActive=true)`; after a full burn the
+    ///      position is inactive so maxima are omitted (`commitmentMaximaAvailable == false`, commitment fields zero).
+    function _snapshotMakerHealth(StandaloneMarket memory m, uint256 commitId, uint256 positionIndex)
+        internal
+        view
+        returns (MakerHealthSnapshotE2E memory h)
+    {
+        IVTSOrchestrator vts = IVTSOrchestrator(m.stack.contracts.vtsOrchestrator);
+        PoolKey memory key = _corePoolKey(m);
+        PoolId poolId = key.toId();
+        (, h.tickCurrent,,) = IPoolManager(config.poolManager).getSlot0(poolId);
+        PositionId pid = vts.getPositionId(commitId, positionIndex);
+        (h.eff0, h.eff1) = vts.getPositionSettledAmounts(pid);
+        (h.overflow0, h.overflow1) = vts.getPositionSettledOverflowAmounts(pid);
+        Position memory pos = vts.getPosition(pid);
+        if (pos.isActive) {
+            (h.commitment0, h.commitment1) = vts.getCommitmentMaxima(pid);
+            h.commitmentMaximaAvailable = true;
+        } else {
+            h.commitment0 = 0;
+            h.commitment1 = 0;
+            h.commitmentMaximaAvailable = false;
+        }
+        (h.poolTotalSettled0, h.poolTotalSettled1) = vts.getPoolTotalSettled(poolId);
+        (h.poolTotalDeficitPrincipal0, h.poolTotalDeficitPrincipal1) = vts.getPoolTotalDeficitPrincipal(poolId);
+        (, , , , h.inactiveRemnantCount) = vts.getCommit(commitId);
+    }
+
+    function _logMakerHealth(string memory label, MakerHealthSnapshotE2E memory h) internal view {
+        console.log("--- Maker health:", label);
+        console.log("tick:", int256(h.tickCurrent));
+        console.log("eff0:", h.eff0);
+        console.log("eff1:", h.eff1);
+        console.log("overflow0:", h.overflow0);
+        console.log("overflow1:", h.overflow1);
+        if (h.commitmentMaximaAvailable) {
+            console.log("commitment0:", h.commitment0);
+            console.log("commitment1:", h.commitment1);
+        } else {
+            console.log("commitment0/1: n/a (inactive position; getCommitmentMaxima is active-only)");
+        }
+        console.log("poolTotalSettled0:", h.poolTotalSettled0);
+        console.log("poolTotalSettled1:", h.poolTotalSettled1);
+        console.log("poolDeficitPrincipal0:", h.poolTotalDeficitPrincipal0);
+        console.log("poolDeficitPrincipal1:", h.poolTotalDeficitPrincipal1);
+        console.log("inactiveRemnantCount:", h.inactiveRemnantCount);
+    }
+
+    function _makerHealthEffectiveSum(MakerHealthSnapshotE2E memory h) internal pure returns (uint256) {
+        return h.eff0 + h.eff1;
+    }
+
+    function _makerHealthOverflowSum(MakerHealthSnapshotE2E memory h) internal pure returns (uint256) {
+        return h.overflow0 + h.overflow1;
+    }
+
+    function _mmProfileNameEq(PositionProfileE2E memory p, string memory nm) internal pure returns (bool) {
+        return keccak256(bytes(p.name)) == keccak256(bytes(nm));
+    }
+
+    function _isTightTinyProfile(PositionProfileE2E memory p) internal pure returns (bool) {
+        return p.tickLower == -60 && p.tickUpper == 60 && p.liquidity == 1e10;
+    }
+
+    function _assertMakerHealthNotWorseWithBuffer(
+        MakerHealthSnapshotE2E memory buffered,
+        MakerHealthSnapshotE2E memory unbuffered
+    ) internal pure {
+        uint256 b = _makerHealthEffectiveSum(buffered) + _makerHealthOverflowSum(buffered);
+        uint256 u = _makerHealthEffectiveSum(unbuffered) + _makerHealthOverflowSum(unbuffered);
+        require(b <= u + (u / 50) + 1, "e2e: buffered run materially worse than unbuffered (effective+overflow)");
+    }
+
+    function _assertMakerHealthImprovedOrStable(
+        MakerHealthSnapshotE2E memory after_,
+        MakerHealthSnapshotE2E memory before_
+    ) internal pure {
+        uint256 a =
+            _makerHealthEffectiveSum(after_) + _makerHealthOverflowSum(after_);
+        uint256 b =
+            _makerHealthEffectiveSum(before_) + _makerHealthOverflowSum(before_);
+        require(a <= b + (b / 100) + 1, "e2e: maker health regressed beyond tolerance");
+    }
+
+    function _assertTickNotExtreme(StandaloneMarket memory m) internal view {
+        PoolKey memory key = _corePoolKey(m);
+        (, int24 tick,,) = IPoolManager(config.poolManager).getSlot0(key.toId());
+        int24 lo = TickMath.MIN_TICK + 10_000;
+        int24 hi = TickMath.MAX_TICK - 10_000;
+        require(tick > lo && tick < hi, "e2e: tick unexpectedly pinned near boundary");
+    }
+
+    function _assertUnserviceableRemnantAfterBurn(
+        StandaloneMarket memory m,
+        uint256 mmPk,
+        uint256 commitId,
+        uint256 positionIndex
+    ) internal {
+        ExitSnapshotE2E memory snap = _snapshotExitState(m, commitId, positionIndex);
+        require(snap.eff0 > 0 || snap.eff1 > 0, "e2e: expected inactive economic remnant");
+        bool progressed = _attemptInactiveDrainOnce(m, mmPk, commitId, positionIndex);
+        require(!progressed, "e2e: expected inactive drain to stall immediately (unserviceable)");
+        vm.expectRevert(abi.encodeWithSelector(Errors.CommitNotDrained.selector, commitId));
+        _decommitAndTakeAllLccs(m, mmPk, commitId);
+    }
+
+    function _assertDrainableAndFullyDrained(
+        StandaloneMarket memory m,
+        uint256 mmPk,
+        uint256 commitId,
+        uint256 positionIndex,
+        uint256 maxDrainIters
+    ) internal {
+        _drainInactivePositionSurplus(m, mmPk, commitId, positionIndex, maxDrainIters);
+        (uint256 e0, uint256 e1) = _getEffectiveSettledPair(IVTSOrchestrator(m.stack.contracts.vtsOrchestrator), commitId, positionIndex);
+        require(e0 == 0 && e1 == 0, "e2e: expected fully drained inactive surplus");
+    }
+
+    function _assertImprovedServiceabilityVsBaseline(
+        MakerHealthSnapshotE2E memory candidate,
+        MakerHealthSnapshotE2E memory baselineTightTiny
+    ) internal pure {
+        uint256 c = _makerHealthOverflowSum(candidate) + _makerHealthEffectiveSum(candidate);
+        uint256 b = _makerHealthOverflowSum(baselineTightTiny) + _makerHealthEffectiveSum(baselineTightTiny);
+        // Bounded relational check: wider/deeper profiles should not exhibit materially worse stranded economics.
+        require(c <= b + (b / 20) + 2, "e2e: wide/deep profile materially worse vs tightTiny baseline");
+    }
+
+    /// @notice After a burn, inactive economic attribution can remain non-zero while vault reserve clamps block withdrawal;
+    ///         this is “unserviceable overflow” / inactive remnant (economic vs immediately serviceable).
+    /// @dev Asserts overflow-bearing inactive state and that decommit is blocked until the remnant clears.
+    function _assertRecognisedUnserviceableOverflowBeforeRebalance(
+        StandaloneMarket memory m,
+        uint256 mmPk,
+        uint256 commitId,
+        uint256 positionIndex
+    ) internal {
+        ExitSnapshotE2E memory s = _snapshotExitState(m, commitId, positionIndex);
+        require(s.eff0 > 0 || s.eff1 > 0, "e2e: stalled drain but zero inactive effective settled (unexpected)");
+        require(s.overflow0 > 0 || s.overflow1 > 0, "e2e: stalled drain but zero inactive overflow (unexpected)");
+        require(s.inactiveRemnantCount > 0, "e2e: stalled drain but zero inactive remnant count (unexpected)");
+
+        _logMakerHealth("recognised unserviceable overflow (pre-rebalance)", _snapshotMakerHealth(m, commitId, positionIndex));
+
+        vm.expectRevert(abi.encodeWithSelector(Errors.CommitNotDrained.selector, commitId));
+        _decommitAndTakeAllLccs(m, mmPk, commitId);
+    }
+
+    /// @dev Directional exact-input swaps: push currency0 or currency1 into the core pool to grow the matching
+    ///      `marketLiquidityReserves` slice so a later `SETTLE_POSITION` withdrawal can clear inactive overflow.
+    ///      See `agents/spec/Endogenous vs Exogenous Liquidity Considerations.md` (heal lane N by swapping N in).
+    function _rebalanceStrandedLanesForInactiveDrain(
+        StandaloneMarket memory m,
+        uint256 takerPk,
+        uint256 eff0,
+        uint256 eff1,
+        uint128 swapChunk,
+        uint256 wrapAmount
+    ) internal {
+        if (eff0 > 0) {
+            console.log("e2e: reserve rebalance - currency0 in (zeroForOne=true), chunk:", swapChunk);
+            _mintAndSwap(m, takerPk, wrapAmount, true, swapChunk);
+        }
+        if (eff1 > 0) {
+            console.log("e2e: reserve rebalance - currency1 in (zeroForOne=false), chunk:", swapChunk);
+            _mintAndSwap(m, takerPk, wrapAmount, false, swapChunk);
+        }
+    }
+
+    function _assertInactiveSurplusFullyResolvedForDecommit(
+        StandaloneMarket memory m,
+        uint256 commitId,
+        uint256 positionIndex
+    ) internal view {
+        ExitSnapshotE2E memory s = _snapshotExitState(m, commitId, positionIndex);
+        require(s.eff0 == 0 && s.eff1 == 0, "e2e: inactive effective settled must be zero before decommit");
+        require(s.inactiveRemnantCount == 0, "e2e: inactive remnant must be cleared before decommit");
+    }
+
+    /// @dev Close RFS → burn + realise credits → drain inactive surplus; if stalled, assert unserviceable overflow,
+    ///      perform bounded directional reserve replenishment swaps, re-drain, then decommit (unwrap separately).
+    function _closeRfsBurnDrainRebalanceDecommitAndTakeAllLccs(
+        StandaloneMarket memory m,
+        uint256 mmPk,
+        uint256 rebalanceTakerPk,
+        uint256 commitId,
+        uint256 positionIndex,
+        uint256 maxRebalanceRounds,
+        uint128 rebalanceSwapChunk,
+        uint256 rebalanceWrapAmount
+    ) internal {
+        _settleRfsIfOpen(m, mmPk, commitId);
+        _burnAndRealiseExitCredits(m, mmPk, commitId, positionIndex);
+
+        _logMakerHealth("after burn (pre-drain)", _snapshotMakerHealth(m, commitId, positionIndex));
+
+        bool drained = _drainInactivePositionSurplusBestEffort(m, mmPk, commitId, positionIndex, 32);
+
+        if (!drained) {
+            _assertRecognisedUnserviceableOverflowBeforeRebalance(m, mmPk, commitId, positionIndex);
+
+            for (uint256 r = 0; r < maxRebalanceRounds; r++) {
+                (uint256 eff0, uint256 eff1) =
+                    _getEffectiveSettledPair(IVTSOrchestrator(m.stack.contracts.vtsOrchestrator), commitId, positionIndex);
+                if (eff0 == 0 && eff1 == 0) {
+                    drained = true;
+                    break;
+                }
+
+                console.log("e2e: reserve rebalance round:", r);
+                _rebalanceStrandedLanesForInactiveDrain(
+                    m, rebalanceTakerPk, eff0, eff1, rebalanceSwapChunk, rebalanceWrapAmount
+                );
+
+                _logMakerHealth(
+                    "after reserve rebalance + pool trade",
+                    _snapshotMakerHealth(m, commitId, positionIndex)
+                );
+
+                drained = _drainInactivePositionSurplusBestEffort(m, mmPk, commitId, positionIndex, 32);
+                if (drained) {
+                    break;
+                }
+            }
+
+            require(drained, "e2e: inactive surplus not cleared after reserve rebalance (lanes still unserviceable)");
+        }
+
+        _assertInactiveSurplusFullyResolvedForDecommit(m, commitId, positionIndex);
+
+        _logMakerHealth("after drain (pre-decommit)", _snapshotMakerHealth(m, commitId, positionIndex));
+
+        _decommitAndTakeAllLccs(m, mmPk, commitId);
+        console.log("OK: burned + drained inactive surplus (+ optional reserve rebalance) + decommitted");
+    }
+
+    /// @dev Single-position (`positionIndex == 0`) variant with default rebalance sizing.
+    function _closeRfsBurnDrainRebalanceDecommitAndTakeAllLccs(StandaloneMarket memory m, uint256 mmPk, uint256 rebalanceTakerPk, uint256 commitId)
+        internal
+    {
+        _closeRfsBurnDrainRebalanceDecommitAndTakeAllLccs(
+            m,
+            mmPk,
+            rebalanceTakerPk,
+            commitId,
+            0,
+            MM_E2E_REBALANCE_MAX_ROUNDS,
+            MM_E2E_REBALANCE_SWAP_CHUNK,
+            MM_E2E_REBALANCE_WRAP_PER_LEG
+        );
     }
 
     function _assertUnwrapInvariant(
@@ -610,6 +998,68 @@ abstract contract MME2EBase is E2EBase {
         console.log("OK: swap both directions complete");
     }
 
+    /// @dev Large two-way sweep + poke (legacy extreme path).
+    function _runExtremeTradingPhase(StandaloneMarket memory m, uint256 mmPk, uint256 takerPk, uint256 commitId)
+        internal
+    {
+        _swapBothDirections(m, takerPk, MM_E2E_WRAP_FOR_SWAPS_LARGE, MM_E2E_BIG_SWAP_IN);
+        _pokePosition(m, mmPk, commitId);
+    }
+
+    /// @dev Adaptive return toward the starting tick after an extreme sweep, then poke.
+    function _runAdaptiveRoundTripTradingPhase(
+        StandaloneMarket memory m,
+        uint256 mmPk,
+        uint256 takerPk,
+        uint256 commitId,
+        uint128 bigSwapAmount,
+        uint128 adaptiveStep,
+        uint256 maxAdaptiveIters
+    ) internal {
+        PoolKey memory key = _corePoolKey(m);
+        (, int24 tickStart,,) = IPoolManager(config.poolManager).getSlot0(key.toId());
+        _swapBothDirections(m, takerPk, MM_E2E_WRAP_FOR_SWAPS_LARGE, bigSwapAmount);
+
+        uint256 i;
+        for (; i < maxAdaptiveIters; i++) {
+            (, int24 tickCur,,) = IPoolManager(config.poolManager).getSlot0(key.toId());
+            int256 diff = int256(tickCur) - int256(tickStart);
+            if (diff < 120 && diff > -120) break;
+            if (diff > 0) {
+                _mintAndSwap(m, takerPk, MM_E2E_WRAP_FOR_SWAPS_LARGE, true, adaptiveStep);
+            } else {
+                _mintAndSwap(m, takerPk, MM_E2E_WRAP_FOR_SWAPS_LARGE, false, adaptiveStep);
+            }
+        }
+        _pokePosition(m, mmPk, commitId, false);
+    }
+
+    /// @dev Small two-way swaps (non-extreme trading volume).
+    function _runModestTradingPhase(StandaloneMarket memory m, uint256 mmPk, uint256 takerPk, uint256 commitId)
+        internal
+    {
+        _swapBothDirections(m, takerPk, MM_E2E_WRAP_FOR_MODEST, MM_E2E_MODEST_SWAP_IN);
+        _pokePosition(m, mmPk, commitId, false);
+    }
+
+    /// @dev Several modest rounds without a single extreme sweep (reserve-shaped / non-pathological trading).
+    function _runReserveShapedTradingAndExitSetup(StandaloneMarket memory m, uint256 mmPk, uint256 takerPk, uint256 commitId)
+        internal
+    {
+        for (uint256 r = 0; r < 3; r++) {
+            _swapBothDirections(m, takerPk, MM_E2E_WRAP_FOR_SWAPS_LARGE, MM_E2E_RESERVE_SHAPED_LEG_SWAP);
+        }
+        _pokePosition(m, mmPk, commitId, false);
+    }
+
+    /// @dev Wide/deeper MM stress: large swaps on profiles that are not ultra-tight.
+    function _runWideOrDeepStressTradingPhase(StandaloneMarket memory m, uint256 mmPk, uint256 takerPk, uint256 commitId)
+        internal
+    {
+        _swapBothDirections(m, takerPk, MM_E2E_WRAP_FOR_SWAPS_LARGE, MM_E2E_BIG_SWAP_IN);
+        _pokePosition(m, mmPk, commitId, false);
+    }
+
     /// @dev Settle a position to a given amount of underlying0 and underlying1
     function _settleToPosition(
         StandaloneMarket memory m,
@@ -794,58 +1244,8 @@ abstract contract MME2EBase is E2EBase {
         return vts.getPositionSettledAmounts(pid);
     }
 
-    /// @notice After burn, repeatedly SETTLE (withdraw) until inactive effective settled is zero, or revert if progress stalls.
-    /// @dev Burn can leave surplus in `settledOverflow` that `SETTLE_POSITION_FROM_DELTAS` alone does not clear; decommit requires no inactive remnant.
-    function _drainInactivePositionSurplus(
-        StandaloneMarket memory m,
-        uint256 mmPk,
-        uint256 commitId,
-        uint256 positionIndex,
-        uint256 maxIterations
-    ) internal {
-        IVTSOrchestrator vts = IVTSOrchestrator(m.stack.contracts.vtsOrchestrator);
-        PoolKey memory corePoolKey = _corePoolKey(m);
-
-        uint256 cap = maxIterations == 0 ? 32 : maxIterations;
-
-        for (uint256 i = 0; i < cap; i++) {
-            (uint256 eff0Before, uint256 eff1Before) = _getEffectiveSettledPair(vts, commitId, positionIndex);
-            if (eff0Before == 0 && eff1Before == 0) {
-                return;
-            }
-
-            console.log("e2e: inactive surplus before drain, eff0:", eff0Before, "eff1:", eff1Before);
-
-            vm.startBroadcast(mmPk);
-            {
-                MMPositionManager mmpm = MMPositionManager(payable(m.stack.contracts.mmPositionManager));
-                bytes memory actions = abi.encodePacked(bytes1(uint8(MMActions.SETTLE_POSITION)));
-                bytes[] memory params = new bytes[](1);
-                params[0] = abi.encode(
-                    corePoolKey,
-                    commitId,
-                    positionIndex,
-                    _withdrawRequestInt128(eff0Before),
-                    _withdrawRequestInt128(eff1Before),
-                    false
-                );
-                _executeMMActions(mmpm, actions, params, block.timestamp + 3600);
-            }
-            vm.stopBroadcast();
-
-            (uint256 eff0After, uint256 eff1After) = _getEffectiveSettledPair(vts, commitId, positionIndex);
-            bool progressed = eff0After < eff0Before || eff1After < eff1Before;
-            if (!progressed) {
-                revert("e2e: inactive surplus settle made no progress (check vault liquidity / queue)");
-            }
-        }
-
-        (uint256 left0, uint256 left1) = _getEffectiveSettledPair(vts, commitId, positionIndex);
-        require(left0 == 0 && left1 == 0, "e2e: inactive economic remnant remains after max drain iterations");
-    }
-
-    /// @dev Burn, settle-from-deltas, optionally drain inactive surplus on index `positionIndex`, decommit, and sweep LCC credits.
-    function _burnDecommitAndTakeAllLccs(
+    /// @dev Burn inactive liquidity, settle from hook deltas, and sweep credited LCC balances to the MM wallet.
+    function _burnAndRealiseExitCredits(
         StandaloneMarket memory m,
         uint256 mmPk,
         uint256 commitId,
@@ -871,8 +1271,102 @@ abstract contract MME2EBase is E2EBase {
             _executeMMActions(mmpm, actions, params, block.timestamp + 3600);
         }
         vm.stopBroadcast();
+    }
 
-        _drainInactivePositionSurplus(m, mmPk, commitId, positionIndex, 32);
+    /// @dev One inactive SETTLE attempt; returns whether effective settled strictly decreased.
+    function _attemptInactiveDrainOnce(
+        StandaloneMarket memory m,
+        uint256 mmPk,
+        uint256 commitId,
+        uint256 positionIndex
+    ) internal returns (bool progressed) {
+        IVTSOrchestrator vts = IVTSOrchestrator(m.stack.contracts.vtsOrchestrator);
+        PoolKey memory corePoolKey = _corePoolKey(m);
+
+        (uint256 eff0Before, uint256 eff1Before) = _getEffectiveSettledPair(vts, commitId, positionIndex);
+        if (eff0Before == 0 && eff1Before == 0) {
+            return false;
+        }
+
+        console.log("e2e: inactive surplus before drain, eff0:", eff0Before, "eff1:", eff1Before);
+
+        vm.startBroadcast(mmPk);
+        {
+            MMPositionManager mmpm = MMPositionManager(payable(m.stack.contracts.mmPositionManager));
+            bytes memory actions = abi.encodePacked(bytes1(uint8(MMActions.SETTLE_POSITION)));
+            bytes[] memory params = new bytes[](1);
+            params[0] = abi.encode(
+                corePoolKey,
+                commitId,
+                positionIndex,
+                _withdrawRequestInt128(eff0Before),
+                _withdrawRequestInt128(eff1Before),
+                false
+            );
+            _executeMMActions(mmpm, actions, params, block.timestamp + 3600);
+        }
+        vm.stopBroadcast();
+
+        (uint256 eff0After, uint256 eff1After) = _getEffectiveSettledPair(vts, commitId, positionIndex);
+        progressed = eff0After < eff0Before || eff1After < eff1Before;
+    }
+
+    /// @notice After burn, repeatedly SETTLE (withdraw) until inactive effective settled is zero, or revert if progress stalls.
+    /// @dev Burn can leave surplus in `settledOverflow` that `SETTLE_POSITION_FROM_DELTAS` alone does not clear; decommit requires no inactive remnant.
+    function _drainInactivePositionSurplus(
+        StandaloneMarket memory m,
+        uint256 mmPk,
+        uint256 commitId,
+        uint256 positionIndex,
+        uint256 maxIterations
+    ) internal {
+        IVTSOrchestrator vts = IVTSOrchestrator(m.stack.contracts.vtsOrchestrator);
+
+        uint256 cap = maxIterations == 0 ? 32 : maxIterations;
+
+        for (uint256 i = 0; i < cap; i++) {
+            (uint256 eff0Before, uint256 eff1Before) = _getEffectiveSettledPair(vts, commitId, positionIndex);
+            if (eff0Before == 0 && eff1Before == 0) {
+                return;
+            }
+
+            bool progressed = _attemptInactiveDrainOnce(m, mmPk, commitId, positionIndex);
+            if (!progressed) {
+                revert("e2e: inactive surplus settle made no progress (check vault liquidity / queue)");
+            }
+        }
+
+        (uint256 left0, uint256 left1) = _getEffectiveSettledPair(vts, commitId, positionIndex);
+        require(left0 == 0 && left1 == 0, "e2e: inactive economic remnant remains after max drain iterations");
+    }
+
+    /// @dev Best-effort drain loop that stops when progress stalls (does not revert on stall).
+    function _drainInactivePositionSurplusBestEffort(
+        StandaloneMarket memory m,
+        uint256 mmPk,
+        uint256 commitId,
+        uint256 positionIndex,
+        uint256 maxIterations
+    ) internal returns (bool fullyDrained) {
+        IVTSOrchestrator vts = IVTSOrchestrator(m.stack.contracts.vtsOrchestrator);
+        uint256 cap = maxIterations == 0 ? 32 : maxIterations;
+        for (uint256 i = 0; i < cap; i++) {
+            (uint256 e0, uint256 e1) = _getEffectiveSettledPair(vts, commitId, positionIndex);
+            if (e0 == 0 && e1 == 0) {
+                return true;
+            }
+            if (!_attemptInactiveDrainOnce(m, mmPk, commitId, positionIndex)) {
+                break;
+            }
+        }
+        (uint256 e0f, uint256 e1f) = _getEffectiveSettledPair(vts, commitId, positionIndex);
+        fullyDrained = e0f == 0 && e1f == 0;
+    }
+
+    /// @dev Decommit the signal and sweep any remaining LCC credits for both pool currencies.
+    function _decommitAndTakeAllLccs(StandaloneMarket memory m, uint256 mmPk, uint256 commitId) internal {
+        address mm = vm.addr(mmPk);
+        PoolKey memory corePoolKey = _corePoolKey(m);
 
         vm.startBroadcast(mmPk);
         {
@@ -886,7 +1380,18 @@ abstract contract MME2EBase is E2EBase {
             _executeMMActions(mmpm, actions, params, block.timestamp + 3600);
         }
         vm.stopBroadcast();
+    }
 
+    /// @dev Burn, settle-from-deltas, drain inactive surplus on index `positionIndex`, decommit, and sweep LCC credits.
+    function _burnDecommitAndTakeAllLccs(
+        StandaloneMarket memory m,
+        uint256 mmPk,
+        uint256 commitId,
+        uint256 positionIndex
+    ) internal {
+        _burnAndRealiseExitCredits(m, mmPk, commitId, positionIndex);
+        _drainInactivePositionSurplus(m, mmPk, commitId, positionIndex, 32);
+        _decommitAndTakeAllLccs(m, mmPk, commitId);
         console.log("OK: burned + withdrew-from-deltas + drained inactive surplus + decommitted");
     }
 

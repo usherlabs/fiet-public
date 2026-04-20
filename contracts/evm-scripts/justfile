@@ -752,6 +752,39 @@ e2e-market-maker:
         --rpc-url {{ rpc_url }} \
         {{ broadcast_flag }} -vvv
 
+# E2E: MM matrix — extreme unserviceable remnant (profile × DirectLP buffer).
+e2e-mm-extreme-unserviceable:
+    FOUNDRY_PROFILE={{ foundry_profile }} forge script {{ script_dir }}/e2e/MarketMakerExtremeUnserviceable.s.sol:MarketMakerExtremeUnserviceableE2E \
+        --rpc-url {{ rpc_url }} \
+        {{ broadcast_flag }} -vvv
+
+# E2E: MM matrix — adaptive round-trip trading (serviceable exit).
+e2e-mm-serviceable-round-trip:
+    FOUNDRY_PROFILE={{ foundry_profile }} forge script {{ script_dir }}/e2e/MarketMakerServiceableRoundTrip.s.sol:MarketMakerServiceableRoundTripE2E \
+        --rpc-url {{ rpc_url }} \
+        {{ broadcast_flag }} -vvv
+
+# E2E: MM matrix — reserve-shaped trading (multi modest rounds).
+e2e-mm-serviceable-reserve-shaped:
+    FOUNDRY_PROFILE={{ foundry_profile }} forge script {{ script_dir }}/e2e/MarketMakerServiceableReserveShaped.s.sol:MarketMakerServiceableReserveShapedE2E \
+        --rpc-url {{ rpc_url }} \
+        {{ broadcast_flag }} -vvv
+
+# E2E: MM matrix — modest swap volume + tick bounds.
+e2e-mm-modest-swap:
+    FOUNDRY_PROFILE={{ foundry_profile }} forge script {{ script_dir }}/e2e/MarketMakerModestSwap.s.sol:MarketMakerModestSwapE2E \
+        --rpc-url {{ rpc_url }} \
+        {{ broadcast_flag }} -vvv
+
+# E2E: MM matrix — wide/deep stress vs tightTiny baseline.
+e2e-mm-wide-deep-stress:
+    FOUNDRY_PROFILE={{ foundry_profile }} forge script {{ script_dir }}/e2e/MarketMakerWideOrDeepStress.s.sol:MarketMakerWideOrDeepStressE2E \
+        --rpc-url {{ rpc_url }} \
+        {{ broadcast_flag }} -vvv
+
+# E2E: MM matrix — all scenario runners above (long-running).
+e2e-mm-matrix: e2e-mm-extreme-unserviceable e2e-mm-serviceable-round-trip e2e-mm-serviceable-reserve-shaped e2e-mm-modest-swap e2e-mm-wide-deep-stress
+
 # E2E: MMCoverage (fee-free multi-MM settlement / checkpoint / poke / exit path).
 e2e-mm-coverage:
     FOUNDRY_PROFILE={{ foundry_profile }} forge script {{ script_dir }}/e2e/MMCoverage.s.sol:MMCoverageE2E \

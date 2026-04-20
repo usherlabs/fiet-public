@@ -44,6 +44,15 @@ The following E2E test scripts are available:
    - Run with: `just e2e-market-maker`
    - **Required:** `PRIVATE_KEY`, `LP_PRIVATE_KEY`
 
+   **MM matrix (scenario × position profile × DirectLP buffer)** — separate scenario runners:
+   - `e2e/MarketMakerExtremeUnserviceable.s.sol` → `just e2e-mm-extreme-unserviceable`
+   - `e2e/MarketMakerServiceableRoundTrip.s.sol` → `just e2e-mm-serviceable-round-trip`
+   - `e2e/MarketMakerServiceableReserveShaped.s.sol` → `just e2e-mm-serviceable-reserve-shaped`
+   - `e2e/MarketMakerModestSwap.s.sol` → `just e2e-mm-modest-swap`
+   - `e2e/MarketMakerWideOrDeepStress.s.sol` → `just e2e-mm-wide-deep-stress`
+   - All five: `just e2e-mm-matrix` (long-running)
+   - **Required:** `PRIVATE_KEY`, `LP_PRIVATE_KEY` (deployer acts as DirectLP buffer seeder where applicable)
+
 5. **`e2e/MMCoverage.s.sol`** - Tests the multi-MM settlement, checkpoint, poke, and exit flow without fee-pot-specific assertions
    - Run with: `just e2e-mm-coverage`
    - **Required:** `PRIVATE_KEY`, `LP_PRIVATE_KEY`, `LP2_PRIVATE_KEY`, `LP3_PRIVATE_KEY`
