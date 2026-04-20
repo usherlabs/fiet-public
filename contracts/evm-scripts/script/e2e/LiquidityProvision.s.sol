@@ -83,12 +83,12 @@ contract LiquidityProvisionE2E is E2EBase {
         uint256 lpPk,
         PoolKey memory corePoolKey,
         uint256 tokenId,
-        address curr0Addr,
-        address curr1Addr,
         address lp
     ) internal {
         IPositionManager positionManager = IPositionManager(payable(config.positionManager));
         ILiquidityHub hub = ILiquidityHub(m.stack.contracts.liquidityHub);
+        address curr0Addr = Currency.unwrap(corePoolKey.currency0);
+        address curr1Addr = Currency.unwrap(corePoolKey.currency1);
 
         vm.startBroadcast(lpPk);
         uint256 curr0BeforeBurn = IERC20(curr0Addr).balanceOf(lp);
@@ -111,38 +111,19 @@ contract LiquidityProvisionE2E is E2EBase {
         vm.stopBroadcast();
     }
 
-    function run() external {
-        console.log("=== E2E: LiquidityProvision ===");
-        // Load LP signer.
-        uint256 lpPk = uint256(
-            _requireEnvBytes32("LP_PRIVATE_KEY", "Missing LP_PRIVATE_KEY env var (anvil keys can be used directly)")
-        );
-        address lp = vm.addr(lpPk);
-        CoreDeployment memory d = _deployCoreContracts();
-        StandaloneMarket memory m = _createMarket(d, lp, CORE_POOL_FEE);
-
-        console.log("=== E2E: LiquidityProvision ===");
-        console.log("lp:", lp);
-        console.log("wrap amount per underlying:", WRAP_AMOUNT_PER_ASSET);
-        console.log("liquidity cap per underlying:", LIQUIDITY_AMOUNT_MAX);
-
-        // Snapshot underlying balances before flow.
-        uint256 ua0Before = IERC20(m.underlying0).balanceOf(lp);
-        uint256 ua1Before = IERC20(m.underlying1).balanceOf(lp);
-
-        PoolKey memory corePoolKey = _corePoolKey(m);
+    function _assertPostUnwrapBalances(
+        StandaloneMarket memory m,
+        address lp,
+        PoolKey memory corePoolKey,
+        uint256 ua0Before,
+        uint256 ua1Before,
+        address swapTokenIn,
+        address swapTokenOut,
+        uint256 swapSpent,
+        uint256 swapReceived
+    ) internal view {
         address curr0Addr = Currency.unwrap(corePoolKey.currency0);
         address curr1Addr = Currency.unwrap(corePoolKey.currency1);
-        uint256 tokenId = _addCoreLiquidityFullRange(m, lpPk, WRAP_AMOUNT_PER_ASSET, LIQUIDITY_AMOUNT_MAX);
-        console.log("minted LP position tokenId:", tokenId);
-        console.log("currency0:", curr0Addr);
-        console.log("currency1:", curr1Addr);
-
-        (address swapTokenIn, address swapTokenOut, uint256 swapSpent, uint256 swapReceived) =
-            _swapAndAssert(m, lpPk, corePoolKey);
-        _removeAndUnwrap(m, lpPk, corePoolKey, tokenId, curr0Addr, curr1Addr, lp);
-
-        // Snapshot balances after unwrap.
         uint256 ua0After = IERC20(m.underlying0).balanceOf(lp);
         uint256 ua1After = IERC20(m.underlying1).balanceOf(lp);
         uint256 lcc0After = IERC20(m.lcc0).balanceOf(lp);
@@ -174,6 +155,39 @@ contract LiquidityProvisionE2E is E2EBase {
         console.log("ua1 before/after:", ua1Before, ua1After);
         _assertApproxEq(lcc0After, 0, AMOUNT_TOLERANCE, "final LCC0 should be ~0 after unwrap");
         _assertApproxEq(lcc1After, 0, AMOUNT_TOLERANCE, "final LCC1 should be ~0 after unwrap");
+    }
+
+    function run() external {
+        console.log("=== E2E: LiquidityProvision ===");
+        // Load LP signer.
+        uint256 lpPk = uint256(
+            _requireEnvBytes32("LP_PRIVATE_KEY", "Missing LP_PRIVATE_KEY env var (anvil keys can be used directly)")
+        );
+        address lp = vm.addr(lpPk);
+        CoreDeployment memory d = _deployCoreContracts();
+        StandaloneMarket memory m = _createMarket(d, lp, CORE_POOL_FEE);
+
+        console.log("=== E2E: LiquidityProvision ===");
+        console.log("lp:", lp);
+        console.log("wrap amount per underlying:", WRAP_AMOUNT_PER_ASSET);
+        console.log("liquidity cap per underlying:", LIQUIDITY_AMOUNT_MAX);
+
+        // Snapshot underlying balances before flow.
+        uint256 ua0Before = IERC20(m.underlying0).balanceOf(lp);
+        uint256 ua1Before = IERC20(m.underlying1).balanceOf(lp);
+
+        PoolKey memory corePoolKey = _corePoolKey(m);
+        uint256 tokenId = _addCoreLiquidityFullRange(m, lpPk, WRAP_AMOUNT_PER_ASSET, LIQUIDITY_AMOUNT_MAX);
+        console.log("minted LP position tokenId:", tokenId);
+        console.log("currency0:", Currency.unwrap(corePoolKey.currency0));
+        console.log("currency1:", Currency.unwrap(corePoolKey.currency1));
+
+        (address swapTokenIn, address swapTokenOut, uint256 swapSpent, uint256 swapReceived) =
+            _swapAndAssert(m, lpPk, corePoolKey);
+        _removeAndUnwrap(m, lpPk, corePoolKey, tokenId, lp);
+        _assertPostUnwrapBalances(
+            m, lp, corePoolKey, ua0Before, ua1Before, swapTokenIn, swapTokenOut, swapSpent, swapReceived
+        );
         console.log("OK: stateful DirectLP add->swap->remove->unwrap verified");
     }
 }
