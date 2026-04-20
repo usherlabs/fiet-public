@@ -12,6 +12,7 @@ import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
 import {StateLibrary} from "@uniswap/v4-core/src/libraries/StateLibrary.sol";
 
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {SafeCast} from "@openzeppelin/contracts/utils/math/SafeCast.sol";
 
 import {Token} from "../../setup/MockERC20.s.sol";
 
@@ -22,6 +23,7 @@ import {MessageHashUtils} from "@openzeppelin/contracts/utils/cryptography/Messa
 import {ILCC} from "src/interfaces/ILCC.sol";
 import {MMPositionManager} from "src/MMPositionManager.sol";
 import {IVTSOrchestrator} from "src/interfaces/IVTSOrchestrator.sol";
+import {PositionId} from "src/types/Position.sol";
 import {LiquidityUtils} from "src/libraries/LiquidityUtils.sol";
 import {MarketVTSConfiguration} from "src/types/VTS.sol";
 import {ILiquidityHub} from "src/interfaces/ILiquidityHub.sol";
@@ -722,7 +724,7 @@ abstract contract MME2EBase is E2EBase {
         require(mmpm.ownerOf(commitId) == mm, "mmpm: owner mismatch");
     }
 
-    /// @dev Close RFS (so burn can succeed), then burn → withdraw-from-deltas → decommit, and TAKE any LCC credits.
+    /// @dev Close RFS (so burn can succeed), then burn → realise delta credits → drain inactive economic remnant → decommit → TAKE.
     function _closeRfsBurnDecommitAndTakeAllLccs(StandaloneMarket memory m, uint256 mmPk, uint256 commitId) internal {
         _settleRfsIfOpen(m, mmPk, commitId);
         _burnDecommitAndTakeAllLccs(m, mmPk, commitId);
@@ -773,8 +775,82 @@ abstract contract MME2EBase is E2EBase {
         vts.calcRFS(commitId, 0, true);
     }
 
-    /// @dev Burn the position, settle from deltas, decommit, and take all LCCs
-    function _burnDecommitAndTakeAllLccs(StandaloneMarket memory m, uint256 mmPk, uint256 commitId) internal {
+    /// @dev Clamp a uint withdraw request to positive int128 for SETTLE_POSITION (positive lane = withdrawal).
+    function _withdrawRequestInt128(uint256 amountWei) internal pure returns (int128) {
+        if (amountWei == 0) return int128(0);
+        uint256 cap = uint256(uint128(type(int128).max));
+        uint256 clipped = amountWei > cap ? cap : amountWei;
+        return SafeCast.toInt128(int256(uint256(clipped)));
+    }
+
+    /// @return eff0 token0 effective settled (live + overflow)
+    /// @return eff1 token1 effective settled (live + overflow)
+    function _getEffectiveSettledPair(IVTSOrchestrator vts, uint256 commitId, uint256 positionIndex)
+        internal
+        view
+        returns (uint256 eff0, uint256 eff1)
+    {
+        PositionId pid = vts.getPositionId(commitId, positionIndex);
+        return vts.getPositionSettledAmounts(pid);
+    }
+
+    /// @notice After burn, repeatedly SETTLE (withdraw) until inactive effective settled is zero, or revert if progress stalls.
+    /// @dev Burn can leave surplus in `settledOverflow` that `SETTLE_POSITION_FROM_DELTAS` alone does not clear; decommit requires no inactive remnant.
+    function _drainInactivePositionSurplus(
+        StandaloneMarket memory m,
+        uint256 mmPk,
+        uint256 commitId,
+        uint256 positionIndex,
+        uint256 maxIterations
+    ) internal {
+        IVTSOrchestrator vts = IVTSOrchestrator(m.stack.contracts.vtsOrchestrator);
+        PoolKey memory corePoolKey = _corePoolKey(m);
+
+        uint256 cap = maxIterations == 0 ? 32 : maxIterations;
+
+        for (uint256 i = 0; i < cap; i++) {
+            (uint256 eff0Before, uint256 eff1Before) = _getEffectiveSettledPair(vts, commitId, positionIndex);
+            if (eff0Before == 0 && eff1Before == 0) {
+                return;
+            }
+
+            console.log("e2e: inactive surplus before drain, eff0:", eff0Before, "eff1:", eff1Before);
+
+            vm.startBroadcast(mmPk);
+            {
+                MMPositionManager mmpm = MMPositionManager(payable(m.stack.contracts.mmPositionManager));
+                bytes memory actions = abi.encodePacked(bytes1(uint8(MMActions.SETTLE_POSITION)));
+                bytes[] memory params = new bytes[](1);
+                params[0] = abi.encode(
+                    corePoolKey,
+                    commitId,
+                    positionIndex,
+                    _withdrawRequestInt128(eff0Before),
+                    _withdrawRequestInt128(eff1Before),
+                    false
+                );
+                _executeMMActions(mmpm, actions, params, block.timestamp + 3600);
+            }
+            vm.stopBroadcast();
+
+            (uint256 eff0After, uint256 eff1After) = _getEffectiveSettledPair(vts, commitId, positionIndex);
+            bool progressed = eff0After < eff0Before || eff1After < eff1Before;
+            if (!progressed) {
+                revert("e2e: inactive surplus settle made no progress (check vault liquidity / queue)");
+            }
+        }
+
+        (uint256 left0, uint256 left1) = _getEffectiveSettledPair(vts, commitId, positionIndex);
+        require(left0 == 0 && left1 == 0, "e2e: inactive economic remnant remains after max drain iterations");
+    }
+
+    /// @dev Burn, settle-from-deltas, optionally drain inactive surplus on index `positionIndex`, decommit, and sweep LCC credits.
+    function _burnDecommitAndTakeAllLccs(
+        StandaloneMarket memory m,
+        uint256 mmPk,
+        uint256 commitId,
+        uint256 positionIndex
+    ) internal {
         address mm = vm.addr(mmPk);
         PoolKey memory corePoolKey = _corePoolKey(m);
 
@@ -784,21 +860,39 @@ abstract contract MME2EBase is E2EBase {
             bytes memory actions = abi.encodePacked(
                 bytes1(uint8(MMActions.BURN_POSITION)),
                 bytes1(uint8(MMActions.SETTLE_POSITION_FROM_DELTAS)),
-                bytes1(uint8(MMActions.DECOMMIT_SIGNAL)),
                 bytes1(uint8(MMActions.TAKE)),
                 bytes1(uint8(MMActions.TAKE))
             );
-            bytes[] memory params = new bytes[](5);
-            params[0] = abi.encode(corePoolKey, commitId, 0, uint128(0), uint128(0));
-            params[1] = abi.encode(corePoolKey, commitId, 0, true, true);
-            params[2] = abi.encode(commitId);
-            params[3] = abi.encode(corePoolKey.currency0, mm, 0);
-            params[4] = abi.encode(corePoolKey.currency1, mm, 0);
+            bytes[] memory params = new bytes[](4);
+            params[0] = abi.encode(corePoolKey, commitId, positionIndex, uint128(0), uint128(0));
+            params[1] = abi.encode(corePoolKey, commitId, positionIndex, true, true);
+            params[2] = abi.encode(corePoolKey.currency0, mm, 0);
+            params[3] = abi.encode(corePoolKey.currency1, mm, 0);
             _executeMMActions(mmpm, actions, params, block.timestamp + 3600);
         }
         vm.stopBroadcast();
 
-        console.log("OK: closed RFS + burned + withdrew-from-deltas + decommitted");
+        _drainInactivePositionSurplus(m, mmPk, commitId, positionIndex, 32);
+
+        vm.startBroadcast(mmPk);
+        {
+            MMPositionManager mmpm = MMPositionManager(payable(m.stack.contracts.mmPositionManager));
+            bytes memory actions =
+                abi.encodePacked(bytes1(uint8(MMActions.DECOMMIT_SIGNAL)), bytes1(uint8(MMActions.TAKE)), bytes1(uint8(MMActions.TAKE)));
+            bytes[] memory params = new bytes[](3);
+            params[0] = abi.encode(commitId);
+            params[1] = abi.encode(corePoolKey.currency0, mm, 0);
+            params[2] = abi.encode(corePoolKey.currency1, mm, 0);
+            _executeMMActions(mmpm, actions, params, block.timestamp + 3600);
+        }
+        vm.stopBroadcast();
+
+        console.log("OK: burned + withdrew-from-deltas + drained inactive surplus + decommitted");
+    }
+
+    /// @dev Same as `_burnDecommitAndTakeAllLccs(m, mmPk, commitId, 0)` for single-position E2E.
+    function _burnDecommitAndTakeAllLccs(StandaloneMarket memory m, uint256 mmPk, uint256 commitId) internal {
+        _burnDecommitAndTakeAllLccs(m, mmPk, commitId, 0);
     }
 
     /// @dev Backwards-compatible helper for callsites that do not provide a commitment bucket.

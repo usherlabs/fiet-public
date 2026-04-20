@@ -120,7 +120,7 @@ abstract contract LiquidityHubTestBase is Test {
     /// @notice Helper function to wrap market-derived LCC for a user
     function _wrapMarketDerivedLCC(address user, address lccToken, uint256 amount) public {
         // Issuer-only market-derived mint (directAmount == 0). Do not seed via exempt direct wrap:
-        // direct-backed mints to exempt endpoints are forbidden (see `DirectMintToExemptNotAllowed`).
+        // direct-backed mints to exempt endpoints are forbidden on user wrap paths (see `MintToNotAllowedRecipient` / `LCC.mint`).
         vm.prank(proxyHook);
         liquidityHub.issue(lccToken, user, amount);
 

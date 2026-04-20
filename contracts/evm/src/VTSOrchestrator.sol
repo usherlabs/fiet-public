@@ -13,6 +13,7 @@ import {Pool} from "./types/Pool.sol";
 import {
     MarketVTSConfiguration,
     PositionAccounting,
+    PositionAccountingLib,
     SettleResult,
     TouchPositionResult,
     VaultSettlementIntent,
@@ -320,7 +321,7 @@ contract VTSOrchestrator is
     /// @return expiresAt The expiration timestamp
     /// @return positionCount The count of positions
     /// @return activePositionCount The count of active positions
-    /// @return inactiveRemnantCount Inactive positions with non-zero live settled (blocks decommit)
+    /// @return inactiveRemnantCount Inactive positions with non-zero live settled or deferred overflow (blocks decommit)
     function getCommit(uint256 commitId)
         external
         view
@@ -407,7 +408,17 @@ contract VTSOrchestrator is
     /// @inheritdoc IVTSOrchestrator
     function getPositionSettledAmounts(PositionId positionId) external view returns (uint256 amount0, uint256 amount1) {
         PositionAccounting storage pa = s.positionAccounting[positionId];
-        return (pa.settled.token0, pa.settled.token1);
+        return PositionAccountingLib.effectiveSettled(pa);
+    }
+
+    /// @inheritdoc IVTSOrchestrator
+    function getPositionSettledOverflowAmounts(PositionId positionId)
+        external
+        view
+        returns (uint256 overflow0, uint256 overflow1)
+    {
+        PositionAccounting storage pa = s.positionAccounting[positionId];
+        return (pa.settledOverflow.token0, pa.settledOverflow.token1);
     }
 
     /// @inheritdoc IVTSOrchestrator
@@ -688,6 +699,8 @@ contract VTSOrchestrator is
             settlementDelta.amount1(),
             pa.settled.token0,
             pa.settled.token1,
+            pa.settledOverflow.token0,
+            pa.settledOverflow.token1,
             isSeizing,
             rfsOpen
         );
@@ -696,6 +709,9 @@ contract VTSOrchestrator is
     /// @notice Settle a market maker position
     /// @dev Called by MMPositionManager to settle a position, handling both normal settlement and seizure.
     ///      Position validation is performed inside `VTSLifecycleLinkedLib._executeMMSettleFromParams`.
+    ///      Non-seizing calls normally require a live VRL-backed signal; the sole exception is
+    ///      withdrawal-only settlement (`amountDelta` lanes both non-negative) on an inactive position,
+    ///      so inactive `pa.settled` remnants remain drainable after signal expiry or empty-reserve renewals.
     /// @param factory The market factory namespace for caller-bound validation
     /// @param commitId The commit identifier
     /// @param positionIndex The position index within the commit
@@ -720,18 +736,28 @@ contract VTSOrchestrator is
         nonReentrant
         returns (BalanceDelta settlementDelta, bool rfsOpen, uint256 seizedLiquidityUnits, VaultSettlementIntent memory)
     {
-        _assertSignalValid(commitId, !isSeizing);
         _assertBoundFactoryCaller(factory);
+
+        // Commit must exist (initialised). For non-seizing paths, the live-signal check (when required) runs before
+        // the `owner` check so invalid non-live commits revert `InvalidSignal` even when `msg.sender` is not the
+        // position owner (diagnostics / direct unlock-callback probes). Seizure paths defer `isSeizable` until after
+        // `owner` so wrong callers still revert `InvalidSender` instead of RFS checkpoint errors.
+        _assertSignalValid(commitId, false);
 
         PositionId positionId = getPositionId(commitId, positionIndex);
         _assertPositionValid(positionId, false);
 
-        PoolId poolId;
-        {
-            Position memory pos = s.positions[positionId];
-            if (_msgSender() != pos.owner) revert Errors.InvalidSender();
-            poolId = pos.poolId;
+        Position memory pos = s.positions[positionId];
+        PoolId poolId = pos.poolId;
+
+        if (!isSeizing) {
+            bool inactiveWithdrawOnly = !pos.isActive && amountDelta.amount0() >= 0 && amountDelta.amount1() >= 0;
+            if (!inactiveWithdrawOnly) {
+                _assertSignalValid(commitId, true);
+            }
         }
+
+        if (_msgSender() != pos.owner) revert Errors.InvalidSender();
 
         if (isSeizing) {
             CheckpointLibrary.isSeizable(s, commitId, positionIndex, true);

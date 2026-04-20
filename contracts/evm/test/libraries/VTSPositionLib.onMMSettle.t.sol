@@ -73,14 +73,15 @@ contract VTSPositionLibOnMMSettleTest is VTSLibTestBase {
         (BalanceDelta settlementDelta,,) =
             harness.onMMSettle(manager, mockVault, positionId, lccCurrency0, lccCurrency1, delta, false, false);
 
-        // Should clamp: only 20 can be deposited (100 - 80)
-        assertEq(settlementDelta.amount0(), -20e18, "Should clamp deposit0 to available commitment");
-        assertEq(settlementDelta.amount1(), -20e18, "Should clamp deposit1 to available commitment");
+        // Full intended credit is applied: headroom fills live `settled` to `commitmentMax`, remainder deferred to overflow
+        assertEq(settlementDelta.amount0(), -50e18, "deposit0 should consume full intended credit");
+        assertEq(settlementDelta.amount1(), -50e18, "deposit1 should consume full intended credit");
 
-        // Verify settled increased to max
-        (,, uint256 settled0, uint256 settled1,,) = harness.getPositionAccounting(positionId);
+        (,, uint256 settled0, uint256 settled1,,, uint256 ov0, uint256 ov1) = harness.getPositionAccounting(positionId);
         assertEq(settled0, 100e18, "settled0 should reach commitmentMax");
         assertEq(settled1, 100e18, "settled1 should reach commitmentMax");
+        assertEq(ov0, 30e18, "overflow0 should hold deferred settle above headroom");
+        assertEq(ov1, 30e18, "overflow1 should hold deferred settle above headroom");
     }
 
     function test_onMMSettle_deposits_clearsCurrencyDelta() public {
@@ -325,7 +326,7 @@ contract VTSPositionLibOnMMSettleTest is VTSLibTestBase {
         assertFalse(rfsOpen, "RFS should be closed for withdrawals");
 
         // Settlement accounting should reflect only the actually-available withdrawal.
-        (,, uint256 settled0, uint256 settled1,,) = harness.getPositionAccounting(positionId);
+        (,, uint256 settled0, uint256 settled1,,,,) = harness.getPositionAccounting(positionId);
         assertEq(settled0, 100e18, "settled0 should decrease by the actual withdrawal");
         assertEq(settled1, 140e18, "settled1 should decrease by the actual withdrawal only");
     }
@@ -349,7 +350,8 @@ contract VTSPositionLibOnMMSettleTest is VTSLibTestBase {
 
         assertFalse(rfsOpen, "RFS should remain closed after the partial clamp");
 
-        (,, uint256 settled0, uint256 settled1, uint256 def0, uint256 def1) = harness.getPositionAccounting(positionId);
+        (,, uint256 settled0, uint256 settled1, uint256 def0, uint256 def1,,) =
+            harness.getPositionAccounting(positionId);
         assertEq(settled0, 140e18, "token0 settled should reflect only the actual withdrawal");
         assertEq(settled1, 100e18, "token1 settled should reflect the full withdrawal");
         assertEq(def0, 120e18, "token0 cumulative deficit must not be netted by the clamp");
@@ -395,7 +397,7 @@ contract VTSPositionLibOnMMSettleTest is VTSLibTestBase {
         assertEq(since1, 0, "commitment deficit age token1 should remain unchanged");
         assertEq(harness.getCommitmentDeficitBps(positionId), 777, "commitment deficit severity must remain unchanged");
 
-        (,, uint256 settled0, uint256 settled1,,) = harness.getPositionAccounting(positionId);
+        (,, uint256 settled0, uint256 settled1,,,,) = harness.getPositionAccounting(positionId);
         assertEq(settled0, 200e18, "token0 settled should remain unchanged when the withdrawal is delta-backed");
         assertEq(settled1, 200e18, "token1 settled should remain unchanged");
 
@@ -452,7 +454,7 @@ contract VTSPositionLibOnMMSettleTest is VTSLibTestBase {
         assertTrue(rfsOpen, "RFS should remain open due to unmet token1 requirement");
 
         // Assert persistent accounting state (not transient deltas).
-        (,, uint256 settled0, uint256 settled1,,) = harness.getPositionAccounting(positionId);
+        (,, uint256 settled0, uint256 settled1,,,,) = harness.getPositionAccounting(positionId);
         assertEq(settled0, 0, "token0 settled should remain unchanged");
         assertEq(settled1, 0, "token1 settled should remain unchanged");
     }
@@ -480,7 +482,7 @@ contract VTSPositionLibOnMMSettleTest is VTSLibTestBase {
             harness.onMMSettle(manager, mockVault, positionId, lccCurrency0, lccCurrency1, delta, false, false);
 
         assertFalse(rfsOpen, "RFS should be closed");
-        (,, uint256 settled0, uint256 settled1,,) = harness.getPositionAccounting(positionId);
+        (,, uint256 settled0, uint256 settled1,,,,) = harness.getPositionAccounting(positionId);
         assertEq(settled0, 200e18, "positive delta should be consumed before live settled is reduced");
         assertEq(settled1, 200e18, "untouched lane should remain unchanged");
 
@@ -536,7 +538,7 @@ contract VTSPositionLibOnMMSettleTest is VTSLibTestBase {
         );
 
         assertFalse(rfsOpen, "RFS should remain closed");
-        (,, uint256 settled0, uint256 settled1,,) = harness.getPositionAccounting(positionId);
+        (,, uint256 settled0, uint256 settled1,,,,) = harness.getPositionAccounting(positionId);
         assertEq(settled0, 200e18, "delta-backed withdrawal should not reduce live settled under vault shortfall");
         assertEq(settled1, 200e18, "untouched lane should remain unchanged");
         assertEq(
@@ -569,7 +571,7 @@ contract VTSPositionLibOnMMSettleTest is VTSLibTestBase {
 
         assertFalse(rfsOpen, "RFS should stay closed for the immediate settleable withdrawal");
 
-        (,, uint256 settled0, uint256 settled1,,) = harness.getPositionAccounting(positionId);
+        (,, uint256 settled0, uint256 settled1,,,,) = harness.getPositionAccounting(positionId);
         assertEq(settled0, 60e18, "follow-on settle should consume delta before touching settled");
         assertEq(settled1, 60e18, "untouched lane should remain at commitment max");
         assertEq(harness.getUnderlyingDelta(underlyingCurrency0, owner), 0, "positive delta should be fully consumed");
@@ -595,7 +597,7 @@ contract VTSPositionLibOnMMSettleTest is VTSLibTestBase {
 
         assertFalse(rfsOpen, "inactive mixed settlement should not open RFS");
 
-        (,, uint256 settled0, uint256 settled1,,) = harness.getPositionAccounting(positionId);
+        (,, uint256 settled0, uint256 settled1,,,,) = harness.getPositionAccounting(positionId);
         assertEq(settled0, 50e18, "deposit lane should increase settled");
         assertEq(settled1, 200e18, "delta-backed withdrawal lane should not reduce settled");
         assertEq(harness.getUnderlyingDelta(underlyingCurrency0, owner), 0, "deposit lane should clear negative debt");
@@ -644,7 +646,7 @@ contract VTSPositionLibOnMMSettleTest is VTSLibTestBase {
         );
 
         assertFalse(rfsOpen, "deposit leg should refresh RFS before the withdrawal leg executes");
-        (,, uint256 settled0, uint256 settled1,,) = harness.getPositionAccounting(positionId);
+        (,, uint256 settled0, uint256 settled1,,,,) = harness.getPositionAccounting(positionId);
         assertEq(settled0, 50e18, "token0 deposit should close the previously-open RFS lane");
         assertEq(settled1, 200e18, "token1 delta-backed withdrawal should still avoid reducing settled");
         assertEq(harness.getUnderlyingDelta(underlyingCurrency0, owner), 0, "token0 deposit debt should be cleared");
@@ -694,7 +696,7 @@ contract VTSPositionLibOnMMSettleTest is VTSLibTestBase {
         // Should clamp to positionRequiredSettlementDelta
         assertEq(settlementDelta.amount0(), 50e18, "Seizing withdrawal0 clamped by currencyDelta");
         assertEq(settlementDelta.amount1(), 30e18, "Seizing withdrawal1 clamped by currencyDelta");
-        (,, uint256 settled0, uint256 settled1,,) = harness.getPositionAccounting(positionId);
+        (,, uint256 settled0, uint256 settled1,,,,) = harness.getPositionAccounting(positionId);
         assertEq(settled0, 100e18, "Seizing delta-backed withdrawal0 should not reduce settled");
         assertEq(settled1, 100e18, "Seizing delta-backed withdrawal1 should not reduce settled");
         assertEq(harness.getUnderlyingDelta(underlyingCurrency0, owner), 0, "token0 delta should be fully consumed");
@@ -724,7 +726,7 @@ contract VTSPositionLibOnMMSettleTest is VTSLibTestBase {
         // Should clamp to zero when no currencyDelta
         assertEq(settlementDelta.amount0(), 0, "Seizing withdrawal0 should be zero with no currencyDelta");
         assertEq(settlementDelta.amount1(), 0, "Seizing withdrawal1 should be zero with no currencyDelta");
-        (,, uint256 settled0, uint256 settled1,,) = harness.getPositionAccounting(positionId);
+        (,, uint256 settled0, uint256 settled1,,,,) = harness.getPositionAccounting(positionId);
         assertEq(settled0, 100e18, "Zero-cap seizing withdrawal0 should leave settled unchanged");
         assertEq(settled1, 100e18, "Zero-cap seizing withdrawal1 should leave settled unchanged");
     }
@@ -810,7 +812,8 @@ contract VTSPositionLibOnMMSettleTest is VTSLibTestBase {
         assertEq(settlementDelta.amount1(), -100e18, "settlementDelta1 should be total deposited");
 
         // Verify deficit is cleared and remainder went to settled
-        (,, uint256 settled0, uint256 settled1, uint256 def0, uint256 def1) = harness.getPositionAccounting(positionId);
+        (,, uint256 settled0, uint256 settled1, uint256 def0, uint256 def1,,) =
+            harness.getPositionAccounting(positionId);
         assertEq(def0, 0, "Deficit0 should be cleared");
         assertEq(def1, 0, "Deficit1 should be cleared");
         assertEq(settled0, 40e18, "Settled0 should be remainder after deficit");
@@ -833,18 +836,19 @@ contract VTSPositionLibOnMMSettleTest is VTSLibTestBase {
         (BalanceDelta settlementDelta,,) =
             harness.onMMSettle(manager, mockVault, positionId, lccCurrency0, lccCurrency1, delta, false, false);
 
-        // Token0: 30 covers deficit, 20 goes to settled (reaches max) = total 50
-        // Token1: 20 covers deficit, 30 goes to settled but clamped to 20 (reaches max) = total 40
+        // Token0: 30 covers deficit, 20 fills headroom → live settled reaches max; full 50 credit applied
+        // Token1: 20 covers deficit, 20 fills headroom, 10 deferred to overflow; full 50 credit applied
         assertEq(settlementDelta.amount0(), -50e18, "settlementDelta0 should be total consumed");
-        assertEq(
-            settlementDelta.amount1(), -40e18, "settlementDelta1 should be total consumed (clamped by commitmentMax)"
-        );
+        assertEq(settlementDelta.amount1(), -50e18, "settlementDelta1 should be total consumed");
 
-        (,, uint256 settled0, uint256 settled1, uint256 def0, uint256 def1) = harness.getPositionAccounting(positionId);
+        (,, uint256 settled0, uint256 settled1, uint256 def0, uint256 def1, uint256 ov0, uint256 ov1) =
+            harness.getPositionAccounting(positionId);
         assertEq(def0, 0, "Deficit0 should be cleared");
         assertEq(def1, 0, "Deficit1 should be cleared");
         assertEq(settled0, 100e18, "Settled0 should reach commitmentMax");
         assertEq(settled1, 100e18, "Settled1 should reach commitmentMax");
+        assertEq(ov0, 0, "Token0 lane has no overflow after netting");
+        assertEq(ov1, 10e18, "Token1 remainder above headroom is deferred");
     }
 
     /// @notice Regression: factory-wide produced credit from one vault namespace can fund delta-backed withdrawal
@@ -892,7 +896,7 @@ contract VTSPositionLibOnMMSettleTest is VTSLibTestBase {
         );
 
         assertEq(settlementDelta.amount0(), int128(int256(withdraw0)), "withdrawal should succeed against vault B");
-        (,, uint256 settled0,,,) = harness.getPositionAccounting(positionId);
+        (,, uint256 settled0,,,,,) = harness.getPositionAccounting(positionId);
         assertEq(settled0, 200e18, "delta-backed lane must not reduce live settled");
         assertEq(
             harness.getUnderlyingDelta(underlyingCurrency0, owner),
@@ -964,6 +968,39 @@ contract VTSPositionLibOnMMSettleTest is VTSLibTestBase {
         assertEq(
             harness.getUnderlyingDelta(underlyingCurrency0, owner), 0, "positive underlying delta should be consumed"
         );
+    }
+
+    /// @dev Regression (audit 28_2): stale `settled` with zero `commitmentMax` must not inflate `increaseLiquidityReserve`
+    ///      on settle-from-deltas; reserve credit must match economic effective-settled increase only.
+    function test_onMMSettle_fromDeltas_staleZeroCommitSplit_doesNotOverCreditLiquidityReserve() public {
+        _initMarket();
+        PositionId positionId = _registerActivePosition();
+        address owner = DEFAULT_OWNER;
+
+        harness.setCommitmentMax(positionId, 0, 0);
+        harness.setSettled(positionId, 100e18, 0);
+        harness.setSettledOverflow(positionId, 0, 0);
+        harness.setPoolTotalSettled(testPoolId, 100e18, 0);
+        harness.setPositionActive(positionId, false);
+
+        harness.setUnderlyingDelta(underlyingCurrency0, owner, 10e18);
+        harness.addMarketProducedCredit(mockVault, underlyingCurrency0, 10e18);
+        mockVault.setAvailableLiquidity(type(int128).max, type(int128).max);
+
+        address u0 = Currency.unwrap(underlyingCurrency0);
+        assertEq(mockVault.totalLiquidityReserveIncreases(u0), 0, "pre: no reserve credit");
+
+        BalanceDelta delta = toBalanceDelta(-10e18, 0);
+        harness.onMMSettle(manager, mockVault, positionId, lccCurrency0, lccCurrency1, delta, false, true);
+
+        assertEq(
+            mockVault.totalLiquidityReserveIncreases(u0),
+            10e18,
+            "reserve credit must equal economic deposit, not component-sum reshuffle"
+        );
+        (,, uint256 settled0,,,, uint256 ov0,) = harness.getPositionAccounting(positionId);
+        assertEq(settled0, 0, "live settled lane stays zero under zero commitmentMax");
+        assertEq(ov0, 110e18, "effective backing includes prior + deposit in overflow");
     }
 
     /// @notice Regression for audit finding #9: positive owner underlying credit cannot fund delta-backed withdrawals

@@ -353,7 +353,7 @@ contract LiquidityHubWrapTest is LiquidityHubTestBase {
 
         vm.startPrank(user1);
         underlyingAsset1.approve(address(liquidityHub), wrapAmount);
-        vm.expectRevert(abi.encodeWithSelector(Errors.DirectWrapToDexNotAllowed.selector, poolManager));
+        vm.expectRevert(abi.encodeWithSelector(Errors.MintToNotAllowedRecipient.selector, poolManager));
         liquidityHub.wrapTo(lccToken1, poolManager, wrapAmount);
         vm.stopPrank();
 
@@ -374,7 +374,7 @@ contract LiquidityHubWrapTest is LiquidityHubTestBase {
 
         vm.startPrank(user1);
         underlyingAsset1.approve(address(liquidityHub), wrapAmount);
-        vm.expectRevert(abi.encodeWithSelector(Errors.DirectWrapToDexNotAllowed.selector, poolManager));
+        vm.expectRevert(abi.encodeWithSelector(Errors.MintToNotAllowedRecipient.selector, poolManager));
         liquidityHub.wrapTo(address(underlyingAsset1), marketId1, poolManager, wrapAmount);
         vm.stopPrank();
 
@@ -392,7 +392,7 @@ contract LiquidityHubWrapTest is LiquidityHubTestBase {
 
         vm.startPrank(user1);
         ILCC(lccToken1).approve(address(liquidityHub), wrapAmount);
-        vm.expectRevert(abi.encodeWithSelector(Errors.DirectWrapToDexNotAllowed.selector, poolManager));
+        vm.expectRevert(abi.encodeWithSelector(Errors.MintToNotAllowedRecipient.selector, poolManager));
         liquidityHub.wrapWithTo(lccToken3, lccToken1, poolManager, wrapAmount);
         vm.stopPrank();
 
@@ -408,7 +408,7 @@ contract LiquidityHubWrapTest is LiquidityHubTestBase {
         _setDexBound(poolManager);
 
         vm.prank(proxyHook);
-        vm.expectRevert(abi.encodeWithSelector(Errors.DirectWrapToDexNotAllowed.selector, poolManager));
+        vm.expectRevert(abi.encodeWithSelector(Errors.MintToNotAllowedRecipient.selector, poolManager));
         liquidityHub.issue(lccToken1, poolManager, 100);
     }
 
@@ -659,7 +659,7 @@ contract LiquidityHubWrapTest is LiquidityHubTestBase {
         underlyingAsset1.mint(user1, amount);
         vm.startPrank(user1);
         underlyingAsset1.approve(address(liquidityHub), amount);
-        vm.expectRevert(abi.encodeWithSelector(Errors.DirectMintToExemptNotAllowed.selector, address(liquidityHub)));
+        vm.expectRevert(abi.encodeWithSelector(Errors.MintToNotAllowedRecipient.selector, address(liquidityHub)));
         liquidityHub.wrapTo(lccToken1, address(liquidityHub), amount);
         vm.stopPrank();
     }
@@ -669,8 +669,31 @@ contract LiquidityHubWrapTest is LiquidityHubTestBase {
         underlyingAsset1.mint(user1, amount);
         vm.startPrank(user1);
         underlyingAsset1.approve(address(liquidityHub), amount);
-        vm.expectRevert(abi.encodeWithSelector(Errors.DirectMintToExemptNotAllowed.selector, proxyHook));
+        vm.expectRevert(abi.encodeWithSelector(Errors.MintToNotAllowedRecipient.selector, proxyHook));
         liquidityHub.wrapTo(lccToken1, proxyHook, amount);
+        vm.stopPrank();
+    }
+
+    /// @dev User-facing mints must not target bucket-tracked protocol endpoints (e.g. factory); issuer paths remain separate.
+    function test_wrapTo_revertsWhenRecipientIsProtocolEndpoint_factory() public {
+        uint256 amount = 100;
+        underlyingAsset1.mint(user1, amount);
+        vm.startPrank(user1);
+        underlyingAsset1.approve(address(liquidityHub), amount);
+        vm.expectRevert(abi.encodeWithSelector(Errors.MintToNotAllowedRecipient.selector, factory));
+        liquidityHub.wrapTo(lccToken1, factory, amount);
+        vm.stopPrank();
+    }
+
+    function test_wrapWithTo_revertsWhenRecipientIsProtocolEndpoint_factory() public {
+        uint256 wrapAmount = 100;
+        (address lccToken3,) = _createSecondLCCPair();
+        _wrapDirectLCC(user1, lccToken1, wrapAmount);
+
+        vm.startPrank(user1);
+        ILCC(lccToken1).approve(address(liquidityHub), wrapAmount);
+        vm.expectRevert(abi.encodeWithSelector(Errors.MintToNotAllowedRecipient.selector, factory));
+        liquidityHub.wrapWithTo(lccToken3, lccToken1, factory, wrapAmount);
         vm.stopPrank();
     }
 }

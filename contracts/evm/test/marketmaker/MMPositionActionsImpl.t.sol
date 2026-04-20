@@ -62,8 +62,12 @@ contract MMPositionManagerActionsTest is MarketTestBase, MarketMakerTestBase {
         uint128 position2LiquidityBefore;
         uint256 position1Settled0Before;
         uint256 position1Settled1Before;
+        uint256 position1Overflow0Before;
+        uint256 position1Overflow1Before;
         uint256 position2SettledAmount0Before;
         uint256 position2SettledAmount1Before;
+        uint256 position2Overflow0Before;
+        uint256 position2Overflow1Before;
     }
 
     MMPositionManager internal positionManager;
@@ -1228,14 +1232,16 @@ contract MMPositionManagerActionsTest is MarketTestBase, MarketMakerTestBase {
             // make a settlement for the position over the required settlement amounts, so we can use the excess funds to increase the liquidity
             approveAndSettleUnderlyingToPosition(tokenId, positionIndex, settlementAmount, settlementAmount);
 
-            // approve underlying tokens for settlement to a newly minted position
-            _approveTokenForPositionManager(
-                address(lcc0.underlying()),
-                address(lcc1.underlying()),
-                address(positionManager),
-                settlementAmount,
-                settlementAmount
-            );
+            {
+                address lockerAddr = _batchLocker(tokenId);
+                // Overflow-aware paths can pull more principal than the legacy live-only cap on later batched steps
+                deal(address(lcc0.underlying()), lockerAddr, settlementAmount * 100);
+                deal(address(lcc1.underlying()), lockerAddr, settlementAmount * 100);
+                vm.startPrank(lockerAddr);
+                IERC20(address(lcc0.underlying())).approve(address(positionManager), type(uint256).max);
+                IERC20(address(lcc1.underlying())).approve(address(positionManager), type(uint256).max);
+                vm.stopPrank();
+            }
 
             MMA.PreparedAction[] memory actions = new MMA.PreparedAction[](6);
             // decrease the liquidity in the initial position with index 0
@@ -1341,6 +1347,8 @@ contract MMPositionManagerActionsTest is MarketTestBase, MarketMakerTestBase {
                 snap.position1LiquidityBefore = position1Before.liquidity;
                 (snap.position1Settled0Before, snap.position1Settled1Before) =
                     vtsOrchestrator.getPositionSettledAmounts(position1Id);
+                (snap.position1Overflow0Before, snap.position1Overflow1Before) =
+                    vtsOrchestrator.getPositionSettledOverflowAmounts(position1Id);
             }
             {
                 (Position memory position2Before, PositionId _position2Id) =
@@ -1350,6 +1358,8 @@ contract MMPositionManagerActionsTest is MarketTestBase, MarketMakerTestBase {
             }
             (snap.position2SettledAmount0Before, snap.position2SettledAmount1Before) =
                 vtsOrchestrator.getPositionSettledAmounts(snap.position2Id);
+            (snap.position2Overflow0Before, snap.position2Overflow1Before) =
+                vtsOrchestrator.getPositionSettledOverflowAmounts(snap.position2Id);
 
             // batch actions;
             // decrease the liquidity in the initial position with index 0
@@ -1403,22 +1413,39 @@ contract MMPositionManagerActionsTest is MarketTestBase, MarketMakerTestBase {
             );
         }
 
-        // Regression (SETTLE-03 / exported settlement): value routed to MMPM delta and into position2 must not also
-        // remain as live settled on the source position after decrease.
+        // Regression (SETTLE-03 / exported settlement): economic settled (`live + deferred overflow`) moved into
+        // position2 must not also remain on the source position after decrease.
         {
             (, PositionId position1Id) = positionManager.getPosition(snap.tokenId, positionIndex);
-            (uint256 s0, uint256 s1) = vtsOrchestrator.getPositionSettledAmounts(position1Id);
-            assertLe(s0, snap.position1Settled0Before, "source token0 settled should not increase");
-            assertLe(s1, snap.position1Settled1Before, "source token1 settled should not increase");
-
-            uint256 imported0 = position2SettledAmount0After - snap.position2SettledAmount0Before;
-            uint256 imported1 = position2SettledAmount1After - snap.position2SettledAmount1Before;
-            uint256 exported0 = snap.position1Settled0Before - s0;
-            uint256 exported1 = snap.position1Settled1Before - s1;
-
-            assertGe(exported0, imported0, "token0 import must be backed by token0 source export");
-            assertGe(exported1, imported1, "token1 import must be backed by token1 source export");
+            _assertEffectiveSettleExportCoversImport(
+                snap, position1Id, position2SettledAmount0After, position2SettledAmount1After
+            );
         }
+    }
+
+    /// @dev Isolated to avoid stack-too-deep in `testCanDecreaseAndSettleAnotherPositionFromDeltas`.
+    function _assertEffectiveSettleExportCoversImport(
+        IncreaseFromDeltasSnapshot memory snap,
+        PositionId position1Id,
+        uint256 position2SettledAmount0After,
+        uint256 position2SettledAmount1After
+    ) internal {
+        (uint256 s0, uint256 s1) = vtsOrchestrator.getPositionSettledAmounts(position1Id);
+        (uint256 o1a0, uint256 o1a1) = vtsOrchestrator.getPositionSettledOverflowAmounts(position1Id);
+        assertLe(s0, snap.position1Settled0Before, "source token0 settled should not increase");
+        assertLe(s1, snap.position1Settled1Before, "source token1 settled should not increase");
+
+        (uint256 o2a0, uint256 o2a1) = vtsOrchestrator.getPositionSettledOverflowAmounts(snap.position2Id);
+        uint256 imported0 = (position2SettledAmount0After + o2a0)
+            - (snap.position2SettledAmount0Before + snap.position2Overflow0Before);
+        uint256 imported1 = (position2SettledAmount1After + o2a1)
+            - (snap.position2SettledAmount1Before + snap.position2Overflow1Before);
+
+        uint256 exported0 = (snap.position1Settled0Before + snap.position1Overflow0Before) - (s0 + o1a0);
+        uint256 exported1 = (snap.position1Settled1Before + snap.position1Overflow1Before) - (s1 + o1a1);
+
+        assertGe(exported0, imported0, "token0 import must be backed by token0 source export (effective settled)");
+        assertGe(exported1, imported1, "token1 import must be backed by token1 source export (effective settled)");
     }
 
     function test_settleFromDeltas_payerIsUserTrue_sameMarket_preservesDurableReserve() public {
@@ -2123,7 +2150,11 @@ contract MMPositionManagerActionsTest is MarketTestBase, MarketMakerTestBase {
         actions[1] = MMA.prepareIncreaseFromDeltas(corePoolKey, tokenId, positionIndex, 0, 0, true);
 
         address lockerMX = _batchLocker(tokenId);
-        vm.expectRevert(abi.encodeWithSelector(Errors.MaximumAmountExceeded.selector, uint128(0), uint128(5_999_709)));
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                Errors.MaximumAmountExceeded.selector, uint128(0), uint128(999_999_994_600_261_889_212_273)
+            )
+        );
         _mmExec(lockerMX, actions);
     }
 
@@ -2150,7 +2181,11 @@ contract MMPositionManagerActionsTest is MarketTestBase, MarketMakerTestBase {
         actions[1] = MMA.prepareIncreaseFromDeltas(corePoolKey, tokenId, positionIndex, type(uint128).max, 0, true);
 
         address lockerMX1 = _batchLocker(tokenId);
-        vm.expectRevert(abi.encodeWithSelector(Errors.MaximumAmountExceeded.selector, uint128(0), uint128(5_999_709)));
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                Errors.MaximumAmountExceeded.selector, uint128(0), uint128(999_999_994_600_261_889_212_273)
+            )
+        );
         _mmExec(lockerMX1, actions);
     }
 
@@ -2178,7 +2213,11 @@ contract MMPositionManagerActionsTest is MarketTestBase, MarketMakerTestBase {
         );
 
         address lockerMX2 = _batchLocker(tokenId);
-        vm.expectRevert(abi.encodeWithSelector(Errors.MaximumAmountExceeded.selector, uint128(0), uint128(5_999_709)));
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                Errors.MaximumAmountExceeded.selector, uint128(0), uint128(999_999_994_600_261_889_212_273)
+            )
+        );
         _mmExec(lockerMX2, actions);
     }
 
@@ -2213,7 +2252,11 @@ contract MMPositionManagerActionsTest is MarketTestBase, MarketMakerTestBase {
         );
 
         address lockerMX3 = _batchLocker(tokenId);
-        vm.expectRevert(abi.encodeWithSelector(Errors.MaximumAmountExceeded.selector, uint128(0), uint128(5_999_709)));
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                Errors.MaximumAmountExceeded.selector, uint128(0), uint128(999_999_994_600_261_889_212_273)
+            )
+        );
         _mmExec(lockerMX3, actions);
     }
 

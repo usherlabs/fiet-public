@@ -21,6 +21,7 @@ import {
     VaultSettlementIntent,
     MarketVTSConfiguration,
     PositionAccounting,
+    PositionAccountingLib,
     TokenPairUint,
     TokenPairLib
 } from "../types/VTS.sol";
@@ -461,7 +462,8 @@ library VTSLifecycleLinkedLib {
 
         uint256 settledCapacity;
         if (!isActive) {
-            settledCapacity = s.positionAccounting[positionId].settled.get(tokenIndex);
+            PositionAccounting storage pa = s.positionAccounting[positionId];
+            settledCapacity = PositionAccountingLib.effectiveSettledLane(pa, tokenIndex);
         } else if (rfsLaneDelta < 0) {
             settledCapacity = LiquidityUtils.safeInt128ToUint256(rfsLaneDelta);
         }

@@ -108,7 +108,7 @@ forge test --match-test "test_recomputeCommitmentMax_matchesCalculatedMaxima_for
 
 3. **Assert Results**:
    ```solidity
-   (uint256 settled0,,,) = harness.getPositionAccounting(positionId);
+   (,, uint256 settled0, uint256 settled1,,, uint256 ov0, uint256 ov1) = harness.getPositionAccounting(positionId);
    assertEq(settled0, expectedValue, "Settled should match expected");
    ```
 

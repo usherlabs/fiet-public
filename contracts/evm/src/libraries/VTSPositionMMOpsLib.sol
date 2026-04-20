@@ -270,21 +270,26 @@ library VTSPositionMMOpsLib {
         }
         if (requestedAmount == 0) return (0, remainingRequiredSettlementDelta, 0);
 
-        (int256 totalApplied, int256 settledDeltaOnly) =
+        (int256 totalApplied, int256 settledDeltaOnly, int256 overflowDeltaOnly, uint256 effectiveSettledLaneIncrease) =
             VTSPositionLib._vUpdateSettlement(s, p.positionId, p.tokenIndex, requestedAmount.toInt256());
         if (totalApplied <= 0) return (0, remainingRequiredSettlementDelta, 0);
 
         uint256 creditConsumed = uint256(totalApplied);
         OwnerCurrencyDelta.accountDelta(p.underlyingCurrency, -creditConsumed.toInt128(), p.owner);
         settlementDelta = -creditConsumed.toInt128();
-        if (settledDeltaOnly > 0) {
-            settledIncrease = uint256(settledDeltaOnly);
+        // Reserve credit must track economic backing (`settled + settledOverflow`) on this lane, not the sum of
+        // positive per-component deltas (representation reshuffles can inflate that sum without extra backing).
+        uint256 backingLaneIncrease = 0;
+        if (settledDeltaOnly > 0) backingLaneIncrease += uint256(settledDeltaOnly);
+        if (overflowDeltaOnly > 0) backingLaneIncrease += uint256(overflowDeltaOnly);
+        if (effectiveSettledLaneIncrease > 0) {
+            settledIncrease = effectiveSettledLaneIncrease;
         }
         if (p.clampToRequiredSettlement) {
-            // MM in-hook backing: only the portion that increases `pa.settled` satisfies the deposit requirement.
+            // MM in-hook backing: increases to live `settled` or deferred `settledOverflow` satisfy deposit headroom.
             // Deficit / commitment-deficit cure consumes credit but must not over-clear `requiredSettlementDelta`.
-            if (settledDeltaOnly > 0) {
-                remainingRequiredSettlementDelta += uint256(settledDeltaOnly).toInt128();
+            if (backingLaneIncrease > 0) {
+                remainingRequiredSettlementDelta += backingLaneIncrease.toInt128();
             }
         }
     }

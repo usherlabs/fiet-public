@@ -144,7 +144,7 @@ contract LiquidityCommitmentCertificate is ERC20, ILCC {
         // Allowing directAmount > 0 to exempt would misalign `directSupply` with per-holder buckets and allow
         // exempt->non-protocol transfers to reclassify Domain A liquidity as market-derived without `prepareMarketLiquidity`.
         if (Bounds.isExempt(ILiquidityHub(hub).boundLevel(factory, to)) && directAmount > 0) {
-            revert Errors.DirectMintToExemptNotAllowed(to);
+            revert Errors.MintToNotAllowedRecipient(to);
         }
         _mint(to, amount);
         // Bucket bookkeeping is skipped only for bucket-exempt protocol endpoints.

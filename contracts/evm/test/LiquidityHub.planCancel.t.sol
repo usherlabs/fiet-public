@@ -11,6 +11,14 @@ import {Errors} from "../src/libraries/Errors.sol";
  * @dev Tests the planned cancellation mechanics used during LCC transfers
  */
 contract LiquidityHubPlanCancelTest is LiquidityHubTestBase {
+    /// @dev User-facing `wrap` cannot mint to protocol endpoints; seed factory balance via transfer from a holder.
+    function _seedWrappedLccOnFactory(address lccToken, uint256 amount) internal {
+        address holder = makeAddr("planCancelLccHolder");
+        _wrapDirectLCC(holder, lccToken, amount);
+        vm.prank(holder);
+        ILCC(lccToken).transfer(factory, amount);
+    }
+
     // ============ PLAN CANCEL TESTS ============
 
     /// @notice Tests that planCancel reverts when called by non-issuer
@@ -35,7 +43,7 @@ contract LiquidityHubPlanCancelTest is LiquidityHubTestBase {
         uint256 amount = 100;
 
         // Setup: Mint LCC to factory (protocol-bound) so it can transfer to user1
-        _wrapDirectLCC(factory, lccToken1, amount);
+        _seedWrappedLccOnFactory(lccToken1, amount);
 
         // Factory plans a cancel for when it transfers to user1
         vm.prank(vtsOrchestrator);
@@ -63,7 +71,7 @@ contract LiquidityHubPlanCancelTest is LiquidityHubTestBase {
         uint256 amount = 100;
 
         // Setup: Mint LCC to factory
-        _wrapDirectLCC(factory, lccToken1, amount);
+        _seedWrappedLccOnFactory(lccToken1, amount);
 
         // Factory plans a cancel for when it transfers to user2 (not user1)
         vm.prank(vtsOrchestrator);
@@ -115,7 +123,7 @@ contract LiquidityHubPlanCancelTest is LiquidityHubTestBase {
         uint256 queueAmount = 40; // 40 goes to queue, 60 gets canceled
 
         // Setup: Mint LCC to factory
-        _wrapDirectLCC(factory, lccToken1, principalAmount);
+        _seedWrappedLccOnFactory(lccToken1, principalAmount);
         _wrapMarketDerivedLCC(user2, lccToken1, queueAmount);
 
         // Factory plans a cancel with queue for when it transfers to user1
@@ -152,7 +160,7 @@ contract LiquidityHubPlanCancelTest is LiquidityHubTestBase {
         uint256 queueAmount = 100; // entire amount goes to queue
 
         // Setup: Mint LCC to factory
-        _wrapDirectLCC(factory, lccToken1, principalAmount);
+        _seedWrappedLccOnFactory(lccToken1, principalAmount);
         _wrapMarketDerivedLCC(user3, lccToken1, queueAmount);
 
         // Factory plans a cancel with queue where everything is queued
@@ -179,7 +187,7 @@ contract LiquidityHubPlanCancelTest is LiquidityHubTestBase {
         uint256 queueAmount = 0; // nothing queued, all burned
 
         // Setup: Mint LCC to factory
-        _wrapDirectLCC(factory, lccToken1, principalAmount);
+        _seedWrappedLccOnFactory(lccToken1, principalAmount);
 
         // Factory plans a cancel with zero queue
         vm.prank(vtsOrchestrator);
@@ -205,7 +213,7 @@ contract LiquidityHubPlanCancelTest is LiquidityHubTestBase {
         uint256 amount = 100;
 
         // Setup: Mint LCC to factory
-        _wrapDirectLCC(factory, lccToken1, amount);
+        _seedWrappedLccOnFactory(lccToken1, amount);
 
         // Factory plans a cancel in first transaction
         vm.prank(vtsOrchestrator);
@@ -235,7 +243,7 @@ contract LiquidityHubPlanCancelTest is LiquidityHubTestBase {
         uint256 amount2 = 75;
 
         // Setup: Mint LCC to factory
-        _wrapDirectLCC(factory, lccToken1, amount2);
+        _seedWrappedLccOnFactory(lccToken1, amount2);
 
         // First plan
         vm.prank(vtsOrchestrator);
@@ -263,7 +271,7 @@ contract LiquidityHubPlanCancelTest is LiquidityHubTestBase {
         uint256 queueAmount = 30;
 
         // Setup: Mint LCC to factory
-        _wrapDirectLCC(factory, lccToken1, principalAmount);
+        _seedWrappedLccOnFactory(lccToken1, principalAmount);
         _wrapMarketDerivedLCC(user2, lccToken1, queueAmount);
 
         // First: plan a simple cancel

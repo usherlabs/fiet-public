@@ -27,6 +27,8 @@ interface IVTSOrchestrator is IPausableVTS, IVTSCurrencyDelta, IVTSAdmin, IExtsl
         int128 settlementDelta1,
         uint256 settledToken0,
         uint256 settledToken1,
+        uint256 settledOverflowToken0,
+        uint256 settledOverflowToken1,
         bool isSeizing,
         bool rfsOpen
     );
@@ -57,7 +59,7 @@ interface IVTSOrchestrator is IPausableVTS, IVTSCurrencyDelta, IVTSAdmin, IExtsl
     /// @return expiresAt The expiration timestamp
     /// @return positionCount The count of positions in the commit
     /// @return activePositionCount The count of active positions in the commit
-    /// @return inactiveRemnantCount Inactive positions under this commit that still hold non-zero live `pa.settled` (blocks decommit)
+    /// @return inactiveRemnantCount Inactive positions under this commit that still hold non-zero live `pa.settled` or `pa.settledOverflow` (blocks decommit)
     function getCommit(uint256 commitId)
         external
         view
@@ -155,11 +157,17 @@ interface IVTSOrchestrator is IPausableVTS, IVTSCurrencyDelta, IVTSAdmin, IExtsl
     /// @return The position identifier
     function getPositionId(uint256 commitId, uint256 positionIndex) external view returns (PositionId);
 
-    /// @notice Get the settled amounts for a position
+    /// @notice Effective settled per lane: live `settled` plus `settledOverflow` (canonical economic backing)
     /// @param positionId The position identifier
-    /// @return amount0 Settled amount for token0
-    /// @return amount1 Settled amount for token1
+    /// @return amount0 Effective settled for token0
+    /// @return amount1 Effective settled for token1
     function getPositionSettledAmounts(PositionId positionId) external view returns (uint256 amount0, uint256 amount1);
+
+    /// @notice Deferred settled amounts above `commitmentMax` (economic backing still tracked; see `_settled` / RFS helpers)
+    function getPositionSettledOverflowAmounts(PositionId positionId)
+        external
+        view
+        returns (uint256 overflow0, uint256 overflow1);
 
     /// @notice Get the maximum commitment amounts for a position
     /// @param positionId The position identifier
@@ -245,7 +253,9 @@ interface IVTSOrchestrator is IPausableVTS, IVTSCurrencyDelta, IVTSAdmin, IExtsl
     ) external;
 
     /// @notice Settle a market maker position
-    /// @dev Called by MMPositionManager to settle a position, handling both normal settlement and seizure
+    /// @dev Called by MMPositionManager to settle a position, handling both normal settlement and seizure.
+    ///      Non-seizing settlement normally requires a live signal; withdrawal-only settlement on an inactive
+    ///      position is exempt so inactive `pa.settled` remnants remain drainable without renewal.
     /// @param factory The market factory namespace for caller-bound validation
     /// @param commitId The commit identifier
     /// @param positionIndex The position index within the commit

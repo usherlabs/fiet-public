@@ -35,7 +35,7 @@ When both lanes are open, each open lane may hold the same canonical episode tim
 This means the protocol has two related but distinct concepts:
 
 1. **Current economic state**
-   - What `VTSPositionLib.getRFS(...)` would compute right now from `settled`, deficits, commitment deficits, and current position state.
+   - What `VTSPositionLib.getRFS(...)` would compute right now from **effective** settled amounts (`pa.settled + pa.settledOverflow` per lane), deficits, commitment deficits, and current position state.
 
 2. **Stored checkpoint state**
    - What the protocol has most recently persisted into `s.positions[positionId].checkpoint`.
@@ -54,7 +54,9 @@ It performs a full state materialisation pipeline:
    - crystallises fee / deficit / inflow growth into position accounting so later reads use a consistent snapshot;
 
 2. optional `checkpointWithCommitment(...)`
-   - if `withCommitment=true`, recomputes `commitmentDeficit`, `commitmentDeficitSince`, and `commitmentDeficitBps`;
+   - if `withCommitment=true`, recomputes `commitmentDeficit`, `commitmentDeficitSince`, and `commitmentDeficitBps`
+     using USD backing from **effective** settled per lane (`pa.settled + pa.settledOverflow`, priced like issuance),
+     not live `settled` alone;
 
 3. `getRFS(...)`
    - computes the current live RFS delta from the unified post-settlement snapshot;

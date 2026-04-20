@@ -7,6 +7,7 @@ import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {
     VTSStorage,
     PositionAccounting,
+    PositionAccountingLib,
     TokenPairUint,
     TokenPairLib,
     VTSLifecycleContext,
@@ -148,8 +149,7 @@ library VTSCommitLib {
         PositionId positionId
     ) internal view returns (uint256 settledValue) {
         PositionAccounting storage pa = s.positionAccounting[positionId];
-        uint256 settled0 = pa.settled.get(0);
-        uint256 settled1 = pa.settled.get(1);
+        (uint256 settled0, uint256 settled1) = PositionAccountingLib.effectiveSettled(pa);
         settledValue = OracleUtils.lccPairValue(
             oracleHelper, Currency.unwrap(currency0), settled0, Currency.unwrap(currency1), settled1
         );
@@ -335,12 +335,9 @@ library VTSCommitLib {
             ctx.issuedUsd = OracleUtils.lccPairValue(
                 oracleHelper, Currency.unwrap(ctx.currency0), ctx.eff0, Currency.unwrap(ctx.currency1), ctx.eff1
             );
+            (uint256 eff0, uint256 eff1) = PositionAccountingLib.effectiveSettled(pa);
             ctx.settledUsd = OracleUtils.lccPairValue(
-                oracleHelper,
-                Currency.unwrap(ctx.currency0),
-                pa.settled.token0,
-                Currency.unwrap(ctx.currency1),
-                pa.settled.token1
+                oracleHelper, Currency.unwrap(ctx.currency0), eff0, Currency.unwrap(ctx.currency1), eff1
             );
             // If the stored signal has expired, treat it as having zero backing.
             // This ensures renewal is paramount: expired signals are not recognised as backing.

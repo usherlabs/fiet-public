@@ -149,6 +149,9 @@ struct PositionAccounting {
     TokenPairUint commitmentMax;
     // Settled amounts per token
     TokenPairUint settled;
+    /// @dev Deferred positive settlement when inflow would exceed `commitmentMax` on the live `settled` lane.
+    ///      Consumed before deficit accrual and migrated into `settled` when headroom reopens.
+    TokenPairUint settledOverflow;
     // Cumulative deficit per token (raw units)
     TokenPairUint cumulativeDeficit;
     // Deficit growth snapshots per token
@@ -164,6 +167,21 @@ struct PositionAccounting {
     uint16 commitmentDeficitBps;
     // Timestamp at which commitment deficit became non-zero per token (0 when token deficit is zero)
     TokenPairUint commitmentDeficitSince;
+}
+
+/// @title PositionAccountingLib
+/// @notice Read helpers for `PositionAccounting` (canonical economic quantities per position)
+library PositionAccountingLib {
+    /// @notice Effective settled per lane: live `settled` + `settledOverflow`
+    function effectiveSettled(PositionAccounting storage pa) internal view returns (uint256 eff0, uint256 eff1) {
+        eff0 = pa.settled.token0 + pa.settledOverflow.token0;
+        eff1 = pa.settled.token1 + pa.settledOverflow.token1;
+    }
+
+    /// @notice Effective settled for a single lane (`tokenIndex` 0 or 1)
+    function effectiveSettledLane(PositionAccounting storage pa, uint8 tokenIndex) internal view returns (uint256) {
+        return TokenPairLib.get(pa.settled, tokenIndex) + TokenPairLib.get(pa.settledOverflow, tokenIndex);
+    }
 }
 
 /// @notice Per-pool accounting data (mirrors VTSManager per-pool mappings)
