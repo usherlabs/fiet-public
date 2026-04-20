@@ -10,6 +10,7 @@ import {MockLiquidityHub} from "./_mocks/MockLiquidityHub.sol";
 import {ReactiveConstants} from "../src/libs/ReactiveConstants.sol";
 
 uint256 constant DEFAULT_MAX_DISPATCH_ITEMS = 20;
+uint256 constant RECEIVER_BATCH_SIZE_CAP = 30;
 
 contract MockSystemContract {
     function subscribe(uint256, address, uint256, uint256, uint256, uint256) external {}
@@ -92,6 +93,16 @@ contract HubRSCTest is Test {
 
         vm.expectRevert(abi.encodeWithSelector(HubRSC.InvalidConfig.selector));
         new HubRSC(DEFAULT_MAX_DISPATCH_ITEMS, originChainId, destinationChainId, liquidityHub, hubCallback, address(0));
+
+        vm.expectRevert(abi.encodeWithSelector(HubRSC.InvalidConfig.selector));
+        new HubRSC(
+            RECEIVER_BATCH_SIZE_CAP + 1,
+            originChainId,
+            destinationChainId,
+            liquidityHub,
+            hubCallback,
+            destinationReceiverContract
+        );
     }
 
     function _etchSystemContract() internal {

@@ -34,6 +34,7 @@ jobs:
         with:
           submodules: recursive
           token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 0
 
       - name: Install Foundry
         uses: foundry-rs/foundry-toolchain@v1
@@ -43,6 +44,16 @@ jobs:
       - name: Show Forge version
         run: forge --version
         working-directory: contracts/evm
+
+      - name: Detect EVM changes
+        if: github.event_name == 'pull_request'
+        id: evm_changes
+        run: |
+          if git diff --name-only "origin/${{ github.base_ref }}...HEAD" | grep -q '^contracts/evm/'; then
+            echo "evm_changed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "evm_changed=false" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Run Forge fmt
         run: forge fmt --check
@@ -111,7 +122,8 @@ jobs:
         id: test_remaining
 
       - name: Run Forge coverage
-        if: github.event_name == 'pull_request'
+        if: github.event_name == 'pull_request' &&
+          steps.evm_changes.outputs.evm_changed == 'true'
         id: coverage
         working-directory: contracts/evm
         run: |
@@ -187,7 +199,8 @@ jobs:
           echo "Note: Forge branch % vs mutation kill-rate — see contracts/evm/MUTATION_COVERAGE.md"
 
       - name: Generate coverage comment body
-        if: github.event_name == 'pull_request'
+        if: github.event_name == 'pull_request' &&
+          steps.evm_changes.outputs.evm_changed == 'true'
         id: comment_body
         working-directory: contracts/evm
         run: |
@@ -250,7 +263,8 @@ jobs:
           EOF
 
       - name: Post coverage comment on PR
-        if: github.event_name == 'pull_request'
+        if: github.event_name == 'pull_request' &&
+          steps.evm_changes.outputs.evm_changed == 'true'
         uses: mshick/add-pr-comment@v2
         with:
           message-path: contracts/evm/comment.md
@@ -258,6 +272,7 @@ jobs:
 
       - name: Fail if coverage is below threshold
         if: github.event_name == 'pull_request' &&
+          steps.evm_changes.outputs.evm_changed == 'true' &&
           steps.coverage.outputs.coverage_failed == 'true'
         run: |
           echo "❌ Coverage is below the configured threshold!"
