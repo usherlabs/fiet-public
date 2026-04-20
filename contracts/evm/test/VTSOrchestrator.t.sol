@@ -1325,6 +1325,52 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
         vtsOrchestrator.calcRFS(positionId, true);
     }
 
+    /// @notice E2E regression for permissionless `settlePositionGrowths` path dependence (finding #29_8):
+    /// many tiny exact-output swaps, each followed by growth settlement, must match one aggregated swap
+    /// plus a single settlement for the same total exact output, so fractional growth cannot be discarded
+    /// by checkpoint cadence alone.
+    function test_settlePositionGrowths_pathIndependent_manySmallSwapsVsOneAggregated() public {
+        _mockLccPrices(1e18, 1e18);
+        _mockSignalUsd(1e30);
+
+        uint256 snap = vm.snapshotState();
+
+        // Use `zeroForOne: true` (headroom toward MIN_SQRT from 1:1) and keep aggregate exact output small so
+        // chunked swaps plus per-swap fees still complete `n` times without hitting `ZERO_FOR_ONE_LIMIT`.
+        int256 totalExactOut = -int256(1e17);
+        uint256 n = 8;
+        int256 chunk = totalExactOut / int256(n);
+        bool zeroForOne = true;
+
+        (, PositionId positionId,,) = _createCommittedPosition();
+        bytes32 expectedId = PositionId.unwrap(positionId);
+
+        for (uint256 i = 0; i < n; i++) {
+            _swapCore(zeroForOne, chunk);
+            vtsOrchestrator.settlePositionGrowths(positionId);
+        }
+
+        (bool rfsOpenMany, BalanceDelta deltaMany) = vtsOrchestrator.calcRFS(positionId, false);
+        (uint256 cum0Many, uint256 cum1Many) = _cumulativeDeficit(positionId);
+
+        assertTrue(vm.revertToState(snap), "revert to pre-branch snapshot");
+
+        (, PositionId positionIdB,,) = _createCommittedPosition();
+        assertEq(PositionId.unwrap(positionIdB), expectedId, "PositionId should be deterministic across branches");
+
+        _swapCore(zeroForOne, totalExactOut);
+        vtsOrchestrator.settlePositionGrowths(positionIdB);
+
+        (bool rfsOpenOne, BalanceDelta deltaOne) = vtsOrchestrator.calcRFS(positionIdB, false);
+        (uint256 cum0One, uint256 cum1One) = _cumulativeDeficit(positionIdB);
+
+        assertEq(cum0Many, cum0One, "cumulativeDeficit token0 path-independent");
+        assertEq(cum1Many, cum1One, "cumulativeDeficit token1 path-independent");
+        assertEq(rfsOpenMany, rfsOpenOne, "RFS open flag path-independent");
+        assertEq(deltaMany.amount0(), deltaOne.amount0(), "calcRFS delta0 path-independent");
+        assertEq(deltaMany.amount1(), deltaOne.amount1(), "calcRFS delta1 path-independent");
+    }
+
     function test_revert_calcRFS_whenInvalidPosition() public {
         PositionId invalidId = PositionId.wrap(bytes32(uint256(999)));
         vm.expectRevert(abi.encodeWithSelector(Errors.InvalidPosition.selector, 0, 0, invalidId));
