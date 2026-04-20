@@ -668,26 +668,32 @@ being an informal “should”.
 
 - **Statement**: For MM liquidity increases that settle protocol credit inside `processMMOperations` (in-hook path with
   `clampToRequiredSettlement`), `_updateSettlement` / `_vUpdateSettlement` may apply a single positive deposit amount across
-  `cumulativeDeficit`, `commitmentDeficit`, and `pa.settled` in the usual netting order. The portion of
-  protocol credit that cures deficits without increasing `pa.settled` must still be debited from positive underlying
-  delta (full economic consumption), but it must **not** be treated as having satisfied the MM add deposit requirement
-  encoded in `requiredSettlementDelta`. Only the actual `pa.settled` lane delta may reduce that remainder before the
-  post-hook underlying settlement step.
+  `cumulativeDeficit`, `commitmentDeficit`, and effective settled (`pa.settled + pa.settledOverflow`, split canonically vs
+  `commitmentMax`) in the usual netting order. The portion of protocol credit that cures deficits **without** increasing
+  effective settled on that lane must still be debited from positive underlying delta (full economic consumption), but it
+  must **not** be treated as having satisfied the MM add deposit shortfall encoded in `requiredSettlementDelta`.
+  That shortfall is computed in `_touchExistingIncrease` against **effective** settled (not live `pa.settled` alone), so
+  increases that land in `pa.settledOverflow` still count toward closing the obligation.
 - **Protocol rule**:
-  - **Credit consumption** follows total applied amount from settlement (`totalApplied`): deficit cure + settled increase
-    (and pool accounting on the cumulative-deficit leg) stays internally consistent.
-  - **Requirement bookkeeping** for MM add backing vs the live negative `requiredSettlementDelta` advances only by the
-    settled leg (`settledDeltaOnly`), so a position cannot skip posting the still-outstanding deposit obligation merely
-    because credit first cleared `cumulativeDeficit` / `commitmentDeficit`.
+  - **Credit consumption** follows total applied amount from settlement (`totalApplied`): deficit cure + effective-settled
+    movement (and pool accounting on the cumulative-deficit leg) stays internally consistent.
+  - **Requirement bookkeeping** for MM add backing vs the live negative `requiredSettlementDelta` advances only when the
+    in-hook deposit slice increases **effective** settled on the lane (live `settled` and/or `settledOverflow`). Under
+    `clampToRequiredSettlement`, the implementation advances the remainder by the sum of **positive** per-lane deltas on
+    `pa.settled` and `pa.settledOverflow` after the settlement step (each positive component reflects additional deferred
+    or live backing). **Vault reserve** crediting for the same protocol-credit path uses `effectiveSettledLaneIncrease`
+    returned from `_vUpdateSettlement` so representation-only reshuffles cannot inflate `marketLiquidityReserves` without a
+    matching economic effective-settled increase (see finding 28_2).
 - **Enforced by**:
-  - `src/libraries/VTSPositionLib.sol::_vUpdateSettlement` (returns both `totalApplied` and `next - cur` on `pa.settled`)
+  - `src/libraries/VTSPositionLib.sol::_touchExistingIncrease` (MM `requiredSettlementDelta` vs **effective** settled)
+  - `src/libraries/VTSPositionLib.sol::_vUpdateSettlement` (returns `totalApplied`, per-lane deltas, and `effectiveSettledLaneIncrease`)
   - `src/libraries/VTSPositionMMOpsLib.sol::_consumePositiveUnderlyingDeltaForSettlementLane` when `clampToRequiredSettlement`
     is true (MM in-hook settlement only; `onMMSettle` settle-from-deltas keeps `clampToRequiredSettlement = false`).
 - **Regression tests**:
   - `test/libraries/VTSPositionLib.mutation.unit.t.sol`:
-    - `test_touchPosition_mmIncrease_cumulativeDeficit_doesNotOverClearRequiredSettlement`
-    - `test_touchPosition_mmIncrease_cumulativeDeficit_surplusProtocolCredit_preservesShortfallAndSurplus`
-    - `test_touchPosition_mmIncrease_mixedLane_cumulativeDeficitToken0_exactToken1`
+    - `test_trackCommitment_zeroLiquidity_canonicalisesStaleLiveSettledIntoOverflow`
+  - `test/libraries/VTSPositionLib.onMMSettle.t.sol`:
+    - `test_onMMSettle_fromDeltas_staleZeroCommitSplit_doesNotOverCreditLiquidityReserve`
 
 ### SEIZE-01: Seizability is token-lane scoped and aggregated at position level
 

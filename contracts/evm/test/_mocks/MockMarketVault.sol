@@ -19,6 +19,8 @@ contract MockCanonicalVaultRef {
 contract MockMarketVault is IMarketVault {
     BalanceDelta public availableLiquidity;
     mapping(Currency => uint256) public balances;
+    /// @dev Cumulative amounts passed to `increaseLiquidityReserve` (for settlement / reserve regression tests).
+    mapping(address => uint256) public totalLiquidityReserveIncreases;
     address internal immutable canonical;
 
     /// @param canonicalOverride If zero, deploys `MockCanonicalVaultRef` with `marketFactory == address(this)` (legacy
@@ -112,6 +114,9 @@ contract MockMarketVault is IMarketVault {
 
     function decreaseLiquidityReserve(Currency, uint256) external pure {}
 
-    function increaseLiquidityReserve(Currency, uint256) external pure {}
+    function increaseLiquidityReserve(Currency currency, uint256 amount) external {
+        if (amount == 0) return;
+        totalLiquidityReserveIncreases[Currency.unwrap(currency)] += amount;
+    }
 }
 
