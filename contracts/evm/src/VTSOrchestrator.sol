@@ -408,7 +408,7 @@ contract VTSOrchestrator is
     /// @inheritdoc IVTSOrchestrator
     function getPositionSettledAmounts(PositionId positionId) external view returns (uint256 amount0, uint256 amount1) {
         PositionAccounting storage pa = s.positionAccounting[positionId];
-        return (pa.settled.token0, pa.settled.token1);
+        return PositionAccountingLib.effectiveSettled(pa);
     }
 
     /// @inheritdoc IVTSOrchestrator
@@ -419,16 +419,6 @@ contract VTSOrchestrator is
     {
         PositionAccounting storage pa = s.positionAccounting[positionId];
         return (pa.settledOverflow.token0, pa.settledOverflow.token1);
-    }
-
-    /// @inheritdoc IVTSOrchestrator
-    function getPositionEffectiveSettledAmounts(PositionId positionId)
-        external
-        view
-        returns (uint256 effective0, uint256 effective1)
-    {
-        PositionAccounting storage pa = s.positionAccounting[positionId];
-        return PositionAccountingLib.effectiveSettled(pa);
     }
 
     /// @inheritdoc IVTSOrchestrator

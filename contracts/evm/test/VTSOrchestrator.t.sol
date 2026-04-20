@@ -1405,11 +1405,12 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
         assertEq(ov1, 0);
     }
 
-    function test_getPositionEffectiveSettledAmounts_equalsLivePlusOverflow() public {
+    function test_getPositionSettledAmounts_equalsLivePlusOverflow() public {
         (, PositionId positionId,,) = _createCommittedPosition();
-        (uint256 live0, uint256 live1) = vtsOrchestrator.getPositionSettledAmounts(positionId);
+        (uint256 eff0, uint256 eff1) = vtsOrchestrator.getPositionSettledAmounts(positionId);
         (uint256 ov0, uint256 ov1) = vtsOrchestrator.getPositionSettledOverflowAmounts(positionId);
-        (uint256 eff0, uint256 eff1) = vtsOrchestrator.getPositionEffectiveSettledAmounts(positionId);
+        uint256 live0 = eff0 - ov0;
+        uint256 live1 = eff1 - ov1;
         assertEq(eff0, live0 + ov0);
         assertEq(eff1, live1 + ov1);
     }

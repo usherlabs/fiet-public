@@ -6,14 +6,14 @@ pragma solidity ^0.8.26;
  *
  * Goal:
  * - Provide a compact “happy path” journey for a single MMPositionManager position:
- *   commit → mint → settle → swaps → poke (realise fees) → close RFS → burn/decommit → unwrap.
+ *   commit → mint → settle → swaps → poke (realise fees) → close RFS → burn → drain inactive surplus → decommit → unwrap.
  *
  * High-level flow:
  * - Deploy full stack + create a market (core LCC/LCC pool) with a non-zero fee.
  * - Create one MM position (commit → mint → settle).
  * - Execute swaps in both directions to generate fee growth.
  * - Poke the position (no-op increase + take) to materialise any pending fee adjustments as LCC balances.
- * - Close RFS (if open), then burn + settle-from-deltas + decommit, and take any remaining credits.
+ * - Close RFS (if open), then burn + settle-from-deltas, drain inactive economic remnant if any, decommit, and take credits.
  * - Unwrap any remaining LCCs back to underlyings and assert 1:1 deltas.
  *
  * Env:

@@ -27,9 +27,9 @@ being an informal “should”.
   - **`settled`**: live settled amount per lane, **capped** by `commitmentMax` for that lane.
   - **`settledOverflow`**: deferred positive settlement that does not fit under the current `commitmentMax` headroom
     (economic value is still tracked; it is not discarded). Together they form **effective settled** per lane for
-    RFS, commitment-backing USD checks, and pool `totalSettled` aggregates. Off-chain readers that only query
-    `getPositionSettledAmounts` see **live** `settled`; prefer `getPositionEffectiveSettledAmounts`, or sum
-    `getPositionSettledAmounts` + `getPositionSettledOverflowAmounts`, for economics.
+    RFS, commitment-backing USD checks, and pool `totalSettled` aggregates. `getPositionSettledAmounts` returns **effective**
+    settled (live + overflow). For the lane split, use `getPositionSettledOverflowAmounts` and subtract from effective per lane,
+    or read live `pa.settled` via internal storage layouts off-chain only when appropriate.
 
 ## Supported underlying asset model
 
@@ -539,7 +539,7 @@ being an informal “should”.
   reason over this effective total; pool-wide **`totalSettled`** deltas include both lanes.
 - **Enforced by**: `src/libraries/VTSPositionLib.sol` (`_vUpdateSettlementCore`, `_canonicalSettledSplitForLane`, `getRFS`,
   excess paths), `src/libraries/VTSCommitLib.sol` (`_checkpointWithCommitment`, `_settledValueForPosition`),
-  `IVTSOrchestrator.getPositionSettledOverflowAmounts`, `IVTSOrchestrator.getPositionEffectiveSettledAmounts`, and
+  `IVTSOrchestrator.getPositionSettledAmounts`, `IVTSOrchestrator.getPositionSettledOverflowAmounts`, and
   `PositionSettled` event fields for observability.
 
 ### Policy reference: seizure economics (amendment 2026-04-19)

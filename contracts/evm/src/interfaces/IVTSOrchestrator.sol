@@ -157,11 +157,10 @@ interface IVTSOrchestrator is IPausableVTS, IVTSCurrencyDelta, IVTSAdmin, IExtsl
     /// @return The position identifier
     function getPositionId(uint256 commitId, uint256 positionIndex) external view returns (PositionId);
 
-    /// @notice Get the live settled amounts for a position (bounded by `commitmentMax` per lane)
-    /// @dev For economic backing and RFS, prefer {getPositionEffectiveSettledAmounts} or sum live + overflow off-chain.
+    /// @notice Effective settled per lane: live `settled` plus `settledOverflow` (canonical economic backing)
     /// @param positionId The position identifier
-    /// @return amount0 Settled amount for token0
-    /// @return amount1 Settled amount for token1
+    /// @return amount0 Effective settled for token0
+    /// @return amount1 Effective settled for token1
     function getPositionSettledAmounts(PositionId positionId) external view returns (uint256 amount0, uint256 amount1);
 
     /// @notice Deferred settled amounts above `commitmentMax` (economic backing still tracked; see `_settled` / RFS helpers)
@@ -169,15 +168,6 @@ interface IVTSOrchestrator is IPausableVTS, IVTSCurrencyDelta, IVTSAdmin, IExtsl
         external
         view
         returns (uint256 overflow0, uint256 overflow1);
-
-    /// @notice Effective settled per lane: live `settled` plus `settledOverflow` (canonical economic backing for the position)
-    /// @param positionId The position identifier
-    /// @return effective0 token0 effective settled
-    /// @return effective1 token1 effective settled
-    function getPositionEffectiveSettledAmounts(PositionId positionId)
-        external
-        view
-        returns (uint256 effective0, uint256 effective1);
 
     /// @notice Get the maximum commitment amounts for a position
     /// @param positionId The position identifier
