@@ -73,6 +73,8 @@ contract MarketMakerWideOrDeepStressE2E is MME2EBase {
             }
         }
 
-        require(haveBaseline[0] && haveBaseline[1], "e2e: missing tightTiny baseline rows for both buffer modes");
+        for (uint256 j = 0; j < buffers.length; j++) {
+            require(haveBaseline[j], "e2e: missing tightTiny baseline row for a buffer mode");
+        }
     }
 }
