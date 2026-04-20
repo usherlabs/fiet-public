@@ -15,6 +15,7 @@ import {PositionModificationHookDataLib, PositionLibrary} from "../src/types/Pos
 import {ModifyLiquidityParams, SwapParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
 import {MarketVTSConfiguration} from "../src/types/VTS.sol";
 import {VTSConfigs} from "../src/libraries/VTSConfigs.sol";
+import {LiquidityUtils} from "../src/libraries/LiquidityUtils.sol";
 import {Errors} from "../src/libraries/Errors.sol";
 import {StateLibrary} from "v4-periphery/lib/v4-core/src/libraries/StateLibrary.sol";
 import {IPoolManager} from "v4-periphery/lib/v4-core/src/interfaces/IPoolManager.sol";
@@ -2542,6 +2543,20 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
 
         vm.prank(vtsOrchestrator.owner());
         vm.expectRevert(abi.encodeWithSelector(Errors.InvalidVTSConfiguration.selector, 10, 9));
+        vtsOrchestrator.setMarketVTSConfiguration(pid, cfg);
+    }
+
+    function test_revert_setMarketVTSConfiguration_whenBaseVTSRateExceedsBpsDenominator() public {
+        PoolId pid = corePoolKey.toId();
+        MarketVTSConfiguration memory cfg = vtsOrchestrator.getMarketVTSConfiguration(pid);
+        cfg.token0.baseVTSRate = LiquidityUtils.BPS_DENOMINATOR + 1;
+
+        vm.prank(vtsOrchestrator.owner());
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                Errors.InvalidAmount.selector, cfg.token0.baseVTSRate, LiquidityUtils.BPS_DENOMINATOR
+            )
+        );
         vtsOrchestrator.setMarketVTSConfiguration(pid, cfg);
     }
 

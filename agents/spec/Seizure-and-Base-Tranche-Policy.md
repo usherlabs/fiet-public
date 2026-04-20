@@ -58,7 +58,7 @@ A maker who is overdue places at least a **base tranche** of their position at r
 
 ## Implementation note (non-normative)
 
-On-chain sizing uses `VTSLifecycleLinkedLib._calcSeizure` with basis-point helpers in `LiquidityUtils` (`exposureBps`, `settleOfRfsBps`, `seizedUnitsFromBps`). `_executeMMSettleFromParams` passes a **pre-deposit** `BalanceDelta` snapshot of RfS (`R_pre`) into `_calcSeizure`; that snapshot is taken from `getRFS`, which reasons over **effective** settled (`live settled + settledOverflow`) per lane alongside deficits. Per-lane exposure and `φ` use `R_pre` denominators, and a **full RfS close** in the same transaction still produces a policy-consistent non-zero seizure when the snapshot showed overdue amounts to cure. Residual-threshold promotion and position-wide caps match the implementation in `INVARIANTS.md` (**SETTLE-02**, **SEIZE-01**).
+On-chain sizing uses `VTSLifecycleLinkedLib._calcSeizure` with a **pre-deposit** `BalanceDelta` snapshot of RfS (`R_pre`) passed in from the MM settle path (same ordering as `getRFS`). That snapshot reasons over **effective** settled (`live settled + settledOverflow`) per lane alongside deficits. Per lane, cured amount is `S_eff = min(S_lane, R_pre)` and seized liquidity units are `floor(L · inner / denom)` from a **piecewise rational** (commitment zero, overdue vs cap, base binds, or proportional exposure) with **Q128 fractional carry** in `SeizureCarryQ128Lib` (`contracts/evm/src/libraries/SeizureCarryQ128Lib.sol`). `LiquidityUtils.exposureBps` / `settleOfRfsBps` / `seizedUnitsFromBps` are **not** used for seizure sizing. A **full RfS close** in the same transaction can still yield a policy-consistent non-zero seizure when the snapshot showed overdue amounts to cure. Residual-threshold promotion and position-wide caps match `INVARIANTS.md` (**SETTLE-02**, **SEIZE-01**).
 
 ---
 
@@ -69,3 +69,4 @@ On-chain sizing uses `VTSLifecycleLinkedLib._calcSeizure` with basis-point helpe
 | 2026-04-19 | Initial publication: canonical policy for base tranche, proportional cure, position-wide aggregation, and relationship to full RfS close. |
 | 2026-04-19 | Implementation note updated: on-chain `_calcSeizure` uses pre-intervention `R_pre` snapshot; full close no longer implies zero sizing. |
 | 2026-04-20 | Clarified `R_pre` is derived from `getRFS` / **effective** settled (live + `settledOverflow`) semantics. |
+| 2026-04-21 | Implementation note: seizure sizing uses `SeizureCarryQ128Lib` piecewise rational + carry; not `LiquidityUtils` bps product helpers. |

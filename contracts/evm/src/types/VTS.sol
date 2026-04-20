@@ -15,11 +15,10 @@ import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {ModifyLiquidityParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
 import {BalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
 import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
-import {FullMath} from "@uniswap/v4-core/src/libraries/FullMath.sol";
 import {FixedPoint128} from "v4-periphery/lib/v4-core/src/libraries/FixedPoint128.sol";
+import {CarryQ128, CarryQ128Lib} from "./Carry.sol";
 
-/// @dev Remainder modulo `FixedPoint128.Q128` for growth `mulDiv(dGrowth, liquidity, Q128)` carry.
-///      Stored value is always `< Q128` after each `accumulate` step.
+/// @dev Semantic alias for deficit/inflow growth carry (same representation as `CarryQ128`).
 type GrowthCarryQ128 is uint256;
 
 /// @title GrowthCarryQ128Lib
@@ -40,20 +39,37 @@ library GrowthCarryQ128Lib {
     }
 
     /// @notice Returns whole-token `add` attributed this step and updated carry (`< DENOM`).
-    /// @dev When `liquidity == 0`, `q=r=0`; carry may still cross a whole token from prior intervals.
     function accumulate(GrowthCarryQ128 carryIn, uint256 dGrowth, uint128 liquidity)
         public
         pure
         returns (uint256 add, GrowthCarryQ128 carryOut)
     {
-        uint256 L = uint256(liquidity);
-        uint256 q = L == 0 ? 0 : FullMath.mulDiv(dGrowth, L, DENOM);
-        uint256 r = L == 0 ? 0 : mulmod(dGrowth, L, DENOM);
-        uint256 sum = r + unwrap(carryIn);
-        unchecked {
-            add = q + (sum / DENOM);
-        }
-        carryOut = wrap(sum % DENOM);
+        CarryQ128 cOut;
+        (add, cOut) = CarryQ128Lib.accumulateGrowth(CarryQ128.wrap(GrowthCarryQ128.unwrap(carryIn)), dGrowth, liquidity);
+        carryOut = GrowthCarryQ128.wrap(CarryQ128.unwrap(cOut));
+    }
+}
+
+/// @notice Per-token pair of Q128 seizure liquidity carries (one per RFS lane).
+struct TokenPairSeizureCarryQ128 {
+    CarryQ128 token0;
+    CarryQ128 token1;
+}
+
+/// @title TokenPairSeizureCarryQ128Lib
+library TokenPairSeizureCarryQ128Lib {
+    function get(TokenPairSeizureCarryQ128 storage self, uint8 tokenIndex) internal view returns (CarryQ128) {
+        return tokenIndex == 0 ? self.token0 : self.token1;
+    }
+
+    function set(TokenPairSeizureCarryQ128 storage self, uint8 tokenIndex, CarryQ128 value) internal {
+        if (tokenIndex == 0) self.token0 = value;
+        else self.token1 = value;
+    }
+
+    function clear(TokenPairSeizureCarryQ128 storage self) internal {
+        self.token0 = CarryQ128.wrap(0);
+        self.token1 = CarryQ128.wrap(0);
     }
 }
 
@@ -236,6 +252,9 @@ struct PositionAccounting {
     TokenPairGrowthCarryQ128 deficitGrowthCarry;
     /// @dev Q128 fractional remainder carry for inflow growth settlement; cleared on inflow snapshot rebase.
     TokenPairGrowthCarryQ128 inflowGrowthCarry;
+    /// @dev Q128 fractional remainder carry for seizure liquidity sizing per lane; path-independent across repeated
+    ///      guarantor interventions. Cleared when position liquidity reaches zero (`_trackCommitment`).
+    TokenPairSeizureCarryQ128 seizureLiquidityCarry;
 }
 
 /// @title PositionAccountingLib
