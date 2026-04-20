@@ -50,4 +50,3 @@ contract DeployE2E is DeployFullStackBase {
         console.log("CoreHook:", stack.contracts.coreHook);
     }
 }
-

@@ -23,16 +23,21 @@ import {IMarketVault} from "../../../src/interfaces/IMarketVault.sol";
 import {ILiquidityHub} from "../../../src/interfaces/ILiquidityHub.sol";
 import {IOracleHelper} from "../../../src/interfaces/IOracleHelper.sol";
 
-/// @notice Minimal Echidna-oriented harness that avoids calling `public`/`external` functions on `VTSPositionLib`.
-///         This prevents linked-library DELEGATECALLs that cause Echidna/HEVM to attempt RPC bytecode fetches.
-contract VTSPositionLibEchidnaHarness {
-    VTSStorage internal s;
-
-    constructor() {
-        // VTSPositionLib must already be deployed at the EchidnaLinkedLibs address before
-        // this harness is constructed. Callers should call EchidnaLinkedLibs.deployVTSPositionLib()
-        // before `new VTSPositionLibEchidnaHarness()`.
+/// @notice Minimal fuzz-oriented harness that avoids calling `public`/`external` functions on `VTSPositionLib`.
+/// @dev Keeps the Medusa-facing shape while targeting the fee-less VTS library signatures.
+contract VTSPositionLibFuzzHarness {
+    /// @dev Bundles `onMMSettle` calldata so non-IR builds do not hit stack-too-deep in the harness.
+    struct OnMMSettleInput {
+        IPoolManager poolManager;
+        IMarketVault vault;
+        PositionId positionId;
+        Currency lccCurrency0;
+        Currency lccCurrency1;
+        BalanceDelta delta;
+        bool isSeizing;
+        bool fromDeltas;
     }
+    VTSStorage internal s;
 
     // -------------------------------------------------------------------------
     // Setup / internal-library calls (safe: internal functions are inlined)
@@ -149,7 +154,7 @@ contract VTSPositionLibEchidnaHarness {
     // -------------------------------------------------------------------------
 
     function getRFS(PositionId positionId) external view returns (bool rfsOpen, BalanceDelta delta) {
-        // NOTE: This is safe in Echidna because `getRFS` takes a `VTSStorage storage` pointer,
+        // NOTE: This is safe in Medusa because `getRFS` takes a `VTSStorage storage` pointer,
         // so the compiler inlines it (no linked-library DELEGATECALL).
         return VTSPositionLib.getRFS(s, positionId);
     }
@@ -158,28 +163,21 @@ contract VTSPositionLibEchidnaHarness {
     // MM settle entrypoint (`VTSLifecycleLinkedLib._executeMMSettleFromParams`)
     // -------------------------------------------------------------------------
 
-    function onMMSettle(
-        IPoolManager poolManager,
-        IMarketVault vault,
-        PositionId positionId,
-        Currency lccCurrency0,
-        Currency lccCurrency1,
-        BalanceDelta delta,
-        bool isSeizing,
-        bool fromDeltas
-    ) external returns (BalanceDelta settlementDelta, bool rfsOpen, uint256 seizedLiquidityUnits) {
-        Position memory pos = s.positions[positionId];
-        if (pos.owner == address(0)) revert("VTSPositionLib: Invalid position");
+    function onMMSettle(OnMMSettleInput calldata c)
+        external
+        returns (BalanceDelta settlementDelta, bool rfsOpen, uint256 seizedLiquidityUnits)
+    {
+        if (s.positions[c.positionId].owner == address(0)) revert("VTSPositionLib: Invalid position");
 
         SettleParams memory p;
-        p.vault = vault;
-        p.positionId = positionId;
-        p.lccCurrency0 = lccCurrency0;
-        p.lccCurrency1 = lccCurrency1;
-        p.delta = delta;
-        p.isSeizing = isSeizing;
-        p.fromDeltas = fromDeltas;
-        SettleResult memory result = VTSLifecycleLinkedLib._executeMMSettleFromParams(s, poolManager, p);
+        p.vault = c.vault;
+        p.positionId = c.positionId;
+        p.lccCurrency0 = c.lccCurrency0;
+        p.lccCurrency1 = c.lccCurrency1;
+        p.delta = c.delta;
+        p.isSeizing = c.isSeizing;
+        p.fromDeltas = c.fromDeltas;
+        SettleResult memory result = VTSLifecycleLinkedLib._executeMMSettleFromParams(s, c.poolManager, p);
         return (result.settlementDelta, result.rfsOpen, result.seizedLiquidityUnits);
     }
 
@@ -202,4 +200,3 @@ contract VTSPositionLibEchidnaHarness {
         });
     }
 }
-

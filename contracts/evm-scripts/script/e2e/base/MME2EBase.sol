@@ -122,7 +122,11 @@ abstract contract MME2EBase is E2EBase {
         snap.underlying = IERC20(underlying).balanceOf(owner);
     }
 
-    function _targetUnwrapAmount(uint256 requestedAmount, uint256 liquid, uint256 queued) internal pure returns (uint256) {
+    function _targetUnwrapAmount(uint256 requestedAmount, uint256 liquid, uint256 queued)
+        internal
+        pure
+        returns (uint256)
+    {
         uint256 unwrapHeadroom = liquid > queued ? (liquid - queued) : 0;
         if (requestedAmount == 0) return unwrapHeadroom;
         return requestedAmount > unwrapHeadroom ? unwrapHeadroom : requestedAmount;
@@ -136,6 +140,14 @@ abstract contract MME2EBase is E2EBase {
 
     /// @dev Fee “poke”: no-op increase (0) to touch the position, then TAKE both pool currencies to wallet.
     function _pokePosition(StandaloneMarket memory m, uint256 mmPk, uint256 commitId)
+        internal
+        returns (uint256 amount0, uint256 amount1)
+    {
+        return _pokePosition(m, mmPk, commitId, true);
+    }
+
+    /// @dev Some scenarios intentionally touch inactive / out-of-range MM positions, so zero realised LCC change can be valid.
+    function _pokePosition(StandaloneMarket memory m, uint256 mmPk, uint256 commitId, bool expectLccChange)
         internal
         returns (uint256 amount0, uint256 amount1)
     {
@@ -170,7 +182,7 @@ abstract contract MME2EBase is E2EBase {
 
         amount0 = lcc0After - lcc0Before;
         amount1 = lcc1After - lcc1Before;
-        require(amount0 > 0 || amount1 > 0, "poke: expected some LCC change");
+        if (expectLccChange) require(amount0 > 0 || amount1 > 0, "poke: expected some LCC change");
 
         console.log("OK: position poked");
         console.log("fee lcc0 taken:", amount0);
@@ -293,7 +305,7 @@ abstract contract MME2EBase is E2EBase {
         PoolKey memory key = _corePoolKey(m);
         IVTSOrchestrator vts = IVTSOrchestrator(m.stack.contracts.vtsOrchestrator);
 
-        (, , uint256 positionCount,,) = vts.getCommit(commitId);
+        (,, uint256 positionCount,,) = vts.getCommit(commitId);
         uint256 newIndex = positionCount;
 
         (uint256 settle0, uint256 settle1) =
@@ -305,7 +317,8 @@ abstract contract MME2EBase is E2EBase {
         IERC20(m.underlying0).approve(address(mmpm), settle0);
         IERC20(m.underlying1).approve(address(mmpm), settle1);
 
-        bytes memory actions = abi.encodePacked(bytes1(uint8(MMActions.MINT_POSITION)), bytes1(uint8(MMActions.SETTLE_POSITION)));
+        bytes memory actions =
+            abi.encodePacked(bytes1(uint8(MMActions.MINT_POSITION)), bytes1(uint8(MMActions.SETTLE_POSITION)));
         bytes[] memory params = new bytes[](2);
         params[0] = abi.encode(key, commitId, tickLower, tickUpper, uint256(liq));
         params[1] = abi.encode(key, commitId, newIndex, -int128(int256(settle0)), -int128(int256(settle1)), false);
@@ -400,7 +413,8 @@ abstract contract MME2EBase is E2EBase {
             uint256 settleIdx = mintIdx + 1;
             actions[mintIdx] = bytes1(uint8(MMActions.MINT_POSITION));
             actions[settleIdx] = bytes1(uint8(MMActions.SETTLE_POSITION));
-            params[mintIdx] = abi.encode(key, commitId, seeds[i].tickLower, seeds[i].tickUpper, uint256(seeds[i].liquidity));
+            params[mintIdx] =
+                abi.encode(key, commitId, seeds[i].tickLower, seeds[i].tickUpper, uint256(seeds[i].liquidity));
             params[settleIdx] =
                 abi.encode(key, commitId, i, -int128(int256(settle0[i])), -int128(int256(settle1[i])), false);
         }
@@ -436,7 +450,10 @@ abstract contract MME2EBase is E2EBase {
     ) internal {
         uint256 positionCount = positionIndices.length;
         require(positionCount > 0, "e2e seize: empty position set");
-        require(positionCount == amount0Caps.length && positionCount == amount1Caps.length, "e2e seize: array length mismatch");
+        require(
+            positionCount == amount0Caps.length && positionCount == amount1Caps.length,
+            "e2e seize: array length mismatch"
+        );
         address guarantor = vm.addr(guarantorPk);
         PoolKey memory key = _corePoolKey(m);
 
@@ -454,9 +471,8 @@ abstract contract MME2EBase is E2EBase {
         IERC20(m.underlying1).approve(address(m.stack.contracts.mmPositionManager), totalAmount1);
 
         MMPositionManager mmpm = MMPositionManager(payable(m.stack.contracts.mmPositionManager));
-        (bytes memory actions, bytes[] memory params) = _buildGuarantorMultiSeizeBatch(
-            key, commitId, positionIndices, amount0Caps, amount1Caps, guarantor
-        );
+        (bytes memory actions, bytes[] memory params) =
+            _buildGuarantorMultiSeizeBatch(key, commitId, positionIndices, amount0Caps, amount1Caps, guarantor);
         _executeMMActions(mmpm, actions, params, block.timestamp + 3600);
         vm.stopBroadcast();
     }
@@ -477,9 +493,8 @@ abstract contract MME2EBase is E2EBase {
             uint256 actionBase = 2 * i;
             actions[actionBase] = bytes1(uint8(MMActions.SEIZE_POSITION));
             actions[actionBase + 1] = bytes1(uint8(MMActions.SETTLE_POSITION_FROM_DELTAS));
-            params[actionBase] = _encodeSeizePositionParams(
-                key, commitId, positionIndices[i], amount0Caps[i], amount1Caps[i]
-            );
+            params[actionBase] =
+                _encodeSeizePositionParams(key, commitId, positionIndices[i], amount0Caps[i], amount1Caps[i]);
             params[actionBase + 1] = _encodeSettleFromDeltasParams(key, commitId, positionIndices[i]);
         }
         actions[actionCount - 2] = bytes1(uint8(MMActions.TAKE));
@@ -803,10 +818,7 @@ abstract contract MME2EBase is E2EBase {
         uint256 unwrapAmount,
         bool assertBalance,
         uint256 commitId
-    )
-        internal
-        returns (uint256 underlyingDelta)
-    {
+    ) internal returns (uint256 underlyingDelta) {
         address owner = vm.addr(mmPk);
         ILiquidityHub hub = ILiquidityHub(m.stack.contracts.liquidityHub);
         address underlying = ILCC(lcc).underlying();
@@ -852,10 +864,7 @@ abstract contract MME2EBase is E2EBase {
         uint256 commitId,
         uint256 unwrapAmount,
         bool assertBalance
-    )
-        internal
-        returns (uint256 underlying0Delta, uint256 underlying1Delta)
-    {
+    ) internal returns (uint256 underlying0Delta, uint256 underlying1Delta) {
         PoolKey memory corePoolKey = _corePoolKey(m);
 
         address lcc0 = Currency.unwrap(corePoolKey.currency0);
@@ -931,4 +940,3 @@ abstract contract MME2EBase is E2EBase {
         signalBytes = abi.encode(sig);
     }
 }
-

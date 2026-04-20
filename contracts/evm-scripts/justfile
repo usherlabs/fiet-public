@@ -752,7 +752,7 @@ e2e-market-maker:
         --rpc-url {{ rpc_url }} \
         {{ broadcast_flag }} -vvv
 
-# E2E: MMCoverage (two-MMs coverage + fee realisation exploration).
+# E2E: MMCoverage (fee-free multi-MM settlement / checkpoint / poke / exit path).
 e2e-mm-coverage:
     FOUNDRY_PROFILE={{ foundry_profile }} forge script {{ script_dir }}/e2e/MMCoverage.s.sol:MMCoverageE2E \
         --rpc-url {{ rpc_url }} \

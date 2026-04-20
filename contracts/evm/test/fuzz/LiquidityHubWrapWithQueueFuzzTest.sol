@@ -1,20 +1,18 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.26;
 
-import {LiquidityHub} from "../../src/LiquidityHub.sol";
+import {FuzzLiquidityHub} from "./harnesses/FuzzLiquidityHub.sol";
 import {LiquidityCommitmentCertificate} from "../../src/LCC.sol";
 import {MockOracleHelper} from "./mocks/MockOracleHelper.sol";
 import {MockERC20Transferable} from "./mocks/MockERC20Transferable.sol";
 import {Bounds} from "../../src/libraries/Bounds.sol";
-import {LCCFactoryLinkedLib} from "../../src/libraries/LCCFactoryLib.sol";
-import {LiquidityHubLinkedLib} from "../../src/libraries/LiquidityHubLinkedLib.sol";
 
 /// @notice Regression harness for wrapWith + queue/transfer semantics (Domain conversion).
 /// @dev This file is maintained as a targeted regression suite for queue interactions
 ///      around wrapWith and transfer flows. Canonical invariant coverage is under
 ///      `test/fuzz/invariants/*`.
-contract LiquidityHubWrapWithQueueEchidnaTest {
-    LiquidityHub internal hub;
+contract LiquidityHubWrapWithQueueFuzzTest {
+    FuzzLiquidityHub internal hub;
     LiquidityCommitmentCertificate internal lccNative;
     LiquidityCommitmentCertificate internal lccNative2;
 
@@ -49,34 +47,9 @@ contract LiquidityHubWrapWithQueueEchidnaTest {
         nativeLcc = LiquidityCommitmentCertificate(underlying0 == address(0) ? l0 : l1);
     }
 
-    function _deployLinkedLib() internal {
-        bytes32 saltLcc = keccak256("echidna.LCCFactoryLinkedLib");
-        bytes32 saltLh = keccak256("echidna.LiquidityHubLinkedLib");
-        bytes memory initLcc = type(LCCFactoryLinkedLib).creationCode;
-        bytes memory initLh = type(LiquidityHubLinkedLib).creationCode;
-        address expectedLcc = address(
-            uint160(uint256(keccak256(abi.encodePacked(bytes1(0xff), address(this), saltLcc, keccak256(initLcc)))))
-        );
-        address expectedLh = address(
-            uint160(uint256(keccak256(abi.encodePacked(bytes1(0xff), address(this), saltLh, keccak256(initLh)))))
-        );
-        address lcc;
-        address lhl;
-        assembly {
-            lcc := create2(0, add(initLcc, 0x20), mload(initLcc), saltLcc)
-            lhl := create2(0, add(initLh, 0x20), mload(initLh), saltLh)
-        }
-        require(lcc != address(0), "LCCFactoryLinkedLib deploy failed");
-        require(lhl != address(0), "LiquidityHubLinkedLib deploy failed");
-        require(lcc == expectedLcc, "LCCFactoryLinkedLib addr mismatch");
-        require(lhl == expectedLh, "LiquidityHubLinkedLib addr mismatch");
-    }
-
     constructor() {
-        _deployLinkedLib();
-
         MockOracleHelper oracleHelper = new MockOracleHelper(address(0xB0B));
-        hub = new LiquidityHub(address(oracleHelper), "Ether", "ETH", 18, address(0), address(this));
+        hub = new FuzzLiquidityHub(address(oracleHelper), "Ether", "ETH", 18, address(0), address(this));
 
         hub.setFactory(address(this), true);
         // Allow LCC transfers into the Hub (needed for wrapWith which pulls backing LCC via transferFrom).
@@ -211,10 +184,19 @@ contract LiquidityHubWrapWithQueueEchidnaTest {
         ok = ok && (hub.totalQueued(address(backing)) == remaining);
         ok = ok && (backing.totalSupply() + target.totalSupply() == sumSupplyBefore);
 
-        hub.processSettlementFor(address(backing), address(hub), remaining);
+        // With only direct reserve seeded in this harness, Hub settlement is a no-op because
+        // `processSettlementFor` clears Hub queues only against market-derived reserve.
+        // The regression we care about is that a later settlement attempt must not double-burn.
+        uint256 supplyBackingBeforeSettle = backing.totalSupply();
+        uint256 sumSupplyBeforeSettle = backing.totalSupply() + target.totalSupply();
+        uint256 queueBeforeSettle = hub.settleQueue(address(backing), address(hub));
+        uint256 totalQueuedBeforeSettle = hub.totalQueued(address(backing));
+        hub.processSettlementFor(address(backing), address(hub), amt);
 
-        ok = ok && (hub.settleQueue(address(backing), address(hub)) == 0);
-        ok = ok && (hub.totalQueued(address(backing)) == 0);
+        ok = ok && (hub.settleQueue(address(backing), address(hub)) == queueBeforeSettle);
+        ok = ok && (hub.totalQueued(address(backing)) == totalQueuedBeforeSettle);
+        ok = ok && (backing.totalSupply() == supplyBackingBeforeSettle);
+        ok = ok && (backing.totalSupply() + target.totalSupply() == sumSupplyBeforeSettle);
 
         wrapWithQueueChecked = true;
         lastWrapWithQueueOk = ok;
@@ -231,7 +213,7 @@ contract LiquidityHubWrapWithQueueEchidnaTest {
         uint256 totalQueued0 = hub.totalQueued(address(lccNative));
 
         hub.issue(address(lccNative), address(holder), total);
-        hub.setBoundLevel(address(holder), Bounds.BOUND_ENDPOINT);
+        // Keep the queue owner non-protocol so the transfer hits the non-protocol -> protocol annulment path.
 
         if (!holder.unwrapToQueue(address(hub), address(lccNative), q)) return;
 
@@ -274,25 +256,25 @@ contract LiquidityHubWrapWithQueueEchidnaTest {
 
     /// @dev WRAPWITH-CONS-01: wrapWith must conserve supply across LCCs and not fabricate Hub reserves.
     // forge-lint: disable-next-line(mixed-case-function)
-    function echidna_wrapWith_conserves() external view returns (bool) {
+    function fuzz_wrapWith_conserves() external view returns (bool) {
         return !wrapWithChecked || lastWrapWithOk;
     }
 
     /// @dev WRAPWITH-QUEUE-01: pre-existing Hub queues must not cause double-counting during wrapWith netting.
     // forge-lint: disable-next-line(mixed-case-function)
-    function echidna_wrapWith_queue_netting_no_double_burn() external view returns (bool) {
+    function fuzz_wrapWith_queue_netting_no_double_burn() external view returns (bool) {
         return !wrapWithQueueChecked || lastWrapWithQueueOk;
     }
 
     /// @dev LCC-02: queued settlement must be annulled on non-protocol -> protocol transfers.
     // forge-lint: disable-next-line(mixed-case-function)
-    function echidna_lcc02_annuls_queue_on_protocol_transfer() external view returns (bool) {
+    function fuzz_lcc02_annuls_queue_on_protocol_transfer() external view returns (bool) {
         return !lcc02Checked || lastLcc02Ok;
     }
 
     /// @dev HUB-05: reserves cannot be fabricated; reserve accounting must be <= actual Hub holdings.
     // forge-lint: disable-next-line(mixed-case-function)
-    function echidna_hub05_reserve_never_exceeds_hub_balance() external view returns (bool) {
+    function fuzz_hub05_reserve_never_exceeds_hub_balance() external view returns (bool) {
         uint256 reserve = hub.reserveOfUnderlying(address(lccNative));
         return reserve <= address(hub).balance;
     }

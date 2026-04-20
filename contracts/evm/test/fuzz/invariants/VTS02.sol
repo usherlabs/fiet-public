@@ -4,7 +4,7 @@ pragma solidity ^0.8.26;
 import {VTSSwapLibHarness} from "../../libraries/harnesses/VTSSwapLibHarness.sol";
 import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
 
-/// @notice Echidna harness for VTS-02: Tick-cross "outside flip" must preserve inside-growth queryability.
+/// @notice fuzz harness for VTS-02: Tick-cross "outside flip" must preserve inside-growth queryability.
 ///         On tick cross, outside growth must flip as outside := global - outside.
 ///         This explicitly sets (global, outside), flips once, and asserts the identity.
 contract VTS02 {
@@ -63,13 +63,13 @@ contract VTS02 {
     }
 
     // forge-lint: disable-next-line(mixed-case-function)
-    function echidna_vts_02_flip_identity() external view returns (bool) {
+    function fuzz_vts_02_flip_identity() external view returns (bool) {
         return !checked || lastOk;
     }
 
-    // Keep a second trivial property to avoid rare Echidna instability with single-property targets.
+    // Keep a second trivial property to avoid rare property-runner instability with single-property targets.
     // forge-lint: disable-next-line(mixed-case-function)
-    function echidna_vts_02_smoke() external pure returns (bool) {
+    function fuzz_vts_02_smoke() external pure returns (bool) {
         return true;
     }
 }

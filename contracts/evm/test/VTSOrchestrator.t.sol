@@ -2576,4 +2576,3 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
         if (delta.amount1() > 0) openMask |= 2;
     }
 }
-

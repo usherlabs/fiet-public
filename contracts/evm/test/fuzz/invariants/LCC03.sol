@@ -9,7 +9,7 @@ import {IVaultCoreActionHandler} from "../../../src/interfaces/IVaultCoreActionH
 import {MockPoolManagerTransient} from "../mocks/MockPoolManagerTransient.sol";
 import {MockERC20Transferable} from "../mocks/MockERC20Transferable.sol";
 
-/// @notice Echidna harness for LCC-03 nested ingress settlement windows.
+/// @notice fuzz harness for LCC-03 nested ingress settlement windows.
 contract LCC03 {
     uint256 internal constant MAX_VACUOUS_ATTEMPTS = 18;
     MockPoolManagerTransient internal poolManager;
@@ -101,9 +101,13 @@ contract LCC03 {
         checkedRevert = false;
         lastRevertOk = true;
 
-        uint256 synced = uint256(syncedRaw % 1e18) + 2;
-        uint256 bal = uint256(balRaw % (synced - 1)) + 1;
-        lccErc20.mint(address(poolManager), bal);
+        uint256 extraBal = uint256(balRaw % 1e18);
+        if (extraBal > 0) {
+            lccErc20.mint(address(poolManager), extraBal);
+        }
+
+        uint256 bal = lccErc20.balanceOf(address(poolManager));
+        uint256 synced = bal + uint256(syncedRaw % 1e18) + 1;
         poolManager.setExttload(MarketLiquidityRouterLib.CURRENCY_SLOT, bytes32(uint256(uint160(address(lccErc20)))));
         poolManager.setExttload(MarketLiquidityRouterLib.RESERVES_OF_SLOT, bytes32(synced));
 
@@ -138,7 +142,7 @@ contract LCC03 {
     }
 
     // forge-lint: disable-next-line(mixed-case-function)
-    function echidna_lcc_03_sync_windows_hold() external view returns (bool) {
+    function fuzz_lcc_03_sync_windows_hold() external view returns (bool) {
         if (syncChecks == 0) {
             return syncAttempts < MAX_VACUOUS_ATTEMPTS;
         }
@@ -146,7 +150,7 @@ contract LCC03 {
     }
 
     // forge-lint: disable-next-line(mixed-case-function)
-    function echidna_lcc_03_revert_guards_hold() external view returns (bool) {
+    function fuzz_lcc_03_revert_guards_hold() external view returns (bool) {
         if (revertChecks == 0) {
             return revertAttempts < MAX_VACUOUS_ATTEMPTS;
         }
@@ -154,7 +158,7 @@ contract LCC03 {
     }
 
     // forge-lint: disable-next-line(mixed-case-function)
-    function echidna_lcc_03_smoke() external pure returns (bool) {
+    function fuzz_lcc_03_smoke() external pure returns (bool) {
         return true;
     }
 
@@ -232,4 +236,3 @@ contract MockLCCIngress is MockERC20Transferable {
         return underlyingAsset;
     }
 }
-

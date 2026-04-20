@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.26;
 
-/// @notice Echidna harness for MKT-03 and MKT-06 structural market ordering constraints.
+/// @notice fuzz harness for MKT-03 and MKT-06 structural market ordering constraints.
 contract MKT03_06 {
     uint256 internal constant MAX_VACUOUS_ATTEMPTS = 14;
     uint256 internal uniqAttempts;
@@ -47,7 +47,7 @@ contract MKT03_06 {
     }
 
     // forge-lint: disable-next-line(mixed-case-function)
-    function echidna_mkt_03_core_pool_unique() external view returns (bool) {
+    function fuzz_mkt_03_core_pool_unique() external view returns (bool) {
         if (uniqChecks == 0) {
             return uniqAttempts < MAX_VACUOUS_ATTEMPTS;
         }
@@ -55,7 +55,7 @@ contract MKT03_06 {
     }
 
     // forge-lint: disable-next-line(mixed-case-function)
-    function echidna_mkt_06_core_order_canonical() external view returns (bool) {
+    function fuzz_mkt_06_core_order_canonical() external view returns (bool) {
         if (orderChecks == 0) {
             return orderAttempts < MAX_VACUOUS_ATTEMPTS;
         }

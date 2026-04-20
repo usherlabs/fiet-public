@@ -12,8 +12,8 @@ import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
 import {IHooks} from "@uniswap/v4-core/src/interfaces/IHooks.sol";
 import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
 
-/// @notice Shared Echidna fixture: `CoreHook` calls `settlePositionGrowths` before add/remove modify hooks.
-/// @dev Validates hook-level call ordering against a mock orchestrator (VTS-01).
+/// @notice Shared fuzz fixture: `CoreHook` calls `settlePositionGrowths` before add/remove modify hooks.
+/// @dev Validates hook-level call ordering against a mock orchestrator.
 contract SettleBeforeModifyHarness is HookMinerBase {
     uint256 internal constant MAX_VACUOUS_ATTEMPTS = 10;
 
@@ -57,15 +57,20 @@ contract SettleBeforeModifyHarness is HookMinerBase {
         ModifyLiquidityParams memory params =
             ModifyLiquidityParams({tickLower: tl, tickUpper: tu, liquidityDelta: liquidityDelta, salt: salt});
 
+        // Compute the PositionId CoreHook should settle (must match pre-modify params).
         PositionId expected = PositionLibrary.generateId(address(this), params);
+        // Snapshot the settle call count to ensure exactly one settle occurs per action.
         uint256 beforeCount = mockOrch.settleCount();
 
         if (isAdd) {
+            // Simulate add-liquidity path; must call settlePositionGrowths first.
             hook.beforeAddLiquidity(address(this), poolKey, params, bytes(""));
         } else {
+            // Simulate remove-liquidity path; must call settlePositionGrowths first.
             hook.beforeRemoveLiquidity(address(this), poolKey, params, bytes(""));
         }
 
+        // Assert a single settle call with the expected PositionId.
         checks++;
         bool lastOk = mockOrch.settleCount() == beforeCount + 1
             && PositionId.unwrap(mockOrch.lastSettled()) == PositionId.unwrap(expected);

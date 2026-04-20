@@ -88,11 +88,11 @@ library VTSPositionMMOpsLib {
     function processMMOperations(
         VTSStorage storage s,
         PositionContext memory ctx,
-        TouchPositionParams calldata p,
+        TouchPositionParams memory p,
         TouchPositionResult memory result,
         BalanceDelta requiredSettlementDelta
     ) external {
-        PositionModificationHookData memory mmData = PositionModificationHookDataLib.decodeCalldata(p.hookData);
+        PositionModificationHookData memory mmData = PositionModificationHookDataLib.decode(p.hookData);
         if (!PositionModificationHookDataLib.isMMOperation(mmData)) return;
 
         // True principal liquidity change (maps to LCC mint/burn for the position delta). `feesAccrued` is informational

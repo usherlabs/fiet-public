@@ -1,244 +1,171 @@
-# Echidna fuzz harnesses
+# Medusa fuzz migration
 
-This folder contains **Echidna** fuzzing harnesses for protocol invariants.
-All invariant harnesses live in **`invariants/`**.
+`test/fuzz/FuzzEntry.sol` is the repo-owned Medusa composition root. The supported workflow now runs Medusa against
+that concrete target model rather than against per-harness CREATE2-prepared linked-library deployments.
 
-## Medusa (`FuzzEntry`, no linked-library prepare)
+## Supported path
 
-For harnesses that do **not** require the Echidna `[profile.echidna]` linked-library map (for example **MMQ-01**), you can fuzz the Bunni-style entry contract [`FuzzEntry.sol`](FuzzEntry.sol):
+Medusa now runs through a composed runtime tree:
 
-- **Why**: [`scripts/echidna.sh`](../scripts/echidna.sh) runs [`echidna_prepare_linked_libs.py`](../scripts/echidna_prepare_linked_libs.py) to converge CREATE2 linker addresses for production `library` dependencies. Thin harnesses that only `new` mocks and use [`PositionManagerImplQueueCustodyHarness.sol`](harnesses/PositionManagerImplQueueCustodyHarness.sol) do not need that pipeline.
-- **How**: [`medusa.json`](../medusa.json) targets `FuzzEntry`. [`scripts/medusa.sh`](../scripts/medusa.sh) passes `--compilation-target ./test/fuzz/FuzzEntry.sol` by default so `crytic-compile` does not try to deploy the entire protocol graph (which can hit library cycle warnings).
-- **Commands** (from `contracts/evm/`):
-
-```bash
-just medusa-mmq-01
-# or
-./scripts/medusa.sh --config medusa.json --test-limit 5000
-```
-
-Requires **`medusa`** and **`crytic-compile`** on `PATH`. Corpus and coverage output go to `medusa-corpus/` (gitignored).
-
-## How Echidna fuzzing works (in this repo)
-
-These files are **Echidna harness contracts**, not Foundry unit tests. Each harness is a _stateful Solidity contract_
-that Echidna deploys once, then interacts with by generating sequences of calls. At a high level:
-
-- Echidna deploys the harness (runs its `constructor()` to set up initial state).
-- Echidna generates a sequence of "transactions" (function calls) into the harness to mutate state.
-- After and during sequences, Echidna evaluates **properties** (invariants) and fails the run if any property is false.
-- When a property fails, Echidna attempts to **shrink** the call sequence to a minimal reproducer.
-
-### Harness structure
-
-In this repository, harnesses follow a consistent pattern:
-
-- **`constructor()`**: deploy real protocol contracts + mocks, configure roles/bounds, seed balances, etc.
-- **`action_*` functions**: state-mutating entrypoints for Echidna to call in arbitrary order with arbitrary inputs.
-  - Actions often clamp inputs into safe ranges.
-  - Actions often use low-level calls / `try/catch` so a revert does not abort the whole fuzz sequence.
-- **`echidna_*` functions**: boolean properties that express invariants; Echidna treats any `echidna_*() -> bool`
-  as "must always hold".
-  - Many properties use a `checked`/`lastOk` pattern so the property only becomes meaningful after a relevant action
-    has executed (avoids vacuous failures before an action has run).
-  - Some harnesses include a second trivial property (`*_smoke`) to avoid rare instability when only one property exists.
-
-### What Echidna considers a "test"
-
-The default configuration used by this repo is `contracts/evm/echidna.config.yml`:
-
-- **`testMode: property`**: treat `echidna_*` as properties/invariants.
-- **`prefix: echidna_`**: the property prefix.
-- **`seqLen`**: the maximum length of call sequences Echidna will explore per run.
-- **`testLimit`**: how many sequences to try.
-- **`maxValue`**: maximum `msg.value` Echidna may use when calling payable actions (used for native wrap flows).
-
-### How we run Echidna here
-
-We run Echidna through `contracts/evm/scripts/echidna.sh`, which:
-
-- prefers a locally installed `echidna`/`echidna-test` binary when available,
-- otherwise falls back to Docker (using Trail of Bits' toolbox image),
-- uses `crytic-compile` with the **Foundry backend** by default in our `yarn` scripts.
-
-We also use a dedicated Foundry profile (`[profile.echidna]` in `contracts/evm/foundry.toml`) to:
-
-- compile only the harnesses under `test/fuzz` (faster, avoids OOM),
-- build into a separate output directory (`out-echidna/`),
-- link selected libraries for determinism (some harnesses deploy those libraries via `CREATE2` to the linked
-  addresses during `constructor()`).
-
-### Linked-library wiring (runtime)
-
-Harness constructors call helpers in `test/fuzz/base/EchidnaLinkedLibs.sol` to deploy selected libraries at
-**deterministic CREATE2** addresses (fixed deployer + per-library salts). Foundry must **link** the same addresses
-into bytecode that delegates to those libraries, otherwise HEVM rejects unlinked placeholders.
-
-Before each Echidna run, `scripts/echidna.sh` runs `scripts/echidna_prepare_linked_libs.py`, which:
-
-1. Writes a converged `[profile.echidna].libraries` map to **`.echidna-gen/foundry.toml`** (gitignored),
-2. Sets **`FOUNDRY_CONFIG`** to that file so `forge build` and Echidna’s Foundry backend use the same linker map,
-3. Runs `forge build`, reads CREATE2 predictions from `GenerateEchidnaLinkedLibAddresses.printManifest()` (see
-   `test/fuzz/script/GenerateEchidnaLinkedLibAddresses.s.sol`), and repeats until the linker map matches the manifest,
-4. Runs **`SmokeEchidnaLinkedLibs`** to verify CREATE2 deployment under the Echidna deployer.
-
-(Older docs may refer to `EchidnaLinkedLibManifest`; that contract is now a thin alias of `GenerateEchidnaLinkedLibAddresses`.)
-
-**Commands** (from `contracts/evm/`)
-
-| Command | Purpose |
-| ------- | ------- |
-| `just echidna-prepare` | Same prepare step as `echidna.sh` (useful for debugging). |
-
-**Notes**
-
-- **VTSSwapLib** remains a **fixed placeholder** address in the linker map (not CREATE2-validated by the deploy helpers).
-- Do not run `FOUNDRY_PROFILE=echidna forge build` without `FOUNDRY_CONFIG` pointing at the generated file; the checked-in
-  profile keeps `libraries = []` on purpose.
-
-More detail lives in `test/fuzz/script/README.md`.
-
-## Run
+- `contracts/evm/medusa.json` and `contracts/evm/medusa.deep.json` target `FuzzEntry`
+- `contracts/evm/scripts/medusa.sh` reads the target contract from config instead of patching in ad hoc harness pairs
+- `[profile.medusa]` in `contracts/evm/foundry.toml` is scoped to the supported `FuzzEntry` path
+- `FuzzEntry` composes `FuzzMMQ01`, `FuzzHubLCC`, `FuzzMMSettle`, `FuzzMarketAuth`, and `FuzzVTSPosition`
+- `FuzzVTSPosition` inherits `FuzzVTSCoreTail` so the remaining core/accounting/VTS tail surfaces route through the
+  same supported target without root-level helper plumbing
 
 From `contracts/evm/`:
 
 ```bash
-# Run all fuzz harnesses
 just fuzz
 just fuzz-deep
 just fuzz-invariants
+just medusa-entry
 
-# Run individual harnesses
-just echidna-lcc-backing
-just echidna-commit-01
+MEDUSA_CORPUS_DIR=artifacts/medusa-local \
+  just medusa-entry -- --test-limit 50 --seq-len 5
 ```
 
-### Troubleshooting
+The runner writes coverage-guided artifacts to `<MEDUSA_CORPUS_DIR>/<TargetContract>/...`, so the supported path stores
+artifacts under `FuzzEntry/`.
 
-- If you see `error: missing --file or --contract`, it means `scripts/echidna.sh` was invoked without required args.
-  As a workaround (and for debugging), you can call the runner directly:
+## How this Medusa suite works
 
-```bash
-cd contracts/evm
-FOUNDRY_PROFILE=echidna FOUNDRY_OUT_DIR=out-echidna ECHIDNA_COMPILE=foundry \
-  sh ./scripts/echidna.sh --file test/fuzz/invariants/LCCBacking01.sol --contract LCCBacking01
-```
+Medusa is now pointed at one concrete contract: `FuzzEntry`.
 
-## Checklist
+- `FuzzEntry` is the only repo-owned Medusa target. It is not itself a protocol harness; it is a composition root that
+  mixes in the repo-owned fuzz modules and exposes the top-level `fuzz_*` properties Medusa should keep true.
+- Each composed module (`FuzzMMQ01`, `FuzzHubLCC`, `FuzzMMSettle`, `FuzzMarketAuth`, `FuzzVTSPosition`) instantiates
+  the underlying invariant harness contracts with ordinary runtime `new` calls and forwards their `action_*` and
+  `fuzz_*` entrypoints.
+- In practice Medusa deploys `FuzzEntry`, generates call sequences against the exposed `action_*` methods, and checks
+  the exported `fuzz_*` properties after and during those sequences.
+- `FuzzEntry.t.sol` is the Foundry-side smoke test for that composition root. It is not a replacement for Medusa; it
+  proves the composed tree deploys and the expected top-level properties remain callable from one concrete target.
 
-The **source of truth** for protocol invariants is `contracts/evm/INVARIANTS.md`.
+Compared to the legacy Echidna layout, the supported path no longer does per-harness selection plus deterministic
+linked-library preparation. The state still lives inside Solidity harness contracts, but the workflow is now:
 
-This README is a **coverage tracker** for:
+1. compile one target (`FuzzEntry`)
+2. compose repo-owned child harnesses under that target
+3. let Medusa explore the unified action/property surface
 
-- which `INVARIANTS.md` items are covered by Echidna harnesses in this directory, and
-- which invariants are still missing (and what the next priorities are).
+`FuzzHubLCC` is the Hub/LCC slice of that pattern. It is a Medusa-facing module, not a standalone fuzz target: it
+deploys the Hub/LCC child harnesses once, forwards actions into them, and re-exports their properties so `FuzzEntry`
+can present a single supported Medusa surface.
 
-### Coverage (from `INVARIANTS.md`)
+## Why `FuzzLiquidityHub` is an adapter
 
-This table is keyed by **canonical** invariant IDs from `INVARIANTS.md`. It is the main "what's done / what's next"
-view.
+The Hub/LCC cluster needs one fuzz-only adapter: `test/fuzz/harnesses/FuzzLiquidityHub.sol`.
 
-- **Needs property?**: "Yes" means we should prefer a property-based test (Echidna and/or invariant-style Foundry)
-  because manual inspection is unreliable.
-- **Status**: "Covered" means there is at least one non-trivial check; "Partial" means the invariant is exercised but
-  not comprehensively (or only in a narrow harness assumption).
+- We do not inherit `src/LiquidityHub.sol` directly because the production contract dispatches through
+  `LCCFactoryLinkedLib` / `LiquidityHubLinkedLib` from non-virtual functions.
+- A derived contract would therefore still execute the linked-library path we removed from the repo-owned Medusa
+  workflow.
+- `FuzzLiquidityHub` stays intentionally close to `src/LiquidityHub.sol` and only swaps those linked-library call sites
+  to their direct library equivalents so the fuzz harnesses inherit current Hub semantics without reintroducing the old
+  CREATE2 prep flow.
 
-| Invariant (`INVARIANTS.md`) | Priority | Needs property? | Status                | Evidence (Echidna)                                                                                                                             | Notes                                                                                                     |
-| --------------------------- | -------- | --------------- | --------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------- |
-| **LCC-BACKING-01**          | **P1**   | Yes             | **Covered**           | `invariants/LCCBacking01.sol` → `echidna_lcc_backing_01_*` (10 properties)                                                                     | Full domain accounting: supply, reserves, queues, wrapWith conservation, commitment gate.                 |
-| **LCC-01**                  | **P2**   | Yes             | **Covered**           | `invariants/LCC01.sol` → `echidna_lcc_01_*` (7 properties)                                                                                     | Transfer gating: user-to-user blocked, endpoint/exempt routes allowed, approved transfers.                |
-| **LCC-02**                  | **P1**   | Yes             | **Covered**           | `invariants/LCC02.sol` → `echidna_lcc_02_*` (3 properties)                                                                                     | Queue annul semantics on protocol transfer, bucket-sum invariant.                                         |
-| **LCC-03**                  | **P1**   | Yes             | **Covered**           | `invariants/LCC03.sol` → `echidna_lcc_03_sync_windows_hold`, `echidna_lcc_03_revert_guards_hold` + `test/MarketFactory.t.sol::{testFuzz_prepareMarketLiquidity_revertsWhenDifferentCurrencyInFlight,test_prepareMarketLiquidity_sameLccSync_restoresAfterNestedErc20Sync,test_prepareMarketLiquidity_sameLccSync_nativeUnderlying_clearsAndRestores}` | Echidna ingress-window checks now track sync and revert surfaces independently, plus direct MarketFactory nested-sync/restore path evidence. |
-| **HUB-01**                  | **P1**   | Yes             | **Covered**           | `invariants/HUB01.sol` → `echidna_hub_01_*` (12 properties)                                                                                    | Native + ERC20 wrap 1:1, supply/reserve model, balance coverage, guard checks.                            |
-| **HUB-02**                  | **P1**   | Yes             | **Covered**           | `invariants/HUB02.sol` → `echidna_hub_02_*` (6 properties)                                                                                     | Queue/unwrap decomposition, total-queued model, guard checks.                                             |
-| **HUB-03**                  | **P2**   | Yes             | **Covered**           | `invariants/HUB03.sol` → `echidna_hub_03_*` (3 properties)                                                                                     | Issuer gating: invalid LCC reverts, non-issuer reverts, valid issuer succeeds.                            |
-| **HUB-04**                  | **P3**   | Yes             | **Covered**           | `invariants/HUB04.sol` → `echidna_hub_04_*` (3 properties)                                                                                     | Same-factory constraint on pair operations, cross-factory and non-LCC rejection.                          |
-| **HUB-05**                  | **P1**   | Yes             | **Covered**           | `invariants/HUB05.sol` → `echidna_hub_05_*` (4 properties)                                                                                     | Reserve never exceeds actual balance, confirmTake accounting.                                             |
-| **HUB-06**                  | **P1**   | Yes             | **Covered**           | `invariants/HUB06.sol` → `echidna_hub_06_*` (5 properties)                                                                                     | Issue/cancel domain accounting, prepareSettle decrements, guard checks.                                   |
-| **SIG-01**                  | **P3**   | Yes             | **Covered**           | `invariants/SIG01_02.sol` → `echidna_sig_01_*` (3 properties)                                                                                  | Nonce monotonicity, valid signal succeeds, stale nonce reverts.                                           |
-| **SIG-02**                  | **P3**   | Yes             | **Covered**           | `invariants/SIG01_02.sol` → `echidna_sig_02_*` (2 properties)                                                                                  | Invalid proof reverts / returns false.                                                                    |
-| **COMMIT-01**               | **P1**   | Yes             | **Covered**           | `invariants/COMMIT01.sol` → `echidna_commit_01_gate_correct`                                                                                   | Issuance gate: issuedUsd <= settledUsd + signalUsd.                                                       |
-| **COMMIT-02**               | **P1**   | Yes             | **Covered**           | `invariants/COMMIT02.sol` → `echidna_commit_02_checkpoint_deficit_math_correct`                                                                 | Checkpoint deficit math correctness; the harness clamps liquidity into the checkpoint path's supported `int128` domain to avoid vacuous failures from unreachable states. |
-| **COMMIT-03**               | **P3**   | Yes             | **Covered**           | `invariants/COMMIT03.sol` → `echidna_commit_03_*` (4 properties)                                                                               | Advancer binding: renewal, hijack prevention, rotation.                                                   |
-| **VTS-02**                  | **P1**   | Yes             | **Covered**           | `invariants/VTS02.sol` → `echidna_vts_02_flip_identity`                                                                                         | Tick-cross "outside flip" preserves inside-growth queryability.                                            |
-| **VTS-03**                  | **P1**   | Yes             | **Covered** (Hybrid)  | `invariants/VTS03.sol` → `echidna_vts_03_segment_growth_accounting`, `echidna_vts_03_aux_flip_identity` + `test/VTSOrchestratorInvariantRegressions.t.sol::{test_vts03_swapThenSettle_mutatesPositionAccounting_zeroForOne,test_vts03_swapThenSettle_mutatesPositionAccounting_oneForZero}` | VTSSwapLib internals plus orchestrator-path swap settlement accounting mutation checks; segment and flip vacuity are tracked independently. |
-| **DELTA-01**                | **P1**   | Yes             | **Covered**           | `invariants/DELTA01.sol` → `echidna_delta_01_nonzero_deltas_revert`                                                                             | Deltas must net to zero per unlock/batch.                                                                 |
-| **DELTA-02**                | **P2**   | No              | **Covered** (Foundry) | `test/DeltaDesignStatements.t.sol` → `test_delta02_router_residue_is_fcfs_dust`                                                                 | Real `MMPositionManager` `SYNC`/`TAKE` path proves router residue is FCFS dust for the next caller.      |
-| **DELTA-03**                | **P2**   | No              | **Covered** (Foundry) | `test/DeltaDesignStatements.t.sol` → `test_delta03_planned_cancel_is_path_scoped_and_immediately_consumed`                                     | Real MM decrease flow exercises `planCancelWithQueue` adjacency and immediate transfer-path consumption.  |
-| **SETTLE-01**               | **P1**   | Yes             | **Covered**           | `invariants/SETTLE01.sol` → `echidna_settle_01_withdraw_reverts_when_rfs_open`, `echidna_settle_01_aux_withdraw_succeeds_when_rfs_closed`     | Real `onMMSettle -> _settleActive` path; open-RFS withdrawals revert with the production gate reason, and closed-RFS withdrawals are tracked independently to avoid cross-branch vacuity. |
-| **MKT-05**                  | **P1**   | Yes             | **Covered** (Hybrid)  | `invariants/MKT05.sol` + `test/ProxyHook.t.sol::{testFuzz_swap_exactOutput_*_revertsWhenRequestedExceedsImmediateLiquidity,test_proxySwap_exactInput_keepsProxySlot0Unchanged,test_proxySwap_exactOutput_keepsProxySlot0Unchanged,test_proxySwap_exactInput_oneForZero_keepsProxySlot0Unchanged,test_proxySwap_exactOutput_oneForZero_keepsProxySlot0Unchanged}` | Foundry regressions remain authoritative for strict exact-output hardening and proxy-curve neutralisation; the Echidna harness is retained as a lightweight cancellation/drift check. |
-| **SETTLE-02**               | **P2**   | Yes             | **Covered**           | `invariants/SETTLE02.sol` → `echidna_settle_02_seizing_clamps_hold`, `echidna_settle_02_smoke`                                                 | Real `onMMSettle -> _settleSeizing` path; fuzzes positive-cap and zero-cap seizure branches, asserting returned clamp deltas and withdrawal settlement effects. |
-| **SETTLE-03**               | **P1**   | Partial         | **Covered (Foundry)** | `../libraries/VTSPositionLib.t.sol`, `../libraries/VTSPositionLib.onMMSettle.t.sol`, `../marketmaker/MMPositionMinOutFeeAdjIntegration.t.sol`, `../modules/PositionManagerImpl.t.sol`, `../marketmaker/MMPositionActionsImpl.t.sol` | MM decrease routing splits (`VTSPositionMMOpsLib`), min-out vs hook principal; spec in `INVARIANTS.md` §SETTLE-03. No dedicated Echidna harness — Foundry + harnesses are authoritative. |
-| **MMQ-01**                  | **P1**   | Yes             | **Covered**           | `invariants/MMQ01.sol` (Echidna) / `FuzzEntry.sol` (Medusa) → `echidna_mmq01_*` + `action_*`; shared logic in `FuzzMMQ01.sol` | Queue custody guard: `nonFee >= qCommitted` when `tokenId > 0` (fail-closed vs under-collateralised custody; **SETTLE-03** / **MMQ-01** in `INVARIANTS.md`). See `agents/audit-resolutions/mm-queue-custody-nonfee-vs-custodyforward-guard-resolution.md`. Run: `just echidna-mmq-01` or `just medusa-mmq-01`. |
-| **SEIZE-01**                | **P2**   | Yes             | **Covered**           | `invariants/SEIZE01_02.sol` → `echidna_seize_01_token_lane_scoped_and_aggregated`                                                              | Includes bypass bps, token-age gates, threshold lanes, and mixed-lane grace masking checks; vacuity is tracked independently from `SEIZE-02` actions. |
-| **SEIZE-02**                | **P3**   | Yes             | **Covered**           | `invariants/SEIZE01_02.sol` → `echidna_seize_02_valid_verifier_required`                                                                        | Verifier-active + token-allowlist enforcement, invalid token index, and closed-lane extension reverts; vacuity is tracked independently from `SEIZE-01` actions. |
-| **SEIZE-03**                | **P3**   | Yes             | **Covered**           | `invariants/SEIZE03_04.sol` → `echidna_seize_03_no_lcc_issue_during_seizure`                                                                    | Uses `VTSPositionLib.touchPosition` path; MM seizing increase/new-position attempts revert as required.   |
-| **SEIZE-04**                | **P3**   | Yes             | **Covered**           | `invariants/SEIZE03_04.sol` → `echidna_seize_04_commit_identity_fixed`                                                                          | Uses `VTSPositionLib.touchPosition` path; mismatched commit IDs revert before MM processing.             |
-| **PAUSE-01**                | **P3**   | Yes             | **Covered** (Hybrid)  | `invariants/PAUSE01.sol` → `echidna_pause_01_proc_swap_guards_hold`, `echidna_pause_01_active_settle_guard_holds`, `echidna_pause_01_inactive_settle_guard_holds` + `test/VTSOrchestratorInvariantRegressions.t.sol::test_pause01_mmModify_revertsWhenPaused_andSucceedsAfterUnpause` | Guard-level harness now cycles deterministically through unpaused, pool-paused, and global-paused states for each semantic surface, plus direct MM/orchestrator enforcement and unpause recovery path. |
-| **VTS-01**                  | **P3**   | Yes             | **Covered** (Hybrid)  | `invariants/VTS01.sol` + `test/VTSOrchestratorInvariantRegressions.t.sol::test_vts01_cov02_directDecrease_matchesPokeThenDecrease_afterGrowthAccrual` | Hook ordering (`settlePositionGrowths` before modify) plus orchestrator-path accounting regression. |
-| **AUTH-01**                 | **P3**   | Yes             | **Covered** (Foundry) | `test/AuthSeizeInvariants.t.sol` → `testFuzz_auth01_nonApprovedCannotSettleWhenNotSeizing`                                                     | Real `_settle` path rejects non-owner/non-approved callers when not seizing.                             |
-| **AUTH-01A**                | **P3**   | Yes             | **Covered** (Foundry) | `test/AuthSeizeInvariants.t.sol` → `test_auth01a_seizeContext_samePositionOnlyInBatch`, `test_auth01a_seizeContext_clearedAtBatchEnd`         | Real seize path enforces same-position scope and confirms transient seizure context is cleared after batch end. |
-| **AUTH-02**                 | **P3**   | Yes             | **Covered** (Foundry) | `test/AuthSeizeInvariants.t.sol` → `test_auth02_transferFromBlockedWhenPoolManagerUnlocked`                                                    | Real `MMPositionManager.transferFrom` path enforces `onlyIfPoolManagerLocked`.                           |
-| **MKT-06**                  | **P2**   | No              | **Covered**           | `invariants/MKT03_06.sol` + `test/MarketFactory.t.sol::testFuzz_createMarket_corePairOrderingMatchesStored`                                    | Canonical pair ordering validated in Echidna model plus MarketFactory stored-pair fuzz checks.            |
-| **MKT-01**                  | P3       | No              | **Covered**           | `invariants/MKT01_02.sol` → `echidna_mkt_01_proxy_rejects_add_liquidity`                                                                        | `ProxyHook._beforeAddLiquidity` rejects with `AddLiquidityThroughHookNotAllowed` selector.               |
-| **MKT-02**                  | P3       | No              | **Covered**           | `invariants/MKT01_02.sol` → `echidna_mkt_02_core_pool_key_write_once`                                                                           | `setCorePoolKey` is write-once even when a different second key is attempted.                            |
-| **MKT-03**                  | P3       | No              | **Covered**           | `invariants/MKT03_06.sol` → `echidna_mkt_03_core_pool_unique` + `test/MarketFactory.t.sol::testFuzz_createMarket_revertsWhenCorePoolAlreadyExists` | Echidna model plus MarketFactory duplicate-core reversion fuzz check.                                  |
-| **MKT-04**                  | P3       | No              | **Covered**           | `invariants/MKT04_04A.sol` → `echidna_mkt_04_factory_and_issuer_gating`                                                                         | Factory/issuer matrix extended to issue, cancel, cancelWithQueue, prepareSettle, and confirmTake guards. |
-| **MKT-04A**                 | **P3**   | No              | **Covered**           | `invariants/MKT04_04A.sol` → `echidna_mkt_04a_bound_lifecycle`                                                                                  | Bound-role lifecycle enforces immutable EXEMPT/DEX transitions.                                           |
+If the production Hub later exposes proper overridable/internal seams for those linked-library call sites, this adapter
+should collapse back to inheritance rather than remain a long-lived fork.
 
-## Audit resolutions (cross-reference)
+## Coverage matrix
 
-Formal write-ups for targeted remediations live under **[`agents/audit-resolutions/`](../../../agents/audit-resolutions/)** at the repo root (not compiled into production). Key entries tied to fuzz harnesses and **SETTLE-03** / **MMQ-01** include:
+`contracts/evm/INVARIANTS.md` remains the source of truth for invariant definitions. The tables below answer three
+questions for every invariant:
 
-- `3__high-mm-min-out-pre-transfer-callerdelta-resolution.md` — min-out vs hook-time principal (**SETTLE-03**).
-- `mm-queue-custody-nonfee-vs-custodyforward-guard-resolution.md` — custody forward vs forwarded non-fee (**MMQ-01**).
-- `vulnerability 67-reciprocal-sqrt-price-limit-inversion-clamping-resolution.md` — **ProxyHook** price-limit branches.
+- what the priority is for ongoing review
+- whether the primary evidence currently comes from `FuzzEntry`, core Foundry tests, or both
+- how much of the invariant is covered, and where the authoritative regression evidence lives
 
-See each file for Foundry regression pointers; the table above remains the invariant → harness map.
+### Hub / LCC / market-boundary invariants
 
-## Coverage map (invariant -> harness -> property)
+| Invariant | Priority | Primary path | Evidence | Coverage notes |
+| --------- | -------- | ------------ | -------- | -------------- |
+| LCC-BACKING-01 | P0 | Medusa/FuzzEntry | `FuzzHubLCC.sol`, `invariants/LCCBacking01.sol` | Directly composed into the supported Medusa path. |
+| LCC-01 | P0 | Medusa/FuzzEntry | `FuzzHubLCC.sol`, `invariants/LCC01.sol` | Direct transfer-boundary property in the composed Hub/LCC module. |
+| LCC-02 | P0 | Medusa/FuzzEntry | `FuzzHubLCC.sol`, `invariants/LCC02.sol` | Bucket-accounting property runs through the supported Hub adapter path. |
+| LCC-03 | P1 | Medusa/FuzzEntry | `FuzzHubLCC.sol`, `invariants/LCC03.sol` | Nested ingress-settlement ordering is exercised under the composed Medusa path. |
+| HUB-01 | P0 | Medusa/FuzzEntry | `FuzzHubLCC.sol`, `invariants/HUB01.sol` | Native and ERC20 wrap flow remains a first-class Medusa property. |
+| HUB-01A | P1 | Foundry | `LiquidityHub.t.sol` | `receive()` sender-gating is authoritative in production-Hub tests rather than a separate Medusa child harness. |
+| HUB-02 | P0 | Medusa/FuzzEntry | `FuzzHubLCC.sol`, `invariants/HUB02.sol` | Unwrap decomposition and queue accounting remain direct Medusa properties. |
+| HUB-02A | P0 | Foundry + Medusa | `LiquidityHub.t.sol`, `MMPositionManager.t.sol`, `harnesses/FuzzLiquidityHub.sol` | Endpoint-only `unwrapTo` admission is enforced in the adapter and covered more explicitly in core Foundry regressions. |
+| HUB-02B | P0 | Foundry + Medusa | `LiquidityHub.t.sol`, `harnesses/FuzzLiquidityHub.sol` | Recipient serviceability is enforced in the adapter; targeted Foundry tests remain the clearest regression oracle. |
+| HUB-02C | P1 | Foundry | `MMPositionManager.t.sol` | Recipient-shape changes after queueing remain covered by real-path queue/locker regressions. |
+| HUB-03 | P0 | Medusa/FuzzEntry | `FuzzHubLCC.sol`, `invariants/HUB03.sol` | Invalid-LCC and issuer-only paths stay in the composed Medusa surface. |
+| HUB-04 | P1 | Medusa/FuzzEntry | `FuzzHubLCC.sol`, `invariants/HUB04.sol` | Factory-consistency invariant is covered directly in Medusa. |
+| HUB-05 | P0 | Medusa/FuzzEntry | `FuzzHubLCC.sol`, `invariants/HUB05.sol` | Balance-backed `confirmTake` remains a direct Medusa property. |
+| HUB-06 | P0 | Medusa/FuzzEntry | `FuzzHubLCC.sol`, `invariants/HUB06.sol` | `prepareSettle` liquidity-accounting consistency remains a direct Medusa property. |
+| MKT-04 | P0 | Medusa/FuzzEntry | `FuzzHubLCC.sol`, `invariants/MKT04_04A.sol` | Factory and issuer gating remain on the supported Hub/LCC path. |
+| MKT-04A | P0 | Medusa/FuzzEntry | `FuzzHubLCC.sol`, `invariants/MKT04_04A.sol` | Bound-level policy regression stays composed with the same Hub adapter path. |
 
-All harnesses live in **`invariants/`**.
+### Commit / signal / VTS invariants
 
-| Invariant               | Harness                  | Properties                                                                                              |
-| ----------------------- | ------------------------ | ------------------------------------------------------------------------------------------------------- |
-| LCC-BACKING-01          | `LCCBacking01.sol`       | `echidna_lcc_backing_01_no_unauthorised_mint`, `echidna_lcc_backing_01_no_unauthorised_burn`, `echidna_lcc_backing_01_total_supply_matches_model`, `echidna_lcc_backing_01_direct_reserve_matches_wrapped`, `echidna_lcc_backing_01_holder_balances_match_model`, `echidna_lcc_backing_01_reserve_tuple_matches_model`, `echidna_lcc_backing_01_settle_queue_matches_model`, `echidna_lcc_backing_01_wrapwith_conserves_backing`, `echidna_lcc_backing_01_commitment_gate_consistent`, `echidna_lcc_backing_01_commitment_gate_boundary` |
-| LCC-01                  | `LCC01.sol`              | `echidna_lcc_01_user_to_user_blocked`, `echidna_lcc_01_approved_user_to_user_blocked`, `echidna_lcc_01_user_to_endpoint_allowed`, `echidna_lcc_01_user_to_exempt_allowed`, `echidna_lcc_01_endpoint_to_user_allowed`, `echidna_lcc_01_endpoint_to_endpoint_allowed`, `echidna_lcc_01_approved_user_to_endpoint_allowed` |
-| LCC-02                  | `LCC02.sol`              | `echidna_lcc_02_bucket_sum_equals_balance`, `echidna_lcc_02_queue_matches_model`, `echidna_lcc_02_transfer_annuls_queue_correctly` |
-| HUB-01                  | `HUB01.sol`              | `echidna_hub_01_direct_supply_native_matches_model`, `echidna_hub_01_direct_supply_erc20_matches_model`, `echidna_hub_01_reserve_native_matches_model`, `echidna_hub_01_reserve_erc20_matches_model`, `echidna_hub_01_total_supply_native_matches_model`, `echidna_hub_01_total_supply_erc20_matches_model`, `echidna_hub_01_hub_eth_balance_covers_native_reserve`, `echidna_hub_01_hub_erc20_balance_covers_erc20_reserve`, `echidna_hub_01_native_wrap_is_one_to_one`, `echidna_hub_01_erc20_wrap_is_one_to_one`, `echidna_hub_01_native_guard_rejects_mismatch`, `echidna_hub_01_erc20_guard_rejects_value` |
-| HUB-02                  | `HUB02.sol`              | `echidna_hub_02_holder_queue_matches_model`, `echidna_hub_02_total_queued_matches_model`, `echidna_hub_02_zero_amount_reverts`, `echidna_hub_02_over_balance_reverts`, `echidna_hub_02_unwrap_decomposition_holds`, `echidna_hub_02_balance_decreases_by_paidout` |
-| HUB-03                  | `HUB03.sol`              | `echidna_hub_03_invalid_lcc_always_reverts`, `echidna_hub_03_non_issuer_always_reverts`, `echidna_hub_03_valid_issuer_succeeds` |
-| HUB-04                  | `HUB04.sol`              | `echidna_hub_04_same_market_resolves`, `echidna_hub_04_cross_factory_reverts`, `echidna_hub_04_non_lcc_reverts` |
-| HUB-05                  | `HUB05.sol`              | `echidna_hub_05_erc20_reserve_never_exceeds_balance`, `echidna_hub_05_native_reserve_never_exceeds_balance`, `echidna_hub_05_valid_take_increments_correctly`, `echidna_hub_05_over_balance_take_reverts` |
-| HUB-06                  | `HUB06.sol`              | `echidna_hub_06_direct_supply_matches_model`, `echidna_hub_06_reserve_direct_matches_model`, `echidna_hub_06_prepare_settle_decrements_both`, `echidna_hub_06_zero_amount_reverts`, `echidna_hub_06_over_limit_reverts` |
-| SIG-01                  | `SIG01_02.sol`           | `echidna_sig_01_nonce_never_decreases`, `echidna_sig_01_valid_signal_succeeds`, `echidna_sig_01_stale_nonce_reverts` |
-| SIG-02                  | `SIG01_02.sol`           | `echidna_sig_02_invalid_proof_reverts`, `echidna_sig_02_invalid_proof_returns_false` |
-| COMMIT-01               | `COMMIT01.sol`           | `echidna_commit_01_gate_correct` |
-| COMMIT-02               | `COMMIT02.sol`           | `echidna_commit_02_checkpoint_deficit_math_correct` |
-| COMMIT-03               | `COMMIT03.sol`           | `echidna_commit_03_valid_renewal_succeeds`, `echidna_commit_03_owner_hijack_reverts`, `echidna_commit_03_non_advancer_reverts`, `echidna_commit_03_rotation_respects_new_advancer` |
-| VTS-02                  | `VTS02.sol`              | `echidna_vts_02_flip_identity` |
-| VTS-03                  | `VTS03.sol`              | `echidna_vts_03_segment_growth_accounting`, `echidna_vts_03_aux_flip_identity` |
-| DELTA-01                | `DELTA01.sol`            | `echidna_delta_01_nonzero_deltas_revert` |
-| DELTA-02                | `../DeltaDesignStatements.t.sol` | `test_delta02_router_residue_is_fcfs_dust` |
-| DELTA-03                | `../DeltaDesignStatements.t.sol` | `test_delta03_planned_cancel_is_path_scoped_and_immediately_consumed` |
-| SETTLE-01               | `SETTLE01.sol`           | `echidna_settle_01_withdraw_reverts_when_rfs_open`, `echidna_settle_01_aux_withdraw_succeeds_when_rfs_closed` |
-| SETTLE-02               | `SETTLE02.sol`           | `echidna_settle_02_seizing_clamps_hold`, `echidna_settle_02_smoke` |
-| SETTLE-03               | Foundry (see checklist)  | See checklist row — `VTSPositionLib.t.sol`, `MMPositionMinOutFeeAdjIntegration.t.sol`, `PositionManagerImpl.t.sol`, `MMPositionActionsImpl.t.sol` |
-| MMQ-01                  | `MMQ01.sol`              | `echidna_mmq01_valid_routes_succeed_when_non_fee_covers_queue`, `echidna_mmq01_underfunded_always_reverts`, `echidna_mmq01_custody_record_equals_q_committed`, `echidna_mmq01_smoke` |
-| LCC-03                  | `LCC03.sol`              | `echidna_lcc_03_sync_windows_hold`, `echidna_lcc_03_revert_guards_hold` |
-| VTS-01                  | `VTS01.sol`              | `echidna_vts_01_settle_growths_before_modify` |
-| SEIZE-01                | `SEIZE01_02.sol`         | `echidna_seize_01_token_lane_scoped_and_aggregated` |
-| SEIZE-02                | `SEIZE01_02.sol`         | `echidna_seize_02_valid_verifier_required` |
-| SEIZE-03                | `SEIZE03_04.sol`         | `echidna_seize_03_no_lcc_issue_during_seizure` |
-| SEIZE-04                | `SEIZE03_04.sol`         | `echidna_seize_04_commit_identity_fixed` |
-| AUTH-01                 | `../AuthSeizeInvariants.t.sol` | `testFuzz_auth01_nonApprovedCannotSettleWhenNotSeizing` |
-| AUTH-01A                | `../AuthSeizeInvariants.t.sol` | `test_auth01a_seizeContext_samePositionOnlyInBatch`, `test_auth01a_seizeContext_clearedAtBatchEnd` |
-| AUTH-02                 | `../AuthSeizeInvariants.t.sol` | `test_auth02_transferFromBlockedWhenPoolManagerUnlocked` |
-| PAUSE-01                | `PAUSE01.sol`            | `echidna_pause_01_proc_swap_guards_hold`, `echidna_pause_01_active_settle_guard_holds`, `echidna_pause_01_inactive_settle_guard_holds` |
-| MKT-01                  | `MKT01_02.sol`           | `echidna_mkt_01_proxy_rejects_add_liquidity` |
-| MKT-02                  | `MKT01_02.sol`           | `echidna_mkt_02_core_pool_key_write_once` |
-| MKT-03                  | `MKT03_06.sol`           | `echidna_mkt_03_core_pool_unique` |
-| MKT-06                  | `MKT03_06.sol`           | `echidna_mkt_06_core_order_canonical` |
-| MKT-04                  | `MKT04_04A.sol`          | `echidna_mkt_04_factory_and_issuer_gating` |
-| MKT-04A                 | `MKT04_04A.sol`          | `echidna_mkt_04a_bound_lifecycle` |
-| MKT-05                  | `../ProxyHook.t.sol`     | `testFuzz_swap_exactOutput_*_revertsWhenRequestedExceedsImmediateLiquidity`, `test_proxySwap_exactInput_keepsProxySlot0Unchanged`, `test_proxySwap_exactOutput_keepsProxySlot0Unchanged`, `test_proxySwap_exactInput_oneForZero_keepsProxySlot0Unchanged`, `test_proxySwap_exactOutput_oneForZero_keepsProxySlot0Unchanged` |
+| Invariant | Priority | Primary path | Evidence | Coverage notes |
+| --------- | -------- | ------------ | -------- | -------------- |
+| COMMIT-ROLE-01 | P1 | Foundry + Medusa | `MMPositionManager.t.sol`, `FuzzVTSPosition.sol`, `invariants/COMMIT03.sol` | Role separation is exercised through renew/advancer flows; Foundry remains the clearest real-path oracle. |
+| SIG-01 | P0 | Medusa/FuzzEntry | `FuzzMarketAuth.sol`, `invariants/SIG01_02.sol` | Nonce monotonicity is a direct composed Medusa property. |
+| SIG-02 | P0 | Medusa/FuzzEntry | `FuzzMarketAuth.sol`, `invariants/SIG01_02.sol` | Valid/invalid proof handling remains a direct Medusa property. |
+| COMMIT-00 | P0 | Foundry | `VTSOrchestrator.t.sol`, `VTSPositionLib.t.sol` | Live-liquidity/`commitmentMax` drift remains authoritative in the core VTS Foundry tests. |
+| COMMIT-01 | P0 | Medusa/FuzzEntry | `FuzzVTSPosition.sol`, `invariants/COMMIT01.sol` | Backing gate stays directly fuzzed under the supported path. |
+| COMMIT-02 | P0 | Medusa/FuzzEntry | `FuzzVTSPosition.sol`, `invariants/COMMIT02.sol` | Checkpoint deficit math remains directly fuzzed under the supported path. |
+| COMMIT-02A | P0 | Foundry + Medusa | `invariants/COMMIT02.sol`, `VTSOrchestrator.t.sol` | Deficit formation is fuzzed; the explicit non-seizure freeze is asserted in the core orchestrator tests. |
+| COMMIT-02B | P0 | Foundry + Medusa | `invariants/COMMIT02.sol`, `VTSOrchestrator.t.sol` | Deficit clearing is fuzzed; full-deactivation storage cleanup remains authoritative in Foundry. |
+| COMMIT-03 | P0 | Medusa/FuzzEntry | `FuzzVTSPosition.sol`, `invariants/COMMIT03.sol` | Advancer binding and rotation remain direct Medusa properties. |
+| VTS-01 | P0 | Medusa/FuzzEntry | `FuzzVTSCoreTail.sol`, `invariants/VTS01.sol` | Growth settlement before modify remains a direct Medusa property. |
+| VTS-02 | P1 | Medusa/FuzzEntry | `FuzzVTSCoreTail.sol`, `invariants/VTS02.sol` | Tick flip identity remains a direct Medusa property. |
+| VTS-03 | P0 | Medusa/FuzzEntry | `FuzzVTSCoreTail.sol`, `invariants/VTS03.sol` | Segment-based growth reflection remains a direct Medusa property. |
+
+### Settle / seize / delta invariants
+
+| Invariant | Priority | Primary path | Evidence | Coverage notes |
+| --------- | -------- | ------------ | -------- | -------------- |
+| SETTLE-01 | P0 | Medusa/FuzzEntry | `FuzzMMSettle.sol`, `invariants/SETTLE01.sol` | Active-position withdrawal guard is a direct composed Medusa property. |
+| SETTLE-02 | P0 | Medusa/FuzzEntry | `FuzzMMSettle.sol`, `invariants/SETTLE02.sol` | Seizure settle clamps remain direct composed Medusa properties. |
+| SETTLE-03 | P0 | Foundry | `MMPositionActionsImpl.t.sol`, `VTSPositionMMOpsLib.accessor.t.sol`, `harnesses/PositionManagerImplQueueCustodyHarness.sol` | Full MM decrease-routing and exported-settlement behavior remain authoritative in the real-path/core harness tests. |
+| MMQ-01 | P0 | Medusa/FuzzEntry | `FuzzMMQ01.sol` | Queue-custody guard is a direct composed Medusa property. |
+| SETTLE-04 | P0 | Foundry | `MMPositionManager.t.sol`, `VTSPositionMMOpsLib.accessor.t.sol` | In-hook protocol-credit clearing order remains authoritative in the core MM path tests. |
+| SEIZE-01 | P0 | Medusa/FuzzEntry | `FuzzVTSCoreTail.sol`, `invariants/SEIZE01_02.sol` | Lane-scoped seizability remains a direct Medusa property. |
+| SEIZE-02 | P0 | Medusa/FuzzEntry | `FuzzVTSCoreTail.sol`, `invariants/SEIZE01_02.sol` | Allowed-verifier grace extension remains a direct Medusa property. |
+| SEIZE-03 | P0 | Medusa/FuzzEntry | `FuzzVTSPosition.sol`, `invariants/SEIZE03_04.sol` | No-LCC-issue seizure path remains a direct Medusa property. |
+| SEIZE-04 | P0 | Medusa/FuzzEntry | `FuzzVTSPosition.sol`, `invariants/SEIZE03_04.sol` | Commit identity fixity during MM operations remains a direct Medusa property. |
+| DELTA-01 | P0 | Medusa/FuzzEntry | `FuzzVTSCoreTail.sol`, `invariants/DELTA01.sol` | Batch delta netting remains a direct Medusa property. |
+| DELTA-01A | P0 | Foundry | `MMPositionManager.t.sol`, `DeltaDesignStatements.t.sol` | Reserve-export and credit-backed withdrawal consumption remain authoritative in real-path design-statement tests. |
+| DELTA-02 | P1 | Foundry | `DeltaDesignStatements.t.sol` | Residual-balance FCFS dust remains documented and asserted in design-statement tests. |
+| DELTA-03 | P1 | Foundry | `DeltaDesignStatements.t.sol` | Planned-cancel path scoping remains documented and asserted in design-statement tests. |
+
+### Auth / pause / market-structure invariants
+
+| Invariant | Priority | Primary path | Evidence | Coverage notes |
+| --------- | -------- | ------------ | -------- | -------------- |
+| AUTH-01 | P0 | Medusa + Foundry | `FuzzMarketAuth.sol`, `invariants/AUTH01_01A_02.sol`, `AuthSeizeInvariants.t.sol` | Supported Medusa path carries the auth guards; Foundry remains the deeper batch-scoped regression oracle. |
+| AUTH-01A | P0 | Medusa + Foundry | `FuzzMarketAuth.sol`, `invariants/AUTH01_01A_02.sol`, `AuthSeizeInvariants.t.sol` | Same-position and batch-scoped seizure context is exposed in Medusa and verified more deeply in Foundry. |
+| AUTH-02 | P0 | Medusa + Foundry | `FuzzMarketAuth.sol`, `invariants/AUTH01_01A_02.sol`, `AuthSeizeInvariants.t.sol` | Mid-batch NFT-transfer blocking is exposed in Medusa and verified more deeply in Foundry. |
+| PAUSE-01 | P0 | Medusa + Foundry | `FuzzVTSCoreTail.sol`, `invariants/PAUSE01.sol`, `VTSOrchestrator.t.sol`, `MMPositionManager.t.sol` | Pause guards remain composed into `FuzzEntry`; Foundry covers the broader paused real-path behavior. |
+| MKT-01 | P0 | Medusa/FuzzEntry | `FuzzMarketAuth.sol`, `invariants/MKT01_02.sol` | Proxy add-liquidity rejection remains a direct Medusa property. |
+| MKT-02 | P0 | Medusa/FuzzEntry | `FuzzMarketAuth.sol`, `invariants/MKT01_02.sol` | Core pool-key write-once guard remains a direct Medusa property. |
+| MKT-03 | P1 | Medusa/FuzzEntry | `FuzzMarketAuth.sol`, `invariants/MKT03_06.sol` | Core-pool uniqueness remains a direct Medusa property. |
+| MKT-05 | P0 | Medusa + Foundry | `FuzzMarketAuth.sol`, `invariants/MKT05.sol`, `ProxyHook.t.sol`, `ProxyHook.mutationHardening.t.sol` | Medusa carries the lightweight cancellation/drift property; Foundry remains authoritative for the stricter live-path regression. |
+| MKT-06 | P1 | Medusa/FuzzEntry | `FuzzMarketAuth.sol`, `invariants/MKT03_06.sol` | Canonical ordering remains a direct Medusa property. |
+
+## Migration status
+
+The repo-owned Medusa migration is complete for the supported path:
+
+- `FuzzEntry` is the concrete target
+- repo-owned `FuzzLinkedLibs` references are `0`
+- repo-owned `echidna.` salt references are `0`
+- the old linked-library CREATE2 prepare/validation flow is no longer part of `just fuzz`, `just fuzz-deep`, or
+  `just medusa-entry`
+- fee-era invariants (`COV-01`, `COV-03`, `COV-04`, `FEE-01`, `FEE-02`) and `VTSFeeLib`-specific docs/harnesses are no
+  longer part of the supported path
+- `script/e2e/MMCoverage.s.sol` is intentionally retired because the fee-pot and fee-accounting orchestrator lenses no
+  longer exist
+
+Removed from the repo-owned supported path:
+
+- empty or generic Medusa target selection
+- ad hoc `--file` / `--contract` harness selection in the default runner path
+- linked-library CREATE2 prepare and validation assumptions in the supported Medusa flow
+- the old linked-library deployment helper
+- repo-owned CREATE2 salt wiring from the supported fuzz workflow

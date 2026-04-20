@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.26;
 
-import {VTSPositionLibEchidnaHarness} from "../harnesses/VTSPositionLibEchidnaHarness.sol";
+import {VTSPositionLibFuzzHarness} from "../harnesses/VTSPositionLibFuzzHarness.sol";
 import {MockPoolManager} from "../mocks/MockPoolManager.sol";
 import {MockMarketVault} from "../../_mocks/MockMarketVault.sol";
 import {MockLCC} from "../../_mocks/MockLCC.sol";
@@ -14,9 +14,8 @@ import {IPoolManager} from "v4-periphery/lib/v4-core/src/interfaces/IPoolManager
 import {ModifyLiquidityParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
 import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
 import {LiquidityUtils} from "../../../src/libraries/LiquidityUtils.sol";
-import {EchidnaLinkedLibs} from "../base/EchidnaLinkedLibs.sol";
 
-/// @notice Echidna harness for SETTLE-02: seizure settlement clamps deposit/withdraw bounds.
+/// @notice fuzz harness for SETTLE-02: seizure settlement clamps deposit/withdraw bounds.
 /// @dev Exercises the production MM settle seizing branch via `VTSLifecycleLinkedLib._executeMMSettleFromParams`.
 contract SETTLE02 {
     uint256 internal constant MAX_NON_VACUOUS_ATTEMPTS = 32;
@@ -31,7 +30,7 @@ contract SETTLE02 {
         bool zeroCapBranch;
     }
 
-    VTSPositionLibEchidnaHarness internal harness;
+    VTSPositionLibFuzzHarness internal harness;
     MockPoolManager internal poolManager;
     MockMarketVault internal vault;
 
@@ -52,10 +51,7 @@ contract SETTLE02 {
     bool internal withdrawAllOk = true;
 
     constructor() {
-        EchidnaLinkedLibs.deployVTSPositionLib();
-        EchidnaLinkedLibs.deployVTSPositionMMOpsLib();
-        EchidnaLinkedLibs.deployVTSLifecycleLinkedLib();
-        harness = new VTSPositionLibEchidnaHarness();
+        harness = new VTSPositionLibFuzzHarness();
         poolManager = new MockPoolManager();
         vault = new MockMarketVault(address(0));
 
@@ -135,7 +131,16 @@ contract SETTLE02 {
 
             BalanceDelta delta = toBalanceDelta(-int128(uint128(c.requested0)), -int128(uint128(c.requested1)));
             try harness.onMMSettle(
-                IPoolManager(address(poolManager)), vault, positionId, lccCurrency0, lccCurrency1, delta, true, false
+                VTSPositionLibFuzzHarness.OnMMSettleInput({
+                    poolManager: IPoolManager(address(poolManager)),
+                    vault: vault,
+                    positionId: positionId,
+                    lccCurrency0: lccCurrency0,
+                    lccCurrency1: lccCurrency1,
+                    delta: delta,
+                    isSeizing: true,
+                    fromDeltas: false
+                })
             ) returns (
                 BalanceDelta settlementDelta, bool, uint256
             ) {
@@ -196,7 +201,16 @@ contract SETTLE02 {
 
             BalanceDelta delta = toBalanceDelta(int128(uint128(c.requested0)), int128(uint128(c.requested1)));
             try harness.onMMSettle(
-                IPoolManager(address(poolManager)), vault, positionId, lccCurrency0, lccCurrency1, delta, true, false
+                VTSPositionLibFuzzHarness.OnMMSettleInput({
+                    poolManager: IPoolManager(address(poolManager)),
+                    vault: vault,
+                    positionId: positionId,
+                    lccCurrency0: lccCurrency0,
+                    lccCurrency1: lccCurrency1,
+                    delta: delta,
+                    isSeizing: true,
+                    fromDeltas: false
+                })
             ) returns (
                 BalanceDelta settlementDelta, bool, uint256
             ) {
@@ -224,7 +238,7 @@ contract SETTLE02 {
     }
 
     // forge-lint: disable-next-line(mixed-case-function)
-    function echidna_settle_02_seizing_clamps_hold() external view returns (bool) {
+    function fuzz_settle_02_seizing_clamps_hold() external view returns (bool) {
         uint256 totalAttempts = depositChecks + withdrawChecks;
         if (totalAttempts < MAX_NON_VACUOUS_ATTEMPTS) {
             return true;
@@ -239,7 +253,7 @@ contract SETTLE02 {
     }
 
     // forge-lint: disable-next-line(mixed-case-function)
-    function echidna_settle_02_smoke() external pure returns (bool) {
+    function fuzz_settle_02_smoke() external pure returns (bool) {
         return true;
     }
 

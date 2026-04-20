@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.26;
 
-import {LiquidityHub} from "../../../src/LiquidityHub.sol";
+import {FuzzLiquidityHub} from "../harnesses/FuzzLiquidityHub.sol";
 import {LiquidityCommitmentCertificate} from "../../../src/LCC.sol";
 import {VTSCommitLib} from "../../../src/libraries/VTSCommitLib.sol";
 import {PositionId} from "../../../src/types/Position.sol";
@@ -9,11 +9,11 @@ import {MockOracleHelper} from "../mocks/MockOracleHelper.sol";
 import {MockERC20Transferable} from "../mocks/MockERC20Transferable.sol";
 import {VTSCommitLibHarness} from "../../libraries/harnesses/VTSCommitLibHarness.sol";
 import {Bounds} from "../../../src/libraries/Bounds.sol";
-import {EchidnaLinkedLibs} from "../base/EchidnaLinkedLibs.sol";
 import {Currency} from "v4-periphery/lib/v4-core/src/types/Currency.sol";
 import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
+import {MarketMaker} from "../../../src/libraries/MarketMaker.sol";
 
-/// @notice Incremental Echidna harness for `LCC-BACKING-01`.
+/// @notice Incremental fuzz harness for `LCC-BACKING-01`.
 /// @dev Milestone 1 proves direct unauthorised mint/burn into `LCC` cannot succeed.
 ///      Milestone 2 adds a tracked market so we can model the two basic mint surfaces
 ///      already reachable here: wrapped (hub-reserved) supply and issuer-created market supply.
@@ -28,7 +28,7 @@ contract LCCBacking01 {
     uint256 internal constant COMMIT_ID = 1;
 
     // ----- Core protocol objects under test -----
-    LiquidityHub internal hub;
+    FuzzLiquidityHub internal hub;
     LiquidityCommitmentCertificate internal lccNative;
     LiquidityCommitmentCertificate internal lccTracked;
     LiquidityCommitmentCertificate internal lccConvA;
@@ -70,6 +70,24 @@ contract LCCBacking01 {
     // Action/result cache for the dual-mode commitment gate check.
     bool internal commitGateChecked;
     bool internal commitGateLastOk;
+
+    function _seedCommitState() internal {
+        MarketMaker.Reserve[] memory reserves = new MarketMaker.Reserve[](1);
+        reserves[0] = MarketMaker.Reserve({asset: "USD", amount: 1e18});
+
+        commitHarness.setCommitMmState(
+            COMMIT_ID,
+            MarketMaker.State({
+                owner: address(this),
+                reserves: reserves,
+                sourceState: "",
+                prover: "",
+                nonce: "",
+                advancer: address(this),
+                expiryAt: block.timestamp + 365 days
+            })
+        );
+    }
 
     // ================================================================
     // Helpers
@@ -287,12 +305,8 @@ contract LCCBacking01 {
     // ================================================================
 
     constructor() {
-        EchidnaLinkedLibs.deployLCCFactoryLinkedLib();
-        EchidnaLinkedLibs.deployLiquidityHubLinkedLib();
-        EchidnaLinkedLibs.deployVTSCommitLib();
-
         MockOracleHelper oracleHelper = new MockOracleHelper(address(0xB0B));
-        hub = new LiquidityHub(address(oracleHelper), "Ether", "ETH", 18, address(0), address(this));
+        hub = new FuzzLiquidityHub(address(oracleHelper), "Ether", "ETH", 18, address(0), address(this));
         hub.setFactory(address(this), true);
         hub.setBoundLevel(address(hub), Bounds.BOUND_EXEMPT);
 
@@ -326,7 +340,8 @@ contract LCCBacking01 {
         commitOracle.setTotalValue(vrlSignalUsd);
 
         commitHarness = new VTSCommitLibHarness();
-        commitPositionId = PositionId.wrap(keccak256("echidna.lcc-backing-01.commitment"));
+        commitPositionId = PositionId.wrap(keccak256("fuzz.lcc-backing-01.commitment"));
+        _seedCommitState();
         commitHarness.setCommitExpiresAt(COMMIT_ID, block.timestamp + 365 days);
 
         _setPositionShape(uint160(1) << 96, 0, -60, 60, 1);
@@ -497,13 +512,13 @@ contract LCCBacking01 {
 
     /// @dev No account other than the Hub may mint directly on LCC.
     // forge-lint: disable-next-line(mixed-case-function)
-    function echidna_lcc_backing_01_no_unauthorised_mint() external view returns (bool) {
+    function fuzz_lcc_backing_01_no_unauthorised_mint() external view returns (bool) {
         return lastDirectMintOk == false;
     }
 
     /// @dev No account other than the Hub may burn directly on LCC.
     // forge-lint: disable-next-line(mixed-case-function)
-    function echidna_lcc_backing_01_no_unauthorised_burn() external view returns (bool) {
+    function fuzz_lcc_backing_01_no_unauthorised_burn() external view returns (bool) {
         return lastDirectBurnOk == false;
     }
 
@@ -513,20 +528,20 @@ contract LCCBacking01 {
 
     /// @dev Total LCC supply must equal the harness model of wrapped + market-derived supply.
     // forge-lint: disable-next-line(mixed-case-function)
-    function echidna_lcc_backing_01_total_supply_matches_model() external view returns (bool) {
+    function fuzz_lcc_backing_01_total_supply_matches_model() external view returns (bool) {
         return lccTracked.totalSupply() == expectedWrapped + expectedMarketDerived + expectedHolderMarketDerived;
     }
 
     /// @dev Hub direct reserve must match exactly the total underlying deposited via wrap.
     // forge-lint: disable-next-line(mixed-case-function)
-    function echidna_lcc_backing_01_direct_reserve_matches_wrapped() external view returns (bool) {
+    function fuzz_lcc_backing_01_direct_reserve_matches_wrapped() external view returns (bool) {
         (uint256 directReserve,) = hub.reserveOfUnderlyingTuple(address(lccTracked));
         return directReserve == expectedWrapped;
     }
 
     /// @dev Per-holder wrapped/market-derived bucket split must match the harness model.
     // forge-lint: disable-next-line(mixed-case-function)
-    function echidna_lcc_backing_01_holder_balances_match_model() external view returns (bool) {
+    function fuzz_lcc_backing_01_holder_balances_match_model() external view returns (bool) {
         (uint256 wrapped, uint256 marketDerived) = lccTracked.balancesOf(address(this));
         return wrapped == expectedWrapped && marketDerived == expectedMarketDerived;
     }
@@ -537,14 +552,14 @@ contract LCCBacking01 {
 
     /// @dev Hub reserve tuple must reflect direct wraps and explicit market reserve funding.
     // forge-lint: disable-next-line(mixed-case-function)
-    function echidna_lcc_backing_01_reserve_tuple_matches_model() external view returns (bool) {
+    function fuzz_lcc_backing_01_reserve_tuple_matches_model() external view returns (bool) {
         (uint256 directReserve, uint256 marketReserve) = hub.reserveOfUnderlyingTuple(address(lccTracked));
         return directReserve == expectedWrapped && marketReserve == expectedMarketReserve;
     }
 
     /// @dev Queued external claims stay represented as both queue debt and holder market-derived balance.
     // forge-lint: disable-next-line(mixed-case-function)
-    function echidna_lcc_backing_01_settle_queue_matches_model() external view returns (bool) {
+    function fuzz_lcc_backing_01_settle_queue_matches_model() external view returns (bool) {
         if (settlementModelMismatch) return false;
         if (hub.settleQueue(address(lccTracked), address(queueHolder)) != expectedHolderQueued) return false;
         if (hub.totalQueued(address(lccTracked)) != expectedHolderQueued) return false;
@@ -556,7 +571,7 @@ contract LCCBacking01 {
 
     /// @dev wrapWith conversion-pair supply must always be fully represented as Hub-held LCC or queue debt.
     // forge-lint: disable-next-line(mixed-case-function)
-    function echidna_lcc_backing_01_wrapwith_conserves_backing() external view returns (bool) {
+    function fuzz_lcc_backing_01_wrapwith_conserves_backing() external view returns (bool) {
         uint256 totalSupply = lccConvA.totalSupply() + lccConvB.totalSupply();
         uint256 hubHeld = lccConvA.balanceOf(address(hub)) + lccConvB.balanceOf(address(hub));
         uint256 totalQueued = hub.totalQueued(address(lccConvA)) + hub.totalQueued(address(lccConvB));
@@ -573,14 +588,14 @@ contract LCCBacking01 {
     /// @dev Action/result gate: validateLiquidityDelta soft + hard modes must be consistent
     ///      and the returned signal value must match our independently tracked VRL signal.
     // forge-lint: disable-next-line(mixed-case-function)
-    function echidna_lcc_backing_01_commitment_gate_consistent() external view returns (bool) {
+    function fuzz_lcc_backing_01_commitment_gate_consistent() external view returns (bool) {
         return !commitGateChecked || _evaluateCommitmentGate();
     }
 
     /// @dev Always-on boundary: with zero backing our model predicts rejection,
     ///      and with sufficient VRL signal our model predicts acceptance.
     // forge-lint: disable-next-line(mixed-case-function)
-    function echidna_lcc_backing_01_commitment_gate_boundary() external view returns (bool) {
+    function fuzz_lcc_backing_01_commitment_gate_boundary() external view returns (bool) {
         return _evaluateCommitmentGateBoundary();
     }
 }

@@ -7,9 +7,9 @@ import {MockOracleHelper} from "../mocks/MockOracleHelper.sol";
 import {VTSCommitLibHarness} from "../../libraries/harnesses/VTSCommitLibHarness.sol";
 import {Currency} from "v4-periphery/lib/v4-core/src/types/Currency.sol";
 import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
-import {EchidnaLinkedLibs} from "../base/EchidnaLinkedLibs.sol";
+import {MarketMaker} from "../../../src/libraries/MarketMaker.sol";
 
-/// @notice Echidna harness for COMMIT-01 / SIG-BACKING-01 (Domain C):
+/// @notice fuzz harness for COMMIT-01 / SIG-BACKING-01 (Domain C):
 /// the gate `issuedUsd <= settledUsd + signalUsd` enforced by `VTSCommitLib.validateLiquidityDelta`.
 ///
 /// We mock:
@@ -31,6 +31,24 @@ contract COMMIT01 {
 
     bool internal checked;
     bool internal lastOk;
+
+    function _seedCommitState() internal {
+        MarketMaker.Reserve[] memory reserves = new MarketMaker.Reserve[](1);
+        reserves[0] = MarketMaker.Reserve({asset: "USD", amount: 1e18});
+
+        commitHarness.setCommitMmState(
+            COMMIT_ID,
+            MarketMaker.State({
+                owner: address(this),
+                reserves: reserves,
+                sourceState: "",
+                prover: "",
+                nonce: "",
+                advancer: address(this),
+                expiryAt: block.timestamp + 365 days
+            })
+        );
+    }
 
     function _seedAll() internal {
         uint160 sp = uint160(1) << 96;
@@ -73,15 +91,14 @@ contract COMMIT01 {
     }
 
     constructor() {
-        EchidnaLinkedLibs.deployVTSCommitLib();
-
         oracle = new MockOracleHelper(address(0));
         oracle.setPrices(1e18, 1e18);
         oracle.setTotalValue(0);
 
-        positionId = PositionId.wrap(keccak256("echidna.sig-backing-01"));
+        positionId = PositionId.wrap(keccak256("fuzz.sig-backing-01"));
 
         commitHarness = new VTSCommitLibHarness();
+        _seedCommitState();
 
         _seedAll();
     }
@@ -178,12 +195,12 @@ contract COMMIT01 {
     // ===== properties =====
 
     // forge-lint: disable-next-line(mixed-case-function)
-    function echidna_commit_01_gate_correct() external view returns (bool) {
+    function fuzz_commit_01_gate_correct() external view returns (bool) {
         return !checked || lastOk;
     }
 
     // forge-lint: disable-next-line(mixed-case-function)
-    function echidna_commit_01_smoke() external pure returns (bool) {
+    function fuzz_commit_01_smoke() external pure returns (bool) {
         return true;
     }
 }

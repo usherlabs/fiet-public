@@ -1,14 +1,13 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.26;
 
-import {LiquidityHub} from "../../../src/LiquidityHub.sol";
+import {FuzzLiquidityHub} from "../harnesses/FuzzLiquidityHub.sol";
 import {LiquidityCommitmentCertificate} from "../../../src/LCC.sol";
 import {MockOracleHelper} from "../mocks/MockOracleHelper.sol";
 import {MockERC20Transferable} from "../mocks/MockERC20Transferable.sol";
 import {Bounds} from "../../../src/libraries/Bounds.sol";
-import {EchidnaLinkedLibs} from "../base/EchidnaLinkedLibs.sol";
 
-/// @notice Echidna harness for LCC-01: transfer gating.
+/// @notice fuzz harness for LCC-01: transfer gating.
 /// @dev "A transfer of LCC must be either mint/burn, or have at least one endpoint
 ///      that is a protocol-bound address."
 ///
@@ -23,7 +22,7 @@ contract LCC01 {
     uint256 internal constant MAX_ACTION_AMOUNT = 1e24;
     uint256 internal constant SEED_BALANCE = 1000e18;
 
-    LiquidityHub internal hub;
+    FuzzLiquidityHub internal hub;
     LiquidityCommitmentCertificate internal lcc;
 
     // Users: neither is protocol-bound.
@@ -83,11 +82,8 @@ contract LCC01 {
     // ================================================================
 
     constructor() {
-        EchidnaLinkedLibs.deployLCCFactoryLinkedLib();
-        EchidnaLinkedLibs.deployLiquidityHubLinkedLib();
-
         MockOracleHelper oracleHelper = new MockOracleHelper(address(0));
-        hub = new LiquidityHub(address(oracleHelper), "Ether", "ETH", 18, address(0), address(this));
+        hub = new FuzzLiquidityHub(address(oracleHelper), "Ether", "ETH", 18, address(0), address(this));
         hub.setFactory(address(this), true);
         hub.setBoundLevel(address(hub), Bounds.BOUND_EXEMPT);
 
@@ -265,13 +261,13 @@ contract LCC01 {
 
     /// @dev User-to-user transfer must always revert (TransferNotAllowed).
     // forge-lint: disable-next-line(mixed-case-function)
-    function echidna_lcc_01_user_to_user_blocked() external view returns (bool) {
+    function fuzz_lcc_01_user_to_user_blocked() external view returns (bool) {
         return !checkedUserToUser || !lastUserToUserOk;
     }
 
     /// @dev transferFrom user-to-user via approved spender must also revert.
     // forge-lint: disable-next-line(mixed-case-function)
-    function echidna_lcc_01_approved_user_to_user_blocked() external view returns (bool) {
+    function fuzz_lcc_01_approved_user_to_user_blocked() external view returns (bool) {
         return !checkedApprovedUserToUser || !lastApprovedUserToUserOk;
     }
 
@@ -281,31 +277,31 @@ contract LCC01 {
 
     /// @dev User → protocol-endpoint transfer must succeed.
     // forge-lint: disable-next-line(mixed-case-function)
-    function echidna_lcc_01_user_to_endpoint_allowed() external view returns (bool) {
+    function fuzz_lcc_01_user_to_endpoint_allowed() external view returns (bool) {
         return !checkedUserToEndpoint || lastUserToEndpointOk;
     }
 
     /// @dev User → hub (BOUND_EXEMPT) transfer must succeed.
     // forge-lint: disable-next-line(mixed-case-function)
-    function echidna_lcc_01_user_to_exempt_allowed() external view returns (bool) {
+    function fuzz_lcc_01_user_to_exempt_allowed() external view returns (bool) {
         return !checkedUserToExempt || lastUserToExemptOk;
     }
 
     /// @dev Protocol-endpoint → user transfer must succeed.
     // forge-lint: disable-next-line(mixed-case-function)
-    function echidna_lcc_01_endpoint_to_user_allowed() external view returns (bool) {
+    function fuzz_lcc_01_endpoint_to_user_allowed() external view returns (bool) {
         return !checkedEndpointToUser || lastEndpointToUserOk;
     }
 
     /// @dev Protocol → protocol transfer must succeed.
     // forge-lint: disable-next-line(mixed-case-function)
-    function echidna_lcc_01_endpoint_to_endpoint_allowed() external view returns (bool) {
+    function fuzz_lcc_01_endpoint_to_endpoint_allowed() external view returns (bool) {
         return !checkedEndpointToEndpoint || lastEndpointToEndpointOk;
     }
 
     /// @dev transferFrom user → endpoint via approved spender must succeed.
     // forge-lint: disable-next-line(mixed-case-function)
-    function echidna_lcc_01_approved_user_to_endpoint_allowed() external view returns (bool) {
+    function fuzz_lcc_01_approved_user_to_endpoint_allowed() external view returns (bool) {
         return !checkedApprovedUserToEndpoint || lastApprovedUserToEndpointOk;
     }
 }
@@ -321,6 +317,7 @@ contract LCC01Actor {
     }
 
     function approve(address lcc, address spender) external {
-        lcc.call(abi.encodeWithSignature("approve(address,uint256)", spender, type(uint256).max));
+        (bool ok,) = lcc.call(abi.encodeWithSignature("approve(address,uint256)", spender, type(uint256).max));
+        ok;
     }
 }
