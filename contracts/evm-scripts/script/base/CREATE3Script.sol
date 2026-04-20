@@ -60,14 +60,12 @@ abstract contract CREATE3Script is Script {
 
     constructor(string memory version_) {
         version = version_;
-        address factory;
-        try vm.envAddress("CREATE3_FACTORY") returns (address a) {
-            factory = a;
-        } catch {
-            factory = (block.chainid == ARBITRUM_SEPOLIA_CHAIN_ID)
+        address factory = vm.envOr(
+            "CREATE3_FACTORY",
+            block.chainid == ARBITRUM_SEPOLIA_CHAIN_ID
                 ? DEFAULT_CREATE3_FACTORY_ARBITRUM_SEPOLIA
-                : DEFAULT_CREATE3_FACTORY;
-        }
+                : DEFAULT_CREATE3_FACTORY
+        );
         create3 = ICREATE3Factory(factory);
     }
 
@@ -117,7 +115,9 @@ abstract contract CREATE3Script is Script {
     /// @dev Fail-fast sanity check for CREATE3 factory wiring.
     function _assertCreate3FactoryDeployed() internal view {
         require(address(create3) != address(0), "CREATE3: factory is zero address");
-        require(address(create3).code.length > 0, "CREATE3: factory has no code (set CREATE3_FACTORY or run setup-create3)");
+        require(
+            address(create3).code.length > 0, "CREATE3: factory has no code (set CREATE3_FACTORY or run setup-create3)"
+        );
     }
 
     function getCreate3SaltFromEnv(string memory name) internal view virtual returns (bytes32) {

@@ -45,7 +45,7 @@ contract MarketMakerE2E is MME2EBase {
 
     function _runTradingPhase(StandaloneMarket memory m, uint256 mmPk, uint256 commitId) internal {
         uint256 takerPk = _getDeployerPrivateKey();
-        _runExtremeTradingPhase(m, mmPk, takerPk, commitId);
+        _runAdaptiveRoundTripTradingPhase(m, mmPk, takerPk, commitId, MM_E2E_BIG_SWAP_IN, 100e18, 40);
     }
 
     function _runExitPhase(StandaloneMarket memory m, uint256 mmPk, uint256 commitId) internal {
