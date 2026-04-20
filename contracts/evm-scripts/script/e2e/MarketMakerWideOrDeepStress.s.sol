@@ -4,8 +4,9 @@ pragma solidity ^0.8.26;
 /**
  * E2E: MM wide/deep stress vs `tightTiny` baseline (matrix)
  *
- * Captures the unbuffered `tightTiny` burn snapshot as a baseline, then asserts wider/deeper profiles
- * achieve strictly better combined effective+overflow economic posture when compared to that baseline.
+ * Captures a `tightTiny` burn snapshot baseline for each buffer mode, then asserts wider/deeper profiles
+ * achieve strictly better combined effective+overflow economic posture when compared to their matching
+ * per-buffer-mode baseline.
  */
 
 import {console} from "forge-std/Script.sol";
@@ -21,6 +22,9 @@ contract MarketMakerWideOrDeepStressE2E is MME2EBase {
         );
     }
 
+    /// @notice Executes the MM wide/deep stress matrix across all position profiles and buffer modes.
+    /// @dev Creates fresh market state per cell, runs the stress trading phase, settles and burns the MM
+    /// position, then validates the result against the corresponding `tightTiny` baseline for that buffer mode.
     function run() external {
         console.log("=== E2E: MM Wide/deep stress matrix ===");
         _initNetwork();
