@@ -14,8 +14,9 @@ import {IPausableVTS} from "./IPausableVTS.sol";
 import {IVTSCurrencyDelta} from "./IVTSCurrencyDelta.sol";
 import {IVTSAdmin} from "./IVTSAdmin.sol";
 import {IMarketFactory} from "./IMarketFactory.sol";
+import {IExtsload} from "v4-periphery/lib/v4-core/src/interfaces/IExtsload.sol";
 
-interface IVTSOrchestrator is IPausableVTS, IVTSCurrencyDelta, IVTSAdmin {
+interface IVTSOrchestrator is IPausableVTS, IVTSCurrencyDelta, IVTSAdmin, IExtsload {
     // Events
     event Checkpointed(uint256 commitId, uint256 positionIndex, RFSCheckpoint checkpoint, bool withCommitment);
     event GracePeriodExtended(uint256 commitId, uint256 positionIndex, uint8 tokenIndex, RFSCheckpoint checkpoint);
@@ -111,31 +112,13 @@ interface IVTSOrchestrator is IPausableVTS, IVTSCurrencyDelta, IVTSAdmin {
     /// @param positionId The position identifier
     function settlePositionGrowths(PositionId positionId) external;
 
-    /// @notice Get the materialised slashed pot (claimables available for bonus payouts) for a pool
-    /// @param poolId The pool identifier
-    /// @return pot0 Slashed pot balance for token0
-    /// @return pot1 Slashed pot balance for token1
-    function getSlashedPot(PoolId poolId) external view returns (uint256 pot0, uint256 pot1);
-
-    /// @notice Pool-wide CISE total settled aggregate per token lane
+    /// @notice Pool-wide total settled aggregate per token lane
     /// @param poolId The pool identifier
     function getPoolTotalSettled(PoolId poolId) external view returns (uint256 total0, uint256 total1);
 
-    /// @notice Pool-wide outstanding swap-incurred deficit principal per token (DICE aggregate)
+    /// @notice Pool-wide outstanding swap-incurred deficit principal per token
     /// @param poolId The pool identifier
     function getPoolTotalDeficitPrincipal(PoolId poolId) external view returns (uint256 principal0, uint256 principal1);
-
-    /// @notice Get fee-sharing accounting for a position
-    /// @dev `pendingFeeAdj` is signed: +slash (funds pot), -bonus (drains pot when materialised)
-    /// @param positionId The position identifier
-    /// @return feesShared0 Total fees attributed to this position for token0
-    /// @return feesShared1 Total fees attributed to this position for token1
-    /// @return pendingFeeAdj0 Pending fee adjustment for token0 (+slash, -bonus)
-    /// @return pendingFeeAdj1 Pending fee adjustment for token1 (+slash, -bonus)
-    function getPositionFeeAccounting(PositionId positionId)
-        external
-        view
-        returns (uint256 feesShared0, uint256 feesShared1, int256 pendingFeeAdj0, int256 pendingFeeAdj1);
 
     /// @notice Initialize a market's configuration in the VTS state
     /// @dev Called by MarketFactory contract during market creation
@@ -178,12 +161,6 @@ interface IVTSOrchestrator is IPausableVTS, IVTSCurrencyDelta, IVTSAdmin {
     /// @return amount1 Settled amount for token1
     function getPositionSettledAmounts(PositionId positionId) external view returns (uint256 amount0, uint256 amount1);
 
-    /// @notice Increment coverage amounts for a pool
-    /// @param poolId The pool identifier
-    /// @param amount0 Amount to increment for token0
-    /// @param amount1 Amount to increment for token1
-    function incrementCoverage(PoolId poolId, uint256 amount0, uint256 amount1) external;
-
     /// @notice Get the maximum commitment amounts for a position
     /// @param positionId The position identifier
     /// @return commitment0 Maximum commitment for token0
@@ -202,7 +179,6 @@ interface IVTSOrchestrator is IPausableVTS, IVTSCurrencyDelta, IVTSAdmin {
     /// @param hookData The hook data containing PositionModificationHookData for MM operations
     /// @return pos The position struct
     /// @return id The position id
-    /// @return feeAdj The fee adjustment delta
     /// @return isMMPosition True if this is an MM position operation with valid signal
     function processPosition(
         address owner,
@@ -211,7 +187,7 @@ interface IVTSOrchestrator is IPausableVTS, IVTSCurrencyDelta, IVTSAdmin {
         BalanceDelta callerDelta,
         BalanceDelta feesAccrued,
         bytes calldata hookData
-    ) external returns (Position memory pos, PositionId id, BalanceDelta feeAdj, bool isMMPosition);
+    ) external returns (Position memory pos, PositionId id, bool isMMPosition);
 
     /// @notice Called by CoreHook after a swap to process swap-related accounting
     /// @param key The pool key

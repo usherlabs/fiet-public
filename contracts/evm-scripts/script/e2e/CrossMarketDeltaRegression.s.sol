@@ -11,7 +11,7 @@ pragma solidity ^0.8.26;
  *   1) the same program executed as staged batches, and
  *   2) the compacted single-batch program.
  * - Keep compacted execution as a smoke path, but move correctness to staged-vs-compacted end-state equality.
- * - After each staged batch, assert durable expectations (positions + protocol fees on idle pools); do not assert
+ * - After each staged batch, assert durable expectations on idle pools; do not assert
  *   wallet LCC balances mid-run (transient credits are batch-scoped per `DELTA-01`).
  * - Staged slices that are not the final segment append an 8-lane `TAKE` sweep so each `MMPositionManager` unlock ends
  *   with zero currency deltas (`_afterBatch` / `CurrencyNotSettled`); the compacted batch already ends with that sweep.
@@ -106,13 +106,11 @@ contract CrossMarketDeltaRegressionE2E is MME2EBase {
         bytes32 digestB;
         bytes32 digestC;
         bytes32 digestD;
-        /// @dev Pool-level durable aggregates (A–D) for CISE total settled and DICE deficit principal.
+        /// @dev Pool-level durable aggregates (A–D): total settled and deficit principal.
         uint256[4] poolTotalSettled0;
         uint256[4] poolTotalSettled1;
         uint256[4] poolDeficitPrincipal0;
         uint256[4] poolDeficitPrincipal1;
-        uint256[4] protocolFee0;
-        uint256[4] protocolFee1;
     }
 
     function _loadMmPrivateKey() internal view returns (uint256 mmPk) {
@@ -436,11 +434,6 @@ contract CrossMarketDeltaRegressionE2E is MME2EBase {
             vts.getPoolTotalDeficitPrincipal(s_keyC.toId());
         (snap.poolDeficitPrincipal0[3], snap.poolDeficitPrincipal1[3]) =
             vts.getPoolTotalDeficitPrincipal(s_keyD.toId());
-
-        (snap.protocolFee0[0], snap.protocolFee1[0]) = vts.getSlashedPot(s_keyA.toId());
-        (snap.protocolFee0[1], snap.protocolFee1[1]) = vts.getSlashedPot(s_keyB.toId());
-        (snap.protocolFee0[2], snap.protocolFee1[2]) = vts.getSlashedPot(s_keyC.toId());
-        (snap.protocolFee0[3], snap.protocolFee1[3]) = vts.getSlashedPot(s_keyD.toId());
     }
 
     function _assertPositionStateEq(DurablePositionState memory lhs, DurablePositionState memory rhs, string memory label)
@@ -500,10 +493,6 @@ contract CrossMarketDeltaRegressionE2E is MME2EBase {
                 "diff: poolDeficitPrincipal1 mismatch"
             );
         }
-        for (uint256 j = 0; j < staged.protocolFee0.length; ++j) {
-            require(staged.protocolFee0[j] == compacted.protocolFee0[j], "diff: protocolFee0 mismatch");
-            require(staged.protocolFee1[j] == compacted.protocolFee1[j], "diff: protocolFee1 mismatch");
-        }
     }
 
     function _positionStateFingerprint(DurablePositionState memory p) internal pure returns (bytes32) {
@@ -546,62 +535,31 @@ contract CrossMarketDeltaRegressionE2E is MME2EBase {
         }
     }
 
-    function _assertProtocolFeesUnchangedUnless(
-        DurableSnapshot memory prev,
-        DurableSnapshot memory curr,
-        bool poolA,
-        bool poolB,
-        bool poolC,
-        bool poolD
-    ) internal pure {
-        if (poolA) {
-            require(prev.protocolFee0[0] == curr.protocolFee0[0], "stage: pool A protocolFee0 unexpected change");
-            require(prev.protocolFee1[0] == curr.protocolFee1[0], "stage: pool A protocolFee1 unexpected change");
-        }
-        if (poolB) {
-            require(prev.protocolFee0[1] == curr.protocolFee0[1], "stage: pool B protocolFee0 unexpected change");
-            require(prev.protocolFee1[1] == curr.protocolFee1[1], "stage: pool B protocolFee1 unexpected change");
-        }
-        if (poolC) {
-            require(prev.protocolFee0[2] == curr.protocolFee0[2], "stage: pool C protocolFee0 unexpected change");
-            require(prev.protocolFee1[2] == curr.protocolFee1[2], "stage: pool C protocolFee1 unexpected change");
-        }
-        if (poolD) {
-            require(prev.protocolFee0[3] == curr.protocolFee0[3], "stage: pool D protocolFee0 unexpected change");
-            require(prev.protocolFee1[3] == curr.protocolFee1[3], "stage: pool D protocolFee1 unexpected change");
-        }
-    }
-
     function _assertAfterStageA(DurableSnapshot memory prev, DurableSnapshot memory curr) internal pure {
         require(curr.posA.liquidity < prev.posA.liquidity, "stageA: posA liquidity should decrease");
         require(curr.posB.positionCount > prev.posB.positionCount, "stageA: commit B should gain a position");
         _assertMarketsUnchanged(prev, curr, false, false, true, true);
-        _assertProtocolFeesUnchangedUnless(prev, curr, false, false, true, true);
     }
 
     function _assertAfterStageB(DurableSnapshot memory prev, DurableSnapshot memory curr) internal pure {
         _assertPositionStateChanged(prev.posB, curr.posB, "stageB: posB");
         _assertMarketsUnchanged(prev, curr, true, false, true, true);
-        _assertProtocolFeesUnchangedUnless(prev, curr, true, false, true, true);
     }
 
     function _assertAfterStageC(DurableSnapshot memory prev, DurableSnapshot memory curr) internal pure {
         _assertPositionStateChanged(prev.posB, curr.posB, "stageC: posB");
         _assertPositionStateChanged(prev.posC, curr.posC, "stageC: posC");
         _assertMarketsUnchanged(prev, curr, true, false, false, true);
-        _assertProtocolFeesUnchangedUnless(prev, curr, true, false, false, true);
     }
 
     function _assertAfterStageD(DurableSnapshot memory prev, DurableSnapshot memory curr) internal pure {
         _assertPositionStateChanged(prev.posC, curr.posC, "stageD: posC");
         require(curr.posD.positionCount > prev.posD.positionCount, "stageD: commit D should gain a position");
         _assertMarketsUnchanged(prev, curr, true, true, false, false);
-        _assertProtocolFeesUnchangedUnless(prev, curr, true, true, false, false);
     }
 
     function _assertAfterStageE(DurableSnapshot memory prev, DurableSnapshot memory curr) internal pure {
         _assertMarketsUnchanged(prev, curr, true, true, true, true);
-        _assertProtocolFeesUnchangedUnless(prev, curr, true, true, true, true);
     }
 
     function _runScenario() internal {

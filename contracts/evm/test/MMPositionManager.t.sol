@@ -1201,6 +1201,16 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
         _executeLiquidityValue(prepared, 1 ether);
     }
 
+    /// @notice Native TAKE to `ProxyHook` must revert: the hook rejects plain ETH (`receive`) so funds cannot strand unaccounted.
+    /// @dev `Currency.transfer` wraps a failed native send as `NativeTransferFailed` (bubbled); we only assert revert, not the wrapper.
+    function test_take_native_toProxyHook_reverts() public {
+        MMA.PreparedAction[] memory prepared = new MMA.PreparedAction[](1);
+        prepared[0] = MMA.prepareTake(CurrencyLibrary.ADDRESS_ZERO, address(proxyHook), 0);
+
+        vm.expectRevert();
+        _executeLiquidityValue(prepared, 1 ether);
+    }
+
     function test_wrapNative_ignoresAmbientEthBalance_andCreditsOnlyMsgValue() public {
         // Seed ambient ETH that should not be auto-credited to the locker.
         vm.deal(address(positionManager), 5 ether);

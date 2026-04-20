@@ -44,9 +44,9 @@ The following E2E test scripts are available:
    - Run with: `just e2e-market-maker`
    - **Required:** `PRIVATE_KEY`, `LP_PRIVATE_KEY`
 
-5. **`e2e/MMCoverage.s.sol`** - Tests fee sharing and coverage mechanics with multiple Market Makers
+5. **`e2e/MMCoverage.s.sol`** - Tests the multi-MM settlement, checkpoint, poke, and exit flow without fee-pot-specific assertions
    - Run with: `just e2e-mm-coverage`
-   - **Required:** `PRIVATE_KEY`, `LP_PRIVATE_KEY`, `LP2_PRIVATE_KEY`
+   - **Required:** `PRIVATE_KEY`, `LP_PRIVATE_KEY`, `LP2_PRIVATE_KEY`, `LP3_PRIVATE_KEY`
 
 **Run all E2E tests:** `just e2e` (requires fork to be running)
 
@@ -95,8 +95,8 @@ The comprehensive deployment script that deploys all contracts in the correct or
    - **Required (VTS config):**
      - `VTS_CONFIG_FILE_PATH` must point to a JSON or TOML file matching the full VTS config struct shape
      - All VTS fields must be present in the file; market-creation scripts do not apply fallback defaults
-     - JSON keys: `.token0.gracePeriodTime`, `.token0.baseVTSRate`, `.token0.maxGracePeriodTime`, `.token0.unbackedCommitmentGraceBypassTime`, `.token0.unbackedCommitmentGraceBypassThreshold`, `.token1...`, `.coverageFeeShare`, `.minResidualUnits`, `.unbackedCommitmentGraceBypassBps`
-     - TOML keys: `token0.gracePeriodTime`, `token0.baseVTSRate`, `token0.maxGracePeriodTime`, `token0.unbackedCommitmentGraceBypassTime`, `token0.unbackedCommitmentGraceBypassThreshold`, `token1...`, `coverageFeeShare`, `minResidualUnits`, `unbackedCommitmentGraceBypassBps`
+     - JSON keys: `.token0.gracePeriodTime`, `.token0.baseVTSRate`, `.token0.maxGracePeriodTime`, `.token0.unbackedCommitmentGraceBypassTime`, `.token0.unbackedCommitmentGraceBypassThreshold`, `.token1...`, `.minResidualUnits`, `.unbackedCommitmentGraceBypassBps`
+     - TOML keys: `token0.gracePeriodTime`, `token0.baseVTSRate`, `token0.maxGracePeriodTime`, `token0.unbackedCommitmentGraceBypassTime`, `token0.unbackedCommitmentGraceBypassThreshold`, `token1...`, `minResidualUnits`, `unbackedCommitmentGraceBypassBps`
    - **Output:** Writes `CORE_POOL_ID` and `PROXY_POOL_ID` to `deployments/{NETWORK}_markets.json`. Use `just read-deployment` to retrieve these values.
 
 6. **Add liquidity** - `just add-liquidity`

@@ -1,5 +1,7 @@
 # Settlements
 
+**Amendment (2026-04-19).** Normative policy for **guarantor seizure economics** (base collateral tranche, proportional cure of overdue RfS, position-wide aggregation, full vs partial close) is defined in [`Seizure-and-Base-Tranche-Policy.md`](./Seizure-and-Base-Tranche-Policy.md). Implementation sizing (`VTSLifecycleLinkedLib._calcSeizure`, fed with pre-intervention RfS in `_executeMMSettleFromParams`) is documented alongside invariants in `contracts/evm/INVARIANTS.md` (see **Policy reference: seizure economics**). Older prose in this file that described seizure as scaling **linearly with time** after grace, or that presented a **time-based formula** for the seized portion, was **aspirational / alternate narrative** and does **not** match the current EVM sizing path. Sections **Seizure Process** (historical step 2) and **Seizure Amount** below retain a **deprecated** time-linear model for archive context; for policy and audits, prefer the amendment document.
+
 Settlements in the Fiet Protocol enable Market Makers (MMs) to fulfil liquidity commitments in response to trader demand within specific price ranges. Using the Value-to-Signal (VTS) model, the protocol calculates a Request for Settlement (RfS) per position and token, determining the amount MMs must deposit or may withdraw to align settled liquidity with market needs. This approach supports efficient market facilitation in concentrated liquidity automated market makers (AMMs), where settlements are triggered by outflows in active or soon-to-be active positions, ensuring traders access native tokens without unnecessary capital lockup.
 
 ## What is a Request for Settlement?
@@ -39,7 +41,7 @@ The intervening party, a Settlement Guarantor, can be another MM or a dedicated 
 ### Seizure Process
 
 1. When an RfS opens ( $a_A(r) > 0$ ), a grace period begins, allowing MMs to settle their obligations without penalty.
-2. After the grace period, unsettled MMs’ liquidity positions become available for seizure, with the amount calculated on a linear scale based on time elapsed since the period’s end, increasing until the full position is seizable.
+2. **(Amended 2026-04-19.)** After the grace period, unsettled MMs’ liquidity positions may be seized by Settlement Guarantors subject to seizability checks. The **intended** seized share is driven by the **cured fraction** of overdue obligation and a **per-lane base tranche** at risk, aggregated at the position level—not by elapsed time after grace. See [`Seizure-and-Base-Tranche-Policy.md`](./Seizure-and-Base-Tranche-Policy.md).
 3. Guarantors may wait until the seizure is sufficiently lucrative before settling on behalf of the failing MM.
 4. Upon settlement:
     - If the Guarantor is an MM with verified reserve liquidity, they receive a new Fiet Market position NFT, assuming the failing MM’s obligations.
@@ -56,7 +58,15 @@ This structure ensures settlement obligations are met, with collateralisation an
 
 ### Seizure Amount
 
-When a Request for Settlement (RfS) remains open after the grace period, the liquidity position of a failing MM becomes available for seizure on a linear scale based on time. The seizure amount is calculated as:
+**Amendment (2026-04-19).** The **normative** description of how much liquidity may be seized per intervention is [**Seizure-and-Base-Tranche-Policy.md**](./Seizure-and-Base-Tranche-Policy.md): base tranche per lane, proportional consumption of the at-risk tranche with respect to the **pre-intervention** overdue amount, and position-wide aggregation.
+
+Grace periods and per-token **timelines** remain the protocol’s **gating** mechanism (when seizure becomes *available*); they do **not** define the on-chain **sizing** of seized liquidity units in the current EVM implementation.
+
+#### Deprecated: time-linear model (historical text, pre-2026-04-19)
+
+The following formula and explanation were retained from an earlier draft. They are **not** authoritative for current contract behaviour.
+
+When a Request for Settlement (RfS) remains open after the grace period, an older narrative described the liquidity position of a failing MM as becoming available for seizure on a linear scale based on time. The seizure amount was stated as:
 
 $$
 s(r) = C(r) \cdot \min\left(1, \frac{t}{t_{\max, A}} \cdot \left(1 + \alpha \cdot \frac{a_A(r)}{C_A(r)}\right)\right) 
@@ -72,11 +82,9 @@ Where:
 - $a_A(r)$: The MM’s exposure to the RfS amount for token $A$ in position $r$.
 - $C_A(r)$: The MM’s committed liquidity for the intervened token $A$ in position $r$.
 
-The formula scales the seizure rate linearly with time, adjusted by the MM’s exposure to the RfS amount relative to their committed liquidity for the specific token ( $\frac{a_A(r)}{C_A(r)}$ ). Seizure occurs at the position level ( $r$ ) encapsulating both tokens; however, the trigger is token-specific (failure on $a_A(r) > 0$). MMs with larger exposures for the intervened token face faster seizures, reflecting their greater responsibility to settle. The $\min(1, \cdot)$ function caps the seizure at the full position $C(r)$, ensuring completion within $t_{\max, A}$. 
+That narrative scaled the seizure rate linearly with time, adjusted by exposure. Seizure remains **position-level** in product terms; triggers are **token-lane**-specific. Per-token grace **windows** still matter for **when** seizure may start, even though **sizing** is not time-linear in the amended policy.
 
-Market Makers (MMs) facilitate liquidity across diverse assets, and per-token timelines encourage participation in markets with mixed settlement speeds (e.g., crypto-fiat pairs). It also aligns guarantor incentives: Shorter deadlines for fast-settling tokens prompt quicker interventions, while longer ones for slower assets allow MMs more leeway without assuming bad faith.
-
-This mechanism balances fairness for failing MMs needing time to settle, Guarantors incentivised to intervene, and Traders requiring timely settlements to maintain market liquidity. Upon seizure, the guarantor claims the proportional share of the entire position, including both tokens' settled liquidity and future obligations.
+Market Makers (MMs) facilitate liquidity across diverse assets, and per-token timelines encourage participation in markets with mixed settlement speeds (e.g., crypto-fiat pairs). This mechanism balances fairness for failing MMs needing time to settle, Guarantors incentivised to intervene, and Traders requiring timely settlements to maintain market liquidity. Upon seizure, the guarantor claims a share of the position per policy linked above, including both tokens’ economics as aggregated by the protocol.
 
 ### Looping
 

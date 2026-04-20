@@ -4,7 +4,7 @@ pragma solidity ^0.8.26;
 import {MarketVTSConfiguration, TokenConfiguration} from "../types/VTS.sol";
 
 library VTSConfigs {
-    // Default VTS Configuration
+    /// @notice Default market VTS configuration.
     function getDefaultConfig() internal pure returns (MarketVTSConfiguration memory) {
         return MarketVTSConfiguration({
             token0: TokenConfiguration({
@@ -21,7 +21,6 @@ library VTSConfigs {
                 unbackedCommitmentGraceBypassTime: 0, // no extra age gating by default
                 unbackedCommitmentGraceBypassThreshold: 0 // optional token amount threshold (disabled by default)
             }),
-            coverageFeeShare: 5000, // 50% (5000 bps)
             minResidualUnits: 1, // minimum units of liquidity that will result in full seizure
             unbackedCommitmentGraceBypassBps: 500 // 5% under-backing bypasses grace
         });

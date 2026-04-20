@@ -40,8 +40,8 @@ abstract contract FuzzMMSettle {
         return childSETTLE01.fuzz_settle_01_withdraw_reverts_when_rfs_open();
     }
 
-    function fuzz_settle_01_aux_closed_withdraw_preserves_accounting_bounds() external view returns (bool) {
-        return childSETTLE01.fuzz_settle_01_aux_closed_withdraw_preserves_accounting_bounds();
+    function fuzz_settle_01_aux_withdraw_succeeds_when_rfs_closed() external view returns (bool) {
+        return childSETTLE01.fuzz_settle_01_aux_withdraw_succeeds_when_rfs_closed();
     }
 
     function action_settle02_seizing_deposit_clamp(

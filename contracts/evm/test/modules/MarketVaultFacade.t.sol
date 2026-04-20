@@ -742,22 +742,26 @@ contract MarketVaultFacadeTest is Test {
         facade.decreaseLiquidityReserve(c, amt);
     }
 
-    function test_receive_acceptsCanonicalBoundsAndSelf() public {
+    /// @dev `MarketVaultFacade.receive` is fail-closed: no plain ETH, including prior allowlisted senders.
+    function test_receive_rejectsPlainEth_fromCanonicalVaultBoundAndSelf() public {
         vm.deal(address(canonical), 1);
         vm.prank(address(canonical));
+        vm.expectRevert(Errors.InvalidEthSender.selector);
         (bool okC,) = address(facade).call{value: 1}("");
-        assertTrue(okC);
+        okC;
 
         factory.setBound(boundCaller, true);
         vm.deal(boundCaller, 1);
         vm.prank(boundCaller);
+        vm.expectRevert(Errors.InvalidEthSender.selector);
         (bool okB,) = address(facade).call{value: 1}("");
-        assertTrue(okB);
+        okB;
 
         vm.deal(address(facade), 2);
         vm.prank(address(facade));
+        vm.expectRevert(Errors.InvalidEthSender.selector);
         (bool okSelf,) = address(facade).call{value: 1}("");
-        assertTrue(okSelf);
+        okSelf;
     }
 
     function test_receive_rejectsStranger() public {

@@ -120,7 +120,7 @@ library LiquidityUtils {
      *      Decomposition (equivalent for all uint256 inputs):
      *      - `q0 = floor(consumedFees * Q128 / L)`, `r0 = mulmod(consumedFees, Q128, L)`
      *      - `growthInc = q0 + (r0 + carryIn) / L`, `newCarry = (r0 + carryIn) % L`
-     * @param consumedFees Fee-token amount attributed to this burn (before coverageFeeShare bps)
+     * @param consumedFees Fee-token amount attributed to this burn (raw units)
      * @param positionLiquidity Position liquidity L; must be > 0
      * @param carryIn Remainder carried from the prior burn; invariant `carryIn < L` when used correctly
      * @return growthInc Q128-scaled growth to add to `feeGrowthInsideLast` on the fee token
@@ -268,7 +268,7 @@ library LiquidityUtils {
     }
 
     /**
-     * @notice Non-fee LCC amount forwarded to the queue custodian after netting informational fees by hook `feeAdj`.
+     * @notice Non-fee LCC amount forwarded to the queue custodian after netting informational fees against the hook’s transient delta.
      * @dev Matches `PositionManagerImpl._handleLccBalanceIncrease`: `netFee = max(feesAccrued - hookDelta, 0)`,
      *      `nonFee = max(inc - netFee, 0)`, where `hookDelta` is `PoolManager` transient delta on the hook address
      *      (CoreHook) for that currency. VTS queue/cancel principal remains hook-time `callerDelta - feesAccrued`;
@@ -296,8 +296,8 @@ library LiquidityUtils {
      *      `addedCreditAfterSync - classifiedInformationalFee` (same basis as `forwardedNonFeeLccAmount`), matching the
      *      full `nonFee` forwarded for `tokenId == 0`.
      *
-     *      Queue principal for routing remains hook-time `callerDelta - feesAccrued`; `feeAdj` only affects fee vs
-     *      non-fee classification, not that principal basis.
+     *      Queue principal for routing remains hook-time `callerDelta - feesAccrued`; only fee vs non-fee classification
+     *      differs on the actual LCC receipt, not that principal basis.
      */
     function lockerLccTakeAmountBeforeCustodyForward(
         bool isCommitBucket,

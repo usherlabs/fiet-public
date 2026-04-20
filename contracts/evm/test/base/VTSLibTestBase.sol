@@ -43,7 +43,6 @@ abstract contract VTSLibTestBase is MarketTestBase {
     uint256 internal constant DEFAULT_GRACE_PERIOD = 1 hours;
     uint256 internal constant DEFAULT_BASE_VTS_RATE = 500; // 5% in bps
     uint256 internal constant DEFAULT_MAX_GRACE_PERIOD = 7 days;
-    uint16 internal constant DEFAULT_COVERAGE_FEE_SHARE = 1000; // 10% in bps
     uint256 internal constant DEFAULT_MIN_RESIDUAL_UNITS = 1000;
 
     // ============ Setup ============
@@ -68,7 +67,6 @@ abstract contract VTSLibTestBase is MarketTestBase {
         return MarketVTSConfiguration({
             token0: tokenConfig,
             token1: tokenConfig,
-            coverageFeeShare: DEFAULT_COVERAGE_FEE_SHARE,
             minResidualUnits: DEFAULT_MIN_RESIDUAL_UNITS,
             unbackedCommitmentGraceBypassBps: 500
         });

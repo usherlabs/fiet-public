@@ -9,8 +9,8 @@ import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
 import {BalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
 
-import {ILiquidityHub} from "./interfaces/ILiquidityHub.sol";
-import {IMarketFactory} from "./interfaces/IMarketFactory.sol";
+import {ILiquidityHub} from "../interfaces/ILiquidityHub.sol";
+import {IMarketFactory} from "../interfaces/IMarketFactory.sol";
 
 /// @dev PositionManager has a public getter for `poolKeys(bytes25)`. We use it during `notifyBurn`,
 /// because `getPoolAndPositionInfo(tokenId)` can return zeros after PositionManager clears `positionInfo[tokenId]`.
@@ -24,9 +24,9 @@ interface IPositionManagerPoolKeys {
 ///      ## Why This Contract Exists
 ///
 ///      When Direct LPs modify liquidity through Uniswap's native `PositionManager`, CoreHook processes the operation
-///      and may return non-zero hook deltas (`feeAdj`) representing fee adjustments (bonuses/slashes). These deltas are
-///      applied by PoolManager *after* the hook returns, and Uniswap V4 requires all hook deltas to be cleared before
-///      the `PoolManager.unlock` session ends. If deltas remain uncleared, PoolManager reverts with `CurrencyNotSettled()`.
+///      and returns hook deltas to PoolManager. Those deltas are applied *after* the hook returns, and Uniswap v4
+///      requires transient hook currency deltas to be cleared before the `PoolManager.unlock` session ends. If deltas
+///      remain uncleared, PoolManager reverts with `CurrencyNotSettled()`.
 ///
 ///      ## The Problem
 ///
@@ -46,6 +46,11 @@ interface IPositionManagerPoolKeys {
 ///      Critically, these notifications occur *within the same `PoolManager.unlock` session* as the liquidity modification,
 ///      ensuring hook deltas are cleared before `unlock` completes. Direct LPs must subscribe this contract to their positions
 ///      (via `PositionManager.subscribe()`) before modifying liquidity to enable fee collection on inactive positions.
+///
+///      **Retention:** The implementation and `DirectLPDeltaResolver.t.sol` are kept in-tree even when the default deploy
+///      does not wire this contract: a future `MarketFactory` / sub-hook setup that again surfaces non-zero hook return
+///      deltas on direct-LP paths will need this subscriber (or an equivalent) registered as a bound endpoint and
+///      subscribed on relevant positions.
 contract DirectLPDeltaResolver is ISubscriber {
     IPositionManager public immutable positionManager;
     ILiquidityHub public immutable liquidityHub;

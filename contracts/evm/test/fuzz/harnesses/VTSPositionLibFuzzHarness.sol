@@ -24,8 +24,19 @@ import {ILiquidityHub} from "../../../src/interfaces/ILiquidityHub.sol";
 import {IOracleHelper} from "../../../src/interfaces/IOracleHelper.sol";
 
 /// @notice Minimal fuzz-oriented harness that avoids calling `public`/`external` functions on `VTSPositionLib`.
-///         This prevents linked-library DELEGATECALLs that cause Medusa/HEVM to attempt RPC bytecode fetches.
+/// @dev Keeps the Medusa-facing shape while targeting the fee-less VTS library signatures.
 contract VTSPositionLibFuzzHarness {
+    /// @dev Bundles `onMMSettle` calldata so non-IR builds do not hit stack-too-deep in the harness.
+    struct OnMMSettleInput {
+        IPoolManager poolManager;
+        IMarketVault vault;
+        PositionId positionId;
+        Currency lccCurrency0;
+        Currency lccCurrency1;
+        BalanceDelta delta;
+        bool isSeizing;
+        bool fromDeltas;
+    }
     VTSStorage internal s;
 
     // -------------------------------------------------------------------------
@@ -152,37 +163,30 @@ contract VTSPositionLibFuzzHarness {
     // MM settle entrypoint (`VTSLifecycleLinkedLib._executeMMSettleFromParams`)
     // -------------------------------------------------------------------------
 
-    function onMMSettle(
-        IPoolManager poolManager,
-        IMarketVault vault,
-        PositionId positionId,
-        Currency lccCurrency0,
-        Currency lccCurrency1,
-        BalanceDelta delta,
-        bool isSeizing,
-        bool fromDeltas
-    ) external returns (BalanceDelta settlementDelta, bool rfsOpen, uint256 seizedLiquidityUnits) {
-        Position memory pos = s.positions[positionId];
-        if (pos.owner == address(0)) revert("VTSPositionLib: Invalid position");
+    function onMMSettle(OnMMSettleInput calldata c)
+        external
+        returns (BalanceDelta settlementDelta, bool rfsOpen, uint256 seizedLiquidityUnits)
+    {
+        if (s.positions[c.positionId].owner == address(0)) revert("VTSPositionLib: Invalid position");
 
         SettleParams memory p;
-        p.vault = vault;
-        p.positionId = positionId;
-        p.lccCurrency0 = lccCurrency0;
-        p.lccCurrency1 = lccCurrency1;
-        p.delta = delta;
-        p.isSeizing = isSeizing;
-        p.fromDeltas = fromDeltas;
-        SettleResult memory result = VTSLifecycleLinkedLib._executeMMSettleFromParams(s, poolManager, p);
+        p.vault = c.vault;
+        p.positionId = c.positionId;
+        p.lccCurrency0 = c.lccCurrency0;
+        p.lccCurrency1 = c.lccCurrency1;
+        p.delta = c.delta;
+        p.isSeizing = c.isSeizing;
+        p.fromDeltas = c.fromDeltas;
+        SettleResult memory result = VTSLifecycleLinkedLib._executeMMSettleFromParams(s, c.poolManager, p);
         return (result.settlementDelta, result.rfsOpen, result.seizedLiquidityUnits);
     }
 
     function touchPosition(PositionContext calldata ctx, TouchPositionParams calldata params)
         external
-        returns (Position memory pos, PositionId id, BalanceDelta feeAdj)
+        returns (Position memory pos, PositionId id)
     {
         TouchPositionResult memory out = VTSPositionLib.touchPosition(s, ctx, params);
-        return (out.pos, out.id, out.feeAdj);
+        return (out.pos, out.id);
     }
 
     function buildPositionContext(

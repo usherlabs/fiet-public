@@ -15,7 +15,6 @@ import {VTSLifecycleLinkedLib} from "src/libraries/VTSLifecycleLinkedLib.sol";
 import {VTSPositionMMOpsLib} from "src/libraries/VTSPositionMMOpsLib.sol";
 import {LCCFactoryLinkedLib} from "src/libraries/LCCFactoryLib.sol";
 import {LiquidityHubLinkedLib} from "src/libraries/LiquidityHubLinkedLib.sol";
-import {VTSFeeLinkedLib} from "src/libraries/VTSFeeLib.sol";
 
 /**
  * @dev E2E deploy base: deploy full stack (libraries + contracts) and return addresses (no JSON writes).
@@ -32,7 +31,6 @@ abstract contract DeployFullStackBase is DeployProtocolBase {
         address vtsCommitLib;
         address vtsPositionMMOpsLib;
         address vtsLifecycleLinkedLib;
-        address vtsFeeLinkedLib;
         address lccFactoryLinkedLib;
         address liquidityHubLinkedLib;
     }
@@ -77,7 +75,6 @@ abstract contract DeployFullStackBase is DeployProtocolBase {
     string internal constant VTS_LIFECYCLE_LINKED_LIB = "VTSLifecycleLinkedLib";
     string internal constant LCC_FACTORY_LINKED_LIB = "LCCFactoryLinkedLib";
     string internal constant LIQUIDITY_HUB_LINKED_LIB = "LiquidityHubLinkedLib";
-    string internal constant VTS_FEE_LINKED_LIB = "VTSFeeLinkedLib";
 
     function _deployLibrary(string memory name, bytes memory creationCode) internal returns (address deployed) {
         return _deployCreate3(name, creationCode);
@@ -100,7 +97,6 @@ abstract contract DeployFullStackBase is DeployProtocolBase {
         out.libs.lccFactoryLinkedLib = _deployLibrary(LCC_FACTORY_LINKED_LIB, type(LCCFactoryLinkedLib).creationCode);
         out.libs.liquidityHubLinkedLib =
             _deployLibrary(LIQUIDITY_HUB_LINKED_LIB, type(LiquidityHubLinkedLib).creationCode);
-        out.libs.vtsFeeLinkedLib = _deployLibrary(VTS_FEE_LINKED_LIB, type(VTSFeeLinkedLib).creationCode);
         out.libs.vtsCommitLib = _deployLibrary(VTS_COMMIT_LIB, type(VTSCommitLib).creationCode);
         out.libs.vtsSwapLib = _deployLibrary(VTS_SWAP_LIB, type(VTSSwapLib).creationCode);
         out.libs.vtsPositionLib = _deployLibrary(VTS_POSITION_LIB, type(VTSPositionLib).creationCode);
@@ -211,4 +207,3 @@ abstract contract DeployFullStackBase is DeployProtocolBase {
         return _deployed;
     }
 }
-

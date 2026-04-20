@@ -12,7 +12,7 @@ import {IFuzzTakeOrchestrator} from "./IFuzzTakeOrchestrator.sol";
 /// @dev Logic MUST stay aligned with `PositionManagerImpl._routeLccCustodyTakeAndForward` (custody guard + take + forward)
 ///      and `MMPositionActionsImpl._forwardQueuedLccToCustodian` (ERC20 transfer + conditional `record`).
 ///      `nonFee < custodyForward` reverts `InsufficientBalance` as a defensive check (queued principal must be fundable by
-///      immediate post-`feeAdj` non-fee receipt under **SETTLE-03** / **MMQ-01**).
+///      immediate non-fee LCC after fee netting under **SETTLE-03** / **MMQ-01**).
 ///      Related audit note: `agents/audit-resolutions/mm-queue-custody-nonfee-vs-custodyforward-guard-resolution.md`.
 contract PositionManagerImplQueueCustodyHarness {
     IFuzzTakeOrchestrator public immutable vtsOrchestrator;

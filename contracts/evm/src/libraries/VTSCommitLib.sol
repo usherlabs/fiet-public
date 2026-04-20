@@ -19,8 +19,6 @@ import {VTSPositionLib} from "./VTSPositionLib.sol";
 import {CheckpointLibrary} from "./Checkpoint.sol";
 import {MarketHandlerLib} from "./MarketHandlerLib.sol";
 import {FullMath} from "@uniswap/v4-core/src/libraries/FullMath.sol";
-import {FixedPoint128} from "v4-periphery/lib/v4-core/src/libraries/FixedPoint128.sol";
-import {PoolAccounting} from "../types/VTS.sol";
 import {LiquidityUtils} from "./LiquidityUtils.sol";
 import {Errors} from "../libraries/Errors.sol";
 import {LiquiditySignal} from "../types/Commit.sol";
@@ -188,45 +186,6 @@ library VTSCommitLib {
 
         if (revertIfInsufficientBacking && !success) {
             revert Errors.InvalidLiquiditySignal(issuedValue, signalValue, settledValue);
-        }
-    }
-
-    /// @notice LCC Unwrap -> Protocol Coverage Function
-    /// @notice Increment protocol or proactive excess liquidity coverage on LCC unwrap, consuming proactive pool first
-    /// @param s The central VTS storage
-    /// @param poolId The pool ID
-    /// @param tokenIndex The token index (0 or 1)
-    /// @param coveredAmount The amount covered
-    function incrementCoverage(VTSStorage storage s, PoolId poolId, uint8 tokenIndex, uint256 coveredAmount) external {
-        if (tokenIndex > 1 || coveredAmount == 0) return;
-        PoolAccounting storage paPool = s.poolAccounting[poolId];
-
-        // DICE: Increment coverage-per-deficit index (for slash attribution)
-        uint256 totalPrincipal = paPool.totalDeficitPrincipal.get(tokenIndex);
-        if (totalPrincipal > 0) {
-            uint256 deltaIndex = FullMath.mulDiv(coveredAmount, FixedPoint128.Q128, totalPrincipal);
-            uint256 currentIndex = paPool.coveragePerDeficitIndexX128.get(tokenIndex);
-            paPool.coveragePerDeficitIndexX128.set(tokenIndex, currentIndex + deltaIndex);
-        } else {
-            // No materialised deficit principal: defer to residual (socialised)
-            uint256 currentResidual = paPool.coverageResidualDICE.get(tokenIndex);
-            paPool.coverageResidualDICE.set(tokenIndex, currentResidual + coveredAmount);
-        }
-
-        // CISE: Increment coverage-per-settled index (for bonus allocation)
-        uint256 totalSettled = paPool.totalSettled.get(tokenIndex);
-        if (totalSettled > 0) {
-            uint256 deltaIndexCISE = FullMath.mulDiv(coveredAmount, FixedPoint128.Q128, totalSettled);
-            uint256 currentIndexCISE = paPool.coveragePerSettledIndexX128.get(tokenIndex);
-            paPool.coveragePerSettledIndexX128.set(tokenIndex, currentIndexCISE + deltaIndexCISE);
-            // Eager bonus denominator: sum_i (settled_i * deltaIndex / Q128) == coveredAmount when pool totalSettled
-            // matches the sum of position settled amounts. Realising exposure on touch only updates numerators.
-            uint256 curTotalCISE = paPool.totalCISEExposureSinceLastMod.get(tokenIndex);
-            paPool.totalCISEExposureSinceLastMod.set(tokenIndex, curTotalCISE + coveredAmount);
-        } else {
-            // No settled liquidity existed during this coverage event, so there is no valid CISE claimant.
-            // Unlike DICE, we intentionally do not defer-and-socialise this later; only coverage exercised
-            // while settled liquidity is live contributes to allocatable CISE index/denominator state.
         }
     }
 

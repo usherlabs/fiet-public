@@ -249,14 +249,11 @@ abstract contract MarketVaultFacade is IMarketVault, ImmutableMarketState, Reent
         currency1 = Currency.wrap(lcc1.underlying());
     }
 
-    /// @notice Accepts ETH only from the canonical vault, `address(0)` (selfdestruct-style origin), factory bounds, or this contract.
+    /// @notice Rejects all plain ETH sent to market vault facades.
+    /// @dev Native liquidity is accounted via `CanonicalVault` / `PoolManager` claims, not unbooked `receive` balance.
+    ///      Subclasses inherit this fail-closed default; override only if a future facade documents an accounted
+    ///      native ingress path. See `INVARIANTS.md` HUB-02B.
     receive() external payable virtual {
-        address canonical = marketFactory.canonicalVault();
-        if (
-            msg.sender != canonical && msg.sender != address(0) && !marketFactory.bounds(msg.sender)
-                && msg.sender != address(this)
-        ) {
-            revert Errors.InvalidEthSender();
-        }
+        revert Errors.InvalidEthSender();
     }
 }

@@ -54,10 +54,61 @@ jobs:
         working-directory: contracts/evm
         id: build
 
-      - name: Run Forge tests
-        run: forge test -vvv
+      - name: Run Forge onMMSettle deposit/cross position-library tests
+        run: |
+          forge test -vvv -j 1 \
+            --match-path 'test/libraries/VTSPositionLib.onMMSettle.t.sol' \
+            --match-test 'test_onMMSettle_(deposits|crossMarket|fromDeltas|finding9|revertsOnInvalidPosition).*'
         working-directory: contracts/evm
-        id: test
+        id: test_position_lib_on_mm_settle_deposit_cross
+
+      - name: Run Forge onMMSettle active/withdraw position-library tests
+        run: |
+          forge test -vvv -j 1 \
+            --match-path 'test/libraries/VTSPositionLib.onMMSettle.t.sol' \
+            --match-test 'test_onMMSettle_(active|mixedDepositAndWithdrawal|withdrawals).*'
+        working-directory: contracts/evm
+        id: test_position_lib_on_mm_settle_active_withdraw
+
+      - name: Run Forge onMMSettle seizing position-library tests
+        run: |
+          forge test -vvv -j 1 \
+            --match-path 'test/libraries/VTSPositionLib.onMMSettle.t.sol' \
+            --match-test 'test_onMMSettle_seizing_.*'
+        working-directory: contracts/evm
+        id: test_position_lib_on_mm_settle_seizing
+
+      - name: Run remaining position-library tests
+        run: |
+          forge test -vvv \
+            --match-path 'test/libraries/VTSPositionLib*.t.sol' \
+            --no-match-path 'test/libraries/VTSPositionLib.onMMSettle.t.sol'
+        working-directory: contracts/evm
+        id: test_position_lib
+
+      - name: Run Forge heavy fee-library tests
+        run: forge test -vvv --match-path 'test/libraries/VTSFeeLib*.t.sol'
+        working-directory: contracts/evm
+        id: test_fee_lib
+
+      - name: Run Forge fuzz tests
+        run: forge test -vvv --match-path 'test/fuzz/**'
+        working-directory: contracts/evm
+        id: test_fuzz
+
+      - name: Run remaining Forge tests
+        run: |
+          find test -type f -name '*.t.sol' \
+            ! -path 'test/fuzz/*' \
+            ! -name 'VTSPositionLib*.t.sol' \
+            ! -name 'VTSFeeLib*.t.sol' \
+            -print0 \
+            | sort -z \
+            | while IFS= read -r -d '' path; do
+              forge test -vvv --match-path "$path"
+            done
+        working-directory: contracts/evm
+        id: test_remaining
 
       - name: Run Forge coverage
         if: github.event_name == 'pull_request'

@@ -38,6 +38,9 @@ contract LiquidityHub is BoundRegistry, Ownable, ReentrancyGuardTransient {
 
     event FactorySet(address indexed factory, bool enabled);
     event LCCCreated(address indexed underlyingAsset, address indexed lccToken, bytes32 marketId);
+    /// @notice New market-derived reserve recorded for this LCC's underlying; may now service queued external settlements.
+    /// @dev Wake-up signal for off-chain / reactive settlement dispatch. Not net of Hub self-queue: Hub settling to
+    ///      itself burns LCC and does not spend reserve, so emission must not be gated on pre-Hub queue size.
     event LiquidityAvailable(address indexed lcc, address underlyingAsset, uint256 amount, bytes32 marketId);
     event SettlementQueued(address indexed lcc, address indexed recipient, uint256 amount);
     event SettlementAnnulled(address indexed lcc, address indexed recipient, uint256 amount);
@@ -961,7 +964,8 @@ contract LiquidityHub is BoundRegistry, Ownable, ReentrancyGuardTransient {
      * @notice Called by MarketVault after taking underlying liquidity from the market to LCC
      * @param lcc The LCC token address
      * @param amount The amount of underlying liquidity taken
-     * @param shouldEmit Whether to emit LiquidityAvailable event
+     * @param shouldEmit If true, emit `LiquidityAvailable` when `amount > 0` (wake-up for dispatch; not suppressed when
+     *        Hub self-queue is large—new reserve may still service external queues)
      */
     function confirmTake(address lcc, uint256 amount, bool shouldEmit) external onlyIssuer(lcc) {
         // INTENT:
@@ -979,7 +983,8 @@ contract LiquidityHub is BoundRegistry, Ownable, ReentrancyGuardTransient {
         }
 
         if (ctx.emitLiquidityAvailable) {
-            // Only emit if there is new liquidity available and not consumed greedily by the Hub
+            // New reserve arrived at the Hub; downstream dispatch may clear external `settleQueue` entries. Hub
+            // self-settlement above does not consume this reserve (LCC burn / queue collapse only).
             emit LiquidityAvailable(lcc, ctx.underlying, amount, ctx.marketId);
         }
 

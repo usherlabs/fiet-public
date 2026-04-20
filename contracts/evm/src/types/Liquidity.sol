@@ -56,7 +56,8 @@ struct LiquidityHubStorage {
     // Total queued per underlying asset across all LCCs sharing that underlying
     mapping(address => uint256) queueOfUnderlying;
 
-    // Lazy netting claims per LCC
+    /// @dev Deprecated: Step-2 `wrapWith` netting now updates durable queue (`settleQueue` / `totalQueued` /
+    ///      `queueOfUnderlying`) eagerly. Slot retained for storage layout compatibility; must not be read in logic.
     mapping(address => uint256) nettedLCCsAsUnderlying;
 
     // Reserve of underlying split by source (keyed by underlying asset, not LCC)

@@ -1,11 +1,6 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.26;
 
-import {COV01} from "./invariants/COV01.sol";
-import {COV02} from "./invariants/COV02.sol";
-import {COV04} from "./invariants/COV04.sol";
-import {FEE01} from "./invariants/FEE01.sol";
-import {FEE02} from "./invariants/FEE02.sol";
 import {VTS01} from "./invariants/VTS01.sol";
 import {VTS02} from "./invariants/VTS02.sol";
 import {VTS03} from "./invariants/VTS03.sol";
@@ -17,11 +12,6 @@ import {PAUSE01} from "./invariants/PAUSE01.sol";
 /// @dev This keeps the remaining repo-owned tail surfaces on the same child-harness pattern
 ///      already used by the other migrated Medusa modules.
 abstract contract FuzzVTSCoreTail {
-    COV01 internal childCOV01;
-    COV02 internal childCOV02;
-    COV04 internal childCOV04;
-    FEE01 internal childFEE01;
-    FEE02 internal childFEE02;
     VTS01 internal childVTS01;
     VTS02 internal childVTS02;
     VTS03 internal childVTS03;
@@ -30,152 +20,12 @@ abstract contract FuzzVTSCoreTail {
     PAUSE01 internal childPAUSE01;
 
     constructor() {
-        childCOV01 = new COV01();
-        childCOV02 = new COV02();
-        childCOV04 = new COV04();
-        childFEE01 = new FEE01();
-        childFEE02 = new FEE02();
         childVTS01 = new VTS01();
         childVTS02 = new VTS02();
         childVTS03 = new VTS03();
         childDELTA01 = new DELTA01();
         childSEIZE0102 = new SEIZE01_02();
         childPAUSE01 = new PAUSE01();
-    }
-
-    // -------------------------------------------------------------------------
-    // COV-01 / COV-02 / COV-04
-    // -------------------------------------------------------------------------
-
-    function action_apply_coverage_burn_bounds(
-        uint8 tokenIndexRaw,
-        uint256 covRaw,
-        uint256 deficitRaw,
-        uint256 settledRaw,
-        uint16 feeShareBpsRaw,
-        uint128 positionLiquidityRaw,
-        uint256 feeGrowthInsideRaw
-    ) external {
-        childCOV01.action_apply_coverage_burn_bounds(
-            tokenIndexRaw, covRaw, deficitRaw, settledRaw, feeShareBpsRaw, positionLiquidityRaw, feeGrowthInsideRaw
-        );
-    }
-
-    function fuzz_cov_01_burn_base_bounded() external view returns (bool) {
-        return childCOV01.fuzz_cov_01_burn_base_bounded();
-    }
-
-    function fuzz_cov_01_smoke() external pure returns (bool) {
-        return true;
-    }
-
-    function action_before_add_modify(int24 tickLower, int24 tickUpper, int256 liquidityDelta, bytes32 salt) external {
-        childCOV02.action_before_add_modify(tickLower, tickUpper, liquidityDelta, salt);
-    }
-
-    function action_before_remove_modify(int24 tickLower, int24 tickUpper, int256 liquidityDelta, bytes32 salt)
-        external
-    {
-        childCOV02.action_before_remove_modify(tickLower, tickUpper, liquidityDelta, salt);
-    }
-
-    function action_before_modify(bool isAdd, int24 tickLower, int24 tickUpper, int256 liquidityDelta, bytes32 salt)
-        external
-    {
-        childCOV02.action_before_modify(isAdd, tickLower, tickUpper, liquidityDelta, salt);
-    }
-
-    function fuzz_cov_02_settle_before_modify() external view returns (bool) {
-        return childCOV02.fuzz_cov_02_settle_before_modify();
-    }
-
-    function fuzz_cov_02_smoke() external pure returns (bool) {
-        return true;
-    }
-
-    function action_cov_04_burn(uint256 fees) external {
-        childCOV04.action_cov_04_burn(fees);
-    }
-
-    function action_cov_04_split_burn(uint256 total, uint256 splitPoint) external {
-        childCOV04.action_cov_04_split_burn(total, splitPoint);
-    }
-
-    function action_cov_04_change_liquidity(uint256 newLiq) external {
-        childCOV04.action_cov_04_change_liquidity(newLiq);
-    }
-
-    function action_cov_04_zero_burn() external {
-        childCOV04.action_cov_04_zero_burn();
-    }
-
-    function fuzz_cov_04_carry_lt_liquidity() external view returns (bool) {
-        return childCOV04.fuzz_cov_04_carry_lt_liquidity();
-    }
-
-    function fuzz_cov_04_split_equals_single() external view returns (bool) {
-        return childCOV04.fuzz_cov_04_split_equals_single();
-    }
-
-    function fuzz_cov_04_accumulated_matches_single() external view returns (bool) {
-        return childCOV04.fuzz_cov_04_accumulated_matches_single();
-    }
-
-    function fuzz_cov_04_zero_fees_preserves_carry() external view returns (bool) {
-        return childCOV04.fuzz_cov_04_zero_fees_preserves_carry();
-    }
-
-    function fuzz_cov_04_smoke() external pure returns (bool) {
-        return true;
-    }
-
-    // -------------------------------------------------------------------------
-    // FEE-01 / FEE-02
-    // -------------------------------------------------------------------------
-
-    function action_queue_bonus(
-        uint8 feeTokenIndexRaw,
-        uint256 protocolFeeAccruedRaw,
-        uint256 selfRemainingRaw,
-        uint256 ciseExposureRaw,
-        uint256 totalExposureRaw
-    ) external {
-        childFEE01.action_queue_bonus(
-            feeTokenIndexRaw, protocolFeeAccruedRaw, selfRemainingRaw, ciseExposureRaw, totalExposureRaw
-        );
-    }
-
-    function action_finalise_materialisation(
-        uint8 tokenIndexRaw,
-        int256 pendingRaw,
-        uint256 slashedPotRaw,
-        uint256 protocolFeeAccruedRaw
-    ) external {
-        childFEE01.action_finalise_materialisation(tokenIndexRaw, pendingRaw, slashedPotRaw, protocolFeeAccruedRaw);
-    }
-
-    function fuzz_fee_01_queue_vs_pot() external view returns (bool) {
-        return childFEE01.fuzz_fee_01_queue_vs_pot();
-    }
-
-    function fuzz_fee_01_materialise_updates_pot_only() external view returns (bool) {
-        return childFEE01.fuzz_fee_01_materialise_updates_pot_only();
-    }
-
-    function fuzz_fee_01_smoke() external pure returns (bool) {
-        return true;
-    }
-
-    function action_no_bonus_on_creation(uint256 protocolFeeAccruedRaw, uint256 totalExposureRaw) external {
-        childFEE02.action_no_bonus_on_creation(protocolFeeAccruedRaw, totalExposureRaw);
-    }
-
-    function fuzz_fee_02_no_bonus_on_creation() external view returns (bool) {
-        return childFEE02.fuzz_fee_02_no_bonus_on_creation();
-    }
-
-    function fuzz_fee_02_smoke() external pure returns (bool) {
-        return true;
     }
 
     // -------------------------------------------------------------------------

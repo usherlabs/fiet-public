@@ -48,7 +48,7 @@ FILES=(
 
   src/MarketFactory.sol
   src/MarketVaultDeployer.sol
-  src/DirectLPDeltaResolver.sol
+  src/periphery/DirectLPDeltaResolver.sol
 
   src/MMPositionManager.sol
   src/MMPositionActionsImpl.sol
@@ -90,7 +90,6 @@ FILES=(
   src/libraries/TransientSlots.sol
   src/libraries/VTSCommitLib.sol
   src/libraries/VTSConfigs.sol
-  src/libraries/VTSFeeLib.sol
   src/libraries/VTSPositionLib.sol
   src/libraries/VTSSwapLib.sol
 )

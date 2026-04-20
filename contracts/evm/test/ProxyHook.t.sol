@@ -132,6 +132,13 @@ contract ProxyHookTest is MarketVaultBase {
         assertEq(recipient.balance, 0);
     }
 
+    /// @notice Direct plain-ETH sends to `ProxyHook` must revert (no unaccounted native sink on the market facade).
+    function test_proxyHook_rejectsPlainEth_inReceive() public {
+        vm.deal(address(this), 1 ether);
+        vm.expectRevert(Errors.InvalidEthSender.selector);
+        payable(address(proxyHook)).transfer(1 wei);
+    }
+
     function test_activate_revertsIfNotFactory_onFreshProxyHook() public {
         ProxyHookHarness fresh = new ProxyHookHarness(address(manager), address(marketFactory));
 

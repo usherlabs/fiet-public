@@ -23,6 +23,12 @@ inventory. That inventory is also used by other legitimate protocol paths, inclu
 As a result, a proxy swap can revert if an earlier transaction has already consumed the relevant output-side
 underlying liquidity, even if the core pool itself would still price the trade.
 
+## Market vault facades do not accept unbooked native ETH
+
+`MarketVaultFacade.receive` (including `ProxyHook`) reverts all plain ETH. Native liquidity for proxy settlement is
+accounted through `CanonicalVault` / `PoolManager` paths, not stray balance on the facade. Integrators must not direct
+native `TAKE` or similar transfers to the proxy-hook address.
+
 ## Why the Protocol Fails Closed
 
 For proxy exact-output, insufficient immediate underlying must revert.

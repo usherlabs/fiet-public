@@ -2,7 +2,7 @@
 
 > **Module**: `MMPositionManager`, `MMPositionActionsImpl`, `MMActions`  
 > **Author**: Fiet Protocol  
-> **Last Updated**: December 2024
+> **Last Updated**: 19th April 2026
 
 ## Overview
 
@@ -126,10 +126,10 @@ Decreases liquidity from an existing position.
 | `tokenId` | `uint256` | The commitment NFT token ID |
 | `positionIndex` | `uint256` | The position index within the commitment |
 | `amountToDecrease` | `uint256` | Amount of liquidity units to remove |
-| `amount0Min` | `uint128` | Minimum per-leg **immediate post-`feeAdj` non-fee LCC** token0 (`LiquidityUtils.forwardedNonFeeLccAmount`). For commit positions, only the Hub-queued slice is forwarded to the queue custodian; any surplus remains as locker transient LCC credit (`TAKE` / `UNWRAP_LCC`). **Not** the same scalar as VTS queue principal (`callerDelta - feesAccrued`). |
-| `amount1Min` | `uint128` | Minimum per-leg **immediate post-`feeAdj` non-fee LCC** token1 (same semantics as `amount0Min`). |
+| `amount0Min` | `uint128` | Minimum per-leg **immediate non-fee LCC after informational fee netting** token0 (`LiquidityUtils.forwardedNonFeeLccAmount`). For commit positions, only the Hub-queued slice is forwarded to the queue custodian; any surplus remains as locker transient LCC credit (`TAKE` / `UNWRAP_LCC`). **Not** the same scalar as VTS queue principal (`callerDelta - feesAccrued`). |
+| `amount1Min` | `uint128` | Minimum per-leg **immediate non-fee LCC after informational fee netting** token1 (same semantics as `amount0Min`). |
 
-**Protocol note (fee slash):** VTS caps same-touch materialisation of positive pending fee slashes to the per-leg **informational `feesAccrued`** slice on decreases (see **SETTLE-03** in `contracts/evm/INVARIANTS.md`). Queue principal from VTS remains `callerDelta - feesAccrued`; this rule only bounds how much historical `pendingFeeAdj` can become `feeAdj` on that touch.
+**Protocol note:** Min-out protects the user-facing LCC receipt after the PoolManager → MMPM transfer and planned-cancel path; VTS queue/cancel caps still use hook-time principal `callerDelta - feesAccrued` (see **SETTLE-03** / **MMQ-01** in `contracts/evm/INVARIANTS.md`).
 
 ---
 
@@ -143,14 +143,16 @@ Burns (fully decreases) a position, removing all liquidity.
 | `poolKey` | `PoolKey` | The pool key identifying the market |
 | `tokenId` | `uint256` | The commitment NFT token ID |
 | `positionIndex` | `uint256` | The position index within the commitment |
-| `amount0Min` | `uint128` | Minimum per-leg **immediate post-`feeAdj` non-fee LCC** token0 when burning (same decrease/burn min-out semantics as `DECREASE_LIQUIDITY`). |
-| `amount1Min` | `uint128` | Minimum per-leg **immediate post-`feeAdj` non-fee LCC** token1 when burning. |
+| `amount0Min` | `uint128` | Minimum per-leg **immediate non-fee LCC after informational fee netting** token0 when burning (same decrease/burn min-out semantics as `DECREASE_LIQUIDITY`). |
+| `amount1Min` | `uint128` | Minimum per-leg **immediate non-fee LCC after informational fee netting** token1 when burning. |
 
 ---
 
 ### SEIZE_POSITION (0x05)
 
 Seizes a position that has failed to meet its backing requirements after the grace period. This is a third-party guarantor action.
+
+**Amendment (2026-04-19).** Economic intent for **how much** liquidity may be seized and how that relates to the **base VTS rate** and **proportional cure** of overdue RfS is documented in [`Seizure-and-Base-Tranche-Policy.md`](./Seizure-and-Base-Tranche-Policy.md). Execution still flows through `onMMSettle` → `_calcSeizure` as implemented in `VTSLifecycleLinkedLib`.
 
 **Parameters:**
 | Name | Type | Description |
@@ -362,7 +364,15 @@ Decommits a signal and burns the commitment NFT. Requires all positions to be re
 **Requirements:**
 
 - Caller must be approved or owner of the NFT
-- Commitment must have zero positions (`positionCount == 0`)
+- Commitment must have zero **active** positions (`activePositionCount == 0`)
+- Commitment must have zero inactive live-`settled` remnants (`inactiveRemnantCount == 0`)
+
+**Exit semantics (amended 19th April 2026):**
+
+- `DECOMMIT_SIGNAL` is a valid **terminal exit** for an MM commitment once the active-position and inactive-live-`settled`
+  gates above are satisfied.
+- Historical `positionCount` may remain non-zero because the commit retains position history; decommit is not gated on
+  `positionCount == 0`.
 
 ---
 

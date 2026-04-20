@@ -43,13 +43,13 @@ import {SwapParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
 import {MarketHandlerLib} from "./libraries/MarketHandlerLib.sol";
 import {VTSCurrencyDelta} from "./modules/VTSCurrencyDelta.sol";
 import {Ownable} from "openzeppelin-contracts/contracts/access/Ownable.sol";
-import {VTSFeeLib} from "./libraries/VTSFeeLib.sol";
 import {IMarketFactory} from "./interfaces/IMarketFactory.sol";
 import {LiquidityUtils} from "./libraries/LiquidityUtils.sol";
 import {PoolAccounting} from "./types/VTS.sol";
 import {ReentrancyGuardTransient} from "openzeppelin-contracts/contracts/utils/ReentrancyGuardTransient.sol";
 import {TokenConfiguration} from "./types/VTS.sol";
 import {VTSAdmin} from "./modules/VTSAdmin.sol";
+import {Extsload} from "v4-periphery/lib/v4-core/src/Extsload.sol";
 
 /// @title VTSOrchestrator
 /// @notice Central state management layer and orchestrator for VTS logic
@@ -59,6 +59,7 @@ contract VTSOrchestrator is
     PausableVTS,
     VTSAdmin,
     VTSCurrencyDelta,
+    Extsload,
     ImmutableState,
     IVTSOrchestrator,
     ReentrancyGuardTransient
@@ -421,12 +422,6 @@ contract VTSOrchestrator is
     }
 
     /// @inheritdoc IVTSOrchestrator
-    function getSlashedPot(PoolId poolId) external view returns (uint256 pot0, uint256 pot1) {
-        PoolAccounting storage paPool = s.poolAccounting[poolId];
-        return (paPool.slashedPot.token0, paPool.slashedPot.token1);
-    }
-
-    /// @inheritdoc IVTSOrchestrator
     function getPoolTotalSettled(PoolId poolId) external view returns (uint256 total0, uint256 total1) {
         PoolAccounting storage paPool = s.poolAccounting[poolId];
         return (paPool.totalSettled.token0, paPool.totalSettled.token1);
@@ -440,16 +435,6 @@ contract VTSOrchestrator is
     {
         PoolAccounting storage paPool = s.poolAccounting[poolId];
         return (paPool.totalDeficitPrincipal.token0, paPool.totalDeficitPrincipal.token1);
-    }
-
-    /// @inheritdoc IVTSOrchestrator
-    function getPositionFeeAccounting(PositionId positionId)
-        external
-        view
-        returns (uint256 feesShared0, uint256 feesShared1, int256 pendingFeeAdj0, int256 pendingFeeAdj1)
-    {
-        PositionAccounting storage pa = s.positionAccounting[positionId];
-        return (pa.feesShared.token0, pa.feesShared.token1, pa.pendingFeeAdj.token0, pa.pendingFeeAdj.token1);
     }
 
     /// @notice Get the checkpoint for a given position
@@ -480,19 +465,6 @@ contract VTSOrchestrator is
             vtsConfig: vtsConfiguration,
             isPaused: false
         });
-    }
-
-    /// @notice Increment coverage amounts for a pool
-    /// @param poolId The pool identifier
-    /// @param amount0 Amount to increment for token0
-    /// @param amount1 Amount to increment for token1
-    function incrementCoverage(PoolId poolId, uint256 amount0, uint256 amount1) external onlyFactory {
-        if (amount0 > 0) {
-            VTSCommitLib.incrementCoverage(s, poolId, 0, amount0);
-        }
-        if (amount1 > 0) {
-            VTSCommitLib.incrementCoverage(s, poolId, 1, amount1);
-        }
     }
 
     // --------------------------------------------------
@@ -557,7 +529,6 @@ contract VTSOrchestrator is
     /// @param hookData The hook data containing PositionModificationHookData for MM operations
     /// @return pos The position struct
     /// @return id The position identifier
-    /// @return feeAdj The fee adjustment delta
     /// @return isMMPosition True if this is an MM position operation with valid signal
     function processPosition(
         address owner,
@@ -569,10 +540,10 @@ contract VTSOrchestrator is
     )
         external
         onlyCoreHook(poolKey.currency0, poolKey.currency1)
-        returns (Position memory pos, PositionId id, BalanceDelta feeAdj, bool isMMPosition)
+        returns (Position memory pos, PositionId id, bool isMMPosition)
     {
         isMMPosition = _validateMMOperationLinked(owner, poolKey, hookData);
-        (pos, id, feeAdj) = _processPositionLinked(owner, poolKey, params, callerDelta, feesAccrued, hookData);
+        (pos, id) = _processPositionLinked(owner, poolKey, params, callerDelta, feesAccrued, hookData);
     }
 
     function _validateMMOperationLinked(address owner, PoolKey calldata poolKey, bytes calldata hookData)
@@ -591,14 +562,13 @@ contract VTSOrchestrator is
         BalanceDelta callerDelta,
         BalanceDelta feesAccrued,
         bytes calldata hookData
-    ) private returns (Position memory pos, PositionId id, BalanceDelta feeAdj) {
+    ) private returns (Position memory pos, PositionId id) {
         VTSCoreHookContext memory ctx = _coreHookContext();
         TouchPositionResult memory result = VTSLifecycleLinkedLib.executeProcessPositionTouch(
             s, ctx, owner, poolKey, params, callerDelta, feesAccrued, hookData
         );
         pos = result.pos;
         id = result.id;
-        feeAdj = result.feeAdj;
     }
 
     /// @notice Called by CoreHook after a swap to process swap-related accounting

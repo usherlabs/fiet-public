@@ -8,6 +8,7 @@ being an informal “should”.
 
 ## Scope and terminology
 
+- **Invariant taxonomy**: headings in this file are **base / conservative v1** guarantees. Optional label: treat these as **`BASE-*`** when you need a stable prefix in new prose or tooling. Legacy capability-specific annex material (fee-sharing / coverage-index economics) was removed with fee disablement; see repository history if you need the old text.
 - **Underlying**: the “real” token (ERC20 or native ETH represented as `address(0)` internally).
 - **LCC**: `LiquidityCommitmentCertificate` (`src/LCC.sol`), a protocol-bound ERC20 that represents claims across
   multiple liquidity domains.
@@ -18,10 +19,10 @@ being an informal “should”.
 - **Position (positionId)**: a VTS-tracked liquidity position keyed like Uniswap positions.
 - **RfS / RFS**: “Required for Settlement”; when open, withdrawals are restricted.
 - **Deficits**:
-  - **cumulativeDeficit**: swap-driven outflow shortfall accumulated per position; this is the DICE principal used for
-    coverage-index attribution and fee-slash accounting.
-  - **commitmentDeficit**: position-level insolvency gate derived from commitment backing checks; this is used for
-    RFS/seizability hardening and is not part of DICE principal (`totalDeficitPrincipal`).
+  - **cumulativeDeficit**: swap-driven outflow shortfall accumulated per position; it feeds pool-level deficit
+    principal aggregates (`totalDeficitPrincipal`) alongside growth settlement.
+  - **commitmentDeficit**: position-level insolvency gate derived from commitment backing checks; used for
+    RFS/seizability hardening and distinct from swap-attributed pool deficit principal (`totalDeficitPrincipal`).
 
 ## Supported underlying asset model
 
@@ -89,6 +90,12 @@ being an informal “should”.
   - **Domain conversion — LCC↔LCC wrapWith (domain-preserving re-expression)**:
     - `wrapWith` must conserve value by converting one LCC claim into another without creating net backing; it may
       reclassify between “wrapped” and “market-derived” buckets, but must not mint value from nothing.
+    - **Step-2 Hub queue netting (backing LCC)**: when market-derived balance nets against
+      `settleQueue[withLCC][address(this)]`, the implementation must **eagerly** decrement the same durable triple as
+      other queue paths (`settleQueue`, `totalQueued`, `queueOfUnderlying` for the shared underlying). This keeps
+      `unfundedQueueOfUnderlying` and vault funding logic aligned with economically outstanding queue debt (no separate
+      shadow “lazy claim” overlay in live logic; the `nettedLCCsAsUnderlying` storage slot is deprecated and retained
+      only for layout compatibility).
 
 - **Enforced by (authorised mint surfaces)**:
 
@@ -261,6 +268,9 @@ being an informal “should”.
 - **Enforced by**: `src/LiquidityHub.sol::_assertValidUnwrapPayoutRecipient` inside `_unwrap` before `_pay`.
 - **Why**: Exempt endpoints are not unwrap payout targets; paying them strands underlying outside durable custody and
   settlement accounting.
+- **Implementation note**: `MarketVaultFacade.receive()` is fail-closed and reverts **all** plain ETH ingress
+  (`Errors.InvalidEthSender`), including for `ProxyHook`. Native market liquidity is accounted via `CanonicalVault` /
+  `PoolManager` claims, not unbooked ETH balance on the facade.
 
 ### HUB-02C: Native queue settlement remains serviceable if recipient shape changes after queueing
 
@@ -418,6 +428,13 @@ being an informal “should”.
   - The protocol does **not** guarantee that transferring an active commitment NFT alone transfers full MM operating
     authority to the recipient.
 
+### SIG-00: VRL root signatures are deployment-agnostic (cross-chain syndication)
+
+- **Statement**: The `ECDSASignatureSignalVerifier` root attestation signs `(nonce, rootStateHash)` under `eth_sign` without `chainId` or verifying-contract binding. **This is intentional:** VRL state is treated as a single source of truth off-chain; the same signed proof may verify on multiple Market Chain deployments as **state synchronisation**, not as accidental cross-deployment replay. Per-deployment freshness is `mmNonce[mmState.owner]` in **each** `VRLSignalManager` instance only.
+- **Enforced by (signature shape)**: `src/verifiers/ECDSASignatureSignalVerifier.sol::verifyProof`.
+- **Enforced by (local replay floor)**: `src/VRLSignalManager.sol::_verifyLiquiditySignalInternal` and optional `seedMMNonce` / `seedSubmitAuthNonce` for replacement deployments.
+- **Authoritative note**: `agents/spec/VRL-Cross-Chain-Proof-Syndication.md` (amendment 2026-04-19).
+
 ### SIG-01: VRL nonce must be strictly monotonically increasing per MM
 
 - **Statement**: A new signal for an MM must have `signal.nonce > mmNonce[mmState.owner]`.
@@ -461,15 +478,15 @@ being an informal “should”.
 - **Ordering (growth before commitment)**: `checkpointWithCommitment` values backing from stored `pa.settled` (and
   effective issued amounts). Therefore `src/VTSOrchestrator.sol::checkpoint(..., withCommitment: true)` must settle
   position growths **before** delegating to `VTSLifecycleLinkedLib.checkpointAfterGrowthNoCommitment` / `VTSCommitLib.checkpointAfterGrowthWithCommitment` (commitment path uses `VTSCommitLib.checkpointWithCommitment`), so
-  uncrystallised deficit/inflow/fee growth cannot make the commitment gate read stale-high `settled`. While the pool
+  uncrystallised deficit/inflow growth cannot make the commitment gate read stale-high `settled`. While the pool
   (or VTS globally) is paused, public `VTSOrchestrator.settlePositionGrowths` remains restricted to the canonical
   `CoreHook` for that market; the orchestrator-only helper `_settleGrowthsBeforeCheckpoint` performs the same
   `VTSPositionLib.settlePositionGrowths` work for paused commitment checkpoints only, without widening arbitrary
   third-party refresh on the public entrypoint.
 - **Consequence**: Positions with non-zero `commitmentDeficit` can bypass normal grace only when the configured
   token-lane bypass age/severity gates in `SEIZE-01` are satisfied.
-- **Separation invariant**: `commitmentDeficit` is a checkpoint-derived solvency gate and is not the pool DICE
-  principal. DICE denominator (`totalDeficitPrincipal`) tracks swap-incurred `cumulativeDeficit` only.
+- **Separation invariant**: `commitmentDeficit` is a checkpoint-derived solvency gate and is not the pool swap-attributed
+  deficit principal bucket. `totalDeficitPrincipal` tracks swap-incurred `cumulativeDeficit` at the pool level only.
 
 ### COMMIT-02A: Non-seizure MM liquidity changes blocked while `commitmentDeficit` is non-zero
 
@@ -499,109 +516,12 @@ being an informal “should”.
   - `advancer != owner`.
 - **Enforced by**: `VTSCommitLib.checkpointWithCommitment` reverts `Errors.InvalidSender()` when violated.
 
-## Coverage, fee burning, and bounded exercises
-
-### COV-01: Coverage burn is bounded by `(deficit + settled)`; fee burn is capped by deficit
-
-- **Statement**:
-  - Effective coverage usage must satisfy \(cov\_{eff} = \min(cov, cumulativeDeficit + settled)\).
-  - Burn base must satisfy \(burnBase = \min(cov\_{eff}, cumulativeDeficit)\).
-  - `commitmentDeficit` is not used as slash principal in this burn path.
-- **Enforced by**: `src/libraries/VTSPositionLib.sol::_applyCoverageBurn`.
-
-### COV-02: Coverage is applied before position modification to preserve economic integrity
-
-- **Statement**: Coverage burns must be settled before liquidity modification to prevent “cover then avoid burn in same
-  call” games.
-- **Ordering requirement**: Settlement netting order is:
-  1. `cumulativeDeficit` first,
-  2. then `commitmentDeficit`,
-  3. then `settled` increases.
-     Only the `cumulativeDeficit` leg mutates DICE principal (`totalDeficitPrincipal`).
-- **Enforced by**:
-  - `src/libraries/VTSPositionLib.sol::settlePositionGrowths` calls `_settleDeficitIndexedCoverageUsage` after settling
-    deficit/inflow growths, and is invoked by `CoreHook` _before_ modifies.
-
-### COV-03: Coverage increments are meaningful only when there is principal/settled to index against
-
-- **Statement**: Coverage index increments are conditional:
-  - If `totalDeficitPrincipal > 0`, increment DICE index; else accrue to residual.
-    (`totalDeficitPrincipal` is the pool sum of outstanding `cumulativeDeficit`, excluding `commitmentDeficit`.)
-  - If `totalSettled > 0`, increment CISE index; else accrue to residual.
-- **Enforced by**: `src/libraries/VTSCommitLib.sol::incrementCoverage`.
-- **Practical implication**: Tests should not assume “arbitrary coverage” will always produce burns or index movement.
-
-### COV-03A: Coverage is measured at unwrap-time market consumption, not at later queue fulfilment
-
-- **Statement**:
-  - `incrementCoverage` measures only the amount of already-live market liquidity actually consumed by
-    `MarketFactory.useMarketLiquidity(...)` during an unwrap.
-  - Any unwrap remainder that is queued is **not** itself a coverage event.
-  - Later queue servicing via vault-to-Hub mobilisation (for example `CanonicalVault._settleObligationsForLCC(...)` ->
-    `LiquidityHub.confirmTake(...)`) is fulfilment / reserve reconciliation, not retroactive enlargement of the earlier
-    coverage event.
-- **Why**:
-  - DICE/CISE are intended to answer "how much market liquidity was exercised by this unwrap now?", not "how much queue
-    debt was eventually paid later?".
-  - Therefore, if current reserve state causes part of an unwrap to queue, the protocol records coverage only for the
-    immediate exercised slice. Later token-in replenishment may clear the queue, but it does not create a second
-    coverage event for that original unwrap.
-
-### COV-04: Fee-burn baseline remainder carry and liquidity resets
-
-- **Statement**:
-  - When applying a coverage fee burn, the position checkpoints `feeGrowthInsideLast` on the fee token by advancing
-    Q128 growth in a way that **carries** the `(consumedFees * Q128) mod positionLiquidity` remainder across successive
-    burns at fixed liquidity, so repeated partial burns do not lose one wei of growth per event to independent flooring.
-  - The remainder is **invalid** if `positionLiquidity` changes: `touchPosition` clears `feeBurnGrowthRemainder` whenever
-    `liquidityDelta != 0` for an existing position. New positions initialise both fee snapshots and remainders in
-    `_initFeeSnapshot`.
-  - If Uniswap position liquidity changes **without** `touchPosition` (for example paused remove-liquidity in
-    `CoreHook._afterRemoveLiquidity`), `settlePositionGrowths` detects a mismatch between stored `Position.liquidity`
-    and `StateLibrary.getPositionLiquidity` and clears `feeBurnGrowthRemainder` so carry is never applied under a stale
-    denominator. The next `touchPosition` continues to be the canonical place that updates the stored liquidity mirror.
-- **Enforced by**: `src/libraries/VTSPositionLib.sol::_applyBurnBase`, `_initFeeSnapshot`, `touchPosition`,
-  `_reconcileLiquidityMirrorAndFeeBurnRemainder`, `settlePositionGrowths`.
-
-### FEE-01: Two-phase fee processing, materialised pot, and `pendingFeeAdj`
-
-- **Statement**:
-  - Pool-level **bonus economics** are anchored on the **materialised** per-fee-token `slashedPot` balances (not on a
-    separate queued “protocol fee accrued” counter).
-  - **Positive** `pendingFeeAdj` on positions encodes slash / fee-burn obligations that are **materialised** into
-    `slashedPot` on later touches (subject to per-leg caps on decreases — see SETTLE-03).
-  - **Bonus allocation** runs only **after** positive materialisation for that touch: `_processPositionFees` applies
-    Phase 1 (`_finalisePositiveFeeAdjustment`), Phase 2 (`_queueBonusForToken` against `slashedPot` / CSI `potAvail`),
-    then Phase 3 (`_finaliseNegativeFeeAdjustment` draining `slashedPot` for negative pending).
-  - Fee adjustments are **best effort** at the touch granularity: the same pass may fully pay a queued bonus when the
-    materialised pot suffices; otherwise negative `pendingFeeAdj` can remain for later touches.
-- **Enforced by**:
-  - `src/libraries/VTSFeeLib.sol::_queueBonusForToken` reads allocatable balance from `slashedPot` (with CSI self-exclusion
-    via `feesShared` / remaining-share epochs).
-  - `src/libraries/VTSFeeLib.sol::_finalisePositiveFeeAdjustment` / `_finaliseNegativeFeeAdjustment` move value between
-    `pendingFeeAdj` and `slashedPot` in accounting; CoreHook settles ERC6909 against the hub.
-  - `src/libraries/VTSFeeLib.sol::_processPositionFees` orchestrates the three phases above.
-  - Bonus sizing uses `FullMath.mulDivRoundingUp(potAvail, ciseExposure, totalExposure)` (then caps to `potAvail`) so
-    tiny proportional shares are not stranded at zero wei when the position is otherwise eligible.
-- **fuzz harness note**:
-  - `test/fuzz/invariants/FEE01.sol` resets CSI `feesSharedEpoch`, remaining-share factors, and related accounting at the
-    start of each action. Medusa reuses a single deployed harness, so without that reset, `_syncFeesSharedRemainingForToken`
-    can clear or rescale seeded `feesShared` across steps and desynchronise a naive “expected queue” model from production
-    behaviour.
-
-### FEE-02: New positions must not receive fee-sharing bonuses on creation
-
-- **Statement**: A newly registered position (MM or DirectLP) must not immediately allocate/receive fee-sharing bonuses
-  at the moment it is created, even if the pool already has a non-zero materialised `slashedPot`.
-  Bonus allocation is only possible after the position has accrued non-dust eligibility (CISE exposure) and is later
-  fee-processed.
-- **Enforced by**:
-  - `src/libraries/VTSFeeLib.sol::_queueBonusForToken` requires `ciseExposure > 0` and `ciseExposure >= 1e6`
-    (dust guard). New positions start with `ciseExposureSinceLastMod == 0`.
-  - CISE exposure accrues only when coverage is incremented (`VTSCommitLib.incrementCoverage`) **after** the position
-    exists; it is then realised/consumed on subsequent fee-processing touches.
-
 ## Settlement, RFS, and seizure safety
+
+### Policy reference: seizure economics (amendment 2026-04-19)
+
+- **Agents/spec**: Normative **economic intent** for guarantor seizure (base tranche, proportional cure of overdue RfS, position-wide aggregation) is documented in `agents/spec/Seizure-and-Base-Tranche-Policy.md`. That document supersedes older narrative in `agents/spec/Settlements.md` that described time-linear seizure sizing after grace.
+- **Implementation note**: On-chain seized liquidity units are computed in `src/libraries/VTSLifecycleLinkedLib.sol::_calcSeizure`. The outer MM settle path captures **pre-intervention** RfS (`R_pre`) from `getRFS` immediately before settlement deposits mutate `pa.settled`; `_calcSeizure` sizes per-lane **exposure** and **cured fraction** `φ = S/R_pre` from that snapshot (not from post-settlement remainders), so a transaction that **fully closes** RfS in the same step can still yield **non-zero** seized units when the snapshot showed overdue obligation. Rounding conservatism follows existing `LiquidityUtils` bps helpers (`mulDivRoundingUp` where applicable). Treat `INVARIANTS.md` enforcement points as authoritative for **what reverts**; treat the agents spec as authoritative for **economic intent**, with this note describing **current sizing alignment**.
 
 ### SETTLE-01: Withdrawals from active positions are disallowed while RFS is open
 
@@ -637,18 +557,12 @@ being an informal “should”.
     booked as positive owner underlying delta. Any shortfall that cannot be Hub-queued (principal-capped) and cannot be
     paid from the vault in the same unlock **stays in live source `settled`**, not on `OwnerCurrencyDelta`.
   - **User min-out vs routing principal**: `DECREASE_LIQUIDITY` / `BURN_POSITION` `amountMin` floors the per-leg **immediate
-    post-`feeAdj` non-fee LCC** (`LiquidityUtils.forwardedNonFeeLccAmount`), not hook-time pool principal
+    post-netting non-fee LCC** (`LiquidityUtils.forwardedNonFeeLccAmount`), not hook-time pool principal
     `callerDelta - feesAccrued` used for cancel/queue caps in VTS. For **commit buckets** (`tokenId > 0`), only the
     Hub-queued slice `qCommitted` is physically forwarded to `MMQueueCustodian`; any surplus
     `nonFee - qCommitted` remains as **locker transient LCC credit** on `MMPositionManager` (cleared via `TAKE` /
-    `UNWRAP_LCC` in the same batch). `feeAdj` reclassifies only the informational **fee** slice vs non-fee receipt; it does
-    not redefine queue principal, which stays principal-bounded from `callerDelta - feesAccrued`.
-  - **Same-touch positive slash vs fee slice (finding #4 / policy B)**: On any **liquidity decrease** (`liquidityDelta < 0`),
-    including MM and direct-LP paths, materialisation of positive `pendingFeeAdj` in `VTSFeeLib._finaliseFeeAdjustment` is
-    **capped per leg** to the current modify’s informational `feesAccrued` amount for that leg. Any excess positive slash
-    stays banked in `pendingFeeAdj` for later touches — it is **not** moved into residual-fee backing buckets. Increases and
-    no-op modifies keep uncapped materialisation (`type(uint256).max` caps). This aligns the hook-reported `feeAdj` with the
-    fee slice of the receipt without changing MM principal staging (`callerDelta - feesAccrued` in `VTSPositionMMOpsLib`).
+    `UNWRAP_LCC` in the same batch). Informational accrued fees (`feesAccrued`) are classified separately from principal;
+    queue principal remains bounded from `callerDelta - feesAccrued`.
   - **Source-side decrement (routed amount only)**: `_applySettlementClampFromExcess` removes the **routed export** from
     source `pa.settled` / pool `totalSettled` — for non-seizure decreases that is `settleableDelta + queuedDelta`; for
     seizure decreases it is the per-leg seizure export (`min(excess, settleable + burn)`, not the full queued principal
@@ -687,8 +601,7 @@ being an informal “should”.
 - **Regression / evidence (Foundry + audit)**:
   - `test/marketmaker/MMPositionMinOutFeeAdjIntegration.t.sol`, `test/modules/PositionManagerImpl.t.sol`,
     `test/marketmaker/MMPositionManager.t.sol`, `test/marketmaker/MMPositionActionsImpl.t.sol` (min-out vs hook principal;
-    see [agents/audit-resolutions/3__high-mm-min-out-pre-transfer-callerdelta-resolution.md](../../agents/audit-resolutions/3__high-mm-min-out-pre-transfer-callerdelta-resolution.md)).
-  - Fee-slice slash cap (finding #4): [agents/audit-resolutions/4__medium-not-netting-feeadj-from-mm-decrease-principal-resolution.md](../../agents/audit-resolutions/4__medium-not-netting-feeadj-from-mm-decrease-principal-resolution.md); `test/libraries/VTSPositionLib.mutation.unit.t.sol` (`test_touchPosition_*_positiveSlash_capped_to_feesAccrued`).
+    see [agents/audit-resolutions/3\_\_high-mm-min-out-pre-transfer-callerdelta-resolution.md](../../agents/audit-resolutions/3__high-mm-min-out-pre-transfer-callerdelta-resolution.md)).
   - Decrease routing / `VTSPositionMMOpsLib` integration: `test/libraries/VTSPositionLib.t.sol`,
     `test/libraries/VTSPositionLib.onMMSettle.t.sol`, harnesses under `test/libraries/harnesses/VTSPositionLibHarness.sol`.
   - Queue custody vs forwarded non-fee: [agents/audit-resolutions/mm-queue-custody-nonfee-vs-custodyforward-guard-resolution.md](../../agents/audit-resolutions/mm-queue-custody-nonfee-vs-custodyforward-guard-resolution.md) and **MMQ-01** (Echidna) in `test/fuzz/README.md`.
@@ -697,12 +610,12 @@ being an informal “should”.
 
 - **Statement**: When routing Hub-queued principal (`qCommitted` / custody-forward) through
   `PositionManagerImpl._routeLccCustodyTakeAndForward` with a non-zero position-scoped `tokenId`, the immediate
-  post-`feeAdj` **non-fee** LCC amount (`LiquidityUtils.forwardedNonFeeLccAmount`) must cover the queued slice being
-  custodied, or the call reverts with `Errors.InsufficientBalance` (fail-closed vs under-collateralised commit custody).
-  Under sound routing, queued principal is bounded by pool principal `callerDelta - feesAccrued`, while `feeAdj` applies
-  only to the fee-classified slice relative to informational `feesAccrued` — not as a separate “tax” on principal — so
-  `nonFee < custodyForward` should be **unreachable** in valid states and indicates a regression, sequencing bug, or
-  inconsistent coupling between VTS queue staging and the router’s actual post-hook receipt.
+  **non-fee** LCC amount after informational fee netting (`LiquidityUtils.forwardedNonFeeLccAmount`) must cover the queued
+  slice being custodied, or the call reverts with `Errors.InsufficientBalance` (fail-closed vs under-collateralised commit
+  custody). Under sound routing, queued principal is bounded by pool principal `callerDelta - feesAccrued`; informational
+  `feesAccrued` does not reduce queue principal caps, so `nonFee < custodyForward` should be **unreachable** in valid
+  states and indicates a regression, sequencing bug, or inconsistent coupling between VTS queue staging and the router’s
+  actual post-hook receipt.
 - **Enforced by**: `PositionManagerImpl` custody-forward path and `LiquidityUtils.forwardedNonFeeLccAmount` semantics
   (see audit resolution linked above). Locker delta is debited via `LiquidityUtils.lockerLccTakeAmountBeforeCustodyForward`
   only by the custodied amount for commit buckets; surplus non-fee LCC remains locker credit.
@@ -715,14 +628,14 @@ being an informal “should”.
 
 - **Statement**: For MM liquidity increases that settle protocol credit inside `processMMOperations` (in-hook path with
   `clampToRequiredSettlement`), `_updateSettlement` / `_vUpdateSettlement` may apply a single positive deposit amount across
-  `cumulativeDeficit`, `commitmentDeficit`, and `pa.settled` in the usual netting order (**COV-02**). The portion of
+  `cumulativeDeficit`, `commitmentDeficit`, and `pa.settled` in the usual netting order. The portion of
   protocol credit that cures deficits without increasing `pa.settled` must still be debited from positive underlying
   delta (full economic consumption), but it must **not** be treated as having satisfied the MM add deposit requirement
   encoded in `requiredSettlementDelta`. Only the actual `pa.settled` lane delta may reduce that remainder before the
   post-hook underlying settlement step.
 - **Protocol rule**:
   - **Credit consumption** follows total applied amount from settlement (`totalApplied`): deficit cure + settled increase
-    (and pool accounting such as DICE principal on the cumulative-deficit leg) stays internally consistent.
+    (and pool accounting on the cumulative-deficit leg) stays internally consistent.
   - **Requirement bookkeeping** for MM add backing vs the live negative `requiredSettlementDelta` advances only by the
     settled leg (`settledDeltaOnly`), so a position cannot skip posting the still-outstanding deposit obligation merely
     because credit first cleared `cumulativeDeficit` / `commitmentDeficit`.
@@ -749,7 +662,7 @@ being an informal “should”.
   - Commitment-deficit bypass is evaluated per token lane using token-specific deficit age and thresholds.
   - `commitmentDeficit` bypass is distinct from swap-incurred `cumulativeDeficit` accounting:
     - `commitmentDeficit` hardens solvency enforcement (RFS/seizability),
-    - `cumulativeDeficit` drives DICE slash attribution and pool deficit principal.
+    - `cumulativeDeficit` drives swap-attributed pool deficit principal (`totalDeficitPrincipal`).
   - Normal grace-path seizability is evaluated only for token lanes currently marked open in the checkpoint mask.
   - For normal grace-path checks, open-lane eligibility uses each lane's configured grace plus lane-local extension
     against the canonical checkpointed episode timestamp on that lane.
@@ -1114,6 +1027,7 @@ being an informal “should”.
 
 ## Notes for test authors
 
+- **Config**: use `VTSConfigs.getDefaultConfig()` unless a test intentionally constructs a custom `VTSConfig`.
 - Many invariants above are **batch-scoped** (PoolManager unlock sessions) rather than “global over time”.
 - When writing tests that exercise settlement/credit paths, prefer asserting on **balance deltas** and **explicit revert
   selectors** (eg `Errors.CurrencyNotSettled()`, `Errors.TransferNotAllowed()`, `DelegateCallGuard.OnlyDelegateCall()`).

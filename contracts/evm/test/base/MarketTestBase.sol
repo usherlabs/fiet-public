@@ -29,6 +29,7 @@ import {WETH} from "@uniswap/v4-core/lib/solmate/src/tokens/WETH.sol";
 import {IWETH9} from "v4-periphery/src/interfaces/external/IWETH9.sol";
 import {IAllowanceTransfer} from "permit2/src/interfaces/IAllowanceTransfer.sol";
 import {VTSConfigs} from "../../src/libraries/VTSConfigs.sol";
+import {MarketVTSConfiguration} from "../../src/types/VTS.sol";
 import {VRLSignalManager} from "../../src/VRLSignalManager.sol";
 import {VRLSettlementObserver} from "../../src/VRLSettlementObserver.sol";
 import {IVRLSettlementObserver} from "../../src/interfaces/IVRLSettlementObserver.sol";
@@ -47,7 +48,7 @@ import {DeployPermit2} from "permit2/test/utils/DeployPermit2.sol";
 import {MarketFactory} from "../../src/MarketFactory.sol";
 import {PositionManager} from "v4-periphery/src/PositionManager.sol";
 import {IPositionDescriptor} from "v4-periphery/src/interfaces/IPositionDescriptor.sol";
-import {DirectLPDeltaResolver} from "../../src/DirectLPDeltaResolver.sol";
+import {DirectLPDeltaResolver} from "../../src/periphery/DirectLPDeltaResolver.sol";
 import {IPositionManager} from "v4-periphery/src/interfaces/IPositionManager.sol";
 import {MockPositionDescriptor} from "../_mocks/MockPositionDescriptor.sol";
 import {Bounds} from "../../src/libraries/Bounds.sol";
@@ -265,6 +266,11 @@ abstract contract MarketTestBase is Test, Deployers, DeployPermit2 {
         MarketFactory(marketFactory).initialise(canonicalVaultAddr, coreHookAddress, initialBounds);
     }
 
+    /// @dev VTS configuration supplied to `MarketFactory.createMarket` during test setup.
+    function _marketVTSConfigurationForCreate() internal pure virtual returns (MarketVTSConfiguration memory) {
+        return VTSConfigs.getDefaultConfig();
+    }
+
     // Create and initialize the market i.e deploy core and proxy pools using the market factory
     function _createAndInitializeMarket(uint24 corePoolFee, int24 tickSpacing, uint160 initialSqrtPriceX96) internal {
         // Mock validateMarketOracles call that is made when we create the market
@@ -291,7 +297,7 @@ abstract contract MarketTestBase is Test, Deployers, DeployPermit2 {
                 tickSpacing,
                 initialSqrtPriceX96,
                 proxySalt,
-                VTSConfigs.getDefaultConfig()
+                _marketVTSConfigurationForCreate()
             );
 
         // set the deployed proxy hook address

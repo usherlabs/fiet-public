@@ -99,7 +99,7 @@ questions for every invariant:
 | MKT-04 | P0 | Medusa/FuzzEntry | `FuzzHubLCC.sol`, `invariants/MKT04_04A.sol` | Factory and issuer gating remain on the supported Hub/LCC path. |
 | MKT-04A | P0 | Medusa/FuzzEntry | `FuzzHubLCC.sol`, `invariants/MKT04_04A.sol` | Bound-level policy regression stays composed with the same Hub adapter path. |
 
-### Commit / signal / coverage / fee / VTS invariants
+### Commit / signal / VTS invariants
 
 | Invariant | Priority | Primary path | Evidence | Coverage notes |
 | --------- | -------- | ------------ | -------- | -------------- |
@@ -112,13 +112,6 @@ questions for every invariant:
 | COMMIT-02A | P0 | Foundry + Medusa | `invariants/COMMIT02.sol`, `VTSOrchestrator.t.sol` | Deficit formation is fuzzed; the explicit non-seizure freeze is asserted in the core orchestrator tests. |
 | COMMIT-02B | P0 | Foundry + Medusa | `invariants/COMMIT02.sol`, `VTSOrchestrator.t.sol` | Deficit clearing is fuzzed; full-deactivation storage cleanup remains authoritative in Foundry. |
 | COMMIT-03 | P0 | Medusa/FuzzEntry | `FuzzVTSPosition.sol`, `invariants/COMMIT03.sol` | Advancer binding and rotation remain direct Medusa properties. |
-| COV-01 | P0 | Medusa/FuzzEntry | `FuzzVTSCoreTail.sol`, `invariants/COV01.sol` | Coverage-burn bounds remain a direct Medusa property. |
-| COV-02 | P0 | Medusa/FuzzEntry | `FuzzVTSCoreTail.sol`, `invariants/COV02.sol` | Settle-before-modify ordering remains a direct Medusa property. |
-| COV-03 | P1 | Medusa/FuzzEntry | `FuzzVTSPosition.sol`, `invariants/COV03.sol` | Conditional coverage indexing remains a direct Medusa property. |
-| COV-03A | P1 | Foundry + E2E | `VTSFeeLib.index.t.sol`, `script/e2e/MMCoverage.s.sol` | Unwrap-time market-consumption semantics remain most explicit in the fee-index and end-to-end coverage flows. |
-| COV-04 | P1 | Medusa/FuzzEntry | `FuzzVTSCoreTail.sol`, `invariants/COV04.sol` | Fee-burn remainder and carry math remain a direct Medusa property. |
-| FEE-01 | P0 | Medusa/FuzzEntry | `FuzzVTSCoreTail.sol`, `invariants/FEE01.sol` | Bonus queue vs materialised pot remains a direct Medusa property. |
-| FEE-02 | P0 | Medusa/FuzzEntry | `FuzzVTSCoreTail.sol`, `invariants/FEE02.sol` | No-bonus-on-creation remains a direct Medusa property. |
 | VTS-01 | P0 | Medusa/FuzzEntry | `FuzzVTSCoreTail.sol`, `invariants/VTS01.sol` | Growth settlement before modify remains a direct Medusa property. |
 | VTS-02 | P1 | Medusa/FuzzEntry | `FuzzVTSCoreTail.sol`, `invariants/VTS02.sol` | Tick flip identity remains a direct Medusa property. |
 | VTS-03 | P0 | Medusa/FuzzEntry | `FuzzVTSCoreTail.sol`, `invariants/VTS03.sol` | Segment-based growth reflection remains a direct Medusa property. |
@@ -164,6 +157,10 @@ The repo-owned Medusa migration is complete for the supported path:
 - repo-owned `echidna.` salt references are `0`
 - the old linked-library CREATE2 prepare/validation flow is no longer part of `just fuzz`, `just fuzz-deep`, or
   `just medusa-entry`
+- fee-era invariants (`COV-01`, `COV-03`, `COV-04`, `FEE-01`, `FEE-02`) and `VTSFeeLib`-specific docs/harnesses are no
+  longer part of the supported path
+- `script/e2e/MMCoverage.s.sol` is intentionally retired because the fee-pot and fee-accounting orchestrator lenses no
+  longer exist
 
 Removed from the repo-owned supported path:
 

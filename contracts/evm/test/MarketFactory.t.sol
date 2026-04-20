@@ -419,21 +419,7 @@ contract MockOracleHelper_MarketFactory {
 }
 
 contract MockVTSOrchestrator_MarketFactory {
-    PoolId internal _lastCoveragePoolId;
-    uint256 internal _lastCoverage0;
-    uint256 internal _lastCoverage1;
-
     function initPool(PoolKey memory, MarketVTSConfiguration memory) external pure {}
-
-    function incrementCoverage(PoolId poolId, uint256 amount0, uint256 amount1) external {
-        _lastCoveragePoolId = poolId;
-        _lastCoverage0 = amount0;
-        _lastCoverage1 = amount1;
-    }
-
-    function lastCoverage() external view returns (PoolId poolId, uint256 amount0, uint256 amount1) {
-        return (_lastCoveragePoolId, _lastCoverage0, _lastCoverage1);
-    }
 }
 
 contract MockLiquidityHub_MarketFactory {
@@ -1107,7 +1093,7 @@ contract MarketFactoryUnitTest is Test {
         factory.useMarketLiquidity(address(0xDEAD), PoolId.unwrap(coreId), 1);
     }
 
-    function test_useMarketLiquidity_usesCoreOrderingForDeltaAndCoverage() public {
+    function test_useMarketLiquidity_usesCoreOrderingForPerLegCapacity() public {
         uint160 initial = 79228162514264337593543950336;
         (PoolId coreId,) = _createMarket(address(0x100), address(0x200), initial);
         address[2] memory corePair = factory.corePoolToCurrencyPair(coreId);
@@ -1118,18 +1104,10 @@ contract MarketFactoryUnitTest is Test {
         vm.prank(address(liquidityHub));
         uint256 used0 = factory.useMarketLiquidity(corePair[0], PoolId.unwrap(coreId), 10);
         assertEq(used0, 3);
-        (PoolId gotPoolId0, uint256 cov00, uint256 cov01) = vts.lastCoverage();
-        assertEq(PoolId.unwrap(gotPoolId0), PoolId.unwrap(coreId));
-        assertEq(cov00, 3);
-        assertEq(cov01, 0);
 
         vm.prank(address(liquidityHub));
         uint256 used1 = factory.useMarketLiquidity(corePair[1], PoolId.unwrap(coreId), 10);
         assertEq(used1, 7);
-        (PoolId gotPoolId1, uint256 cov10, uint256 cov11) = vts.lastCoverage();
-        assertEq(PoolId.unwrap(gotPoolId1), PoolId.unwrap(coreId));
-        assertEq(cov10, 0);
-        assertEq(cov11, 7);
     }
 
     function test_marketLiquidity_readsVaultBalance() public {

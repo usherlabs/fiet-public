@@ -41,6 +41,8 @@ import {CurrencySortHelper} from "../../libraries/CurrencySortHelper.sol";
 abstract contract E2EBase is DeployFullStackBase {
     using StateLibrary for IPoolManager;
 
+    mapping(address marketFactoryAddr => uint256 nextSaltSearchStart) internal s_nextProxyHookSaltSearchStart;
+
     struct CoreDeployment {
         FullStack stack;
     }
@@ -235,15 +237,24 @@ abstract contract E2EBase is DeployFullStackBase {
         );
     }
 
-    function _findProxyHookSalt(address marketFactoryAddr) internal view returns (bytes32 salt) {
-        (address expectedProxyHook, bytes32 minedSalt) = HookMiner.find(
-            MarketFactory(marketFactoryAddr).marketVaultDeployer(),
-            HookFlags.PROXY_HOOK_FLAGS,
-            type(ProxyHook).creationCode,
-            abi.encode(config.poolManager, marketFactoryAddr)
-        );
-        console.log("Expected ProxyHook (extra market):", expectedProxyHook);
-        salt = minedSalt;
+    function _findProxyHookSalt(address marketFactoryAddr) internal returns (bytes32 salt) {
+        address deployer = MarketFactory(marketFactoryAddr).marketVaultDeployer();
+        bytes memory creationCodeWithArgs =
+            abi.encodePacked(type(ProxyHook).creationCode, abi.encode(config.poolManager, marketFactoryAddr));
+        uint256 startSalt = s_nextProxyHookSaltSearchStart[marketFactoryAddr];
+        uint160 flags = HookFlags.PROXY_HOOK_FLAGS & HookMiner.FLAG_MASK;
+        uint256 endSalt = startSalt + HookMiner.MAX_LOOP;
+
+        for (uint256 candidateSalt = startSalt; candidateSalt < endSalt; ++candidateSalt) {
+            address expectedProxyHook = HookMiner.computeAddress(deployer, candidateSalt, creationCodeWithArgs);
+            if (uint160(expectedProxyHook) & HookMiner.FLAG_MASK == flags && expectedProxyHook.code.length == 0) {
+                console.log("Expected ProxyHook (extra market):", expectedProxyHook);
+                s_nextProxyHookSaltSearchStart[marketFactoryAddr] = candidateSalt + 1;
+                return bytes32(candidateSalt);
+            }
+        }
+
+        revert("E2EBase: proxy hook salt not found");
     }
 
     function _proxyCreateMarket(address globalConfigAddr, address marketFactoryAddr, CreateMarketArgs memory args)
@@ -286,7 +297,6 @@ abstract contract E2EBase is DeployFullStackBase {
         cfg = MarketVTSConfiguration({
             token0: token0,
             token1: token1,
-            coverageFeeShare: 5000,
             minResidualUnits: 1,
             unbackedCommitmentGraceBypassBps: 500
         });
@@ -578,4 +588,3 @@ abstract contract E2EBase is DeployFullStackBase {
         );
     }
 }
-

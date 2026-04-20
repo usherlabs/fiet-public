@@ -35,7 +35,6 @@ abstract contract VTSConfigFileBase is Script {
         cfg = MarketVTSConfiguration({
             token0: _parseJsonTokenConfig(json, ".token0"),
             token1: _parseJsonTokenConfig(json, ".token1"),
-            coverageFeeShare: _jsonUint16(json, ".coverageFeeShare"),
             minResidualUnits: _jsonUint(json, ".minResidualUnits"),
             unbackedCommitmentGraceBypassBps: _jsonUint16(json, ".unbackedCommitmentGraceBypassBps")
         });
@@ -45,7 +44,6 @@ abstract contract VTSConfigFileBase is Script {
         cfg = MarketVTSConfiguration({
             token0: _parseTomlTokenConfig(toml, "token0"),
             token1: _parseTomlTokenConfig(toml, "token1"),
-            coverageFeeShare: _tomlUint16(toml, "coverageFeeShare"),
             minResidualUnits: _tomlUint(toml, "minResidualUnits"),
             unbackedCommitmentGraceBypassBps: _tomlUint16(toml, "unbackedCommitmentGraceBypassBps")
         });
@@ -122,4 +120,3 @@ abstract contract VTSConfigFileBase is Script {
         return true;
     }
 }
-

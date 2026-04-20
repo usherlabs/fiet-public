@@ -19,7 +19,7 @@ import {MMPCommitmentDescriptor} from "src/MMPCommitmentDescriptor.sol";
 import {LiquidityHub} from "src/LiquidityHub.sol";
 import {GlobalConfig} from "src/GlobalConfig.sol";
 import {ECDSASignatureSignalVerifier} from "src/verifiers/ECDSASignatureSignalVerifier.sol";
-import {DirectLPDeltaResolver} from "src/DirectLPDeltaResolver.sol";
+import {DirectLPDeltaResolver} from "src/periphery/DirectLPDeltaResolver.sol";
 import {CanonicalVault} from "src/CanonicalVault.sol";
 import {IPoolManager} from "v4-periphery/lib/v4-core/src/interfaces/IPoolManager.sol";
 import {IWETH9} from "v4-periphery/src/interfaces/external/IWETH9.sol";
@@ -246,6 +246,9 @@ abstract contract DeployProtocolBase is CREATE3Script, NetworkConfig {
         coreHook = hookAddress;
     }
 
+    /// @notice Binds MM stack addresses (and optionally `DirectLPDeltaResolver`) as `LiquidityHub` bound endpoints.
+    /// @param directLPDeltaResolver Optional third bound endpoint for native `PositionManager` subscriber wiring. Use
+    ///        `address(0)` to omit; default `DeployContracts` does not deploy the resolver.
     function _initialiseFactory(
         address globalConfig,
         address marketFactory,
@@ -255,10 +258,13 @@ abstract contract DeployProtocolBase is CREATE3Script, NetworkConfig {
         address queueCustodian,
         address directLPDeltaResolver
     ) internal {
-        address[] memory initialBounds = new address[](3);
+        uint256 n = directLPDeltaResolver == address(0) ? 2 : 3;
+        address[] memory initialBounds = new address[](n);
         initialBounds[0] = mmPositionManager;
         initialBounds[1] = queueCustodian;
-        initialBounds[2] = directLPDeltaResolver;
+        if (n == 3) {
+            initialBounds[2] = directLPDeltaResolver;
+        }
         GlobalConfig(globalConfig)
             .proxyCall(
                 marketFactory,
