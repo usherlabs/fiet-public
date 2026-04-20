@@ -89,7 +89,7 @@ contract MarketMakerExtremeUnserviceableE2E is MME2EBase {
                         _unwrapAllLccsAndAssert(m, mmPk, commitId, 0, true);
                         console.log("OK: full exit (serviceable in this cell)");
                     } else {
-                        _assertCommitNotDrainedOnDecommit(m, mmPk, commitId);
+                        _assertRecognisedUnserviceableOverflowBeforeRebalance(m, mmPk, commitId, 0);
                         console.log("OK: decommit blocked as expected (unserviceable in this cell)");
                     }
                 }

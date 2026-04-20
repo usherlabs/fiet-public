@@ -42,8 +42,12 @@ contract MarketMakerModestSwapE2E is MME2EBase {
 
                 uint256 takerPk = _getDeployerPrivateKey();
                 _runModestTradingPhase(m, mmPk, takerPk, commitId);
+                _assertTickNotExtreme(m);
 
-                console.log("INFO: modest path uses exit classification + health logs for this profile");
+                _logMakerHealth(
+                    string.concat("after modest trade [", profiles[i].name, "][", buffers[j].name, "]"),
+                    _snapshotMakerHealth(m, commitId, 0)
+                );
 
                 _settleRfsIfOpen(m, mmPk, commitId);
                 _burnAndRealiseExitCredits(m, mmPk, commitId, 0);
@@ -63,7 +67,7 @@ contract MarketMakerModestSwapE2E is MME2EBase {
                     _unwrapAllLccsAndAssert(m, mmPk, commitId, 0, true);
                     console.log("OK: modest path fully serviceable in this cell");
                 } else {
-                    _assertCommitNotDrainedOnDecommit(m, mmPk, commitId);
+                    _assertRecognisedUnserviceableOverflowBeforeRebalance(m, mmPk, commitId, 0);
                     console.log("OK: modest path left inactive remnant (classified)");
                 }
             }

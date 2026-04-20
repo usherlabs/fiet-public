@@ -48,7 +48,9 @@ contract MarketMakerServiceableRoundTripE2E is MME2EBase {
                 _runAdaptiveRoundTripTradingPhase(m, mmPk, takerPk, commitId, MM_E2E_BIG_SWAP_IN, 100e18, 40);
 
                 MakerHealthSnapshotE2E memory ht = _snapshotMakerHealth(m, commitId, 0);
-                _logMakerHealth(string.concat("after adaptive trade [", profiles[i].name, "][", buffers[j].name, "]"), ht);
+                _logMakerHealth(
+                    string.concat("after adaptive trade [", profiles[i].name, "][", buffers[j].name, "]"), ht
+                );
 
                 if (j == 0) {
                     unbufAfterTrade[i] = ht;

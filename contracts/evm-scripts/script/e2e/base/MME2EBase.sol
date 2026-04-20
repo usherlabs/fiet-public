@@ -117,10 +117,10 @@ abstract contract MME2EBase is E2EBase {
     uint128 internal constant MM_E2E_BIG_SWAP_IN = 5_000e18;
 
     uint256 internal constant MM_E2E_WRAP_FOR_MODEST = 1_200e18;
-    uint128 internal constant MM_E2E_MODEST_SWAP_IN = 10e18;
+    uint128 internal constant MM_E2E_MODEST_SWAP_IN = 1e6;
 
-    /// @dev Gentler “reserve-shaped” cumulative swap size per leg (both directions) per round.
-    uint128 internal constant MM_E2E_RESERVE_SHAPED_LEG_SWAP = 500e18;
+    /// @dev Reserve-shaped path uses repeated modest legs instead of a single extreme sweep.
+    uint128 internal constant MM_E2E_RESERVE_SHAPED_LEG_SWAP = 10e18;
 
     /// @dev Default DirectLP full-range buffer (aligned with `Swap.s.sol` seeding caps).
     uint256 internal constant MM_E2E_BUFFER_WRAP_PER_ASSET = 1_200e18;
@@ -299,9 +299,10 @@ abstract contract MME2EBase is E2EBase {
         uint256 maxDrainIters
     ) internal {
         _drainInactivePositionSurplus(m, mmPk, commitId, positionIndex, maxDrainIters);
-        (uint256 e0, uint256 e1) =
-            _getEffectiveSettledPair(IVTSOrchestrator(m.stack.contracts.vtsOrchestrator), commitId, positionIndex);
-        require(e0 == 0 && e1 == 0, "e2e: expected fully drained inactive surplus");
+        ExitSnapshotE2E memory s = _snapshotExitState(m, commitId, positionIndex);
+        require(s.eff0 == 0 && s.eff1 == 0, "e2e: expected fully drained inactive surplus");
+        require(s.overflow0 == 0 && s.overflow1 == 0, "e2e: expected zero inactive overflow after full drain");
+        require(s.inactiveRemnantCount == 0, "e2e: expected inactive remnant count to clear after full drain");
     }
 
     function _assertImprovedServiceabilityVsBaseline(
@@ -1115,7 +1116,7 @@ abstract contract MME2EBase is E2EBase {
         _pokePosition(m, mmPk, commitId, false);
     }
 
-    /// @dev Several modest rounds without a single extreme sweep (reserve-shaped / non-pathological trading).
+    /// @dev Several modest rounds intended to keep the exit serviceable without using adaptive price restoration.
     function _runReserveShapedTradingAndExitSetup(
         StandaloneMarket memory m,
         uint256 mmPk,

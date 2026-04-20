@@ -2,9 +2,10 @@
 pragma solidity ^0.8.26;
 
 /**
- * E2E: MM reserve-shaped trading (no single extreme sweep) → full exit (matrix)
+ * E2E: MM reserve-shaped trading → serviceable full exit (matrix)
  *
- * Uses several modest two-way rounds to accumulate fees without pinning the pool tick to extremes.
+ * Uses several modest two-way rounds to accumulate fees and enforce the serviceable exit path
+ * without relying on the adaptive round-trip recovery used by the separate round-trip scenario.
  */
 
 import {console} from "forge-std/Script.sol";
@@ -30,10 +31,9 @@ contract MarketMakerServiceableReserveShapedE2E is MME2EBase {
         PositionProfileE2E[] memory profiles = _mmPositionProfilesAll();
         BufferModeE2E[] memory buffers = _mmBufferModesAll();
 
-        MakerHealthSnapshotE2E[] memory unbufAfterBurn = new MakerHealthSnapshotE2E[](profiles.length);
+        MakerHealthSnapshotE2E[] memory unbufAfterDrain = new MakerHealthSnapshotE2E[](profiles.length);
 
         for (uint256 i = 0; i < profiles.length; i++) {
-            uint256 successfulExits = 0;
             for (uint256 j = 0; j < buffers.length; j++) {
                 StandaloneMarket memory m = _createMarket(d, vm.addr(mmPk), CORE_POOL_FEE);
                 uint256 commitId = _createMmPositionFromProfile(m, mmPk, profiles[i]);
@@ -54,25 +54,19 @@ contract MarketMakerServiceableReserveShapedE2E is MME2EBase {
                 MakerHealthSnapshotE2E memory hb = _snapshotMakerHealth(m, commitId, 0);
                 _logMakerHealth(string.concat("after burn [", profiles[i].name, "][", buffers[j].name, "]"), hb);
 
+                _assertDrainableAndFullyDrained(m, mmPk, commitId, 0, 48);
+                MakerHealthSnapshotE2E memory hd = _snapshotMakerHealth(m, commitId, 0);
+                _logMakerHealth(string.concat("after full drain [", profiles[i].name, "][", buffers[j].name, "]"), hd);
                 if (!buffers[j].seedDirectLP) {
-                    unbufAfterBurn[i] = hb;
+                    unbufAfterDrain[i] = hd;
                 } else {
-                    _assertMakerHealthNotWorseWithBuffer(hb, unbufAfterBurn[i]);
-                }
-
-                bool drained = _drainInactivePositionSurplusBestEffort(m, mmPk, commitId, 0, 48);
-                if (!drained) {
-                    _assertCommitNotDrainedOnDecommit(m, mmPk, commitId);
-                    console.log("SKIP: cell not fully serviceable under reserve-shaped path");
-                    continue;
+                    _assertMakerHealthNotWorseWithBuffer(hd, unbufAfterDrain[i]);
                 }
 
                 _decommitAndTakeAllLccs(m, mmPk, commitId);
                 _unwrapAllLccsAndAssert(m, mmPk, commitId, 0, true);
-                successfulExits++;
                 console.log("OK: reserve-shaped cell fully exited");
             }
-            require(successfulExits > 0, "e2e: reserve-shaped scenario had no fully serviceable cells");
         }
     }
 }
