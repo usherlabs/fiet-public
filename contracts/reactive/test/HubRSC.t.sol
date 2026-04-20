@@ -230,7 +230,7 @@ contract HubRSCTest is Test {
         hub.react(_settlementLog(hub, recipient3, lcc, 10, 3, 3, 3));
 
         IReactive.LogRecord memory liqLog = IReactive.LogRecord({
-            chain_id: 1,
+            chain_id: hub.protocolChainId(),
             _contract: hub.liquidityHub(),
             topic_0: LIQUIDITY_AVAILABLE_TOPIC,
             topic_1: uint256(uint160(lcc)),
@@ -319,7 +319,7 @@ contract HubRSCTest is Test {
         );
 
         IReactive.LogRecord memory liqLog = IReactive.LogRecord({
-            chain_id: 1,
+            chain_id: hub.protocolChainId(),
             _contract: hub.liquidityHub(),
             topic_0: LIQUIDITY_AVAILABLE_TOPIC,
             topic_1: uint256(uint160(makeAddr("lcc"))),
@@ -354,7 +354,7 @@ contract HubRSCTest is Test {
         hub.react(_settlementLog(hub, recipient, lcc, 100, 1, 0xabc4, 1));
 
         IReactive.LogRecord memory liqLog = IReactive.LogRecord({
-            chain_id: 1,
+            chain_id: hub.protocolChainId(),
             _contract: hub.liquidityHub(),
             topic_0: LIQUIDITY_AVAILABLE_TOPIC,
             topic_1: uint256(uint160(lcc)),
@@ -1570,7 +1570,7 @@ contract HubRSCTest is Test {
         uint256 logIndex
     ) internal view returns (IReactive.LogRecord memory) {
         return IReactive.LogRecord({
-            chain_id: 1,
+            chain_id: hub.reactChainId(),
             _contract: hub.hubCallback(),
             topic_0: SETTLEMENT_REPORTED_TOPIC,
             topic_1: uint256(uint160(recipient)),
@@ -1631,7 +1631,7 @@ contract HubRSCTest is Test {
         uint256 logIndex
     ) internal view returns (IReactive.LogRecord memory) {
         return IReactive.LogRecord({
-            chain_id: 1,
+            chain_id: hub.protocolChainId(),
             _contract: hub.liquidityHub(),
             topic_0: LCC_CREATED_TOPIC,
             topic_1: uint256(uint160(underlying)),
@@ -1652,7 +1652,7 @@ contract HubRSCTest is Test {
         returns (IReactive.LogRecord memory)
     {
         return IReactive.LogRecord({
-            chain_id: 1,
+            chain_id: hub.reactChainId(),
             _contract: hub.hubCallback(),
             topic_0: MORE_LIQUIDITY_AVAILABLE_TOPIC,
             topic_1: uint256(uint160(lcc)),
@@ -1676,7 +1676,7 @@ contract HubRSCTest is Test {
         uint256 logIndex
     ) internal view returns (IReactive.LogRecord memory) {
         return IReactive.LogRecord({
-            chain_id: 1,
+            chain_id: hub.reactChainId(),
             _contract: hub.hubCallback(),
             topic_0: SETTLEMENT_PROCESSED_REPORTED_TOPIC,
             topic_1: uint256(uint160(recipient)),
@@ -1701,7 +1701,7 @@ contract HubRSCTest is Test {
         uint256 logIndex
     ) internal view returns (IReactive.LogRecord memory) {
         return IReactive.LogRecord({
-            chain_id: 1,
+            chain_id: hub.reactChainId(),
             _contract: hub.hubCallback(),
             topic_0: SETTLEMENT_PROCESSED_REPORTED_TOPIC,
             topic_1: uint256(uint160(recipient)),
@@ -1725,7 +1725,7 @@ contract HubRSCTest is Test {
         uint256 logIndex
     ) internal view returns (IReactive.LogRecord memory) {
         return IReactive.LogRecord({
-            chain_id: 1,
+            chain_id: hub.reactChainId(),
             _contract: hub.hubCallback(),
             topic_0: SETTLEMENT_ANNULLED_REPORTED_TOPIC,
             topic_1: uint256(uint160(recipient)),
@@ -1751,7 +1751,7 @@ contract HubRSCTest is Test {
     ) internal view returns (IReactive.LogRecord memory) {
         reason;
         return IReactive.LogRecord({
-            chain_id: 1,
+            chain_id: hub.reactChainId(),
             _contract: hub.hubCallback(),
             topic_0: SETTLEMENT_FAILED_REPORTED_TOPIC,
             topic_1: uint256(uint160(recipient)),
