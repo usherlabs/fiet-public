@@ -72,6 +72,13 @@ contract VTSOrchestratorTestable is VTSOrchestrator {
         if (commitmentDeficit1 == 0) pa.commitmentDeficitSince.token1 = 0;
     }
 
+    /// @notice TEST-ONLY: set deferred settled overflow amounts directly.
+    function _setSettledOverflow(PositionId positionId, uint256 settledOverflow0, uint256 settledOverflow1) external {
+        PositionAccounting storage pa = s.positionAccounting[positionId];
+        pa.settledOverflow.token0 = settledOverflow0;
+        pa.settledOverflow.token1 = settledOverflow1;
+    }
+
     /// @notice Pool base aggregates: deficit growth / inflow growth globals plus totals (mirrors on-chain getters)
     function getPoolBaseAggregates(PoolId poolId)
         external
@@ -108,6 +115,17 @@ contract VTSOrchestratorTestable is VTSOrchestrator {
     {
         PositionAccounting storage pa = s.positionAccounting[positionId];
         return (pa.commitmentDeficit.token0, pa.commitmentDeficit.token1);
+    }
+
+    function getPositionEffectiveSettledAmounts(PositionId positionId)
+        external
+        view
+        returns (uint256 effectiveSettled0, uint256 effectiveSettled1)
+    {
+        PositionAccounting storage pa = s.positionAccounting[positionId];
+        return (
+            pa.settled.token0 + pa.settledOverflow.token0, pa.settled.token1 + pa.settledOverflow.token1
+        );
     }
 
     /// @notice Commitment-deficit bypass timer fields (for integration tests)

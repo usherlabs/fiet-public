@@ -9,8 +9,6 @@ pragma solidity ^0.8.26;
 
 import {console} from "forge-std/Script.sol";
 
-import {Errors} from "src/libraries/Errors.sol";
-
 import {MME2EBase} from "./base/MME2EBase.sol";
 
 contract MarketMakerServiceableReserveShapedE2E is MME2EBase {
@@ -28,6 +26,7 @@ contract MarketMakerServiceableReserveShapedE2E is MME2EBase {
 
         uint256 mmPk = _loadMmPrivateKey();
         uint256 directLpPk = _getDeployerPrivateKey();
+        CoreDeployment memory d = _deployCoreContracts();
         PositionProfileE2E[] memory profiles = _mmPositionProfilesAll();
         BufferModeE2E[] memory buffers = _mmBufferModesAll();
 
@@ -35,7 +34,7 @@ contract MarketMakerServiceableReserveShapedE2E is MME2EBase {
 
         for (uint256 i = 0; i < profiles.length; i++) {
             for (uint256 j = 0; j < buffers.length; j++) {
-                StandaloneMarket memory m = _deployAndCreateMarket(vm.addr(mmPk), CORE_POOL_FEE);
+                StandaloneMarket memory m = _createMarket(d, vm.addr(mmPk), CORE_POOL_FEE);
                 uint256 commitId = _createMmPositionFromProfile(m, mmPk, profiles[i]);
 
                 _seedDirectLPBufferIfEnabled(m, directLpPk, buffers[j]);
@@ -62,8 +61,7 @@ contract MarketMakerServiceableReserveShapedE2E is MME2EBase {
 
                 bool drained = _drainInactivePositionSurplusBestEffort(m, mmPk, commitId, 0, 48);
                 if (!drained) {
-                    vm.expectRevert(abi.encodeWithSelector(Errors.CommitNotDrained.selector, commitId));
-                    _decommitAndTakeAllLccs(m, mmPk, commitId);
+                    _assertCommitNotDrainedOnDecommit(m, mmPk, commitId);
                     console.log("SKIP: cell not fully serviceable under reserve-shaped path");
                     continue;
                 }

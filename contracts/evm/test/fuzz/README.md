@@ -21,6 +21,7 @@ just fuzz
 just fuzz-deep
 just fuzz-invariants
 just medusa-entry
+just echidna-prepare
 
 MEDUSA_CORPUS_DIR=artifacts/medusa-local \
   just medusa-entry -- --test-limit 50 --seq-len 5
@@ -44,7 +45,9 @@ Medusa is now pointed at one concrete contract: `FuzzEntry`.
   proves the composed tree deploys and the expected top-level properties remain callable from one concrete target.
 
 Compared to the legacy Echidna layout, the supported path no longer does per-harness selection plus deterministic
-linked-library preparation. The state still lives inside Solidity harness contracts, but the workflow is now:
+linked-library preparation. `just echidna-prepare` is retained only as a compatibility preflight that materializes
+the `FuzzEntry` build artifacts for downstream tooling; it is not a CREATE2/link-validation step anymore. The state
+still lives inside Solidity harness contracts, but the workflow is now:
 
 1. compile one target (`FuzzEntry`)
 2. compose repo-owned child harnesses under that target
@@ -157,10 +160,12 @@ The repo-owned Medusa migration is complete for the supported path:
 - repo-owned `echidna.` salt references are `0`
 - the old linked-library CREATE2 prepare/validation flow is no longer part of `just fuzz`, `just fuzz-deep`, or
   `just medusa-entry`
-- fee-era invariants (`COV-01`, `COV-03`, `COV-04`, `FEE-01`, `FEE-02`) and `VTSFeeLib`-specific docs/harnesses are no
-  longer part of the supported path
-- `script/e2e/MMCoverage.s.sol` is intentionally retired because the fee-pot and fee-accounting orchestrator lenses no
-  longer exist
+- `just echidna-prepare` remains as a compatibility build step only; it does not restore the removed linked-library
+  prepare flow
+- fee-era invariants (`COV-01`, `COV-03`, `COV-04`, `FEE-01`, `FEE-02`) are out of the supported fuzz target, but this
+  branch still carries adjacent fee-era code and regressions where they remain useful
+- `contracts/evm-scripts/script/e2e/MMCoverage.s.sol` is live on this branch and remains the supported multi-MM E2E
+  coverage script after fee disablement
 
 Removed from the repo-owned supported path:
 

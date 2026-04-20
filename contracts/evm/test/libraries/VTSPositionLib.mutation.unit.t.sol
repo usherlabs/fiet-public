@@ -121,21 +121,24 @@ contract VTSPositionLibMutationUnitTest is Test {
         assertEq(pool0, 80e18, "pure split normalisation must not change pool totalSettled");
     }
 
-    /// @dev Regression (audit 28_2): zero-liquidity commitment refresh must canonicalise stale all-in-live `settled`
-    ///      into `settledOverflow` when `commitmentMax` is zero (SETTLE-00).
-    function test_trackCommitment_zeroLiquidity_canonicalisesStaleLiveSettledIntoOverflow() public {
-        (PositionId id,) = _register(bytes32(uint256(28)), 1);
-        harness.setCommitmentMax(id, 1000e18, 1000e18);
-        harness.setSettled(id, 100e18, 50e18);
-        harness.setSettledOverflow(id, 0, 0);
+    function test_trackCommitment_zeroLiquidity_movesResidualLiveSettledIntoOverflow() public {
+        (PositionId id,) = _register(bytes32(uint256(78)), 1);
+        harness.setCommitmentMax(id, 40e18, 0);
+        harness.setSettled(id, 25e18, 0);
+        harness.setSettledOverflow(id, 15e18, 0);
+        harness.setPoolTotalSettled(poolId, 40e18, 0);
         harness.trackCommitmentFromLiveLiquidity(id, 0);
-        (uint256 c0, uint256 c1, uint256 s0, uint256 s1,,, uint256 o0, uint256 o1) = harness.getPositionAccounting(id);
-        assertEq(c0, 0);
-        assertEq(c1, 0);
-        assertEq(s0, 0);
-        assertEq(s1, 0);
-        assertEq(o0, 100e18);
-        assertEq(o1, 50e18);
+        (uint256 c0, uint256 c1, uint256 s0,, uint256 d0, uint256 d1, uint256 o0, uint256 o1) =
+            harness.getPositionAccounting(id);
+        assertEq(c0, 0, "commitment max token0 should clear at zero liquidity");
+        assertEq(c1, 0, "commitment max token1 should clear at zero liquidity");
+        assertEq(s0, 0, "live settled should be zero once commitment max is zero");
+        assertEq(o0, 40e18, "all residual effective settled should move into overflow");
+        assertEq(o1, 0, "token1 overflow should remain unchanged");
+        assertEq(d0, 0, "deficit token0 should remain untouched");
+        assertEq(d1, 0, "deficit token1 should remain untouched");
+        (uint256 pool0,) = harness.getPoolTotalSettled(poolId);
+        assertEq(pool0, 40e18, "canonical split must not disturb pool total settled");
     }
 
     function test_updateSettlement_updatesPoolTotalSettled_onDepositAndWithdrawal() public {
@@ -173,7 +176,7 @@ contract VTSPositionLibMutationUnitTest is Test {
 
     function test_updateSettlement_negativeDelta_drainsOverflowBeforeLiveSettled() public {
         (PositionId id,) = _register(bytes32(uint256(32)), 1);
-        harness.setCommitmentMax(id, 200e18, 0);
+        harness.setCommitmentMax(id, 50e18, 0);
         harness.setSettled(id, 50e18, 0);
         harness.setSettledOverflow(id, 30e18, 0);
         harness.setPoolTotalSettled(poolId, 80e18, 0);
@@ -184,6 +187,84 @@ contract VTSPositionLibMutationUnitTest is Test {
         assertEq(ov0, 0);
         (uint256 pool0,) = harness.getPoolTotalSettled(poolId);
         assertEq(pool0, 40e18);
+    }
+
+    function test_updateSettlement_positiveDelta_netsCumulativeDeficitBeforeIncreasingSettled() public {
+        (PositionId id,) = _register(bytes32(uint256(33)), 1);
+        harness.setCommitmentMax(id, 100e18, 0);
+        harness.setSettled(id, 10e18, 0);
+        harness.setCumulativeDeficit(id, 20e18, 0);
+        harness.setPoolTotalSettled(poolId, 10e18, 0);
+        harness.setPoolTotalDeficitPrincipal(poolId, 20e18, 0);
+
+        assertEq(harness.updateSettlement(id, 0, int256(15e18)), int256(15e18));
+
+        (,, uint256 settled0,, uint256 deficit0,,, uint256 ov1) = harness.getPositionAccounting(id);
+        assertEq(settled0, 10e18, "live settled should not grow until cumulative deficit is covered");
+        assertEq(deficit0, 5e18, "cumulative deficit should be reduced first");
+        assertEq(ov1, 0, "untouched lane state should remain zero");
+        (uint256 poolSettled0,) = harness.getPoolTotalSettled(poolId);
+        assertEq(poolSettled0, 10e18, "pool total settled should stay flat while only covering deficit");
+        (uint256 poolPrincipal0,) = harness.getPoolTotalDeficitPrincipal(poolId);
+        assertEq(poolPrincipal0, 5e18, "pool deficit principal should shrink by the covered amount");
+    }
+
+    function test_updateSettlement_positiveDelta_clearsCommitmentDeficitAndBpsOnlyWhenBothLanesResolved() public {
+        (PositionId id,) = _register(bytes32(uint256(34)), 1);
+        harness.setCommitmentMax(id, 100e18, 0);
+        harness.setCommitmentDeficit(id, 30e18, 4e18);
+        harness.setCommitmentDeficitSince(id, 123, 456);
+        harness.setCommitmentDeficitBps(id, 777);
+
+        assertEq(harness.updateSettlement(id, 0, int256(30e18)), int256(30e18));
+
+        (uint256 cd0, uint256 cd1) = harness.getCommitmentDeficit(id);
+        assertEq(cd0, 0, "token0 commitment deficit should clear");
+        assertEq(cd1, 4e18, "token1 commitment deficit should remain outstanding");
+        (uint256 since0, uint256 since1) = harness.getCommitmentDeficitSince(id);
+        assertEq(since0, 0, "cleared lane should reset its timer");
+        assertEq(since1, 456, "uncleared lane should keep its timer");
+        assertEq(harness.getCommitmentDeficitBps(id), 777, "bps should persist while another lane remains insolvent");
+    }
+
+    function test_updateSettlement_positiveDelta_clearsCommitmentDeficitBpsOnceAllLanesResolved() public {
+        (PositionId id,) = _register(bytes32(uint256(35)), 1);
+        harness.setCommitmentMax(id, 100e18, 0);
+        harness.setCommitmentDeficit(id, 30e18, 0);
+        harness.setCommitmentDeficitSince(id, 123, 0);
+        harness.setCommitmentDeficitBps(id, 777);
+
+        assertEq(harness.updateSettlement(id, 0, int256(30e18)), int256(30e18));
+
+        (uint256 cd0, uint256 cd1) = harness.getCommitmentDeficit(id);
+        assertEq(cd0, 0);
+        assertEq(cd1, 0);
+        (uint256 since0, uint256 since1) = harness.getCommitmentDeficitSince(id);
+        assertEq(since0, 0);
+        assertEq(since1, 0);
+        assertEq(harness.getCommitmentDeficitBps(id), 0, "bps should clear when both commitment-deficit lanes are zero");
+    }
+
+    function test_updateSettlement_inactiveRemnantCount_tracksCreateSteadyStateAndDrain() public {
+        (PositionId id,) = _register(bytes32(uint256(36)), 1);
+        uint256 commitId = 77;
+        harness.setPositionCommitId(id, commitId);
+        harness.setPositionActive(id, false);
+        harness.setCommitmentMax(id, 100e18, 0);
+
+        assertEq(harness.inactiveRemnantCount(commitId), 0, "count should start empty");
+
+        assertEq(harness.updateSettlement(id, 0, int256(10e18)), int256(10e18));
+        assertEq(harness.inactiveRemnantCount(commitId), 1, "first inactive remnant should increment count");
+
+        assertEq(harness.updateSettlement(id, 0, int256(5e18)), int256(5e18));
+        assertEq(harness.inactiveRemnantCount(commitId), 1, "additional settled while remnant exists should not double-count");
+
+        assertEq(harness.updateSettlement(id, 0, -int256(15e18)), -int256(15e18));
+        assertEq(harness.inactiveRemnantCount(commitId), 0, "draining the last inactive remnant should decrement count");
+        (,, uint256 settled0,,,, uint256 overflow0,) = harness.getPositionAccounting(id);
+        assertEq(settled0, 0, "live settled should clamp to zero after full drain");
+        assertEq(overflow0, 0, "overflow should clamp to zero after full drain");
     }
 
     function test_updateSettlement_twoChunksMatchesSingleStep_effectiveSplit() public {

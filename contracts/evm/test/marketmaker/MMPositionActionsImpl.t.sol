@@ -1234,39 +1234,53 @@ contract MMPositionManagerActionsTest is MarketTestBase, MarketMakerTestBase {
 
             {
                 address lockerAddr = _batchLocker(tokenId);
-                // Overflow-aware paths can pull more principal than the legacy live-only cap on later batched steps
-                deal(address(lcc0.underlying()), lockerAddr, settlementAmount * 100);
-                deal(address(lcc1.underlying()), lockerAddr, settlementAmount * 100);
+                deal(address(lcc0.underlying()), lockerAddr, settlementAmount);
+                deal(address(lcc1.underlying()), lockerAddr, settlementAmount);
+                uint256 lockerUnderlying0Before = IERC20(address(lcc0.underlying())).balanceOf(lockerAddr);
+                uint256 lockerUnderlying1Before = IERC20(address(lcc1.underlying())).balanceOf(lockerAddr);
                 vm.startPrank(lockerAddr);
-                IERC20(address(lcc0.underlying())).approve(address(positionManager), type(uint256).max);
-                IERC20(address(lcc1.underlying())).approve(address(positionManager), type(uint256).max);
+                IERC20(address(lcc0.underlying())).approve(address(positionManager), settlementAmount);
+                IERC20(address(lcc1.underlying())).approve(address(positionManager), settlementAmount);
                 vm.stopPrank();
-            }
 
-            MMA.PreparedAction[] memory actions = new MMA.PreparedAction[](6);
-            // decrease the liquidity in the initial position with index 0
-            actions[0] = MMA.prepareDecrease(corePoolKey, tokenId, positionIndex, 1000);
-            // use the deltas to mint a new position with index 1
-            actions[1] = MMA.prepareMintFromDeltas(
-                corePoolKey, tokenId, newLiquidityParams.tickLower, newLiquidityParams.tickUpper, true
-            );
-            // settle to the new position with index 1
-            actions[2] = MMA.prepareSettle(
-                corePoolKey,
-                tokenId,
-                newPositionIndex,
-                -int128(int256(settlementAmount)),
-                -int128(int256(settlementAmount)),
-                false
-            );
-            // increase the liquidity in the new position with index 1
-            actions[3] = MMA.prepareIncrease(corePoolKey, tokenId, newPositionIndex, 1000);
-            // completely burn the initial position with index 0
-            actions[4] = MMA.prepareBurn(corePoolKey, tokenId, positionIndex);
-            // take all the underlying tokens from the initial position with index 0
-            actions[5] = MMA.prepareSettleFromDeltas(corePoolKey, tokenId, positionIndex, true, true);
-            // execute the batch actions
-            _mmExec(tokenId, actions);
+                MMA.PreparedAction[] memory actions = new MMA.PreparedAction[](6);
+                // decrease the liquidity in the initial position with index 0
+                actions[0] = MMA.prepareDecrease(corePoolKey, tokenId, positionIndex, 1000);
+                // use the deltas to mint a new position with index 1
+                actions[1] = MMA.prepareMintFromDeltas(
+                    corePoolKey, tokenId, newLiquidityParams.tickLower, newLiquidityParams.tickUpper, true
+                );
+                // settle to the new position with index 1
+                actions[2] = MMA.prepareSettle(
+                    corePoolKey,
+                    tokenId,
+                    newPositionIndex,
+                    -int128(int256(settlementAmount)),
+                    -int128(int256(settlementAmount)),
+                    false
+                );
+                // increase the liquidity in the new position with index 1
+                actions[3] = MMA.prepareIncrease(corePoolKey, tokenId, newPositionIndex, 1000);
+                // completely burn the initial position with index 0
+                actions[4] = MMA.prepareBurn(corePoolKey, tokenId, positionIndex);
+                // take all the underlying tokens from the initial position with index 0
+                actions[5] = MMA.prepareSettleFromDeltas(corePoolKey, tokenId, positionIndex, true, true);
+                // execute the batch actions
+                _mmExec(tokenId, actions);
+
+                uint256 lockerUnderlying0After = IERC20(address(lcc0.underlying())).balanceOf(lockerAddr);
+                uint256 lockerUnderlying1After = IERC20(address(lcc1.underlying())).balanceOf(lockerAddr);
+                assertLe(
+                    lockerUnderlying0Before - lockerUnderlying0After,
+                    settlementAmount,
+                    "token0 principal pull should stay within the bounded settlement amount"
+                );
+                assertLe(
+                    lockerUnderlying1Before - lockerUnderlying1After,
+                    settlementAmount,
+                    "token1 principal pull should stay within the bounded settlement amount"
+                );
+            }
         }
 
         // validate the new position was created with the expected ticks

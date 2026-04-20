@@ -19,6 +19,8 @@ import {MMPositionManager} from "../src/MMPositionManager.sol";
 import {MMQueueCustodian} from "../src/MMQueueCustodian.sol";
 import {MMActionAdapter as MMA} from "./utils/MMActionAdapter.sol";
 import {MarketMakerTestBase} from "./base/MMTestBase.sol";
+import {VTSOrchestratorTestable} from "./base/VTSOrchestratorTestable.sol";
+import {VTSOrchestrator} from "../src/VTSOrchestrator.sol";
 import {MarketMaker} from "../src/libraries/MarketMaker.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {PositionId} from "../src/types/Position.sol";
@@ -103,6 +105,16 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
         return cnt;
     }
 
+    function _getPositionEffectiveSettledAmounts(PositionId positionId) internal view returns (uint256, uint256) {
+        return VTSOrchestratorTestable(address(vtsOrchestrator)).getPositionEffectiveSettledAmounts(positionId);
+    }
+
+    function _getPositionLiveSettledAmounts(PositionId positionId) internal view returns (uint256, uint256) {
+        (,, uint256 settled0, uint256 settled1,,,,) =
+            VTSOrchestratorTestable(address(vtsOrchestrator)).getPositionAccounting(positionId);
+        return (settled0, settled1);
+    }
+
     function _mintUnderlyingForPositiveSettle(address payer, int128 settle0, int128 settle1) internal {
         uint256 pay0 = LiquidityUtils.safeInt128ToUint256(settle0);
         uint256 pay1 = LiquidityUtils.safeInt128ToUint256(settle1);
@@ -116,6 +128,39 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
             vm.prank(payer);
             MockERC20(lcc1.underlying()).approve(address(positionManager), pay1);
         }
+    }
+
+    function _executeSettleAndAssertLockerUnderlyingGain(
+        address locker,
+        uint256 tokenId,
+        uint256 positionIndex,
+        uint256 expectedGain0,
+        uint256 expectedGain1
+    ) internal {
+        uint256 lockerUnderlying0Before = MockERC20(lcc0.underlying()).balanceOf(locker);
+        uint256 lockerUnderlying1Before = MockERC20(lcc1.underlying()).balanceOf(locker);
+
+        MMA.PreparedAction[] memory drain = new MMA.PreparedAction[](1);
+        drain[0] = MMA.prepareSettle(
+            corePoolKey,
+            tokenId,
+            positionIndex,
+            SafeCast.toInt128(expectedGain0),
+            SafeCast.toInt128(expectedGain1),
+            false
+        );
+        _executeWithUnlockLiquidity(drain, block.timestamp + 3600);
+
+        assertEq(
+            MockERC20(lcc0.underlying()).balanceOf(locker) - lockerUnderlying0Before,
+            expectedGain0,
+            "expired inactive remnant should remain withdrawable for token0"
+        );
+        assertEq(
+            MockERC20(lcc1.underlying()).balanceOf(locker) - lockerUnderlying1Before,
+            expectedGain1,
+            "expired inactive remnant should remain withdrawable for token1"
+        );
     }
 
     struct AfterSwapPhase1Params {
@@ -143,6 +188,14 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
         uint256 requiredSettlementAmount0;
         uint256 requiredSettlementAmount1;
         uint256 amountToDecrease;
+    }
+
+    function _deployVTSOrchestrator(address _poolManager, address _oracleHelper, address _liquidityHub, address _owner)
+        internal
+        override
+        returns (VTSOrchestrator)
+    {
+        return new VTSOrchestratorTestable(_poolManager, _oracleHelper, _liquidityHub, _owner);
     }
 
     function setUp() public {
@@ -3207,8 +3260,10 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
         actions[2] = MMA.prepareTake(Currency.wrap(address(lcc1)), locker, 0);
         _executeWithUnlockLiquidity(actions, block.timestamp + 3600);
 
-        (uint256 s0, uint256 s1) = vtsOrchestrator.getPositionSettledAmounts(scenario.positionId);
-        assertGt(s0 + s1, 0, "precondition: inactive position retains live settled until separately settled");
+        (uint256 live0, uint256 live1) = _getPositionLiveSettledAmounts(scenario.positionId);
+        (uint256 s0, uint256 s1) = _getPositionEffectiveSettledAmounts(scenario.positionId);
+        assertEq(live0 + live1, 0, "precondition: inactive remnant should sit outside live settled after decrease");
+        assertGt(s0 + s1, 0, "precondition: inactive position retains effective settled until separately settled");
 
         (,,,, uint256 inactiveRemnantCount) = vtsOrchestrator.getCommit(scenario.tokenId);
         assertGt(inactiveRemnantCount, 0, "commit remnant counter must reflect inactive settled remainder");
@@ -3251,20 +3306,15 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
         actions[2] = MMA.prepareTake(Currency.wrap(address(lcc1)), locker, 0);
         _executeWithUnlockLiquidity(actions, block.timestamp + 3600);
 
-        (uint256 s0, uint256 s1) = vtsOrchestrator.getPositionSettledAmounts(scPosId);
-        assertGt(s0 + s1, 0, "precondition: inactive position retains live settled until separately settled");
+        (uint256 live0, uint256 live1) = _getPositionLiveSettledAmounts(scPosId);
+        (uint256 s0, uint256 s1) = _getPositionEffectiveSettledAmounts(scPosId);
+        assertEq(live0 + live1, 0, "precondition: inactive remnant should sit outside live settled after decrease");
+        assertGt(s0 + s1, 0, "precondition: inactive position retains effective settled until separately settled");
 
         assertGt(_inactiveRemnantCount(scTokenId), 0, "precondition: inactive remnant counter should be non-zero");
+        _executeSettleAndAssertLockerUnderlyingGain(locker, scTokenId, scPosIndex, s0, s1);
 
-        int128 settle0 = SafeCast.toInt128(s0);
-        int128 settle1 = SafeCast.toInt128(s1);
-        _mintUnderlyingForPositiveSettle(liquiditySignal.mmState.advancer, settle0, settle1);
-
-        MMA.PreparedAction[] memory drain = new MMA.PreparedAction[](1);
-        drain[0] = MMA.prepareSettle(corePoolKey, scTokenId, scPosIndex, settle0, settle1, false);
-        _executeWithUnlockLiquidity(drain, block.timestamp + 3600);
-
-        (uint256 s0After, uint256 s1After) = vtsOrchestrator.getPositionSettledAmounts(scPosId);
+        (uint256 s0After, uint256 s1After) = _getPositionEffectiveSettledAmounts(scPosId);
         assertEq(s0After + s1After, 0, "inactive settled should be fully drained");
 
         assertEq(
@@ -3311,23 +3361,18 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
         actions[2] = MMA.prepareTake(Currency.wrap(address(lcc1)), locker, 0);
         _executeWithUnlockLiquidity(actions, block.timestamp + 3600);
 
-        (uint256 s0, uint256 s1) = vtsOrchestrator.getPositionSettledAmounts(scPosId);
-        assertGt(s0 + s1, 0, "precondition: inactive position retains live settled until separately settled");
+        (uint256 live0, uint256 live1) = _getPositionLiveSettledAmounts(scPosId);
+        (uint256 s0, uint256 s1) = _getPositionEffectiveSettledAmounts(scPosId);
+        assertEq(live0 + live1, 0, "precondition: inactive remnant should sit outside live settled after decrease");
+        assertGt(s0 + s1, 0, "precondition: inactive position retains effective settled until separately settled");
         assertGt(_inactiveRemnantCount(scTokenId), 0, "precondition: inactive remnant counter should be non-zero");
 
         (, uint256 expiresAt,,,) = vtsOrchestrator.getCommit(scTokenId);
         vm.warp(expiresAt + 1);
         assertFalse(vtsOrchestrator.isSignalValid(scTokenId, true), "precondition: commit must be non-live after warp");
 
-        int128 settle0 = SafeCast.toInt128(s0);
-        int128 settle1 = SafeCast.toInt128(s1);
-        _mintUnderlyingForPositiveSettle(locker, settle0, settle1);
-
-        MMA.PreparedAction[] memory drain = new MMA.PreparedAction[](1);
-        drain[0] = MMA.prepareSettle(corePoolKey, scTokenId, scPosIndex, settle0, settle1, false);
-        _executeWithUnlockLiquidity(drain, block.timestamp + 3600);
-
-        (uint256 s0After, uint256 s1After) = vtsOrchestrator.getPositionSettledAmounts(scPosId);
+        _executeSettleAndAssertLockerUnderlyingGain(locker, scTokenId, scPosIndex, s0, s1);
+        (uint256 s0After, uint256 s1After) = _getPositionEffectiveSettledAmounts(scPosId);
         assertEq(s0After + s1After, 0, "inactive settled should be fully drained after expiry");
         assertEq(_inactiveRemnantCount(scTokenId), 0, "inactive remnant counter should clear after drain");
     }
