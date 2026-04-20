@@ -36,9 +36,7 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Install Foundry
-        uses: foundry-rs/foundry-toolchain@v1
-        with:
-          version: "v1.4.2"
+        run: ./.github/scripts/install-foundry.sh v1.4.2
 
       - name: Show Forge version
         run: forge --version
@@ -288,9 +286,7 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Install Foundry
-        uses: foundry-rs/foundry-toolchain@v1
-        with:
-          version: "v1.4.2"
+        run: ./.github/scripts/install-foundry.sh v1.4.2
 
       - name: Show Forge version
         run: forge --version

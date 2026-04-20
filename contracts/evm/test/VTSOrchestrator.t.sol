@@ -1405,12 +1405,27 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
         assertEq(ov1, 0);
     }
 
-    function test_getPositionSettledAmounts_equalsLivePlusOverflow() public {
+    function test_getPositionEffectiveSettledAmounts_equalsLivePlusOverflow() public {
         (, PositionId positionId,,) = _createCommittedPosition();
-        (uint256 eff0, uint256 eff1) = vtsOrchestrator.getPositionSettledAmounts(positionId);
+        (,, uint256 live0, uint256 live1,,,,) = _testableOrchestrator().getPositionAccounting(positionId);
         (uint256 ov0, uint256 ov1) = vtsOrchestrator.getPositionSettledOverflowAmounts(positionId);
-        uint256 live0 = eff0 - ov0;
-        uint256 live1 = eff1 - ov1;
+        (uint256 eff0, uint256 eff1) = vtsOrchestrator.getPositionSettledAmounts(positionId);
+        (uint256 commitment0, uint256 commitment1) = vtsOrchestrator.getCommitmentMaxima(positionId);
+        assertEq(eff0, live0 + ov0);
+        assertEq(eff1, live1 + ov1);
+
+        _testableOrchestrator()._setSettledOverflow(positionId, 7e18, 11e18);
+        (,, uint256 seededLive0, uint256 seededLive1,,,,) = _testableOrchestrator().getPositionAccounting(positionId);
+        (ov0, ov1) = vtsOrchestrator.getPositionSettledOverflowAmounts(positionId);
+        (eff0, eff1) = vtsOrchestrator.getPositionSettledAmounts(positionId);
+        assertEq(seededLive0, live0, "live token0 should remain unchanged");
+        assertEq(seededLive1, live1, "live token1 should remain unchanged");
+        assertEq(ov0, 7e18, "seeded token0 overflow should be returned");
+        assertEq(ov1, 11e18, "seeded token1 overflow should be returned");
+        assertGt(ov0, 0, "token0 overflow should be non-zero");
+        assertGt(ov1, 0, "token1 overflow should be non-zero");
+        assertLe(seededLive0, commitment0, "live token0 should stay capped by commitmentMax");
+        assertLe(seededLive1, commitment1, "live token1 should stay capped by commitmentMax");
         assertEq(eff0, live0 + ov0);
         assertEq(eff1, live1 + ov1);
     }
