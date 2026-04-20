@@ -241,7 +241,7 @@ contract HubRSCTest is Test {
         hub.react(_settlementLog(hub, recipient3, lcc, 10, 3, 3, 3));
 
         IReactive.LogRecord memory liqLog = IReactive.LogRecord({
-            chain_id: 1,
+            chain_id: hub.protocolChainId(),
             _contract: hub.liquidityHub(),
             topic_0: LIQUIDITY_AVAILABLE_TOPIC,
             topic_1: uint256(uint160(lcc)),
@@ -330,7 +330,7 @@ contract HubRSCTest is Test {
         );
 
         IReactive.LogRecord memory liqLog = IReactive.LogRecord({
-            chain_id: 1,
+            chain_id: hub.protocolChainId(),
             _contract: hub.liquidityHub(),
             topic_0: LIQUIDITY_AVAILABLE_TOPIC,
             topic_1: uint256(uint160(makeAddr("lcc"))),
@@ -365,7 +365,7 @@ contract HubRSCTest is Test {
         hub.react(_settlementLog(hub, recipient, lcc, 100, 1, 0xabc4, 1));
 
         IReactive.LogRecord memory liqLog = IReactive.LogRecord({
-            chain_id: 1,
+            chain_id: hub.protocolChainId(),
             _contract: hub.liquidityHub(),
             topic_0: LIQUIDITY_AVAILABLE_TOPIC,
             topic_1: uint256(uint160(lcc)),
@@ -910,6 +910,101 @@ contract HubRSCTest is Test {
         assertEq(lccs[0], lccB);
         assertEq(recipients[0], recipientB);
         assertEq(amounts[0], 40);
+    }
+
+    /// @notice Large historical backlogs are mirrored into the shared underlying lane across bounded follow-up callbacks.
+    function test_chunkedPreRegistrationBackfillContinuesAcrossLiquidityCallbacks() public {
+        _clearSystemContract();
+
+        uint256 boundedDispatchItems = 2;
+        MockLiquidityHub liq = new MockLiquidityHub();
+        MockSettlementReceiver receiver = new MockSettlementReceiver(address(liq));
+        HubRSC hub = new HubRSC(
+            boundedDispatchItems, originChainId, destinationChainId, address(liq), hubCallback, address(receiver)
+        );
+
+        address underlying = makeAddr("underlying");
+        address lccA = makeAddr("lccA");
+        address lccB = makeAddr("lccB");
+        address[5] memory recipients =
+            [address(uint160(1)), address(uint160(2)), address(uint160(3)), address(uint160(4)), address(uint160(5))];
+
+        hub.react(_settlementLog(hub, recipients[0], lccB, 1, 1, 0x8610, 1));
+        hub.react(_settlementLog(hub, recipients[1], lccB, 1, 2, 0x8611, 2));
+        hub.react(_settlementLog(hub, recipients[2], lccB, 1, 3, 0x8612, 3));
+        hub.react(_settlementLog(hub, recipients[3], lccB, 1, 4, 0x8613, 4));
+        hub.react(_settlementLog(hub, recipients[4], lccB, 1, 5, 0x8614, 5));
+
+        hub.react(_lccCreatedLog(hub, underlying, lccA, bytes32("mktA"), 0x8615, 6));
+        hub.react(_lccCreatedLog(hub, underlying, lccB, bytes32("mktB"), 0x8616, 7));
+
+        assertEq(hub.underlyingBackfillRemainingByLcc(lccB), 3);
+
+        vm.recordLogs();
+        hub.react(liquidityAvailableLog(address(liq), lccA, underlying, 5, bytes32("mktA"), 0x8617, 8));
+        Vm.Log[] memory firstEntries = vm.getRecordedLogs();
+
+        {
+            (
+                address dispatcher,
+                address[] memory firstLccs,
+                address[] memory firstRecipients,
+                uint256[] memory firstAmounts
+            ) = _decodeProcessSettlementsPayload(firstEntries);
+            assertEq(dispatcher, address(0));
+            assertEq(firstLccs.length, 2);
+            assertEq(firstRecipients.length, 2);
+            assertEq(firstAmounts.length, 2);
+            assertEq(firstLccs[0], lccB);
+            assertEq(firstLccs[1], lccB);
+            assertEq(firstRecipients[0], recipients[0]);
+            assertEq(firstRecipients[1], recipients[1]);
+            assertEq(firstAmounts[0], 1);
+            assertEq(firstAmounts[1], 1);
+        }
+        assertTrue(
+            _findCallbackPayloadBySelector(firstEntries, ReactiveConstants.TRIGGER_MORE_LIQUIDITY_AVAILABLE_SELECTOR)
+            .length > 0
+        );
+        assertEq(hub.underlyingBackfillRemainingByLcc(lccB), 1);
+
+        vm.recordLogs();
+        hub.react(_moreLiquidityAvailableLog(hub, lccA, 3, 0x8618, 9));
+        Vm.Log[] memory secondEntries = vm.getRecordedLogs();
+
+        {
+            (, address[] memory secondLccs, address[] memory secondRecipients, uint256[] memory secondAmounts) =
+                _decodeProcessSettlementsPayload(secondEntries);
+            assertEq(secondLccs.length, 2);
+            assertEq(secondRecipients.length, 2);
+            assertEq(secondAmounts.length, 2);
+            assertEq(secondLccs[0], lccB);
+            assertEq(secondLccs[1], lccB);
+            assertEq(secondRecipients[0], recipients[2]);
+            assertEq(secondRecipients[1], recipients[3]);
+            assertEq(secondAmounts[0], 1);
+            assertEq(secondAmounts[1], 1);
+        }
+        assertTrue(
+            _findCallbackPayloadBySelector(secondEntries, ReactiveConstants.TRIGGER_MORE_LIQUIDITY_AVAILABLE_SELECTOR)
+            .length > 0
+        );
+        assertEq(hub.underlyingBackfillRemainingByLcc(lccB), 0);
+
+        vm.recordLogs();
+        hub.react(_moreLiquidityAvailableLog(hub, lccA, 1, 0x8619, 10));
+        Vm.Log[] memory thirdEntries = vm.getRecordedLogs();
+
+        {
+            (, address[] memory thirdLccs, address[] memory thirdRecipients, uint256[] memory thirdAmounts) =
+                _decodeProcessSettlementsPayload(thirdEntries);
+            assertEq(thirdLccs.length, 1);
+            assertEq(thirdRecipients.length, 1);
+            assertEq(thirdAmounts.length, 1);
+            assertEq(thirdLccs[0], lccB);
+            assertEq(thirdRecipients[0], recipients[4]);
+            assertEq(thirdAmounts[0], 1);
+        }
     }
 
     /// @notice A reserved prefix longer than one scan window still reaches a trailing dispatchable entry after multiple retries.
@@ -1486,7 +1581,7 @@ contract HubRSCTest is Test {
         uint256 logIndex
     ) internal view returns (IReactive.LogRecord memory) {
         return IReactive.LogRecord({
-            chain_id: 1,
+            chain_id: hub.reactChainId(),
             _contract: hub.hubCallback(),
             topic_0: SETTLEMENT_REPORTED_TOPIC,
             topic_1: uint256(uint160(recipient)),
@@ -1547,7 +1642,7 @@ contract HubRSCTest is Test {
         uint256 logIndex
     ) internal view returns (IReactive.LogRecord memory) {
         return IReactive.LogRecord({
-            chain_id: 1,
+            chain_id: hub.protocolChainId(),
             _contract: hub.liquidityHub(),
             topic_0: LCC_CREATED_TOPIC,
             topic_1: uint256(uint160(underlying)),
@@ -1568,7 +1663,7 @@ contract HubRSCTest is Test {
         returns (IReactive.LogRecord memory)
     {
         return IReactive.LogRecord({
-            chain_id: 1,
+            chain_id: hub.reactChainId(),
             _contract: hub.hubCallback(),
             topic_0: MORE_LIQUIDITY_AVAILABLE_TOPIC,
             topic_1: uint256(uint160(lcc)),
@@ -1592,7 +1687,7 @@ contract HubRSCTest is Test {
         uint256 logIndex
     ) internal view returns (IReactive.LogRecord memory) {
         return IReactive.LogRecord({
-            chain_id: 1,
+            chain_id: hub.reactChainId(),
             _contract: hub.hubCallback(),
             topic_0: SETTLEMENT_PROCESSED_REPORTED_TOPIC,
             topic_1: uint256(uint160(recipient)),
@@ -1617,7 +1712,7 @@ contract HubRSCTest is Test {
         uint256 logIndex
     ) internal view returns (IReactive.LogRecord memory) {
         return IReactive.LogRecord({
-            chain_id: 1,
+            chain_id: hub.reactChainId(),
             _contract: hub.hubCallback(),
             topic_0: SETTLEMENT_PROCESSED_REPORTED_TOPIC,
             topic_1: uint256(uint160(recipient)),
@@ -1641,7 +1736,7 @@ contract HubRSCTest is Test {
         uint256 logIndex
     ) internal view returns (IReactive.LogRecord memory) {
         return IReactive.LogRecord({
-            chain_id: 1,
+            chain_id: hub.reactChainId(),
             _contract: hub.hubCallback(),
             topic_0: SETTLEMENT_ANNULLED_REPORTED_TOPIC,
             topic_1: uint256(uint160(recipient)),
@@ -1667,7 +1762,7 @@ contract HubRSCTest is Test {
     ) internal view returns (IReactive.LogRecord memory) {
         reason;
         return IReactive.LogRecord({
-            chain_id: 1,
+            chain_id: hub.reactChainId(),
             _contract: hub.hubCallback(),
             topic_0: SETTLEMENT_FAILED_REPORTED_TOPIC,
             topic_1: uint256(uint160(recipient)),
