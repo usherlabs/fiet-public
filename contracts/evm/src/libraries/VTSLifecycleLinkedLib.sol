@@ -461,7 +461,7 @@ library VTSLifecycleLinkedLib {
 
         uint256 settledCapacity;
         if (!isActive) {
-            settledCapacity = s.positionAccounting[positionId].settled.get(tokenIndex);
+            settledCapacity = VTSPositionLib.effectiveSettledAmount(s, positionId, tokenIndex);
         } else if (rfsLaneDelta < 0) {
             settledCapacity = LiquidityUtils.safeInt128ToUint256(rfsLaneDelta);
         }

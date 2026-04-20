@@ -89,13 +89,36 @@ contract VTSPositionLibMutationUnitTest is Test {
     }
 
     function test_trackCommitment_singleLiquidity_matchesCalculatedMaxima() public {
-        (PositionId id, ModifyLiquidityParams memory p) = _register(bytes32(uint256(1)), 1);
+        (PositionId id,) = _register(bytes32(uint256(1)), 1);
         uint128 liq = 1e18;
         (uint256 exp0, uint256 exp1) = LiquidityUtils.calculateCommitmentMaxima(TICK_LOWER, TICK_UPPER, liq);
         harness.trackCommitmentFromLiveLiquidity(id, liq);
-        (uint256 c0, uint256 c1,,,,) = harness.getPositionAccounting(id);
+        (uint256 c0, uint256 c1,,,,,,) = harness.getPositionAccounting(id);
         assertEq(c0, exp0);
         assertEq(c1, exp1);
+    }
+
+    function test_trackCommitment_reopensHeadroom_collapsesOverflowIntoLiveSettled() public {
+        (PositionId id,) = _register(bytes32(uint256(77)), 1);
+        harness.setCommitmentMax(id, 50e18, 0);
+        harness.setSettled(id, 50e18, 0);
+        harness.setSettledOverflow(id, 30e18, 0);
+        harness.setPoolTotalSettled(poolId, 80e18, 0);
+
+        uint128 baseLiq = 1e18;
+        (uint256 baseC0,) = LiquidityUtils.calculateCommitmentMaxima(TICK_LOWER, TICK_UPPER, baseLiq);
+        assertGt(baseC0, 0, "base commitment max should be non-zero");
+        uint256 targetC0 = 100e18;
+        uint128 liqHigh = uint128(FullMath.mulDiv(uint256(baseLiq), targetC0, baseC0));
+
+        harness.trackCommitmentFromLiveLiquidity(id, liqHigh);
+
+        (uint256 c0,, uint256 s0,,,, uint256 o0,) = harness.getPositionAccounting(id);
+        assertGe(c0, 80e18, "commitment max should cover full effective settled");
+        assertEq(s0, 80e18, "live settled should absorb prior overflow when headroom allows");
+        assertEq(o0, 0, "overflow should collapse once effective fits under commitmentMax");
+        (uint256 pool0,) = harness.getPoolTotalSettled(poolId);
+        assertEq(pool0, 80e18, "pure split normalisation must not change pool totalSettled");
     }
 
     function test_updateSettlement_updatesPoolTotalSettled_onDepositAndWithdrawal() public {
@@ -105,16 +128,78 @@ contract VTSPositionLibMutationUnitTest is Test {
         harness.setPoolTotalSettled(poolId, 100e18, 0);
 
         assertEq(harness.updateSettlement(id, 0, 50e18), 50e18);
-        (,, uint256 settledAfterIn,,,) = harness.getPositionAccounting(id);
+        (,, uint256 settledAfterIn,,,,,) = harness.getPositionAccounting(id);
         assertEq(settledAfterIn, 150e18);
         (uint256 poolTotalAfterIn,) = harness.getPoolTotalSettled(poolId);
         assertEq(poolTotalAfterIn, 150e18);
 
         assertEq(harness.updateSettlement(id, 0, -25e18), -25e18);
-        (,, uint256 settledAfterOut,,,) = harness.getPositionAccounting(id);
+        (,, uint256 settledAfterOut,,,,,) = harness.getPositionAccounting(id);
         assertEq(settledAfterOut, 125e18);
         (uint256 poolTotalAfterOut,) = harness.getPoolTotalSettled(poolId);
         assertEq(poolTotalAfterOut, 125e18);
+    }
+
+    function test_updateSettlement_positiveDelta_routesHeadroomIntoSettledAndRemainderIntoOverflow() public {
+        (PositionId id,) = _register(bytes32(uint256(31)), 1);
+        harness.setCommitmentMax(id, 100e18, 0);
+        harness.setSettled(id, 95e18, 0);
+        harness.setPoolTotalSettled(poolId, 95e18, 0);
+
+        assertEq(harness.updateSettlement(id, 0, int256(20e18)), int256(20e18));
+        (,, uint256 settled0,,,, uint256 ov0,) = harness.getPositionAccounting(id);
+        assertEq(settled0, 100e18);
+        assertEq(ov0, 15e18);
+        (uint256 pool0,) = harness.getPoolTotalSettled(poolId);
+        assertEq(pool0, 115e18);
+    }
+
+    function test_updateSettlement_negativeDelta_drainsOverflowBeforeLiveSettled() public {
+        (PositionId id,) = _register(bytes32(uint256(32)), 1);
+        harness.setCommitmentMax(id, 200e18, 0);
+        harness.setSettled(id, 50e18, 0);
+        harness.setSettledOverflow(id, 30e18, 0);
+        harness.setPoolTotalSettled(poolId, 80e18, 0);
+
+        assertEq(harness.updateSettlement(id, 0, -40e18), -40e18);
+        (,, uint256 settled0,,,, uint256 ov0,) = harness.getPositionAccounting(id);
+        assertEq(settled0, 40e18);
+        assertEq(ov0, 0);
+        (uint256 pool0,) = harness.getPoolTotalSettled(poolId);
+        assertEq(pool0, 40e18);
+    }
+
+    function test_updateSettlement_twoChunksMatchesSingleStep_effectiveSplit() public {
+        VTSPositionLibHarness h1 = new VTSPositionLibHarness();
+        h1.setupPool(poolId, _defaultCfg());
+        ModifyLiquidityParams memory p1 = ModifyLiquidityParams({
+            tickLower: TICK_LOWER, tickUpper: TICK_UPPER, liquidityDelta: 1, salt: bytes32(uint256(41))
+        });
+        h1.registerPosition(owner, poolId, p1);
+        PositionId id1 = PositionLibrary.generateId(owner, p1);
+        h1.setCommitmentMax(id1, 100e18, 0);
+        h1.setSettled(id1, 90e18, 0);
+        h1.setPoolTotalSettled(poolId, 90e18, 0);
+        h1.updateSettlement(id1, 0, 15e18);
+        h1.updateSettlement(id1, 0, 15e18);
+        (,, uint256 s1,,,, uint256 o1,) = h1.getPositionAccounting(id1);
+
+        VTSPositionLibHarness h2 = new VTSPositionLibHarness();
+        h2.setupPool(poolId, _defaultCfg());
+        ModifyLiquidityParams memory p2 = ModifyLiquidityParams({
+            tickLower: TICK_LOWER, tickUpper: TICK_UPPER, liquidityDelta: 1, salt: bytes32(uint256(42))
+        });
+        h2.registerPosition(owner, poolId, p2);
+        PositionId id2 = PositionLibrary.generateId(owner, p2);
+        h2.setCommitmentMax(id2, 100e18, 0);
+        h2.setSettled(id2, 90e18, 0);
+        h2.setPoolTotalSettled(poolId, 90e18, 0);
+        h2.updateSettlement(id2, 0, 30e18);
+        (,, uint256 s2,,,, uint256 o2,) = h2.getPositionAccounting(id2);
+
+        assertEq(s1, s2);
+        assertEq(o1, o2);
+        assertEq(s1 + o1, 120e18);
     }
 
     function test_registerPosition_duplicate_revertsAlreadyRegistered() public {
@@ -162,7 +247,7 @@ contract VTSPositionLibMutationUnitTest is Test {
 
         uint256 expAdd1 = 7 * uint256(liq);
         uint256 expDeficitIncrease = expAdd1 - s1;
-        (,,, uint256 settled1, uint256 d0, uint256 d1) = harness.getPositionAccounting(id);
+        (,,, uint256 settled1, uint256 d0, uint256 d1,,) = harness.getPositionAccounting(id);
         assertEq(d0, 0);
         assertEq(d1, expDeficitIncrease);
         assertEq(settled1, 0);

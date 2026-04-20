@@ -3,6 +3,7 @@ pragma solidity ^0.8.26;
 
 import {
     VTSStorage,
+    PositionAccounting,
     MarketVTSConfiguration,
     TokenConfiguration,
     GrowthPair,
@@ -339,16 +340,21 @@ contract VTSPositionLibHarness {
             uint256 settled0,
             uint256 settled1,
             uint256 cumulativeDeficit0,
-            uint256 cumulativeDeficit1
+            uint256 cumulativeDeficit1,
+            uint256 settledOverflow0,
+            uint256 settledOverflow1
         )
     {
+        PositionAccounting storage pa = s.positionAccounting[id];
         return (
-            s.positionAccounting[id].commitmentMax.token0,
-            s.positionAccounting[id].commitmentMax.token1,
-            s.positionAccounting[id].settled.token0,
-            s.positionAccounting[id].settled.token1,
-            s.positionAccounting[id].cumulativeDeficit.token0,
-            s.positionAccounting[id].cumulativeDeficit.token1
+            pa.commitmentMax.token0,
+            pa.commitmentMax.token1,
+            pa.settled.token0,
+            pa.settled.token1,
+            pa.cumulativeDeficit.token0,
+            pa.cumulativeDeficit.token1,
+            pa.settledOverflow.token0,
+            pa.settledOverflow.token1
         );
     }
 
@@ -431,6 +437,12 @@ contract VTSPositionLibHarness {
     function setSettled(PositionId id, uint256 s0, uint256 s1) external {
         s.positionAccounting[id].settled.token0 = s0;
         s.positionAccounting[id].settled.token1 = s1;
+    }
+
+    /// @notice TEST-ONLY: sets deferred amounts above `commitmentMax`
+    function setSettledOverflow(PositionId id, uint256 o0, uint256 o1) external {
+        s.positionAccounting[id].settledOverflow.token0 = o0;
+        s.positionAccounting[id].settledOverflow.token1 = o1;
     }
 
     /// @notice Sets cumulative deficit for a position

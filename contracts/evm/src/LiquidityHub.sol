@@ -441,18 +441,17 @@ contract LiquidityHub is BoundRegistry, Ownable, ReentrancyGuardTransient {
     function _assertRecipientNotDexSink(address lcc, address to) internal view {
         uint8 level = boundLevel(s.lccToMarket[lcc].factory, to);
         if (Bounds.isDex(level)) {
-            revert Errors.DirectWrapToDexNotAllowed(to);
+            revert Errors.MintToNotAllowedRecipient(to);
         }
     }
 
-    /// @dev Defence in depth for **direct-backed** Hub mints (`_wrap`, etc.): exempt holders skip bucket maps, so
-    ///      `directAmount > 0` must not target them (`LCC.mint` is authoritative; this surfaces a clearer early revert).
-    ///      Do **not** use for `issue` / pure market-derived mints — issuers must still be able to mint to ProxyHook.
-    function _assertDirectBackedMintRecipient(address lcc, address to) internal view {
-        _assertRecipientNotDexSink(lcc, to);
+    /// @dev User-facing wrap / wrapWith mint surfaces (`_wrap`, `_wrapWith`): minting into any protocol-bound address
+    ///      (endpoint, exempt, or DEX) bypasses normal custody expectations and can strand value or become FCFS-capturable
+    ///      on routers (see **DELTA-02**). Issuer-only `issue` remains the supported path to protocol endpoints.
+    function _assertUserFacingMintRecipient(address lcc, address to) internal view {
         uint8 level = boundLevel(s.lccToMarket[lcc].factory, to);
-        if (Bounds.isExempt(level)) {
-            revert Errors.DirectMintToExemptNotAllowed(to);
+        if (Bounds.isEndpoint(level)) {
+            revert Errors.MintToNotAllowedRecipient(to);
         }
     }
 
@@ -470,10 +469,7 @@ contract LiquidityHub is BoundRegistry, Ownable, ReentrancyGuardTransient {
         address underlying = s.lccToUnderlying[lcc];
         bool isNativeAsset = underlying == address(0);
 
-        // Mint-time ingress to the DEX sink bypasses LCC transfer hooks.
-        // Reject it until there is a safe settlement path that can run under PoolManager lock constraints.
-        // Direct-backed mint to exempt is forbidden (finding 14); pure market issuer mints use `issue` instead.
-        _assertDirectBackedMintRecipient(lcc, to);
+        _assertUserFacingMintRecipient(lcc, to);
 
         // throw error if the native ETH is insufficient and it is a native ETH backed LCC
         if (isNativeAsset) {
@@ -542,8 +538,7 @@ contract LiquidityHub is BoundRegistry, Ownable, ReentrancyGuardTransient {
     function _wrapWith(address lcc, address withLCC, address to, uint256 amount) internal onlyValidLcc(lcc) {
         address from = _msgSender();
 
-        // Reject DEX sinks. If the final mint includes a direct-backed leg to an exempt recipient, `LCC.mint` reverts.
-        _assertRecipientNotDexSink(lcc, to);
+        _assertUserFacingMintRecipient(lcc, to);
 
         // Performs all necessary validation and preparation
         LiquidityHubLib.WrapWithContext memory ctx =

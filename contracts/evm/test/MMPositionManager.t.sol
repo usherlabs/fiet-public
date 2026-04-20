@@ -3280,6 +3280,99 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
         positionManager.ownerOf(scTokenId);
     }
 
+    /// @notice Inactive `pa.settled` remnants must remain withdrawable after commit expiry (SETTLE-03A / scan #27).
+    function test_inactiveSettledRemnant_withdraw_succeeds_afterCommitExpired() public {
+        this._externalInactiveRemnantDrainAfterExpiry();
+    }
+
+    function _externalInactiveRemnantDrainAfterExpiry() external {
+        address locker = liquiditySignal.mmState.advancer;
+        PriceShapedScenario memory scenario = _setupPriceShapedScenario();
+        (uint256 settled0BeforeDecrease, uint256 settled1BeforeDecrease) = _settleShapedPositionForFullRemove(scenario);
+        uint256 scTokenId = scenario.tokenId;
+        uint256 scPosIndex = scenario.positionIndex;
+        PositionId scPosId = scenario.positionId;
+
+        vm.mockCall(
+            address(mv),
+            abi.encodeWithSelector(
+                IMarketVaultDryBalanceDelta.dryModifyLiquidities.selector,
+                toBalanceDelta(SafeCast.toInt128(settled0BeforeDecrease), SafeCast.toInt128(settled1BeforeDecrease))
+            ),
+            abi.encode(toBalanceDelta(0, 0))
+        );
+        vm.mockCall(
+            marketFactory, abi.encodeWithSelector(IMarketFactory.useMarketLiquidity.selector), abi.encode(uint256(0))
+        );
+
+        MMA.PreparedAction[] memory actions = new MMA.PreparedAction[](3);
+        actions[0] = MMA.prepareDecrease(corePoolKey, scTokenId, scPosIndex, 1e18);
+        actions[1] = MMA.prepareTake(Currency.wrap(address(lcc0)), locker, 0);
+        actions[2] = MMA.prepareTake(Currency.wrap(address(lcc1)), locker, 0);
+        _executeWithUnlockLiquidity(actions, block.timestamp + 3600);
+
+        (uint256 s0, uint256 s1) = vtsOrchestrator.getPositionSettledAmounts(scPosId);
+        assertGt(s0 + s1, 0, "precondition: inactive position retains live settled until separately settled");
+        assertGt(_inactiveRemnantCount(scTokenId), 0, "precondition: inactive remnant counter should be non-zero");
+
+        (, uint256 expiresAt,,,) = vtsOrchestrator.getCommit(scTokenId);
+        vm.warp(expiresAt + 1);
+        assertFalse(vtsOrchestrator.isSignalValid(scTokenId, true), "precondition: commit must be non-live after warp");
+
+        int128 settle0 = SafeCast.toInt128(s0);
+        int128 settle1 = SafeCast.toInt128(s1);
+        _mintUnderlyingForPositiveSettle(locker, settle0, settle1);
+
+        MMA.PreparedAction[] memory drain = new MMA.PreparedAction[](1);
+        drain[0] = MMA.prepareSettle(corePoolKey, scTokenId, scPosIndex, settle0, settle1, false);
+        _executeWithUnlockLiquidity(drain, block.timestamp + 3600);
+
+        (uint256 s0After, uint256 s1After) = vtsOrchestrator.getPositionSettledAmounts(scPosId);
+        assertEq(s0After + s1After, 0, "inactive settled should be fully drained after expiry");
+        assertEq(_inactiveRemnantCount(scTokenId), 0, "inactive remnant counter should clear after drain");
+    }
+
+    /// @notice Active positions must still present a live signal for non-seizing deposits after commit expiry.
+    function test_activePosition_settleDeposit_reverts_InvalidSignal_afterCommitExpired() public {
+        vm.mockCall(
+            marketFactory,
+            abi.encodeWithSelector(IMarketFactory.bounds.selector, address(positionManager)),
+            abi.encode(true)
+        );
+
+        ModifyLiquidityParams memory liquidityParams =
+            ModifyLiquidityParams({tickLower: -60, tickUpper: 60, liquidityDelta: 1e18, salt: bytes32(uint256(99))});
+
+        (uint256 tokenId,,,) = _setupCommittedPosition(
+            positionManager,
+            corePoolKey,
+            abi.encode(liquiditySignal),
+            liquidityParams,
+            marketVTSConfiguration,
+            address(lcc0),
+            address(lcc1)
+        );
+
+        (, uint256 expiresAt,,,) = vtsOrchestrator.getCommit(tokenId);
+        vm.warp(expiresAt + 1);
+        assertFalse(vtsOrchestrator.isSignalValid(tokenId, true));
+
+        address locker = liquiditySignal.mmState.advancer;
+        int128 d0 = -1;
+        int128 d1 = -1;
+        MockERC20(lcc0.underlying()).mint(locker, 1);
+        MockERC20(lcc1.underlying()).mint(locker, 1);
+        vm.startPrank(locker);
+        MockERC20(lcc0.underlying()).approve(address(positionManager), 1);
+        MockERC20(lcc1.underlying()).approve(address(positionManager), 1);
+        vm.stopPrank();
+
+        MMA.PreparedAction[] memory settle = new MMA.PreparedAction[](1);
+        settle[0] = MMA.prepareSettle(corePoolKey, tokenId, 0, d0, d1, false);
+        vm.expectRevert(abi.encodeWithSelector(Errors.InvalidSignal.selector, tokenId));
+        _executeWithUnlockLiquidity(settle, block.timestamp + 3600);
+    }
+
     /// @notice `commitOf` must mirror `getCommit` on the orchestrator (including `inactiveRemnantCount`).
     function test_commitOf_matches_getCommit_allTupleFields() public {
         PriceShapedScenario memory scenario = _setupPriceShapedScenario();

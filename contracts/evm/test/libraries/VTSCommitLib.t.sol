@@ -297,6 +297,37 @@ contract VTSCommitLibTest is VTSLibTestBase {
         assertEq(settled, settled0 + settled1, "settled USD should equal token amounts at p=1");
     }
 
+    function test_validateLiquidityDelta_success_whenBackedBySettledOverflowOnly() public {
+        (uint160 sqrtPriceX96, int24 tick,,) = _getSlot0(poolId);
+
+        VTSCommitLib.LiquidityDeltaParams memory p = VTSCommitLib.LiquidityDeltaParams({
+            currency0: corePoolKey.currency0,
+            currency1: corePoolKey.currency1,
+            sqrtPriceX96: sqrtPriceX96,
+            currentTick: tick,
+            tickLower: TL,
+            tickUpper: TU,
+            liquidityDelta: int256(uint256(LIQ))
+        });
+
+        oracle.setTotalValue(0);
+        harness.setPositionSettled(positionId, 0, 0);
+
+        (, uint256 issuedBefore,,) = harness.validateLiquidityDelta(oracle, commitId, positionId, p, false);
+        assertGt(issuedBefore, 0, "issued should be non-zero");
+
+        // Live settled zero; economic backing sits entirely in overflow (still priced in validateLiquidityDelta).
+        harness.setPositionSettledOverflow(positionId, issuedBefore + 1, 0);
+
+        (bool ok, uint256 issued, uint256 settled, uint256 signal) =
+            harness.validateLiquidityDelta(oracle, commitId, positionId, p, false);
+
+        assertTrue(ok, "should be backed by overflow alone");
+        assertEq(signal, 0, "signal should remain zero");
+        assertEq(issued, issuedBefore, "issued should be stable");
+        assertEq(settled, issuedBefore + 1, "settled USD should include overflow at p=1");
+    }
+
     function test_validateLiquidityDelta_reverts_whenInsufficientBacking_andFlagTrue() public {
         (uint160 sqrtPriceX96, int24 tick,,) = _getSlot0(poolId);
 
@@ -443,6 +474,26 @@ contract VTSCommitLibTest is VTSLibTestBase {
         assertEq(d0, 0, "deficit0 should be cleared");
         assertEq(d1, 0, "deficit1 should be cleared");
         assertEq(harness.getPositionCommitmentDeficitBps(positionId), 0, "deficit bps should clear when fully backed");
+    }
+
+    function test_checkpoint_countsSettledOverflow_towardBacking_whenLiveSettledAloneWouldBeShort() public {
+        uint256 issuedUsd = _computeIssuedUsd();
+        assertGt(issuedUsd, 100, "issued USD should be large enough for headroom test");
+
+        oracle.setTotalValue(0);
+        harness.setPositionCommitmentDeficit(positionId, 0, 0);
+
+        // Live settled alone: issuedUsd - 50 < issuedUsd -> would be under-backed if overflow were ignored.
+        // Effective settled token0: (issuedUsd - 50) + 100 > issuedUsd at 1:1 prices -> fully backed.
+        harness.setPositionSettled(positionId, issuedUsd - 50, 0);
+        harness.setPositionSettledOverflow(positionId, 100, 0);
+
+        harness.checkpoint(manager, oracle, commitId, positionId);
+
+        assertEq(harness.getPositionCommitmentDeficitBps(positionId), 0, "deficit bps should clear with overflow");
+        (uint256 d0, uint256 d1) = harness.getPositionCommitmentDeficit(positionId);
+        assertEq(d0, 0, "deficit0 should be clear");
+        assertEq(d1, 0, "deficit1 should be clear");
     }
 
     function test_checkpoint_sufficientBacking_reducesDeficit_proRata_whenSurplusPartial() public {

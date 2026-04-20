@@ -54,8 +54,10 @@ contract VTSOrchestratorInvariantRegressionsTest is VTSOrchestratorFixture {
         _decreasePosition(tokenA, 1e9);
         _decreasePosition(tokenB, 1e9);
 
-        (uint256 cumA0, uint256 cumA1, uint256 settledA0, uint256 settledA1,,) = _testable().getPositionAccounting(posA);
-        (uint256 cumB0, uint256 cumB1, uint256 settledB0, uint256 settledB1,,) = _testable().getPositionAccounting(posB);
+        (uint256 cumA0, uint256 cumA1, uint256 settledA0, uint256 settledA1,,,,) =
+            _testable().getPositionAccounting(posA);
+        (uint256 cumB0, uint256 cumB1, uint256 settledB0, uint256 settledB1,,,,) =
+            _testable().getPositionAccounting(posB);
 
         assertEq(cumA0, cumB0, "token0 cumulative deficit diverged");
         assertEq(cumA1, cumB1, "token1 cumulative deficit diverged");
@@ -100,13 +102,13 @@ contract VTSOrchestratorInvariantRegressionsTest is VTSOrchestratorFixture {
 
     function test_vts03_swapThenSettle_mutatesPositionAccounting_zeroForOne() public {
         (uint256 tokenId, PositionId positionId,,) = _createCommittedPosition();
-        (uint256 cumBefore0, uint256 cumBefore1, uint256 settledBefore0, uint256 settledBefore1,,) =
+        (uint256 cumBefore0, uint256 cumBefore1, uint256 settledBefore0, uint256 settledBefore1,,,,) =
             _testable().getPositionAccounting(positionId);
 
         _swapCore(true, -int256(5e17));
         _pokeMM(tokenId, 0);
 
-        (uint256 cumAfter0, uint256 cumAfter1, uint256 settledAfter0, uint256 settledAfter1,,) =
+        (uint256 cumAfter0, uint256 cumAfter1, uint256 settledAfter0, uint256 settledAfter1,,,,) =
             _testable().getPositionAccounting(positionId);
         bool accountingChanged = cumAfter0 != cumBefore0 || cumAfter1 != cumBefore1 || settledAfter0 != settledBefore0
             || settledAfter1 != settledBefore1;
@@ -115,13 +117,13 @@ contract VTSOrchestratorInvariantRegressionsTest is VTSOrchestratorFixture {
 
     function test_vts03_swapThenSettle_mutatesPositionAccounting_oneForZero() public {
         (uint256 tokenId, PositionId positionId,,) = _createCommittedPosition();
-        (uint256 cumBefore0, uint256 cumBefore1, uint256 settledBefore0, uint256 settledBefore1,,) =
+        (uint256 cumBefore0, uint256 cumBefore1, uint256 settledBefore0, uint256 settledBefore1,,,,) =
             _testable().getPositionAccounting(positionId);
 
         _swapCore(false, -int256(5e17));
         _pokeMM(tokenId, 0);
 
-        (uint256 cumAfter0, uint256 cumAfter1, uint256 settledAfter0, uint256 settledAfter1,,) =
+        (uint256 cumAfter0, uint256 cumAfter1, uint256 settledAfter0, uint256 settledAfter1,,,,) =
             _testable().getPositionAccounting(positionId);
         bool accountingChanged = cumAfter0 != cumBefore0 || cumAfter1 != cumBefore1 || settledAfter0 != settledBefore0
             || settledAfter1 != settledBefore1;

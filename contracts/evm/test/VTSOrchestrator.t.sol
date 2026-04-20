@@ -51,6 +51,8 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
         int128 settlementDelta1,
         uint256 settledToken0,
         uint256 settledToken1,
+        uint256 settledOverflowToken0,
+        uint256 settledOverflowToken1,
         bool isSeizing,
         bool rfsOpen
     );
@@ -209,7 +211,7 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
     }
 
     function _cumulativeDeficit(PositionId positionId) internal view returns (uint256 def0, uint256 def1) {
-        (def0, def1,,,,) = _testableOrchestrator().getPositionAccounting(positionId);
+        (def0, def1,,,,,,) = _testableOrchestrator().getPositionAccounting(positionId);
     }
 
     function _lastPositionSettledMeta()
@@ -217,14 +219,16 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
         returns (uint256 commitId, uint256 positionIndex, bool isSeizing, bool rfsOpen)
     {
         Vm.Log[] memory entries = vm.getRecordedLogs();
-        bytes32 sig = keccak256("PositionSettled(uint256,uint256,int128,int128,uint256,uint256,bool,bool)");
+        bytes32 sig =
+            keccak256("PositionSettled(uint256,uint256,int128,int128,uint256,uint256,uint256,uint256,bool,bool)");
 
         for (uint256 i = entries.length; i > 0; i--) {
             Vm.Log memory entry = entries[i - 1];
             if (entry.emitter == address(vtsOrchestrator) && entry.topics.length == 3 && entry.topics[0] == sig) {
                 commitId = uint256(entry.topics[1]);
                 positionIndex = uint256(entry.topics[2]);
-                (,,,, isSeizing, rfsOpen) = abi.decode(entry.data, (int128, int128, uint256, uint256, bool, bool));
+                (,,,,,, isSeizing, rfsOpen) =
+                    abi.decode(entry.data, (int128, int128, uint256, uint256, uint256, uint256, bool, bool));
                 return (commitId, positionIndex, isSeizing, rfsOpen);
             }
         }
@@ -1392,6 +1396,22 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
         (uint256 amount0, uint256 amount1) = vtsOrchestrator.getPositionSettledAmounts(positionId);
         assertEq(amount0, requiredSettlementAmount0, "Settled amount0 should be the required settlement amount");
         assertEq(amount1, requiredSettlementAmount1, "Settled amount1 should be the required settlement amount");
+    }
+
+    function test_getPositionSettledOverflowAmounts_startsAtZero_forNormalCommittedPosition() public {
+        (, PositionId positionId,,) = _createCommittedPosition();
+        (uint256 ov0, uint256 ov1) = vtsOrchestrator.getPositionSettledOverflowAmounts(positionId);
+        assertEq(ov0, 0);
+        assertEq(ov1, 0);
+    }
+
+    function test_getPositionEffectiveSettledAmounts_equalsLivePlusOverflow() public {
+        (, PositionId positionId,,) = _createCommittedPosition();
+        (uint256 live0, uint256 live1) = vtsOrchestrator.getPositionSettledAmounts(positionId);
+        (uint256 ov0, uint256 ov1) = vtsOrchestrator.getPositionSettledOverflowAmounts(positionId);
+        (uint256 eff0, uint256 eff1) = vtsOrchestrator.getPositionEffectiveSettledAmounts(positionId);
+        assertEq(eff0, live0 + ov0);
+        assertEq(eff1, live1 + ov1);
     }
 
     function test_revert_CurrencyNotSettled_whenPositionNotSettled() public {

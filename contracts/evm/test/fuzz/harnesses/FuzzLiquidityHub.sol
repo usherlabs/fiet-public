@@ -440,9 +440,17 @@ contract FuzzLiquidityHub is BoundRegistry, Ownable, ReentrancyGuardTransient {
         return LCCFactoryLib.balancesOf(lccToken, account);
     }
 
-    function _assertWrapRecipientNotDexSink(address lcc, address to) internal view {
-        if (Bounds.isDex(boundLevel(s.lccToMarket[lcc].factory, to))) {
-            revert Errors.DirectWrapToDexNotAllowed(to);
+    function _assertRecipientNotDexSink(address lcc, address to) internal view {
+        uint8 level = boundLevel(s.lccToMarket[lcc].factory, to);
+        if (Bounds.isDex(level)) {
+            revert Errors.MintToNotAllowedRecipient(to);
+        }
+    }
+
+    function _assertUserFacingMintRecipient(address lcc, address to) internal view {
+        uint8 level = boundLevel(s.lccToMarket[lcc].factory, to);
+        if (Bounds.isEndpoint(level)) {
+            revert Errors.MintToNotAllowedRecipient(to);
         }
     }
 
@@ -460,9 +468,7 @@ contract FuzzLiquidityHub is BoundRegistry, Ownable, ReentrancyGuardTransient {
         address underlying = s.lccToUnderlying[lcc];
         bool isNativeAsset = underlying == address(0);
 
-        // Mint-time ingress to the DEX sink bypasses LCC transfer hooks.
-        // Reject it until there is a safe settlement path that can run under PoolManager lock constraints.
-        _assertWrapRecipientNotDexSink(lcc, to);
+        _assertUserFacingMintRecipient(lcc, to);
 
         // throw error if the native ETH is insufficient and it is a native ETH backed LCC
         if (isNativeAsset) {
@@ -531,8 +537,7 @@ contract FuzzLiquidityHub is BoundRegistry, Ownable, ReentrancyGuardTransient {
     function _wrapWith(address lcc, address withLCC, address to, uint256 amount) internal onlyValidLcc(lcc) {
         address from = _msgSender();
 
-        // wrapWithTo shares the same mint surface as direct wrap and must not bypass DEX ingress handling.
-        _assertWrapRecipientNotDexSink(lcc, to);
+        _assertUserFacingMintRecipient(lcc, to);
 
         // Performs all necessary validation and preparation
         LiquidityHubLib.WrapWithContext memory ctx = LiquidityHubLib.wrapWithPrepare(s, lcc, withLCC, from, amount);
@@ -731,7 +736,7 @@ contract FuzzLiquidityHub is BoundRegistry, Ownable, ReentrancyGuardTransient {
     function issue(address lcc, address to, uint256 amount) external onlyIssuer(lcc) nonReentrant {
         // Note: LCC mint path reverts on zero (direct+market) amount.
         // Minting market-derived LCC directly to the DEX sink bypasses transfer hooks and ingress settlement.
-        _assertWrapRecipientNotDexSink(lcc, to);
+        _assertRecipientNotDexSink(lcc, to);
         _mint(lcc, to, 0, amount);
     }
 

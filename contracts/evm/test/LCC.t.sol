@@ -188,7 +188,7 @@ contract LiquidityCommitmentCertificateTest is Test {
     function test_mint_revertsWhenDirectBackedToExemptRecipient() public {
         address exempt = makeAddr("exemptRecipient");
         _setBoundLevel(exempt, BOUND_EXEMPT);
-        vm.expectRevert(abi.encodeWithSelector(Errors.DirectMintToExemptNotAllowed.selector, exempt));
+        vm.expectRevert(abi.encodeWithSelector(Errors.MintToNotAllowedRecipient.selector, exempt));
         lcc.mint(exempt, 1, 0);
     }
 

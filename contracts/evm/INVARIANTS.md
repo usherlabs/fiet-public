@@ -23,6 +23,13 @@ being an informal “should”.
     principal aggregates (`totalDeficitPrincipal`) alongside growth settlement.
   - **commitmentDeficit**: position-level insolvency gate derived from commitment backing checks; used for
     RFS/seizability hardening and distinct from swap-attributed pool deficit principal (`totalDeficitPrincipal`).
+- **Settlement buckets (`PositionAccounting`)**:
+  - **`settled`**: live settled amount per lane, **capped** by `commitmentMax` for that lane.
+  - **`settledOverflow`**: deferred positive settlement that does not fit under the current `commitmentMax` headroom
+    (economic value is still tracked; it is not discarded). Together they form **effective settled** per lane for
+    RFS, commitment-backing USD checks, and pool `totalSettled` aggregates. Off-chain readers that only query
+    `getPositionSettledAmounts` see **live** `settled`; prefer `getPositionEffectiveSettledAmounts`, or sum
+    `getPositionSettledAmounts` + `getPositionSettledOverflowAmounts`, for economics.
 
 ## Supported underlying asset model
 
@@ -100,10 +107,10 @@ being an informal “should”.
 - **Enforced by (authorised mint surfaces)**:
 
   - **Domain A**: `src/LiquidityHub.sol::_wrap` transfers underlying in, increments
-    `directSupply[lcc]` and `reserveOfUnderlying[underlying]`, then mints LCC; `src/LCC.sol::mint` and
-    `LiquidityHub._assertDirectBackedMintRecipient` reject `directAmount > 0` to `BOUND_EXEMPT` recipients
-    (`Errors.DirectMintToExemptNotAllowed`). `issue` uses `_assertRecipientNotDexSink` only so issuer mints to exempt
-    endpoints (eg ProxyHook) remain valid for pure market-derived balance.
+    `directSupply[lcc]` and `reserveOfUnderlying[underlying]`, then mints LCC; user-facing `_wrap` / `_wrapWith` reject
+    protocol-bound recipients (`Errors.MintToNotAllowedRecipient`); `src/LCC.sol::mint` rejects `directAmount > 0` to
+    `BOUND_EXEMPT` where applicable (`Errors.MintToNotAllowedRecipient`). `issue` uses DEX-only rejection
+    (`_assertRecipientNotDexSink`) so issuer mints to exempt endpoints (eg ProxyHook) remain valid for pure market-derived balance.
   - **Domain B**: `src/LiquidityHub.sol::issue` is `onlyIssuer(lcc)` and mints market-derived amount via the LCC hub
     mint path; issuer gating is enforced by `LiquidityHub._onlyIssuer` (valid LCC + issuer allowlist).
   - **Domain C**: `src/libraries/VTSPositionMMOpsLib.sol::_handleLiquidityIncrease` calls
@@ -180,8 +187,9 @@ being an informal “should”.
 - **Notable guard**:
   - native-asset wrap requires `msg.value == amount`, otherwise `Errors.InvalidAmount`.
   - ERC20-backed wrap requires `msg.value == 0`, otherwise `Errors.InvalidAmount`.
-  - Recipients must not be a DEX ingress sink (`Errors.DirectWrapToDexNotAllowed`) or bucket-exempt
-    (`Errors.DirectMintToExemptNotAllowed`); see **LCC-BACKING-01** Domain A.
+  - User-facing wrap recipients must not be protocol-bound (`Errors.MintToNotAllowedRecipient`), covering endpoint, exempt,
+    and DEX roles in one check; issuer-only `issue` remains the path to protocol sinks (DEX mints still revert via the same
+    error). See **LCC-BACKING-01** Domain A.
 - **Asset-model assumption**:
   - For ERC20 underlyings, this invariant assumes the listed underlying is a **standard, transfer-conservative token**
     whose received amount equals the nominal transfer amount.
@@ -475,8 +483,8 @@ being an informal “should”.
 - **Statement**: A commitment checkpoint must set (or reduce/clear) `PositionAccounting.commitmentDeficit` in token
   units based on the USD backing shortfall.
 - **Enforced by**: `src/libraries/VTSCommitLib.sol::checkpointWithCommitment`.
-- **Ordering (growth before commitment)**: `checkpointWithCommitment` values backing from stored `pa.settled` (and
-  effective issued amounts). Therefore `src/VTSOrchestrator.sol::checkpoint(..., withCommitment: true)` must settle
+- **Ordering (growth before commitment)**: `checkpointWithCommitment` values backing from **effective** settled amounts
+  (`pa.settled + pa.settledOverflow` per leg, via `VTSCommitLib`) together with effective issued amounts. Therefore `src/VTSOrchestrator.sol::checkpoint(..., withCommitment: true)` must settle
   position growths **before** delegating to `VTSLifecycleLinkedLib.checkpointAfterGrowthNoCommitment` / `VTSCommitLib.checkpointAfterGrowthWithCommitment` (commitment path uses `VTSCommitLib.checkpointWithCommitment`), so
   uncrystallised deficit/inflow growth cannot make the commitment gate read stale-high `settled`. While the pool
   (or VTS globally) is paused, public `VTSOrchestrator.settlePositionGrowths` remains restricted to the canonical
@@ -518,10 +526,26 @@ being an informal “should”.
 
 ## Settlement, RFS, and seizure safety
 
+### SETTLE-00: `settled`, `settledOverflow`, and **effective** settled
+
+- **Statement**: **Effective** settled per lane is `pa.settled + pa.settledOverflow`. After every relevant mutation
+  (positive/negative settlement and commitment-max refresh), the protocol **re-splits** canonically:
+  `pa.settled = min(effectiveSettled, commitmentMax)` and `pa.settledOverflow = effectiveSettled - pa.settled`. Positive
+  growth/MM settlement first nets **cumulative** then **commitment** deficits, then adjusts effective settled and applies
+  that split. Negative settlement reduces effective settled (drawing **`settledOverflow` before** live `pa.settled` is an
+  emergent property of the same normalisation). `_trackCommitment` recomputes `commitmentMax` from live liquidity, then
+  applies the same normaliser so headroom reopening **collapses** overflow into live `settled` without a separate migration
+  helper. **RFS**, **MM excess/over-withdraw clamps**, **checkpoint-with-commitment** settled USD, and **`_settledValueForPosition`**
+  reason over this effective total; pool-wide **`totalSettled`** deltas include both lanes.
+- **Enforced by**: `src/libraries/VTSPositionLib.sol` (`_vUpdateSettlementCore`, `_canonicalSettledSplitForLane`, `getRFS`,
+  excess paths), `src/libraries/VTSCommitLib.sol` (`_checkpointWithCommitment`, `_settledValueForPosition`),
+  `IVTSOrchestrator.getPositionSettledOverflowAmounts`, `IVTSOrchestrator.getPositionEffectiveSettledAmounts`, and
+  `PositionSettled` event fields for observability.
+
 ### Policy reference: seizure economics (amendment 2026-04-19)
 
 - **Agents/spec**: Normative **economic intent** for guarantor seizure (base tranche, proportional cure of overdue RfS, position-wide aggregation) is documented in `agents/spec/Seizure-and-Base-Tranche-Policy.md`. That document supersedes older narrative in `agents/spec/Settlements.md` that described time-linear seizure sizing after grace.
-- **Implementation note**: On-chain seized liquidity units are computed in `src/libraries/VTSLifecycleLinkedLib.sol::_calcSeizure`. The outer MM settle path captures **pre-intervention** RfS (`R_pre`) from `getRFS` immediately before settlement deposits mutate `pa.settled`; `_calcSeizure` sizes per-lane **exposure** and **cured fraction** `φ = S/R_pre` from that snapshot (not from post-settlement remainders), so a transaction that **fully closes** RfS in the same step can still yield **non-zero** seized units when the snapshot showed overdue obligation. Rounding conservatism follows existing `LiquidityUtils` bps helpers (`mulDivRoundingUp` where applicable). Treat `INVARIANTS.md` enforcement points as authoritative for **what reverts**; treat the agents spec as authoritative for **economic intent**, with this note describing **current sizing alignment**.
+- **Implementation note**: On-chain seized liquidity units are computed in `src/libraries/VTSLifecycleLinkedLib.sol::_calcSeizure`. The outer MM settle path captures **pre-intervention** RfS (`R_pre`) from `getRFS` immediately before settlement deposits mutate position accounting; `getRFS` compares requirements against **effective** settled (`settled + settledOverflow`) per lane. `_calcSeizure` sizes per-lane **exposure** and **cured fraction** `φ = S/R_pre` from that snapshot (not from post-settlement remainders), so a transaction that **fully closes** RfS in the same step can still yield **non-zero** seized units when the snapshot showed overdue obligation. Rounding conservatism follows existing `LiquidityUtils` bps helpers (`mulDivRoundingUp` where applicable). Treat `INVARIANTS.md` enforcement points as authoritative for **what reverts**; treat the agents spec as authoritative for **economic intent**, with this note describing **current sizing alignment**.
 
 ### SETTLE-01: Withdrawals from active positions are disallowed while RFS is open
 
@@ -605,6 +629,22 @@ being an informal “should”.
   - Decrease routing / `VTSPositionMMOpsLib` integration: `test/libraries/VTSPositionLib.t.sol`,
     `test/libraries/VTSPositionLib.onMMSettle.t.sol`, harnesses under `test/libraries/harnesses/VTSPositionLibHarness.sol`.
   - Queue custody vs forwarded non-fee: [agents/audit-resolutions/mm-queue-custody-nonfee-vs-custodyforward-guard-resolution.md](../../agents/audit-resolutions/mm-queue-custody-nonfee-vs-custodyforward-guard-resolution.md) and **MMQ-01** (Echidna) in `test/fuzz/README.md`.
+
+### SETTLE-03A: Inactive remnant withdrawal-only `onMMSettle` does not require a live VRL signal
+
+- **Statement**: When `VTSOrchestrator.onMMSettle` runs **non-seizing** settlement, it normally requires a live
+  VRL-backed commit (`isSignalValid(commitId, true)`). The **sole exception** is **withdrawal-only** settlement on an
+  **inactive** position: both signed `amountDelta` lanes are withdrawals (`amount0 >= 0` and `amount1 >= 0` in the
+  MM settle convention where negative means deposit). That path still requires an initialised commit
+  (`isSignalValid(commitId, false)`), bound-factory caller, and `msg.sender == position.owner` (`MMPositionManager`), but
+  does **not** require unexpired non-empty reserves. This keeps inactive `pa.settled` remnants drainable (and
+  `Commit.inactiveRemnantCount` / decommit semantics consistent) after natural expiry or an empty-reserve renewal.
+- **Enforced by**: `src/VTSOrchestrator.sol::onMMSettle` (live-signal assertion gated unless the carve-out applies;
+  `owner` is asserted before `CheckpointLibrary.isSeizable` on seizure so unrelated callers do not observe RFS errors
+  first).
+- **Why**: Inactive positions already cap withdrawal capacity from stored `pa.settled` in
+  `VTSLifecycleLinkedLib._planWithdrawalLane`; that slice is not fresh signal-backed issuance. Requiring a live signal
+  there would deadlock decommit against `CommitNotDrained` when the advancer cannot or will not renew.
 
 ### MMQ-01: Queued principal must not exceed forwarded non-fee LCC on custody take-and-forward
 

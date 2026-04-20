@@ -93,6 +93,11 @@ contract VTSCommitLibHarness {
         s.positionAccounting[id].settled.token1 = settled1;
     }
 
+    function setPositionSettledOverflow(PositionId id, uint256 overflow0, uint256 overflow1) external {
+        s.positionAccounting[id].settledOverflow.token0 = overflow0;
+        s.positionAccounting[id].settledOverflow.token1 = overflow1;
+    }
+
     function setPositionCommitmentDeficit(PositionId id, uint256 deficit0, uint256 deficit1) external {
         s.positionAccounting[id].commitmentDeficit.token0 = deficit0;
         s.positionAccounting[id].commitmentDeficit.token1 = deficit1;

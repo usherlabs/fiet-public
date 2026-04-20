@@ -36,7 +36,9 @@ contract VTSOrchestratorTestable is VTSOrchestrator {
             uint256 settled0,
             uint256 settled1,
             uint256 commitmentMax0,
-            uint256 commitmentMax1
+            uint256 commitmentMax1,
+            uint256 settledOverflow0,
+            uint256 settledOverflow1
         )
     {
         PositionAccounting storage pa = s.positionAccounting[positionId];
@@ -46,7 +48,9 @@ contract VTSOrchestratorTestable is VTSOrchestrator {
             pa.settled.token0,
             pa.settled.token1,
             pa.commitmentMax.token0,
-            pa.commitmentMax.token1
+            pa.commitmentMax.token1,
+            pa.settledOverflow.token0,
+            pa.settledOverflow.token1
         );
     }
 

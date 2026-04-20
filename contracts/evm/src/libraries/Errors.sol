@@ -156,12 +156,10 @@ library Errors {
     /// @notice Thrown when a transfer is not allowed
     error TransferNotAllowed();
 
-    /// @notice Thrown when direct wrap minting targets a DEX ingress sink.
-    error DirectWrapToDexNotAllowed(address recipient);
-
-    /// @notice Thrown when a direct-backed (wrapped) LCC mint targets a bucket-exempt endpoint.
-    /// @dev Exempt holders skip bucket maps; direct supply there cannot align with Domain A accounting or DEX ingress preparation.
-    error DirectMintToExemptNotAllowed(address recipient);
+    /// @notice Thrown when an LCC mint targets a disallowed recipient.
+    /// @dev Covers: user-facing wrap/wrapWith to protocol-bound roles; issuer `issue` to a DEX sink; `LCC.mint` direct-backed
+    ///      leg to bucket-exempt endpoints (see **LCC-BACKING-01** / **HUB-01** in INVARIANTS.md).
+    error MintToNotAllowedRecipient(address recipient);
 
     /// @notice Thrown when native ETH transferFrom is attempted from a non-self source
     error NativeTransferFromUnsupported(address from);
