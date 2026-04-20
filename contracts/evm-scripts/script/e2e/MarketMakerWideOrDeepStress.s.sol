@@ -31,8 +31,8 @@ contract MarketMakerWideOrDeepStressE2E is MME2EBase {
         PositionProfileE2E[] memory profiles = _mmPositionProfilesAll();
         BufferModeE2E[] memory buffers = _mmBufferModesAll();
 
-        MakerHealthSnapshotE2E[2] memory baselineTightTiny;
-        bool[2] memory haveBaseline;
+        MakerHealthSnapshotE2E[] memory baselineTightTiny = new MakerHealthSnapshotE2E[](buffers.length);
+        bool[] memory haveBaseline = new bool[](buffers.length);
 
         for (uint256 i = 0; i < profiles.length; i++) {
             for (uint256 j = 0; j < buffers.length; j++) {
@@ -53,6 +53,9 @@ contract MarketMakerWideOrDeepStressE2E is MME2EBase {
                 if (_mmProfileNameEq(profiles[i], "tightTiny")) {
                     baselineTightTiny[j] = hb;
                     haveBaseline[j] = true;
+                } else {
+                    require(haveBaseline[j], "e2e: missing tightTiny baseline row before comparison");
+                    _assertImprovedServiceabilityVsBaseline(hb, baselineTightTiny[j]);
                 }
 
                 bool drained = _drainInactivePositionSurplusBestEffort(m, mmPk, commitId, 0, 32);

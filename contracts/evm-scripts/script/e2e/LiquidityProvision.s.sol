@@ -61,11 +61,14 @@ contract LiquidityProvisionE2E is E2EBase {
         require(_absDiff(a, b) <= tol, err);
     }
 
-    function _swapAndAssert(StandaloneMarket memory m, uint256 lpPk, PoolKey memory corePoolKey) internal {
+    function _swapAndAssert(StandaloneMarket memory m, uint256 lpPk, PoolKey memory corePoolKey)
+        internal
+        returns (address tokenIn, address tokenOut, uint256 swapSpent, uint256 swapReceived)
+    {
         IPoolManager poolManager = IPoolManager(config.poolManager);
         (uint160 sqrtPriceX96BeforeSwap,,,) = poolManager.getSlot0(corePoolKey.toId());
         uint256 expectedAmountIn = _quoteExactOutputSingle(_deployQuoter(), corePoolKey, ZERO_FOR_ONE, SWAP_AMOUNT_OUT);
-        (address tokenIn, address tokenOut, uint256 swapSpent, uint256 swapReceived) =
+        (tokenIn, tokenOut, swapSpent, swapReceived) =
             _swapExactOutputSingle(m, lpPk, ZERO_FOR_ONE, SWAP_AMOUNT_OUT, expectedAmountIn);
         require(tokenIn == Currency.unwrap(corePoolKey.currency0), "swap tokenIn mismatch");
         require(tokenOut == Currency.unwrap(corePoolKey.currency1), "swap tokenOut mismatch");
@@ -135,7 +138,8 @@ contract LiquidityProvisionE2E is E2EBase {
         console.log("currency0:", curr0Addr);
         console.log("currency1:", curr1Addr);
 
-        _swapAndAssert(m, lpPk, corePoolKey);
+        (address swapTokenIn, address swapTokenOut, uint256 swapSpent, uint256 swapReceived) =
+            _swapAndAssert(m, lpPk, corePoolKey);
         _removeAndUnwrap(m, lpPk, corePoolKey, tokenId, curr0Addr, curr1Addr, lp);
 
         // Snapshot balances after unwrap.
@@ -144,9 +148,24 @@ contract LiquidityProvisionE2E is E2EBase {
         uint256 lcc0After = IERC20(m.lcc0).balanceOf(lp);
         uint256 lcc1After = IERC20(m.lcc1).balanceOf(lp);
 
-        // Milestone 2: Underlying round-trips after unwrap (LP ends with ~same underlying as started).
-        _assertApproxEq(ua0After, ua0Before, AMOUNT_TOLERANCE, "underlying roundtrip: ua0 != before");
-        _assertApproxEq(ua1After, ua1Before, AMOUNT_TOLERANCE, "underlying roundtrip: ua1 != before");
+        // After unwrapping, the LP should hold only underlying and the net balance shift should mirror the
+        // exact-output swap executed while assets were wrapped as LCCs.
+        uint256 expectedUa0After = ua0Before;
+        uint256 expectedUa1After = ua1Before;
+        if (swapTokenIn == curr0Addr) {
+            expectedUa0After -= swapSpent;
+            expectedUa1After += swapReceived;
+        } else {
+            expectedUa1After -= swapSpent;
+            expectedUa0After += swapReceived;
+        }
+
+        require(
+            swapTokenOut == curr0Addr || swapTokenOut == curr1Addr,
+            "swap: unexpected tokenOut for core-pool liquidity flow"
+        );
+        _assertApproxEq(ua0After, expectedUa0After, AMOUNT_TOLERANCE, "underlying delta: ua0 != expected");
+        _assertApproxEq(ua1After, expectedUa1After, AMOUNT_TOLERANCE, "underlying delta: ua1 != expected");
 
         console.log("final checkpoints:");
         console.log("lcc0 final:", lcc0After);
@@ -158,4 +177,3 @@ contract LiquidityProvisionE2E is E2EBase {
         console.log("OK: stateful DirectLP add->swap->remove->unwrap verified");
     }
 }
-

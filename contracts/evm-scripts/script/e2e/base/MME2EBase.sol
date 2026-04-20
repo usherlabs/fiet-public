@@ -141,12 +141,8 @@ abstract contract MME2EBase is E2EBase {
 
     function _mmBufferModesAll() internal pure returns (BufferModeE2E[] memory b) {
         b = new BufferModeE2E[](2);
-        b[0] = BufferModeE2E({
-            name: "NoDirectLPBuffer",
-            seedDirectLP: false,
-            wrapAmountPerAsset: 0,
-            amountMaxPerAsset: 0
-        });
+        b[0] =
+            BufferModeE2E({name: "NoDirectLPBuffer", seedDirectLP: false, wrapAmountPerAsset: 0, amountMaxPerAsset: 0});
         b[1] = BufferModeE2E({
             name: "FullRangeDirectLPBuffer",
             seedDirectLP: true,
@@ -180,7 +176,7 @@ abstract contract MME2EBase is E2EBase {
         PositionId pid = vts.getPositionId(commitId, positionIndex);
         (s.eff0, s.eff1) = vts.getPositionSettledAmounts(pid);
         (s.overflow0, s.overflow1) = vts.getPositionSettledOverflowAmounts(pid);
-        (, , , , s.inactiveRemnantCount) = vts.getCommit(commitId);
+        (,,,, s.inactiveRemnantCount) = vts.getCommit(commitId);
         s.positionIndex = positionIndex;
     }
 
@@ -210,7 +206,7 @@ abstract contract MME2EBase is E2EBase {
         }
         (h.poolTotalSettled0, h.poolTotalSettled1) = vts.getPoolTotalSettled(poolId);
         (h.poolTotalDeficitPrincipal0, h.poolTotalDeficitPrincipal1) = vts.getPoolTotalDeficitPrincipal(poolId);
-        (, , , , h.inactiveRemnantCount) = vts.getCommit(commitId);
+        (,,,, h.inactiveRemnantCount) = vts.getCommit(commitId);
     }
 
     function _logMakerHealth(string memory label, MakerHealthSnapshotE2E memory h) internal view {
@@ -257,27 +253,20 @@ abstract contract MME2EBase is E2EBase {
         MakerHealthSnapshotE2E memory buffered,
         MakerHealthSnapshotE2E memory unbuffered
     ) internal pure {
-        uint256 b =
-            _makerHealthEffectiveSum(buffered) + _makerHealthOverflowSum(buffered) + _makerHealthDeficitSum(buffered);
-        uint256 u = _makerHealthEffectiveSum(unbuffered) + _makerHealthOverflowSum(unbuffered)
-            + _makerHealthDeficitSum(unbuffered);
+        uint256 b = _makerHealthEffectiveSum(buffered) + _makerHealthDeficitSum(buffered);
+        uint256 u = _makerHealthEffectiveSum(unbuffered) + _makerHealthDeficitSum(unbuffered);
         // Matrix comparisons should be bounded, not brittle. When the baseline is effectively zero, tolerate
         // only dust-sized residuals from the buffered path while still rejecting material regressions.
         uint256 tolerance = (u / 50) + 1e13;
-        require(
-            b <= u + tolerance,
-            "e2e: buffered run materially worse than unbuffered (effective+overflow+deficit)"
-        );
+        require(b <= u + tolerance, "e2e: buffered run materially worse than unbuffered (effective+deficit)");
     }
 
     function _assertMakerHealthImprovedOrStable(
         MakerHealthSnapshotE2E memory after_,
         MakerHealthSnapshotE2E memory before_
     ) internal pure {
-        uint256 a =
-            _makerHealthEffectiveSum(after_) + _makerHealthOverflowSum(after_);
-        uint256 b =
-            _makerHealthEffectiveSum(before_) + _makerHealthOverflowSum(before_);
+        uint256 a = _makerHealthEffectiveSum(after_);
+        uint256 b = _makerHealthEffectiveSum(before_);
         require(a <= b + (b / 100) + 1, "e2e: maker health regressed beyond tolerance");
     }
 
@@ -310,7 +299,8 @@ abstract contract MME2EBase is E2EBase {
         uint256 maxDrainIters
     ) internal {
         _drainInactivePositionSurplus(m, mmPk, commitId, positionIndex, maxDrainIters);
-        (uint256 e0, uint256 e1) = _getEffectiveSettledPair(IVTSOrchestrator(m.stack.contracts.vtsOrchestrator), commitId, positionIndex);
+        (uint256 e0, uint256 e1) =
+            _getEffectiveSettledPair(IVTSOrchestrator(m.stack.contracts.vtsOrchestrator), commitId, positionIndex);
         require(e0 == 0 && e1 == 0, "e2e: expected fully drained inactive surplus");
     }
 
@@ -318,8 +308,8 @@ abstract contract MME2EBase is E2EBase {
         MakerHealthSnapshotE2E memory candidate,
         MakerHealthSnapshotE2E memory baselineTightTiny
     ) internal pure {
-        uint256 c = _makerHealthOverflowSum(candidate) + _makerHealthEffectiveSum(candidate);
-        uint256 b = _makerHealthOverflowSum(baselineTightTiny) + _makerHealthEffectiveSum(baselineTightTiny);
+        uint256 c = _makerHealthEffectiveSum(candidate);
+        uint256 b = _makerHealthEffectiveSum(baselineTightTiny);
         // Bounded relational check: wider/deeper profiles should not exhibit materially worse stranded economics.
         require(c <= b + (b / 20) + 2, "e2e: wide/deep profile materially worse vs tightTiny baseline");
     }
@@ -338,7 +328,9 @@ abstract contract MME2EBase is E2EBase {
         require(s.overflow0 > 0 || s.overflow1 > 0, "e2e: stalled drain but zero inactive overflow (unexpected)");
         require(s.inactiveRemnantCount > 0, "e2e: stalled drain but zero inactive remnant count (unexpected)");
 
-        _logMakerHealth("recognised unserviceable overflow (pre-rebalance)", _snapshotMakerHealth(m, commitId, positionIndex));
+        _logMakerHealth(
+            "recognised unserviceable overflow (pre-rebalance)", _snapshotMakerHealth(m, commitId, positionIndex)
+        );
 
         _assertCommitNotDrainedOnDecommit(m, mmPk, commitId);
     }
@@ -399,6 +391,7 @@ abstract contract MME2EBase is E2EBase {
         uint128 rebalanceSwapChunk,
         uint256 rebalanceWrapAmount
     ) internal {
+        require(positionIndex == 0, "e2e: helper is single-position only");
         _settleRfsIfOpen(m, mmPk, commitId);
         _burnAndRealiseExitCredits(m, mmPk, commitId, positionIndex);
 
@@ -410,8 +403,9 @@ abstract contract MME2EBase is E2EBase {
             _assertRecognisedUnserviceableOverflowBeforeRebalance(m, mmPk, commitId, positionIndex);
 
             for (uint256 r = 0; r < maxRebalanceRounds; r++) {
-                (uint256 eff0, uint256 eff1) =
-                    _getEffectiveSettledPair(IVTSOrchestrator(m.stack.contracts.vtsOrchestrator), commitId, positionIndex);
+                (uint256 eff0, uint256 eff1) = _getEffectiveSettledPair(
+                    IVTSOrchestrator(m.stack.contracts.vtsOrchestrator), commitId, positionIndex
+                );
                 if (eff0 == 0 && eff1 == 0) {
                     drained = true;
                     break;
@@ -423,8 +417,7 @@ abstract contract MME2EBase is E2EBase {
                 );
 
                 _logMakerHealth(
-                    "after reserve rebalance + pool trade",
-                    _snapshotMakerHealth(m, commitId, positionIndex)
+                    "after reserve rebalance + pool trade", _snapshotMakerHealth(m, commitId, positionIndex)
                 );
 
                 drained = _drainInactivePositionSurplusBestEffort(m, mmPk, commitId, positionIndex, 32);
@@ -445,9 +438,12 @@ abstract contract MME2EBase is E2EBase {
     }
 
     /// @dev Single-position (`positionIndex == 0`) variant with default rebalance sizing.
-    function _closeRfsBurnDrainRebalanceDecommitAndTakeAllLccs(StandaloneMarket memory m, uint256 mmPk, uint256 rebalanceTakerPk, uint256 commitId)
-        internal
-    {
+    function _closeRfsBurnDrainRebalanceDecommitAndTakeAllLccs(
+        StandaloneMarket memory m,
+        uint256 mmPk,
+        uint256 rebalanceTakerPk,
+        uint256 commitId
+    ) internal {
         _closeRfsBurnDrainRebalanceDecommitAndTakeAllLccs(
             m,
             mmPk,
@@ -969,8 +965,9 @@ abstract contract MME2EBase is E2EBase {
         PoolKey memory corePoolKey = _corePoolKey(m);
         MMPositionManager mmpm = MMPositionManager(payable(m.stack.contracts.mmPositionManager));
 
-        bytes memory actions =
-            abi.encodePacked(bytes1(uint8(MMActions.DECOMMIT_SIGNAL)), bytes1(uint8(MMActions.TAKE)), bytes1(uint8(MMActions.TAKE)));
+        bytes memory actions = abi.encodePacked(
+            bytes1(uint8(MMActions.DECOMMIT_SIGNAL)), bytes1(uint8(MMActions.TAKE)), bytes1(uint8(MMActions.TAKE))
+        );
         bytes[] memory params = new bytes[](3);
         params[0] = abi.encode(commitId);
         params[1] = abi.encode(corePoolKey.currency0, mm, 0);
@@ -1096,9 +1093,12 @@ abstract contract MME2EBase is E2EBase {
     }
 
     /// @dev Several modest rounds without a single extreme sweep (reserve-shaped / non-pathological trading).
-    function _runReserveShapedTradingAndExitSetup(StandaloneMarket memory m, uint256 mmPk, uint256 takerPk, uint256 commitId)
-        internal
-    {
+    function _runReserveShapedTradingAndExitSetup(
+        StandaloneMarket memory m,
+        uint256 mmPk,
+        uint256 takerPk,
+        uint256 commitId
+    ) internal {
         for (uint256 r = 0; r < 3; r++) {
             _swapBothDirections(m, takerPk, MM_E2E_WRAP_FOR_SWAPS_LARGE, MM_E2E_RESERVE_SHAPED_LEG_SWAP);
         }
@@ -1106,9 +1106,12 @@ abstract contract MME2EBase is E2EBase {
     }
 
     /// @dev Wide/deeper MM stress: large swaps on profiles that are not ultra-tight.
-    function _runWideOrDeepStressTradingPhase(StandaloneMarket memory m, uint256 mmPk, uint256 takerPk, uint256 commitId)
-        internal
-    {
+    function _runWideOrDeepStressTradingPhase(
+        StandaloneMarket memory m,
+        uint256 mmPk,
+        uint256 takerPk,
+        uint256 commitId
+    ) internal {
         _swapBothDirections(m, takerPk, MM_E2E_WRAP_FOR_SWAPS_LARGE, MM_E2E_BIG_SWAP_IN);
         _pokePosition(m, mmPk, commitId, false);
     }
@@ -1429,8 +1432,9 @@ abstract contract MME2EBase is E2EBase {
         vm.startBroadcast(mmPk);
         {
             MMPositionManager mmpm = MMPositionManager(payable(m.stack.contracts.mmPositionManager));
-            bytes memory actions =
-                abi.encodePacked(bytes1(uint8(MMActions.DECOMMIT_SIGNAL)), bytes1(uint8(MMActions.TAKE)), bytes1(uint8(MMActions.TAKE)));
+            bytes memory actions = abi.encodePacked(
+                bytes1(uint8(MMActions.DECOMMIT_SIGNAL)), bytes1(uint8(MMActions.TAKE)), bytes1(uint8(MMActions.TAKE))
+            );
             bytes[] memory params = new bytes[](3);
             params[0] = abi.encode(commitId);
             params[1] = abi.encode(corePoolKey.currency0, mm, 0);
@@ -1447,6 +1451,7 @@ abstract contract MME2EBase is E2EBase {
         uint256 commitId,
         uint256 positionIndex
     ) internal {
+        require(positionIndex == 0, "e2e: helper is single-position only");
         _burnAndRealiseExitCredits(m, mmPk, commitId, positionIndex);
         _drainInactivePositionSurplus(m, mmPk, commitId, positionIndex, 32);
         _decommitAndTakeAllLccs(m, mmPk, commitId);

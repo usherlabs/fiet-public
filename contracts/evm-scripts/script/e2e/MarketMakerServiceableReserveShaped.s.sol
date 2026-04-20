@@ -33,6 +33,7 @@ contract MarketMakerServiceableReserveShapedE2E is MME2EBase {
         MakerHealthSnapshotE2E[] memory unbufAfterBurn = new MakerHealthSnapshotE2E[](profiles.length);
 
         for (uint256 i = 0; i < profiles.length; i++) {
+            uint256 successfulExits = 0;
             for (uint256 j = 0; j < buffers.length; j++) {
                 StandaloneMarket memory m = _createMarket(d, vm.addr(mmPk), CORE_POOL_FEE);
                 uint256 commitId = _createMmPositionFromProfile(m, mmPk, profiles[i]);
@@ -53,7 +54,7 @@ contract MarketMakerServiceableReserveShapedE2E is MME2EBase {
                 MakerHealthSnapshotE2E memory hb = _snapshotMakerHealth(m, commitId, 0);
                 _logMakerHealth(string.concat("after burn [", profiles[i].name, "][", buffers[j].name, "]"), hb);
 
-                if (j == 0) {
+                if (!buffers[j].seedDirectLP) {
                     unbufAfterBurn[i] = hb;
                 } else {
                     _assertMakerHealthNotWorseWithBuffer(hb, unbufAfterBurn[i]);
@@ -68,8 +69,10 @@ contract MarketMakerServiceableReserveShapedE2E is MME2EBase {
 
                 _decommitAndTakeAllLccs(m, mmPk, commitId);
                 _unwrapAllLccsAndAssert(m, mmPk, commitId, 0, true);
+                successfulExits++;
                 console.log("OK: reserve-shaped cell fully exited");
             }
+            require(successfulExits > 0, "e2e: reserve-shaped scenario had no fully serviceable cells");
         }
     }
 }

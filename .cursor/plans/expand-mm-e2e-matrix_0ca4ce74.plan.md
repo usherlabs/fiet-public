@@ -35,7 +35,7 @@ Turn the current single MM e2e path into a reusable matrix that varies:
 - initial settled amounts derived per profile,
 - and whether the market is additionally buffered by a full-range DirectLP position.
 
-The core refactor point is the existing one-path script in [`contracts/evm-scripts/script/e2e/MarketMaker.s.sol`](/Users/ryansoury/dev/fiet/protocol/contracts/evm-scripts/script/e2e/MarketMaker.s.sol) and the bundled exit helpers in [`contracts/evm-scripts/script/e2e/base/MME2EBase.sol`](/Users/ryansoury/dev/fiet/protocol/contracts/evm-scripts/script/e2e/base/MME2EBase.sol).
+The core refactor point is the existing one-path script in [`contracts/evm-scripts/script/e2e/MarketMaker.s.sol`](contracts/evm-scripts/script/e2e/MarketMaker.s.sol) and the bundled exit helpers in [`contracts/evm-scripts/script/e2e/base/MME2EBase.sol`](contracts/evm-scripts/script/e2e/base/MME2EBase.sol).
 
 ## Proposed Matrix
 Implement a full cross-product of:
@@ -58,7 +58,7 @@ Implement a full cross-product of:
   - Assert materially improved serviceability relative to `tightTiny`.
 
 ### Position profiles
-Introduce reusable `PositionProfile` definitions in [`contracts/evm-scripts/script/e2e/base/MME2EBase.sol`](/Users/ryansoury/dev/fiet/protocol/contracts/evm-scripts/script/e2e/base/MME2EBase.sol):
+Introduce reusable `PositionProfile` definitions in [`contracts/evm-scripts/script/e2e/base/MME2EBase.sol`](contracts/evm-scripts/script/e2e/base/MME2EBase.sol):
 - `tightTiny`: current `[-60, 60], 1e10`
 - `tightMaterial`: same range, larger liquidity
 - `wideMaterial`: wider ticks, medium liquidity
@@ -88,7 +88,7 @@ Introduce a second reusable matrix axis:
 - `NoDirectLPBuffer`
 - `FullRangeDirectLPBuffer`
 
-The buffered variant should seed additional core liquidity with the existing helper in [`contracts/evm-scripts/script/e2e/base/E2EBase.sol`](/Users/ryansoury/dev/fiet/protocol/contracts/evm-scripts/script/e2e/base/E2EBase.sol):
+The buffered variant should seed additional core liquidity with the existing helper in [`contracts/evm-scripts/script/e2e/base/E2EBase.sol`](contracts/evm-scripts/script/e2e/base/E2EBase.sol):
 
 ```341:383:contracts/evm-scripts/script/e2e/base/E2EBase.sol
 function _addCoreLiquidityFullRange(
@@ -104,7 +104,7 @@ function _addCoreLiquidityFullRange(
 This lets the suite compare the same MM scenario/profile in under-buffered versus externally buffered market conditions.
 
 ## Refactor Shape
-Split the monolithic exit path in [`contracts/evm-scripts/script/e2e/base/MME2EBase.sol`](/Users/ryansoury/dev/fiet/protocol/contracts/evm-scripts/script/e2e/base/MME2EBase.sol):
+Split the monolithic exit path in [`contracts/evm-scripts/script/e2e/base/MME2EBase.sol`](contracts/evm-scripts/script/e2e/base/MME2EBase.sol):
 - `_settleRfsIfOpen(...)`
 - `_burnAndRealiseExitCredits(...)`
 - `_snapshotExitState(...)`
@@ -138,7 +138,7 @@ The implementation should log health at fixed checkpoints:
 - after final drain/decommit/unwrap
 
 ## Assertion Model
-Use per-scenario expectation helpers in [`contracts/evm-scripts/script/e2e/base/MME2EBase.sol`](/Users/ryansoury/dev/fiet/protocol/contracts/evm-scripts/script/e2e/base/MME2EBase.sol):
+Use per-scenario expectation helpers in [`contracts/evm-scripts/script/e2e/base/MME2EBase.sol`](contracts/evm-scripts/script/e2e/base/MME2EBase.sol):
 - `assertUnserviceableRemnant(...)`
 - `assertDrainableAndFullyDrained(...)`
 - `assertNonExtremeTicks(...)`
@@ -147,8 +147,8 @@ Use per-scenario expectation helpers in [`contracts/evm-scripts/script/e2e/base/
 - `assertBufferedRunNotWorseThanUnbuffered(...)`
 
 Back them with the existing VTS lenses/getters:
-- [`contracts/evm/src/interfaces/IVTSOrchestrator.sol`](/Users/ryansoury/dev/fiet/protocol/contracts/evm/src/interfaces/IVTSOrchestrator.sol)
-- [`contracts/evm/src/VTSOrchestrator.sol`](/Users/ryansoury/dev/fiet/protocol/contracts/evm/src/VTSOrchestrator.sol)
+- [`contracts/evm/src/interfaces/IVTSOrchestrator.sol`](contracts/evm/src/interfaces/IVTSOrchestrator.sol)
+- [`contracts/evm/src/VTSOrchestrator.sol`](contracts/evm/src/VTSOrchestrator.sol)
 
 Key values to snapshot and compare:
 - `getPositionSettledAmounts(positionId)`
@@ -167,18 +167,18 @@ Be explicit that these values are not just diagnostic logs: each scenario/profil
 
 ## Script Layout
 Prefer separate top-level scripts over one large branching script:
-- [`contracts/evm-scripts/script/e2e/MarketMaker.s.sol`](/Users/ryansoury/dev/fiet/protocol/contracts/evm-scripts/script/e2e/MarketMaker.s.sol) can become the baseline entrypoint or a thin wrapper.
+- [`contracts/evm-scripts/script/e2e/MarketMaker.s.sol`](contracts/evm-scripts/script/e2e/MarketMaker.s.sol) can become the baseline entrypoint or a thin wrapper.
 - Add dedicated scenario runners, for example:
   - `MarketMakerExtremeUnserviceable.s.sol`
   - `MarketMakerServiceableRoundTrip.s.sol`
   - `MarketMakerServiceableReserveShaped.s.sol`
   - `MarketMakerModestSwap.s.sol`
-  - `MarketMakerWideOrDeep.s.sol`
+  - `MarketMakerWideOrDeepStress.s.sol`
 
 Each runner iterates every `PositionProfile` and every `BufferMode` because you chose full cross-product.
 
 ## Trading-Phase Strategy
-Keep the current exact-input helper for extreme paths, but add two more trading helpers in [`contracts/evm-scripts/script/e2e/base/MME2EBase.sol`](/Users/ryansoury/dev/fiet/protocol/contracts/evm-scripts/script/e2e/base/MME2EBase.sol):
+Keep the current exact-input helper for extreme paths, but add two more trading helpers in [`contracts/evm-scripts/script/e2e/base/MME2EBase.sol`](contracts/evm-scripts/script/e2e/base/MME2EBase.sol):
 - `_runExtremeTradingPhase(...)`
 - `_runAdaptiveRoundTripTradingPhase(...)`
 - `_runModestTradingPhase(..., swapAmount)`
