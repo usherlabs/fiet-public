@@ -1,43 +1,43 @@
-[Medium] Unbounded backfill loop in HubRSC _backfillUnderlyingQueueForLcc before dispatch causes LCC-wide settlement dispatch DoS
+[High] Unbounded historical backfill in HubRSC registration causes stuck settlements for an LCC
 
 # Description
 
-HubRSC performs an unbounded historical backfill over the per-LCC queue during first underlying registration. For large queues this can revert due to gas, repeatedly blocking dispatch for that LCC and stalling automated settlements, though a permissionless on-chain workaround exists.
+HubRSC performs an unbounded backfill of per-LCC pending entries into the shared-underlying queue on first underlying registration. For large queues this can run out of gas and revert, preventing any settlement dispatch for that LCC and causing recipient settlements to remain stuck until intervention.
 
-In HubRSC, _registerLccUnderlying(lcc, underlying) invokes _backfillUnderlyingQueueForLcc, which iterates over the entire per-LCC queue (queueDataByLcc[lcc]) and enqueues each key into the shared-underlying queue. LinkedQueue.enqueue performs multiple SSTOREs per key. This backfill is executed before any dispatch in both _handleLccCreated and _handleLiquidityAvailable. When the per-LCC queue is large (e.g., after redeploy/resync or out-of-order delivery that accumulates historical pending entries), the O(n) storage writes can exceed gas limits, causing react() to revert. Because the revert rolls back processedReport and hasUnderlyingForLcc, the same liquidity/creation events are retried and repeatedly fail, preventing dispatch for that LCC. Per-LCC fallback dispatch is not reached because registration (and its backfill) happens first, and MoreLiquidityAvailable signals are only emitted after a successful dispatch. While this stalls automated settlement dispatch for the affected LCC, users (or bots) can still settle permissionlessly via LiquidityHub.processSettlementFor on the protocol chain, so funds are not permanently frozen.
+On first registration of an LCC’s underlying in HubRSC, _registerLccUnderlying calls _backfillUnderlyingQueueForLcc, which iterates over the entire per-LCC queue (queueDataByLcc[lcc]) and enqueues each key into the shared-underlying queue using LinkedQueue.enqueue. This loop is unbounded and performs multiple SSTOREs per entry. If the per-LCC queue is large (e.g., many recipients with pending settlements), the call can run out of gas (OOG) and revert. Because _registerLccUnderlying is called at the start of _handleLiquidityAvailable and also from _handleLccCreated, such a revert prevents any liquidity dispatch from running for that LCC. Subsequent deliveries of the same LiquidityAvailable (or LCCCreated) event will retry and revert again, resulting in indefinite inability to process settlements for that LCC. There is no alternative bootstrap path: _handleMoreLiquidityAvailable is only emitted after a successful dispatch. Users have no on-chain workaround; only a code change or operational fix can unstick the LCC.
 
 # Severity
 
-**Impact Explanation:** [Medium] Automated settlement dispatch for an LCC can be significantly DoS’d, stalling users’ automated settlements. However, a permissionless on-chain workaround (LiquidityHub.processSettlementFor) exists, so funds are not permanently frozen without recourse.
+**Impact Explanation:** [High] Settlement dispatch for the affected LCC becomes completely unusable, and recipients’ funds remain effectively frozen until an off-chain intervention (upgrade/fix). This breaks core functionality for that LCC and can persist for extended periods.
 
-**Likelihood Explanation:** [Medium] Requires realistic but non-trivial conditions such as redeploy/replay or cross-chain delivery ordering that produce large historical backlogs before registration. Attacker-driven inflation is possible but costlier and less likely.
+**Likelihood Explanation:** [Medium] Requires uncommon but realistic operational states (redeploy/recovery or late registration) combined with a large per-LCC queue—plausible for popular assets but not always present in steady-state.
 
 # Exploitation
 
 ## Exploitation Scenarios:
 
 ### Scenario 1.
-Redeploy/resync with large historical per-LCC queue: After HubRSC is redeployed or re-synced, many SettlementQueuedReported events for an existing LCC-X are processed before LCCCreated/LiquidityAvailable. The first subsequent underlying registration triggers _backfillUnderlyingQueueForLcc, which attempts to enqueue thousands of keys and reverts due to gas. The revert aborts registration and dispatch, and the same events keep retriggering the failing path, DoSing automated settlement dispatch for LCC-X.
+Fresh HubRSC deployment after an LCC has been active: many SettlementQueuedReported events have created a large per-LCC queue; the first LiquidityAvailable triggers _registerLccUnderlying backfill, which OOGs and reverts, so dispatch never runs and all settlements for that LCC remain stuck.
 #### Preconditions / Assumptions
-- (a). An LCC with a large number of unique queued recipients exists (organic growth at scale)
-- (b). HubRSC is redeployed or re-synced, with many SettlementQueuedReported processed before LCCCreated/LiquidityAvailable
-- (c). Reactive VM calls have finite gas and revert on out-of-gas
-- (d). No prior hasUnderlyingForLcc set for the affected LCC
+- (a). An LCC is already active and widely used (many recipients with pending settlements).
+- (b). HubRSC is newly deployed and has not processed the historical LCCCreated for this LCC (hasUnderlyingForLcc[lcc] is false).
+- (c). HubRSC has ingested many SettlementQueuedReported logs creating a large per-LCC queue for this LCC.
+- (d). LiquidityHub emits LiquidityAvailable for this LCC.
 
 ### Scenario 2.
-Out-of-order delivery backlog: Many SettlementQueuedReported events arrive before LCCCreated/LiquidityAvailable for LCC-X, growing the per-LCC queue. When a LiquidityAvailable event is processed, _registerLccUnderlying runs backfill first, hits OOG, and reverts, blocking dispatch and stalling automated settlements for LCC-X.
+HubRSC downtime and backlog accumulation: after recovery, a large per-LCC queue exists for an LCC without registered underlying; the first LiquidityAvailable triggers unbounded backfill that OOGs and reverts, repeatedly blocking dispatch and leaving settlements stuck.
 #### Preconditions / Assumptions
-- (a). Cross-chain/out-of-order delivery allows SettlementQueuedReported to be processed before LCCCreated/LiquidityAvailable
-- (b). Large per-LCC queue exists when registration/backfill runs
-- (c). Reactive VM calls have finite gas and revert on out-of-gas
-- (d). Underlying registration is attempted via _handleLiquidityAvailable
+- (a). HubRSC experienced downtime or delayed processing and later catches up.
+- (b). During downtime, many SettlementQueuedReported logs accumulated for the LCC, creating a large per-LCC queue.
+- (c). HubRSC has not yet registered the underlying for this LCC (hasUnderlyingForLcc[lcc] is false).
+- (d). LiquidityHub emits LiquidityAvailable after recovery.
 
 ### Scenario 3.
-Adversary inflates queue pre-registration: An attacker generates many small SettlementQueued entries across distinct recipients for LCC-X (e.g., by triggering shortfalls), inflating the per-LCC queue before underlying registration occurs. On the next LCCCreated/LiquidityAvailable, backfill reverts due to gas, repeatedly preventing automated dispatch for LCC-X and delaying victims’ automated settlements.
+Late delivery/processing of LCCCreated: HubRSC has already accumulated a large per-LCC queue; when LCCCreated is finally processed, _registerLccUnderlying backfill OOGs and reverts; later LiquidityAvailable repeats the failure, bricking settlement dispatch for that LCC.
 #### Preconditions / Assumptions
-- (a). Attacker can trigger many SettlementQueued events across distinct recipients for the same LCC prior to underlying registration
-- (b). Reactive VM calls have finite gas and revert on out-of-gas
-- (c). LCC underlying not yet registered so historical backfill will attempt to enqueue all existing per-LCC entries
+- (a). The LCC was created historically; HubRSC did not process the LCCCreated event earlier.
+- (b). HubRSC has already accumulated a large per-LCC queue for this LCC via SettlementQueuedReported logs.
+- (c). LCCCreated (or LiquidityAvailable) is delivered late, triggering first-time underlying registration.
 
 # Proposed fix
 
@@ -45,7 +45,7 @@ Adversary inflates queue pre-registration: An attacker generates many small Sett
 
 File: `contracts/reactive/src/HubRSC.sol`
 
-[Source](https://github.com/usherlabs/fiet-protocol/blob/8cefc80d0a77f70260d5024395fd7d64d8747a8f/contracts/reactive/src/HubRSC.sol)
+[Source](https://github.com/usherlabs/fiet-protocol/blob/e8ef35fa5e0602b949585d8caf092ac0ba34595f/contracts/reactive/src/HubRSC.sol)
 
 ```diff
  // SPDX-License-Identifier: BUSL-1.1
@@ -639,7 +639,6 @@ File: `contracts/reactive/src/HubRSC.sol`
          underlyingByLcc[lcc] = underlying;
          hasUnderlyingForLcc[lcc] = true;
 -        _backfillUnderlyingQueueForLcc(lcc, underlying);
-+        // Avoid synchronous historical backfill to prevent unbounded gas on large queues.
      }
  
      /// @notice Backfills historical per-LCC entries into the shared underlying lane.
