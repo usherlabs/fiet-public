@@ -258,7 +258,9 @@ contract VTSPositionLibMutationUnitTest is Test {
         assertEq(harness.inactiveRemnantCount(commitId), 1, "first inactive remnant should increment count");
 
         assertEq(harness.updateSettlement(id, 0, int256(5e18)), int256(5e18));
-        assertEq(harness.inactiveRemnantCount(commitId), 1, "additional settled while remnant exists should not double-count");
+        assertEq(
+            harness.inactiveRemnantCount(commitId), 1, "additional settled while remnant exists should not double-count"
+        );
 
         assertEq(harness.updateSettlement(id, 0, -int256(15e18)), -int256(15e18));
         assertEq(harness.inactiveRemnantCount(commitId), 0, "draining the last inactive remnant should decrement count");

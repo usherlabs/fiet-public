@@ -123,9 +123,7 @@ contract VTSOrchestratorTestable is VTSOrchestrator {
         returns (uint256 effectiveSettled0, uint256 effectiveSettled1)
     {
         PositionAccounting storage pa = s.positionAccounting[positionId];
-        return (
-            pa.settled.token0 + pa.settledOverflow.token0, pa.settled.token1 + pa.settledOverflow.token1
-        );
+        return (pa.settled.token0 + pa.settledOverflow.token0, pa.settled.token1 + pa.settledOverflow.token1);
     }
 
     /// @notice Commitment-deficit bypass timer fields (for integration tests)
