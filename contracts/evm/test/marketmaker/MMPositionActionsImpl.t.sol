@@ -382,11 +382,12 @@ contract MMPositionManagerActionsTest is MarketTestBase, MarketMakerTestBase {
 
     /// @notice Regression (audit 29_5): legacy sizing used stacked `ceil` on bps helpers so any positive cure forced a
     ///         per-lane minimum on the order of **~ceil(L / 10_000)** liquidity units per transaction. Rational
-    ///         `floor(L * inner / denom)` + carry scales with the cure; a 1 wei deposit on a **large** position still
-    ///         removes some liquidity (so a full seize batch can succeed), but far below that legacy per-tx floor.
-    function test_seize_microDeposit_liquidityRemovalWellBelowLegacyBpsFloor_audit29_5() public {
+    ///         `floor(L * inner / denom)` + carry scales with cure size and can be replayed in loops without inheriting
+    ///         that forced floor each step.
+    function test_seize_microDeposit_loopedBatches_cumulativeRemovalWellBelowLegacyFloor_audit29_5() public {
         uint256 tokenId = 1;
         uint256 positionIndex = 0;
+        uint256 loops = 20;
 
         _setupCommittedPosition(
             positionManager,
@@ -401,31 +402,40 @@ contract MMPositionManagerActionsTest is MarketTestBase, MarketMakerTestBase {
         _openSeizeWindow(tokenId, positionIndex);
 
         (Position memory posBefore,) = vtsOrchestrator.getPosition(tokenId, positionIndex);
-        uint128 liqBefore = posBefore.liquidity;
+        uint128 liqInitial = posBefore.liquidity;
 
-        MockERC20(address(lcc0.underlying())).mint(guarantor, 100);
-        MockERC20(address(lcc1.underlying())).mint(guarantor, 100);
+        // Budget enough underlying for repeated tiny-cure seizure batches.
+        MockERC20(address(lcc0.underlying())).mint(guarantor, 10_000);
+        MockERC20(address(lcc1.underlying())).mint(guarantor, 10_000);
 
         vm.startPrank(guarantor);
         IERC20(lcc0.underlying()).approve(address(positionManager), type(uint256).max);
         IERC20(lcc1.underlying()).approve(address(positionManager), type(uint256).max);
 
-        MMA.PreparedAction[] memory actions = new MMA.PreparedAction[](4);
-        actions[0] = MMA.prepareSeize(corePoolKey, tokenId, positionIndex, 1, 1, false);
-        actions[1] = MMA.prepareSettleFromDeltas(corePoolKey, tokenId, positionIndex, true, true);
-        actions[2] = MMA.prepareTake(Currency.wrap(address(lcc0)), address(guarantor), 0);
-        actions[3] = MMA.prepareTake(Currency.wrap(address(lcc1)), address(guarantor), 0);
-        MMA.executeWithUnlock(positionManager, actions, block.timestamp + 3600);
+        uint256 legacyCumulativeFloor = 0;
+        for (uint256 i = 0; i < loops; i++) {
+            (Position memory posStep,) = vtsOrchestrator.getPosition(tokenId, positionIndex);
+            uint256 legacyPerLaneFloor =
+                (uint256(posStep.liquidity) + LiquidityUtils.BPS_DENOMINATOR - 1) / LiquidityUtils.BPS_DENOMINATOR;
+            legacyCumulativeFloor += (legacyPerLaneFloor * 2); // two-lane 1 wei micro-cure each batch
+
+            MMA.PreparedAction[] memory actions = new MMA.PreparedAction[](4);
+            actions[0] = MMA.prepareSeize(corePoolKey, tokenId, positionIndex, 1, 1, false);
+            actions[1] = MMA.prepareSettleFromDeltas(corePoolKey, tokenId, positionIndex, true, true);
+            actions[2] = MMA.prepareTake(Currency.wrap(address(lcc0)), address(guarantor), 0);
+            actions[3] = MMA.prepareTake(Currency.wrap(address(lcc1)), address(guarantor), 0);
+            MMA.executeWithUnlock(positionManager, actions, block.timestamp + 3600);
+        }
         vm.stopPrank();
 
         (Position memory posAfter,) = vtsOrchestrator.getPosition(tokenId, positionIndex);
-        uint256 removed = uint256(liqBefore - posAfter.liquidity);
+        uint256 removed = uint256(liqInitial - posAfter.liquidity);
 
-        uint256 legacyPerLaneFloor =
-            (uint256(liqBefore) + LiquidityUtils.BPS_DENOMINATOR - 1) / LiquidityUtils.BPS_DENOMINATOR;
-        uint256 legacyTwoLaneLoose = legacyPerLaneFloor * 2;
-
-        assertLt(removed, legacyTwoLaneLoose, "micro-cure must not remove ~1 bps of L per lane per tx (audit 29_5)");
+        // Strong separation from the legacy exploit profile: cumulative removal from repeated 1 wei cures must remain
+        // at least an order of magnitude below cumulative "forced ~1 bps per lane per tx" floors.
+        assertLt(
+            removed * 10, legacyCumulativeFloor, "looped micro-cures should not reproduce legacy per-tx floor drain"
+        );
     }
 
     function testCanCommitMintAndSettlePosition() public {
