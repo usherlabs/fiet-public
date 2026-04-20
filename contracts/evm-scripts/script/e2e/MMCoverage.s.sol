@@ -304,10 +304,56 @@ contract MMCoverageE2E is MME2EBase {
         _pokePosition(s.market, keys.mm3Pk, s.mm3CommitId, false);
     }
 
+    function _closeCoveragePosition(StandaloneMarket memory m, uint256 mmPk, uint256 takerPk, uint256 commitId) internal {
+        _settleRfsIfOpen(m, mmPk, commitId);
+        _burnAndRealiseExitCredits(m, mmPk, commitId, 0);
+
+        _logMakerHealth("after burn (pre-drain)", _snapshotMakerHealth(m, commitId, 0));
+
+        bool drained = _drainInactivePositionSurplusBestEffort(m, mmPk, commitId, 0, 32);
+
+        if (!drained) {
+            _assertRecognisedUnserviceableOverflowBeforeRebalance(m, mmPk, commitId, 0);
+
+            for (uint256 r = 0; r < MM_E2E_REBALANCE_MAX_ROUNDS; r++) {
+                (uint256 eff0, uint256 eff1) =
+                    _getEffectiveSettledPair(IVTSOrchestrator(m.stack.contracts.vtsOrchestrator), commitId, 0);
+                if (eff0 == 0 && eff1 == 0) {
+                    drained = true;
+                    break;
+                }
+
+                console.log("e2e: reserve rebalance round:", r);
+                _rebalanceStrandedLanesForInactiveDrain(
+                    m, takerPk, eff0, eff1, MM_E2E_REBALANCE_SWAP_CHUNK, MM_E2E_REBALANCE_WRAP_PER_LEG
+                );
+
+                _logMakerHealth("after reserve rebalance + pool trade", _snapshotMakerHealth(m, commitId, 0));
+
+                drained = _drainInactivePositionSurplusBestEffort(m, mmPk, commitId, 0, 32);
+                if (drained) break;
+            }
+        }
+
+        if (!drained) {
+            (uint256 eff0Left, uint256 eff1Left) =
+                _getEffectiveSettledPair(IVTSOrchestrator(m.stack.contracts.vtsOrchestrator), commitId, 0);
+            require(eff0Left + eff1Left <= 1, "e2e: inactive surplus not cleared after reserve rebalance");
+            _assertCommitNotDrainedOnDecommit(m, mmPk, commitId);
+            console.log("OK: classified terminal dust remnant after bounded rebalance");
+            return;
+        }
+
+        _assertInactiveSurplusFullyResolvedForDecommit(m, commitId, 0);
+        _logMakerHealth("after drain (pre-decommit)", _snapshotMakerHealth(m, commitId, 0));
+        _decommitAndTakeAllLccs(m, mmPk, commitId);
+        console.log("OK: burned + drained inactive surplus (+ optional reserve rebalance) + decommitted");
+    }
+
     function _closeAllPositions(ScenarioState memory s, ActorKeys memory keys) internal {
-        _closeRfsBurnDecommitAndTakeAllLccs(s.market, keys.mm1Pk, s.mm1CommitId);
-        _closeRfsBurnDecommitAndTakeAllLccs(s.market, keys.mm2Pk, s.mm2CommitId);
-        _closeRfsBurnDecommitAndTakeAllLccs(s.market, keys.mm3Pk, s.mm3CommitId);
+        _closeCoveragePosition(s.market, keys.mm1Pk, keys.takerPk, s.mm1CommitId);
+        _closeCoveragePosition(s.market, keys.mm2Pk, keys.takerPk, s.mm2CommitId);
+        _closeCoveragePosition(s.market, keys.mm3Pk, keys.takerPk, s.mm3CommitId);
     }
 
     function run() external {

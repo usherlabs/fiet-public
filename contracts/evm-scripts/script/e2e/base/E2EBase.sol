@@ -360,6 +360,11 @@ abstract contract E2EBase is DeployFullStackBase {
             IPermit2 permit2 = IPermit2(config.permit2);
             PoolKey memory key = _corePoolKey(m);
 
+            // Reused stacks mint mock underlyings to the MM LP during market creation, not to the DirectLP buffer seeder.
+            // Provision the seeder locally before wrapping so buffered matrix cells can add full-range core liquidity.
+            Token(m.underlying0).mint(lp, wrapAmountPerAsset);
+            Token(m.underlying1).mint(lp, wrapAmountPerAsset);
+
             // Wrap underlying -> LCC so LP has pool currencies.
             _wrapAndMintLccPair(hub, m, lp, wrapAmountPerAsset);
             _approveCorePairForPositionManager(key, positionManager, permit2);
@@ -485,6 +490,22 @@ abstract contract E2EBase is DeployFullStackBase {
     function _approvePermit2ForRouter(address tokenIn, IUniversalRouter router, IPermit2 permit2) internal {
         IERC20(tokenIn).approve(address(permit2), type(uint256).max);
         permit2.approve(tokenIn, address(router), type(uint160).max, uint48(block.timestamp + 1 days));
+    }
+
+    /// @dev Approves both direct ERC20 allowance and Permit2 allowance for a token/spender pair.
+    function _approveTokenForSpenderAndPermit2(address token, address spender) internal {
+        IPermit2 permit2 = IPermit2(config.permit2);
+        IERC20(token).approve(spender, type(uint256).max);
+        IERC20(token).approve(address(permit2), type(uint256).max);
+        permit2.approve(token, spender, type(uint160).max, uint48(block.timestamp + 1 days));
+    }
+
+    /// @dev Mints mock settlement inventory and grants both direct + Permit2 allowances to the spender.
+    function _mintAndApproveForSpenderAndPermit2(address token, address recipient, address spender, uint256 amount)
+        internal
+    {
+        Token(token).mint(recipient, amount);
+        _approveTokenForSpenderAndPermit2(token, spender);
     }
 
     function _executeExactOutputSwap(

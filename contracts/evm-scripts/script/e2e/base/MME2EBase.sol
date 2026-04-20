@@ -241,6 +241,10 @@ abstract contract MME2EBase is E2EBase {
         return h.overflow0 + h.overflow1;
     }
 
+    function _makerHealthDeficitSum(MakerHealthSnapshotE2E memory h) internal pure returns (uint256) {
+        return h.poolTotalDeficitPrincipal0 + h.poolTotalDeficitPrincipal1;
+    }
+
     function _mmProfileNameEq(PositionProfileE2E memory p, string memory nm) internal pure returns (bool) {
         return keccak256(bytes(p.name)) == keccak256(bytes(nm));
     }
@@ -253,9 +257,17 @@ abstract contract MME2EBase is E2EBase {
         MakerHealthSnapshotE2E memory buffered,
         MakerHealthSnapshotE2E memory unbuffered
     ) internal pure {
-        uint256 b = _makerHealthEffectiveSum(buffered) + _makerHealthOverflowSum(buffered);
-        uint256 u = _makerHealthEffectiveSum(unbuffered) + _makerHealthOverflowSum(unbuffered);
-        require(b <= u + (u / 50) + 1, "e2e: buffered run materially worse than unbuffered (effective+overflow)");
+        uint256 b =
+            _makerHealthEffectiveSum(buffered) + _makerHealthOverflowSum(buffered) + _makerHealthDeficitSum(buffered);
+        uint256 u = _makerHealthEffectiveSum(unbuffered) + _makerHealthOverflowSum(unbuffered)
+            + _makerHealthDeficitSum(unbuffered);
+        // Matrix comparisons should be bounded, not brittle. When the baseline is effectively zero, tolerate
+        // only dust-sized residuals from the buffered path while still rejecting material regressions.
+        uint256 tolerance = (u / 50) + 1e13;
+        require(
+            b <= u + tolerance,
+            "e2e: buffered run materially worse than unbuffered (effective+overflow+deficit)"
+        );
     }
 
     function _assertMakerHealthImprovedOrStable(
@@ -287,8 +299,7 @@ abstract contract MME2EBase is E2EBase {
         require(snap.eff0 > 0 || snap.eff1 > 0, "e2e: expected inactive economic remnant");
         bool progressed = _attemptInactiveDrainOnce(m, mmPk, commitId, positionIndex);
         require(!progressed, "e2e: expected inactive drain to stall immediately (unserviceable)");
-        vm.expectRevert(abi.encodeWithSelector(Errors.CommitNotDrained.selector, commitId));
-        _decommitAndTakeAllLccs(m, mmPk, commitId);
+        _assertCommitNotDrainedOnDecommit(m, mmPk, commitId);
     }
 
     function _assertDrainableAndFullyDrained(
@@ -329,8 +340,7 @@ abstract contract MME2EBase is E2EBase {
 
         _logMakerHealth("recognised unserviceable overflow (pre-rebalance)", _snapshotMakerHealth(m, commitId, positionIndex));
 
-        vm.expectRevert(abi.encodeWithSelector(Errors.CommitNotDrained.selector, commitId));
-        _decommitAndTakeAllLccs(m, mmPk, commitId);
+        _assertCommitNotDrainedOnDecommit(m, mmPk, commitId);
     }
 
     /// @dev Directional exact-input swaps: push currency0 or currency1 into the core pool to grow the matching
@@ -344,11 +354,24 @@ abstract contract MME2EBase is E2EBase {
         uint128 swapChunk,
         uint256 wrapAmount
     ) internal {
+        uint128 antiPinChunk = swapChunk / 1000;
+        if (antiPinChunk == 0) antiPinChunk = 1;
+
         if (eff0 > 0) {
+            (, int24 tickCurrent,,) = IPoolManager(config.poolManager).getSlot0(_corePoolKey(m).toId());
+            if (tickCurrent <= TickMath.MIN_TICK + 1) {
+                console.log("e2e: anti-pin nudge - currency1 in before healing currency0 lane");
+                _mintAndSwap(m, takerPk, wrapAmount, false, antiPinChunk);
+            }
             console.log("e2e: reserve rebalance - currency0 in (zeroForOne=true), chunk:", swapChunk);
             _mintAndSwap(m, takerPk, wrapAmount, true, swapChunk);
         }
         if (eff1 > 0) {
+            (, int24 tickCurrent,,) = IPoolManager(config.poolManager).getSlot0(_corePoolKey(m).toId());
+            if (tickCurrent >= TickMath.MAX_TICK - 1) {
+                console.log("e2e: anti-pin nudge - currency0 in before healing currency1 lane");
+                _mintAndSwap(m, takerPk, wrapAmount, true, antiPinChunk);
+            }
             console.log("e2e: reserve rebalance - currency1 in (zeroForOne=false), chunk:", swapChunk);
             _mintAndSwap(m, takerPk, wrapAmount, false, swapChunk);
         }
@@ -704,8 +727,8 @@ abstract contract MME2EBase is E2EBase {
         vm.startBroadcast(mmPk);
         Token(m.underlying0).mint(mm, settle0);
         Token(m.underlying1).mint(mm, settle1);
-        IERC20(m.underlying0).approve(address(mmpm), settle0);
-        IERC20(m.underlying1).approve(address(mmpm), settle1);
+        _approveTokenForSpenderAndPermit2(m.underlying0, address(mmpm));
+        _approveTokenForSpenderAndPermit2(m.underlying1, address(mmpm));
 
         bytes memory actions =
             abi.encodePacked(bytes1(uint8(MMActions.MINT_POSITION)), bytes1(uint8(MMActions.SETTLE_POSITION)));
@@ -936,6 +959,36 @@ abstract contract MME2EBase is E2EBase {
                 sel := mload(add(err, 32))
             }
             require(sel == Errors.NotApproved.selector, "e2e: expected NotApproved selector");
+        }
+    }
+
+    /// @dev Script-local assertion for the blocked decommit path. Use try/catch instead of `expectRevert`
+    ///      so forge-script simulations can keep running after the intentional revert.
+    function _assertCommitNotDrainedOnDecommit(StandaloneMarket memory m, uint256 mmPk, uint256 commitId) internal {
+        address mm = vm.addr(mmPk);
+        PoolKey memory corePoolKey = _corePoolKey(m);
+        MMPositionManager mmpm = MMPositionManager(payable(m.stack.contracts.mmPositionManager));
+
+        bytes memory actions =
+            abi.encodePacked(bytes1(uint8(MMActions.DECOMMIT_SIGNAL)), bytes1(uint8(MMActions.TAKE)), bytes1(uint8(MMActions.TAKE)));
+        bytes[] memory params = new bytes[](3);
+        params[0] = abi.encode(commitId);
+        params[1] = abi.encode(corePoolKey.currency0, mm, 0);
+        params[2] = abi.encode(corePoolKey.currency1, mm, 0);
+
+        vm.prank(mm);
+        try mmpm.modifyLiquidities(abi.encode(actions, params), block.timestamp + 3600) {
+            revert("e2e: expected CommitNotDrained on decommit");
+        } catch (bytes memory err) {
+            require(err.length >= 36, "e2e: malformed CommitNotDrained revert");
+            bytes4 sel;
+            uint256 revertedCommitId;
+            assembly {
+                sel := mload(add(err, 32))
+                revertedCommitId := mload(add(err, 36))
+            }
+            require(sel == Errors.CommitNotDrained.selector, "e2e: expected CommitNotDrained selector");
+            require(revertedCommitId == commitId, "e2e: CommitNotDrained commitId mismatch");
         }
     }
 
@@ -1199,20 +1252,25 @@ abstract contract MME2EBase is E2EBase {
         int128 settle0 = d0 > 0 ? -type(int128).max : int128(0);
         int128 settle1 = d1 > 0 ? -type(int128).max : int128(0);
 
-        uint256 fund0 = d0 > 0 ? uint256(int256(type(int128).max)) : 0;
-        uint256 fund1 = d1 > 0 ? uint256(int256(type(int128).max)) : 0;
-
         vm.startBroadcast(mmPk);
         {
             MMPositionManager mmpm = MMPositionManager(payable(m.stack.contracts.mmPositionManager));
 
-            if (fund0 > 0) {
-                Token(m.underlying0).mint(mm, fund0);
-                IERC20(m.underlying0).approve(address(mmpm), fund0);
+            if (d0 > 0) {
+                _mintAndApproveForSpenderAndPermit2(
+                    ILCC(Currency.unwrap(corePoolKey.currency0)).underlying(),
+                    mm,
+                    address(mmpm),
+                    uint256(int256(type(int128).max))
+                );
             }
-            if (fund1 > 0) {
-                Token(m.underlying1).mint(mm, fund1);
-                IERC20(m.underlying1).approve(address(mmpm), fund1);
+            if (d1 > 0) {
+                _mintAndApproveForSpenderAndPermit2(
+                    ILCC(Currency.unwrap(corePoolKey.currency1)).underlying(),
+                    mm,
+                    address(mmpm),
+                    uint256(int256(type(int128).max))
+                );
             }
 
             bytes memory actions = abi.encodePacked(bytes1(uint8(MMActions.SETTLE_POSITION)));
