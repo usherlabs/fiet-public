@@ -118,22 +118,12 @@ library VTSPositionLib {
     /// @dev Carry normalisation for one lane: `settled = min(eff, commitmentMax)`, `overflow = eff - settled`.
     ///      Economic total `eff` is unchanged; pure reshuffle does not affect pool `totalSettled`.
     function _canonicalSettledSplitForLane(PositionAccounting storage pa, uint8 tokenIndex) private {
-        uint256 eff = pa.settled.get(tokenIndex) + pa.settledOverflow.get(tokenIndex);
+        uint256 eff = PositionAccountingLib.effectiveSettledLane(pa, tokenIndex);
         uint256 c = pa.commitmentMax.get(tokenIndex);
         uint256 nextS = eff < c ? eff : c;
         uint256 nextO = eff - nextS;
         pa.settled.set(tokenIndex, nextS);
         pa.settledOverflow.set(tokenIndex, nextO);
-    }
-
-    /// @notice Effective settled backing per lane (live `settled` plus deferred overflow).
-    function effectiveSettledAmount(VTSStorage storage s, PositionId positionId, uint8 tokenIndex)
-        public
-        view
-        returns (uint256)
-    {
-        PositionAccounting storage pa = s.positionAccounting[positionId];
-        return pa.settled.get(tokenIndex) + pa.settledOverflow.get(tokenIndex);
     }
 
     // --------------------------------------------------

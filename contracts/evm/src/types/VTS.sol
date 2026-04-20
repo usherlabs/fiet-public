@@ -177,6 +177,11 @@ library PositionAccountingLib {
         eff0 = pa.settled.token0 + pa.settledOverflow.token0;
         eff1 = pa.settled.token1 + pa.settledOverflow.token1;
     }
+
+    /// @notice Effective settled for a single lane (`tokenIndex` 0 or 1)
+    function effectiveSettledLane(PositionAccounting storage pa, uint8 tokenIndex) internal view returns (uint256) {
+        return TokenPairLib.get(pa.settled, tokenIndex) + TokenPairLib.get(pa.settledOverflow, tokenIndex);
+    }
 }
 
 /// @notice Per-pool accounting data (mirrors VTSManager per-pool mappings)
