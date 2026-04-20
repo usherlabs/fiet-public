@@ -376,6 +376,11 @@ being an informal “should”.
   liquidity) into transient storage for `processSwap`. Tick-indexed attribution must not reconstruct the pre-swap
   tick from `sqrtPBefore` alone, because at exact tick boundaries Uniswap may store `tick = T - 1` while
   `getTickAtSqrtPrice(sqrtPrice) == T`.
+- **Remainder carry (path independence)**: Per-position crystallisation of deficit/inflow growth uses `GrowthCarryQ128`
+  tied to `PositionAccounting.deficitGrowthCarry` / `inflowGrowthCarry` so repeated `settlePositionGrowths` calls
+  preserve the same attributed totals as a single settlement over the same aggregate inside-growth delta (sub-Q128
+  remainders are carried, not discarded on each checkpoint). Snapshot rebases (`_initDeficitSnapshot` /
+  `_initInflowSnapshot` / `_checkpointTickIndexedSnapshots`) zero these carries together with `*GrowthInsideLast`.
 
 ## Commitment backing, signals, and insolvency gates
 

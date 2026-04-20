@@ -20,6 +20,10 @@ import {
     TokenPairUint,
     TokenPairInt,
     TokenPairLib,
+    GrowthCarryQ128,
+    TokenPairGrowthCarryQ128,
+    GrowthCarryQ128Lib,
+    TokenPairGrowthCarryQ128Lib,
     PositionContext,
     TouchPositionParams,
     TouchPositionResult
@@ -539,9 +543,8 @@ library VTSPositionLib {
     }
 
     /// @notice Compute delta and checkpoint for growth settlement
-    /// @dev This is the exact same pattern as Uniswap fees:
-    ///      owed = (growthInsideNow - growthInsideLast) * liquidity / Q128, then checkpoint growthInsideLast = growthInsideNow.
-    ///
+    /// @dev Uniswap-style inside delta with Q128 scaling; per-lane Q128 **carry** makes attribution path-independent
+    ///      across repeated `settlePositionGrowths` (permissionless refresh cannot discard sub-wei totals).
     ///      We checkpoint *before* liquidity changes (see `CoreHook._beforeAddLiquidity/_beforeRemoveLiquidity`) to ensure:
     ///      - no retroactive capture (new liquidity cannot claim historical accrual), and
     ///      - fair attribution across partial adds/removes.
@@ -558,6 +561,8 @@ library VTSPositionLib {
         (uint256 inside0, uint256 inside1) = _growthInside(
             p.poolId, p.tickLower, p.tickUpper, p.tickCurrent, p.global0, p.global1, outsideMap
         );
+
+        TokenPairGrowthCarryQ128 storage carryPair = p.isInflow ? pa.inflowGrowthCarry : pa.deficitGrowthCarry;
 
         // Read last snapshots based on field identifier
         uint256 lastSnap0;
@@ -577,14 +582,13 @@ library VTSPositionLib {
         unchecked {
             uint256 d0 = inside0 - lastSnap0;
             uint256 d1 = inside1 - lastSnap1;
-            if (p.liquidity > 0) {
-                if (d0 > 0) {
-                    add0 = FullMath.mulDiv(d0, uint256(p.liquidity), FixedPoint128.Q128);
-                }
-                if (d1 > 0) {
-                    add1 = FullMath.mulDiv(d1, uint256(p.liquidity), FixedPoint128.Q128);
-                }
-            }
+
+            GrowthCarryQ128 c0 = TokenPairGrowthCarryQ128Lib.get(carryPair, 0);
+            GrowthCarryQ128 c1 = TokenPairGrowthCarryQ128Lib.get(carryPair, 1);
+            (add0, c0) = GrowthCarryQ128Lib.accumulate(c0, d0, p.liquidity);
+            (add1, c1) = GrowthCarryQ128Lib.accumulate(c1, d1, p.liquidity);
+            TokenPairGrowthCarryQ128Lib.set(carryPair, 0, c0);
+            TokenPairGrowthCarryQ128Lib.set(carryPair, 1, c1);
         }
     }
 
@@ -831,6 +835,7 @@ library VTSPositionLib {
         );
         pa.deficitGrowthInsideLast.token0 = d0;
         pa.deficitGrowthInsideLast.token1 = d1;
+        TokenPairGrowthCarryQ128Lib.clear(pa.deficitGrowthCarry);
     }
 
     /// @dev Initialise inflow growth snapshot
@@ -849,6 +854,7 @@ library VTSPositionLib {
         );
         pa.inflowGrowthInsideLast.token0 = i0;
         pa.inflowGrowthInsideLast.token1 = i1;
+        TokenPairGrowthCarryQ128Lib.clear(pa.inflowGrowthCarry);
     }
 
     /// @dev Seed per-tick outside growth snapshots when a tick is initialised by this liquidity add.

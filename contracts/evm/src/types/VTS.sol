@@ -15,6 +15,70 @@ import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {ModifyLiquidityParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
 import {BalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
 import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
+import {FullMath} from "@uniswap/v4-core/src/libraries/FullMath.sol";
+import {FixedPoint128} from "v4-periphery/lib/v4-core/src/libraries/FixedPoint128.sol";
+
+/// @dev Remainder modulo `FixedPoint128.Q128` for growth `mulDiv(dGrowth, liquidity, Q128)` carry.
+///      Stored value is always `< Q128` after each `accumulate` step.
+type GrowthCarryQ128 is uint256;
+
+/// @title GrowthCarryQ128Lib
+/// @notice Path-independent rounding for Uniswap-style growth settlement (`owed = floor(d * L / Q128)` plus carry).
+library GrowthCarryQ128Lib {
+    uint256 internal constant DENOM = FixedPoint128.Q128;
+
+    function unwrap(GrowthCarryQ128 self) internal pure returns (uint256) {
+        return GrowthCarryQ128.unwrap(self);
+    }
+
+    function wrap(uint256 raw) internal pure returns (GrowthCarryQ128) {
+        return GrowthCarryQ128.wrap(raw % DENOM);
+    }
+
+    function zero() internal pure returns (GrowthCarryQ128) {
+        return GrowthCarryQ128.wrap(0);
+    }
+
+    /// @notice Returns whole-token `add` attributed this step and updated carry (`< DENOM`).
+    /// @dev When `liquidity == 0`, `q=r=0`; carry may still cross a whole token from prior intervals.
+    function accumulate(GrowthCarryQ128 carryIn, uint256 dGrowth, uint128 liquidity)
+        public
+        pure
+        returns (uint256 add, GrowthCarryQ128 carryOut)
+    {
+        uint256 L = uint256(liquidity);
+        uint256 q = L == 0 ? 0 : FullMath.mulDiv(dGrowth, L, DENOM);
+        uint256 r = L == 0 ? 0 : mulmod(dGrowth, L, DENOM);
+        uint256 sum = r + unwrap(carryIn);
+        unchecked {
+            add = q + (sum / DENOM);
+        }
+        carryOut = wrap(sum % DENOM);
+    }
+}
+
+/// @notice Per-token pair of Q128 growth carries (deficit and inflow paths use separate storage pairs).
+struct TokenPairGrowthCarryQ128 {
+    GrowthCarryQ128 token0;
+    GrowthCarryQ128 token1;
+}
+
+/// @title TokenPairGrowthCarryQ128Lib
+library TokenPairGrowthCarryQ128Lib {
+    function get(TokenPairGrowthCarryQ128 storage self, uint8 tokenIndex) internal view returns (GrowthCarryQ128) {
+        return tokenIndex == 0 ? self.token0 : self.token1;
+    }
+
+    function set(TokenPairGrowthCarryQ128 storage self, uint8 tokenIndex, GrowthCarryQ128 value) internal {
+        if (tokenIndex == 0) self.token0 = value;
+        else self.token1 = value;
+    }
+
+    function clear(TokenPairGrowthCarryQ128 storage self) internal {
+        self.token0 = GrowthCarryQ128.wrap(0);
+        self.token1 = GrowthCarryQ128.wrap(0);
+    }
+}
 
 struct TokenConfiguration {
     // Grace period time
@@ -167,6 +231,11 @@ struct PositionAccounting {
     uint16 commitmentDeficitBps;
     // Timestamp at which commitment deficit became non-zero per token (0 when token deficit is zero)
     TokenPairUint commitmentDeficitSince;
+    /// @dev Q128 fractional remainder carry for deficit growth settlement; path-independent across repeated
+    ///      `settlePositionGrowths` calls. Cleared when deficit growth snapshots are rebased (`_initDeficitSnapshot` / tick checkpoint).
+    TokenPairGrowthCarryQ128 deficitGrowthCarry;
+    /// @dev Q128 fractional remainder carry for inflow growth settlement; cleared on inflow snapshot rebase.
+    TokenPairGrowthCarryQ128 inflowGrowthCarry;
 }
 
 /// @title PositionAccountingLib

@@ -93,12 +93,11 @@ contract MMPositionManager is
     ///      custodian (`_forwardUnwrapQueuedLccToCustodian`), so physical LCC tracks the Hub obligation for that
     ///      beneficiary. The Hub queue and custodian are separate ledgers: if `settleQueue[lcc][beneficiary]` is later
     ///      annulled by other LCC flows (e.g. LCC-02 `annulSettlementBeforeTransfer` on a different transfer), the Hub
-    ///      obligation can drop while utility custody still holds the prior slice. The beneficiary (batch locker)
-    ///      operating through MMPM is then entitled to receive that mismatch as LCC: the delta
-    ///      `custodied - hubQueued` is released to them in `_reconcileUtilityCustodyWithHubQueue` on the next
-    ///      utility `UNWRAP_LCC` or utility collect (`tokenId == 0`). Commit buckets (`tokenId > 0`) are unchanged.
-    ///      Unwrap headroom and post-transfer queue snapshots are handled separately (`LiquidityHub`
-    ///      `_unwrapEffectiveFromBalance`, `_unwrapLccFromUser`).
+    ///      obligation can drop while custody still holds the prior slice. The beneficiary (batch locker) operating
+    ///      through MMPM is entitled to that mismatch as LCC: the delta `custodied - hubQueued` is released in
+    ///      `_reconcileCustodyWithHubQueue` on utility `UNWRAP_LCC`, utility collect (`tokenId == 0`), or commit-bucket
+    ///      collect (`tokenId > 0`). Unwrap headroom and post-transfer queue snapshots are handled separately
+    ///      (`LiquidityHub` `_unwrapEffectiveFromBalance`, `_unwrapLccFromUser`).
     uint256 private constant _UNWRAP_QUEUE_CUSTODY_TOKEN_ID = 0;
 
     // ═══════════════════════════════════════════════════════════════════════════
@@ -542,7 +541,7 @@ contract MMPositionManager is
     ///      Because this forwards physical LCC into the custodian while `LiquidityHub` owns queue accounting, a later
     ///      annulment of `settleQueue` (from unrelated LCC transfers by the same beneficiary) does not automatically
     ///      pull LCC back out of the custodian. The beneficiary remains entitled to the resulting excess
-    ///      (`custodied - live hubQueued`); see `_reconcileUtilityCustodyWithHubQueue`.
+    ///      (`custodied - live hubQueued`); see `_reconcileCustodyWithHubQueue`.
     function _forwardUnwrapQueuedLccToCustodian(Currency lccCurrency, address beneficiary, uint256 amount) private {
         if (amount == 0) return;
         if (beneficiary == address(0)) revert Errors.InvalidAddress(beneficiary);
@@ -558,26 +557,28 @@ contract MMPositionManager is
         custodian.record(_UNWRAP_QUEUE_CUSTODY_TOKEN_ID, Currency.unwrap(lccCurrency), beneficiary, amount);
     }
 
-    /// @notice If utility-bucket (`tokenId == 0`) custody exceeds the beneficiary's live Hub queue, release the excess
-    ///         LCC to the beneficiary (scan #22 finding #3 narrowed).
-    /// @dev `UNWRAP_LCC` had forwarded queued-backing LCC into the custodian; if `settleQueue` is later reduced
-    ///      independently (annulment via other LCC movements), the custodian can still hold the full prior slice.
-    ///      The beneficiary (batch locker) is entitled to that gap as LCC: we release `custodied - hubQueued`, i.e. the
-    ///      amount that was annulled from the Hub queue without a matching decrement of utility custody. Commit-scoped
-    ///      custody (`tokenId > 0`) is not touched. Called before utility `UNWRAP_LCC` and before
-    ///      `COLLECT_AVAILABLE_LIQUIDITY` when `tokenId == 0`.
-    function _reconcileUtilityCustodyWithHubQueue(address lccAddr, address beneficiary) private {
+    /// @notice If custody for `(tokenId, lcc, beneficiary)` exceeds the beneficiary's live Hub queue, release the
+    ///         excess LCC to the beneficiary (utility bucket: scan #22 finding #3; commit buckets: queue annul drift).
+    /// @dev Hub `settleQueue` and custodian ledgers can diverge after LCC-02 annulment. The beneficiary is entitled to
+    ///      `custodied - hubQueued` for that bucket. Called before utility `UNWRAP_LCC` and before every
+    ///      `COLLECT_AVAILABLE_LIQUIDITY` (any `tokenId`).
+    function _reconcileCustodyWithHubQueue(address lccAddr, uint256 tokenId, address beneficiary) private {
         if (beneficiary == address(0)) return;
         IMMQueueCustodian custodian = queueCustodian;
         address cust = address(custodian);
         if (cust == address(0) || cust == address(this)) return;
 
         uint256 hubQueued = liquidityHub.settleQueue(lccAddr, beneficiary);
-        uint256 custodied = custodian.queued(_UNWRAP_QUEUE_CUSTODY_TOKEN_ID, lccAddr, beneficiary);
+        uint256 custodied = custodian.queued(tokenId, lccAddr, beneficiary);
         if (custodied <= hubQueued) return;
 
         uint256 excess = custodied - hubQueued;
-        custodian.release(_UNWRAP_QUEUE_CUSTODY_TOKEN_ID, lccAddr, beneficiary, excess);
+        custodian.release(tokenId, lccAddr, beneficiary, excess);
+    }
+
+    /// @dev Utility-bucket wrapper; `unwrapAdmissionCredit` remains `queued(0, ...)`-only per HUB-02A.
+    function _reconcileUtilityCustodyWithHubQueue(address lccAddr, address beneficiary) private {
+        _reconcileCustodyWithHubQueue(lccAddr, _UNWRAP_QUEUE_CUSTODY_TOKEN_ID, beneficiary);
     }
 
     /// @notice Collects available liquidity from settlement queue
@@ -586,10 +587,12 @@ contract MMPositionManager is
     ///      with any queue could pair it with another party's commit custody bucket.
     ///
     ///      Intended model (queue-gated collect):
-    ///      - This path exists to release custodied LCC and then call `processSettlementFor`, which burns the
-    ///        caller's LCC and clears their Hub `settleQueue` entry. If `settleQueue(lcc, locker) == 0`, this
-    ///        function is a no-op by design — e.g. some flows (including certain seizure shapes) may record LCC
-    ///        in the custodian for the locker without creating a per-LCC queue entry; those are not settled here.
+    ///      - First reconciles this bucket: if custodied LCC exceeds the live Hub queue (e.g. LCC-02 annulment), the
+    ///        excess is returned to the locker as LCC before settlement.
+    ///      - Then releases custodied LCC and calls `processSettlementFor`, which burns the caller's market-derived
+    ///        LCC and clears their Hub `settleQueue` entry up to `min(queue, reserve, maxAmount, custody)`.
+    ///      - If after reconciliation `settleQueue(lcc, locker) == 0`, `settleFromCustodian` is a no-op; custody for
+    ///        this bucket should already match the queue.
     ///      - Arbitrary `processSettlementFor` calls cannot drain another party's custody: settlement still
     ///        requires the recipient's market-derived LCC balance; beneficiary-scoped custody ensures collect
     ///        only debits the slice matching the caller's queue.
@@ -598,9 +601,7 @@ contract MMPositionManager is
     /// @param maxAmount The maximum amount to collect
     function _collectAvailableLiquidity(address lcc, uint256 tokenId, uint256 maxAmount) internal {
         address locker = msgSender();
-        if (tokenId == _UNWRAP_QUEUE_CUSTODY_TOKEN_ID) {
-            _reconcileUtilityCustodyWithHubQueue(lcc, locker);
-        }
+        _reconcileCustodyWithHubQueue(lcc, tokenId, locker);
         liquidityHub.settleFromCustodian(lcc, address(queueCustodian), tokenId, locker, maxAmount);
     }
 

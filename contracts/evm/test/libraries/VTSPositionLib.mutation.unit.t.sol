@@ -324,6 +324,24 @@ contract VTSPositionLibMutationUnitTest is Test {
         assertEq(delta.amount1(), int128(int256(100e18)));
     }
 
+    function test_initPositionSnapshots_clears_deficit_and_inflow_growth_carries() public {
+        (PositionId id,) = _register(bytes32(uint256(42)), 1000);
+        _pmSetSlot0Tick(poolId, 0);
+        _pmSetPositionLiquidity(poolId, PositionId.unwrap(id), 1000);
+
+        harness.setDeficitGrowthCarry(id, FixedPoint128.Q128 - 1, 123);
+        harness.setInflowGrowthCarry(id, 456, FixedPoint128.Q128 / 2);
+
+        harness.initPositionSnapshots(IPoolManager(address(pm)), id);
+
+        (uint256 dc0, uint256 dc1) = harness.getDeficitGrowthCarry(id);
+        (uint256 ic0, uint256 ic1) = harness.getInflowGrowthCarry(id);
+        assertEq(dc0, 0);
+        assertEq(dc1, 0);
+        assertEq(ic0, 0);
+        assertEq(ic1, 0);
+    }
+
     function test_settlePositionDeficitGrowth_belowRange_accumulatesToken1Deficit_usingOutsideLowerMinusUpper() public {
         (PositionId id, ModifyLiquidityParams memory p) = _register(bytes32(uint256(10)), 1);
         harness.setDeficitGrowthGlobal(poolId, 0, 0);

@@ -334,6 +334,13 @@ contract MMPositionActionsImpl is
             poolKey, tokenId, positionIndex, -amount0.toInt128(), -amount1.toInt128(), usePositionManagerBalance
         );
 
+        // Fail closed: a zero-liquidity decrease still runs `modifyLiquidity` and can realise accrued LCC fees to the
+        // locker (seizer) without removing any position liquidity. Seizure must not proceed unless the settlement
+        // phase produced a non-zero seized-liquidity amount from VTS sizing.
+        if (seizedLiquidityUnits == 0) {
+            revert Errors.SeizureWithoutLiquidityRemoval();
+        }
+
         // Use returned maxima clamped settlementDelta
         bytes memory hookData = PositionModificationHookDataLib.encodeSeizure(
             tokenId, positionIndex, msgSender(), settlementDelta.amount0(), settlementDelta.amount1()

@@ -12,8 +12,10 @@ import {
     TouchPositionResult,
     SettleParams,
     SettleResult,
-    VaultSettlementIntent
+    VaultSettlementIntent,
+    GrowthCarryQ128
 } from "../../../src/types/VTS.sol";
+import {FixedPoint128} from "v4-periphery/lib/v4-core/src/libraries/FixedPoint128.sol";
 import {PositionId, Position} from "../../../src/types/Position.sol";
 import {Pool} from "../../../src/types/Pool.sol";
 import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
@@ -409,6 +411,33 @@ contract VTSPositionLibHarness {
             s.positionAccounting[id].inflowGrowthInsideLast.token0,
             s.positionAccounting[id].inflowGrowthInsideLast.token1
         );
+    }
+
+    /// @notice Test-only: read Q128 deficit growth carries (raw `< Q128`)
+    function getDeficitGrowthCarry(PositionId id) external view returns (uint256 c0, uint256 c1) {
+        return (
+            GrowthCarryQ128.unwrap(s.positionAccounting[id].deficitGrowthCarry.token0),
+            GrowthCarryQ128.unwrap(s.positionAccounting[id].deficitGrowthCarry.token1)
+        );
+    }
+
+    /// @notice Test-only: read Q128 inflow growth carries
+    function getInflowGrowthCarry(PositionId id) external view returns (uint256 c0, uint256 c1) {
+        return (
+            GrowthCarryQ128.unwrap(s.positionAccounting[id].inflowGrowthCarry.token0),
+            GrowthCarryQ128.unwrap(s.positionAccounting[id].inflowGrowthCarry.token1)
+        );
+    }
+
+    /// @notice Test-only: seed carries (values reduced mod Q128)
+    function setDeficitGrowthCarry(PositionId id, uint256 c0, uint256 c1) external {
+        s.positionAccounting[id].deficitGrowthCarry.token0 = GrowthCarryQ128.wrap(c0 % FixedPoint128.Q128);
+        s.positionAccounting[id].deficitGrowthCarry.token1 = GrowthCarryQ128.wrap(c1 % FixedPoint128.Q128);
+    }
+
+    function setInflowGrowthCarry(PositionId id, uint256 c0, uint256 c1) external {
+        s.positionAccounting[id].inflowGrowthCarry.token0 = GrowthCarryQ128.wrap(c0 % FixedPoint128.Q128);
+        s.positionAccounting[id].inflowGrowthCarry.token1 = GrowthCarryQ128.wrap(c1 % FixedPoint128.Q128);
     }
 
     function getCommitExpiresAt(uint256 commitId) external view returns (uint256 expiresAt) {

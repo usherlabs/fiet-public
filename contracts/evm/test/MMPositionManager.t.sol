@@ -2384,7 +2384,7 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
         assertEq(lcc0.balanceOf(victim) - lccBefore, q);
     }
 
-    /// @notice `COLLECT_AVAILABLE_LIQUIDITY` with `tokenId > 0` does not run utility-bucket reconciliation.
+    /// @notice `COLLECT_AVAILABLE_LIQUIDITY` with `tokenId > 0` reconciles that commit bucket only; utility custody is unchanged.
     function test_collectAvailableLiquidity_commitTokenId_doesNotReconcileUtilityBucket() public {
         address user = makeAddr("userCommitNoUtilityReconcile");
         address lccAddr = address(lcc0);
@@ -2428,6 +2428,113 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
         _executeWithUnlockAs(user, prepared, block.timestamp + 3600);
 
         assertEq(positionManager.queueCustodian().queued(0, lccAddr, user), q, "utility drift untouched");
+    }
+
+    /// @notice Commit-bucket custody can exceed Hub queue after LCC-02 annulment; collect reconciles excess as LCC before settlement.
+    function test_collectAvailableLiquidity_commitTokenId_reconcilesExcessCustodyWhenHubQueueZero_afterAnnul() public {
+        address user = makeAddr("userCommitReconcileFullAnnul");
+        address lccAddr = address(lcc0);
+        uint256 q = 170;
+        uint256 commitTokenId = 4242;
+        address custody = address(positionManager.queueCustodian());
+
+        vm.prank(address(proxyHook));
+        ILiquidityHub(liquidityHub).issue(lccAddr, address(liquidityHub), q);
+
+        vm.mockCall(
+            marketFactory, abi.encodeWithSelector(IMarketFactory.useMarketLiquidity.selector), abi.encode(uint256(0))
+        );
+        vm.prank(address(vtsOrchestrator));
+        ILiquidityHub(liquidityHub)
+            .planCancelWithQueue(lccAddr, address(liquidityHub), address(positionManager), q, q, user);
+        vm.prank(address(liquidityHub));
+        ILCC(lccAddr).transfer(address(positionManager), q);
+
+        vm.startPrank(address(positionManager));
+        lcc0.transfer(custody, q);
+        IMMQueueCustodian(custody).record(commitTokenId, lccAddr, user, q);
+        vm.stopPrank();
+
+        assertEq(ILiquidityHub(liquidityHub).settleQueue(lccAddr, user), q);
+        assertEq(IMMQueueCustodian(custody).queued(commitTokenId, lccAddr, user), q);
+
+        vm.prank(address(proxyHook));
+        ILiquidityHub(liquidityHub).issue(lccAddr, user, q);
+        vm.mockCall(marketFactory, abi.encodeWithSelector(IMarketFactory.bounds.selector, user), abi.encode(false));
+        vm.startPrank(user);
+        lcc0.approve(address(positionManager), type(uint256).max);
+        lcc0.transfer(address(positionManager), q);
+        vm.stopPrank();
+
+        assertEq(ILiquidityHub(liquidityHub).settleQueue(lccAddr, user), 0, "queue annulled");
+        assertEq(IMMQueueCustodian(custody).queued(commitTokenId, lccAddr, user), q, "commit custody drift");
+
+        uint256 lccBefore = lcc0.balanceOf(user);
+        MMA.PreparedAction[] memory prepared = new MMA.PreparedAction[](1);
+        prepared[0] = MMA.prepareCollectAvailableLiquidity(lccAddr, commitTokenId, type(uint256).max);
+        _executeWithUnlockAs(user, prepared, block.timestamp + 3600);
+
+        assertEq(ILiquidityHub(liquidityHub).settleQueue(lccAddr, user), 0);
+        assertEq(IMMQueueCustodian(custody).queued(commitTokenId, lccAddr, user), 0);
+        assertEq(lcc0.balanceOf(user) - lccBefore, q, "excess custody returned as LCC");
+    }
+
+    /// @notice Partial annul: reconcile releases annulled slice as LCC; remainder settles against Hub reserve when available.
+    function test_collectAvailableLiquidity_commitTokenId_reconcilesPartialAnnul_thenSettlesRemainder() public {
+        address user = makeAddr("userCommitReconcilePartialAnnul");
+        address lccAddr = address(lcc0);
+        uint256 q = 100;
+        uint256 annulled = 50;
+        uint256 commitTokenId = 5151;
+        address custody = address(positionManager.queueCustodian());
+
+        vm.prank(address(proxyHook));
+        ILiquidityHub(liquidityHub).issue(lccAddr, address(liquidityHub), q);
+
+        vm.mockCall(
+            marketFactory, abi.encodeWithSelector(IMarketFactory.useMarketLiquidity.selector), abi.encode(uint256(0))
+        );
+        vm.prank(address(vtsOrchestrator));
+        ILiquidityHub(liquidityHub)
+            .planCancelWithQueue(lccAddr, address(liquidityHub), address(positionManager), q, q, user);
+        vm.prank(address(liquidityHub));
+        ILCC(lccAddr).transfer(address(positionManager), q);
+
+        vm.startPrank(address(positionManager));
+        lcc0.transfer(custody, q);
+        IMMQueueCustodian(custody).record(commitTokenId, lccAddr, user, q);
+        vm.stopPrank();
+
+        assertEq(ILiquidityHub(liquidityHub).settleQueue(lccAddr, user), q);
+
+        MockERC20 underlying = MockERC20(lcc0.underlying());
+        underlying.mint(address(liquidityHub), q);
+        vm.prank(address(vtsOrchestrator));
+        ILiquidityHub(liquidityHub).confirmTake(lccAddr, q, false);
+
+        vm.prank(address(proxyHook));
+        ILiquidityHub(liquidityHub).issue(lccAddr, user, q + annulled);
+        vm.mockCall(marketFactory, abi.encodeWithSelector(IMarketFactory.bounds.selector, user), abi.encode(false));
+        vm.startPrank(user);
+        lcc0.approve(address(positionManager), type(uint256).max);
+        lcc0.transfer(address(positionManager), q);
+        vm.stopPrank();
+
+        assertEq(ILiquidityHub(liquidityHub).settleQueue(lccAddr, user), q - annulled, "partial annul");
+        assertEq(IMMQueueCustodian(custody).queued(commitTokenId, lccAddr, user), q, "custody still full slice");
+
+        uint256 lccBefore = lcc0.balanceOf(user);
+        assertEq(lccBefore, annulled, "precondition: wallet LCC after partial transfer");
+        uint256 underlyingBefore = underlying.balanceOf(user);
+
+        MMA.PreparedAction[] memory prepared = new MMA.PreparedAction[](1);
+        prepared[0] = MMA.prepareCollectAvailableLiquidity(lccAddr, commitTokenId, type(uint256).max);
+        _executeWithUnlockAs(user, prepared, block.timestamp + 3600);
+
+        assertEq(ILiquidityHub(liquidityHub).settleQueue(lccAddr, user), 0);
+        assertEq(IMMQueueCustodian(custody).queued(commitTokenId, lccAddr, user), 0);
+        assertEq(lcc0.balanceOf(user) - lccBefore, annulled, "reconcile returns annulled as LCC");
+        assertEq(underlying.balanceOf(user) - underlyingBefore, q - annulled, "remainder settled to underlying");
     }
 
     /// @notice After partial collect, utility-bucket custody and `unwrapAdmissionCredit` match the remaining queue; a

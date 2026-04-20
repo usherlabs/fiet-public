@@ -330,6 +330,56 @@ contract MMPositionManagerActionsTest is MarketTestBase, MarketMakerTestBase {
         vm.warp(block.timestamp + 300000 + 1);
     }
 
+    /// @notice Regression (audit 29_10): mis-scoped seizure settlement must not fall through to a zero-liquidity decrease
+    ///         that can still realise accrued LCC fees to the seizer.
+    function test_seize_revertsWhenMisdirectedSettlementProducesZeroSeizedLiquidity() public {
+        uint256 tokenId = 1;
+        uint256 positionIndex = 0;
+
+        _setupCommittedPosition(
+            positionManager,
+            corePoolKey,
+            abi.encode(liquiditySignal),
+            defaultlLiquidityParams,
+            marketVTSConfiguration,
+            address(lcc0),
+            address(lcc1)
+        );
+
+        _openSeizeWindow(tokenId, positionIndex);
+
+        (, PositionId positionId) = positionManager.getPosition(tokenId, positionIndex);
+        (, BalanceDelta rfs) = vtsOrchestrator.calcRFS(positionId, false);
+
+        uint256 amt = 5_999_709_018_652_707;
+
+        if (rfs.amount0() > 0 && rfs.amount1() <= 0) {
+            // Deposit only lane 1 while lane 1 has no positive-RFS need — `_settleSeizingDeposits` accepts nothing; seized liquidity stays 0.
+            MockERC20(address(lcc1.underlying())).mint(guarantor, amt);
+            vm.startPrank(guarantor);
+            IERC20(lcc1.underlying()).approve(address(positionManager), amt);
+
+            MMA.PreparedAction[] memory actions = new MMA.PreparedAction[](1);
+            actions[0] = MMA.prepareSeize(corePoolKey, tokenId, positionIndex, 0, amt, false);
+            vm.expectRevert(Errors.SeizureWithoutLiquidityRemoval.selector);
+            MMA.executeWithUnlock(positionManager, actions, block.timestamp + 3600);
+            vm.stopPrank();
+        } else if (rfs.amount1() > 0 && rfs.amount0() <= 0) {
+            MockERC20(address(lcc0.underlying())).mint(guarantor, amt);
+            vm.startPrank(guarantor);
+            IERC20(lcc0.underlying()).approve(address(positionManager), amt);
+
+            MMA.PreparedAction[] memory actions = new MMA.PreparedAction[](1);
+            actions[0] = MMA.prepareSeize(corePoolKey, tokenId, positionIndex, amt, 0, false);
+            vm.expectRevert(Errors.SeizureWithoutLiquidityRemoval.selector);
+            MMA.executeWithUnlock(positionManager, actions, block.timestamp + 3600);
+            vm.stopPrank();
+        } else {
+            // Symmetric two-lane RFS under this fixture; single-lane mis-scope precondition does not apply.
+            vm.skip(true);
+        }
+    }
+
     function testCanCommitMintAndSettlePosition() public {
         // Objective:
         // - Prove a user can commit, mint, and settle a single MM position via the position manager.
