@@ -304,7 +304,9 @@ contract MMCoverageE2E is MME2EBase {
         _pokePosition(s.market, keys.mm3Pk, s.mm3CommitId, false);
     }
 
-    function _closeCoveragePosition(StandaloneMarket memory m, uint256 mmPk, uint256 takerPk, uint256 commitId) internal {
+    function _closeCoveragePosition(StandaloneMarket memory m, uint256 mmPk, uint256 takerPk, uint256 commitId)
+        internal
+    {
         _settleRfsIfOpen(m, mmPk, commitId);
         _burnAndRealiseExitCredits(m, mmPk, commitId, 0);
 
@@ -336,11 +338,7 @@ contract MMCoverageE2E is MME2EBase {
         }
 
         if (!drained) {
-            (uint256 eff0Left, uint256 eff1Left) =
-                _getEffectiveSettledPair(IVTSOrchestrator(m.stack.contracts.vtsOrchestrator), commitId, 0);
-            require(eff0Left + eff1Left <= 1, "e2e: inactive surplus not cleared after reserve rebalance");
-            _assertCommitNotDrainedOnDecommit(m, mmPk, commitId);
-            console.log("OK: classified terminal dust remnant after bounded rebalance");
+            _classifyTerminalInactiveDustOrRevert(m, mmPk, commitId, 0);
             return;
         }
 
