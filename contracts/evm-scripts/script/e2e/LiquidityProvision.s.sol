@@ -111,40 +111,21 @@ contract LiquidityProvisionE2E is E2EBase {
         vm.stopBroadcast();
     }
 
-    function _assertPostUnwrapBalances(
-        StandaloneMarket memory m,
-        address lp,
-        PoolKey memory corePoolKey,
-        uint256 ua0Before,
-        uint256 ua1Before,
-        address swapTokenIn,
-        address swapTokenOut,
-        uint256 swapSpent,
-        uint256 swapReceived
-    ) internal view {
-        address curr0Addr = Currency.unwrap(corePoolKey.currency0);
-        address curr1Addr = Currency.unwrap(corePoolKey.currency1);
+    function _assertPostUnwrapBalances(StandaloneMarket memory m, address lp, uint256 ua0Before, uint256 ua1Before)
+        internal
+        view
+    {
         uint256 ua0After = IERC20(m.underlying0).balanceOf(lp);
         uint256 ua1After = IERC20(m.underlying1).balanceOf(lp);
         uint256 lcc0After = IERC20(m.lcc0).balanceOf(lp);
         uint256 lcc1After = IERC20(m.lcc1).balanceOf(lp);
 
-        // After unwrapping, the LP should hold only underlying and the net balance shift should mirror the
-        // exact-output swap executed while assets were wrapped as LCCs.
-        uint256 expectedUa0After = ua0Before;
-        uint256 expectedUa1After = ua1Before;
-        if (swapTokenIn == curr0Addr) {
-            expectedUa0After -= swapSpent;
-            expectedUa1After += swapReceived;
-        } else {
-            expectedUa1After -= swapSpent;
-            expectedUa0After += swapReceived;
-        }
-
-        require(
-            swapTokenOut == curr0Addr || swapTokenOut == curr1Addr,
-            "swap: unexpected tokenOut for core-pool liquidity flow"
-        );
+        // `_addCoreLiquidityFullRange` mints fresh underlying locally before wrapping it into LCC for the LP.
+        // Because this runner later burns the only LP position and unwraps all residual LCC, the aggregate
+        // post-run underlying balances should round-trip back to the pre-flow wallet balance plus the locally
+        // provisioned inventory, independent of the intermediate self-trade against that same pool.
+        uint256 expectedUa0After = ua0Before + WRAP_AMOUNT_PER_ASSET;
+        uint256 expectedUa1After = ua1Before + WRAP_AMOUNT_PER_ASSET;
         _assertApproxEq(ua0After, expectedUa0After, AMOUNT_TOLERANCE, "underlying delta: ua0 != expected");
         _assertApproxEq(ua1After, expectedUa1After, AMOUNT_TOLERANCE, "underlying delta: ua1 != expected");
 
@@ -182,12 +163,9 @@ contract LiquidityProvisionE2E is E2EBase {
         console.log("currency0:", Currency.unwrap(corePoolKey.currency0));
         console.log("currency1:", Currency.unwrap(corePoolKey.currency1));
 
-        (address swapTokenIn, address swapTokenOut, uint256 swapSpent, uint256 swapReceived) =
-            _swapAndAssert(m, lpPk, corePoolKey);
+        _swapAndAssert(m, lpPk, corePoolKey);
         _removeAndUnwrap(m, lpPk, corePoolKey, tokenId, lp);
-        _assertPostUnwrapBalances(
-            m, lp, corePoolKey, ua0Before, ua1Before, swapTokenIn, swapTokenOut, swapSpent, swapReceived
-        );
+        _assertPostUnwrapBalances(m, lp, ua0Before, ua1Before);
         console.log("OK: stateful DirectLP add->swap->remove->unwrap verified");
     }
 }
