@@ -50,7 +50,6 @@ import {PoolAccounting} from "./types/VTS.sol";
 import {ReentrancyGuardTransient} from "openzeppelin-contracts/contracts/utils/ReentrancyGuardTransient.sol";
 import {TokenConfiguration} from "./types/VTS.sol";
 import {VTSAdmin} from "./modules/VTSAdmin.sol";
-import {Extsload} from "v4-periphery/lib/v4-core/src/Extsload.sol";
 
 /// @title VTSOrchestrator
 /// @notice Central state management layer and orchestrator for VTS logic
@@ -60,7 +59,6 @@ contract VTSOrchestrator is
     PausableVTS,
     VTSAdmin,
     VTSCurrencyDelta,
-    Extsload,
     ImmutableState,
     IVTSOrchestrator,
     ReentrancyGuardTransient

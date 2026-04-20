@@ -14,9 +14,8 @@ import {IPausableVTS} from "./IPausableVTS.sol";
 import {IVTSCurrencyDelta} from "./IVTSCurrencyDelta.sol";
 import {IVTSAdmin} from "./IVTSAdmin.sol";
 import {IMarketFactory} from "./IMarketFactory.sol";
-import {IExtsload} from "v4-periphery/lib/v4-core/src/interfaces/IExtsload.sol";
 
-interface IVTSOrchestrator is IPausableVTS, IVTSCurrencyDelta, IVTSAdmin, IExtsload {
+interface IVTSOrchestrator is IPausableVTS, IVTSCurrencyDelta, IVTSAdmin {
     // Events
     event Checkpointed(uint256 commitId, uint256 positionIndex, RFSCheckpoint checkpoint, bool withCommitment);
     event GracePeriodExtended(uint256 commitId, uint256 positionIndex, uint8 tokenIndex, RFSCheckpoint checkpoint);

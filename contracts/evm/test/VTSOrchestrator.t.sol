@@ -531,10 +531,6 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
         vm.stopPrank();
     }
 
-    function test_extsload_isCallable_onOrchestrator() public view {
-        vtsOrchestrator.extsload(bytes32(uint256(0)));
-    }
-
     // ============================================================
     // Guard Tests - onlyCoreHook
     // ============================================================
