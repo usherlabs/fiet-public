@@ -970,6 +970,39 @@ contract VTSPositionLibOnMMSettleTest is VTSLibTestBase {
         );
     }
 
+    /// @dev Regression (audit 28_2): stale `settled` with zero `commitmentMax` must not inflate `increaseLiquidityReserve`
+    ///      on settle-from-deltas; reserve credit must match economic effective-settled increase only.
+    function test_onMMSettle_fromDeltas_staleZeroCommitSplit_doesNotOverCreditLiquidityReserve() public {
+        _initMarket();
+        PositionId positionId = _registerActivePosition();
+        address owner = DEFAULT_OWNER;
+
+        harness.setCommitmentMax(positionId, 0, 0);
+        harness.setSettled(positionId, 100e18, 0);
+        harness.setSettledOverflow(positionId, 0, 0);
+        harness.setPoolTotalSettled(testPoolId, 100e18, 0);
+        harness.setPositionActive(positionId, false);
+
+        harness.setUnderlyingDelta(underlyingCurrency0, owner, 10e18);
+        harness.addMarketProducedCredit(mockVault, underlyingCurrency0, 10e18);
+        mockVault.setAvailableLiquidity(type(int128).max, type(int128).max);
+
+        address u0 = Currency.unwrap(underlyingCurrency0);
+        assertEq(mockVault.totalLiquidityReserveIncreases(u0), 0, "pre: no reserve credit");
+
+        BalanceDelta delta = toBalanceDelta(-10e18, 0);
+        harness.onMMSettle(manager, mockVault, positionId, lccCurrency0, lccCurrency1, delta, false, true);
+
+        assertEq(
+            mockVault.totalLiquidityReserveIncreases(u0),
+            10e18,
+            "reserve credit must equal economic deposit, not component-sum reshuffle"
+        );
+        (,, uint256 settled0,,,, uint256 ov0,) = harness.getPositionAccounting(positionId);
+        assertEq(settled0, 0, "live settled lane stays zero under zero commitmentMax");
+        assertEq(ov0, 110e18, "effective backing includes prior + deposit in overflow");
+    }
+
     /// @notice Regression for audit finding #9: positive owner underlying credit cannot fund delta-backed withdrawals
     ///         unless matching factory-scoped produced credit exists (reserve export provenance).
     function test_onMMSettle_finding9_crossVaultWithdrawWithoutProduced_reverts() public {

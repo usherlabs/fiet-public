@@ -121,6 +121,23 @@ contract VTSPositionLibMutationUnitTest is Test {
         assertEq(pool0, 80e18, "pure split normalisation must not change pool totalSettled");
     }
 
+    /// @dev Regression (audit 28_2): zero-liquidity commitment refresh must canonicalise stale all-in-live `settled`
+    ///      into `settledOverflow` when `commitmentMax` is zero (SETTLE-00).
+    function test_trackCommitment_zeroLiquidity_canonicalisesStaleLiveSettledIntoOverflow() public {
+        (PositionId id,) = _register(bytes32(uint256(28)), 1);
+        harness.setCommitmentMax(id, 1000e18, 1000e18);
+        harness.setSettled(id, 100e18, 50e18);
+        harness.setSettledOverflow(id, 0, 0);
+        harness.trackCommitmentFromLiveLiquidity(id, 0);
+        (uint256 c0, uint256 c1, uint256 s0, uint256 s1,,, uint256 o0, uint256 o1) = harness.getPositionAccounting(id);
+        assertEq(c0, 0);
+        assertEq(c1, 0);
+        assertEq(s0, 0);
+        assertEq(s1, 0);
+        assertEq(o0, 100e18);
+        assertEq(o1, 50e18);
+    }
+
     function test_updateSettlement_updatesPoolTotalSettled_onDepositAndWithdrawal() public {
         (PositionId id,) = _register(bytes32(uint256(3)), 1);
         harness.setCommitmentMax(id, 1000e18, 0);

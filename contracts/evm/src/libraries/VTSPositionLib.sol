@@ -105,6 +105,10 @@ library VTSPositionLib {
         if (liveLiquidity == 0) {
             pa.commitmentMax.token0 = 0;
             pa.commitmentMax.token1 = 0;
+            // SETTLE-00: with commitmentMax cleared, canonicalise live `settled` vs `settledOverflow` so stale
+            // all-in-live shapes cannot later couple with reserve-credit paths.
+            _canonicalSettledSplitForLane(pa, 0);
+            _canonicalSettledSplitForLane(pa, 1);
             return;
         }
         Position memory pos = s.positions[positionId];
@@ -198,7 +202,7 @@ library VTSPositionLib {
     /// @notice "Silent" update settlement helper wrapper for contexts where we deliberately don't need the applied return value
     /// @dev Consumes the return value so static analysers don't flag ignored returns.
     function _sUpdateSettlement(VTSStorage storage s, PositionId id, uint8 tokenIndex, int256 delta) internal {
-        (int256 applied,,) = _vUpdateSettlement(s, id, tokenIndex, delta);
+        (int256 applied,,,) = _vUpdateSettlement(s, id, tokenIndex, delta);
         applied;
     }
 
@@ -225,16 +229,23 @@ library VTSPositionLib {
     /// @dev `totalApplied` matches legacy `_updateSettlement` semantics extended with overflow lane.
     ///      `settledDeltaOnly` is `next - cur` on `pa.settled` for this lane only (MM requirement attribution).
     ///      `overflowDeltaOnly` is `next - cur` on `pa.settledOverflow`.
+    ///      `effectiveSettledLaneIncrease` is the non-negative increase in `settled + settledOverflow` on this lane (economic backing).
     function _vUpdateSettlement(VTSStorage storage s, PositionId id, uint8 tokenIndex, int256 delta)
         internal
-        returns (int256 totalApplied, int256 settledDeltaOnly, int256 overflowDeltaOnly)
+        returns (
+            int256 totalApplied,
+            int256 settledDeltaOnly,
+            int256 overflowDeltaOnly,
+            uint256 effectiveSettledLaneIncrease
+        )
     {
-        if (delta == 0) return (0, 0, 0);
+        if (delta == 0) return (0, 0, 0, 0);
 
         PositionAccounting storage pa = s.positionAccounting[id];
         (uint256 oldRemnantS0, uint256 oldRemnantS1) = (pa.settled.token0, pa.settled.token1);
         (uint256 oldOv0, uint256 oldOv1) = (pa.settledOverflow.token0, pa.settledOverflow.token1);
-        (totalApplied, settledDeltaOnly, overflowDeltaOnly) = _vUpdateSettlementCore(s, id, tokenIndex, delta, pa);
+        (totalApplied, settledDeltaOnly, overflowDeltaOnly, effectiveSettledLaneIncrease) =
+            _vUpdateSettlementCore(s, id, tokenIndex, delta, pa);
         _syncInactiveRemnantAfterSettledPairChange(s, id, oldRemnantS0, oldRemnantS1, oldOv0, oldOv1);
     }
 
@@ -287,6 +298,17 @@ library VTSPositionLib {
         }
     }
 
+    /// @dev Non-negative increase in effective settled (`settled + overflow`) for one lane; isolated for stack depth.
+    function _nonNegativeEffectiveSettledLaneIncrease(uint256 curS, uint256 curO, uint256 nextS, uint256 nextO)
+        private
+        pure
+        returns (uint256)
+    {
+        uint256 curEff = curS + curO;
+        uint256 nextEff = nextS + nextO;
+        return nextEff > curEff ? nextEff - curEff : 0;
+    }
+
     /// @dev Pool totals + MM lane deltas after settlement write (separate stack frame).
     function _settlementPoolAppliedAndLaneDeltas(
         VTSStorage storage s,
@@ -298,9 +320,18 @@ library VTSPositionLib {
         uint256 nextO,
         uint256 cumulativeDeficitCoverage,
         uint256 totalDeficitCoverage
-    ) private returns (int256 totalApplied, int256 settledDeltaOnly, int256 overflowDeltaOnly) {
+    )
+        private
+        returns (
+            int256 totalApplied,
+            int256 settledDeltaOnly,
+            int256 overflowDeltaOnly,
+            uint256 effectiveSettledLaneIncrease
+        )
+    {
         settledDeltaOnly = nextS.toInt256() - curS.toInt256();
         overflowDeltaOnly = nextO.toInt256() - curO.toInt256();
+        effectiveSettledLaneIncrease = _nonNegativeEffectiveSettledLaneIncrease(curS, curO, nextS, nextO);
         totalApplied = _updatePoolAccounting(s, id, tokenIndex, curS, nextS, curO, nextO, cumulativeDeficitCoverage);
         if (totalDeficitCoverage > cumulativeDeficitCoverage) {
             totalApplied += SafeCast.toInt256(totalDeficitCoverage - cumulativeDeficitCoverage);
@@ -314,7 +345,15 @@ library VTSPositionLib {
         uint8 tokenIndex,
         int256 delta,
         PositionAccounting storage pa
-    ) private returns (int256 totalApplied, int256 settledDeltaOnly, int256 overflowDeltaOnly) {
+    )
+        private
+        returns (
+            int256 totalApplied,
+            int256 settledDeltaOnly,
+            int256 overflowDeltaOnly,
+            uint256 effectiveSettledLaneIncrease
+        )
+    {
         SettlementLaneScratch memory scratch;
         scratch.curS = pa.settled.get(tokenIndex);
         scratch.curO = pa.settledOverflow.get(tokenIndex);
@@ -424,7 +463,7 @@ library VTSPositionLib {
         internal
         returns (int256 applied)
     {
-        (applied,,) = _vUpdateSettlement(s, id, tokenIndex, delta);
+        (applied,,,) = _vUpdateSettlement(s, id, tokenIndex, delta);
     }
 
     // --------------------------------------------------
