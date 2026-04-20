@@ -96,11 +96,17 @@ contract HubRSC is AbstractReactive {
     mapping(address => LinkedQueue.Data) private queueDataByLcc;
     /// @notice Per-underlying linked-list queue state for shared-underlying dispatch.
     mapping(address => LinkedQueue.Data) private queueDataByUnderlying;
+    /// @notice Per-underlying queue of LCCs whose historical per-LCC backlog still needs shared-lane backfill.
+    mapping(address => LinkedQueue.Data) private pendingBackfillLccsByUnderlying;
     /// @notice Canonical underlying lookup for each LCC (from LiquidityHub `LCCCreated`).
     mapping(address => address) public underlyingByLcc;
     /// @notice Whether an LCC has been registered with a canonical underlying.
     /// @notice It is important to track using a second variable because underlyingByLcc[lcc] can be 0x for lccs with native underlying assets
     mapping(address => bool) public hasUnderlyingForLcc;
+    /// @notice Remaining historical per-LCC queue entries still to be mirrored into the shared underlying lane.
+    mapping(address => uint256) public underlyingBackfillRemainingByLcc;
+    /// @notice Next per-LCC queue key to resume scanning when continuing a bounded underlying backfill.
+    mapping(address => bytes32) public underlyingBackfillCursorByLcc;
     /// @notice Remaining zero-batch retry callbacks allowed for a dispatch lane (see `_handleZeroBatchRetry`).
     mapping(address => uint256) public zeroBatchRetryCreditsRemaining;
 
@@ -246,6 +252,7 @@ contract HubRSC is AbstractReactive {
     /// @dev Deduplicates by log identity, ignores zero amounts, and either creates
     /// or increments a queued pending entry.
     function _handleSettlementQueued(IReactive.LogRecord calldata log) internal {
+        if (log.chain_id != reactChainId || log._contract != hubCallback) return;
         address recipient = address(uint160(log.topic_1));
         address lcc = address(uint160(log.topic_2));
         (uint256 amount,) = abi.decode(log.data, (uint256, uint256));
@@ -287,7 +294,7 @@ contract HubRSC is AbstractReactive {
 
     /// @notice Reconciles pending amount from authoritative LiquidityHub settlement processing.
     function _handleSettlementProcessed(IReactive.LogRecord calldata log) internal {
-        if (log._contract != hubCallback) return;
+        if (log.chain_id != reactChainId || log._contract != hubCallback) return;
         if (!_markLogProcessed(log)) return;
 
         address recipient = address(uint160(log.topic_1));
@@ -299,7 +306,7 @@ contract HubRSC is AbstractReactive {
 
     /// @notice Reconciles pending amount from authoritative LiquidityHub queue annulments.
     function _handleSettlementAnnulled(IReactive.LogRecord calldata log) internal {
-        if (log._contract != hubCallback) return;
+        if (log.chain_id != reactChainId || log._contract != hubCallback) return;
         if (!_markLogProcessed(log)) return;
 
         address recipient = address(uint160(log.topic_1));
@@ -311,7 +318,7 @@ contract HubRSC is AbstractReactive {
 
     /// @notice Releases reserved in-flight amount for failed destination settlements.
     function _handleSettlementFailed(IReactive.LogRecord calldata log) internal {
-        if (log._contract != hubCallback) return;
+        if (log.chain_id != reactChainId || log._contract != hubCallback) return;
         if (!_markLogProcessed(log)) return;
 
         address recipient = address(uint160(log.topic_1));
@@ -377,7 +384,8 @@ contract HubRSC is AbstractReactive {
 
     /// @notice Registers canonical underlying from LiquidityHub `LCCCreated` logs.
     function _handleLccCreated(IReactive.LogRecord calldata log) internal {
-        if (log._contract != liquidityHub) return;
+        if (log.chain_id != protocolChainId || log._contract != liquidityHub) return;
+
         address underlying = address(uint160(log.topic_1));
         address lcc = address(uint160(log.topic_2));
         _registerLccUnderlying(lcc, underlying);
@@ -386,11 +394,12 @@ contract HubRSC is AbstractReactive {
     /// @notice Builds and dispatches a bounded settlement batch when liquidity is available.
     /// @dev Decodes LiquidityAvailable log fields, registers `lcc -> underlying`, then routes dispatch.
     function _handleLiquidityAvailable(IReactive.LogRecord calldata log) internal {
-        if (log._contract != liquidityHub) return;
+        if (log.chain_id != protocolChainId || log._contract != liquidityHub) return;
         if (!_markLogProcessed(log)) return;
         address lcc = address(uint160(log.topic_1));
         (address underlying, uint256 available,) = abi.decode(log.data, (address, uint256, bytes32));
         _registerLccUnderlying(lcc, underlying);
+        _continueUnderlyingBackfill(underlying, maxDispatchItems);
         bootstrapZeroBatchRetry = true;
         _dispatchLiquidity(lcc, available);
         bootstrapZeroBatchRetry = false;
@@ -399,10 +408,13 @@ contract HubRSC is AbstractReactive {
     /// @notice Handles follow-up liquidity notices emitted via HubCallback.
     /// @dev Decodes MoreLiquidityAvailable log fields and forwards to shared dispatch logic.
     function _handleMoreLiquidityAvailable(IReactive.LogRecord calldata log) internal {
-        if (log._contract != hubCallback) return;
+        if (log.chain_id != reactChainId || log._contract != hubCallback) return;
         if (!_markLogProcessed(log)) return;
         address lcc = address(uint160(log.topic_1));
         uint256 available = abi.decode(log.data, (uint256));
+        if (hasUnderlyingForLcc[lcc]) {
+            _continueUnderlyingBackfill(underlyingByLcc[lcc], maxDispatchItems);
+        }
         _dispatchLiquidity(lcc, available);
     }
 
@@ -590,26 +602,21 @@ contract HubRSC is AbstractReactive {
         if (hasUnderlyingForLcc[lcc]) return;
         underlyingByLcc[lcc] = underlying;
         hasUnderlyingForLcc[lcc] = true;
-        _backfillUnderlyingQueueForLcc(lcc, underlying);
+        _initializeUnderlyingBackfill(lcc, underlying);
     }
 
-    /// @notice Backfills historical per-LCC entries into the shared underlying lane.
-    /// @dev This runs only on first registration, and `enqueue()` keeps the operation idempotent per key.
-    function _backfillUnderlyingQueueForLcc(address lcc, address underlying) internal {
+    /// @notice Seeds bounded shared-lane backfill for an LCC that queued work before underlying registration.
+    /// @dev The first registration pass mirrors at most `maxDispatchItems` historical keys immediately and leaves
+    ///      the remainder to `_continueUnderlyingBackfill`, which resumes from the saved cursor.
+    function _initializeUnderlyingBackfill(address lcc, address underlying) internal {
         LinkedQueue.Data storage lccQueue = queueDataByLcc[lcc];
         if (lccQueue.size == 0) return;
-
-        uint256 remaining = lccQueue.size;
-        bytes32 cursor = lccQueue.currentCursor();
-        while (remaining > 0) {
-            bytes32 key = cursor;
-            cursor = lccQueue.nextOrHead(key);
-
-            Pending storage entry = pending[key];
-            if (entry.exists && entry.lcc == lcc) {
-                queueDataByUnderlying[underlying].enqueue(key);
-            }
-            remaining--;
+        underlyingBackfillRemainingByLcc[lcc] = lccQueue.size;
+        underlyingBackfillCursorByLcc[lcc] = lccQueue.currentCursor();
+        pendingBackfillLccsByUnderlying[underlying].enqueue(_backfillLccKey(lcc));
+        _continueUnderlyingBackfillForLcc(lcc, underlying, maxDispatchItems);
+        if (underlyingBackfillRemainingByLcc[lcc] == 0) {
+            pendingBackfillLccsByUnderlying[underlying].remove(_backfillLccKey(lcc));
         }
     }
 
@@ -698,6 +705,76 @@ contract HubRSC is AbstractReactive {
         }
         queueDataByLcc[lcc].remove(key);
         queueData.remove(key);
+    }
+
+    /// @notice Continues bounded historical backfill for LCCs registered on a shared underlying lane.
+    /// @dev This keeps first-time registration O(`maxDispatchItems`) instead of O(queue size) while allowing
+    ///      later liquidity callbacks on the same underlying to make forward progress on any remaining backlog.
+    function _continueUnderlyingBackfill(address underlying, uint256 budget) internal {
+        LinkedQueue.Data storage backfillQueue = pendingBackfillLccsByUnderlying[underlying];
+        while (budget > 0 && backfillQueue.size > 0) {
+            bytes32 lccKey = backfillQueue.currentCursor();
+            address lcc = _lccFromBackfillKey(lccKey);
+            bytes32 nextLccKey = backfillQueue.nextOrHead(lccKey);
+
+            uint256 scanned = _continueUnderlyingBackfillForLcc(lcc, underlying, budget);
+            if (scanned == 0) {
+                break;
+            }
+            budget -= scanned;
+
+            if (underlyingBackfillRemainingByLcc[lcc] == 0) {
+                backfillQueue.remove(lccKey);
+                continue;
+            }
+
+            backfillQueue.cursor = nextLccKey;
+        }
+    }
+
+    /// @notice Mirrors up to `budget` historical per-LCC queue keys into the shared underlying lane.
+    function _continueUnderlyingBackfillForLcc(address lcc, address underlying, uint256 budget)
+        internal
+        returns (uint256 scanned)
+    {
+        uint256 remaining = underlyingBackfillRemainingByLcc[lcc];
+        if (budget == 0 || remaining == 0) return 0;
+
+        LinkedQueue.Data storage lccQueue = queueDataByLcc[lcc];
+        bytes32 cursor = underlyingBackfillCursorByLcc[lcc];
+        if (cursor == bytes32(0)) {
+            cursor = lccQueue.currentCursor();
+        }
+
+        while (remaining > 0 && scanned < budget) {
+            bytes32 key = cursor;
+            cursor = lccQueue.nextOrHead(key);
+
+            Pending storage entry = pending[key];
+            if (entry.exists && entry.lcc == lcc) {
+                queueDataByUnderlying[underlying].enqueue(key);
+            }
+
+            remaining--;
+            scanned++;
+        }
+
+        underlyingBackfillRemainingByLcc[lcc] = remaining;
+        if (remaining == 0) {
+            delete underlyingBackfillCursorByLcc[lcc];
+            return scanned;
+        }
+
+        underlyingBackfillCursorByLcc[lcc] = cursor;
+        return scanned;
+    }
+
+    function _backfillLccKey(address lcc) internal pure returns (bytes32) {
+        return bytes32(uint256(uint160(lcc)));
+    }
+
+    function _lccFromBackfillKey(bytes32 lccKey) internal pure returns (address) {
+        return address(uint160(uint256(lccKey)));
     }
 
     /// @notice Queue size accessor.
