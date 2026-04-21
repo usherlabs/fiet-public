@@ -503,24 +503,35 @@ library MMCalldataDecoder {
         }
     }
 
-    /// @dev COLLECT_AVAILABLE_LIQUIDITY: (address, uint256, uint256)
+    /// @dev COLLECT_AVAILABLE_LIQUIDITY:
+    ///      - Legacy (locker collects own slice): `(address lcc, uint256 tokenId, uint256 maxAmount)` — **0x60** bytes; `beneficiary` is returned as `address(0)` (caller is the beneficiary).
+    ///      - Commit beneficiary slice (any caller; payout only to `beneficiary`): `(address lcc, uint256 tokenId, address beneficiary, uint256 maxAmount)` — **0x80** bytes; `beneficiary` must be non-zero.
     /// @param params The calldata bytes to decode
     /// @return lcc The LCC token address
-    /// @return tokenId The commitment NFT token ID bucket to collect from
+    /// @return tokenId The commitment NFT token ID bucket (`0` = utility), or commitment id for beneficiary form
+    /// @return beneficiary `address(0)` when using the 3-word legacy encoding; otherwise the recorded beneficiary to pay
     /// @return maxAmount The maximum amount to collect
     function decodeCollectLiquidityParams(bytes calldata params)
         internal
         pure
-        returns (address lcc, uint256 tokenId, uint256 maxAmount)
+        returns (address lcc, uint256 tokenId, address beneficiary, uint256 maxAmount)
     {
-        assembly ("memory-safe") {
-            if lt(params.length, 0x60) {
-                mstore(0, SLICE_ERROR_SELECTOR)
-                revert(0x1c, 4)
+        if (params.length == 0x60) {
+            assembly ("memory-safe") {
+                lcc := calldataload(params.offset)
+                tokenId := calldataload(add(params.offset, 0x20))
+                maxAmount := calldataload(add(params.offset, 0x40))
             }
-            lcc := calldataload(params.offset)
-            tokenId := calldataload(add(params.offset, 0x20))
-            maxAmount := calldataload(add(params.offset, 0x40))
+            beneficiary = address(0);
+        } else if (params.length == 0x80) {
+            assembly ("memory-safe") {
+                lcc := calldataload(params.offset)
+                tokenId := calldataload(add(params.offset, 0x20))
+                beneficiary := calldataload(add(params.offset, 0x40))
+                maxAmount := calldataload(add(params.offset, 0x60))
+            }
+        } else {
+            revert SliceOutOfBounds();
         }
     }
 

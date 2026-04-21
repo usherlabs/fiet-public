@@ -2777,6 +2777,201 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
         positionManager.ownerOf(tokenId);
     }
 
+    /// @notice Third-party beneficiary slice on a commit bucket blocks decommit until four-word `COLLECT_AVAILABLE_LIQUIDITY` pays that beneficiary.
+    function test_collectForBeneficiary_commitBucket_clearsThirdPartySlice_thenDecommits() public {
+        bytes memory liquiditySignalBytes = abi.encode(liquiditySignal);
+        uint256 tokenId = positionManager.nextTokenId();
+        address seizer = makeAddr("seizerBeneficiary");
+        address lccAddr = address(lcc0);
+        MockERC20 underlying = MockERC20(lcc0.underlying());
+        uint256 amount = 250;
+
+        MMA.PreparedAction[] memory prepared = new MMA.PreparedAction[](1);
+        prepared[0] = MMA.prepareCommit(liquiditySignalBytes);
+        _executeWithUnlockLiquidity(prepared, block.timestamp + 3600);
+
+        address custody = positionManager.custodianFor(positionManager.ownerOf(tokenId));
+
+        vm.prank(address(proxyHook));
+        ILiquidityHub(liquidityHub).issue(lccAddr, address(liquidityHub), amount);
+        vm.prank(address(vtsOrchestrator));
+        ILiquidityHub(liquidityHub)
+            .planCancelWithQueue(lccAddr, address(liquidityHub), address(positionManager), amount, amount, custody);
+        vm.prank(address(liquidityHub));
+        ILCC(lccAddr).transfer(address(positionManager), amount);
+
+        underlying.mint(address(liquidityHub), amount);
+        vm.prank(address(vtsOrchestrator));
+        ILiquidityHub(liquidityHub).confirmTake(lccAddr, amount, true);
+
+        vm.startPrank(address(positionManager));
+        lcc0.transfer(custody, amount);
+        IMMQueueCustodian(custody).record(tokenId, lccAddr, seizer, amount);
+        vm.stopPrank();
+
+        assertEq(IMMQueueCustodian(custody).queued(tokenId, lccAddr, seizer), amount);
+        assertEq(ILiquidityHub(liquidityHub).settleQueue(lccAddr, custody), amount);
+
+        prepared[0] = MMA.prepareCollectAvailableLiquidity(lccAddr, tokenId, type(uint256).max);
+        _executeWithUnlockLiquidity(prepared, block.timestamp + 3600);
+        assertEq(
+            IMMQueueCustodian(custody).queued(tokenId, lccAddr, seizer),
+            amount,
+            "owner self-collect must not debit seizer slice"
+        );
+
+        prepared[0] = MMA.prepareDecommit(tokenId);
+        vm.expectRevert(abi.encodeWithSelector(Errors.CommitCustodyNotDrained.selector, tokenId));
+        _executeWithUnlockLiquidity(prepared, block.timestamp + 3600);
+
+        address stranger = makeAddr("strangerCollectForBeneficiary");
+        uint256 seizerUnderlyingBefore = underlying.balanceOf(seizer);
+        prepared[0] = MMA.prepareCollectAvailableLiquidityForBeneficiary(lccAddr, tokenId, seizer, type(uint256).max);
+        _executeWithUnlockAs(stranger, prepared, block.timestamp + 3600);
+
+        assertEq(IMMQueueCustodian(custody).queued(tokenId, lccAddr, seizer), 0);
+        assertEq(underlying.balanceOf(seizer) - seizerUnderlyingBefore, amount);
+
+        prepared[0] = MMA.prepareDecommit(tokenId);
+        _executeWithUnlockLiquidity(prepared, block.timestamp + 3600);
+
+        vm.expectRevert();
+        positionManager.ownerOf(tokenId);
+    }
+
+    /// @notice Same as third-party beneficiary drain, but Hub queue was pre-settled permissionlessly; beneficiary collect must still clear custody.
+    function test_collectForBeneficiary_commitBucket_afterPermissionlessPreSettlement_clearsSlice_thenDecommits()
+        public
+    {
+        bytes memory liquiditySignalBytes = abi.encode(liquiditySignal);
+        uint256 tokenId = positionManager.nextTokenId();
+        address seizer = makeAddr("seizerBeneficiaryPre");
+        address lccAddr = address(lcc0);
+        MockERC20 underlying = MockERC20(lcc0.underlying());
+        uint256 amount = 250;
+
+        MMA.PreparedAction[] memory prepared = new MMA.PreparedAction[](1);
+        prepared[0] = MMA.prepareCommit(liquiditySignalBytes);
+        _executeWithUnlockLiquidity(prepared, block.timestamp + 3600);
+
+        address custody = positionManager.custodianFor(positionManager.ownerOf(tokenId));
+
+        vm.prank(address(proxyHook));
+        ILiquidityHub(liquidityHub).issue(lccAddr, address(liquidityHub), amount);
+        vm.prank(address(vtsOrchestrator));
+        ILiquidityHub(liquidityHub)
+            .planCancelWithQueue(lccAddr, address(liquidityHub), address(positionManager), amount, amount, custody);
+        vm.prank(address(liquidityHub));
+        ILCC(lccAddr).transfer(address(positionManager), amount);
+
+        underlying.mint(address(liquidityHub), amount);
+        vm.prank(address(vtsOrchestrator));
+        ILiquidityHub(liquidityHub).confirmTake(lccAddr, amount, true);
+
+        vm.startPrank(address(positionManager));
+        lcc0.transfer(custody, amount);
+        IMMQueueCustodian(custody).record(tokenId, lccAddr, seizer, amount);
+        vm.stopPrank();
+
+        address strangerSettler = makeAddr("strangerPreSettleBeneficiary");
+        vm.prank(strangerSettler);
+        ILiquidityHub(liquidityHub).processSettlementFor(lccAddr, custody, amount);
+        assertEq(ILiquidityHub(liquidityHub).settleQueue(lccAddr, custody), 0);
+        assertEq(underlying.balanceOf(custody), amount);
+
+        uint256 seizerUnderlyingBefore = underlying.balanceOf(seizer);
+        prepared[0] = MMA.prepareCollectAvailableLiquidityForBeneficiary(lccAddr, tokenId, seizer, type(uint256).max);
+        _executeWithUnlockAs(strangerSettler, prepared, block.timestamp + 3600);
+
+        assertEq(IMMQueueCustodian(custody).queued(tokenId, lccAddr, seizer), 0);
+        assertEq(underlying.balanceOf(seizer) - seizerUnderlyingBefore, amount);
+
+        prepared[0] = MMA.prepareDecommit(tokenId);
+        _executeWithUnlockLiquidity(prepared, block.timestamp + 3600);
+        vm.expectRevert();
+        positionManager.ownerOf(tokenId);
+    }
+
+    /// @notice Four-word `COLLECT_AVAILABLE_LIQUIDITY` rejects utility bucket `tokenId == 0`.
+    function test_collectForBeneficiary_revertsOnUtilityBucket() public {
+        address user = makeAddr("userUtilityForBeneficiary");
+        address lccAddr = address(lcc0);
+        _wireTestQueueCustodian(user);
+
+        MMA.PreparedAction[] memory prepared = new MMA.PreparedAction[](1);
+        prepared[0] = MMA.prepareCollectAvailableLiquidityForBeneficiary(lccAddr, 0, user, 1);
+        vm.expectRevert(abi.encodeWithSelector(Errors.CollectForBeneficiaryRequiresCommitToken.selector, uint256(0)));
+        vm.prank(user);
+        MMA.executeWithUnlock(positionManager, prepared, block.timestamp + 3600);
+    }
+
+    /// @notice Four-word collect with `beneficiary == address(0)` is invalid (must use three-word self-collect).
+    function test_collect_fourWord_zeroBeneficiary_reverts() public {
+        bytes memory liquiditySignalBytes = abi.encode(liquiditySignal);
+        uint256 tokenId = positionManager.nextTokenId();
+        address lccAddr = address(lcc0);
+
+        MMA.PreparedAction[] memory prepared = new MMA.PreparedAction[](1);
+        prepared[0] = MMA.prepareCommit(liquiditySignalBytes);
+        _executeWithUnlockLiquidity(prepared, block.timestamp + 3600);
+
+        prepared[0] = MMA.PreparedAction({
+            action: bytes1(uint8(MMActions.COLLECT_AVAILABLE_LIQUIDITY)),
+            params: abi.encode(lccAddr, tokenId, address(0), uint256(1))
+        });
+        vm.expectRevert(abi.encodeWithSelector(Errors.InvalidAddress.selector, address(0)));
+        _executeWithUnlockLiquidity(prepared, block.timestamp + 3600);
+    }
+
+    /// @notice `transferFrom` is blocked by non-empty commit bucket until a stranger finalises the third-party beneficiary slice.
+    function test_collectForBeneficiary_unblocksTransferFrom_afterSliceCleared() public {
+        bytes memory liquiditySignalBytes = abi.encode(liquiditySignal);
+        uint256 tokenId = positionManager.nextTokenId();
+        address owner = liquiditySignal.mmState.owner;
+        address alice = makeAddr("aliceTransferAfterCollectForBeneficiary");
+        address seizer = makeAddr("seizerForTransferTest");
+        address lccAddr = address(lcc0);
+        MockERC20 underlying = MockERC20(lcc0.underlying());
+        uint256 amount = 250;
+
+        MMA.PreparedAction[] memory prepared = new MMA.PreparedAction[](1);
+        prepared[0] = MMA.prepareCommit(liquiditySignalBytes);
+        _executeWithUnlockLiquidity(prepared, block.timestamp + 3600);
+
+        address custody = positionManager.custodianFor(positionManager.ownerOf(tokenId));
+
+        vm.prank(address(proxyHook));
+        ILiquidityHub(liquidityHub).issue(lccAddr, address(liquidityHub), amount);
+        vm.prank(address(vtsOrchestrator));
+        ILiquidityHub(liquidityHub)
+            .planCancelWithQueue(lccAddr, address(liquidityHub), address(positionManager), amount, amount, custody);
+        vm.prank(address(liquidityHub));
+        ILCC(lccAddr).transfer(address(positionManager), amount);
+
+        underlying.mint(address(liquidityHub), amount);
+        vm.prank(address(vtsOrchestrator));
+        ILiquidityHub(liquidityHub).confirmTake(lccAddr, amount, true);
+
+        vm.startPrank(address(positionManager));
+        lcc0.transfer(custody, amount);
+        IMMQueueCustodian(custody).record(tokenId, lccAddr, seizer, amount);
+        vm.stopPrank();
+
+        vm.startPrank(owner);
+        vm.expectRevert(abi.encodeWithSelector(Errors.CommitCustodyNotDrained.selector, tokenId));
+        positionManager.transferFrom(owner, alice, tokenId);
+        vm.stopPrank();
+
+        address stranger = makeAddr("strangerUnblockTransfer");
+        prepared[0] = MMA.prepareCollectAvailableLiquidityForBeneficiary(lccAddr, tokenId, seizer, type(uint256).max);
+        _executeWithUnlockAs(stranger, prepared, block.timestamp + 3600);
+
+        vm.startPrank(owner);
+        positionManager.transferFrom(owner, alice, tokenId);
+        vm.stopPrank();
+        assertEq(positionManager.ownerOf(tokenId), alice);
+    }
+
     function test_collectAvailableLiquidity_whenNoReserveAvailable_isNoopAndKeepsCustody() public {
         address user = makeAddr("user");
         address lccAddr = address(lcc0);

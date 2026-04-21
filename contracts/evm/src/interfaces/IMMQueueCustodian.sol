@@ -9,6 +9,7 @@ import {ILiquidityHub} from "./ILiquidityHub.sol";
 ///      for MM synthetic principal is keyed to this custodian (`settleQueue(lcc, address(custodian))`); beneficiary
 ///      slices gate who may receive underlying after settlement. LCC leaves custody only via Hub settlement
 ///      (`processSettlementFor` + `collectUnderlyingToBeneficiary`), not a separate pre-settlement `release` path.
+///      Commit buckets may also be drained via four-word `COLLECT_AVAILABLE_LIQUIDITY` params, which pays only the named beneficiary.
 interface IMMQueueCustodian {
     /// @notice Returns the MMPositionManager bound to this custodian
     function positionManager() external view returns (address);

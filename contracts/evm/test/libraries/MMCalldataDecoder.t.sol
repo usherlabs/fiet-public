@@ -225,9 +225,9 @@ contract MMCalldataDecoderHarness {
     function decodeCollectLiquidityParams(bytes calldata params)
         external
         pure
-        returns (address lcc, uint256 tokenId, uint256 maxAmount)
+        returns (address lcc, uint256 tokenId, address beneficiary, uint256 maxAmount)
     {
-        (lcc, tokenId, maxAmount) = params.decodeCollectLiquidityParams();
+        (lcc, tokenId, beneficiary, maxAmount) = params.decodeCollectLiquidityParams();
     }
 
     function decodeUint256AndBool(bytes calldata params) external pure returns (uint256 amount, bool payerIsUser) {
@@ -471,11 +471,21 @@ contract MMCalldataDecoderTest is Test {
         assertTrue(payerIsUser);
     }
 
-    function test_decodeCollectLiquidityParams_ok() public view {
+    function test_decodeCollectLiquidityParams_ok_threeWord() public view {
         bytes memory params = abi.encode(address(0x1111), uint256(7), uint256(9));
-        (address lcc, uint256 tokenId, uint256 maxAmount) = h.decodeCollectLiquidityParams(params);
+        (address lcc, uint256 tokenId, address beneficiary, uint256 maxAmount) = h.decodeCollectLiquidityParams(params);
         assertEq(lcc, address(0x1111));
         assertEq(tokenId, 7);
+        assertEq(beneficiary, address(0));
+        assertEq(maxAmount, 9);
+    }
+
+    function test_decodeCollectLiquidityParams_ok_fourWord() public view {
+        bytes memory params = abi.encode(address(0x1111), uint256(7), address(0x2222), uint256(9));
+        (address lcc, uint256 tokenId, address beneficiary, uint256 maxAmount) = h.decodeCollectLiquidityParams(params);
+        assertEq(lcc, address(0x1111));
+        assertEq(tokenId, 7);
+        assertEq(beneficiary, address(0x2222));
         assertEq(maxAmount, 9);
     }
 
@@ -573,6 +583,13 @@ contract MMCalldataDecoderTest is Test {
         h.decodeCollectLiquidityParams(hex"");
     }
 
+    function test_decodeCollectLiquidityParams_revertsOnInvalidLength() public {
+        vm.expectRevert(MMCalldataDecoder.SliceOutOfBounds.selector);
+        h.decodeCollectLiquidityParams(new bytes(0x40));
+        vm.expectRevert(MMCalldataDecoder.SliceOutOfBounds.selector);
+        h.decodeCollectLiquidityParams(new bytes(0x70));
+    }
+
     function test_decodeUint256AndBool_revertsOnShortInput() public {
         vm.expectRevert(MMCalldataDecoder.SliceOutOfBounds.selector);
         h.decodeUint256AndBool(hex"");
@@ -636,9 +653,10 @@ contract MMCalldataDecoderTest is Test {
         address lccClean = address(0x1111);
         bytes memory params = abi.encode(lccClean, uint256(7), uint256(9));
         _setAbiWord(params, 0, _dirtyAddressWord(lccClean));
-        (address lcc, uint256 tokenId, uint256 maxAmount) = h.decodeCollectLiquidityParams(params);
+        (address lcc, uint256 tokenId, address beneficiary, uint256 maxAmount) = h.decodeCollectLiquidityParams(params);
         assertEq(lcc, lccClean);
         assertEq(tokenId, 7);
+        assertEq(beneficiary, address(0));
         assertEq(maxAmount, 9);
     }
 }

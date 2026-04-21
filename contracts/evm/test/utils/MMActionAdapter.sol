@@ -398,7 +398,7 @@ library MMActionAdapter {
     }
 
     /**
-     * @notice Prepares a COLLECT_AVAILABLE_LIQUIDITY action to collect queued settlement
+     * @notice Prepares a COLLECT_AVAILABLE_LIQUIDITY action (three-word params: locker collects own beneficiary slice)
      * @param lcc The LCC token address
      * @param tokenId The commitment token id bucket to collect from
      * @param maxAmount The maximum amount to collect (0 for max)
@@ -410,6 +410,25 @@ library MMActionAdapter {
     {
         return PreparedAction({
             action: bytes1(uint8(MMActions.COLLECT_AVAILABLE_LIQUIDITY)), params: abi.encode(lcc, tokenId, maxAmount)
+        });
+    }
+
+    /**
+     * @notice Same action as `prepareCollectAvailableLiquidity`, but four-word calldata: collect a named beneficiary’s commit-bucket slice (payout only to `beneficiary`; caller may be anyone).
+     * @param lcc The LCC token address
+     * @param tokenId Commitment NFT id (must be > 0)
+     * @param beneficiary Recorded beneficiary whose slice is collected
+     * @param maxAmount Maximum amount to collect (0 for max semantics if supported by implementation)
+     */
+    function prepareCollectAvailableLiquidityForBeneficiary(
+        address lcc,
+        uint256 tokenId,
+        address beneficiary,
+        uint256 maxAmount
+    ) internal pure returns (PreparedAction memory) {
+        return PreparedAction({
+            action: bytes1(uint8(MMActions.COLLECT_AVAILABLE_LIQUIDITY)),
+            params: abi.encode(lcc, tokenId, beneficiary, maxAmount)
         });
     }
 

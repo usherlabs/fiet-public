@@ -422,8 +422,14 @@ contract MMPositionManager is
             return;
         }
         if (action == MMActions.COLLECT_AVAILABLE_LIQUIDITY) {
-            (address lcc, uint256 tokenId, uint256 maxAmount) = params.decodeCollectLiquidityParams();
-            _collectAvailableLiquidity(lcc, tokenId, maxAmount);
+            (address lcc, uint256 tokenId, address beneficiary, uint256 maxAmount) =
+                params.decodeCollectLiquidityParams();
+            if (params.length == 0x60) {
+                _collectAvailableLiquidity(lcc, tokenId, maxAmount, address(0));
+            } else {
+                if (beneficiary == address(0)) revert Errors.InvalidAddress(beneficiary);
+                _collectAvailableLiquidity(lcc, tokenId, maxAmount, beneficiary);
+            }
             return;
         }
         if (action == MMActions.SYNC) {
@@ -539,16 +545,31 @@ contract MMPositionManager is
         }
     }
 
-    /// @notice Collects available liquidity for the locker: settles the Hub queue when needed, then pays underlying.
+    /// @notice Collects available queue liquidity: settles the Hub queue when needed, then pays underlying to the beneficiary slice.
     /// @dev When the Hub queue was already cleared via permissionless `processSettlementFor`, pays from underlying already
     ///      held on the custodian (bounded by aggregate custody vs remaining Hub queue per **HUB-02A** accounting).
+    /// @param explicitBeneficiary `address(0)` for the three-word path: beneficiary is `msgSender()`, `recipientKey` is the locker for bucket `0` else `ownerOf(tokenId)`.
+    ///        Non-zero for the four-word path: payout only to that address; requires `tokenId > 0` (reverts `CollectForBeneficiaryRequiresCommitToken` for utility bucket).
     /// @param lcc The LCC token address
-    /// @param tokenId The commitment NFT token id, or `0` for utility-bucket collect
+    /// @param tokenId The commitment NFT token id, or `0` for utility-bucket collect (three-word path only)
     /// @param maxAmount The maximum amount to collect
-    function _collectAvailableLiquidity(address lcc, uint256 tokenId, uint256 maxAmount) internal {
+    function _collectAvailableLiquidity(address lcc, uint256 tokenId, uint256 maxAmount, address explicitBeneficiary)
+        internal
+    {
         if (maxAmount == 0) return;
-        address locker = msgSender();
-        address recipientKey = tokenId == 0 ? locker : _ownerOf[tokenId];
+
+        address beneficiary;
+        address recipientKey;
+
+        if (explicitBeneficiary == address(0)) {
+            beneficiary = msgSender();
+            recipientKey = tokenId == 0 ? beneficiary : _ownerOf[tokenId];
+        } else {
+            if (tokenId == 0) revert Errors.CollectForBeneficiaryRequiresCommitToken(tokenId);
+            beneficiary = explicitBeneficiary;
+            recipientKey = _ownerOf[tokenId];
+        }
+
         if (recipientKey == address(0)) revert Errors.InvalidAddress(recipientKey);
         MMHelpers.assertQueueCustodianForRecipient(recipientKey);
         address custAddr = custodianFor[recipientKey];
@@ -557,8 +578,8 @@ contract MMPositionManager is
 
         uint256 bucket = tokenId == 0 ? _UNWRAP_QUEUE_CUSTODY_TOKEN_ID : tokenId;
 
-        uint256 remaining = _collectSettleHubQueueForCustodian(custodian, custAddr, lcc, bucket, locker, maxAmount);
-        _releasePreSettledCustodianUnderlying(custodian, custAddr, lcc, bucket, locker, remaining);
+        uint256 remaining = _collectSettleHubQueueForCustodian(custodian, custAddr, lcc, bucket, beneficiary, maxAmount);
+        _releasePreSettledCustodianUnderlying(custodian, custAddr, lcc, bucket, beneficiary, remaining);
     }
 
     /// @dev Phase 1: settle live Hub queue where possible; returns `maxAmount` minus what was settled and forwarded.
@@ -567,11 +588,11 @@ contract MMPositionManager is
         address custAddr,
         address lcc,
         uint256 bucket,
-        address locker,
+        address beneficiary,
         uint256 maxAmount
     ) private returns (uint256 remaining) {
         uint256 hubQ = liquidityHub.settleQueue(lcc, custAddr);
-        uint256 entitled = custodian.queued(bucket, lcc, locker);
+        uint256 entitled = custodian.queued(bucket, lcc, beneficiary);
         (, uint256 holderBal) = ILCC(lcc).balancesOf(custAddr);
         (, uint256 reserveMarket) = liquidityHub.reserveOfUnderlyingTuple(lcc);
 
@@ -585,7 +606,7 @@ contract MMPositionManager is
         if (settleAmount == 0) return maxAmount;
 
         liquidityHub.processSettlementFor(lcc, custAddr, settleAmount);
-        custodian.collectUnderlyingToBeneficiary(bucket, lcc, locker, settleAmount);
+        custodian.collectUnderlyingToBeneficiary(bucket, lcc, beneficiary, settleAmount);
         return maxAmount - settleAmount;
     }
 
@@ -595,12 +616,12 @@ contract MMPositionManager is
         address custAddr,
         address lcc,
         uint256 bucket,
-        address locker,
+        address beneficiary,
         uint256 remaining
     ) private {
         if (remaining == 0) return;
 
-        uint256 entitled = custodian.queued(bucket, lcc, locker);
+        uint256 entitled = custodian.queued(bucket, lcc, beneficiary);
         if (entitled == 0) return;
 
         uint256 totalLcc = custodian.totalQueuedLcc(lcc);
@@ -617,7 +638,7 @@ contract MMPositionManager is
         releaseAmount = Math.min(releaseAmount, custodianUnderlyingBal);
 
         if (releaseAmount > 0) {
-            custodian.collectUnderlyingToBeneficiary(bucket, lcc, locker, releaseAmount);
+            custodian.collectUnderlyingToBeneficiary(bucket, lcc, beneficiary, releaseAmount);
         }
     }
 

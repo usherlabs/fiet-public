@@ -339,7 +339,30 @@ library VTSLifecycleLinkedLib {
         );
 
         (result.rfsOpen, rfsDelta) = VTSPositionLib.getRFS(s, p.positionId);
+        if (p.isSeizing) {
+            _clearSeizureCarryForLanesClosedAfterSeizingSettle(s, p.positionId, rfsDelta);
+        }
         CheckpointLibrary.markCheckpoint(s, p.positionId, VTSPositionLib._rfsOpenMask(rfsDelta));
+    }
+
+    /// @dev After a seizing `onMMSettle`, drop per-lane Q128 seizure carry for any lane whose **post-settlement** RFS
+    ///      is no longer an open positive requirement (`getRFS` lane delta <= 0). The carry exists only so repeated
+    ///      `floor(L * inner / denom)` steps stay path-independent **while that lane remains overdue**; it must not
+    ///      survive into a later distinct RFS episode or crystallise for a different guarantor once the lane is fully
+    ///      cured here. Terminal zero-liquidity still clears all carry in `VTSPositionLib._trackCommitment` as a
+    ///      teardown fail-safe.
+    function _clearSeizureCarryForLanesClosedAfterSeizingSettle(
+        VTSStorage storage s,
+        PositionId positionId,
+        BalanceDelta rfsPost
+    ) private {
+        PositionAccounting storage pa = s.positionAccounting[positionId];
+        if (rfsPost.amount0() <= 0) {
+            TokenPairSeizureCarryQ128Lib.set(pa.seizureLiquidityCarry, 0, CarryQ128Lib.zero());
+        }
+        if (rfsPost.amount1() <= 0) {
+            TokenPairSeizureCarryQ128Lib.set(pa.seizureLiquidityCarry, 1, CarryQ128Lib.zero());
+        }
     }
 
     /// @notice Handle deposit settlement for non-seizing MM settles
