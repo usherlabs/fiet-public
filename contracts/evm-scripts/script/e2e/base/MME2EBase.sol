@@ -112,6 +112,17 @@ abstract contract MME2EBase is E2EBase {
         uint256 inactiveRemnantCount;
     }
 
+    struct OverflowRecoveryResultE2E {
+        bool blockedDrainObserved;
+        bool fullyResolved;
+        uint256 stalledEff0;
+        uint256 stalledEff1;
+        uint256 stalledOverflow0;
+        uint256 stalledOverflow1;
+        uint256 stalledInactiveRemnantCount;
+        uint256 rebalanceRoundsUsed;
+    }
+
     /// @dev Matches the legacy `MarketMaker.s.sol` large-sweep trading phase.
     uint256 internal constant MM_E2E_WRAP_FOR_SWAPS_LARGE = 50_000e18;
     uint128 internal constant MM_E2E_BIG_SWAP_IN = 5_000e18;
@@ -377,6 +388,7 @@ abstract contract MME2EBase is E2EBase {
     ) internal view {
         ExitSnapshotE2E memory s = _snapshotExitState(m, commitId, positionIndex);
         require(s.eff0 == 0 && s.eff1 == 0, "e2e: inactive effective settled must be zero before decommit");
+        require(s.overflow0 == 0 && s.overflow1 == 0, "e2e: inactive overflow must be zero before decommit");
         require(s.inactiveRemnantCount == 0, "e2e: inactive remnant must be cleared before decommit");
     }
 
@@ -400,6 +412,29 @@ abstract contract MME2EBase is E2EBase {
         console.log("OK: classified terminal dust remnant after bounded rebalance");
     }
 
+    function _runReserveRebalanceRound(
+        StandaloneMarket memory m,
+        uint256 mmPk,
+        uint256 rebalanceTakerPk,
+        uint256 commitId,
+        uint256 positionIndex,
+        uint128 rebalanceSwapChunk,
+        uint256 rebalanceWrapAmount,
+        uint256 round
+    ) internal returns (bool settledAlreadyEmpty, bool drainedAfterRound) {
+        (uint256 eff0, uint256 eff1) =
+            _getEffectiveSettledPair(IVTSOrchestrator(m.stack.contracts.vtsOrchestrator), commitId, positionIndex);
+        if (eff0 == 0 && eff1 == 0) {
+            return (true, true);
+        }
+
+        console.log("e2e: reserve rebalance round:", round);
+        _rebalanceStrandedLanesForInactiveDrain(m, rebalanceTakerPk, eff0, eff1, rebalanceSwapChunk, rebalanceWrapAmount);
+        _logMakerHealth("after reserve rebalance + pool trade", _snapshotMakerHealth(m, commitId, positionIndex));
+
+        drainedAfterRound = _drainInactivePositionSurplusBestEffort(m, mmPk, commitId, positionIndex, 32);
+    }
+
     /// @dev Close RFS → burn + realise credits → drain inactive surplus; if stalled, assert unserviceable overflow,
     ///      perform bounded directional reserve replenishment swaps, re-drain, then decommit (unwrap separately).
     function _closeRfsBurnDrainRebalanceDecommitAndTakeAllLccs(
@@ -411,7 +446,7 @@ abstract contract MME2EBase is E2EBase {
         uint256 maxRebalanceRounds,
         uint128 rebalanceSwapChunk,
         uint256 rebalanceWrapAmount
-    ) internal {
+    ) internal returns (OverflowRecoveryResultE2E memory result) {
         require(positionIndex == 0, "e2e: helper is single-position only");
         _settleRfsIfOpen(m, mmPk, commitId);
         _burnAndRealiseExitCredits(m, mmPk, commitId, positionIndex);
@@ -421,27 +456,33 @@ abstract contract MME2EBase is E2EBase {
         bool drained = _drainInactivePositionSurplusBestEffort(m, mmPk, commitId, positionIndex, 32);
 
         if (!drained) {
+            ExitSnapshotE2E memory stalled = _snapshotExitState(m, commitId, positionIndex);
+            result.blockedDrainObserved = true;
+            result.stalledEff0 = stalled.eff0;
+            result.stalledEff1 = stalled.eff1;
+            result.stalledOverflow0 = stalled.overflow0;
+            result.stalledOverflow1 = stalled.overflow1;
+            result.stalledInactiveRemnantCount = stalled.inactiveRemnantCount;
             _assertRecognisedUnserviceableOverflowBeforeRebalance(m, mmPk, commitId, positionIndex);
 
             for (uint256 r = 0; r < maxRebalanceRounds; r++) {
-                (uint256 eff0, uint256 eff1) = _getEffectiveSettledPair(
-                    IVTSOrchestrator(m.stack.contracts.vtsOrchestrator), commitId, positionIndex
+                (bool settledAlreadyEmpty, bool drainedAfterRound) = _runReserveRebalanceRound(
+                    m,
+                    mmPk,
+                    rebalanceTakerPk,
+                    commitId,
+                    positionIndex,
+                    rebalanceSwapChunk,
+                    rebalanceWrapAmount,
+                    r
                 );
-                if (eff0 == 0 && eff1 == 0) {
+                if (settledAlreadyEmpty) {
                     drained = true;
                     break;
                 }
 
-                console.log("e2e: reserve rebalance round:", r);
-                _rebalanceStrandedLanesForInactiveDrain(
-                    m, rebalanceTakerPk, eff0, eff1, rebalanceSwapChunk, rebalanceWrapAmount
-                );
-
-                _logMakerHealth(
-                    "after reserve rebalance + pool trade", _snapshotMakerHealth(m, commitId, positionIndex)
-                );
-
-                drained = _drainInactivePositionSurplusBestEffort(m, mmPk, commitId, positionIndex, 32);
+                result.rebalanceRoundsUsed = r + 1;
+                drained = drainedAfterRound;
                 if (drained) {
                     break;
                 }
@@ -449,11 +490,12 @@ abstract contract MME2EBase is E2EBase {
 
             if (!drained) {
                 _classifyTerminalInactiveDustOrRevert(m, mmPk, commitId, positionIndex);
-                return;
+                return result;
             }
         }
 
         _assertInactiveSurplusFullyResolvedForDecommit(m, commitId, positionIndex);
+        result.fullyResolved = true;
 
         _logMakerHealth("after drain (pre-decommit)", _snapshotMakerHealth(m, commitId, positionIndex));
 
@@ -467,8 +509,8 @@ abstract contract MME2EBase is E2EBase {
         uint256 mmPk,
         uint256 rebalanceTakerPk,
         uint256 commitId
-    ) internal {
-        _closeRfsBurnDrainRebalanceDecommitAndTakeAllLccs(
+    ) internal returns (OverflowRecoveryResultE2E memory result) {
+        result = _closeRfsBurnDrainRebalanceDecommitAndTakeAllLccs(
             m,
             mmPk,
             rebalanceTakerPk,
@@ -1359,11 +1401,13 @@ abstract contract MME2EBase is E2EBase {
     }
 
     /// @dev One inactive SETTLE attempt; returns whether effective settled strictly decreased.
-    function _attemptInactiveDrainOnce(
+    function _attemptInactiveDrainRequestOnce(
         StandaloneMarket memory m,
         uint256 mmPk,
         uint256 commitId,
-        uint256 positionIndex
+        uint256 positionIndex,
+        uint256 request0,
+        uint256 request1
     ) internal returns (bool progressed) {
         IVTSOrchestrator vts = IVTSOrchestrator(m.stack.contracts.vtsOrchestrator);
         PoolKey memory corePoolKey = _corePoolKey(m);
@@ -1384,8 +1428,8 @@ abstract contract MME2EBase is E2EBase {
                 corePoolKey,
                 commitId,
                 positionIndex,
-                _withdrawRequestInt128(eff0Before),
-                _withdrawRequestInt128(eff1Before),
+                _withdrawRequestInt128(request0),
+                _withdrawRequestInt128(request1),
                 false
             );
             _executeMMActions(mmpm, actions, params, block.timestamp + 3600);
@@ -1394,6 +1438,18 @@ abstract contract MME2EBase is E2EBase {
 
         (uint256 eff0After, uint256 eff1After) = _getEffectiveSettledPair(vts, commitId, positionIndex);
         progressed = eff0After < eff0Before || eff1After < eff1Before;
+    }
+
+    /// @dev One inactive SETTLE attempt requesting the full currently effective settled amount on each lane.
+    function _attemptInactiveDrainOnce(
+        StandaloneMarket memory m,
+        uint256 mmPk,
+        uint256 commitId,
+        uint256 positionIndex
+    ) internal returns (bool progressed) {
+        IVTSOrchestrator vts = IVTSOrchestrator(m.stack.contracts.vtsOrchestrator);
+        (uint256 eff0Before, uint256 eff1Before) = _getEffectiveSettledPair(vts, commitId, positionIndex);
+        return _attemptInactiveDrainRequestOnce(m, mmPk, commitId, positionIndex, eff0Before, eff1Before);
     }
 
     /// @notice After burn, repeatedly SETTLE (withdraw) until inactive effective settled is zero, or revert if progress stalls.

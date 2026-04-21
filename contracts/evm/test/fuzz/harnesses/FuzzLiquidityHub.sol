@@ -15,6 +15,7 @@ import {Errors} from "../../../src/libraries/Errors.sol";
 import {ICanonicalVault} from "../../../src/interfaces/ICanonicalVault.sol";
 import {TransientSlots} from "../../../src/libraries/TransientSlots.sol";
 import {ILiquidityHub} from "../../../src/interfaces/ILiquidityHub.sol";
+import {IEndpointUnwrapAdmission} from "../../../src/interfaces/IEndpointUnwrapAdmission.sol";
 import {ILCC} from "../../../src/interfaces/ILCC.sol";
 import {BoundRegistry} from "../../../src/modules/BoundRegistry.sol";
 import {Bounds} from "../../../src/libraries/Bounds.sol";
@@ -29,9 +30,16 @@ import {IWETH9} from "v4-periphery/src/interfaces/external/IWETH9.sol";
  *
  *      This adapter therefore stays intentionally close to `src/LiquidityHub.sol` and only swaps the linked-library
  *      call sites to their direct library equivalents (`LCCFactoryLib` / `LiquidityHubLib`) so the fuzz harnesses keep
- *      current Hub semantics without deterministic external-library deployment. If the production Hub later exposes
- *      overridable/internal seams for those call sites, this file should collapse back to inheritance rather than
- *      continue as a long-lived fork.
+ *      current Hub semantics without deterministic external-library deployment.
+ *
+ *      Bounded adapter policy:
+ *      - keep public/external selectors aligned with `LiquidityHub`
+ *      - keep unwrap/settlement semantics aligned with `LiquidityHub`
+ *      - allow divergence only where production dispatches via linked libraries and the fuzz harness must call the
+ *        direct library equivalents instead
+ *
+ *      If the production Hub later exposes overridable/internal seams for those call sites, this file should collapse
+ *      back to inheritance rather than continue as a long-lived fork.
  */
 contract FuzzLiquidityHub is BoundRegistry, Ownable, ReentrancyGuardTransient {
     using CurrencyTransfer for Currency;
@@ -44,6 +52,9 @@ contract FuzzLiquidityHub is BoundRegistry, Ownable, ReentrancyGuardTransient {
 
     event FactorySet(address indexed factory, bool enabled);
     event LCCCreated(address indexed underlyingAsset, address indexed lccToken, bytes32 marketId);
+    /// @notice New market-derived reserve recorded for this LCC's underlying; may now service queued external settlements.
+    /// @dev Wake-up signal for off-chain / reactive settlement dispatch. Not net of Hub self-queue: Hub settling to
+    ///      itself burns LCC and does not spend reserve, so emission must not be gated on pre-Hub queue size.
     event LiquidityAvailable(address indexed lcc, address underlyingAsset, uint256 amount, bytes32 marketId);
     event SettlementQueued(address indexed lcc, address indexed recipient, uint256 amount);
     event SettlementAnnulled(address indexed lcc, address indexed recipient, uint256 amount);
@@ -591,7 +602,9 @@ contract FuzzLiquidityHub is BoundRegistry, Ownable, ReentrancyGuardTransient {
      *        against the same user's live balance.
      *      - Endpoint `unwrapTo(lcc, to, queueTo, ...)`: supported only when the endpoint acts on behalf of the
      *        beneficiary named by `queueTo`; caller-held balance is treated as representing that beneficiary for this
-     *        unwrap (see HUB-02A in INVARIANTS.md).
+     *        unwrap (see HUB-02A in INVARIANTS.md). If the endpoint implements `IEndpointUnwrapAdmission`, admission
+     *        headroom also counts capped beneficiary-scoped custody credit against the same queue key (e.g. custodied
+     *        queued shortfall not on the endpoint balance).
      *      - Immediate payout `to` must be serviceable: not Hub, not exempt/DEX sinks (HUB-02B).
      * @param lcc The LCC token address to unwrap
      * @param to The recipient of the underlying asset
@@ -609,7 +622,9 @@ contract FuzzLiquidityHub is BoundRegistry, Ownable, ReentrancyGuardTransient {
         // Immediate payout recipient must be serviceable: not Hub, not exempt/DEX sinks (see HUB-02B in INVARIANTS.md).
         _assertValidUnwrapPayoutRecipient(lcc, to);
 
-        _assertUnwrapWithinHeadroom(amount, fromBalance, s.settleQueue[lcc][queueTo]);
+        (uint256 effectiveFromBalance, uint256 existingQueue) =
+            _unwrapEffectiveFromBalance(lcc, from, queueTo, fromBalance);
+        _assertUnwrapWithinHeadroom(amount, effectiveFromBalance, existingQueue);
 
         (uint256 directUnwrapped, uint256 marketUnwrapped, uint256 queuedShortfall) =
             LiquidityHubLib.unwrapInternalLogic(s, lcc, queueTo, amount, wrappedBalance, marketDerivedBalance);
@@ -960,7 +975,8 @@ contract FuzzLiquidityHub is BoundRegistry, Ownable, ReentrancyGuardTransient {
         }
 
         if (ctx.emitLiquidityAvailable) {
-            // Only emit if there is new liquidity available and not consumed greedily by the Hub
+            // New reserve arrived at the Hub; downstream dispatch may clear external `settleQueue` entries. Hub
+            // self-settlement above does not consume this reserve (LCC burn / queue collapse only).
             emit LiquidityAvailable(lcc, ctx.underlying, amount, ctx.marketId);
         }
 
@@ -999,12 +1015,12 @@ contract FuzzLiquidityHub is BoundRegistry, Ownable, ReentrancyGuardTransient {
     }
 
     /**
-     * @notice Atomically releases queued MM custody and settles it against the recipient's Hub queue
-     * @dev Best-effort path for MM collection flows. Returns 0 when the queue, reserve, or custody
-     *      currently cannot support settlement, instead of reverting.
+     * @notice Atomically releases queued custody and settles it against the recipient's Hub queue
+     * @dev Best-effort path for collection flows (e.g. MM). Returns 0 when the queue, reserve, or custody
+     *      currently cannot support settlement, instead of reverting. `custodian` must implement `IQueueCustodian`.
      * @param lcc The LCC token address
-     * @param custodian The MM queue custodian holding beneficiary-scoped queued LCC
-     * @param tokenId The commitment token id bucket to debit in the custodian
+     * @param custodian The queue custodian holding beneficiary-scoped queued LCC
+     * @param tokenId The custodian bucket id to debit (e.g. commitment NFT id, or utility bucket such as `0`)
      * @param recipient The queue owner and settlement recipient
      * @param maxAmount The maximum amount to settle
      */
@@ -1181,7 +1197,35 @@ contract FuzzLiquidityHub is BoundRegistry, Ownable, ReentrancyGuardTransient {
 
     // ============ INTERNAL FUNCTIONS ============
 
+    /// @dev Computes admission `fromBalance` for `_unwrap`, including capped endpoint custody credit when applicable.
+    function _unwrapEffectiveFromBalance(address lcc, address from, address queueTo, uint256 fromBalance)
+        private
+        view
+        returns (uint256 effectiveFromBalance, uint256 existingQueue)
+    {
+        existingQueue = s.settleQueue[lcc][queueTo];
+        effectiveFromBalance = fromBalance;
+        if (boundLevelOfLcc(lcc, from) == Bounds.BOUND_ENDPOINT) {
+            uint256 credit = _endpointUnwrapAdmissionCredit(from, lcc, queueTo);
+            credit = Math.min(credit, existingQueue);
+            effectiveFromBalance = fromBalance + credit;
+        }
+    }
+
+    /// @dev Best-effort staticcall to optional `IEndpointUnwrapAdmission` on `BOUND_ENDPOINT` unwrap callers.
+    function _endpointUnwrapAdmissionCredit(address endpoint, address lcc, address beneficiary)
+        private
+        view
+        returns (uint256)
+    {
+        (bool ok, bytes memory data) =
+            endpoint.staticcall(abi.encodeCall(IEndpointUnwrapAdmission.unwrapAdmissionCredit, (lcc, beneficiary)));
+        if (!ok || data.length < 32) return 0;
+        return abi.decode(data, (uint256));
+    }
+
     /// @dev Reverts unless `0 < amount <= availableToUnwrap` where `availableToUnwrap = max(0, fromBalance - existingQueue)`.
+    ///      For endpoint flows, `fromBalance` may already include capped custody credit (see `_unwrap`).
     function _assertUnwrapWithinHeadroom(uint256 amount, uint256 fromBalance, uint256 existingQueue) private pure {
         uint256 availableToUnwrap = fromBalance > existingQueue ? fromBalance - existingQueue : 0;
         if (amount == 0 || amount > availableToUnwrap) {

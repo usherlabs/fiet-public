@@ -50,7 +50,19 @@ contract MarketMakerE2E is MME2EBase {
 
     function _runExitPhase(StandaloneMarket memory m, uint256 mmPk, uint256 commitId) internal {
         uint256 rebalanceTakerPk = _getDeployerPrivateKey();
-        _closeRfsBurnDrainRebalanceDecommitAndTakeAllLccs(m, mmPk, rebalanceTakerPk, commitId);
+        OverflowRecoveryResultE2E memory recovery =
+            _closeRfsBurnDrainRebalanceDecommitAndTakeAllLccs(m, mmPk, rebalanceTakerPk, commitId);
+        if (recovery.blockedDrainObserved) {
+            require(
+                recovery.stalledOverflow0 > 0 || recovery.stalledOverflow1 > 0,
+                "e2e: blocked drain must expose inactive overflow before rebalance"
+            );
+            require(
+                recovery.stalledInactiveRemnantCount > 0,
+                "e2e: blocked drain must preserve an inactive remnant before rebalance"
+            );
+        }
+        require(recovery.fullyResolved, "e2e: baseline MM exit must fully resolve overflow before unwrap");
         _unwrapAllLccsAndAssert(m, mmPk, commitId, 0, true);
     }
 
