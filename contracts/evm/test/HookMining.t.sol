@@ -12,7 +12,6 @@ import {MarketFactory} from "../src/MarketFactory.sol";
 import {HookFlags} from "../src/libraries/HookFlags.sol";
 import {MMPositionManager} from "../src/MMPositionManager.sol";
 import {MMPositionActionsImpl} from "../src/MMPositionActionsImpl.sol";
-import {MMQueueCustodian} from "../src/MMQueueCustodian.sol";
 import {WETH} from "@uniswap/v4-core/lib/solmate/src/tokens/WETH.sol";
 import {IWETH9} from "v4-periphery/src/interfaces/external/IWETH9.sol";
 import {IAllowanceTransfer} from "permit2/src/interfaces/IAllowanceTransfer.sol";
@@ -54,8 +53,6 @@ contract HookTest is Test, Deployers {
         MMPositionActionsImpl actionsImpl = new MMPositionActionsImpl(
             address(poolManager), address(factory), address(vtsOrchestrator), address(canonicalVault)
         );
-        MMQueueCustodian queueCustodian = new MMQueueCustodian(address(this));
-
         mmPositionManager = new MMPositionManager(
             MMPositionManager.MMPositionManagerInit({
                 poolManager: poolManager,
@@ -65,11 +62,9 @@ contract HookTest is Test, Deployers {
                 descriptor: makeAddr("descriptor"),
                 weth9: weth9,
                 permit2: permit2,
-                actionsImpl: address(actionsImpl),
-                queueCustodianAddr: address(queueCustodian)
+                actionsImpl: address(actionsImpl)
             })
         );
-        queueCustodian.setPositionManager(address(mmPositionManager));
 
         // Compute flags for CoreHook
         uint160 coreFlags = HookFlags.CORE_HOOK_FLAGS;

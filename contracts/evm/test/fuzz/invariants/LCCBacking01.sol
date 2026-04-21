@@ -405,7 +405,7 @@ contract LCCBacking01 {
     }
 
     // ================================================================
-    // Actions — settlement queue (unwrapTo queue, confirmTake, processSettlementFor)
+    // Actions — settlement queue (self-unwrap / queue seeding, confirmTake, processSettlementFor)
     // ================================================================
 
     // forge-lint: disable-next-line(mixed-case-function)
@@ -611,11 +611,7 @@ contract LCCBacking01Holder {
     }
 
     function unwrapToQueue(address hub, address lcc, uint256 amount) external returns (bool ok) {
-        (ok,) = hub.call(
-            abi.encodeWithSignature(
-                "unwrapTo(address,address,address,uint256)", lcc, address(this), address(this), amount
-            )
-        );
+        (ok,) = hub.call(abi.encodeWithSignature("unwrap(address,uint256)", lcc, amount));
     }
 
     function wrapWith(address hub, address target, address backing, uint256 amount) external returns (bool ok) {

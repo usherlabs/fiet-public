@@ -246,7 +246,7 @@ contract MMPositionManagerActionsTest is MarketTestBase, MarketMakerTestBase {
             + IMMQueueCustodian(custodian).queued(tokenId, address(lcc1), beneficiary);
     }
 
-    /// @dev After a primed seizure batch, guarantor Hub queues, per-leg deltas, and commit custody must align.
+    /// @dev After a primed seizure batch, Hub `settleQueue(lcc, commitCustodian)` and beneficiary-scoped custody align per leg.
     function _assertGuarantorSeizureQueueStaging(
         uint256 tokenId,
         address custodian,
@@ -259,17 +259,17 @@ contract MMPositionManagerActionsTest is MarketTestBase, MarketMakerTestBase {
     ) internal view {
         assertEq(
             IMMQueueCustodian(custodian).queued(tokenId, address(lcc0), queueRecipient),
-            ILiquidityHub(liquidityHub).settleQueue(address(lcc0), queueRecipient),
-            "lcc0: MMQueueCustodian must mirror Hub queue for seizure locker"
+            ILiquidityHub(liquidityHub).settleQueue(address(lcc0), custodian),
+            "lcc0: beneficiary slice must match Hub queue for commit custodian"
         );
         assertEq(
             IMMQueueCustodian(custodian).queued(tokenId, address(lcc1), queueRecipient),
-            ILiquidityHub(liquidityHub).settleQueue(address(lcc1), queueRecipient),
-            "lcc1: MMQueueCustodian must mirror Hub queue for seizure locker"
+            ILiquidityHub(liquidityHub).settleQueue(address(lcc1), custodian),
+            "lcc1: beneficiary slice must match Hub queue for commit custodian"
         );
-        uint256 dq0 = ILiquidityHub(liquidityHub).settleQueue(address(lcc0), queueRecipient) - qLcc0Before;
-        uint256 dq1 = ILiquidityHub(liquidityHub).settleQueue(address(lcc1), queueRecipient) - qLcc1Before;
-        assertGt(dq0 + dq1, 0, "Primed seizure should stage non-zero retained principal to guarantor Hub queues");
+        uint256 dq0 = ILiquidityHub(liquidityHub).settleQueue(address(lcc0), custodian) - qLcc0Before;
+        uint256 dq1 = ILiquidityHub(liquidityHub).settleQueue(address(lcc1), custodian) - qLcc1Before;
+        assertGt(dq0 + dq1, 0, "Primed seizure should stage non-zero retained principal to commit custodian Hub queues");
         assertEq(
             dq0,
             IMMQueueCustodian(custodian).queued(tokenId, address(lcc0), queueRecipient) - custodyLcc0Before,
@@ -281,9 +281,9 @@ contract MMPositionManagerActionsTest is MarketTestBase, MarketMakerTestBase {
             "lcc1 Hub queue delta matches commit custody delta"
         );
         assertGt(
-            _queuedSumFor(queueRecipient),
+            _queuedSumFor(custodian),
             queuedSumBefore,
-            "Seizure should strictly increase guarantor queue when retained principal is non-zero"
+            "Seizure should increase commit custodian queue when retained principal is non-zero"
         );
     }
 
@@ -1136,9 +1136,9 @@ contract MMPositionManagerActionsTest is MarketTestBase, MarketMakerTestBase {
         );
 
         address lockerAddr = liquiditySignal.mmState.advancer;
-        address custodian = address(positionManager.queueCustodian());
+        address custodian = positionManager.custodianFor(positionManager.ownerOf(tokenId));
         uint256 queueBeforeLocker = _queuedSumFor(lockerAddr);
-        uint256 queueBeforeCustodianOwner = _queuedSumFor(custodian);
+        uint256 queueBeforeCommitOwner = _queuedSumFor(custodian);
         uint256 custodyBefore = _custodySumFor(tokenId, custodian, lockerAddr);
         uint256 walletLccBefore = _walletLccSum(lockerAddr);
 
@@ -1149,9 +1149,9 @@ contract MMPositionManagerActionsTest is MarketTestBase, MarketMakerTestBase {
         uint256 custodyDelta = _custodySumFor(tokenId, custodian, lockerAddr) - custodyBefore;
         uint256 walletLccAfter = _walletLccSum(lockerAddr);
 
-        assertGt(custodyDelta, 0, "Expected retained LCC to be recorded in shared custodian");
-        assertEq(_queuedSumFor(custodian), queueBeforeCustodianOwner, "Custodian must not own queue entries");
-        assertGe(_queuedSumFor(lockerAddr), queueBeforeLocker, "Locker queue ownership should never be redirected");
+        assertGt(custodyDelta, 0, "Expected retained LCC to be recorded in commit custodian");
+        assertGt(_queuedSumFor(custodian), queueBeforeCommitOwner, "Hub queue should be keyed to commit custodian");
+        assertEq(_queuedSumFor(lockerAddr), queueBeforeLocker, "Locker must not own synthetic principal queue");
         assertEq(walletLccAfter, walletLccBefore, "Queued retained LCC must not be transferred to locker wallet");
     }
 
@@ -1187,10 +1187,10 @@ contract MMPositionManagerActionsTest is MarketTestBase, MarketMakerTestBase {
         IERC20(lcc0.underlying()).transfer(guarantor, settleAmount0);
         IERC20(lcc1.underlying()).transfer(guarantor, settleAmount1);
 
-        address custodian = address(positionManager.queueCustodian());
-        uint256 queueBeforeGuarantor = _queuedSumFor(guarantor);
-        uint256 qLcc0BeforeGuarantor = ILiquidityHub(liquidityHub).settleQueue(address(lcc0), guarantor);
-        uint256 qLcc1BeforeGuarantor = ILiquidityHub(liquidityHub).settleQueue(address(lcc1), guarantor);
+        address custodian = positionManager.custodianFor(positionManager.ownerOf(tokenId));
+        uint256 queueBeforeCommitOwner = _queuedSumFor(custodian);
+        uint256 qLcc0BeforeGuarantor = ILiquidityHub(liquidityHub).settleQueue(address(lcc0), custodian);
+        uint256 qLcc1BeforeGuarantor = ILiquidityHub(liquidityHub).settleQueue(address(lcc1), custodian);
         uint256 custodyLcc0Before = IMMQueueCustodian(custodian).queued(tokenId, address(lcc0), guarantor);
         uint256 custodyLcc1Before = IMMQueueCustodian(custodian).queued(tokenId, address(lcc1), guarantor);
         address batchLocker = liquiditySignal.mmState.advancer;
@@ -1211,7 +1211,7 @@ contract MMPositionManagerActionsTest is MarketTestBase, MarketMakerTestBase {
             tokenId,
             custodian,
             guarantor,
-            queueBeforeGuarantor,
+            queueBeforeCommitOwner,
             qLcc0BeforeGuarantor,
             qLcc1BeforeGuarantor,
             custodyLcc0Before,
@@ -1224,9 +1224,8 @@ contract MMPositionManagerActionsTest is MarketTestBase, MarketMakerTestBase {
         );
     }
 
-    /// @notice `COLLECT_AVAILABLE_LIQUIDITY` is queue-gated via `LiquidityHub.settleFromCustodian`. After seizure,
-    ///         Hub `settleQueue` and commit custody align per leg; with **no market reserves** to fund withdrawal,
-    ///         collect returns nothing and must not debit custody (queued principal remains until liquidity exists).
+    /// @notice `COLLECT_AVAILABLE_LIQUIDITY` settles the commit custodian queue then forwards underlying. With **no**
+    ///         market-derived reserve to fund settlement, collect is a no-op and must not debit custody.
     function test_seize_whenGuarantorHasNoHubQueue_collectIsNoop_andDoesNotDrainCustody() public {
         uint256 positionIndex = 0;
 
@@ -1258,7 +1257,7 @@ contract MMPositionManagerActionsTest is MarketTestBase, MarketMakerTestBase {
         IERC20(lcc0.underlying()).transfer(guarantor, settleAmount0);
         IERC20(lcc1.underlying()).transfer(guarantor, settleAmount1);
 
-        IMMQueueCustodian qc = IMMQueueCustodian(address(positionManager.queueCustodian()));
+        IMMQueueCustodian qc = IMMQueueCustodian(positionManager.custodianFor(positionManager.ownerOf(tokenId)));
 
         vm.startPrank(guarantor);
         IERC20(lcc0.underlying()).approve(address(positionManager), type(uint256).max);
@@ -1273,12 +1272,12 @@ contract MMPositionManagerActionsTest is MarketTestBase, MarketMakerTestBase {
 
         assertEq(
             qc.queued(tokenId, address(lcc0), guarantor),
-            ILiquidityHub(liquidityHub).settleQueue(address(lcc0), guarantor),
+            ILiquidityHub(liquidityHub).settleQueue(address(lcc0), address(qc)),
             "lcc0 parity after seizure"
         );
         assertEq(
             qc.queued(tokenId, address(lcc1), guarantor),
-            ILiquidityHub(liquidityHub).settleQueue(address(lcc1), guarantor),
+            ILiquidityHub(liquidityHub).settleQueue(address(lcc1), address(qc)),
             "lcc1 parity after seizure"
         );
 
@@ -1335,7 +1334,7 @@ contract MMPositionManagerActionsTest is MarketTestBase, MarketMakerTestBase {
         IERC20(lcc0.underlying()).transfer(guarantor, settleAmount0);
         IERC20(lcc1.underlying()).transfer(guarantor, settleAmount1);
 
-        address custodian = address(positionManager.queueCustodian());
+        address custodian = positionManager.custodianFor(positionManager.ownerOf(tokenId));
 
         vm.startPrank(guarantor);
         IERC20(lcc0.underlying()).approve(address(positionManager), type(uint256).max);
@@ -1348,7 +1347,7 @@ contract MMPositionManagerActionsTest is MarketTestBase, MarketMakerTestBase {
         MMA.executeWithUnlock(positionManager, seizeActions, block.timestamp + 3600);
         vm.stopPrank();
 
-        uint256 q0 = ILiquidityHub(liquidityHub).settleQueue(address(lcc0), guarantor);
+        uint256 q0 = ILiquidityHub(liquidityHub).settleQueue(address(lcc0), custodian);
         assertGt(q0, 0, "primed seizure should stage non-zero token0 queue for collect");
 
         uint256 available = q0 / 4;
@@ -1362,7 +1361,7 @@ contract MMPositionManagerActionsTest is MarketTestBase, MarketMakerTestBase {
         vm.prank(marketFactory);
         ILiquidityHub(liquidityHub).setBoundLevel(address(positionManager), Bounds.BOUND_ENDPOINT);
 
-        uint256 hubBefore = ILiquidityHub(liquidityHub).settleQueue(address(lcc0), guarantor);
+        uint256 hubBefore = ILiquidityHub(liquidityHub).settleQueue(address(lcc0), custodian);
         uint256 custodyBefore = IMMQueueCustodian(custodian).queued(tokenId, address(lcc0), guarantor);
         assertEq(hubBefore, custodyBefore, "pre-collect: hub queue matches custody (lcc0)");
 
@@ -1375,7 +1374,7 @@ contract MMPositionManagerActionsTest is MarketTestBase, MarketMakerTestBase {
         vm.stopPrank();
 
         assertEq(
-            ILiquidityHub(liquidityHub).settleQueue(address(lcc0), guarantor),
+            ILiquidityHub(liquidityHub).settleQueue(address(lcc0), custodian),
             hubBefore - available,
             "queue should decrease by settled amount"
         );
@@ -1419,7 +1418,7 @@ contract MMPositionManagerActionsTest is MarketTestBase, MarketMakerTestBase {
         IERC20(lcc0.underlying()).transfer(guarantor, settleAmount0);
         IERC20(lcc1.underlying()).transfer(guarantor, settleAmount1);
 
-        address custodian = address(positionManager.queueCustodian());
+        address custodian = positionManager.custodianFor(positionManager.ownerOf(tokenId));
 
         vm.startPrank(guarantor);
         IERC20(lcc0.underlying()).approve(address(positionManager), type(uint256).max);
@@ -1434,12 +1433,12 @@ contract MMPositionManagerActionsTest is MarketTestBase, MarketMakerTestBase {
 
         assertEq(
             IMMQueueCustodian(custodian).queued(tokenId, address(lcc0), guarantor),
-            ILiquidityHub(liquidityHub).settleQueue(address(lcc0), guarantor),
+            ILiquidityHub(liquidityHub).settleQueue(address(lcc0), custodian),
             "lcc0 parity without priming"
         );
         assertEq(
             IMMQueueCustodian(custodian).queued(tokenId, address(lcc1), guarantor),
-            ILiquidityHub(liquidityHub).settleQueue(address(lcc1), guarantor),
+            ILiquidityHub(liquidityHub).settleQueue(address(lcc1), custodian),
             "lcc1 parity without priming"
         );
     }

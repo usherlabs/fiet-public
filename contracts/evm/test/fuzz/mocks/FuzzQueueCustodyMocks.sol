@@ -29,6 +29,7 @@ contract FuzzMMQueueCustodian is IMMQueueCustodian {
     address public override positionManager;
 
     mapping(uint256 tokenId => mapping(address lcc => mapping(address beneficiary => uint256 amount))) private _queued;
+    mapping(uint256 bucketId => uint256 total) private _bucketTotals;
 
     modifier onlyPositionManager() {
         if (msg.sender != positionManager) revert Errors.InvalidSender();
@@ -58,6 +59,11 @@ contract FuzzMMQueueCustodian is IMMQueueCustodian {
         if (beneficiary == address(0)) revert Errors.InvalidAddress(beneficiary);
         if (amount == 0) return;
         _queued[tokenId][lcc][beneficiary] += amount;
+        _bucketTotals[tokenId] += amount;
+    }
+
+    function isBucketEmpty(uint256 bucketId) external view override returns (bool) {
+        return _bucketTotals[bucketId] == 0;
     }
 
     function queued(uint256 tokenId, address lcc, address beneficiary) external view override returns (uint256) {
@@ -66,5 +72,11 @@ contract FuzzMMQueueCustodian is IMMQueueCustodian {
 
     function release(uint256, address, address, uint256) external pure override returns (uint256) {
         return 0;
+    }
+
+    function collectUnderlyingToBeneficiary(uint256, address, address, uint256) external pure override {}
+
+    function isEmpty() external pure override returns (bool) {
+        return true;
     }
 }

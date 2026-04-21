@@ -3,22 +3,27 @@ pragma solidity ^0.8.26;
 
 import {Currency} from "v4-periphery/lib/v4-core/src/types/Currency.sol";
 import {CurrencyTransfer} from "./libraries/CurrencyTransfer.sol";
+import {IERC20} from "openzeppelin-contracts/contracts/token/ERC20/IERC20.sol";
+import {SafeERC20} from "openzeppelin-contracts/contracts/token/ERC20/utils/SafeERC20.sol";
 import {IMMQueueCustodian} from "./interfaces/IMMQueueCustodian.sol";
 import {ILCC} from "./interfaces/ILCC.sol";
+import {ILiquidityHub} from "./interfaces/ILiquidityHub.sol";
 import {Errors} from "./libraries/Errors.sol";
 
 /// @title MMQueueCustodian
-/// @notice Shared custody for queued MM-backed LCC balances, bucketed by commitment token id and beneficiary
-/// @dev Beneficiary-scoped slices prevent cross-composition: Hub queue is per-(lcc, recipient); custody must
-///      align so COLLECT_AVAILABLE_LIQUIDITY cannot spend another recipient's LCC under the same tokenId.
+/// @notice Per-NFT-recipient queue owner: one custodian serves many commitment NFTs (`bucketId == tokenId`; utility uses `0`).
+/// @dev The Hub `settleQueue(lcc, address(this))` entry is owned by this contract; beneficiary-scoped `_queuedLcc`
+///      tracks who may collect underlying after `LiquidityHub.processSettlementFor` pays this contract.
 ///
 ///      Intended model:
-///      - `beneficiary` is always the MM batch locker whose `LiquidityHub.settleQueue(lcc, beneficiary)` entry
-///        was created for that staged principal (see `VTSPositionLib` queue recipient == hook `locker`).
-///      - Normal decreases: locker is the authorised party acting on the commitment (typically owner or approved operator).
-///      - Seizure decreases: locker is the seizer. Custody and queue (when present) both attribute to that locker.
+///      - `beneficiary` is the MM batch locker (owner, operator, or seizer) entitled to that staged principal slice.
+///      - `COLLECT_AVAILABLE_LIQUIDITY` settles LCC against the Hub queue for this custodian, then forwards underlying
+///        to the beneficiary via `collectUnderlyingToBeneficiary`.
+///      - `unwrapLccViaHub` calls Hub `unwrap` as this contract (queue owner == `address(this)`), then forwards any
+///        immediately-received underlying to `forwardUnderlyingTo` (typically MMPM for native, locker or MMPM for ERC20).
 contract MMQueueCustodian is IMMQueueCustodian {
     using CurrencyTransfer for Currency;
+    using SafeERC20 for IERC20;
 
     /// @notice Beneficiary-scoped custody increased (MM-backed LCC staged for later Hub settlement).
     event CustodyRecorded(uint256 indexed tokenId, address indexed lcc, address indexed beneficiary, uint256 amount);
@@ -26,9 +31,18 @@ contract MMQueueCustodian is IMMQueueCustodian {
     /// @notice Beneficiary-scoped custody decreased and LCC transferred out.
     event CustodyReleased(uint256 indexed tokenId, address indexed lcc, address indexed beneficiary, uint256 amount);
 
+    /// @notice Underlying paid out after Hub settlement burned custodied LCC against this contract.
+    event UnderlyingPaid(uint256 indexed tokenId, address indexed lcc, address indexed beneficiary, uint256 amount);
+
     /// @notice One-time authoriser allowed to bind the position manager.
     address public authorisedBinder;
     address public override positionManager;
+
+    /// @dev Tracks aggregate recorded slices for `isEmpty()` / global guards (must match maintained mapping ops).
+    uint256 private _totalQueuedSlices;
+
+    /// @dev Per-bucket aggregate for `isBucketEmpty(bucketId)` (decommit / transfer guards).
+    mapping(uint256 bucketId => uint256) private _bucketQueuedTotal;
 
     // tokenId => lcc => beneficiary => queued custody balance
     mapping(uint256 tokenId => mapping(address lcc => mapping(address beneficiary => uint256 amount))) private
@@ -38,6 +52,9 @@ contract MMQueueCustodian is IMMQueueCustodian {
         if (msg.sender != positionManager) revert Errors.InvalidSender();
         _;
     }
+
+    /// @dev Accept native underlying from `LiquidityHub` settlement for native-backed LCC markets.
+    receive() external payable {}
 
     constructor(address _authorisedBinder) {
         if (_authorisedBinder == address(0)) revert Errors.InvalidAddress(_authorisedBinder);
@@ -54,16 +71,100 @@ contract MMQueueCustodian is IMMQueueCustodian {
         authorisedBinder = address(0);
     }
 
+    /// @inheritdoc IMMQueueCustodian
     function record(uint256 tokenId, address lcc, address beneficiary, uint256 amount)
         external
         override
         onlyPositionManager
     {
+        _record(tokenId, lcc, beneficiary, amount);
+    }
+
+    function _record(uint256 tokenId, address lcc, address beneficiary, uint256 amount) private {
         if (lcc == address(0)) revert Errors.InvalidAddress(lcc);
         if (beneficiary == address(0)) revert Errors.InvalidAddress(beneficiary);
         if (amount == 0) return;
         _queuedLcc[tokenId][lcc][beneficiary] += amount;
+        _totalQueuedSlices += amount;
+        _bucketQueuedTotal[tokenId] += amount;
         emit CustodyRecorded(tokenId, lcc, beneficiary, amount);
+    }
+
+    /// @notice Hub `unwrap` as this contract: shortfall queues to `address(this)`; immediate underlying is forwarded to `forwardUnderlyingTo`.
+    /// @dev `MMPM` must transfer `amount` LCC to this contract before calling. Native: forward to MMPM (`positionManager`) for delta credit; ERC20: forward per MM routing (`to` or MMPM).
+    function unwrapLccViaHub(
+        address lcc,
+        address forwardUnderlyingTo,
+        address beneficiary,
+        uint256 bucketId,
+        uint256 amount,
+        ILiquidityHub hub
+    ) external onlyPositionManager {
+        if (amount == 0) return;
+        if (forwardUnderlyingTo == address(0)) revert Errors.InvalidAddress(forwardUnderlyingTo);
+
+        address underlying = ILCC(lcc).underlying();
+        uint256 uBalBefore =
+            underlying == address(0) ? address(this).balance : IERC20(underlying).balanceOf(address(this));
+
+        uint256 qBefore = hub.settleQueue(lcc, address(this));
+        hub.unwrap(lcc, amount);
+        uint256 queuedDelta = hub.settleQueue(lcc, address(this)) - qBefore;
+
+        uint256 uBalAfter =
+            underlying == address(0) ? address(this).balance : IERC20(underlying).balanceOf(address(this));
+        uint256 immediateReceived = uBalAfter - uBalBefore;
+
+        if (queuedDelta > 0) {
+            uint256 bal = IERC20(lcc).balanceOf(address(this));
+            if (bal < queuedDelta) revert Errors.InsufficientBalance(bal, queuedDelta);
+            _record(bucketId, lcc, beneficiary, queuedDelta);
+        }
+
+        if (immediateReceived > 0) {
+            if (underlying == address(0)) {
+                (bool ok,) = forwardUnderlyingTo.call{value: immediateReceived}("");
+                if (!ok) revert Errors.InvalidAmount(immediateReceived, 0);
+            } else {
+                IERC20(underlying).safeTransfer(forwardUnderlyingTo, immediateReceived);
+            }
+        }
+    }
+
+    /// @inheritdoc IMMQueueCustodian
+    function collectUnderlyingToBeneficiary(uint256 tokenId, address lcc, address beneficiary, uint256 amount)
+        external
+        override
+        onlyPositionManager
+    {
+        if (beneficiary == address(0)) revert Errors.InvalidAddress(beneficiary);
+        if (lcc == address(0)) revert Errors.InvalidAddress(lcc);
+        if (amount == 0) return;
+
+        uint256 q = _queuedLcc[tokenId][lcc][beneficiary];
+        if (amount > q) revert Errors.InsufficientBalance(q, amount);
+        _queuedLcc[tokenId][lcc][beneficiary] = q - amount;
+        _totalQueuedSlices -= amount;
+        _bucketQueuedTotal[tokenId] -= amount;
+
+        address underlying = ILCC(lcc).underlying();
+        if (underlying == address(0)) {
+            (bool ok,) = beneficiary.call{value: amount}("");
+            if (!ok) revert Errors.InvalidAmount(amount, 0);
+        } else {
+            IERC20(underlying).safeTransfer(beneficiary, amount);
+        }
+        emit UnderlyingPaid(tokenId, lcc, beneficiary, amount);
+    }
+
+    /// @inheritdoc IMMQueueCustodian
+    function isEmpty() external view override returns (bool) {
+        return _totalQueuedSlices == 0 && address(this).balance == 0;
+    }
+
+    /// @inheritdoc IMMQueueCustodian
+    function isBucketEmpty(uint256 bucketId) external view override returns (bool) {
+        return _bucketQueuedTotal[bucketId] == 0;
     }
 
     // Releases LCC to recipient before processSettlementFor is called.
@@ -85,6 +186,8 @@ contract MMQueueCustodian is IMMQueueCustodian {
         if (released == 0) return 0;
 
         _queuedLcc[tokenId][lcc][beneficiary] = available - released;
+        _totalQueuedSlices -= released;
+        _bucketQueuedTotal[tokenId] -= released;
         emit CustodyReleased(tokenId, lcc, beneficiary, released);
         Currency.wrap(lcc).transfer(beneficiary, released);
     }

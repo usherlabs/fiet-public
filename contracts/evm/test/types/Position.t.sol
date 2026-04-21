@@ -21,19 +21,21 @@ contract PositionTypeTest_Autocover is Test {
     }
 
     function test_hookData_encodeDecode_roundTrip() public view {
-        bytes memory encoded = h.encodeHookData(1, 2, address(3));
+        bytes memory encoded = h.encodeHookData(1, 2, address(3), address(4));
         PositionModificationHookData memory d = h.decodeHookData(encoded);
         assertEq(d.commitId, 1);
         assertEq(d.positionIndex, 2);
         assertEq(d.locker, address(3));
+        assertEq(d.queueRecipient, address(4));
     }
 
     function test_hookData_encodeSeizure_setsSeizureFields() public view {
-        bytes memory encoded = h.encodeSeizureHookData(11, 22, address(33), int128(-7), int128(9));
+        bytes memory encoded = h.encodeSeizureHookData(11, 22, address(33), address(44), int128(-7), int128(9));
         PositionModificationHookData memory d = h.decodeHookData(encoded);
         assertEq(d.commitId, 11);
         assertEq(d.positionIndex, 22);
         assertEq(d.locker, address(33));
+        assertEq(d.queueRecipient, address(44));
         assertTrue(d.seizure.isSeizing);
         assertEq(d.seizure.settle0, int128(-7));
         assertEq(d.seizure.settle1, int128(9));
@@ -44,6 +46,7 @@ contract PositionTypeTest_Autocover is Test {
         assertEq(d.commitId, 0);
         assertEq(d.positionIndex, 0);
         assertEq(d.locker, address(0));
+        assertEq(d.queueRecipient, address(0));
         assertFalse(d.seizure.isSeizing);
         assertEq(d.seizure.settle0, 0);
         assertEq(d.seizure.settle1, 0);
@@ -55,6 +58,7 @@ contract PositionTypeTest_Autocover is Test {
         assertEq(d.commitId, 0);
         assertEq(d.positionIndex, 0);
         assertEq(d.locker, address(0));
+        assertEq(d.queueRecipient, address(0));
         assertFalse(d.seizure.isSeizing);
         assertEq(d.extraData.length, 0);
     }
@@ -63,12 +67,12 @@ contract PositionTypeTest_Autocover is Test {
         PositionModificationHookData memory d0 = h.decodeHookData("");
         assertFalse(h.isMMOperation(d0));
 
-        PositionModificationHookData memory d1 = h.decodeHookData(h.encodeHookData(1, 0, address(0)));
+        PositionModificationHookData memory d1 = h.decodeHookData(h.encodeHookData(1, 0, address(0x1), address(0x2)));
         assertTrue(h.isMMOperation(d1));
     }
 
     function test_hookData_getLocker_revertsWhenUnset() public {
-        PositionModificationHookData memory d = h.decodeHookData(h.encodeHookData(1, 2, address(0)));
+        PositionModificationHookData memory d = h.decodeHookData(h.encodeHookData(1, 2, address(0), address(0x1)));
         vm.expectRevert(
             abi.encodeWithSelector(
                 Errors.InvariantViolated.selector, "MM Operation: locker must be passed into hookdata"
@@ -76,8 +80,21 @@ contract PositionTypeTest_Autocover is Test {
         );
         h.getLocker(d);
 
-        PositionModificationHookData memory d2 = h.decodeHookData(h.encodeHookData(1, 2, address(456)));
+        PositionModificationHookData memory d2 = h.decodeHookData(h.encodeHookData(1, 2, address(456), address(789)));
         assertEq(h.getLocker(d2), address(456));
+    }
+
+    function test_hookData_getQueueRecipient_revertsWhenUnset() public {
+        PositionModificationHookData memory d = h.decodeHookData(h.encodeHookData(1, 2, address(0x1), address(0)));
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                Errors.InvariantViolated.selector, "MM Operation: queueRecipient must be passed into hookdata"
+            )
+        );
+        h.getQueueRecipient(d);
+
+        PositionModificationHookData memory d2 = h.decodeHookData(h.encodeHookData(1, 2, address(456), address(789)));
+        assertEq(h.getQueueRecipient(d2), address(789));
     }
 
     function test_generateSalt_isDeterministic() public view {

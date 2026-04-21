@@ -6,7 +6,6 @@ import {LCCFactoryLib} from "./LCCFactoryLib.sol";
 import {Math} from "openzeppelin-contracts/contracts/utils/math/Math.sol";
 import {Errors} from "./Errors.sol";
 import {IMarketFactory} from "../interfaces/IMarketFactory.sol";
-import {IQueueCustodian} from "../interfaces/IQueueCustodian.sol";
 import {Currency} from "v4-periphery/lib/v4-core/src/types/Currency.sol";
 import {CurrencyTransfer} from "./CurrencyTransfer.sol";
 import {IWETH9} from "v4-periphery/src/interfaces/external/IWETH9.sol";
@@ -666,46 +665,6 @@ library LiquidityHubLib {
         } else {
             underlyingCurrency.approve(issuer, amount);
         }
-    }
-
-    /// @dev `custodian` must implement `IQueueCustodian`. `tokenId` is the custodian bucket id (commitment id or utility sentinel).
-    function settleFromCustodian(
-        LiquidityHubStorage storage s,
-        address lcc,
-        address custodian,
-        uint256 tokenId,
-        address recipient,
-        uint256 maxAmount
-    ) internal returns (uint256 settled) {
-        if (recipient == address(0) || custodian == address(0) || maxAmount == 0) {
-            return 0;
-        }
-        if (custodian.code.length == 0) {
-            return 0;
-        }
-
-        IQueueCustodian queueCustodian = IQueueCustodian(custodian);
-        uint256 queued = s.settleQueue[lcc][recipient];
-        if (queued == 0) return 0;
-
-        address underlying = s.lccToUnderlying[lcc];
-        uint256 available = s.reserveOfUnderlying[underlying].marketDerived;
-        uint256 custodied;
-        try queueCustodian.queued(tokenId, lcc, recipient) returns (uint256 q) {
-            custodied = q;
-        } catch {
-            return 0;
-        }
-
-        settled = Math.min(Math.min(queued, available), Math.min(maxAmount, custodied));
-        if (settled == 0) return 0;
-
-        try queueCustodian.release(tokenId, lcc, recipient, settled) returns (uint256 released) {
-            settled = released;
-        } catch {
-            return 0;
-        }
-        if (settled == 0) return 0;
     }
 
     function annulSettlementBeforeTransfer(

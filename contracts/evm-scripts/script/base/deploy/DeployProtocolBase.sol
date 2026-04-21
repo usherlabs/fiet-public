@@ -7,7 +7,6 @@ import {PositionManager} from "v4-periphery/src/PositionManager.sol";
 import {CoreHook} from "src/CoreHook.sol";
 import {MarketFactory} from "src/MarketFactory.sol";
 import {HookFlags} from "src/libraries/HookFlags.sol";
-import {MMQueueCustodian} from "src/MMQueueCustodian.sol";
 import {MMPositionManager} from "src/MMPositionManager.sol";
 import {MMPositionActionsImpl} from "src/MMPositionActionsImpl.sol";
 import {VRLSignalManager} from "src/VRLSignalManager.sol";
@@ -38,7 +37,6 @@ abstract contract DeployProtocolBase is CREATE3Script, NetworkConfig {
     string internal constant VTS_ORCHESTRATOR = "VTSOrchestrator";
     string internal constant COMMITMENT_DESCRIPTOR = "MMPCommitmentDescriptor";
     string internal constant ACTIONS_IMPL = "MMPositionActionsImpl";
-    string internal constant QUEUE_CUSTODIAN = "MMQueueCustodian";
     string internal constant MM_POSITION_MANAGER = "MMPositionManager";
     string internal constant DIRECT_LP_DELTA_RESOLVER = "DirectLPDeltaResolver";
     string internal constant MARKET_FACTORY = "MarketFactory";
@@ -169,9 +167,8 @@ abstract contract DeployProtocolBase is CREATE3Script, NetworkConfig {
         address marketFactory,
         address vtsOrchestrator,
         address commitmentDescriptor,
-        address queueBinder,
         address canonicalVaultAddr
-    ) internal returns (address actionsImpl, address queueCustodian, address mmPositionManager) {
+    ) internal returns (address actionsImpl, address mmPositionManager) {
         address weth9 = address(PositionManager(payable(config.positionManager)).WETH9());
         address permit2 = address(PositionManager(payable(config.positionManager)).permit2());
 
@@ -181,10 +178,6 @@ abstract contract DeployProtocolBase is CREATE3Script, NetworkConfig {
                 type(MMPositionActionsImpl).creationCode,
                 abi.encode(config.poolManager, marketFactory, vtsOrchestrator, canonicalVaultAddr)
             )
-        );
-
-        queueCustodian = _deployCreate3(
-            QUEUE_CUSTODIAN, abi.encodePacked(type(MMQueueCustodian).creationCode, abi.encode(queueBinder))
         );
 
         mmPositionManager = _deployCreate3(
@@ -200,14 +193,11 @@ abstract contract DeployProtocolBase is CREATE3Script, NetworkConfig {
                         descriptor: commitmentDescriptor,
                         weth9: IWETH9(weth9),
                         permit2: IAllowanceTransfer(permit2),
-                        actionsImpl: actionsImpl,
-                        queueCustodianAddr: queueCustodian
+                        actionsImpl: actionsImpl
                     })
                 )
             )
         );
-
-        MMQueueCustodian(queueCustodian).setPositionManager(mmPositionManager);
     }
 
     function _deployDirectLPDeltaResolver(address liquidityHub) internal returns (address) {
@@ -255,15 +245,14 @@ abstract contract DeployProtocolBase is CREATE3Script, NetworkConfig {
         address canonicalVaultAddr,
         address coreHook,
         address mmPositionManager,
-        address queueCustodian,
         address directLPDeltaResolver
     ) internal {
-        uint256 n = directLPDeltaResolver == address(0) ? 2 : 3;
+        uint256 n = directLPDeltaResolver == address(0) ? 1 : 2;
         address[] memory initialBounds = new address[](n);
+        // Generic protocol endpoint bootstrap for `MarketFactory.initialise` (not a special MM–custodian binding slot).
         initialBounds[0] = mmPositionManager;
-        initialBounds[1] = queueCustodian;
-        if (n == 3) {
-            initialBounds[2] = directLPDeltaResolver;
+        if (n == 2) {
+            initialBounds[1] = directLPDeltaResolver;
         }
         GlobalConfig(globalConfig)
             .proxyCall(

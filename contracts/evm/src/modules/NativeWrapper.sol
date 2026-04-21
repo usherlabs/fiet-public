@@ -6,6 +6,7 @@ import {IWETH9} from "v4-periphery/src/interfaces/external/IWETH9.sol";
 import {Errors} from "../libraries/Errors.sol";
 import {IMarketFactory} from "../interfaces/IMarketFactory.sol";
 import {ILiquidityHub} from "../interfaces/ILiquidityHub.sol";
+import {IMMQueueCustodian} from "../interfaces/IMMQueueCustodian.sol";
 
 /// @title FietNativeWrapper
 /// @notice Used for wrapping and unwrapping native assets in PositionManagers.
@@ -29,6 +30,14 @@ abstract contract FietNativeWrapper is UniNativeWrapper {
         // Allow canonical Hub-native payouts (e.g. native LCC unwrap-to-self in MMPM).
         if (msg.sender == address(_liquidityHub())) {
             return;
+        }
+
+        // Native-backed LCC unwrap: `MMQueueCustodian` forwards immediate ETH from Hub to this manager for delta credit.
+        if (msg.sender.code.length > 0) {
+            (bool ok, bytes memory data) = msg.sender.staticcall(abi.encodeCall(IMMQueueCustodian.positionManager, ()));
+            if (ok && data.length >= 32 && abi.decode(data, (address)) == address(this)) {
+                return;
+            }
         }
 
         IMarketFactory factory = _canonicalMarketFactory();

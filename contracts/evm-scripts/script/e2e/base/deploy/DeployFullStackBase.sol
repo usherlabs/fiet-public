@@ -42,7 +42,6 @@ abstract contract DeployFullStackBase is DeployProtocolBase {
         address coreHook;
         address marketFactory;
         address mmPositionManager;
-        address queueCustodian;
         address oracleHelper;
         address payable liquidityHub;
         address signalManager;
@@ -176,11 +175,10 @@ abstract contract DeployFullStackBase is DeployProtocolBase {
         out.contracts.commitmentDescriptor = _deployCommitmentDescriptor();
 
         // 13) MMPositionActionsImpl + MMQueueCustodian + MMPositionManager
-        (out.contracts.actionsImpl, out.contracts.queueCustodian, out.contracts.mmPositionManager) = _deployMMStack(
+        (out.contracts.actionsImpl, out.contracts.mmPositionManager) = _deployMMStack(
             out.contracts.marketFactory,
             out.contracts.vtsOrchestrator,
             out.contracts.commitmentDescriptor,
-            deployer,
             out.contracts.canonicalVault
         );
 
@@ -194,7 +192,6 @@ abstract contract DeployFullStackBase is DeployProtocolBase {
             out.contracts.canonicalVault,
             out.contracts.coreHook,
             out.contracts.mmPositionManager,
-            out.contracts.queueCustodian,
             out.contracts.directLPDeltaResolver
         );
 

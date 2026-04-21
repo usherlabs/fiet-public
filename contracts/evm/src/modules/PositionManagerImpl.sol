@@ -18,7 +18,6 @@ import {PositionManagerBase} from "./PositionManagerBase.sol";
 import {SafeCast} from "v4-periphery/lib/v4-core/src/libraries/SafeCast.sol";
 import {Math} from "openzeppelin-contracts/contracts/utils/math/Math.sol";
 import {IMarketFactory} from "../interfaces/IMarketFactory.sol";
-import {IMMQueueCustodian} from "../interfaces/IMMQueueCustodian.sol";
 import {MarketHandlerLib} from "../libraries/MarketHandlerLib.sol";
 
 /**
@@ -36,6 +35,10 @@ abstract contract PositionManagerImpl is PositionManagerBase, ImmutableState {
         ImmutableState(_poolManager)
         PositionManagerBase(_marketFactory, _vtsOrchestrator, _canonicalCustody)
     {}
+
+    /// @notice LiquidityHub `settleQueue(lcc, recipient)` key for measuring `qCommitted` on MM takes (queue owner).
+    /// @dev Implemented by `MMPositionActionsImpl` to return the recipient-keyed `MMQueueCustodian` address.
+    function _queueSettleRecipient(uint256 tokenId) internal virtual returns (address);
 
     // ------------------------------------------------------------------------------------------------
     // CREDIT HELPERS
@@ -246,7 +249,7 @@ abstract contract PositionManagerImpl is PositionManagerBase, ImmutableState {
     }
 
     /// @dev One positive leg: `take` then, for LCC, classify receipt and forward using Hub queue delta for `qCommitted`.
-    ///      `qCommitted = settleQueue_after − settleQueue_before` for `(lcc, locker)`; this attribution is sound only
+    ///      `qCommitted = settleQueue_after − settleQueue_before` for `(lcc, queueOwner)`; this attribution is sound only
     ///      when no other operation mutates that queue entry between the two reads (same adjacency assumption as the
     ///      former orchestrator transient mirror).
     function _takePositiveDeltaAndHandleLccIfLcc(
@@ -262,13 +265,14 @@ abstract contract PositionManagerImpl is PositionManagerBase, ImmutableState {
 
         uint256 balanceBefore = currency.balanceOfSelf();
         address lccAddr = Currency.unwrap(currency);
-        uint256 qBefore = _isLCC(currency) ? liquidityHub.settleQueue(lccAddr, locker) : 0;
+        address queueOwner = _queueSettleRecipient(tokenId);
+        uint256 qBefore = _isLCC(currency) ? liquidityHub.settleQueue(lccAddr, queueOwner) : 0;
         currency.take(poolManager, self, LiquidityUtils.safeInt128ToUint256(delta), false);
         uint256 balanceAfter = currency.balanceOfSelf();
 
         if (!_isLCC(currency)) return 0;
 
-        uint256 qCommitted = liquidityHub.settleQueue(lccAddr, locker) - qBefore;
+        uint256 qCommitted = liquidityHub.settleQueue(lccAddr, queueOwner) - qBefore;
         return _handleLccBalanceIncrease(
             key, currency, balanceBefore, balanceAfter, feesAccruedAmount, locker, tokenId, qCommitted
         );
@@ -285,7 +289,7 @@ abstract contract PositionManagerImpl is PositionManagerBase, ImmutableState {
         uint256 tokenId
     ) internal returns (BalanceDelta mmForwardedNonFeeForMinOut) {
         // Take positive deltas: receive tokens owed from PoolManager (LP is withdrawing).
-        // For LCC legs, `executePlannedCancel` runs during the `take` and bumps `LiquidityHub.settleQueue(lcc, locker)`.
+        // For LCC legs, `executePlannedCancel` runs during the `take` and bumps `LiquidityHub.settleQueue(lcc, queueOwner)`.
         // Snapshot queue before/after each `take` so commit custody (`qCommitted`) matches that durable increment.
         uint256 n0 = _takePositiveDeltaAndHandleLccIfLcc(
             key, self, key.currency0, delta0, feesAccrued.amount0(), locker, tokenId

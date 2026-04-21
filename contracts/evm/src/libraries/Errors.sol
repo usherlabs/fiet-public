@@ -214,6 +214,14 @@ library Errors {
     /// @param tokenId The commitment NFT id (commit id)
     error CommitNotDrained(uint256 tokenId);
 
+    /// @notice Thrown when decommit or NFT transfer is blocked because the commitment bucket still has custodied queue slices
+    /// @param tokenId The commitment NFT id (commit id)
+    error CommitCustodyNotDrained(uint256 tokenId);
+
+    /// @notice Thrown when a queue custodian is required for `recipient` but has not been deployed (only created on `commitSignal`)
+    /// @param recipient The NFT recipient / locker domain that must already have a custodian
+    error QueueCustodianNotDeployed(address recipient);
+
     // ============ PAUSE & STATE ERRORS ============
     // Errors related to contract pause state and state transitions
 

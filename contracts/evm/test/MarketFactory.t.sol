@@ -18,7 +18,6 @@ import {HookFlags} from "../src/libraries/HookFlags.sol";
 import {HookMiner} from "v4-periphery/src/utils/HookMiner.sol";
 import {MMPositionManager} from "../src/MMPositionManager.sol";
 import {MMPositionActionsImpl} from "../src/MMPositionActionsImpl.sol";
-import {MMQueueCustodian} from "../src/MMQueueCustodian.sol";
 import {VTSConfigs} from "../src/libraries/VTSConfigs.sol";
 import {IOracleHelper} from "../src/interfaces/IOracleHelper.sol";
 import {WETH} from "@uniswap/v4-core/lib/solmate/src/tokens/WETH.sol";
@@ -107,8 +106,6 @@ contract MarketFactoryTest is Test, Deployers {
         MMPositionActionsImpl actionsImpl = new MMPositionActionsImpl(
             address(poolManager), address(factory), address(vtsOrchestrator), address(canonicalVault)
         );
-        MMQueueCustodian queueCustodian = new MMQueueCustodian(address(this));
-
         vm.prank(owner);
         positionManager = new MMPositionManager(
             MMPositionManager.MMPositionManagerInit({
@@ -119,11 +116,9 @@ contract MarketFactoryTest is Test, Deployers {
                 descriptor: commitmentDescriptor,
                 weth9: weth9,
                 permit2: permit2,
-                actionsImpl: address(actionsImpl),
-                queueCustodianAddr: address(queueCustodian)
+                actionsImpl: address(actionsImpl)
             })
         );
-        queueCustodian.setPositionManager(address(positionManager));
 
         // Deploy CoreHook at computed address
         deployCodeTo(

@@ -574,23 +574,6 @@ contract LiquidityHubWrapTest is LiquidityHubTestBase {
         assertEq(lcc.balanceOf(user1), 0, "LCC should be burned");
     }
 
-    /// @notice Tests that unwrapTo still works for external recipients
-    function testUnwrapToExternalRecipient() public {
-        uint256 wrapAmount = 100;
-
-        // Wrap
-        _wrapDirectLCC(user1, lccToken1, wrapAmount);
-
-        // Unwrap to different recipient (endpoint-mediated on-behalf-of surface)
-        _setBoundLevel(user1, Bounds.BOUND_ENDPOINT);
-        vm.prank(user1);
-        liquidityHub.unwrapTo(lccToken1, user2, wrapAmount);
-
-        // Verify user2 received underlying
-        assertEq(underlyingAsset1.balanceOf(user2), wrapAmount, "user2 should receive underlying");
-        assertEq(underlyingAsset1.balanceOf(user1), 0, "user1 should not have underlying");
-    }
-
     /// @notice Tests unwrap reverts with zero amount
     function testUnwrapRevertsWithZeroAmount() public {
         uint256 wrapAmount = 100;

@@ -60,7 +60,7 @@ contract Phase1QuarantineTest is VTSOrchestratorFixture {
         });
 
         address locker = liquiditySignal.mmState.owner;
-        bytes memory hookData = PositionModificationHookDataLib.encode(tokenId, 0, locker);
+        bytes memory hookData = PositionModificationHookDataLib.encode(tokenId, 0, locker, address(0xB0B));
 
         vm.prank(coreHookAddress);
         (, PositionId id, bool isMMPosition) = vtsOrchestrator.processPosition(

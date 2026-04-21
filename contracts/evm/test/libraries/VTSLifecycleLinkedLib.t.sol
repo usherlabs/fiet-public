@@ -499,7 +499,7 @@ contract VTSLifecycleLinkedLibTest is Test {
     }
 
     function test_validateMMOperation_returnsFalseWhenCommitIdZero() public view {
-        bytes memory hook = PositionModificationHookDataLib.encode(0, 0, address(0x1));
+        bytes memory hook = PositionModificationHookDataLib.encode(0, 0, address(0x1), address(0));
         assertFalse(harness.validateMMOperation(_coreCtx(), boundCaller, poolKey, hook));
     }
 
@@ -507,7 +507,7 @@ contract VTSLifecycleLinkedLibTest is Test {
         harness.testSeedCommit(5, mmOwner, advancer, block.timestamp + 1 days, boundCaller);
         vm.warp(block.timestamp + 2 days);
 
-        bytes memory hook = PositionModificationHookDataLib.encode(5, 0, advancer);
+        bytes memory hook = PositionModificationHookDataLib.encode(5, 0, advancer, address(0xB0B));
         vm.mockCall(
             address(hub),
             abi.encodeWithSelector(ILiquidityHub.getFactory.selector, Currency.unwrap(c0), Currency.unwrap(c1)),
@@ -523,7 +523,7 @@ contract VTSLifecycleLinkedLibTest is Test {
         uint256 expires = block.timestamp + 7 days;
         harness.testSeedCommit(3, mmOwner, advancer, expires, boundCaller);
 
-        bytes memory hook = PositionModificationHookDataLib.encode(3, 0, advancer);
+        bytes memory hook = PositionModificationHookDataLib.encode(3, 0, advancer, address(0xB0B));
         vm.mockCall(
             address(hub),
             abi.encodeWithSelector(ILiquidityHub.getFactory.selector, Currency.unwrap(c0), Currency.unwrap(c1)),
@@ -548,7 +548,7 @@ contract VTSLifecycleLinkedLibTest is Test {
         uint256 expires = block.timestamp + 7 days;
         harness.testSeedCommit(8, mmOwner, advancer, expires, boundCaller);
 
-        bytes memory hook = PositionModificationHookDataLib.encode(8, 0, advancer);
+        bytes memory hook = PositionModificationHookDataLib.encode(8, 0, advancer, address(0xB0B));
         vm.mockCall(
             address(hub),
             abi.encodeWithSelector(ILiquidityHub.getFactory.selector, Currency.unwrap(c0), Currency.unwrap(c1)),
@@ -576,7 +576,8 @@ contract VTSLifecycleLinkedLibTest is Test {
         uint256 expires = block.timestamp + 7 days;
         harness.testSeedCommit(9, mmOwner, advancer, expires, boundCaller);
 
-        bytes memory hook = PositionModificationHookDataLib.encodeSeizure(9, 0, makeAddr("seizerLocker"), 0, 0);
+        bytes memory hook =
+            PositionModificationHookDataLib.encodeSeizure(9, 0, makeAddr("seizerLocker"), address(0xB0B), 0, 0);
         vm.mockCall(
             address(hub),
             abi.encodeWithSelector(ILiquidityHub.getFactory.selector, Currency.unwrap(c0), Currency.unwrap(c1)),
@@ -602,7 +603,7 @@ contract VTSLifecycleLinkedLibTest is Test {
         uint256 expires = block.timestamp + 7 days;
         harness.testSeedCommit(4, mmOwner, advancer, expires, boundCaller);
 
-        bytes memory hook = PositionModificationHookDataLib.encode(4, 0, makeAddr("badLocker"));
+        bytes memory hook = PositionModificationHookDataLib.encode(4, 0, makeAddr("badLocker"), address(0xB0B));
         vm.mockCall(
             address(hub),
             abi.encodeWithSelector(ILiquidityHub.getFactory.selector, Currency.unwrap(c0), Currency.unwrap(c1)),
@@ -627,7 +628,8 @@ contract VTSLifecycleLinkedLibTest is Test {
         uint256 expires = block.timestamp + 7 days;
         harness.testSeedCommit(6, mmOwner, advancer, expires, boundCaller);
 
-        bytes memory hook = PositionModificationHookDataLib.encodeSeizure(6, 0, makeAddr("badLocker"), 0, 0);
+        bytes memory hook =
+            PositionModificationHookDataLib.encodeSeizure(6, 0, makeAddr("badLocker"), address(0xB0B), 0, 0);
         vm.mockCall(
             address(hub),
             abi.encodeWithSelector(ILiquidityHub.getFactory.selector, Currency.unwrap(c0), Currency.unwrap(c1)),
@@ -653,7 +655,7 @@ contract VTSLifecycleLinkedLibTest is Test {
         uint256 expires = block.timestamp + 7 days;
         harness.testSeedCommit(7, mmOwner, advancer, expires, boundCaller);
 
-        bytes memory hook = PositionModificationHookDataLib.encode(7, 0, advancer);
+        bytes memory hook = PositionModificationHookDataLib.encode(7, 0, advancer, address(0xB0B));
         vm.mockCall(
             address(hub),
             abi.encodeWithSelector(ILiquidityHub.getFactory.selector, Currency.unwrap(c0), Currency.unwrap(c1)),

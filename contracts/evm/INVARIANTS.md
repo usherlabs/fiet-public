@@ -229,43 +229,50 @@ being an informal “should”.
   `settleQueue[lcc][queueTo]` remains correct because both the liquid balance and the queue refer to the same economic
   slice for the beneficiary.
 
-### HUB-02A: `unwrapTo` is endpoint-only (on-behalf-of); direct users use `unwrap`
+### HUB-02A: MM queue custody uses custodian self-unwrap (`unwrap`); Hub has no `unwrapTo`
 
-- **Statement**: Every `LiquidityHub.unwrapTo(...)` overload requires `msg.sender` to be `BOUND_ENDPOINT` in the
-  resolved LCC’s market factory namespace (`boundLevelOfLcc(lcc, msg.sender) == BOUND_ENDPOINT`). Bucket-exempt and
-  DEX tiers are not admitted via `unwrapTo`. End users unwrap with `unwrap(...)` / `unwrap(underlying, marketId, ...)`,
-  which may queue **market-derived** shortfall to the caller (wrapped/direct shortfall reverts instead).
-- **Enforced by**: `src/LiquidityHub.sol::_onlyUnwrapToEndpoint` on each `unwrapTo` entrypoint before `_unwrap`.
-- **Trusted endpoint contract**:
-  - `unwrapTo(lcc, to, queueTo, ...)` is an on-behalf-of primitive, not a generic convenience wrapper over `unwrap`.
-  - The endpoint must call it only after it has already consumed/escrowed beneficiary-linked value (for example locker
-    LCC or delta credit) for `queueTo`, so the caller-held LCC slice economically represents that beneficiary.
-  - Under that precondition, HUB-02 headroom netting against `settleQueue[lcc][queueTo]` is correct because the queue is
-    already encumbering the same caller-held slice.
-  - Current intended caller: `MMPositionManager`, which consumes locker/user LCC or delta credit before calling
-    `unwrapTo`.
-  - **Post-shortfall custody (`UNWRAP_LCC`)**: Queued shortfall does not burn LCC at queue time; any LCC that remains on
-    the endpoint after `unwrapTo` must not sit on `MMPositionManager` as unscoped router residue (**DELTA-02**). After
-    each `unwrapTo`, `MMPositionManager` measures the incremental `settleQueue` delta for `queueTo` and forwards that
-    amount of LCC to `MMQueueCustodian` under beneficiary-scoped storage (`tokenId == 0` utility bucket), matching the
-    MM decrease / `COLLECT_AVAILABLE_LIQUIDITY` model. For `payerIsUser` flows, that delta must be measured from the
-    queue state **after** pulling LCC into the endpoint (`transferFrom`), because non-protocol → protocol transfer can
-    annul prior queue entries (**LCC-02**) before `unwrapTo` runs; the deltas path measures from immediately before
-    `unwrapTo` only (no LCC transfer annul in between).
-  - **Native-backed `UNWRAP_LCC` (underlying `address(0)`)**: `MMPositionManager` passes Hub immediate payout
-    `to = address(this)` so `LiquidityHub` does not send native ETH to the locker inside `unwrapTo` (removes a
-    re-entrancy window between queue write and custodian forward). The locker receives native as transient
-    currency-delta credit and withdraws with `TAKE(ADDRESS_ZERO, ...)` in the same batch.
-  - Any additional `BOUND_ENDPOINT` integration that cannot preserve this coupling must not use `unwrapTo` without
-    revisiting HUB-02 netting assumptions.
-  - **Admission vs custody**: After forwarding, the endpoint’s live LCC balance no longer includes custodied
-    queue-backing. `LiquidityHub` therefore adds optional capped credit from `IEndpointUnwrapAdmission` (implemented by
-    `MMPositionManager` via `MMQueueCustodian.queued(0, lcc, beneficiary)`), bounded by `settleQueue[lcc][queueTo]`, so
-    fresh beneficiary-linked principal can still pass `_unwrap` admission without weakening HUB-02 anti-double-queue
-    semantics.
-- **Rationale**: Splitting immediate payout recipient from queue owner is a trusted endpoint pattern (for example
-  `MMPositionManager` after it has consumed the beneficiary’s LCC or delta credit). Exposing that split to arbitrary EOAs
-  allowed repeated queue inflation against unchanged holder balance.
+- **Statement**: `LiquidityHub` only exposes public unwrap entrypoints `unwrap(address,uint256)` and
+  `unwrap(address,bytes32,uint256)` (resolved LCC). There is **no** split “payout recipient ≠ queue owner” API on the Hub.
+  For MM queued settlement, `MMPositionManager` moves beneficiary LCC onto the per-recipient `MMQueueCustodian`, which calls
+  `hub.unwrap(lcc, amount)` **as itself**. Hub shortfalls therefore accrue to `settleQueue[lcc][custodian]`, while any
+  immediate underlying is received by the custodian and forwarded to `forwardUnderlyingTo` (native: typically
+  `MMPositionManager` for exact delta credit; ERC20: locker or manager per routing). `MarketFactory` dynamic “bind
+  custodian endpoint” registration is not required for this flow.
+- **Enforced by**:
+  - `src/MMQueueCustodian.sol::unwrapLccViaHub` (unwrap + `settleQueue` delta + `_record` + forward underlying),
+  - `src/MMPositionManager.sol::_unwrapToQueueForward`,
+  - `src/LiquidityHub.sol::unwrap` / `_unwrap` / `_unwrapAndPay`.
+- **Post-shortfall custody (`UNWRAP_LCC`)**: Queued shortfall does not burn LCC at queue time; incremental queue delta on
+  the custodian must be recorded into beneficiary-scoped custody (`tokenId == 0` utility bucket) so principal is not
+  unscoped router residue on `MMPositionManager` (**DELTA-02**). For `payerIsUser` flows, measure the delta **after**
+  pulling LCC into the manager (`transferFrom`), because non-protocol → protocol transfer can annul prior queue entries
+  (**LCC-02**) before the custodian unwrap runs.
+- **Native-backed `UNWRAP_LCC` (underlying `address(0)`)**: `LiquidityHub` pays native to the custodian during `unwrap`;
+  the custodian immediately forwards to `MMPositionManager` so the locker’s `receive()` does not run inside the Hub
+  call. The locker withdraws native via `TAKE(ADDRESS_ZERO, ...)` in the same batch.
+- **Rationale**: A public Hub `unwrapTo` surface duplicated queue-owner vs payout semantics and required endpoint-only
+  admission. Collapsing unwrap actor and queue owner onto the custodian preserves HUB-02 headroom netting while keeping
+  split payout handling in MM composition code (custodian forward), not as a generic unwrap variant.
+
+### MM-QUEUE-01: Recipient-keyed queue custodians; commit-only deployment; utility uses bucket `0`
+
+- **Statement**:
+  - `MMPositionManager.custodianFor[recipient]` maps **one** `MMQueueCustodian` per recipient domain (commit NFT owner or
+    utility locker domain). **Utility** and **commit** custody share that contract: utility slices use bucket id **`0`**;
+    commitment slices use bucket id **`tokenId`** (the commitment NFT id).
+  - A queue custodian is **deployed only** from `_commitSignal` for the mint recipient. Runtime paths that need a
+    custodian (`UNWRAP_LCC` forward, `COLLECT_AVAILABLE_LIQUIDITY`, owner-gated flows that consult the owner’s
+    custodian) **require** an existing mapping and otherwise revert fail-closed (`Errors.QueueCustodianNotDeployed` /
+    related guards). There is **no** `LiquidityHub.unwrapTo` and **no** `MarketFactory` dynamic custodian binding for this
+    model.
+- **Enforced by**:
+  - `src/MMPositionManager.sol::_deployQueueCustodian` (internal; only `_commitSignal`),
+  - `src/libraries/MMHelpers.sol::assertQueueCustodianForRecipient` / `assertQueueCustodianForCommitToken`,
+  - `src/MMPositionManager.sol::_unwrapToQueueForward`, `_collectAvailableLiquidity`, `_decommitSignal`, `transferFrom`
+    (with `MMQueueCustodian.isBucketEmpty` for commit buckets).
+- **Native ETH to `MMPositionManager`**: immediate native forwarded from a bound `MMQueueCustodian` after Hub `unwrap`
+  is accepted in `FietNativeWrapper.receive` (custodian reports `positionManager() == address(this)`), distinct from
+  canonical Hub payouts.
 
 ### HUB-02B: Unwrap immediate payout recipients must be serviceable (not Hub, exempt, or DEX)
 

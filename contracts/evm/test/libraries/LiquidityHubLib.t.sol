@@ -11,7 +11,7 @@ import {StdStorage, stdStorage} from "forge-std/StdStorage.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {IMMQueueCustodian} from "../../src/interfaces/IMMQueueCustodian.sol";
 
-/// @notice Minimal custodian for `LiquidityHub.settleFromCustodian` integration tests.
+/// @notice Minimal custodian for legacy custody-release tests (LCC release path).
 contract MockSettleCustodian is IMMQueueCustodian {
     address public override positionManager;
 
@@ -45,6 +45,16 @@ contract MockSettleCustodian is IMMQueueCustodian {
         _custody[tokenId][lcc][beneficiary] = avail - released;
         IERC20(lcc).transfer(beneficiary, released);
         return released;
+    }
+
+    function collectUnderlyingToBeneficiary(uint256, address, address, uint256) external pure override {}
+
+    function isEmpty() external pure override returns (bool) {
+        return true;
+    }
+
+    function isBucketEmpty(uint256) external pure override returns (bool) {
+        return true;
     }
 }
 
@@ -921,50 +931,29 @@ contract MockSettleCustodian is IMMQueueCustodian {
         }
 
         // ============================================================
-        // settleFromCustodian (custody release + processSettlement)
+        // processSettlementFor (queue owner may be a contract MM custodian)
         // ============================================================
 
-        function test_settleFromCustodian_settlesQueuedDebt_whenReserveAndCustodyAlign() public {
+        function test_processSettlementFor_settlesQueuedDebt_whenReserveAndCustodyAlign_forQueueOwner() public {
             uint256 q = 50;
-            uint256 tokenId = 33;
             MockSettleCustodian custodian = new MockSettleCustodian();
 
-            // Custodian must be protocol-tracked so issued LCC populates market-derived buckets (exempt mint skips buckets).
             vm.prank(factory);
             liquidityHub.setBoundLevel(address(custodian), Bounds.BOUND_ENDPOINT);
 
-            _createSettlementQueueEntry(lccToken1, user1, q);
+            _createSettlementQueueEntry(lccToken1, address(custodian), q);
             _setMarketReserveOfUnderlying(address(underlyingAsset1), q);
-            // processSettlement pays underlying from Hub balance; reserve-only storage is not enough.
             underlyingAsset1.mint(address(liquidityHub), q);
 
             vm.prank(vtsOrchestrator);
             liquidityHub.issue(lccToken1, address(custodian), q);
 
-            custodian.seed(tokenId, lccToken1, user1, q);
+            uint256 underlyingBefore = underlyingAsset1.balanceOf(address(custodian));
+            liquidityHub.processSettlementFor(lccToken1, address(custodian), q);
 
-            uint256 underlyingBefore = underlyingAsset1.balanceOf(user1);
-            liquidityHub.settleFromCustodian(lccToken1, address(custodian), tokenId, user1, q);
-
-            assertEq(liquidityHub.settleQueue(lccToken1, user1), 0);
+            assertEq(liquidityHub.settleQueue(lccToken1, address(custodian)), 0);
             assertEq(liquidityHub.totalQueued(lccToken1), 0);
-            assertGt(underlyingAsset1.balanceOf(user1), underlyingBefore);
-        }
-
-        function test_settleFromCustodian_noop_whenMaxAmountZero() public {
-            uint256 q = 10;
-            _createSettlementQueueEntry(lccToken1, user1, q);
-            liquidityHub.settleFromCustodian(lccToken1, address(0x1234), 1, user1, 0);
-            assertEq(liquidityHub.settleQueue(lccToken1, user1), q);
-        }
-
-        function test_settleFromCustodian_noop_whenCustodianHasNoCode() public {
-            uint256 q = 10;
-            _createSettlementQueueEntry(lccToken1, user1, q);
-            address noCode = makeAddr("noCodeCustodian");
-            vm.etch(noCode, hex"");
-            liquidityHub.settleFromCustodian(lccToken1, noCode, 1, user1, type(uint256).max);
-            assertEq(liquidityHub.settleQueue(lccToken1, user1), q);
+            assertGt(underlyingAsset1.balanceOf(address(custodian)), underlyingBefore);
         }
 
         /// @notice Regression: `_processSettlementFor` emits `SettlementProcessed` with `settled == queuedBefore - queuedAfter`.

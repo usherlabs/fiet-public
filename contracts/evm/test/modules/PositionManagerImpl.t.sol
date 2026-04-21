@@ -4,8 +4,6 @@ pragma solidity ^0.8.26;
 import "forge-std/Test.sol";
 
 import {PositionManagerImpl} from "../../src/modules/PositionManagerImpl.sol";
-import {PositionManagerQueueCustodian} from "../../src/modules/PositionManagerQueueCustodian.sol";
-import {IMMQueueCustodian} from "../../src/interfaces/IMMQueueCustodian.sol";
 import {IPoolManager} from "v4-periphery/lib/v4-core/src/interfaces/IPoolManager.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
@@ -291,7 +289,7 @@ contract MockOrchestratorHandleLcc {
     }
 }
 
-contract PositionManagerImplHarness is PositionManagerQueueCustodian, PositionManagerImpl {
+contract PositionManagerImplHarness is PositionManagerImpl {
     address internal _locker;
 
     constructor(IPoolManager pm, address marketFactory, address orch, address canonicalCustody, address locker)
@@ -304,8 +302,8 @@ contract PositionManagerImplHarness is PositionManagerQueueCustodian, PositionMa
         return _locker;
     }
 
-    function _queueCustodian() internal view override(PositionManagerQueueCustodian) returns (IMMQueueCustodian) {
-        return IMMQueueCustodian(address(this));
+    function _queueSettleRecipient(uint256) internal view override returns (address) {
+        return msgSender();
     }
 
     function _forwardQueuedLccToCustodian(Currency currency, uint256 tokenId, address beneficiary, uint256 amount)
@@ -354,10 +352,6 @@ contract PositionManagerImplHarness is PositionManagerQueueCustodian, PositionMa
 
     function exposeSyncPairBalanceAsCredit(Currency c0, Currency c1) external {
         _syncPairBalanceAsCredit(c0, c1);
-    }
-
-    function exposeQueueCustodian() external view returns (address) {
-        return address(_queueCustodian());
     }
 }
 
@@ -562,10 +556,6 @@ contract PositionManagerImplTest is Test {
             abi.encode(int128(0), int128(0))
         );
         h.exposeSyncPairBalanceAsCredit(c0, c1);
-    }
-
-    function test_queueCustodian_override_returnsHarnessAddress() public view {
-        assertEq(h.exposeQueueCustodian(), address(h));
     }
 
     function _seedPositionLiquidity(PoolKey memory key, int24 tickLower, int24 tickUpper, bytes32 salt, uint128 liq)

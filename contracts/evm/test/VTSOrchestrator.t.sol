@@ -1192,7 +1192,8 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
         ModifyLiquidityParams memory params = ModifyLiquidityParams({
             tickLower: -60, tickUpper: 60, liquidityDelta: 0, salt: PositionLibrary.generateSalt(tokenId, 0)
         });
-        bytes memory hookData = PositionModificationHookDataLib.encode(tokenId, 0, address(positionManager));
+        bytes memory hookData =
+            PositionModificationHookDataLib.encode(tokenId, 0, address(positionManager), address(0xB0B));
 
         vm.prank(coreHookAddress);
         vm.expectRevert(abi.encodeWithSelector(Errors.InvalidSignal.selector, tokenId));
@@ -1229,8 +1230,9 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
         ModifyLiquidityParams memory params = ModifyLiquidityParams({
             tickLower: -60, tickUpper: 60, liquidityDelta: 0, salt: PositionLibrary.generateSalt(tokenId, 0)
         });
-        bytes memory hookData =
-            PositionModificationHookDataLib.encodeSeizure(tokenId, 0, address(positionManager), int128(0), int128(0));
+        bytes memory hookData = PositionModificationHookDataLib.encodeSeizure(
+            tokenId, 0, address(positionManager), address(0xB0B), int128(0), int128(0)
+        );
 
         vm.prank(coreHookAddress);
         vtsOrchestrator.processPosition(
@@ -1811,7 +1813,7 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
 
     function test_revert_processPosition_mmOperation_whenCommitInvalid() public {
         // MM operation is defined as hookData.commitId > 0, so use a non-existent commitId.
-        bytes memory hookData = PositionModificationHookDataLib.encode(999, 0, address(this));
+        bytes memory hookData = PositionModificationHookDataLib.encode(999, 0, address(this), address(0xB0B));
 
         ModifyLiquidityParams memory params =
             ModifyLiquidityParams({tickLower: -60, tickUpper: 60, liquidityDelta: 0, salt: bytes32(0)});
@@ -1832,7 +1834,7 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
         });
 
         address locker = liquiditySignal.mmState.owner;
-        bytes memory hookData = PositionModificationHookDataLib.encode(tokenId, 0, locker);
+        bytes memory hookData = PositionModificationHookDataLib.encode(tokenId, 0, locker, address(0xB0B));
 
         vm.prank(coreHookAddress);
         BalanceDelta callerDelta = toBalanceDelta(0, 0);

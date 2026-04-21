@@ -137,29 +137,6 @@ contract LiquidityHubMutationHardeningTest is LiquidityHubTestBase {
         liquidityHub.annulSettlementBeforeTransfer(user1, 1, 0, 1);
     }
 
-    function test_unwrapTo_overloadWithQueueTo_attributesQueueToCorrectRecipient() public {
-        // Give user1 market-derived LCC and force unwrap to queue (no market liquidity).
-        uint256 amount = 25;
-        _wrapMarketDerivedLCC(user1, lccToken1, amount);
-        _wrapMarketDerivedLCC(user3, lccToken1, amount);
-
-        vm.mockCall(
-            factory,
-            abi.encodeWithSelector(IMarketFactory.useMarketLiquidity.selector),
-            abi.encode(uint256(0)) // no market liquidity
-        );
-
-        address to = user2;
-        address queueTo = user3;
-
-        _setBoundLevel(user1, Bounds.BOUND_ENDPOINT);
-        vm.prank(user1);
-        liquidityHub.unwrapTo(address(underlyingAsset1), marketId1, to, queueTo, amount);
-
-        assertEq(liquidityHub.settleQueue(lccToken1, queueTo), amount, "queue should be attributed to queueTo");
-        assertEq(liquidityHub.settleQueue(lccToken1, to), 0, "to should not own the queued settlement");
-    }
-
     function test_createLCCPair_emitsLccCreatedEvents() public {
         // Using recordLogs avoids having to know the marketId ahead of time.
         vm.recordLogs();
@@ -214,14 +191,13 @@ contract LiquidityHubMutationHardeningTest is LiquidityHubTestBase {
         assertTrue(found, "missing LccWrapped");
     }
 
-    function test_unwrapTo_emitsLccUnwrapped() public {
+    function test_unwrap_emitsLccUnwrapped() public {
         uint256 amount = 9;
         _wrapDirectLCC(user1, lccToken1, amount);
 
-        _setBoundLevel(user1, Bounds.BOUND_ENDPOINT);
         vm.recordLogs();
         vm.prank(user1);
-        liquidityHub.unwrapTo(lccToken1, user2, amount);
+        liquidityHub.unwrap(lccToken1, amount);
 
         Vm.Log[] memory entries = vm.getRecordedLogs();
         bytes32 topic0 = keccak256("LccUnwrapped(address,address,address,uint256)");
@@ -232,7 +208,7 @@ contract LiquidityHubMutationHardeningTest is LiquidityHubTestBase {
             address lcc = address(uint160(uint256(entries[i].topics[1])));
             if (lcc != lccToken1) continue;
             (address from, address to, uint256 amt) = abi.decode(entries[i].data, (address, address, uint256));
-            if (from == user1 && to == user2 && amt == amount) found = true;
+            if (from == user1 && to == user1 && amt == amount) found = true;
         }
 
         assertTrue(found, "missing LccUnwrapped");

@@ -107,8 +107,9 @@ contract DeltaDesignStatementsTest is MarketTestBase, MarketMakerTestBase {
         MMA.executeWithUnlock(positionManager, actions, block.timestamp + 3600);
         vm.stopPrank();
 
-        uint256 queued0 = ILiquidityHub(liquidityHub).settleQueue(address(lcc0), recipient);
-        uint256 queued1 = ILiquidityHub(liquidityHub).settleQueue(address(lcc1), recipient);
+        address queueOwner = positionManager.custodianFor(positionManager.ownerOf(tokenId));
+        uint256 queued0 = ILiquidityHub(liquidityHub).settleQueue(address(lcc0), queueOwner);
+        uint256 queued1 = ILiquidityHub(liquidityHub).settleQueue(address(lcc1), queueOwner);
         assertGt(queued0 + queued1, 0, "decrease path should materialise queued cancel output");
 
         // No deferred entitlement persists: leaving a synced credit without TAKE must still fail at batch end.

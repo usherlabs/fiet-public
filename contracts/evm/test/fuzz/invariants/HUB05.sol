@@ -162,7 +162,7 @@ contract HUB05 {
         uint256 amt = (amount % MAX_AMOUNT) + 1;
         callbackExpected = true;
         hub.issue(address(lccErc20), address(callbackHolder), amt);
-        bool ok = callbackHolder.unwrapTo(address(hub), address(lccErc20), amt);
+        bool ok = callbackHolder.unwrapSelf(address(hub), address(lccErc20), amt);
         ok;
         modelReserveErc20 = hub.reserveOfUnderlying(address(lccErc20));
     }
@@ -270,11 +270,7 @@ contract HUB05 {
 }
 
 contract HUB05Holder {
-    function unwrapTo(address hub, address lcc, uint256 amount) external returns (bool ok) {
-        (ok,) = hub.call(
-            abi.encodeWithSignature(
-                "unwrapTo(address,address,address,uint256)", lcc, address(this), address(this), amount
-            )
-        );
+    function unwrapSelf(address hub, address lcc, uint256 amount) external returns (bool ok) {
+        (ok,) = hub.call(abi.encodeWithSignature("unwrap(address,uint256)", lcc, amount));
     }
 }

@@ -44,7 +44,6 @@ contract DeployE2E is DeployFullStackBase {
         console.log("CommitmentDescriptor:", stack.contracts.commitmentDescriptor);
         console.log("ActionsImpl:", stack.contracts.actionsImpl);
         console.log("MMPositionManager:", stack.contracts.mmPositionManager);
-        console.log("MMQueueCustodian:", stack.contracts.queueCustodian);
         console.log("DirectLPDeltaResolver:", stack.contracts.directLPDeltaResolver);
         console.log("MarketFactory:", stack.contracts.marketFactory);
         console.log("CoreHook:", stack.contracts.coreHook);
