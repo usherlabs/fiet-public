@@ -22,6 +22,73 @@ contract MarketMakerExtremeUnserviceableE2E is MME2EBase {
         );
     }
 
+    function _runExtremeBurnCell(
+        CoreDeployment memory d,
+        uint256 mmPk,
+        uint256 directLpPk,
+        PositionProfileE2E memory profile,
+        BufferModeE2E memory bufferMode
+    ) internal returns (StandaloneMarket memory m, uint256 commitId, MakerHealthSnapshotE2E memory hb) {
+        m = _createMarket(d, vm.addr(mmPk), CORE_POOL_FEE);
+        commitId = _createMmPositionFromProfile(m, mmPk, profile);
+
+        _logMakerHealth(
+            string.concat("initial settle [", profile.name, "][", bufferMode.name, "]"), _snapshotMakerHealth(m, commitId, 0)
+        );
+
+        uint256 tokenIdCoreLp = _seedDirectLPBufferIfEnabled(m, directLpPk, bufferMode);
+        if (tokenIdCoreLp > 0) {
+            console.log("DirectLP buffer tokenId:", tokenIdCoreLp);
+        }
+
+        _logMakerHealth(
+            string.concat("after buffer seed [", profile.name, "][", bufferMode.name, "]"),
+            _snapshotMakerHealth(m, commitId, 0)
+        );
+
+        uint256 takerPk = _getDeployerPrivateKey();
+        _runExtremeTradingPhase(m, mmPk, takerPk, commitId);
+
+        _logMakerHealth(
+            string.concat("after trading [", profile.name, "][", bufferMode.name, "]"), _snapshotMakerHealth(m, commitId, 0)
+        );
+
+        _settleRfsIfOpen(m, mmPk, commitId);
+
+        _logMakerHealth(
+            string.concat("after RFS close [", profile.name, "][", bufferMode.name, "]"),
+            _snapshotMakerHealth(m, commitId, 0)
+        );
+
+        _burnAndRealiseExitCredits(m, mmPk, commitId, 0);
+
+        hb = _snapshotMakerHealth(m, commitId, 0);
+        _logMakerHealth(string.concat("after burn [", profile.name, "][", bufferMode.name, "]"), hb);
+    }
+
+    function _classifyExtremeCellOutcome(
+        StandaloneMarket memory m,
+        uint256 mmPk,
+        uint256 commitId,
+        PositionProfileE2E memory profile,
+        BufferModeE2E memory bufferMode
+    ) internal {
+        if (_isTightTinyProfile(profile) && !bufferMode.seedDirectLP) {
+            _assertUnserviceableRemnantAfterBurn(m, mmPk, commitId, 0);
+            return;
+        }
+
+        bool drained = _drainInactivePositionSurplusBestEffort(m, mmPk, commitId, 0, 32);
+        if (drained) {
+            _decommitAndTakeAllLccs(m, mmPk, commitId);
+            _unwrapAllLccsAndAssert(m, mmPk, commitId, 0, true);
+            console.log("OK: full exit (serviceable in this cell)");
+        } else {
+            _assertRecognisedUnserviceableOverflowBeforeRebalance(m, mmPk, commitId, 0);
+            console.log("OK: decommit blocked as expected (unserviceable in this cell)");
+        }
+    }
+
     function run() external {
         console.log("=== E2E: MM Extreme / Unserviceable remnant matrix ===");
         _initNetwork();
@@ -36,43 +103,8 @@ contract MarketMakerExtremeUnserviceableE2E is MME2EBase {
 
         for (uint256 i = 0; i < profiles.length; i++) {
             for (uint256 j = 0; j < buffers.length; j++) {
-                StandaloneMarket memory m = _createMarket(d, vm.addr(mmPk), CORE_POOL_FEE);
-                uint256 commitId = _createMmPositionFromProfile(m, mmPk, profiles[i]);
-
-                _logMakerHealth(
-                    string.concat("initial settle [", profiles[i].name, "][", buffers[j].name, "]"),
-                    _snapshotMakerHealth(m, commitId, 0)
-                );
-
-                uint256 tokenIdCoreLp = _seedDirectLPBufferIfEnabled(m, directLpPk, buffers[j]);
-                if (tokenIdCoreLp > 0) {
-                    console.log("DirectLP buffer tokenId:", tokenIdCoreLp);
-                }
-
-                _logMakerHealth(
-                    string.concat("after buffer seed [", profiles[i].name, "][", buffers[j].name, "]"),
-                    _snapshotMakerHealth(m, commitId, 0)
-                );
-
-                uint256 takerPk = _getDeployerPrivateKey();
-                _runExtremeTradingPhase(m, mmPk, takerPk, commitId);
-
-                _logMakerHealth(
-                    string.concat("after trading [", profiles[i].name, "][", buffers[j].name, "]"),
-                    _snapshotMakerHealth(m, commitId, 0)
-                );
-
-                _settleRfsIfOpen(m, mmPk, commitId);
-
-                _logMakerHealth(
-                    string.concat("after RFS close [", profiles[i].name, "][", buffers[j].name, "]"),
-                    _snapshotMakerHealth(m, commitId, 0)
-                );
-
-                _burnAndRealiseExitCredits(m, mmPk, commitId, 0);
-
-                MakerHealthSnapshotE2E memory hb = _snapshotMakerHealth(m, commitId, 0);
-                _logMakerHealth(string.concat("after burn [", profiles[i].name, "][", buffers[j].name, "]"), hb);
+                (StandaloneMarket memory m, uint256 commitId, MakerHealthSnapshotE2E memory hb) =
+                    _runExtremeBurnCell(d, mmPk, directLpPk, profiles[i], buffers[j]);
 
                 if (j == 0) {
                     unbufAfterBurn[i] = hb;
@@ -80,19 +112,7 @@ contract MarketMakerExtremeUnserviceableE2E is MME2EBase {
                     _assertMakerHealthNotWorseWithBuffer(hb, unbufAfterBurn[i]);
                 }
 
-                if (_isTightTinyProfile(profiles[i]) && !buffers[j].seedDirectLP) {
-                    _assertUnserviceableRemnantAfterBurn(m, mmPk, commitId, 0);
-                } else {
-                    bool drained = _drainInactivePositionSurplusBestEffort(m, mmPk, commitId, 0, 32);
-                    if (drained) {
-                        _decommitAndTakeAllLccs(m, mmPk, commitId);
-                        _unwrapAllLccsAndAssert(m, mmPk, commitId, 0, true);
-                        console.log("OK: full exit (serviceable in this cell)");
-                    } else {
-                        _assertRecognisedUnserviceableOverflowBeforeRebalance(m, mmPk, commitId, 0);
-                        console.log("OK: decommit blocked as expected (unserviceable in this cell)");
-                    }
-                }
+                _classifyExtremeCellOutcome(m, mmPk, commitId, profiles[i], buffers[j]);
             }
         }
     }

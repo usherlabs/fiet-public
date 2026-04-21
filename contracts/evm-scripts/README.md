@@ -47,11 +47,15 @@ The following E2E test scripts are available:
    **MM matrix (scenario × position profile × DirectLP buffer)** — separate scenario runners:
    - `e2e/MarketMakerExtremeUnserviceable.s.sol` → `just e2e-mm-extreme-unserviceable`
    - `e2e/MarketMakerServiceableRoundTrip.s.sol` → `just e2e-mm-serviceable-round-trip`
+   - `e2e/MarketMakerAsymmetricOverflowCure.s.sol` → `just e2e-mm-asymmetric-overflow-cure`
    - `e2e/MarketMakerServiceableReserveShaped.s.sol` → `just e2e-mm-serviceable-reserve-shaped`
    - `e2e/MarketMakerModestSwap.s.sol` → `just e2e-mm-modest-swap`
    - `e2e/MarketMakerWideOrDeepStress.s.sol` → `just e2e-mm-wide-deep-stress`
-   - All five: `just e2e-mm-matrix` (long-running)
-   - **Required:** `PRIVATE_KEY`, `LP_PRIVATE_KEY` (deployer acts as DirectLP buffer seeder where applicable)
+   - All six: `just e2e-mm-matrix` (long-running)
+   - The asymmetric overflow-cure runner proves the maker-side recovery order explicitly: burn realises the
+     serviceable token1 side, then the deployer seeds exogenous full-range DirectLP liquidity, swaps `0 -> 1`
+     to replenish token0 serviceability, and the stranded token0 remnant re-drains before exit.
+   - **Required:** `PRIVATE_KEY`, `LP_PRIVATE_KEY`
 
 5. **`e2e/MMCoverage.s.sol`** - Tests the multi-MM settlement, checkpoint, poke, and exit flow without fee-pot-specific assertions
    - Run with: `just e2e-mm-coverage`

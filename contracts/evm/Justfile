@@ -7,7 +7,7 @@
 #   just --list
 #   just fuzz
 #   just medusa-entry
-#   just echidna-prepare
+#   just fuzz-prepare
 #
 
 set export := true
@@ -37,9 +37,9 @@ medusa-entry-deep *args:
 medusa-mmq-01 *args:
     @just medusa-entry {{ args }}
 
-# Compatibility preflight for older Echidna-era automation.
+# Build preflight for the supported Medusa target.
 # This only materializes the supported FuzzEntry build artifacts.
-echidna-prepare:
+fuzz-prepare:
     FOUNDRY_PROFILE=medusa FOUNDRY_OUT_DIR=out-medusa forge build --force
 
 # Run the supported Medusa entry contract (default config: `medusa.json`).
@@ -70,6 +70,7 @@ invariant-evidence-foundry:
     FOUNDRY_PROFILE=debug forge test -vvv --match-path test/DeltaDesignStatements.t.sol
     FOUNDRY_PROFILE=debug forge test -vvv --match-path test/AuthSeizeInvariants.t.sol
     FOUNDRY_PROFILE=debug forge test -vvv --match-path test/VTSOrchestratorInvariantRegressions.t.sol
+    FOUNDRY_PROFILE=debug forge test -vvv --match-path test/fuzz/FuzzLiquidityHubParity.t.sol
     FOUNDRY_PROFILE=debug forge test -vvv --match-path test/MarketFactory.t.sol --match-test testFuzz_prepareMarketLiquidity_revertsWhenDifferentCurrencyInFlight
     FOUNDRY_PROFILE=debug forge test -vvv --match-path test/MarketFactory.t.sol --match-test test_prepareMarketLiquidity_sameLccSync_restoresAfterNestedErc20Sync
     FOUNDRY_PROFILE=debug forge test -vvv --match-path test/MarketFactory.t.sol --match-test test_prepareMarketLiquidity_sameLccSync_nativeUnderlying_clearsAndRestores

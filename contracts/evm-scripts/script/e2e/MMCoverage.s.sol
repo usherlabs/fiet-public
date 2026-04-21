@@ -307,45 +307,7 @@ contract MMCoverageE2E is MME2EBase {
     function _closeCoveragePosition(StandaloneMarket memory m, uint256 mmPk, uint256 takerPk, uint256 commitId)
         internal
     {
-        _settleRfsIfOpen(m, mmPk, commitId);
-        _burnAndRealiseExitCredits(m, mmPk, commitId, 0);
-
-        _logMakerHealth("after burn (pre-drain)", _snapshotMakerHealth(m, commitId, 0));
-
-        bool drained = _drainInactivePositionSurplusBestEffort(m, mmPk, commitId, 0, 32);
-
-        if (!drained) {
-            _assertRecognisedUnserviceableOverflowBeforeRebalance(m, mmPk, commitId, 0);
-
-            for (uint256 r = 0; r < MM_E2E_REBALANCE_MAX_ROUNDS; r++) {
-                (uint256 eff0, uint256 eff1) =
-                    _getEffectiveSettledPair(IVTSOrchestrator(m.stack.contracts.vtsOrchestrator), commitId, 0);
-                if (eff0 == 0 && eff1 == 0) {
-                    drained = true;
-                    break;
-                }
-
-                console.log("e2e: reserve rebalance round:", r);
-                _rebalanceStrandedLanesForInactiveDrain(
-                    m, takerPk, eff0, eff1, MM_E2E_REBALANCE_SWAP_CHUNK, MM_E2E_REBALANCE_WRAP_PER_LEG
-                );
-
-                _logMakerHealth("after reserve rebalance + pool trade", _snapshotMakerHealth(m, commitId, 0));
-
-                drained = _drainInactivePositionSurplusBestEffort(m, mmPk, commitId, 0, 32);
-                if (drained) break;
-            }
-        }
-
-        if (!drained) {
-            _classifyTerminalInactiveDustOrRevert(m, mmPk, commitId, 0);
-            return;
-        }
-
-        _assertInactiveSurplusFullyResolvedForDecommit(m, commitId, 0);
-        _logMakerHealth("after drain (pre-decommit)", _snapshotMakerHealth(m, commitId, 0));
-        _decommitAndTakeAllLccs(m, mmPk, commitId);
-        console.log("OK: burned + drained inactive surplus (+ optional reserve rebalance) + decommitted");
+        _closeRfsBurnDrainRebalanceDecommitAndTakeAllLccs(m, mmPk, takerPk, commitId);
     }
 
     function _closeAllPositions(ScenarioState memory s, ActorKeys memory keys) internal {
