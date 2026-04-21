@@ -24,6 +24,7 @@ contract DeployE2E is DeployFullStackBase {
         console.log("=== E2E Deploy Results ===");
 
         console.log("--- Libraries ---");
+        console.log("GrowthCarryQ128Lib:", stack.libs.growthCarryQ128Lib);
         console.log("VTSPositionLib:", stack.libs.vtsPositionLib);
         console.log("VTSSwapLib:", stack.libs.vtsSwapLib);
         console.log("VTSCommitLib:", stack.libs.vtsCommitLib);

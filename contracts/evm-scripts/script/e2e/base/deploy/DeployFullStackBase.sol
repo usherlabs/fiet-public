@@ -8,6 +8,7 @@ import {MockResilientOracle} from "../../mocks/oracle/MockResilientOracle.sol";
 import {MockChainlinkOracle} from "../../mocks/oracle/MockChainlinkOracle.sol";
 
 // Linked libraries to deploy
+import {GrowthCarryQ128Lib} from "src/types/VTS.sol";
 import {VTSPositionLib} from "src/libraries/VTSPositionLib.sol";
 import {VTSSwapLib} from "src/libraries/VTSSwapLib.sol";
 import {VTSCommitLib} from "src/libraries/VTSCommitLib.sol";
@@ -26,6 +27,7 @@ import {LiquidityHubLinkedLib} from "src/libraries/LiquidityHubLinkedLib.sol";
  */
 abstract contract DeployFullStackBase is DeployProtocolBase {
     struct LibraryAddrs {
+        address growthCarryQ128Lib;
         address vtsPositionLib;
         address vtsSwapLib;
         address vtsCommitLib;
@@ -70,6 +72,7 @@ abstract contract DeployFullStackBase is DeployProtocolBase {
     string internal constant VTS_POSITION_LIB = "VTSPositionLib";
     string internal constant VTS_SWAP_LIB = "VTSSwapLib";
     string internal constant VTS_COMMIT_LIB = "VTSCommitLib";
+    string internal constant GROWTH_CARRY_Q128_LIB = "GrowthCarryQ128Lib";
     string internal constant VTS_POSITION_MM_OPS_LIB = "VTSPositionMMOpsLib";
     string internal constant VTS_LIFECYCLE_LINKED_LIB = "VTSLifecycleLinkedLib";
     string internal constant LCC_FACTORY_LINKED_LIB = "LCCFactoryLinkedLib";
@@ -98,6 +101,7 @@ abstract contract DeployFullStackBase is DeployProtocolBase {
             _deployLibrary(LIQUIDITY_HUB_LINKED_LIB, type(LiquidityHubLinkedLib).creationCode);
         out.libs.vtsCommitLib = _deployLibrary(VTS_COMMIT_LIB, type(VTSCommitLib).creationCode);
         out.libs.vtsSwapLib = _deployLibrary(VTS_SWAP_LIB, type(VTSSwapLib).creationCode);
+        out.libs.growthCarryQ128Lib = _deployLibrary(GROWTH_CARRY_Q128_LIB, type(GrowthCarryQ128Lib).creationCode);
         out.libs.vtsPositionLib = _deployLibrary(VTS_POSITION_LIB, type(VTSPositionLib).creationCode);
         out.libs.vtsPositionMMOpsLib =
             _deployLibrary(VTS_POSITION_MM_OPS_LIB, type(VTSPositionMMOpsLib).creationCode);

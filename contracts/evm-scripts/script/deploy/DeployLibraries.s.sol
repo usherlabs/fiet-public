@@ -6,6 +6,7 @@ import {CREATE3Script, ICREATE3Factory} from "../base/CREATE3Script.sol";
 import {NetworkConfig} from "../base/NetworkConfig.sol";
 
 // Libraries to deploy
+import {GrowthCarryQ128Lib} from "src/types/VTS.sol";
 import {VTSPositionLib} from "src/libraries/VTSPositionLib.sol";
 import {VTSSwapLib} from "src/libraries/VTSSwapLib.sol";
 import {VTSCommitLib} from "src/libraries/VTSCommitLib.sol";
@@ -19,6 +20,7 @@ import {LiquidityHubLinkedLib} from "src/libraries/LiquidityHubLinkedLib.sol";
  * @notice Deploys linked libraries using CREATE3 for deterministic addresses across chains
  * @dev Libraries with public/external functions must be deployed separately and linked.
  *      This script deploys:
+ *      - GrowthCarryQ128Lib (used by VTSPositionLib)
  *      - VTSPositionLib (used by VTSOrchestrator)
  *      - VTSSwapLib (used by VTSOrchestrator)
  *      - VTSCommitLib (used by VTSOrchestrator, VTSPositionLib)
@@ -35,9 +37,10 @@ import {LiquidityHubLinkedLib} from "src/libraries/LiquidityHubLinkedLib.sol";
  * 1b. Deploy LiquidityHubLinkedLib (no dependencies on VTS libs)
  * 2. Deploy VTSCommitLib (no dependencies on other VTS libs)
  * 3. Deploy VTSSwapLib (no dependencies on other VTS libs)
- * 4. Deploy VTSPositionLib (uses VTSCommitLib)
- * 5. Deploy VTSPositionMMOpsLib (uses VTSCommitLib, VTSPositionLib)
- * 6. Deploy VTSLifecycleLinkedLib (uses VTSPositionLib, VTSPositionMMOpsLib)
+ * 4. Deploy GrowthCarryQ128Lib (no dependencies on other VTS libs)
+ * 5. Deploy VTSPositionLib (uses VTSCommitLib, GrowthCarryQ128Lib)
+ * 6. Deploy VTSPositionMMOpsLib (uses VTSCommitLib, VTSPositionLib)
+ * 7. Deploy VTSLifecycleLinkedLib (uses VTSPositionLib, VTSPositionMMOpsLib)
  * Usage:
  *   PRIVATE_KEY=<key> forge script script/deploy/DeployLibraries.s.sol \
  *     --rpc-url $RPC_URL --broadcast --verify
@@ -45,6 +48,7 @@ import {LiquidityHubLinkedLib} from "src/libraries/LiquidityHubLinkedLib.sol";
  * After deployment, update foundry.toml with library addresses:
  *   [profile.default]
  *   libraries = [
+ *     "src/types/VTS.sol:GrowthCarryQ128Lib:<address>",
  *     "src/libraries/VTSPositionLib.sol:VTSPositionLib:<address>",
  *     "src/libraries/VTSSwapLib.sol:VTSSwapLib:<address>",
  *     "src/libraries/VTSCommitLib.sol:VTSCommitLib:<address>",
@@ -56,6 +60,7 @@ import {LiquidityHubLinkedLib} from "src/libraries/LiquidityHubLinkedLib.sol";
  */
 contract DeployLibraries is CREATE3Script, NetworkConfig {
     // Deployed library addresses
+    address public growthCarryQ128Lib;
     address public vtsPositionLib;
     address public vtsSwapLib;
     address public vtsCommitLib;
@@ -68,6 +73,7 @@ contract DeployLibraries is CREATE3Script, NetworkConfig {
     string constant VTS_POSITION_LIB = "VTSPositionLib";
     string constant VTS_SWAP_LIB = "VTSSwapLib";
     string constant VTS_COMMIT_LIB = "VTSCommitLib";
+    string constant GROWTH_CARRY_Q128_LIB = "GrowthCarryQ128Lib";
     string constant VTS_POSITION_MM_OPS_LIB = "VTSPositionMMOpsLib";
     string constant VTS_LIFECYCLE_LINKED_LIB = "VTSLifecycleLinkedLib";
     string constant LCC_FACTORY_LINKED_LIB = "LCCFactoryLinkedLib";
@@ -108,16 +114,21 @@ contract DeployLibraries is CREATE3Script, NetworkConfig {
         vtsSwapLib = _deployLibrary(VTS_SWAP_LIB, type(VTSSwapLib).creationCode);
         console.log("VTSSwapLib deployed at:", vtsSwapLib);
 
-        // Step 4: Deploy VTSPositionLib (links VTSCommitLib)
-        console.log("\n=== Step 4: Deploying VTSPositionLib ===");
+        // Step 4: Deploy GrowthCarryQ128Lib (no dependencies)
+        console.log("\n=== Step 4: Deploying GrowthCarryQ128Lib ===");
+        growthCarryQ128Lib = _deployLibrary(GROWTH_CARRY_Q128_LIB, type(GrowthCarryQ128Lib).creationCode);
+        console.log("GrowthCarryQ128Lib deployed at:", growthCarryQ128Lib);
+
+        // Step 5: Deploy VTSPositionLib (links VTSCommitLib, GrowthCarryQ128Lib)
+        console.log("\n=== Step 5: Deploying VTSPositionLib ===");
         vtsPositionLib = _deployLibrary(VTS_POSITION_LIB, type(VTSPositionLib).creationCode);
         console.log("VTSPositionLib deployed at:", vtsPositionLib);
 
-        console.log("\n=== Step 5: Deploying VTSPositionMMOpsLib ===");
+        console.log("\n=== Step 6: Deploying VTSPositionMMOpsLib ===");
         vtsPositionMMOpsLib = _deployLibrary(VTS_POSITION_MM_OPS_LIB, type(VTSPositionMMOpsLib).creationCode);
         console.log("VTSPositionMMOpsLib deployed at:", vtsPositionMMOpsLib);
 
-        console.log("\n=== Step 6: Deploying VTSLifecycleLinkedLib ===");
+        console.log("\n=== Step 7: Deploying VTSLifecycleLinkedLib ===");
         vtsLifecycleLinkedLib = _deployLibrary(VTS_LIFECYCLE_LINKED_LIB, type(VTSLifecycleLinkedLib).creationCode);
         console.log("VTSLifecycleLinkedLib deployed at:", vtsLifecycleLinkedLib);
 
@@ -154,6 +165,7 @@ contract DeployLibraries is CREATE3Script, NetworkConfig {
         console.log("LiquidityHubLinkedLib:", getCreate3Contract(LIQUIDITY_HUB_LINKED_LIB));
         console.log("VTSCommitLib:", getCreate3Contract(VTS_COMMIT_LIB));
         console.log("VTSSwapLib:", getCreate3Contract(VTS_SWAP_LIB));
+        console.log("GrowthCarryQ128Lib:", getCreate3Contract(GROWTH_CARRY_Q128_LIB));
         console.log("VTSPositionLib:", getCreate3Contract(VTS_POSITION_LIB));
         console.log("VTSPositionMMOpsLib:", getCreate3Contract(VTS_POSITION_MM_OPS_LIB));
         console.log("VTSLifecycleLinkedLib:", getCreate3Contract(VTS_LIFECYCLE_LINKED_LIB));
@@ -164,6 +176,7 @@ contract DeployLibraries is CREATE3Script, NetworkConfig {
      */
     function _writeDeploymentAddresses() internal {
         _setFilenameWithSuffix(networkName, "_libraries");
+        writeAddress("growthCarryQ128Lib", growthCarryQ128Lib);
         writeAddress("vtsPositionLib", vtsPositionLib);
         writeAddress("vtsSwapLib", vtsSwapLib);
         writeAddress("vtsCommitLib", vtsCommitLib);
@@ -181,6 +194,7 @@ contract DeployLibraries is CREATE3Script, NetworkConfig {
     function _logFoundryTomlConfig() internal view {
         console.log("\n=== Add to foundry.toml [profile.default] ===");
         console.log("libraries = [");
+        console.log('  "src/types/VTS.sol:GrowthCarryQ128Lib:%s",', growthCarryQ128Lib);
         console.log('  "src/libraries/VTSPositionLib.sol:VTSPositionLib:%s",', vtsPositionLib);
         console.log('  "src/libraries/VTSSwapLib.sol:VTSSwapLib:%s",', vtsSwapLib);
         console.log('  "src/libraries/VTSCommitLib.sol:VTSCommitLib:%s",', vtsCommitLib);
@@ -198,6 +212,7 @@ contract DeployLibraries is CREATE3Script, NetworkConfig {
         external
         view
         returns (
+            address growthCarryLib,
             address positionLib,
             address swapLib,
             address commitLib,
@@ -207,6 +222,7 @@ contract DeployLibraries is CREATE3Script, NetworkConfig {
             address liquidityHubLib
         )
     {
+        growthCarryLib = getCreate3Contract(GROWTH_CARRY_Q128_LIB);
         positionLib = getCreate3Contract(VTS_POSITION_LIB);
         swapLib = getCreate3Contract(VTS_SWAP_LIB);
         commitLib = getCreate3Contract(VTS_COMMIT_LIB);
