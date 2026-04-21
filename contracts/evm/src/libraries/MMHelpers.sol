@@ -44,7 +44,7 @@ library MMHelpers {
         }
     }
 
-    /// @notice Requires `custodianFor(recipient)` to be non-zero (queue custodian is created only in `commitSignal`).
+    /// @notice Requires `custodianFor(recipient)` to be non-zero (created via `INITIALISE`).
     function assertQueueCustodianForRecipient(address recipient) internal view {
         if (recipient == address(0)) revert Errors.InvalidAddress(recipient);
         address c = IMMPositionManager(address(this)).custodianFor(recipient);

@@ -14,6 +14,6 @@ contract MMQueueCustodianFactory is IMMQueueCustodianFactory {
     function deploy(address recipient, IMarketFactory marketFactory) external returns (address custodian) {
         if (recipient == address(0)) revert Errors.InvalidAddress(recipient);
         if (!marketFactory.bounds(msg.sender)) revert Errors.InvalidSender();
-        custodian = address(new MMQueueCustodian(msg.sender));
+        custodian = address(new MMQueueCustodian(msg.sender, recipient));
     }
 }

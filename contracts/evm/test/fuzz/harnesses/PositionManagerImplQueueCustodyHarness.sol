@@ -73,9 +73,7 @@ contract PositionManagerImplQueueCustodyHarness {
         address custodianAddr = address(queueCustodian);
         if (custodianAddr != address(0) && custodianAddr != address(this)) {
             currency.transfer(custodianAddr, amount);
-            if (tokenId > 0) {
-                queueCustodian.record(tokenId, Currency.unwrap(currency), beneficiary, amount);
-            }
+            queueCustodian.record(Currency.unwrap(currency), amount);
         }
     }
 }

@@ -30,19 +30,20 @@ contract FuzzMMQueueCustodian is IMMQueueCustodian {
     address public immutable authorisedBinder;
 
     address public override positionManager;
+    address public override beneficiary;
 
-    mapping(uint256 tokenId => mapping(address lcc => mapping(address beneficiary => uint256 amount))) private _queued;
-    mapping(uint256 bucketId => uint256 total) private _bucketTotals;
-    mapping(address lcc => uint256 total) private _totalLcc;
+    mapping(address lcc => uint256) private _queued;
 
     modifier onlyPositionManager() {
         if (msg.sender != positionManager) revert Errors.InvalidSender();
         _;
     }
 
-    constructor(address authorisedBinder_) {
+    constructor(address authorisedBinder_, address beneficiary_) {
         if (authorisedBinder_ == address(0)) revert Errors.InvalidAddress(authorisedBinder_);
+        if (beneficiary_ == address(0)) revert Errors.InvalidAddress(beneficiary_);
         authorisedBinder = authorisedBinder_;
+        beneficiary = beneficiary_;
     }
 
     /// @notice One-time link after `new PositionManagerImplQueueCustodyHarness(..., this)`.
@@ -55,43 +56,22 @@ contract FuzzMMQueueCustodian is IMMQueueCustodian {
         positionManager = _positionManager;
     }
 
-    function unwrapLccViaHub(address, address, address, uint256, uint256, ILiquidityHub) external pure override {}
+    function unwrapLccViaHub(address, address, uint256, ILiquidityHub) external pure override {}
 
-    function record(uint256 tokenId, address lcc, address beneficiary, uint256 amount)
-        external
-        override
-        onlyPositionManager
-    {
+    function record(address lcc, uint256 amount) external override onlyPositionManager {
         if (lcc == address(0)) revert Errors.InvalidAddress(lcc);
-        if (beneficiary == address(0)) revert Errors.InvalidAddress(beneficiary);
         if (amount == 0) return;
-        _queued[tokenId][lcc][beneficiary] += amount;
-        _bucketTotals[tokenId] += amount;
-        _totalLcc[lcc] += amount;
+        _queued[lcc] += amount;
     }
 
     function totalQueuedLcc(address lcc) external view override returns (uint256) {
-        return _totalLcc[lcc];
+        return _queued[lcc];
     }
 
-    function isBucketEmpty(uint256 bucketId) external view override returns (bool) {
-        return _bucketTotals[bucketId] == 0;
-    }
-
-    function queued(uint256 tokenId, address lcc, address beneficiary) external view override returns (uint256) {
-        return _queued[tokenId][lcc][beneficiary];
-    }
-
-    function collectUnderlyingToBeneficiary(uint256 tokenId, address lcc, address beneficiary, uint256 amount)
-        external
-        override
-        onlyPositionManager
-    {
+    function releaseSettledUnderlyingToManager(address lcc, uint256 amount) external override onlyPositionManager {
         if (amount == 0) return;
-        uint256 q = _queued[tokenId][lcc][beneficiary];
+        uint256 q = _queued[lcc];
         if (q < amount) revert Errors.InsufficientBalance(q, amount);
-        _queued[tokenId][lcc][beneficiary] = q - amount;
-        _bucketTotals[tokenId] -= amount;
-        _totalLcc[lcc] -= amount;
+        _queued[lcc] = q - amount;
     }
 }

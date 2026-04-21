@@ -419,11 +419,11 @@ abstract contract MarketTestBase is Test, Deployers, DeployPermit2 {
         return new VTSOrchestrator(_poolManager, _oracleHelper, _liquidityHub, _owner);
     }
 
-    /// @dev Production deploys queue custodians only on `commitSignal`. Tests that need a custodian without a full
-    ///      commit wire `custodianFor[recipient]` to a fresh `MMQueueCustodian` bound to `mmpm`.
+    /// @dev Production deploys queue custodians via `INITIALISE`. Tests that need a custodian without that action
+    ///      wire `custodianFor[recipient]` to a fresh `MMQueueCustodian` bound to `mmpm` with immutable `recipient`.
     function _wireTestQueueCustodianFor(address mmpm, address recipient) internal {
         if (MMPositionManager(payable(mmpm)).custodianFor(recipient) != address(0)) return;
-        MMQueueCustodian c = new MMQueueCustodian(mmpm);
+        MMQueueCustodian c = new MMQueueCustodian(mmpm, recipient);
         stdstore.target(mmpm).sig("custodianFor(address)").with_key(recipient)
             .checked_write(uint256(uint160(address(c))));
     }

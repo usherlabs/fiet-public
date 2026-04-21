@@ -242,9 +242,9 @@ being an informal “should”.
   - `src/MMQueueCustodian.sol::unwrapLccViaHub` (unwrap + `settleQueue` delta + `_record` + forward underlying),
   - `src/MMPositionManager.sol::_unwrapToQueueForward`,
   - `src/LiquidityHub.sol::unwrap` / `_unwrap` / `_unwrapAndPay`.
-- **Commit-bucket beneficiary payout (liveness)**: third-party beneficiary slices on the owner’s queue custodian (for example a seizer’s recorded slice on `bucket == tokenId`) are paid **only** to that beneficiary. Anyone may call `COLLECT_AVAILABLE_LIQUIDITY` with **four-word** calldata `(lcc, tokenId, beneficiary, maxAmount)` to settle live Hub queue and/or release pre-settled underlying against that beneficiary’s `queued` slice; the **three-word** form `(lcc, tokenId, maxAmount)` remains locker-self collect (beneficiary is the batch locker).
+- **Collect (manager-mediated pull)**: `COLLECT_AVAILABLE_LIQUIDITY` decodes **`(lcc, maxAmount)`** only (two 32-byte words; legacy three- or four-word encodings are rejected). The action is scoped to the batch locker’s custodian (`custodianFor[msgSender()]`) and requires `IMMQueueCustodian.beneficiary() == msgSender()`. The custodian settles live Hub queue where possible and/or releases pre-settled underlying onto **`MMPositionManager`**, which credits the locker via delta accounting; **wallet payout** is completed only through a subsequent **`TAKE`** (same or later batch), not by pushing ERC20/native directly to the beneficiary from the custodian.
 - **Post-shortfall custody (`UNWRAP_LCC`)**: Queued shortfall does not burn LCC at queue time; incremental queue delta on
-  the custodian must be recorded into beneficiary-scoped custody (`tokenId == 0` utility bucket) so principal is not
+  the custodian must be **recorded** on the **acting beneficiary’s** `MMQueueCustodian` so principal is not
   unscoped router residue on `MMPositionManager` (**DELTA-02**). For `payerIsUser` flows, measure the delta **after**
   pulling LCC into the manager (`transferFrom`), because non-protocol → protocol transfer can annul prior queue entries
   (**LCC-02**) before the custodian unwrap runs.
@@ -255,24 +255,18 @@ being an informal “should”.
   admission. Collapsing unwrap actor and queue owner onto the custodian preserves HUB-02 headroom netting while keeping
   split payout handling in MM composition code (custodian forward), not as a generic unwrap variant.
 
-### MM-QUEUE-01: Recipient-keyed queue custodians; commit / transfer deployment; utility uses bucket `0`
+### MM-QUEUE-01: Beneficiary-scoped queue custodians; explicit `INITIALISE`; beneficiary-global receivables
 
 - **Statement**:
-  - `MMPositionManager.custodianFor[recipient]` maps **one** `MMQueueCustodian` per recipient domain (commit NFT owner or
-    utility locker domain). **Utility** and **commit** custody share that contract: utility slices use bucket id **`0`**;
-    commitment slices use bucket id **`tokenId`** (the commitment NFT id).
-  - A queue custodian is deployed from `_commitSignal` for the mint recipient, and from `transferFrom` for the
-    transferee when absent, so a commitment NFT owner always has a custodian for runtime paths that key on
-    `ownerOf(tokenId)`. Other runtime paths that need a custodian (`UNWRAP_LCC` forward, `COLLECT_AVAILABLE_LIQUIDITY`,
-    `COLLECT_AVAILABLE_LIQUIDITY` (four-word form), owner-gated flows) **require** an existing mapping and otherwise revert fail-closed (`Errors.QueueCustodianNotDeployed` /
-    related guards). There is **no** `LiquidityHub.unwrapTo` and **no** `MarketFactory` dynamic custodian binding for this
-    model.
+  - `MMPositionManager.custodianFor[beneficiary]` maps **at most one** `MMQueueCustodian` per **beneficiary** (MM batch locker / acting party). Each deployed custodian stores an **immutable** `beneficiary()` equal to that address; internal custody is **not** further keyed by commitment NFT id.
+  - Custodian creation is **explicit** via the utility action **`INITIALISE`** (`MMActions.INITIALISE`), which calls `_deployQueueCustodian(msg.sender)` and is **idempotent** when a custodian already exists. **`commitSignal` and `transferFrom` do not auto-deploy** queue custodians; any flow that forwards or collects queued principal for a party must therefore ensure that party has called `INITIALISE` first, or it reverts fail-closed (`Errors.QueueCustodianNotDeployed`, and related guards). There is **no** `LiquidityHub.unwrapTo` and **no** `MarketFactory` dynamic custodian binding for this model.
+  - Once LCC is custodied and **recorded** on a beneficiary’s custodian, it is **beneficiary-global** receivable state per `lcc` (`totalQueuedLcc`). Queued principal **after forwarding** is **not** treated as commitment-scoped property on the router: **`transferFrom` / `decommit` do not gate** draining that receivable (no `CommitCustodyNotDrained`-style custody-empty checks on the commitment NFT for this layer).
+  - **Seizure / multi-party routing**: Hub queue entries and custodian `record` targets use the **acting beneficiary’s** custodian (for example the **seizer’s** address for seizure-queued principal), not a synthetic “owner domain + internal bucket” split on a single custodian contract.
 - **Enforced by**:
-  - `src/MMPositionManager.sol::_deployQueueCustodian` (internal; `_commitSignal`, `transferFrom`),
-  - `src/libraries/MMHelpers.sol::assertQueueCustodianForRecipient` / `assertApprovedOrOwnerWithQueueCustodian`,
-  - `src/MMPositionManager.sol::_unwrapToQueueForward`, `_collectAvailableLiquidity` (three- and four-word params),
-    `_decommitSignal`, `transferFrom`
-    (with `MMQueueCustodian.isBucketEmpty` for commit buckets).
+  - `src/MMPositionManager.sol::_deployQueueCustodian`, `_handleUtilityAction` (`INITIALISE`),
+  - `src/libraries/MMHelpers.sol::assertQueueCustodianForRecipient`,
+  - `src/MMQueueCustodian.sol` (`record`, `unwrapLccViaHub`, `releaseSettledUnderlyingToManager`, `totalQueuedLcc`),
+  - `src/MMPositionManager.sol::_unwrapToQueueForward`, `_collectAvailableLiquidity`.
 - **Native ETH to `MMPositionManager`**: immediate native forwarded from a bound `MMQueueCustodian` after Hub `unwrap`
   is accepted in `FietNativeWrapper.receive` (custodian reports `positionManager() == address(this)`), distinct from
   canonical Hub payouts.

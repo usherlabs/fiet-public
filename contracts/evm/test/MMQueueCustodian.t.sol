@@ -23,89 +23,66 @@ contract MMQueueCustodianTest is Test {
     DummyPositionManager internal positionManager;
 
     address internal attacker = makeAddr("attacker");
-    address internal beneficiary = makeAddr("beneficiary");
-    address internal otherBeneficiary = makeAddr("otherBeneficiary");
-
-    uint256 internal constant TOKEN_ID_A = 11;
-    uint256 internal constant TOKEN_ID_B = 22;
+    address internal beneficiaryAddr = makeAddr("beneficiary");
 
     function setUp() public {
         positionManager = new DummyPositionManager();
-        custodian = new MMQueueCustodian(address(positionManager));
+        custodian = new MMQueueCustodian(address(positionManager), beneficiaryAddr);
         lcc = new MockERC20("LCC", "LCC", 18);
     }
 
-    function test_constructor_revertsForZeroAddress() public {
+    function test_constructor_revertsForZeroPositionManager() public {
         vm.expectRevert(abi.encodeWithSelector(Errors.InvalidAddress.selector, address(0)));
-        new MMQueueCustodian(address(0));
+        new MMQueueCustodian(address(0), beneficiaryAddr);
     }
 
-    function test_constructor_revertsForEoa() public {
+    function test_constructor_revertsForEoaPositionManager() public {
         address eoa = makeAddr("eoa");
         vm.expectRevert(abi.encodeWithSelector(Errors.InvalidAddress.selector, eoa));
-        new MMQueueCustodian(eoa);
+        new MMQueueCustodian(eoa, beneficiaryAddr);
     }
 
-    function test_positionManager_isImmutable() public {
+    function test_constructor_revertsForZeroBeneficiary() public {
+        vm.expectRevert(abi.encodeWithSelector(Errors.InvalidAddress.selector, address(0)));
+        new MMQueueCustodian(address(positionManager), address(0));
+    }
+
+    function test_positionManager_and_beneficiary_areImmutable() public {
         assertEq(custodian.positionManager(), address(positionManager));
+        assertEq(custodian.beneficiary(), beneficiaryAddr);
     }
 
     function test_record_revertsWhenCallerIsNotPositionManager() public {
         vm.prank(attacker);
         vm.expectRevert(Errors.InvalidSender.selector);
-        custodian.record(TOKEN_ID_A, address(lcc), beneficiary, 1);
+        custodian.record(address(lcc), 1);
     }
 
     function test_record_revertsForZeroLcc() public {
         vm.prank(address(positionManager));
         vm.expectRevert(abi.encodeWithSelector(Errors.InvalidAddress.selector, address(0)));
-        custodian.record(TOKEN_ID_A, address(0), beneficiary, 1);
-    }
-
-    function test_record_revertsForZeroBeneficiary() public {
-        vm.prank(address(positionManager));
-        vm.expectRevert(abi.encodeWithSelector(Errors.InvalidAddress.selector, address(0)));
-        custodian.record(TOKEN_ID_A, address(lcc), address(0), 1);
+        custodian.record(address(0), 1);
     }
 
     function test_record_zeroAmount_isNoop() public {
         vm.prank(address(positionManager));
-        custodian.record(TOKEN_ID_A, address(lcc), beneficiary, 0);
+        custodian.record(address(lcc), 0);
 
-        assertEq(custodian.queued(TOKEN_ID_A, address(lcc), beneficiary), 0);
-        assertTrue(custodian.isBucketEmpty(TOKEN_ID_A));
+        assertEq(custodian.totalQueuedLcc(address(lcc)), 0);
     }
 
-    function test_record_accumulatesPerTokenIdLccAndBeneficiary() public {
+    function test_record_accumulatesPerLcc() public {
         vm.startPrank(address(positionManager));
-        custodian.record(TOKEN_ID_A, address(lcc), beneficiary, 10);
-        custodian.record(TOKEN_ID_A, address(lcc), beneficiary, 15);
-        custodian.record(TOKEN_ID_B, address(lcc), beneficiary, 7);
-        custodian.record(TOKEN_ID_A, address(lcc), otherBeneficiary, 100);
+        custodian.record(address(lcc), 10);
+        custodian.record(address(lcc), 15);
         vm.stopPrank();
 
-        assertEq(custodian.queued(TOKEN_ID_A, address(lcc), beneficiary), 25);
-        assertEq(custodian.queued(TOKEN_ID_B, address(lcc), beneficiary), 7);
-        assertEq(custodian.queued(TOKEN_ID_A, address(lcc), otherBeneficiary), 100);
-        assertFalse(custodian.isBucketEmpty(TOKEN_ID_A));
-        assertFalse(custodian.isBucketEmpty(TOKEN_ID_B));
-    }
-
-    function test_totalQueuedLcc_tracksRecordsAcrossBuckets() public {
-        vm.startPrank(address(positionManager));
-        custodian.record(TOKEN_ID_A, address(lcc), beneficiary, 10);
-        custodian.record(TOKEN_ID_B, address(lcc), beneficiary, 7);
-        assertEq(custodian.totalQueuedLcc(address(lcc)), 17);
-        vm.stopPrank();
-    }
-
-    function test_isBucketEmpty_trueWhenBucketUnused() public {
-        assertTrue(custodian.isBucketEmpty(TOKEN_ID_A));
+        assertEq(custodian.totalQueuedLcc(address(lcc)), 25);
     }
 }
 
-/// @dev No `receive` / `fallback`: native ETH transfer from custodian fails; WETH fallback must apply (see HUB-02C).
-contract NonPayableBeneficiary {}
+/// @dev No `receive` / `fallback`: native ETH transfer to PM fails; WETH fallback must apply (see HUB-02C).
+contract NonPayablePositionManager {}
 
 /// @dev Minimal Hub exposing `weth9()` for `MMQueueCustodian._payNativeWithWethFallback`.
 contract MockHubForWeth {
@@ -122,14 +99,18 @@ contract MockHubForWeth {
 
 /// @dev Native-backed LCC: `underlying() == address(0)`, `hub()` returns the mock Hub above.
 contract MockLccNative {
-    address public immutable hub;
+    address public immutable hubAddr;
 
     constructor(address _hub) {
-        hub = _hub;
+        hubAddr = _hub;
     }
 
     function underlying() external pure returns (address) {
         return address(0);
+    }
+
+    function hub() external view returns (address) {
+        return hubAddr;
     }
 }
 
@@ -146,33 +127,31 @@ contract MockWETH9 is ERC20 {
     }
 }
 
-/// @notice Regression: non-payable beneficiary receives WETH when native push fails (mirrors `LiquidityHubLib.transferUnderlying`).
+/// @notice Regression: non-payable position manager receives WETH when native push fails (mirrors `LiquidityHubLib.transferUnderlying`).
 contract MMQueueCustodianNativeWethFallbackTest is Test {
-    uint256 internal constant TOKEN_ID = 1;
     uint256 internal constant AMOUNT = 1 ether;
 
-    function test_collectUnderlyingToBeneficiary_nonPayableBeneficiary_receivesWeth() public {
-        DummyPositionManager pm = new DummyPositionManager();
-        MMQueueCustodian cust = new MMQueueCustodian(address(pm));
+    function test_releaseSettledUnderlyingToManager_nonPayablePm_receivesWeth() public {
+        NonPayablePositionManager pm = new NonPayablePositionManager();
+        address ben = makeAddr("ben");
+        MMQueueCustodian cust = new MMQueueCustodian(address(pm), ben);
 
         MockWETH9 weth = new MockWETH9();
         MockHubForWeth hub = new MockHubForWeth(address(weth));
         MockLccNative lccNative = new MockLccNative(address(hub));
 
-        NonPayableBeneficiary beneficiary = new NonPayableBeneficiary();
-
         vm.startPrank(address(pm));
-        cust.record(TOKEN_ID, address(lccNative), address(beneficiary), AMOUNT);
+        cust.record(address(lccNative), AMOUNT);
         vm.stopPrank();
 
         vm.deal(address(cust), AMOUNT);
 
         vm.prank(address(pm));
-        cust.collectUnderlyingToBeneficiary(TOKEN_ID, address(lccNative), address(beneficiary), AMOUNT);
+        cust.releaseSettledUnderlyingToManager(address(lccNative), AMOUNT);
 
-        assertEq(IERC20(address(weth)).balanceOf(address(beneficiary)), AMOUNT);
-        assertEq(address(beneficiary).balance, 0);
-        assertTrue(cust.isBucketEmpty(TOKEN_ID));
+        assertEq(IERC20(address(weth)).balanceOf(address(pm)), AMOUNT);
+        assertEq(address(pm).balance, 0);
+        assertEq(cust.totalQueuedLcc(address(lccNative)), 0);
     }
 }
 
@@ -211,5 +190,6 @@ contract MMQueueCustodianFactoryTest is Test {
         vm.prank(mmpm);
         address deployed = factory.deploy(recipient, IMarketFactory(marketFactoryAddr));
         assertEq(MMQueueCustodian(payable(deployed)).positionManager(), mmpm);
+        assertEq(MMQueueCustodian(payable(deployed)).beneficiary(), recipient);
     }
 }

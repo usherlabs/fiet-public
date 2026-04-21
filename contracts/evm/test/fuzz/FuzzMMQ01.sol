@@ -47,7 +47,7 @@ abstract contract FuzzMMQ01 is FuzzHelper {
         lccCurrency = Currency.wrap(address(lcc));
 
         orchestrator = new FuzzTakeOrchestratorMock();
-        custodian = new FuzzMMQueueCustodian(address(this));
+        custodian = new FuzzMMQueueCustodian(address(this), LOCKER);
         harness = new PositionManagerImplQueueCustodyHarness(orchestrator, custodian);
         custodian.wirePositionManager(address(harness));
 
@@ -143,10 +143,10 @@ abstract contract FuzzMMQ01 is FuzzHelper {
         uint256 extra = extraNonFeeRaw % DOMAIN_CAP;
         uint256 nonFee = qCommitted + extra;
 
-        uint256 beforeQ = custodian.queued(tokenId, address(lcc), LOCKER);
+        uint256 beforeQ = custodian.totalQueuedLcc(address(lcc));
 
         try harness.routeLccCustodyTakeAndForward(lccCurrency, LOCKER, tokenId, nonFee, qCommitted, 0, 0) {
-            uint256 afterQ = custodian.queued(tokenId, address(lcc), LOCKER);
+            uint256 afterQ = custodian.totalQueuedLcc(address(lcc));
             if (afterQ != beforeQ + qCommitted) {
                 matchAllOk = false;
             }
