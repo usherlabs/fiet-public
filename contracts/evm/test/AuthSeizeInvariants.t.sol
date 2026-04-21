@@ -141,6 +141,36 @@ contract AuthSeizeInvariantsTest is MarketTestBase, MarketMakerTestBase {
         vm.stopPrank();
     }
 
+    /// @notice AUTH-01A: ambient seizure authorises follow-ons for the same position, but settle-only deposits must stay
+    ///         coupled to `SEIZE_POSITION` (audit 30_3).
+    function test_auth01a_ambientSeizure_disallows_settleOnlyDeposit_samePosition() public {
+        (uint256 tokenId,,,) = _setupCommittedPosition(
+            positionManager,
+            corePoolKey,
+            abi.encode(liquiditySignal),
+            ModifyLiquidityParams({tickLower: -60, tickUpper: 60, liquidityDelta: 1e10, salt: bytes32(0)}),
+            marketVTSConfiguration,
+            address(lcc0),
+            address(lcc1)
+        );
+        _openSeizeWindow(tokenId);
+
+        address guarantor = makeAddr("guarantor-auth01a-settleonly");
+        IERC20(lcc0.underlying()).transfer(guarantor, SEIZE_SETTLE0);
+        IERC20(lcc1.underlying()).transfer(guarantor, SEIZE_SETTLE1);
+
+        vm.startPrank(guarantor);
+        IERC20(lcc0.underlying()).approve(address(positionManager), type(uint256).max);
+        IERC20(lcc1.underlying()).approve(address(positionManager), type(uint256).max);
+
+        MMA.PreparedAction[] memory actions = new MMA.PreparedAction[](2);
+        actions[0] = MMA.prepareSeize(corePoolKey, tokenId, 0, SEIZE_SETTLE0, SEIZE_SETTLE1, false);
+        actions[1] = MMA.prepareSettle(corePoolKey, tokenId, 0, -int128(1), -int128(1), false);
+        vm.expectRevert(Errors.SeizureSettleOnlyDepositDisallowed.selector);
+        MMA.executeWithUnlock(positionManager, actions, block.timestamp + 3600);
+        vm.stopPrank();
+    }
+
     function test_auth01a_seizeContext_clearedAtBatchEnd() public {
         (uint256 tokenId,,,) = _setupCommittedPosition(
             positionManager,

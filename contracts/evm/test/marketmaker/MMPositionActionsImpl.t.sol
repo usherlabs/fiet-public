@@ -907,6 +907,154 @@ contract MMPositionManagerActionsTest is MarketTestBase, MarketMakerTestBase {
         }
     }
 
+    /// @notice Regression (audit 30_3): ambient seizure context must not allow settle-only deposits that advance
+    ///         seizure carry without a coupled liquidity decrease (only `SEIZE_POSITION` may authorise that phase).
+    function test_audit30_3_ambientSeizure_reverts_settleOnlyDeposit_settlePosition() public {
+        uint256 tokenId = 1;
+        uint256 positionIndex = 0;
+
+        _setupCommittedPosition(
+            positionManager,
+            corePoolKey,
+            abi.encode(liquiditySignal),
+            defaultlLiquidityParams,
+            marketVTSConfiguration,
+            address(lcc0),
+            address(lcc1)
+        );
+        _openSeizeWindow(tokenId, positionIndex);
+
+        uint256 seize0 = 1;
+        uint256 seize1 = 1;
+        MockERC20(address(lcc0.underlying())).mint(guarantor, seize0);
+        MockERC20(address(lcc1.underlying())).mint(guarantor, seize1);
+
+        vm.startPrank(guarantor);
+        IERC20(lcc0.underlying()).approve(address(positionManager), type(uint256).max);
+        IERC20(lcc1.underlying()).approve(address(positionManager), type(uint256).max);
+
+        MMA.PreparedAction[] memory actions = new MMA.PreparedAction[](2);
+        actions[0] = MMA.prepareSeize(corePoolKey, tokenId, positionIndex, seize0, seize1, false);
+        actions[1] = MMA.prepareSettle(corePoolKey, tokenId, positionIndex, -int128(1), -int128(1), false);
+        vm.expectRevert(Errors.SeizureSettleOnlyDepositDisallowed.selector);
+        MMA.executeWithUnlock(positionManager, actions, block.timestamp + 3600);
+        vm.stopPrank();
+    }
+
+    /// @notice Regression (audit 30_3): locker-credit deposit via `SETTLE_POSITION_FROM_DELTAS` is also blocked under
+    ///         ambient seizure (same coupling invariant as raw `SETTLE_POSITION` deposits).
+    function test_audit30_3_ambientSeizure_reverts_settleOnlyDeposit_settleFromDeltas_lockerCredits() public {
+        uint256 tokenId = 1;
+        uint256 positionIndex = 0;
+
+        _setupCommittedPosition(
+            positionManager,
+            corePoolKey,
+            abi.encode(liquiditySignal),
+            defaultlLiquidityParams,
+            marketVTSConfiguration,
+            address(lcc0),
+            address(lcc1)
+        );
+        _openSeizeWindow(tokenId, positionIndex);
+
+        uint256 seize0 = 1;
+        uint256 seize1 = 1;
+        MockERC20(address(lcc0.underlying())).mint(guarantor, seize0);
+        MockERC20(address(lcc1.underlying())).mint(guarantor, seize1);
+
+        uint256 syncAmt0 = 100;
+        uint256 syncAmt1 = 100;
+        MockERC20(address(lcc0.underlying())).mint(guarantor, syncAmt0);
+        MockERC20(address(lcc1.underlying())).mint(guarantor, syncAmt1);
+
+        vm.startPrank(guarantor);
+        IERC20(lcc0.underlying()).approve(address(positionManager), type(uint256).max);
+        IERC20(lcc1.underlying()).approve(address(positionManager), type(uint256).max);
+
+        MMA.PreparedAction[] memory actions = new MMA.PreparedAction[](4);
+        actions[0] = MMA.prepareSeize(corePoolKey, tokenId, positionIndex, seize0, seize1, false);
+        IERC20(lcc0.underlying()).transfer(address(positionManager), syncAmt0);
+        IERC20(lcc1.underlying()).transfer(address(positionManager), syncAmt1);
+        actions[1] = MMA.prepareSync(Currency.wrap(address(lcc0.underlying())));
+        actions[2] = MMA.prepareSync(Currency.wrap(address(lcc1.underlying())));
+        actions[3] = MMA.prepareSettleFromDeltas(corePoolKey, tokenId, positionIndex, false, false);
+        vm.expectRevert(Errors.SeizureSettleOnlyDepositDisallowed.selector);
+        MMA.executeWithUnlock(positionManager, actions, block.timestamp + 3600);
+        vm.stopPrank();
+    }
+
+    /// @notice Regression (audit 30_3): protocol-credit *deposit* matrix (`payerIsUser=true`, `shouldTake=false`) must
+    ///         revert under ambient seizure even when no protocol credits are present yet — the forbidden operation is
+    ///         scheduling that path in the same batch as `SEIZE_POSITION`, not merely consuming a non-zero credit.
+    function test_audit30_3_ambientSeizure_reverts_protocolCreditDeposit_settleFromDeltas_payerIsUser_shouldTake_false()
+        public
+    {
+        uint256 tokenId = 1;
+        uint256 positionIndex = 0;
+
+        _setupCommittedPosition(
+            positionManager,
+            corePoolKey,
+            abi.encode(liquiditySignal),
+            defaultlLiquidityParams,
+            marketVTSConfiguration,
+            address(lcc0),
+            address(lcc1)
+        );
+        _openSeizeWindow(tokenId, positionIndex);
+
+        uint256 seize0 = 1;
+        uint256 seize1 = 1;
+        MockERC20(address(lcc0.underlying())).mint(guarantor, seize0);
+        MockERC20(address(lcc1.underlying())).mint(guarantor, seize1);
+
+        vm.startPrank(guarantor);
+        IERC20(lcc0.underlying()).approve(address(positionManager), type(uint256).max);
+        IERC20(lcc1.underlying()).approve(address(positionManager), type(uint256).max);
+
+        MMA.PreparedAction[] memory actions = new MMA.PreparedAction[](2);
+        actions[0] = MMA.prepareSeize(corePoolKey, tokenId, positionIndex, seize0, seize1, false);
+        actions[1] = MMA.prepareSettleFromDeltas(corePoolKey, tokenId, positionIndex, true, false);
+        vm.expectRevert(Errors.SeizureSettleOnlyDepositDisallowed.selector);
+        MMA.executeWithUnlock(positionManager, actions, block.timestamp + 3600);
+        vm.stopPrank();
+    }
+
+    /// @notice Positive control: withdraw-style `SETTLE_POSITION_FROM_DELTAS` remains valid in the same batch after seizure.
+    function test_audit30_3_ambientSeizure_allows_settleFromDeltas_withdrawProtocolCredit_afterSeize() public {
+        uint256 tokenId = 1;
+        uint256 positionIndex = 0;
+
+        _setupCommittedPosition(
+            positionManager,
+            corePoolKey,
+            abi.encode(liquiditySignal),
+            defaultlLiquidityParams,
+            marketVTSConfiguration,
+            address(lcc0),
+            address(lcc1)
+        );
+        _openSeizeWindow(tokenId, positionIndex);
+
+        uint256 settleAmount0 = 5999709018652707;
+        uint256 settleAmount1 = 5999709018652707;
+        IERC20(lcc0.underlying()).transfer(guarantor, settleAmount0);
+        IERC20(lcc1.underlying()).transfer(guarantor, settleAmount1);
+
+        vm.startPrank(guarantor);
+        IERC20(lcc0.underlying()).approve(address(positionManager), settleAmount0);
+        IERC20(lcc1.underlying()).approve(address(positionManager), settleAmount1);
+
+        MMA.PreparedAction[] memory actions = new MMA.PreparedAction[](4);
+        actions[0] = MMA.prepareSeize(corePoolKey, tokenId, positionIndex, settleAmount0, settleAmount1, false);
+        actions[1] = MMA.prepareSettleFromDeltas(corePoolKey, tokenId, positionIndex, true, true);
+        actions[2] = MMA.prepareTake(Currency.wrap(address(lcc0)), guarantor, 0);
+        actions[3] = MMA.prepareTake(Currency.wrap(address(lcc1)), guarantor, 0);
+        MMA.executeWithUnlock(positionManager, actions, block.timestamp + 3600);
+        vm.stopPrank();
+    }
+
     function test_seizeContext_clearedAfterBatch_preventsCrossBatchApprovalBypass() public {
         // Objective:
         // - Ensure the transient SEIZED_POSITION_ID context is cleared at the end of a batch.

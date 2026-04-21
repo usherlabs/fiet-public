@@ -60,6 +60,7 @@ abstract contract PositionManagerEntrypoint is PositionManagerBase {
     ///      `_beforeBatch` in the same transaction (multicall-safe, multi-entrypoint-safe).
     function _afterBatch() internal {
         TransientSlots.clearSeizedPositionId();
+        TransientSlots.clearSeizurePrimarySettleAllowed();
         // Owner-scoped and market-scoped transient namespaces both resolve through the orchestrator boundary.
         vtsOrchestrator.assertNonZeroDeltas(marketFactory);
         TransientSlots.setNativeLastSeenBalance(address(this).balance);

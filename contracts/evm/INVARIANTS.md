@@ -550,7 +550,7 @@ being an informal “should”.
 ### Policy reference: seizure economics (amendment 2026-04-19)
 
 - **Agents/spec**: Normative **economic intent** for guarantor seizure (base tranche, proportional cure of overdue RfS, position-wide aggregation) is documented in `agents/spec/Seizure-and-Base-Tranche-Policy.md`. That document supersedes older narrative in `agents/spec/Settlements.md` that described time-linear seizure sizing after grace.
-- **Implementation note**: On-chain seized liquidity units are computed in `src/libraries/VTSLifecycleLinkedLib.sol::_calcSeizure`. The outer MM settle path captures **pre-intervention** RfS (`R_pre`) from `getRFS` immediately before settlement deposits mutate position accounting; `getRFS` compares requirements against **effective** settled (`settled + settledOverflow`) per lane. Per-lane **cured amount** is `S_eff = min(S_lane, R_pre)` from that snapshot (not from post-settlement remainders), so a transaction that **fully closes** RfS in the same step can still yield **non-zero** seized units when the snapshot showed overdue obligation. With commitment `C`, base rate `baseBps`, and denominator `B = 10_000`, seized liquidity units per step are `floor(L · inner / denom)` where: if `C == 0`, `inner = baseBps · S_eff`, `denom = B · R_pre`; else if `R_pre > C`, `inner = S_eff`, `denom = R_pre`; else if `baseBps · C ≥ B · R_pre`, `inner = baseBps · S_eff`, `denom = B · R_pre`; else `inner = S_eff`, `denom = C`. Fractional remainder is accumulated in **Q128** via `src/libraries/SeizureCarryQ128Lib.sol` into `PositionAccounting.seizureLiquidityCarry` (path independence across split cures). `LiquidityUtils.exposureBpsFloor` is **not** used for seizure sizing. `PositionAccounting.seizureLiquidityCarry` is **cleared** only when `VTSPositionLib._trackCommitment` runs with **zero** live liquidity (full deactivation); non-terminal commitment refreshes (including zero-delta `touchPosition` pokes that recompute `commitmentMax`) **preserve** carry so split cures stay path-independent. Per-lane carry is also cleared in `_calcSeizure` when `R_pre == 0` for that lane. `minResidualUnits` applies after this cumulative sizing step. Treat `INVARIANTS.md` enforcement points as authoritative for **what reverts**; treat the agents spec as authoritative for **economic intent**, with this note describing **current sizing alignment**.
+- **Implementation note**: On-chain seized liquidity units are computed in `src/libraries/VTSLifecycleLinkedLib.sol::_calcSeizure`. The outer MM settle path captures **pre-intervention** RfS (`R_pre`) from `getRFS` immediately before settlement deposits mutate position accounting; `getRFS` compares requirements against **effective** settled (`settled + settledOverflow`) per lane. Per-lane **cured amount** is `S_eff = min(S_lane, R_pre)` from that snapshot (not from post-settlement remainders), so a transaction that **fully closes** RfS in the same step can still yield **non-zero** seized units when the snapshot showed overdue obligation. With commitment `C`, base rate `baseBps`, and denominator `B = 10_000`, seized liquidity units per step are `floor(L · inner / denom)` where: if `C == 0`, `inner = baseBps · S_eff`, `denom = B · R_pre`; else if `R_pre > C`, `inner = S_eff`, `denom = R_pre`; else if `baseBps · C ≥ B · R_pre`, `inner = baseBps · S_eff`, `denom = B · R_pre`; else `inner = S_eff`, `denom = C`. Fractional remainder is accumulated in **Q128** via `src/libraries/SeizureCarryQ128Lib.sol` into `PositionAccounting.seizureLiquidityCarry` (path independence across split cures). `LiquidityUtils.exposureBpsFloor` is **not** used for seizure sizing. `PositionAccounting.seizureLiquidityCarry` is **cleared** only when `VTSPositionLib._trackCommitment` runs with **zero** live liquidity (full deactivation); non-terminal commitment refreshes (including zero-delta `touchPosition` pokes that recompute `commitmentMax`) **preserve** carry so split cures stay path-independent. Per-lane carry is also cleared in `_calcSeizure` when `R_pre == 0` for that lane. `minResidualUnits` applies after this cumulative sizing step. **Coupling rule**: while batch-scoped seizure context is active for a position, **settle-only deposit** actions (`SETTLE_POSITION` / protocol-credit `SETTLE_POSITION_FROM_DELTAS` deposit paths / locker-credit deposit via `_settle` with negative lanes) must **not** run except for the single authorised deposit phase inside `SEIZE_POSITION`, so Q128 carry cannot advance without a matching liquidity decrease in the same logical operation. Treat `INVARIANTS.md` enforcement points as authoritative for **what reverts**; treat the agents spec as authoritative for **economic intent**, with this note describing **current sizing alignment**.
 
 ### SETTLE-01: Withdrawals from active positions are disallowed while RFS is open
 
@@ -888,6 +888,11 @@ being an informal “should”.
   - After a successful `SEIZE_POSITION`, the transient seized-position context may remain live for the remainder of the
     current unlock/batch so the guarantor can complete follow-on settlement / take flows for that **same** seized
     position.
+  - **Settle-only deposits under ambient seizure** (additional deposit settlement after `SEIZE_POSITION` has already run
+    in the batch, while the transient seized ID still matches) are **disallowed**: they would advance `seizureLiquidityCarry`
+    / seizure sizing in `onMMSettle(..., isSeizing=true)` without the coupled `_decreaseInternal` that `SEIZE_POSITION`
+    performs. Withdraw / credit-withdraw paths and non-deposit follow-ons remain valid per the coupling rule in the seizure
+    economics note above.
   - This is not a general approval bypass: the context is valid only when the queried `positionId` exactly matches the
     transient seized ID.
   - The seizure context must be cleared at batch end so it cannot leak into a later batch / unlock session.
@@ -895,8 +900,13 @@ being an informal “should”.
   - `src/MMPositionActionsImpl.sol::_isSeizing` compares the queried `positionId` against
     `TransientSlots.getSeizedPositionId()`.
   - `src/MMPositionActionsImpl.sol::_seizePosition` sets the transient seized-position ID only after
-    `VTSOrchestrator.onSeize(...)` validates seizability.
-  - `src/modules/PositionManagerEntrypoint.sol::_afterBatch` clears `TransientSlots.clearSeizedPositionId()`.
+    `VTSOrchestrator.onSeize(...)` validates seizability, sets `TransientSlots.setSeizurePrimarySettleAllowed(true)` around
+    its paired `_settle` (the only authorised seizing deposit phase), then clears the flag.
+  - `src/MMPositionActionsImpl.sol::_settle` reverts `Errors.SeizureSettleOnlyDepositDisallowed()` on seizing deposit lanes
+    when the primary-settle flag is not set; `src/MMPositionActionsImpl.sol::_settleProtocolCreditsFromDeltas` reverts the
+    same when `isSeizing` is true (protocol-credit deposits bypass `_settle`).
+  - `src/modules/PositionManagerEntrypoint.sol::_afterBatch` clears `TransientSlots.clearSeizedPositionId()` and
+    `TransientSlots.clearSeizurePrimarySettleAllowed()`.
 - **Intended flow consequence**:
   - Batched follow-on actions such as `SEIZE_POSITION -> SETTLE_POSITION_FROM_DELTAS -> TAKE` on the same position are
     part of the supported seizure execution model.

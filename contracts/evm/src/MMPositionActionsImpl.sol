@@ -286,6 +286,9 @@ contract MMPositionActionsImpl is
         bool isSeizing
     ) internal {
         if (credit0 == 0 && credit1 == 0) return;
+        if (isSeizing) {
+            revert Errors.SeizureSettleOnlyDepositDisallowed();
+        }
 
         _callOnMMSettle(
             SettleCallParams({
@@ -330,9 +333,11 @@ contract MMPositionActionsImpl is
         TransientSlots.setSeizedPositionId(positionId);
 
         // negative amounts since we are settling into a position
+        TransientSlots.setSeizurePrimarySettleAllowed(true);
         (BalanceDelta settlementDelta, uint256 seizedLiquidityUnits) = _settle(
             poolKey, tokenId, positionIndex, -amount0.toInt128(), -amount1.toInt128(), usePositionManagerBalance
         );
+        TransientSlots.setSeizurePrimarySettleAllowed(false);
 
         // Fail closed: a zero-liquidity decrease still runs `modifyLiquidity` and can realise accrued LCC fees to the
         // locker (seizer) without removing any position liquidity. Seizure must not proceed unless the settlement
@@ -501,6 +506,10 @@ contract MMPositionActionsImpl is
 
             if (!isSeizing) {
                 MMHelpers.assertApprovedOrOwner(msgSender(), tokenId);
+            }
+
+            if (isSeizing && (amount0 < 0 || amount1 < 0) && !TransientSlots.getSeizurePrimarySettleAllowed()) {
+                revert Errors.SeizureSettleOnlyDepositDisallowed();
             }
 
             callParams = SettleCallParams({
@@ -759,6 +768,20 @@ contract MMPositionActionsImpl is
 
         Currency underlying0 = _lccToUnderlyingCurrency(poolKey.currency0);
         Currency underlying1 = _lccToUnderlyingCurrency(poolKey.currency1);
+
+        // Ambient seizure (AUTH-01A / audit 30_3): `SETTLE_POSITION_FROM_DELTAS` with `payerIsUser=true` and
+        // `shouldTake=false` is the protocol-credit *deposit* matrix cell. It calls `onMMSettle(isSeizing=true)` without
+        // any guaranteed `_decreaseInternal` coupling, so carry and sizing can advance while liquidity stays unchanged.
+        // Forbid this cell whenever the batch already marked this `(tokenId, positionIndex)` as seized — even when
+        // there are no protocol credits yet (otherwise the call would be a misleading no-op while still being the
+        // wrong operation to schedule under seizure).
+        if (payerIsUser && !shouldTake) {
+            (Position memory position, PositionId positionId) = getPosition(tokenId, positionIndex);
+            MMHelpers.assertPositionForPool(poolKey, position);
+            if (_isSeizing(positionId)) {
+                revert Errors.SeizureSettleOnlyDepositDisallowed();
+            }
+        }
 
         // Behaviour matrix:
         // - shouldTake=true && payerIsUser=true:  Withdraw to locker from protocol delta via _settle

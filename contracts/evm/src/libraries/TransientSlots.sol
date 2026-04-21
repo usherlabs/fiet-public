@@ -21,6 +21,10 @@ library TransientSlots {
     /// @dev Last recorded `address(this).balance` after `_afterBatch` (and baseline before first `_beforeBatch`).
     bytes32 internal constant NATIVE_LAST_SEEN_BALANCE_SLOT = keccak256("NATIVE_LAST_SEEN_BALANCE");
     bytes32 internal constant SEIZED_POSITION_ID_SLOT = keccak256("SEIZED_POSITION_ID");
+    /// @dev When true, `_settle` may perform seizing deposit lanes for the single authorised `SEIZE_POSITION` phase.
+    ///      Prevents ambient batch-scoped seizure context from running settle-only deposits that advance seizure carry
+    ///      without a coupled liquidity decrease.
+    bytes32 internal constant SEIZURE_PRIMARY_SETTLE_ALLOWED_SLOT = keccak256("SEIZURE_PRIMARY_SETTLE_ALLOWED");
     bytes32 internal constant PLANNED_CANCEL_SLOT = keccak256("PLANNED_CANCEL");
     bytes32 internal constant PLANNED_CANCEL_WITH_QUEUE_SLOT = keccak256("PLANNED_CANCEL_WITH_QUEUE");
 
@@ -80,6 +84,18 @@ library TransientSlots {
     /// @dev Clears the seizure context slot to avoid within-tx ambient-authority leakage.
     function clearSeizedPositionId() internal {
         TransientSlot.asBytes32(TransientSlots.SEIZED_POSITION_ID_SLOT).tstore(bytes32(0));
+    }
+
+    function setSeizurePrimarySettleAllowed(bool allowed) internal {
+        TransientSlot.asBoolean(TransientSlots.SEIZURE_PRIMARY_SETTLE_ALLOWED_SLOT).tstore(allowed);
+    }
+
+    function getSeizurePrimarySettleAllowed() internal view returns (bool) {
+        return TransientSlot.asBoolean(TransientSlots.SEIZURE_PRIMARY_SETTLE_ALLOWED_SLOT).tload();
+    }
+
+    function clearSeizurePrimarySettleAllowed() internal {
+        TransientSlot.asBoolean(TransientSlots.SEIZURE_PRIMARY_SETTLE_ALLOWED_SLOT).tstore(false);
     }
 
     // ------------------------------
