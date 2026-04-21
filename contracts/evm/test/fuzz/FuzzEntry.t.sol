@@ -29,6 +29,10 @@ contract FuzzEntryTest is Test {
         assertTrue(entry.fuzz_pause_01_proc_swap_guards_hold());
         assertTrue(entry.fuzz_pause_01_active_settle_guard_holds());
         assertTrue(entry.fuzz_pause_01_inactive_settle_guard_holds());
+        assertTrue(entry.fuzz_settle_01_withdraw_reverts_when_rfs_open());
+        assertTrue(entry.fuzz_settle_01_aux_withdraw_succeeds_when_rfs_closed());
+        assertTrue(entry.fuzz_settle_02_seizing_clamps_hold());
+        assertTrue(entry.fuzz_settle_02_smoke());
         assertTrue(entry.fuzz_sig_01_valid_signal_succeeds());
         assertTrue(entry.fuzz_sig_01_stale_nonce_reverts());
         assertTrue(entry.fuzz_sig_02_invalid_proof_reverts());

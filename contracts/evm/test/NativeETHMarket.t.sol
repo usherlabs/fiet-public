@@ -25,7 +25,7 @@ import {IOracleHelper} from "../src/interfaces/IOracleHelper.sol";
 import {StateLibrary} from "v4-periphery/lib/v4-core/src/libraries/StateLibrary.sol";
 import {IPoolManager} from "v4-periphery/lib/v4-core/src/interfaces/IPoolManager.sol";
 import {CurrencyTransfer} from "../src/libraries/CurrencyTransfer.sol";
-import {Position} from "../src/types/Position.sol";
+import {Position, PositionId} from "../src/types/Position.sol";
 import {MMActionAdapter as MMA} from "./utils/MMActionAdapter.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {Errors} from "../src/libraries/Errors.sol";
@@ -696,12 +696,26 @@ contract NativeETHMarket is MarketTestBase, MarketMakerTestBase {
         positionManager.modifyLiquidities{value: ethToSend}(unlockData, block.timestamp + 3600);
         vm.stopPrank();
 
-        uint256 selfEthBalanceAfter = locker.balance;
+        _assertLockerEthSpendMatchesNativeEffectiveSettled(selfEthBalanceBefore, locker, 1, 0);
+    }
 
-        // Validate ETH was consumed for settlement: only the required amount was used
-        // The excess ETH should have been returned via the TAKE action
-        // `settled` vs `settledOverflow` split can shift native consumption vs legacy live-only accounting by O(1) wei per lane
-        assertApproxEqAbs(selfEthBalanceAfter, selfEthBalanceBefore - c0, 2e18, "Some excess ETH should be refunded");
+    function _assertLockerEthSpendMatchesNativeEffectiveSettled(
+        uint256 lockerEthBalanceBefore,
+        address locker,
+        uint256 tokenId,
+        uint256 positionIndex
+    ) internal view {
+        uint256 lockerEthBalanceAfter = locker.balance;
+        (, PositionId positionId) = positionManager.getPosition(tokenId, positionIndex);
+        (uint256 settled0, uint256 settled1) = vtsOrchestrator.getPositionSettledAmounts(positionId);
+        bool nativeIsToken0 = Currency.unwrap(corePoolKey.currency0) == address(lcc0);
+        uint256 nativeEffectiveSettled = nativeIsToken0 ? settled0 : settled1;
+
+        assertEq(
+            lockerEthBalanceAfter,
+            lockerEthBalanceBefore - nativeEffectiveSettled,
+            "locker ETH spend should equal native effective settled backing"
+        );
     }
 
     /// @dev Reduces stack depth in `test_settle_nativeNegativeDelta_usePositionManagerBalanceFalse_reverts_andDoesNotDrainMmpmEth`.

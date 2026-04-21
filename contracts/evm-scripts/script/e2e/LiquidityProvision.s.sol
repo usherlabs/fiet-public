@@ -61,11 +61,14 @@ contract LiquidityProvisionE2E is E2EBase {
         require(_absDiff(a, b) <= tol, err);
     }
 
-    function _swapAndAssert(StandaloneMarket memory m, uint256 lpPk, PoolKey memory corePoolKey) internal {
+    function _swapAndAssert(StandaloneMarket memory m, uint256 lpPk, PoolKey memory corePoolKey)
+        internal
+        returns (address tokenIn, address tokenOut, uint256 swapSpent, uint256 swapReceived)
+    {
         IPoolManager poolManager = IPoolManager(config.poolManager);
         (uint160 sqrtPriceX96BeforeSwap,,,) = poolManager.getSlot0(corePoolKey.toId());
         uint256 expectedAmountIn = _quoteExactOutputSingle(_deployQuoter(), corePoolKey, ZERO_FOR_ONE, SWAP_AMOUNT_OUT);
-        (address tokenIn, address tokenOut, uint256 swapSpent, uint256 swapReceived) =
+        (tokenIn, tokenOut, swapSpent, swapReceived) =
             _swapExactOutputSingle(m, lpPk, ZERO_FOR_ONE, SWAP_AMOUNT_OUT, expectedAmountIn);
         require(tokenIn == Currency.unwrap(corePoolKey.currency0), "swap tokenIn mismatch");
         require(tokenOut == Currency.unwrap(corePoolKey.currency1), "swap tokenOut mismatch");
@@ -80,12 +83,12 @@ contract LiquidityProvisionE2E is E2EBase {
         uint256 lpPk,
         PoolKey memory corePoolKey,
         uint256 tokenId,
-        address curr0Addr,
-        address curr1Addr,
         address lp
     ) internal {
         IPositionManager positionManager = IPositionManager(payable(config.positionManager));
         ILiquidityHub hub = ILiquidityHub(m.stack.contracts.liquidityHub);
+        address curr0Addr = Currency.unwrap(corePoolKey.currency0);
+        address curr1Addr = Currency.unwrap(corePoolKey.currency1);
 
         vm.startBroadcast(lpPk);
         uint256 curr0BeforeBurn = IERC20(curr0Addr).balanceOf(lp);
@@ -108,6 +111,33 @@ contract LiquidityProvisionE2E is E2EBase {
         vm.stopBroadcast();
     }
 
+    function _assertPostUnwrapBalances(StandaloneMarket memory m, address lp, uint256 ua0Before, uint256 ua1Before)
+        internal
+        view
+    {
+        uint256 ua0After = IERC20(m.underlying0).balanceOf(lp);
+        uint256 ua1After = IERC20(m.underlying1).balanceOf(lp);
+        uint256 lcc0After = IERC20(m.lcc0).balanceOf(lp);
+        uint256 lcc1After = IERC20(m.lcc1).balanceOf(lp);
+
+        // `_addCoreLiquidityFullRange` mints fresh underlying locally before wrapping it into LCC for the LP.
+        // Because this runner later burns the only LP position and unwraps all residual LCC, the aggregate
+        // post-run underlying balances should round-trip back to the pre-flow wallet balance plus the locally
+        // provisioned inventory, independent of the intermediate self-trade against that same pool.
+        uint256 expectedUa0After = ua0Before + WRAP_AMOUNT_PER_ASSET;
+        uint256 expectedUa1After = ua1Before + WRAP_AMOUNT_PER_ASSET;
+        _assertApproxEq(ua0After, expectedUa0After, AMOUNT_TOLERANCE, "underlying delta: ua0 != expected");
+        _assertApproxEq(ua1After, expectedUa1After, AMOUNT_TOLERANCE, "underlying delta: ua1 != expected");
+
+        console.log("final checkpoints:");
+        console.log("lcc0 final:", lcc0After);
+        console.log("lcc1 final:", lcc1After);
+        console.log("ua0 before/after:", ua0Before, ua0After);
+        console.log("ua1 before/after:", ua1Before, ua1After);
+        _assertApproxEq(lcc0After, 0, AMOUNT_TOLERANCE, "final LCC0 should be ~0 after unwrap");
+        _assertApproxEq(lcc1After, 0, AMOUNT_TOLERANCE, "final LCC1 should be ~0 after unwrap");
+    }
+
     function run() external {
         console.log("=== E2E: LiquidityProvision ===");
         // Load LP signer.
@@ -128,34 +158,14 @@ contract LiquidityProvisionE2E is E2EBase {
         uint256 ua1Before = IERC20(m.underlying1).balanceOf(lp);
 
         PoolKey memory corePoolKey = _corePoolKey(m);
-        address curr0Addr = Currency.unwrap(corePoolKey.currency0);
-        address curr1Addr = Currency.unwrap(corePoolKey.currency1);
         uint256 tokenId = _addCoreLiquidityFullRange(m, lpPk, WRAP_AMOUNT_PER_ASSET, LIQUIDITY_AMOUNT_MAX);
         console.log("minted LP position tokenId:", tokenId);
-        console.log("currency0:", curr0Addr);
-        console.log("currency1:", curr1Addr);
+        console.log("currency0:", Currency.unwrap(corePoolKey.currency0));
+        console.log("currency1:", Currency.unwrap(corePoolKey.currency1));
 
         _swapAndAssert(m, lpPk, corePoolKey);
-        _removeAndUnwrap(m, lpPk, corePoolKey, tokenId, curr0Addr, curr1Addr, lp);
-
-        // Snapshot balances after unwrap.
-        uint256 ua0After = IERC20(m.underlying0).balanceOf(lp);
-        uint256 ua1After = IERC20(m.underlying1).balanceOf(lp);
-        uint256 lcc0After = IERC20(m.lcc0).balanceOf(lp);
-        uint256 lcc1After = IERC20(m.lcc1).balanceOf(lp);
-
-        // Milestone 2: Underlying round-trips after unwrap (LP ends with ~same underlying as started).
-        _assertApproxEq(ua0After, ua0Before, AMOUNT_TOLERANCE, "underlying roundtrip: ua0 != before");
-        _assertApproxEq(ua1After, ua1Before, AMOUNT_TOLERANCE, "underlying roundtrip: ua1 != before");
-
-        console.log("final checkpoints:");
-        console.log("lcc0 final:", lcc0After);
-        console.log("lcc1 final:", lcc1After);
-        console.log("ua0 before/after:", ua0Before, ua0After);
-        console.log("ua1 before/after:", ua1Before, ua1After);
-        _assertApproxEq(lcc0After, 0, AMOUNT_TOLERANCE, "final LCC0 should be ~0 after unwrap");
-        _assertApproxEq(lcc1After, 0, AMOUNT_TOLERANCE, "final LCC1 should be ~0 after unwrap");
+        _removeAndUnwrap(m, lpPk, corePoolKey, tokenId, lp);
+        _assertPostUnwrapBalances(m, lp, ua0Before, ua1Before);
         console.log("OK: stateful DirectLP add->swap->remove->unwrap verified");
     }
 }
-

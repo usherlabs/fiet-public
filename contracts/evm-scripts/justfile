@@ -656,7 +656,42 @@ read-deployment:
 
 # === E2E ===
 # Note: Make sure fork is running
-e2e: e2e-deploy e2e-normal-lp e2e-market-maker e2e-mm-coverage e2e-cross-market-delta
+e2e:
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    CREATE3_FACTORY_FILE="deployments/create3_factory_{{ network }}.address"
+    if [ -n "${CREATE3_FACTORY:-}" ]; then
+        CREATE3_FACTORY_ADDR="$CREATE3_FACTORY"
+    elif [ "{{ mode }}" = "LOCAL" ]; then
+        CREATE3_FACTORY_ADDR="0x9fBB3DF7C40Da2e5A0dE984fFE2CCB7C47cd0ABf"
+    elif [ -f "$CREATE3_FACTORY_FILE" ] && [ -s "$CREATE3_FACTORY_FILE" ]; then
+        CREATE3_FACTORY_ADDR="$(tr -d '\n\r' < "$CREATE3_FACTORY_FILE" | head -n1)"
+    elif [ "{{ network }}" = "sepolia" ]; then
+        CREATE3_FACTORY_ADDR="0x0EC3715467915Cbd7355A6B111510e4a09D9ccC0"
+    else
+        CREATE3_FACTORY_ADDR="0x9fBB3DF7C40Da2e5A0dE984fFE2CCB7C47cd0ABf"
+    fi
+    export CREATE3_FACTORY="$CREATE3_FACTORY_ADDR"
+
+    CREATE3_CODE="$(cast code "$CREATE3_FACTORY_ADDR" --rpc-url {{ rpc_url }})"
+    if [ "$CREATE3_CODE" = "0x" ] && [ "{{ mode }}" = "LOCAL" ] \
+        && [ "$CREATE3_FACTORY_ADDR" = "0x9fBB3DF7C40Da2e5A0dE984fFE2CCB7C47cd0ABf" ]; then
+        echo "CREATE3 factory missing on local fork at canonical address; bootstrapping via setup-create3..."
+        just setup-create3
+        CREATE3_CODE="$(cast code "$CREATE3_FACTORY_ADDR" --rpc-url {{ rpc_url }})"
+    fi
+    if [ "$CREATE3_CODE" = "0x" ]; then
+        echo "CREATE3 factory has no code on current RPC: $CREATE3_FACTORY_ADDR"
+        echo "Set CREATE3_FACTORY to a deployed factory or run: just setup-create3"
+        exit 1
+    fi
+
+    just e2e-deploy
+    just e2e-normal-lp
+    just e2e-market-maker
+    just e2e-mm-coverage
+    just e2e-cross-market-delta
 
 # E2E: Multi-market MM regression (shared underlyings across four markets; decrease/mint-from-deltas/settle-from-deltas).
 e2e-cross-market-delta:
@@ -751,6 +786,39 @@ e2e-market-maker:
     FOUNDRY_PROFILE={{ foundry_profile }} forge script {{ script_dir }}/e2e/MarketMaker.s.sol:MarketMakerE2E \
         --rpc-url {{ rpc_url }} \
         {{ broadcast_flag }} -vvv
+
+# E2E: MM matrix — extreme unserviceable remnant (profile × DirectLP buffer).
+e2e-mm-extreme-unserviceable:
+    FOUNDRY_PROFILE={{ foundry_profile }} forge script {{ script_dir }}/e2e/MarketMakerExtremeUnserviceable.s.sol:MarketMakerExtremeUnserviceableE2E \
+        --rpc-url {{ rpc_url }} \
+        {{ broadcast_flag }} -vvv
+
+# E2E: MM matrix — adaptive round-trip trading (serviceable exit).
+e2e-mm-serviceable-round-trip:
+    FOUNDRY_PROFILE={{ foundry_profile }} forge script {{ script_dir }}/e2e/MarketMakerServiceableRoundTrip.s.sol:MarketMakerServiceableRoundTripE2E \
+        --rpc-url {{ rpc_url }} \
+        {{ broadcast_flag }} -vvv
+
+# E2E: MM matrix — reserve-shaped trading (multi modest rounds).
+e2e-mm-serviceable-reserve-shaped:
+    FOUNDRY_PROFILE={{ foundry_profile }} forge script {{ script_dir }}/e2e/MarketMakerServiceableReserveShaped.s.sol:MarketMakerServiceableReserveShapedE2E \
+        --rpc-url {{ rpc_url }} \
+        {{ broadcast_flag }} -vvv
+
+# E2E: MM matrix — modest swap volume + tick bounds.
+e2e-mm-modest-swap:
+    FOUNDRY_PROFILE={{ foundry_profile }} forge script {{ script_dir }}/e2e/MarketMakerModestSwap.s.sol:MarketMakerModestSwapE2E \
+        --rpc-url {{ rpc_url }} \
+        {{ broadcast_flag }} -vvv
+
+# E2E: MM matrix — wide/deep stress vs tightTiny baseline.
+e2e-mm-wide-deep-stress:
+    FOUNDRY_PROFILE={{ foundry_profile }} forge script {{ script_dir }}/e2e/MarketMakerWideOrDeepStress.s.sol:MarketMakerWideOrDeepStressE2E \
+        --rpc-url {{ rpc_url }} \
+        {{ broadcast_flag }} -vvv
+
+# E2E: MM matrix — all scenario runners above (long-running).
+e2e-mm-matrix: e2e-mm-extreme-unserviceable e2e-mm-serviceable-round-trip e2e-mm-serviceable-reserve-shaped e2e-mm-modest-swap e2e-mm-wide-deep-stress
 
 # E2E: MMCoverage (fee-free multi-MM settlement / checkpoint / poke / exit path).
 e2e-mm-coverage:

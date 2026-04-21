@@ -7,6 +7,7 @@
 #   just --list
 #   just fuzz
 #   just medusa-entry
+#   just echidna-prepare
 #
 
 set export := true
@@ -35,6 +36,11 @@ medusa-entry-deep *args:
 
 medusa-mmq-01 *args:
     @just medusa-entry {{ args }}
+
+# Compatibility preflight for older Echidna-era automation.
+# This only materializes the supported FuzzEntry build artifacts.
+echidna-prepare:
+    FOUNDRY_PROFILE=medusa FOUNDRY_OUT_DIR=out-medusa forge build --force
 
 # Run the supported Medusa entry contract (default config: `medusa.json`).
 fuzz:

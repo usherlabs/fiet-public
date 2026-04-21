@@ -13,7 +13,9 @@ pragma solidity ^0.8.26;
  * - Create one MM position (commit → mint → settle).
  * - Execute swaps in both directions to generate fee growth.
  * - Poke the position (no-op increase + take) to materialise any pending fee adjustments as LCC balances.
- * - Close RFS (if open), then burn + settle-from-deltas, drain inactive economic remnant if any, decommit, and take credits.
+ * - Close RFS (if open), then burn + settle-from-deltas, drain inactive economic remnant if any (if the vault clamps
+ *   withdrawals, assert recognised unserviceable overflow then perform directional reserve-replenishing swaps and re-drain),
+ *   decommit, and take credits.
  * - Unwrap any remaining LCCs back to underlyings and assert 1:1 deltas.
  *
  * Env:
@@ -35,9 +37,6 @@ contract MarketMakerE2E is MME2EBase {
     int24 internal constant TICK_LOWER = -60;
     int24 internal constant TICK_UPPER = 60;
 
-    uint256 internal constant WRAP_FOR_SWAPS = 50_000e18;
-    uint128 internal constant BIG_SWAP_AMOUNT_IN = 5_000e18;
-
     function _loadMmPrivateKey() internal view returns (uint256 mmPk) {
         mmPk = uint256(
             _requireEnvBytes32("LP_PRIVATE_KEY", "Missing LP_PRIVATE_KEY env var (anvil keys can be used directly)")
@@ -46,12 +45,12 @@ contract MarketMakerE2E is MME2EBase {
 
     function _runTradingPhase(StandaloneMarket memory m, uint256 mmPk, uint256 commitId) internal {
         uint256 takerPk = _getDeployerPrivateKey();
-        _swapBothDirections(m, takerPk, WRAP_FOR_SWAPS, BIG_SWAP_AMOUNT_IN);
-        _pokePosition(m, mmPk, commitId);
+        _runAdaptiveRoundTripTradingPhase(m, mmPk, takerPk, commitId, MM_E2E_BIG_SWAP_IN, 100e18, 40);
     }
 
     function _runExitPhase(StandaloneMarket memory m, uint256 mmPk, uint256 commitId) internal {
-        _closeRfsBurnDecommitAndTakeAllLccs(m, mmPk, commitId);
+        uint256 rebalanceTakerPk = _getDeployerPrivateKey();
+        _closeRfsBurnDrainRebalanceDecommitAndTakeAllLccs(m, mmPk, rebalanceTakerPk, commitId);
         _unwrapAllLccsAndAssert(m, mmPk, commitId, 0, true);
     }
 
