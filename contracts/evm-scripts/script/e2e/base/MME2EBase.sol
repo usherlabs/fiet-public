@@ -412,6 +412,29 @@ abstract contract MME2EBase is E2EBase {
         console.log("OK: classified terminal dust remnant after bounded rebalance");
     }
 
+    function _runReserveRebalanceRound(
+        StandaloneMarket memory m,
+        uint256 mmPk,
+        uint256 rebalanceTakerPk,
+        uint256 commitId,
+        uint256 positionIndex,
+        uint128 rebalanceSwapChunk,
+        uint256 rebalanceWrapAmount,
+        uint256 round
+    ) internal returns (bool settledAlreadyEmpty, bool drainedAfterRound) {
+        (uint256 eff0, uint256 eff1) =
+            _getEffectiveSettledPair(IVTSOrchestrator(m.stack.contracts.vtsOrchestrator), commitId, positionIndex);
+        if (eff0 == 0 && eff1 == 0) {
+            return (true, true);
+        }
+
+        console.log("e2e: reserve rebalance round:", round);
+        _rebalanceStrandedLanesForInactiveDrain(m, rebalanceTakerPk, eff0, eff1, rebalanceSwapChunk, rebalanceWrapAmount);
+        _logMakerHealth("after reserve rebalance + pool trade", _snapshotMakerHealth(m, commitId, positionIndex));
+
+        drainedAfterRound = _drainInactivePositionSurplusBestEffort(m, mmPk, commitId, positionIndex, 32);
+    }
+
     /// @dev Close RFS → burn + realise credits → drain inactive surplus; if stalled, assert unserviceable overflow,
     ///      perform bounded directional reserve replenishment swaps, re-drain, then decommit (unwrap separately).
     function _closeRfsBurnDrainRebalanceDecommitAndTakeAllLccs(
@@ -443,25 +466,23 @@ abstract contract MME2EBase is E2EBase {
             _assertRecognisedUnserviceableOverflowBeforeRebalance(m, mmPk, commitId, positionIndex);
 
             for (uint256 r = 0; r < maxRebalanceRounds; r++) {
-                (uint256 eff0, uint256 eff1) = _getEffectiveSettledPair(
-                    IVTSOrchestrator(m.stack.contracts.vtsOrchestrator), commitId, positionIndex
+                (bool settledAlreadyEmpty, bool drainedAfterRound) = _runReserveRebalanceRound(
+                    m,
+                    mmPk,
+                    rebalanceTakerPk,
+                    commitId,
+                    positionIndex,
+                    rebalanceSwapChunk,
+                    rebalanceWrapAmount,
+                    r
                 );
-                if (eff0 == 0 && eff1 == 0) {
+                if (settledAlreadyEmpty) {
                     drained = true;
                     break;
                 }
 
-                console.log("e2e: reserve rebalance round:", r);
-                _rebalanceStrandedLanesForInactiveDrain(
-                    m, rebalanceTakerPk, eff0, eff1, rebalanceSwapChunk, rebalanceWrapAmount
-                );
                 result.rebalanceRoundsUsed = r + 1;
-
-                _logMakerHealth(
-                    "after reserve rebalance + pool trade", _snapshotMakerHealth(m, commitId, positionIndex)
-                );
-
-                drained = _drainInactivePositionSurplusBestEffort(m, mmPk, commitId, positionIndex, 32);
+                drained = drainedAfterRound;
                 if (drained) {
                     break;
                 }

@@ -37,8 +37,9 @@ contract FuzzLiquidityHubParityTest is Test {
 
         address[] memory issuers = new address[](1);
         issuers[0] = address(this);
-        (lcc0, lcc1) =
-            hub.createLCCPair(abi.encodePacked(address(this), bytes1(0x29)), address(underlying0), address(underlying1), "Parity", issuers);
+        (lcc0, lcc1) = hub.createLCCPair(
+            abi.encodePacked(address(this), bytes1(0x29)), address(underlying0), address(underlying1), "Parity", issuers
+        );
         hub.initialize(lcc0, lcc1, MARKET_ID, abi.encodePacked(address(this), bytes1(0x29)));
     }
 
@@ -94,7 +95,9 @@ contract FuzzLiquidityHubParityTest is Test {
         assertEq(FuzzLiquidityHub.processSettlementFor.selector, LiquidityHub.processSettlementFor.selector);
         assertEq(FuzzLiquidityHub.settleFromCustodian.selector, LiquidityHub.settleFromCustodian.selector);
         assertEq(FuzzLiquidityHub.executePlannedCancel.selector, LiquidityHub.executePlannedCancel.selector);
-        assertEq(FuzzLiquidityHub.annulSettlementBeforeTransfer.selector, LiquidityHub.annulSettlementBeforeTransfer.selector);
+        assertEq(
+            FuzzLiquidityHub.annulSettlementBeforeTransfer.selector, LiquidityHub.annulSettlementBeforeTransfer.selector
+        );
     }
 
     /// @dev Mirror of the production Hub regression: endpoint-reported admission credit is capped by the queue and
