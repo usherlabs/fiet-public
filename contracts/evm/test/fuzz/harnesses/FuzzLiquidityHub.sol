@@ -944,27 +944,6 @@ contract FuzzLiquidityHub is BoundRegistry, Ownable, ReentrancyGuardTransient {
     }
 
     /**
-     * @notice Atomically releases queued custody and settles it against the recipient's Hub queue
-     * @dev Best-effort path for collection flows (e.g. MM). Returns 0 when the queue, reserve, or custody
-     *      currently cannot support settlement, instead of reverting. `custodian` must implement `IQueueCustodian`.
-     * @param lcc The LCC token address
-     * @param custodian The queue custodian holding beneficiary-scoped queued LCC
-     * @param tokenId The custodian bucket id to debit (e.g. commitment NFT id, or utility bucket such as `0`)
-     * @param recipient The queue owner and settlement recipient
-     * @param maxAmount The maximum amount to settle
-     */
-    function settleFromCustodian(address lcc, address custodian, uint256 tokenId, address recipient, uint256 maxAmount)
-        external
-        onlyValidLcc(lcc)
-        nonReentrant
-    {
-        uint256 settled = LiquidityHubLib.settleFromCustodian(s, lcc, custodian, tokenId, recipient, maxAmount);
-        if (settled > 0) {
-            _processSettlementFor(lcc, recipient, settled);
-        }
-    }
-
-    /**
      * @notice Internal function to process settlement for a specific recipient
      * @dev Delegates to LiquidityHubLib.processSettlementLogic
      * @param lcc The LCC token address
