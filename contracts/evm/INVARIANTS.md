@@ -254,20 +254,21 @@ being an informal “should”.
   admission. Collapsing unwrap actor and queue owner onto the custodian preserves HUB-02 headroom netting while keeping
   split payout handling in MM composition code (custodian forward), not as a generic unwrap variant.
 
-### MM-QUEUE-01: Recipient-keyed queue custodians; commit-only deployment; utility uses bucket `0`
+### MM-QUEUE-01: Recipient-keyed queue custodians; commit / transfer deployment; utility uses bucket `0`
 
 - **Statement**:
   - `MMPositionManager.custodianFor[recipient]` maps **one** `MMQueueCustodian` per recipient domain (commit NFT owner or
     utility locker domain). **Utility** and **commit** custody share that contract: utility slices use bucket id **`0`**;
     commitment slices use bucket id **`tokenId`** (the commitment NFT id).
-  - A queue custodian is **deployed only** from `_commitSignal` for the mint recipient. Runtime paths that need a
-    custodian (`UNWRAP_LCC` forward, `COLLECT_AVAILABLE_LIQUIDITY`, owner-gated flows that consult the owner’s
-    custodian) **require** an existing mapping and otherwise revert fail-closed (`Errors.QueueCustodianNotDeployed` /
+  - A queue custodian is deployed from `_commitSignal` for the mint recipient, and from `transferFrom` for the
+    transferee when absent, so a commitment NFT owner always has a custodian for runtime paths that key on
+    `ownerOf(tokenId)`. Other runtime paths that need a custodian (`UNWRAP_LCC` forward, `COLLECT_AVAILABLE_LIQUIDITY`,
+    owner-gated flows) **require** an existing mapping and otherwise revert fail-closed (`Errors.QueueCustodianNotDeployed` /
     related guards). There is **no** `LiquidityHub.unwrapTo` and **no** `MarketFactory` dynamic custodian binding for this
     model.
 - **Enforced by**:
-  - `src/MMPositionManager.sol::_deployQueueCustodian` (internal; only `_commitSignal`),
-  - `src/libraries/MMHelpers.sol::assertQueueCustodianForRecipient` / `assertQueueCustodianForCommitToken`,
+  - `src/MMPositionManager.sol::_deployQueueCustodian` (internal; `_commitSignal`, `transferFrom`),
+  - `src/libraries/MMHelpers.sol::assertQueueCustodianForRecipient` / `assertApprovedOrOwnerWithQueueCustodian`,
   - `src/MMPositionManager.sol::_unwrapToQueueForward`, `_collectAvailableLiquidity`, `_decommitSignal`, `transferFrom`
     (with `MMQueueCustodian.isBucketEmpty` for commit buckets).
 - **Native ETH to `MMPositionManager`**: immediate native forwarded from a bound `MMQueueCustodian` after Hub `unwrap`

@@ -13,6 +13,11 @@ interface IMMQueueCustodian {
     /// @notice Returns the MMPositionManager bound to this custodian
     function positionManager() external view returns (address);
 
+    /// @notice Aggregate beneficiary-scoped custody still outstanding for `lcc` (LCC units), across all buckets.
+    /// @dev Used with `LiquidityHub.settleQueue(lcc, address(this))` to cap payout of underlying already received
+    ///      when the Hub queue was settled permissionlessly before `COLLECT_AVAILABLE_LIQUIDITY`.
+    function totalQueuedLcc(address lcc) external view returns (uint256);
+
     /// @notice Reads custodied LCC balance for a bucket, LCC, and beneficiary slice.
     function queued(uint256 tokenId, address lcc, address beneficiary) external view returns (uint256);
 

@@ -34,6 +34,10 @@ contract MockSettleCustodian is IMMQueueCustodian {
         return _custody[tokenId][lcc][beneficiary];
     }
 
+    function totalQueuedLcc(address) external pure override returns (uint256) {
+        return 0;
+    }
+
     function collectUnderlyingToBeneficiary(uint256, address, address, uint256) external pure override {}
 
     function isBucketEmpty(uint256) external pure override returns (bool) {

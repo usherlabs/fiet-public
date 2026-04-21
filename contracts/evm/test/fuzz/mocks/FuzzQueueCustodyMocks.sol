@@ -33,6 +33,7 @@ contract FuzzMMQueueCustodian is IMMQueueCustodian {
 
     mapping(uint256 tokenId => mapping(address lcc => mapping(address beneficiary => uint256 amount))) private _queued;
     mapping(uint256 bucketId => uint256 total) private _bucketTotals;
+    mapping(address lcc => uint256 total) private _totalLcc;
 
     modifier onlyPositionManager() {
         if (msg.sender != positionManager) revert Errors.InvalidSender();
@@ -66,6 +67,11 @@ contract FuzzMMQueueCustodian is IMMQueueCustodian {
         if (amount == 0) return;
         _queued[tokenId][lcc][beneficiary] += amount;
         _bucketTotals[tokenId] += amount;
+        _totalLcc[lcc] += amount;
+    }
+
+    function totalQueuedLcc(address lcc) external view override returns (uint256) {
+        return _totalLcc[lcc];
     }
 
     function isBucketEmpty(uint256 bucketId) external view override returns (bool) {
@@ -76,5 +82,16 @@ contract FuzzMMQueueCustodian is IMMQueueCustodian {
         return _queued[tokenId][lcc][beneficiary];
     }
 
-    function collectUnderlyingToBeneficiary(uint256, address, address, uint256) external pure override {}
+    function collectUnderlyingToBeneficiary(uint256 tokenId, address lcc, address beneficiary, uint256 amount)
+        external
+        override
+        onlyPositionManager
+    {
+        if (amount == 0) return;
+        uint256 q = _queued[tokenId][lcc][beneficiary];
+        if (q < amount) revert Errors.InsufficientBalance(q, amount);
+        _queued[tokenId][lcc][beneficiary] = q - amount;
+        _bucketTotals[tokenId] -= amount;
+        _totalLcc[lcc] -= amount;
+    }
 }

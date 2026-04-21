@@ -3,6 +3,9 @@ pragma solidity ^0.8.26;
 
 import "forge-std/Test.sol";
 
+import {ERC20} from "openzeppelin-contracts/contracts/token/ERC20/ERC20.sol";
+import {IERC20} from "openzeppelin-contracts/contracts/token/ERC20/IERC20.sol";
+
 import {MMQueueCustodian} from "../src/MMQueueCustodian.sol";
 import {MMQueueCustodianFactory} from "../src/MMQueueCustodianFactory.sol";
 import {IMarketFactory} from "../src/interfaces/IMarketFactory.sol";
@@ -88,8 +91,88 @@ contract MMQueueCustodianTest is Test {
         assertFalse(custodian.isBucketEmpty(TOKEN_ID_B));
     }
 
+    function test_totalQueuedLcc_tracksRecordsAcrossBuckets() public {
+        vm.startPrank(address(positionManager));
+        custodian.record(TOKEN_ID_A, address(lcc), beneficiary, 10);
+        custodian.record(TOKEN_ID_B, address(lcc), beneficiary, 7);
+        assertEq(custodian.totalQueuedLcc(address(lcc)), 17);
+        vm.stopPrank();
+    }
+
     function test_isBucketEmpty_trueWhenBucketUnused() public {
         assertTrue(custodian.isBucketEmpty(TOKEN_ID_A));
+    }
+}
+
+/// @dev No `receive` / `fallback`: native ETH transfer from custodian fails; WETH fallback must apply (see HUB-02C).
+contract NonPayableBeneficiary {}
+
+/// @dev Minimal Hub exposing `weth9()` for `MMQueueCustodian._payNativeWithWethFallback`.
+contract MockHubForWeth {
+    address public immutable weth;
+
+    constructor(address _weth) {
+        weth = _weth;
+    }
+
+    function weth9() external view returns (address) {
+        return weth;
+    }
+}
+
+/// @dev Native-backed LCC: `underlying() == address(0)`, `hub()` returns the mock Hub above.
+contract MockLccNative {
+    address public immutable hub;
+
+    constructor(address _hub) {
+        hub = _hub;
+    }
+
+    function underlying() external pure returns (address) {
+        return address(0);
+    }
+}
+
+/// @dev Minimal WETH9: `deposit{value}` mints to caller (IWETH9-compatible for custodian wrap).
+contract MockWETH9 is ERC20 {
+    constructor() ERC20("Wrapped Ether", "WETH") {}
+
+    function deposit() external payable {
+        _mint(msg.sender, msg.value);
+    }
+
+    receive() external payable {
+        _mint(msg.sender, msg.value);
+    }
+}
+
+/// @notice Regression: non-payable beneficiary receives WETH when native push fails (mirrors `LiquidityHubLib.transferUnderlying`).
+contract MMQueueCustodianNativeWethFallbackTest is Test {
+    uint256 internal constant TOKEN_ID = 1;
+    uint256 internal constant AMOUNT = 1 ether;
+
+    function test_collectUnderlyingToBeneficiary_nonPayableBeneficiary_receivesWeth() public {
+        DummyPositionManager pm = new DummyPositionManager();
+        MMQueueCustodian cust = new MMQueueCustodian(address(pm));
+
+        MockWETH9 weth = new MockWETH9();
+        MockHubForWeth hub = new MockHubForWeth(address(weth));
+        MockLccNative lccNative = new MockLccNative(address(hub));
+
+        NonPayableBeneficiary beneficiary = new NonPayableBeneficiary();
+
+        vm.startPrank(address(pm));
+        cust.record(TOKEN_ID, address(lccNative), address(beneficiary), AMOUNT);
+        vm.stopPrank();
+
+        vm.deal(address(cust), AMOUNT);
+
+        vm.prank(address(pm));
+        cust.collectUnderlyingToBeneficiary(TOKEN_ID, address(lccNative), address(beneficiary), AMOUNT);
+
+        assertEq(IERC20(address(weth)).balanceOf(address(beneficiary)), AMOUNT);
+        assertEq(address(beneficiary).balance, 0);
+        assertTrue(cust.isBucketEmpty(TOKEN_ID));
     }
 }
 

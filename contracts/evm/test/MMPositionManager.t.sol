@@ -2666,6 +2666,117 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
         );
     }
 
+    /// @notice Regression: permissionless Hub settlement can zero the custodian queue before collect; payout must still succeed.
+    function test_collectAvailableLiquidity_afterPermissionlessPreSettlement_paysFromCustodian() public {
+        address user = makeAddr("userPreSettle");
+        address lccAddr = address(lcc0);
+        MockERC20 underlying = MockERC20(lcc0.underlying());
+        uint256 amount = 250;
+
+        vm.prank(address(proxyHook));
+        ILiquidityHub(liquidityHub).issue(lccAddr, address(liquidityHub), amount);
+
+        vm.mockCall(
+            marketFactory, abi.encodeWithSelector(IMarketFactory.useMarketLiquidity.selector), abi.encode(uint256(0))
+        );
+
+        _wireTestQueueCustodian(user);
+        address utilQ = positionManager.custodianFor(user);
+        vm.prank(address(vtsOrchestrator));
+        ILiquidityHub(liquidityHub)
+            .planCancelWithQueue(lccAddr, address(liquidityHub), address(positionManager), amount, amount, utilQ);
+
+        vm.prank(address(liquidityHub));
+        ILCC(lccAddr).transfer(address(positionManager), amount);
+
+        underlying.mint(address(liquidityHub), amount);
+        vm.prank(address(vtsOrchestrator));
+        ILiquidityHub(liquidityHub).confirmTake(lccAddr, amount, true);
+
+        address custody = positionManager.custodianFor(user);
+        vm.startPrank(address(positionManager));
+        lcc0.transfer(custody, amount);
+        IMMQueueCustodian(custody).record(0, lccAddr, user, amount);
+        vm.stopPrank();
+
+        assertEq(ILiquidityHub(liquidityHub).settleQueue(lccAddr, custody), amount);
+        assertEq(IMMQueueCustodian(custody).totalQueuedLcc(lccAddr), amount);
+
+        address stranger = makeAddr("strangerSettler");
+        vm.prank(stranger);
+        ILiquidityHub(liquidityHub).processSettlementFor(lccAddr, custody, amount);
+
+        assertEq(ILiquidityHub(liquidityHub).settleQueue(lccAddr, custody), 0);
+        assertEq(lcc0.balanceOf(custody), 0);
+        assertEq(underlying.balanceOf(custody), amount);
+
+        uint256 beforeUnderlying = underlying.balanceOf(user);
+        MMA.PreparedAction[] memory prepared = new MMA.PreparedAction[](1);
+        prepared[0] = MMA.prepareCollectAvailableLiquidity(lccAddr, 0, type(uint256).max);
+        _executeWithUnlockAs(user, prepared, block.timestamp + 3600);
+
+        assertEq(IMMQueueCustodian(custody).queued(0, lccAddr, user), 0);
+        assertEq(IMMQueueCustodian(custody).totalQueuedLcc(lccAddr), 0);
+        assertEq(underlying.balanceOf(user) - beforeUnderlying, amount);
+        assertEq(underlying.balanceOf(custody), 0);
+    }
+
+    /// @notice Regression: permissionless Hub settlement of a commit bucket must still allow collect and decommit.
+    function test_collectAvailableLiquidity_commitBucket_afterPermissionlessPreSettlement_allowsDecommit() public {
+        bytes memory liquiditySignalBytes = abi.encode(liquiditySignal);
+        uint256 tokenId = positionManager.nextTokenId();
+        address owner = liquiditySignal.mmState.owner;
+        address lccAddr = address(lcc0);
+        MockERC20 underlying = MockERC20(lcc0.underlying());
+        uint256 amount = 250;
+
+        MMA.PreparedAction[] memory prepared = new MMA.PreparedAction[](1);
+        prepared[0] = MMA.prepareCommit(liquiditySignalBytes);
+        _executeWithUnlockLiquidity(prepared, block.timestamp + 3600);
+
+        address custody = positionManager.custodianFor(positionManager.ownerOf(tokenId));
+
+        vm.prank(address(proxyHook));
+        ILiquidityHub(liquidityHub).issue(lccAddr, address(liquidityHub), amount);
+        vm.prank(address(vtsOrchestrator));
+        ILiquidityHub(liquidityHub)
+            .planCancelWithQueue(lccAddr, address(liquidityHub), address(positionManager), amount, amount, custody);
+        vm.prank(address(liquidityHub));
+        ILCC(lccAddr).transfer(address(positionManager), amount);
+
+        underlying.mint(address(liquidityHub), amount);
+        vm.prank(address(vtsOrchestrator));
+        ILiquidityHub(liquidityHub).confirmTake(lccAddr, amount, true);
+
+        vm.startPrank(address(positionManager));
+        lcc0.transfer(custody, amount);
+        IMMQueueCustodian(custody).record(tokenId, lccAddr, owner, amount);
+        vm.stopPrank();
+
+        assertEq(ILiquidityHub(liquidityHub).settleQueue(lccAddr, custody), amount);
+        assertEq(IMMQueueCustodian(custody).queued(tokenId, lccAddr, owner), amount);
+
+        address stranger = makeAddr("strangerCommitSettler");
+        vm.prank(stranger);
+        ILiquidityHub(liquidityHub).processSettlementFor(lccAddr, custody, amount);
+
+        assertEq(ILiquidityHub(liquidityHub).settleQueue(lccAddr, custody), 0);
+        assertEq(underlying.balanceOf(custody), amount);
+
+        uint256 beforeUnderlying = underlying.balanceOf(owner);
+        prepared[0] = MMA.prepareCollectAvailableLiquidity(lccAddr, tokenId, type(uint256).max);
+        _executeWithUnlockLiquidity(prepared, block.timestamp + 3600);
+
+        assertEq(IMMQueueCustodian(custody).queued(tokenId, lccAddr, owner), 0);
+        assertEq(underlying.balanceOf(owner) - beforeUnderlying, amount);
+
+        prepared[0] = MMA.prepareDecommit(tokenId);
+        _executeWithUnlockLiquidity(prepared, block.timestamp + 3600);
+
+        vm.expectRevert();
+        positionManager.ownerOf(tokenId);
+    }
+
     function test_collectAvailableLiquidity_whenNoReserveAvailable_isNoopAndKeepsCustody() public {
         address user = makeAddr("user");
         address lccAddr = address(lcc0);
@@ -3592,6 +3703,32 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
         assertEq(
             positionManager.ownerOf(tokenId), to, "transferFrom should transfer ownership when PoolManager is locked"
         );
+    }
+
+    /// @notice Regression: transferring to an address that has never committed must deploy `custodianFor[to]` so
+    /// queue-keyed paths (e.g. seizure, hook queue recipient) cannot revert with `QueueCustodianNotDeployed`.
+    function test_transferFrom_deploysQueueCustodian_whenRecipientHasNoPriorCommit() public {
+        bytes memory liquiditySignalBytes = abi.encode(liquiditySignal);
+        uint256 tokenId = positionManager.nextTokenId();
+
+        MMA.PreparedAction[] memory prepared = new MMA.PreparedAction[](1);
+        prepared[0] = MMA.prepareCommit(liquiditySignalBytes);
+        _executeWithUnlockLiquidity(prepared, block.timestamp + 3600);
+
+        address freshRecipient = makeAddr("freshRecipientNoPriorCustodian");
+        assertEq(
+            positionManager.custodianFor(freshRecipient),
+            address(0),
+            "pre: recipient must not have a queue custodian yet"
+        );
+
+        vm.prank(liquiditySignal.mmState.advancer);
+        positionManager.transferFrom(liquiditySignal.mmState.advancer, freshRecipient, tokenId);
+
+        assertEq(positionManager.ownerOf(tokenId), freshRecipient);
+        address cust = positionManager.custodianFor(freshRecipient);
+        assertTrue(cust != address(0), "post: transfer must deploy queue custodian for recipient");
+        assertTrue(cust.code.length > 0, "custodian must be a contract");
     }
 
     /*** INTERNAL FUNCTIONS FOR test_collectAvailableLiquidity_afterSwap ***/
