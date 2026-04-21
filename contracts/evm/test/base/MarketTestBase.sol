@@ -419,8 +419,6 @@ abstract contract MarketTestBase is Test, Deployers, DeployPermit2 {
     function _wireTestQueueCustodianFor(address mmpm, address recipient) internal {
         if (MMPositionManager(payable(mmpm)).custodianFor(recipient) != address(0)) return;
         MMQueueCustodian c = new MMQueueCustodian(mmpm);
-        vm.prank(mmpm);
-        c.setPositionManager(mmpm);
         stdstore.target(mmpm).sig("custodianFor(address)").with_key(recipient)
             .checked_write(uint256(uint160(address(c))));
     }

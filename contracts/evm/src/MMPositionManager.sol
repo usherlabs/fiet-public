@@ -141,7 +141,6 @@ contract MMPositionManager is
         if (recipient == address(0)) revert Errors.InvalidAddress(recipient);
         if (custodianFor[recipient] != address(0)) return;
         MMQueueCustodian c = new MMQueueCustodian(address(this));
-        c.setPositionManager(address(this));
         address ca = address(c);
         custodianFor[recipient] = ca;
     }

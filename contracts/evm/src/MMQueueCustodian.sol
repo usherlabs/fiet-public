@@ -28,18 +28,10 @@ contract MMQueueCustodian is IMMQueueCustodian {
     /// @notice Beneficiary-scoped custody increased (MM-backed LCC staged for later Hub settlement).
     event CustodyRecorded(uint256 indexed tokenId, address indexed lcc, address indexed beneficiary, uint256 amount);
 
-    /// @notice Beneficiary-scoped custody decreased and LCC transferred out.
-    event CustodyReleased(uint256 indexed tokenId, address indexed lcc, address indexed beneficiary, uint256 amount);
-
     /// @notice Underlying paid out after Hub settlement burned custodied LCC against this contract.
     event UnderlyingPaid(uint256 indexed tokenId, address indexed lcc, address indexed beneficiary, uint256 amount);
 
-    /// @notice One-time authoriser allowed to bind the position manager.
-    address public authorisedBinder;
     address public override positionManager;
-
-    /// @dev Tracks aggregate recorded slices for `isEmpty()` / global guards (must match maintained mapping ops).
-    uint256 private _totalQueuedSlices;
 
     /// @dev Per-bucket aggregate for `isBucketEmpty(bucketId)` (decommit / transfer guards).
     mapping(uint256 bucketId => uint256) private _bucketQueuedTotal;
@@ -56,19 +48,11 @@ contract MMQueueCustodian is IMMQueueCustodian {
     /// @dev Accept native underlying from `LiquidityHub` settlement for native-backed LCC markets.
     receive() external payable {}
 
-    constructor(address _authorisedBinder) {
-        if (_authorisedBinder == address(0)) revert Errors.InvalidAddress(_authorisedBinder);
-        authorisedBinder = _authorisedBinder;
-    }
-
-    function setPositionManager(address _positionManager) external override {
-        if (msg.sender != authorisedBinder) revert Errors.InvalidSender();
-        if (positionManager != address(0)) revert Errors.InvalidSender();
+    constructor(address _positionManager) {
         if (_positionManager == address(0) || _positionManager.code.length == 0) {
             revert Errors.InvalidAddress(_positionManager);
         }
         positionManager = _positionManager;
-        authorisedBinder = address(0);
     }
 
     /// @inheritdoc IMMQueueCustodian
@@ -85,7 +69,6 @@ contract MMQueueCustodian is IMMQueueCustodian {
         if (beneficiary == address(0)) revert Errors.InvalidAddress(beneficiary);
         if (amount == 0) return;
         _queuedLcc[tokenId][lcc][beneficiary] += amount;
-        _totalQueuedSlices += amount;
         _bucketQueuedTotal[tokenId] += amount;
         emit CustodyRecorded(tokenId, lcc, beneficiary, amount);
     }
@@ -144,7 +127,6 @@ contract MMQueueCustodian is IMMQueueCustodian {
         uint256 q = _queuedLcc[tokenId][lcc][beneficiary];
         if (amount > q) revert Errors.InsufficientBalance(q, amount);
         _queuedLcc[tokenId][lcc][beneficiary] = q - amount;
-        _totalQueuedSlices -= amount;
         _bucketQueuedTotal[tokenId] -= amount;
 
         address underlying = ILCC(lcc).underlying();
@@ -158,38 +140,8 @@ contract MMQueueCustodian is IMMQueueCustodian {
     }
 
     /// @inheritdoc IMMQueueCustodian
-    function isEmpty() external view override returns (bool) {
-        return _totalQueuedSlices == 0 && address(this).balance == 0;
-    }
-
-    /// @inheritdoc IMMQueueCustodian
     function isBucketEmpty(uint256 bucketId) external view override returns (bool) {
         return _bucketQueuedTotal[bucketId] == 0;
-    }
-
-    // Releases LCC to recipient before processSettlementFor is called.
-    function release(uint256 tokenId, address lcc, address beneficiary, uint256 maxAmount)
-        external
-        override
-        returns (uint256 released)
-    {
-        if (beneficiary == address(0)) revert Errors.InvalidAddress(beneficiary);
-        if (lcc == address(0)) revert Errors.InvalidAddress(lcc);
-        if (msg.sender != positionManager) {
-            (bool ok, bytes memory data) = lcc.staticcall(abi.encodeCall(ILCC.hub, ()));
-            if (!ok || data.length < 32 || msg.sender != abi.decode(data, (address))) revert Errors.InvalidSender();
-        }
-        if (maxAmount == 0) return 0;
-
-        uint256 available = _queuedLcc[tokenId][lcc][beneficiary];
-        released = available < maxAmount ? available : maxAmount;
-        if (released == 0) return 0;
-
-        _queuedLcc[tokenId][lcc][beneficiary] = available - released;
-        _totalQueuedSlices -= released;
-        _bucketQueuedTotal[tokenId] -= released;
-        emit CustodyReleased(tokenId, lcc, beneficiary, released);
-        Currency.wrap(lcc).transfer(beneficiary, released);
     }
 
     function queued(uint256 tokenId, address lcc, address beneficiary) external view override returns (uint256) {

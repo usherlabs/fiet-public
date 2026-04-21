@@ -4,6 +4,7 @@ pragma solidity ^0.8.26;
 import {Currency} from "v4-periphery/lib/v4-core/src/types/Currency.sol";
 import {IFuzzTakeOrchestrator} from "../harnesses/IFuzzTakeOrchestrator.sol";
 import {IMMQueueCustodian} from "../../../src/interfaces/IMMQueueCustodian.sol";
+import {ILiquidityHub} from "../../../src/interfaces/ILiquidityHub.sol";
 import {Errors} from "../../../src/libraries/Errors.sol";
 
 /// @notice Records `take` calls for fuzz visibility; does not move tokens (sufficient for routing-guard coverage).
@@ -23,6 +24,8 @@ contract FuzzTakeOrchestratorMock is IFuzzTakeOrchestrator {
 }
 
 /// @notice Minimal `IMMQueueCustodian` for the composed Medusa fuzz harnesses.
+/// @dev Constructor binds `authorisedBinder` only; `wirePositionManager` breaks the harness↔custodian circular `new`
+///      (production uses `new MMQueueCustodian(mmpm)` with no second step).
 contract FuzzMMQueueCustodian is IMMQueueCustodian {
     address public immutable authorisedBinder;
 
@@ -41,7 +44,8 @@ contract FuzzMMQueueCustodian is IMMQueueCustodian {
         authorisedBinder = authorisedBinder_;
     }
 
-    function setPositionManager(address _positionManager) external override {
+    /// @notice One-time link after `new PositionManagerImplQueueCustodyHarness(..., this)`.
+    function wirePositionManager(address _positionManager) external {
         if (msg.sender != authorisedBinder) revert Errors.InvalidSender();
         if (positionManager != address(0)) revert Errors.InvalidSender();
         if (_positionManager == address(0) || _positionManager.code.length == 0) {
@@ -49,6 +53,8 @@ contract FuzzMMQueueCustodian is IMMQueueCustodian {
         }
         positionManager = _positionManager;
     }
+
+    function unwrapLccViaHub(address, address, address, uint256, uint256, ILiquidityHub) external pure override {}
 
     function record(uint256 tokenId, address lcc, address beneficiary, uint256 amount)
         external
@@ -70,13 +76,5 @@ contract FuzzMMQueueCustodian is IMMQueueCustodian {
         return _queued[tokenId][lcc][beneficiary];
     }
 
-    function release(uint256, address, address, uint256) external pure override returns (uint256) {
-        return 0;
-    }
-
     function collectUnderlyingToBeneficiary(uint256, address, address, uint256) external pure override {}
-
-    function isEmpty() external pure override returns (bool) {
-        return true;
-    }
 }

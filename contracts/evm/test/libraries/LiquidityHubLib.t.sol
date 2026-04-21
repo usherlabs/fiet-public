@@ -4,6 +4,7 @@ pragma solidity ^0.8.26;
 import {LiquidityHubTestBase} from "../base/LiquidityHubTestBase.sol";
 import {LiquidityHub} from "../../src/LiquidityHub.sol";
 import {ILCC} from "../../src/interfaces/ILCC.sol";
+import {ILiquidityHub} from "../../src/interfaces/ILiquidityHub.sol";
 import {IMarketFactory} from "../../src/interfaces/IMarketFactory.sol";
 import {Errors} from "../../src/libraries/Errors.sol";
 import {Bounds} from "../../src/libraries/Bounds.sol";
@@ -11,7 +12,7 @@ import {StdStorage, stdStorage} from "forge-std/StdStorage.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {IMMQueueCustodian} from "../../src/interfaces/IMMQueueCustodian.sol";
 
-/// @notice Minimal custodian for legacy custody-release tests (LCC release path).
+/// @notice Minimal custodian stub for `processSettlementFor` queue-owner tests (no MM custody bookkeeping).
 contract MockSettleCustodian is IMMQueueCustodian {
     address public override positionManager;
 
@@ -21,7 +22,7 @@ contract MockSettleCustodian is IMMQueueCustodian {
         positionManager = address(0xDEAD);
     }
 
-    function setPositionManager(address) external override {}
+    function unwrapLccViaHub(address, address, address, uint256, uint256, ILiquidityHub) external pure override {}
 
     function record(uint256, address, address, uint256) external override {}
 
@@ -33,25 +34,7 @@ contract MockSettleCustodian is IMMQueueCustodian {
         return _custody[tokenId][lcc][beneficiary];
     }
 
-    function release(uint256 tokenId, address lcc, address beneficiary, uint256 maxAmount)
-        external
-        override
-        returns (uint256 released)
-    {
-        if (msg.sender != ILCC(lcc).hub()) revert();
-        uint256 avail = _custody[tokenId][lcc][beneficiary];
-        released = avail < maxAmount ? avail : maxAmount;
-        if (released == 0) return 0;
-        _custody[tokenId][lcc][beneficiary] = avail - released;
-        IERC20(lcc).transfer(beneficiary, released);
-        return released;
-    }
-
     function collectUnderlyingToBeneficiary(uint256, address, address, uint256) external pure override {}
-
-    function isEmpty() external pure override returns (bool) {
-        return true;
-    }
 
     function isBucketEmpty(uint256) external pure override returns (bool) {
         return true;

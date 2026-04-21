@@ -49,7 +49,7 @@ abstract contract FuzzMMQ01 is FuzzHelper {
         orchestrator = new FuzzTakeOrchestratorMock();
         custodian = new FuzzMMQueueCustodian(address(this));
         harness = new PositionManagerImplQueueCustodyHarness(orchestrator, custodian);
-        custodian.setPositionManager(address(harness));
+        custodian.wirePositionManager(address(harness));
 
         lcc.mint(address(harness), type(uint128).max);
     }
