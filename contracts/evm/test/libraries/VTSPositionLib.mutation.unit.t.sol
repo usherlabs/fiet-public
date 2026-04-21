@@ -141,6 +141,56 @@ contract VTSPositionLibMutationUnitTest is Test {
         assertEq(pool0, 40e18, "canonical split must not disturb pool total settled");
     }
 
+    /// @dev Regression: benign `_trackCommitment` with positive live liquidity must preserve seizure Q128 carry.
+    function test_trackCommitment_preservesSeizureLiquidityCarry_whenLiveLiquidityNonZero() public {
+        (PositionId id,) = _register(bytes32(uint256(771)), 1);
+        uint128 liq = 1e18;
+        harness.trackCommitmentFromLiveLiquidity(id, liq);
+        harness.setSeizureLiquidityCarry(id, FixedPoint128.Q128 / 3, FixedPoint128.Q128 / 7);
+
+        harness.trackCommitmentFromLiveLiquidity(id, liq);
+
+        (uint256 sc0, uint256 sc1) = harness.getSeizureLiquidityCarry(id);
+        assertEq(sc0, FixedPoint128.Q128 / 3);
+        assertEq(sc1, FixedPoint128.Q128 / 7);
+    }
+
+    /// @dev Regression: recomputing `commitmentMax` from a different positive liquidity must not wipe seizure carry.
+    function test_trackCommitment_preservesSeizureLiquidityCarry_onLiquidityChange() public {
+        (PositionId id,) = _register(bytes32(uint256(772)), 1);
+        harness.trackCommitmentFromLiveLiquidity(id, 1e18);
+        harness.setSeizureLiquidityCarry(id, 42, 99);
+
+        harness.trackCommitmentFromLiveLiquidity(id, 2e18);
+
+        (uint256 sc0, uint256 sc1) = harness.getSeizureLiquidityCarry(id);
+        assertEq(sc0, 42);
+        assertEq(sc1, 99);
+    }
+
+    /// @dev Regression: terminal zero-liquidity path clears seizure carry alongside SETTLE-00 canonicalisation.
+    function test_trackCommitment_zeroLiquidity_clearsSeizureLiquidityCarry() public {
+        (PositionId id,) = _register(bytes32(uint256(773)), 1);
+        harness.setCommitmentMax(id, 1000e18, 1000e18);
+        harness.setSettled(id, 100e18, 50e18);
+        harness.setSettledOverflow(id, 0, 0);
+        harness.setSeizureLiquidityCarry(id, FixedPoint128.Q128 - 1, 123);
+
+        harness.trackCommitmentFromLiveLiquidity(id, 0);
+
+        (uint256 sc0, uint256 sc1) = harness.getSeizureLiquidityCarry(id);
+        assertEq(sc0, 0);
+        assertEq(sc1, 0);
+
+        (uint256 c0, uint256 c1, uint256 s0, uint256 s1,,, uint256 o0, uint256 o1) = harness.getPositionAccounting(id);
+        assertEq(c0, 0);
+        assertEq(c1, 0);
+        assertEq(s0, 0);
+        assertEq(s1, 0);
+        assertEq(o0, 100e18);
+        assertEq(o1, 50e18);
+    }
+
     function test_updateSettlement_updatesPoolTotalSettled_onDepositAndWithdrawal() public {
         (PositionId id,) = _register(bytes32(uint256(3)), 1);
         harness.setCommitmentMax(id, 1000e18, 0);

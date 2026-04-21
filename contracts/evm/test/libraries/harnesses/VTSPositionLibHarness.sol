@@ -34,6 +34,7 @@ import {MarketCurrencyDelta} from "../../../src/libraries/MarketCurrencyDelta.so
 import {ICanonicalVault} from "../../../src/interfaces/ICanonicalVault.sol";
 import {CurrencyDelta} from "v4-periphery/lib/v4-core/src/libraries/CurrencyDelta.sol";
 import {LiquidityUtils} from "../../../src/libraries/LiquidityUtils.sol";
+import {CarryQ128, CarryQ128Lib} from "../../../src/types/Carry.sol";
 
 /// @title VTSPositionLibHarness
 /// @notice Exposes internal VTSPositionLib functions for unit testing
@@ -438,6 +439,20 @@ contract VTSPositionLibHarness {
     function setInflowGrowthCarry(PositionId id, uint256 c0, uint256 c1) external {
         s.positionAccounting[id].inflowGrowthCarry.token0 = GrowthCarryQ128.wrap(c0 % FixedPoint128.Q128);
         s.positionAccounting[id].inflowGrowthCarry.token1 = GrowthCarryQ128.wrap(c1 % FixedPoint128.Q128);
+    }
+
+    /// @notice Test-only: read Q128 seizure liquidity carries per lane (raw `< Q128`)
+    function getSeizureLiquidityCarry(PositionId id) external view returns (uint256 c0, uint256 c1) {
+        return (
+            CarryQ128.unwrap(s.positionAccounting[id].seizureLiquidityCarry.token0),
+            CarryQ128.unwrap(s.positionAccounting[id].seizureLiquidityCarry.token1)
+        );
+    }
+
+    /// @notice Test-only: seed seizure carries (values reduced mod Q128)
+    function setSeizureLiquidityCarry(PositionId id, uint256 c0, uint256 c1) external {
+        s.positionAccounting[id].seizureLiquidityCarry.token0 = CarryQ128Lib.wrap(c0);
+        s.positionAccounting[id].seizureLiquidityCarry.token1 = CarryQ128Lib.wrap(c1);
     }
 
     function getCommitExpiresAt(uint256 commitId) external view returns (uint256 expiresAt) {

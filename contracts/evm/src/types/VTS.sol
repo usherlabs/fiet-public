@@ -253,7 +253,8 @@ struct PositionAccounting {
     /// @dev Q128 fractional remainder carry for inflow growth settlement; cleared on inflow snapshot rebase.
     TokenPairGrowthCarryQ128 inflowGrowthCarry;
     /// @dev Q128 fractional remainder carry for seizure liquidity sizing per lane; path-independent across repeated
-    ///      guarantor interventions. Cleared when position liquidity reaches zero (`_trackCommitment`).
+    ///      guarantor interventions. Cleared when `VTSPositionLib._trackCommitment` runs with zero live liquidity
+    ///      (terminal deactivation), not on ordinary commitment refreshes while liquidity remains positive.
     TokenPairSeizureCarryQ128 seizureLiquidityCarry;
 }
 

@@ -102,13 +102,16 @@ library VTSPositionLib {
     /// @dev Per-delta rounded add/subtract bookkeeping is not equivalent to rounding once on the total;
     ///      incremental `ceil` arithmetic can drift below the true maxima for the remaining range.
     ///      Always derive from `liveLiquidity` after any modify that changes pool position liquidity.
+    ///      `seizureLiquidityCarry` is cleared only when `liveLiquidity == 0` (terminal deactivation), so benign
+    ///      refreshes preserve Q128 seizure remainder across split cures.
     /// @param s The central VTS storage
     /// @param positionId The position id
     /// @param liveLiquidity Current position liquidity from PoolManager after the modify
     function _trackCommitment(VTSStorage storage s, PositionId positionId, uint128 liveLiquidity) internal {
         PositionAccounting storage pa = s.positionAccounting[positionId];
-        TokenPairSeizureCarryQ128Lib.clear(pa.seizureLiquidityCarry);
         if (liveLiquidity == 0) {
+            // Terminal deactivation: Q128 seizure remainder is tied to the live position; clear it with liquidity.
+            TokenPairSeizureCarryQ128Lib.clear(pa.seizureLiquidityCarry);
             pa.commitmentMax.token0 = 0;
             pa.commitmentMax.token1 = 0;
             // SETTLE-00: with commitmentMax cleared, canonicalise live `settled` vs `settledOverflow` so stale
