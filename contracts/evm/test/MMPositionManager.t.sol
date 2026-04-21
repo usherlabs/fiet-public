@@ -1130,6 +1130,26 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
         positionManager.modifyLiquiditiesWithoutUnlock(actions, params);
     }
 
+    function test_constructor_reverts_whenQueueCustodianFactoryZero() public {
+        address cv = IMarketFactory(marketFactory).canonicalVault();
+        address desc = address(new MockCommitmentDescriptor("ipfs://x/"));
+        address actionsImplAddr = positionManager.actionsImpl();
+        vm.expectRevert(abi.encodeWithSelector(Errors.InvalidAddress.selector, address(0)));
+        new MMPositionManager(
+            MMPositionManager.MMPositionManagerInit({
+                poolManager: manager,
+                marketFactory: address(marketFactory),
+                vtsOrchestrator: address(vtsOrchestrator),
+                canonicalCustody: cv,
+                descriptor: desc,
+                weth9: weth9,
+                permit2: permit2,
+                actionsImpl: actionsImplAddr,
+                queueCustodianFactory: address(0)
+            })
+        );
+    }
+
     function test_tokenURI_revertsWhenCommitmentDescriptorNotSet() public {
         // Reuse the real actions impl from the already-deployed PositionManager so the constructor succeeds.
         // This test is about `commitmentDescriptor`, not delegation.
@@ -1142,7 +1162,8 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
                 descriptor: address(0),
                 weth9: weth9,
                 permit2: permit2,
-                actionsImpl: positionManager.actionsImpl()
+                actionsImpl: positionManager.actionsImpl(),
+                queueCustodianFactory: queueCustodianFactory
             })
         );
         vm.expectRevert(Errors.CommitmentDescriptorNotSet.selector);
@@ -1161,7 +1182,8 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
                 descriptor: address(desc),
                 weth9: weth9,
                 permit2: permit2,
-                actionsImpl: positionManager.actionsImpl()
+                actionsImpl: positionManager.actionsImpl(),
+                queueCustodianFactory: queueCustodianFactory
             })
         );
 
@@ -1180,7 +1202,8 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
                 descriptor: address(desc),
                 weth9: weth9,
                 permit2: permit2,
-                actionsImpl: positionManager.actionsImpl()
+                actionsImpl: positionManager.actionsImpl(),
+                queueCustodianFactory: queueCustodianFactory
             })
         );
 

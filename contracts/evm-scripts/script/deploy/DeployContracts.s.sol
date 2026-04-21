@@ -66,7 +66,7 @@ contract DeployContracts is DeployProtocolBase {
         console.log("VTSOrchestrator:", getCreate3Contract(VTS_ORCHESTRATOR));
         console.log("MMPCommitmentDescriptor:", getCreate3Contract(COMMITMENT_DESCRIPTOR));
         console.log("MMPositionActionsImpl:", getCreate3Contract(ACTIONS_IMPL));
-        console.log("MMQueueCustodian:", getCreate3Contract(QUEUE_CUSTODIAN));
+        console.log("MMQueueCustodianFactory:", getCreate3Contract(MM_QUEUE_CUSTODIAN_FACTORY));
         console.log("MMPositionManager:", getCreate3Contract(MM_POSITION_MANAGER));
         console.log("MarketFactory:", getCreate3Contract(MARKET_FACTORY));
         console.log("CanonicalVault:", getCreate3Contract(CANONICAL_VAULT));

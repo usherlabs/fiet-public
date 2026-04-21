@@ -17,6 +17,7 @@ import {Deployers} from "@uniswap/v4-core/test/utils/Deployers.sol";
 import {HookFlags} from "../src/libraries/HookFlags.sol";
 import {HookMiner} from "v4-periphery/src/utils/HookMiner.sol";
 import {MMPositionManager} from "../src/MMPositionManager.sol";
+import {MMQueueCustodianFactory} from "../src/MMQueueCustodianFactory.sol";
 import {MMPositionActionsImpl} from "../src/MMPositionActionsImpl.sol";
 import {VTSConfigs} from "../src/libraries/VTSConfigs.sol";
 import {IOracleHelper} from "../src/interfaces/IOracleHelper.sol";
@@ -106,6 +107,7 @@ contract MarketFactoryTest is Test, Deployers {
         MMPositionActionsImpl actionsImpl = new MMPositionActionsImpl(
             address(poolManager), address(factory), address(vtsOrchestrator), address(canonicalVault)
         );
+        MMQueueCustodianFactory queueCustodianFactory = new MMQueueCustodianFactory();
         vm.prank(owner);
         positionManager = new MMPositionManager(
             MMPositionManager.MMPositionManagerInit({
@@ -116,7 +118,8 @@ contract MarketFactoryTest is Test, Deployers {
                 descriptor: commitmentDescriptor,
                 weth9: weth9,
                 permit2: permit2,
-                actionsImpl: address(actionsImpl)
+                actionsImpl: address(actionsImpl),
+                queueCustodianFactory: address(queueCustodianFactory)
             })
         );
 

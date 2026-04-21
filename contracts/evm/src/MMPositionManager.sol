@@ -30,6 +30,7 @@ import {StateLibrary} from "v4-periphery/lib/v4-core/src/libraries/StateLibrary.
 import {TransientStateLibrary} from "v4-periphery/lib/v4-core/src/libraries/TransientStateLibrary.sol";
 import {CurrencyTransfer} from "./libraries/CurrencyTransfer.sol";
 import {IMMQueueCustodian} from "./interfaces/IMMQueueCustodian.sol";
+import {IMMQueueCustodianFactory} from "./interfaces/IMMQueueCustodianFactory.sol";
 import {MMQueueCustodian} from "./MMQueueCustodian.sol";
 import {IMarketFactory} from "./interfaces/IMarketFactory.sol";
 import {ILiquidityHub} from "./interfaces/ILiquidityHub.sol";
@@ -64,6 +65,8 @@ contract MMPositionManager is
         IWETH9 weth9;
         IAllowanceTransfer permit2;
         address actionsImpl;
+        /// @notice Stateless deployer for `MMQueueCustodian` (authorises callers via `marketFactory.bounds`).
+        address queueCustodianFactory;
     }
 
     using MMCalldataDecoder for bytes;
@@ -84,6 +87,8 @@ contract MMPositionManager is
 
     /// @notice The implementation contract for position operations
     address public immutable commitmentDescriptor;
+    /// @notice Deploys queue custodians; only factory-bound MMPMs may call `deploy` on it.
+    address public immutable queueCustodianFactory;
     /// @notice One queue custodian per NFT recipient domain (many commits share the same custodian).
     mapping(address recipient => address) public custodianFor;
 
@@ -101,7 +106,11 @@ contract MMPositionManager is
         FietNativeWrapper(p.weth9)
         PositionManagerEntrypoint(p.marketFactory, p.vtsOrchestrator, p.canonicalCustody, p.actionsImpl)
     {
+        if (p.queueCustodianFactory == address(0) || p.queueCustodianFactory.code.length == 0) {
+            revert Errors.InvalidAddress(p.queueCustodianFactory);
+        }
         commitmentDescriptor = p.descriptor;
+        queueCustodianFactory = p.queueCustodianFactory;
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
@@ -140,8 +149,7 @@ contract MMPositionManager is
     function _deployQueueCustodian(address recipient) internal {
         if (recipient == address(0)) revert Errors.InvalidAddress(recipient);
         if (custodianFor[recipient] != address(0)) return;
-        MMQueueCustodian c = new MMQueueCustodian(address(this));
-        address ca = address(c);
+        address ca = IMMQueueCustodianFactory(queueCustodianFactory).deploy(recipient, marketFactory);
         custodianFor[recipient] = ca;
     }
 

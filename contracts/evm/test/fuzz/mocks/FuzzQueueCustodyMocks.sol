@@ -25,7 +25,7 @@ contract FuzzTakeOrchestratorMock is IFuzzTakeOrchestrator {
 
 /// @notice Minimal `IMMQueueCustodian` for the composed Medusa fuzz harnesses.
 /// @dev Constructor binds `authorisedBinder` only; `wirePositionManager` breaks the harness↔custodian circular `new`
-///      (production uses `new MMQueueCustodian(mmpm)` with no second step).
+///      (production deploys via `MMQueueCustodianFactory` bound to the MMPM).
 contract FuzzMMQueueCustodian is IMMQueueCustodian {
     address public immutable authorisedBinder;
 

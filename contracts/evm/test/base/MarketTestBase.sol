@@ -24,6 +24,7 @@ import {HookFlags} from "../../src/libraries/HookFlags.sol";
 import {HookMiner} from "v4-periphery/src/utils/HookMiner.sol";
 import {MMPositionManager} from "../../src/MMPositionManager.sol";
 import {MMQueueCustodian} from "../../src/MMQueueCustodian.sol";
+import {MMQueueCustodianFactory} from "../../src/MMQueueCustodianFactory.sol";
 import {ECDSASignatureSignalVerifier} from "../../src/verifiers/ECDSASignatureSignalVerifier.sol";
 import {StubSignalVerifier} from "../../src/verifiers/StubSignalVerifier.sol";
 import {WETH} from "@uniswap/v4-core/lib/solmate/src/tokens/WETH.sol";
@@ -85,6 +86,8 @@ abstract contract MarketTestBase is Test, Deployers, DeployPermit2 {
     StubSignalVerifier stubSignalVerifier;
     VRLSignalManager signalManager;
     address mmPositionManager;
+    /// @dev Deployed in `_deployCoreContracts`; required by `MMPositionManager` constructor.
+    address queueCustodianFactory;
     IVRLSettlementObserver settlementObserver;
     IMarketVault mv;
     IWETH9 public weth9;
@@ -221,6 +224,7 @@ abstract contract MarketTestBase is Test, Deployers, DeployPermit2 {
         MMPositionActionsImpl actionsImpl = new MMPositionActionsImpl(
             address(manager), address(marketFactory), address(vtsOrchestrator), canonicalVaultAddr
         );
+        queueCustodianFactory = address(new MMQueueCustodianFactory());
         // Deploy MMPositionManager (recipient-keyed queue custodians are deployed lazily by MMPM)
         mmPositionManager = address(
             new MMPositionManager(
@@ -232,7 +236,8 @@ abstract contract MarketTestBase is Test, Deployers, DeployPermit2 {
                     descriptor: commitmentDescriptor,
                     weth9: weth9,
                     permit2: permit2,
-                    actionsImpl: address(actionsImpl)
+                    actionsImpl: address(actionsImpl),
+                    queueCustodianFactory: queueCustodianFactory
                 })
             )
         );

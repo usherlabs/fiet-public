@@ -174,7 +174,7 @@ abstract contract DeployFullStackBase is DeployProtocolBase {
         // 12) MMPCommitmentDescriptor
         out.contracts.commitmentDescriptor = _deployCommitmentDescriptor();
 
-        // 13) MMPositionActionsImpl + MMQueueCustodian + MMPositionManager
+        // 13) MMPositionActionsImpl + MMQueueCustodianFactory + MMPositionManager
         (out.contracts.actionsImpl, out.contracts.mmPositionManager) = _deployMMStack(
             out.contracts.marketFactory,
             out.contracts.vtsOrchestrator,

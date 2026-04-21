@@ -11,6 +11,7 @@ import {ProxyHook} from "../src/ProxyHook.sol";
 import {MarketFactory} from "../src/MarketFactory.sol";
 import {HookFlags} from "../src/libraries/HookFlags.sol";
 import {MMPositionManager} from "../src/MMPositionManager.sol";
+import {MMQueueCustodianFactory} from "../src/MMQueueCustodianFactory.sol";
 import {MMPositionActionsImpl} from "../src/MMPositionActionsImpl.sol";
 import {WETH} from "@uniswap/v4-core/lib/solmate/src/tokens/WETH.sol";
 import {IWETH9} from "v4-periphery/src/interfaces/external/IWETH9.sol";
@@ -53,6 +54,7 @@ contract HookTest is Test, Deployers {
         MMPositionActionsImpl actionsImpl = new MMPositionActionsImpl(
             address(poolManager), address(factory), address(vtsOrchestrator), address(canonicalVault)
         );
+        MMQueueCustodianFactory queueCustodianFactory = new MMQueueCustodianFactory();
         mmPositionManager = new MMPositionManager(
             MMPositionManager.MMPositionManagerInit({
                 poolManager: poolManager,
@@ -62,7 +64,8 @@ contract HookTest is Test, Deployers {
                 descriptor: makeAddr("descriptor"),
                 weth9: weth9,
                 permit2: permit2,
-                actionsImpl: address(actionsImpl)
+                actionsImpl: address(actionsImpl),
+                queueCustodianFactory: address(queueCustodianFactory)
             })
         );
 

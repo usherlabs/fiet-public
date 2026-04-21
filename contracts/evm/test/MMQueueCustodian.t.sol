@@ -4,10 +4,15 @@ pragma solidity ^0.8.26;
 import "forge-std/Test.sol";
 
 import {MMQueueCustodian} from "../src/MMQueueCustodian.sol";
+import {MMQueueCustodianFactory} from "../src/MMQueueCustodianFactory.sol";
+import {IMarketFactory} from "../src/interfaces/IMarketFactory.sol";
 import {Errors} from "../src/libraries/Errors.sol";
 import {MockERC20} from "./_mocks/MockERC20.sol";
 
 contract DummyPositionManager {}
+
+/// @dev Has bytecode so `MMQueueCustodian` constructor accepts it as `positionManager`.
+contract DummyMmpmWithCode {}
 
 contract MMQueueCustodianTest is Test {
     MMQueueCustodian internal custodian;
@@ -85,5 +90,43 @@ contract MMQueueCustodianTest is Test {
 
     function test_isBucketEmpty_trueWhenBucketUnused() public {
         assertTrue(custodian.isBucketEmpty(TOKEN_ID_A));
+    }
+}
+
+/// @notice Unit tests for `MMQueueCustodianFactory` authorisation and deployment wiring.
+contract MMQueueCustodianFactoryTest is Test {
+    MMQueueCustodianFactory internal factory;
+    address internal marketFactoryAddr;
+
+    function setUp() public {
+        factory = new MMQueueCustodianFactory();
+        marketFactoryAddr = makeAddr("marketFactory");
+    }
+
+    function test_factory_deploy_reverts_zeroRecipient() public {
+        vm.mockCall(
+            marketFactoryAddr, abi.encodeWithSelector(IMarketFactory.bounds.selector, address(this)), abi.encode(true)
+        );
+        vm.expectRevert(abi.encodeWithSelector(Errors.InvalidAddress.selector, address(0)));
+        factory.deploy(address(0), IMarketFactory(marketFactoryAddr));
+    }
+
+    function test_factory_deploy_reverts_whenCallerNotBound() public {
+        address caller = makeAddr("unboundMmpm");
+        vm.mockCall(
+            marketFactoryAddr, abi.encodeWithSelector(IMarketFactory.bounds.selector, caller), abi.encode(false)
+        );
+        vm.prank(caller);
+        vm.expectRevert(Errors.InvalidSender.selector);
+        factory.deploy(makeAddr("recipient"), IMarketFactory(marketFactoryAddr));
+    }
+
+    function test_factory_deploy_succeeds_whenCallerBound() public {
+        address mmpm = address(new DummyMmpmWithCode());
+        address recipient = makeAddr("recipient");
+        vm.mockCall(marketFactoryAddr, abi.encodeWithSelector(IMarketFactory.bounds.selector, mmpm), abi.encode(true));
+        vm.prank(mmpm);
+        address deployed = factory.deploy(recipient, IMarketFactory(marketFactoryAddr));
+        assertEq(MMQueueCustodian(payable(deployed)).positionManager(), mmpm);
     }
 }
