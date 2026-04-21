@@ -565,6 +565,12 @@ abstract contract MME2EBase is E2EBase {
         vm.stopBroadcast();
     }
 
+    function _runHubUnwrapAction(StandaloneMarket memory m, uint256 mmPk, address lcc, uint256 unwrapAmount) internal {
+        vm.startBroadcast(mmPk);
+        ILiquidityHub(m.stack.contracts.liquidityHub).unwrap(lcc, unwrapAmount);
+        vm.stopBroadcast();
+    }
+
     /// @dev Best-effort queue collection for a specific LCC and commitment bucket.
     /// If reserve or custody cannot support settlement yet, this action is a no-op by design.
     function _collectAvailableLiquidity(
@@ -1562,11 +1568,14 @@ abstract contract MME2EBase is E2EBase {
         uint256 commitId
     ) internal returns (uint256 underlyingDelta) {
         address owner = vm.addr(mmPk);
+        MMPositionManager mmpm = MMPositionManager(payable(m.stack.contracts.mmPositionManager));
         ILiquidityHub hub = ILiquidityHub(m.stack.contracts.liquidityHub);
         address underlying = ILCC(lcc).underlying();
+        bool hasQueueCustodian = mmpm.custodianFor(owner) != address(0);
 
-        // Try to consume any queue that can already be settled from custody/reserves.
-        if (hub.settleQueue(lcc, owner) > 0) {
+        // Commit-owner queues can be settled via recipient-keyed custodians. Non-commit actors may still have
+        // direct Hub queue debt, but `COLLECT_AVAILABLE_LIQUIDITY` is fail-closed for them because no custodian exists.
+        if (hub.settleQueue(lcc, owner) > 0 && hasQueueCustodian) {
             _collectAvailableLiquidity(m, mmPk, lcc, commitId, type(uint256).max);
         }
 
@@ -1578,7 +1587,11 @@ abstract contract MME2EBase is E2EBase {
             return 0;
         }
 
-        _runUnwrapAction(m, mmPk, lcc, before.lcc, targetUnwrapAmount);
+        if (hasQueueCustodian) {
+            _runUnwrapAction(m, mmPk, lcc, before.lcc, targetUnwrapAmount);
+        } else {
+            _runHubUnwrapAction(m, mmPk, lcc, targetUnwrapAmount);
+        }
 
         UnwrapSnapshot memory afterState = _loadUnwrapSnapshot(hub, lcc, owner, underlying);
 
