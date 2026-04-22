@@ -44,6 +44,7 @@ import {VTSPositionMMOpsLib} from "./VTSPositionMMOpsLib.sol";
 import {IMarketVault} from "../interfaces/IMarketVault.sol";
 import {FullMath} from "@uniswap/v4-core/src/libraries/FullMath.sol";
 import {FixedPoint128} from "v4-periphery/lib/v4-core/src/libraries/FixedPoint128.sol";
+import {CommitmentDeficitMMFreezeLib} from "./CommitmentDeficitMMFreezeLib.sol";
 
 /// @title VTSPositionLib
 /// @notice Position lifecycle, registration, RFS, settlement, seizure, and growth accounting for VTS
@@ -1106,11 +1107,14 @@ library VTSPositionLib {
             revert Errors.InvariantViolated("Invalid operation: Commit ID mismatch");
         }
 
-        // Insolvency freeze: do not allow non-seizure MM liquidity changes while commitment deficit persists.
-        // Settlement, checkpoint(withCommitment), and seizure paths remain the intended cure/formalise surfaces.
+        // Insolvency freeze: non-seizure MM liquidity changes are blocked only for **material** stored commitment
+        // deficits (bps severity and/or optional per-token threshold), not every non-zero raw unit — see
+        // `CommitmentDeficitMMFreezeLib` and `COMMIT-02A` in `INVARIANTS.md`. Settlement, checkpoint(withCommitment),
+        // and seizure paths remain the intended cure surfaces.
         if (hookData.isMMOperation && !hookData.isSeizing && p.params.liquidityDelta != 0) {
-            PositionAccounting storage paGuard = s.positionAccounting[positionId];
-            if (paGuard.commitmentDeficit.token0 > 0 || paGuard.commitmentDeficit.token1 > 0) {
+            if (CommitmentDeficitMMFreezeLib.blocksNonSeizingMMLiquidityChange(
+                    s.positionAccounting[positionId], s.pools[poolId].vtsConfig
+                )) {
                 revert Errors.CommitmentDeficitBlocksLiquidityChange(positionId);
             }
         }
@@ -1303,8 +1307,9 @@ library VTSPositionLib {
         // Issued commitment is zero once liquidity is fully unwound, so there is nothing left to be insolvent for.
         // Clearing token amounts avoids stale `commitmentDeficit` with `commitmentDeficitSince == 0` after a prior
         // partial reset, which would otherwise block age-gated deficit bypass in `CheckpointLibrary.isSeizable`.
-        // Non-seizure MM liquidity changes remain blocked while deficit is non-zero (`CommitmentDeficitBlocksLiquidityChange`);
-        // this reset is the semantic cleanup once deactivation is actually reached (including non-MM and seizure paths).
+        // Non-seizure MM liquidity changes remain blocked while a **material** stored commitment deficit applies
+        // (`CommitmentDeficitMMFreezeLib` / `CommitmentDeficitBlocksLiquidityChange`); this reset is the semantic
+        // cleanup once deactivation is actually reached (including non-MM and seizure paths).
         if (initialLiquidity > 0 && nextLiquidity == 0) {
             pa.commitmentDeficit.set(0, 0);
             pa.commitmentDeficit.set(1, 0);

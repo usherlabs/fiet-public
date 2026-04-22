@@ -17,6 +17,10 @@ library MMCalldataDecoder {
     /// @dev No sane ABI encoding will pass in an offset or length greater than type(uint32).max
     uint256 constant OFFSET_OR_LENGTH_MASK = 0xffffffff;
 
+    /// @notice Lower 128 bits only: assembly `calldataload` is 256-bit; narrow `uint128` fields must be canonicalised
+    /// @dev Prevents non-ABI-conforming calldata (dirty high bits) from inflating max-in / min-out checks.
+    uint256 constant UINT128_MASK = 0xffffffffffffffffffffffffffffffff;
+
     /// @notice Equivalent to SliceOutOfBounds.selector, stored in least-significant bits
     uint256 constant SLICE_ERROR_SELECTOR = 0x3b99b53d;
 
@@ -91,8 +95,8 @@ library MMCalldataDecoder {
             tokenId := calldataload(add(params.offset, 0xa0))
             positionIndex := calldataload(add(params.offset, 0xc0))
             liquidity := calldataload(add(params.offset, 0xe0))
-            amount0Max := calldataload(add(params.offset, 0x100))
-            amount1Max := calldataload(add(params.offset, 0x120))
+            amount0Max := and(calldataload(add(params.offset, 0x100)), UINT128_MASK)
+            amount1Max := and(calldataload(add(params.offset, 0x120)), UINT128_MASK)
         }
     }
 
@@ -130,8 +134,8 @@ library MMCalldataDecoder {
             tickLower := calldataload(add(params.offset, 0xc0))
             tickUpper := calldataload(add(params.offset, 0xe0))
             liquidity := calldataload(add(params.offset, 0x100))
-            amount0Max := calldataload(add(params.offset, 0x120))
-            amount1Max := calldataload(add(params.offset, 0x140))
+            amount0Max := and(calldataload(add(params.offset, 0x120)), UINT128_MASK)
+            amount1Max := and(calldataload(add(params.offset, 0x140)), UINT128_MASK)
         }
     }
 
@@ -275,8 +279,8 @@ library MMCalldataDecoder {
             poolKey := params.offset
             tokenId := calldataload(add(params.offset, 0xa0))
             positionIndex := calldataload(add(params.offset, 0xc0))
-            amount0Max := calldataload(add(params.offset, 0xe0))
-            amount1Max := calldataload(add(params.offset, 0x100))
+            amount0Max := and(calldataload(add(params.offset, 0xe0)), UINT128_MASK)
+            amount1Max := and(calldataload(add(params.offset, 0x100)), UINT128_MASK)
             payerIsUser := calldataload(add(params.offset, 0x120))
         }
     }
@@ -315,8 +319,8 @@ library MMCalldataDecoder {
             tokenId := calldataload(add(params.offset, 0xa0))
             tickLower := calldataload(add(params.offset, 0xc0))
             tickUpper := calldataload(add(params.offset, 0xe0))
-            amount0Max := calldataload(add(params.offset, 0x100))
-            amount1Max := calldataload(add(params.offset, 0x120))
+            amount0Max := and(calldataload(add(params.offset, 0x100)), UINT128_MASK)
+            amount1Max := and(calldataload(add(params.offset, 0x120)), UINT128_MASK)
             payerIsUser := calldataload(add(params.offset, 0x140))
         }
     }

@@ -1,7 +1,7 @@
 # MM admission vs spot manipulation (consolidated audit resolution)
 
 **Date:** 2026-04-22 (UTC)  
-**Last updated:** 2026-04-22  
+**Last updated:** 2026-04-22 (follow-up: marginal mint vs admission delta)  
 **Related plan (implementation reference):** `.cursor/plans/harden_mm_admission_883e022f.plan.md` (do not treat the plan file as normative protocol documentation; it is engineering scaffolding only.)
 
 ## Executive summary
@@ -11,6 +11,11 @@
 **Unchanged by design:** `checkpointWithCommitment` / `_checkpointWithCommitment` continue to measure **current** issued exposure from **live** `slot0` and `LiquidityUtils.calculateEffectiveTokenAmounts(...)`, because that path answers **solvency and `commitmentDeficit` state**, not whether new exposure may be admitted.
 
 This admission change is **complementary** to the earlier checkpoint / seizure hardening documented in `agents/audit-resolutions/vulnerability 15-spot-checkpoint-commitment-bypass-resolution.md` (age gates, `onSeize` refresh, etc.). Vulnerability #15 addressed **persistence and trust** around spot-derived **deficit** state; this work addresses **admission** relying on a manipulable spot snapshot **before** LCC issue.
+
+**Follow-up (same split policy, tighter MM increase gate):** the MM increase path now also enforces a **marginal** inequality: the oracle-valued **actual** minted principal for the step must satisfy  
+`mintDeltaUsd <= issuedAdmission(postL) - issuedAdmission(preL)`.  
+This does **not** reintroduce live `slot0` into admission (both sides of the marginal admission budget still come from `_issuedAdmissionValueForLiquidity`). It hardens against **rounding / composition drift** between spot-shaped mint amounts and the incremental endpoint-max admission budget while keeping the original **global** check  
+`issuedAdmission(postL) <= settledUsd + signalUsd`.
 
 ---
 
@@ -58,9 +63,9 @@ Checkpointing still uses live `slot0` + effective amounts so stored deficit refl
 | Area | Location |
 |------|----------|
 | Admission helper | `contracts/evm/src/libraries/VTSCommitLib.sol` — `_issuedAdmissionValueForLiquidity` |
-| Admission gate | `contracts/evm/src/libraries/VTSCommitLib.sol` — `validateLiquidityDelta` (calls admission helper; NatSpec describes admission vs checkpoint) |
+| Admission gate (global + marginal on MM increases) | `contracts/evm/src/libraries/VTSCommitLib.sol` — `validateMmIncreaseLiquidityDelta` (and `validateLiquidityDelta` where only the global check is needed) |
 | Live checkpoint issued USD | `contracts/evm/src/libraries/VTSCommitLib.sol` — `_checkpointWithCommitment` (`getSlot0` + `calculateEffectiveTokenAmounts` + `lccPairValue`) |
-| MM increase call site | `contracts/evm/src/libraries/VTSPositionMMOpsLib.sol` — `_handleLiquidityIncrease` passes `sqrtPriceX96: 0`, `currentTick: 0` with rationale comment |
+| MM increase call site | `contracts/evm/src/libraries/VTSPositionMMOpsLib.sol` — `_handleLiquidityIncrease` calls `validateMmIncreaseLiquidityDelta` with `sqrtPriceX96: 0`, `currentTick: 0` with rationale comment |
 | Invariant documentation | `contracts/evm/INVARIANTS.md` — **COMMIT-01** (admission worst-case vs checkpoint live-state) |
 | Regression tests | `contracts/evm/test/libraries/VTSCommitLib.t.sol` — see “Test coverage” below |
 
@@ -73,6 +78,7 @@ Added / updated Foundry coverage in `contracts/evm/test/libraries/VTSCommitLib.t
 - **`test_validateLiquidityDelta_admission_invariant_to_slot0_fields`** — same range and post-add liquidity; varying `sqrtPriceX96` / `currentTick` in params does not change admission issued USD.
 - **`test_validateLiquidityDelta_reverts_when_backing_covers_spot_only_not_admission`** — oracle leg skew so **live-spot issued** is materially below **admission issued**; signal backing between the two must **fail** admission (and revert in hard mode).
 - **`test_validateLiquidityDelta_honest_backing_passes_with_dummy_slot0_fields`** — MM-style dummy `slot0` fields with ample signal backing still **pass**.
+- **`test_validateMmIncreaseLiquidityDelta_*`** — marginal gate: revert when oracle-valued mint exceeds `issuedAdmission(post) - issuedAdmission(pre)`; pass for tiny mint on a small liquidity increment; admission still invariant to `slot0` fields; global failure still surfaces as `InvalidLiquiditySignal` first.
 
 Checkpoint tests that compare maths to **live** issued exposure use a **spot-based** helper (`_computeIssuedUsd`) aligned with `_checkpointWithCommitment`, not `validateLiquidityDelta`’s admission figure.
 

@@ -113,7 +113,7 @@ questions for every invariant:
 | COMMIT-00 | P0 | Foundry | `VTSOrchestrator.t.sol`, `VTSPositionLib.t.sol` | Live-liquidity/`commitmentMax` drift remains authoritative in the core VTS Foundry tests. |
 | COMMIT-01 | P0 | Medusa/FuzzEntry | `FuzzVTSPosition.sol`, `invariants/COMMIT01.sol` | Backing gate stays directly fuzzed under the supported path. |
 | COMMIT-02 | P0 | Medusa/FuzzEntry | `FuzzVTSPosition.sol`, `invariants/COMMIT02.sol` | Checkpoint deficit math remains directly fuzzed under the supported path. |
-| COMMIT-02A | P0 | Foundry + Medusa | `invariants/COMMIT02.sol`, `VTSOrchestrator.t.sol` | Deficit formation is fuzzed; the explicit non-seizure freeze is asserted in the core orchestrator tests. |
+| COMMIT-02A | P0 | Foundry + Medusa | `invariants/COMMIT02.sol`, `VTSOrchestrator.t.sol`, `VTSPositionLib.t.sol` | Deficit formation is fuzzed; materiality-based non-seizure MM freeze is covered in `VTSPositionLib.t.sol` and orchestrator paths. |
 | COMMIT-02B | P0 | Foundry + Medusa | `invariants/COMMIT02.sol`, `VTSOrchestrator.t.sol` | Deficit clearing is fuzzed; full-deactivation storage cleanup remains authoritative in Foundry. |
 | COMMIT-03 | P0 | Medusa/FuzzEntry | `FuzzVTSPosition.sol`, `invariants/COMMIT03.sol` | Advancer binding and rotation remain direct Medusa properties. |
 | VTS-01 | P0 | Medusa/FuzzEntry | `FuzzVTSCoreTail.sol`, `invariants/VTS01.sol` | Growth settlement before modify remains a direct Medusa property. |

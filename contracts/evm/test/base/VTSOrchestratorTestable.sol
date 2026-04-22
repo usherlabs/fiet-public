@@ -7,10 +7,26 @@ import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {PositionId} from "../../src/types/Position.sol";
 import {IVRLSignalManager} from "../../src/interfaces/IVRLSignalManager.sol";
 import {IVRLSettlementObserver} from "../../src/interfaces/IVRLSettlementObserver.sol";
+import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
+import {VTSCommitLib} from "../../src/libraries/VTSCommitLib.sol";
 
 // ============================================================
 // Testable VTSOrchestrator with Debug View Functions
 // ============================================================
+
+/// @dev Bundles inputs for `exposedValidateMmIncreaseLiquidityDeltaSoft` to avoid stack-too-deep in the test harness.
+struct MmIncreaseAdmissionReplay {
+    uint256 commitId;
+    PositionId positionId;
+    Currency currency0;
+    Currency currency1;
+    int24 tickLower;
+    int24 tickUpper;
+    uint128 postAddLiquidity;
+    uint128 preAddLiquidity;
+    uint256 mintAmount0;
+    uint256 mintAmount1;
+}
 
 /// @title VTSOrchestratorTestable
 /// @notice Extends VTSOrchestrator with debug view functions for testing
@@ -134,5 +150,38 @@ contract VTSOrchestratorTestable is VTSOrchestrator {
     {
         PositionAccounting storage pa = s.positionAccounting[positionId];
         return (pa.commitmentDeficitSince.token0, pa.commitmentDeficitSince.token1, pa.commitmentDeficitBps);
+    }
+
+    /// @dev Stack-shallow struct build for `exposedValidateMmIncreaseLiquidityDeltaSoft`.
+    function _liquidityDeltaParamsForMmReplay(
+        Currency currency0,
+        Currency currency1,
+        int24 tickLower,
+        int24 tickUpper,
+        uint128 postAddLiquidity
+    ) private pure returns (VTSCommitLib.LiquidityDeltaParams memory p) {
+        p.currency0 = currency0;
+        p.currency1 = currency1;
+        p.sqrtPriceX96 = 0;
+        p.currentTick = 0;
+        p.tickLower = tickLower;
+        p.tickUpper = tickUpper;
+        p.liquidityDelta = int256(uint256(postAddLiquidity));
+    }
+
+    /// @notice TEST-ONLY: replay `VTSCommitLib.validateMmIncreaseLiquidityDelta` on live `VTSStorage` without reverting.
+    /// @dev Used by integration tests to assert actual LCC mints from `modifyLiquidities` satisfy the same COMMIT-01
+    ///      global + marginal admission bundle enforced pre-mint in `VTSPositionMMOpsLib`.
+    function exposedValidateMmIncreaseLiquidityDeltaSoft(MmIncreaseAdmissionReplay calldata r)
+        external
+        view
+        returns (bool success, uint256 issuedPost, uint256 settledValue, uint256 signalValue)
+    {
+        VTSCommitLib.LiquidityDeltaParams memory p = _liquidityDeltaParamsForMmReplay(
+            r.currency0, r.currency1, r.tickLower, r.tickUpper, r.postAddLiquidity
+        );
+        return VTSCommitLib.validateMmIncreaseLiquidityDelta(
+            s, oracleHelper, r.commitId, r.positionId, p, r.preAddLiquidity, r.mintAmount0, r.mintAmount1, false
+        );
     }
 }

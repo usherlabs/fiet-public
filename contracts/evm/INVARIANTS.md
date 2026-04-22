@@ -115,8 +115,12 @@ being an informal “should”.
   - **Domain B**: `src/LiquidityHub.sol::issue` is `onlyIssuer(lcc)` and mints market-derived amount via the LCC hub
     mint path; issuer gating is enforced by `LiquidityHub._onlyIssuer` (valid LCC + issuer allowlist).
   - **Domain C**: `src/libraries/VTSPositionMMOpsLib.sol::_handleLiquidityIncrease` calls
-    `src/libraries/VTSCommitLib.sol::validateLiquidityDelta(..., revertIfInsufficientBacking=true)`, which reverts
-    `Errors.InvalidLiquiditySignal(...)` unless \(issuedUsd \le settledUsd + signalUsd\).
+    `src/libraries/VTSCommitLib.sol::validateMmIncreaseLiquidityDelta(..., revertIfInsufficientBacking=true)`, which
+    enforces **post-add** endpoint-max backing \(issuedPost \le settledUsd + signalUsd\) and a **marginal** cap on the
+    oracle-valued actual minted principal for this step:
+    \(mintDeltaUsd \le issuedAdmission(postL) - issuedAdmission(preL)\). On failure it reverts
+    `Errors.InvalidLiquiditySignal(...)` (global shortfall) or `Errors.InvalidAdmissionMintDelta(...)` (marginal mint
+    vs admission delta).
   - **Domain conversion**: `src/LiquidityHub.sol::_wrapWith` delegates to `LiquidityHubLib.wrapWithPrepare` /
     `LiquidityHubLib.wrapWithContext` and then mints the target LCC split as `(directToMint, marketToMint)`; any
     mismatch is treated as a library logic bug (see inline comments).
@@ -516,27 +520,38 @@ being an informal “should”.
 ### COMMIT-01: Commitment backing must satisfy `issuedUsd <= settledUsd + signalUsd` (per-position, per-commit)
 
 - **Statement**: Any MM liquidity increase that would cause the issued commitment value to exceed (settled + signalled)
-  backing must revert.
-- **Admission valuation (anti-manipulation)**: `validateLiquidityDelta` values **new** MM exposure for admission using a
-  conservative worst-case range rule (`VTSCommitLib::_issuedAdmissionValueForLiquidity`): commitment maxima at the
-  position ticks are valued at the **upper** and **lower** tick endpoint compositions in USD (via
-  `OracleUtils::lccPairValue`), and the **maximum** of those two endpoint valuations is used as `issuedValue`. This
+  backing must revert. Additionally, the **oracle-valued** principal minted on this increase must not exceed the
+  **marginal** endpoint-max admission budget for the same add:
+  \(mintDeltaUsd \le issuedAdmission(postL) - issuedAdmission(preL)\).
+- **Admission valuation (anti-manipulation)**: MM increase admission uses `VTSCommitLib::validateMmIncreaseLiquidityDelta`,
+  which reuses `_issuedAdmissionValueForLiquidity` (same endpoint-max rule as `validateLiquidityDelta`): commitment
+  maxima at the position ticks are valued at the **upper** and **lower** tick endpoint compositions in USD (via
+  `OracleUtils::lccPairValue`), and the **maximum** of those two endpoint valuations is used per liquidity level. This
   deliberately avoids relying on pool `slot0` / current tick for admission, so same-transaction spot games cannot
   understate required backing. The protocol does **not** treat “arbitrage will restore the price” as a security
   invariant for admission.
+- **Marginal mint gate**: `mintDeltaUsd` is `OracleUtils.lccPairValue` over the **actual** minted LCC amounts for the
+  step (`preL` / `postL` are position liquidity immediately before and after the modify). This bounds spot-shaped minting
+  against the incremental endpoint-max admission budget and complements the **global** post-add check
+  \(issuedAdmission(postL) \le settledUsd + signalUsd\).
 - **Checkpoint valuation (live state)**: `checkpointWithCommitment` / `_checkpointWithCommitment` continue to measure
   **current** issued exposure from live `slot0` and effective token amounts (`LiquidityUtils::calculateEffectiveTokenAmounts`)
   because that path answers solvency and `commitmentDeficit` state, not whether new liquidity may be admitted.
   `commitmentDeficit` and grace/bypass timers are **enforcement** after admission; they are not substitutes for
   conservative admission.
 - **Enforced by**:
-  - `src/libraries/VTSCommitLib.sol::validateLiquidityDelta` computes issued/settled/signal values and reverts
-    `Errors.InvalidLiquiditySignal(issuedValue, signalValue, settledValue)` when insufficient.
+  - `src/libraries/VTSCommitLib.sol::validateMmIncreaseLiquidityDelta` computes `issuedPost`, settled, signal, admission
+    at `preL` and `postL`, and reverts `Errors.InvalidLiquiditySignal(issuedPost, signalValue, settledValue)` when the
+    global inequality fails, or `Errors.InvalidAdmissionMintDelta(mintValueUsd, admissionDeltaUsd)` when the marginal
+    inequality fails.
+  - `src/libraries/VTSCommitLib.sol::validateLiquidityDelta` remains the shared helper for other callers that only need
+    the global post-add admission check (same `_issuedAdmissionValueForLiquidity` semantics).
   - Called during MM increases by `src/libraries/VTSPositionMMOpsLib.sol::_handleLiquidityIncrease` with
-    `revertIfInsufficientBacking = true`.
-  - MM increases pass **post-add total position liquidity** into `validateLiquidityDelta` (not the incremental add
-    delta alone), so repeated adds cannot each pass on a per-slice check while cumulative post-add issuance exceeds
-    `(settled + signal)` backing.
+    `revertIfInsufficientBacking = true` (after non-zero mint amounts are known, before `liquidityHub.issue`).
+  - MM increases pass **post-add total position liquidity** as `LiquidityDeltaParams.liquidityDelta` (not the incremental
+    Uniswap modify delta alone), so repeated adds cannot each pass on a per-slice global check while cumulative post-add
+    issuance exceeds `(settled + signal)` backing. The incremental modify delta is used only to recover `preL` from
+    stored post-add liquidity for the marginal gate.
 
 ### COMMIT-02: Checkpointing with commitment updates `commitmentDeficit` as an insolvency gate
 
@@ -556,15 +571,28 @@ being an informal “should”.
 - **Separation invariant**: `commitmentDeficit` is a checkpoint-derived solvency gate and is not the pool swap-attributed
   deficit principal bucket. `totalDeficitPrincipal` tracks swap-incurred `cumulativeDeficit` at the pool level only.
 
-### COMMIT-02A: Non-seizure MM liquidity changes blocked while `commitmentDeficit` is non-zero
+### COMMIT-02A: Non-seizure MM liquidity changes blocked on **material** stored commitment deficit
 
-- **Statement**: If `PositionAccounting.commitmentDeficit` is non-zero on either token, any MM `touchPosition` with
-  `liquidityDelta != 0` must revert unless the operation is a seizure (`hookData.seizure.isSeizing == true`).
-- **Enforced by**: `src/libraries/VTSPositionLib.sol::touchPosition` reverts `Errors.CommitmentDeficitBlocksLiquidityChange`.
-- **Rationale**: Closing live RFS (via settlement) does not necessarily clear stored `commitmentDeficit`; allowing MM
-  add/remove while the insolvency gate persists would desynchronise commitment context from checkpoint-derived deficit
-  state. MM no-ops (`liquidityDelta == 0`) and settlement / checkpoint paths remain available to cure or formalise
-  backing.
+- **Statement**: Any MM `touchPosition` with `liquidityDelta != 0` must revert unless the operation is a seizure
+  (`hookData.seizure.isSeizing == true`), or the stored commitment deficit is not **material** for this gate.
+  **Material** means any of:
+  - `PositionAccounting.commitmentDeficitBps > 0`, or
+  - for token lane `i` in `{0,1}`, `commitmentDeficit` for that lane is at least
+    `pools[poolId].vtsConfig.token{i}.unbackedCommitmentGraceBypassThreshold` when that threshold is non-zero
+    (the same per-token fields used in seizure bypass; `0` disables the threshold arm).
+- **Not material (does not block MM add/remove)**: non-zero raw `commitmentDeficit` token units alone when
+  `commitmentDeficitBps == 0` and every configured threshold is `0` or the lane is strictly below its threshold
+  (e.g. sub-1 bps USD shortfall with exact proportional write and bps floored to 0). Checkpoint still persists the
+  storage snapshot; seizure/risk policy uses `commitmentDeficit` / `SEIZE-01` separately.
+- **Enforced by**: `src/libraries/CommitmentDeficitMMFreezeLib.sol::blocksNonSeizingMMLiquidityChange` (called from
+  `src/libraries/VTSPositionLib.sol` on non-seizing MM path) reverts `Errors.CommitmentDeficitBlocksLiquidityChange`.
+- **Rationale**: The checkpoint path records **exact** per-lane token deficits; treating every 1-wei residual like a
+  full insolvency block would over-restrict ordinary MM flow. The gate is narrowed to bps severity and optional
+  token thresholds, while **COMMIT-02** storage and `CheckpointLibrary` seizure path remain unchanged.
+- **Rationale (continued)**: Closing live RFS (via settlement) does not necessarily clear stored `commitmentDeficit`;
+  allowing MM add/remove while a **material** insolvency condition persists would desynchronise commitment context
+  from checkpoint-derived state. MM no-ops (`liquidityDelta == 0`) and settlement / checkpoint paths remain
+  available to cure or formalise backing.
 
 ### COMMIT-02B: Full liquidity mirror deactivation clears commitment-deficit storage
 
@@ -572,9 +600,10 @@ being an informal “should”.
   tokens), `commitmentDeficitSince`, and `commitmentDeficitBps` are reset to zero.
 - **Enforced by**: `src/libraries/VTSPositionLib.sol::_applyLiquidityMirrorTransition`.
 - **Rationale**: Issued commitment is zero after a full unwind; retaining token deficit amounts without a coherent age
-  vector would be stale and could interact badly with deficit-age bypass logic. **COMMIT-02A** remains in force: MM still
-  cannot change liquidity while deficit is non-zero, so this reset is not a way to “MM-remove past” the gate—it is the
-  bookkeeping cleanup once deactivation is actually reached (including non-MM and seizure paths).
+  vector would be stale and could interact badly with deficit-age bypass logic. **COMMIT-02A** remains in force: MM
+  still cannot change liquidity while a **material** stored commitment deficit would block the modify path, so this
+  reset is not a way to “MM-remove past” the gate—it is the bookkeeping cleanup once deactivation is actually
+  reached (including non-MM and seizure paths).
 
 ### COMMIT-03: “Advancer” binding for checkpoint-with-commitment must hold
 

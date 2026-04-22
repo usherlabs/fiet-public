@@ -388,6 +388,56 @@ library VTSPositionMMOpsLib {
     // LCC Issuance/Cancellation Helpers
     // --------------------------------------------------
 
+    /// @dev Struct literal for `LiquidityDeltaParams` in a separate frame (avoids yul "stack too deep" in
+    ///      `_validateMmIncreaseCommitBacking` when optimiser is on but `via_ir` is off).
+    function _liquidityDeltaParamsForMmIncrease(
+        PoolKey memory poolKey,
+        ModifyLiquidityParams memory params,
+        uint128 postAddLiquidity
+    ) private pure returns (VTSCommitLib.LiquidityDeltaParams memory ld) {
+        ld = VTSCommitLib.LiquidityDeltaParams({
+            currency0: poolKey.currency0,
+            currency1: poolKey.currency1,
+            sqrtPriceX96: 0,
+            currentTick: 0,
+            tickLower: params.tickLower,
+            tickUpper: params.tickUpper,
+            liquidityDelta: SafeCast.toInt256(uint256(postAddLiquidity))
+        });
+    }
+
+    /// @dev Isolated stack frame for COMMIT-01 MM increase validation (global + marginal admission).
+    function _validateMmIncreaseCommitBacking(
+        VTSStorage storage s,
+        PositionContext memory ctx,
+        PoolKey memory poolKey,
+        ModifyLiquidityParams memory params,
+        VTSPositionLib.LiquidityIncreaseParams memory p,
+        uint256 amount0,
+        uint256 amount1
+    ) private view {
+        uint128 postAddLiquidity = s.positions[p.positionId].liquidity;
+        int256 modifyDelta = params.liquidityDelta;
+        if (modifyDelta <= 0) {
+            revert Errors.InvariantViolated("MM increase liquidity delta must be positive");
+        }
+        uint256 addU = uint256(modifyDelta);
+        if (addU > uint256(type(uint128).max)) {
+            revert Errors.InvalidAmount(addU, type(uint128).max);
+        }
+        uint128 addL = uint128(addU);
+        if (postAddLiquidity < addL) {
+            revert Errors.InvariantViolated("MM increase liquidity underflow");
+        }
+        uint128 preAddLiquidity = postAddLiquidity - addL;
+
+        VTSCommitLib.LiquidityDeltaParams memory ld =
+            _liquidityDeltaParamsForMmIncrease(poolKey, params, postAddLiquidity);
+        VTSCommitLib.validateMmIncreaseLiquidityDelta(
+            s, ctx.oracleHelper, p.commitId, p.positionId, ld, preAddLiquidity, amount0, amount1, true
+        );
+    }
+
     /// @notice Handle liquidity increase (mint or add liquidity) - issues LCCs
     /// @param s The VTS storage
     /// @param ctx The position context
@@ -413,30 +463,13 @@ library VTSPositionMMOpsLib {
             if (amount0 == 0 && amount1 == 0) return;
         }
 
-        // Validate commitment backing in scoped block.
-        // `touchPosition` updates `positions[positionId].liquidity` to post-modify liquidity before this MM tail runs,
-        // so use that total for issued-value (COMMIT-01), not the incremental `params.liquidityDelta` alone.
-        // Admission is worst-case over the tick range and oracle prices, not live `slot0`, so same-block spot
-        // manipulation cannot relax the backing gate before LCC issue.
-        {
-            uint128 postAddLiquidity = s.positions[p.positionId].liquidity;
-            VTSCommitLib.validateLiquidityDelta(
-                s,
-                ctx.oracleHelper,
-                p.commitId,
-                p.positionId,
-                VTSCommitLib.LiquidityDeltaParams({
-                    currency0: poolKey.currency0,
-                    currency1: poolKey.currency1,
-                    sqrtPriceX96: 0,
-                    currentTick: 0,
-                    tickLower: params.tickLower,
-                    tickUpper: params.tickUpper,
-                    liquidityDelta: SafeCast.toInt256(postAddLiquidity)
-                }),
-                true
-            );
-        }
+        // `touchPosition` updates `positions[positionId].liquidity` to post-modify liquidity before this MM tail runs.
+        // COMMIT-01: (1) post-add endpoint-max issued USD must be covered by settled + signal, and (2) the oracle
+        // value of this step's actual minted principal must not exceed the marginal admission budget
+        // `issuedAdmission(postL) - issuedAdmission(preL)`. `ModifyLiquidityParams.liquidityDelta` is the add delta;
+        // `LiquidityDeltaParams.liquidityDelta` passed to `VTSCommitLib` is the post-add total L (same convention as
+        // `validateLiquidityDelta`). Admission ignores live `slot0` in params.
+        _validateMmIncreaseCommitBacking(s, ctx, poolKey, params, p, amount0, amount1);
 
         // Issue LCC tokens in scoped block
         {

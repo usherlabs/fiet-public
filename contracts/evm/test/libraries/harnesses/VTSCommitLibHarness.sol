@@ -35,6 +35,29 @@ contract VTSCommitLibHarness {
         );
     }
 
+    function validateMmIncreaseLiquidityDelta(
+        IOracleHelper oracleHelper,
+        uint256 commitId,
+        PositionId positionId,
+        VTSCommitLib.LiquidityDeltaParams memory params,
+        uint128 preAddLiquidity,
+        uint256 mintAmount0,
+        uint256 mintAmount1,
+        bool revertIfInsufficientBacking
+    ) external view returns (bool, uint256, uint256, uint256) {
+        return VTSCommitLib.validateMmIncreaseLiquidityDelta(
+            s,
+            oracleHelper,
+            commitId,
+            positionId,
+            params,
+            preAddLiquidity,
+            mintAmount0,
+            mintAmount1,
+            revertIfInsufficientBacking
+        );
+    }
+
     function commitSignal(IVRLSignalManager mgr, address sender, IOracleHelper oracleHelper, bytes memory sig)
         external
         returns (uint256)

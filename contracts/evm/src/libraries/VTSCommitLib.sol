@@ -216,6 +216,104 @@ library VTSCommitLib {
         }
     }
 
+    function _mmIncreaseAdmissionScalars(
+        VTSStorage storage s,
+        IOracleHelper oracleHelper,
+        uint256 commitId,
+        PositionId positionId,
+        LiquidityDeltaParams memory params,
+        uint128 preAddLiquidity
+    ) private view returns (uint256 issuedPost, uint256 settledValue, uint256 signalValue, uint256 admissionPre) {
+        issuedPost = _issuedAdmissionValueForLiquidity(
+            oracleHelper, params.currency0, params.currency1, params.tickLower, params.tickUpper, params.liquidityDelta
+        );
+        settledValue = _settledValueForPosition(s, oracleHelper, params.currency0, params.currency1, positionId);
+        signalValue = _signalValueForCommit(s, oracleHelper, commitId);
+        admissionPre = _issuedAdmissionValueForLiquidity(
+            oracleHelper,
+            params.currency0,
+            params.currency1,
+            params.tickLower,
+            params.tickUpper,
+            int256(uint256(preAddLiquidity))
+        );
+    }
+
+    function _mintDeltaUsdFromLiquidityParams(
+        IOracleHelper oracleHelper,
+        LiquidityDeltaParams memory params,
+        uint256 mintAmount0,
+        uint256 mintAmount1
+    ) private view returns (uint256 mintDeltaUsd) {
+        mintDeltaUsd = OracleUtils.lccPairValue(
+            oracleHelper, Currency.unwrap(params.currency0), mintAmount0, Currency.unwrap(params.currency1), mintAmount1
+        );
+    }
+
+    /// @notice COMMIT-01 MM increase: post-add endpoint-max backing plus marginal oracle cap on actual minted principal.
+    /// @dev `params.liquidityDelta` must be **post-add total** position liquidity (positive), matching
+    ///      `validateLiquidityDelta` for MM increases. `preAddLiquidity` must be the liquidity immediately before this
+    ///      increase (typically `post - uint128(liquidityDelta)` from `ModifyLiquidityParams`). `sqrtPriceX96` and
+    ///      `currentTick` in `params` are ignored for admission (same as `validateLiquidityDelta`).
+    /// @param mintAmount0 Actual LCC amount minted on `currency0` this increase (pool principal deposited).
+    /// @param mintAmount1 Actual LCC amount minted on `currency1` this increase.
+    // TODO: Naming convention here requires some improvement.
+    function validateMmIncreaseLiquidityDelta(
+        VTSStorage storage s,
+        IOracleHelper oracleHelper,
+        uint256 commitId,
+        PositionId positionId,
+        LiquidityDeltaParams memory params,
+        uint128 preAddLiquidity,
+        uint256 mintAmount0,
+        uint256 mintAmount1,
+        bool revertIfInsufficientBacking
+    ) external view returns (bool success, uint256 issuedPost, uint256 settledValue, uint256 signalValue) {
+        if (params.liquidityDelta <= 0) {
+            if (revertIfInsufficientBacking) {
+                revert Errors.InvariantViolated("MM increase expects positive post liquidity");
+            }
+            return (false, 0, 0, 0);
+        }
+
+        {
+            uint128 postL = SafeCast.toUint128(uint256(params.liquidityDelta));
+            if (uint256(preAddLiquidity) > uint256(postL)) {
+                if (revertIfInsufficientBacking) {
+                    revert Errors.InvariantViolated("pre liquidity exceeds post");
+                }
+                return (false, 0, 0, 0);
+            }
+        }
+
+        uint256 admissionPre;
+        (issuedPost, settledValue, signalValue, admissionPre) =
+            _mmIncreaseAdmissionScalars(s, oracleHelper, commitId, positionId, params, preAddLiquidity);
+
+        if (admissionPre > issuedPost) {
+            if (revertIfInsufficientBacking) {
+                revert Errors.InvariantViolated("admission non-monotonic");
+            }
+            return (false, 0, 0, 0);
+        }
+
+        uint256 admissionDelta = issuedPost - admissionPre;
+        uint256 mintDeltaUsd = _mintDeltaUsdFromLiquidityParams(oracleHelper, params, mintAmount0, mintAmount1);
+
+        bool globalOk = issuedPost <= signalValue + settledValue;
+        bool marginalOk = mintDeltaUsd <= admissionDelta;
+        success = globalOk && marginalOk;
+
+        if (revertIfInsufficientBacking) {
+            if (!globalOk) {
+                revert Errors.InvalidLiquiditySignal(issuedPost, signalValue, settledValue);
+            }
+            if (!marginalOk) {
+                revert Errors.InvalidAdmissionMintDelta(mintDeltaUsd, admissionDelta);
+            }
+        }
+    }
+
     /// @dev Shared body for linked `commitSignal` and orchestrator router overload.
     /// @param sender Address passed to `VRLSignalManager` as the proof-authenticated principal (must satisfy
     ///        `_assertSenderAuthorised`). For fresh commit this is always `signal.mmState.owner` (see

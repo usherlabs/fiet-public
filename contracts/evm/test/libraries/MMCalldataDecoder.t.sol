@@ -272,6 +272,9 @@ contract MMCalldataDecoderTest is Test {
     /// @dev Non-zero bits only above the low 160 (canonical address lives in least-significant 160 bits).
     uint256 internal constant DIRTY_HIGH = uint256(0xA11CE) << 160;
 
+    /// @dev Non-zero bits in the high 128 bits of a 256-bit word that is typed as `uint128` in ABI.
+    uint256 internal constant DIRTY_UINT128_HIGH = uint256(0xB0BAD) << 128;
+
     function setUp() public {
         h = new MMCalldataDecoderHarness();
     }
@@ -285,6 +288,10 @@ contract MMCalldataDecoderTest is Test {
 
     function _dirtyAddressWord(address addr) internal pure returns (uint256) {
         return DIRTY_HIGH | uint256(uint160(addr));
+    }
+
+    function _dirtyUint128Word(uint128 low) internal pure returns (uint256) {
+        return DIRTY_UINT128_HIGH | uint256(low);
     }
 
     function _poolKey() internal pure returns (PoolKey memory key) {
@@ -512,6 +519,71 @@ contract MMCalldataDecoderTest is Test {
         (address lcc, uint256 maxAmount) = h.decodeCollectLiquidityParams(params);
         assertEq(lcc, address(0x1111));
         assertEq(maxAmount, 9);
+    }
+
+    // --- max-in uint128: dirty high 128 bits must not inflate decoded caps ---
+
+    function test_decodeIncreaseLiquidityParams_dirtyAmountMax_truncatesToUint128() public view {
+        PoolKey memory key = _poolKey();
+        bytes memory params = abi.encode(key, uint256(10), uint256(2), uint256(123), uint128(11), uint128(22));
+        // amount0Max @ word 8, amount1Max @ word 9 (PoolKey = words 0..4)
+        _setAbiWord(params, 8, _dirtyUint128Word(11));
+        _setAbiWord(params, 9, _dirtyUint128Word(22));
+        (, uint256 tokenId, uint256 positionIndex, uint256 liq, uint128 a0, uint128 a1) =
+            h.decodeIncreaseLiquidityParams(params);
+        assertEq(tokenId, 10);
+        assertEq(positionIndex, 2);
+        assertEq(liq, 123);
+        assertEq(a0, 11);
+        assertEq(a1, 22);
+    }
+
+    function test_decodeMintPositionParams_dirtyAmountMax_truncatesToUint128() public view {
+        PoolKey memory key = _poolKey();
+        bytes memory params =
+            abi.encode(key, uint256(77), int24(-120), int24(120), uint256(999), uint128(5), uint128(7));
+        // amount0Max @ word 9, amount1Max @ word 10
+        _setAbiWord(params, 9, _dirtyUint128Word(5));
+        _setAbiWord(params, 10, _dirtyUint128Word(7));
+        (, uint256 tokenId, int24 tl, int24 tu, uint256 liq, uint128 a0, uint128 a1) =
+            h.decodeMintPositionParams(params);
+        assertEq(tokenId, 77);
+        assertEq(tl, -120);
+        assertEq(tu, 120);
+        assertEq(liq, 999);
+        assertEq(a0, 5);
+        assertEq(a1, 7);
+    }
+
+    function test_decodeIncreaseFromDeltasParams_dirtyAmountMax_truncatesToUint128() public view {
+        PoolKey memory key = _poolKey();
+        bytes memory params = abi.encode(key, uint256(10), uint256(2), uint128(11), uint128(12), true);
+        // amount0Max @ word 7, amount1Max @ word 8
+        _setAbiWord(params, 7, _dirtyUint128Word(11));
+        _setAbiWord(params, 8, _dirtyUint128Word(12));
+        (, uint256 tokenId, uint256 positionIndex, uint128 amount0Max, uint128 amount1Max, bool payerIsUser) =
+            h.decodeIncreaseFromDeltasParams(params);
+        assertEq(tokenId, 10);
+        assertEq(positionIndex, 2);
+        assertEq(amount0Max, 11);
+        assertEq(amount1Max, 12);
+        assertTrue(payerIsUser);
+    }
+
+    function test_decodeMintFromDeltasParams_dirtyAmountMax_truncatesToUint128() public view {
+        PoolKey memory key = _poolKey();
+        bytes memory params = abi.encode(key, uint256(10), int24(-1), int24(1), uint128(21), uint128(22), false);
+        // amount0Max @ word 8, amount1Max @ word 9
+        _setAbiWord(params, 8, _dirtyUint128Word(21));
+        _setAbiWord(params, 9, _dirtyUint128Word(22));
+        (, uint256 tokenId, int24 tl, int24 tu, uint128 amount0Max, uint128 amount1Max, bool payerIsUser) =
+            h.decodeMintFromDeltasParams(params);
+        assertEq(tokenId, 10);
+        assertEq(tl, -1);
+        assertEq(tu, 1);
+        assertEq(amount0Max, 21);
+        assertEq(amount1Max, 22);
+        assertFalse(payerIsUser);
     }
 
     function test_decodeUint256AndBool_ok() public view {

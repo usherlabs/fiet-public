@@ -495,6 +495,136 @@ contract VTSCommitLibTest is VTSLibTestBase {
         harness.validateLiquidityDelta(oracle, commitId, positionId, p1, true);
     }
 
+    // ============================================================
+    // validateMmIncreaseLiquidityDelta (COMMIT-01 global + marginal)
+    // ============================================================
+
+    /// @dev Admission-only params: `sqrtPriceX96` / `currentTick` dummy (COMMIT-01 ignores them).
+    function _liquidityDeltaParamsAdmission(int256 liquidityAmount)
+        internal
+        view
+        returns (VTSCommitLib.LiquidityDeltaParams memory p)
+    {
+        p = VTSCommitLib.LiquidityDeltaParams({
+            currency0: corePoolKey.currency0,
+            currency1: corePoolKey.currency1,
+            sqrtPriceX96: 0,
+            currentTick: 0,
+            tickLower: TL,
+            tickUpper: TU,
+            liquidityDelta: liquidityAmount
+        });
+    }
+
+    /// @notice Regression: marginal gate rejects oracle-valued mint above `issued(post) - issued(pre)`.
+    function test_validateMmIncrease_reverts_when_mint_exceeds_marginal_admission_budget() public {
+        harness.setPositionSettled(positionId, 0, 0);
+        oracle.setPrices(1e18, 1e18);
+
+        int256 Lpost = int256(uint256(LIQ));
+        uint128 pre = 0;
+
+        (, uint256 issuedPost,,) = harness.validateMmIncreaseLiquidityDelta(
+            oracle, commitId, positionId, _liquidityDeltaParamsAdmission(Lpost), pre, 0, 0, false
+        );
+
+        oracle.setTotalValue(issuedPost);
+
+        uint256 mintUsd = issuedPost + 1;
+        (bool ok,,,) = harness.validateMmIncreaseLiquidityDelta(
+            oracle, commitId, positionId, _liquidityDeltaParamsAdmission(Lpost), pre, mintUsd, 0, false
+        );
+        assertFalse(ok, "marginal failure expected while global holds at equality");
+
+        vm.expectRevert(abi.encodeWithSelector(Errors.InvalidAdmissionMintDelta.selector, mintUsd, issuedPost));
+        harness.validateMmIncreaseLiquidityDelta(
+            oracle, commitId, positionId, _liquidityDeltaParamsAdmission(Lpost), pre, mintUsd, 0, true
+        );
+    }
+
+    /// @notice Honest mint fits marginal budget when signal amply covers post-add admission.
+    function test_validateMmIncrease_marginal_passes_when_mint_within_admission_delta() public {
+        harness.setPositionSettled(positionId, 0, 0);
+        oracle.setPrices(1e18, 1e18);
+        oracle.setTotalValue(1_000_000e18);
+
+        int256 Lpost = int256(uint256(LIQ));
+        uint128 pre = uint128(uint256(LIQ / 2));
+        uint256 admissionDelta = _issuedUsdForLiquidity(Lpost) - _issuedUsdForLiquidity(int256(uint256(pre)));
+        assertGt(admissionDelta, 0, "pre/post slice must admit positive marginal budget");
+
+        uint256 mint0 = admissionDelta / 2;
+        (bool ok,,,) = harness.validateMmIncreaseLiquidityDelta(
+            oracle, commitId, positionId, _liquidityDeltaParamsAdmission(Lpost), pre, mint0, 0, false
+        );
+        assertTrue(ok, "mint oracle value under half of admission delta must pass");
+        harness.validateMmIncreaseLiquidityDelta(
+            oracle, commitId, positionId, _liquidityDeltaParamsAdmission(Lpost), pre, mint0, 0, true
+        );
+    }
+
+    /// @notice Regression (COMMIT-01): `issuedPost` path must not depend on manipulable `slot0` fields in params.
+    function test_validateMmIncrease_admission_invariant_to_slot0_fields() public {
+        harness.setPositionSettled(positionId, 0, 0);
+        oracle.setTotalValue(1_000_000e18);
+        uint128 pre = uint128(uint256(LIQ / 4));
+
+        int256 Lpost = int256(uint256(LIQ));
+        uint256 m0 = 100;
+        uint256 m1 = 100;
+
+        VTSCommitLib.LiquidityDeltaParams memory pLow = VTSCommitLib.LiquidityDeltaParams({
+            currency0: corePoolKey.currency0,
+            currency1: corePoolKey.currency1,
+            sqrtPriceX96: TickMath.getSqrtPriceAtTick(-50),
+            currentTick: -50,
+            tickLower: TL,
+            tickUpper: TU,
+            liquidityDelta: Lpost
+        });
+        VTSCommitLib.LiquidityDeltaParams memory pHigh = VTSCommitLib.LiquidityDeltaParams({
+            currency0: corePoolKey.currency0,
+            currency1: corePoolKey.currency1,
+            sqrtPriceX96: TickMath.getSqrtPriceAtTick(50),
+            currentTick: 50,
+            tickLower: TL,
+            tickUpper: TU,
+            liquidityDelta: Lpost
+        });
+
+        (, uint256 issuedLow,,) =
+            harness.validateMmIncreaseLiquidityDelta(oracle, commitId, positionId, pLow, pre, m0, m1, false);
+        (, uint256 issuedHigh,,) =
+            harness.validateMmIncreaseLiquidityDelta(oracle, commitId, positionId, pHigh, pre, m0, m1, false);
+
+        assertEq(issuedLow, issuedHigh, "admission issuedPost must ignore sqrtPriceX96/currentTick");
+    }
+
+    /// @notice Hard mode surfaces global shortfall before marginal mint checks.
+    function test_validateMmIncrease_reverts_global_signal_before_marginal() public {
+        harness.setPositionSettled(positionId, 0, 0);
+        oracle.setPrices(1e18, 1e18);
+
+        int256 Lpost = int256(uint256(LIQ));
+        uint256 issuedPost = _issuedUsdForLiquidity(Lpost);
+        uint256 signalBad = issuedPost > 0 ? issuedPost - 1 : 0;
+        oracle.setTotalValue(signalBad);
+
+        vm.expectRevert(
+            abi.encodeWithSelector(Errors.InvalidLiquiditySignal.selector, issuedPost, signalBad, uint256(0))
+        );
+        harness.validateMmIncreaseLiquidityDelta(
+            oracle,
+            commitId,
+            positionId,
+            _liquidityDeltaParamsAdmission(Lpost),
+            uint128(0),
+            type(uint128).max,
+            type(uint128).max,
+            true
+        );
+    }
+
     function test_validateLiquidityDelta_reverts_whenSignalHasTooManyUniqueReserveTickers() public {
         LiquiditySignal memory poisonSig =
             abi.decode(_makeSignalWithUniqueReserveCount(mmOwner, address(this), 101), (LiquiditySignal));
