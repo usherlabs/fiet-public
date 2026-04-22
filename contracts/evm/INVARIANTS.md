@@ -517,6 +517,18 @@ being an informal “should”.
 
 - **Statement**: Any MM liquidity increase that would cause the issued commitment value to exceed (settled + signalled)
   backing must revert.
+- **Admission valuation (anti-manipulation)**: `validateLiquidityDelta` values **new** MM exposure for admission using a
+  conservative worst-case range rule (`VTSCommitLib::_issuedAdmissionValueForLiquidity`): commitment maxima at the
+  position ticks are valued at the **upper** and **lower** tick endpoint compositions in USD (via
+  `OracleUtils::lccPairValue`), and the **maximum** of those two endpoint valuations is used as `issuedValue`. This
+  deliberately avoids relying on pool `slot0` / current tick for admission, so same-transaction spot games cannot
+  understate required backing. The protocol does **not** treat “arbitrage will restore the price” as a security
+  invariant for admission.
+- **Checkpoint valuation (live state)**: `checkpointWithCommitment` / `_checkpointWithCommitment` continue to measure
+  **current** issued exposure from live `slot0` and effective token amounts (`LiquidityUtils::calculateEffectiveTokenAmounts`)
+  because that path answers solvency and `commitmentDeficit` state, not whether new liquidity may be admitted.
+  `commitmentDeficit` and grace/bypass timers are **enforcement** after admission; they are not substitutes for
+  conservative admission.
 - **Enforced by**:
   - `src/libraries/VTSCommitLib.sol::validateLiquidityDelta` computes issued/settled/signal values and reverts
     `Errors.InvalidLiquiditySignal(issuedValue, signalValue, settledValue)` when insufficient.

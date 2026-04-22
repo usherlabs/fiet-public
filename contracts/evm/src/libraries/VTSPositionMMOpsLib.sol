@@ -416,8 +416,9 @@ library VTSPositionMMOpsLib {
         // Validate commitment backing in scoped block.
         // `touchPosition` updates `positions[positionId].liquidity` to post-modify liquidity before this MM tail runs,
         // so use that total for issued-value (COMMIT-01), not the incremental `params.liquidityDelta` alone.
+        // Admission is worst-case over the tick range and oracle prices, not live `slot0`, so same-block spot
+        // manipulation cannot relax the backing gate before LCC issue.
         {
-            (uint160 sqrtPriceX96, int24 currentTick,,) = ctx.poolManager.getSlot0(poolKey.toId());
             uint128 postAddLiquidity = s.positions[p.positionId].liquidity;
             VTSCommitLib.validateLiquidityDelta(
                 s,
@@ -427,8 +428,8 @@ library VTSPositionMMOpsLib {
                 VTSCommitLib.LiquidityDeltaParams({
                     currency0: poolKey.currency0,
                     currency1: poolKey.currency1,
-                    sqrtPriceX96: sqrtPriceX96,
-                    currentTick: currentTick,
+                    sqrtPriceX96: 0,
+                    currentTick: 0,
                     tickLower: params.tickLower,
                     tickUpper: params.tickUpper,
                     liquidityDelta: SafeCast.toInt256(postAddLiquidity)

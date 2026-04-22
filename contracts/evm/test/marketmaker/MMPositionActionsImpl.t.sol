@@ -2619,6 +2619,163 @@ contract MMPositionManagerActionsTest is MarketTestBase, MarketMakerTestBase {
         _mmExec(lockerMX3, actions);
     }
 
+    /// @dev Plain `INCREASE_LIQUIDITY` must enforce `_validateMaxIn` on principal delta (v4-style max spend).
+    function test_increaseLiquidity_revertsWhenAmount0MaxExceeded() public {
+        uint256 tokenId = 1;
+        uint256 positionIndex = 0;
+
+        _setupCommittedPosition(
+            positionManager,
+            corePoolKey,
+            abi.encode(liquiditySignal),
+            defaultlLiquidityParams,
+            marketVTSConfiguration,
+            address(lcc0),
+            address(lcc1)
+        );
+
+        uint256 settlementAmount = 1_000_000e18;
+        approveAndSettleUnderlyingToPosition(tokenId, positionIndex, settlementAmount, settlementAmount);
+
+        MMA.PreparedAction[] memory actions = new MMA.PreparedAction[](2);
+        actions[0] = MMA.prepareDecrease(corePoolKey, tokenId, positionIndex, 1_000_000_000);
+        actions[1] = MMA.prepareIncrease(corePoolKey, tokenId, positionIndex, 1_000_000_000, 0, 0);
+
+        address lockerMX = _batchLocker(tokenId);
+        vm.expectRevert(abi.encodeWithSelector(Errors.MaximumAmountExceeded.selector, uint128(0), uint128(2_995_355)));
+        _mmExec(lockerMX, actions);
+    }
+
+    /// @dev Covers the token1 leg of `_validateMaxIn` for plain `INCREASE_LIQUIDITY`.
+    function test_increaseLiquidity_revertsWhenAmount1MaxExceeded() public {
+        uint256 tokenId = 1;
+        uint256 positionIndex = 0;
+
+        _setupCommittedPosition(
+            positionManager,
+            corePoolKey,
+            abi.encode(liquiditySignal),
+            defaultlLiquidityParams,
+            marketVTSConfiguration,
+            address(lcc0),
+            address(lcc1)
+        );
+
+        uint256 settlementAmount = 1_000_000e18;
+        approveAndSettleUnderlyingToPosition(tokenId, positionIndex, settlementAmount, settlementAmount);
+
+        MMA.PreparedAction[] memory actions = new MMA.PreparedAction[](2);
+        actions[0] = MMA.prepareDecrease(corePoolKey, tokenId, positionIndex, 1_000_000_000);
+        actions[1] = MMA.prepareIncrease(corePoolKey, tokenId, positionIndex, 1_000_000_000, type(uint128).max, 0);
+
+        address lockerMX1 = _batchLocker(tokenId);
+        vm.expectRevert(abi.encodeWithSelector(Errors.MaximumAmountExceeded.selector, uint128(0), uint128(2_995_355)));
+        _mmExec(lockerMX1, actions);
+    }
+
+    /// @dev Plain `MINT_POSITION` must enforce `_validateMaxIn` after `_mintPositionInternal`.
+    function test_mintPosition_revertsWhenAmount0MaxExceeded() public {
+        uint256 tokenId = 1;
+
+        _setupCommittedPosition(
+            positionManager,
+            corePoolKey,
+            abi.encode(liquiditySignal),
+            defaultlLiquidityParams,
+            marketVTSConfiguration,
+            address(lcc0),
+            address(lcc1)
+        );
+
+        uint256 settlementAmount = 1_000_000e18;
+        approveAndSettleUnderlyingToPosition(tokenId, 0, settlementAmount, settlementAmount);
+
+        MMA.PreparedAction[] memory actions = new MMA.PreparedAction[](2);
+        actions[0] = MMA.prepareDecrease(corePoolKey, tokenId, 0, 1_000_000_000);
+        actions[1] = MMA.prepareMint(
+            corePoolKey,
+            tokenId,
+            defaultlLiquidityParams.tickLower,
+            defaultlLiquidityParams.tickUpper,
+            1_000_000_000,
+            0,
+            0
+        );
+
+        address lockerMX2 = _batchLocker(tokenId);
+        vm.expectRevert(abi.encodeWithSelector(Errors.MaximumAmountExceeded.selector, uint128(0), uint128(2_995_355)));
+        _mmExec(lockerMX2, actions);
+    }
+
+    /// @dev Token1 leg for plain `MINT_POSITION` max-in enforcement.
+    function test_mintPosition_revertsWhenAmount1MaxExceeded() public {
+        uint256 tokenId = 1;
+
+        _setupCommittedPosition(
+            positionManager,
+            corePoolKey,
+            abi.encode(liquiditySignal),
+            defaultlLiquidityParams,
+            marketVTSConfiguration,
+            address(lcc0),
+            address(lcc1)
+        );
+
+        uint256 settlementAmount = 1_000_000e18;
+        approveAndSettleUnderlyingToPosition(tokenId, 0, settlementAmount, settlementAmount);
+
+        MMA.PreparedAction[] memory actions = new MMA.PreparedAction[](2);
+        actions[0] = MMA.prepareDecrease(corePoolKey, tokenId, 0, 1_000_000_000);
+        actions[1] = MMA.prepareMint(
+            corePoolKey,
+            tokenId,
+            defaultlLiquidityParams.tickLower,
+            defaultlLiquidityParams.tickUpper,
+            1_000_000_000,
+            type(uint128).max,
+            0
+        );
+
+        address lockerMX3 = _batchLocker(tokenId);
+        vm.expectRevert(abi.encodeWithSelector(Errors.MaximumAmountExceeded.selector, uint128(0), uint128(2_995_355)));
+        _mmExec(lockerMX3, actions);
+    }
+
+    /// @dev Plain add-liquidity succeeds when explicit `amount0Max` / `amount1Max` comfortably bound principal spend.
+    function test_plainIncrease_succeedsWithLooseExplicitMaxIn() public {
+        uint256 tokenId = 1;
+        uint256 positionIndex = 0;
+
+        _setupCommittedPosition(
+            positionManager,
+            corePoolKey,
+            abi.encode(liquiditySignal),
+            defaultlLiquidityParams,
+            marketVTSConfiguration,
+            address(lcc0),
+            address(lcc1)
+        );
+
+        uint256 settlementAmount = 1_000_000e18;
+        approveAndSettleUnderlyingToPosition(tokenId, positionIndex, settlementAmount, settlementAmount);
+
+        (Position memory positionBeforeIncrease,) = positionManager.getPosition(tokenId, positionIndex);
+
+        uint256 liquidityToIncrease = 1000;
+        MMA.PreparedAction[] memory incActions = new MMA.PreparedAction[](1);
+        incActions[0] = MMA.prepareIncrease(
+            corePoolKey, tokenId, positionIndex, liquidityToIncrease, type(uint128).max - 100, type(uint128).max - 100
+        );
+        _mmExec(tokenId, incActions);
+
+        (Position memory positionAfterIncrease,) = positionManager.getPosition(tokenId, positionIndex);
+        assertEq(
+            uint256(positionAfterIncrease.liquidity),
+            uint256(positionBeforeIncrease.liquidity) + liquidityToIncrease,
+            "Liquidity should increase when loose explicit max-in is supplied"
+        );
+    }
+
     function test_unauthorised_revertsNotApproved_forBurnIncreaseDecreaseAndDeltasActions() public {
         uint256 tokenId = 1;
         uint256 positionIndex = 0;

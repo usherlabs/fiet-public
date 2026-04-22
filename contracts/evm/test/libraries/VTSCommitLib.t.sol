@@ -12,11 +12,13 @@ import {LiquiditySignal} from "../../src/types/Commit.sol";
 import {MarketMaker} from "../../src/libraries/MarketMaker.sol";
 
 import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
+import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
 import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
 import {PositionId} from "../../src/types/Position.sol";
 import {FullMath} from "@uniswap/v4-core/src/libraries/FullMath.sol";
 import {FixedPoint128} from "v4-periphery/lib/v4-core/src/libraries/FixedPoint128.sol";
 import {LiquidityUtils} from "../../src/libraries/LiquidityUtils.sol";
+import {OracleUtils} from "../../src/libraries/OracleUtils.sol";
 
 contract MockOracleHelper is IOracleHelper {
     uint256 internal _price0 = 1e18;
@@ -198,6 +200,13 @@ contract VTSCommitLibTest is VTSLibTestBase {
         assertEq(harness.getCommitExpiresAt(newCommitId), block.timestamp + 1234, "expiry should be set");
     }
 
+    function test_commitSignal_revertsWhenAdvancerIsZero() public {
+        address owner2 = makeAddr("owner2");
+
+        vm.expectRevert(abi.encodeWithSelector(Errors.InvalidAddress.selector, address(0)));
+        harness.commitSignal(sigMgr, owner2, oracle, _makeSignal(owner2, address(0)));
+    }
+
     function test_renewSignal_revertsOnEmptySignal() public {
         vm.expectRevert(abi.encodeWithSelector(Errors.InvalidLiquiditySignal.selector, 0, 0, 0));
         harness.renewSignal(sigMgr, oracle, commitId, "");
@@ -349,6 +358,97 @@ contract VTSCommitLibTest is VTSLibTestBase {
 
         assertTrue(!ok, "should be insufficiently backed");
         vm.expectRevert(abi.encodeWithSelector(Errors.InvalidLiquiditySignal.selector, issued, signal, settled));
+        harness.validateLiquidityDelta(oracle, commitId, positionId, p, true);
+    }
+
+    /// @notice Regression (COMMIT-01): admission issued USD must not depend on manipulable `slot0` fields in params.
+    function test_validateLiquidityDelta_admission_invariant_to_slot0_fields() public {
+        harness.setPositionSettled(positionId, 0, 0);
+        oracle.setTotalValue(1_000_000e18);
+
+        VTSCommitLib.LiquidityDeltaParams memory pLow = VTSCommitLib.LiquidityDeltaParams({
+            currency0: corePoolKey.currency0,
+            currency1: corePoolKey.currency1,
+            sqrtPriceX96: TickMath.getSqrtPriceAtTick(-50),
+            currentTick: -50,
+            tickLower: TL,
+            tickUpper: TU,
+            liquidityDelta: int256(uint256(LIQ))
+        });
+        VTSCommitLib.LiquidityDeltaParams memory pHigh = VTSCommitLib.LiquidityDeltaParams({
+            currency0: corePoolKey.currency0,
+            currency1: corePoolKey.currency1,
+            sqrtPriceX96: TickMath.getSqrtPriceAtTick(50),
+            currentTick: 50,
+            tickLower: TL,
+            tickUpper: TU,
+            liquidityDelta: int256(uint256(LIQ))
+        });
+
+        (, uint256 issuedLow,,) = harness.validateLiquidityDelta(oracle, commitId, positionId, pLow, false);
+        (, uint256 issuedHigh,,) = harness.validateLiquidityDelta(oracle, commitId, positionId, pHigh, false);
+
+        assertEq(issuedLow, issuedHigh, "admission issued USD must ignore sqrtPriceX96/currentTick");
+    }
+
+    /// @notice Regression (COMMIT-01): skewed oracle legs can make worst-case admission exceed live-spot composition.
+    /// @dev Under a spot-based admission rule, `signalUsd` here would clear `issuedSpot` but not `issuedAdmission`.
+    function test_validateLiquidityDelta_reverts_when_backing_covers_spot_only_not_admission() public {
+        oracle.setPrices(1, 1e18);
+        harness.setPositionSettled(positionId, 0, 0);
+
+        uint256 spotIssued = _computeIssuedUsd();
+
+        VTSCommitLib.LiquidityDeltaParams memory p = VTSCommitLib.LiquidityDeltaParams({
+            currency0: corePoolKey.currency0,
+            currency1: corePoolKey.currency1,
+            sqrtPriceX96: 0,
+            currentTick: 0,
+            tickLower: TL,
+            tickUpper: TU,
+            liquidityDelta: int256(uint256(LIQ))
+        });
+
+        (, uint256 admissionIssued,, uint256 signal0) =
+            harness.validateLiquidityDelta(oracle, commitId, positionId, p, false);
+        assertEq(signal0, 0, "pre: signal cleared for backing math");
+        assertGt(admissionIssued, spotIssued, "pre: need oracle skew where admission exceeds live-spot issuance");
+
+        uint256 backing = spotIssued + (admissionIssued - spotIssued) / 2;
+        assertGt(admissionIssued, backing, "backing must sit strictly between spot and admission");
+        assertGt(backing, spotIssued, "backing must exceed live-spot issuance (old rule would pass)");
+
+        oracle.setTotalValue(backing);
+
+        (bool ok,, uint256 settled, uint256 signal) =
+            harness.validateLiquidityDelta(oracle, commitId, positionId, p, false);
+        assertEq(settled, 0, "settled remains zero");
+        assertEq(signal, backing, "signal should match configured total value");
+        assertFalse(ok, "admission must fail when signal covers spot issuance only");
+
+        vm.expectRevert(abi.encodeWithSelector(Errors.InvalidLiquiditySignal.selector, admissionIssued, backing, 0));
+        harness.validateLiquidityDelta(oracle, commitId, positionId, p, true);
+    }
+
+    /// @notice Regression (COMMIT-01): MM-style dummy `slot0` fields still admit when economically backed.
+    function test_validateLiquidityDelta_honest_backing_passes_with_dummy_slot0_fields() public {
+        harness.setPositionSettled(positionId, 0, 0);
+        oracle.setPrices(1e18, 1e18);
+        oracle.setTotalValue(1_000_000e18);
+
+        VTSCommitLib.LiquidityDeltaParams memory p = VTSCommitLib.LiquidityDeltaParams({
+            currency0: corePoolKey.currency0,
+            currency1: corePoolKey.currency1,
+            sqrtPriceX96: 0,
+            currentTick: 0,
+            tickLower: TL,
+            tickUpper: TU,
+            liquidityDelta: int256(uint256(LIQ))
+        });
+
+        (bool ok, uint256 issued,,) = harness.validateLiquidityDelta(oracle, commitId, positionId, p, false);
+        assertTrue(ok, "honest signal backing must pass regardless of dummy slot fields");
+        assertGt(issued, 0, "admission issuance should be non-zero for positive liquidity add");
         harness.validateLiquidityDelta(oracle, commitId, positionId, p, true);
     }
 
@@ -796,20 +896,14 @@ contract VTSCommitLibTest is VTSLibTestBase {
         return _liquidityDeltaParamsForLiquidity(int256(uint256(LIQ)));
     }
 
+    /// @dev Spot-based issued USD matching `_checkpointWithCommitment` (live `slot0`), not COMMIT-01 admission.
     function _computeIssuedUsd() internal view returns (uint256 issuedUsd) {
         (uint160 sqrtPriceX96, int24 tick,,) = _getSlot0(poolId);
-
-        VTSCommitLib.LiquidityDeltaParams memory p = VTSCommitLib.LiquidityDeltaParams({
-            currency0: corePoolKey.currency0,
-            currency1: corePoolKey.currency1,
-            sqrtPriceX96: sqrtPriceX96,
-            currentTick: tick,
-            tickLower: TL,
-            tickUpper: TU,
-            liquidityDelta: int256(uint256(LIQ))
-        });
-
-        (, issuedUsd,,) = harness.validateLiquidityDelta(oracle, commitId, positionId, p, false);
+        (uint256 a0, uint256 a1) =
+            LiquidityUtils.calculateEffectiveTokenAmounts(sqrtPriceX96, tick, TL, TU, int256(uint256(LIQ)));
+        issuedUsd = OracleUtils.lccPairValue(
+            oracle, Currency.unwrap(corePoolKey.currency0), a0, Currency.unwrap(corePoolKey.currency1), a1
+        );
     }
 }
 

@@ -114,15 +114,28 @@ contract MMPositionActionsImpl is IMMActionsImpl, PositionManagerImpl, DelegateC
             return;
         }
         if (action == MMActions.MINT_POSITION) {
-            (PoolKey calldata poolKey, uint256 tokenId, int24 tickLower, int24 tickUpper, uint256 liquidity) =
-                params.decodeMintPositionParams();
-            _mintPosition(poolKey, tokenId, tickLower, tickUpper, liquidity);
+            (
+                PoolKey calldata poolKey,
+                uint256 tokenId,
+                int24 tickLower,
+                int24 tickUpper,
+                uint256 liquidity,
+                uint128 amount0Max,
+                uint128 amount1Max
+            ) = params.decodeMintPositionParams();
+            _mintPosition(poolKey, tokenId, tickLower, tickUpper, liquidity, amount0Max, amount1Max);
             return;
         }
         if (action == MMActions.INCREASE_LIQUIDITY) {
-            (PoolKey calldata poolKey, uint256 tokenId, uint256 positionIndex, uint256 liquidity) =
-                params.decodeIncreaseLiquidityParams();
-            _increase(poolKey, tokenId, positionIndex, liquidity);
+            (
+                PoolKey calldata poolKey,
+                uint256 tokenId,
+                uint256 positionIndex,
+                uint256 liquidity,
+                uint128 amount0Max,
+                uint128 amount1Max
+            ) = params.decodeIncreaseLiquidityParams();
+            _increase(poolKey, tokenId, positionIndex, liquidity, amount0Max, amount1Max);
             return;
         }
         if (action == MMActions.DECREASE_LIQUIDITY) {
@@ -570,12 +583,23 @@ contract MMPositionActionsImpl is IMMActionsImpl, PositionManagerImpl, DelegateC
     /// @param tokenId The commitment NFT token ID
     /// @param positionIndex The position index within the commitment
     /// @param liquidity The amount of liquidity to add
-    function _increase(PoolKey calldata poolKey, uint256 tokenId, uint256 positionIndex, uint256 liquidity) internal {
+    /// @param amount0Max Maximum token0 principal spend (LCC leg)
+    /// @param amount1Max Maximum token1 principal spend
+    function _increase(
+        PoolKey calldata poolKey,
+        uint256 tokenId,
+        uint256 positionIndex,
+        uint256 liquidity,
+        uint128 amount0Max,
+        uint128 amount1Max
+    ) internal {
         MMHelpers.assertApprovedOrOwner(msgSender(), tokenId);
 
         (Position memory position,) = getPosition(tokenId, positionIndex);
         MMHelpers.assertPositionForPool(poolKey, position);
-        _increaseInternal(poolKey, tokenId, positionIndex, position.tickLower, position.tickUpper, liquidity);
+        (, BalanceDelta principalDelta) =
+            _increaseInternal(poolKey, tokenId, positionIndex, position.tickLower, position.tickUpper, liquidity);
+        _validateMaxIn(principalDelta, amount0Max, amount1Max);
     }
 
     /// @notice Internal helper to increase liquidity
@@ -682,15 +706,20 @@ contract MMPositionActionsImpl is IMMActionsImpl, PositionManagerImpl, DelegateC
     /// @param tickLower The lower tick of the position
     /// @param tickUpper The upper tick of the position
     /// @param liquidity The amount of liquidity to mint
+    /// @param amount0Max Maximum token0 principal spend (LCC leg)
+    /// @param amount1Max Maximum token1 principal spend
     function _mintPosition(
         PoolKey calldata poolKey,
         uint256 tokenId,
         int24 tickLower,
         int24 tickUpper,
-        uint256 liquidity
+        uint256 liquidity,
+        uint128 amount0Max,
+        uint128 amount1Max
     ) internal {
         MMHelpers.assertApprovedOrOwner(msgSender(), tokenId);
-        _mintPositionInternal(poolKey, tokenId, tickLower, tickUpper, liquidity);
+        (,, BalanceDelta principalDelta) = _mintPositionInternal(poolKey, tokenId, tickLower, tickUpper, liquidity);
+        _validateMaxIn(principalDelta, amount0Max, amount1Max);
     }
 
     /// @notice Mints a new position using available delta credits

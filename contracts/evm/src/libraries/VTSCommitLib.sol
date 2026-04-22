@@ -64,6 +64,8 @@ library VTSCommitLib {
 
     /// @dev Internal struct to reduce stack depth in validateLiquidityDelta. Field `liquidityDelta` is the liquidity
     ///      amount used to compute issued USD (MM increases pass post-add total position liquidity).
+    /// @dev `sqrtPriceX96` and `currentTick` are **ignored** for COMMIT-01 admission: issued value is derived from
+    ///      range-bound worst-case token exposure and oracle prices only, not manipulable pool spot.
     struct LiquidityDeltaParams {
         Currency currency0;
         Currency currency1;
@@ -105,6 +107,9 @@ library VTSCommitLib {
             revert Errors.InvalidAddress(address(0));
         }
         LiquiditySignal memory signal = abi.decode(liquiditySignal, (LiquiditySignal));
+        if (signal.mmState.advancer == address(0)) {
+            revert Errors.InvalidAddress(address(0));
+        }
         _signalValue(signal.mmState, oracleHelper);
     }
 
@@ -136,6 +141,32 @@ library VTSCommitLib {
         value = OracleUtils.lccPairValue(oracleHelper, Currency.unwrap(currency0), a0, Currency.unwrap(currency1), a1);
     }
 
+    /// @dev MM add admission (COMMIT-01): conservative issued USD independent of pool `slot0`.
+    ///      Uses `LiquidityUtils.calculateCommitmentMaxima` then values the two endpoint compositions:
+    ///      all token0 at the lower tick vs all token1 at the upper tick, and takes the max in USD.
+    ///      This avoids same-transaction spot manipulation while staying less pessimistic than summing both legs
+    ///      (a single position cannot realise both endpoint maxima simultaneously).
+    /// @dev For `liquidityDelta <= 0`, returns zero (no admission issuance to value).
+    function _issuedAdmissionValueForLiquidity(
+        IOracleHelper oracleHelper,
+        Currency currency0,
+        Currency currency1,
+        int24 tickLower,
+        int24 tickUpper,
+        int256 liquidityDelta
+    ) internal view returns (uint256 value) {
+        if (liquidityDelta <= 0) {
+            return 0;
+        }
+        uint128 L = SafeCast.toUint128(uint256(liquidityDelta));
+        (uint256 c0, uint256 c1) = LiquidityUtils.calculateCommitmentMaxima(tickLower, tickUpper, L);
+        address u0 = Currency.unwrap(currency0);
+        address u1 = Currency.unwrap(currency1);
+        uint256 valueLower = OracleUtils.lccPairValue(oracleHelper, u0, c0, u1, 0);
+        uint256 valueUpper = OracleUtils.lccPairValue(oracleHelper, u0, 0, u1, c1);
+        value = valueLower > valueUpper ? valueLower : valueUpper;
+    }
+
     /// @notice Calculates the USD value of the position's settled commitment
     /// @param s The central VTS storage
     /// @param oracleHelper The oracle helper for USD price calculations
@@ -162,6 +193,9 @@ library VTSCommitLib {
     /// @param positionId The position ID
     /// @param params Liquidity delta parameters bundled in a struct
     /// @param revertIfInsufficientBacking Whether to revert if backing is insufficient
+    /// @dev COMMIT-01 admission compares settled + signal against **worst-case range** issued USD
+    ///      (`_issuedAdmissionValueForLiquidity`), not live `slot0` composition. Checkpointing with commitment
+    ///      (`_checkpointWithCommitment`) still uses live spot for current solvency/deficit state.
     function validateLiquidityDelta(
         VTSStorage storage s,
         IOracleHelper oracleHelper,
@@ -170,15 +204,8 @@ library VTSCommitLib {
         LiquidityDeltaParams memory params,
         bool revertIfInsufficientBacking
     ) external view returns (bool success, uint256 issuedValue, uint256 settledValue, uint256 signalValue) {
-        issuedValue = _issuedValueForLiquidity(
-            oracleHelper,
-            params.currency0,
-            params.currency1,
-            params.sqrtPriceX96,
-            params.currentTick,
-            params.tickLower,
-            params.tickUpper,
-            params.liquidityDelta
+        issuedValue = _issuedAdmissionValueForLiquidity(
+            oracleHelper, params.currency0, params.currency1, params.tickLower, params.tickUpper, params.liquidityDelta
         );
         settledValue = _settledValueForPosition(s, oracleHelper, params.currency0, params.currency1, positionId);
         signalValue = _signalValueForCommit(s, oracleHelper, commitId);
@@ -325,7 +352,9 @@ library VTSCommitLib {
             ctx.currency1 = pool.currency1;
         }
         {
-            // Compute effective issued amounts at current price
+            // Checkpoint / commitment deficit: measure issued exposure at **live** pool spot so stored deficit
+            // reflects current economic state. This is intentionally distinct from MM **admission**
+            // (`validateLiquidityDelta`), which uses worst-case range valuation to resist same-tx `slot0` games.
             (uint160 sqrtPriceX96, int24 currentTick,,) = poolManager.getSlot0(pos.poolId);
             (ctx.eff0, ctx.eff1) = LiquidityUtils.calculateEffectiveTokenAmounts(
                 sqrtPriceX96, currentTick, pos.tickLower, pos.tickUpper, SafeCast.toInt256(uint128(pos.liquidity))
