@@ -52,6 +52,7 @@ abstract contract DeployFullStackBase is DeployProtocolBase {
         address commitmentDescriptor;
         address vtsOrchestrator;
         address actionsImpl;
+        address utilityActionsImpl;
         address directLPDeltaResolver;
         address canonicalVault;
     }
@@ -178,8 +179,8 @@ abstract contract DeployFullStackBase is DeployProtocolBase {
         // 12) MMPCommitmentDescriptor
         out.contracts.commitmentDescriptor = _deployCommitmentDescriptor();
 
-        // 13) MMPositionActionsImpl + MMQueueCustodianFactory + MMPositionManager
-        (out.contracts.actionsImpl, out.contracts.mmPositionManager) = _deployMMStack(
+        // 13) MMPositionActionsImpl + MMUtilityActionsImpl + MMQueueCustodianFactory + MMPositionManager
+        (out.contracts.actionsImpl, out.contracts.utilityActionsImpl, out.contracts.mmPositionManager) = _deployMMStack(
             out.contracts.marketFactory,
             out.contracts.vtsOrchestrator,
             out.contracts.commitmentDescriptor,

@@ -8,7 +8,7 @@ pragma solidity ^0.8.26;
 ///      immediate non-fee LCC after fee netting — see `LiquidityUtils.forwardedNonFeeLccAmount`; commit surplus is locker credit; not
 ///      identical to raw `callerDelta - feesAccrued`).
 /// @dev Actions >= COMMIT_SIGNAL and < TAKE are handled in MMPositionManager (commitments)
-/// @dev Actions >= TAKE are handled in MMPositionManager (utilities)
+/// @dev Actions >= TAKE are delegated to `MMUtilityActionsImpl` except `INITIALISE` (handled on `MMPositionManager`)
 library MMActions {
     // ═══════════════════════════════════════════════════════════════════════════
     // POSITION OPERATIONS (0x00-0x09) - Delegated to MMPMActionsImpl

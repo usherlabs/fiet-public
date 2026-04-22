@@ -58,8 +58,8 @@ contract PositionManagerEntrypointHarness is PositionManagerEntrypoint {
     // Used to validate delegatecall writes to the caller's storage.
     uint256 public x;
 
-    constructor(address factory, address orch, address canonicalCustody, address impl, address locker)
-        PositionManagerEntrypoint(factory, orch, canonicalCustody, impl)
+    constructor(address factory, address orch, address canonicalCustody, address impl, address utilImpl, address locker)
+        PositionManagerEntrypoint(factory, orch, canonicalCustody, impl, utilImpl)
     {
         _locker = locker;
     }
@@ -166,7 +166,7 @@ contract PositionManagerEntrypointTest is Test {
         vm.etch(orch, hex"00");
         vm.etch(canonical, hex"00");
         impl = new DelegationImpl();
-        h = new PositionManagerEntrypointHarness(factory, orch, canonical, address(impl), locker);
+        h = new PositionManagerEntrypointHarness(factory, orch, canonical, address(impl), address(impl), locker);
     }
 
     function test_delegateToImpl_success() public {
@@ -359,8 +359,9 @@ contract PositionManagerEntrypointTest is Test {
     ///      matches the callee context of `assertNonZeroDeltas` (same as production `VTSOrchestrator` wiring).
     function test_afterBatch_revertsWhenMarketProducedCreditUnresolved() public {
         VTSCurrencyDeltaHarness orchHarness = new VTSCurrencyDeltaHarness();
-        PositionManagerEntrypointHarness hh =
-            new PositionManagerEntrypointHarness(factory, address(orchHarness), canonical, address(impl), locker);
+        PositionManagerEntrypointHarness hh = new PositionManagerEntrypointHarness(
+            factory, address(orchHarness), canonical, address(impl), address(impl), locker
+        );
 
         MockERC20 creditToken = new MockERC20("P", "P");
         orchHarness.seedMarketProduced(factory, Currency.wrap(address(creditToken)), 1 ether);
@@ -404,12 +405,19 @@ contract PositionManagerEntrypointTest is Test {
         address badImpl = makeAddr("badActionsImpl");
         vm.etch(badImpl, hex"");
         vm.expectRevert(abi.encodeWithSelector(Errors.InvalidAddress.selector, badImpl));
-        new PositionManagerEntrypointHarness(factory, orch, canonical, badImpl, locker);
+        new PositionManagerEntrypointHarness(factory, orch, canonical, badImpl, address(impl), locker);
+    }
+
+    function test_constructor_revertsWhenUtilityActionsImplHasNoContractCode() public {
+        address badUtil = makeAddr("badUtilityImpl");
+        vm.etch(badUtil, hex"");
+        vm.expectRevert(abi.encodeWithSelector(Errors.InvalidAddress.selector, badUtil));
+        new PositionManagerEntrypointHarness(factory, orch, canonical, address(impl), badUtil, locker);
     }
 
     function test_constructor_revertsWhenCanonicalCustodyIsZero() public {
         vm.expectRevert(abi.encodeWithSelector(Errors.InvalidAddress.selector, address(0)));
-        new PositionManagerEntrypointHarness(factory, orch, address(0), address(impl), locker);
+        new PositionManagerEntrypointHarness(factory, orch, address(0), address(impl), address(impl), locker);
     }
 }
 

@@ -39,6 +39,7 @@ import {StubSettlementVerifier} from "../../src/verifiers/StubSettlementVerifier
 import {IMarketVault} from "../../src/interfaces/IMarketVault.sol";
 import {MMPCommitmentDescriptor} from "../../src/MMPCommitmentDescriptor.sol";
 import {MMPositionActionsImpl} from "../../src/MMPositionActionsImpl.sol";
+import {MMUtilityActionsImpl} from "../../src/MMUtilityActionsImpl.sol";
 import {CurrencyTransfer} from "../../src/libraries/CurrencyTransfer.sol";
 import {OracleHelper} from "../../src/OracleHelper.sol";
 import {CanonicalVault} from "../../src/CanonicalVault.sol";
@@ -224,6 +225,9 @@ abstract contract MarketTestBase is Test, Deployers, DeployPermit2 {
         MMPositionActionsImpl actionsImpl = new MMPositionActionsImpl(
             address(manager), address(marketFactory), address(vtsOrchestrator), canonicalVaultAddr
         );
+        MMUtilityActionsImpl utilityActionsImpl = new MMUtilityActionsImpl(
+            manager, address(marketFactory), address(vtsOrchestrator), canonicalVaultAddr, weth9
+        );
         queueCustodianFactory = address(new MMQueueCustodianFactory());
         // Deploy MMPositionManager (recipient-keyed queue custodians are deployed lazily by MMPM)
         mmPositionManager = address(
@@ -237,6 +241,7 @@ abstract contract MarketTestBase is Test, Deployers, DeployPermit2 {
                     weth9: weth9,
                     permit2: permit2,
                     actionsImpl: address(actionsImpl),
+                    utilityActionsImpl: address(utilityActionsImpl),
                     queueCustodianFactory: queueCustodianFactory
                 })
             )

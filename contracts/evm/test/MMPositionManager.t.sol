@@ -1151,6 +1151,9 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
         address cv = IMarketFactory(marketFactory).canonicalVault();
         address desc = address(new MockCommitmentDescriptor("ipfs://x/"));
         address actionsImplAddr = positionManager.actionsImpl();
+        // Read before `expectRevert`: struct literal evaluation can perform external calls first,
+        // which would consume `vm.expectRevert` before `new MMPositionManager` runs.
+        address utilityActionsImplAddr = positionManager.utilityActionsImpl();
         vm.expectRevert(abi.encodeWithSelector(Errors.InvalidAddress.selector, address(0)));
         new MMPositionManager(
             MMPositionManager.MMPositionManagerInit({
@@ -1162,6 +1165,7 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
                 weth9: weth9,
                 permit2: permit2,
                 actionsImpl: actionsImplAddr,
+                utilityActionsImpl: utilityActionsImplAddr,
                 queueCustodianFactory: address(0)
             })
         );
@@ -1180,6 +1184,7 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
                 weth9: weth9,
                 permit2: permit2,
                 actionsImpl: positionManager.actionsImpl(),
+                utilityActionsImpl: positionManager.utilityActionsImpl(),
                 queueCustodianFactory: queueCustodianFactory
             })
         );
@@ -1200,6 +1205,7 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
                 weth9: weth9,
                 permit2: permit2,
                 actionsImpl: positionManager.actionsImpl(),
+                utilityActionsImpl: positionManager.utilityActionsImpl(),
                 queueCustodianFactory: queueCustodianFactory
             })
         );
@@ -1220,6 +1226,7 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
                 weth9: weth9,
                 permit2: permit2,
                 actionsImpl: positionManager.actionsImpl(),
+                utilityActionsImpl: positionManager.utilityActionsImpl(),
                 queueCustodianFactory: queueCustodianFactory
             })
         );

@@ -13,7 +13,6 @@ import {StateLibrary} from "v4-periphery/lib/v4-core/src/libraries/StateLibrary.
 import {IMarketVault} from "./interfaces/IMarketVault.sol";
 import {IMarketFactory} from "./interfaces/IMarketFactory.sol";
 import {IMMQueueCustodian} from "./interfaces/IMMQueueCustodian.sol";
-import {IMMPositionManager} from "./interfaces/IMMPositionManager.sol";
 import {Errors} from "./libraries/Errors.sol";
 import {LiquidityUtils} from "./libraries/LiquidityUtils.sol";
 import {Position} from "./types/Position.sol";
@@ -95,35 +94,13 @@ contract MMPositionActionsImpl is IMMActionsImpl, PositionManagerImpl, DelegateC
         return Locker.get();
     }
 
-    /// @inheritdoc PositionManagerImpl
-    function _queueSettleRecipient(uint256) internal view override returns (address) {
-        IMMPositionManager m = IMMPositionManager(address(this));
-        address recipientKey = msgSender();
-        MMHelpers.assertQueueCustodianForRecipient(recipientKey);
-        return m.custodianFor(recipientKey);
-    }
-
-    /// @dev Queued LCC is custodied on `custodianFor[beneficiary]` (the acting locker’s domain), beneficiary-global per `lcc`.
-    function _forwardQueuedLccToCustodian(Currency currency, uint256, address beneficiary, uint256 amount)
-        internal
-        override(PositionManagerImpl)
-    {
-        IMMPositionManager m = IMMPositionManager(address(this));
-        address recipientKey = beneficiary;
-        MMHelpers.assertQueueCustodianForRecipient(recipientKey);
-        address custAddr = m.custodianFor(recipientKey);
-        if (custAddr != address(0) && custAddr != address(this)) {
-            currency.transfer(custAddr, amount);
-        }
-    }
-
     // ═══════════════════════════════════════════════════════════════════════════
     // Position Action Handler
     // ═══════════════════════════════════════════════════════════════════════════
 
     /// @inheritdoc IMMActionsImpl
     /// @dev Only handles position operations (actions <= SETTLE_POSITION_FROM_DELTAS)
-    function handleAction(uint256 action, bytes calldata params) external override onlyDelegateCall {
+    function handleAction(uint256 action, bytes calldata params) external payable override onlyDelegateCall {
         if (action == MMActions.SETTLE_POSITION) {
             (
                 PoolKey calldata poolKey,

@@ -10,6 +10,7 @@ import {HookFlags} from "src/libraries/HookFlags.sol";
 import {MMPositionManager} from "src/MMPositionManager.sol";
 import {MMQueueCustodianFactory} from "src/MMQueueCustodianFactory.sol";
 import {MMPositionActionsImpl} from "src/MMPositionActionsImpl.sol";
+import {MMUtilityActionsImpl} from "src/MMUtilityActionsImpl.sol";
 import {VRLSignalManager} from "src/VRLSignalManager.sol";
 import {VRLSettlementObserver} from "src/VRLSettlementObserver.sol";
 import {VTSOrchestrator} from "src/VTSOrchestrator.sol";
@@ -38,6 +39,7 @@ abstract contract DeployProtocolBase is CREATE3Script, NetworkConfig {
     string internal constant VTS_ORCHESTRATOR = "VTSOrchestrator";
     string internal constant COMMITMENT_DESCRIPTOR = "MMPCommitmentDescriptor";
     string internal constant ACTIONS_IMPL = "MMPositionActionsImpl";
+    string internal constant UTILITY_ACTIONS_IMPL = "MMUtilityActionsImpl";
     string internal constant MM_POSITION_MANAGER = "MMPositionManager";
     string internal constant MM_QUEUE_CUSTODIAN_FACTORY = "MMQueueCustodianFactory";
     string internal constant DIRECT_LP_DELTA_RESOLVER = "DirectLPDeltaResolver";
@@ -170,7 +172,7 @@ abstract contract DeployProtocolBase is CREATE3Script, NetworkConfig {
         address vtsOrchestrator,
         address commitmentDescriptor,
         address canonicalVaultAddr
-    ) internal returns (address actionsImpl, address mmPositionManager) {
+    ) internal returns (address actionsImpl, address utilityActionsImpl, address mmPositionManager) {
         address weth9 = address(PositionManager(payable(config.positionManager)).WETH9());
         address permit2 = address(PositionManager(payable(config.positionManager)).permit2());
 
@@ -179,6 +181,14 @@ abstract contract DeployProtocolBase is CREATE3Script, NetworkConfig {
             abi.encodePacked(
                 type(MMPositionActionsImpl).creationCode,
                 abi.encode(config.poolManager, marketFactory, vtsOrchestrator, canonicalVaultAddr)
+            )
+        );
+
+        utilityActionsImpl = _deployCreate3(
+            UTILITY_ACTIONS_IMPL,
+            abi.encodePacked(
+                type(MMUtilityActionsImpl).creationCode,
+                abi.encode(config.poolManager, marketFactory, vtsOrchestrator, canonicalVaultAddr, weth9)
             )
         );
 
@@ -200,6 +210,7 @@ abstract contract DeployProtocolBase is CREATE3Script, NetworkConfig {
                         weth9: IWETH9(weth9),
                         permit2: IAllowanceTransfer(permit2),
                         actionsImpl: actionsImpl,
+                        utilityActionsImpl: utilityActionsImpl,
                         queueCustodianFactory: queueCustodianFactory
                     })
                 )

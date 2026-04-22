@@ -42,6 +42,7 @@ import {IMMQueueCustodian} from "../../src/interfaces/IMMQueueCustodian.sol";
 import {SwapParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
 import {PoolSwapTest} from "@uniswap/v4-core/src/test/PoolSwapTest.sol";
 import {MMPositionActionsImpl} from "../../src/MMPositionActionsImpl.sol";
+import {MMUtilityActionsImpl} from "../../src/MMUtilityActionsImpl.sol";
 import {MMActions} from "../../src/libraries/MMActions.sol";
 import {DelegateCallGuard} from "../../src/modules/DelegateCallGuard.sol";
 import {Bounds} from "../../src/libraries/Bounds.sol";
@@ -1926,6 +1927,19 @@ contract MMPositionManagerActionsTest is MarketTestBase, MarketMakerTestBase {
         bytes memory params = abi.encode(corePoolKey, uint256(1), uint256(0), int128(1), int128(0), false);
         vm.expectRevert(DelegateCallGuard.OnlyDelegateCall.selector);
         impl.handleAction(MMActions.SETTLE_POSITION, params);
+    }
+
+    function test_utilityActionsImpl_handleAction_revertsWhenNotDelegatecall() public {
+        MMUtilityActionsImpl utilImpl = new MMUtilityActionsImpl(
+            manager,
+            address(marketFactory),
+            address(vtsOrchestrator),
+            IMarketFactory(marketFactory).canonicalVault(),
+            weth9
+        );
+        bytes memory params = abi.encode(Currency.wrap(address(0)), address(this), uint256(0));
+        vm.expectRevert(DelegateCallGuard.OnlyDelegateCall.selector);
+        utilImpl.handleAction(MMActions.TAKE, params);
     }
 
     function test_settle_usePositionManagerBalance_syncsCredit_whenOnlyToken0Outflow() public {

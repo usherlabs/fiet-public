@@ -13,6 +13,7 @@ import {HookFlags} from "../src/libraries/HookFlags.sol";
 import {MMPositionManager} from "../src/MMPositionManager.sol";
 import {MMQueueCustodianFactory} from "../src/MMQueueCustodianFactory.sol";
 import {MMPositionActionsImpl} from "../src/MMPositionActionsImpl.sol";
+import {MMUtilityActionsImpl} from "../src/MMUtilityActionsImpl.sol";
 import {WETH} from "@uniswap/v4-core/lib/solmate/src/tokens/WETH.sol";
 import {IWETH9} from "v4-periphery/src/interfaces/external/IWETH9.sol";
 import {IAllowanceTransfer} from "permit2/src/interfaces/IAllowanceTransfer.sol";
@@ -54,6 +55,9 @@ contract HookTest is Test, Deployers {
         MMPositionActionsImpl actionsImpl = new MMPositionActionsImpl(
             address(poolManager), address(factory), address(vtsOrchestrator), address(canonicalVault)
         );
+        MMUtilityActionsImpl utilityActionsImpl = new MMUtilityActionsImpl(
+            poolManager, address(factory), address(vtsOrchestrator), address(canonicalVault), weth9
+        );
         MMQueueCustodianFactory queueCustodianFactory = new MMQueueCustodianFactory();
         mmPositionManager = new MMPositionManager(
             MMPositionManager.MMPositionManagerInit({
@@ -65,6 +69,7 @@ contract HookTest is Test, Deployers {
                 weth9: weth9,
                 permit2: permit2,
                 actionsImpl: address(actionsImpl),
+                utilityActionsImpl: address(utilityActionsImpl),
                 queueCustodianFactory: address(queueCustodianFactory)
             })
         );

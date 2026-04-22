@@ -51,6 +51,7 @@ contract DeployContracts is DeployProtocolBase {
     address public commitmentDescriptor;
     address public vtsOrchestrator;
     address public actionsImpl;
+    address public utilityActionsImpl;
     address public canonicalVault;
 
     /**
@@ -66,6 +67,7 @@ contract DeployContracts is DeployProtocolBase {
         console.log("VTSOrchestrator:", getCreate3Contract(VTS_ORCHESTRATOR));
         console.log("MMPCommitmentDescriptor:", getCreate3Contract(COMMITMENT_DESCRIPTOR));
         console.log("MMPositionActionsImpl:", getCreate3Contract(ACTIONS_IMPL));
+        console.log("MMUtilityActionsImpl:", getCreate3Contract(UTILITY_ACTIONS_IMPL));
         console.log("MMQueueCustodianFactory:", getCreate3Contract(MM_QUEUE_CUSTODIAN_FACTORY));
         console.log("MMPositionManager:", getCreate3Contract(MM_POSITION_MANAGER));
         console.log("MarketFactory:", getCreate3Contract(MARKET_FACTORY));
@@ -164,9 +166,11 @@ contract DeployContracts is DeployProtocolBase {
         // Step 10: Deploy MMPositionManager
         console.log("\n=== Step 10: Deploying MMPositionManager ===");
         commitmentDescriptor = _deployCommitmentDescriptor();
-        (actionsImpl, mmPositionManager) = _deployMMStack(marketFactory, vtsOrchestrator, commitmentDescriptor, canonicalVault);
+        (actionsImpl, utilityActionsImpl, mmPositionManager) =
+            _deployMMStack(marketFactory, vtsOrchestrator, commitmentDescriptor, canonicalVault);
         console.log("MMPCommitmentDescriptor deployed at:", commitmentDescriptor);
         console.log("MMPositionActionsImpl deployed at:", actionsImpl);
+        console.log("MMUtilityActionsImpl deployed at:", utilityActionsImpl);
         console.log("MMPositionManager deployed at:", mmPositionManager);
 
         // Step 11: Deploy CoreHook
@@ -242,6 +246,7 @@ contract DeployContracts is DeployProtocolBase {
         // MM / market-maker stack
         writeAddress("commitmentDescriptor", commitmentDescriptor);
         writeAddress("actionsImpl", actionsImpl);
+        writeAddress("utilityActionsImpl", utilityActionsImpl);
 
         console.log("Deployment addresses written to deployments/%s_deployments.json", networkName);
     }

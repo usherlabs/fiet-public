@@ -18,7 +18,9 @@ import {PositionManagerBase} from "./PositionManagerBase.sol";
 import {SafeCast} from "v4-periphery/lib/v4-core/src/libraries/SafeCast.sol";
 import {Math} from "openzeppelin-contracts/contracts/utils/math/Math.sol";
 import {IMarketFactory} from "../interfaces/IMarketFactory.sol";
+import {IMMPositionManager} from "../interfaces/IMMPositionManager.sol";
 import {MarketHandlerLib} from "../libraries/MarketHandlerLib.sol";
+import {MMHelpers} from "../libraries/MMHelpers.sol";
 
 /**
  * @title PositionManagerImpl
@@ -37,8 +39,12 @@ abstract contract PositionManagerImpl is PositionManagerBase, ImmutableState {
     {}
 
     /// @notice LiquidityHub `settleQueue(lcc, recipient)` key for measuring `qCommitted` on MM takes (queue owner).
-    /// @dev Implemented by `MMPositionActionsImpl` to return the recipient-keyed `MMQueueCustodian` address.
-    function _queueSettleRecipient(uint256 tokenId) internal view virtual returns (address);
+    /// @dev Default routes to `custodianFor[msgSender()]` on the entry contract (`address(this)` under delegatecall).
+    function _queueSettleRecipient(uint256) internal view virtual returns (address) {
+        address recipientKey = msgSender();
+        MMHelpers.assertQueueCustodianForRecipient(recipientKey);
+        return IMMPositionManager(address(this)).custodianFor(recipientKey);
+    }
 
     // ------------------------------------------------------------------------------------------------
     // CREDIT HELPERS
@@ -133,9 +139,17 @@ abstract contract PositionManagerImpl is PositionManagerBase, ImmutableState {
 
     /// @notice Forwards queued LCC to `custodianFor[beneficiary]` and records beneficiary-global custody per `lcc`.
     /// @dev `beneficiary` is the hook locker / queue economic owner; must match `msgSender()` in production paths.
-    function _forwardQueuedLccToCustodian(Currency currency, uint256 tokenId, address beneficiary, uint256 amount)
+    function _forwardQueuedLccToCustodian(Currency currency, uint256, address beneficiary, uint256 amount)
         internal
-        virtual;
+        virtual
+    {
+        address recipientKey = beneficiary;
+        MMHelpers.assertQueueCustodianForRecipient(recipientKey);
+        address custAddr = IMMPositionManager(address(this)).custodianFor(recipientKey);
+        if (custAddr != address(0) && custAddr != address(this)) {
+            currency.transfer(custAddr, amount);
+        }
+    }
 
     // ------------------------------------------------------------------------------------------------
     // Liquidity Flow/Modification Handlers
