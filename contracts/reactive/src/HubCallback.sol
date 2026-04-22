@@ -22,9 +22,16 @@ contract HubCallback is AbstractCallback, Ownable {
     event SettlementProcessedReported(
         address indexed recipient, address indexed lcc, uint256 settledAmount, uint256 requestedAmount
     );
-    event SettlementSucceededReported(address indexed recipient, address indexed lcc, uint256 maxAmount);
+    event SettlementSucceededReported(
+        address indexed recipient, address indexed lcc, uint256 maxAmount, uint256 attemptId
+    );
     event SettlementFailedReported(
-        address indexed recipient, address indexed lcc, uint256 maxAmount, bytes4 failureSelector, uint8 failureClass
+        address indexed recipient,
+        address indexed lcc,
+        uint256 maxAmount,
+        uint256 attemptId,
+        bytes4 failureSelector,
+        uint8 failureClass
     );
     event MoreLiquidityAvailable(address indexed lcc, uint256 amountAvailable);
     event InvalidCallbackSender(address indexed sender);
@@ -132,13 +139,14 @@ contract HubCallback is AbstractCallback, Ownable {
         address lcc,
         address recipient,
         uint256 maxAmount,
+        uint256 attemptId,
         uint256 nonce
     ) external authorizedSenderOnly {
         if (!_validateEventParameters(
                 spokeRVMId, lcc, recipient, maxAmount, nonce, ReactiveConstants.RECORD_SETTLEMENT_SUCCEEDED_SELECTOR
             )) return;
 
-        emit SettlementSucceededReported(recipient, lcc, maxAmount);
+        emit SettlementSucceededReported(recipient, lcc, maxAmount, attemptId);
     }
 
     /// @notice Record a settlement-failed callback for a recipient.
@@ -147,6 +155,7 @@ contract HubCallback is AbstractCallback, Ownable {
         address lcc,
         address recipient,
         uint256 maxAmount,
+        uint256 attemptId,
         bytes4 failureSelector,
         uint8 failureClass,
         uint256 nonce
@@ -155,7 +164,7 @@ contract HubCallback is AbstractCallback, Ownable {
                 spokeRVMId, lcc, recipient, maxAmount, nonce, ReactiveConstants.RECORD_SETTLEMENT_FAILED_SELECTOR
             )) return;
 
-        emit SettlementFailedReported(recipient, lcc, maxAmount, failureSelector, failureClass);
+        emit SettlementFailedReported(recipient, lcc, maxAmount, attemptId, failureSelector, failureClass);
     }
 
     /// @notice Emits a liquidity-available signal from an authorised sender (compatibility overload).

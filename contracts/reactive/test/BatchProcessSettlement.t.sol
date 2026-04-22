@@ -35,9 +35,10 @@ contract BatchProcessSettlementTest is Test {
         address[] memory lcc = new address[](1);
         address[] memory recipient = new address[](1);
         uint256[] memory maxAmount = new uint256[](1);
+        uint256[] memory attemptId = new uint256[](1);
 
         vm.expectRevert("Authorized sender only");
-        receiver.processSettlements(hubRVMId, lcc, recipient, maxAmount);
+        receiver.processSettlements(hubRVMId, lcc, recipient, maxAmount, attemptId);
     }
 
     /// @notice Reverts when array lengths do not match.
@@ -45,10 +46,11 @@ contract BatchProcessSettlementTest is Test {
         address[] memory lcc = new address[](1);
         address[] memory recipient = new address[](2);
         uint256[] memory maxAmount = new uint256[](1);
+        uint256[] memory attemptId = new uint256[](1);
 
         vm.expectRevert(AbstractBatchProcessSettlement.InvalidArrayLengths.selector);
         vm.prank(callbackProxy);
-        receiver.processSettlements(hubRVMId, lcc, recipient, maxAmount);
+        receiver.processSettlements(hubRVMId, lcc, recipient, maxAmount, attemptId);
     }
 
     /// @notice Reverts when batch size exceeds MAX_BATCH_SIZE.
@@ -58,10 +60,11 @@ contract BatchProcessSettlementTest is Test {
         address[] memory lcc = new address[](len);
         address[] memory recipient = new address[](len);
         uint256[] memory maxAmount = new uint256[](len);
+        uint256[] memory attemptId = new uint256[](len);
 
         vm.expectRevert(abi.encodeWithSelector(AbstractBatchProcessSettlement.BatchTooLarge.selector, len, maxBatch));
         vm.prank(callbackProxy);
-        receiver.processSettlements(hubRVMId, lcc, recipient, maxAmount);
+        receiver.processSettlements(hubRVMId, lcc, recipient, maxAmount, attemptId);
     }
 
     /// @notice Continues on failure and emits per-item outcomes.
@@ -73,6 +76,7 @@ contract BatchProcessSettlementTest is Test {
         address[] memory lcc = new address[](2);
         address[] memory recipients = new address[](2);
         uint256[] memory maxAmount = new uint256[](2);
+        uint256[] memory attemptId = new uint256[](2);
 
         lcc[0] = lccOk;
         lcc[1] = lccFail;
@@ -80,17 +84,19 @@ contract BatchProcessSettlementTest is Test {
         recipients[1] = recipient;
         maxAmount[0] = 10;
         maxAmount[1] = 20;
+        attemptId[0] = 1;
+        attemptId[1] = 2;
 
         mockHub.setShouldRevert(lccFail, true);
 
         vm.recordLogs();
         vm.prank(callbackProxy);
-        receiver.processSettlements(hubRVMId, lcc, recipients, maxAmount);
+        receiver.processSettlements(hubRVMId, lcc, recipients, maxAmount, attemptId);
         Vm.Log[] memory entries = vm.getRecordedLogs();
 
         bytes32 batchSig = keccak256("BatchReceived(uint256)");
-        bytes32 okSig = keccak256("SettlementSucceeded(address,address,uint256)");
-        bytes32 failSig = keccak256("SettlementFailed(address,address,uint256,bytes)");
+        bytes32 okSig = keccak256("SettlementSucceeded(address,address,uint256,uint256)");
+        bytes32 failSig = keccak256("SettlementFailed(address,address,uint256,uint256,bytes)");
 
         bool sawBatch = false;
         bool sawOk = false;
@@ -117,12 +123,13 @@ contract BatchProcessSettlementTest is Test {
         address[] memory lcc = new address[](1);
         address[] memory recipient = new address[](1);
         uint256[] memory maxAmount = new uint256[](1);
+        uint256[] memory attemptId = new uint256[](1);
 
         address wrongOrigin = makeAddr("wrongOrigin");
         vm.expectRevert(
             abi.encodeWithSelector(BatchProcessSettlement.InvalidCallbackOrigin.selector, hubRVMId, wrongOrigin)
         );
         vm.prank(callbackProxy);
-        receiver.processSettlements(wrongOrigin, lcc, recipient, maxAmount);
+        receiver.processSettlements(wrongOrigin, lcc, recipient, maxAmount, attemptId);
     }
 }
