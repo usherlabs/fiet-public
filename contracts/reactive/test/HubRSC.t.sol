@@ -1241,7 +1241,8 @@ contract HubRSCTest is Test {
             _clearSyntheticReservationAndPrune(hub, lccB, recipient, 0x8730 + i, i + 1);
         }
         assertEq(hub.queueSize(), 0);
-        assertGt(hub.zeroBatchRetryCreditsRemaining(underlying), 0);
+        // Processed reconciliation can now consume the leftover retry credit while it re-checks dispatchability,
+        // but the follow-up fallback must still leave the shared-underlying lane clean either way.
 
         vm.recordLogs();
         hub.react(_moreLiquidityAvailableLog(hub, lccA, 100, 0x8640, 1));
@@ -1847,6 +1848,56 @@ contract HubRSCTest is Test {
         assertTrue(exists);
         assertEq(remaining, 40);
         assertEq(hub.inFlightByKey(key), 0);
+        assertEq(hub.completedAwaitingProcessedByKey(key), 0);
+        assertEq(hub.processedRequestedCreditByKey(key), 0);
+    }
+
+    function test_successBeforeProcessedDoesNotRedispatchSameKeyUntilProcessedReconciles() public {
+        _clearSystemContract();
+        HubRSC hub = new HubRSC(
+            DEFAULT_MAX_DISPATCH_ITEMS,
+            originChainId,
+            destinationChainId,
+            liquidityHub,
+            hubCallback,
+            destinationReceiverContract
+        );
+
+        address recipient = makeAddr("recipient");
+        address lcc = makeAddr("lcc");
+        bytes32 key = hub.computeKey(lcc, recipient);
+
+        hub.react(_settlementLog(hub, recipient, lcc, 100, 1, 0x9610, 1));
+
+        uint256 attemptA = _dispatchSingleAttemptId(hub, lcc, 100, bytes32("mkt"), 0x9611, 2);
+        assertEq(hub.inFlightByKey(key), 100);
+
+        hub.react(_settlementSucceededLog(hub, lcc, recipient, 100, attemptA, 0x9612, 3));
+        assertEq(hub.inFlightByKey(key), 0);
+        assertEq(hub.completedAwaitingProcessedByKey(key), 100);
+        assertEq(hub.processedRequestedCreditByKey(key), 0);
+
+        _assertNoProcessSettlementsDispatched(hub, lcc, 100, bytes32("mkt"), 0x9613, 4);
+        assertEq(hub.completedAwaitingProcessedByKey(key), 100);
+
+        vm.recordLogs();
+        hub.react(_settlementProcessedLogWithRequested(hub, lcc, recipient, 60, 100, 0x9614, 5));
+        Vm.Log[] memory entries = vm.getRecordedLogs();
+
+        (,, uint256 remaining, bool exists) = hub.pending(key);
+        assertTrue(exists);
+        assertEq(remaining, 40);
+        assertEq(hub.completedAwaitingProcessedByKey(key), 0);
+        assertEq(hub.processedRequestedCreditByKey(key), 0);
+        assertEq(hub.inFlightByKey(key), 40);
+
+        (, address[] memory lccs, address[] memory recipients, uint256[] memory amounts, uint256[] memory attemptIds) =
+            _decodeProcessSettlementsPayload(entries);
+        assertEq(lccs.length, 1);
+        assertEq(lccs[0], lcc);
+        assertEq(recipients[0], recipient);
+        assertEq(amounts[0], 40);
+        assertGt(attemptIds[0], attemptA);
     }
 
     function test_trustedSuccessReleasesOnlyMatchingAttemptWhenLaterReservationIsLive() public {
