@@ -13,58 +13,6 @@ interface IMinimalLiquidityHub {
     function wrap(address underlying, bytes32 marketId, uint256 amount) external payable;
     function unwrap(address lcc, uint256 amount) external;
     function unwrap(address underlying, bytes32 marketId, uint256 amount) external;
-    /**
-     * @notice Endpoint-only: unwrap from `msg.sender`’s Hub/LCC balance and pay underlying to `to` (queue shortfall to `to`).
-     * @dev Caller must be `BOUND_ENDPOINT` for this LCC’s market. Direct users should use `unwrap(...)`.
-     *      Immediate payout `to` must not be the Hub, `BOUND_EXEMPT`, or `BOUND_DEX` (see HUB-02B in INVARIANTS.md).
-     */
-    function unwrapTo(address lcc, address to, uint256 amount) external;
-
-    /**
-     * @notice Unwraps LCC tokens back to underlying assets and transfers any immediately-available underlying to `to`,
-     *         while queueing any unfulfilled portion to a separate settlement queue owner.
-     * @dev If available liquidity is insufficient to fulfil `amount`, the shortfall is queued under `queueTo` and can be
-     *      permissionlessly processed later via `processSettlementFor(lcc, queueTo, maxAmount)` when reserves become available.
-     *      Queue creation validates owner shape (for example non-zero and non-exempt unless Hub), while present settleability is
-     *      enforced at `processSettlementFor` time and may require a later retry after reconciliation.
-     *
-     *      Endpoint-only: caller must be `BOUND_ENDPOINT` for this LCC’s market. Intended for protocol flows where
-     *      "who receives underlying now" differs from "who owns the settlement claim".
-     * @param lcc The LCC token address to unwrap
-     * @param to The recipient address for any underlying paid out immediately
-     * @param queueTo The address credited for any queued settlement shortfall (the eventual recipient on settlement)
-     * @param amount The amount of LCC tokens to unwrap
-     *
-     * @custom:constraints `queueTo` MUST NOT be `address(0)`; queueing to the zero address will strand the settlement.
-     * @custom:constraints `queueTo` MAY equal `to` to match the behaviour of `unwrapTo(lcc, to, amount)`.
-     * @custom:constraints `to` MUST NOT be `address(0)`, the Hub, `BOUND_EXEMPT`, or `BOUND_DEX` (HUB-02B).
-     */
-    function unwrapTo(address lcc, address to, address queueTo, uint256 amount) external;
-    /**
-     * @notice Endpoint-only: same as `unwrapTo(lcc, to, amount)` with LCC resolved by market.
-     */
-    function unwrapTo(address underlying, bytes32 marketId, address to, uint256 amount) external;
-
-    /**
-     * @notice Unwraps LCC tokens (resolved by `underlying` + `marketId`) back to underlying assets and transfers any
-     *         immediately-available underlying to `to`, while queueing any unfulfilled portion to `queueTo`.
-     * @dev If available liquidity is insufficient to fulfil `amount`, the shortfall is queued under `queueTo` and can be
-     *      permissionlessly processed later via `processSettlementFor(lcc, queueTo, maxAmount)`.
-     *      Queue creation validates owner shape (for example non-zero and non-exempt unless Hub), while present settleability is
-     *      enforced at `processSettlementFor` time and may require a later retry after reconciliation.
-     *
-     *      Endpoint-only: caller must be `BOUND_ENDPOINT` for the resolved LCC’s market.
-     * @param underlying The underlying asset address
-     * @param marketId The market ID (corePoolKey -> PoolID -> unwrap() to bytes32)
-     * @param to The recipient address for any underlying paid out immediately
-     * @param queueTo The address credited for any queued settlement shortfall (the eventual recipient on settlement)
-     * @param amount The amount of LCC tokens to unwrap
-     *
-     * @custom:constraints `queueTo` MUST NOT be `address(0)`; queueing to the zero address will strand the settlement.
-     * @custom:constraints `queueTo` MAY equal `to` to match the behaviour of `unwrapTo(underlying, marketId, to, amount)`.
-     * @custom:constraints `to` MUST NOT be `address(0)`, the Hub, `BOUND_EXEMPT`, or `BOUND_DEX` (HUB-02B).
-     */
-    function unwrapTo(address underlying, bytes32 marketId, address to, address queueTo, uint256 amount) external;
 
     /**
      * @notice Process settlement for a specific recipient using reserveOfUnderlying
@@ -75,19 +23,6 @@ interface IMinimalLiquidityHub {
      * @param maxAmount The maximum amount to settle (caller can limit to avoid large gas costs)
      */
     function processSettlementFor(address lcc, address recipient, uint256 maxAmount) external;
-
-    /**
-     * @notice Atomically releases queued custody and settles it against the recipient's Hub queue.
-     * @dev Best-effort path for collection flows (e.g. MM). Returns 0 when nothing is currently settleable.
-     *      `custodian` must implement `IQueueCustodian`.
-     * @param lcc The LCC token address
-     * @param custodian The queue custodian holding beneficiary-scoped queued LCC
-     * @param tokenId The custodian bucket id to debit (e.g. commitment NFT id, or utility bucket such as `0`)
-     * @param recipient The queue owner and settlement recipient
-     * @param maxAmount The maximum amount to settle
-     */
-    function settleFromCustodian(address lcc, address custodian, uint256 tokenId, address recipient, uint256 maxAmount)
-        external;
 
     /**
      * @notice Gets the LCC token for a given underlying asset in a specific market
