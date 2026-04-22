@@ -33,10 +33,10 @@ contract HubRSC is AbstractReactive {
     /// @notice SettlementProcessedReported(address indexed recipient, address indexed lcc, uint256 amount).
     uint256 public constant SETTLEMENT_PROCESSED_REPORTED_TOPIC = ReactiveConstants.SETTLEMENT_PROCESSED_REPORTED_TOPIC;
 
-    /// @notice SettlementSucceededReported(address indexed recipient, address indexed lcc, uint256 maxAmount).
+    /// @notice SettlementSucceededReported(address indexed recipient, address indexed lcc, uint256 maxAmount, uint256 attemptId).
     uint256 public constant SETTLEMENT_SUCCEEDED_REPORTED_TOPIC = ReactiveConstants.SETTLEMENT_SUCCEEDED_REPORTED_TOPIC;
 
-    /// @notice SettlementFailedReported(address indexed recipient, address indexed lcc, uint256 maxAmount, bytes4 failureSelector, uint8 failureClass).
+    /// @notice SettlementFailedReported(address indexed recipient, address indexed lcc, uint256 maxAmount, uint256 attemptId, bytes4 failureSelector, uint8 failureClass).
     uint256 public constant SETTLEMENT_FAILED_REPORTED_TOPIC = ReactiveConstants.SETTLEMENT_FAILED_REPORTED_TOPIC;
 
     struct Pending {
@@ -62,6 +62,13 @@ contract HubRSC is AbstractReactive {
         address[] lccs;
         address[] recipients;
         uint256[] amounts;
+        uint256[] attemptIds;
+    }
+
+    struct AttemptReservation {
+        address lcc;
+        address recipient;
+        uint256 amount;
     }
 
     uint256 public immutable maxDispatchItems;
@@ -127,6 +134,10 @@ contract HubRSC is AbstractReactive {
     mapping(address => uint256) public zeroBatchRetryCreditsRemaining;
     /// @notice Persisted dispatch budget keyed by the economic lane currently funding settlement dispatch.
     mapping(address => uint256) public availableBudgetByDispatchLane;
+    /// @notice Monotonic identifier assigned to each dispatched settlement attempt.
+    uint256 public nextAttemptId;
+    /// @notice Active reservation keyed by dispatch attempt id.
+    mapping(uint256 => AttemptReservation) public attemptReservationById;
     /// @notice Whether a pending key has already been mirrored into the shared underlying lane.
     mapping(bytes32 => bool) private mirroredToUnderlyingByKey;
 
@@ -358,10 +369,10 @@ contract HubRSC is AbstractReactive {
 
         address recipient = address(uint160(log.topic_1));
         address lcc = address(uint160(log.topic_2));
-        uint256 succeededAmount = abi.decode(log.data, (uint256));
+        (uint256 succeededAmount, uint256 attemptId) = abi.decode(log.data, (uint256, uint256));
         if (succeededAmount == 0) return;
 
-        _releaseInFlightReservation(lcc, recipient, succeededAmount, false);
+        _releaseInFlightReservation(attemptId, lcc, recipient, false);
         _dispatchLiquidityIfBudgetAvailable(lcc, true);
     }
 
@@ -384,11 +395,11 @@ contract HubRSC is AbstractReactive {
 
         address recipient = address(uint160(log.topic_1));
         address lcc = address(uint160(log.topic_2));
-        (uint256 failedAmount, bytes4 failureSelector, uint8 failureClass) =
-            abi.decode(log.data, (uint256, bytes4, uint8));
+        (uint256 failedAmount, uint256 attemptId, bytes4 failureSelector, uint8 failureClass) =
+            abi.decode(log.data, (uint256, uint256, bytes4, uint8));
         if (failedAmount == 0) return;
 
-        _releaseInFlightReservation(lcc, recipient, failedAmount, true);
+        _releaseInFlightReservation(attemptId, lcc, recipient, true);
         if (SettlementFailureLib.isTerminal(failureClass)) {
             bytes32 key = computeKey(lcc, recipient);
             Pending storage entry = pending[key];
@@ -398,7 +409,6 @@ contract HubRSC is AbstractReactive {
             _dispatchLiquidityIfBudgetAvailable(lcc, true);
             return;
         }
-
         _dispatchLiquidityIfBudgetAvailable(lcc, true);
     }
 
@@ -512,8 +522,12 @@ contract HubRSC is AbstractReactive {
         uint256 startSize = scanQueue.size;
         uint256 cap = startSize < maxDispatchItems ? startSize : maxDispatchItems;
 
-        DispatchBatch memory batch =
-            DispatchBatch({lccs: new address[](cap), recipients: new address[](cap), amounts: new uint256[](cap)});
+        DispatchBatch memory batch = DispatchBatch({
+            lccs: new address[](cap),
+            recipients: new address[](cap),
+            amounts: new uint256[](cap),
+            attemptIds: new uint256[](cap)
+        });
 
         DispatchState memory state = DispatchState({
             remainingLiquidity: available, batchCount: 0, scanned: 0, cursor: scanQueue.currentCursor()
@@ -542,7 +556,8 @@ contract HubRSC is AbstractReactive {
             state.remainingLiquidity,
             batch.lccs,
             batch.recipients,
-            batch.amounts
+            batch.amounts,
+            batch.attemptIds
         );
     }
 
@@ -631,11 +646,15 @@ contract HubRSC is AbstractReactive {
 
         uint256 settleAmount = dispatchable <= state.remainingLiquidity ? dispatchable : state.remainingLiquidity;
         inFlightByKey[key] = reserved + settleAmount;
+        uint256 attemptId = ++nextAttemptId;
+        attemptReservationById[attemptId] =
+            AttemptReservation({lcc: entry.lcc, recipient: entry.recipient, amount: settleAmount});
         state.remainingLiquidity -= settleAmount;
 
         batch.lccs[state.batchCount] = entry.lcc;
         batch.recipients[state.batchCount] = entry.recipient;
         batch.amounts[state.batchCount] = settleAmount;
+        batch.attemptIds[state.batchCount] = attemptId;
         state.batchCount++;
     }
 
@@ -684,12 +703,20 @@ contract HubRSC is AbstractReactive {
         return queueDataByLcc[lcc].size == 0;
     }
 
-    function _releaseInFlightReservation(address lcc, address recipient, uint256 amount, bool restoreBudget) internal {
+    function _releaseInFlightReservation(uint256 attemptId, address lcc, address recipient, bool restoreBudget)
+        internal
+    {
+        AttemptReservation memory reservation = attemptReservationById[attemptId];
+        if (reservation.amount == 0) return;
+        if (reservation.lcc != lcc || reservation.recipient != recipient) return;
+
+        delete attemptReservationById[attemptId];
+
         bytes32 key = computeKey(lcc, recipient);
         uint256 reserved = inFlightByKey[key];
         if (reserved == 0) return;
 
-        uint256 release = amount < reserved ? amount : reserved;
+        uint256 release = reservation.amount < reserved ? reservation.amount : reserved;
         inFlightByKey[key] = reserved - release;
         if (restoreBudget) {
             _restoreDispatchBudget(lcc, release);
@@ -765,7 +792,8 @@ contract HubRSC is AbstractReactive {
         uint256 remainingLiquidity,
         address[] memory lccs,
         address[] memory recipients,
-        uint256[] memory amounts
+        uint256[] memory amounts,
+        uint256[] memory attemptIds
     ) internal {
         if (batchCount == 0) return;
 
@@ -773,10 +801,11 @@ contract HubRSC is AbstractReactive {
             mstore(lccs, batchCount)
             mstore(recipients, batchCount)
             mstore(amounts, batchCount)
+            mstore(attemptIds, batchCount)
         }
 
         bytes memory payload = abi.encodeWithSelector(
-            ReactiveConstants.PROCESS_SETTLEMENTS_SELECTOR, address(0), lccs, recipients, amounts
+            ReactiveConstants.PROCESS_SETTLEMENTS_SELECTOR, address(0), lccs, recipients, amounts, attemptIds
         );
 
         emit DispatchRequested(triggerLcc, available, batchCount, remainingLiquidity);
@@ -850,9 +879,9 @@ contract HubRSC is AbstractReactive {
         }
     }
 
-    /// @notice Applies authoritative queue decrement and keeps in-flight reservations bounded.
-    /// @dev Returns any settled decrease not applied to `entry.amount` and any in-flight reduction not applied to
-    ///      reservations. When there was no reservation, excess in-flight reduction is discarded (same as legacy).
+    /// @notice Applies authoritative queue decrement without mutating attempt-scoped reservations.
+    /// @dev Returns any settled decrease not applied to `entry.amount`. Attempt completions release reservations via
+    ///      `_releaseInFlightReservation`, so the inflight remainder channel is retained only for struct compatibility.
     function _consumeAuthoritativeDecrease(
         Pending storage entry,
         bytes32 key,
@@ -870,23 +899,7 @@ contract HubRSC is AbstractReactive {
         }
         remainingSettled = settledAmount - dec;
 
-        uint256 reservedBefore = inFlightByKey[key];
-        uint256 consumed = 0;
-        if (inflightAmountToReduce > 0 && reservedBefore > 0) {
-            consumed = inflightAmountToReduce < reservedBefore ? inflightAmountToReduce : reservedBefore;
-            inFlightByKey[key] = reservedBefore - consumed;
-        }
-        remainingInflight = inflightAmountToReduce - consumed;
-
-        // Match legacy behaviour: if nothing was reserved, do not carry forward attempt-completion reductions.
-        if (reservedBefore == 0 && inflightAmountToReduce > 0) {
-            remainingInflight = 0;
-        }
-
-        uint256 reserved = inFlightByKey[key];
-        if (reserved > entry.amount) {
-            inFlightByKey[key] = entry.amount;
-        }
+        remainingInflight = inflightAmountToReduce;
 
         _pruneIfFullySettled(entry, key);
     }
