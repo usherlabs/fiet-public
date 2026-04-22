@@ -17,6 +17,10 @@ library MMCalldataDecoder {
     /// @dev No sane ABI encoding will pass in an offset or length greater than type(uint32).max
     uint256 constant OFFSET_OR_LENGTH_MASK = 0xffffffff;
 
+    /// @notice Lower 128 bits only: assembly `calldataload` is 256-bit; narrow `uint128` fields must be canonicalised
+    /// @dev Prevents non-ABI-conforming calldata (dirty high bits) from inflating max-in / min-out checks.
+    uint256 constant UINT128_MASK = 0xffffffffffffffffffffffffffffffff;
+
     /// @notice Equivalent to SliceOutOfBounds.selector, stored in least-significant bits
     uint256 constant SLICE_ERROR_SELECTOR = 0x3b99b53d;
 
@@ -60,21 +64,30 @@ library MMCalldataDecoder {
         }
     }
 
-    /// @dev INCREASE_LIQUIDITY: (PoolKey, uint256, uint256, uint256)
+    /// @dev INCREASE_LIQUIDITY: (PoolKey, uint256, uint256, uint256, uint128, uint128)
     /// @param params The calldata bytes to decode
     /// @return poolKey The pool key (calldata pointer)
     /// @return tokenId The commitment NFT token ID
     /// @return positionIndex The position index within the commitment
     /// @return liquidity The amount of liquidity to add
+    /// @return amount0Max Maximum token0 principal spend (LCC leg; negative delta in `principalDelta`)
+    /// @return amount1Max Maximum token1 principal spend
     function decodeIncreaseLiquidityParams(bytes calldata params)
         internal
         pure
-        returns (PoolKey calldata poolKey, uint256 tokenId, uint256 positionIndex, uint256 liquidity)
+        returns (
+            PoolKey calldata poolKey,
+            uint256 tokenId,
+            uint256 positionIndex,
+            uint256 liquidity,
+            uint128 amount0Max,
+            uint128 amount1Max
+        )
     {
         assembly ("memory-safe") {
-            // PoolKey: 5 slots (0xa0), then tokenId, positionIndex, liquidity
-            // Minimum length: 0xa0 + 0x20*3 = 0x100
-            if lt(params.length, 0x100) {
+            // PoolKey: 5 slots (0xa0), then tokenId, positionIndex, liquidity, amount0Max, amount1Max
+            // Minimum length: 0xa0 + 0x20*5 = 0x140
+            if lt(params.length, 0x140) {
                 mstore(0, SLICE_ERROR_SELECTOR)
                 revert(0x1c, 4)
             }
@@ -82,25 +95,37 @@ library MMCalldataDecoder {
             tokenId := calldataload(add(params.offset, 0xa0))
             positionIndex := calldataload(add(params.offset, 0xc0))
             liquidity := calldataload(add(params.offset, 0xe0))
+            amount0Max := and(calldataload(add(params.offset, 0x100)), UINT128_MASK)
+            amount1Max := and(calldataload(add(params.offset, 0x120)), UINT128_MASK)
         }
     }
 
-    /// @dev MINT_POSITION: (PoolKey, uint256, int24, int24, uint256)
+    /// @dev MINT_POSITION: (PoolKey, uint256, int24, int24, uint256, uint128, uint128)
     /// @param params The calldata bytes to decode
     /// @return poolKey The pool key (calldata pointer)
     /// @return tokenId The commitment NFT token ID
     /// @return tickLower The lower tick of the position
     /// @return tickUpper The upper tick of the position
     /// @return liquidity The amount of liquidity to mint
+    /// @return amount0Max Maximum token0 principal spend (LCC leg)
+    /// @return amount1Max Maximum token1 principal spend
     function decodeMintPositionParams(bytes calldata params)
         internal
         pure
-        returns (PoolKey calldata poolKey, uint256 tokenId, int24 tickLower, int24 tickUpper, uint256 liquidity)
+        returns (
+            PoolKey calldata poolKey,
+            uint256 tokenId,
+            int24 tickLower,
+            int24 tickUpper,
+            uint256 liquidity,
+            uint128 amount0Max,
+            uint128 amount1Max
+        )
     {
         assembly ("memory-safe") {
-            // PoolKey: 5 slots (0xa0), then tokenId, tickLower, tickUpper, liquidity
-            // Minimum length: 0xa0 + 0x20*4 = 0x120
-            if lt(params.length, 0x120) {
+            // PoolKey: 5 slots (0xa0), then tokenId, tickLower, tickUpper, liquidity, amount0Max, amount1Max
+            // Minimum length: 0xa0 + 0x20*6 = 0x160
+            if lt(params.length, 0x160) {
                 mstore(0, SLICE_ERROR_SELECTOR)
                 revert(0x1c, 4)
             }
@@ -109,6 +134,8 @@ library MMCalldataDecoder {
             tickLower := calldataload(add(params.offset, 0xc0))
             tickUpper := calldataload(add(params.offset, 0xe0))
             liquidity := calldataload(add(params.offset, 0x100))
+            amount0Max := and(calldataload(add(params.offset, 0x120)), UINT128_MASK)
+            amount1Max := and(calldataload(add(params.offset, 0x140)), UINT128_MASK)
         }
     }
 
@@ -252,8 +279,8 @@ library MMCalldataDecoder {
             poolKey := params.offset
             tokenId := calldataload(add(params.offset, 0xa0))
             positionIndex := calldataload(add(params.offset, 0xc0))
-            amount0Max := calldataload(add(params.offset, 0xe0))
-            amount1Max := calldataload(add(params.offset, 0x100))
+            amount0Max := and(calldataload(add(params.offset, 0xe0)), UINT128_MASK)
+            amount1Max := and(calldataload(add(params.offset, 0x100)), UINT128_MASK)
             payerIsUser := calldataload(add(params.offset, 0x120))
         }
     }
@@ -292,8 +319,8 @@ library MMCalldataDecoder {
             tokenId := calldataload(add(params.offset, 0xa0))
             tickLower := calldataload(add(params.offset, 0xc0))
             tickUpper := calldataload(add(params.offset, 0xe0))
-            amount0Max := calldataload(add(params.offset, 0x100))
-            amount1Max := calldataload(add(params.offset, 0x120))
+            amount0Max := and(calldataload(add(params.offset, 0x100)), UINT128_MASK)
+            amount1Max := and(calldataload(add(params.offset, 0x120)), UINT128_MASK)
             payerIsUser := calldataload(add(params.offset, 0x140))
         }
     }

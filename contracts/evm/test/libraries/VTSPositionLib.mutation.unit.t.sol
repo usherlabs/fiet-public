@@ -374,6 +374,18 @@ contract VTSPositionLibMutationUnitTest is Test {
         assertEq(delta.amount1(), int128(int256(100e18)));
     }
 
+    function test_getRFS_commitmentDeficitBpsZero_stillInflatesFromLaneDeficits() public {
+        (PositionId id,) = _register(bytes32(uint256(6)), 1);
+        harness.setCommitmentMax(id, 0, 100e18);
+        harness.setSettled(id, 0, 0);
+        harness.setCumulativeDeficit(id, 0, 0);
+        harness.setCommitmentDeficit(id, 0, 1000e18);
+        harness.setCommitmentDeficitBps(id, 0);
+        (bool rfsOpen, BalanceDelta delta) = harness.getRFS(id);
+        assertTrue(rfsOpen);
+        assertEq(delta.amount1(), int128(int256(100e18)));
+    }
+
     function test_initPositionSnapshots_clears_deficit_and_inflow_growth_carries() public {
         (PositionId id,) = _register(bytes32(uint256(42)), 1000);
         _pmSetSlot0Tick(poolId, 0);

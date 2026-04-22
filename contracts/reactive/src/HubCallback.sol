@@ -22,6 +22,7 @@ contract HubCallback is AbstractCallback, Ownable {
     event SettlementProcessedReported(
         address indexed recipient, address indexed lcc, uint256 settledAmount, uint256 requestedAmount
     );
+    event SettlementSucceededReported(address indexed recipient, address indexed lcc, uint256 maxAmount);
     event SettlementFailedReported(address indexed recipient, address indexed lcc, uint256 maxAmount);
     event MoreLiquidityAvailable(address indexed lcc, uint256 amountAvailable);
     event InvalidCallbackSender(address indexed sender);
@@ -121,6 +122,21 @@ contract HubCallback is AbstractCallback, Ownable {
             )) return;
 
         emit SettlementProcessedReported(recipient, lcc, settledAmount, requestedAmount);
+    }
+
+    /// @notice Record a trusted settlement-succeeded callback for a recipient.
+    function recordSettlementSucceeded(
+        address spokeRVMId,
+        address lcc,
+        address recipient,
+        uint256 maxAmount,
+        uint256 nonce
+    ) external authorizedSenderOnly {
+        if (!_validateEventParameters(
+                spokeRVMId, lcc, recipient, maxAmount, nonce, ReactiveConstants.RECORD_SETTLEMENT_SUCCEEDED_SELECTOR
+            )) return;
+
+        emit SettlementSucceededReported(recipient, lcc, maxAmount);
     }
 
     /// @notice Record a settlement-failed callback for a recipient.
@@ -253,4 +269,3 @@ contract HubCallback is AbstractCallback, Ownable {
         return true;
     }
 }
-

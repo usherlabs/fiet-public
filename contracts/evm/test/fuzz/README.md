@@ -89,7 +89,7 @@ questions for every invariant:
 | LCC-BACKING-01 | P0 | Medusa/FuzzEntry | `FuzzHubLCC.sol`, `invariants/LCCBacking01.sol` | Directly composed into the supported Medusa path. |
 | LCC-01 | P0 | Medusa/FuzzEntry | `FuzzHubLCC.sol`, `invariants/LCC01.sol` | Direct transfer-boundary property in the composed Hub/LCC module. |
 | LCC-02 | P0 | Medusa/FuzzEntry | `FuzzHubLCC.sol`, `invariants/LCC02.sol` | Bucket-accounting property runs through the supported Hub adapter path. |
-| LCC-03 | P1 | Medusa/FuzzEntry | `FuzzHubLCC.sol`, `invariants/LCC03.sol` | Nested ingress-settlement ordering is exercised under the composed Medusa path. |
+| LCC-03 | P1 | Medusa/FuzzEntry | `FuzzHubLCC.sol`, `invariants/LCC03.sol` | Nested ingress-settlement ordering and **no active `sync(lcc)` → revert** (`IngressRequiresActiveSync`) are exercised under the composed Medusa path. |
 | HUB-01 | P0 | Medusa/FuzzEntry | `FuzzHubLCC.sol`, `invariants/HUB01.sol` | Native and ERC20 wrap flow remains a first-class Medusa property. |
 | HUB-01A | P1 | Foundry | `LiquidityHub.t.sol` | `receive()` sender-gating is authoritative in production-Hub tests rather than a separate Medusa child harness. |
 | HUB-02 | P0 | Medusa/FuzzEntry | `FuzzHubLCC.sol`, `invariants/HUB02.sol` | Unwrap decomposition and queue accounting remain direct Medusa properties. |
@@ -113,7 +113,7 @@ questions for every invariant:
 | COMMIT-00 | P0 | Foundry | `VTSOrchestrator.t.sol`, `VTSPositionLib.t.sol` | Live-liquidity/`commitmentMax` drift remains authoritative in the core VTS Foundry tests. |
 | COMMIT-01 | P0 | Medusa/FuzzEntry | `FuzzVTSPosition.sol`, `invariants/COMMIT01.sol` | Backing gate stays directly fuzzed under the supported path. |
 | COMMIT-02 | P0 | Medusa/FuzzEntry | `FuzzVTSPosition.sol`, `invariants/COMMIT02.sol` | Checkpoint deficit math remains directly fuzzed under the supported path. |
-| COMMIT-02A | P0 | Foundry + Medusa | `invariants/COMMIT02.sol`, `VTSOrchestrator.t.sol` | Deficit formation is fuzzed; the explicit non-seizure freeze is asserted in the core orchestrator tests. |
+| COMMIT-02A | P0 | Foundry + Medusa | `invariants/COMMIT02.sol`, `VTSOrchestrator.t.sol`, `VTSPositionLib.t.sol` | Deficit formation is fuzzed; materiality-based non-seizure MM freeze is covered in `VTSPositionLib.t.sol` and orchestrator paths. |
 | COMMIT-02B | P0 | Foundry + Medusa | `invariants/COMMIT02.sol`, `VTSOrchestrator.t.sol` | Deficit clearing is fuzzed; full-deactivation storage cleanup remains authoritative in Foundry. |
 | COMMIT-03 | P0 | Medusa/FuzzEntry | `FuzzVTSPosition.sol`, `invariants/COMMIT03.sol` | Advancer binding and rotation remain direct Medusa properties. |
 | VTS-01 | P0 | Medusa/FuzzEntry | `FuzzVTSCoreTail.sol`, `invariants/VTS01.sol` | Growth settlement before modify remains a direct Medusa property. |

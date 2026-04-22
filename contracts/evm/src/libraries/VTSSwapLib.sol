@@ -103,9 +103,13 @@ library VTSSwapLib {
                 ? (st.sqrtPAfter > sqrtNext ? st.sqrtPAfter : sqrtNext)
                 : (st.sqrtPAfter < sqrtNext ? st.sqrtPAfter : sqrtNext);
 
-            if (st.segmentLiquidity > 0 && sqrtTarget != st.sqrtCurrent) {
-                // Accrue growth for this segment
-                _accrueSegmentGrowth(s, st.poolId, st.zeroForOne, st.sqrtCurrent, sqrtTarget, st.segmentLiquidity);
+            // Match Uniswap v4 `Pool.swap`: the realised sqrt price advances every step (`computeSwapStep`), including
+            // across zero-liquidity spans where no fee-style growth accrues. Only call `_accrueSegmentGrowth` when
+            // `segmentLiquidity > 0`; always advance `sqrtCurrent` so the next segment does not replay stale bounds.
+            if (sqrtTarget != st.sqrtCurrent) {
+                if (st.segmentLiquidity > 0) {
+                    _accrueSegmentGrowth(s, st.poolId, st.zeroForOne, st.sqrtCurrent, sqrtTarget, st.segmentLiquidity);
+                }
                 st.sqrtCurrent = sqrtTarget;
             }
 

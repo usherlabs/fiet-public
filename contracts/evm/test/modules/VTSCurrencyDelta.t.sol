@@ -401,6 +401,8 @@ contract VTSCurrencyDeltaTest is Test {
     // ════════════════════════════════════════════════════════════════════════════
     // sync Tests
     // ════════════════════════════════════════════════════════════════════════════
+    // @dev Audit **finding 33_3** Scenario 3: `sync` must not pay down **negative** delta from omnibus owner balance
+    //      (`test_finding33_3_scenario3_sync_doesNotPayDownDebtWithOmnibusOwnerBalance` and related).
 
     function test_sync_ownerHasBalance_targetZeroDelta_creditsTarget() public {
         // Setup: give owner some token balance
@@ -425,28 +427,25 @@ contract VTSCurrencyDeltaTest is Test {
         assertEq(harness.getDelta(currency0, target), 150e18, "Target credit should increase to match balance");
     }
 
-    function test_sync_ownerHasBalance_targetNegativeDebt_reducesDebt() public {
-        // Setup: owner has balance, target has debt
+    /// @notice Regression: audit **finding 33_3**, **Scenario 3** — `sync` does not reduce negative delta from owner
+    ///         balance (no omnibus debt paydown). See `agents/audit-findings/33_3__high-balance-wide-sync-*.md`.
+    function test_finding33_3_scenario3_sync_doesNotPayDownDebtWithOmnibusOwnerBalance() public {
+        // Residue sync must not use omnibus balance to pay down debt; debt is unchanged.
         token0.mint(owner, 50e18);
         harness.setDelta(currency0, target, -100e18);
 
-        // Act: sync - should reduce debt by owner's balance
         harness.sync(factory, currency0, owner, target);
 
-        // Assert: debt should be reduced
-        assertEq(harness.getDelta(currency0, target), -50e18, "Debt should be reduced by balance amount");
+        assertEq(harness.getDelta(currency0, target), -100e18, "Debt should be unchanged (no debt paydown via sync)");
     }
 
-    function test_sync_ownerHasBalance_fullyPaysOffDebt() public {
-        // Setup: owner has more balance than target's debt
-        token0.mint(owner, 100e18);
+    function test_sync_ownerHasBalance_targetNegativeDebt_largeOwnerBalance_stillNoOp() public {
+        token0.mint(owner, 200e18);
         harness.setDelta(currency0, target, -50e18);
 
-        // Act: sync - should pay off debt (50e18 used)
         harness.sync(factory, currency0, owner, target);
 
-        // Assert: debt should be fully paid, delta becomes 0
-        assertEq(harness.getDelta(currency0, target), 0, "Debt should be fully paid off");
+        assertEq(harness.getDelta(currency0, target), -50e18, "Omnibus balance must not pay down debt");
     }
 
     function test_sync_noBalance_noChange() public {
@@ -517,21 +516,18 @@ contract VTSCurrencyDeltaTest is Test {
         assertEq(change1, 0, "Change1 should be zero (no balance)");
     }
 
-    function test_syncPair_reducesDebts_forBothCurrencies() public {
-        // Setup: owner has balances, target has debts
+    function test_syncPair_targetHasDebts_noDebtReduction() public {
         token0.mint(owner, 50e18);
         token1.mint(owner, 50e18);
         harness.setDelta(currency0, target, -100e18);
         harness.setDelta(currency1, target, -30e18);
 
-        // Act
         (int128 change0, int128 change1) = harness.syncPair(factory, currency0, currency1, owner, target);
 
-        // Assert
-        assertEq(change0, 50e18, "Change0 should reduce debt by balance");
-        assertEq(change1, 30e18, "Change1 should fully pay off debt");
-        assertEq(harness.getDelta(currency0, target), -50e18, "Target delta0 should have reduced debt");
-        assertEq(harness.getDelta(currency1, target), 0, "Target delta1 should be zero (debt paid)");
+        assertEq(change0, 0, "No change when target in debt");
+        assertEq(change1, 0, "No change when target in debt");
+        assertEq(harness.getDelta(currency0, target), -100e18);
+        assertEq(harness.getDelta(currency1, target), -30e18);
     }
 
     function test_syncPair_noBalances_noChanges() public {
@@ -544,23 +540,20 @@ contract VTSCurrencyDeltaTest is Test {
         assertEq(change1, 0, "Change1 should be zero");
     }
 
-    function test_syncPair_mixedScenario_handlesCorrectly() public {
-        // Setup: complex scenario
-        // currency0: owner has 100, target has credit of 50 → should increase to 100
-        // currency1: owner has 30, target has debt of -100 → should reduce debt by 30
+    function test_syncPair_mixedScenario_creditPathOnly() public {
+        // currency0: credit 50 -> match owner balance 100 (+50)
+        // currency1: target in debt -> sync is no-op (no cross-currency effect)
         token0.mint(owner, 100e18);
         token1.mint(owner, 30e18);
         harness.setDelta(currency0, target, 50e18);
         harness.setDelta(currency1, target, -100e18);
 
-        // Act
         (int128 change0, int128 change1) = harness.syncPair(factory, currency0, currency1, owner, target);
 
-        // Assert
-        assertEq(change0, 50e18, "Change0 should be difference (100 - 50)");
-        assertEq(change1, 30e18, "Change1 should reduce debt by available balance");
-        assertEq(harness.getDelta(currency0, target), 100e18, "Target delta0 should increase to balance");
-        assertEq(harness.getDelta(currency1, target), -70e18, "Target delta1 should have reduced debt");
+        assertEq(change0, 50e18, "Change0: top up non-debt credit to match balance");
+        assertEq(change1, 0, "Change1: no debt reduction for currency1");
+        assertEq(harness.getDelta(currency0, target), 100e18);
+        assertEq(harness.getDelta(currency1, target), -100e18);
     }
 
     // ════════════════════════════════════════════════════════════════════════════

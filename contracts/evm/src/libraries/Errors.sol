@@ -71,6 +71,11 @@ library Errors {
     /// @param settledValue Settled value already in-market
     error InvalidLiquiditySignal(uint256 issuedValue, uint256 signalValue, uint256 settledValue);
 
+    /// @notice Thrown when oracle-valued minted LCC principal exceeds the marginal endpoint-max admission budget
+    /// @param mintValueUsd Oracle USD value of the (amount0, amount1) mint for this increase
+    /// @param admissionDeltaUsd `issuedAdmission(postL) - issuedAdmission(preL)` for the same tick range
+    error InvalidAdmissionMintDelta(uint256 mintValueUsd, uint256 admissionDeltaUsd);
+
     /// @notice Thrown when an MM reserve set exceeds the maximum allowed unique ticker count
     /// @param uniqueTickerCount Unique ticker count in the MM reserve set
     /// @param maxUniqueTickerCount Maximum allowed unique ticker count per MM reserve set
@@ -178,6 +183,9 @@ library Errors {
 
     /// @notice Thrown when synced reserves exceed poolManager token balance for the synced LCC.
     error NestedIngressInvalidSyncSnapshot(uint256 syncedReserves, uint256 poolManagerBalance);
+
+    /// @notice Thrown when wrapped DEX ingress runs without an active `sync(lcc)` on PoolManager (see **LCC-03**).
+    error IngressRequiresActiveSync();
 
     // ============ POSITION & COMMITMENT ERRORS ============
     // Errors related to positions, commitments, and position management

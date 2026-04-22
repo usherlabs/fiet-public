@@ -38,6 +38,8 @@ import {IMarketVaultDryBalanceDelta} from "../_helpers/IMarketVaultDryBalanceDel
 import {IVRLSignalManager} from "../../src/interfaces/IVRLSignalManager.sol";
 import {LiquiditySignal} from "../../src/types/Commit.sol";
 import {IVTSOrchestrator} from "../../src/interfaces/IVTSOrchestrator.sol";
+import {VTSOrchestrator} from "../../src/VTSOrchestrator.sol";
+import {MmIncreaseAdmissionReplay, VTSOrchestratorTestable} from "../base/VTSOrchestratorTestable.sol";
 import {IMMQueueCustodian} from "../../src/interfaces/IMMQueueCustodian.sol";
 import {SwapParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
 import {PoolSwapTest} from "@uniswap/v4-core/src/test/PoolSwapTest.sol";
@@ -91,6 +93,15 @@ contract MMPositionManagerActionsTest is MarketTestBase, MarketMakerTestBase {
         _wireAllUtilityTestQueueCustodians(address(positionManager));
     }
 
+    /// @dev Use `VTSOrchestratorTestable` so integration tests can replay COMMIT-01 admission on live `s`.
+    function _deployVTSOrchestrator(address _poolManager, address _oracleHelper, address _liquidityHub, address _owner)
+        internal
+        override
+        returns (VTSOrchestrator)
+    {
+        return VTSOrchestrator(address(new VTSOrchestratorTestable(_poolManager, _oracleHelper, _liquidityHub, _owner)));
+    }
+
     function setUp() public {
         _setupMarket();
         _setUpMM();
@@ -139,12 +150,28 @@ contract MMPositionManagerActionsTest is MarketTestBase, MarketMakerTestBase {
         _mmExec(_batchLocker(tokenId), actions);
     }
 
+    /// @dev External wrapper so tests can `try/catch` full-path MM increase execution.
+    function _attemptIncreaseExternal(uint256 tokenId, uint256 positionIndex, uint256 liquidityToIncrease) external {
+        if (msg.sender != address(this)) revert("self only");
+        address locker = _batchLocker(tokenId);
+        MMA.PreparedAction[] memory incActions = new MMA.PreparedAction[](1);
+        incActions[0] = MMA.prepareIncrease(corePoolKey, tokenId, positionIndex, liquidityToIncrease);
+        _mmExec(locker, incActions);
+    }
+
     /// @dev For batches that only contain `prepareCommit` (no `tokenId` yet), run as the signal advancer.
     function _mmExecSignalLocker(bytes memory liquiditySignalBytes, MMA.PreparedAction[] memory actions) internal {
         address locker = abi.decode(liquiditySignalBytes, (LiquiditySignal)).mmState.advancer;
         vm.startPrank(locker);
         MMA.executeWithUnlock(positionManager, actions, block.timestamp + 3600);
         vm.stopPrank();
+    }
+
+    /// @dev Overwrite one 32-byte word in `abi.encode` content (`wordIndex` 0 = first head word after the length word).
+    function _setActionParamWord(bytes memory data, uint256 wordIndex, uint256 word) private pure {
+        assembly ("memory-safe") {
+            mstore(add(add(data, 0x20), mul(wordIndex, 0x20)), word)
+        }
     }
 
     // use this function to calculate the minumum amount of underlying assets that need to be settled in order to mint a position
@@ -673,6 +700,201 @@ contract MMPositionManagerActionsTest is MarketTestBase, MarketMakerTestBase {
         // get the active position count after increasing the liquidity
         (,,, uint256 activePositionCountAfterIncrease,) = vtsOrchestrator.getCommit(tokenId);
         assertEq(activePositionCountAfterIncrease, 1, "Active position count should remain 1 after increase");
+    }
+
+    /// @notice End-to-end: a real `modifyLiquidities` increase mints LCC principal that still passes the same
+    ///         `VTSCommitLib.validateMmIncreaseLiquidityDelta` bundle (global + marginal) when replayed on live `s`.
+    function test_mmIncrease_e2e_actual_mint_replays_validateMmIncrease_on_live_storage() public {
+        uint256 tokenId = 1;
+        uint256 positionIndex = 0;
+
+        _setupCommittedPosition(
+            positionManager,
+            corePoolKey,
+            abi.encode(liquiditySignal),
+            defaultlLiquidityParams,
+            marketVTSConfiguration,
+            address(lcc0),
+            address(lcc1)
+        );
+
+        approveAndSettleUnderlyingToPosition(tokenId, positionIndex, 1_000_000e18, 1_000_000e18);
+
+        address locker = _batchLocker(tokenId);
+        uint256 bal0Before = IERC20(address(lcc0)).balanceOf(locker);
+        uint256 bal1Before = IERC20(address(lcc1)).balanceOf(locker);
+
+        (Position memory posBefore, PositionId pid) = positionManager.getPosition(tokenId, positionIndex);
+        uint128 Lpre = posBefore.liquidity;
+
+        uint256 liquidityToIncrease = 50_001;
+        {
+            MMA.PreparedAction[] memory incActions = new MMA.PreparedAction[](1);
+            incActions[0] = MMA.prepareIncrease(corePoolKey, tokenId, positionIndex, liquidityToIncrease);
+            _mmExec(locker, incActions);
+        }
+
+        (Position memory posAfter,) = positionManager.getPosition(tokenId, positionIndex);
+        assertEq(
+            uint256(posAfter.liquidity),
+            uint256(Lpre) + liquidityToIncrease,
+            "position liquidity should reflect the increase"
+        );
+
+        uint256 minted0 = IERC20(address(lcc0)).balanceOf(locker) - bal0Before;
+        uint256 minted1 = IERC20(address(lcc1)).balanceOf(locker) - bal1Before;
+
+        VTSOrchestratorTestable orch = VTSOrchestratorTestable(address(vtsOrchestrator));
+        (bool ok,,,) = orch.exposedValidateMmIncreaseLiquidityDeltaSoft(
+            MmIncreaseAdmissionReplay({
+                commitId: posAfter.commitId,
+                positionId: pid,
+                currency0: corePoolKey.currency0,
+                currency1: corePoolKey.currency1,
+                tickLower: posAfter.tickLower,
+                tickUpper: posAfter.tickUpper,
+                postAddLiquidity: posAfter.liquidity,
+                preAddLiquidity: Lpre,
+                mintAmount0: minted0,
+                mintAmount1: minted1
+            })
+        );
+        assertTrue(ok, "E2E mint must satisfy validateMmIncrease (global + marginal) on live VTS storage");
+    }
+
+    function _replayIssuedPostForMmIncrease(
+        VTSOrchestratorTestable orch,
+        uint256 commitId,
+        PositionId positionId,
+        int24 tickLower,
+        int24 tickUpper,
+        uint128 postAddLiquidity,
+        uint128 preAddLiquidity
+    ) internal view returns (uint256 issuedPost) {
+        (, issuedPost,,) = orch.exposedValidateMmIncreaseLiquidityDeltaSoft(
+            MmIncreaseAdmissionReplay({
+                commitId: commitId,
+                positionId: positionId,
+                currency0: corePoolKey.currency0,
+                currency1: corePoolKey.currency1,
+                tickLower: tickLower,
+                tickUpper: tickUpper,
+                postAddLiquidity: postAddLiquidity,
+                preAddLiquidity: preAddLiquidity,
+                mintAmount0: 0,
+                mintAmount1: 0
+            })
+        );
+    }
+
+    function _findAdversarialMmIncreaseCandidate(
+        VTSOrchestratorTestable orch,
+        uint256 commitId,
+        PositionId positionId,
+        int24 tickLower,
+        int24 tickUpper,
+        uint128 preL,
+        uint160 sqrtPriceX96,
+        int24 currentTick
+    ) internal view returns (uint256 candidateIncrease, uint256 candidateIssuedPost) {
+        uint256 issuedPre = _replayIssuedPostForMmIncrease(orch, commitId, positionId, tickLower, tickUpper, preL, preL);
+
+        for (uint256 liqDelta = 1; liqDelta <= 25_000; liqDelta++) {
+            if (uint256(preL) + liqDelta > uint256(type(uint128).max)) break;
+            uint128 postL = uint128(uint256(preL) + liqDelta);
+            uint256 issuedPost =
+                _replayIssuedPostForMmIncrease(orch, commitId, positionId, tickLower, tickUpper, postL, preL);
+            uint256 admissionDelta = issuedPost - issuedPre;
+            uint256 estimatedMintUsd =
+                _estimateMintUsdForDelta(sqrtPriceX96, currentTick, tickLower, tickUpper, liqDelta);
+            if (estimatedMintUsd > admissionDelta) {
+                candidateIncrease = liqDelta;
+                candidateIssuedPost = issuedPost;
+                return (candidateIncrease, candidateIssuedPost);
+            }
+        }
+    }
+
+    /// @dev Spot-composition mint valuation proxy for one liquidity increment (oracle prices mocked to 1e18 each).
+    function _estimateMintUsdForDelta(
+        uint160 sqrtPriceX96,
+        int24 currentTick,
+        int24 tickLower,
+        int24 tickUpper,
+        uint256 liqDelta
+    ) internal pure returns (uint256 estimatedMintUsd) {
+        (uint256 estMint0, uint256 estMint1) = LiquidityUtils.calculateEffectiveTokenAmounts(
+            sqrtPriceX96, currentTick, tickLower, tickUpper, int256(liqDelta)
+        );
+        estimatedMintUsd = estMint0 + estMint1;
+    }
+
+    function _containsSelector(bytes memory reason, bytes4 selector) internal pure returns (bool) {
+        if (reason.length < 4) return false;
+        bytes4 found;
+        for (uint256 i = 0; i + 4 <= reason.length; i++) {
+            assembly ("memory-safe") {
+                found := mload(add(add(reason, 0x20), i))
+            }
+            if (found == selector) return true;
+        }
+        return false;
+    }
+
+    /// @notice Adversarial full-path proof: search for a rounding-sensitive increase where estimated spot mint USD
+    ///         exceeds marginal endpoint-max admission delta, then prove the real increase reverts on
+    ///         `InvalidAdmissionMintDelta`.
+    function test_mmIncrease_e2e_adversarial_rounding_reverts_on_marginal_gate() public {
+        uint256 tokenId = 1;
+        uint256 positionIndex = 0;
+
+        _setupCommittedPosition(
+            positionManager,
+            corePoolKey,
+            abi.encode(liquiditySignal),
+            defaultlLiquidityParams,
+            marketVTSConfiguration,
+            address(lcc0),
+            address(lcc1)
+        );
+
+        // Keep global backing permissive while we target the marginal inequality.
+        approveAndSettleUnderlyingToPosition(tokenId, positionIndex, 1_000_000e18, 1_000_000e18);
+        vm.mockCall(
+            address(oracleHelper),
+            abi.encodeWithSelector(IOracleHelper.getPricesForLccPair.selector),
+            abi.encode(uint256(1e18), uint256(1e18))
+        );
+
+        VTSOrchestratorTestable orch = VTSOrchestratorTestable(address(vtsOrchestrator));
+        (Position memory posBefore, PositionId pid) = positionManager.getPosition(tokenId, positionIndex);
+        uint128 preL = posBefore.liquidity;
+        (uint160 sqrtPriceX96, int24 currentTick,,) = manager.getSlot0(corePoolKey.toId());
+
+        (uint256 candidateIncrease, uint256 candidateIssuedPost) = _findAdversarialMmIncreaseCandidate(
+            orch, posBefore.commitId, pid, posBefore.tickLower, posBefore.tickUpper, preL, sqrtPriceX96, currentTick
+        );
+
+        assertGt(candidateIncrease, 0, "failed to find adversarial candidate in scan window");
+
+        // Set signal to endpoint-max post issuance so global check is not the binding constraint.
+        vm.mockCall(
+            address(oracleHelper),
+            abi.encodeWithSelector(IOracleHelper.getTotalValue.selector),
+            abi.encode(candidateIssuedPost)
+        );
+
+        bool marginalReverted;
+        try this._attemptIncreaseExternal(tokenId, positionIndex, candidateIncrease) {
+            assertTrue(false, "expected marginal admission revert");
+        } catch (bytes memory reason) {
+            assertTrue(
+                _containsSelector(reason, Errors.InvalidAdmissionMintDelta.selector),
+                "expected InvalidAdmissionMintDelta inside wrapped revert"
+            );
+            marginalReverted = true;
+        }
+        assertTrue(marginalReverted, "adversarial full-path attempt must revert on marginal gate");
     }
 
     function testCanDecreaseMintNewPositionFromDeltas() public {
@@ -2044,9 +2266,71 @@ contract MMPositionManagerActionsTest is MarketTestBase, MarketMakerTestBase {
         assertGt(bal1After, bal1Before, "expected token1 TAKE after synced credit");
     }
 
-    function test_settle_usePositionManagerBalance_revertsWhenLockerCreditInsufficient_onNegativeDelta() public {
-        // Regression test for pooled-balance misallocation:
-        // with usePositionManagerBalance=true, a negative settle must consume locker credit first.
+    /// @notice Regression: audit **finding 33_3** (omnibus MMPM `sync` attribution), **Scenario 2** — positive settlement
+    ///         with `usePositionManagerBalance=true` must credit `creditExact(vaultOutflow)` only, not the full MMPM ERC20
+    ///         balance (no piggyback on others’ parked tokens). See `agents/audit-findings/33_3__high-balance-wide-sync-*.md`.
+    function test_finding33_3_scenario2_settleWithUsePmb_creditsExactNotOmnibusErc20() public {
+        uint256 tokenId = 1;
+        uint256 positionIndex = 0;
+
+        address underlying0 = lcc0.underlying();
+        address underlying1 = lcc1.underlying();
+
+        ModifyLiquidityParams memory oneSided =
+            ModifyLiquidityParams({tickLower: 60, tickUpper: 120, liquidityDelta: 1e18, salt: bytes32(0)});
+        createPosition(oneSided, abi.encode(liquiditySignal), tokenId, positionIndex);
+
+        address lockerAddr = _batchLocker(tokenId);
+        (uint256 commitment0, uint256 commitment1) = LiquidityUtils.calculateCommitmentMaxima(
+            oneSided.tickLower, oneSided.tickUpper, uint128(uint256(oneSided.liquidityDelta))
+        );
+        _fundLockerForSettlement(lockerAddr, underlying0, underlying1, commitment0, commitment1);
+        vm.startPrank(lockerAddr);
+        _approveTokenForPositionManager(underlying0, underlying1, address(positionManager), commitment0, commitment1);
+        vm.stopPrank();
+
+        MMA.PreparedAction[] memory preActions = new MMA.PreparedAction[](1);
+        preActions[0] = MMA.prepareSettle(
+            corePoolKey, tokenId, positionIndex, -int128(int256(commitment0)), -int128(int256(commitment1)), false
+        );
+        _mmExec(tokenId, preActions);
+
+        uint256 withdraw0 = Math.max(uint256(1), commitment0 / 2);
+
+        // Ambient ERC20 dust unrelated to the vault outflow: must not be credited in the same ratio as settle.
+        uint256 ambientDust = 1_000_000e9;
+        MockERC20(underlying0).mint(address(positionManager), ambientDust);
+
+        uint256 bal0Before = IERC20(underlying0).balanceOf(address(this));
+        uint256 bal1Before = IERC20(underlying1).balanceOf(address(this));
+
+        MMA.PreparedAction[] memory actions = new MMA.PreparedAction[](3);
+        actions[0] = MMA.prepareSettle(corePoolKey, tokenId, positionIndex, int128(int256(withdraw0)), 0, true);
+        actions[1] = MMA.prepareTake(Currency.wrap(underlying0), address(this), type(uint256).max);
+        actions[2] = MMA.prepareTake(Currency.wrap(underlying1), address(this), type(uint256).max);
+        _mmExec(tokenId, actions);
+
+        // Exact `creditExact` on the settlement delta: recipient should receive the vault outflow, not MMPM + ambient.
+        assertEq(
+            IERC20(underlying0).balanceOf(address(this)) - bal0Before,
+            withdraw0,
+            "TAKE should match exact credited outflow"
+        );
+        assertEq(
+            IERC20(underlying1).balanceOf(address(this)), bal1Before, "expected no token1 in token0-only withdrawal"
+        );
+
+        // Unrelated ambient ERC20 remains on the router; it was not swept into the locker as settlement credit.
+        assertEq(
+            IERC20(underlying0).balanceOf(address(positionManager)), ambientDust, "Ambient ERC20 must stay on MMPM"
+        );
+    }
+
+    /// @notice Regression: audit **finding 33_3**, **Scenario 3** — a locker with no credit cannot fund a negative
+    ///         settle from unrelated ERC20 parked on MMPM (no debt erasure via omnibus balance). See
+    ///         `agents/audit-findings/33_3__high-balance-wide-sync-*.md`.
+    function test_finding33_3_scenario3_negativeSettle_revertsWhenNoOwnCredit_despiteOmnibusErc20() public {
+        // With usePositionManagerBalance=true, a negative settle must consume locker credit first.
         uint256 tokenId = 1;
         uint256 positionIndex = 0;
         uint256 depositAmount0 = 1e18;
@@ -2071,8 +2355,8 @@ contract MMPositionManagerActionsTest is MarketTestBase, MarketMakerTestBase {
         assertEq(IERC20(underlying0).balanceOf(address(positionManager)), depositAmount0);
     }
 
-    /// @dev Mirrors `test_settle_usePositionManagerBalance_revertsWhenLockerCreditInsufficient_onNegativeDelta` on token1.
-    function test_settle_usePositionManagerBalance_revertsWhenLockerCreditInsufficient_onNegativeDelta_token1() public {
+    /// @dev Mirrors `test_finding33_3_scenario3_negativeSettle_revertsWhenNoOwnCredit_despiteOmnibusErc20` on token1.
+    function test_finding33_3_scenario3_negativeSettle_revertsWhenNoOwnCredit_despiteOmnibusErc20_token1() public {
         uint256 tokenId = 1;
         uint256 positionIndex = 0;
         uint256 depositAmount1 = 1e18;
@@ -2145,9 +2429,6 @@ contract MMPositionManagerActionsTest is MarketTestBase, MarketMakerTestBase {
         address underlying0 = lcc0.underlying();
         address underlying1 = lcc1.underlying();
 
-        (uint256 requiredSettlementAmount0, uint256 requiredSettlementAmount1) =
-            _calculateSettlementAmounts(oneSided, marketVTSConfiguration);
-
         // Additional settle to ensure the burn+withdraw path has sufficient settled amounts.
         // IMPORTANT: commitmentMaxima is an upper bound for *either* side, so even “effectively one-sided” ranges
         // can still be settled on both tokens. For a true one-sided credit test, we must settle only one token.
@@ -2183,9 +2464,6 @@ contract MMPositionManagerActionsTest is MarketTestBase, MarketMakerTestBase {
 
         address underlying0 = lcc0.underlying();
         address underlying1 = lcc1.underlying();
-
-        (uint256 requiredSettlementAmount0, uint256 requiredSettlementAmount1) =
-            _calculateSettlementAmounts(oneSided, marketVTSConfiguration);
 
         // Additional settle to ensure the burn+withdraw path has sufficient settled amounts.
         // IMPORTANT: commitmentMaxima is an upper bound for *either* side, so even “effectively one-sided” ranges
@@ -2555,6 +2833,198 @@ contract MMPositionManagerActionsTest is MarketTestBase, MarketMakerTestBase {
             )
         );
         _mmExec(lockerMX3, actions);
+    }
+
+    /// @dev Plain `INCREASE_LIQUIDITY` must enforce `_validateMaxIn` on principal delta (v4-style max spend).
+    function test_increaseLiquidity_revertsWhenAmount0MaxExceeded() public {
+        uint256 tokenId = 1;
+        uint256 positionIndex = 0;
+
+        _setupCommittedPosition(
+            positionManager,
+            corePoolKey,
+            abi.encode(liquiditySignal),
+            defaultlLiquidityParams,
+            marketVTSConfiguration,
+            address(lcc0),
+            address(lcc1)
+        );
+
+        uint256 settlementAmount = 1_000_000e18;
+        approveAndSettleUnderlyingToPosition(tokenId, positionIndex, settlementAmount, settlementAmount);
+
+        MMA.PreparedAction[] memory actions = new MMA.PreparedAction[](2);
+        actions[0] = MMA.prepareDecrease(corePoolKey, tokenId, positionIndex, 1_000_000_000);
+        actions[1] = MMA.prepareIncrease(corePoolKey, tokenId, positionIndex, 1_000_000_000, 0, 0);
+
+        address lockerMX = _batchLocker(tokenId);
+        vm.expectRevert(abi.encodeWithSelector(Errors.MaximumAmountExceeded.selector, uint128(0), uint128(2_995_355)));
+        _mmExec(lockerMX, actions);
+    }
+
+    /// @dev Dirty high 128 bits in calldata max-in words must be masked; same revert as clean `(0,0)` caps.
+    function test_increaseLiquidity_revertsWhenAmount0MaxExceeded_evenWithDirtyHighBitsInCalldata() public {
+        uint256 tokenId = 1;
+        uint256 positionIndex = 0;
+
+        _setupCommittedPosition(
+            positionManager,
+            corePoolKey,
+            abi.encode(liquiditySignal),
+            defaultlLiquidityParams,
+            marketVTSConfiguration,
+            address(lcc0),
+            address(lcc1)
+        );
+
+        uint256 settlementAmount = 1_000_000e18;
+        approveAndSettleUnderlyingToPosition(tokenId, positionIndex, settlementAmount, settlementAmount);
+
+        PoolKey memory poolKeyMem = corePoolKey;
+        bytes memory incParams =
+            abi.encode(poolKeyMem, tokenId, positionIndex, uint256(1_000_000_000), uint128(0), uint128(0));
+        uint256 dirty = uint256(0xC0FFEE) << 128;
+        // amount0Max @ word 8, amount1Max @ word 9 (PoolKey = 5 words)
+        _setActionParamWord(incParams, 8, dirty);
+        _setActionParamWord(incParams, 9, dirty);
+
+        MMA.PreparedAction[] memory actions = new MMA.PreparedAction[](2);
+        actions[0] = MMA.prepareDecrease(corePoolKey, tokenId, positionIndex, 1_000_000_000);
+        actions[1] = MMA.PreparedAction({action: bytes1(uint8(MMActions.INCREASE_LIQUIDITY)), params: incParams});
+
+        address lockerMX = _batchLocker(tokenId);
+        vm.expectRevert(abi.encodeWithSelector(Errors.MaximumAmountExceeded.selector, uint128(0), uint128(2_995_355)));
+        _mmExec(lockerMX, actions);
+    }
+
+    /// @dev Covers the token1 leg of `_validateMaxIn` for plain `INCREASE_LIQUIDITY`.
+    function test_increaseLiquidity_revertsWhenAmount1MaxExceeded() public {
+        uint256 tokenId = 1;
+        uint256 positionIndex = 0;
+
+        _setupCommittedPosition(
+            positionManager,
+            corePoolKey,
+            abi.encode(liquiditySignal),
+            defaultlLiquidityParams,
+            marketVTSConfiguration,
+            address(lcc0),
+            address(lcc1)
+        );
+
+        uint256 settlementAmount = 1_000_000e18;
+        approveAndSettleUnderlyingToPosition(tokenId, positionIndex, settlementAmount, settlementAmount);
+
+        MMA.PreparedAction[] memory actions = new MMA.PreparedAction[](2);
+        actions[0] = MMA.prepareDecrease(corePoolKey, tokenId, positionIndex, 1_000_000_000);
+        actions[1] = MMA.prepareIncrease(corePoolKey, tokenId, positionIndex, 1_000_000_000, type(uint128).max, 0);
+
+        address lockerMX1 = _batchLocker(tokenId);
+        vm.expectRevert(abi.encodeWithSelector(Errors.MaximumAmountExceeded.selector, uint128(0), uint128(2_995_355)));
+        _mmExec(lockerMX1, actions);
+    }
+
+    /// @dev Plain `MINT_POSITION` must enforce `_validateMaxIn` after `_mintPositionInternal`.
+    function test_mintPosition_revertsWhenAmount0MaxExceeded() public {
+        uint256 tokenId = 1;
+
+        _setupCommittedPosition(
+            positionManager,
+            corePoolKey,
+            abi.encode(liquiditySignal),
+            defaultlLiquidityParams,
+            marketVTSConfiguration,
+            address(lcc0),
+            address(lcc1)
+        );
+
+        uint256 settlementAmount = 1_000_000e18;
+        approveAndSettleUnderlyingToPosition(tokenId, 0, settlementAmount, settlementAmount);
+
+        MMA.PreparedAction[] memory actions = new MMA.PreparedAction[](2);
+        actions[0] = MMA.prepareDecrease(corePoolKey, tokenId, 0, 1_000_000_000);
+        actions[1] = MMA.prepareMint(
+            corePoolKey,
+            tokenId,
+            defaultlLiquidityParams.tickLower,
+            defaultlLiquidityParams.tickUpper,
+            1_000_000_000,
+            0,
+            0
+        );
+
+        address lockerMX2 = _batchLocker(tokenId);
+        vm.expectRevert(abi.encodeWithSelector(Errors.MaximumAmountExceeded.selector, uint128(0), uint128(2_995_355)));
+        _mmExec(lockerMX2, actions);
+    }
+
+    /// @dev Token1 leg for plain `MINT_POSITION` max-in enforcement.
+    function test_mintPosition_revertsWhenAmount1MaxExceeded() public {
+        uint256 tokenId = 1;
+
+        _setupCommittedPosition(
+            positionManager,
+            corePoolKey,
+            abi.encode(liquiditySignal),
+            defaultlLiquidityParams,
+            marketVTSConfiguration,
+            address(lcc0),
+            address(lcc1)
+        );
+
+        uint256 settlementAmount = 1_000_000e18;
+        approveAndSettleUnderlyingToPosition(tokenId, 0, settlementAmount, settlementAmount);
+
+        MMA.PreparedAction[] memory actions = new MMA.PreparedAction[](2);
+        actions[0] = MMA.prepareDecrease(corePoolKey, tokenId, 0, 1_000_000_000);
+        actions[1] = MMA.prepareMint(
+            corePoolKey,
+            tokenId,
+            defaultlLiquidityParams.tickLower,
+            defaultlLiquidityParams.tickUpper,
+            1_000_000_000,
+            type(uint128).max,
+            0
+        );
+
+        address lockerMX3 = _batchLocker(tokenId);
+        vm.expectRevert(abi.encodeWithSelector(Errors.MaximumAmountExceeded.selector, uint128(0), uint128(2_995_355)));
+        _mmExec(lockerMX3, actions);
+    }
+
+    /// @dev Plain add-liquidity succeeds when explicit `amount0Max` / `amount1Max` comfortably bound principal spend.
+    function test_plainIncrease_succeedsWithLooseExplicitMaxIn() public {
+        uint256 tokenId = 1;
+        uint256 positionIndex = 0;
+
+        _setupCommittedPosition(
+            positionManager,
+            corePoolKey,
+            abi.encode(liquiditySignal),
+            defaultlLiquidityParams,
+            marketVTSConfiguration,
+            address(lcc0),
+            address(lcc1)
+        );
+
+        uint256 settlementAmount = 1_000_000e18;
+        approveAndSettleUnderlyingToPosition(tokenId, positionIndex, settlementAmount, settlementAmount);
+
+        (Position memory positionBeforeIncrease,) = positionManager.getPosition(tokenId, positionIndex);
+
+        uint256 liquidityToIncrease = 1000;
+        MMA.PreparedAction[] memory incActions = new MMA.PreparedAction[](1);
+        incActions[0] = MMA.prepareIncrease(
+            corePoolKey, tokenId, positionIndex, liquidityToIncrease, type(uint128).max - 100, type(uint128).max - 100
+        );
+        _mmExec(tokenId, incActions);
+
+        (Position memory positionAfterIncrease,) = positionManager.getPosition(tokenId, positionIndex);
+        assertEq(
+            uint256(positionAfterIncrease.liquidity),
+            uint256(positionBeforeIncrease.liquidity) + liquidityToIncrease,
+            "Liquidity should increase when loose explicit max-in is supplied"
+        );
     }
 
     function test_unauthorised_revertsNotApproved_forBurnIncreaseDecreaseAndDeltasActions() public {

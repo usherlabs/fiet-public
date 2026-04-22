@@ -306,6 +306,19 @@ contract CheckpointLibraryTest is Test {
         assertTrue(h.isSeizable(COMMIT_ID, POSITION_INDEX, false));
     }
 
+    /// @dev Sub-1 bps USD shortfall checkpoints can store `commitmentDeficitBps == 0` while lane deficits are still
+    ///      non-zero; token-threshold bypass must not require non-zero bps.
+    function test_isSeizable_commitmentDeficitBpsZero_token0ThresholdBypasses() public {
+        PoolKey memory key = _defaultPoolKey();
+        PoolId poolId = key.toId();
+        h.setPosition(PID, poolId);
+        h.setUnbackedCommitmentGraceBypassBps(poolId, 500);
+        h.setUnbackedCommitmentGraceBypassConfig(poolId, 0, 0, 1_000, 0);
+        h.setCommitmentDeficit(PID, 1_000, 0);
+        h.setCommitmentDeficitBps(PID, 0);
+        assertTrue(h.isSeizable(COMMIT_ID, POSITION_INDEX, false));
+    }
+
     function test_isSeizable_commitmentDeficitBelowBps_token1ThresholdBypasses() public {
         PoolKey memory key = _defaultPoolKey();
         PoolId poolId = key.toId();

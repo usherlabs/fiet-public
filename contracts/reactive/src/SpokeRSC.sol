@@ -94,6 +94,15 @@ contract SpokeRSC is AbstractReactive {
                 uint256(uint160(recipient)),
                 REACTIVE_IGNORE
             );
+            // Observe trusted success outcomes from the destination receiver for this recipient.
+            service.subscribe(
+                protocolChainId,
+                destinationReceiverContract,
+                ReactiveConstants.SETTLEMENT_SUCCEEDED_TOPIC,
+                REACTIVE_IGNORE,
+                uint256(uint160(recipient)),
+                REACTIVE_IGNORE
+            );
             // Observe failed settlement attempts for this recipient from the deployed destination receiver.
             service.subscribe(
                 protocolChainId,
@@ -128,6 +137,11 @@ contract SpokeRSC is AbstractReactive {
         }
         if (log._contract == liquidityHub && log.topic_0 == ReactiveConstants.SETTLEMENT_PROCESSED_TOPIC) {
             _forwardSettlementProcessed(log);
+            return;
+        }
+        if (log._contract == destinationReceiverContract && log.topic_0 == ReactiveConstants.SETTLEMENT_SUCCEEDED_TOPIC)
+        {
+            _forwardSettlementSucceeded(log);
             return;
         }
         if (log._contract == destinationReceiverContract && log.topic_0 == ReactiveConstants.SETTLEMENT_FAILED_TOPIC) {
@@ -186,6 +200,17 @@ contract SpokeRSC is AbstractReactive {
             settledAmount,
             requestedAmount,
             eventNonce
+        );
+        emit Callback(reactChainId, hubCallback, GAS_LIMIT, payload);
+    }
+
+    function _forwardSettlementSucceeded(IReactive.LogRecord calldata log) internal {
+        address lcc = address(uint160(log.topic_1));
+        uint256 maxAmount = abi.decode(log.data, (uint256));
+        uint256 eventNonce = _getAndIncrementEventNonce(ReactiveConstants.RECORD_SETTLEMENT_SUCCEEDED_SELECTOR);
+
+        bytes memory payload = abi.encodeWithSelector(
+            ReactiveConstants.RECORD_SETTLEMENT_SUCCEEDED_SELECTOR, address(0), lcc, recipient, maxAmount, eventNonce
         );
         emit Callback(reactChainId, hubCallback, GAS_LIMIT, payload);
     }

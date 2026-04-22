@@ -667,7 +667,7 @@ abstract contract MME2EBase is E2EBase {
                 bytes1(uint8(MMActions.TAKE))
             );
             bytes[] memory params = new bytes[](3);
-            params[0] = abi.encode(corePoolKey, commitId, 0, 0);
+            params[0] = abi.encode(corePoolKey, commitId, uint256(0), uint256(0), type(uint128).max, type(uint128).max);
             params[1] = abi.encode(corePoolKey.currency0, mm, 0);
             params[2] = abi.encode(corePoolKey.currency1, mm, 0);
             _executeMMActions(mmpm, actions, params, block.timestamp + 3600);
@@ -817,7 +817,9 @@ abstract contract MME2EBase is E2EBase {
         bytes memory actions =
             abi.encodePacked(bytes1(uint8(MMActions.MINT_POSITION)), bytes1(uint8(MMActions.SETTLE_POSITION)));
         bytes[] memory params = new bytes[](2);
-        params[0] = abi.encode(key, commitId, tickLower, tickUpper, uint256(liq));
+        params[0] = abi.encode(
+            key, commitId, tickLower, tickUpper, uint256(liq), type(uint128).max, type(uint128).max
+        );
         params[1] = abi.encode(key, commitId, newIndex, -int128(int256(settle0)), -int128(int256(settle1)), false);
         _executeMMActions(mmpm, actions, params, block.timestamp + 3600);
         vm.stopBroadcast();
@@ -911,8 +913,15 @@ abstract contract MME2EBase is E2EBase {
             uint256 settleIdx = mintIdx + 1;
             actions[mintIdx] = bytes1(uint8(MMActions.MINT_POSITION));
             actions[settleIdx] = bytes1(uint8(MMActions.SETTLE_POSITION));
-            params[mintIdx] =
-                abi.encode(key, commitId, seeds[i].tickLower, seeds[i].tickUpper, uint256(seeds[i].liquidity));
+            params[mintIdx] = abi.encode(
+                key,
+                commitId,
+                seeds[i].tickLower,
+                seeds[i].tickUpper,
+                uint256(seeds[i].liquidity),
+                type(uint128).max,
+                type(uint128).max
+            );
             params[settleIdx] =
                 abi.encode(key, commitId, i, -int128(int256(settle0[i])), -int128(int256(settle1[i])), false);
         }
@@ -1270,7 +1279,7 @@ abstract contract MME2EBase is E2EBase {
         );
         bytes[] memory params = new bytes[](3);
         params[0] = abi.encode(liquiditySignalBytes, bytes(""));
-        params[1] = abi.encode(key, commitId, tickLower, tickUpper, liq);
+        params[1] = abi.encode(key, commitId, tickLower, tickUpper, liq, type(uint128).max, type(uint128).max);
         params[2] = abi.encode(key, commitId, 0, -int128(int256(settle0)), -int128(int256(settle1)), false);
         _executeMMActions(mmpm, actions, params, block.timestamp + 3600);
     }

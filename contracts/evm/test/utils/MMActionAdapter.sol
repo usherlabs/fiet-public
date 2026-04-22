@@ -102,16 +102,31 @@ library MMActionAdapter {
     }
 
     /**
-     * @notice Prepares a MINT_POSITION action
+     * @notice Prepares a MINT_POSITION action (no explicit max-in; uses `type(uint128).max` per leg)
      */
     function prepareMint(PoolKey memory poolKey, uint256 tokenId, int24 tickLower, int24 tickUpper, uint256 liquidity)
         internal
         pure
         returns (PreparedAction memory)
     {
+        return prepareMint(poolKey, tokenId, tickLower, tickUpper, liquidity, type(uint128).max, type(uint128).max);
+    }
+
+    /**
+     * @notice Prepares a MINT_POSITION action with per-leg max principal spend (v4-style `validateMaxIn`)
+     */
+    function prepareMint(
+        PoolKey memory poolKey,
+        uint256 tokenId,
+        int24 tickLower,
+        int24 tickUpper,
+        uint256 liquidity,
+        uint128 amount0Max,
+        uint128 amount1Max
+    ) internal pure returns (PreparedAction memory) {
         return PreparedAction({
             action: bytes1(uint8(MMActions.MINT_POSITION)),
-            params: abi.encode(poolKey, tokenId, tickLower, tickUpper, liquidity)
+            params: abi.encode(poolKey, tokenId, tickLower, tickUpper, liquidity, amount0Max, amount1Max)
         });
     }
 
@@ -281,16 +296,30 @@ library MMActionAdapter {
     }
 
     /**
-     * @notice Prepares an INCREASE_LIQUIDITY action
+     * @notice Prepares an INCREASE_LIQUIDITY action (no explicit max-in; uses `type(uint128).max` per leg)
      */
     function prepareIncrease(PoolKey memory poolKey, uint256 tokenId, uint256 positionIndex, uint256 liquidity)
         internal
         pure
         returns (PreparedAction memory)
     {
+        return prepareIncrease(poolKey, tokenId, positionIndex, liquidity, type(uint128).max, type(uint128).max);
+    }
+
+    /**
+     * @notice Prepares an INCREASE_LIQUIDITY action with per-leg max principal spend (v4-style `validateMaxIn`)
+     */
+    function prepareIncrease(
+        PoolKey memory poolKey,
+        uint256 tokenId,
+        uint256 positionIndex,
+        uint256 liquidity,
+        uint128 amount0Max,
+        uint128 amount1Max
+    ) internal pure returns (PreparedAction memory) {
         return PreparedAction({
             action: bytes1(uint8(MMActions.INCREASE_LIQUIDITY)),
-            params: abi.encode(poolKey, tokenId, positionIndex, liquidity)
+            params: abi.encode(poolKey, tokenId, positionIndex, liquidity, amount0Max, amount1Max)
         });
     }
 

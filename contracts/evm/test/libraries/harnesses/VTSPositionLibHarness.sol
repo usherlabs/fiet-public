@@ -34,6 +34,7 @@ import {MarketCurrencyDelta} from "../../../src/libraries/MarketCurrencyDelta.so
 import {ICanonicalVault} from "../../../src/interfaces/ICanonicalVault.sol";
 import {CurrencyDelta} from "v4-periphery/lib/v4-core/src/libraries/CurrencyDelta.sol";
 import {LiquidityUtils} from "../../../src/libraries/LiquidityUtils.sol";
+import {CommitmentDeficitMMFreezeLib} from "../../../src/libraries/CommitmentDeficitMMFreezeLib.sol";
 import {CarryQ128, CarryQ128Lib} from "../../../src/types/Carry.sol";
 
 /// @title VTSPositionLibHarness
@@ -380,6 +381,17 @@ contract VTSPositionLibHarness {
 
     function getCommitmentDeficit(PositionId id) external view returns (uint256 cd0, uint256 cd1) {
         return (s.positionAccounting[id].commitmentDeficit.token0, s.positionAccounting[id].commitmentDeficit.token1);
+    }
+
+    /// @notice Test-only: same predicate as non-seizing MM liquidity freeze in `VTSPositionLib._touchExistingPositionPath`.
+    function materialDeficitBlocksNonSeizingMMLiquidityChange(PoolId poolId, PositionId id)
+        external
+        view
+        returns (bool)
+    {
+        return CommitmentDeficitMMFreezeLib.blocksNonSeizingMMLiquidityChange(
+            s.positionAccounting[id], s.pools[poolId].vtsConfig
+        );
     }
 
     function getPoolTotalSettled(PoolId poolId) external view returns (uint256 total0, uint256 total1) {

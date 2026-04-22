@@ -724,9 +724,12 @@ contract LiquidityHub is BoundRegistry, Ownable, ReentrancyGuardTransient {
      * @dev Security checks:
      *      - recipient must be non-zero
      *      - recipient must not be bucket-exempt (external settlement path requires market-derived balance accounting)
+     *      - recipient must not be any other protocol-bound role (`BOUND_ENDPOINT` / `BOUND_EXEMPT` / `BOUND_DEX`)
+     *      - recipient must not be an objective sink (`weth9()` for native-backed LCCs; the ERC20 underlying contract)
      *      - recipient must hold sufficient market-derived LCC to back the queued amount
-     *      This path is stricter than generic queue accounting because it is only used when the issuer
-     *      has already transferred deficit LCC to `recipient`, so queue owner and burn source must match now.
+     *      Non-bound recipients are admitted without proving ERC20/native handling capability; callers must nominate
+     *      serviceable addresses. This path is stricter than generic queue accounting because it is only used when the
+     *      issuer has already transferred deficit LCC to `recipient`, so queue owner and burn source must match now.
      */
     function queueForTransferRecipient(address lcc, address recipient, uint256 amount)
         external
@@ -758,6 +761,9 @@ contract LiquidityHub is BoundRegistry, Ownable, ReentrancyGuardTransient {
     ) internal {
         if (queueAmount > 0) {
             _assertValidQueueOwner(lcc, recipient, true);
+            // Mirror `queueForTransferRecipient` policy: external reserve-funded queues must not target protocol-bound
+            // recipients or objective sink addresses (Hub self-queue exempt via early return).
+            _assertExternalReserveFundedSettlementRecipient(lcc, recipient);
         }
 
         uint256 cancelAmount = principalAmount - queueAmount;
@@ -944,6 +950,9 @@ contract LiquidityHub is BoundRegistry, Ownable, ReentrancyGuardTransient {
      * @param maxAmount The maximum amount to settle
      */
     function _processSettlementFor(address lcc, address recipient, uint256 maxAmount) internal {
+        // Defence in depth: reject legacy or regressed external queues that violate reserve-funded recipient policy
+        // before any reserve-consuming settlement logic runs.
+        _assertExternalReserveFundedSettlementRecipient(lcc, recipient);
         uint256 queuedBefore = s.settleQueue[lcc][recipient];
         LiquidityHubLinkedLib.processSettlementLogic(s, lcc, recipient, maxAmount);
         uint256 queuedAfter = s.settleQueue[lcc][recipient];
@@ -1028,6 +1037,7 @@ contract LiquidityHub is BoundRegistry, Ownable, ReentrancyGuardTransient {
         view
     {
         _assertValidQueueOwner(lcc, recipient, allowHub);
+        _assertExternalReserveFundedSettlementRecipient(lcc, recipient);
 
         // Native settlements pay `recipient` during `processSettlementFor` via `LiquidityHubLib.transferUnderlying`:
         // EOAs receive raw ETH first (then WETH on failure); contracts receive raw ETH only if they EIP-165 support
@@ -1060,6 +1070,23 @@ contract LiquidityHub is BoundRegistry, Ownable, ReentrancyGuardTransient {
         if (Bounds.isExempt(level) || Bounds.isDex(level)) {
             revert Errors.NotApproved(recipient);
         }
+    }
+
+    /// @dev External reserve-funded settlement (`recipient != address(this)`): any protocol-bound address in the
+    ///      factory namespace is invalid (`BOUND_ENDPOINT`, `BOUND_EXEMPT`, `BOUND_DEX`). Hub-internal self-settlement
+    ///      uses `recipient == address(this)` and is exempt. Non-bound recipients are admitted without recipient-shape
+    ///      introspection; integrators must nominate addresses capable of receiving ERC20-compatible settlement assets.
+    ///      Additionally rejects objective sink addresses via `LiquidityHubLib._assertUnderlyingPayoutRecipientNotSink`
+    ///      (`weth9()` when the LCC underlying is native; the underlying token when the LCC underlying is an ERC20).
+    function _assertExternalReserveFundedSettlementRecipient(address lcc, address recipient) internal view {
+        if (recipient == address(this)) {
+            return;
+        }
+        uint8 level = boundLevelOfLcc(lcc, recipient);
+        if (level != Bounds.BOUND_NONE) {
+            revert Errors.NotApproved(recipient);
+        }
+        LiquidityHubLib._assertUnderlyingPayoutRecipientNotSink(s.lccToUnderlying[lcc], recipient);
     }
 
     /**

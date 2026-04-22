@@ -64,6 +64,8 @@ library VTSCommitLib {
 
     /// @dev Internal struct to reduce stack depth in validateLiquidityDelta. Field `liquidityDelta` is the liquidity
     ///      amount used to compute issued USD (MM increases pass post-add total position liquidity).
+    /// @dev `sqrtPriceX96` and `currentTick` are **ignored** for COMMIT-01 admission: issued value is derived from
+    ///      range-bound worst-case token exposure and oracle prices only, not manipulable pool spot.
     struct LiquidityDeltaParams {
         Currency currency0;
         Currency currency1;
@@ -105,6 +107,9 @@ library VTSCommitLib {
             revert Errors.InvalidAddress(address(0));
         }
         LiquiditySignal memory signal = abi.decode(liquiditySignal, (LiquiditySignal));
+        if (signal.mmState.advancer == address(0)) {
+            revert Errors.InvalidAddress(address(0));
+        }
         _signalValue(signal.mmState, oracleHelper);
     }
 
@@ -136,6 +141,32 @@ library VTSCommitLib {
         value = OracleUtils.lccPairValue(oracleHelper, Currency.unwrap(currency0), a0, Currency.unwrap(currency1), a1);
     }
 
+    /// @dev MM add admission (COMMIT-01): conservative issued USD independent of pool `slot0`.
+    ///      Uses `LiquidityUtils.calculateCommitmentMaxima` then values the two endpoint compositions:
+    ///      all token0 at the lower tick vs all token1 at the upper tick, and takes the max in USD.
+    ///      This avoids same-transaction spot manipulation while staying less pessimistic than summing both legs
+    ///      (a single position cannot realise both endpoint maxima simultaneously).
+    /// @dev For `liquidityDelta <= 0`, returns zero (no admission issuance to value).
+    function _issuedAdmissionValueForLiquidity(
+        IOracleHelper oracleHelper,
+        Currency currency0,
+        Currency currency1,
+        int24 tickLower,
+        int24 tickUpper,
+        int256 liquidityDelta
+    ) internal view returns (uint256 value) {
+        if (liquidityDelta <= 0) {
+            return 0;
+        }
+        uint128 L = SafeCast.toUint128(uint256(liquidityDelta));
+        (uint256 c0, uint256 c1) = LiquidityUtils.calculateCommitmentMaxima(tickLower, tickUpper, L);
+        address u0 = Currency.unwrap(currency0);
+        address u1 = Currency.unwrap(currency1);
+        uint256 valueLower = OracleUtils.lccPairValue(oracleHelper, u0, c0, u1, 0);
+        uint256 valueUpper = OracleUtils.lccPairValue(oracleHelper, u0, 0, u1, c1);
+        value = valueLower > valueUpper ? valueLower : valueUpper;
+    }
+
     /// @notice Calculates the USD value of the position's settled commitment
     /// @param s The central VTS storage
     /// @param oracleHelper The oracle helper for USD price calculations
@@ -162,6 +193,9 @@ library VTSCommitLib {
     /// @param positionId The position ID
     /// @param params Liquidity delta parameters bundled in a struct
     /// @param revertIfInsufficientBacking Whether to revert if backing is insufficient
+    /// @dev COMMIT-01 admission compares settled + signal against **worst-case range** issued USD
+    ///      (`_issuedAdmissionValueForLiquidity`), not live `slot0` composition. Checkpointing with commitment
+    ///      (`_checkpointWithCommitment`) still uses live spot for current solvency/deficit state.
     function validateLiquidityDelta(
         VTSStorage storage s,
         IOracleHelper oracleHelper,
@@ -170,15 +204,8 @@ library VTSCommitLib {
         LiquidityDeltaParams memory params,
         bool revertIfInsufficientBacking
     ) external view returns (bool success, uint256 issuedValue, uint256 settledValue, uint256 signalValue) {
-        issuedValue = _issuedValueForLiquidity(
-            oracleHelper,
-            params.currency0,
-            params.currency1,
-            params.sqrtPriceX96,
-            params.currentTick,
-            params.tickLower,
-            params.tickUpper,
-            params.liquidityDelta
+        issuedValue = _issuedAdmissionValueForLiquidity(
+            oracleHelper, params.currency0, params.currency1, params.tickLower, params.tickUpper, params.liquidityDelta
         );
         settledValue = _settledValueForPosition(s, oracleHelper, params.currency0, params.currency1, positionId);
         signalValue = _signalValueForCommit(s, oracleHelper, commitId);
@@ -186,6 +213,104 @@ library VTSCommitLib {
 
         if (revertIfInsufficientBacking && !success) {
             revert Errors.InvalidLiquiditySignal(issuedValue, signalValue, settledValue);
+        }
+    }
+
+    function _mmIncreaseAdmissionScalars(
+        VTSStorage storage s,
+        IOracleHelper oracleHelper,
+        uint256 commitId,
+        PositionId positionId,
+        LiquidityDeltaParams memory params,
+        uint128 preAddLiquidity
+    ) private view returns (uint256 issuedPost, uint256 settledValue, uint256 signalValue, uint256 admissionPre) {
+        issuedPost = _issuedAdmissionValueForLiquidity(
+            oracleHelper, params.currency0, params.currency1, params.tickLower, params.tickUpper, params.liquidityDelta
+        );
+        settledValue = _settledValueForPosition(s, oracleHelper, params.currency0, params.currency1, positionId);
+        signalValue = _signalValueForCommit(s, oracleHelper, commitId);
+        admissionPre = _issuedAdmissionValueForLiquidity(
+            oracleHelper,
+            params.currency0,
+            params.currency1,
+            params.tickLower,
+            params.tickUpper,
+            int256(uint256(preAddLiquidity))
+        );
+    }
+
+    function _mintDeltaUsdFromLiquidityParams(
+        IOracleHelper oracleHelper,
+        LiquidityDeltaParams memory params,
+        uint256 mintAmount0,
+        uint256 mintAmount1
+    ) private view returns (uint256 mintDeltaUsd) {
+        mintDeltaUsd = OracleUtils.lccPairValue(
+            oracleHelper, Currency.unwrap(params.currency0), mintAmount0, Currency.unwrap(params.currency1), mintAmount1
+        );
+    }
+
+    /// @notice COMMIT-01 MM increase: post-add endpoint-max backing plus marginal oracle cap on actual minted principal.
+    /// @dev `params.liquidityDelta` must be **post-add total** position liquidity (positive), matching
+    ///      `validateLiquidityDelta` for MM increases. `preAddLiquidity` must be the liquidity immediately before this
+    ///      increase (typically `post - uint128(liquidityDelta)` from `ModifyLiquidityParams`). `sqrtPriceX96` and
+    ///      `currentTick` in `params` are ignored for admission (same as `validateLiquidityDelta`).
+    /// @param mintAmount0 Actual LCC amount minted on `currency0` this increase (pool principal deposited).
+    /// @param mintAmount1 Actual LCC amount minted on `currency1` this increase.
+    // TODO: Naming convention here requires some improvement.
+    function validateMmIncreaseLiquidityDelta(
+        VTSStorage storage s,
+        IOracleHelper oracleHelper,
+        uint256 commitId,
+        PositionId positionId,
+        LiquidityDeltaParams memory params,
+        uint128 preAddLiquidity,
+        uint256 mintAmount0,
+        uint256 mintAmount1,
+        bool revertIfInsufficientBacking
+    ) external view returns (bool success, uint256 issuedPost, uint256 settledValue, uint256 signalValue) {
+        if (params.liquidityDelta <= 0) {
+            if (revertIfInsufficientBacking) {
+                revert Errors.InvariantViolated("MM increase expects positive post liquidity");
+            }
+            return (false, 0, 0, 0);
+        }
+
+        {
+            uint128 postL = SafeCast.toUint128(uint256(params.liquidityDelta));
+            if (uint256(preAddLiquidity) > uint256(postL)) {
+                if (revertIfInsufficientBacking) {
+                    revert Errors.InvariantViolated("pre liquidity exceeds post");
+                }
+                return (false, 0, 0, 0);
+            }
+        }
+
+        uint256 admissionPre;
+        (issuedPost, settledValue, signalValue, admissionPre) =
+            _mmIncreaseAdmissionScalars(s, oracleHelper, commitId, positionId, params, preAddLiquidity);
+
+        if (admissionPre > issuedPost) {
+            if (revertIfInsufficientBacking) {
+                revert Errors.InvariantViolated("admission non-monotonic");
+            }
+            return (false, 0, 0, 0);
+        }
+
+        uint256 admissionDelta = issuedPost - admissionPre;
+        uint256 mintDeltaUsd = _mintDeltaUsdFromLiquidityParams(oracleHelper, params, mintAmount0, mintAmount1);
+
+        bool globalOk = issuedPost <= signalValue + settledValue;
+        bool marginalOk = mintDeltaUsd <= admissionDelta;
+        success = globalOk && marginalOk;
+
+        if (revertIfInsufficientBacking) {
+            if (!globalOk) {
+                revert Errors.InvalidLiquiditySignal(issuedPost, signalValue, settledValue);
+            }
+            if (!marginalOk) {
+                revert Errors.InvalidAdmissionMintDelta(mintDeltaUsd, admissionDelta);
+            }
         }
     }
 
@@ -325,7 +450,9 @@ library VTSCommitLib {
             ctx.currency1 = pool.currency1;
         }
         {
-            // Compute effective issued amounts at current price
+            // Checkpoint / commitment deficit: measure issued exposure at **live** pool spot so stored deficit
+            // reflects current economic state. This is intentionally distinct from MM **admission**
+            // (`validateLiquidityDelta`), which uses worst-case range valuation to resist same-tx `slot0` games.
             (uint160 sqrtPriceX96, int24 currentTick,,) = poolManager.getSlot0(pos.poolId);
             (ctx.eff0, ctx.eff1) = LiquidityUtils.calculateEffectiveTokenAmounts(
                 sqrtPriceX96, currentTick, pos.tickLower, pos.tickUpper, SafeCast.toInt256(uint128(pos.liquidity))
@@ -396,13 +523,14 @@ library VTSCommitLib {
             return;
         }
 
-        // Insufficient backing: derive position-level deficit in token units using deficit BPS
+        // Insufficient backing: severity is still whole bps, but per-lane deficits are proportional to
+        // deficitUsd/issuedUsd in one step so sub-1 bps shortfalls do not double-floor to zero in token units.
         {
             uint256 deficitUsd = ctx.issuedUsd - backingUsd;
             uint256 deficitBps = FullMath.mulDiv(deficitUsd, LiquidityUtils.BPS_DENOMINATOR, ctx.issuedUsd);
             pa.commitmentDeficitBps = uint16(deficitBps);
-            _writeCommitmentDeficitToken(pa, 0, FullMath.mulDiv(ctx.eff0, deficitBps, LiquidityUtils.BPS_DENOMINATOR));
-            _writeCommitmentDeficitToken(pa, 1, FullMath.mulDiv(ctx.eff1, deficitBps, LiquidityUtils.BPS_DENOMINATOR));
+            _writeCommitmentDeficitToken(pa, 0, FullMath.mulDiv(ctx.eff0, deficitUsd, ctx.issuedUsd));
+            _writeCommitmentDeficitToken(pa, 1, FullMath.mulDiv(ctx.eff1, deficitUsd, ctx.issuedUsd));
         }
     }
 

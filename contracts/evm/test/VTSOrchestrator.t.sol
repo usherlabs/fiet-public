@@ -2339,9 +2339,11 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
         // Paused remove requires closed RFS; iteratively settle calcRFS shortfall until lanes close.
         _e2eFinding5_closeRfsBySettlingShortfall(tokenId, positionId);
 
-        // Non-seizure MM liquidity changes are frozen while stored commitmentDeficit is non-zero (COMMIT-02A).
-        // Full deactivation clears token deficit amounts as well as age fields (COMMIT-02B), but MM cannot reach
-        // remove until this gate is zero—cure via a strong backing signal before any MM liquidity change.
+        // Non-seizure MM liquidity changes are frozen while a material stored commitment deficit applies (COMMIT-02A;
+        // bps / per-token threshold via `CommitmentDeficitMMFreezeLib`). This scenario uses a severe deficit with
+        // non-zero bps, so the MM gate blocks until token deficits and bps are cleared. Full deactivation clears
+        // token deficit amounts as well as age fields (COMMIT-02B), but MM cannot reach remove until cured—cure via a
+        // strong backing signal before any MM liquidity change.
         _mockLccPrices(1e18, 1e18);
         _mockSignalUsd(1e30);
         vm.prank(advancer);

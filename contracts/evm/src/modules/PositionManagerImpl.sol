@@ -246,11 +246,12 @@ abstract contract PositionManagerImpl is PositionManagerBase, ImmutableState {
         // this handler runs immediately after the matching PoolManager -> MMPM take and before
         // control returns to any outer MM action, so path-keyed planned cancels are consumed
         // in the same logical flow that staged them.
-        // Sync LCC fee balance ONLY increases as credit to locker
-        // After taking from PoolManager, MMPM now holds LCC as ERC20 - sync as takeable credit to locker
-        // However, MMPM can hold LCCs queued after _decrease, therefore we extract feesAccrued from the balance change
+        // Credit only this `take` increment (not full omnibus MMPM balance); `nonFee` / fee still derived from `inc` + fees.
+        uint256 inc = balanceAfter - balanceBefore;
         uint256 prevCredit = _getFullCredit(currency, locker);
-        _syncBalanceAsCredit(currency);
+        if (inc > 0) {
+            _creditExact(currency, inc);
+        }
 
         (uint256 nonFee, uint256 addedCredit, uint256 fee) = _computeLccNonFeeAndAddedCredit(
             key, currency, balanceBefore, balanceAfter, feesAccruedAmount, locker, prevCredit

@@ -115,8 +115,12 @@ being an informal “should”.
   - **Domain B**: `src/LiquidityHub.sol::issue` is `onlyIssuer(lcc)` and mints market-derived amount via the LCC hub
     mint path; issuer gating is enforced by `LiquidityHub._onlyIssuer` (valid LCC + issuer allowlist).
   - **Domain C**: `src/libraries/VTSPositionMMOpsLib.sol::_handleLiquidityIncrease` calls
-    `src/libraries/VTSCommitLib.sol::validateLiquidityDelta(..., revertIfInsufficientBacking=true)`, which reverts
-    `Errors.InvalidLiquiditySignal(...)` unless \(issuedUsd \le settledUsd + signalUsd\).
+    `src/libraries/VTSCommitLib.sol::validateMmIncreaseLiquidityDelta(..., revertIfInsufficientBacking=true)`, which
+    enforces **post-add** endpoint-max backing \(issuedPost \le settledUsd + signalUsd\) and a **marginal** cap on the
+    oracle-valued actual minted principal for this step:
+    \(mintDeltaUsd \le issuedAdmission(postL) - issuedAdmission(preL)\). On failure it reverts
+    `Errors.InvalidLiquiditySignal(...)` (global shortfall) or `Errors.InvalidAdmissionMintDelta(...)` (marginal mint
+    vs admission delta).
   - **Domain conversion**: `src/LiquidityHub.sol::_wrapWith` delegates to `LiquidityHubLib.wrapWithPrepare` /
     `LiquidityHubLib.wrapWithContext` and then mints the target LCC split as `(directToMint, marketToMint)`; any
     mismatch is treated as a library logic bug (see inline comments).
@@ -154,6 +158,10 @@ being an informal “should”.
 - **Statement**:
   - During `LCC -> PoolManager` ingress reporting, `MarketFactory.prepareMarketLiquidity(...)` must not leave the active
     PoolManager sync context corrupted for the outer payment flow.
+  - Wrapped (direct-backed) DEX ingress must run only inside an **active** `sync(lcc)` window on `PoolManager`. If the
+    manager is unlocked but no currency is synced (`syncedCurrency == address(0)`), ingress must **not** call Hub→vault
+    settlement: doing so would strand LCC on `PoolManager` without matching synced reserves and could brick later
+    canonical `sync(lcc) -> transfer -> settle()` flows.
   - If `prepareMarketLiquidity` executes while the active synced currency is this same `lcc`, it must:
     - allow only the first unpaid ingress transfer in that sync window, and
     - restore `sync(lcc)` after nested settlement side-effects.
@@ -162,6 +170,8 @@ being an informal “should”.
 - **Enforced by**:
   - `src/MarketFactory.sol::prepareMarketLiquidity`
     - Reads PoolManager transient slots (`Currency`, `ReservesOf`) through `exttload`.
+    - Reverts when there is no active sync window for ingress (`Errors.IngressRequiresActiveSync`), via
+      `src/libraries/MarketLiquidityRouterLib.sol::prepareMarketLiquidityIngress`.
     - Reverts when sync currency is different (`Errors.NestedIngressSyncCurrencyMismatch`).
     - Reverts when a prior unpaid ingress already exists (`Errors.NestedIngressUnpaidTransferExists`).
     - Reverts on invalid snapshot ordering (`Errors.NestedIngressInvalidSyncSnapshot`).
@@ -299,12 +309,37 @@ being an informal “should”.
     - **Contracts** that EIP-165 support `INativeSettlementReceiver` (for example `src/MMQueueCustodian.sol`): same
       raw-first, WETH-on-failure behaviour as EOAs.
     - **All other contracts** (including canonical WETH9): skip raw native push; wrap and transfer WETH as ERC20 to
-      the recipient.
+      the nominal recipient **only when that recipient is a valid non-sink external payout target** (see **HUB-02D**;
+      canonical `WETH9` must not be used as the queued settlement owner / nominal payout address for reserve-funded
+      external settlement).
 - **Why**:
   - Queue-time checks cannot guarantee future native payability for counterfactual addresses; EOAs and opt-in contracts
     still need the raw-then-WETH failure path.
   - Payable contracts that accept ETH but credit wrapped assets to `msg.sender` (not the nominal recipient) would
     otherwise clear queues while mis-delivering value; WETH-first for unsupported contracts closes that class.
+
+### HUB-02D: External reserve-funded settlement recipients (issuer deficit queue + cancel-with-queue + runtime)
+
+- **Statement**:
+  - Issuer-created external reserve-funded settlement queues (`queueForTransferRecipient`, and the queued leg of
+    `cancelWithQueue` / planned cancel-with-queue) must not target **protocol-bound** recipients in the factory
+    namespace (`boundLevelOfLcc != BOUND_NONE`, i.e. `BOUND_ENDPOINT`, `BOUND_EXEMPT`, or `BOUND_DEX`).
+  - The same policy is revalidated at `processSettlementFor(...)` entry for external recipients (`recipient != Hub`) so
+    legacy or regressed queued state cannot spend reserves against forbidden recipients.
+  - Objective sink addresses are also rejected for those external paths: `recipient == weth9()` when the LCC underlying
+    is native (`address(0)`), and `recipient == underlying` when the LCC underlying is an ERC20.
+  - Hub self-queue (`recipient == address(this)`) remains valid where existing Hub-internal semantics apply.
+  - For **non-bound** recipients, the Hub remains agnostic about EOA vs contract; **callers / integrators** engaging the
+    protocol must nominate recipients capable of receiving and handling **ERC20-compatible** settlement assets (native
+    lanes may still deliver WETH to unsupported contracts per **HUB-02C**).
+- **Enforced by**:
+  - `src/LiquidityHub.sol::_assertExternalReserveFundedSettlementRecipient` (delegates sink checks to
+    `LiquidityHubLib::_assertUnderlyingPayoutRecipientNotSink`; used from `_assertQueueRecipientServiceable`,
+    `_cancelWithQueue` when `queueAmount > 0`, and `_processSettlementFor`).
+  - Defence in depth at payout: `src/libraries/LiquidityHubLib.sol::_assertUnderlyingPayoutRecipientNotSink` inside
+    `transferUnderlying` before reserve mutation.
+- **Why**: Protocol-bound endpoints and exempt/DEX sinks are not durable external settlement owners for reserve-funded
+  payout; canonical `WETH9` and the underlying ERC20 contract are objective blackholes as nominal queue/payout owners.
 
 ### HUB-03: Issuer-gated issuance/cancellation must never operate on invalid LCCs
 
@@ -485,15 +520,38 @@ being an informal “should”.
 ### COMMIT-01: Commitment backing must satisfy `issuedUsd <= settledUsd + signalUsd` (per-position, per-commit)
 
 - **Statement**: Any MM liquidity increase that would cause the issued commitment value to exceed (settled + signalled)
-  backing must revert.
+  backing must revert. Additionally, the **oracle-valued** principal minted on this increase must not exceed the
+  **marginal** endpoint-max admission budget for the same add:
+  \(mintDeltaUsd \le issuedAdmission(postL) - issuedAdmission(preL)\).
+- **Admission valuation (anti-manipulation)**: MM increase admission uses `VTSCommitLib::validateMmIncreaseLiquidityDelta`,
+  which reuses `_issuedAdmissionValueForLiquidity` (same endpoint-max rule as `validateLiquidityDelta`): commitment
+  maxima at the position ticks are valued at the **upper** and **lower** tick endpoint compositions in USD (via
+  `OracleUtils::lccPairValue`), and the **maximum** of those two endpoint valuations is used per liquidity level. This
+  deliberately avoids relying on pool `slot0` / current tick for admission, so same-transaction spot games cannot
+  understate required backing. The protocol does **not** treat “arbitrage will restore the price” as a security
+  invariant for admission.
+- **Marginal mint gate**: `mintDeltaUsd` is `OracleUtils.lccPairValue` over the **actual** minted LCC amounts for the
+  step (`preL` / `postL` are position liquidity immediately before and after the modify). This bounds spot-shaped minting
+  against the incremental endpoint-max admission budget and complements the **global** post-add check
+  \(issuedAdmission(postL) \le settledUsd + signalUsd\).
+- **Checkpoint valuation (live state)**: `checkpointWithCommitment` / `_checkpointWithCommitment` continue to measure
+  **current** issued exposure from live `slot0` and effective token amounts (`LiquidityUtils::calculateEffectiveTokenAmounts`)
+  because that path answers solvency and `commitmentDeficit` state, not whether new liquidity may be admitted.
+  `commitmentDeficit` and grace/bypass timers are **enforcement** after admission; they are not substitutes for
+  conservative admission.
 - **Enforced by**:
-  - `src/libraries/VTSCommitLib.sol::validateLiquidityDelta` computes issued/settled/signal values and reverts
-    `Errors.InvalidLiquiditySignal(issuedValue, signalValue, settledValue)` when insufficient.
+  - `src/libraries/VTSCommitLib.sol::validateMmIncreaseLiquidityDelta` computes `issuedPost`, settled, signal, admission
+    at `preL` and `postL`, and reverts `Errors.InvalidLiquiditySignal(issuedPost, signalValue, settledValue)` when the
+    global inequality fails, or `Errors.InvalidAdmissionMintDelta(mintValueUsd, admissionDeltaUsd)` when the marginal
+    inequality fails.
+  - `src/libraries/VTSCommitLib.sol::validateLiquidityDelta` remains the shared helper for other callers that only need
+    the global post-add admission check (same `_issuedAdmissionValueForLiquidity` semantics).
   - Called during MM increases by `src/libraries/VTSPositionMMOpsLib.sol::_handleLiquidityIncrease` with
-    `revertIfInsufficientBacking = true`.
-  - MM increases pass **post-add total position liquidity** into `validateLiquidityDelta` (not the incremental add
-    delta alone), so repeated adds cannot each pass on a per-slice check while cumulative post-add issuance exceeds
-    `(settled + signal)` backing.
+    `revertIfInsufficientBacking = true` (after non-zero mint amounts are known, before `liquidityHub.issue`).
+  - MM increases pass **post-add total position liquidity** as `LiquidityDeltaParams.liquidityDelta` (not the incremental
+    Uniswap modify delta alone), so repeated adds cannot each pass on a per-slice global check while cumulative post-add
+    issuance exceeds `(settled + signal)` backing. The incremental modify delta is used only to recover `preL` from
+    stored post-add liquidity for the marginal gate.
 
 ### COMMIT-02: Checkpointing with commitment updates `commitmentDeficit` as an insolvency gate
 
@@ -513,15 +571,28 @@ being an informal “should”.
 - **Separation invariant**: `commitmentDeficit` is a checkpoint-derived solvency gate and is not the pool swap-attributed
   deficit principal bucket. `totalDeficitPrincipal` tracks swap-incurred `cumulativeDeficit` at the pool level only.
 
-### COMMIT-02A: Non-seizure MM liquidity changes blocked while `commitmentDeficit` is non-zero
+### COMMIT-02A: Non-seizure MM liquidity changes blocked on **material** stored commitment deficit
 
-- **Statement**: If `PositionAccounting.commitmentDeficit` is non-zero on either token, any MM `touchPosition` with
-  `liquidityDelta != 0` must revert unless the operation is a seizure (`hookData.seizure.isSeizing == true`).
-- **Enforced by**: `src/libraries/VTSPositionLib.sol::touchPosition` reverts `Errors.CommitmentDeficitBlocksLiquidityChange`.
-- **Rationale**: Closing live RFS (via settlement) does not necessarily clear stored `commitmentDeficit`; allowing MM
-  add/remove while the insolvency gate persists would desynchronise commitment context from checkpoint-derived deficit
-  state. MM no-ops (`liquidityDelta == 0`) and settlement / checkpoint paths remain available to cure or formalise
-  backing.
+- **Statement**: Any MM `touchPosition` with `liquidityDelta != 0` must revert unless the operation is a seizure
+  (`hookData.seizure.isSeizing == true`), or the stored commitment deficit is not **material** for this gate.
+  **Material** means any of:
+  - `PositionAccounting.commitmentDeficitBps > 0`, or
+  - for token lane `i` in `{0,1}`, `commitmentDeficit` for that lane is at least
+    `pools[poolId].vtsConfig.token{i}.unbackedCommitmentGraceBypassThreshold` when that threshold is non-zero
+    (the same per-token fields used in seizure bypass; `0` disables the threshold arm).
+- **Not material (does not block MM add/remove)**: non-zero raw `commitmentDeficit` token units alone when
+  `commitmentDeficitBps == 0` and every configured threshold is `0` or the lane is strictly below its threshold
+  (e.g. sub-1 bps USD shortfall with exact proportional write and bps floored to 0). Checkpoint still persists the
+  storage snapshot; seizure/risk policy uses `commitmentDeficit` / `SEIZE-01` separately.
+- **Enforced by**: `src/libraries/CommitmentDeficitMMFreezeLib.sol::blocksNonSeizingMMLiquidityChange` (called from
+  `src/libraries/VTSPositionLib.sol` on non-seizing MM path) reverts `Errors.CommitmentDeficitBlocksLiquidityChange`.
+- **Rationale**: The checkpoint path records **exact** per-lane token deficits; treating every 1-wei residual like a
+  full insolvency block would over-restrict ordinary MM flow. The gate is narrowed to bps severity and optional
+  token thresholds, while **COMMIT-02** storage and `CheckpointLibrary` seizure path remain unchanged.
+- **Rationale (continued)**: Closing live RFS (via settlement) does not necessarily clear stored `commitmentDeficit`;
+  allowing MM add/remove while a **material** insolvency condition persists would desynchronise commitment context
+  from checkpoint-derived state. MM no-ops (`liquidityDelta == 0`) and settlement / checkpoint paths remain
+  available to cure or formalise backing.
 
 ### COMMIT-02B: Full liquidity mirror deactivation clears commitment-deficit storage
 
@@ -529,9 +600,10 @@ being an informal “should”.
   tokens), `commitmentDeficitSince`, and `commitmentDeficitBps` are reset to zero.
 - **Enforced by**: `src/libraries/VTSPositionLib.sol::_applyLiquidityMirrorTransition`.
 - **Rationale**: Issued commitment is zero after a full unwind; retaining token deficit amounts without a coherent age
-  vector would be stale and could interact badly with deficit-age bypass logic. **COMMIT-02A** remains in force: MM still
-  cannot change liquidity while deficit is non-zero, so this reset is not a way to “MM-remove past” the gate—it is the
-  bookkeeping cleanup once deactivation is actually reached (including non-MM and seizure paths).
+  vector would be stale and could interact badly with deficit-age bypass logic. **COMMIT-02A** remains in force: MM
+  still cannot change liquidity while a **material** stored commitment deficit would block the modify path, so this
+  reset is not a way to “MM-remove past” the gate—it is the bookkeeping cleanup once deactivation is actually
+  reached (including non-MM and seizure paths).
 
 ### COMMIT-03: “Advancer” binding for checkpoint-with-commitment must hold
 
@@ -848,6 +920,16 @@ being an informal “should”.
   - `src/modules/PositionManagerEntrypoint.sol::_afterBatch` calls `vtsOrchestrator.assertNonZeroDeltas(marketFactory)`,
     which forces callers to fully resolve owner-scoped transient credits/debts and the bound factory’s market-produced
     credit within the batch or revert.
+- **Internal vs explicit balance attribution (DELTA-02 / settlement hardening)**:
+  - **Internal** receipt paths that already know the exact amount (vault settlement outflow to MMPM, LCC **take** balance
+    increases, native wrap/unwrap, and similar) credit the locker with **`VTSOrchestrator.creditExact` only for that
+    amount**. They do **not** attribute the contract’s full omnibus ERC20/native balance, so **ambient** tokens parked on
+    MMPM cannot inflate a locker’s credited amount or net off **negative** (debt) deltas.
+  - **Public `SYNC`** (FCFS) remains the **only** intentional path that turns **unscoped** MMPM balance into locker
+    **positive** credit, and it is **positive-credit only**: it does not reduce a target’s **negative** delta from
+    omnibus balance (residue cannot erase debt; paydown still requires an explicit `take` / settlement transfer).
+  - In other words: **FCFS dust** is an **explicit** utility choice (`SYNC` then `TAKE`); **internal** flows use
+    **exact** credit, not omnibus sync.
 - **Scope clarification**:
   - This FCFS rule applies to **residual dust held by `MMPositionManager` itself**.
   - It does **not** redefine assets held in explicit custody/accounting domains (for example, queue-custodied balances,
@@ -886,12 +968,16 @@ being an informal “should”.
 
 ## Authorisation, call-surface, and pause invariants
 
-### AUTH-01: Only owner/approved can settle/burn/modify MM Commit NFTs, except in seizure context
+### AUTH-01: Only owner/approved can settle/burn/modify MM Commit NFTs, except the primary `SEIZE_POSITION` deposit settle
 
-- **Statement**: Settlement and position modification require `approvedOrOwner`, except when operating in an active
-  seizure context.
+- **Statement**: Settlement and position modification require `approvedOrOwner`, except **only** for the **primary**
+  deposit settle that is explicitly paired with `SEIZE_POSITION` (when `TransientSlots.getSeizurePrimarySettleAllowed()`
+  is true and the settle includes a deposit lane: `amount0 < 0` or `amount1 < 0`). **All** other `_settle` paths on the
+  seized commitment—including follow-on withdrawal settles in the same batch—require `approvedOrOwner` for `msgSender()`
+  on the commitment NFT, even while transient seizure context is active for that `positionId`.
 - **Enforced by**:
-  - `src/MMPositionActionsImpl.sol::_settle` calls `MMHelpers.assertApprovedOrOwner` unless `_isSeizing(positionId)`.
+  - `src/MMPositionActionsImpl.sol::_settle` calls `MMHelpers.assertApprovedOrOwner` unless `_isSeizing(positionId)` **and**
+    `TransientSlots.getSeizurePrimarySettleAllowed()` **and** the settle includes a deposit lane.
   - `src/MMPositionActionsImpl.sol::_seizePosition` explicitly forbids owner/approved from seizing and forbids seizing
     inactive positions.
 
@@ -900,14 +986,16 @@ being an informal “should”.
 - **Statement**:
   - After a successful `SEIZE_POSITION`, the transient seized-position context may remain live for the remainder of the
     current unlock/batch so the guarantor can complete follow-on settlement / take flows for that **same** seized
-    position.
+    position **subject to** the narrowed NFT gate in AUTH-01 (withdrawal `_settle` is not auth-free for the seizer).
   - **Settle-only deposits under ambient seizure** (additional deposit settlement after `SEIZE_POSITION` has already run
     in the batch, while the transient seized ID still matches) are **disallowed**: they would advance `seizureLiquidityCarry`
     / seizure sizing in `onMMSettle(..., isSeizing=true)` without the coupled `_decreaseInternal` that `SEIZE_POSITION`
-    performs. Withdraw / credit-withdraw paths and non-deposit follow-ons remain valid per the coupling rule in the seizure
-    economics note above.
-  - This is not a general approval bypass: the context is valid only when the queried `positionId` exactly matches the
-    transient seized ID.
+    performs.
+  - Follow-on withdrawal or mixed-sign settles that touch `_settle` on the seized token **do not** inherit a blanket
+    approval bypass: the seizer must be `approvedOrOwner` (or the owner must execute those steps), unless the batch
+    never reaches an NFT-gated withdrawal settle for that token.
+  - This is not a general approval bypass: the carve-out applies **only** to the orchestrator-paired primary deposit phase;
+    the context is additionally valid only when the queried `positionId` exactly matches the transient seized ID.
   - The seizure context must be cleared at batch end so it cannot leak into a later batch / unlock session.
 - **Enforced by**:
   - `src/MMPositionActionsImpl.sol::_isSeizing` compares the queried `positionId` against
@@ -921,8 +1009,10 @@ being an informal “should”.
   - `src/modules/PositionManagerEntrypoint.sol::_afterBatch` clears `TransientSlots.clearSeizedPositionId()` and
     `TransientSlots.clearSeizurePrimarySettleAllowed()`.
 - **Intended flow consequence**:
-  - Batched follow-on actions such as `SEIZE_POSITION -> SETTLE_POSITION_FROM_DELTAS -> TAKE` on the same position are
-    part of the supported seizure execution model.
+  - The guarantor can drive the **primary** `SEIZE_POSITION` deposit settle without `approvedOrOwner` on the commitment NFT.
+  - Batched follow-on actions on the same position (for example `SEIZE_POSITION -> SETTLE_POSITION_FROM_DELTAS -> TAKE`)
+    remain valid **only** where subsequent steps either do not require NFT-gated withdrawal `_settle` without approval, or
+    the guarantor already holds `approvedOrOwner` (or the owner / an approved operator performs those steps).
   - Reusing the context for a different position, or allowing it to persist after batch finalisation, would violate this
     invariant.
 

@@ -248,8 +248,7 @@ contract COMMIT02 {
         }
 
         uint256 deficitUsd = issuedUsd - backingUsd;
-        uint256 deficitBps = FullMath.mulDiv(deficitUsd, LiquidityUtils.BPS_DENOMINATOR, issuedUsd);
-        exp0 = FullMath.mulDiv(eff0, deficitBps, LiquidityUtils.BPS_DENOMINATOR);
-        exp1 = FullMath.mulDiv(eff1, deficitBps, LiquidityUtils.BPS_DENOMINATOR);
+        exp0 = FullMath.mulDiv(eff0, deficitUsd, issuedUsd);
+        exp1 = FullMath.mulDiv(eff1, deficitUsd, issuedUsd);
     }
 }

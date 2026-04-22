@@ -1122,17 +1122,15 @@ contract MarketFactoryUnitTest is Test {
         assertEq(got, 123);
     }
 
-    function test_prepareMarketLiquidity_withoutActiveSync_forwardsIngress() public {
+    function test_prepareMarketLiquidity_withoutActiveSync_reverts() public {
         (MockLCC_MarketFactory lcc0,,) = _prepareMarketWithMockLcc(address(0x100), address(0x200));
         poolManager.setExttload(Lock.IS_UNLOCKED_SLOT, bytes32(uint256(1)));
 
         vm.prank(address(lcc0));
+        vm.expectRevert(Errors.IngressRequiresActiveSync.selector);
         factory.prepareMarketLiquidity(address(lcc0), 7);
 
-        assertEq(proxyHook.ingressCalls(), 1);
-        (address lastLcc, uint256 lastWrapped) = proxyHook.lastIngress();
-        assertEq(lastLcc, address(lcc0));
-        assertEq(lastWrapped, 7);
+        assertEq(proxyHook.ingressCalls(), 0);
     }
 
     function test_prepareMarketLiquidity_sameLccSync_restoresAfterNestedErc20Sync() public {

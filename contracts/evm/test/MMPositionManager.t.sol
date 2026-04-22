@@ -1248,6 +1248,24 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
         _executeLiquidity(prepared);
     }
 
+    /// @notice **Finding 33_3** context: public `SYNC`+`TAKE` FCFS (DELTA-02) is unchanged by internal hardening; this
+    ///         path **still** allows explicit claim of unscoped dust when the locker has no **negative** delta. Not the
+    ///         attack in Scenario 1, but the documented intentional behaviour after Option A. See
+    ///         `agents/audit-findings/33_3__high-balance-wide-sync-*.md` and `INVARIANTS.md` **DELTA-02**.
+    function test_finding33_3_postFix_explicitSyncThenTake_erc20Dust_fcfs() public {
+        address locker = liquiditySignal.mmState.advancer;
+        MockERC20 u = MockERC20(lcc0.underlying());
+        uint256 dust = 7777e3;
+        u.mint(address(positionManager), dust);
+
+        uint256 lockerBefore = u.balanceOf(locker);
+        MMA.PreparedAction[] memory p = new MMA.PreparedAction[](2);
+        p[0] = MMA.prepareSync(Currency.wrap(address(u)));
+        p[1] = MMA.prepareTake(Currency.wrap(address(u)), locker, type(uint256).max);
+        _executeLiquidity(p);
+        assertEq(u.balanceOf(locker) - lockerBefore, dust, "FCFS dust: SYNC then TAKE should move parked ERC20");
+    }
+
     function test_modifyLiquiditiesWithoutUnlock_revertsWhenSyncNativeRequested() public {
         MMA.PreparedAction[] memory prepared = new MMA.PreparedAction[](1);
         prepared[0] = MMA.prepareSync(CurrencyLibrary.ADDRESS_ZERO);

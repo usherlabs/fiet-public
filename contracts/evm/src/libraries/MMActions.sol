@@ -4,6 +4,8 @@ pragma solidity ^0.8.26;
 /// @notice Library to define MM Position Manager actions
 /// @dev These action codes are used by MMPositionManager and MMPMActions for action dispatch
 /// @dev Actions < SETTLE_POSITION_FROM_DELTAS + 1 are delegated to MMPMActionsImpl (position operations).
+///      `MINT_POSITION` / `INCREASE_LIQUIDITY` calldata includes `amount0Max` / `amount1Max` (ceiling on per-leg principal
+///      token spend after fee netting, same semantics as v4 `SlippageCheck.validateMaxIn` on `liquidityDelta - feesAccrued`).
 ///      `DECREASE_LIQUIDITY` / `BURN_POSITION` calldata includes `amount0Min` / `amount1Min` (floor on per-leg immediate
 ///      immediate non-fee LCC after fee netting — see `LiquidityUtils.forwardedNonFeeLccAmount`; commit surplus is locker credit; not
 ///      identical to raw `callerDelta - feesAccrued`).

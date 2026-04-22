@@ -269,6 +269,10 @@ contract VTSLifecycleLinkedLibTest is Test {
     }
 
     function _encodedSignal() internal view returns (bytes memory) {
+        return _encodedSignalWithAdvancer(advancer);
+    }
+
+    function _encodedSignalWithAdvancer(address signalAdvancer) internal view returns (bytes memory) {
         MarketMaker.Reserve[] memory reserves = new MarketMaker.Reserve[](1);
         reserves[0] = MarketMaker.Reserve({asset: "USD", amount: 1e18});
         LiquiditySignal memory sig = LiquiditySignal({
@@ -282,7 +286,7 @@ contract VTSLifecycleLinkedLibTest is Test {
                 sourceState: "",
                 prover: "",
                 nonce: "",
-                advancer: advancer,
+                advancer: signalAdvancer,
                 expiryAt: block.timestamp + 50_000
             }),
             mmSignature: ""
@@ -399,6 +403,22 @@ contract VTSLifecycleLinkedLibTest is Test {
         assertEq(signalManager.lastDeadline(), deadline);
         assertEq(signalManager.lastAuthNonce(), authNonce);
         assertEq(signalManager.lastAuthSig(), authSig);
+    }
+
+    function test_commitSignalRelayed_revertsWhenAdvancerIsZero() public {
+        factory.setBound(boundCaller, true);
+
+        vm.expectRevert(abi.encodeWithSelector(Errors.InvalidAddress.selector, address(0)));
+        harness.commitSignalRelayed(
+            _routerCtx(),
+            IMarketFactory(address(factory)),
+            boundCaller,
+            _encodedSignalWithAdvancer(address(0)),
+            block.timestamp + 1 hours,
+            17,
+            hex"CAFE",
+            makeAddr("commitmentLocker")
+        );
     }
 
     function test_renewSignal_revertsWhenUnboundCallerNotAdvancer() public {

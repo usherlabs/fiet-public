@@ -32,6 +32,9 @@ contract HubRSC is AbstractReactive {
     /// @notice SettlementProcessedReported(address indexed recipient, address indexed lcc, uint256 amount).
     uint256 public constant SETTLEMENT_PROCESSED_REPORTED_TOPIC = ReactiveConstants.SETTLEMENT_PROCESSED_REPORTED_TOPIC;
 
+    /// @notice SettlementSucceededReported(address indexed recipient, address indexed lcc, uint256 maxAmount).
+    uint256 public constant SETTLEMENT_SUCCEEDED_REPORTED_TOPIC = ReactiveConstants.SETTLEMENT_SUCCEEDED_REPORTED_TOPIC;
+
     /// @notice SettlementFailedReported(address indexed recipient, address indexed lcc, uint256 maxAmount).
     uint256 public constant SETTLEMENT_FAILED_REPORTED_TOPIC = ReactiveConstants.SETTLEMENT_FAILED_REPORTED_TOPIC;
 
@@ -52,6 +55,12 @@ contract HubRSC is AbstractReactive {
         uint256 batchCount;
         uint256 scanned;
         bytes32 cursor;
+    }
+
+    struct DispatchBatch {
+        address[] lccs;
+        address[] recipients;
+        uint256[] amounts;
     }
 
     uint256 public immutable maxDispatchItems;
@@ -109,6 +118,10 @@ contract HubRSC is AbstractReactive {
     mapping(address => bytes32) public underlyingBackfillCursorByLcc;
     /// @notice Remaining zero-batch retry callbacks allowed for a dispatch lane (see `_handleZeroBatchRetry`).
     mapping(address => uint256) public zeroBatchRetryCreditsRemaining;
+    /// @notice Persisted dispatch budget keyed by the economic lane currently funding settlement dispatch.
+    mapping(address => uint256) public availableBudgetByDispatchLane;
+    /// @notice Whether a pending key has already been mirrored into the shared underlying lane.
+    mapping(bytes32 => bool) private mirroredToUnderlyingByKey;
 
     /// @dev Upper bound on how many consecutive zero-batch windows we will chain per liquidity amount.
     uint256 private constant MAX_ZERO_BATCH_RETRY_WINDOWS = 256;
@@ -193,6 +206,14 @@ contract HubRSC is AbstractReactive {
                 REACTIVE_IGNORE,
                 REACTIVE_IGNORE
             );
+            service.subscribe(
+                reactChainId,
+                hubCallback,
+                SETTLEMENT_SUCCEEDED_REPORTED_TOPIC,
+                REACTIVE_IGNORE,
+                REACTIVE_IGNORE,
+                REACTIVE_IGNORE
+            );
             // subscribe to failed destination execution reports normalised by HubCallback
             service.subscribe(
                 reactChainId,
@@ -242,6 +263,11 @@ contract HubRSC is AbstractReactive {
             return;
         }
 
+        if (log.topic_0 == SETTLEMENT_SUCCEEDED_REPORTED_TOPIC) {
+            _handleSettlementSucceeded(log);
+            return;
+        }
+
         if (log.topic_0 == SETTLEMENT_FAILED_REPORTED_TOPIC) {
             _handleSettlementFailed(log);
             return;
@@ -272,7 +298,11 @@ contract HubRSC is AbstractReactive {
             entry.exists = true;
             queueData.enqueue(key);
             queueDataByLcc[lcc].enqueue(key);
-            _enqueueUnderlyingKey(lcc, key);
+            if (hasUnderlyingForLcc[lcc]) {
+                _enqueueUnderlyingKey(lcc, key);
+            } else {
+                underlyingBackfillRemainingByLcc[lcc] += 1;
+            }
             emit PendingAdded(lcc, recipient, amount);
         } else {
             // Accumulate additional queued amount for the same pair.
@@ -281,15 +311,18 @@ contract HubRSC is AbstractReactive {
             if (!queueDataByLcc[lcc].inQueue[key]) {
                 queueDataByLcc[lcc].enqueue(key);
             }
-            _enqueueUnderlyingKey(lcc, key);
             if (!queueData.inQueue[key]) {
                 queueData.enqueue(key);
+            }
+            if (hasUnderlyingForLcc[lcc]) {
+                _enqueueUnderlyingKey(lcc, key);
             }
             emit PendingIncreased(lcc, recipient, amount);
         }
 
         // Apply buffered decreases that arrived before pending existed.
         _applyBufferedDecreases(entry, key);
+        _dispatchLiquidityIfBudgetAvailable(lcc, true);
     }
 
     /// @notice Reconciles pending amount from authoritative LiquidityHub settlement processing.
@@ -299,9 +332,23 @@ contract HubRSC is AbstractReactive {
 
         address recipient = address(uint160(log.topic_1));
         address lcc = address(uint160(log.topic_2));
-        (uint256 settledAmount, uint256 requestedAmount) = abi.decode(log.data, (uint256, uint256));
+        (uint256 settledAmount,) = abi.decode(log.data, (uint256, uint256));
 
-        _applyAuthoritativeDecreaseOrBuffer(lcc, recipient, settledAmount, requestedAmount, true);
+        _applyAuthoritativeDecreaseOrBuffer(lcc, recipient, settledAmount, 0, true);
+    }
+
+    /// @notice Releases trusted in-flight amount for completed destination settlements.
+    function _handleSettlementSucceeded(IReactive.LogRecord calldata log) internal {
+        if (log.chain_id != reactChainId || log._contract != hubCallback) return;
+        if (!_markLogProcessed(log)) return;
+
+        address recipient = address(uint160(log.topic_1));
+        address lcc = address(uint160(log.topic_2));
+        uint256 succeededAmount = abi.decode(log.data, (uint256));
+        if (succeededAmount == 0) return;
+
+        _releaseInFlightReservation(lcc, recipient, succeededAmount, false);
+        _dispatchLiquidityIfBudgetAvailable(lcc, true);
     }
 
     /// @notice Reconciles pending amount from authoritative LiquidityHub queue annulments.
@@ -326,17 +373,8 @@ contract HubRSC is AbstractReactive {
         uint256 failedAmount = abi.decode(log.data, (uint256));
         if (failedAmount == 0) return;
 
-        bytes32 key = computeKey(lcc, recipient);
-        uint256 reserved = inFlightByKey[key];
-        if (reserved == 0) return;
-
-        uint256 release = failedAmount < reserved ? failedAmount : reserved;
-        inFlightByKey[key] = reserved - release;
-
-        Pending storage entry = pending[key];
-        if (entry.exists) {
-            _pruneIfFullySettled(entry, key);
-        }
+        _releaseInFlightReservation(lcc, recipient, failedAmount, true);
+        _dispatchLiquidityIfBudgetAvailable(lcc, true);
     }
 
     /// @notice Applies authoritative decrease immediately when pending exists, otherwise buffers it.
@@ -360,12 +398,6 @@ contract HubRSC is AbstractReactive {
             if (remainingSettled > 0 || remainingInflight > 0) {
                 if (isProcessedCallback) {
                     bufferedProcessedDecreaseByKey[key].settledAmount += remainingSettled;
-                    // If `settledAmount` was fully absorbed into `entry.amount`, any leftover
-                    // `requestedAmount` is not backed by a queued deficit on this key. Buffering
-                    // that inflight remainder would later apply against an unrelated reservation.
-                    if (remainingSettled > 0) {
-                        bufferedProcessedDecreaseByKey[key].inflightAmountToReduce += remainingInflight;
-                    }
                 } else {
                     bufferedAnnulledDecreaseByKey[key] += remainingSettled;
                 }
@@ -375,7 +407,6 @@ contract HubRSC is AbstractReactive {
 
         // Out-of-order: buffer until a queued mirror exists for this key.
         if (isProcessedCallback) {
-            bufferedProcessedDecreaseByKey[key].inflightAmountToReduce += inflightAmountToReduce;
             bufferedProcessedDecreaseByKey[key].settledAmount += settledAmount;
         } else {
             bufferedAnnulledDecreaseByKey[key] += settledAmount;
@@ -399,10 +430,8 @@ contract HubRSC is AbstractReactive {
         address lcc = address(uint160(log.topic_1));
         (address underlying, uint256 available,) = abi.decode(log.data, (address, uint256, bytes32));
         _registerLccUnderlying(lcc, underlying);
-        _continueUnderlyingBackfill(underlying, maxDispatchItems);
-        bootstrapZeroBatchRetry = true;
-        _dispatchLiquidity(lcc, available);
-        bootstrapZeroBatchRetry = false;
+        _creditDispatchBudget(lcc, available);
+        _dispatchLiquidityIfBudgetAvailable(lcc, true);
     }
 
     /// @notice Handles follow-up liquidity notices emitted via HubCallback.
@@ -411,33 +440,53 @@ contract HubRSC is AbstractReactive {
         if (log.chain_id != reactChainId || log._contract != hubCallback) return;
         if (!_markLogProcessed(log)) return;
         address lcc = address(uint160(log.topic_1));
-        uint256 available = abi.decode(log.data, (uint256));
-        if (hasUnderlyingForLcc[lcc]) {
-            _continueUnderlyingBackfill(underlyingByLcc[lcc], maxDispatchItems);
-        }
-        _dispatchLiquidity(lcc, available);
+        uint256 ignoredAvailable = abi.decode(log.data, (uint256));
+        ignoredAvailable;
+        _dispatchLiquidityIfBudgetAvailable(lcc, false);
     }
 
     /// @notice Dispatches liquidity for a given LCC.
     /// @dev Checks if the LCC has a registered underlying and dispatches liquidity accordingly.
-    function _dispatchLiquidity(address lcc, uint256 available) internal {
+    function _dispatchLiquidity(address lcc) internal {
         address underlying = underlyingByLcc[lcc];
+        address budgetLane = _dispatchBudgetLane(lcc);
+        uint256 available = availableBudgetByDispatchLane[budgetLane];
         // Registration metadata alone is not enough to safely choose the shared-underlying lane:
         // historical backlog may still exist only in the per-LCC queue.
-        bool useSharedUnderlying = hasUnderlyingForLcc[lcc] && queueDataByUnderlying[underlying].size > 0;
+        bool useSharedUnderlying = _sharedUnderlyingRoutingReady(lcc, underlying);
         address dispatchLane = useSharedUnderlying ? underlying : lcc;
         _clearInactiveZeroBatchRetryCredits(lcc, underlying, useSharedUnderlying);
 
         LinkedQueue.Data storage scanQueue =
             useSharedUnderlying ? queueDataByUnderlying[dispatchLane] : queueDataByLcc[lcc];
-        if (available == 0 || scanQueue.size == 0) return;
+        if (available == 0) return;
+        if (scanQueue.size == 0) {
+            // Historical sibling backlog may still be mid-backfill and therefore intentionally hidden from the
+            // shared lane. Keep waking the lane while persisted budget exists so bounded backfill can finish.
+            if (
+                !useSharedUnderlying && hasUnderlyingForLcc[lcc] && pendingBackfillLccsByUnderlying[underlying].size > 0
+            ) {
+                _triggerMoreLiquidityAvailable(lcc, available);
+            }
+            return;
+        }
 
+        _dispatchLiquidityFromQueue(scanQueue, lcc, dispatchLane, budgetLane, available, useSharedUnderlying);
+    }
+
+    function _dispatchLiquidityFromQueue(
+        LinkedQueue.Data storage scanQueue,
+        address triggerLcc,
+        address dispatchLane,
+        address budgetLane,
+        uint256 available,
+        bool useSharedUnderlying
+    ) internal {
         uint256 startSize = scanQueue.size;
         uint256 cap = startSize < maxDispatchItems ? startSize : maxDispatchItems;
 
-        address[] memory lccs = new address[](cap);
-        address[] memory recipients = new address[](cap);
-        uint256[] memory amounts = new uint256[](cap);
+        DispatchBatch memory batch =
+            DispatchBatch({lccs: new address[](cap), recipients: new address[](cap), amounts: new uint256[](cap)});
 
         DispatchState memory state = DispatchState({
             remainingLiquidity: available, batchCount: 0, scanned: 0, cursor: scanQueue.currentCursor()
@@ -446,45 +495,27 @@ contract HubRSC is AbstractReactive {
         while (state.scanned < cap && state.remainingLiquidity > 0) {
             bytes32 key = state.cursor;
             state.cursor = scanQueue.nextOrHead(key);
-            Pending storage entry = pending[key];
-
-            if (!scanQueue.inQueue[key] || !entry.exists) {
-                scanQueue.remove(key);
-                queueData.remove(key);
-            } else if (_entryMatchesDispatchLane(entry.lcc, lcc, useSharedUnderlying)) {
-                uint256 reserved = inFlightByKey[key];
-                uint256 dispatchable = entry.amount > reserved ? (entry.amount - reserved) : 0;
-                if (entry.amount == 0 && reserved == 0) {
-                    _pruneIfFullySettled(entry, key);
-                    state.scanned++;
-                    continue;
-                }
-                if (dispatchable == 0) {
-                    state.scanned++;
-                    continue;
-                }
-                uint256 settleAmount =
-                    dispatchable <= state.remainingLiquidity ? dispatchable : state.remainingLiquidity;
-
-                inFlightByKey[key] = reserved + settleAmount;
-                state.remainingLiquidity -= settleAmount;
-
-                lccs[state.batchCount] = entry.lcc;
-                recipients[state.batchCount] = entry.recipient;
-                amounts[state.batchCount] = settleAmount;
-                state.batchCount++;
-            }
+            _scanDispatchEntry(scanQueue, key, dispatchLane, useSharedUnderlying, state, batch);
             state.scanned++;
         }
 
         scanQueue.cursor = state.cursor;
+        availableBudgetByDispatchLane[budgetLane] = state.remainingLiquidity;
 
         // if the batchsize is zero then we need to check if there is more liquidity and more items
-        if (_handleZeroBatchRetry(dispatchLane, lcc, state.batchCount, state.remainingLiquidity, startSize)) return;
+        if (_handleZeroBatchRetry(dispatchLane, triggerLcc, state.batchCount, state.remainingLiquidity, startSize)) {
+            return;
+        }
 
         // if the batchsize is greater than zero
         _finalizeLiquidityDispatch(
-            lcc, available, state.batchCount, state.remainingLiquidity, lccs, recipients, amounts
+            triggerLcc,
+            available,
+            state.batchCount,
+            state.remainingLiquidity,
+            batch.lccs,
+            batch.recipients,
+            batch.amounts
         );
     }
 
@@ -533,14 +564,112 @@ contract HubRSC is AbstractReactive {
     /// @dev Shared-underlying routing only matches entries whose LCC has registered metadata
     /// and shares the same underlying as the triggering LCC; otherwise dispatch falls back
     /// to strict per-LCC matching.
-    function _entryMatchesDispatchLane(address entryLcc, address triggerLcc, bool useSharedUnderlying)
+    function _entryMatchesDispatchLane(address entryLcc, address dispatchLane, bool useSharedUnderlying)
         internal
         view
         returns (bool)
     {
         return useSharedUnderlying && hasUnderlyingForLcc[entryLcc]
-            ? underlyingByLcc[entryLcc] == underlyingByLcc[triggerLcc]
-            : entryLcc == triggerLcc;
+            ? underlyingByLcc[entryLcc] == dispatchLane
+            : entryLcc == dispatchLane;
+    }
+
+    function _scanDispatchEntry(
+        LinkedQueue.Data storage scanQueue,
+        bytes32 key,
+        address dispatchLane,
+        bool useSharedUnderlying,
+        DispatchState memory state,
+        DispatchBatch memory batch
+    ) internal {
+        Pending storage entry = pending[key];
+        if (!scanQueue.inQueue[key] || !entry.exists) {
+            scanQueue.remove(key);
+            queueData.remove(key);
+            return;
+        }
+
+        if (!_entryMatchesDispatchLane(entry.lcc, dispatchLane, useSharedUnderlying)) return;
+
+        uint256 reserved = inFlightByKey[key];
+        if (entry.amount == 0 && reserved == 0) {
+            _pruneIfFullySettled(entry, key);
+            return;
+        }
+
+        uint256 dispatchable = entry.amount > reserved ? (entry.amount - reserved) : 0;
+        if (dispatchable == 0) return;
+
+        uint256 settleAmount = dispatchable <= state.remainingLiquidity ? dispatchable : state.remainingLiquidity;
+        inFlightByKey[key] = reserved + settleAmount;
+        state.remainingLiquidity -= settleAmount;
+
+        batch.lccs[state.batchCount] = entry.lcc;
+        batch.recipients[state.batchCount] = entry.recipient;
+        batch.amounts[state.batchCount] = settleAmount;
+        state.batchCount++;
+    }
+
+    function _dispatchLiquidityIfBudgetAvailable(address lcc, bool allowBootstrapRetry) internal {
+        if (_availableBudgetForLcc(lcc) == 0) return;
+        if (hasUnderlyingForLcc[lcc]) {
+            address underlying = underlyingByLcc[lcc];
+            _continueUnderlyingBackfill(underlying, maxDispatchItems);
+            if (pendingBackfillLccsByUnderlying[underlying].size > 0 && queueDataByLcc[lcc].size == 0) {
+                _triggerMoreLiquidityAvailable(lcc, _availableBudgetForLcc(lcc));
+                return;
+            }
+        }
+        bootstrapZeroBatchRetry = allowBootstrapRetry;
+        _dispatchLiquidity(lcc);
+        bootstrapZeroBatchRetry = false;
+    }
+
+    function _dispatchBudgetLane(address lcc) internal view returns (address) {
+        return hasUnderlyingForLcc[lcc] ? underlyingByLcc[lcc] : lcc;
+    }
+
+    function _availableBudgetForLcc(address lcc) internal view returns (uint256) {
+        return availableBudgetByDispatchLane[_dispatchBudgetLane(lcc)];
+    }
+
+    function _creditDispatchBudget(address lcc, uint256 amount) internal {
+        if (amount == 0) return;
+        address budgetLane = _dispatchBudgetLane(lcc);
+        availableBudgetByDispatchLane[budgetLane] += amount;
+    }
+
+    function _restoreDispatchBudget(address lcc, uint256 amount) internal {
+        if (amount == 0) return;
+        address budgetLane = _dispatchBudgetLane(lcc);
+        availableBudgetByDispatchLane[budgetLane] += amount;
+    }
+
+    function _sharedUnderlyingRoutingReady(address lcc, address underlying) internal view returns (bool) {
+        if (!hasUnderlyingForLcc[lcc] || queueDataByUnderlying[underlying].size == 0) return false;
+        if (pendingBackfillLccsByUnderlying[underlying].size == 0) return true;
+
+        // While sibling historical keys are still being mirrored, prefer the trigger LCC's dedicated lane whenever
+        // it already has visible work. If the trigger lane is empty, using the shared lane is still safe and avoids
+        // stalling mirrored historical recipients behind a no-op per-LCC scan.
+        return queueDataByLcc[lcc].size == 0;
+    }
+
+    function _releaseInFlightReservation(address lcc, address recipient, uint256 amount, bool restoreBudget) internal {
+        bytes32 key = computeKey(lcc, recipient);
+        uint256 reserved = inFlightByKey[key];
+        if (reserved == 0) return;
+
+        uint256 release = amount < reserved ? amount : reserved;
+        inFlightByKey[key] = reserved - release;
+        if (restoreBudget) {
+            _restoreDispatchBudget(lcc, release);
+        }
+
+        Pending storage entry = pending[key];
+        if (entry.exists) {
+            _pruneIfFullySettled(entry, key);
+        }
     }
 
     /// @dev Shrink batch arrays, emit destination callback, and optionally request more liquidity on the callback chain.
@@ -600,8 +729,13 @@ contract HubRSC is AbstractReactive {
     /// @dev Registers a LCC underlying and sets the hasUnderlyingForLcc flag to true.
     function _registerLccUnderlying(address lcc, address underlying) internal {
         if (hasUnderlyingForLcc[lcc]) return;
+        uint256 preRegistrationBudget = availableBudgetByDispatchLane[lcc];
         underlyingByLcc[lcc] = underlying;
         hasUnderlyingForLcc[lcc] = true;
+        if (preRegistrationBudget > 0) {
+            availableBudgetByDispatchLane[underlying] += preRegistrationBudget;
+            delete availableBudgetByDispatchLane[lcc];
+        }
         _initializeUnderlyingBackfill(lcc, underlying);
     }
 
@@ -609,15 +743,11 @@ contract HubRSC is AbstractReactive {
     /// @dev The first registration pass mirrors at most `maxDispatchItems` historical keys immediately and leaves
     ///      the remainder to `_continueUnderlyingBackfill`, which resumes from the saved cursor.
     function _initializeUnderlyingBackfill(address lcc, address underlying) internal {
-        LinkedQueue.Data storage lccQueue = queueDataByLcc[lcc];
-        if (lccQueue.size == 0) return;
-        underlyingBackfillRemainingByLcc[lcc] = lccQueue.size;
-        underlyingBackfillCursorByLcc[lcc] = lccQueue.currentCursor();
+        if (underlyingBackfillRemainingByLcc[lcc] == 0) return;
         pendingBackfillLccsByUnderlying[underlying].enqueue(_backfillLccKey(lcc));
+        underlyingBackfillCursorByLcc[lcc] = queueDataByLcc[lcc].currentCursor();
         _continueUnderlyingBackfillForLcc(lcc, underlying, maxDispatchItems);
-        if (underlyingBackfillRemainingByLcc[lcc] == 0) {
-            pendingBackfillLccsByUnderlying[underlying].remove(_backfillLccKey(lcc));
-        }
+        _syncUnderlyingBackfillState(lcc);
     }
 
     /// @notice Enqueues a key into the underlying queue for a given LCC.
@@ -625,6 +755,14 @@ contract HubRSC is AbstractReactive {
     function _enqueueUnderlyingKey(address lcc, bytes32 key) internal {
         if (!hasUnderlyingForLcc[lcc]) return;
         queueDataByUnderlying[underlyingByLcc[lcc]].enqueue(key);
+        if (!mirroredToUnderlyingByKey[key]) {
+            mirroredToUnderlyingByKey[key] = true;
+            uint256 remaining = underlyingBackfillRemainingByLcc[lcc];
+            if (remaining > 0) {
+                underlyingBackfillRemainingByLcc[lcc] = remaining - 1;
+                _syncUnderlyingBackfillState(lcc);
+            }
+        }
     }
 
     /// @notice Applies authoritative queue decrement and keeps in-flight reservations bounded.
@@ -700,9 +838,16 @@ contract HubRSC is AbstractReactive {
         if (entry.amount != 0 || inFlightByKey[key] != 0) return;
         address lcc = entry.lcc;
         entry.exists = false;
-        if (hasUnderlyingForLcc[lcc]) {
+        if (mirroredToUnderlyingByKey[key] && hasUnderlyingForLcc[lcc]) {
             queueDataByUnderlying[underlyingByLcc[lcc]].remove(key);
+        } else {
+            uint256 remaining = underlyingBackfillRemainingByLcc[lcc];
+            if (remaining > 0) {
+                underlyingBackfillRemainingByLcc[lcc] = remaining - 1;
+                _syncUnderlyingBackfillState(lcc);
+            }
         }
+        delete mirroredToUnderlyingByKey[key];
         queueDataByLcc[lcc].remove(key);
         queueData.remove(key);
     }
@@ -718,15 +863,14 @@ contract HubRSC is AbstractReactive {
             bytes32 nextLccKey = backfillQueue.nextOrHead(lccKey);
 
             uint256 scanned = _continueUnderlyingBackfillForLcc(lcc, underlying, budget);
-            if (scanned == 0) {
-                break;
-            }
-            budget -= scanned;
-
             if (underlyingBackfillRemainingByLcc[lcc] == 0) {
                 backfillQueue.remove(lccKey);
                 continue;
             }
+            if (scanned == 0) {
+                break;
+            }
+            budget -= scanned;
 
             backfillQueue.cursor = nextLccKey;
         }
@@ -741,8 +885,13 @@ contract HubRSC is AbstractReactive {
         if (budget == 0 || remaining == 0) return 0;
 
         LinkedQueue.Data storage lccQueue = queueDataByLcc[lcc];
+        if (lccQueue.size == 0) {
+            underlyingBackfillRemainingByLcc[lcc] = 0;
+            _syncUnderlyingBackfillState(lcc);
+            return 0;
+        }
         bytes32 cursor = underlyingBackfillCursorByLcc[lcc];
-        if (cursor == bytes32(0)) {
+        if (cursor == bytes32(0) || !lccQueue.inQueue[cursor]) {
             cursor = lccQueue.currentCursor();
         }
 
@@ -751,22 +900,41 @@ contract HubRSC is AbstractReactive {
             cursor = lccQueue.nextOrHead(key);
 
             Pending storage entry = pending[key];
-            if (entry.exists && entry.lcc == lcc) {
+            if (entry.exists && entry.lcc == lcc && !mirroredToUnderlyingByKey[key]) {
                 queueDataByUnderlying[underlying].enqueue(key);
+                mirroredToUnderlyingByKey[key] = true;
+                remaining--;
             }
-
-            remaining--;
             scanned++;
         }
 
         underlyingBackfillRemainingByLcc[lcc] = remaining;
-        if (remaining == 0) {
-            delete underlyingBackfillCursorByLcc[lcc];
-            return scanned;
+        underlyingBackfillCursorByLcc[lcc] = remaining == 0 ? bytes32(0) : cursor;
+        _syncUnderlyingBackfillState(lcc);
+        return scanned;
+    }
+
+    function _syncUnderlyingBackfillState(address lcc) internal {
+        if (!hasUnderlyingForLcc[lcc]) return;
+
+        LinkedQueue.Data storage lccQueue = queueDataByLcc[lcc];
+        if (lccQueue.size == 0) {
+            underlyingBackfillRemainingByLcc[lcc] = 0;
         }
 
-        underlyingBackfillCursorByLcc[lcc] = cursor;
-        return scanned;
+        LinkedQueue.Data storage backfillQueue = pendingBackfillLccsByUnderlying[underlyingByLcc[lcc]];
+        bytes32 lccKey = _backfillLccKey(lcc);
+        if (underlyingBackfillRemainingByLcc[lcc] == 0) {
+            backfillQueue.remove(lccKey);
+            delete underlyingBackfillCursorByLcc[lcc];
+            return;
+        }
+
+        backfillQueue.enqueue(lccKey);
+        bytes32 cursor = underlyingBackfillCursorByLcc[lcc];
+        if (cursor == bytes32(0) || !lccQueue.inQueue[cursor]) {
+            underlyingBackfillCursorByLcc[lcc] = lccQueue.currentCursor();
+        }
     }
 
     function _backfillLccKey(address lcc) internal pure returns (bytes32) {
