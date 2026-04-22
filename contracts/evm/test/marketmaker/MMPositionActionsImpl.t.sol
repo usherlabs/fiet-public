@@ -805,16 +805,40 @@ contract MMPositionManagerActionsTest is MarketTestBase, MarketMakerTestBase {
             uint256 issuedPost =
                 _replayIssuedPostForMmIncrease(orch, commitId, positionId, tickLower, tickUpper, postL, preL);
             uint256 admissionDelta = issuedPost - issuedPre;
-            (uint256 estMint0, uint256 estMint1) = LiquidityUtils.calculateEffectiveTokenAmounts(
-                sqrtPriceX96, currentTick, tickLower, tickUpper, int256(liqDelta)
-            );
-            uint256 estimatedMintUsd = estMint0 + estMint1; // oracle prices mocked to 1e18 each
+            uint256 estimatedMintUsd =
+                _estimateMintUsdForDelta(sqrtPriceX96, currentTick, tickLower, tickUpper, liqDelta);
             if (estimatedMintUsd > admissionDelta) {
                 candidateIncrease = liqDelta;
                 candidateIssuedPost = issuedPost;
                 return (candidateIncrease, candidateIssuedPost);
             }
         }
+    }
+
+    /// @dev Spot-composition mint valuation proxy for one liquidity increment (oracle prices mocked to 1e18 each).
+    function _estimateMintUsdForDelta(
+        uint160 sqrtPriceX96,
+        int24 currentTick,
+        int24 tickLower,
+        int24 tickUpper,
+        uint256 liqDelta
+    ) internal pure returns (uint256 estimatedMintUsd) {
+        (uint256 estMint0, uint256 estMint1) = LiquidityUtils.calculateEffectiveTokenAmounts(
+            sqrtPriceX96, currentTick, tickLower, tickUpper, int256(liqDelta)
+        );
+        estimatedMintUsd = estMint0 + estMint1;
+    }
+
+    function _containsSelector(bytes memory reason, bytes4 selector) internal pure returns (bool) {
+        if (reason.length < 4) return false;
+        bytes4 found;
+        for (uint256 i = 0; i + 4 <= reason.length; i++) {
+            assembly ("memory-safe") {
+                found := mload(add(add(reason, 0x20), i))
+            }
+            if (found == selector) return true;
+        }
+        return false;
     }
 
     /// @notice Adversarial full-path proof: search for a rounding-sensitive increase where estimated spot mint USD
@@ -860,8 +884,17 @@ contract MMPositionManagerActionsTest is MarketTestBase, MarketMakerTestBase {
             abi.encode(candidateIssuedPost)
         );
 
-        vm.expectRevert(Errors.InvalidAdmissionMintDelta.selector);
-        this._attemptIncreaseExternal(tokenId, positionIndex, candidateIncrease);
+        bool marginalReverted;
+        try this._attemptIncreaseExternal(tokenId, positionIndex, candidateIncrease) {
+            assertTrue(false, "expected marginal admission revert");
+        } catch (bytes memory reason) {
+            assertTrue(
+                _containsSelector(reason, Errors.InvalidAdmissionMintDelta.selector),
+                "expected InvalidAdmissionMintDelta inside wrapped revert"
+            );
+            marginalReverted = true;
+        }
+        assertTrue(marginalReverted, "adversarial full-path attempt must revert on marginal gate");
     }
 
     function testCanDecreaseMintNewPositionFromDeltas() public {
