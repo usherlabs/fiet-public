@@ -6,7 +6,6 @@ import {LiquidityHub} from "../../src/LiquidityHub.sol";
 import {ILCC} from "../../src/interfaces/ILCC.sol";
 import {IMarketFactory} from "../../src/interfaces/IMarketFactory.sol";
 import {Errors} from "../../src/libraries/Errors.sol";
-import {Bounds} from "../../src/libraries/Bounds.sol";
 import {StdStorage, stdStorage} from "forge-std/StdStorage.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {IMMQueueCustodian} from "../../src/interfaces/IMMQueueCustodian.sol";
@@ -910,9 +909,6 @@ contract MockSettleCustodian is IMMQueueCustodian {
             uint256 q = 50;
             MockSettleCustodian custodian = new MockSettleCustodian();
 
-            vm.prank(factory);
-            liquidityHub.setBoundLevel(address(custodian), Bounds.BOUND_ENDPOINT);
-
             _createSettlementQueueEntry(lccToken1, address(custodian), q);
             _setMarketReserveOfUnderlying(address(underlyingAsset1), q);
             underlyingAsset1.mint(address(liquidityHub), q);
@@ -926,6 +922,27 @@ contract MockSettleCustodian is IMMQueueCustodian {
             assertEq(liquidityHub.settleQueue(lccToken1, address(custodian)), 0);
             assertEq(liquidityHub.totalQueued(lccToken1), 0);
             assertGt(underlyingAsset1.balanceOf(address(custodian)), underlyingBefore);
+        }
+
+        /// @notice `LiquidityHubLib.transferUnderlying` sink backstop is redundant with Hub admission for normal flows;
+        ///         `processSettlementFor` must still fail closed before spending reserve for poisoned ERC20-underlying keys.
+        function test_processSettlementFor_revertsWhenRecipientIsUnderlyingTokenEvenIfQueued() public {
+            uint256 amt = 8;
+            address u = address(underlyingAsset1);
+            vm.prank(proxyHook);
+            liquidityHub.issue(lccToken1, u, amt);
+
+            _setSettleQueue(lccToken1, u, amt);
+            _setTotalQueued(lccToken1, amt);
+            _setQueueOfUnderlying(address(underlyingAsset1), amt);
+            _setMarketReserveOfUnderlying(address(underlyingAsset1), amt);
+
+            uint256 reserveBefore = liquidityHub.reserveOfUnderlying(lccToken1);
+
+            vm.expectRevert(abi.encodeWithSelector(Errors.NotApproved.selector, u));
+            liquidityHub.processSettlementFor(lccToken1, u, amt);
+
+            assertEq(liquidityHub.reserveOfUnderlying(lccToken1), reserveBefore, "reserve must not be consumed");
         }
 
         /// @notice Regression: `_processSettlementFor` emits `SettlementProcessed` with `settled == queuedBefore - queuedAfter`.

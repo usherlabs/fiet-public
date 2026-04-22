@@ -89,7 +89,7 @@ questions for every invariant:
 | LCC-BACKING-01 | P0 | Medusa/FuzzEntry | `FuzzHubLCC.sol`, `invariants/LCCBacking01.sol` | Directly composed into the supported Medusa path. |
 | LCC-01 | P0 | Medusa/FuzzEntry | `FuzzHubLCC.sol`, `invariants/LCC01.sol` | Direct transfer-boundary property in the composed Hub/LCC module. |
 | LCC-02 | P0 | Medusa/FuzzEntry | `FuzzHubLCC.sol`, `invariants/LCC02.sol` | Bucket-accounting property runs through the supported Hub adapter path. |
-| LCC-03 | P1 | Medusa/FuzzEntry | `FuzzHubLCC.sol`, `invariants/LCC03.sol` | Nested ingress-settlement ordering is exercised under the composed Medusa path. |
+| LCC-03 | P1 | Medusa/FuzzEntry | `FuzzHubLCC.sol`, `invariants/LCC03.sol` | Nested ingress-settlement ordering and **no active `sync(lcc)` → revert** (`IngressRequiresActiveSync`) are exercised under the composed Medusa path. |
 | HUB-01 | P0 | Medusa/FuzzEntry | `FuzzHubLCC.sol`, `invariants/HUB01.sol` | Native and ERC20 wrap flow remains a first-class Medusa property. |
 | HUB-01A | P1 | Foundry | `LiquidityHub.t.sol` | `receive()` sender-gating is authoritative in production-Hub tests rather than a separate Medusa child harness. |
 | HUB-02 | P0 | Medusa/FuzzEntry | `FuzzHubLCC.sol`, `invariants/HUB02.sol` | Unwrap decomposition and queue accounting remain direct Medusa properties. |

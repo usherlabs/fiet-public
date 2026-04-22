@@ -117,7 +117,7 @@ The remediation is covered by deterministic regression tests including:
   - `test_settleUnderlyingToVaultFromHub_noopWhenReserveIsZero`
 
 - `contracts/evm/test/MarketFactory.t.sol`
-  - `test_prepareMarketLiquidity_withoutActiveSync_forwardsIngress`
+  - `test_prepareMarketLiquidity_withoutActiveSync_reverts` (wrapped ingress requires active `sync(lcc)`; see scan #33 resolution `agents/audit-resolutions/33-6-no-active-sync-ingress-ingressrequiressync-resolution.md`)
   - `test_prepareMarketLiquidity_sameLccSync_restoresAfterNestedErc20Sync`
   - `test_prepareMarketLiquidity_sameLccSync_revertsWhenUnpaidIngressAlreadyExists`
   - `test_prepareMarketLiquidity_sameLccSync_revertsWhenSyncSnapshotInvalid`

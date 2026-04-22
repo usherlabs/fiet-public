@@ -164,12 +164,11 @@ library OwnerCurrencyDelta {
     // Balance-to-Delta Sync
     // ============================================================
 
-    /// @notice Syncs balance accumulation as credit in the delta system
-    /// @dev Only handles balance increases (accumulation), not decreases (consumption).
-    ///      If balance exceeds current positive delta, increases delta to match balance,
-    ///      establishing credit. Also reduces debt if balance is available and delta is negative.
-    ///      This is useful after wrap/unwrap operations where balance increases occur outside
-    ///      of normal delta accounting flows.
+    /// @notice FCFS utility: map omnibus `owner` ERC20/balance to positive credit on `target` (explicit SYNC).
+    /// @dev Only increases the target’s delta when the target is not in debt. If `getDelta(target) < 0`, this is
+    ///      a no-op: parked omnibus balance must not reduce someone else’s debt (that would double-count residue).
+    ///      When `getDelta(target) >= 0`, credit is raised to match `balanceOf(owner)` to the extent balance exceeds
+    ///      current non-negative credit. For exact inflows, prefer `creditExact` from internal protocol paths.
     /// @param currency The currency to sync
     /// @param owner The address whose balance to check (e.g., MMPM which holds the tokens)
     /// @param target The address whose delta to credit (e.g., locker/msgSender)
@@ -181,9 +180,11 @@ library OwnerCurrencyDelta {
         uint256 balance = currency.balanceOf(owner);
         int256 currentDelta = currency.getDelta(target);
 
-        // Case 1: Owner has balance and target's current delta is non-negative
-        // Increase target's delta to match owner's balance if balance exceeds delta
-        if (balance > 0 && currentDelta >= 0) {
+        if (currentDelta < 0) {
+            // Explicit residue sync must not use omnibus balance to pay down debt; settle debt via TAKE/flows.
+            return 0;
+        }
+        if (balance > 0) {
             uint256 currentDeltaUint = uint256(currentDelta);
             if (balance > currentDeltaUint) {
                 uint256 diff = balance - currentDeltaUint;
@@ -191,15 +192,5 @@ library OwnerCurrencyDelta {
                 accountDelta(currency, deltaChange, target);
             }
         }
-        // Case 2: Owner has balance and target owes (negative delta)
-        // Use owner's balance to reduce target's debt
-        else if (balance > 0 && currentDelta < 0) {
-            uint256 debt = uint256(-currentDelta);
-            uint256 reduction = balance < debt ? balance : debt;
-            deltaChange = SafeCast.toInt128(reduction);
-            accountDelta(currency, deltaChange, target);
-        }
-        // Case 3: No balance - cannot establish credit from nothing
-        // (No action needed)
     }
 }

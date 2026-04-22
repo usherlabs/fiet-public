@@ -553,7 +553,23 @@ library LiquidityHubLib {
         }
     }
 
+    /// @dev Fail-closed payout sink guard: independent of Hub bound-registry policy so mis-queued payouts cannot target
+    ///      canonical WETH9 (native lane) or the ERC20 token contract itself (which would strand assets).
+    ///      Uses `ILiquidityHubWeth9(address(this)).weth9()` so the Hub (or parity harness) supplies the canonical WETH.
+    function _assertUnderlyingPayoutRecipientNotSink(address underlying, address account) internal view {
+        if (underlying == address(0)) {
+            address wrappedNative = ILiquidityHubWeth9(address(this)).weth9();
+            if (wrappedNative != address(0) && account == wrappedNative) {
+                revert Errors.NotApproved(account);
+            }
+        } else if (account == underlying) {
+            revert Errors.NotApproved(account);
+        }
+    }
+
     /// @notice Transfers underlying assets to an account
+    /// @dev Before mutating reserves, rejects objective sink recipients (`weth9()` for native lane; the underlying
+    ///      token contract for ERC20 lanes). Hub-level admission may still fail closed earlier; this is defence in depth.
     /// @param s The liquidity hub storage
     /// @param underlying The underlying asset address
     /// @param account The account to transfer the underlying assets to
@@ -572,6 +588,7 @@ library LiquidityHubLib {
             uint256 totalReserve = reserve.direct + reserve.marketDerived;
             revert Errors.InvalidAmount(amount, totalReserve);
         }
+        _assertUnderlyingPayoutRecipientNotSink(underlying, account);
         reserve.direct -= directAmount;
         reserve.marketDerived -= marketDerivedAmount;
 

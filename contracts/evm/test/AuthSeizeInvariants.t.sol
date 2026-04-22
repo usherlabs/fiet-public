@@ -12,6 +12,7 @@ import {MarketVTSConfiguration} from "../src/types/VTS.sol";
 import {Errors} from "../src/libraries/Errors.sol";
 import {IMarketFactory} from "../src/interfaces/IMarketFactory.sol";
 import {IOracleHelper} from "../src/interfaces/IOracleHelper.sol";
+import {IVTSCurrencyDelta} from "../src/interfaces/IVTSCurrencyDelta.sol";
 
 import {ModifyLiquidityParams, SwapParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
 import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
@@ -150,6 +151,83 @@ contract AuthSeizeInvariantsTest is MarketTestBase, MarketMakerTestBase {
         vm.expectRevert(abi.encodeWithSelector(Errors.NotApproved.selector, guarantor));
         MMA.executeWithUnlock(positionManager, actions, block.timestamp + 3600);
         vm.stopPrank();
+    }
+
+    /// @notice Regression (scan 33 / finding 2): after `SEIZE_POSITION`, ambient seizure must not waive NFT approval
+    ///         for follow-on withdrawal `SETTLE_POSITION` — only the primary seizing deposit may bypass `approvedOrOwner`.
+    function test_scan33_seizerFollowUpSettlePositionWithdrawWithoutNftApproval_revertsNotApproved() public {
+        (uint256 tokenId,,,) = _setupCommittedPosition(
+            positionManager,
+            corePoolKey,
+            abi.encode(liquiditySignal),
+            ModifyLiquidityParams({tickLower: -60, tickUpper: 60, liquidityDelta: 1e10, salt: bytes32(0)}),
+            marketVTSConfiguration,
+            address(lcc0),
+            address(lcc1)
+        );
+        _openSeizeWindow(tokenId);
+
+        address guarantor = makeAddr("guarantor-scan33-withdraw-settle");
+        _wireTestQueueCustodianFor(address(positionManager), guarantor);
+        IERC20(lcc0.underlying()).transfer(guarantor, SEIZE_SETTLE0);
+        IERC20(lcc1.underlying()).transfer(guarantor, SEIZE_SETTLE1);
+
+        vm.startPrank(guarantor);
+        IERC20(lcc0.underlying()).approve(address(positionManager), type(uint256).max);
+        IERC20(lcc1.underlying()).approve(address(positionManager), type(uint256).max);
+
+        MMA.PreparedAction[] memory actions = new MMA.PreparedAction[](2);
+        actions[0] = MMA.prepareSeize(corePoolKey, tokenId, 0, SEIZE_SETTLE0, SEIZE_SETTLE1, false);
+        // Positive lanes = withdrawal settle; must not succeed for a non-approved guarantor in the same batch.
+        actions[1] = MMA.prepareSettle(corePoolKey, tokenId, 0, int128(1), int128(1), false);
+        vm.expectRevert(abi.encodeWithSelector(Errors.NotApproved.selector, guarantor));
+        MMA.executeWithUnlock(positionManager, actions, block.timestamp + 3600);
+        vm.stopPrank();
+    }
+
+    /// @notice Regression: `SETTLE_POSITION_FROM_DELTAS` with `payerIsUser=true` and `shouldTake=true` routes through
+    ///         `_settle` on positive protocol-credit lanes. Under ambient seizure that path must still require
+    ///         `approvedOrOwner` (production economics often leave MMPM protocol credits at zero here, so we mock the
+    ///         orchestrator read to force the guarded branch).
+    function test_scan33_seizerFollowUpSettleFromDeltasWithdrawProtocolCreditWithoutNftApproval_revertsNotApproved()
+        public
+    {
+        (uint256 tokenId,,,) = _setupCommittedPosition(
+            positionManager,
+            corePoolKey,
+            abi.encode(liquiditySignal),
+            ModifyLiquidityParams({tickLower: -60, tickUpper: 60, liquidityDelta: 1e10, salt: bytes32(0)}),
+            marketVTSConfiguration,
+            address(lcc0),
+            address(lcc1)
+        );
+        _openSeizeWindow(tokenId);
+
+        address guarantor = makeAddr("guarantor-scan33-settleFromDeltas-withdraw");
+        _wireTestQueueCustodianFor(address(positionManager), guarantor);
+        IERC20(lcc0.underlying()).transfer(guarantor, SEIZE_SETTLE0);
+        IERC20(lcc1.underlying()).transfer(guarantor, SEIZE_SETTLE1);
+
+        Currency underlying0 = Currency.wrap(address(lcc0.underlying()));
+        Currency underlying1 = Currency.wrap(address(lcc1.underlying()));
+        vm.mockCall(
+            address(vtsOrchestrator),
+            abi.encodeCall(IVTSCurrencyDelta.getFullCreditPair, (underlying0, underlying1, address(positionManager))),
+            abi.encode(uint256(1), uint256(1))
+        );
+
+        vm.startPrank(guarantor);
+        IERC20(lcc0.underlying()).approve(address(positionManager), type(uint256).max);
+        IERC20(lcc1.underlying()).approve(address(positionManager), type(uint256).max);
+
+        MMA.PreparedAction[] memory actions = new MMA.PreparedAction[](2);
+        actions[0] = MMA.prepareSeize(corePoolKey, tokenId, 0, SEIZE_SETTLE0, SEIZE_SETTLE1, false);
+        actions[1] = MMA.prepareSettleFromDeltas(corePoolKey, tokenId, 0, true, true);
+        vm.expectRevert(abi.encodeWithSelector(Errors.NotApproved.selector, guarantor));
+        MMA.executeWithUnlock(positionManager, actions, block.timestamp + 3600);
+        vm.stopPrank();
+
+        vm.clearMockedCalls();
     }
 
     /// @notice AUTH-01A: ambient seizure authorises follow-ons for the same position, but settle-only deposits must stay

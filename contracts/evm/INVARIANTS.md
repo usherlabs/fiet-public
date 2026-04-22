@@ -154,6 +154,10 @@ being an informal “should”.
 - **Statement**:
   - During `LCC -> PoolManager` ingress reporting, `MarketFactory.prepareMarketLiquidity(...)` must not leave the active
     PoolManager sync context corrupted for the outer payment flow.
+  - Wrapped (direct-backed) DEX ingress must run only inside an **active** `sync(lcc)` window on `PoolManager`. If the
+    manager is unlocked but no currency is synced (`syncedCurrency == address(0)`), ingress must **not** call Hub→vault
+    settlement: doing so would strand LCC on `PoolManager` without matching synced reserves and could brick later
+    canonical `sync(lcc) -> transfer -> settle()` flows.
   - If `prepareMarketLiquidity` executes while the active synced currency is this same `lcc`, it must:
     - allow only the first unpaid ingress transfer in that sync window, and
     - restore `sync(lcc)` after nested settlement side-effects.
@@ -162,6 +166,8 @@ being an informal “should”.
 - **Enforced by**:
   - `src/MarketFactory.sol::prepareMarketLiquidity`
     - Reads PoolManager transient slots (`Currency`, `ReservesOf`) through `exttload`.
+    - Reverts when there is no active sync window for ingress (`Errors.IngressRequiresActiveSync`), via
+      `src/libraries/MarketLiquidityRouterLib.sol::prepareMarketLiquidityIngress`.
     - Reverts when sync currency is different (`Errors.NestedIngressSyncCurrencyMismatch`).
     - Reverts when a prior unpaid ingress already exists (`Errors.NestedIngressUnpaidTransferExists`).
     - Reverts on invalid snapshot ordering (`Errors.NestedIngressInvalidSyncSnapshot`).
@@ -299,12 +305,37 @@ being an informal “should”.
     - **Contracts** that EIP-165 support `INativeSettlementReceiver` (for example `src/MMQueueCustodian.sol`): same
       raw-first, WETH-on-failure behaviour as EOAs.
     - **All other contracts** (including canonical WETH9): skip raw native push; wrap and transfer WETH as ERC20 to
-      the recipient.
+      the nominal recipient **only when that recipient is a valid non-sink external payout target** (see **HUB-02D**;
+      canonical `WETH9` must not be used as the queued settlement owner / nominal payout address for reserve-funded
+      external settlement).
 - **Why**:
   - Queue-time checks cannot guarantee future native payability for counterfactual addresses; EOAs and opt-in contracts
     still need the raw-then-WETH failure path.
   - Payable contracts that accept ETH but credit wrapped assets to `msg.sender` (not the nominal recipient) would
     otherwise clear queues while mis-delivering value; WETH-first for unsupported contracts closes that class.
+
+### HUB-02D: External reserve-funded settlement recipients (issuer deficit queue + cancel-with-queue + runtime)
+
+- **Statement**:
+  - Issuer-created external reserve-funded settlement queues (`queueForTransferRecipient`, and the queued leg of
+    `cancelWithQueue` / planned cancel-with-queue) must not target **protocol-bound** recipients in the factory
+    namespace (`boundLevelOfLcc != BOUND_NONE`, i.e. `BOUND_ENDPOINT`, `BOUND_EXEMPT`, or `BOUND_DEX`).
+  - The same policy is revalidated at `processSettlementFor(...)` entry for external recipients (`recipient != Hub`) so
+    legacy or regressed queued state cannot spend reserves against forbidden recipients.
+  - Objective sink addresses are also rejected for those external paths: `recipient == weth9()` when the LCC underlying
+    is native (`address(0)`), and `recipient == underlying` when the LCC underlying is an ERC20.
+  - Hub self-queue (`recipient == address(this)`) remains valid where existing Hub-internal semantics apply.
+  - For **non-bound** recipients, the Hub remains agnostic about EOA vs contract; **callers / integrators** engaging the
+    protocol must nominate recipients capable of receiving and handling **ERC20-compatible** settlement assets (native
+    lanes may still deliver WETH to unsupported contracts per **HUB-02C**).
+- **Enforced by**:
+  - `src/LiquidityHub.sol::_assertExternalReserveFundedSettlementRecipient` (delegates sink checks to
+    `LiquidityHubLib::_assertUnderlyingPayoutRecipientNotSink`; used from `_assertQueueRecipientServiceable`,
+    `_cancelWithQueue` when `queueAmount > 0`, and `_processSettlementFor`).
+  - Defence in depth at payout: `src/libraries/LiquidityHubLib.sol::_assertUnderlyingPayoutRecipientNotSink` inside
+    `transferUnderlying` before reserve mutation.
+- **Why**: Protocol-bound endpoints and exempt/DEX sinks are not durable external settlement owners for reserve-funded
+  payout; canonical `WETH9` and the underlying ERC20 contract are objective blackholes as nominal queue/payout owners.
 
 ### HUB-03: Issuer-gated issuance/cancellation must never operate on invalid LCCs
 
@@ -848,6 +879,16 @@ being an informal “should”.
   - `src/modules/PositionManagerEntrypoint.sol::_afterBatch` calls `vtsOrchestrator.assertNonZeroDeltas(marketFactory)`,
     which forces callers to fully resolve owner-scoped transient credits/debts and the bound factory’s market-produced
     credit within the batch or revert.
+- **Internal vs explicit balance attribution (DELTA-02 / settlement hardening)**:
+  - **Internal** receipt paths that already know the exact amount (vault settlement outflow to MMPM, LCC **take** balance
+    increases, native wrap/unwrap, and similar) credit the locker with **`VTSOrchestrator.creditExact` only for that
+    amount**. They do **not** attribute the contract’s full omnibus ERC20/native balance, so **ambient** tokens parked on
+    MMPM cannot inflate a locker’s credited amount or net off **negative** (debt) deltas.
+  - **Public `SYNC`** (FCFS) remains the **only** intentional path that turns **unscoped** MMPM balance into locker
+    **positive** credit, and it is **positive-credit only**: it does not reduce a target’s **negative** delta from
+    omnibus balance (residue cannot erase debt; paydown still requires an explicit `take` / settlement transfer).
+  - In other words: **FCFS dust** is an **explicit** utility choice (`SYNC` then `TAKE`); **internal** flows use
+    **exact** credit, not omnibus sync.
 - **Scope clarification**:
   - This FCFS rule applies to **residual dust held by `MMPositionManager` itself**.
   - It does **not** redefine assets held in explicit custody/accounting domains (for example, queue-custodied balances,
@@ -886,12 +927,16 @@ being an informal “should”.
 
 ## Authorisation, call-surface, and pause invariants
 
-### AUTH-01: Only owner/approved can settle/burn/modify MM Commit NFTs, except in seizure context
+### AUTH-01: Only owner/approved can settle/burn/modify MM Commit NFTs, except the primary `SEIZE_POSITION` deposit settle
 
-- **Statement**: Settlement and position modification require `approvedOrOwner`, except when operating in an active
-  seizure context.
+- **Statement**: Settlement and position modification require `approvedOrOwner`, except **only** for the **primary**
+  deposit settle that is explicitly paired with `SEIZE_POSITION` (when `TransientSlots.getSeizurePrimarySettleAllowed()`
+  is true and the settle includes a deposit lane: `amount0 < 0` or `amount1 < 0`). **All** other `_settle` paths on the
+  seized commitment—including follow-on withdrawal settles in the same batch—require `approvedOrOwner` for `msgSender()`
+  on the commitment NFT, even while transient seizure context is active for that `positionId`.
 - **Enforced by**:
-  - `src/MMPositionActionsImpl.sol::_settle` calls `MMHelpers.assertApprovedOrOwner` unless `_isSeizing(positionId)`.
+  - `src/MMPositionActionsImpl.sol::_settle` calls `MMHelpers.assertApprovedOrOwner` unless `_isSeizing(positionId)` **and**
+    `TransientSlots.getSeizurePrimarySettleAllowed()` **and** the settle includes a deposit lane.
   - `src/MMPositionActionsImpl.sol::_seizePosition` explicitly forbids owner/approved from seizing and forbids seizing
     inactive positions.
 
@@ -900,14 +945,16 @@ being an informal “should”.
 - **Statement**:
   - After a successful `SEIZE_POSITION`, the transient seized-position context may remain live for the remainder of the
     current unlock/batch so the guarantor can complete follow-on settlement / take flows for that **same** seized
-    position.
+    position **subject to** the narrowed NFT gate in AUTH-01 (withdrawal `_settle` is not auth-free for the seizer).
   - **Settle-only deposits under ambient seizure** (additional deposit settlement after `SEIZE_POSITION` has already run
     in the batch, while the transient seized ID still matches) are **disallowed**: they would advance `seizureLiquidityCarry`
     / seizure sizing in `onMMSettle(..., isSeizing=true)` without the coupled `_decreaseInternal` that `SEIZE_POSITION`
-    performs. Withdraw / credit-withdraw paths and non-deposit follow-ons remain valid per the coupling rule in the seizure
-    economics note above.
-  - This is not a general approval bypass: the context is valid only when the queried `positionId` exactly matches the
-    transient seized ID.
+    performs.
+  - Follow-on withdrawal or mixed-sign settles that touch `_settle` on the seized token **do not** inherit a blanket
+    approval bypass: the seizer must be `approvedOrOwner` (or the owner must execute those steps), unless the batch
+    never reaches an NFT-gated withdrawal settle for that token.
+  - This is not a general approval bypass: the carve-out applies **only** to the orchestrator-paired primary deposit phase;
+    the context is additionally valid only when the queried `positionId` exactly matches the transient seized ID.
   - The seizure context must be cleared at batch end so it cannot leak into a later batch / unlock session.
 - **Enforced by**:
   - `src/MMPositionActionsImpl.sol::_isSeizing` compares the queried `positionId` against
@@ -921,8 +968,10 @@ being an informal “should”.
   - `src/modules/PositionManagerEntrypoint.sol::_afterBatch` clears `TransientSlots.clearSeizedPositionId()` and
     `TransientSlots.clearSeizurePrimarySettleAllowed()`.
 - **Intended flow consequence**:
-  - Batched follow-on actions such as `SEIZE_POSITION -> SETTLE_POSITION_FROM_DELTAS -> TAKE` on the same position are
-    part of the supported seizure execution model.
+  - The guarantor can drive the **primary** `SEIZE_POSITION` deposit settle without `approvedOrOwner` on the commitment NFT.
+  - Batched follow-on actions on the same position (for example `SEIZE_POSITION -> SETTLE_POSITION_FROM_DELTAS -> TAKE`)
+    remain valid **only** where subsequent steps either do not require NFT-gated withdrawal `_settle` without approval, or
+    the guarantor already holds `approvedOrOwner` (or the owner / an approved operator performs those steps).
   - Reusing the context for a different position, or allowing it to persist after batch finalisation, would violate this
     invariant.
 

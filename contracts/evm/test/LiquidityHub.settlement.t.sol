@@ -241,4 +241,28 @@ contract LiquidityHubSettlementTest is LiquidityHubTestBase {
         // 5. User LCC should be burned
         assertEq(lcc1.balanceOf(user1), userLccBalanceBefore - queueAmount, "User LCC should be burned");
     }
+
+    /// @notice Fail-closed settlement when a legacy unwrap queued a protocol-bound endpoint (`BOUND_ENDPOINT`).
+    function testProcessSettlementFor_revertsProtocolBoundRecipientEvenWhenQueued() public {
+        uint256 amt = 40;
+        vm.mockCall(factory, abi.encodeWithSelector(IMarketFactory.useMarketLiquidity.selector), abi.encode(uint256(0)));
+        vm.prank(proxyHook);
+        liquidityHub.issue(lccToken1, factory, amt);
+        vm.prank(factory);
+        ILCC(lccToken1).approve(address(liquidityHub), amt);
+        vm.prank(factory);
+        liquidityHub.unwrap(lccToken1, amt);
+        assertEq(liquidityHub.settleQueue(lccToken1, factory), amt);
+
+        underlyingAsset1.mint(address(liquidityHub), amt);
+        vm.prank(proxyHook);
+        liquidityHub.confirmTake(lccToken1, amt, false);
+
+        uint256 reserveBefore = liquidityHub.reserveOfUnderlying(lccToken1);
+
+        vm.expectRevert(abi.encodeWithSelector(Errors.NotApproved.selector, factory));
+        liquidityHub.processSettlementFor(lccToken1, factory, amt);
+
+        assertEq(liquidityHub.reserveOfUnderlying(lccToken1), reserveBefore, "reserve must not be consumed");
+    }
 }

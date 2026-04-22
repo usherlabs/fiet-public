@@ -90,15 +90,13 @@ abstract contract VTSCurrencyDelta is IVTSCurrencyDelta {
     /// @inheritdoc IVTSCurrencyDelta
     function sync(IMarketFactory factory, Currency currency, address owner, address target) external {
         _assertBoundFactoryCaller(factory);
-        // Sync owner's balance as credit to target's delta
-        // Use case: MMPM receives msg.value (owner=MMPM), credit goes to locker (target=msgSender)
+        // FCFS explicit residue: map omnibus owner balance to target credit (positive-credit only; no debt paydown)
         OwnerCurrencyDelta.syncBalanceAsCredit(currency, owner, target);
     }
 
-    /// @notice Syncs balance accumulation as credit for multiple currencies
-    /// @dev Only handles balance increases (accumulation), not decreases (consumption).
-    ///      Convenience function to sync both currencies of a pool pair in one call.
-    ///      Useful after operations that increase multiple currency balances.
+    /// @notice FCFS pair sync: same as `sync` for two currencies
+    /// @dev Positive-credit-only; does not reduce negative deltas from omnibus balance. Internal paths use
+    ///      `creditExact` for known inflow amounts.
     /// @param factory The market factory namespace used to validate the caller is protocol-bound
     /// @param currency0 The first currency to sync
     /// @param currency1 The second currency to sync

@@ -162,7 +162,7 @@ contract MMUtilityActionsImpl is IMMActionsImpl, PositionManagerImpl, FietNative
         if (isNativeUnderlying && unwrapped > 0) {
             _creditExact(CurrencyLibrary.ADDRESS_ZERO, unwrapped);
         } else if (!isNativeUnderlying && to == address(this) && unwrapped > 0) {
-            _syncBalanceAsCredit(Currency.wrap(underlying));
+            _creditExact(Currency.wrap(underlying), unwrapped);
         }
     }
 
@@ -202,7 +202,7 @@ contract MMUtilityActionsImpl is IMMActionsImpl, PositionManagerImpl, FietNative
         if (isNativeUnderlying && unwrapped > 0) {
             _creditExact(CurrencyLibrary.ADDRESS_ZERO, unwrapped);
         } else if (!isNativeUnderlying && to == address(this) && unwrapped > 0) {
-            _syncBalanceAsCredit(Currency.wrap(underlying));
+            _creditExact(Currency.wrap(underlying), unwrapped);
         }
     }
 
@@ -327,8 +327,8 @@ contract MMUtilityActionsImpl is IMMActionsImpl, PositionManagerImpl, FietNative
         }
 
         _wrap(amount);
-        Currency weth = Currency.wrap(address(WETH9));
-        _syncBalanceAsCredit(weth);
+        // Exact WETH minted: do not attribute full MMPM WETH balance
+        _creditExact(Currency.wrap(address(WETH9)), amount);
     }
 
     function _unwrapNative(uint256 amount, bool payerIsUser) internal {

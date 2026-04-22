@@ -242,43 +242,58 @@ contract MockPoolManager {
     }
 }
 
-/// @notice Minimal orchestrator for `_handleLccBalanceIncrease` tests (sync/getFullCredit/take only).
-contract MockOrchestratorHandleLcc {
-    uint256 public credit;
+/// @notice State reflects `creditExact` inflows; used by LCC-balance and PM harness tests.
+contract MockOrchestratorHandleLcc is IVTSCurrencyDelta {
     uint256 public lastTakeAmount;
-    uint256 public syncCallCount;
+    address public lastTakeCurrency;
+    address public lastTakeLocker;
 
-    address public lastSyncFactory;
+    address public lastCreditExactCurrency;
+    address public lastCreditTarget;
+    uint256 public lastCreditExactAmount;
+
+    IMarketFactory public lastSyncFactory;
     address public lastSyncCurrency;
     address public lastSyncBalanceHolder;
     address public lastSyncLocker;
 
-    address public lastTakeCurrency;
-    address public lastTakeLocker;
+    /// @dev Bump in `resetCredit` so per-test `vm.mockCall` / mapping state does not leak.
+    uint32 public creditEpoch;
+    mapping(bytes32 => uint256) internal _credits;
+
+    function _creditKey(Currency currency, address account) private pure returns (bytes32) {
+        return keccak256(abi.encode(Currency.unwrap(currency), account));
+    }
 
     function resetCredit() external {
-        credit = 0;
+        creditEpoch++;
         lastTakeAmount = 0;
-        syncCallCount = 0;
-        lastSyncFactory = address(0);
+        lastTakeCurrency = address(0);
+        lastTakeLocker = address(0);
+        lastCreditExactCurrency = address(0);
+        lastCreditTarget = address(0);
+        lastCreditExactAmount = 0;
+        lastSyncFactory = IMarketFactory(address(0));
         lastSyncCurrency = address(0);
         lastSyncBalanceHolder = address(0);
         lastSyncLocker = address(0);
-        lastTakeCurrency = address(0);
-        lastTakeLocker = address(0);
     }
 
-    function sync(IMarketFactory factory, Currency currency, address balanceHolder, address locker_) external {
-        syncCallCount++;
-        lastSyncFactory = address(factory);
-        lastSyncCurrency = Currency.unwrap(currency);
-        lastSyncBalanceHolder = balanceHolder;
-        lastSyncLocker = locker_;
-        credit = 100;
+    function getFullCredit(Currency currency, address owner) external view returns (uint256) {
+        return _credits[_creditKey(currency, owner)];
     }
 
-    function getFullCredit(Currency, address) external view returns (uint256) {
-        return credit;
+    function creditExact(IMarketFactory, Currency currency, address target, uint256 amount)
+        external
+        returns (int128 deltaChange)
+    {
+        address c = Currency.unwrap(currency);
+        (lastCreditExactCurrency, lastCreditTarget, lastCreditExactAmount) = (c, target, amount);
+        _credits[_creditKey(currency, target)] += amount;
+        if (amount > uint256(int256(type(int128).max))) {
+            return type(int128).max;
+        }
+        return int128(int256(uint256(amount)));
     }
 
     function take(Currency currency, address locker_, uint256 maxAmount) external returns (uint256) {
@@ -286,6 +301,37 @@ contract MockOrchestratorHandleLcc {
         lastTakeLocker = locker_;
         lastTakeAmount = maxAmount;
         return maxAmount;
+    }
+
+    function getFullDebt(Currency, address) external pure returns (uint256) {
+        return 0;
+    }
+
+    function getFullCreditPair(Currency, Currency, address) external pure returns (uint256, uint256) {
+        return (0, 0);
+    }
+
+    function getFullDebtPair(Currency, Currency, address) external pure returns (uint256, uint256) {
+        return (0, 0);
+    }
+
+    function getUnderlyingDeltaPair(address, Currency, Currency) external pure returns (BalanceDelta) {
+        return toBalanceDelta(0, 0);
+    }
+
+    function assertNonZeroDeltas(IMarketFactory) external view {}
+
+    function sync(IMarketFactory, Currency, address, address) external {}
+
+    function syncPair(IMarketFactory factory, Currency currency0, Currency, address owner, address target)
+        external
+        returns (int128, int128)
+    {
+        lastSyncFactory = factory;
+        lastSyncCurrency = Currency.unwrap(currency0);
+        lastSyncBalanceHolder = owner;
+        lastSyncLocker = target;
+        return (0, 0);
     }
 }
 
@@ -420,9 +466,7 @@ contract PositionManagerImplTest is Test {
         factory.setLiquidityHub(address(hub));
         hub.setFactory(address(factory));
 
-        orch = makeAddr("vtsOrchestrator");
-        // Foundry reverts on interface calls to EOAs ("call to non-contract address").
-        vm.etch(orch, hex"00");
+        orch = address(new MockOrchestratorHandleLcc());
         locker = makeAddr("locker");
         owner = makeAddr("owner");
 
@@ -827,11 +871,13 @@ contract PositionManagerHandleLccHardeningTest is Test {
         orch.resetCredit();
         poolManager.setHookCurrencyDelta(hooksAddr, Currency.wrap(lcc0), int256(10));
 
+        // prev credit, `creditExact(inc)` for this take, re-read for `addedCredit`, then `take(nonFee)`.
         vm.expectCall(address(orch), abi.encodeCall(IVTSCurrencyDelta.getFullCredit, (Currency.wrap(lcc0), locker)));
         vm.expectCall(
             address(orch),
             abi.encodeCall(
-                IVTSCurrencyDelta.sync, (IMarketFactory(address(factory)), Currency.wrap(lcc0), address(h), locker)
+                IVTSCurrencyDelta.creditExact,
+                (IMarketFactory(address(factory)), Currency.wrap(lcc0), locker, uint256(100))
             )
         );
         vm.expectCall(address(orch), abi.encodeCall(IVTSCurrencyDelta.getFullCredit, (Currency.wrap(lcc0), locker)));
@@ -840,19 +886,16 @@ contract PositionManagerHandleLccHardeningTest is Test {
         // tokenId 0: forward `nonFee` (no commit-bucket queue delta in this direct harness).
         h.exposeHandleLccBalanceIncrease(key, Currency.wrap(lcc0), 0, 100, int128(30), locker, 0, 0);
 
-        // fee = max(30 - 10, 0) = 20; nonFee = 100 - 20 = 80
+        // fee = max(30 - 10, 0) = 20; nonFee = 100 - 20 = 80; addedCredit from exact credit = 100; take = 100 - 20 = 80
         assertEq(h.forwardCallCount(), 1);
         assertEq(h.lastFwdAmount(), 80);
         assertEq(h.lastFwdTokenId(), 0);
         assertEq(h.lastFwdBeneficiary(), locker);
         assertEq(Currency.unwrap(h.lastFwdCurrency()), lcc0);
 
-        assertEq(orch.lastSyncFactory(), address(factory));
-        assertEq(orch.lastSyncCurrency(), lcc0);
-        assertEq(orch.lastSyncBalanceHolder(), address(h));
-        assertEq(orch.lastSyncLocker(), locker);
-
-        // credit after sync = 100; extra = 100 - 20 = 80
+        assertEq(orch.lastCreditExactCurrency(), lcc0);
+        assertEq(orch.lastCreditTarget(), locker);
+        assertEq(orch.lastCreditExactAmount(), 100);
         assertEq(orch.lastTakeAmount(), 80);
         assertEq(orch.lastTakeCurrency(), lcc0);
         assertEq(orch.lastTakeLocker(), locker);
@@ -872,6 +915,15 @@ contract PositionManagerHandleLccHardeningTest is Test {
         orch.resetCredit();
         poolManager.setHookCurrencyDelta(hooksAddr, Currency.wrap(lcc0), int256(10));
 
+        vm.expectCall(address(orch), abi.encodeCall(IVTSCurrencyDelta.getFullCredit, (Currency.wrap(lcc0), locker)));
+        vm.expectCall(
+            address(orch),
+            abi.encodeCall(
+                IVTSCurrencyDelta.creditExact,
+                (IMarketFactory(address(factory)), Currency.wrap(lcc0), locker, uint256(100))
+            )
+        );
+        vm.expectCall(address(orch), abi.encodeCall(IVTSCurrencyDelta.getFullCredit, (Currency.wrap(lcc0), locker)));
         vm.expectCall(address(orch), abi.encodeCall(IVTSCurrencyDelta.take, (Currency.wrap(lcc0), locker, uint256(50))));
 
         uint256 tokenId = 1;
@@ -900,15 +952,16 @@ contract PositionManagerHandleLccHardeningTest is Test {
         orch.resetCredit();
         poolManager.setHookCurrencyDelta(hooksAddr, Currency.wrap(lcc0), int256(0));
 
+        // `nonFee` is 0, so `creditTake` is 0 and `take` is skipped (orchestrator only `creditExact(50)` and reads).
         vm.expectCall(address(orch), abi.encodeCall(IVTSCurrencyDelta.getFullCredit, (Currency.wrap(lcc0), locker)));
         vm.expectCall(
             address(orch),
             abi.encodeCall(
-                IVTSCurrencyDelta.sync, (IMarketFactory(address(factory)), Currency.wrap(lcc0), address(h), locker)
+                IVTSCurrencyDelta.creditExact,
+                (IMarketFactory(address(factory)), Currency.wrap(lcc0), locker, uint256(50))
             )
         );
         vm.expectCall(address(orch), abi.encodeCall(IVTSCurrencyDelta.getFullCredit, (Currency.wrap(lcc0), locker)));
-        vm.expectCall(address(orch), abi.encodeCall(IVTSCurrencyDelta.take, (Currency.wrap(lcc0), locker, uint256(50))));
 
         h.exposeHandleLccBalanceIncrease(key, Currency.wrap(lcc0), 0, 50, int128(50), locker, 0, 0);
 

@@ -2044,9 +2044,71 @@ contract MMPositionManagerActionsTest is MarketTestBase, MarketMakerTestBase {
         assertGt(bal1After, bal1Before, "expected token1 TAKE after synced credit");
     }
 
-    function test_settle_usePositionManagerBalance_revertsWhenLockerCreditInsufficient_onNegativeDelta() public {
-        // Regression test for pooled-balance misallocation:
-        // with usePositionManagerBalance=true, a negative settle must consume locker credit first.
+    /// @notice Regression: audit **finding 33_3** (omnibus MMPM `sync` attribution), **Scenario 2** — positive settlement
+    ///         with `usePositionManagerBalance=true` must credit `creditExact(vaultOutflow)` only, not the full MMPM ERC20
+    ///         balance (no piggyback on others’ parked tokens). See `agents/audit-findings/33_3__high-balance-wide-sync-*.md`.
+    function test_finding33_3_scenario2_settleWithUsePmb_creditsExactNotOmnibusErc20() public {
+        uint256 tokenId = 1;
+        uint256 positionIndex = 0;
+
+        address underlying0 = lcc0.underlying();
+        address underlying1 = lcc1.underlying();
+
+        ModifyLiquidityParams memory oneSided =
+            ModifyLiquidityParams({tickLower: 60, tickUpper: 120, liquidityDelta: 1e18, salt: bytes32(0)});
+        createPosition(oneSided, abi.encode(liquiditySignal), tokenId, positionIndex);
+
+        address lockerAddr = _batchLocker(tokenId);
+        (uint256 commitment0, uint256 commitment1) = LiquidityUtils.calculateCommitmentMaxima(
+            oneSided.tickLower, oneSided.tickUpper, uint128(uint256(oneSided.liquidityDelta))
+        );
+        _fundLockerForSettlement(lockerAddr, underlying0, underlying1, commitment0, commitment1);
+        vm.startPrank(lockerAddr);
+        _approveTokenForPositionManager(underlying0, underlying1, address(positionManager), commitment0, commitment1);
+        vm.stopPrank();
+
+        MMA.PreparedAction[] memory preActions = new MMA.PreparedAction[](1);
+        preActions[0] = MMA.prepareSettle(
+            corePoolKey, tokenId, positionIndex, -int128(int256(commitment0)), -int128(int256(commitment1)), false
+        );
+        _mmExec(tokenId, preActions);
+
+        uint256 withdraw0 = Math.max(uint256(1), commitment0 / 2);
+
+        // Ambient ERC20 dust unrelated to the vault outflow: must not be credited in the same ratio as settle.
+        uint256 ambientDust = 1_000_000e9;
+        MockERC20(underlying0).mint(address(positionManager), ambientDust);
+
+        uint256 bal0Before = IERC20(underlying0).balanceOf(address(this));
+        uint256 bal1Before = IERC20(underlying1).balanceOf(address(this));
+
+        MMA.PreparedAction[] memory actions = new MMA.PreparedAction[](3);
+        actions[0] = MMA.prepareSettle(corePoolKey, tokenId, positionIndex, int128(int256(withdraw0)), 0, true);
+        actions[1] = MMA.prepareTake(Currency.wrap(underlying0), address(this), type(uint256).max);
+        actions[2] = MMA.prepareTake(Currency.wrap(underlying1), address(this), type(uint256).max);
+        _mmExec(tokenId, actions);
+
+        // Exact `creditExact` on the settlement delta: recipient should receive the vault outflow, not MMPM + ambient.
+        assertEq(
+            IERC20(underlying0).balanceOf(address(this)) - bal0Before,
+            withdraw0,
+            "TAKE should match exact credited outflow"
+        );
+        assertEq(
+            IERC20(underlying1).balanceOf(address(this)), bal1Before, "expected no token1 in token0-only withdrawal"
+        );
+
+        // Unrelated ambient ERC20 remains on the router; it was not swept into the locker as settlement credit.
+        assertEq(
+            IERC20(underlying0).balanceOf(address(positionManager)), ambientDust, "Ambient ERC20 must stay on MMPM"
+        );
+    }
+
+    /// @notice Regression: audit **finding 33_3**, **Scenario 3** — a locker with no credit cannot fund a negative
+    ///         settle from unrelated ERC20 parked on MMPM (no debt erasure via omnibus balance). See
+    ///         `agents/audit-findings/33_3__high-balance-wide-sync-*.md`.
+    function test_finding33_3_scenario3_negativeSettle_revertsWhenNoOwnCredit_despiteOmnibusErc20() public {
+        // With usePositionManagerBalance=true, a negative settle must consume locker credit first.
         uint256 tokenId = 1;
         uint256 positionIndex = 0;
         uint256 depositAmount0 = 1e18;
@@ -2071,8 +2133,8 @@ contract MMPositionManagerActionsTest is MarketTestBase, MarketMakerTestBase {
         assertEq(IERC20(underlying0).balanceOf(address(positionManager)), depositAmount0);
     }
 
-    /// @dev Mirrors `test_settle_usePositionManagerBalance_revertsWhenLockerCreditInsufficient_onNegativeDelta` on token1.
-    function test_settle_usePositionManagerBalance_revertsWhenLockerCreditInsufficient_onNegativeDelta_token1() public {
+    /// @dev Mirrors `test_finding33_3_scenario3_negativeSettle_revertsWhenNoOwnCredit_despiteOmnibusErc20` on token1.
+    function test_finding33_3_scenario3_negativeSettle_revertsWhenNoOwnCredit_despiteOmnibusErc20_token1() public {
         uint256 tokenId = 1;
         uint256 positionIndex = 0;
         uint256 depositAmount1 = 1e18;

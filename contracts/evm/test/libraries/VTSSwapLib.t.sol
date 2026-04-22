@@ -263,13 +263,17 @@ contract VTSSwapLibTest is VTSLibTestBase {
         stOut = st;
         egOut = eg;
 
-        if (stOut.segmentLiquidity > 0 && it.sqrtTarget != stOut.sqrtCurrent) {
-            ExpectedGrowth memory seg =
-                _expectedSegmentGrowth(zeroForOne, stOut.sqrtCurrent, it.sqrtTarget, stOut.segmentLiquidity);
-            egOut.deficit0 += seg.deficit0;
-            egOut.deficit1 += seg.deficit1;
-            egOut.inflow0 += seg.inflow0;
-            egOut.inflow1 += seg.inflow1;
+        // Mirror `VTSSwapLib._processMultiTickSwap`: advance sqrt along the realised path every segment; accrue only
+        // when liquidity is positive (zero-liquidity gaps move price without growth).
+        if (it.sqrtTarget != stOut.sqrtCurrent) {
+            if (stOut.segmentLiquidity > 0) {
+                ExpectedGrowth memory seg =
+                    _expectedSegmentGrowth(zeroForOne, stOut.sqrtCurrent, it.sqrtTarget, stOut.segmentLiquidity);
+                egOut.deficit0 += seg.deficit0;
+                egOut.deficit1 += seg.deficit1;
+                egOut.inflow0 += seg.inflow0;
+                egOut.inflow1 += seg.inflow1;
+            }
             stOut.sqrtCurrent = it.sqrtTarget;
         }
 
@@ -595,6 +599,95 @@ contract VTSSwapLibTest is VTSLibTestBase {
         assertEq(afterGrowth.deficit1, beforeGrowth.deficit1 + expected.deficit1, "deficit1 exact");
         assertEq(afterGrowth.inflow0, beforeGrowth.inflow0 + expected.inflow0, "inflow0 exact");
         assertEq(afterGrowth.inflow1, beforeGrowth.inflow1 + expected.inflow1, "inflow1 exact");
+    }
+
+    /// @notice Regression (audit 33/1): `sqrtCurrent` must advance through a true zero-liquidity gap so growth is
+    ///         not attributed across the gap using post-gap liquidity (oneForZero / price moves right).
+    function test_processSwap_multiTick_zeroLiquidityGap_oneForZero_matches_oracle() public {
+        PoolId poolId = corePoolKey.toId();
+        int256 L = int256(initialLiquidity);
+        modifyLiquidityRouter.modifyLiquidity(
+            corePoolKey,
+            ModifyLiquidityParams({
+                tickLower: 60, tickUpper: 120, liquidityDelta: 2 * L, salt: bytes32(uint256(0x6A70))
+            }),
+            ZERO_BYTES
+        );
+        modifyLiquidityRouter.modifyLiquidity(
+            corePoolKey,
+            ModifyLiquidityParams({
+                tickLower: 300, tickUpper: 360, liquidityDelta: 2 * L, salt: bytes32(uint256(0x6A71))
+            }),
+            ZERO_BYTES
+        );
+
+        (uint160 sqrtPBefore, int24 tickBeforeSwap,,) = manager.getSlot0(poolId);
+        uint128 liqBefore = manager.getLiquidity(poolId);
+
+        SwapParams memory params =
+            SwapParams({zeroForOne: false, amountSpecified: -2e18, sqrtPriceLimitX96: ONE_FOR_ZERO_LIMIT});
+        BalanceDelta delta = swapRouter.swap(
+            corePoolKey, params, PoolSwapTest.TestSettings({takeClaims: false, settleUsingBurn: false}), ZERO_BYTES
+        );
+
+        (uint160 sqrtPAfter, int24 tickAfterSlot,,) = manager.getSlot0(poolId);
+        (ExpectedGrowth memory expected,) = _simulateMultiTickOneForZero(
+            poolId, sqrtPBefore, sqrtPAfter, liqBefore, corePoolKey.tickSpacing, tickBeforeSwap, tickAfterSlot
+        );
+
+        ExpectedGrowth memory beforeGrowth = _globalGrowth(poolId);
+        _invokeProcessSwap(params, delta, sqrtPBefore, liqBefore, tickBeforeSwap);
+        ExpectedGrowth memory afterGrowth = _globalGrowth(poolId);
+
+        assertEq(afterGrowth.deficit0, beforeGrowth.deficit0 + expected.deficit0, "gap oneForZero deficit0");
+        assertEq(afterGrowth.deficit1, beforeGrowth.deficit1 + expected.deficit1, "gap oneForZero deficit1");
+        assertEq(afterGrowth.inflow0, beforeGrowth.inflow0 + expected.inflow0, "gap oneForZero inflow0");
+        assertEq(afterGrowth.inflow1, beforeGrowth.inflow1 + expected.inflow1, "gap oneForZero inflow1");
+        assertTrue(tickAfterSlot > tickBeforeSwap, "must move tick right across the gap");
+    }
+
+    /// @notice Regression (audit 33/1): same invariant when price moves left across a zero-liquidity gap.
+    function test_processSwap_multiTick_zeroLiquidityGap_zeroForOne_matches_oracle() public {
+        PoolId poolId = corePoolKey.toId();
+        int256 L = int256(initialLiquidity);
+        modifyLiquidityRouter.modifyLiquidity(
+            corePoolKey,
+            ModifyLiquidityParams({
+                tickLower: -360, tickUpper: -300, liquidityDelta: 2 * L, salt: bytes32(uint256(0x6B70))
+            }),
+            ZERO_BYTES
+        );
+        modifyLiquidityRouter.modifyLiquidity(
+            corePoolKey,
+            ModifyLiquidityParams({
+                tickLower: -120, tickUpper: -60, liquidityDelta: 2 * L, salt: bytes32(uint256(0x6B71))
+            }),
+            ZERO_BYTES
+        );
+
+        (uint160 sqrtPBefore, int24 tickBeforeSwap,,) = manager.getSlot0(poolId);
+        uint128 liqBefore = manager.getLiquidity(poolId);
+
+        SwapParams memory params =
+            SwapParams({zeroForOne: true, amountSpecified: -2e18, sqrtPriceLimitX96: ZERO_FOR_ONE_LIMIT});
+        BalanceDelta delta = swapRouter.swap(
+            corePoolKey, params, PoolSwapTest.TestSettings({takeClaims: false, settleUsingBurn: false}), ZERO_BYTES
+        );
+
+        (uint160 sqrtPAfter, int24 tickAfterSlot,,) = manager.getSlot0(poolId);
+        ExpectedGrowth memory expected = _simulateMultiTickZeroForOne(
+            poolId, sqrtPBefore, sqrtPAfter, liqBefore, corePoolKey.tickSpacing, tickBeforeSwap, tickAfterSlot
+        );
+
+        ExpectedGrowth memory beforeGrowth = _globalGrowth(poolId);
+        _invokeProcessSwap(params, delta, sqrtPBefore, liqBefore, tickBeforeSwap);
+        ExpectedGrowth memory afterGrowth = _globalGrowth(poolId);
+
+        assertEq(afterGrowth.deficit0, beforeGrowth.deficit0 + expected.deficit0, "gap zeroForOne deficit0");
+        assertEq(afterGrowth.deficit1, beforeGrowth.deficit1 + expected.deficit1, "gap zeroForOne deficit1");
+        assertEq(afterGrowth.inflow0, beforeGrowth.inflow0 + expected.inflow0, "gap zeroForOne inflow0");
+        assertEq(afterGrowth.inflow1, beforeGrowth.inflow1 + expected.inflow1, "gap zeroForOne inflow1");
+        assertTrue(tickAfterSlot < tickBeforeSwap, "must move tick left across the gap");
     }
 
     function test_onTickCross_flips_deficit_and_inflow_outside_for_both_tokens() public {

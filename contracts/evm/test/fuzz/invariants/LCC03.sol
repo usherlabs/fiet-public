@@ -48,12 +48,11 @@ contract LCC03 {
 
         poolManager.setExttload(MarketLiquidityRouterLib.CURRENCY_SLOT, bytes32(0));
         uint256 beforeCalls = ingressHandler.calls();
-        _prepare(lcc, wrappedAmount);
+        bool reverted = _prepareCatch(lcc, wrappedAmount);
 
         checkedSync = true;
         syncChecks++;
-        (address gotLcc, uint256 gotAmount) = ingressHandler.lastCall();
-        lastSyncOk = ingressHandler.calls() == beforeCalls + 1 && gotLcc == lcc && gotAmount == wrappedAmount;
+        lastSyncOk = reverted && ingressHandler.calls() == beforeCalls;
     }
 
     // forge-lint: disable-next-line(mixed-case-function)

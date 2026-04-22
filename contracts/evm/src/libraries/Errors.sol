@@ -179,6 +179,9 @@ library Errors {
     /// @notice Thrown when synced reserves exceed poolManager token balance for the synced LCC.
     error NestedIngressInvalidSyncSnapshot(uint256 syncedReserves, uint256 poolManagerBalance);
 
+    /// @notice Thrown when wrapped DEX ingress runs without an active `sync(lcc)` on PoolManager (see **LCC-03**).
+    error IngressRequiresActiveSync();
+
     // ============ POSITION & COMMITMENT ERRORS ============
     // Errors related to positions, commitments, and position management
 

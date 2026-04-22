@@ -767,6 +767,7 @@ contract FuzzLiquidityHub is BoundRegistry, Ownable, ReentrancyGuardTransient {
     ) internal {
         if (queueAmount > 0) {
             _assertValidQueueOwner(lcc, recipient, true);
+            _assertExternalReserveFundedSettlementRecipient(lcc, recipient);
         }
 
         uint256 cancelAmount = principalAmount - queueAmount;
@@ -951,6 +952,7 @@ contract FuzzLiquidityHub is BoundRegistry, Ownable, ReentrancyGuardTransient {
      * @param maxAmount The maximum amount to settle
      */
     function _processSettlementFor(address lcc, address recipient, uint256 maxAmount) internal {
+        _assertExternalReserveFundedSettlementRecipient(lcc, recipient);
         uint256 queuedBefore = s.settleQueue[lcc][recipient];
         LiquidityHubLib.processSettlementLogic(s, lcc, recipient, maxAmount);
         uint256 queuedAfter = s.settleQueue[lcc][recipient];
@@ -1035,6 +1037,7 @@ contract FuzzLiquidityHub is BoundRegistry, Ownable, ReentrancyGuardTransient {
         view
     {
         _assertValidQueueOwner(lcc, recipient, allowHub);
+        _assertExternalReserveFundedSettlementRecipient(lcc, recipient);
 
         // Native settlements: production `LiquidityHub` allows contract queue owners; payout is EOAs + raw ETH,
         // or `INativeSettlementReceiver` (EIP-165) for raw ETH, otherwise WETH (see `LiquidityHubLib.transferUnderlying`).
@@ -1066,6 +1069,17 @@ contract FuzzLiquidityHub is BoundRegistry, Ownable, ReentrancyGuardTransient {
         if (Bounds.isExempt(level) || Bounds.isDex(level)) {
             revert Errors.NotApproved(recipient);
         }
+    }
+
+    function _assertExternalReserveFundedSettlementRecipient(address lcc, address recipient) internal view {
+        if (recipient == address(this)) {
+            return;
+        }
+        uint8 level = boundLevelOfLcc(lcc, recipient);
+        if (level != Bounds.BOUND_NONE) {
+            revert Errors.NotApproved(recipient);
+        }
+        LiquidityHubLib._assertUnderlyingPayoutRecipientNotSink(s.lccToUnderlying[lcc], recipient);
     }
 
     /**

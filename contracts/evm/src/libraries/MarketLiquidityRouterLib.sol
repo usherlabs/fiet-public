@@ -93,6 +93,8 @@ library MarketLiquidityRouterLib {
     /// @dev Strict same-tx invariant: if this runs with a non-zero wrapped amount and a handler, the PoolManager
     ///      must be unlocked so `handleIngress` can settle in this transaction. If the manager is locked, ingress
     ///      cannot be funded atomically and the call reverts rather than returning with unsettled wrapped flow.
+    ///      Wrapped ingress must also run inside an active `sync(lcc)` window; otherwise stray LCC on PoolManager
+    ///      can desynchronise from synced reserves and brick later canonical settle flows (`IngressRequiresActiveSync`).
 
     function prepareMarketLiquidityIngress(PrepareMarketLiquidityContext memory ctx) internal {
         if (ctx.wrappedAmount == 0 || ctx.handler == address(0)) return;
@@ -100,8 +102,7 @@ library MarketLiquidityRouterLib {
 
         address syncedCurrency = poolManagerSyncedCurrency(ctx.poolManager);
         if (syncedCurrency == address(0)) {
-            IVaultCoreActionHandler(ctx.handler).handleIngress(ctx.lcc, ctx.wrappedAmount);
-            return;
+            revert Errors.IngressRequiresActiveSync();
         }
 
         if (syncedCurrency != ctx.lcc) {

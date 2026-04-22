@@ -373,16 +373,15 @@ contract MarketLiquidityRouterLibTest is Test {
         assertEq(ingressHandler.calls(), 0);
     }
 
-    function test_prepareMarketLiquidityIngress_noActiveSync_callsHandleIngress() public {
+    /// @dev Regression: scan #33 — wrapped ingress must not run without an active `sync(lcc)` (see **LCC-03**).
+    function test_prepareMarketLiquidityIngress_noActiveSync_revertsBeforeHandleIngress() public {
         MockLCC_RouterLib lcc = new MockLCC_RouterLib(address(0x1111));
         poolManager.setLocked(false);
 
+        vm.expectRevert(Errors.IngressRequiresActiveSync.selector);
         h.prepareMarketLiquidityIngress(IPoolManager(address(poolManager)), address(ingressHandler), address(lcc), 4);
 
-        assertEq(ingressHandler.calls(), 1);
-        (address gotLcc, uint256 gotAmount) = ingressHandler.lastCall();
-        assertEq(gotLcc, address(lcc));
-        assertEq(gotAmount, 4);
+        assertEq(ingressHandler.calls(), 0);
     }
 
     function test_prepareMarketLiquidityIngress_lockedPoolManager_reverts() public {

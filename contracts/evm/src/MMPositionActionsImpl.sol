@@ -437,22 +437,14 @@ contract MMPositionActionsImpl is IMMActionsImpl, PositionManagerImpl, DelegateC
 
         // Process positive deltas (outflows from vault)
         if (params.usePositionManagerBalance) {
-            // Either sync received amounts (non-native) or credit exact known native deltas.
+            // Native: exact; ERC20: exact from settlement delta (not omnibus MMPM balance sync)
             if (delta0 > 0) {
                 uint256 amt0Out = LiquidityUtils.safeInt128ToUint256(delta0);
-                if (params.underlying0 == CurrencyLibrary.ADDRESS_ZERO) {
-                    _creditExact(params.underlying0, amt0Out);
-                } else {
-                    _syncBalanceAsCredit(params.underlying0);
-                }
+                _creditExact(params.underlying0, amt0Out);
             }
             if (delta1 > 0) {
                 uint256 amt1Out = LiquidityUtils.safeInt128ToUint256(delta1);
-                if (params.underlying1 == CurrencyLibrary.ADDRESS_ZERO) {
-                    _creditExact(params.underlying1, amt1Out);
-                } else {
-                    _syncBalanceAsCredit(params.underlying1);
-                }
+                _creditExact(params.underlying1, amt1Out);
             }
         } else {
             // or forward to the locker.
@@ -499,12 +491,16 @@ contract MMPositionActionsImpl is IMMActionsImpl, PositionManagerImpl, DelegateC
                 isSeizing = _isSeizing(positionId);
             }
 
-            if (!isSeizing) {
-                MMHelpers.assertApprovedOrOwner(msgSender(), tokenId);
-            }
-
-            if (isSeizing && (amount0 < 0 || amount1 < 0) && !TransientSlots.getSeizurePrimarySettleAllowed()) {
+            // AUTH-01A: only the primary `SEIZE_POSITION` deposit settle may bypass NFT owner checks. All follow-on
+            // settles (including seizing withdrawals) require `approvedOrOwner` so a seizer cannot drain router-scoped
+            // underlying credit without commitment NFT authorisation.
+            bool isDepositLane = (amount0 < 0) || (amount1 < 0);
+            if (isSeizing && isDepositLane && !TransientSlots.getSeizurePrimarySettleAllowed()) {
                 revert Errors.SeizureSettleOnlyDepositDisallowed();
+            }
+            bool inPrimarySeizeSettle = isSeizing && TransientSlots.getSeizurePrimarySettleAllowed() && isDepositLane;
+            if (!inPrimarySeizeSettle) {
+                MMHelpers.assertApprovedOrOwner(msgSender(), tokenId);
             }
 
             callParams = SettleCallParams({

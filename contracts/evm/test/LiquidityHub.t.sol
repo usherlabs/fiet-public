@@ -616,6 +616,13 @@ contract LiquidityHubTest is LiquidityHubTestBase {
         liquidityHub.cancelWithQueue(lccToken1, user1, 5, 1, proxyHook);
     }
 
+    function test_cancelWithQueue_revertsWhenRecipientIsProtocolBoundFactory() public {
+        _wrapMarketDerivedLCC(user1, lccToken1, 20);
+        vm.prank(proxyHook);
+        vm.expectRevert(abi.encodeWithSelector(Errors.NotApproved.selector, factory));
+        liquidityHub.cancelWithQueue(lccToken1, user1, 10, 5, factory);
+    }
+
     function test_cancelWithQueue_doesNotEmitSettlementQueuedWhenQueueAmountIsZero() public {
         // Give user1 some market-derived balance so cancelWithQueue can burn.
         _wrapMarketDerivedLCC(user1, lccToken1, 10);
@@ -645,6 +652,60 @@ contract LiquidityHubTest is LiquidityHubTestBase {
         vm.prank(proxyHook);
         vm.expectRevert(abi.encodeWithSelector(Errors.NotApproved.selector, user2));
         liquidityHub.queueForTransferRecipient(lccToken1, user2, amount);
+    }
+
+    function test_queueForTransferRecipient_revertsWhenRecipientIsProtocolBoundFactory() public {
+        uint256 amount = 11;
+        vm.prank(proxyHook);
+        liquidityHub.issue(lccToken1, factory, amount);
+
+        vm.prank(proxyHook);
+        vm.expectRevert(abi.encodeWithSelector(Errors.NotApproved.selector, factory));
+        liquidityHub.queueForTransferRecipient(lccToken1, factory, amount);
+    }
+
+    function test_queueForTransferRecipient_revertsWhenRecipientIsDex() public {
+        uint256 amount = 9;
+        _setDexBound(user2);
+        vm.prank(proxyHook);
+        liquidityHub.issue(lccToken1, proxyHook, amount);
+        vm.prank(proxyHook);
+        ILCC(lccToken1).transfer(user2, amount);
+
+        vm.prank(proxyHook);
+        vm.expectRevert(abi.encodeWithSelector(Errors.NotApproved.selector, user2));
+        liquidityHub.queueForTransferRecipient(lccToken1, user2, amount);
+    }
+
+    function test_queueForTransferRecipient_revertsWhenRecipientIsUnderlyingERC20() public {
+        uint256 amount = 14;
+        vm.prank(proxyHook);
+        liquidityHub.issue(lccToken1, address(underlyingAsset1), amount);
+
+        vm.prank(proxyHook);
+        vm.expectRevert(abi.encodeWithSelector(Errors.NotApproved.selector, address(underlyingAsset1)));
+        liquidityHub.queueForTransferRecipient(lccToken1, address(underlyingAsset1), amount);
+    }
+
+    function test_queueForTransferRecipient_revertsWhenRecipientIsWeth9ForNativeLCC() public {
+        address lccNative;
+        address lccErc20;
+        vm.startPrank(factory);
+        address[] memory issuers = new address[](1);
+        issuers[0] = proxyHook;
+        (lccNative, lccErc20) = liquidityHub.createLCCPair(
+            abi.encodePacked(address(0xBEEF)), address(0), address(underlyingAsset1), "NativeSinkTest", issuers
+        );
+        liquidityHub.initialize(lccNative, lccErc20, bytes32("nativeSinkTest"), abi.encodePacked(address(0xBEEF)));
+        vm.stopPrank();
+
+        uint256 amount = 5;
+        vm.prank(proxyHook);
+        liquidityHub.issue(lccNative, user1, amount);
+
+        vm.prank(proxyHook);
+        vm.expectRevert(abi.encodeWithSelector(Errors.NotApproved.selector, address(weth9)));
+        liquidityHub.queueForTransferRecipient(lccNative, address(weth9), amount);
     }
 
     function test_queueForTransferRecipient_native_allowsContractRecipient() public {
@@ -863,8 +924,9 @@ contract LiquidityHubTest is LiquidityHubTestBase {
         assertEq(IERC20(weth).balanceOf(recipient), remainder);
     }
 
-    /// @dev Regression: canonical WETH9 must not receive raw ETH from the Hub (mints WETH to `msg.sender` instead).
-    function test_processSettlementFor_native_recipientWeth9_settlesAsWethErc20OnRecipient() public {
+    /// @dev Canonical `WETH9` is an objective sink for native-backed external reserve-funded settlement; deficit queues
+    ///      must not admit it as the nominal queue owner / payout recipient (see **HUB-02D**).
+    function test_queueForTransferRecipient_native_revertsWhenNominalRecipientIsWeth9() public {
         address lccNative;
         address lccErc20;
         vm.startPrank(factory);
@@ -883,21 +945,10 @@ contract LiquidityHubTest is LiquidityHubTestBase {
         liquidityHub.issue(lccNative, proxyHook, amount);
         vm.prank(proxyHook);
         ILCC(lccNative).transfer(wethAddr, amount);
+
         vm.prank(proxyHook);
+        vm.expectRevert(abi.encodeWithSelector(Errors.NotApproved.selector, wethAddr));
         liquidityHub.queueForTransferRecipient(lccNative, wethAddr, amount);
-
-        vm.deal(address(liquidityHub), amount);
-        vm.prank(proxyHook);
-        liquidityHub.confirmTake(lccNative, amount, false);
-
-        uint256 hubWethBefore = IERC20(wethAddr).balanceOf(address(liquidityHub));
-        liquidityHub.processSettlementFor(lccNative, wethAddr, amount);
-        uint256 hubWethAfter = IERC20(wethAddr).balanceOf(address(liquidityHub));
-
-        assertEq(liquidityHub.settleQueue(lccNative, wethAddr), 0);
-        assertEq(ILCC(lccNative).balanceOf(wethAddr), 0);
-        assertEq(IERC20(wethAddr).balanceOf(wethAddr), amount);
-        assertEq(hubWethAfter, hubWethBefore, "Hub must not strand WETH after settlement to WETH9 recipient");
     }
 
     /// @dev Contracts that implement `INativeSettlementReceiver` still receive raw ETH when native transfer succeeds.
@@ -955,7 +1006,7 @@ contract LiquidityHubTest is LiquidityHubTestBase {
         liquidityHub.queueForTransferRecipient(lccToken1, user2, 0);
     }
 
-    function test_queueForTransferRecipient_queuesWhenRecipientIsBoundEndpoint() public {
+    function test_queueForTransferRecipient_revertsWhenRecipientIsBoundEndpoint() public {
         uint256 amount = 9;
         _setBoundLevel(user2, Bounds.BOUND_ENDPOINT);
 
@@ -965,11 +1016,8 @@ contract LiquidityHubTest is LiquidityHubTestBase {
         ILCC(lccToken1).transfer(user2, amount);
 
         vm.prank(proxyHook);
+        vm.expectRevert(abi.encodeWithSelector(Errors.NotApproved.selector, user2));
         liquidityHub.queueForTransferRecipient(lccToken1, user2, amount);
-
-        assertEq(liquidityHub.settleQueue(lccToken1, user2), amount);
-        assertEq(liquidityHub.totalQueued(lccToken1), amount);
-        assertEq(liquidityHub.queueOfUnderlying(lccToken1), amount);
     }
 
     function test_queueForTransferRecipient_accumulatesQueueForSameRecipient() public {
