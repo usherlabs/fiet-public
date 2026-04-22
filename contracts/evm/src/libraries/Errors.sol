@@ -102,6 +102,16 @@ library Errors {
     /// @notice Thrown when price limit is outside valid tick bounds
     error PriceLimitOutOfBounds(uint160 sqrtPriceLimitX96);
 
+    /// @notice Thrown when non-MM direct liquidity would initialise a core range narrower than policy allows (dense-tick grief mitigation)
+    /// @param widthTicks tickUpper - tickLower (tick units)
+    /// @param minWidthTicks minimum allowed width in tick units
+    error DirectLiquidityRangeTooNarrow(int24 widthTicks, int24 minWidthTicks);
+
+    /// @notice Thrown when non-MM direct liquidity add is below minimum delta (dust mitigation on core pool)
+    /// @param liquidityDelta requested positive liquidity delta for the add
+    /// @param minLiquidityDelta configured floor
+    error DirectLiquidityTooSmall(uint128 liquidityDelta, uint128 minLiquidityDelta);
+
     // ============ POOL & MARKET ERRORS ============
     // Errors related to pool creation, market operations, and pool state
 

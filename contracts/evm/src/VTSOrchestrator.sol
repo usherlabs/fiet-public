@@ -639,7 +639,10 @@ contract VTSOrchestrator is
     }
 
     /// @notice Extend the grace period for a position
-    /// @dev Uses the RFSCheckpoint module to extend the grace period after validating the settlement proof
+    /// @dev Uses the RFSCheckpoint module to extend the grace period after validating the settlement proof.
+    ///      Requires only an initialised commit (`requireLiveSignal=false`). Proof-backed grace extension must remain
+    ///      available when the VRL signal is expired or renewed to empty reserves, otherwise seizure could proceed on
+    ///      the normal grace path while this recovery hook is blocked (`SEIZE-02`).
     /// @param poolKey The pool key for the position
     /// @param commitId The commit identifier
     /// @param positionIndex The position index within the commit
@@ -655,7 +658,7 @@ contract VTSOrchestrator is
         uint32 verifierIndex,
         bytes memory settlementProof
     ) external onlyIfPoolManagerUnlocked onlyIfVRLHandlersRegistered nonReentrant {
-        _assertSignalValid(commitId, true);
+        _assertSignalValid(commitId, false);
         // Validate position exists
         PositionId positionId = getPositionId(commitId, positionIndex);
         _assertPositionValid(positionId, true, poolKey.toId());

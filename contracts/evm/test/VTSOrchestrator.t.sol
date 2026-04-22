@@ -16,6 +16,7 @@ import {ModifyLiquidityParams, SwapParams} from "@uniswap/v4-core/src/types/Pool
 import {MarketVTSConfiguration} from "../src/types/VTS.sol";
 import {VTSConfigs} from "../src/libraries/VTSConfigs.sol";
 import {LiquidityUtils} from "../src/libraries/LiquidityUtils.sol";
+import {OracleUtils} from "../src/libraries/OracleUtils.sol";
 import {Errors} from "../src/libraries/Errors.sol";
 import {StateLibrary} from "v4-periphery/lib/v4-core/src/libraries/StateLibrary.sol";
 import {IPoolManager} from "v4-periphery/lib/v4-core/src/interfaces/IPoolManager.sol";
@@ -251,6 +252,47 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
             abi.encodeWithSelector(IOracleHelper.getPricesForLccPair.selector),
             abi.encode(price0, price1)
         );
+    }
+
+    /// @dev Live `slot0` issued USD for commitment checkpointing (matches `VTSCommitLib._checkpointWithCommitment`).
+    function _checkpointIssuedUsd(PositionId positionId) internal view returns (uint256 issuedUsd) {
+        Position memory pos = vtsOrchestrator.getPosition(positionId);
+        PoolId pid = pos.poolId;
+        (uint160 sqrtP, int24 tick,,) = manager.getSlot0(pid);
+        (uint256 eff0, uint256 eff1) = LiquidityUtils.calculateEffectiveTokenAmounts(
+            sqrtP, tick, pos.tickLower, pos.tickUpper, int256(uint256(pos.liquidity))
+        );
+        issuedUsd = OracleUtils.lccPairValue(
+            IOracleHelper(address(oracleHelper)),
+            Currency.unwrap(corePoolKey.currency0),
+            eff0,
+            Currency.unwrap(corePoolKey.currency1),
+            eff1
+        );
+    }
+
+    /// @dev Effective settled USD for commitment checkpointing (matches `PositionAccountingLib.effectiveSettled` path).
+    function _checkpointSettledUsd(PositionId positionId) internal view returns (uint256 settledUsd) {
+        (uint256 s0, uint256 s1) = _testableOrchestrator().getPositionEffectiveSettledAmounts(positionId);
+        settledUsd = OracleUtils.lccPairValue(
+            IOracleHelper(address(oracleHelper)),
+            Currency.unwrap(corePoolKey.currency0),
+            s0,
+            Currency.unwrap(corePoolKey.currency1),
+            s1
+        );
+    }
+
+    /// @dev VRL signal USD such that `settledUsd + signalUsd = issuedUsd + surplusUsd` (tight surplus for pro-rata netting).
+    function _e2eFinding6_signalForTightSurplus(PositionId positionId, uint256 surplusUsd)
+        internal
+        view
+        returns (uint256 signalUsd)
+    {
+        uint256 issued = _checkpointIssuedUsd(positionId);
+        uint256 settled = _checkpointSettledUsd(positionId);
+        uint256 backingTarget = issued + surplusUsd;
+        signalUsd = backingTarget > settled ? backingTarget - settled : 0;
     }
 
     // ============================================================
@@ -1657,6 +1699,53 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
         );
     }
 
+    /// @dev Proof-backed grace extension must succeed after commit expiry when the lane is still open (SEIZE-02).
+    function test_extendGracePeriod_succeedsAfterCommitExpired_whenLaneOpen_andProofValid() public {
+        (uint256 tokenId,,,) = _createCommittedPosition();
+        PositionId positionId = vtsOrchestrator.getPositionId(tokenId, 0);
+
+        (, uint256 expiresAt,,,) = vtsOrchestrator.getCommit(tokenId);
+
+        _mockLccPrices(1e18, 1e18);
+        _mockSignalUsd(0);
+        unlockCaller.run(
+            address(vtsOrchestrator), abi.encodeWithSelector(VTSOrchestrator.checkpoint.selector, tokenId, 0, true)
+        );
+
+        vm.warp(expiresAt + 1);
+        assertFalse(vtsOrchestrator.isSignalValid(tokenId, true), "commit should be expired for live-signal checks");
+
+        RFSCheckpoint memory checkpointBefore = vtsOrchestrator.positionToCheckpoint(positionId);
+
+        bytes memory settlementProof = abi.encode("post-expiry-proof");
+        vm.mockCall(
+            address(settlementObserver),
+            abi.encodeWithSelector(IVRLSettlementObserver.verifySettlementProof.selector),
+            abi.encode(true)
+        );
+
+        unlockCaller.run(
+            address(vtsOrchestrator),
+            abi.encodeWithSelector(
+                VTSOrchestrator.extendGracePeriod.selector,
+                marketFactory,
+                corePoolKey,
+                tokenId,
+                0,
+                0,
+                0,
+                settlementProof
+            )
+        );
+
+        RFSCheckpoint memory checkpointAfter = vtsOrchestrator.positionToCheckpoint(positionId);
+        assertGt(
+            checkpointAfter.gracePeriodExtension0,
+            checkpointBefore.gracePeriodExtension0,
+            "Grace should extend despite expired signal when proof and lane checks pass"
+        );
+    }
+
     function test_revert_onSeize_whenCommitInvalid_insideUnlock() public {
         vm.expectRevert(abi.encodeWithSelector(Errors.InvalidSignal.selector, uint256(0)));
         unlockCaller.run(address(vtsOrchestrator), abi.encodeWithSelector(VTSOrchestrator.onSeize.selector, 0, 0));
@@ -2281,6 +2370,88 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
         _e2eFinding5_pauseFullRemoveUnpause(tokenId, positionId, bypassSecs);
 
         _e2eFinding5_reactivateCureAndFreshDeficit(tokenId, positionId, advancer, bypassSecs);
+    }
+
+    /// @notice Sufficient backing with partial surplus clears `commitmentDeficitSince` even when token residuals
+    ///         remain; a later under-backed episode must not reuse banked age for `onSeize` bypass.
+    function test_e2e_partialSurplusCheckpoint_clearsDeficitAge_freshDeficitRespectsBypassDelay() public {
+        (uint256 tokenId, PositionId positionId, uint256 bypassSecs) = _e2eFinding5_setupMarketAndCommittedPosition();
+        _e2eFinding6_partialSurplusDeficitAgeBody(tokenId, positionId, bypassSecs, renewSignal.mmState.advancer);
+    }
+
+    function _e2eFinding6_mockRenewVerify() private {
+        bytes memory signalBytes = abi.encode(renewSignal);
+        vm.mockCall(
+            address(signalManager),
+            abi.encodeWithSelector(
+                bytes4(keccak256("verifyLiquiditySignal(address,bytes,bool)")),
+                renewSignal.mmState.owner,
+                signalBytes,
+                true
+            ),
+            abi.encode(true, 10)
+        );
+    }
+
+    function _e2eFinding6_checkpointWithCommitment(uint256 tokenId, address advancer) private {
+        vm.prank(advancer);
+        unlockCaller.run(
+            address(vtsOrchestrator), abi.encodeWithSelector(VTSOrchestrator.checkpoint.selector, tokenId, 0, true)
+        );
+    }
+
+    function _e2eFinding6_onSeize(uint256 tokenId) private {
+        unlockCaller.run(address(vtsOrchestrator), abi.encodeWithSelector(VTSOrchestrator.onSeize.selector, tokenId, 0));
+    }
+
+    function _e2eFinding6_assertSeizeAfterFreshDeficit(uint256 tokenId, uint256 sinceFresh, uint256 bypassSecs)
+        private
+    {
+        uint256 halfGrace = marketVTSConfiguration.token0.gracePeriodTime / 2;
+        assertLt(halfGrace, bypassSecs, "e2e finding6: need halfGrace < bypassSecs for seize timing wedge");
+        vm.warp(sinceFresh + halfGrace);
+        vm.expectRevert();
+        _e2eFinding6_onSeize(tokenId);
+        vm.warp(sinceFresh + bypassSecs + 1);
+        _e2eFinding6_onSeize(tokenId);
+    }
+
+    function _e2eFinding6_partialSurplusDeficitAgeBody(
+        uint256 tokenId,
+        PositionId positionId,
+        uint256 bypassSecs,
+        address advancer
+    ) internal {
+        _e2eFinding6_mockRenewVerify();
+
+        _mockLccPrices(1e18, 1e18);
+        _mockSignalUsd(0);
+        _e2eFinding6_checkpointWithCommitment(tokenId, advancer);
+        (uint256 s0d, uint256 s1d,) = _testableOrchestrator().getCommitmentDeficitAgeFields(positionId);
+        assertTrue(s0d > 0 || s1d > 0, "deficit checkpoint should record since");
+
+        uint256 issuedForSurplus = _checkpointIssuedUsd(positionId);
+        uint256 tightSurplus = issuedForSurplus / 1000;
+        assertGt(tightSurplus, 0, "tight surplus must be non-zero for pro-rata partial netting");
+        _mockSignalUsd(_e2eFinding6_signalForTightSurplus(positionId, tightSurplus));
+        _e2eFinding6_checkpointWithCommitment(tokenId, advancer);
+
+        (uint256 s0p, uint256 s1p,) = _testableOrchestrator().getCommitmentDeficitAgeFields(positionId);
+        assertEq(s0p, 0, "since0 cleared after sufficient checkpoint with partial surplus");
+        assertEq(s1p, 0, "since1 cleared after sufficient checkpoint with partial surplus");
+        (uint256 r0, uint256 r1) = _commitmentDeficit(positionId);
+        assertTrue(r0 > 0 || r1 > 0, "residual commitment deficit should remain after fractional surplus netting");
+
+        vm.warp(block.timestamp + 120);
+        _mockSignalUsd(0);
+        _e2eFinding6_checkpointWithCommitment(tokenId, advancer);
+
+        (uint256 s0f, uint256 s1f,) = _testableOrchestrator().getCommitmentDeficitAgeFields(positionId);
+        assertTrue(s0f > 0 || s1f > 0, "fresh under-backed episode should record since");
+        uint256 sinceFresh = s0f > 0 ? s0f : s1f;
+        assertEq(sinceFresh, block.timestamp, "fresh episode should reset bypass clock to checkpoint time");
+
+        _e2eFinding6_assertSeizeAfterFreshDeficit(tokenId, sinceFresh, bypassSecs);
     }
 
     function _e2eFinding5_setupMarketAndCommittedPosition()

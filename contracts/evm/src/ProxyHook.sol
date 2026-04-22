@@ -257,6 +257,11 @@ contract ProxyHook is BaseHook, VaultCoreActionHandler {
         _settleObligationsForLCC(ctx.lccTokenForCurrency1);
     }
 
+    /// @dev Cancels output LCC held on this hook via issuer `LiquidityHub.cancel` (market-only burn at Hub). This hook
+    ///      is `BOUND_EXEMPT`: it does not maintain wrapped/market bucket maps; all ERC20 balance here is treated as
+    ///      market-derived for `balancesOf` and cancel semantics. Deficit slices are transferred out and queued
+    ///      without co-mingling on the hook. Direct Domain A provenance is enforced only on bucket-tracked paths
+    ///      (e.g. DEX ingress with wrapped slice per **LCC-03**).
     function _cancelProxySwapLccWithDeficit(
         PoolId poolId,
         Currency outputUnderlying,

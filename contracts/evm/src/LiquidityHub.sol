@@ -680,6 +680,10 @@ contract LiquidityHub is BoundRegistry, Ownable, ReentrancyGuardTransient {
      * @param lcc The LCC token address to cancel for
      * @param from The address to cancel tokens from
      * @param amount The amount to cancel
+     * @dev Burn is always `(direct=0, market=amount)` at the Hub boundary. For bucket-tracked `from`, `LCC.burn`
+     *      debits market then wrapped per holder buckets. For `BOUND_EXEMPT` `from` (e.g. `ProxyHook`), bucket maps
+     *      are skipped and the balance is semantically market-derived (`ILCC.balancesOf` reports `(0, balance)`), so
+     *      this matches exempt-held inventory rather than mis-labelling fungible exempt balance as direct-backed.
      */
     function cancel(address lcc, address from, uint256 amount) external onlyIssuer(lcc) nonReentrant {
         // Note: LCC burn path reverts on zero (direct+market) amount.
@@ -782,7 +786,8 @@ contract LiquidityHub is BoundRegistry, Ownable, ReentrancyGuardTransient {
 
     /**
      * @dev Burns against a holder's bucket split (market-derived first, then wrapped).
-     * - Bucket-exempt recipients can burn without bucket accounting.
+     * - Bucket-exempt `from` uses market-only burn by design: exempt-held LCC is not tracked as wrapped per-address
+     *   buckets on `LCC`; `balancesOf(exempt)` exposes the full balance as market-derived for consistency.
      * - If `balancesOf` is unavailable (e.g. reentrancy tests that stub LCC), fall back to a full burn.
      */
     function _safeBurn(address lcc, address from, uint256 amount) internal {

@@ -199,6 +199,15 @@ contract LiquidityCommitmentCertificateTest is Test {
         assertEq(lcc.balanceOf(exempt), 7);
     }
 
+    /// @dev Exempt endpoints do not maintain per-address wrapped/market maps; `balancesOf` exposes full balance as market-derived.
+    function test_balancesOf_exemptHolder_reportsZeroWrappedFullMarket() public {
+        lcc.mint(protocol, 0, 11);
+        (uint256 w, uint256 m) = lcc.balancesOf(protocol);
+        assertEq(w, 0);
+        assertEq(m, 11);
+        assertEq(w + m, lcc.balanceOf(protocol));
+    }
+
     function test_mint_updatesBucketsWhenNotIssued() public {
         lcc.mint(alice, 3, 5);
 
@@ -295,15 +304,15 @@ contract LiquidityCommitmentCertificateTest is Test {
         lcc.mint(protocol, 0, 10);
 
         (uint256 wrappedBal, uint256 marketBal) = lcc.balancesOf(protocol);
-        assertEq(wrappedBal, 10);
-        assertEq(marketBal, 0);
+        assertEq(wrappedBal, 0);
+        assertEq(marketBal, 10);
 
         // Non-issued burn should still skip buckets because protocol is bucket-exempt.
         lcc.burn(protocol, 0, 4);
         (wrappedBal, marketBal) = lcc.balancesOf(protocol);
         assertEq(lcc.balanceOf(protocol), 6);
-        assertEq(wrappedBal, 6);
-        assertEq(marketBal, 0);
+        assertEq(wrappedBal, 0);
+        assertEq(marketBal, 6);
     }
 
     function test_transfer_revertsForNonProtocolToNonProtocol() public {
@@ -351,11 +360,11 @@ contract LiquidityCommitmentCertificateTest is Test {
         // No annulment for protocol -> protocol.
         assertEq(annulCalls, 0);
 
-        // Protocol recipients don't accumulate bucket maps; balancesOf reports ERC20 balance as wrapped via fallback.
+        // Protocol recipients don't accumulate bucket maps; balancesOf reports full ERC20 balance as market-derived.
         (uint256 wrappedBal, uint256 marketBal) = lcc.balancesOf(protocol2);
         assertEq(lcc.balanceOf(protocol2), 4);
-        assertEq(wrappedBal, 4);
-        assertEq(marketBal, 0);
+        assertEq(wrappedBal, 0);
+        assertEq(marketBal, 4);
 
         assertEq(plannedCancelCalls, 1);
         assertEq(lastCancelSender, protocol);
@@ -494,8 +503,8 @@ contract LiquidityCommitmentCertificateTest is Test {
 
         assertEq(lcc.balanceOf(protocol), 60);
         (uint256 wrappedBalProtocol, uint256 marketBalProtocol) = lcc.balancesOf(protocol);
-        assertEq(wrappedBalProtocol, 60);
-        assertEq(marketBalProtocol, 0);
+        assertEq(wrappedBalProtocol, 0);
+        assertEq(marketBalProtocol, 60);
 
         (uint256 wrappedBalMmpm, uint256 marketBalMmpm) = lcc.balancesOf(mmpm);
         assertEq(wrappedBalMmpm, 20);
@@ -628,7 +637,7 @@ contract LiquidityCommitmentCertificateTest is Test {
     }
 
     /// @dev Exempt endpoints may stay bucketless while exempt, but flipping them back to bucket-tracked without
-    ///      reconciling buckets must surface as an invalid state rather than silently classifying the balance as wrapped.
+    ///      reconciling buckets must surface as an invalid state rather than silently inferring a wrapped/market split.
     function test_transfer_bucketTrackedEndpointToBucketExemptEndpoint_flipAfterwards_revertsInvalidBucketState()
         public
     {
