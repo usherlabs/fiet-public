@@ -463,7 +463,9 @@ contract HubRSC is AbstractReactive {
         if (scanQueue.size == 0) {
             // Historical sibling backlog may still be mid-backfill and therefore intentionally hidden from the
             // shared lane. Keep waking the lane while persisted budget exists so bounded backfill can finish.
-            if (!useSharedUnderlying && hasUnderlyingForLcc[lcc] && pendingBackfillLccsByUnderlying[underlying].size > 0) {
+            if (
+                !useSharedUnderlying && hasUnderlyingForLcc[lcc] && pendingBackfillLccsByUnderlying[underlying].size > 0
+            ) {
                 _triggerMoreLiquidityAvailable(lcc, available);
             }
             return;
