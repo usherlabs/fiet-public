@@ -57,8 +57,9 @@ being an informal “should”.
 - **Current code status**:
   - Native ETH ingress is explicitly exact (`msg.value == amount`) on wrap paths; plain ETH to `LiquidityHub.receive`
     is restricted to authorised vault senders (see **HUB-01A**).
-  - Native ETH settlement egress now attempts direct ETH payout first, then wraps to WETH9 and transfers ERC20 WETH
-    when the recipient cannot accept native ETH.
+  - Native ETH settlement egress: EOAs receive raw ETH first, then WETH on transfer failure; contracts receive raw ETH
+    only if they EIP-165 support `INativeSettlementReceiver` (for example `MMQueueCustodian`); all other contracts
+    receive ERC20 WETH directly so payable sinks such as WETH9 cannot credit `msg.sender` instead of the nominal recipient.
   - ERC20 ingress currently assumes standard ERC20 transfer behaviour; this assumption should be treated as part of the
     market-listing policy unless and until explicit on-chain rejection / normalisation is added.
 
@@ -246,9 +247,10 @@ being an informal “should”.
 - **Post-shortfall custody (`UNWRAP_LCC`)**: Queued shortfall does not burn LCC at queue time; LCC held on the **acting beneficiary’s** custodian plus Hub queue state constitute receivable custody — principal is not unscoped router residue on `MMPositionManager` (**DELTA-02**). For `payerIsUser` flows, measure the delta **after**
   pulling LCC into the manager (`transferFrom`), because non-protocol → protocol transfer can annul prior queue entries
   (**LCC-02**) before the custodian unwrap runs.
-- **Native-backed `UNWRAP_LCC` (underlying `address(0)`)**: `LiquidityHub` pays native to the custodian during `unwrap`;
-  the custodian immediately forwards to `MMPositionManager` so the locker’s `receive()` does not run inside the Hub
-  call. The locker withdraws native via `TAKE(ADDRESS_ZERO, ...)` in the same batch.
+- **Native-backed `UNWRAP_LCC` (underlying `address(0)`)**: `LiquidityHub` pays native to the custodian during `unwrap`
+  (`MMQueueCustodian` EIP-165 opts in via `INativeSettlementReceiver`); the custodian immediately forwards to
+  `MMPositionManager` so the locker’s `receive()` does not run inside the Hub call. The locker withdraws native via
+  `TAKE(ADDRESS_ZERO, ...)` in the same batch.
 - **Rationale**: A public Hub `unwrapTo` surface duplicated queue-owner vs payout semantics and required endpoint-only
   admission. Collapsing unwrap actor and queue owner onto the custodian preserves HUB-02 headroom netting while keeping
   split payout handling in MM composition code (custodian forward), not as a generic unwrap variant.
@@ -285,19 +287,24 @@ being an informal “should”.
   (`Errors.InvalidEthSender`), including for `ProxyHook`. Native market liquidity is accounted via `CanonicalVault` /
   `PoolManager` claims, not unbooked ETH balance on the facade.
 
-### HUB-02C: Native queue settlement remains serviceable if recipient shape changes after queueing
+### HUB-02C: Native external settlement payout shape (EOA, opt-in contracts, WETH fallback)
 
-- **Statement**: For native-underlying settlements on the external recipient path, `processSettlementFor(...)` must not
-  become permanently unserviceable merely because a queue owner that appeared EOA-shaped at queue time later becomes a
-  non-payable contract.
+- **Statement**: For native-underlying settlements on the external recipient path, `processSettlementFor(...)` must
+  remain serviceable and must not strand value on the Hub when the nominal recipient is a contract that does not
+  implement the protocol’s explicit native-receiver capability.
 - **Enforced by**:
-  - `src/libraries/LiquidityHubLib.sol::transferUnderlying`:
-    - attempts direct native ETH transfer first;
-    - on native transfer failure, wraps the same amount via `LiquidityHub.weth9()` and transfers WETH as ERC20.
+  - `src/libraries/LiquidityHubLib.sol::transferUnderlying` for `underlying == address(0)`:
+    - **EOAs** (`recipient.code.length == 0`): attempt raw native transfer first; on failure, wrap via
+      `LiquidityHub.weth9()` and transfer WETH as ERC20 (counterfactual / non-payable contract after queue time).
+    - **Contracts** that EIP-165 support `INativeSettlementReceiver` (for example `src/MMQueueCustodian.sol`): same
+      raw-first, WETH-on-failure behaviour as EOAs.
+    - **All other contracts** (including canonical WETH9): skip raw native push; wrap and transfer WETH as ERC20 to
+      the recipient.
 - **Why**:
-  - Queue-time recipient checks (for example `recipient.code.length`) are snapshot checks and cannot guarantee future
-    native payability for counterfactual addresses.
-  - Settlement-time fallback is therefore the definitive liveness guard for native queue redemption.
+  - Queue-time checks cannot guarantee future native payability for counterfactual addresses; EOAs and opt-in contracts
+    still need the raw-then-WETH failure path.
+  - Payable contracts that accept ETH but credit wrapped assets to `msg.sender` (not the nominal recipient) would
+    otherwise clear queues while mis-delivering value; WETH-first for unsupported contracts closes that class.
 
 ### HUB-03: Issuer-gated issuance/cancellation must never operate on invalid LCCs
 
@@ -555,7 +562,8 @@ being an informal “should”.
 ### Policy reference: seizure economics (amendment 2026-04-19)
 
 - **Agents/spec**: Normative **economic intent** for guarantor seizure (base tranche, proportional cure of overdue RfS, position-wide aggregation) is documented in `agents/spec/Seizure-and-Base-Tranche-Policy.md`. That document supersedes older narrative in `agents/spec/Settlements.md` that described time-linear seizure sizing after grace.
-- **Implementation note**: On-chain seized liquidity units are computed in `src/libraries/VTSLifecycleLinkedLib.sol::_calcSeizure`. The outer MM settle path captures **pre-intervention** RfS (`R_pre`) from `getRFS` immediately before settlement deposits mutate position accounting; `getRFS` compares requirements against **effective** settled (`settled + settledOverflow`) per lane. Per-lane **cured amount** is `S_eff = min(S_lane, R_pre)` from that snapshot (not from post-settlement remainders), so a transaction that **fully closes** RfS in the same step can still yield **non-zero** seized units when the snapshot showed overdue obligation. With commitment `C`, base rate `baseBps`, and denominator `B = 10_000`, seized liquidity units per step are `floor(L · inner / denom)` where: if `C == 0`, `inner = baseBps · S_eff`, `denom = B · R_pre`; else if `R_pre > C`, `inner = S_eff`, `denom = R_pre`; else if `baseBps · C ≥ B · R_pre`, `inner = baseBps · S_eff`, `denom = B · R_pre`; else `inner = S_eff`, `denom = C`. Fractional remainder is accumulated in **Q128** via `src/libraries/SeizureCarryQ128Lib.sol` into `PositionAccounting.seizureLiquidityCarry` (path independence across split cures **while a lane’s RfS remains overdue**). `LiquidityUtils.exposureBpsFloor` is **not** used for seizure sizing. After each **seizing** MM settle, `VTSLifecycleLinkedLib._executeMMSettleFromParams` clears per-lane carry for any lane whose **post-settlement** `getRFS` delta is no longer a positive open requirement (`<= 0`), so remainder does not roll into a later distinct RfS episode. Non-seizing commitment refreshes (including zero-delta `touchPosition` pokes that recompute `commitmentMax`) **preserve** carry while liquidity stays positive and lanes stay in the same overdue shape. `VTSPositionLib._trackCommitment` with **zero** live liquidity clears all carry as terminal teardown. Per-lane carry is also cleared in `_calcSeizure` when `R_pre == 0` for that lane. `minResidualUnits` applies after this cumulative sizing step. **Coupling rule**: while batch-scoped seizure context is active for a position, **settle-only deposit** actions (`SETTLE_POSITION` / protocol-credit `SETTLE_POSITION_FROM_DELTAS` deposit paths / locker-credit deposit via `_settle` with negative lanes) must **not** run except for the single authorised deposit phase inside `SEIZE_POSITION`, so Q128 carry cannot advance without a matching liquidity decrease in the same logical operation. Treat `INVARIANTS.md` enforcement points as authoritative for **what reverts**; treat the agents spec as authoritative for **economic intent**, with this note describing **current sizing alignment**.
+- **Implementation note**: On-chain seized liquidity units are computed in `src/libraries/VTSLifecycleLinkedLib.sol::_calcSeizure`. The outer MM settle path captures **pre-intervention** RfS (`R_pre`) from `getRFS` immediately before settlement deposits mutate position accounting; `getRFS` compares requirements against **effective** settled (`settled + settledOverflow`) per lane. Per-lane **cured amount** is `S_eff = min(S_lane, R_pre)` from that snapshot (not from post-settlement remainders), so a transaction that **fully closes** RfS in the same step can still yield **non-zero** seized units when the snapshot showed overdue obligation. With commitment `C`, base rate `baseBps`, and denominator `B = 10_000`, seized liquidity units per step are `floor(L · inner / denom)` where: if `C == 0`, `inner = baseBps · S_eff`, `denom = B · R_pre`; else if `R_pre > C`, `inner = S_eff`, `denom = R_pre`; else if `baseBps · C ≥ B · R_pre`, `inner = baseBps · S_eff`, `denom = B · R_pre`; else `inner = S_eff`, `denom = C`. Fractional remainder is accumulated in **Q128** via `src/libraries/SeizureCarryQ128Lib.sol` into `PositionAccounting.seizureLiquidityCarry` (path independence across split cures **while a lane’s RfS remains overdue**). `LiquidityUtils.exposureBpsFloor` is **not** used for seizure sizing. After each **seizing** MM settle, `VTSLifecycleLinkedLib._executeMMSettleFromParams` clears per-lane carry for any lane whose **post-settlement** `getRFS` delta is no longer a positive open requirement (`<= 0`), so remainder does not roll into a later distinct RfS episode. Whenever RFS checkpoint marking runs (`src/libraries/Checkpoint.sol::markCheckpoint`), per-lane carry for any lane **not** present in the new open mask is also cleared—covering non-seizing settlement, checkpoints, and MM modifies that close an RFS lane without a seizing settle. Non-seizing commitment refreshes (including zero-delta `touchPosition` pokes that recompute `commitmentMax`) **preserve** carry on lanes that **remain** open in the same overdue shape. `VTSPositionLib._trackCommitment` with **zero** live liquidity clears all carry as terminal teardown. Per-lane carry is also cleared in `_calcSeizure` when `R_pre == 0` for that lane. `minResidualUnits` applies after this cumulative sizing step. **Coupling rule**: while batch-scoped seizure context is active for a position, **settle-only deposit** actions (`SETTLE_POSITION` / protocol-credit `SETTLE_POSITION_FROM_DELTAS` deposit paths / locker-credit deposit via `_settle` with negative lanes) must **not** run except for the single authorised deposit phase inside `SEIZE_POSITION`, so Q128 carry cannot advance without a matching liquidity decrease in the same logical operation. Treat `INVARIANTS.md` enforcement points as authoritative for **what reverts**; treat the agents spec as authoritative for **economic intent**, with this note describing **current sizing alignment**.
+- **Known assumption — multi-call seizure is re-priced, not one-shot equivalent**: Repeated `SEIZE_POSITION` calls during the same overdue episode are **not** assumed to be economically equivalent to a single intervention that cures the same **aggregate** amount in one step. Each call snapshots the position’s **then-current** `R_pre` from `getRFS`, uses **then-current** live liquidity (and recomputed `commitmentMax` after any prior seizure decrease), sizes seized units for that step, and removes liquidity before a later step can run. Q128 carry makes **rounding** path-independent while a lane’s RfS remains overdue; it does **not** freeze an original episode baseline or make full seizure economics path-independent across separate transactions or calls.
 
 ### SETTLE-01: Withdrawals from active positions are disallowed while RFS is open
 

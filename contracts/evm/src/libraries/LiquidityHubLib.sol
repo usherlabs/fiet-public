@@ -9,6 +9,8 @@ import {IMarketFactory} from "../interfaces/IMarketFactory.sol";
 import {Currency} from "v4-periphery/lib/v4-core/src/types/Currency.sol";
 import {CurrencyTransfer} from "./CurrencyTransfer.sol";
 import {IWETH9} from "v4-periphery/src/interfaces/external/IWETH9.sol";
+import {ERC165Checker} from "openzeppelin-contracts/contracts/utils/introspection/ERC165Checker.sol";
+import {INativeSettlementReceiver} from "../interfaces/INativeSettlementReceiver.sol";
 
 interface ILiquidityHubWeth9 {
     function weth9() external view returns (address);
@@ -574,13 +576,20 @@ library LiquidityHubLib {
         reserve.marketDerived -= marketDerivedAmount;
 
         if (underlying == address(0)) {
-            // Attempt native push first for backwards-compatible payout behaviour.
-            (bool nativeOk,) = account.call{value: amount}("");
-            if (nativeOk) return;
-
             address wrappedNative = ILiquidityHubWeth9(address(this)).weth9();
             if (wrappedNative == address(0)) {
                 revert Errors.InvalidAddress(wrappedNative);
+            }
+
+            // EOAs and contracts that explicitly opt in via `INativeSettlementReceiver` (EIP-165) may receive raw ETH.
+            // All other contracts (including canonical WETH9) settle as ERC20 WETH so value cannot be absorbed by
+            // payable contracts that credit `msg.sender` instead of the nominal recipient.
+            bool tryRawEthPush = account.code.length == 0
+                || ERC165Checker.supportsInterface(account, type(INativeSettlementReceiver).interfaceId);
+
+            if (tryRawEthPush) {
+                (bool nativeOk,) = account.call{value: amount}("");
+                if (nativeOk) return;
             }
 
             IWETH9(wrappedNative).deposit{value: amount}();

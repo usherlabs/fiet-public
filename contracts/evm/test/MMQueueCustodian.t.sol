@@ -3,9 +3,11 @@ pragma solidity ^0.8.26;
 
 import "forge-std/Test.sol";
 
+import {IERC165} from "@openzeppelin/contracts/utils/introspection/IERC165.sol";
 import {MMQueueCustodian} from "../src/MMQueueCustodian.sol";
 import {MMQueueCustodianFactory} from "../src/MMQueueCustodianFactory.sol";
 import {IMarketFactory} from "../src/interfaces/IMarketFactory.sol";
+import {INativeSettlementReceiver} from "../src/interfaces/INativeSettlementReceiver.sol";
 import {Errors} from "../src/libraries/Errors.sol";
 import {MockERC20} from "./_mocks/MockERC20.sol";
 
@@ -57,6 +59,11 @@ contract MMQueueCustodianTest is Test {
 
     function test_totalQueuedLcc_zeroWhenNoLccHeld() public {
         assertEq(custodian.totalQueuedLcc(address(lcc)), 0);
+    }
+
+    function test_supportsInterface_declaresNativeSettlementReceiver() public view {
+        assertTrue(custodian.supportsInterface(type(IERC165).interfaceId));
+        assertTrue(custodian.supportsInterface(type(INativeSettlementReceiver).interfaceId));
     }
 }
 

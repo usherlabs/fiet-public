@@ -9,6 +9,8 @@ import {Errors} from "../src/libraries/Errors.sol";
 import {Bounds} from "../src/libraries/Bounds.sol";
 import {Vm} from "forge-std/Vm.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {ERC165} from "@openzeppelin/contracts/utils/introspection/ERC165.sol";
+import {INativeSettlementReceiver} from "../src/interfaces/INativeSettlementReceiver.sol";
 
 /// @dev Contract with no `ICanonicalVault.marketFactory()` — Hub `receive` must reject.
 contract MockNonCanonicalEthSender {
@@ -76,6 +78,19 @@ contract CounterfactualDeployer {
     function deploy(bytes32 salt) external returns (address deployed) {
         deployed = address(new NonPayableCreate2Recipient{salt: salt}());
     }
+}
+
+/// @dev Explicit native opt-in for `LiquidityHubLib.transferUnderlying` contract branch tests.
+contract NativeOptInReceiverMock is ERC165, INativeSettlementReceiver {
+    function supportsNativeSettlementFromFiet() external pure override returns (bool) {
+        return true;
+    }
+
+    function supportsInterface(bytes4 interfaceId) public view virtual override returns (bool) {
+        return interfaceId == type(INativeSettlementReceiver).interfaceId || super.supportsInterface(interfaceId);
+    }
+
+    receive() external payable {}
 }
 
 /**
@@ -846,6 +861,80 @@ contract LiquidityHubTest is LiquidityHubTestBase {
         assertEq(ILCC(lccNative).balanceOf(recipient), 0);
         assertEq(recipient.balance, partialAmount);
         assertEq(IERC20(weth).balanceOf(recipient), remainder);
+    }
+
+    /// @dev Regression: canonical WETH9 must not receive raw ETH from the Hub (mints WETH to `msg.sender` instead).
+    function test_processSettlementFor_native_recipientWeth9_settlesAsWethErc20OnRecipient() public {
+        address lccNative;
+        address lccErc20;
+        vm.startPrank(factory);
+        address[] memory issuers = new address[](1);
+        issuers[0] = proxyHook;
+        (lccNative, lccErc20) = liquidityHub.createLCCPair(
+            abi.encodePacked(address(0xD299)), address(0), address(underlyingAsset1), "Native Weth9 Recipient", issuers
+        );
+        liquidityHub.initialize(lccNative, lccErc20, bytes32("nativeWeth9Market"), abi.encodePacked(address(0xD299)));
+        vm.stopPrank();
+
+        address wethAddr = address(liquidityHub.weth9());
+        uint256 amount = 9;
+
+        vm.prank(proxyHook);
+        liquidityHub.issue(lccNative, proxyHook, amount);
+        vm.prank(proxyHook);
+        ILCC(lccNative).transfer(wethAddr, amount);
+        vm.prank(proxyHook);
+        liquidityHub.queueForTransferRecipient(lccNative, wethAddr, amount);
+
+        vm.deal(address(liquidityHub), amount);
+        vm.prank(proxyHook);
+        liquidityHub.confirmTake(lccNative, amount, false);
+
+        uint256 hubWethBefore = IERC20(wethAddr).balanceOf(address(liquidityHub));
+        liquidityHub.processSettlementFor(lccNative, wethAddr, amount);
+        uint256 hubWethAfter = IERC20(wethAddr).balanceOf(address(liquidityHub));
+
+        assertEq(liquidityHub.settleQueue(lccNative, wethAddr), 0);
+        assertEq(ILCC(lccNative).balanceOf(wethAddr), 0);
+        assertEq(IERC20(wethAddr).balanceOf(wethAddr), amount);
+        assertEq(hubWethAfter, hubWethBefore, "Hub must not strand WETH after settlement to WETH9 recipient");
+    }
+
+    /// @dev Contracts that implement `INativeSettlementReceiver` still receive raw ETH when native transfer succeeds.
+    function test_processSettlementFor_native_optInContractRecipient_receivesEth() public {
+        address lccNative;
+        address lccErc20;
+        vm.startPrank(factory);
+        address[] memory issuers = new address[](1);
+        issuers[0] = proxyHook;
+        (lccNative, lccErc20) = liquidityHub.createLCCPair(
+            abi.encodePacked(address(0xD29A)), address(0), address(underlyingAsset1), "Native OptIn Recipient", issuers
+        );
+        liquidityHub.initialize(lccNative, lccErc20, bytes32("nativeOptInMarket"), abi.encodePacked(address(0xD29A)));
+        vm.stopPrank();
+
+        NativeOptInReceiverMock recipient = new NativeOptInReceiverMock();
+        uint256 amount = 11;
+
+        vm.prank(proxyHook);
+        liquidityHub.issue(lccNative, proxyHook, amount);
+        vm.prank(proxyHook);
+        ILCC(lccNative).transfer(address(recipient), amount);
+        vm.prank(proxyHook);
+        liquidityHub.queueForTransferRecipient(lccNative, address(recipient), amount);
+
+        vm.deal(address(liquidityHub), amount);
+        vm.prank(proxyHook);
+        liquidityHub.confirmTake(lccNative, amount, false);
+
+        address wethAddr = address(liquidityHub.weth9());
+        uint256 ethBefore = address(recipient).balance;
+        liquidityHub.processSettlementFor(lccNative, address(recipient), amount);
+
+        assertEq(liquidityHub.settleQueue(lccNative, address(recipient)), 0);
+        assertEq(ILCC(lccNative).balanceOf(address(recipient)), 0);
+        assertEq(address(recipient).balance - ethBefore, amount);
+        assertEq(IERC20(wethAddr).balanceOf(address(recipient)), 0);
     }
 
     function test_queueForTransferRecipient_revertsWhenCallerIsNotIssuer() public {

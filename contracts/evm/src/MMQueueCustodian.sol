@@ -4,9 +4,11 @@ pragma solidity ^0.8.26;
 import {Currency, CurrencyLibrary} from "v4-periphery/lib/v4-core/src/types/Currency.sol";
 import {IERC20} from "openzeppelin-contracts/contracts/token/ERC20/IERC20.sol";
 import {Math} from "openzeppelin-contracts/contracts/utils/math/Math.sol";
+import {ERC165} from "openzeppelin-contracts/contracts/utils/introspection/ERC165.sol";
 import {IMMQueueCustodian} from "./interfaces/IMMQueueCustodian.sol";
 import {ILCC} from "./interfaces/ILCC.sol";
 import {ILiquidityHub} from "./interfaces/ILiquidityHub.sol";
+import {INativeSettlementReceiver} from "./interfaces/INativeSettlementReceiver.sol";
 import {Errors} from "./libraries/Errors.sol";
 
 /// @title MMQueueCustodian
@@ -14,7 +16,7 @@ import {Errors} from "./libraries/Errors.sol";
 ///         on this contract are the receivable state (no shadow ledger).
 /// @dev `COLLECT_AVAILABLE_LIQUIDITY` settles when needed, then `release` credits the locker
 ///      through `MMPositionManager` pull flows (`TAKE`), not direct beneficiary push payout from this contract.
-contract MMQueueCustodian is IMMQueueCustodian {
+contract MMQueueCustodian is IMMQueueCustodian, ERC165, INativeSettlementReceiver {
     /// @notice Underlying released to the position manager after settlement paths deliver underlying to this custodian.
     event UnderlyingReleasedToManager(address indexed lcc, uint256 amount);
 
@@ -36,6 +38,16 @@ contract MMQueueCustodian is IMMQueueCustodian {
         if (_beneficiary == address(0)) revert Errors.InvalidAddress(_beneficiary);
         positionManager = _positionManager;
         beneficiary = _beneficiary;
+    }
+
+    /// @inheritdoc INativeSettlementReceiver
+    function supportsNativeSettlementFromFiet() external pure override returns (bool) {
+        return true;
+    }
+
+    /// @inheritdoc ERC165
+    function supportsInterface(bytes4 interfaceId) public view virtual override returns (bool) {
+        return interfaceId == type(INativeSettlementReceiver).interfaceId || super.supportsInterface(interfaceId);
     }
 
     /// @inheritdoc IMMQueueCustodian
