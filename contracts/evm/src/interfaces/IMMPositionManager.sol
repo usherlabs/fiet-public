@@ -58,7 +58,7 @@ interface IMMPositionManager {
     /// @return The next token ID (will be assigned on next commitSignal call)
     function nextTokenId() external view returns (uint256);
 
-    /// @notice Queue custodian for an NFT recipient domain (one custodian : many commits for that recipient).
-    /// @dev Deployed only in `commitSignal`; use `custodianFor` for queue-owner resolution elsewhere.
+    /// @notice Queue custodian for a beneficiary domain (one custodian per beneficiary; immutable beneficiary inside).
+    /// @dev Deployed via `INITIALISE`; use `custodianFor` for queue-owner resolution elsewhere.
     function custodianFor(address recipient) external view returns (address);
 }
