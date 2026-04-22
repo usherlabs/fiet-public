@@ -207,18 +207,24 @@ contract SpokeRSC is AbstractReactive {
 
     function _forwardSettlementSucceeded(IReactive.LogRecord calldata log) internal {
         address lcc = address(uint160(log.topic_1));
-        uint256 maxAmount = abi.decode(log.data, (uint256));
+        (uint256 maxAmount, uint256 attemptId) = abi.decode(log.data, (uint256, uint256));
         uint256 eventNonce = _getAndIncrementEventNonce(ReactiveConstants.RECORD_SETTLEMENT_SUCCEEDED_SELECTOR);
 
         bytes memory payload = abi.encodeWithSelector(
-            ReactiveConstants.RECORD_SETTLEMENT_SUCCEEDED_SELECTOR, address(0), lcc, recipient, maxAmount, eventNonce
+            ReactiveConstants.RECORD_SETTLEMENT_SUCCEEDED_SELECTOR,
+            address(0),
+            lcc,
+            recipient,
+            maxAmount,
+            attemptId,
+            eventNonce
         );
         emit Callback(reactChainId, hubCallback, GAS_LIMIT, payload);
     }
 
     function _forwardSettlementFailed(IReactive.LogRecord calldata log) internal {
         address lcc = address(uint160(log.topic_1));
-        (uint256 maxAmount, bytes memory revertData) = abi.decode(log.data, (uint256, bytes));
+        (uint256 maxAmount, uint256 attemptId, bytes memory revertData) = abi.decode(log.data, (uint256, uint256, bytes));
         bytes4 failureSelector = SettlementFailureLib.selectorFromRevertData(revertData);
         uint8 failureClass = SettlementFailureLib.classify(failureSelector);
         uint256 eventNonce = _getAndIncrementEventNonce(ReactiveConstants.RECORD_SETTLEMENT_FAILED_SELECTOR);
@@ -230,6 +236,7 @@ contract SpokeRSC is AbstractReactive {
             lcc,
             recipient,
             maxAmount,
+            attemptId,
             failureSelector,
             failureClass,
             eventNonce

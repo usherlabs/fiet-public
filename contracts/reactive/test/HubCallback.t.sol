@@ -178,8 +178,8 @@ contract HubCallbackTest is Test {
 
         vm.prank(callbackProxy);
         vm.expectEmit(true, true, false, true, address(callback));
-        emit HubCallback.SettlementSucceededReported(recipient, lcc, 12);
-        callback.recordSettlementSucceeded(spoke, lcc, recipient, 12, 1);
+        emit HubCallback.SettlementSucceededReported(recipient, lcc, 12, 77);
+        callback.recordSettlementSucceeded(spoke, lcc, recipient, 12, 77, 1);
     }
 
     function test_recordSettlementFailedEmitsNormalisedEvent() public {
@@ -191,6 +191,7 @@ contract HubCallbackTest is Test {
             recipient,
             lcc,
             7,
+            88,
             SettlementFailureLib.NOT_APPROVED_SELECTOR,
             SettlementFailureLib.FAILURE_CLASS_TERMINAL_POLICY
         );
@@ -199,6 +200,7 @@ contract HubCallbackTest is Test {
             lcc,
             recipient,
             7,
+            88,
             SettlementFailureLib.NOT_APPROVED_SELECTOR,
             SettlementFailureLib.FAILURE_CLASS_TERMINAL_POLICY,
             1
