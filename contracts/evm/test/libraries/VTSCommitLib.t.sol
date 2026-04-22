@@ -578,16 +578,47 @@ contract VTSCommitLibTest is VTSLibTestBase {
 
         uint256 deficitUsd = issuedUsd - backingUsd;
         uint256 deficitBps = FullMath.mulDiv(deficitUsd, LiquidityUtils.BPS_DENOMINATOR, issuedUsd);
-        uint256 exp0 = FullMath.mulDiv(eff0, deficitBps, LiquidityUtils.BPS_DENOMINATOR);
-        uint256 exp1 = FullMath.mulDiv(eff1, deficitBps, LiquidityUtils.BPS_DENOMINATOR);
+        uint256 exp0 = FullMath.mulDiv(eff0, deficitUsd, issuedUsd);
+        uint256 exp1 = FullMath.mulDiv(eff1, deficitUsd, issuedUsd);
 
-        assertEq(d0, exp0, "deficit0 should match proportional deficit bps");
-        assertEq(d1, exp1, "deficit1 should match proportional deficit bps");
+        assertEq(d0, exp0, "deficit0 should match eff0 * deficitUsd / issuedUsd");
+        assertEq(d1, exp1, "deficit1 should match eff1 * deficitUsd / issuedUsd");
         assertEq(
             harness.getPositionCommitmentDeficitBps(positionId),
             uint16(deficitBps),
             "deficit bps should match computed bps"
         );
+    }
+
+    /// @dev Sub-1 bps USD shortfall floors `commitmentDeficitBps` to 0, but per-lane deficits must not double-floor
+    ///      to zero when eff * deficitUsd / issuedUsd is still positive.
+    function test_checkpoint_subOneBpsShortfall_nonZeroLaneDeficits_andDeficitSince() public {
+        harness.setPositionSettled(positionId, 0, 0);
+        harness.setPositionCommitmentDeficit(positionId, 0, 0);
+
+        uint256 issuedUsd = _computeIssuedUsd();
+        // 0.5 bps shortfall: deficitBps = floor(5000) = 0, but token deficits remain non-zero.
+        uint256 backingUsd = issuedUsd - (issuedUsd / 20_000);
+        oracle.setTotalValue(backingUsd);
+
+        harness.checkpoint(manager, oracle, commitId, positionId);
+
+        assertEq(
+            harness.getPositionCommitmentDeficitBps(positionId),
+            0,
+            "sub-1 bps shortfall should still floor bps severity to 0"
+        );
+
+        (uint256 d0, uint256 d1) = harness.getPositionCommitmentDeficit(positionId);
+        assertTrue(d0 > 0 || d1 > 0, "at least one lane deficit should be non-zero");
+
+        (uint256 since0, uint256 since1) = harness.getPositionCommitmentDeficitSince(positionId);
+        if (d0 > 0) {
+            assertEq(since0, block.timestamp, "deficit0 age should initialise when lane deficit non-zero");
+        }
+        if (d1 > 0) {
+            assertEq(since1, block.timestamp, "deficit1 age should initialise when lane deficit non-zero");
+        }
     }
 
     function test_checkpoint_expiredSignal_treatsSignalUsdAsZero() public {

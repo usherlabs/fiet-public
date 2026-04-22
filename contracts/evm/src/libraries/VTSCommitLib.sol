@@ -396,13 +396,14 @@ library VTSCommitLib {
             return;
         }
 
-        // Insufficient backing: derive position-level deficit in token units using deficit BPS
+        // Insufficient backing: severity is still whole bps, but per-lane deficits are proportional to
+        // deficitUsd/issuedUsd in one step so sub-1 bps shortfalls do not double-floor to zero in token units.
         {
             uint256 deficitUsd = ctx.issuedUsd - backingUsd;
             uint256 deficitBps = FullMath.mulDiv(deficitUsd, LiquidityUtils.BPS_DENOMINATOR, ctx.issuedUsd);
             pa.commitmentDeficitBps = uint16(deficitBps);
-            _writeCommitmentDeficitToken(pa, 0, FullMath.mulDiv(ctx.eff0, deficitBps, LiquidityUtils.BPS_DENOMINATOR));
-            _writeCommitmentDeficitToken(pa, 1, FullMath.mulDiv(ctx.eff1, deficitBps, LiquidityUtils.BPS_DENOMINATOR));
+            _writeCommitmentDeficitToken(pa, 0, FullMath.mulDiv(ctx.eff0, deficitUsd, ctx.issuedUsd));
+            _writeCommitmentDeficitToken(pa, 1, FullMath.mulDiv(ctx.eff1, deficitUsd, ctx.issuedUsd));
         }
     }
 
