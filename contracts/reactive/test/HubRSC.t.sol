@@ -8,6 +8,7 @@ import {IReactive} from "reactive-lib/interfaces/IReactive.sol";
 import {HubRSC} from "../src/HubRSC.sol";
 import {MockLiquidityHub} from "./_mocks/MockLiquidityHub.sol";
 import {ReactiveConstants} from "../src/libs/ReactiveConstants.sol";
+import {SettlementFailureLib} from "../src/libs/SettlementFailureLib.sol";
 
 uint256 constant DEFAULT_MAX_DISPATCH_ITEMS = 20;
 uint256 constant RECEIVER_BATCH_SIZE_CAP = 30;
@@ -1316,7 +1317,7 @@ contract HubRSCTest is Test {
         assertEq(remaining, 40);
     }
 
-    function test_releasesInFlightOnSettlementFailedAndKeepsPendingRetryable() public {
+    function test_unknownFailureRemainsRetryable() public {
         _clearSystemContract();
         HubRSC hub = new HubRSC(
             DEFAULT_MAX_DISPATCH_ITEMS,
@@ -1341,14 +1342,237 @@ contract HubRSCTest is Test {
         assertEq(hub.inFlightByKey(hub.computeKey(lcc, recipient)), 100);
 
         vm.recordLogs();
-        hub.react(_settlementFailedLog(hub, lcc, recipient, 100, hex"deadc0de", 0x9103, 1));
+        hub.react(
+            _settlementFailedLog(
+                hub,
+                lcc,
+                recipient,
+                100,
+                bytes4(keccak256("UnknownFailure()")),
+                SettlementFailureLib.FAILURE_CLASS_UNKNOWN,
+                0x9103,
+                1
+            )
+        );
         Vm.Log[] memory retryEntries = vm.getRecordedLogs();
         assertTrue(_pendingExists(hub, lcc, recipient));
+        assertFalse(hub.terminalFailureByKey(hub.computeKey(lcc, recipient)));
         assertEq(hub.inFlightByKey(hub.computeKey(lcc, recipient)), 100);
 
         (, lccs,, amounts) = _decodeProcessSettlementsPayload(retryEntries);
         assertEq(lccs.length, 1);
         assertEq(amounts[0], 100);
+    }
+
+    function test_terminalNotApprovedFailureIsQuarantinedAndNotRedispatched() public {
+        _clearSystemContract();
+        HubRSC hub = new HubRSC(
+            DEFAULT_MAX_DISPATCH_ITEMS,
+            originChainId,
+            destinationChainId,
+            liquidityHub,
+            hubCallback,
+            destinationReceiverContract
+        );
+
+        address recipient = makeAddr("recipient");
+        address lcc = makeAddr("lcc");
+        bytes32 key = hub.computeKey(lcc, recipient);
+
+        hub.react(_settlementLog(hub, recipient, lcc, 100, 1, 0x9111, 1));
+        hub.react(liquidityAvailableLog(hub.liquidityHub(), lcc, 100, bytes32("mkt"), 0x9112, 2));
+        assertEq(hub.inFlightByKey(key), 100);
+
+        vm.recordLogs();
+        hub.react(
+            _settlementFailedLog(
+                hub,
+                lcc,
+                recipient,
+                100,
+                SettlementFailureLib.NOT_APPROVED_SELECTOR,
+                SettlementFailureLib.FAILURE_CLASS_TERMINAL_POLICY,
+                0x9113,
+                3
+            )
+        );
+        Vm.Log[] memory quarantineEntries = vm.getRecordedLogs();
+
+        (,, uint256 remaining, bool exists) = hub.pending(key);
+        assertTrue(exists);
+        assertEq(remaining, 100);
+        assertEq(hub.inFlightByKey(key), 0);
+        assertTrue(hub.terminalFailureByKey(key));
+        assertEq(hub.terminalFailureSelectorByKey(key), SettlementFailureLib.NOT_APPROVED_SELECTOR);
+        assertEq(hub.terminalFailureClassByKey(key), SettlementFailureLib.FAILURE_CLASS_TERMINAL_POLICY);
+        assertFalse(hub.inQueue(key));
+        assertEq(
+            _findCallbackPayloadBySelector(quarantineEntries, ReactiveConstants.PROCESS_SETTLEMENTS_SELECTOR).length, 0
+        );
+
+        vm.recordLogs();
+        hub.react(liquidityAvailableLog(hub.liquidityHub(), lcc, 100, bytes32("mkt"), 0x9114, 4));
+        Vm.Log[] memory laterEntries = vm.getRecordedLogs();
+
+        assertEq(_findCallbackPayloadBySelector(laterEntries, ReactiveConstants.PROCESS_SETTLEMENTS_SELECTOR).length, 0);
+        assertTrue(hub.terminalFailureByKey(key));
+        assertEq(hub.inFlightByKey(key), 0);
+    }
+
+    function test_terminalFailureOnSameUnderlyingStillAllowsSiblingDispatch() public {
+        _clearSystemContract();
+        HubRSC hub = new HubRSC(
+            DEFAULT_MAX_DISPATCH_ITEMS,
+            originChainId,
+            destinationChainId,
+            liquidityHub,
+            hubCallback,
+            destinationReceiverContract
+        );
+
+        address underlying = makeAddr("underlying");
+        address triggerLcc = makeAddr("triggerLcc");
+        address badLcc = makeAddr("badLcc");
+        address goodLcc = makeAddr("goodLcc");
+        address badRecipient = makeAddr("badRecipient");
+        address goodRecipient = makeAddr("goodRecipient");
+
+        hub.react(_lccCreatedLog(hub, underlying, triggerLcc, bytes32("mktA"), 0x9120, 1));
+        hub.react(_lccCreatedLog(hub, underlying, badLcc, bytes32("mktB"), 0x9121, 2));
+        hub.react(_lccCreatedLog(hub, underlying, goodLcc, bytes32("mktC"), 0x9122, 3));
+        hub.react(_settlementLog(hub, badRecipient, badLcc, 100, 1, 0x9123, 4));
+        hub.react(_settlementLog(hub, goodRecipient, goodLcc, 50, 1, 0x9124, 5));
+
+        hub.react(liquidityAvailableLog(hub.liquidityHub(), triggerLcc, underlying, 100, bytes32("mktA"), 0x9125, 6));
+        assertEq(hub.inFlightByKey(hub.computeKey(badLcc, badRecipient)), 100);
+        assertEq(hub.inFlightByKey(hub.computeKey(goodLcc, goodRecipient)), 0);
+
+        vm.recordLogs();
+        hub.react(
+            _settlementFailedLog(
+                hub,
+                badLcc,
+                badRecipient,
+                100,
+                SettlementFailureLib.NOT_APPROVED_SELECTOR,
+                SettlementFailureLib.FAILURE_CLASS_TERMINAL_POLICY,
+                0x9126,
+                7
+            )
+        );
+        Vm.Log[] memory siblingEntries = vm.getRecordedLogs();
+
+        (, address[] memory lccs, address[] memory recipients, uint256[] memory amounts) =
+            _decodeProcessSettlementsPayload(siblingEntries);
+        assertEq(lccs.length, 1);
+        assertEq(lccs[0], goodLcc);
+        assertEq(recipients[0], goodRecipient);
+        assertEq(amounts[0], 50);
+        assertTrue(hub.terminalFailureByKey(hub.computeKey(badLcc, badRecipient)));
+        assertEq(hub.inFlightByKey(hub.computeKey(goodLcc, goodRecipient)), 50);
+    }
+
+    function test_terminalFailureClearsOnFreshQueueMutation() public {
+        _clearSystemContract();
+        HubRSC hub = new HubRSC(
+            DEFAULT_MAX_DISPATCH_ITEMS,
+            originChainId,
+            destinationChainId,
+            liquidityHub,
+            hubCallback,
+            destinationReceiverContract
+        );
+
+        address recipient = makeAddr("recipient");
+        address lcc = makeAddr("lcc");
+        bytes32 key = hub.computeKey(lcc, recipient);
+
+        hub.react(_settlementLog(hub, recipient, lcc, 100, 1, 0x9131, 1));
+        hub.react(liquidityAvailableLog(hub.liquidityHub(), lcc, 100, bytes32("mkt"), 0x9132, 2));
+        hub.react(
+            _settlementFailedLog(
+                hub,
+                lcc,
+                recipient,
+                100,
+                SettlementFailureLib.NOT_APPROVED_SELECTOR,
+                SettlementFailureLib.FAILURE_CLASS_TERMINAL_POLICY,
+                0x9133,
+                3
+            )
+        );
+        assertTrue(hub.terminalFailureByKey(key));
+        assertFalse(hub.inQueue(key));
+
+        hub.react(_settlementLog(hub, recipient, lcc, 25, 2, 0x9134, 4));
+        (,, uint256 remaining, bool exists) = hub.pending(key);
+        assertTrue(exists);
+        assertEq(remaining, 125);
+        assertFalse(hub.terminalFailureByKey(key));
+        assertTrue(hub.inQueue(key));
+        assertEq(hub.inFlightByKey(key), 100);
+
+        vm.recordLogs();
+        hub.react(liquidityAvailableLog(hub.liquidityHub(), lcc, 125, bytes32("mkt"), 0x9135, 5));
+        Vm.Log[] memory entries = vm.getRecordedLogs();
+
+        (, address[] memory lccs, address[] memory recipients, uint256[] memory amounts) =
+            _decodeProcessSettlementsPayload(entries);
+        assertEq(lccs.length, 1);
+        assertEq(lccs[0], lcc);
+        assertEq(recipients[0], recipient);
+        assertEq(amounts[0], 25);
+    }
+
+    function test_terminalFailureClearsOnAuthoritativeDecrease() public {
+        _clearSystemContract();
+        HubRSC hub = new HubRSC(
+            DEFAULT_MAX_DISPATCH_ITEMS,
+            originChainId,
+            destinationChainId,
+            liquidityHub,
+            hubCallback,
+            destinationReceiverContract
+        );
+
+        address recipient = makeAddr("recipient");
+        address lcc = makeAddr("lcc");
+        bytes32 key = hub.computeKey(lcc, recipient);
+
+        hub.react(_settlementLog(hub, recipient, lcc, 100, 1, 0x9141, 1));
+        hub.react(liquidityAvailableLog(hub.liquidityHub(), lcc, 100, bytes32("mkt"), 0x9142, 2));
+        hub.react(
+            _settlementFailedLog(
+                hub,
+                lcc,
+                recipient,
+                100,
+                SettlementFailureLib.NOT_APPROVED_SELECTOR,
+                SettlementFailureLib.FAILURE_CLASS_TERMINAL_POLICY,
+                0x9143,
+                3
+            )
+        );
+        assertTrue(hub.terminalFailureByKey(key));
+        assertFalse(hub.inQueue(key));
+
+        hub.react(_settlementProcessedLog(hub, lcc, recipient, 40, 0x9144, 4));
+        (,, uint256 remaining, bool exists) = hub.pending(key);
+        assertTrue(exists);
+        assertEq(remaining, 60);
+        assertFalse(hub.terminalFailureByKey(key));
+        assertTrue(hub.inQueue(key));
+
+        vm.recordLogs();
+        hub.react(liquidityAvailableLog(hub.liquidityHub(), lcc, 60, bytes32("mkt"), 0x9145, 5));
+        Vm.Log[] memory entries = vm.getRecordedLogs();
+
+        (, address[] memory lccs, address[] memory recipients, uint256[] memory amounts) =
+            _decodeProcessSettlementsPayload(entries);
+        assertEq(lccs.length, 1);
+        assertEq(lccs[0], lcc);
+        assertEq(recipients[0], recipient);
+        assertEq(amounts[0], 60);
     }
 
     function test_manualSettlementProcessedLogReconcilesWithoutDispatch() public {
@@ -1850,11 +2074,11 @@ contract HubRSCTest is Test {
         address lcc,
         address recipient,
         uint256 maxAmount,
-        bytes memory reason,
+        bytes4 failureSelector,
+        uint8 failureClass,
         uint256 txHash,
         uint256 logIndex
     ) internal view returns (IReactive.LogRecord memory) {
-        reason;
         return IReactive.LogRecord({
             chain_id: hub.reactChainId(),
             _contract: hub.hubCallback(),
@@ -1862,7 +2086,7 @@ contract HubRSCTest is Test {
             topic_1: uint256(uint160(recipient)),
             topic_2: uint256(uint160(lcc)),
             topic_3: 0,
-            data: abi.encode(maxAmount),
+            data: abi.encode(maxAmount, failureSelector, failureClass),
             block_number: 0,
             op_code: 0,
             block_hash: 0,

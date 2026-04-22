@@ -5,6 +5,7 @@ import {AbstractReactive} from "reactive-lib/abstract-base/AbstractReactive.sol"
 import {IReactive} from "reactive-lib/interfaces/IReactive.sol";
 import {LinkedQueue} from "./libs/LinkedQueue.sol";
 import {ReactiveConstants} from "./libs/ReactiveConstants.sol";
+import {SettlementFailureLib} from "./libs/SettlementFailureLib.sol";
 
 /// @notice Hub RSC that aggregates Spoke reports and dispatches settlements.
 contract HubRSC is AbstractReactive {
@@ -35,7 +36,7 @@ contract HubRSC is AbstractReactive {
     /// @notice SettlementSucceededReported(address indexed recipient, address indexed lcc, uint256 maxAmount).
     uint256 public constant SETTLEMENT_SUCCEEDED_REPORTED_TOPIC = ReactiveConstants.SETTLEMENT_SUCCEEDED_REPORTED_TOPIC;
 
-    /// @notice SettlementFailedReported(address indexed recipient, address indexed lcc, uint256 maxAmount).
+    /// @notice SettlementFailedReported(address indexed recipient, address indexed lcc, uint256 maxAmount, bytes4 failureSelector, uint8 failureClass).
     uint256 public constant SETTLEMENT_FAILED_REPORTED_TOPIC = ReactiveConstants.SETTLEMENT_FAILED_REPORTED_TOPIC;
 
     struct Pending {
@@ -90,6 +91,12 @@ contract HubRSC is AbstractReactive {
     mapping(bytes32 => Pending) public pending;
     /// @notice Amount reserved for in-flight dispatch by key.
     mapping(bytes32 => uint256) public inFlightByKey;
+    /// @notice Terminal failure quarantine bit by key.
+    mapping(bytes32 => bool) public terminalFailureByKey;
+    /// @notice Compact terminal failure selector retained for operator visibility.
+    mapping(bytes32 => bytes4) public terminalFailureSelectorByKey;
+    /// @notice Compact terminal failure class retained for operator visibility.
+    mapping(bytes32 => uint8) public terminalFailureClassByKey;
 
     /// @notice Deduplicate logs.
     mapping(bytes32 => bool) public processedReport;
@@ -135,6 +142,12 @@ contract HubRSC is AbstractReactive {
     event PendingIncreased(address indexed lcc, address indexed recipient, uint256 amount);
     event DuplicateLogIgnored(bytes32 indexed reportId);
     event DispatchRequested(address indexed lcc, uint256 available, uint256 batchCount, uint256 remaining);
+    event TerminalFailureQuarantined(
+        address indexed lcc, address indexed recipient, uint256 failedAmount, bytes4 failureSelector, uint8 failureClass
+    );
+    event TerminalFailureCleared(
+        address indexed lcc, address indexed recipient, bytes4 failureSelector, uint8 failureClass
+    );
 
     constructor(
         uint256 _maxDispatchItems,
@@ -289,6 +302,7 @@ contract HubRSC is AbstractReactive {
         if (amount == 0) return;
 
         bytes32 key = computeKey(lcc, recipient);
+        _clearTerminalFailure(lcc, recipient, key);
         Pending storage entry = pending[key];
 
         if (!entry.exists) {
@@ -370,10 +384,21 @@ contract HubRSC is AbstractReactive {
 
         address recipient = address(uint160(log.topic_1));
         address lcc = address(uint160(log.topic_2));
-        uint256 failedAmount = abi.decode(log.data, (uint256));
+        (uint256 failedAmount, bytes4 failureSelector, uint8 failureClass) =
+            abi.decode(log.data, (uint256, bytes4, uint8));
         if (failedAmount == 0) return;
 
         _releaseInFlightReservation(lcc, recipient, failedAmount, true);
+        if (SettlementFailureLib.isTerminal(failureClass)) {
+            bytes32 key = computeKey(lcc, recipient);
+            Pending storage entry = pending[key];
+            if (entry.exists) {
+                _markTerminalFailure(entry, key, failedAmount, failureSelector, failureClass);
+            }
+            _dispatchLiquidityIfBudgetAvailable(lcc, true);
+            return;
+        }
+
         _dispatchLiquidityIfBudgetAvailable(lcc, true);
     }
 
@@ -393,8 +418,10 @@ contract HubRSC is AbstractReactive {
 
         // if the pending entry exists, then we can apply the decrease immediately
         if (entry.exists) {
+            _clearTerminalFailure(lcc, recipient, key);
             (uint256 remainingSettled, uint256 remainingInflight) =
                 _consumeAuthoritativeDecrease(entry, key, settledAmount, inflightAmountToReduce);
+            _restoreQueueMembership(entry, key);
             if (remainingSettled > 0 || remainingInflight > 0) {
                 if (isProcessedCallback) {
                     bufferedProcessedDecreaseByKey[key].settledAmount += remainingSettled;
@@ -589,6 +616,8 @@ contract HubRSC is AbstractReactive {
             return;
         }
 
+        if (terminalFailureByKey[key]) return;
+
         if (!_entryMatchesDispatchLane(entry.lcc, dispatchLane, useSharedUnderlying)) return;
 
         uint256 reserved = inFlightByKey[key];
@@ -669,6 +698,62 @@ contract HubRSC is AbstractReactive {
         Pending storage entry = pending[key];
         if (entry.exists) {
             _pruneIfFullySettled(entry, key);
+        }
+    }
+
+    function _markTerminalFailure(
+        Pending storage entry,
+        bytes32 key,
+        uint256 failedAmount,
+        bytes4 failureSelector,
+        uint8 failureClass
+    ) internal {
+        if (terminalFailureByKey[key]) return;
+
+        address lcc = entry.lcc;
+        terminalFailureByKey[key] = true;
+        terminalFailureSelectorByKey[key] = failureSelector;
+        terminalFailureClassByKey[key] = failureClass;
+
+        if (mirroredToUnderlyingByKey[key] && hasUnderlyingForLcc[lcc]) {
+            queueDataByUnderlying[underlyingByLcc[lcc]].remove(key);
+        } else if (!hasUnderlyingForLcc[lcc] && underlyingBackfillRemainingByLcc[lcc] > 0) {
+            underlyingBackfillRemainingByLcc[lcc] -= 1;
+        }
+        queueDataByLcc[lcc].remove(key);
+        queueData.remove(key);
+
+        emit TerminalFailureQuarantined(lcc, entry.recipient, failedAmount, failureSelector, failureClass);
+    }
+
+    function _clearTerminalFailure(address lcc, address recipient, bytes32 key) internal {
+        if (!terminalFailureByKey[key]) return;
+
+        bytes4 failureSelector = terminalFailureSelectorByKey[key];
+        uint8 failureClass = terminalFailureClassByKey[key];
+        delete terminalFailureByKey[key];
+        delete terminalFailureSelectorByKey[key];
+        delete terminalFailureClassByKey[key];
+
+        Pending storage entry = pending[key];
+        if (entry.exists && entry.amount > 0 && !hasUnderlyingForLcc[lcc] && !mirroredToUnderlyingByKey[key]) {
+            underlyingBackfillRemainingByLcc[lcc] += 1;
+        }
+
+        emit TerminalFailureCleared(lcc, recipient, failureSelector, failureClass);
+    }
+
+    function _restoreQueueMembership(Pending storage entry, bytes32 key) internal {
+        if (!entry.exists || entry.amount == 0 || terminalFailureByKey[key]) return;
+
+        if (!queueDataByLcc[entry.lcc].inQueue[key]) {
+            queueDataByLcc[entry.lcc].enqueue(key);
+        }
+        if (!queueData.inQueue[key]) {
+            queueData.enqueue(key);
+        }
+        if (hasUnderlyingForLcc[entry.lcc]) {
+            _enqueueUnderlyingKey(entry.lcc, key);
         }
     }
 
@@ -837,16 +922,20 @@ contract HubRSC is AbstractReactive {
     function _pruneIfFullySettled(Pending storage entry, bytes32 key) internal {
         if (entry.amount != 0 || inFlightByKey[key] != 0) return;
         address lcc = entry.lcc;
+        bool terminal = terminalFailureByKey[key];
         entry.exists = false;
         if (mirroredToUnderlyingByKey[key] && hasUnderlyingForLcc[lcc]) {
             queueDataByUnderlying[underlyingByLcc[lcc]].remove(key);
-        } else {
+        } else if (!terminal) {
             uint256 remaining = underlyingBackfillRemainingByLcc[lcc];
             if (remaining > 0) {
                 underlyingBackfillRemainingByLcc[lcc] = remaining - 1;
                 _syncUnderlyingBackfillState(lcc);
             }
         }
+        delete terminalFailureByKey[key];
+        delete terminalFailureSelectorByKey[key];
+        delete terminalFailureClassByKey[key];
         delete mirroredToUnderlyingByKey[key];
         queueDataByLcc[lcc].remove(key);
         queueData.remove(key);

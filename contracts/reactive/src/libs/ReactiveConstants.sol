@@ -30,7 +30,7 @@ library ReactiveConstants {
     uint256 internal constant SETTLEMENT_SUCCEEDED_REPORTED_TOPIC =
         uint256(keccak256("SettlementSucceededReported(address,address,uint256)"));
     uint256 internal constant SETTLEMENT_FAILED_REPORTED_TOPIC =
-        uint256(keccak256("SettlementFailedReported(address,address,uint256)"));
+        uint256(keccak256("SettlementFailedReported(address,address,uint256,bytes4,uint8)"));
 
     // HubCallback function selectors used for callbacks.
     bytes4 internal constant RECORD_SETTLEMENT_QUEUED_SELECTOR =
@@ -42,7 +42,7 @@ library ReactiveConstants {
     bytes4 internal constant RECORD_SETTLEMENT_SUCCEEDED_SELECTOR =
         bytes4(keccak256("recordSettlementSucceeded(address,address,address,uint256,uint256)"));
     bytes4 internal constant RECORD_SETTLEMENT_FAILED_SELECTOR =
-        bytes4(keccak256("recordSettlementFailed(address,address,address,uint256,uint256)"));
+        bytes4(keccak256("recordSettlementFailed(address,address,address,uint256,bytes4,uint8,uint256)"));
     bytes4 internal constant PROCESS_SETTLEMENTS_SELECTOR =
         bytes4(keccak256("processSettlements(address,address[],address[],uint256[])"));
     bytes4 internal constant TRIGGER_MORE_LIQUIDITY_AVAILABLE_SELECTOR =
