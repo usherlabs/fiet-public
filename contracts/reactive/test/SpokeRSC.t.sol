@@ -11,6 +11,7 @@ contract SpokeRSCTest is Test {
     uint256 private constant SETTLEMENT_QUEUED_TOPIC = ReactiveConstants.SETTLEMENT_QUEUED_TOPIC;
     uint256 private constant SETTLEMENT_ANNULLED_TOPIC = ReactiveConstants.SETTLEMENT_ANNULLED_TOPIC;
     uint256 private constant SETTLEMENT_PROCESSED_TOPIC = ReactiveConstants.SETTLEMENT_PROCESSED_TOPIC;
+    uint256 private constant SETTLEMENT_SUCCEEDED_TOPIC = ReactiveConstants.SETTLEMENT_SUCCEEDED_TOPIC;
     uint256 private constant SETTLEMENT_FAILED_TOPIC = ReactiveConstants.SETTLEMENT_FAILED_TOPIC;
 
     uint256 private originChainId;
@@ -315,6 +316,35 @@ contract SpokeRSCTest is Test {
             settledAmount,
             requestedAmount,
             1
+        );
+        vm.expectEmit(true, true, true, true, address(spoke));
+        emit IReactive.Callback(destinationChainId, hubCallback, 8000000, payload);
+        spoke.react(log);
+    }
+
+    function test_reactForwardsSettlementSucceededToHubCallback() public {
+        address recipient = makeAddr("recipient");
+        SpokeRSC spoke = _newSpoke(recipient);
+        address lcc = makeAddr("lcc");
+        uint256 maxAmount = 44;
+
+        IReactive.LogRecord memory log = IReactive.LogRecord({
+            chain_id: originChainId,
+            _contract: destinationReceiverContract,
+            topic_0: SETTLEMENT_SUCCEEDED_TOPIC,
+            topic_1: uint256(uint160(lcc)),
+            topic_2: uint256(uint160(recipient)),
+            topic_3: 0,
+            data: abi.encode(maxAmount),
+            block_number: 0,
+            op_code: 0,
+            block_hash: 0,
+            tx_hash: 23,
+            log_index: 1
+        });
+
+        bytes memory payload = abi.encodeWithSelector(
+            ReactiveConstants.RECORD_SETTLEMENT_SUCCEEDED_SELECTOR, address(0), lcc, recipient, maxAmount, 1
         );
         vm.expectEmit(true, true, true, true, address(spoke));
         emit IReactive.Callback(destinationChainId, hubCallback, 8000000, payload);

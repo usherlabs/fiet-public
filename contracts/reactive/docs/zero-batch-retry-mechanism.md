@@ -23,6 +23,8 @@ Head → [R1, R2, ..., R20, D1] ← Tail
 
 This creates **head-of-line blocking** for dispatchable entries behind long reserved prefixes.
 
+This mechanism is distinct from the historical-backfill wake-up path. Zero-batch retry handles windows that contain only non-dispatchable entries inside an already-selected lane. Historical backfill wake-ups are used earlier, while a shared-underlying lane is still blocked because pre-registration sibling backlog has not been fully mirrored yet.
+
 ## Solution: Credit-Based Chained Retries
 
 The mechanism uses `zeroBatchRetryCreditsRemaining[lane]` to allow a bounded number of follow-up callbacks (`MoreLiquidityAvailable`) that advance the cursor across reserved windows.
@@ -71,6 +73,7 @@ function _handleZeroBatchRetry(
 2. **Credit calculation**: Based on current queue size at start of scan (`startSize`), giving enough retries to cover the entire queue in the worst case (capped at 256).
 3. **Clear on success**: Any successful batch (`batchCount > 0`) immediately clears credits.
 4. **Stale lane clearing**: `_clearInactiveZeroBatchRetryCredits()` prevents stale credits from suppressing retries when routing switches between shared-underlying and per-LCC lanes.
+5. **Separate from backfill wake-ups**: when persisted budget exists but the trigger LCC has no visible per-LCC queue and sibling backfill is still incomplete, `HubRSC` emits another `MoreLiquidityAvailable` callback to continue bounded backfill before shared-lane routing is allowed.
 
 ## Visual Flow
 
