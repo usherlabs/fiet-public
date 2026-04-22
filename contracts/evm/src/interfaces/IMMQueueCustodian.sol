@@ -20,9 +20,9 @@ interface IMMQueueCustodian {
 
     /// @notice Hub `unwrap` as this contract: shortfall queues to this custodian; immediate underlying is forwarded.
     /// @dev Uses canonical Hub from `ILCC(lcc).hub()`. `MMPM` must transfer `amount` LCC to this contract before calling.
-    function unwrapLccViaHub(address lcc, address forwardUnderlyingTo, uint256 amount) external;
+    function unwrapLcc(address lcc, address forwardUnderlyingTo, uint256 amount) external;
 
     /// @notice After Hub settlement, moves underlying from this custodian to the position manager (pull collect path).
     /// @dev Transfers up to `min(amount, actual underlying balance)`; caller must be the bound position manager.
-    function releaseSettledUnderlyingToManager(address lcc, uint256 amount) external;
+    function release(address lcc, uint256 amount) external;
 }

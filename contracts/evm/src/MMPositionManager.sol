@@ -142,6 +142,8 @@ contract MMPositionManager is
     }
 
     /// @dev Deploys `MMQueueCustodian` for `recipient` when absent (`INITIALISE`, tests).
+    ///      There is no lazy deployment on unwrap/collect: queue-forward paths require `custodianFor[recipient] != 0`
+    ///      (see `INVARIANTS.md`); integrators must call `INITIALISE` (or rely on tests) before those flows.
     function _deployQueueCustodian(address recipient) internal {
         if (recipient == address(0)) revert Errors.InvalidAddress(recipient);
         if (custodianFor[recipient] != address(0)) return;
@@ -158,6 +160,16 @@ contract MMPositionManager is
     /// @inheritdoc FietNativeWrapper
     function _liquidityHub() internal view override returns (ILiquidityHub) {
         return liquidityHub;
+    }
+
+    /// @inheritdoc FietNativeWrapper
+    function _isCustodian(address candidate) internal view override returns (bool) {
+        if (candidate.code.length == 0) return false;
+        (bool ok, bytes memory data) = candidate.staticcall(abi.encodeCall(IMMQueueCustodian.beneficiary, ()));
+        if (!ok || data.length < 32) return false;
+        address beneficiary = abi.decode(data, (address));
+        if (beneficiary == address(0)) return false;
+        return custodianFor[beneficiary] == candidate;
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
@@ -450,7 +462,7 @@ contract MMPositionManager is
         if (custAddr == address(0)) revert Errors.InvalidAddress(custAddr);
         IMMQueueCustodian custodian = IMMQueueCustodian(custAddr);
         lccCurrency.transfer(custAddr, toUnwrap);
-        custodian.unwrapLccViaHub(lccAddr, forwardUnderlyingTo, toUnwrap);
+        custodian.unwrapLcc(lccAddr, forwardUnderlyingTo, toUnwrap);
     }
 
     /// @notice Unwraps LCC tokens to underlying asset using deltas (locker credit)
@@ -606,7 +618,7 @@ contract MMPositionManager is
         uint256 delivered = uAfter > uBefore ? uAfter - uBefore : 0;
 
         if (delivered > 0) {
-            custodian.releaseSettledUnderlyingToManager(lcc, delivered);
+            custodian.release(lcc, delivered);
             _creditLockerExactUnderlyingRelease(underlyingAddr, delivered, isNativeUnderlying);
         }
 
@@ -631,7 +643,7 @@ contract MMPositionManager is
         uint256 releaseAmount = Math.min(remaining, uBal);
 
         if (releaseAmount > 0) {
-            custodian.releaseSettledUnderlyingToManager(lcc, releaseAmount);
+            custodian.release(lcc, releaseAmount);
             _creditLockerExactUnderlyingRelease(underlyingAddr, releaseAmount, isNativeUnderlying);
         }
     }

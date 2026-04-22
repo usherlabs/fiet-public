@@ -239,7 +239,7 @@ being an informal “should”.
   `MMPositionManager` for exact delta credit; ERC20: locker or manager per routing). `MarketFactory` dynamic “bind
   custodian endpoint” registration is not required for this flow.
 - **Enforced by**:
-  - `src/MMQueueCustodian.sol::unwrapLccViaHub` (unwrap + `settleQueue` delta + forward underlying; canonical Hub via `ILCC(lcc).hub()`),
+  - `src/MMQueueCustodian.sol::unwrapLcc` (unwrap + `settleQueue` delta + forward underlying; canonical Hub via `ILCC(lcc).hub()`),
   - `src/MMPositionManager.sol::_unwrapToQueueForward`,
   - `src/LiquidityHub.sol::unwrap` / `_unwrap` / `_unwrapAndPay`.
 - **Collect (manager-mediated pull)**: `COLLECT_AVAILABLE_LIQUIDITY` decodes **`(lcc, maxAmount)`** only (two 32-byte words; legacy three- or four-word encodings are rejected). The action is scoped to the batch locker’s custodian (`custodianFor[msgSender()]`) and requires `IMMQueueCustodian.beneficiary() == msgSender()`. Collect reconciles **`LiquidityHub.settleQueue(lcc, custodian)`**, **actual custodian LCC balance** (`ILCC.balancesOf` / `ERC20.balanceOf`), **Hub reserves**, and **actual custodian underlying balance** — **no shadow ledger**: nothing may authorise release beyond those signals. Settlement runs in order (live Hub settlement then pre-settled underlying flush); the locker is credited via **`creditExact`** for known released amounts (**native** or **ERC20 underlying**); **wallet payout** is completed only through a subsequent **`TAKE`** (same or later batch).
@@ -265,11 +265,12 @@ being an informal “should”.
 - **Enforced by**:
   - `src/MMPositionManager.sol::_deployQueueCustodian`, `_handleUtilityAction` (`INITIALISE`),
   - `src/libraries/MMHelpers.sol::assertQueueCustodianForRecipient`,
-  - `src/MMQueueCustodian.sol` (`unwrapLccViaHub`, `releaseSettledUnderlyingToManager`; optional view `totalQueuedLcc` = on-chain LCC balance only),
+  - `src/MMQueueCustodian.sol` (`unwrapLcc`, `release`; optional view `totalQueuedLcc` = on-chain LCC balance only),
   - `src/MMPositionManager.sol::_unwrapToQueueForward`, `_collectAvailableLiquidity`.
 - **Native ETH to `MMPositionManager`**: immediate native forwarded from a bound `MMQueueCustodian` after Hub `unwrap`
-  is accepted in `FietNativeWrapper.receive` (custodian reports `positionManager() == address(this)`), distinct from
-  canonical Hub payouts.
+  is accepted in `FietNativeWrapper.receive` only when `MMPositionManager._isCustodian(msg.sender)` holds: `msg.sender` must
+  be exactly `custodianFor[beneficiary]` for the beneficiary reported by `IMMQueueCustodian.beneficiary()` on that contract,
+  distinct from canonical Hub payouts.
 
 ### HUB-02B: Unwrap immediate payout recipients must be serviceable (not Hub, exempt, or DEX)
 

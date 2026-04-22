@@ -54,11 +54,11 @@ contract FuzzMMQueueCustodian is IMMQueueCustodian {
         positionManager = _positionManager;
     }
 
-    function unwrapLccViaHub(address, address, uint256) external pure override {}
+    function unwrapLcc(address, address, uint256) external pure override {}
 
     function totalQueuedLcc(address lcc) external view override returns (uint256) {
         return IERC20(lcc).balanceOf(address(this));
     }
 
-    function releaseSettledUnderlyingToManager(address, uint256) external override onlyPositionManager {}
+    function release(address, uint256) external override onlyPositionManager {}
 }

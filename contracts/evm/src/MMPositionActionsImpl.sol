@@ -248,14 +248,6 @@ contract MMPositionActionsImpl is IMMActionsImpl, PositionManagerImpl, DelegateC
         return MarketHandlerLib.getVault(marketFactory, poolKey.toId());
     }
 
-    /// @notice Recipient-keyed MM queue custodian — Hub queue owner encoded as `queueRecipient` in position hook data.
-    function _queueRecipientForHook(uint256) internal view returns (address) {
-        IMMPositionManager m = IMMPositionManager(address(this));
-        address recipientKey = msgSender();
-        MMHelpers.assertQueueCustodianForRecipient(recipientKey);
-        return m.custodianFor(recipientKey);
-    }
-
     /// @dev Splits hook encoding out of `_increaseFromDeltas` / `_mintFromDeltas` to avoid stack-too-deep in unoptimised builds.
     function _encodePositionHookForRecipientKeyedCustodian(
         uint256 tokenId,
@@ -265,7 +257,7 @@ contract MMPositionActionsImpl is IMMActionsImpl, PositionManagerImpl, DelegateC
         uint256 credit0,
         uint256 credit1
     ) private returns (bytes memory) {
-        address qRec = _queueRecipientForHook(tokenId);
+        address qRec = _queueSettleRecipient(tokenId);
         if (withInHookProtocolSettlement) {
             return PositionModificationHookDataLib.encodeWithInHookProtocolSettlement(
                 tokenId, positionIndex, locker, qRec, credit0, credit1
@@ -372,7 +364,7 @@ contract MMPositionActionsImpl is IMMActionsImpl, PositionManagerImpl, DelegateC
             tokenId,
             positionIndex,
             msgSender(),
-            _queueRecipientForHook(tokenId),
+            _queueSettleRecipient(tokenId),
             settlementDelta.amount0(),
             settlementDelta.amount1()
         );
@@ -587,7 +579,7 @@ contract MMPositionActionsImpl is IMMActionsImpl, PositionManagerImpl, DelegateC
         MMHelpers.assertPositionForPool(poolKey, position);
 
         uint256 completeLiquidity = uint256(position.liquidity);
-        address qRec = _queueRecipientForHook(tokenId);
+        address qRec = _queueSettleRecipient(tokenId);
         _decreaseInternal(
             poolKey,
             position,
@@ -630,7 +622,7 @@ contract MMPositionActionsImpl is IMMActionsImpl, PositionManagerImpl, DelegateC
         int24 tickUpper,
         uint256 liquidity
     ) internal returns (PositionId positionId, BalanceDelta principalDelta) {
-        address qRec = _queueRecipientForHook(tokenId);
+        address qRec = _queueSettleRecipient(tokenId);
         return _increaseInternal(
             poolKey,
             tokenId,
@@ -905,7 +897,7 @@ contract MMPositionActionsImpl is IMMActionsImpl, PositionManagerImpl, DelegateC
         (Position memory position,) = getPosition(tokenId, positionIndex);
         MMHelpers.assertPositionForPool(poolKey, position);
 
-        address qRec = _queueRecipientForHook(tokenId);
+        address qRec = _queueSettleRecipient(tokenId);
         _decreaseInternal(
             poolKey,
             position,
@@ -936,7 +928,7 @@ contract MMPositionActionsImpl is IMMActionsImpl, PositionManagerImpl, DelegateC
     ) internal returns (PositionId positionId, uint256 positionIndex, BalanceDelta principalDelta) {
         uint256 nextPositionIndex;
         (,, nextPositionIndex,,) = vtsOrchestrator.getCommit(tokenId);
-        address qRec = _queueRecipientForHook(tokenId);
+        address qRec = _queueSettleRecipient(tokenId);
         return _mintPositionInternal(
             poolKey,
             tokenId,

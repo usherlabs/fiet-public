@@ -21,13 +21,13 @@ contract MockSettleCustodian is IMMQueueCustodian {
         beneficiary = address(0xBEEF);
     }
 
-    function unwrapLccViaHub(address, address, uint256) external pure override {}
+    function unwrapLcc(address, address, uint256) external pure override {}
 
     function totalQueuedLcc(address) external pure override returns (uint256) {
         return 0;
     }
 
-    function releaseSettledUnderlyingToManager(address, uint256) external pure override {}
+    function release(address, uint256) external pure override {}
 }
 
     /**

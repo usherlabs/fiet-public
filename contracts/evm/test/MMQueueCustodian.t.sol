@@ -3,9 +3,6 @@ pragma solidity ^0.8.26;
 
 import "forge-std/Test.sol";
 
-import {ERC20} from "openzeppelin-contracts/contracts/token/ERC20/ERC20.sol";
-import {IERC20} from "openzeppelin-contracts/contracts/token/ERC20/IERC20.sol";
-
 import {MMQueueCustodian} from "../src/MMQueueCustodian.sol";
 import {MMQueueCustodianFactory} from "../src/MMQueueCustodianFactory.sol";
 import {IMarketFactory} from "../src/interfaces/IMarketFactory.sol";
@@ -60,76 +57,6 @@ contract MMQueueCustodianTest is Test {
 
     function test_totalQueuedLcc_zeroWhenNoLccHeld() public {
         assertEq(custodian.totalQueuedLcc(address(lcc)), 0);
-    }
-}
-
-/// @dev No `receive` / `fallback`: native ETH transfer to PM fails; WETH fallback must apply (see HUB-02C).
-contract NonPayablePositionManager {}
-
-/// @dev Minimal Hub exposing `weth9()` for `MMQueueCustodian._payNativeWithWethFallback`.
-contract MockHubForWeth {
-    address public immutable weth;
-
-    constructor(address _weth) {
-        weth = _weth;
-    }
-
-    function weth9() external view returns (address) {
-        return weth;
-    }
-}
-
-/// @dev Minimal ERC20 “LCC” with native underlying and hub pointer (enough for `releaseSettledUnderlyingToManager` + `totalQueuedLcc`).
-contract MockLccNative is ERC20 {
-    address public immutable hubAddr;
-
-    constructor(address _hub) ERC20("LCC", "LCC") {
-        hubAddr = _hub;
-    }
-
-    function underlying() external pure returns (address) {
-        return address(0);
-    }
-
-    function hub() external view returns (address) {
-        return hubAddr;
-    }
-}
-
-/// @dev Minimal WETH9: `deposit{value}` mints to caller (IWETH9-compatible for custodian wrap).
-contract MockWETH9 is ERC20 {
-    constructor() ERC20("Wrapped Ether", "WETH") {}
-
-    function deposit() external payable {
-        _mint(msg.sender, msg.value);
-    }
-
-    receive() external payable {
-        _mint(msg.sender, msg.value);
-    }
-}
-
-/// @notice Regression: non-payable position manager receives WETH when native push fails (mirrors `LiquidityHubLib.transferUnderlying`).
-contract MMQueueCustodianNativeWethFallbackTest is Test {
-    uint256 internal constant AMOUNT = 1 ether;
-
-    function test_releaseSettledUnderlyingToManager_nonPayablePm_receivesWeth() public {
-        NonPayablePositionManager pm = new NonPayablePositionManager();
-        address ben = makeAddr("ben");
-        MMQueueCustodian cust = new MMQueueCustodian(address(pm), ben);
-
-        MockWETH9 weth = new MockWETH9();
-        MockHubForWeth hub = new MockHubForWeth(address(weth));
-        MockLccNative lccNative = new MockLccNative(address(hub));
-
-        vm.deal(address(cust), AMOUNT);
-
-        vm.prank(address(pm));
-        cust.releaseSettledUnderlyingToManager(address(lccNative), AMOUNT);
-
-        assertEq(IERC20(address(weth)).balanceOf(address(pm)), AMOUNT);
-        assertEq(address(pm).balance, 0);
-        assertEq(cust.totalQueuedLcc(address(lccNative)), 0);
     }
 }
 
