@@ -40,6 +40,7 @@ This project is built for the Reactive Network execution model:
 9. **Spoke-routed reconciliation**: each recipient `SpokeRSC` also subscribes to:
    - `SettlementProcessed(lcc, recipient, amount)`
    - `SettlementAnnulled(lcc, recipient, amount)`
+   - receiver `SettlementSucceeded(lcc, recipient, maxAmount)`
    - receiver `SettlementFailed(lcc, recipient, maxAmount, reason)`
    and forwards those to `HubCallback`, which emits normalised events consumed by `HubRSC`.
 
@@ -48,17 +49,17 @@ This project is built for the Reactive Network execution model:
 ### Reactive chain
 
 - `src/SpokeRSC.sol`
-  - Subscribes to recipient-scoped protocol-chain events (`SettlementQueued`, `SettlementProcessed`, `SettlementAnnulled`, receiver `SettlementFailed`).
+  - Subscribes to recipient-scoped protocol-chain events (`SettlementQueued`, `SettlementProcessed`, `SettlementAnnulled`, receiver `SettlementSucceeded`, receiver `SettlementFailed`).
   - Deduplicates by on-chain log identity and forwards bounded payloads to `HubCallback`.
   - This keeps per-recipient subscription cost/funding at the spoke level (deployed by/on behalf of end users).
 - `src/HubCallback.sol`
   - Authorised callback entrypoints.
   - Admin whitelist: `setSpokeForRecipient(recipient, spoke)` must be set correctly for reports to be accepted.
-  - Emits `SettlementReported(...)` plus normalised decrement/failure events for the Hub.
+  - Emits `SettlementReported(...)` plus normalised decrement/success/failure events for the Hub.
 - `src/HubRSC.sol`
   - Aggregates pending settlements in a linked-list queue and dispatches bounded settlement batches when liquidity becomes available.
   - Tracks `pending` and `inFlight` separately; dispatch reserves in-flight amount without optimistically decrementing pending.
-  - Reconciles pending state from normalised `HubCallback` events and releases reservations from normalised settlement-failure reports.
+  - Reconciles pending state from normalised `HubCallback` events and only releases reservations from trusted success/failure reports.
 
 ### Protocol chain
 
@@ -91,6 +92,20 @@ The receiver uses `try/catch` per item and **does not revert the whole batch** i
 ### Multi-round processing (“recursive” completion)
 
 If a hub dispatch round ends with remaining liquidity, the hub triggers `HubCallback.triggerMoreLiquidityAvailable(...)` to emit a `MoreLiquidityAvailable` event, which starts another bounded dispatch round. This avoids unbounded loops while still allowing large backlogs to be drained over multiple callback rounds.
+
+### Persisted liquidity budget and trusted release
+
+`HubRSC` persists dispatch budget per dispatch lane (`availableBudgetByDispatchLane`) instead of treating a `LiquidityAvailable(...)` payload as a one-shot wake-up. This matters when liquidity arrives before a queued settlement is mirrored into the reactive queue: the budget remains available and the later queue insertion immediately triggers dispatch.
+
+Budget is consumed only when the hub reserves new in-flight work. `MoreLiquidityAvailable(...)` is therefore a continuation signal, not an authoritative liquidity snapshot. Failed settlements restore the reserved amount back into the same dispatch lane before the hub retries.
+
+`SettlementProcessed(...)` remains authoritative for queue reduction, but its `requestedAmount` input is not trusted for releasing reservations. In-flight reservations are released only after the spoke/callback path emits trusted `SettlementSucceededReported(...)` or `SettlementFailedReported(...)` events back to the hub.
+
+### Shared-underlying routing and backfill
+
+LCCs that share the same underlying eventually dispatch through a shared underlying lane so liquidity on one sibling can satisfy another sibling's queue. Historical per-LCC entries are mirrored into that shared lane by bounded backfill.
+
+While backfill is still in progress, the hub prefers the per-LCC lane when it has local entries. If the triggering LCC has no local queue, the hub emits another bounded `MoreLiquidityAvailable(...)` wake-up and continues backfill until the shared lane is fully safe to use.
 
 ## Quickstart (partner integration)
 

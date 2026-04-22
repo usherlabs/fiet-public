@@ -26,3 +26,33 @@ If the **first** `SettlementQueued(lcc, recipient, amount)` for a new custodian 
 
 - `scripts/deployreactivespoke.sh` — pass the **custodian** address as `RECIPIENT` when wiring MM queue automation.
 - `scripts/WhitelistSpokeForRecipient.s.sol` — set `RECIPIENT` to that same custodian address when registering the Spoke RVM id.
+
+## Liquidity budget is persisted per dispatch lane
+
+`HubRSC` now persists available dispatch budget in `availableBudgetByDispatchLane` instead of relying on `LiquidityAvailable(...)` as a one-shot trigger. Integrators should read this as the hub's liveness source of truth:
+
+- liquidity that arrives before a queue item is mirrored is retained and used when the queue entry later appears;
+- repeated liquidity notifications accumulate until dispatch consumes budget; and
+- `MoreLiquidityAvailable(...)` is only a continuation signal, not an authoritative replacement for stored budget.
+
+For LCCs whose underlying is not known yet, budget is temporarily tracked on the LCC lane and migrated to the underlying lane once `lccToUnderlying` is registered.
+
+## Reservation release only follows trusted receiver outcomes
+
+`SettlementProcessed(lcc, recipient, settledAmount, requestedAmount)` remains authoritative for reducing pending queue state, but `requestedAmount` is treated as untrusted input for reservation release. `HubRSC` will not free `inFlightByKey` based on that value alone.
+
+Reservation release now happens only after the recipient `SpokeRSC` forwards a receiver outcome back through `HubCallback`:
+
+- `SettlementSucceeded(...)` releases the trusted reserved amount without restoring budget;
+- `SettlementFailed(...)` releases the trusted reserved amount, restores the same amount to the dispatch budget, and immediately retries dispatch.
+
+Operators investigating “stuck” in-flight state should therefore trace the full receiver-to-spoke-to-callback path, not only the protocol-chain `SettlementProcessed(...)` log.
+
+## Shared-underlying routing is gated by backfill progress
+
+Shared-underlying dispatch is only fully enabled once historical per-LCC queue entries have been mirrored into the underlying queue. Until then:
+
+- local per-LCC queues are still preferred when they contain work; but
+- if the triggering LCC has no local queue, the hub emits another `MoreLiquidityAvailable(...)` wake-up and continues bounded backfill instead of dispatching from a partially mirrored shared lane.
+
+Backfill cursors are repaired if a resume key is pruned while backfill is in progress, and the remaining counter only decrements when a still-live historical key is actually mirrored. This means queue churn or key deletion should not cause the hub to falsely conclude that backfill is complete.
