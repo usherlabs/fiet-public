@@ -104,6 +104,10 @@ contract HubRSC is AbstractReactive {
     mapping(bytes32 => bytes4) public terminalFailureSelectorByKey;
     /// @notice Compact terminal failure class retained for operator visibility.
     mapping(bytes32 => uint8) public terminalFailureClassByKey;
+    /// @notice Released-success amount that must stay non-dispatchable until authoritative processed reconciliation.
+    mapping(bytes32 => uint256) public completedAwaitingProcessedByKey;
+    /// @notice Processed requested-amount credit that arrived before the matching success release on the same key.
+    mapping(bytes32 => uint256) public processedRequestedCreditByKey;
 
     /// @notice Deduplicate logs.
     mapping(bytes32 => bool) public processedReport;
@@ -357,9 +361,11 @@ contract HubRSC is AbstractReactive {
 
         address recipient = address(uint160(log.topic_1));
         address lcc = address(uint160(log.topic_2));
-        (uint256 settledAmount,) = abi.decode(log.data, (uint256, uint256));
+        (uint256 settledAmount, uint256 requestedAmount) = abi.decode(log.data, (uint256, uint256));
 
+        _reconcileProcessedRequestedAmount(computeKey(lcc, recipient), requestedAmount);
         _applyAuthoritativeDecreaseOrBuffer(lcc, recipient, settledAmount, 0, true);
+        _dispatchLiquidityIfBudgetAvailable(lcc, true);
     }
 
     /// @notice Releases trusted in-flight amount for completed destination settlements.
@@ -372,7 +378,8 @@ contract HubRSC is AbstractReactive {
         (uint256 succeededAmount, uint256 attemptId) = abi.decode(log.data, (uint256, uint256));
         if (succeededAmount == 0) return;
 
-        _releaseInFlightReservation(attemptId, lcc, recipient, false);
+        uint256 releasedAmount = _releaseInFlightReservation(attemptId, lcc, recipient, false);
+        _registerCompletedAwaitingProcessed(computeKey(lcc, recipient), releasedAmount);
         _dispatchLiquidityIfBudgetAvailable(lcc, true);
     }
 
@@ -641,7 +648,13 @@ contract HubRSC is AbstractReactive {
             return;
         }
 
-        uint256 dispatchable = entry.amount > reserved ? (entry.amount - reserved) : 0;
+        uint256 dispatchable = entry.amount;
+        if (reserved >= dispatchable) return;
+        dispatchable -= reserved;
+
+        uint256 awaitingProcessed = completedAwaitingProcessedByKey[key];
+        if (awaitingProcessed >= dispatchable) return;
+        dispatchable -= awaitingProcessed;
         if (dispatchable == 0) return;
 
         uint256 settleAmount = dispatchable <= state.remainingLiquidity ? dispatchable : state.remainingLiquidity;
@@ -705,18 +718,19 @@ contract HubRSC is AbstractReactive {
 
     function _releaseInFlightReservation(uint256 attemptId, address lcc, address recipient, bool restoreBudget)
         internal
+        returns (uint256 release)
     {
         AttemptReservation memory reservation = attemptReservationById[attemptId];
-        if (reservation.amount == 0) return;
-        if (reservation.lcc != lcc || reservation.recipient != recipient) return;
+        if (reservation.amount == 0) return 0;
+        if (reservation.lcc != lcc || reservation.recipient != recipient) return 0;
 
         delete attemptReservationById[attemptId];
 
         bytes32 key = computeKey(lcc, recipient);
         uint256 reserved = inFlightByKey[key];
-        if (reserved == 0) return;
+        if (reserved == 0) return 0;
 
-        uint256 release = reservation.amount < reserved ? reservation.amount : reserved;
+        release = reservation.amount < reserved ? reservation.amount : reserved;
         inFlightByKey[key] = reserved - release;
         if (restoreBudget) {
             _restoreDispatchBudget(lcc, release);
@@ -726,6 +740,8 @@ contract HubRSC is AbstractReactive {
         if (entry.exists) {
             _pruneIfFullySettled(entry, key);
         }
+
+        return release;
     }
 
     function _markTerminalFailure(
@@ -904,6 +920,42 @@ contract HubRSC is AbstractReactive {
         _pruneIfFullySettled(entry, key);
     }
 
+    /// @notice Holds released-success capacity on the key until processed reconciliation catches up.
+    function _registerCompletedAwaitingProcessed(bytes32 key, uint256 amount) internal {
+        if (amount == 0) return;
+
+        uint256 processedCredit = processedRequestedCreditByKey[key];
+        if (processedCredit >= amount) {
+            processedRequestedCreditByKey[key] = processedCredit - amount;
+            return;
+        }
+
+        if (processedCredit != 0) {
+            amount -= processedCredit;
+            delete processedRequestedCreditByKey[key];
+        }
+
+        completedAwaitingProcessedByKey[key] += amount;
+    }
+
+    /// @notice Reconciles processed requested-amount ordering against already released successes on the same key.
+    function _reconcileProcessedRequestedAmount(bytes32 key, uint256 requestedAmount) internal {
+        if (requestedAmount == 0) return;
+
+        uint256 awaitingProcessed = completedAwaitingProcessedByKey[key];
+        if (awaitingProcessed >= requestedAmount) {
+            completedAwaitingProcessedByKey[key] = awaitingProcessed - requestedAmount;
+            return;
+        }
+
+        if (awaitingProcessed != 0) {
+            requestedAmount -= awaitingProcessed;
+            delete completedAwaitingProcessedByKey[key];
+        }
+
+        processedRequestedCreditByKey[key] += requestedAmount;
+    }
+
     /// @notice Applies buffered authoritative decreases after pending entry creation/increase.
     function _applyBufferedDecreases(Pending storage entry, bytes32 key) internal {
         BufferedProcessedSettlement memory bufferedProcessed = bufferedProcessedDecreaseByKey[key];
@@ -933,7 +985,7 @@ contract HubRSC is AbstractReactive {
 
     /// @notice Removes queue membership once both pending and in-flight amounts are zero.
     function _pruneIfFullySettled(Pending storage entry, bytes32 key) internal {
-        if (entry.amount != 0 || inFlightByKey[key] != 0) return;
+        if (entry.amount != 0 || inFlightByKey[key] != 0 || completedAwaitingProcessedByKey[key] != 0) return;
         address lcc = entry.lcc;
         bool terminal = terminalFailureByKey[key];
         entry.exists = false;
