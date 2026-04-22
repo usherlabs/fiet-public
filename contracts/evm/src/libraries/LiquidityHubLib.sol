@@ -6,10 +6,11 @@ import {LCCFactoryLib} from "./LCCFactoryLib.sol";
 import {Math} from "openzeppelin-contracts/contracts/utils/math/Math.sol";
 import {Errors} from "./Errors.sol";
 import {IMarketFactory} from "../interfaces/IMarketFactory.sol";
-import {IQueueCustodian} from "../interfaces/IQueueCustodian.sol";
 import {Currency} from "v4-periphery/lib/v4-core/src/types/Currency.sol";
 import {CurrencyTransfer} from "./CurrencyTransfer.sol";
 import {IWETH9} from "v4-periphery/src/interfaces/external/IWETH9.sol";
+import {ERC165Checker} from "openzeppelin-contracts/contracts/utils/introspection/ERC165Checker.sol";
+import {INativeSettlementReceiver} from "../interfaces/INativeSettlementReceiver.sol";
 
 interface ILiquidityHubWeth9 {
     function weth9() external view returns (address);
@@ -575,13 +576,20 @@ library LiquidityHubLib {
         reserve.marketDerived -= marketDerivedAmount;
 
         if (underlying == address(0)) {
-            // Attempt native push first for backwards-compatible payout behaviour.
-            (bool nativeOk,) = account.call{value: amount}("");
-            if (nativeOk) return;
-
             address wrappedNative = ILiquidityHubWeth9(address(this)).weth9();
             if (wrappedNative == address(0)) {
                 revert Errors.InvalidAddress(wrappedNative);
+            }
+
+            // EOAs and contracts that explicitly opt in via `INativeSettlementReceiver` (EIP-165) may receive raw ETH.
+            // All other contracts (including canonical WETH9) settle as ERC20 WETH so value cannot be absorbed by
+            // payable contracts that credit `msg.sender` instead of the nominal recipient.
+            bool tryRawEthPush = account.code.length == 0
+                || ERC165Checker.supportsInterface(account, type(INativeSettlementReceiver).interfaceId);
+
+            if (tryRawEthPush) {
+                (bool nativeOk,) = account.call{value: amount}("");
+                if (nativeOk) return;
             }
 
             IWETH9(wrappedNative).deposit{value: amount}();
@@ -666,46 +674,6 @@ library LiquidityHubLib {
         } else {
             underlyingCurrency.approve(issuer, amount);
         }
-    }
-
-    /// @dev `custodian` must implement `IQueueCustodian`. `tokenId` is the custodian bucket id (commitment id or utility sentinel).
-    function settleFromCustodian(
-        LiquidityHubStorage storage s,
-        address lcc,
-        address custodian,
-        uint256 tokenId,
-        address recipient,
-        uint256 maxAmount
-    ) internal returns (uint256 settled) {
-        if (recipient == address(0) || custodian == address(0) || maxAmount == 0) {
-            return 0;
-        }
-        if (custodian.code.length == 0) {
-            return 0;
-        }
-
-        IQueueCustodian queueCustodian = IQueueCustodian(custodian);
-        uint256 queued = s.settleQueue[lcc][recipient];
-        if (queued == 0) return 0;
-
-        address underlying = s.lccToUnderlying[lcc];
-        uint256 available = s.reserveOfUnderlying[underlying].marketDerived;
-        uint256 custodied;
-        try queueCustodian.queued(tokenId, lcc, recipient) returns (uint256 q) {
-            custodied = q;
-        } catch {
-            return 0;
-        }
-
-        settled = Math.min(Math.min(queued, available), Math.min(maxAmount, custodied));
-        if (settled == 0) return 0;
-
-        try queueCustodian.release(tokenId, lcc, recipient, settled) returns (uint256 released) {
-            settled = released;
-        } catch {
-            return 0;
-        }
-        if (settled == 0) return 0;
     }
 
     function annulSettlementBeforeTransfer(

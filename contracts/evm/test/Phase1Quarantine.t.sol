@@ -39,6 +39,19 @@ contract Phase1QuarantineTest is VTSOrchestratorFixture {
         assertEq(h1, h2);
     }
 
+    /// @dev Repeated permissionless crystallisation must not drift pool totals absent new swaps / liquidity paths.
+    function test_settlePositionGrowths_preservesPoolBaseAggregates_manyCalls() public {
+        (, PositionId positionId,,) = _createCommittedPosition();
+        PoolId pid = corePoolKey.toId();
+
+        bytes32 h1 = _poolTotalsHash(pid);
+        for (uint256 i = 0; i < 25; i++) {
+            vtsOrchestrator.settlePositionGrowths(positionId);
+        }
+        bytes32 h2 = _poolTotalsHash(pid);
+        assertEq(h1, h2);
+    }
+
     function test_processPosition_mmPoke_smoke() public {
         (uint256 tokenId, PositionId positionId,,) = _createCommittedPosition();
 
@@ -47,7 +60,7 @@ contract Phase1QuarantineTest is VTSOrchestratorFixture {
         });
 
         address locker = liquiditySignal.mmState.owner;
-        bytes memory hookData = PositionModificationHookDataLib.encode(tokenId, 0, locker);
+        bytes memory hookData = PositionModificationHookDataLib.encode(tokenId, 0, locker, address(0xB0B));
 
         vm.prank(coreHookAddress);
         (, PositionId id, bool isMMPosition) = vtsOrchestrator.processPosition(

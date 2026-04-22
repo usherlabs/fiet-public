@@ -663,7 +663,7 @@ contract FietPositionManager is PositionManager {
 
 /// @dev Multicaller that composes (in a single EOA transaction):
 ///      (1) PosM unlock: DECREASE + TAKE_PAIR (LCC paid to this multicaller)
-///      (2) PoolManager unlock: LiquidityHub.unwrapTo (underlying paid to end recipient)
+///      (2) PoolManager unlock: LiquidityHub.unwrap (underlying to multicaller, then forwarded to end recipient)
 ///      (3) PosM call: SWEEP any residual token balances to end recipient
 contract ThreeStepDecreaseUnwrapSweepMulticaller {
     IPoolManager internal immutable pm;
@@ -702,7 +702,7 @@ contract ThreeStepDecreaseUnwrapSweepMulticaller {
         IPositionManager(posm).modifyLiquidities(abi.encode(actions, params), block.timestamp + 3600);
     }
 
-    function step2_unwrapTo_withOwnUnlock(address lcc0_, address lcc1_, address to_) external {
+    function step2_unwrap_withOwnUnlock(address lcc0_, address lcc1_, address to_) external {
         lcc0 = lcc0_;
         lcc1 = lcc1_;
         to = to_;
@@ -710,14 +710,24 @@ contract ThreeStepDecreaseUnwrapSweepMulticaller {
     }
 
     function unlockCallback(bytes calldata) external returns (bytes memory) {
-        // Unwrap all market-derived LCC held by this contract to the provided recipient.
+        // Unwrap all market-derived LCC held by this contract, then forward underlying to `to`.
         if (lcc0 != address(0)) {
             (, uint256 m0) = ILCC(lcc0).balancesOf(address(this));
-            if (m0 > 0) LiquidityHub(payable(hub)).unwrapTo(lcc0, to, m0);
+            if (m0 > 0) {
+                LiquidityHub(payable(hub)).unwrap(lcc0, m0);
+                address u0 = LiquidityCommitmentCertificate(payable(lcc0)).underlying();
+                uint256 b0 = IERC20Minimal(u0).balanceOf(address(this));
+                if (b0 > 0) IERC20Minimal(u0).transfer(to, b0);
+            }
         }
         if (lcc1 != address(0)) {
             (, uint256 m1) = ILCC(lcc1).balancesOf(address(this));
-            if (m1 > 0) LiquidityHub(payable(hub)).unwrapTo(lcc1, to, m1);
+            if (m1 > 0) {
+                LiquidityHub(payable(hub)).unwrap(lcc1, m1);
+                address u1 = LiquidityCommitmentCertificate(payable(lcc1)).underlying();
+                uint256 b1 = IERC20Minimal(u1).balanceOf(address(this));
+                if (b1 > 0) IERC20Minimal(u1).transfer(to, b1);
+            }
         }
         return bytes("");
     }
@@ -1162,10 +1172,10 @@ contract CoreHookDirectLPRemoveBucketingTest is MarketTestBase {
         );
     }
 
-    function test_multicall_threeCall_decrease_then_unwrapTo_then_sweepPosm() public {
+    function test_multicall_threeCall_decrease_then_unwrap_then_sweepPosm() public {
         // Use the default PositionManager and a separate multicaller that performs:
         //   (1) PosM unlock: DECREASE+TAKE_PAIR to multicaller
-        //   (2) Separate PoolManager unlock: unwrapTo(lcc, to=EOA)
+        //   (2) Separate PoolManager unlock: unwrap LCC then forward underlying to EOA
         //   (3) Post-unwrap sweep of any residual PosM balances
         PositionManager posm = uniPositionManager;
         ThreeCallMulticallState memory t;
@@ -1226,7 +1236,7 @@ contract CoreHookDirectLPRemoveBucketingTest is MarketTestBase {
             (t.tokenId, t.liq, corePoolKey.currency0, corePoolKey.currency1)
         );
         calls[1] =
-            abi.encodeCall(ThreeStepDecreaseUnwrapSweepMulticaller.step2_unwrapTo_withOwnUnlock, (t.lcc0, t.lcc1, lp));
+            abi.encodeCall(ThreeStepDecreaseUnwrapSweepMulticaller.step2_unwrap_withOwnUnlock, (t.lcc0, t.lcc1, lp));
         calls[2] = abi.encodeCall(
             ThreeStepDecreaseUnwrapSweepMulticaller.step3_sweepPosmTo, (Currency.wrap(t.ua0), Currency.wrap(t.ua1), lp)
         );
@@ -1244,8 +1254,8 @@ contract CoreHookDirectLPRemoveBucketingTest is MarketTestBase {
         assertFalse(sawPmToFactory1, "underlying1 must not bubble into MarketFactory");
 
         // LCC outcomes: multicaller should have unwrapped everything it received.
-        assertEq(_sumLccBuckets(t.lcc0, t.mc), 0, "Multicaller should not retain LCC0 after unwrapTo");
-        assertEq(_sumLccBuckets(t.lcc1, t.mc), 0, "Multicaller should not retain LCC1 after unwrapTo");
+        assertEq(_sumLccBuckets(t.lcc0, t.mc), 0, "Multicaller should not retain LCC0 after unwrap");
+        assertEq(_sumLccBuckets(t.lcc1, t.mc), 0, "Multicaller should not retain LCC1 after unwrap");
 
         // Underlying outcomes: LP receives underlying, MarketFactory receives nothing.
         assertGt(IERC20Minimal(t.ua0).balanceOf(lp), t.lpUa0Before, "LP should receive underlying0 after flow");

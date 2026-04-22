@@ -1,95 +1,104 @@
 // SPDX-License-Identifier: BUSL-1.1
 pragma solidity ^0.8.26;
 
-import {Currency} from "v4-periphery/lib/v4-core/src/types/Currency.sol";
-import {CurrencyTransfer} from "./libraries/CurrencyTransfer.sol";
+import {Currency, CurrencyLibrary} from "v4-periphery/lib/v4-core/src/types/Currency.sol";
+import {IERC20} from "openzeppelin-contracts/contracts/token/ERC20/IERC20.sol";
+import {Math} from "openzeppelin-contracts/contracts/utils/math/Math.sol";
+import {ERC165} from "openzeppelin-contracts/contracts/utils/introspection/ERC165.sol";
 import {IMMQueueCustodian} from "./interfaces/IMMQueueCustodian.sol";
 import {ILCC} from "./interfaces/ILCC.sol";
+import {ILiquidityHub} from "./interfaces/ILiquidityHub.sol";
+import {INativeSettlementReceiver} from "./interfaces/INativeSettlementReceiver.sol";
 import {Errors} from "./libraries/Errors.sol";
 
 /// @title MMQueueCustodian
-/// @notice Shared custody for queued MM-backed LCC balances, bucketed by commitment token id and beneficiary
-/// @dev Beneficiary-scoped slices prevent cross-composition: Hub queue is per-(lcc, recipient); custody must
-///      align so COLLECT_AVAILABLE_LIQUIDITY cannot spend another recipient's LCC under the same tokenId.
-///
-///      Intended model:
-///      - `beneficiary` is always the MM batch locker whose `LiquidityHub.settleQueue(lcc, beneficiary)` entry
-///        was created for that staged principal (see `VTSPositionLib` queue recipient == hook `locker`).
-///      - Normal decreases: locker is the authorised party acting on the commitment (typically owner or approved operator).
-///      - Seizure decreases: locker is the seizer. Custody and queue (when present) both attribute to that locker.
-contract MMQueueCustodian is IMMQueueCustodian {
-    using CurrencyTransfer for Currency;
+/// @notice One queue custodian per beneficiary: Hub queue owner for that MM domain; actual LCC and underlying balances
+///         on this contract are the receivable state (no shadow ledger).
+/// @dev `COLLECT_AVAILABLE_LIQUIDITY` settles when needed, then `release` credits the locker
+///      through `MMPositionManager` pull flows (`TAKE`), not direct beneficiary push payout from this contract.
+contract MMQueueCustodian is IMMQueueCustodian, ERC165, INativeSettlementReceiver {
+    /// @notice Underlying released to the position manager after settlement paths deliver underlying to this custodian.
+    event UnderlyingReleasedToManager(address indexed lcc, uint256 amount);
 
-    /// @notice Beneficiary-scoped custody increased (MM-backed LCC staged for later Hub settlement).
-    event CustodyRecorded(uint256 indexed tokenId, address indexed lcc, address indexed beneficiary, uint256 amount);
-
-    /// @notice Beneficiary-scoped custody decreased and LCC transferred out.
-    event CustodyReleased(uint256 indexed tokenId, address indexed lcc, address indexed beneficiary, uint256 amount);
-
-    /// @notice One-time authoriser allowed to bind the position manager.
-    address public authorisedBinder;
-    address public override positionManager;
-
-    // tokenId => lcc => beneficiary => queued custody balance
-    mapping(uint256 tokenId => mapping(address lcc => mapping(address beneficiary => uint256 amount))) private
-        _queuedLcc;
+    address public immutable override positionManager;
+    address public immutable override beneficiary;
 
     modifier onlyPositionManager() {
         if (msg.sender != positionManager) revert Errors.InvalidSender();
         _;
     }
 
-    constructor(address _authorisedBinder) {
-        if (_authorisedBinder == address(0)) revert Errors.InvalidAddress(_authorisedBinder);
-        authorisedBinder = _authorisedBinder;
-    }
+    /// @dev Accept native underlying from `LiquidityHub` settlement for native-backed LCC markets.
+    receive() external payable {}
 
-    function setPositionManager(address _positionManager) external override {
-        if (msg.sender != authorisedBinder) revert Errors.InvalidSender();
-        if (positionManager != address(0)) revert Errors.InvalidSender();
+    constructor(address _positionManager, address _beneficiary) {
         if (_positionManager == address(0) || _positionManager.code.length == 0) {
             revert Errors.InvalidAddress(_positionManager);
         }
+        if (_beneficiary == address(0)) revert Errors.InvalidAddress(_beneficiary);
         positionManager = _positionManager;
-        authorisedBinder = address(0);
+        beneficiary = _beneficiary;
     }
 
-    function record(uint256 tokenId, address lcc, address beneficiary, uint256 amount)
-        external
-        override
-        onlyPositionManager
-    {
-        if (lcc == address(0)) revert Errors.InvalidAddress(lcc);
-        if (beneficiary == address(0)) revert Errors.InvalidAddress(beneficiary);
+    /// @inheritdoc INativeSettlementReceiver
+    function supportsNativeSettlementFromFiet() external pure override returns (bool) {
+        return true;
+    }
+
+    /// @inheritdoc ERC165
+    function supportsInterface(bytes4 interfaceId) public view virtual override returns (bool) {
+        return interfaceId == type(INativeSettlementReceiver).interfaceId || super.supportsInterface(interfaceId);
+    }
+
+    /// @inheritdoc IMMQueueCustodian
+    function totalQueuedLcc(address lcc) external view override returns (uint256) {
+        return IERC20(lcc).balanceOf(address(this));
+    }
+
+    /// @inheritdoc IMMQueueCustodian
+    /// @notice Hub `unwrap` as this contract: shortfall queues to `address(this)`; immediate underlying is forwarded to `forwardUnderlyingTo`.
+    /// @dev `MMPM` must transfer `amount` LCC to this contract before calling. Canonical Hub: `ILCC(lcc).hub()`.
+    function unwrapLcc(address lcc, address forwardUnderlyingTo, uint256 amount) external onlyPositionManager {
         if (amount == 0) return;
-        _queuedLcc[tokenId][lcc][beneficiary] += amount;
-        emit CustodyRecorded(tokenId, lcc, beneficiary, amount);
-    }
+        if (forwardUnderlyingTo == address(0)) revert Errors.InvalidAddress(forwardUnderlyingTo);
 
-    // Releases LCC to recipient before processSettlementFor is called.
-    function release(uint256 tokenId, address lcc, address beneficiary, uint256 maxAmount)
-        external
-        override
-        returns (uint256 released)
-    {
-        if (beneficiary == address(0)) revert Errors.InvalidAddress(beneficiary);
-        if (lcc == address(0)) revert Errors.InvalidAddress(lcc);
-        if (msg.sender != positionManager) {
-            (bool ok, bytes memory data) = lcc.staticcall(abi.encodeCall(ILCC.hub, ()));
-            if (!ok || data.length < 32 || msg.sender != abi.decode(data, (address))) revert Errors.InvalidSender();
+        ILiquidityHub hub = ILiquidityHub(ILCC(lcc).hub());
+
+        address underlying = ILCC(lcc).underlying();
+        uint256 uBalBefore =
+            underlying == address(0) ? address(this).balance : IERC20(underlying).balanceOf(address(this));
+
+        uint256 qBefore = hub.settleQueue(lcc, address(this));
+        hub.unwrap(lcc, amount);
+        uint256 queuedDelta = hub.settleQueue(lcc, address(this)) - qBefore;
+
+        if (queuedDelta > 0) {
+            uint256 bal = IERC20(lcc).balanceOf(address(this));
+            if (bal < queuedDelta) revert Errors.InsufficientBalance(bal, queuedDelta);
         }
-        if (maxAmount == 0) return 0;
 
-        uint256 available = _queuedLcc[tokenId][lcc][beneficiary];
-        released = available < maxAmount ? available : maxAmount;
-        if (released == 0) return 0;
+        uint256 uBalAfter =
+            underlying == address(0) ? address(this).balance : IERC20(underlying).balanceOf(address(this));
+        uint256 immediateReceived = uBalAfter - uBalBefore;
 
-        _queuedLcc[tokenId][lcc][beneficiary] = available - released;
-        emit CustodyReleased(tokenId, lcc, beneficiary, released);
-        Currency.wrap(lcc).transfer(beneficiary, released);
+        if (immediateReceived > 0) {
+            Currency.wrap(underlying).transfer(forwardUnderlyingTo, immediateReceived);
+        }
     }
 
-    function queued(uint256 tokenId, address lcc, address beneficiary) external view override returns (uint256) {
-        return _queuedLcc[tokenId][lcc][beneficiary];
+    /// @inheritdoc IMMQueueCustodian
+    function release(address lcc, uint256 amount) external override onlyPositionManager {
+        if (lcc == address(0)) revert Errors.InvalidAddress(lcc);
+        if (amount == 0) return;
+
+        address underlying = ILCC(lcc).underlying();
+        uint256 available =
+            underlying == address(0) ? address(this).balance : IERC20(underlying).balanceOf(address(this));
+        uint256 toSend = Math.min(amount, available);
+        if (toSend == 0) return;
+
+        address to = positionManager;
+        Currency.wrap(underlying).transfer(to, toSend);
+        emit UnderlyingReleasedToManager(lcc, toSend);
     }
 }

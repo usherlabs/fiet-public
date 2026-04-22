@@ -3,7 +3,6 @@ pragma solidity ^0.8.26;
 
 import {PositionId, Position} from "../types/Position.sol";
 import {MarketMaker} from "../libraries/MarketMaker.sol";
-import {IMMQueueCustodian} from "./IMMQueueCustodian.sol";
 
 /// @title IMMPositionManager
 /// @notice Interface for the MMPositionManager contract
@@ -59,6 +58,7 @@ interface IMMPositionManager {
     /// @return The next token ID (will be assigned on next commitSignal call)
     function nextTokenId() external view returns (uint256);
 
-    /// @notice Shared queue custodian (`IMMQueueCustodian` / `IQueueCustodian`) for queued MM-backed LCC custody
-    function queueCustodian() external view returns (IMMQueueCustodian);
+    /// @notice Queue custodian for a beneficiary domain (one custodian per beneficiary; immutable beneficiary inside).
+    /// @dev Deployed via `INITIALISE`; use `custodianFor` for queue-owner resolution elsewhere.
+    function custodianFor(address recipient) external view returns (address);
 }

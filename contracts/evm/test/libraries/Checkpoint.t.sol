@@ -7,6 +7,7 @@ import {CheckpointLibrary} from "../../src/libraries/Checkpoint.sol";
 import {Errors} from "../../src/libraries/Errors.sol";
 
 import {VTSStorage} from "../../src/types/VTS.sol";
+import {CarryQ128} from "../../src/types/Carry.sol";
 import {PositionId, Position} from "../../src/types/Position.sol";
 import {RFSCheckpoint} from "../../src/types/Checkpoint.sol";
 import {IVRLSettlementObserver} from "../../src/interfaces/IVRLSettlementObserver.sol";
@@ -161,6 +162,18 @@ contract CheckpointHarness {
     function get(PositionId positionId) external view returns (RFSCheckpoint memory) {
         return s.positions[positionId].checkpoint;
     }
+
+    function setSeizureCarryRaw(PositionId positionId, uint256 raw0, uint256 raw1) external {
+        s.positionAccounting[positionId].seizureLiquidityCarry.token0 = CarryQ128.wrap(raw0);
+        s.positionAccounting[positionId].seizureLiquidityCarry.token1 = CarryQ128.wrap(raw1);
+    }
+
+    function getSeizureCarryRaw(PositionId positionId) external view returns (uint256, uint256) {
+        return (
+            CarryQ128.unwrap(s.positionAccounting[positionId].seizureLiquidityCarry.token0),
+            CarryQ128.unwrap(s.positionAccounting[positionId].seizureLiquidityCarry.token1)
+        );
+    }
 }
 
 contract CheckpointLibraryTest is Test {
@@ -209,6 +222,32 @@ contract CheckpointLibraryTest is Test {
         RFSCheckpoint memory cp2 = h.get(PID);
         assertEq(cp2.openSince0, 1234);
         assertEq(cp2.openSince1, 1234);
+    }
+
+    /// @dev Non-seizing RFS closure goes through `markCheckpoint`; per-lane Q128 carry must not survive for closed lanes.
+    function test_markCheckpoint_clearsSeizureCarryForClosedLanes() public {
+        h.setSeizureCarryRaw(PID, 0x100, 0x200);
+        h.markMask(PID, 0);
+        (uint256 c0, uint256 c1) = h.getSeizureCarryRaw(PID);
+        assertEq(c0, 0);
+        assertEq(c1, 0);
+    }
+
+    function test_markCheckpoint_preservesSeizureCarryForOpenLanes() public {
+        h.setSeizureCarryRaw(PID, 0x100, 0x200);
+        h.markMask(PID, 3);
+        (uint256 c0, uint256 c1) = h.getSeizureCarryRaw(PID);
+        assertEq(c0, 0x100);
+        assertEq(c1, 0x200);
+    }
+
+    function test_markCheckpoint_clearsSeizureCarryOnlyOnClosedLane() public {
+        h.setSeizureCarryRaw(PID, 0x100, 0x200);
+        // token0 RFS open (bit0), token1 closed
+        h.markMask(PID, 1);
+        (uint256 c0, uint256 c1) = h.getSeizureCarryRaw(PID);
+        assertEq(c0, 0x100);
+        assertEq(c1, 0);
     }
 
     function test_isSeizable_returnsTrueOnCommitmentDeficit() public {

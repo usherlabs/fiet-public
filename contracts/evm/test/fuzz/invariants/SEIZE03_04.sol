@@ -95,7 +95,7 @@ contract SEIZE03_04 {
         uint256 liq = uint256(liqRaw % 1e10) + 1;
         ModifyLiquidityParams memory params =
             ModifyLiquidityParams({tickLower: tl, tickUpper: tu, liquidityDelta: int256(liq), salt: salt});
-        bytes memory hookData = PositionModificationHookDataLib.encodeSeizure(1, 0, address(this), 0, 0);
+        bytes memory hookData = PositionModificationHookDataLib.encodeSeizure(1, 0, address(this), address(0xB0B), 0, 0);
 
         (bool reverted, bytes4 selector) = _touchReverts(address(this), params, hookData);
         checked03 = true;
@@ -126,7 +126,7 @@ contract SEIZE03_04 {
         harness.registerPosition(address(this), poolId, params);
         harness.setPositionCommitId(id, stored);
 
-        bytes memory hookData = PositionModificationHookDataLib.encode(provided, 0, address(this));
+        bytes memory hookData = PositionModificationHookDataLib.encode(provided, 0, address(this), address(0xB0B));
         (bool reverted, bytes4 selector) = _touchReverts(address(this), params, hookData);
         checked04 = true;
         lastOk04 = reverted && selector == Errors.InvariantViolated.selector;

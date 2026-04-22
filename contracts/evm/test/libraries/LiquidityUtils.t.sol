@@ -24,6 +24,10 @@ contract LiquidityUtilsHarness {
         return LiquidityUtils.exposureBps(rfsAmount, commitment);
     }
 
+    function exposureBpsFloor(uint256 rfsAmount, uint256 commitment) external pure returns (uint256) {
+        return LiquidityUtils.exposureBpsFloor(rfsAmount, commitment);
+    }
+
     function settleOfRfsBps(uint256 settleAmount, uint256 rfsAmount) external pure returns (uint256) {
         return LiquidityUtils.settleOfRfsBps(settleAmount, rfsAmount);
     }
@@ -128,6 +132,11 @@ contract LiquidityUtilsTest is Test {
         assertEq(h.exposureBps(1, 3), 3334);
         // cap at 100%
         assertEq(h.exposureBps(999, 1), 10000);
+    }
+
+    function test_exposureBpsFloor_roundsDownAndCapsAt100Percent() public view {
+        assertEq(h.exposureBpsFloor(1, 3), 3333);
+        assertEq(h.exposureBpsFloor(999, 1), 10000);
     }
 
     function test_settleOfRfsBps_handlesZeroRfsAndCapsAt100Percent() public view {

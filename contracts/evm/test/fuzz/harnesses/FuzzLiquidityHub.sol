@@ -15,11 +15,14 @@ import {Errors} from "../../../src/libraries/Errors.sol";
 import {ICanonicalVault} from "../../../src/interfaces/ICanonicalVault.sol";
 import {TransientSlots} from "../../../src/libraries/TransientSlots.sol";
 import {ILiquidityHub} from "../../../src/interfaces/ILiquidityHub.sol";
-import {IEndpointUnwrapAdmission} from "../../../src/interfaces/IEndpointUnwrapAdmission.sol";
 import {ILCC} from "../../../src/interfaces/ILCC.sol";
 import {BoundRegistry} from "../../../src/modules/BoundRegistry.sol";
 import {Bounds} from "../../../src/libraries/Bounds.sol";
 import {IWETH9} from "v4-periphery/src/interfaces/external/IWETH9.sol";
+
+interface IEndpointUnwrapAdmission {
+    function unwrapAdmissionCredit(address lcc, address beneficiary) external view returns (uint256);
+}
 
 /**
  * @title FuzzLiquidityHub
@@ -152,17 +155,6 @@ contract FuzzLiquidityHub is BoundRegistry, Ownable, ReentrancyGuardTransient {
         LiquidityHubLib.assertValidLcc(s, lcc);
         if (!LCCFactoryLib.isCallerIssuer(s, lcc, msg.sender)) {
             revert Errors.NotApproved(msg.sender);
-        }
-    }
-
-    /**
-     * @dev All `unwrapTo` overloads are endpoint-mediated on-behalf-of flows (e.g. `MMPositionManager`).
-     *      Direct users unwrap via `unwrap(...)` which queues shortfalls to the caller.
-     *      Caller must be `BOUND_ENDPOINT` in the LCC's market factory namespace (not EXEMPT/DEX).
-     */
-    function _onlyUnwrapToEndpoint(address lcc) internal view {
-        if (boundLevelOfLcc(lcc, _msgSender()) != Bounds.BOUND_ENDPOINT) {
-            revert Errors.InvalidSender();
         }
     }
 
@@ -663,69 +655,6 @@ contract FuzzLiquidityHub is BoundRegistry, Ownable, ReentrancyGuardTransient {
         _unwrap(s.marketUnderlyingToLCC[marketId][underlying], _msgSender(), _msgSender(), amount);
     }
 
-    /**
-     * @notice Unwraps LCC tokens back to underlying assets and sends them to a specified recipient
-     * @dev Endpoint-only: caller must be `BOUND_ENDPOINT` for this LCC's market. Direct users use `unwrap(...)`.
-     *      Shortfalls queue to `to`; admission is capped by `availableToUnwrap` (see `_unwrap` NatSpec, HUB-02).
-     * @param lcc The LCC token address to unwrap
-     * @param to The recipient address
-     * @param amount The amount of LCC tokens to unwrap
-     */
-    function unwrapTo(address lcc, address to, uint256 amount) external nonReentrant {
-        _onlyUnwrapToEndpoint(lcc);
-        // Backwards-compatible: queue shortfalls to the same address receiving the underlying.
-        _unwrap(lcc, to, to, amount);
-    }
-
-    /**
-     * @notice Unwraps LCC tokens back to underlying assets and sends them to a specified recipient, while queueing any
-     *         unfulfilled portion to a separate queue owner.
-     * @dev Endpoint-only on-behalf-of flow (e.g. MMPM): "who receives underlying now" may differ from queue owner.
-     *      Admission is capped by netting `settleQueue[lcc][queueTo]` against the caller-held balance (HUB-02 / HUB-02A).
-     * @param lcc The LCC token address to unwrap
-     * @param to The recipient address for underlying
-     * @param queueTo The address to attribute any queued settlement to
-     * @param amount The amount of LCC tokens to unwrap
-     */
-    function unwrapTo(address lcc, address to, address queueTo, uint256 amount) external nonReentrant {
-        _onlyUnwrapToEndpoint(lcc);
-        _unwrap(lcc, to, queueTo, amount);
-    }
-
-    /**
-     * @notice Unwraps LCC tokens back to underlying assets and sends them to a specified recipient (overloaded)
-     * @dev Endpoint-only: caller must be `BOUND_ENDPOINT` for the resolved LCC. Direct users use `unwrap(...)`.
-     *      Admission uses `availableToUnwrap` with queue keyed to `to` (HUB-02).
-     * @param underlying The underlying asset address
-     * @param marketId The market ID
-     * @param to The recipient address
-     * @param amount The amount of LCC tokens to unwrap
-     */
-    function unwrapTo(address underlying, bytes32 marketId, address to, uint256 amount) external nonReentrant {
-        address lccAddr = s.marketUnderlyingToLCC[marketId][underlying];
-        _onlyUnwrapToEndpoint(lccAddr);
-        _unwrap(lccAddr, to, to, amount);
-    }
-
-    /**
-     * @notice Unwraps LCC tokens (resolved by underlying+marketId) to underlying assets, while queueing any unfulfilled
-     *         portion to a separate queue owner.
-     * @dev Endpoint-only on-behalf-of flow. Admission uses `availableToUnwrap` with queue keyed to `queueTo` (HUB-02A).
-     * @param underlying The underlying asset address
-     * @param marketId The market ID
-     * @param to The recipient address for underlying
-     * @param queueTo The address to attribute any queued settlement to
-     * @param amount The amount of LCC tokens to unwrap
-     */
-    function unwrapTo(address underlying, bytes32 marketId, address to, address queueTo, uint256 amount)
-        external
-        nonReentrant
-    {
-        address lccAddr = s.marketUnderlyingToLCC[marketId][underlying];
-        _onlyUnwrapToEndpoint(lccAddr);
-        _unwrap(lccAddr, to, queueTo, amount);
-    }
-
     // ============ LIQUIDITY FUNCTIONS ============
 
     /**
@@ -1015,27 +944,6 @@ contract FuzzLiquidityHub is BoundRegistry, Ownable, ReentrancyGuardTransient {
     }
 
     /**
-     * @notice Atomically releases queued custody and settles it against the recipient's Hub queue
-     * @dev Best-effort path for collection flows (e.g. MM). Returns 0 when the queue, reserve, or custody
-     *      currently cannot support settlement, instead of reverting. `custodian` must implement `IQueueCustodian`.
-     * @param lcc The LCC token address
-     * @param custodian The queue custodian holding beneficiary-scoped queued LCC
-     * @param tokenId The custodian bucket id to debit (e.g. commitment NFT id, or utility bucket such as `0`)
-     * @param recipient The queue owner and settlement recipient
-     * @param maxAmount The maximum amount to settle
-     */
-    function settleFromCustodian(address lcc, address custodian, uint256 tokenId, address recipient, uint256 maxAmount)
-        external
-        onlyValidLcc(lcc)
-        nonReentrant
-    {
-        uint256 settled = LiquidityHubLib.settleFromCustodian(s, lcc, custodian, tokenId, recipient, maxAmount);
-        if (settled > 0) {
-            _processSettlementFor(lcc, recipient, settled);
-        }
-    }
-
-    /**
      * @notice Internal function to process settlement for a specific recipient
      * @dev Delegates to LiquidityHubLib.processSettlementLogic
      * @param lcc The LCC token address
@@ -1128,15 +1036,9 @@ contract FuzzLiquidityHub is BoundRegistry, Ownable, ReentrancyGuardTransient {
     {
         _assertValidQueueOwner(lcc, recipient, allowHub);
 
-        // Native settlements push ETH directly to `recipient` during `processSettlementFor`.
-        // Restrict issuer-driven transfer-recipient queues to EOAs only for native-backed LCCs (reject all contracts here).
-        // Reason: non-payable contract recipients cannot create permanently unserviceable queues.
-        // Native payouts require a recipient shape we can deterministically service from push transfers.
-        // The issuer deficit queue path (`queueForTransferRecipient`) is strict by design, so we reject
-        // contract recipients in native lanes up-front rather than creating uncleareable queues.
-        if (s.lccToUnderlying[lcc] == address(0) && recipient.code.length > 0) {
-            revert Errors.NotApproved(recipient);
-        }
+        // Native settlements: production `LiquidityHub` allows contract queue owners; payout is EOAs + raw ETH,
+        // or `INativeSettlementReceiver` (EIP-165) for raw ETH, otherwise WETH (see `LiquidityHubLib.transferUnderlying`).
+        // Admission here matches production: no blanket contract rejection for native lanes.
 
         (, uint256 marketDerivedBalance) = ILCC(lcc).balancesOf(recipient);
         if (marketDerivedBalance < amount) {
@@ -1160,7 +1062,8 @@ contract FuzzLiquidityHub is BoundRegistry, Ownable, ReentrancyGuardTransient {
             return;
         }
 
-        if (Bounds.isExempt(boundLevelOfLcc(lcc, recipient))) {
+        uint8 level = boundLevelOfLcc(lcc, recipient);
+        if (Bounds.isExempt(level) || Bounds.isDex(level)) {
             revert Errors.NotApproved(recipient);
         }
     }

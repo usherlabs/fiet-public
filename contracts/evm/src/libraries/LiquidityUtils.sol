@@ -86,6 +86,17 @@ library LiquidityUtils {
     }
 
     /**
+     * @dev Floor exposure in basis points: min(10000, floor(rfsAmount * 10000 / commitment)).
+     *      Not used for guarantor seizure sizing (`VTSLifecycleLinkedLib._calcSeizure` uses `SeizureCarryQ128Lib`).
+     *      Use `exposureBps` (round up) for conservative obligation views where a floor is not desired.
+     */
+    function exposureBpsFloor(uint256 rfsAmount, uint256 commitment) internal pure returns (uint256) {
+        if (commitment == 0) return 0;
+        uint256 bps = FullMath.mulDiv(rfsAmount, BPS_DENOMINATOR, commitment);
+        return bps > BPS_DENOMINATOR ? BPS_DENOMINATOR : bps;
+    }
+
+    /**
      * @dev Computes the portion of RfS settled this tx (\phi_settle) in basis points.
      *      Formula: \phi_settle = min(1, settled / a_A), scaled to BPS_DENOMINATOR (1e4).
      *      - Uses mulDivRoundingUp to round up, so a settlement does not leave dust deficit due to flooring.

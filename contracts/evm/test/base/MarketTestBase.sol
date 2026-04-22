@@ -3,6 +3,7 @@ pragma solidity ^0.8.26;
 // Sets up the market and the core and proxy pools for testing
 
 import "forge-std/Test.sol";
+import {StdStorage, stdStorage} from "forge-std/StdStorage.sol";
 import {IHooks} from "@uniswap/v4-core/src/interfaces/IHooks.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 
@@ -23,6 +24,7 @@ import {HookFlags} from "../../src/libraries/HookFlags.sol";
 import {HookMiner} from "v4-periphery/src/utils/HookMiner.sol";
 import {MMPositionManager} from "../../src/MMPositionManager.sol";
 import {MMQueueCustodian} from "../../src/MMQueueCustodian.sol";
+import {MMQueueCustodianFactory} from "../../src/MMQueueCustodianFactory.sol";
 import {ECDSASignatureSignalVerifier} from "../../src/verifiers/ECDSASignatureSignalVerifier.sol";
 import {StubSignalVerifier} from "../../src/verifiers/StubSignalVerifier.sol";
 import {WETH} from "@uniswap/v4-core/lib/solmate/src/tokens/WETH.sol";
@@ -37,6 +39,7 @@ import {StubSettlementVerifier} from "../../src/verifiers/StubSettlementVerifier
 import {IMarketVault} from "../../src/interfaces/IMarketVault.sol";
 import {MMPCommitmentDescriptor} from "../../src/MMPCommitmentDescriptor.sol";
 import {MMPositionActionsImpl} from "../../src/MMPositionActionsImpl.sol";
+import {MMUtilityActionsImpl} from "../../src/MMUtilityActionsImpl.sol";
 import {CurrencyTransfer} from "../../src/libraries/CurrencyTransfer.sol";
 import {OracleHelper} from "../../src/OracleHelper.sol";
 import {CanonicalVault} from "../../src/CanonicalVault.sol";
@@ -57,6 +60,7 @@ abstract contract MarketTestBase is Test, Deployers, DeployPermit2 {
     using PoolIdLibrary for PoolId;
     using CurrencyLibrary for Currency;
     using CurrencyTransfer for Currency;
+    using stdStorage for StdStorage;
 
     // Provide initial liquidity to core pool
     uint256 initialLiquidity = 1000e18;
@@ -78,13 +82,13 @@ abstract contract MarketTestBase is Test, Deployers, DeployPermit2 {
     address canonicalVaultAddr;
     address payable liquidityHub;
     address coreHookAddress;
-    address queueCustodian;
-
     address resilientOracle = makeAddr("ResilientOracleAddr");
     ECDSASignatureSignalVerifier icVerifier;
     StubSignalVerifier stubSignalVerifier;
     VRLSignalManager signalManager;
     address mmPositionManager;
+    /// @dev Deployed in `_deployCoreContracts`; required by `MMPositionManager` constructor.
+    address queueCustodianFactory;
     IVRLSettlementObserver settlementObserver;
     IMarketVault mv;
     IWETH9 public weth9;
@@ -221,9 +225,11 @@ abstract contract MarketTestBase is Test, Deployers, DeployPermit2 {
         MMPositionActionsImpl actionsImpl = new MMPositionActionsImpl(
             address(manager), address(marketFactory), address(vtsOrchestrator), canonicalVaultAddr
         );
-        queueCustodian = address(new MMQueueCustodian(address(this)));
-
-        // Deploy MMPositionManager
+        MMUtilityActionsImpl utilityActionsImpl = new MMUtilityActionsImpl(
+            manager, address(marketFactory), address(vtsOrchestrator), canonicalVaultAddr, weth9
+        );
+        queueCustodianFactory = address(new MMQueueCustodianFactory());
+        // Deploy MMPositionManager (recipient-keyed queue custodians are deployed lazily by MMPM)
         mmPositionManager = address(
             new MMPositionManager(
                 MMPositionManager.MMPositionManagerInit({
@@ -235,11 +241,11 @@ abstract contract MarketTestBase is Test, Deployers, DeployPermit2 {
                     weth9: weth9,
                     permit2: permit2,
                     actionsImpl: address(actionsImpl),
-                    queueCustodianAddr: queueCustodian
+                    utilityActionsImpl: address(utilityActionsImpl),
+                    queueCustodianFactory: queueCustodianFactory
                 })
             )
         );
-        MMQueueCustodian(queueCustodian).setPositionManager(mmPositionManager);
 
         // Deploy DirectLP delta resolver subscriber (will be protocol-bound after MarketFactory deployment).
         directLPDeltaResolver =
@@ -258,11 +264,10 @@ abstract contract MarketTestBase is Test, Deployers, DeployPermit2 {
             new CoreHook{salt: coreSalt}(address(manager), address(marketFactory), address(vtsOrchestrator));
         require(address(coreDeployed) == coreHookAddress, "CoreHook deployed at unexpected address");
 
-        // Initialise market factory after core hook deployment
-        address[] memory initialBounds = new address[](3);
+        // Initialise market factory after core hook deployment (generic bound endpoints, not custodian-binding).
+        address[] memory initialBounds = new address[](2);
         initialBounds[0] = mmPositionManager;
-        initialBounds[1] = queueCustodian;
-        initialBounds[2] = address(directLPDeltaResolver);
+        initialBounds[1] = address(directLPDeltaResolver);
         MarketFactory(marketFactory).initialise(canonicalVaultAddr, coreHookAddress, initialBounds);
     }
 
@@ -417,5 +422,68 @@ abstract contract MarketTestBase is Test, Deployers, DeployPermit2 {
         returns (VTSOrchestrator)
     {
         return new VTSOrchestrator(_poolManager, _oracleHelper, _liquidityHub, _owner);
+    }
+
+    /// @dev Production deploys queue custodians via `INITIALISE`. Tests that need a custodian without that action
+    ///      wire `custodianFor[recipient]` to a fresh `MMQueueCustodian` bound to `mmpm` with immutable `recipient`.
+    function _wireTestQueueCustodianFor(address mmpm, address recipient) internal {
+        if (MMPositionManager(payable(mmpm)).custodianFor(recipient) != address(0)) return;
+        MMQueueCustodian c = new MMQueueCustodian(mmpm, recipient);
+        stdstore.target(mmpm).sig("custodianFor(address)").with_key(recipient)
+            .checked_write(uint256(uint160(address(c))));
+    }
+
+    /// @dev Wires custodians for deterministic `makeAddr` labels used as non-commit lockers in utility tests.
+    function _wireAllUtilityTestQueueCustodians(address mmpm) internal {
+        string[45] memory labels = [
+            "alice",
+            "aliceCustody",
+            "attacker",
+            "attackerNativeSyncTake",
+            "attackerSyncTake",
+            "bob",
+            "differentOwner",
+            "ethRecipient",
+            "eve",
+            "guarantor",
+            "guarantor-auth01a-clear",
+            "guarantor-auth01a-scope",
+            "guarantor-auth01a-settleonly",
+            "locker",
+            "lockerA_custodyIso",
+            "lockerB_custodyIso",
+            "lockerDeltaReconcileAfterAnnul",
+            "lockerNativeShortfallAlign",
+            "lockerPartialCollectThenUnwrap",
+            "lockerQueueEncumber",
+            "lockerSecondBatchFreshDelta",
+            "lockerUnwrapCollect",
+            "lockerZeroHeadroomExplicitRevert",
+            "mcRecipient",
+            "notAdvancer",
+            "recipient",
+            "sharedUtilityDomain",
+            "signedOtherLocker",
+            "syncAttacker",
+            "to",
+            "twoExtRecipient",
+            "twoFundedA",
+            "twoFundedB",
+            "user",
+            "userA_iso",
+            "userB_iso",
+            "userCollectNoop",
+            "userTok0Collect",
+            "victim",
+            "victimAnnulFullMarket",
+            "victimNativeSyncTake",
+            "victimSecondUnwrapQueue",
+            "victimSyncTake",
+            "victimUtilityReconcile",
+            "wethRecipient"
+        ];
+        for (uint256 i = 0; i < labels.length; i++) {
+            _wireTestQueueCustodianFor(mmpm, makeAddr(labels[i]));
+        }
     }
 }

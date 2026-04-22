@@ -19,12 +19,14 @@ import {
     SettleParams,
     SettleResult,
     VaultSettlementIntent,
-    MarketVTSConfiguration,
     PositionAccounting,
     PositionAccountingLib,
     TokenPairUint,
-    TokenPairLib
+    TokenPairLib,
+    TokenPairSeizureCarryQ128Lib
 } from "../types/VTS.sol";
+import {CarryQ128, CarryQ128Lib} from "../types/Carry.sol";
+import {SeizureCarryQ128Lib} from "./SeizureCarryQ128Lib.sol";
 import {
     PositionId,
     Position,
@@ -337,7 +339,30 @@ library VTSLifecycleLinkedLib {
         );
 
         (result.rfsOpen, rfsDelta) = VTSPositionLib.getRFS(s, p.positionId);
+        if (p.isSeizing) {
+            _clearSeizureCarryForLanesClosedAfterSeizingSettle(s, p.positionId, rfsDelta);
+        }
         CheckpointLibrary.markCheckpoint(s, p.positionId, VTSPositionLib._rfsOpenMask(rfsDelta));
+    }
+
+    /// @dev After a seizing `onMMSettle`, drop per-lane Q128 seizure carry for any lane whose **post-settlement** RFS
+    ///      is no longer an open positive requirement (`getRFS` lane delta <= 0). The carry exists only so repeated
+    ///      `floor(L * inner / denom)` steps stay path-independent **while that lane remains overdue**; it must not
+    ///      survive into a later distinct RFS episode or crystallise for a different guarantor once the lane is fully
+    ///      cured here. Terminal zero-liquidity still clears all carry in `VTSPositionLib._trackCommitment` as a
+    ///      teardown fail-safe.
+    function _clearSeizureCarryForLanesClosedAfterSeizingSettle(
+        VTSStorage storage s,
+        PositionId positionId,
+        BalanceDelta rfsPost
+    ) private {
+        PositionAccounting storage pa = s.positionAccounting[positionId];
+        if (rfsPost.amount0() <= 0) {
+            TokenPairSeizureCarryQ128Lib.set(pa.seizureLiquidityCarry, 0, CarryQ128Lib.zero());
+        }
+        if (rfsPost.amount1() <= 0) {
+            TokenPairSeizureCarryQ128Lib.set(pa.seizureLiquidityCarry, 1, CarryQ128Lib.zero());
+        }
     }
 
     /// @notice Handle deposit settlement for non-seizing MM settles
@@ -611,11 +636,91 @@ library VTSLifecycleLinkedLib {
         }
     }
 
+    function _clearSeizureCarryLane(PositionAccounting storage pa, uint8 tokenIndex) private {
+        TokenPairSeizureCarryQ128Lib.set(pa.seizureLiquidityCarry, tokenIndex, CarryQ128Lib.zero());
+    }
+
+    function _accumulateSeizureLaneAndStore(
+        PositionAccounting storage pa,
+        uint8 tokenIndex,
+        uint256 liq,
+        uint256 sEff,
+        uint256 rPre,
+        uint256 commitment,
+        uint256 baseBps,
+        uint256 bpsDen
+    ) private returns (uint256 seizedWhole) {
+        CarryQ128 cIn = TokenPairSeizureCarryQ128Lib.get(pa.seizureLiquidityCarry, tokenIndex);
+        CarryQ128 cOut;
+        (seizedWhole, cOut) = SeizureCarryQ128Lib.accumulateLane(cIn, liq, sEff, rPre, commitment, baseBps, bpsDen);
+        TokenPairSeizureCarryQ128Lib.set(pa.seizureLiquidityCarry, tokenIndex, cOut);
+    }
+
+    function _seizureContributionLane(
+        PositionAccounting storage pa,
+        uint256 liq,
+        uint256 rPre,
+        uint256 sLane,
+        uint256 commitment,
+        uint256 baseBps,
+        uint256 bpsDen,
+        uint8 tokenIndex
+    ) private returns (uint256 seizedWhole) {
+        if (rPre == 0) {
+            _clearSeizureCarryLane(pa, tokenIndex);
+            return 0;
+        }
+        uint256 sEff = sLane > rPre ? rPre : sLane;
+        if (sEff == 0) return 0;
+        seizedWhole = _accumulateSeizureLaneAndStore(pa, tokenIndex, liq, sEff, rPre, commitment, baseBps, bpsDen);
+    }
+
+    struct SeizureCalcInputs {
+        uint256 c0;
+        uint256 c1;
+        uint256 r0pre;
+        uint256 r1pre;
+        uint256 s0;
+        uint256 s1;
+    }
+
+    function _loadSeizureCalcInputs(
+        VTSStorage storage s,
+        PositionId positionId,
+        BalanceDelta settlementDelta,
+        BalanceDelta rfsPre
+    ) private view returns (SeizureCalcInputs memory m) {
+        PositionAccounting storage pa = s.positionAccounting[positionId];
+        m.c0 = pa.commitmentMax.token0;
+        m.c1 = pa.commitmentMax.token1;
+        int128 rfs0 = rfsPre.amount0();
+        int128 rfs1 = rfsPre.amount1();
+        m.r0pre = rfs0 > 0 ? LiquidityUtils.safeInt128ToUint256(rfs0) : 0;
+        m.r1pre = rfs1 > 0 ? LiquidityUtils.safeInt128ToUint256(rfs1) : 0;
+        m.s0 = settlementDelta.amount0() < 0 ? LiquidityUtils.safeInt128ToUint256(settlementDelta.amount0()) : 0;
+        m.s1 = settlementDelta.amount1() < 0 ? LiquidityUtils.safeInt128ToUint256(settlementDelta.amount1()) : 0;
+    }
+
+    function _finalizeSeizureTotal(uint256 total, uint256 liq, uint256 minResidualCfg) private pure returns (uint256) {
+        uint256 minResidual = minResidualCfg == 0 ? 1 : minResidualCfg;
+        if (total < liq && (liq - total) < minResidual) {
+            return liq;
+        }
+        if (total > liq) {
+            return liq;
+        }
+        return total;
+    }
+
     /// @notice Calculates liquidity units to seize for a given position and settlement delta
     /// @dev Uses pre-intervention RFS (`rfsPre`) for exposure and cured-fraction denominators so `φ = S/R_pre`
     ///      matches `agents/spec/Seizure-and-Base-Tranche-Policy.md`. Full RfS close in the same transaction still
     ///      yields non-zero seizure (no reliance on post-settlement `getRFS` remaining open). Growth is settled in
     ///      `_executeMMSettleFromParams` before the snapshot; do not re-enter here.
+    /// @dev Per-lane sizing is `floor(L * inner / denom)` with `(inner, denom)` from the piecewise policy (see
+    ///      `SeizureCarryQ128Lib.accumulateLane`) plus Q128 fractional carry in `PositionAccounting.seizureLiquidityCarry`
+    ///      so repeated micro-cures do not stack multi-stage `ceil` bias. `exposureBps` / `settleOfRfsBps` /
+    ///      `seizedUnitsFromBps` are not used for seizure sizing.
     /// @param s The central VTS storage
     /// @param positionId The position id
     /// @param settlementDelta The settlement delta applied during seizure (deposit magnitudes on negative lanes)
@@ -626,62 +731,23 @@ library VTSLifecycleLinkedLib {
         PositionId positionId,
         BalanceDelta settlementDelta,
         BalanceDelta rfsPre
-    ) private view returns (uint256 seizedLiquidityUnits) {
-        uint256 c0;
-        uint256 c1;
-        uint256 r0pre;
-        uint256 r1pre;
-        uint256 s0;
-        uint256 s1;
-        {
-            PositionAccounting storage pa = s.positionAccounting[positionId];
-            c0 = pa.commitmentMax.token0;
-            c1 = pa.commitmentMax.token1;
-
-            int128 rfs0 = rfsPre.amount0();
-            int128 rfs1 = rfsPre.amount1();
-            r0pre = rfs0 > 0 ? LiquidityUtils.safeInt128ToUint256(rfs0) : 0;
-            r1pre = rfs1 > 0 ? LiquidityUtils.safeInt128ToUint256(rfs1) : 0;
-
-            s0 = settlementDelta.amount0() < 0 ? LiquidityUtils.safeInt128ToUint256(settlementDelta.amount0()) : 0;
-            s1 = settlementDelta.amount1() < 0 ? LiquidityUtils.safeInt128ToUint256(settlementDelta.amount1()) : 0;
-        }
-
-        if (r0pre == 0 && r1pre == 0) {
+    ) private returns (uint256 seizedLiquidityUnits) {
+        SeizureCalcInputs memory a = _loadSeizureCalcInputs(s, positionId, settlementDelta, rfsPre);
+        if (a.r0pre == 0 && a.r1pre == 0) {
             return 0;
         }
 
+        PositionAccounting storage pa = s.positionAccounting[positionId];
         Position memory pos = s.positions[positionId];
         Pool memory pool = s.pools[pos.poolId];
-        MarketVTSConfiguration memory cfg = pool.vtsConfig;
         uint256 liq = uint256(pos.liquidity);
+        uint256 bpsDen = LiquidityUtils.BPS_DENOMINATOR;
 
-        uint256 total;
-        {
-            if (r0pre > 0) {
-                uint256 e0bps = LiquidityUtils.exposureBps(r0pre, c0);
-                if (cfg.token0.baseVTSRate > e0bps) e0bps = cfg.token0.baseVTSRate;
-                uint256 p0bps = LiquidityUtils.settleOfRfsBps(s0, r0pre);
-                total += LiquidityUtils.seizedUnitsFromBps(liq, e0bps, p0bps);
-            }
-            if (r1pre > 0) {
-                uint256 e1bps = LiquidityUtils.exposureBps(r1pre, c1);
-                if (cfg.token1.baseVTSRate > e1bps) e1bps = cfg.token1.baseVTSRate;
-                uint256 p1bps = LiquidityUtils.settleOfRfsBps(s1, r1pre);
-                total += LiquidityUtils.seizedUnitsFromBps(liq, e1bps, p1bps);
-            }
-        }
+        uint256 total =
+            _seizureContributionLane(pa, liq, a.r0pre, a.s0, a.c0, pool.vtsConfig.token0.baseVTSRate, bpsDen, 0);
+        total += _seizureContributionLane(pa, liq, a.r1pre, a.s1, a.c1, pool.vtsConfig.token1.baseVTSRate, bpsDen, 1);
 
-        {
-            uint256 minResidual = cfg.minResidualUnits == 0 ? 1 : cfg.minResidualUnits;
-            if (total < liq && (liq - total) < minResidual) {
-                total = liq;
-            } else if (total > liq) {
-                total = liq;
-            }
-        }
-
-        return total;
+        return _finalizeSeizureTotal(total, liq, pool.vtsConfig.minResidualUnits);
     }
 
     /// @notice Mark RFS checkpoint from current state without commitment-backed checkpointing (`withCommitment == false`).

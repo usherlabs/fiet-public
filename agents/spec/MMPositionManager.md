@@ -490,14 +490,15 @@ _unwrapNative()
 
 ### COLLECT_AVAILABLE_LIQUIDITY (0x44)
 
-Collects available liquidity from the settlement queue for a specific LCC and commitment bucket.
+Manager-mediated pull: collects for the **batch locker’s** `MMQueueCustodian` only. Reconciles `LiquidityHub.settleQueue(lcc, custodian)`, **actual** custodian LCC and underlying balances, and Hub reserves (**balance-as-ledger** — no separate entitlement mapping). Optionally runs `processSettlementFor` for the live queue slice, then releases pre-settled underlying already on the custodian. Credits the locker via **`creditExact`** for known amounts; outward wallet payout requires **`TAKE`**.
 
 **Parameters:**
 | Name | Type | Description |
 |------|------|-------------|
 | `lcc` | `address` | The LCC token address |
-| `tokenId` | `uint256` | Commitment token ID custody bucket to release from |
-| `maxAmount` | `uint256` | Maximum amount to collect |
+| `maxAmount` | `uint256` | Maximum amount (underlying units) to collect |
+
+**Prerequisite:** locker has called **`INITIALISE`** so `custodianFor[locker]` exists.
 
 ---
 

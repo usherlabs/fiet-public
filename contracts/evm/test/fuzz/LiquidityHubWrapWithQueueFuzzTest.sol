@@ -283,11 +283,7 @@ contract LiquidityHubWrapWithQueueFuzzTest {
 /// @dev Non-protocol holder used to make transfer/queue invariants reachable regardless of harness state.
 contract LiquidityHubWrapWithQueue_Holder {
     function unwrapToQueue(address hub, address lcc, uint256 amount) external returns (bool ok) {
-        (ok,) = hub.call(
-            abi.encodeWithSignature(
-                "unwrapTo(address,address,address,uint256)", lcc, address(this), address(this), amount
-            )
-        );
+        (ok,) = hub.call(abi.encodeWithSignature("unwrap(address,uint256)", lcc, amount));
     }
 
     function transfer(address token, address to, uint256 amount) external returns (bool ok) {

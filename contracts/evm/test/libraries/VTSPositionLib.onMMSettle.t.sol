@@ -15,7 +15,7 @@ import {OwnerCurrencyDelta} from "../../src/libraries/OwnerCurrencyDelta.sol";
 import {Errors} from "../../src/libraries/Errors.sol";
 import {ICanonicalVault} from "../../src/interfaces/ICanonicalVault.sol";
 import {ILCC} from "../../src/interfaces/ILCC.sol";
-import {VaultSettlementIntent} from "../../src/types/VTS.sol";
+import {MarketVTSConfiguration, VaultSettlementIntent} from "../../src/types/VTS.sol";
 
 /// @dev Several scenarios assert `harness.getUnderlyingDelta` after `onMMSettle`: here that reads harness-local
 ///      `OwnerCurrencyDelta` state in the same Forge transaction (not PoolManager unlock-scoped transient reads).
@@ -764,6 +764,100 @@ contract VTSPositionLibOnMMSettleTest is VTSLibTestBase {
         // Clamped to RfS requirement (50 each)
         assertEq(settlementDelta.amount0(), -50e18, "Seizing deposit0 clamped by RfS");
         assertEq(settlementDelta.amount1(), -50e18, "Seizing deposit1 clamped by RfS");
+    }
+
+    /// @notice Pins audit 30_4: per-lane `floor(L * baseBps * S / (B * R_pre))` is summed; there is no cross-lane
+    ///         fractional netting into whole liquidity units. With symmetric small `L` and 1% base rate, each lane's
+    ///         continuous share is `L * baseBps / B = 99/100` liquidity units (< 1) while the sum of those rationals
+    ///         exceeds 1; `seizedLiquidityUnits` stays 0 and per-lane Q128 carries retain the remainders separately.
+    function test_onMMSettle_seizing_twoLaneFractionalFloors_noCrossLaneNetting_audit30_4() public {
+        _initMarket();
+
+        MarketVTSConfiguration memory cfg = _createDefaultVTSConfig();
+        cfg.token0.baseVTSRate = 100; // 1% — with L=99 yields 0.99 liquidity units per fully cured lane (pre-floor)
+        cfg.token1.baseVTSRate = 100;
+        cfg.minResidualUnits = 1;
+        harness.setupPool(testPoolId, cfg);
+
+        ModifyLiquidityParams memory params = ModifyLiquidityParams({
+            tickLower: DEFAULT_TICK_LOWER, tickUpper: DEFAULT_TICK_UPPER, liquidityDelta: 99, salt: DEFAULT_SALT
+        });
+        harness.registerPosition(DEFAULT_OWNER, testPoolId, params);
+        PositionId positionId = PositionLibrary.generateId(DEFAULT_OWNER, params);
+        harness.setPositionActive(positionId, true);
+
+        harness.setCommitmentMax(positionId, 1e18, 1e18);
+        harness.setSettled(positionId, 0, 0);
+
+        (, BalanceDelta rfs) = harness.getRFS(positionId);
+        assertGt(rfs.amount0(), 0, "pre: lane0 RFS open");
+        assertGt(rfs.amount1(), 0, "pre: lane1 RFS open");
+
+        // Dimensionless check: sum of per-lane full-cure continuous shares (L * baseBps / B) exceeds one unit.
+        assertGt(
+            uint256(99) * uint256(cfg.token0.baseVTSRate) + uint256(99) * uint256(cfg.token1.baseVTSRate),
+            LiquidityUtils.BPS_DENOMINATOR
+        );
+
+        BalanceDelta delta = toBalanceDelta(-int128(int256(1e18)), -int128(int256(1e18)));
+
+        (,, uint256 seizedLiquidityUnits) =
+            harness.onMMSettle(manager, mockVault, positionId, lccCurrency0, lccCurrency1, delta, true, false);
+
+        assertEq(seizedLiquidityUnits, 0, "sum of per-lane floors is 0; no aggregate floor across lanes");
+
+        (uint256 car0, uint256 car1) = harness.getSeizureLiquidityCarry(positionId);
+        assertEq(car0, 0, "full cure: lane0 carry cleared when post-settlement RFS closes");
+        assertEq(car1, 0, "full cure: lane1 carry cleared when post-settlement RFS closes");
+    }
+
+    /// @notice Split cures retain Q128 carry while lanes stay overdue; carry clears when each lane’s RFS closes.
+    function test_onMMSettle_seizing_splitCure_thenFullClose_clearsCarryWhenRfsCloses() public {
+        _initMarket();
+
+        MarketVTSConfiguration memory cfg = _createDefaultVTSConfig();
+        cfg.token0.baseVTSRate = 100;
+        cfg.token1.baseVTSRate = 100;
+        cfg.minResidualUnits = 1;
+        harness.setupPool(testPoolId, cfg);
+
+        ModifyLiquidityParams memory params = ModifyLiquidityParams({
+            tickLower: DEFAULT_TICK_LOWER, tickUpper: DEFAULT_TICK_UPPER, liquidityDelta: 99, salt: DEFAULT_SALT
+        });
+        harness.registerPosition(DEFAULT_OWNER, testPoolId, params);
+        PositionId positionId = PositionLibrary.generateId(DEFAULT_OWNER, params);
+        harness.setPositionActive(positionId, true);
+        harness.setCommitmentMax(positionId, 1e18, 1e18);
+        harness.setSettled(positionId, 0, 0);
+
+        (, BalanceDelta rfs0) = harness.getRFS(positionId);
+        assertGt(rfs0.amount0(), 0);
+        assertGt(rfs0.amount1(), 0);
+
+        int128 half0 = int128(int256(LiquidityUtils.safeInt128ToUint256(rfs0.amount0()) / 2));
+        int128 half1 = int128(int256(LiquidityUtils.safeInt128ToUint256(rfs0.amount1()) / 2));
+
+        harness.onMMSettle(
+            manager, mockVault, positionId, lccCurrency0, lccCurrency1, toBalanceDelta(-half0, -half1), true, false
+        );
+
+        (, BalanceDelta rfsMid) = harness.getRFS(positionId);
+        assertGt(rfsMid.amount0(), 0, "lane0 still overdue after partial cure");
+        assertGt(rfsMid.amount1(), 0, "lane1 still overdue after partial cure");
+        (uint256 c0mid, uint256 c1mid) = harness.getSeizureLiquidityCarry(positionId);
+        assertTrue(c0mid > 0 || c1mid > 0, "expect some Q128 carry while episode remains open");
+
+        int128 rem0 = rfsMid.amount0();
+        int128 rem1 = rfsMid.amount1();
+        harness.onMMSettle(
+            manager, mockVault, positionId, lccCurrency0, lccCurrency1, toBalanceDelta(-rem0, -rem1), true, false
+        );
+
+        (, BalanceDelta rfsEnd) = harness.getRFS(positionId);
+        assertFalse(rfsEnd.amount0() > 0 || rfsEnd.amount1() > 0, "RFS fully closed");
+        (uint256 c0end, uint256 c1end) = harness.getSeizureLiquidityCarry(positionId);
+        assertEq(c0end, 0);
+        assertEq(c1end, 0);
     }
 
     function test_onMMSettle_seizing_deposits_noRfSRequirement_clampsToZero() public {

@@ -194,6 +194,12 @@ library Errors {
     /// @notice Thrown when RFS (Required for Settlement) is not open for a position
     error RFSNotOpenForPosition(PositionId positionId);
 
+    /// @notice Seizure settlement produced no liquidity removal; continuing would allow a zero-liquidity modify that can still sync accrued LCC fees to the seizer.
+    error SeizureWithoutLiquidityRemoval();
+
+    /// @notice Settle-only deposit while batch-scoped seizure context is active; use `SEIZE_POSITION` so seizure carry and liquidity removal stay coupled.
+    error SeizureSettleOnlyDepositDisallowed();
+
     /// @notice Thrown when a non-seizure MM liquidity change is attempted while commitment deficit is non-zero
     error CommitmentDeficitBlocksLiquidityChange(PositionId positionId);
 
@@ -207,6 +213,10 @@ library Errors {
     /// @notice Thrown when decommit is blocked because inactive position(s) still hold withdrawable `pa.settled`
     /// @param tokenId The commitment NFT id (commit id)
     error CommitNotDrained(uint256 tokenId);
+
+    /// @notice Thrown when a queue custodian is required for `recipient` but has not been deployed (call `INITIALISE`)
+    /// @param recipient The NFT recipient / locker domain that must already have a custodian
+    error QueueCustodianNotDeployed(address recipient);
 
     // ============ PAUSE & STATE ERRORS ============
     // Errors related to contract pause state and state transitions

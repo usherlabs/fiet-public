@@ -10,6 +10,8 @@ interface IMMActionsImpl {
     /// @dev Only handles (eg. position) operations (eg. actions < 0x20)
     /// @param action The action type to execute
     /// @param params The encoded parameters for the action
-    function handleAction(uint256 action, bytes calldata params) external;
+    /// @dev `payable` so delegatecall targets accept batches that forward native credit (`msg.value`) from
+    ///      `MMPositionManager.modifyLiquiditiesWithoutUnlock` / `modifyLiquidities` (e.g. `WRAP_NATIVE`).
+    function handleAction(uint256 action, bytes calldata params) external payable;
 }
 

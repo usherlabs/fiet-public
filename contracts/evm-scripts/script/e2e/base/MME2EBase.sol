@@ -565,6 +565,12 @@ abstract contract MME2EBase is E2EBase {
         vm.stopBroadcast();
     }
 
+    function _runHubUnwrapAction(StandaloneMarket memory m, uint256 mmPk, address lcc, uint256 unwrapAmount) internal {
+        vm.startBroadcast(mmPk);
+        ILiquidityHub(m.stack.contracts.liquidityHub).unwrap(lcc, unwrapAmount);
+        vm.stopBroadcast();
+    }
+
     /// @dev Best-effort queue collection for a specific LCC and commitment bucket.
     /// If reserve or custody cannot support settlement yet, this action is a no-op by design.
     function _collectAvailableLiquidity(
@@ -611,6 +617,22 @@ abstract contract MME2EBase is E2EBase {
         internal
     {
         mmpm.modifyLiquidities(abi.encode(actions, params), deadline);
+    }
+
+    /// @dev MM commit flows require an explicit utility `INITIALISE` before any queue-producing action.
+    function _ensureMmQueueCustodian(StandaloneMarket memory m, uint256 mmPk) internal {
+        address mm = vm.addr(mmPk);
+        MMPositionManager mmpm = MMPositionManager(payable(m.stack.contracts.mmPositionManager));
+        if (mmpm.custodianFor(mm) != address(0)) return;
+
+        vm.startBroadcast(mmPk);
+        bytes memory actions = abi.encodePacked(bytes1(uint8(MMActions.INITIALISE)));
+        bytes[] memory params = new bytes[](1);
+        params[0] = bytes("");
+        _executeMMActions(mmpm, actions, params, block.timestamp + 3600);
+        vm.stopBroadcast();
+
+        require(mmpm.custodianFor(mm) != address(0), "e2e: queue custodian missing after initialise");
     }
 
     /// @dev Fee “poke”: no-op increase (0) to touch the position, then TAKE both pool currencies to wallet.
@@ -841,6 +863,7 @@ abstract contract MME2EBase is E2EBase {
         (uint256[] memory settle0, uint256[] memory settle1, uint256 totalSettle0, uint256 totalSettle1) =
             _computeSeedSettlements(m.stack.contracts.vtsOrchestrator, key, seeds);
 
+        _ensureMmQueueCustodian(m, mmPk);
         vm.startBroadcast(mmPk);
         Token(m.underlying0).mint(mm, totalSettle0);
         Token(m.underlying1).mint(mm, totalSettle1);
@@ -1281,6 +1304,7 @@ abstract contract MME2EBase is E2EBase {
             _baseSettlementAmounts(m.stack.contracts.vtsOrchestrator, key, tickLower, tickUpper, liq);
 
         commitId = mmpm.nextTokenId();
+        _ensureMmQueueCustodian(m, mmPk);
 
         vm.startBroadcast(mmPk);
         Token(m.underlying0).mint(mm, settle0);
@@ -1562,11 +1586,14 @@ abstract contract MME2EBase is E2EBase {
         uint256 commitId
     ) internal returns (uint256 underlyingDelta) {
         address owner = vm.addr(mmPk);
+        MMPositionManager mmpm = MMPositionManager(payable(m.stack.contracts.mmPositionManager));
         ILiquidityHub hub = ILiquidityHub(m.stack.contracts.liquidityHub);
         address underlying = ILCC(lcc).underlying();
+        bool hasQueueCustodian = mmpm.custodianFor(owner) != address(0);
 
-        // Try to consume any queue that can already be settled from custody/reserves.
-        if (hub.settleQueue(lcc, owner) > 0) {
+        // Commit-owner queues can be settled via recipient-keyed custodians. Non-commit actors may still have
+        // direct Hub queue debt, but `COLLECT_AVAILABLE_LIQUIDITY` is fail-closed for them because no custodian exists.
+        if (hub.settleQueue(lcc, owner) > 0 && hasQueueCustodian) {
             _collectAvailableLiquidity(m, mmPk, lcc, commitId, type(uint256).max);
         }
 
@@ -1578,7 +1605,11 @@ abstract contract MME2EBase is E2EBase {
             return 0;
         }
 
-        _runUnwrapAction(m, mmPk, lcc, before.lcc, targetUnwrapAmount);
+        if (hasQueueCustodian) {
+            _runUnwrapAction(m, mmPk, lcc, before.lcc, targetUnwrapAmount);
+        } else {
+            _runHubUnwrapAction(m, mmPk, lcc, targetUnwrapAmount);
+        }
 
         UnwrapSnapshot memory afterState = _loadUnwrapSnapshot(hub, lcc, owner, underlying);
 

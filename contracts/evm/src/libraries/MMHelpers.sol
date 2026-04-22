@@ -7,6 +7,8 @@ import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {Errors} from "./Errors.sol";
 import {Position} from "../types/Position.sol";
 
+import {IMMPositionManager} from "../interfaces/IMMPositionManager.sol";
+
 /// @title MMHelpers
 /// @notice Library providing shared helper functions for MMPositionManager
 /// @dev Used by both MMPositionManager and MMPositionActionsImpl
@@ -41,5 +43,17 @@ library MMHelpers {
             revert Errors.InvalidMarket(poolKey);
         }
     }
-}
 
+    /// @notice Requires `custodianFor(recipient)` to be non-zero (created via `INITIALISE`).
+    function assertQueueCustodianForRecipient(address recipient) internal view {
+        if (recipient == address(0)) revert Errors.InvalidAddress(recipient);
+        address c = IMMPositionManager(address(this)).custodianFor(recipient);
+        if (c == address(0)) revert Errors.QueueCustodianNotDeployed(recipient);
+    }
+
+    /// @notice Requires the current `ownerOf(tokenId)` to already have a queue custodian.
+    function assertQueueCustodianForCommitToken(uint256 tokenId) internal view {
+        address owner = ERC721Permit_v4(address(this)).ownerOf(tokenId);
+        assertQueueCustodianForRecipient(owner);
+    }
+}

@@ -231,17 +231,11 @@ contract LiquidityHubConfirmTakeCallbackFuzzTest {
     function action_seed_hub_queue(uint256 amount) external {
         uint256 amt = (amount % 1e18) + 1; // keep small-ish
 
-        // Ensure this harness has market-derived balance to unwrap.
+        // Synthetic Hub-owned queue (issuer path): `unwrap` always queues to `msg.sender`, so we use `cancelWithQueue`
+        // + `cancel` to mirror "burn LCC + attribute shortfall to the Hub" without the removed `unwrapTo` surface.
         hub.issue(address(lccNative), address(this), amt);
-
-        // Unwrap and queue shortfall to the Hub. Use low-level call so reverts don't abort the fuzz sequence.
-        (bool ok,) = address(hub)
-            .call(
-                abi.encodeWithSignature(
-                    "unwrapTo(address,address,address,uint256)", address(lccNative), address(this), address(hub), amt
-                )
-            );
-        ok; // ignore
+        hub.cancelWithQueue(address(lccNative), address(this), amt, amt, address(hub));
+        hub.cancel(address(lccNative), address(this), amt);
     }
 
     /// @notice More adversarial seeding: create a large Hub-owned queue by repeated unwrap attempts.
@@ -253,16 +247,10 @@ contract LiquidityHubConfirmTakeCallbackFuzzTest {
         uint256 iters = ((amount >> 8) % 3) + 1; // 1..3
 
         for (uint256 i = 0; i < iters; i++) {
-            // Mint market-derived to this harness then unwrap to queue to the Hub.
             uint256 a = base + i;
             hub.issue(address(lccNative), address(this), a);
-            (bool ok,) = address(hub)
-                .call(
-                    abi.encodeWithSignature(
-                        "unwrapTo(address,address,address,uint256)", address(lccNative), address(this), address(hub), a
-                    )
-                );
-            ok; // ignore
+            hub.cancelWithQueue(address(lccNative), address(this), a, a, address(hub));
+            hub.cancel(address(lccNative), address(this), a);
         }
 
         if (hub.settleQueue(address(lccNative), address(hub)) != 0) {
@@ -330,10 +318,6 @@ contract LiquidityHubConfirmTakeCallbackFuzzTest {
 
 contract LiquidityHubConfirmTakeCallback_Holder {
     function unwrapToQueue(address hub, address lcc, uint256 amount) external returns (bool ok) {
-        (ok,) = hub.call(
-            abi.encodeWithSignature(
-                "unwrapTo(address,address,address,uint256)", lcc, address(this), address(this), amount
-            )
-        );
+        (ok,) = hub.call(abi.encodeWithSignature("unwrap(address,uint256)", lcc, amount));
     }
 }

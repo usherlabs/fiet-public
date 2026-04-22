@@ -2,7 +2,6 @@
 pragma solidity ^0.8.26;
 
 import {Currency, CurrencyLibrary} from "v4-periphery/lib/v4-core/src/types/Currency.sol";
-import {Math} from "openzeppelin-contracts/contracts/utils/math/Math.sol";
 import {Address} from "openzeppelin-contracts/contracts/utils/Address.sol";
 import {TransientSlots} from "../libraries/TransientSlots.sol";
 import {PositionManagerBase} from "./PositionManagerBase.sol";
@@ -15,24 +14,38 @@ import {Errors} from "../libraries/Errors.sol";
  */
 abstract contract PositionManagerEntrypoint is PositionManagerBase {
     address public immutable actionsImpl;
+    address public immutable utilityActionsImpl;
 
-    constructor(address _marketFactory, address _vtsOrchestrator, address _canonicalCustody, address _actionsImpl)
-        PositionManagerBase(_marketFactory, _vtsOrchestrator, _canonicalCustody)
-    {
+    constructor(
+        address _marketFactory,
+        address _vtsOrchestrator,
+        address _canonicalCustody,
+        address _actionsImpl,
+        address _utilityActionsImpl
+    ) PositionManagerBase(_marketFactory, _vtsOrchestrator, _canonicalCustody) {
         if (_actionsImpl == address(0) || _actionsImpl.code.length == 0) {
             revert Errors.InvalidAddress(_actionsImpl);
         }
+        if (_utilityActionsImpl == address(0) || _utilityActionsImpl.code.length == 0) {
+            revert Errors.InvalidAddress(_utilityActionsImpl);
+        }
         actionsImpl = _actionsImpl;
+        utilityActionsImpl = _utilityActionsImpl;
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
     // Delegation Helpers
     // ═══════════════════════════════════════════════════════════════════════════
 
-    /// @dev Delegates a call to the implementation contract
+    /// @dev Delegates a call to the position-actions implementation contract
     function _delegateToImpl(bytes memory data) internal {
         // OZ Address helper verifies target is a contract and bubbles revert reasons.
         Address.functionDelegateCall(actionsImpl, data);
+    }
+
+    /// @dev Delegates a call to the utility-actions implementation contract
+    function _delegateToUtilityImpl(bytes memory data) internal {
+        Address.functionDelegateCall(utilityActionsImpl, data);
     }
 
     // ------------------------------------------------------------------------------------------------
@@ -60,39 +73,10 @@ abstract contract PositionManagerEntrypoint is PositionManagerBase {
     ///      `_beforeBatch` in the same transaction (multicall-safe, multi-entrypoint-safe).
     function _afterBatch() internal {
         TransientSlots.clearSeizedPositionId();
+        TransientSlots.clearSeizurePrimarySettleAllowed();
         // Owner-scoped and market-scoped transient namespaces both resolve through the orchestrator boundary.
         vtsOrchestrator.assertNonZeroDeltas(marketFactory);
         TransientSlots.setNativeLastSeenBalance(address(this).balance);
-    }
-
-    // ------------------------------------------------------------------------------------------------
-    // MM Utility Helpers
-    // ------------------------------------------------------------------------------------------------
-
-    /// @notice Takes currency from delta and transfers to recipient
-    /// @dev Unified flow for both LCC and underlying currencies:
-    ///      - Balance held as ERC20 by MMPM
-    ///      - Delta on locker (LCC fees synced via _syncBalanceAsCredit after position modification)
-    ///      - Flow: debit locker delta -> direct ERC20 transfer
-    /// @param currency The currency to take
-    /// @param to The recipient address
-    /// @param maxAmount The maximum amount to take (0 = take full available credit)
-    /// @dev Native `TAKE` to `address(this)` is disallowed: it would debit the locker's delta without moving ETH,
-    ///      stranding balance on MMPM with no native `SYNC` path (see `INVARIANTS.md` DELTA-02 / audit finding on
-    ///      native self-take). ERC20 self-take remains valid and recoverable via `SYNC`.
-    function _take(Currency currency, address to, uint256 maxAmount) internal {
-        if (currency == CurrencyLibrary.ADDRESS_ZERO && to == address(this)) {
-            revert Errors.InvalidAddress(to);
-        }
-        address locker = msgSender();
-        uint256 bal = currency.balanceOfSelf();
-        // maxAmount == 0 means "take full available credit", but still cap to the actual ERC20 balance held by MMPM.
-        uint256 trueMaxAmount = (maxAmount == 0) ? bal : Math.min(maxAmount, bal);
-        uint256 takeAmount = vtsOrchestrator.take(currency, locker, trueMaxAmount);
-
-        if (to != address(this)) {
-            currency.transfer(to, takeAmount);
-        }
     }
 }
 

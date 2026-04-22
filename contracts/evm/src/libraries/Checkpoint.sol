@@ -2,7 +2,7 @@
 pragma solidity ^0.8.26;
 
 import {RFSCheckpoint} from "../types/Checkpoint.sol";
-import {VTSStorage, PositionAccounting} from "../types/VTS.sol";
+import {VTSStorage, PositionAccounting, TokenPairSeizureCarryQ128Lib} from "../types/VTS.sol";
 import {Position, PositionId} from "../types/Position.sol";
 import {MarketVTSConfiguration} from "../types/VTS.sol";
 import {Commit} from "../types/Commit.sol";
@@ -10,10 +10,12 @@ import {Errors} from "./Errors.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {IVRLSettlementObserver} from "../interfaces/IVRLSettlementObserver.sol";
 import {TokenConfiguration} from "../types/VTS.sol";
+import {CarryQ128Lib} from "../types/Carry.sol";
 
 library CheckpointLibrary {
     uint8 internal constant TOKEN0_OPEN_MASK = 1;
     uint8 internal constant TOKEN1_OPEN_MASK = 2;
+    uint8 internal constant BOTH_OPEN_MASK = TOKEN0_OPEN_MASK | TOKEN1_OPEN_MASK;
 
     /**
      * @notice Retrieves the checkpoint for a given position
@@ -173,11 +175,23 @@ library CheckpointLibrary {
     /**
      * @notice Marks a checkpoint as open or closed for a given position
      * @dev Updates the checkpoint state by calling the mark function on the checkpoint
+     * @dev Clears per-lane `seizureLiquidityCarry` for lanes not open in `openMask` so fractional Q128 remainder
+     *      from a prior seizure episode cannot survive into a later distinct RFS episode once the lane is cured
+     *      via non-seizing settlement, checkpoints, or MM modifies (audit: stale carry on non-seizing closure).
      * @param s The VTS storage struct
      * @param positionId The position ID to mark the checkpoint for
      * @param openMask Open lane mask (bit0=token0, bit1=token1)
      */
     function markCheckpoint(VTSStorage storage s, PositionId positionId, uint8 openMask) internal {
         s.positions[positionId].checkpoint.mark(openMask);
+
+        uint8 maskedOpen = uint8(openMask & BOTH_OPEN_MASK);
+        PositionAccounting storage pa = s.positionAccounting[positionId];
+        if ((maskedOpen & TOKEN0_OPEN_MASK) == 0) {
+            TokenPairSeizureCarryQ128Lib.set(pa.seizureLiquidityCarry, 0, CarryQ128Lib.zero());
+        }
+        if ((maskedOpen & TOKEN1_OPEN_MASK) == 0) {
+            TokenPairSeizureCarryQ128Lib.set(pa.seizureLiquidityCarry, 1, CarryQ128Lib.zero());
+        }
     }
 }

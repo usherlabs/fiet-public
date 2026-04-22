@@ -5,12 +5,9 @@ import {Test} from "forge-std/Test.sol";
 
 import {LiquidityHub} from "../../src/LiquidityHub.sol";
 import {FuzzLiquidityHub} from "./harnesses/FuzzLiquidityHub.sol";
-import {IEndpointUnwrapAdmission} from "../../src/interfaces/IEndpointUnwrapAdmission.sol";
-import {Errors} from "../../src/libraries/Errors.sol";
 import {Bounds} from "../../src/libraries/Bounds.sol";
 import {MockOracleHelper} from "./mocks/MockOracleHelper.sol";
 import {MockERC20Transferable} from "./mocks/MockERC20Transferable.sol";
-import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
 contract FuzzLiquidityHubParityTest is Test {
     FuzzLiquidityHub internal hub;
@@ -93,91 +90,9 @@ contract FuzzLiquidityHubParityTest is Test {
         assertEq(FuzzLiquidityHub.confirmTake.selector, LiquidityHub.confirmTake.selector);
         assertEq(FuzzLiquidityHub.prepareSettle.selector, LiquidityHub.prepareSettle.selector);
         assertEq(FuzzLiquidityHub.processSettlementFor.selector, LiquidityHub.processSettlementFor.selector);
-        assertEq(FuzzLiquidityHub.settleFromCustodian.selector, LiquidityHub.settleFromCustodian.selector);
         assertEq(FuzzLiquidityHub.executePlannedCancel.selector, LiquidityHub.executePlannedCancel.selector);
         assertEq(
             FuzzLiquidityHub.annulSettlementBeforeTransfer.selector, LiquidityHub.annulSettlementBeforeTransfer.selector
         );
-    }
-
-    /// @dev Mirror of the production Hub regression: endpoint-reported admission credit is capped by the queue and
-    ///      restores the same unwrap headroom in the fuzz adapter.
-    function test_unwrapTo_endpointAdmissionCredit_inflatedReportedCredit_stillAllowsUnwrapUpToLiveBalance() public {
-        uint256 queuedAmt = 15;
-        uint256 endpointBalance = 10;
-        uint256 unwrapAmt = 5;
-
-        _createSettlementQueueEntry(address(0xBEEF), queuedAmt);
-
-        FuzzEndpointUnwrapAdmission endpoint = new FuzzEndpointUnwrapAdmission();
-        hub.issue(lcc0, address(endpoint), endpointBalance);
-        hub.setBoundLevel(address(endpoint), Bounds.BOUND_ENDPOINT);
-        endpoint.setAdmissionCredit(type(uint256).max);
-
-        underlying0.mint(address(hub), unwrapAmt);
-        hub.confirmTake(lcc0, unwrapAmt, false);
-        mockedUsedMarketLiquidity = unwrapAmt;
-
-        uint256 toBefore = underlying0.balanceOf(address(0xCAFE));
-        vm.prank(address(endpoint));
-        endpoint.callUnwrapTo(hub, lcc0, address(0xCAFE), address(0xBEEF), unwrapAmt);
-
-        assertEq(underlying0.balanceOf(address(0xCAFE)) - toBefore, unwrapAmt);
-        assertEq(IERC20(lcc0).balanceOf(address(endpoint)), endpointBalance - unwrapAmt);
-    }
-
-    function test_unwrapTo_endpointAdmissionCredit_zeroCredit_revertsWhenLiveBalanceBelowQueue() public {
-        uint256 queuedAmt = 15;
-        uint256 endpointBalance = 10;
-
-        _createSettlementQueueEntry(address(0xBEEF), queuedAmt);
-
-        FuzzEndpointUnwrapAdmission endpoint = new FuzzEndpointUnwrapAdmission();
-        hub.issue(lcc0, address(endpoint), endpointBalance);
-        hub.setBoundLevel(address(endpoint), Bounds.BOUND_ENDPOINT);
-        endpoint.setAdmissionCredit(0);
-
-        vm.prank(address(endpoint));
-        vm.expectRevert(abi.encodeWithSelector(Errors.InvalidAmount.selector, uint256(5), uint256(0)));
-        endpoint.callUnwrapTo(hub, lcc0, address(0xCAFE), address(0xBEEF), 5);
-    }
-
-    function test_unwrapTo_endpointAdmissionCredit_staticcallNoInterface_zeroCredit_revertsWhenLiveBalanceBelowQueue()
-        public
-    {
-        uint256 queuedAmt = 15;
-        uint256 endpointBalance = 10;
-
-        _createSettlementQueueEntry(address(0xBEEF), queuedAmt);
-
-        FuzzEndpointCallerSansAdmission endpoint = new FuzzEndpointCallerSansAdmission();
-        hub.issue(lcc0, address(endpoint), endpointBalance);
-        hub.setBoundLevel(address(endpoint), Bounds.BOUND_ENDPOINT);
-
-        vm.prank(address(endpoint));
-        vm.expectRevert(abi.encodeWithSelector(Errors.InvalidAmount.selector, uint256(1), uint256(0)));
-        endpoint.callUnwrapTo(hub, lcc0, address(0xCAFE), address(0xBEEF), 1);
-    }
-}
-
-contract FuzzEndpointUnwrapAdmission is IEndpointUnwrapAdmission {
-    uint256 private _admissionCredit;
-
-    function setAdmissionCredit(uint256 credit) external {
-        _admissionCredit = credit;
-    }
-
-    function unwrapAdmissionCredit(address, address) external view returns (uint256) {
-        return _admissionCredit;
-    }
-
-    function callUnwrapTo(FuzzLiquidityHub target, address lcc, address to, address queueTo, uint256 amount) external {
-        target.unwrapTo(lcc, to, queueTo, amount);
-    }
-}
-
-contract FuzzEndpointCallerSansAdmission {
-    function callUnwrapTo(FuzzLiquidityHub target, address lcc, address to, address queueTo, uint256 amount) external {
-        target.unwrapTo(lcc, to, queueTo, amount);
     }
 }

@@ -60,8 +60,11 @@ struct PositionModificationHookData {
     /// @notice The position index within the commit
     uint256 positionIndex;
     /// @notice The locker address (msgSender who initiated the operation via MMPM)
-    /// @dev Required for MM settlement queue attribution and advancer authorisation
+    /// @dev Required for beneficiary / credit attribution and advancer authorisation (non-seizing)
     address locker;
+    /// @notice Hub `settleQueue` owner for this modify — the recipient-keyed `MMQueueCustodian` deployed by MMPM
+    /// @dev Set by MMPM when encoding hook data; VTS uses this for liquidity-decrease queue routing (not derived in VTS)
+    address queueRecipient;
     /// @notice Seizure-related data (only populated during seizure operations)
     SeizureData seizure;
     /// @notice Arbitrary additional data for future extensions
@@ -74,22 +77,30 @@ library PositionModificationHookDataLib {
     /// @param commitId The commit ID (ERC721 tokenId)
     /// @param positionIndex The position index within the commit
     /// @param locker The locker address (msgSender who initiated the operation)
+    /// @param queueRecipient Hub queue owner (`MMQueueCustodian`) for decrease / settlement queue attribution
     /// @return Encoded hook data bytes
-    function encode(uint256 commitId, uint256 positionIndex, address locker) internal pure returns (bytes memory) {
-        return encodeWithExtraData(commitId, positionIndex, locker, "");
-    }
-
-    /// @notice Encodes hook data for standard position modifications with custom extraData
-    function encodeWithExtraData(uint256 commitId, uint256 positionIndex, address locker, bytes memory extraData)
+    function encode(uint256 commitId, uint256 positionIndex, address locker, address queueRecipient)
         internal
         pure
         returns (bytes memory)
     {
+        return encodeWithExtraData(commitId, positionIndex, locker, queueRecipient, "");
+    }
+
+    /// @notice Encodes hook data for standard position modifications with custom extraData
+    function encodeWithExtraData(
+        uint256 commitId,
+        uint256 positionIndex,
+        address locker,
+        address queueRecipient,
+        bytes memory extraData
+    ) internal pure returns (bytes memory) {
         return abi.encode(
             PositionModificationHookData({
                 commitId: commitId,
                 positionIndex: positionIndex,
                 locker: locker,
+                queueRecipient: queueRecipient,
                 seizure: SeizureData({isSeizing: false, settle0: 0, settle1: 0}),
                 extraData: extraData
             })
@@ -101,6 +112,7 @@ library PositionModificationHookDataLib {
         uint256 commitId,
         uint256 positionIndex,
         address locker,
+        address queueRecipient,
         uint256 intendedSettle0,
         uint256 intendedSettle1
     ) internal pure returns (bytes memory) {
@@ -108,6 +120,7 @@ library PositionModificationHookDataLib {
             commitId,
             positionIndex,
             locker,
+            queueRecipient,
             abi.encode(
                 MMIncreaseHookExtraData({
                     settleInHook: true, intendedSettle0: intendedSettle0, intendedSettle1: intendedSettle1
@@ -120,19 +133,24 @@ library PositionModificationHookDataLib {
     /// @param commitId The commit ID (ERC721 tokenId)
     /// @param positionIndex The position index within the commit
     /// @param locker The locker address (msgSender who initiated the operation)
+    /// @param queueRecipient Hub queue owner for queued principal during seizure decrease
     /// @param settle0 The settlement amount for token0
     /// @param settle1 The settlement amount for token1
     /// @return Encoded hook data bytes
-    function encodeSeizure(uint256 commitId, uint256 positionIndex, address locker, int128 settle0, int128 settle1)
-        internal
-        pure
-        returns (bytes memory)
-    {
+    function encodeSeizure(
+        uint256 commitId,
+        uint256 positionIndex,
+        address locker,
+        address queueRecipient,
+        int128 settle0,
+        int128 settle1
+    ) internal pure returns (bytes memory) {
         return abi.encode(
             PositionModificationHookData({
                 commitId: commitId,
                 positionIndex: positionIndex,
                 locker: locker,
+                queueRecipient: queueRecipient,
                 seizure: SeizureData({isSeizing: true, settle0: settle0, settle1: settle1}),
                 extraData: ""
             })
@@ -148,6 +166,7 @@ library PositionModificationHookDataLib {
                 commitId: 0,
                 positionIndex: 0,
                 locker: address(0),
+                queueRecipient: address(0),
                 seizure: SeizureData({isSeizing: false, settle0: 0, settle1: 0}),
                 extraData: ""
             });
@@ -164,6 +183,7 @@ library PositionModificationHookDataLib {
                 commitId: 0,
                 positionIndex: 0,
                 locker: address(0),
+                queueRecipient: address(0),
                 seizure: SeizureData({isSeizing: false, settle0: 0, settle1: 0}),
                 extraData: ""
             });
@@ -198,6 +218,14 @@ library PositionModificationHookDataLib {
             revert Errors.InvariantViolated("MM Operation: locker must be passed into hookdata");
         }
         return data.locker;
+    }
+
+    /// @notice Hub queue owner for MM liquidity decreases — must be set by MMPM when encoding hook data
+    function getQueueRecipient(PositionModificationHookData memory data) internal pure returns (address) {
+        if (data.queueRecipient == address(0)) {
+            revert Errors.InvariantViolated("MM Operation: queueRecipient must be passed into hookdata");
+        }
+        return data.queueRecipient;
     }
 }
 

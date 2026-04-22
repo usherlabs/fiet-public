@@ -15,6 +15,7 @@ import {PositionModificationHookDataLib, PositionLibrary} from "../src/types/Pos
 import {ModifyLiquidityParams, SwapParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
 import {MarketVTSConfiguration} from "../src/types/VTS.sol";
 import {VTSConfigs} from "../src/libraries/VTSConfigs.sol";
+import {LiquidityUtils} from "../src/libraries/LiquidityUtils.sol";
 import {Errors} from "../src/libraries/Errors.sol";
 import {StateLibrary} from "v4-periphery/lib/v4-core/src/libraries/StateLibrary.sol";
 import {IPoolManager} from "v4-periphery/lib/v4-core/src/interfaces/IPoolManager.sol";
@@ -1191,7 +1192,8 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
         ModifyLiquidityParams memory params = ModifyLiquidityParams({
             tickLower: -60, tickUpper: 60, liquidityDelta: 0, salt: PositionLibrary.generateSalt(tokenId, 0)
         });
-        bytes memory hookData = PositionModificationHookDataLib.encode(tokenId, 0, address(positionManager));
+        bytes memory hookData =
+            PositionModificationHookDataLib.encode(tokenId, 0, address(positionManager), address(0xB0B));
 
         vm.prank(coreHookAddress);
         vm.expectRevert(abi.encodeWithSelector(Errors.InvalidSignal.selector, tokenId));
@@ -1228,8 +1230,9 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
         ModifyLiquidityParams memory params = ModifyLiquidityParams({
             tickLower: -60, tickUpper: 60, liquidityDelta: 0, salt: PositionLibrary.generateSalt(tokenId, 0)
         });
-        bytes memory hookData =
-            PositionModificationHookDataLib.encodeSeizure(tokenId, 0, address(positionManager), int128(0), int128(0));
+        bytes memory hookData = PositionModificationHookDataLib.encodeSeizure(
+            tokenId, 0, address(positionManager), address(0xB0B), int128(0), int128(0)
+        );
 
         vm.prank(coreHookAddress);
         vtsOrchestrator.processPosition(
@@ -1323,6 +1326,52 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
 
         vm.expectRevert(abi.encodeWithSelector(Errors.RFSOpenForPosition.selector, positionId));
         vtsOrchestrator.calcRFS(positionId, true);
+    }
+
+    /// @notice E2E regression for permissionless `settlePositionGrowths` path dependence (finding #29_8):
+    /// many tiny exact-output swaps, each followed by growth settlement, must match one aggregated swap
+    /// plus a single settlement for the same total exact output, so fractional growth cannot be discarded
+    /// by checkpoint cadence alone.
+    function test_settlePositionGrowths_pathIndependent_manySmallSwapsVsOneAggregated() public {
+        _mockLccPrices(1e18, 1e18);
+        _mockSignalUsd(1e30);
+
+        uint256 snap = vm.snapshotState();
+
+        // Use `zeroForOne: true` (headroom toward MIN_SQRT from 1:1) and keep aggregate exact output small so
+        // chunked swaps plus per-swap fees still complete `n` times without hitting `ZERO_FOR_ONE_LIMIT`.
+        int256 totalExactOut = -int256(1e17);
+        uint256 n = 8;
+        int256 chunk = totalExactOut / int256(n);
+        bool zeroForOne = true;
+
+        (, PositionId positionId,,) = _createCommittedPosition();
+        bytes32 expectedId = PositionId.unwrap(positionId);
+
+        for (uint256 i = 0; i < n; i++) {
+            _swapCore(zeroForOne, chunk);
+            vtsOrchestrator.settlePositionGrowths(positionId);
+        }
+
+        (bool rfsOpenMany, BalanceDelta deltaMany) = vtsOrchestrator.calcRFS(positionId, false);
+        (uint256 cum0Many, uint256 cum1Many) = _cumulativeDeficit(positionId);
+
+        assertTrue(vm.revertToState(snap), "revert to pre-branch snapshot");
+
+        (, PositionId positionIdB,,) = _createCommittedPosition();
+        assertEq(PositionId.unwrap(positionIdB), expectedId, "PositionId should be deterministic across branches");
+
+        _swapCore(zeroForOne, totalExactOut);
+        vtsOrchestrator.settlePositionGrowths(positionIdB);
+
+        (bool rfsOpenOne, BalanceDelta deltaOne) = vtsOrchestrator.calcRFS(positionIdB, false);
+        (uint256 cum0One, uint256 cum1One) = _cumulativeDeficit(positionIdB);
+
+        assertEq(cum0Many, cum0One, "cumulativeDeficit token0 path-independent");
+        assertEq(cum1Many, cum1One, "cumulativeDeficit token1 path-independent");
+        assertEq(rfsOpenMany, rfsOpenOne, "RFS open flag path-independent");
+        assertEq(deltaMany.amount0(), deltaOne.amount0(), "calcRFS delta0 path-independent");
+        assertEq(deltaMany.amount1(), deltaOne.amount1(), "calcRFS delta1 path-independent");
     }
 
     function test_revert_calcRFS_whenInvalidPosition() public {
@@ -1764,7 +1813,7 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
 
     function test_revert_processPosition_mmOperation_whenCommitInvalid() public {
         // MM operation is defined as hookData.commitId > 0, so use a non-existent commitId.
-        bytes memory hookData = PositionModificationHookDataLib.encode(999, 0, address(this));
+        bytes memory hookData = PositionModificationHookDataLib.encode(999, 0, address(this), address(0xB0B));
 
         ModifyLiquidityParams memory params =
             ModifyLiquidityParams({tickLower: -60, tickUpper: 60, liquidityDelta: 0, salt: bytes32(0)});
@@ -1785,7 +1834,7 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
         });
 
         address locker = liquiditySignal.mmState.owner;
-        bytes memory hookData = PositionModificationHookDataLib.encode(tokenId, 0, locker);
+        bytes memory hookData = PositionModificationHookDataLib.encode(tokenId, 0, locker, address(0xB0B));
 
         vm.prank(coreHookAddress);
         BalanceDelta callerDelta = toBalanceDelta(0, 0);
@@ -2496,6 +2545,20 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
 
         vm.prank(vtsOrchestrator.owner());
         vm.expectRevert(abi.encodeWithSelector(Errors.InvalidVTSConfiguration.selector, 10, 9));
+        vtsOrchestrator.setMarketVTSConfiguration(pid, cfg);
+    }
+
+    function test_revert_setMarketVTSConfiguration_whenBaseVTSRateExceedsBpsDenominator() public {
+        PoolId pid = corePoolKey.toId();
+        MarketVTSConfiguration memory cfg = vtsOrchestrator.getMarketVTSConfiguration(pid);
+        cfg.token0.baseVTSRate = LiquidityUtils.BPS_DENOMINATOR + 1;
+
+        vm.prank(vtsOrchestrator.owner());
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                Errors.InvalidAmount.selector, cfg.token0.baseVTSRate, LiquidityUtils.BPS_DENOMINATOR
+            )
+        );
         vtsOrchestrator.setMarketVTSConfiguration(pid, cfg);
     }
 

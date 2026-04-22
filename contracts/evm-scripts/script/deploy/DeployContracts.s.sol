@@ -51,7 +51,7 @@ contract DeployContracts is DeployProtocolBase {
     address public commitmentDescriptor;
     address public vtsOrchestrator;
     address public actionsImpl;
-    address public queueCustodian;
+    address public utilityActionsImpl;
     address public canonicalVault;
 
     /**
@@ -67,7 +67,8 @@ contract DeployContracts is DeployProtocolBase {
         console.log("VTSOrchestrator:", getCreate3Contract(VTS_ORCHESTRATOR));
         console.log("MMPCommitmentDescriptor:", getCreate3Contract(COMMITMENT_DESCRIPTOR));
         console.log("MMPositionActionsImpl:", getCreate3Contract(ACTIONS_IMPL));
-        console.log("MMQueueCustodian:", getCreate3Contract(QUEUE_CUSTODIAN));
+        console.log("MMUtilityActionsImpl:", getCreate3Contract(UTILITY_ACTIONS_IMPL));
+        console.log("MMQueueCustodianFactory:", getCreate3Contract(MM_QUEUE_CUSTODIAN_FACTORY));
         console.log("MMPositionManager:", getCreate3Contract(MM_POSITION_MANAGER));
         console.log("MarketFactory:", getCreate3Contract(MARKET_FACTORY));
         console.log("CanonicalVault:", getCreate3Contract(CANONICAL_VAULT));
@@ -165,14 +166,12 @@ contract DeployContracts is DeployProtocolBase {
         // Step 10: Deploy MMPositionManager
         console.log("\n=== Step 10: Deploying MMPositionManager ===");
         commitmentDescriptor = _deployCommitmentDescriptor();
-        (actionsImpl, queueCustodian, mmPositionManager) =
-            _deployMMStack(marketFactory, vtsOrchestrator, commitmentDescriptor, deployer, canonicalVault);
+        (actionsImpl, utilityActionsImpl, mmPositionManager) =
+            _deployMMStack(marketFactory, vtsOrchestrator, commitmentDescriptor, canonicalVault);
         console.log("MMPCommitmentDescriptor deployed at:", commitmentDescriptor);
         console.log("MMPositionActionsImpl deployed at:", actionsImpl);
-        console.log("MMQueueCustodian deployed at:", queueCustodian);
-        console.log("MMQueueCustodian authorised binder:", deployer);
+        console.log("MMUtilityActionsImpl deployed at:", utilityActionsImpl);
         console.log("MMPositionManager deployed at:", mmPositionManager);
-        console.log("MMQueueCustodian positionManager bound to:", mmPositionManager);
 
         // Step 11: Deploy CoreHook
         console.log("\n=== Step 11: Deploying CoreHook ===");
@@ -181,7 +180,7 @@ contract DeployContracts is DeployProtocolBase {
 
         // Step 12: Initialise MarketFactory (`DirectLPDeltaResolver` not deployed — pass `address(0)`; see `src/periphery/DirectLPDeltaResolver.sol` devdoc)
         console.log("\n=== Step 12: Initialising MarketFactory ===");
-        _initialiseFactory(globalConfig, marketFactory, canonicalVault, coreHook, mmPositionManager, queueCustodian, address(0));
+        _initialiseFactory(globalConfig, marketFactory, canonicalVault, coreHook, mmPositionManager, address(0));
         console.log("MarketFactory initialised successfully (via GlobalConfig.proxyCall)");
 
         // Step 13: Verify hooks addresses across the contracts
@@ -247,7 +246,7 @@ contract DeployContracts is DeployProtocolBase {
         // MM / market-maker stack
         writeAddress("commitmentDescriptor", commitmentDescriptor);
         writeAddress("actionsImpl", actionsImpl);
-        writeAddress("queueCustodian", queueCustodian);
+        writeAddress("utilityActionsImpl", utilityActionsImpl);
 
         console.log("Deployment addresses written to deployments/%s_deployments.json", networkName);
     }

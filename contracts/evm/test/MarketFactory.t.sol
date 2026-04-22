@@ -17,8 +17,9 @@ import {Deployers} from "@uniswap/v4-core/test/utils/Deployers.sol";
 import {HookFlags} from "../src/libraries/HookFlags.sol";
 import {HookMiner} from "v4-periphery/src/utils/HookMiner.sol";
 import {MMPositionManager} from "../src/MMPositionManager.sol";
+import {MMQueueCustodianFactory} from "../src/MMQueueCustodianFactory.sol";
 import {MMPositionActionsImpl} from "../src/MMPositionActionsImpl.sol";
-import {MMQueueCustodian} from "../src/MMQueueCustodian.sol";
+import {MMUtilityActionsImpl} from "../src/MMUtilityActionsImpl.sol";
 import {VTSConfigs} from "../src/libraries/VTSConfigs.sol";
 import {IOracleHelper} from "../src/interfaces/IOracleHelper.sol";
 import {WETH} from "@uniswap/v4-core/lib/solmate/src/tokens/WETH.sol";
@@ -107,8 +108,10 @@ contract MarketFactoryTest is Test, Deployers {
         MMPositionActionsImpl actionsImpl = new MMPositionActionsImpl(
             address(poolManager), address(factory), address(vtsOrchestrator), address(canonicalVault)
         );
-        MMQueueCustodian queueCustodian = new MMQueueCustodian(address(this));
-
+        MMUtilityActionsImpl utilityActionsImpl = new MMUtilityActionsImpl(
+            poolManager, address(factory), address(vtsOrchestrator), address(canonicalVault), weth9
+        );
+        MMQueueCustodianFactory queueCustodianFactory = new MMQueueCustodianFactory();
         vm.prank(owner);
         positionManager = new MMPositionManager(
             MMPositionManager.MMPositionManagerInit({
@@ -120,10 +123,10 @@ contract MarketFactoryTest is Test, Deployers {
                 weth9: weth9,
                 permit2: permit2,
                 actionsImpl: address(actionsImpl),
-                queueCustodianAddr: address(queueCustodian)
+                utilityActionsImpl: address(utilityActionsImpl),
+                queueCustodianFactory: address(queueCustodianFactory)
             })
         );
-        queueCustodian.setPositionManager(address(positionManager));
 
         // Deploy CoreHook at computed address
         deployCodeTo(

@@ -30,7 +30,8 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Install Foundry
-        run: "$GITHUB_WORKSPACE/.github/scripts/install-foundry.sh" v1.4.2
+        working-directory: .
+        run: ./.github/scripts/install-foundry.sh v1.4.2
 
       - name: Setup Python
         uses: actions/setup-python@v5

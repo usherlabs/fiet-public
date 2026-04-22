@@ -13,13 +13,11 @@ import {StateLibrary} from "v4-periphery/lib/v4-core/src/libraries/StateLibrary.
 import {IMarketVault} from "./interfaces/IMarketVault.sol";
 import {IMarketFactory} from "./interfaces/IMarketFactory.sol";
 import {IMMQueueCustodian} from "./interfaces/IMMQueueCustodian.sol";
-import {IMMPositionManager} from "./interfaces/IMMPositionManager.sol";
 import {Errors} from "./libraries/Errors.sol";
 import {LiquidityUtils} from "./libraries/LiquidityUtils.sol";
 import {Position} from "./types/Position.sol";
 import {TransientSlots} from "./libraries/TransientSlots.sol";
 import {PositionManagerBase} from "./modules/PositionManagerBase.sol";
-import {PositionManagerQueueCustodian} from "./modules/PositionManagerQueueCustodian.sol";
 import {PositionManagerImpl} from "./modules/PositionManagerImpl.sol";
 import {CurrencyTransfer} from "./libraries/CurrencyTransfer.sol";
 import {MarketHandlerLib} from "./libraries/MarketHandlerLib.sol";
@@ -38,12 +36,7 @@ import {SlippageCheck} from "v4-periphery/src/libraries/SlippageCheck.sol";
 /// @dev Called via delegatecall from MMPositionManager, shares storage context
 /// @dev Only handles position operations (actions <= SETTLE_POSITION_FROM_DELTAS)
 /// @dev ERC721 functions accessed via delegatecall context from MMPositionManager
-contract MMPositionActionsImpl is
-    IMMActionsImpl,
-    PositionManagerQueueCustodian,
-    PositionManagerImpl,
-    DelegateCallGuard
-{
+contract MMPositionActionsImpl is IMMActionsImpl, PositionManagerImpl, DelegateCallGuard {
     using SafeCast for uint256;
     using PositionLibrary for PositionId;
     using StateLibrary for IPoolManager;
@@ -101,34 +94,13 @@ contract MMPositionActionsImpl is
         return Locker.get();
     }
 
-    /// @inheritdoc PositionManagerQueueCustodian
-    function _queueCustodian() internal view override(PositionManagerQueueCustodian) returns (IMMQueueCustodian) {
-        return IMMPositionManager(address(this)).queueCustodian();
-    }
-
-    /// @dev `beneficiary` is the batch locker (`msgSender()` in impl), matching the Hub queue recipient chosen in
-    ///      `VTSPositionLib` for `planCancelWithQueue`. Custody slices are keyed by this address so collect cannot
-    ///      pair an arbitrary `tokenId` bucket with another party's queue.
-    function _forwardQueuedLccToCustodian(Currency currency, uint256 tokenId, address beneficiary, uint256 amount)
-        internal
-        override(PositionManagerImpl)
-    {
-        IMMQueueCustodian custodian = _queueCustodian();
-        if (address(custodian) != address(0) && address(custodian) != address(this)) {
-            currency.transfer(address(custodian), amount);
-            if (tokenId > 0) {
-                custodian.record(tokenId, Currency.unwrap(currency), beneficiary, amount);
-            }
-        }
-    }
-
     // ═══════════════════════════════════════════════════════════════════════════
     // Position Action Handler
     // ═══════════════════════════════════════════════════════════════════════════
 
     /// @inheritdoc IMMActionsImpl
     /// @dev Only handles position operations (actions <= SETTLE_POSITION_FROM_DELTAS)
-    function handleAction(uint256 action, bytes calldata params) external override onlyDelegateCall {
+    function handleAction(uint256 action, bytes calldata params) external payable override onlyDelegateCall {
         if (action == MMActions.SETTLE_POSITION) {
             (
                 PoolKey calldata poolKey,
@@ -253,6 +225,24 @@ contract MMPositionActionsImpl is
         return MarketHandlerLib.getVault(marketFactory, poolKey.toId());
     }
 
+    /// @dev Splits hook encoding out of `_increaseFromDeltas` / `_mintFromDeltas` to avoid stack-too-deep in unoptimised builds.
+    function _encodePositionHookForRecipientKeyedCustodian(
+        uint256 tokenId,
+        uint256 positionIndex,
+        address locker,
+        bool withInHookProtocolSettlement,
+        uint256 credit0,
+        uint256 credit1
+    ) private returns (bytes memory) {
+        address qRec = _queueSettleRecipient(tokenId);
+        if (withInHookProtocolSettlement) {
+            return PositionModificationHookDataLib.encodeWithInHookProtocolSettlement(
+                tokenId, positionIndex, locker, qRec, credit0, credit1
+            );
+        }
+        return PositionModificationHookDataLib.encode(tokenId, positionIndex, locker, qRec);
+    }
+
     /// @notice Reverts when principal token spend exceeds user-provided maxima
     function _validateMaxIn(BalanceDelta principalDelta, uint128 amount0Max, uint128 amount1Max) internal pure {
         int256 amount0 = principalDelta.amount0();
@@ -286,6 +276,9 @@ contract MMPositionActionsImpl is
         bool isSeizing
     ) internal {
         if (credit0 == 0 && credit1 == 0) return;
+        if (isSeizing) {
+            revert Errors.SeizureSettleOnlyDepositDisallowed();
+        }
 
         _callOnMMSettle(
             SettleCallParams({
@@ -330,13 +323,27 @@ contract MMPositionActionsImpl is
         TransientSlots.setSeizedPositionId(positionId);
 
         // negative amounts since we are settling into a position
+        TransientSlots.setSeizurePrimarySettleAllowed(true);
         (BalanceDelta settlementDelta, uint256 seizedLiquidityUnits) = _settle(
             poolKey, tokenId, positionIndex, -amount0.toInt128(), -amount1.toInt128(), usePositionManagerBalance
         );
+        TransientSlots.setSeizurePrimarySettleAllowed(false);
+
+        // Fail closed: a zero-liquidity decrease still runs `modifyLiquidity` and can realise accrued LCC fees to the
+        // locker (seizer) without removing any position liquidity. Seizure must not proceed unless the settlement
+        // phase produced a non-zero seized-liquidity amount from VTS sizing.
+        if (seizedLiquidityUnits == 0) {
+            revert Errors.SeizureWithoutLiquidityRemoval();
+        }
 
         // Use returned maxima clamped settlementDelta
         bytes memory hookData = PositionModificationHookDataLib.encodeSeizure(
-            tokenId, positionIndex, msgSender(), settlementDelta.amount0(), settlementDelta.amount1()
+            tokenId,
+            positionIndex,
+            msgSender(),
+            _queueSettleRecipient(tokenId),
+            settlementDelta.amount0(),
+            settlementDelta.amount1()
         );
 
         _decreaseInternal(
@@ -496,6 +503,10 @@ contract MMPositionActionsImpl is
                 MMHelpers.assertApprovedOrOwner(msgSender(), tokenId);
             }
 
+            if (isSeizing && (amount0 < 0 || amount1 < 0) && !TransientSlots.getSeizurePrimarySettleAllowed()) {
+                revert Errors.SeizureSettleOnlyDepositDisallowed();
+            }
+
             callParams = SettleCallParams({
                 vault: _getVault(poolKey),
                 factory: marketFactory,
@@ -545,13 +556,14 @@ contract MMPositionActionsImpl is
         MMHelpers.assertPositionForPool(poolKey, position);
 
         uint256 completeLiquidity = uint256(position.liquidity);
+        address qRec = _queueSettleRecipient(tokenId);
         _decreaseInternal(
             poolKey,
             position,
             PositionLibrary.generateSalt(tokenId, positionIndex),
             tokenId,
             completeLiquidity,
-            PositionModificationHookDataLib.encode(tokenId, positionIndex, msgSender()),
+            PositionModificationHookDataLib.encode(tokenId, positionIndex, msgSender(), qRec),
             amount0Min,
             amount1Min
         );
@@ -587,6 +599,7 @@ contract MMPositionActionsImpl is
         int24 tickUpper,
         uint256 liquidity
     ) internal returns (PositionId positionId, BalanceDelta principalDelta) {
+        address qRec = _queueSettleRecipient(tokenId);
         return _increaseInternal(
             poolKey,
             tokenId,
@@ -594,7 +607,7 @@ contract MMPositionActionsImpl is
             tickLower,
             tickUpper,
             liquidity,
-            PositionModificationHookDataLib.encode(tokenId, positionIndex, msgSender())
+            PositionModificationHookDataLib.encode(tokenId, positionIndex, msgSender(), qRec)
         );
     }
 
@@ -655,11 +668,9 @@ contract MMPositionActionsImpl is
         address deltaTarget = payerIsUser ? address(this) : sender;
         (uint256 liquidityFromDeltas, uint256 credit0, uint256 credit1) =
             _getLiquidityFromDeltas(poolKey, deltaTarget, position.tickLower, position.tickUpper);
-        bytes memory hookData = payerIsUser
-            ? PositionModificationHookDataLib.encodeWithInHookProtocolSettlement(
-                tokenId, positionIndex, sender, credit0, credit1
-            )
-            : PositionModificationHookDataLib.encode(tokenId, positionIndex, sender);
+        bytes memory hookData = _encodePositionHookForRecipientKeyedCustodian(
+            tokenId, positionIndex, sender, payerIsUser, credit0, credit1
+        );
         (, BalanceDelta principalDelta) = _increaseInternal(
             poolKey, tokenId, positionIndex, position.tickLower, position.tickUpper, liquidityFromDeltas, hookData
         );
@@ -716,11 +727,9 @@ contract MMPositionActionsImpl is
             _getLiquidityFromDeltas(poolKey, deltaTarget, tickLower, tickUpper);
         uint256 nextPositionIndex;
         (,, nextPositionIndex,,) = vtsOrchestrator.getCommit(tokenId);
-        bytes memory hookData = payerIsUser
-            ? PositionModificationHookDataLib.encodeWithInHookProtocolSettlement(
-                tokenId, nextPositionIndex, msgSender(), credit0, credit1
-            )
-            : PositionModificationHookDataLib.encode(tokenId, nextPositionIndex, msgSender());
+        bytes memory hookData = _encodePositionHookForRecipientKeyedCustodian(
+            tokenId, nextPositionIndex, msgSender(), payerIsUser, credit0, credit1
+        );
         // This works as LCCs are issued, capitalised by underlying tokens owed to the MM.
         (, uint256 positionIndex, BalanceDelta principalDelta) =
             _mintPositionInternal(poolKey, tokenId, tickLower, tickUpper, liquidityFromDeltas, hookData);
@@ -752,6 +761,20 @@ contract MMPositionActionsImpl is
 
         Currency underlying0 = _lccToUnderlyingCurrency(poolKey.currency0);
         Currency underlying1 = _lccToUnderlyingCurrency(poolKey.currency1);
+
+        // Ambient seizure (AUTH-01A / audit 30_3): `SETTLE_POSITION_FROM_DELTAS` with `payerIsUser=true` and
+        // `shouldTake=false` is the protocol-credit *deposit* matrix cell. It calls `onMMSettle(isSeizing=true)` without
+        // any guaranteed `_decreaseInternal` coupling, so carry and sizing can advance while liquidity stays unchanged.
+        // Forbid this cell whenever the batch already marked this `(tokenId, positionIndex)` as seized — even when
+        // there are no protocol credits yet (otherwise the call would be a misleading no-op while still being the
+        // wrong operation to schedule under seizure).
+        if (payerIsUser && !shouldTake) {
+            (Position memory position, PositionId positionId) = getPosition(tokenId, positionIndex);
+            MMHelpers.assertPositionForPool(poolKey, position);
+            if (_isSeizing(positionId)) {
+                revert Errors.SeizureSettleOnlyDepositDisallowed();
+            }
+        }
 
         // Behaviour matrix:
         // - shouldTake=true && payerIsUser=true:  Withdraw to locker from protocol delta via _settle
@@ -851,13 +874,14 @@ contract MMPositionActionsImpl is
         (Position memory position,) = getPosition(tokenId, positionIndex);
         MMHelpers.assertPositionForPool(poolKey, position);
 
+        address qRec = _queueSettleRecipient(tokenId);
         _decreaseInternal(
             poolKey,
             position,
             PositionLibrary.generateSalt(tokenId, positionIndex),
             tokenId,
             amountToDecrease,
-            PositionModificationHookDataLib.encode(tokenId, positionIndex, msgSender()),
+            PositionModificationHookDataLib.encode(tokenId, positionIndex, msgSender(), qRec),
             amount0Min,
             amount1Min
         );
@@ -881,13 +905,14 @@ contract MMPositionActionsImpl is
     ) internal returns (PositionId positionId, uint256 positionIndex, BalanceDelta principalDelta) {
         uint256 nextPositionIndex;
         (,, nextPositionIndex,,) = vtsOrchestrator.getCommit(tokenId);
+        address qRec = _queueSettleRecipient(tokenId);
         return _mintPositionInternal(
             poolKey,
             tokenId,
             tickLower,
             tickUpper,
             liquidity,
-            PositionModificationHookDataLib.encode(tokenId, nextPositionIndex, msgSender())
+            PositionModificationHookDataLib.encode(tokenId, nextPositionIndex, msgSender(), qRec)
         );
     }
 

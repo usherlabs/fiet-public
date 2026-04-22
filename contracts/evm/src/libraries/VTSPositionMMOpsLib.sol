@@ -120,19 +120,10 @@ library VTSPositionMMOpsLib {
                 })
             );
         } else if (p.params.liquidityDelta < 0) {
-            // Re-decode hookData to get locker - scoped to free memory
-            //
-            // Intended beneficiary / queue recipient model (always hook-data `locker`, not a separate owner lookup):
-            // - Normal liquidity decrease: locker is the party executing the batch (NFT owner or approved operator on MMPM).
-            // - Seizure decrease: locker is the seizer (guarantor). Same encoding path; `isSeizing` only changes principal/settlement deltas.
-            //
-            // queueRecipient == MM batch locker == LiquidityHub settleQueue recipient for this decrease/seizure.
-            // MMQueueCustodian records the same address as the beneficiary so COLLECT_AVAILABLE_LIQUIDITY can only
-            // release LCC from the slice matching the caller's queue.
-            address queueRecipient;
-            {
-                queueRecipient = PositionModificationHookDataLib.getLocker(mmData);
-            }
+            // Queue owner is the recipient-keyed custodian address MMPM placed in hook data (`queueRecipient`).
+            // Beneficiary / advancer semantics remain on `locker` (see `validateMMOperation`); decrease settlement
+            // queues principal to `queueRecipient` for Hub `settleQueue(lcc, queueRecipient)`.
+            address queueRecipient = PositionModificationHookDataLib.getQueueRecipient(mmData);
 
             // Snapshot routing: vault-immediate slice vs Hub queue (non-seizure) or burn vs queued principal (seizure).
             // Only routed value leaves live `pa.settled` via `_applySettlementClampFromExcess`; the vault-immediate slice
@@ -578,7 +569,7 @@ library VTSPositionMMOpsLib {
 
     /// @dev Stages `planCancelWithQueue` for MM decreases (non-seizure and seizure). Durable `settleQueue` is updated
     ///      when the matching `PoolManager -> MMPM` transfer runs (`executePlannedCancel`). The router reconstructs the
-    ///      per-leg queued principal as the increment to `LiquidityHub.settleQueue(lcc, queueRecipient)` across that take.
+    ///      per-leg queued principal as the increment to `LiquidityHub.settleQueue(lcc, queueOwner)` across that take.
     function _stageMMDecreasePlannedCancels(
         PositionContext memory ctx,
         address owner,
@@ -628,7 +619,7 @@ library VTSPositionMMOpsLib {
     /// @param poolKey The pool key
     /// @param principalDelta Pool principal delta: `callerDelta - feesAccrued` (see `processMMOperations`).
     /// @param requiredSettlementDelta The required settlement delta from touchPosition
-    /// @param queueRecipient The recipient for settlement queue (locker)
+    /// @param queueRecipient The queue owner for settlement (`settleQueue` recipient — custodian for commits)
     /// @return underlyingDeltaSettlement Portion routed to `OwnerCurrencyDelta` / vault reserve (vault-immediate slice only).
     /// @return exportedForSettlementClamp Amount passed to `_applySettlementClampFromExcess`: `settleable + queued` per leg.
     function _handleLiquidityDecrease(

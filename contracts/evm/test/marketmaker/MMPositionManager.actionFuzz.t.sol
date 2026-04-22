@@ -91,6 +91,11 @@ contract MMPositionManagerActionFuzzTest is MarketTestBase, MarketMakerTestBase 
             abi.encodeWithSelector(IMarketFactory.bounds.selector, renewSignal.mmState.advancer),
             abi.encode(true)
         );
+
+        _wireTestQueueCustodianFor(address(mmPositionManager), liquiditySignal.mmState.advancer);
+        _wireTestQueueCustodianFor(address(mmPositionManager), renewSignal.mmState.advancer);
+        _wireTestQueueCustodianFor(address(mmPositionManager), address(this));
+        _wireAllUtilityTestQueueCustodians(address(mmPositionManager));
     }
 
     // ============================================================

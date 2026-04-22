@@ -10,6 +10,7 @@ import {MMActionAdapter as MMA} from "./utils/MMActionAdapter.sol";
 import {LiquidityCommitmentCertificate} from "../src/LCC.sol";
 import {MarketVTSConfiguration} from "../src/types/VTS.sol";
 import {Errors} from "../src/libraries/Errors.sol";
+import {IMarketFactory} from "../src/interfaces/IMarketFactory.sol";
 import {IOracleHelper} from "../src/interfaces/IOracleHelper.sol";
 
 import {ModifyLiquidityParams, SwapParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
@@ -56,6 +57,16 @@ contract AuthSeizeInvariantsTest is MarketTestBase, MarketMakerTestBase {
                 abi.encode(uint256(1e18))
             );
         }
+
+        vm.mockCall(
+            marketFactory,
+            abi.encodeWithSelector(IMarketFactory.bounds.selector, liquiditySignal.mmState.advancer),
+            abi.encode(true)
+        );
+
+        _wireTestQueueCustodianFor(address(mmPositionManager), liquiditySignal.mmState.advancer);
+        _wireTestQueueCustodianFor(address(mmPositionManager), renewSignal.mmState.advancer);
+        _wireAllUtilityTestQueueCustodians(address(mmPositionManager));
     }
 
     function testFuzz_auth01_nonApprovedCannotSettleWhenNotSeizing(int128 amount0Raw, int128 amount1Raw) public {
@@ -137,6 +148,36 @@ contract AuthSeizeInvariantsTest is MarketTestBase, MarketMakerTestBase {
         actions[4] = MMA.prepareSettle(corePoolKey, otherTokenId, 0, -int128(1), -int128(1), false);
 
         vm.expectRevert(abi.encodeWithSelector(Errors.NotApproved.selector, guarantor));
+        MMA.executeWithUnlock(positionManager, actions, block.timestamp + 3600);
+        vm.stopPrank();
+    }
+
+    /// @notice AUTH-01A: ambient seizure authorises follow-ons for the same position, but settle-only deposits must stay
+    ///         coupled to `SEIZE_POSITION` (audit 30_3).
+    function test_auth01a_ambientSeizure_disallows_settleOnlyDeposit_samePosition() public {
+        (uint256 tokenId,,,) = _setupCommittedPosition(
+            positionManager,
+            corePoolKey,
+            abi.encode(liquiditySignal),
+            ModifyLiquidityParams({tickLower: -60, tickUpper: 60, liquidityDelta: 1e10, salt: bytes32(0)}),
+            marketVTSConfiguration,
+            address(lcc0),
+            address(lcc1)
+        );
+        _openSeizeWindow(tokenId);
+
+        address guarantor = makeAddr("guarantor-auth01a-settleonly");
+        IERC20(lcc0.underlying()).transfer(guarantor, SEIZE_SETTLE0);
+        IERC20(lcc1.underlying()).transfer(guarantor, SEIZE_SETTLE1);
+
+        vm.startPrank(guarantor);
+        IERC20(lcc0.underlying()).approve(address(positionManager), type(uint256).max);
+        IERC20(lcc1.underlying()).approve(address(positionManager), type(uint256).max);
+
+        MMA.PreparedAction[] memory actions = new MMA.PreparedAction[](2);
+        actions[0] = MMA.prepareSeize(corePoolKey, tokenId, 0, SEIZE_SETTLE0, SEIZE_SETTLE1, false);
+        actions[1] = MMA.prepareSettle(corePoolKey, tokenId, 0, -int128(1), -int128(1), false);
+        vm.expectRevert(Errors.SeizureSettleOnlyDepositDisallowed.selector);
         MMA.executeWithUnlock(positionManager, actions, block.timestamp + 3600);
         vm.stopPrank();
     }

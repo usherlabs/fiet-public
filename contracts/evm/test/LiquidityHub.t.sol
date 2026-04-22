@@ -5,35 +5,12 @@ import {LiquidityHubTestBase} from "./base/LiquidityHubTestBase.sol";
 import {LiquidityHub} from "../src/LiquidityHub.sol";
 import {IMarketFactory} from "../src/interfaces/IMarketFactory.sol";
 import {ILCC} from "../src/interfaces/ILCC.sol";
-import {IEndpointUnwrapAdmission} from "../src/interfaces/IEndpointUnwrapAdmission.sol";
 import {Errors} from "../src/libraries/Errors.sol";
 import {Bounds} from "../src/libraries/Bounds.sol";
 import {Vm} from "forge-std/Vm.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
-
-/// @notice Configurable `IEndpointUnwrapAdmission` for Hub admission-credit tests.
-contract MockEndpointUnwrapAdmission is IEndpointUnwrapAdmission {
-    uint256 private _admissionCredit;
-
-    function setAdmissionCredit(uint256 credit) external {
-        _admissionCredit = credit;
-    }
-
-    function unwrapAdmissionCredit(address, address) external view returns (uint256) {
-        return _admissionCredit;
-    }
-
-    function callUnwrapTo(LiquidityHub hub, address lcc, address to, address queueTo, uint256 amount) external {
-        hub.unwrapTo(lcc, to, queueTo, amount);
-    }
-}
-
-/// @notice BOUND_ENDPOINT caller with no `unwrapAdmissionCredit` — Hub staticcall falls back to zero credit.
-contract EndpointCallerSansAdmission {
-    function callUnwrapTo(LiquidityHub hub, address lcc, address to, address queueTo, uint256 amount) external {
-        hub.unwrapTo(lcc, to, queueTo, amount);
-    }
-}
+import {ERC165} from "@openzeppelin/contracts/utils/introspection/ERC165.sol";
+import {INativeSettlementReceiver} from "../src/interfaces/INativeSettlementReceiver.sol";
 
 /// @dev Contract with no `ICanonicalVault.marketFactory()` — Hub `receive` must reject.
 contract MockNonCanonicalEthSender {
@@ -101,6 +78,19 @@ contract CounterfactualDeployer {
     function deploy(bytes32 salt) external returns (address deployed) {
         deployed = address(new NonPayableCreate2Recipient{salt: salt}());
     }
+}
+
+/// @dev Explicit native opt-in for `LiquidityHubLib.transferUnderlying` contract branch tests.
+contract NativeOptInReceiverMock is ERC165, INativeSettlementReceiver {
+    function supportsNativeSettlementFromFiet() external pure override returns (bool) {
+        return true;
+    }
+
+    function supportsInterface(bytes4 interfaceId) public view virtual override returns (bool) {
+        return interfaceId == type(INativeSettlementReceiver).interfaceId || super.supportsInterface(interfaceId);
+    }
+
+    receive() external payable {}
 }
 
 /**
@@ -345,7 +335,7 @@ contract LiquidityHubTest is LiquidityHubTestBase {
     }
 
     /// @dev `_assertUnwrapWithinHeadroom` nets `settleQueue[lcc][queueTo]` against the caller balance; excess request reverts.
-    function test_unwrapTo_withQueueTo_revertsWhenAmountExceedsHeadroomAfterPriorQueue() public {
+    function test_unwrap_revertsWhenAmountExceedsHeadroomAfterPriorQueue() public {
         uint256 amount = 20;
         _wrapMarketDerivedLCC(user1, lccToken1, amount);
 
@@ -355,14 +345,9 @@ contract LiquidityHubTest is LiquidityHubTestBase {
         liquidityHub.unwrap(lccToken1, 15);
         assertEq(liquidityHub.settleQueue(lccToken1, user1), 15);
 
-        vm.startPrank(factory);
-        liquidityHub.setBoundLevel(user1, Bounds.BOUND_ENDPOINT);
-        vm.stopPrank();
-
-        // `unwrapTo(lcc,to,queueTo,amt)` uses `queueTo` for headroom; attribute shortfall to `user1` to net the prior queue.
         vm.prank(user1);
         vm.expectRevert(abi.encodeWithSelector(Errors.InvalidAmount.selector, uint256(10), uint256(5)));
-        liquidityHub.unwrapTo(lccToken1, user2, user1, 10);
+        liquidityHub.unwrap(lccToken1, 10);
     }
 
     function test_wrapTo_overloadByUnderlyingAndMarketId_works() public {
@@ -414,39 +399,18 @@ contract LiquidityHubTest is LiquidityHubTestBase {
         assertEq(underlyingAsset1.balanceOf(user1), amount);
         assertEq(ILCC(lccToken1).balanceOf(user1), 0);
 
-        // Wrap again and unwrapTo via overload.
+        // Wrap again and unwrap via overload (self).
         underlyingAsset1.mint(user1, amount);
         vm.startPrank(user1);
         underlyingAsset1.approve(address(liquidityHub), amount);
         liquidityHub.wrap(address(underlyingAsset1), marketId1, amount);
         vm.stopPrank();
 
-        _setBoundLevel(user1, Bounds.BOUND_ENDPOINT);
         vm.prank(user1);
-        liquidityHub.unwrapTo(address(underlyingAsset1), marketId1, user2, amount);
-        assertEq(underlyingAsset1.balanceOf(user2), amount);
+        liquidityHub.unwrap(address(underlyingAsset1), marketId1, amount);
+        // After the second wrap/unwrap cycle, `user1` still holds the first unwrap's `amount` plus this cycle's.
+        assertEq(underlyingAsset1.balanceOf(user1), amount * 2);
         assertEq(ILCC(lccToken1).balanceOf(user1), 0);
-    }
-
-    function test_unwrapTo_overloadByUnderlyingMarketId_withQueueTo_attributesQueueCorrectly() public {
-        uint256 amount = 25;
-
-        // user1 has only market-derived balance.
-        _wrapMarketDerivedLCC(user1, lccToken1, amount);
-        _wrapMarketDerivedLCC(user3, lccToken1, amount);
-
-        // Force market liquidity to 0 so it queues.
-        vm.mockCall(factory, abi.encodeWithSelector(IMarketFactory.useMarketLiquidity.selector), abi.encode(uint256(0)));
-
-        _setBoundLevel(user1, Bounds.BOUND_ENDPOINT);
-        vm.expectEmit(true, true, false, true, address(liquidityHub));
-        emit SettlementQueued(lccToken1, user3, amount);
-
-        vm.prank(user1);
-        liquidityHub.unwrapTo(address(underlyingAsset1), marketId1, user2, user3, amount);
-
-        assertEq(liquidityHub.settleQueue(lccToken1, user3), amount, "queue should be attributed to queueTo");
-        assertEq(liquidityHub.settleQueue(lccToken1, user2), 0, "to should not own the queued settlement");
     }
 
     function test_unwrap_doesNotEmitSettlementQueuedWhenNoShortfall() public {
@@ -683,7 +647,7 @@ contract LiquidityHubTest is LiquidityHubTestBase {
         liquidityHub.queueForTransferRecipient(lccToken1, user2, amount);
     }
 
-    function test_queueForTransferRecipient_native_revertsWhenRecipientIsContract() public {
+    function test_queueForTransferRecipient_native_allowsContractRecipient() public {
         address lccNative;
         address lccErc20;
         vm.startPrank(factory);
@@ -703,8 +667,8 @@ contract LiquidityHubTest is LiquidityHubTestBase {
         ILCC(lccNative).transfer(address(recipient), amount);
 
         vm.prank(proxyHook);
-        vm.expectRevert(abi.encodeWithSelector(Errors.NotApproved.selector, address(recipient)));
         liquidityHub.queueForTransferRecipient(lccNative, address(recipient), amount);
+        assertEq(liquidityHub.settleQueue(lccNative, address(recipient)), amount);
     }
 
     function test_queueForTransferRecipient_erc20_allowsContractRecipient() public {
@@ -722,75 +686,6 @@ contract LiquidityHubTest is LiquidityHubTestBase {
         assertEq(liquidityHub.settleQueue(lccToken1, address(recipient)), amount);
         assertEq(liquidityHub.totalQueued(lccToken1), amount);
         assertEq(liquidityHub.queueOfUnderlying(lccToken1), amount);
-    }
-
-    function test_unwrapTo_withQueueTo_revertsWhenQueueRecipientIsZero() public {
-        uint256 amount = 8;
-        _wrapMarketDerivedLCC(user1, lccToken1, amount);
-        vm.mockCall(factory, abi.encodeWithSelector(IMarketFactory.useMarketLiquidity.selector), abi.encode(uint256(0)));
-
-        _setBoundLevel(user1, Bounds.BOUND_ENDPOINT);
-        vm.prank(user1);
-        vm.expectRevert(abi.encodeWithSelector(Errors.InvalidAddress.selector, address(0)));
-        liquidityHub.unwrapTo(lccToken1, user2, address(0), amount);
-    }
-
-    function test_unwrapTo_withQueueTo_revertsWhenQueueRecipientIsExempt() public {
-        uint256 amount = 8;
-        _wrapMarketDerivedLCC(user1, lccToken1, amount);
-        vm.mockCall(factory, abi.encodeWithSelector(IMarketFactory.useMarketLiquidity.selector), abi.encode(uint256(0)));
-
-        _setBoundLevel(user1, Bounds.BOUND_ENDPOINT);
-        vm.prank(user1);
-        vm.expectRevert(abi.encodeWithSelector(Errors.NotApproved.selector, proxyHook));
-        liquidityHub.unwrapTo(lccToken1, user2, proxyHook, amount);
-    }
-
-    function test_unwrapTo_revertsWhenCallerIsNotBoundEndpoint() public {
-        uint256 amount = 10;
-        _wrapDirectLCC(user1, lccToken1, amount);
-
-        vm.prank(user1);
-        vm.expectRevert(abi.encodeWithSelector(Errors.InvalidSender.selector));
-        liquidityHub.unwrapTo(lccToken1, user2, amount);
-    }
-
-    /// @dev HUB-02B: immediate payout `to` must not be exempt (e.g. proxy hook).
-    function test_unwrapTo_splitRecipient_revertsWhenPayoutRecipientIsExempt() public {
-        uint256 amount = 8;
-        _wrapMarketDerivedLCC(user1, lccToken1, amount);
-        vm.mockCall(factory, abi.encodeWithSelector(IMarketFactory.useMarketLiquidity.selector), abi.encode(uint256(0)));
-
-        _setBoundLevel(user1, Bounds.BOUND_ENDPOINT);
-        vm.prank(user1);
-        vm.expectRevert(abi.encodeWithSelector(Errors.NotApproved.selector, proxyHook));
-        liquidityHub.unwrapTo(lccToken1, proxyHook, user2, amount);
-    }
-
-    /// @dev HUB-02B: immediate payout `to` must not be the Hub.
-    function test_unwrapTo_splitRecipient_revertsWhenPayoutRecipientIsHub() public {
-        uint256 amount = 8;
-        _wrapMarketDerivedLCC(user1, lccToken1, amount);
-        vm.mockCall(factory, abi.encodeWithSelector(IMarketFactory.useMarketLiquidity.selector), abi.encode(uint256(0)));
-
-        _setBoundLevel(user1, Bounds.BOUND_ENDPOINT);
-        vm.prank(user1);
-        vm.expectRevert(abi.encodeWithSelector(Errors.NotApproved.selector, address(liquidityHub)));
-        liquidityHub.unwrapTo(lccToken1, address(liquidityHub), user2, amount);
-    }
-
-    /// @dev HUB-02B: immediate payout `to` must not be DEX sink.
-    function test_unwrapTo_splitRecipient_revertsWhenPayoutRecipientIsDex() public {
-        address poolManager = makeAddr("POOL_MGR_DEX");
-        uint256 amount = 8;
-        _wrapMarketDerivedLCC(user1, lccToken1, amount);
-        vm.mockCall(factory, abi.encodeWithSelector(IMarketFactory.useMarketLiquidity.selector), abi.encode(uint256(0)));
-
-        _setDexBound(poolManager);
-        _setBoundLevel(user1, Bounds.BOUND_ENDPOINT);
-        vm.prank(user1);
-        vm.expectRevert(abi.encodeWithSelector(Errors.NotApproved.selector, poolManager));
-        liquidityHub.unwrapTo(lccToken1, poolManager, user2, amount);
     }
 
     function test_queueForTransferRecipient_revertsWhenMarketDerivedIsInsufficient() public {
@@ -826,7 +721,8 @@ contract LiquidityHubTest is LiquidityHubTestBase {
         assertEq(liquidityHub.queueOfUnderlying(lccToken1), amount);
     }
 
-    function test_queueForTransferRecipient_revertsForNativeLccWhenRecipientIsContract() public {
+    /// @dev Native payability is validated at `processSettlementFor` (HUB-02C), not at queue creation.
+    function test_queueForTransferRecipient_native_queuesForNonPayableContractRecipient() public {
         address lccNative;
         address lccErc20;
         vm.startPrank(factory);
@@ -846,8 +742,8 @@ contract LiquidityHubTest is LiquidityHubTestBase {
         ILCC(lccNative).transfer(address(recipient), amount);
 
         vm.prank(proxyHook);
-        vm.expectRevert(abi.encodeWithSelector(Errors.NotApproved.selector, address(recipient)));
         liquidityHub.queueForTransferRecipient(lccNative, address(recipient), amount);
+        assertEq(liquidityHub.settleQueue(lccNative, address(recipient)), amount);
     }
 
     function test_queueForTransferRecipient_nativeLcc_queuesForEoaRecipient() public {
@@ -965,6 +861,80 @@ contract LiquidityHubTest is LiquidityHubTestBase {
         assertEq(ILCC(lccNative).balanceOf(recipient), 0);
         assertEq(recipient.balance, partialAmount);
         assertEq(IERC20(weth).balanceOf(recipient), remainder);
+    }
+
+    /// @dev Regression: canonical WETH9 must not receive raw ETH from the Hub (mints WETH to `msg.sender` instead).
+    function test_processSettlementFor_native_recipientWeth9_settlesAsWethErc20OnRecipient() public {
+        address lccNative;
+        address lccErc20;
+        vm.startPrank(factory);
+        address[] memory issuers = new address[](1);
+        issuers[0] = proxyHook;
+        (lccNative, lccErc20) = liquidityHub.createLCCPair(
+            abi.encodePacked(address(0xD299)), address(0), address(underlyingAsset1), "Native Weth9 Recipient", issuers
+        );
+        liquidityHub.initialize(lccNative, lccErc20, bytes32("nativeWeth9Market"), abi.encodePacked(address(0xD299)));
+        vm.stopPrank();
+
+        address wethAddr = address(liquidityHub.weth9());
+        uint256 amount = 9;
+
+        vm.prank(proxyHook);
+        liquidityHub.issue(lccNative, proxyHook, amount);
+        vm.prank(proxyHook);
+        ILCC(lccNative).transfer(wethAddr, amount);
+        vm.prank(proxyHook);
+        liquidityHub.queueForTransferRecipient(lccNative, wethAddr, amount);
+
+        vm.deal(address(liquidityHub), amount);
+        vm.prank(proxyHook);
+        liquidityHub.confirmTake(lccNative, amount, false);
+
+        uint256 hubWethBefore = IERC20(wethAddr).balanceOf(address(liquidityHub));
+        liquidityHub.processSettlementFor(lccNative, wethAddr, amount);
+        uint256 hubWethAfter = IERC20(wethAddr).balanceOf(address(liquidityHub));
+
+        assertEq(liquidityHub.settleQueue(lccNative, wethAddr), 0);
+        assertEq(ILCC(lccNative).balanceOf(wethAddr), 0);
+        assertEq(IERC20(wethAddr).balanceOf(wethAddr), amount);
+        assertEq(hubWethAfter, hubWethBefore, "Hub must not strand WETH after settlement to WETH9 recipient");
+    }
+
+    /// @dev Contracts that implement `INativeSettlementReceiver` still receive raw ETH when native transfer succeeds.
+    function test_processSettlementFor_native_optInContractRecipient_receivesEth() public {
+        address lccNative;
+        address lccErc20;
+        vm.startPrank(factory);
+        address[] memory issuers = new address[](1);
+        issuers[0] = proxyHook;
+        (lccNative, lccErc20) = liquidityHub.createLCCPair(
+            abi.encodePacked(address(0xD29A)), address(0), address(underlyingAsset1), "Native OptIn Recipient", issuers
+        );
+        liquidityHub.initialize(lccNative, lccErc20, bytes32("nativeOptInMarket"), abi.encodePacked(address(0xD29A)));
+        vm.stopPrank();
+
+        NativeOptInReceiverMock recipient = new NativeOptInReceiverMock();
+        uint256 amount = 11;
+
+        vm.prank(proxyHook);
+        liquidityHub.issue(lccNative, proxyHook, amount);
+        vm.prank(proxyHook);
+        ILCC(lccNative).transfer(address(recipient), amount);
+        vm.prank(proxyHook);
+        liquidityHub.queueForTransferRecipient(lccNative, address(recipient), amount);
+
+        vm.deal(address(liquidityHub), amount);
+        vm.prank(proxyHook);
+        liquidityHub.confirmTake(lccNative, amount, false);
+
+        address wethAddr = address(liquidityHub.weth9());
+        uint256 ethBefore = address(recipient).balance;
+        liquidityHub.processSettlementFor(lccNative, address(recipient), amount);
+
+        assertEq(liquidityHub.settleQueue(lccNative, address(recipient)), 0);
+        assertEq(ILCC(lccNative).balanceOf(address(recipient)), 0);
+        assertEq(address(recipient).balance - ethBefore, amount);
+        assertEq(IERC20(wethAddr).balanceOf(address(recipient)), 0);
     }
 
     function test_queueForTransferRecipient_revertsWhenCallerIsNotIssuer() public {
@@ -1172,79 +1142,6 @@ contract LiquidityHubTest is LiquidityHubTestBase {
         assertEq(liquidityHub.totalQueued(lccToken1), 0, "totalQueued should be decremented");
         assertEq(liquidityHub.queueOfUnderlying(lccToken1), 0, "underlying queue should be decremented");
         assertEq(ILCC(lccToken1).balanceOf(address(liquidityHub)), hubLccBefore - queued, "Hub-held LCC burned");
-    }
-
-    /// @dev Hub must cap endpoint-reported admission credit by `settleQueue[lcc][queueTo]` (not trust `type(uint256).max`).
-    function test_unwrapTo_endpointAdmissionCredit_inflatedReportedCredit_stillAllowsUnwrapUpToLiveBalance() public {
-        uint256 queuedAmt = 15;
-        uint256 endpointBalance = 10;
-        uint256 unwrapAmt = 5;
-
-        _createSettlementQueueEntry(lccToken1, user2, queuedAmt);
-        assertEq(liquidityHub.settleQueue(lccToken1, user2), queuedAmt);
-
-        MockEndpointUnwrapAdmission endpoint = new MockEndpointUnwrapAdmission();
-        vm.prank(proxyHook);
-        liquidityHub.issue(lccToken1, address(endpoint), endpointBalance);
-
-        _setBoundLevel(address(endpoint), Bounds.BOUND_ENDPOINT);
-        endpoint.setAdmissionCredit(type(uint256).max);
-
-        underlyingAsset1.mint(address(liquidityHub), unwrapAmt);
-        vm.prank(proxyHook);
-        liquidityHub.confirmTake(lccToken1, unwrapAmt, false);
-
-        vm.mockCall(
-            factory,
-            abi.encodeWithSelector(IMarketFactory.useMarketLiquidity.selector, lccToken1, marketId1, unwrapAmt),
-            abi.encode(unwrapAmt)
-        );
-
-        uint256 toBefore = underlyingAsset1.balanceOf(user3);
-        vm.prank(address(endpoint));
-        endpoint.callUnwrapTo(liquidityHub, lccToken1, user3, user2, unwrapAmt);
-
-        assertEq(underlyingAsset1.balanceOf(user3) - toBefore, unwrapAmt, "payout should succeed when credit is capped");
-        assertEq(ILCC(lccToken1).balanceOf(address(endpoint)), endpointBalance - unwrapAmt);
-    }
-
-    /// @dev Without admission credit, `fromBalance < settleQueue` implies zero headroom even if endpoint lies off-chain.
-    function test_unwrapTo_endpointAdmissionCredit_zeroCredit_revertsWhenLiveBalanceBelowQueue() public {
-        uint256 queuedAmt = 15;
-        uint256 endpointBalance = 10;
-
-        _createSettlementQueueEntry(lccToken1, user2, queuedAmt);
-
-        MockEndpointUnwrapAdmission endpoint = new MockEndpointUnwrapAdmission();
-        vm.prank(proxyHook);
-        liquidityHub.issue(lccToken1, address(endpoint), endpointBalance);
-
-        _setBoundLevel(address(endpoint), Bounds.BOUND_ENDPOINT);
-        endpoint.setAdmissionCredit(0);
-
-        vm.prank(address(endpoint));
-        vm.expectRevert(abi.encodeWithSelector(Errors.InvalidAmount.selector, uint256(5), uint256(0)));
-        endpoint.callUnwrapTo(liquidityHub, lccToken1, user3, user2, 5);
-    }
-
-    /// @dev `LiquidityHub` staticcall to `unwrapAdmissionCredit` is best-effort: no interface => zero credit.
-    function test_unwrapTo_endpointAdmissionCredit_staticcallNoInterface_zeroCredit_revertsWhenLiveBalanceBelowQueue()
-        public
-    {
-        uint256 queuedAmt = 15;
-        uint256 endpointBalance = 10;
-
-        _createSettlementQueueEntry(lccToken1, user2, queuedAmt);
-
-        EndpointCallerSansAdmission endpoint = new EndpointCallerSansAdmission();
-        vm.prank(proxyHook);
-        liquidityHub.issue(lccToken1, address(endpoint), endpointBalance);
-
-        _setBoundLevel(address(endpoint), Bounds.BOUND_ENDPOINT);
-
-        vm.prank(address(endpoint));
-        vm.expectRevert(abi.encodeWithSelector(Errors.InvalidAmount.selector, uint256(1), uint256(0)));
-        endpoint.callUnwrapTo(liquidityHub, lccToken1, user3, user2, 1);
     }
 }
 

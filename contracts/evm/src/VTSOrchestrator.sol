@@ -185,6 +185,9 @@ contract VTSOrchestrator is
         if (cfg.maxGracePeriodTime < cfg.gracePeriodTime) {
             revert Errors.InvalidVTSConfiguration(cfg.gracePeriodTime, cfg.maxGracePeriodTime);
         }
+        if (cfg.baseVTSRate > LiquidityUtils.BPS_DENOMINATOR) {
+            revert Errors.InvalidAmount(cfg.baseVTSRate, LiquidityUtils.BPS_DENOMINATOR);
+        }
     }
 
     function _assertValidMarketVTSConfiguration(MarketVTSConfiguration memory cfg) internal pure override {

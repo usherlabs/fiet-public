@@ -93,7 +93,7 @@ questions for every invariant:
 | HUB-01 | P0 | Medusa/FuzzEntry | `FuzzHubLCC.sol`, `invariants/HUB01.sol` | Native and ERC20 wrap flow remains a first-class Medusa property. |
 | HUB-01A | P1 | Foundry | `LiquidityHub.t.sol` | `receive()` sender-gating is authoritative in production-Hub tests rather than a separate Medusa child harness. |
 | HUB-02 | P0 | Medusa/FuzzEntry | `FuzzHubLCC.sol`, `invariants/HUB02.sol` | Unwrap decomposition and queue accounting remain direct Medusa properties. |
-| HUB-02A | P0 | Foundry + Medusa | `LiquidityHub.t.sol`, `MMPositionManager.t.sol`, `harnesses/FuzzLiquidityHub.sol` | Endpoint-only `unwrapTo` admission is enforced in the adapter and covered more explicitly in core Foundry regressions. |
+| HUB-02A | P0 | Foundry + Medusa | `LiquidityHub.t.sol`, `MMPositionManager.t.sol`, `harnesses/FuzzLiquidityHub.sol` | MM custodian self-unwrap (`unwrap` only on Hub; no `unwrapTo`) and forward of immediate underlying are covered in core Foundry regressions and fuzz harnesses. |
 | HUB-02B | P0 | Foundry + Medusa | `LiquidityHub.t.sol`, `harnesses/FuzzLiquidityHub.sol` | Recipient serviceability is enforced in the adapter; targeted Foundry tests remain the clearest regression oracle. |
 | HUB-02C | P1 | Foundry | `MMPositionManager.t.sol` | Recipient-shape changes after queueing remain covered by real-path queue/locker regressions. |
 | HUB-03 | P0 | Medusa/FuzzEntry | `FuzzHubLCC.sol`, `invariants/HUB03.sol` | Invalid-LCC and issuer-only paths stay in the composed Medusa surface. |
