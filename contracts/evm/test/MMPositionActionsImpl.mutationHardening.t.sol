@@ -82,6 +82,9 @@ contract MMPositionActionsImplMutationHardeningTest is MarketTestBase, MarketMak
             abi.encodeWithSelector(IMarketFactory.bounds.selector, liquiditySignal.mmState.advancer),
             abi.encode(true)
         );
+
+        _wireTestQueueCustodianFor(address(mmPositionManager), liquiditySignal.mmState.advancer);
+        _wireAllUtilityTestQueueCustodians(address(mmPositionManager));
     }
 
     function _createPosition(

@@ -214,14 +214,7 @@ library Errors {
     /// @param tokenId The commitment NFT id (commit id)
     error CommitNotDrained(uint256 tokenId);
 
-    /// @notice Thrown when decommit or NFT transfer is blocked because the commitment bucket still has custodied queue slices
-    /// @param tokenId The commitment NFT id (commit id)
-    error CommitCustodyNotDrained(uint256 tokenId);
-
-    /// @notice Four-word `COLLECT_AVAILABLE_LIQUIDITY` (`lcc`, `tokenId`, `beneficiary`, `maxAmount`) applies only to commitment buckets (`tokenId > 0`), not utility bucket `0`.
-    error CollectForBeneficiaryRequiresCommitToken(uint256 tokenId);
-
-    /// @notice Thrown when a queue custodian is required for `recipient` but has not been deployed (only created on `commitSignal`)
+    /// @notice Thrown when a queue custodian is required for `recipient` but has not been deployed (call `INITIALISE`)
     /// @param recipient The NFT recipient / locker domain that must already have a custodian
     error QueueCustodianNotDeployed(address recipient);
 

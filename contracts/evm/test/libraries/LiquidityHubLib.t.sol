@@ -4,7 +4,6 @@ pragma solidity ^0.8.26;
 import {LiquidityHubTestBase} from "../base/LiquidityHubTestBase.sol";
 import {LiquidityHub} from "../../src/LiquidityHub.sol";
 import {ILCC} from "../../src/interfaces/ILCC.sol";
-import {ILiquidityHub} from "../../src/interfaces/ILiquidityHub.sol";
 import {IMarketFactory} from "../../src/interfaces/IMarketFactory.sol";
 import {Errors} from "../../src/libraries/Errors.sol";
 import {Bounds} from "../../src/libraries/Bounds.sol";
@@ -15,34 +14,20 @@ import {IMMQueueCustodian} from "../../src/interfaces/IMMQueueCustodian.sol";
 /// @notice Minimal custodian stub for `processSettlementFor` queue-owner tests (no MM custody bookkeeping).
 contract MockSettleCustodian is IMMQueueCustodian {
     address public override positionManager;
-
-    mapping(uint256 tokenId => mapping(address lcc => mapping(address beneficiary => uint256 amount))) private _custody;
+    address public override beneficiary;
 
     constructor() {
         positionManager = address(0xDEAD);
+        beneficiary = address(0xBEEF);
     }
 
-    function unwrapLccViaHub(address, address, address, uint256, uint256, ILiquidityHub) external pure override {}
-
-    function record(uint256, address, address, uint256) external override {}
-
-    function seed(uint256 tokenId, address lcc, address beneficiary, uint256 amount) external {
-        _custody[tokenId][lcc][beneficiary] = amount;
-    }
-
-    function queued(uint256 tokenId, address lcc, address beneficiary) external view override returns (uint256) {
-        return _custody[tokenId][lcc][beneficiary];
-    }
+    function unwrapLcc(address, address, uint256) external pure override {}
 
     function totalQueuedLcc(address) external pure override returns (uint256) {
         return 0;
     }
 
-    function collectUnderlyingToBeneficiary(uint256, address, address, uint256) external pure override {}
-
-    function isBucketEmpty(uint256) external pure override returns (bool) {
-        return true;
-    }
+    function release(address, uint256) external pure override {}
 }
 
     /**

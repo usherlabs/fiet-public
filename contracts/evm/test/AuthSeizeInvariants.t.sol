@@ -10,6 +10,7 @@ import {MMActionAdapter as MMA} from "./utils/MMActionAdapter.sol";
 import {LiquidityCommitmentCertificate} from "../src/LCC.sol";
 import {MarketVTSConfiguration} from "../src/types/VTS.sol";
 import {Errors} from "../src/libraries/Errors.sol";
+import {IMarketFactory} from "../src/interfaces/IMarketFactory.sol";
 import {IOracleHelper} from "../src/interfaces/IOracleHelper.sol";
 
 import {ModifyLiquidityParams, SwapParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
@@ -56,6 +57,16 @@ contract AuthSeizeInvariantsTest is MarketTestBase, MarketMakerTestBase {
                 abi.encode(uint256(1e18))
             );
         }
+
+        vm.mockCall(
+            marketFactory,
+            abi.encodeWithSelector(IMarketFactory.bounds.selector, liquiditySignal.mmState.advancer),
+            abi.encode(true)
+        );
+
+        _wireTestQueueCustodianFor(address(mmPositionManager), liquiditySignal.mmState.advancer);
+        _wireTestQueueCustodianFor(address(mmPositionManager), renewSignal.mmState.advancer);
+        _wireAllUtilityTestQueueCustodians(address(mmPositionManager));
     }
 
     function testFuzz_auth01_nonApprovedCannotSettleWhenNotSeizing(int128 amount0Raw, int128 amount1Raw) public {

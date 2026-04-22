@@ -81,5 +81,8 @@ library MMActions {
 
     /// @notice Sync currency balance as credit to delta
     uint256 internal constant SYNC = 0x45;
+
+    /// @notice Idempotently deploy this caller’s `MMQueueCustodian` (`custodianFor[msgSender()]`)
+    uint256 internal constant INITIALISE = 0x46;
 }
 

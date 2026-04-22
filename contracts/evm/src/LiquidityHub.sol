@@ -1029,9 +1029,10 @@ contract LiquidityHub is BoundRegistry, Ownable, ReentrancyGuardTransient {
     {
         _assertValidQueueOwner(lcc, recipient, allowHub);
 
-        // Native settlements push ETH directly to `recipient` during `processSettlementFor`.
-        // Queue recipients may be contracts (for example `MMQueueCustodian`, smart wallets, or EIP-7702-style accounts);
-        // serviceability is enforced via `balancesOf` backing and bound-level checks above, not an EOA-only gate.
+        // Native settlements pay `recipient` during `processSettlementFor` via `LiquidityHubLib.transferUnderlying`:
+        // EOAs receive raw ETH first (then WETH on failure); contracts receive raw ETH only if they EIP-165 support
+        // `INativeSettlementReceiver` (for example `MMQueueCustodian`); all other contracts receive WETH directly.
+        // Queue admission still requires `balancesOf` market-derived backing and valid bound level (above).
 
         (, uint256 marketDerivedBalance) = ILCC(lcc).balancesOf(recipient);
         if (marketDerivedBalance < amount) {

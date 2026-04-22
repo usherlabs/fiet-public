@@ -10,7 +10,7 @@ import {IFuzzTakeOrchestrator} from "./IFuzzTakeOrchestrator.sol";
 /// @notice Thin test harness mirroring `PositionManagerImpl._routeLccCustodyTakeAndForward` and the MM forward path
 ///         (`MMPositionActionsImpl._forwardQueuedLccToCustodian`).
 /// @dev Logic MUST stay aligned with `PositionManagerImpl._routeLccCustodyTakeAndForward` (custody guard + take + forward)
-///      and `MMPositionActionsImpl._forwardQueuedLccToCustodian` (ERC20 transfer + conditional `record`).
+///      and `MMPositionActionsImpl._forwardQueuedLccToCustodian` (ERC20 transfer to custodian; balance is the ledger).
 ///      `nonFee < custodyForward` reverts `InsufficientBalance` as a defensive check (queued principal must be fundable by
 ///      immediate non-fee LCC after fee netting under **SETTLE-03** / **MMQ-01**).
 ///      Related audit note: `agents/audit-resolutions/mm-queue-custody-nonfee-vs-custodyforward-guard-resolution.md`.
@@ -73,9 +73,6 @@ contract PositionManagerImplQueueCustodyHarness {
         address custodianAddr = address(queueCustodian);
         if (custodianAddr != address(0) && custodianAddr != address(this)) {
             currency.transfer(custodianAddr, amount);
-            if (tokenId > 0) {
-                queueCustodian.record(tokenId, Currency.unwrap(currency), beneficiary, amount);
-            }
         }
     }
 }

@@ -6,7 +6,6 @@ import {IWETH9} from "v4-periphery/src/interfaces/external/IWETH9.sol";
 import {Errors} from "../libraries/Errors.sol";
 import {IMarketFactory} from "../interfaces/IMarketFactory.sol";
 import {ILiquidityHub} from "../interfaces/ILiquidityHub.sol";
-import {IMMQueueCustodian} from "../interfaces/IMMQueueCustodian.sol";
 
 /// @title FietNativeWrapper
 /// @notice Used for wrapping and unwrapping native assets in PositionManagers.
@@ -18,6 +17,11 @@ abstract contract FietNativeWrapper is UniNativeWrapper {
     function _canonicalMarketFactory() internal view virtual returns (IMarketFactory);
     /// @dev Implemented by inheritors with canonical LiquidityHub binding.
     function _liquidityHub() internal view virtual returns (ILiquidityHub);
+
+    /// @dev Bound `MMQueueCustodian` sending native after Hub `unwrap` / release. Inheritors (e.g. `MMPositionManager`) registry-match `beneficiary` to `custodianFor`.
+    function _isCustodian(address) internal view virtual returns (bool) {
+        return false;
+    }
 
     /// @notice Validates that the ETH sender is either WETH9, poolManager, canonical LiquidityHub, or a canonical native vault
     /// @dev Uses MarketFactory registry data to avoid interface-probing based sender spoofing.
@@ -32,12 +36,9 @@ abstract contract FietNativeWrapper is UniNativeWrapper {
             return;
         }
 
-        // Native-backed LCC unwrap: `MMQueueCustodian` forwards immediate ETH from Hub to this manager for delta credit.
-        if (msg.sender.code.length > 0) {
-            (bool ok, bytes memory data) = msg.sender.staticcall(abi.encodeCall(IMMQueueCustodian.positionManager, ()));
-            if (ok && data.length >= 32 && abi.decode(data, (address)) == address(this)) {
-                return;
-            }
+        // Native-backed LCC unwrap: bound `MMQueueCustodian` forwards immediate ETH from Hub to this manager for delta credit.
+        if (_isCustodian(msg.sender)) {
+            return;
         }
 
         IMarketFactory factory = _canonicalMarketFactory();

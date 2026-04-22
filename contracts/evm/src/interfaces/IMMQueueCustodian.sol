@@ -1,48 +1,28 @@
 // SPDX-License-Identifier: BUSL-1.1
 pragma solidity ^0.8.26;
 
-import {ILiquidityHub} from "./ILiquidityHub.sol";
-
 /// @title IMMQueueCustodian
-/// @notice MM queue custodian: beneficiary-scoped LCC custody and Hub queue ownership for `MMPositionManager`.
-/// @dev Custody is keyed by commitment `tokenId` (or utility bucket `0`), `lcc`, and `beneficiary`. Hub queue ownership
-///      for MM synthetic principal is keyed to this custodian (`settleQueue(lcc, address(custodian))`); beneficiary
-///      slices gate who may receive underlying after settlement. LCC leaves custody only via Hub settlement
-///      (`processSettlementFor` + `collectUnderlyingToBeneficiary`), not a separate pre-settlement `release` path.
-///      Commit buckets may also be drained via four-word `COLLECT_AVAILABLE_LIQUIDITY` params, which pays only the named beneficiary.
+/// @notice MM queue custodian: one immutable beneficiary; Hub queue ownership for `MMPositionManager`.
+/// @dev Hub queue ownership for MM synthetic principal is keyed to this custodian (`settleQueue(lcc, address(custodian))`).
+///      Receivable state is **on-chain balances** on this contract (LCC + underlying) plus `LiquidityHub.settleQueue`;
+///      there is no separate entitlement ledger. Underlying is released to `MMPositionManager` for pull withdrawal via
+///      locker `TAKE`, not pushed to EOAs from this contract.
 interface IMMQueueCustodian {
     /// @notice Returns the MMPositionManager bound to this custodian
     function positionManager() external view returns (address);
 
-    /// @notice Aggregate beneficiary-scoped custody still outstanding for `lcc` (LCC units), across all buckets.
-    /// @dev Used with `LiquidityHub.settleQueue(lcc, address(this))` to cap payout of underlying already received
-    ///      when the Hub queue was settled permissionlessly before `COLLECT_AVAILABLE_LIQUIDITY`.
+    /// @notice Immutable beneficiary whose custodian this is (same key as `custodianFor[beneficiary]` on the manager).
+    function beneficiary() external view returns (address);
+
+    /// @notice Current **ERC20 LCC** balance held by this custodian for `lcc` (same as `IERC20(lcc).balanceOf(address(this))`).
+    /// @dev This is the on-chain custody balance, not a shadow queue book. Used with Hub queue and reserves for collect caps.
     function totalQueuedLcc(address lcc) external view returns (uint256);
 
-    /// @notice Reads custodied LCC balance for a bucket, LCC, and beneficiary slice.
-    function queued(uint256 tokenId, address lcc, address beneficiary) external view returns (uint256);
-
     /// @notice Hub `unwrap` as this contract: shortfall queues to this custodian; immediate underlying is forwarded.
-    function unwrapLccViaHub(
-        address lcc,
-        address forwardUnderlyingTo,
-        address beneficiary,
-        uint256 bucketId,
-        uint256 amount,
-        ILiquidityHub hub
-    ) external;
+    /// @dev Uses canonical Hub from `ILCC(lcc).hub()`. `MMPM` must transfer `amount` LCC to this contract before calling.
+    function unwrapLcc(address lcc, address forwardUnderlyingTo, uint256 amount) external;
 
-    /// @notice Records queued LCC that has already been transferred into custody
-    /// @param tokenId The commitment token id whose custody bucket is being credited (or utility bucket, e.g. `0`)
-    /// @param lcc The LCC token address
-    /// @param beneficiary The party entitled to this slice (locker / seizer for underlying payout after settlement)
-    /// @param amount Amount transferred into custody
-    function record(uint256 tokenId, address lcc, address beneficiary, uint256 amount) external;
-
-    /// @notice After `LiquidityHub.processSettlementFor` has paid underlying to this custodian, forwards that slice to the beneficiary.
-    /// @dev Caller must be the bound position manager; debits beneficiary-scoped entitlement by `amount`.
-    function collectUnderlyingToBeneficiary(uint256 tokenId, address lcc, address beneficiary, uint256 amount) external;
-
-    /// @notice True when the given bucket (`0` = utility unwrap, `tokenId` = commitment id) has no recorded custody slices.
-    function isBucketEmpty(uint256 bucketId) external view returns (bool);
+    /// @notice After Hub settlement, moves underlying from this custodian to the position manager (pull collect path).
+    /// @dev Transfers up to `min(amount, actual underlying balance)`; caller must be the bound position manager.
+    function release(address lcc, uint256 amount) external;
 }

@@ -2,9 +2,11 @@
 pragma solidity ^0.8.26;
 
 import {Currency} from "v4-periphery/lib/v4-core/src/types/Currency.sol";
+import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {ERC165} from "@openzeppelin/contracts/utils/introspection/ERC165.sol";
 import {IFuzzTakeOrchestrator} from "../harnesses/IFuzzTakeOrchestrator.sol";
 import {IMMQueueCustodian} from "../../../src/interfaces/IMMQueueCustodian.sol";
-import {ILiquidityHub} from "../../../src/interfaces/ILiquidityHub.sol";
+import {INativeSettlementReceiver} from "../../../src/interfaces/INativeSettlementReceiver.sol";
 import {Errors} from "../../../src/libraries/Errors.sol";
 
 /// @notice Records `take` calls for fuzz visibility; does not move tokens (sufficient for routing-guard coverage).
@@ -26,24 +28,35 @@ contract FuzzTakeOrchestratorMock is IFuzzTakeOrchestrator {
 /// @notice Minimal `IMMQueueCustodian` for the composed Medusa fuzz harnesses.
 /// @dev Constructor binds `authorisedBinder` only; `wirePositionManager` breaks the harness↔custodian circular `new`
 ///      (production deploys via `MMQueueCustodianFactory` bound to the MMPM).
-contract FuzzMMQueueCustodian is IMMQueueCustodian {
+contract FuzzMMQueueCustodian is IMMQueueCustodian, ERC165, INativeSettlementReceiver {
     address public immutable authorisedBinder;
 
     address public override positionManager;
-
-    mapping(uint256 tokenId => mapping(address lcc => mapping(address beneficiary => uint256 amount))) private _queued;
-    mapping(uint256 bucketId => uint256 total) private _bucketTotals;
-    mapping(address lcc => uint256 total) private _totalLcc;
+    address public override beneficiary;
 
     modifier onlyPositionManager() {
         if (msg.sender != positionManager) revert Errors.InvalidSender();
         _;
     }
 
-    constructor(address authorisedBinder_) {
+    constructor(address authorisedBinder_, address beneficiary_) {
         if (authorisedBinder_ == address(0)) revert Errors.InvalidAddress(authorisedBinder_);
+        if (beneficiary_ == address(0)) revert Errors.InvalidAddress(beneficiary_);
         authorisedBinder = authorisedBinder_;
+        beneficiary = beneficiary_;
     }
+
+    /// @inheritdoc INativeSettlementReceiver
+    function supportsNativeSettlementFromFiet() external pure override returns (bool) {
+        return true;
+    }
+
+    /// @inheritdoc ERC165
+    function supportsInterface(bytes4 interfaceId) public view virtual override returns (bool) {
+        return interfaceId == type(INativeSettlementReceiver).interfaceId || super.supportsInterface(interfaceId);
+    }
+
+    receive() external payable {}
 
     /// @notice One-time link after `new PositionManagerImplQueueCustodyHarness(..., this)`.
     function wirePositionManager(address _positionManager) external {
@@ -55,43 +68,11 @@ contract FuzzMMQueueCustodian is IMMQueueCustodian {
         positionManager = _positionManager;
     }
 
-    function unwrapLccViaHub(address, address, address, uint256, uint256, ILiquidityHub) external pure override {}
-
-    function record(uint256 tokenId, address lcc, address beneficiary, uint256 amount)
-        external
-        override
-        onlyPositionManager
-    {
-        if (lcc == address(0)) revert Errors.InvalidAddress(lcc);
-        if (beneficiary == address(0)) revert Errors.InvalidAddress(beneficiary);
-        if (amount == 0) return;
-        _queued[tokenId][lcc][beneficiary] += amount;
-        _bucketTotals[tokenId] += amount;
-        _totalLcc[lcc] += amount;
-    }
+    function unwrapLcc(address, address, uint256) external pure override {}
 
     function totalQueuedLcc(address lcc) external view override returns (uint256) {
-        return _totalLcc[lcc];
+        return IERC20(lcc).balanceOf(address(this));
     }
 
-    function isBucketEmpty(uint256 bucketId) external view override returns (bool) {
-        return _bucketTotals[bucketId] == 0;
-    }
-
-    function queued(uint256 tokenId, address lcc, address beneficiary) external view override returns (uint256) {
-        return _queued[tokenId][lcc][beneficiary];
-    }
-
-    function collectUnderlyingToBeneficiary(uint256 tokenId, address lcc, address beneficiary, uint256 amount)
-        external
-        override
-        onlyPositionManager
-    {
-        if (amount == 0) return;
-        uint256 q = _queued[tokenId][lcc][beneficiary];
-        if (q < amount) revert Errors.InsufficientBalance(q, amount);
-        _queued[tokenId][lcc][beneficiary] = q - amount;
-        _bucketTotals[tokenId] -= amount;
-        _totalLcc[lcc] -= amount;
-    }
+    function release(address, uint256) external override onlyPositionManager {}
 }

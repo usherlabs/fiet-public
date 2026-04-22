@@ -1036,15 +1036,9 @@ contract FuzzLiquidityHub is BoundRegistry, Ownable, ReentrancyGuardTransient {
     {
         _assertValidQueueOwner(lcc, recipient, allowHub);
 
-        // Native settlements push ETH directly to `recipient` during `processSettlementFor`.
-        // Restrict issuer-driven transfer-recipient queues to EOAs only for native-backed LCCs (reject all contracts here).
-        // Reason: non-payable contract recipients cannot create permanently unserviceable queues.
-        // Native payouts require a recipient shape we can deterministically service from push transfers.
-        // The issuer deficit queue path (`queueForTransferRecipient`) is strict by design, so we reject
-        // contract recipients in native lanes up-front rather than creating uncleareable queues.
-        if (s.lccToUnderlying[lcc] == address(0) && recipient.code.length > 0) {
-            revert Errors.NotApproved(recipient);
-        }
+        // Native settlements: production `LiquidityHub` allows contract queue owners; payout is EOAs + raw ETH,
+        // or `INativeSettlementReceiver` (EIP-165) for raw ETH, otherwise WETH (see `LiquidityHubLib.transferUnderlying`).
+        // Admission here matches production: no blanket contract rejection for native lanes.
 
         (, uint256 marketDerivedBalance) = ILCC(lcc).balancesOf(recipient);
         if (marketDerivedBalance < amount) {
@@ -1068,7 +1062,8 @@ contract FuzzLiquidityHub is BoundRegistry, Ownable, ReentrancyGuardTransient {
             return;
         }
 
-        if (Bounds.isExempt(boundLevelOfLcc(lcc, recipient))) {
+        uint8 level = boundLevelOfLcc(lcc, recipient);
+        if (Bounds.isExempt(level) || Bounds.isDex(level)) {
             revert Errors.NotApproved(recipient);
         }
     }

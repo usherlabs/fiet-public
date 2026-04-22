@@ -55,6 +55,15 @@ contract DeltaDesignStatementsTest is MarketTestBase, MarketMakerTestBase {
                 abi.encode(uint256(1e18))
             );
         }
+
+        vm.mockCall(
+            marketFactory,
+            abi.encodeWithSelector(IMarketFactory.bounds.selector, liquiditySignal.mmState.advancer),
+            abi.encode(true)
+        );
+
+        _wireTestQueueCustodianFor(address(mmPositionManager), liquiditySignal.mmState.advancer);
+        _wireAllUtilityTestQueueCustodians(address(mmPositionManager));
     }
 
     function test_delta02_router_residue_is_fcfs_dust() public {

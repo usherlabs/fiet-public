@@ -31,7 +31,6 @@ import {TransientStateLibrary} from "v4-periphery/lib/v4-core/src/libraries/Tran
 import {CurrencyTransfer} from "./libraries/CurrencyTransfer.sol";
 import {IMMQueueCustodian} from "./interfaces/IMMQueueCustodian.sol";
 import {IMMQueueCustodianFactory} from "./interfaces/IMMQueueCustodianFactory.sol";
-import {MMQueueCustodian} from "./MMQueueCustodian.sol";
 import {IMarketFactory} from "./interfaces/IMarketFactory.sol";
 import {ILiquidityHub} from "./interfaces/ILiquidityHub.sol";
 import {IAllowanceTransfer} from "permit2/src/interfaces/IAllowanceTransfer.sol";
@@ -89,11 +88,8 @@ contract MMPositionManager is
     address public immutable commitmentDescriptor;
     /// @notice Deploys queue custodians; only factory-bound MMPMs may call `deploy` on it.
     address public immutable queueCustodianFactory;
-    /// @notice One queue custodian per NFT recipient domain (many commits share the same custodian).
+    /// @notice One queue custodian per beneficiary domain (locker / seizer); immutable beneficiary inside the custodian.
     mapping(address recipient => address) public custodianFor;
-
-    /// @dev Utility custody bucket on the recipient-keyed custodian (`UNWRAP_LCC` / utility collect).
-    uint256 private constant _UNWRAP_QUEUE_CUSTODY_TOKEN_ID = 0;
 
     // ═══════════════════════════════════════════════════════════════════════════
     // Constructor
@@ -145,11 +141,14 @@ contract MMPositionManager is
         return _getLocker();
     }
 
-    /// @dev Deploys `MMQueueCustodian` for `recipient` when absent (`_commitSignal`, `transferFrom`).
+    /// @dev Deploys `MMQueueCustodian` for `recipient` when absent (`INITIALISE`, tests).
+    ///      There is no lazy deployment on unwrap/collect: queue-forward paths require `custodianFor[recipient] != 0`
+    ///      (see `INVARIANTS.md`); integrators must call `INITIALISE` (or rely on tests) before those flows.
     function _deployQueueCustodian(address recipient) internal {
         if (recipient == address(0)) revert Errors.InvalidAddress(recipient);
         if (custodianFor[recipient] != address(0)) return;
         address ca = IMMQueueCustodianFactory(queueCustodianFactory).deploy(recipient, marketFactory);
+        if (ca == address(0) || ca.code.length == 0) revert Errors.InvalidAddress(ca);
         custodianFor[recipient] = ca;
     }
 
@@ -161,6 +160,16 @@ contract MMPositionManager is
     /// @inheritdoc FietNativeWrapper
     function _liquidityHub() internal view override returns (ILiquidityHub) {
         return liquidityHub;
+    }
+
+    /// @inheritdoc FietNativeWrapper
+    function _isCustodian(address candidate) internal view override returns (bool) {
+        if (candidate.code.length == 0) return false;
+        (bool ok, bytes memory data) = candidate.staticcall(abi.encodeCall(IMMQueueCustodian.beneficiary, ()));
+        if (!ok || data.length < 32) return false;
+        address beneficiary = abi.decode(data, (address));
+        if (beneficiary == address(0)) return false;
+        return custodianFor[beneficiary] == candidate;
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
@@ -303,7 +312,6 @@ contract MMPositionManager is
             _mint(mintRecipient, tokenId);
             nftRecipient = mintRecipient;
         }
-        _deployQueueCustodian(nftRecipient);
         emit SignalCommitted(tokenId);
     }
 
@@ -335,7 +343,6 @@ contract MMPositionManager is
     /// @param tokenId The commitment NFT token ID
     function _decommitSignal(uint256 tokenId) internal {
         MMHelpers.assertApprovedOrOwner(msgSender(), tokenId);
-        MMHelpers.assertQueueCustodianForCommitToken(tokenId);
 
         // Check if commit has any active positions (burned positions are inactive)
         (,, uint256 positionCount, uint256 activePositionCount, uint256 inactiveRemnantCount) =
@@ -349,12 +356,6 @@ contract MMPositionManager is
         // `_syncInactiveRemnantAfterSettledPairChange`).
         if (inactiveRemnantCount > 0) {
             revert Errors.CommitNotDrained(tokenId);
-        }
-
-        address owner_ = _ownerOf[tokenId];
-        address custAddr = custodianFor[owner_];
-        if (custAddr != address(0) && !MMQueueCustodian(payable(custAddr)).isBucketEmpty(tokenId)) {
-            revert Errors.CommitCustodyNotDrained(tokenId);
         }
 
         _burn(tokenId);
@@ -385,7 +386,6 @@ contract MMPositionManager is
         bytes calldata settlementProof
     ) internal {
         MMHelpers.assertApprovedOrOwner(msgSender(), tokenId);
-        MMHelpers.assertQueueCustodianForCommitToken(tokenId);
         vtsOrchestrator.extendGracePeriod(
             marketFactory, poolKey, tokenId, positionIndex, settlementTokenIndex, verifierIndex, settlementProof
         );
@@ -421,15 +421,14 @@ contract MMPositionManager is
             _unwrapNative(amount, payerIsUser);
             return;
         }
+        if (action == MMActions.INITIALISE) {
+            params.decodeInitialiseParams();
+            _deployQueueCustodian(msgSender());
+            return;
+        }
         if (action == MMActions.COLLECT_AVAILABLE_LIQUIDITY) {
-            (address lcc, uint256 tokenId, address beneficiary, uint256 maxAmount) =
-                params.decodeCollectLiquidityParams();
-            if (params.length == 0x60) {
-                _collectAvailableLiquidity(lcc, tokenId, maxAmount, address(0));
-            } else {
-                if (beneficiary == address(0)) revert Errors.InvalidAddress(beneficiary);
-                _collectAvailableLiquidity(lcc, tokenId, maxAmount, beneficiary);
-            }
+            (address lcc, uint256 maxAmount) = params.decodeCollectLiquidityParams();
+            _collectAvailableLiquidity(lcc, maxAmount);
             return;
         }
         if (action == MMActions.SYNC) {
@@ -461,11 +460,9 @@ contract MMPositionManager is
         MMHelpers.assertQueueCustodianForRecipient(beneficiary);
         address custAddr = custodianFor[beneficiary];
         if (custAddr == address(0)) revert Errors.InvalidAddress(custAddr);
-        MMQueueCustodian custodian = MMQueueCustodian(payable(custAddr));
+        IMMQueueCustodian custodian = IMMQueueCustodian(custAddr);
         lccCurrency.transfer(custAddr, toUnwrap);
-        custodian.unwrapLccViaHub(
-            lccAddr, forwardUnderlyingTo, beneficiary, _UNWRAP_QUEUE_CUSTODY_TOKEN_ID, toUnwrap, liquidityHub
-        );
+        custodian.unwrapLcc(lccAddr, forwardUnderlyingTo, toUnwrap);
     }
 
     /// @notice Unwraps LCC tokens to underlying asset using deltas (locker credit)
@@ -545,100 +542,109 @@ contract MMPositionManager is
         }
     }
 
-    /// @notice Collects available queue liquidity: settles the Hub queue when needed, then pays underlying to the beneficiary slice.
-    /// @dev When the Hub queue was already cleared via permissionless `processSettlementFor`, pays from underlying already
-    ///      held on the custodian (bounded by aggregate custody vs remaining Hub queue per **HUB-02A** accounting).
-    /// @param explicitBeneficiary `address(0)` for the three-word path: beneficiary is `msgSender()`, `recipientKey` is the locker for bucket `0` else `ownerOf(tokenId)`.
-    ///        Non-zero for the four-word path: payout only to that address; requires `tokenId > 0` (reverts `CollectForBeneficiaryRequiresCommitToken` for utility bucket).
-    /// @param lcc The LCC token address
-    /// @param tokenId The commitment NFT token id, or `0` for utility-bucket collect (three-word path only)
-    /// @param maxAmount The maximum amount to collect
-    function _collectAvailableLiquidity(address lcc, uint256 tokenId, uint256 maxAmount, address explicitBeneficiary)
-        internal
-    {
+    /// @notice Collects available queue liquidity for `msgSender()`’s custodian: settles the Hub queue when needed,
+    ///         then releases underlying to this contract and credits the locker (withdraw via `TAKE`).
+    /// @dev When the Hub queue was already cleared via permissionless `processSettlementFor`, releases from underlying
+    ///      already held on the custodian (bounded per **HUB-02A** accounting).
+    function _collectAvailableLiquidity(address lcc, uint256 maxAmount) internal {
         if (maxAmount == 0) return;
 
-        address beneficiary;
-        address recipientKey;
-
-        if (explicitBeneficiary == address(0)) {
-            beneficiary = msgSender();
-            recipientKey = tokenId == 0 ? beneficiary : _ownerOf[tokenId];
-        } else {
-            if (tokenId == 0) revert Errors.CollectForBeneficiaryRequiresCommitToken(tokenId);
-            beneficiary = explicitBeneficiary;
-            recipientKey = _ownerOf[tokenId];
+        address locker = msgSender();
+        MMHelpers.assertQueueCustodianForRecipient(locker);
+        address custAddr = custodianFor[locker];
+        if (custAddr == address(0)) revert Errors.InvalidAddress(custAddr);
+        if (IMMQueueCustodian(custAddr).beneficiary() != locker) {
+            revert Errors.InvalidSender();
         }
 
-        if (recipientKey == address(0)) revert Errors.InvalidAddress(recipientKey);
-        MMHelpers.assertQueueCustodianForRecipient(recipientKey);
-        address custAddr = custodianFor[recipientKey];
-        if (custAddr == address(0)) revert Errors.InvalidAddress(custAddr);
         IMMQueueCustodian custodian = IMMQueueCustodian(custAddr);
 
-        uint256 bucket = tokenId == 0 ? _UNWRAP_QUEUE_CUSTODY_TOKEN_ID : tokenId;
+        // One `ILCC.underlying()` read per collect; thread through balance + credit helpers (avoids repeated staticcalls).
+        address underlyingAddr = ILCC(lcc).underlying();
+        bool isNativeUnderlying = underlyingAddr == address(0);
 
-        uint256 remaining = _collectSettleHubQueueForCustodian(custodian, custAddr, lcc, bucket, beneficiary, maxAmount);
-        _releasePreSettledCustodianUnderlying(custodian, custAddr, lcc, bucket, beneficiary, remaining);
+        uint256 remaining =
+            _collectSettleHubQueueForCustodian(custodian, custAddr, lcc, underlyingAddr, isNativeUnderlying, maxAmount);
+        _releasePreSettledCustodianUnderlying(custodian, custAddr, lcc, underlyingAddr, isNativeUnderlying, remaining);
     }
 
-    /// @dev Phase 1: settle live Hub queue where possible; returns `maxAmount` minus what was settled and forwarded.
+    /// @dev Credits the batch locker by an exact underlying amount after custodian→manager transfer (no balance-wide sync).
+    function _creditLockerExactUnderlyingRelease(address underlyingAddr, uint256 amount, bool isNativeUnderlying)
+        private
+    {
+        if (amount == 0) return;
+        if (isNativeUnderlying) {
+            _creditExact(CurrencyLibrary.ADDRESS_ZERO, amount);
+        } else {
+            _creditExact(Currency.wrap(underlyingAddr), amount);
+        }
+    }
+
+    /// @dev Native or ERC20 underlying balance held by `custAddr` for the settlement asset (`underlyingAddr` / `isNative`).
+    function _custodianUnderlyingBalance(address custAddr, address underlyingAddr, bool isNativeUnderlying)
+        private
+        view
+        returns (uint256)
+    {
+        if (isNativeUnderlying) {
+            return custAddr.balance;
+        }
+        return IERC20(underlyingAddr).balanceOf(custAddr);
+    }
+
+    /// @dev Phase 1: settle live Hub queue where possible; returns remaining collect budget (underlying units).
     function _collectSettleHubQueueForCustodian(
         IMMQueueCustodian custodian,
         address custAddr,
         address lcc,
-        uint256 bucket,
-        address beneficiary,
+        address underlyingAddr,
+        bool isNativeUnderlying,
         uint256 maxAmount
     ) private returns (uint256 remaining) {
         uint256 hubQ = liquidityHub.settleQueue(lcc, custAddr);
-        uint256 entitled = custodian.queued(bucket, lcc, beneficiary);
         (, uint256 holderBal) = ILCC(lcc).balancesOf(custAddr);
         (, uint256 reserveMarket) = liquidityHub.reserveOfUnderlyingTuple(lcc);
 
-        // Match `LiquidityHubLib.processSettlementFor`: cap by Hub queue, beneficiary slice, custodian LCC, mobilised reserve.
         uint256 settleAmount = maxAmount;
         settleAmount = Math.min(settleAmount, hubQ);
-        settleAmount = Math.min(settleAmount, entitled);
         settleAmount = Math.min(settleAmount, holderBal);
         settleAmount = Math.min(settleAmount, reserveMarket);
 
         if (settleAmount == 0) return maxAmount;
 
+        uint256 uBefore = _custodianUnderlyingBalance(custAddr, underlyingAddr, isNativeUnderlying);
         liquidityHub.processSettlementFor(lcc, custAddr, settleAmount);
-        custodian.collectUnderlyingToBeneficiary(bucket, lcc, beneficiary, settleAmount);
-        return maxAmount - settleAmount;
+        uint256 uAfter = _custodianUnderlyingBalance(custAddr, underlyingAddr, isNativeUnderlying);
+        uint256 delivered = uAfter > uBefore ? uAfter - uBefore : 0;
+
+        if (delivered > 0) {
+            custodian.release(lcc, delivered);
+            _creditLockerExactUnderlyingRelease(underlyingAddr, delivered, isNativeUnderlying);
+        }
+
+        uint256 consumed = delivered;
+        unchecked {
+            return maxAmount > consumed ? maxAmount - consumed : 0;
+        }
     }
 
-    /// @dev Phase 2: underlying already on custodian after external Hub settlement; only `collectUnderlyingToBeneficiary`.
+    /// @dev Phase 2: flush underlying already on the custodian (e.g. permissionless pre-settlement), up to budget.
     function _releasePreSettledCustodianUnderlying(
         IMMQueueCustodian custodian,
         address custAddr,
         address lcc,
-        uint256 bucket,
-        address beneficiary,
+        address underlyingAddr,
+        bool isNativeUnderlying,
         uint256 remaining
     ) private {
         if (remaining == 0) return;
 
-        uint256 entitled = custodian.queued(bucket, lcc, beneficiary);
-        if (entitled == 0) return;
-
-        uint256 totalLcc = custodian.totalQueuedLcc(lcc);
-        uint256 hubQLive = liquidityHub.settleQueue(lcc, custAddr);
-        uint256 preSettledLcc = totalLcc > hubQLive ? totalLcc - hubQLive : 0;
-
-        address underlyingAddr = ILCC(lcc).underlying();
-        uint256 custodianUnderlyingBal =
-            underlyingAddr == address(0) ? custAddr.balance : IERC20(underlyingAddr).balanceOf(custAddr);
-
-        uint256 releaseAmount = remaining;
-        releaseAmount = Math.min(releaseAmount, entitled);
-        releaseAmount = Math.min(releaseAmount, preSettledLcc);
-        releaseAmount = Math.min(releaseAmount, custodianUnderlyingBal);
+        uint256 uBal = _custodianUnderlyingBalance(custAddr, underlyingAddr, isNativeUnderlying);
+        uint256 releaseAmount = Math.min(remaining, uBal);
 
         if (releaseAmount > 0) {
-            custodian.collectUnderlyingToBeneficiary(bucket, lcc, beneficiary, releaseAmount);
+            custodian.release(lcc, releaseAmount);
+            _creditLockerExactUnderlyingRelease(underlyingAddr, releaseAmount, isNativeUnderlying);
         }
     }
 
@@ -712,15 +718,8 @@ contract MMPositionManager is
 
     /// @dev Overrides transferFrom to revert if pool manager is locked
     /// @dev Prevents transfers while an unlock session is active (mid-batch)
-    /// @dev Blocks transfer while the commitment bucket still has custodied slices on this owner's queue custodian.
-    /// @dev Ensures the recipient has a queue custodian so seizure and MM queue paths cannot brick after transfer.
     function transferFrom(address from, address to, uint256 id) public virtual override onlyIfPoolManagerLocked {
-        address cust = custodianFor[from];
-        if (cust != address(0) && !MMQueueCustodian(payable(cust)).isBucketEmpty(id)) {
-            revert Errors.CommitCustodyNotDrained(id);
-        }
         super.transferFrom(from, to, id);
-        _deployQueueCustodian(to);
     }
 
     // ═══════════════════════════════════════════════════════════════════════════

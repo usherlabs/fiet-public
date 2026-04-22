@@ -158,6 +158,12 @@ abstract contract VTSOrchestratorFixture is MarketTestBase, MarketMakerTestBase 
             abi.encodeWithSelector(IMarketFactory.bounds.selector, renewSignal.mmState.advancer),
             abi.encode(true)
         );
+
+        // Mirror `MMPositionManager.t.sol`: production deploys custodians via `INITIALISE`; fixture tests wire
+        // factory-bound lockers without running that action so MM paths do not revert `QueueCustodianNotDeployed`.
+        _wireTestQueueCustodianFor(address(mmPositionManager), liquiditySignal.mmState.advancer);
+        _wireTestQueueCustodianFor(address(mmPositionManager), renewSignal.mmState.advancer);
+        _wireAllUtilityTestQueueCustodians(address(mmPositionManager));
     }
 
     // ============================================================

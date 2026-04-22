@@ -38,7 +38,7 @@ abstract contract PositionManagerImpl is PositionManagerBase, ImmutableState {
 
     /// @notice LiquidityHub `settleQueue(lcc, recipient)` key for measuring `qCommitted` on MM takes (queue owner).
     /// @dev Implemented by `MMPositionActionsImpl` to return the recipient-keyed `MMQueueCustodian` address.
-    function _queueSettleRecipient(uint256 tokenId) internal virtual returns (address);
+    function _queueSettleRecipient(uint256 tokenId) internal view virtual returns (address);
 
     // ------------------------------------------------------------------------------------------------
     // CREDIT HELPERS
@@ -131,9 +131,8 @@ abstract contract PositionManagerImpl is PositionManagerBase, ImmutableState {
         vtsOrchestrator.syncPair(marketFactory, currency0, currency1, address(this), msgSender());
     }
 
-    /// @notice Forwards queued LCC to the queue custodian, recorded for `beneficiary` (Hub queue recipient / locker)
-    /// @dev `beneficiary` must stay aligned with `VTSPositionLib` queue recipient (hook locker) so custodian slices
-    ///      match `settleQueue(lcc, beneficiary)` for `COLLECT_AVAILABLE_LIQUIDITY` (three- or four-word collect params).
+    /// @notice Forwards queued LCC to `custodianFor[beneficiary]` and records beneficiary-global custody per `lcc`.
+    /// @dev `beneficiary` is the hook locker / queue economic owner; must match `msgSender()` in production paths.
     function _forwardQueuedLccToCustodian(Currency currency, uint256 tokenId, address beneficiary, uint256 amount)
         internal
         virtual;
@@ -216,7 +215,7 @@ abstract contract PositionManagerImpl is PositionManagerBase, ImmutableState {
 
     /// @return forwardedNonFee Per-leg immediate non-fee LCC after informational fee netting (min-out basis; post-transfer `inc`). For
     ///         commit buckets, only `qCommitted` is custodied; the remainder stays as locker transient LCC credit.
-    /// @param qCommitted Increase in `LiquidityHub.settleQueue(lcc, locker)` caused by the immediately preceding
+    /// @param qCommitted Increase in `LiquidityHub.settleQueue(lcc, queueOwner)` caused by the immediately preceding
     ///        `PoolManager -> MMPM` `take` (planned cancel executes on that transfer). Must equal the staged
     ///        `queueAmount` from `planCancelWithQueue` when no other Hub queue mutation interleaves for that key.
     function _handleLccBalanceIncrease(
