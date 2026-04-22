@@ -754,14 +754,8 @@ contract HubRSCTest is Test {
     /// @notice Exact duplicate `MoreLiquidityAvailable` delivery is ignored so it cannot reserve another sibling key.
     function test_deduplicatesDuplicateMoreLiquidityAvailableLog() public {
         _clearSystemContract();
-        HubRSC hub = new HubRSC(
-            1,
-            originChainId,
-            destinationChainId,
-            liquidityHub,
-            hubCallback,
-            destinationReceiverContract
-        );
+        HubRSC hub =
+            new HubRSC(1, originChainId, destinationChainId, liquidityHub, hubCallback, destinationReceiverContract);
 
         address underlying = makeAddr("underlying");
         address lccA = makeAddr("lccA");
@@ -1969,8 +1963,10 @@ contract HubRSCTest is Test {
         pure
         returns (address dispatcher, address[] memory lccs, address[] memory recipients, uint256[] memory amounts)
     {
-        bytes memory rawPayload =
-            _findNthCallbackPayloadBySelector(entries, ReactiveConstants.PROCESS_SETTLEMENTS_SELECTOR, ordinal);
+        bytes memory
+            rawPayload = _findNthCallbackPayloadBySelector(
+            entries, ReactiveConstants.PROCESS_SETTLEMENTS_SELECTOR, ordinal
+        );
         require(rawPayload.length > 0, "missing processSettlements callback payload");
         bytes memory args = _slice(rawPayload, 4);
         return abi.decode(args, (address, address[], address[], uint256[]));
