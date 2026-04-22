@@ -172,6 +172,15 @@ contract HubCallbackTest is Test {
         callback.recordSettlementProcessed(spoke, lcc, recipient, 0, 20, 1);
     }
 
+    function test_recordSettlementSucceededEmitsNormalisedEvent() public {
+        callback.setSpokeForRecipient(recipient, spoke);
+
+        vm.prank(callbackProxy);
+        vm.expectEmit(true, true, false, true, address(callback));
+        emit HubCallback.SettlementSucceededReported(recipient, lcc, 12);
+        callback.recordSettlementSucceeded(spoke, lcc, recipient, 12, 1);
+    }
+
     function test_recordSettlementFailedEmitsNormalisedEvent() public {
         callback.setSpokeForRecipient(recipient, spoke);
 
