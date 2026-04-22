@@ -101,6 +101,8 @@ Budget is consumed only when the hub reserves new in-flight work. `MoreLiquidity
 
 `SettlementProcessed(...)` remains authoritative for queue reduction, but its `requestedAmount` input is not trusted for releasing reservations. In-flight reservations are released only after the spoke/callback path emits trusted `SettlementSucceededReported(...)` or `SettlementFailedReported(...)` events back to the hub.
 
+`SettlementFailed(...)` reason bytes are compacted on the reactive side into a `failureSelector` and `failureClass` before being forwarded through `SpokeRSC -> HubCallback -> HubRSC`. Unknown failures remain retryable. Terminal policy failures, currently `NotApproved(address)`, quarantine the affected `(lcc, recipient)` key, release its reservation, keep the pending amount visible, and stop redispatching that key until an authoritative key mutation clears the terminal state.
+
 ### Shared-underlying routing and backfill
 
 LCCs that share the same underlying eventually dispatch through a shared underlying lane so liquidity on one sibling can satisfy another sibling's queue. Historical per-LCC entries are mirrored into that shared lane by bounded backfill.

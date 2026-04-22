@@ -6,6 +6,7 @@ import {AbstractReactive} from "reactive-lib/abstract-base/AbstractReactive.sol"
 import {IReactive} from "reactive-lib/interfaces/IReactive.sol";
 import {ISystemContract} from "reactive-lib/interfaces/ISystemContract.sol";
 import {ReactiveConstants} from "./libs/ReactiveConstants.sol";
+import {SettlementFailureLib} from "./libs/SettlementFailureLib.sol";
 
 /// @notice Spoke RSC that listens for SettlementQueued and reports to HubCallback.
 contract SpokeRSC is AbstractReactive {
@@ -217,12 +218,21 @@ contract SpokeRSC is AbstractReactive {
 
     function _forwardSettlementFailed(IReactive.LogRecord calldata log) internal {
         address lcc = address(uint160(log.topic_1));
-        (uint256 maxAmount,) = abi.decode(log.data, (uint256, bytes));
+        (uint256 maxAmount, bytes memory revertData) = abi.decode(log.data, (uint256, bytes));
+        bytes4 failureSelector = SettlementFailureLib.selectorFromRevertData(revertData);
+        uint8 failureClass = SettlementFailureLib.classify(failureSelector);
         uint256 eventNonce = _getAndIncrementEventNonce(ReactiveConstants.RECORD_SETTLEMENT_FAILED_SELECTOR);
         // while the first parameter is set to address(0), it is automatically set on the receiving contract to the the RVM id of the calling contract
         // i.e it is the rvm id of this contract, and it is derived as the address of the private key used to deploy the contract
         bytes memory payload = abi.encodeWithSelector(
-            ReactiveConstants.RECORD_SETTLEMENT_FAILED_SELECTOR, address(0), lcc, recipient, maxAmount, eventNonce
+            ReactiveConstants.RECORD_SETTLEMENT_FAILED_SELECTOR,
+            address(0),
+            lcc,
+            recipient,
+            maxAmount,
+            failureSelector,
+            failureClass,
+            eventNonce
         );
         emit Callback(reactChainId, hubCallback, GAS_LIMIT, payload);
     }

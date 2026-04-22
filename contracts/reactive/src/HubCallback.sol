@@ -23,7 +23,9 @@ contract HubCallback is AbstractCallback, Ownable {
         address indexed recipient, address indexed lcc, uint256 settledAmount, uint256 requestedAmount
     );
     event SettlementSucceededReported(address indexed recipient, address indexed lcc, uint256 maxAmount);
-    event SettlementFailedReported(address indexed recipient, address indexed lcc, uint256 maxAmount);
+    event SettlementFailedReported(
+        address indexed recipient, address indexed lcc, uint256 maxAmount, bytes4 failureSelector, uint8 failureClass
+    );
     event MoreLiquidityAvailable(address indexed lcc, uint256 amountAvailable);
     event InvalidCallbackSender(address indexed sender);
     event ZeroAmountProvided();
@@ -145,13 +147,15 @@ contract HubCallback is AbstractCallback, Ownable {
         address lcc,
         address recipient,
         uint256 maxAmount,
+        bytes4 failureSelector,
+        uint8 failureClass,
         uint256 nonce
     ) external authorizedSenderOnly {
         if (!_validateEventParameters(
                 spokeRVMId, lcc, recipient, maxAmount, nonce, ReactiveConstants.RECORD_SETTLEMENT_FAILED_SELECTOR
             )) return;
 
-        emit SettlementFailedReported(recipient, lcc, maxAmount);
+        emit SettlementFailedReported(recipient, lcc, maxAmount, failureSelector, failureClass);
     }
 
     /// @notice Emits a liquidity-available signal from an authorised sender (compatibility overload).

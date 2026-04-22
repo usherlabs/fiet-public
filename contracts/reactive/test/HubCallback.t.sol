@@ -5,6 +5,7 @@ import {Test} from "forge-std/Test.sol";
 import {Vm} from "forge-std/Vm.sol";
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 import {HubCallback} from "../src/HubCallback.sol";
+import {SettlementFailureLib} from "../src/libs/SettlementFailureLib.sol";
 
 contract HubCallbackTest is Test {
     address private callbackProxy;
@@ -186,8 +187,22 @@ contract HubCallbackTest is Test {
 
         vm.prank(callbackProxy);
         vm.expectEmit(true, true, false, true, address(callback));
-        emit HubCallback.SettlementFailedReported(recipient, lcc, 7);
-        callback.recordSettlementFailed(spoke, lcc, recipient, 7, 1);
+        emit HubCallback.SettlementFailedReported(
+            recipient,
+            lcc,
+            7,
+            SettlementFailureLib.NOT_APPROVED_SELECTOR,
+            SettlementFailureLib.FAILURE_CLASS_TERMINAL_POLICY
+        );
+        callback.recordSettlementFailed(
+            spoke,
+            lcc,
+            recipient,
+            7,
+            SettlementFailureLib.NOT_APPROVED_SELECTOR,
+            SettlementFailureLib.FAILURE_CLASS_TERMINAL_POLICY,
+            1
+        );
     }
 
     function test_recordSettlementAnnulledRejectsUnexpectedSpoke() public {
