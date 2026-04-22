@@ -619,6 +619,22 @@ abstract contract MME2EBase is E2EBase {
         mmpm.modifyLiquidities(abi.encode(actions, params), deadline);
     }
 
+    /// @dev MM commit flows require an explicit utility `INITIALISE` before any queue-producing action.
+    function _ensureMmQueueCustodian(StandaloneMarket memory m, uint256 mmPk) internal {
+        address mm = vm.addr(mmPk);
+        MMPositionManager mmpm = MMPositionManager(payable(m.stack.contracts.mmPositionManager));
+        if (mmpm.custodianFor(mm) != address(0)) return;
+
+        vm.startBroadcast(mmPk);
+        bytes memory actions = abi.encodePacked(bytes1(uint8(MMActions.INITIALISE)));
+        bytes[] memory params = new bytes[](1);
+        params[0] = bytes("");
+        _executeMMActions(mmpm, actions, params, block.timestamp + 3600);
+        vm.stopBroadcast();
+
+        require(mmpm.custodianFor(mm) != address(0), "e2e: queue custodian missing after initialise");
+    }
+
     /// @dev Fee “poke”: no-op increase (0) to touch the position, then TAKE both pool currencies to wallet.
     function _pokePosition(StandaloneMarket memory m, uint256 mmPk, uint256 commitId)
         internal
@@ -847,6 +863,7 @@ abstract contract MME2EBase is E2EBase {
         (uint256[] memory settle0, uint256[] memory settle1, uint256 totalSettle0, uint256 totalSettle1) =
             _computeSeedSettlements(m.stack.contracts.vtsOrchestrator, key, seeds);
 
+        _ensureMmQueueCustodian(m, mmPk);
         vm.startBroadcast(mmPk);
         Token(m.underlying0).mint(mm, totalSettle0);
         Token(m.underlying1).mint(mm, totalSettle1);
@@ -1287,6 +1304,7 @@ abstract contract MME2EBase is E2EBase {
             _baseSettlementAmounts(m.stack.contracts.vtsOrchestrator, key, tickLower, tickUpper, liq);
 
         commitId = mmpm.nextTokenId();
+        _ensureMmQueueCustodian(m, mmPk);
 
         vm.startBroadcast(mmPk);
         Token(m.underlying0).mint(mm, settle0);
