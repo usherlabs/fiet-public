@@ -430,9 +430,10 @@ abstract contract MarketTestBase is Test, Deployers, DeployPermit2 {
 
     /// @dev Wires custodians for deterministic `makeAddr` labels used as non-commit lockers in utility tests.
     function _wireAllUtilityTestQueueCustodians(address mmpm) internal {
-        string[41] memory labels = [
+        string[45] memory labels = [
             "alice",
             "aliceCustody",
+            "attacker",
             "attackerNativeSyncTake",
             "attackerSyncTake",
             "bob",
@@ -440,6 +441,9 @@ abstract contract MarketTestBase is Test, Deployers, DeployPermit2 {
             "ethRecipient",
             "eve",
             "guarantor",
+            "guarantor-auth01a-clear",
+            "guarantor-auth01a-scope",
+            "guarantor-auth01a-settleonly",
             "locker",
             "lockerA_custodyIso",
             "lockerB_custodyIso",

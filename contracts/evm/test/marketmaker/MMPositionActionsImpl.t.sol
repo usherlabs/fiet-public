@@ -81,11 +81,22 @@ contract MMPositionManagerActionsTest is MarketTestBase, MarketMakerTestBase {
     ModifyLiquidityParams defaultlLiquidityParams =
         ModifyLiquidityParams({tickLower: -60, tickUpper: 60, liquidityDelta: 1e18, salt: bytes32(0)});
 
+    /// @dev Thin wrappers around `MarketTestBase` helpers using this suite's `positionManager`.
+    function _wireTestQueueCustodian(address recipient) internal {
+        _wireTestQueueCustodianFor(address(positionManager), recipient);
+    }
+
+    function _wireAllUtilityTestCustodians() internal {
+        _wireAllUtilityTestQueueCustodians(address(positionManager));
+    }
+
     function setUp() public {
         _setupMarket();
         _setUpMM();
         console.log("setUP() mmPositionManager", address(mmPositionManager));
         positionManager = MMPositionManager(payable(mmPositionManager));
+        _wireTestQueueCustodian(liquiditySignal.mmState.advancer);
+        _wireAllUtilityTestCustodians();
         lcc0 = LiquidityCommitmentCertificate(payable(Currency.unwrap(_currency2)));
         lcc1 = LiquidityCommitmentCertificate(payable(Currency.unwrap(_currency3)));
 
@@ -1368,8 +1379,10 @@ contract MMPositionManagerActionsTest is MarketTestBase, MarketMakerTestBase {
         uint256 underlyingBefore = underlying0.balanceOf(guarantor);
 
         vm.startPrank(guarantor);
-        MMA.PreparedAction[] memory collect = new MMA.PreparedAction[](1);
+        // Collect credits the locker on the manager; wallet payout completes via `TAKE` (same batch clears deltas).
+        MMA.PreparedAction[] memory collect = new MMA.PreparedAction[](2);
         collect[0] = MMA.prepareCollectAvailableLiquidity(address(lcc0), type(uint256).max);
+        collect[1] = MMA.prepareTake(Currency.wrap(address(lcc0.underlying())), guarantor, type(uint256).max);
         MMA.executeWithUnlock(positionManager, collect, block.timestamp + 3600);
         vm.stopPrank();
 

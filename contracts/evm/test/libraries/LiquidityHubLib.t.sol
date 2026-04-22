@@ -4,7 +4,6 @@ pragma solidity ^0.8.26;
 import {LiquidityHubTestBase} from "../base/LiquidityHubTestBase.sol";
 import {LiquidityHub} from "../../src/LiquidityHub.sol";
 import {ILCC} from "../../src/interfaces/ILCC.sol";
-import {ILiquidityHub} from "../../src/interfaces/ILiquidityHub.sol";
 import {IMarketFactory} from "../../src/interfaces/IMarketFactory.sol";
 import {Errors} from "../../src/libraries/Errors.sol";
 import {Bounds} from "../../src/libraries/Bounds.sol";
@@ -22,9 +21,7 @@ contract MockSettleCustodian is IMMQueueCustodian {
         beneficiary = address(0xBEEF);
     }
 
-    function unwrapLccViaHub(address, address, uint256, ILiquidityHub) external pure override {}
-
-    function record(address, uint256) external pure override {}
+    function unwrapLccViaHub(address, address, uint256) external pure override {}
 
     function totalQueuedLcc(address) external pure override returns (uint256) {
         return 0;

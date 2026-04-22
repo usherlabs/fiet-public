@@ -152,6 +152,9 @@ contract NativeETHMarket is MarketTestBase, MarketMakerTestBase {
         vm.mockCall(marketFactory, abi.encodeWithSelector(IMarketFactory.bounds.selector, mmLocker), abi.encode(true));
         vm.deal(mmLocker, 100_000 ether);
 
+        _wireTestQueueCustodianFor(address(mmPositionManager), liquiditySignal.mmState.advancer);
+        _wireAllUtilityTestQueueCustodians(address(mmPositionManager));
+
         console.log("=== Native ETH Market Setup ===");
         console.log("lcc0 (native ETH underlying)", address(lcc0));
         console.log("lcc1 (ERC20 underlying)", address(lcc1));

@@ -114,7 +114,6 @@ contract MMPositionActionsImpl is IMMActionsImpl, PositionManagerImpl, DelegateC
         address custAddr = m.custodianFor(recipientKey);
         if (custAddr != address(0) && custAddr != address(this)) {
             currency.transfer(custAddr, amount);
-            IMMQueueCustodian(custAddr).record(Currency.unwrap(currency), amount);
         }
     }
 

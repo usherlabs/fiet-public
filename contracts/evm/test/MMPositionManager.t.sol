@@ -2262,7 +2262,6 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
         address custody = positionManager.custodianFor(user);
         vm.startPrank(address(positionManager));
         lcc0.transfer(custody, amount);
-        IMMQueueCustodian(custody).record(lccAddr, amount);
         vm.stopPrank();
 
         underlying.mint(address(liquidityHub), amount);
@@ -2661,7 +2660,6 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
         vm.prank(address(positionManager));
         lcc0.transfer(custody, amount);
         vm.prank(address(positionManager));
-        IMMQueueCustodian(custody).record(lccAddr, amount);
 
         _collectAvailableAndTakeUnderlying(user, lccAddr, type(uint256).max);
 
@@ -2705,7 +2703,6 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
         address custody = positionManager.custodianFor(user);
         vm.startPrank(address(positionManager));
         lcc0.transfer(custody, amount);
-        IMMQueueCustodian(custody).record(lccAddr, amount);
         vm.stopPrank();
 
         assertEq(ILiquidityHub(liquidityHub).settleQueue(lccAddr, custody), amount);
@@ -2757,7 +2754,6 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
 
         vm.startPrank(address(positionManager));
         lcc0.transfer(custody, amount);
-        IMMQueueCustodian(custody).record(lccAddr, amount);
         vm.stopPrank();
 
         assertEq(ILiquidityHub(liquidityHub).settleQueue(lccAddr, custody), amount);
@@ -2815,7 +2811,6 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
 
         vm.startPrank(address(positionManager));
         lcc0.transfer(seizerCustody, amount);
-        IMMQueueCustodian(seizerCustody).record(lccAddr, amount);
         vm.stopPrank();
 
         assertEq(IMMQueueCustodian(seizerCustody).totalQueuedLcc(lccAddr), amount);
@@ -2884,7 +2879,6 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
 
         vm.startPrank(address(positionManager));
         lcc0.transfer(seizerCustody, amount);
-        IMMQueueCustodian(seizerCustody).record(lccAddr, amount);
         vm.stopPrank();
 
         vm.startPrank(owner);
@@ -2916,7 +2910,6 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
 
         vm.startPrank(address(positionManager));
         lcc0.transfer(custody, amount);
-        IMMQueueCustodian(custody).record(lccAddr, amount);
         vm.stopPrank();
 
         uint256 userUnderlyingBefore = underlying.balanceOf(user);
@@ -2960,7 +2953,6 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
 
         vm.startPrank(address(positionManager));
         lcc0.transfer(custody, amount);
-        IMMQueueCustodian(custody).record(lccAddr, amount);
         vm.stopPrank();
 
         underlying.mint(address(liquidityHub), available);
@@ -3030,7 +3022,6 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
         ILCC(lccAddr).transfer(address(positionManager), amount);
         vm.startPrank(address(positionManager));
         lcc0.transfer(custody, amount);
-        IMMQueueCustodian(custody).record(lccAddr, amount);
         vm.stopPrank();
     }
 
@@ -3065,7 +3056,6 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
         // Only `victim` has custodied LCC for this utility bucket; `user` has no beneficiary slice.
         vm.startPrank(address(positionManager));
         lcc0.transfer(custody, amount);
-        IMMQueueCustodian(custody).record(lccAddr, amount);
         vm.stopPrank();
 
         underlying.mint(address(liquidityHub), amount);

@@ -52,32 +52,14 @@ contract MMQueueCustodianTest is Test {
         assertEq(custodian.beneficiary(), beneficiaryAddr);
     }
 
-    function test_record_revertsWhenCallerIsNotPositionManager() public {
-        vm.prank(attacker);
-        vm.expectRevert(Errors.InvalidSender.selector);
-        custodian.record(address(lcc), 1);
+    /// @dev `totalQueuedLcc` is the on-chain LCC ERC20 balance (balance-as-ledger).
+    function test_totalQueuedLcc_matchesLccBalance() public {
+        lcc.mint(address(custodian), 100);
+        assertEq(custodian.totalQueuedLcc(address(lcc)), 100);
     }
 
-    function test_record_revertsForZeroLcc() public {
-        vm.prank(address(positionManager));
-        vm.expectRevert(abi.encodeWithSelector(Errors.InvalidAddress.selector, address(0)));
-        custodian.record(address(0), 1);
-    }
-
-    function test_record_zeroAmount_isNoop() public {
-        vm.prank(address(positionManager));
-        custodian.record(address(lcc), 0);
-
+    function test_totalQueuedLcc_zeroWhenNoLccHeld() public {
         assertEq(custodian.totalQueuedLcc(address(lcc)), 0);
-    }
-
-    function test_record_accumulatesPerLcc() public {
-        vm.startPrank(address(positionManager));
-        custodian.record(address(lcc), 10);
-        custodian.record(address(lcc), 15);
-        vm.stopPrank();
-
-        assertEq(custodian.totalQueuedLcc(address(lcc)), 25);
     }
 }
 
@@ -97,11 +79,11 @@ contract MockHubForWeth {
     }
 }
 
-/// @dev Native-backed LCC: `underlying() == address(0)`, `hub()` returns the mock Hub above.
-contract MockLccNative {
+/// @dev Minimal ERC20 “LCC” with native underlying and hub pointer (enough for `releaseSettledUnderlyingToManager` + `totalQueuedLcc`).
+contract MockLccNative is ERC20 {
     address public immutable hubAddr;
 
-    constructor(address _hub) {
+    constructor(address _hub) ERC20("LCC", "LCC") {
         hubAddr = _hub;
     }
 
@@ -139,10 +121,6 @@ contract MMQueueCustodianNativeWethFallbackTest is Test {
         MockWETH9 weth = new MockWETH9();
         MockHubForWeth hub = new MockHubForWeth(address(weth));
         MockLccNative lccNative = new MockLccNative(address(hub));
-
-        vm.startPrank(address(pm));
-        cust.record(address(lccNative), AMOUNT);
-        vm.stopPrank();
 
         vm.deal(address(cust), AMOUNT);
 

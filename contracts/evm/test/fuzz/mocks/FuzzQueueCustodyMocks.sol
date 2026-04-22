@@ -2,9 +2,9 @@
 pragma solidity ^0.8.26;
 
 import {Currency} from "v4-periphery/lib/v4-core/src/types/Currency.sol";
+import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {IFuzzTakeOrchestrator} from "../harnesses/IFuzzTakeOrchestrator.sol";
 import {IMMQueueCustodian} from "../../../src/interfaces/IMMQueueCustodian.sol";
-import {ILiquidityHub} from "../../../src/interfaces/ILiquidityHub.sol";
 import {Errors} from "../../../src/libraries/Errors.sol";
 
 /// @notice Records `take` calls for fuzz visibility; does not move tokens (sufficient for routing-guard coverage).
@@ -32,8 +32,6 @@ contract FuzzMMQueueCustodian is IMMQueueCustodian {
     address public override positionManager;
     address public override beneficiary;
 
-    mapping(address lcc => uint256) private _queued;
-
     modifier onlyPositionManager() {
         if (msg.sender != positionManager) revert Errors.InvalidSender();
         _;
@@ -56,22 +54,11 @@ contract FuzzMMQueueCustodian is IMMQueueCustodian {
         positionManager = _positionManager;
     }
 
-    function unwrapLccViaHub(address, address, uint256, ILiquidityHub) external pure override {}
-
-    function record(address lcc, uint256 amount) external override onlyPositionManager {
-        if (lcc == address(0)) revert Errors.InvalidAddress(lcc);
-        if (amount == 0) return;
-        _queued[lcc] += amount;
-    }
+    function unwrapLccViaHub(address, address, uint256) external pure override {}
 
     function totalQueuedLcc(address lcc) external view override returns (uint256) {
-        return _queued[lcc];
+        return IERC20(lcc).balanceOf(address(this));
     }
 
-    function releaseSettledUnderlyingToManager(address lcc, uint256 amount) external override onlyPositionManager {
-        if (amount == 0) return;
-        uint256 q = _queued[lcc];
-        if (q < amount) revert Errors.InsufficientBalance(q, amount);
-        _queued[lcc] = q - amount;
-    }
+    function releaseSettledUnderlyingToManager(address, uint256) external override onlyPositionManager {}
 }

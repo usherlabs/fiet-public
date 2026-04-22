@@ -215,7 +215,7 @@ abstract contract PositionManagerImpl is PositionManagerBase, ImmutableState {
 
     /// @return forwardedNonFee Per-leg immediate non-fee LCC after informational fee netting (min-out basis; post-transfer `inc`). For
     ///         commit buckets, only `qCommitted` is custodied; the remainder stays as locker transient LCC credit.
-    /// @param qCommitted Increase in `LiquidityHub.settleQueue(lcc, locker)` caused by the immediately preceding
+    /// @param qCommitted Increase in `LiquidityHub.settleQueue(lcc, queueOwner)` caused by the immediately preceding
     ///        `PoolManager -> MMPM` `take` (planned cancel executes on that transfer). Must equal the staged
     ///        `queueAmount` from `planCancelWithQueue` when no other Hub queue mutation interleaves for that key.
     function _handleLccBalanceIncrease(

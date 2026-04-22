@@ -1,13 +1,12 @@
 // SPDX-License-Identifier: BUSL-1.1
 pragma solidity ^0.8.26;
 
-import {ILiquidityHub} from "./ILiquidityHub.sol";
-
 /// @title IMMQueueCustodian
-/// @notice MM queue custodian: one immutable beneficiary, beneficiary-global LCC custody, Hub queue ownership for `MMPositionManager`.
+/// @notice MM queue custodian: one immutable beneficiary; Hub queue ownership for `MMPositionManager`.
 /// @dev Hub queue ownership for MM synthetic principal is keyed to this custodian (`settleQueue(lcc, address(custodian))`).
-///      Custodied LCC principal is tracked per `lcc` only (no commitment buckets). Underlying is released to
-///      `MMPositionManager` for pull withdrawal via locker `TAKE`, not pushed to EOAs from this contract.
+///      Receivable state is **on-chain balances** on this contract (LCC + underlying) plus `LiquidityHub.settleQueue`;
+///      there is no separate entitlement ledger. Underlying is released to `MMPositionManager` for pull withdrawal via
+///      locker `TAKE`, not pushed to EOAs from this contract.
 interface IMMQueueCustodian {
     /// @notice Returns the MMPositionManager bound to this custodian
     function positionManager() external view returns (address);
@@ -15,18 +14,15 @@ interface IMMQueueCustodian {
     /// @notice Immutable beneficiary whose custodian this is (same key as `custodianFor[beneficiary]` on the manager).
     function beneficiary() external view returns (address);
 
-    /// @notice Aggregate custodied LCC still outstanding for `lcc` (LCC units).
-    /// @dev Used with `LiquidityHub.settleQueue(lcc, address(this))` to cap payout of underlying already received
-    ///      when the Hub queue was settled permissionlessly before collect.
+    /// @notice Current **ERC20 LCC** balance held by this custodian for `lcc` (same as `IERC20(lcc).balanceOf(address(this))`).
+    /// @dev This is the on-chain custody balance, not a shadow queue book. Used with Hub queue and reserves for collect caps.
     function totalQueuedLcc(address lcc) external view returns (uint256);
 
     /// @notice Hub `unwrap` as this contract: shortfall queues to this custodian; immediate underlying is forwarded.
-    function unwrapLccViaHub(address lcc, address forwardUnderlyingTo, uint256 amount, ILiquidityHub hub) external;
-
-    /// @notice Records queued LCC that has already been transferred into custody (increments per-`lcc` balance).
-    function record(address lcc, uint256 amount) external;
+    /// @dev Uses canonical Hub from `ILCC(lcc).hub()`. `MMPM` must transfer `amount` LCC to this contract before calling.
+    function unwrapLccViaHub(address lcc, address forwardUnderlyingTo, uint256 amount) external;
 
     /// @notice After Hub settlement, moves underlying from this custodian to the position manager (pull collect path).
-    /// @dev Debits custodied LCC entitlement by `amount`; caller must be the bound position manager.
+    /// @dev Transfers up to `min(amount, actual underlying balance)`; caller must be the bound position manager.
     function releaseSettledUnderlyingToManager(address lcc, uint256 amount) external;
 }

@@ -3,6 +3,7 @@ pragma solidity ^0.8.26;
 
 import {Currency, CurrencyLibrary} from "v4-periphery/lib/v4-core/src/types/Currency.sol";
 import {IERC20} from "openzeppelin-contracts/contracts/token/ERC20/IERC20.sol";
+import {Math} from "openzeppelin-contracts/contracts/utils/math/Math.sol";
 import {IMMQueueCustodian} from "./interfaces/IMMQueueCustodian.sol";
 import {ILCC} from "./interfaces/ILCC.sol";
 import {ILiquidityHub} from "./interfaces/ILiquidityHub.sol";
@@ -15,21 +16,16 @@ interface ILiquidityHubWeth9 {
 }
 
 /// @title MMQueueCustodian
-/// @notice One queue custodian per beneficiary: Hub queue owner for that MM domain; custodied principal is global per `lcc`.
+/// @notice One queue custodian per beneficiary: Hub queue owner for that MM domain; actual LCC and underlying balances
+///         on this contract are the receivable state (no shadow ledger).
 /// @dev `COLLECT_AVAILABLE_LIQUIDITY` settles when needed, then `releaseSettledUnderlyingToManager` credits the locker
 ///      through `MMPositionManager` pull flows (`TAKE`), not direct beneficiary push payout from this contract.
 contract MMQueueCustodian is IMMQueueCustodian {
-    /// @notice Custody increased (MM-backed LCC staged for later Hub settlement).
-    event CustodyRecorded(address indexed lcc, uint256 amount);
-
-    /// @notice Underlying released to the position manager after Hub settlement burned custodied LCC against this contract.
+    /// @notice Underlying released to the position manager after settlement paths deliver underlying to this custodian.
     event UnderlyingReleasedToManager(address indexed lcc, uint256 amount);
 
     address public immutable override positionManager;
     address public immutable override beneficiary;
-
-    /// @dev Per-`lcc` custodied LCC balance (LCC units), decremented only via `releaseSettledUnderlyingToManager`.
-    mapping(address lcc => uint256) private _queuedLcc;
 
     modifier onlyPositionManager() {
         if (msg.sender != positionManager) revert Errors.InvalidSender();
@@ -49,30 +45,18 @@ contract MMQueueCustodian is IMMQueueCustodian {
     }
 
     /// @inheritdoc IMMQueueCustodian
-    function record(address lcc, uint256 amount) external override onlyPositionManager {
-        _record(lcc, amount);
-    }
-
-    function _record(address lcc, uint256 amount) private {
-        if (lcc == address(0)) revert Errors.InvalidAddress(lcc);
-        if (amount == 0) return;
-        _queuedLcc[lcc] += amount;
-        emit CustodyRecorded(lcc, amount);
+    function totalQueuedLcc(address lcc) external view override returns (uint256) {
+        return IERC20(lcc).balanceOf(address(this));
     }
 
     /// @inheritdoc IMMQueueCustodian
-    function totalQueuedLcc(address lcc) external view override returns (uint256) {
-        return _queuedLcc[lcc];
-    }
-
     /// @notice Hub `unwrap` as this contract: shortfall queues to `address(this)`; immediate underlying is forwarded to `forwardUnderlyingTo`.
-    /// @dev `MMPM` must transfer `amount` LCC to this contract before calling. Native: forward to MMPM (`positionManager`) for delta credit; ERC20: forward per MM routing (`to` or MMPM).
-    function unwrapLccViaHub(address lcc, address forwardUnderlyingTo, uint256 amount, ILiquidityHub hub)
-        external
-        onlyPositionManager
-    {
+    /// @dev `MMPM` must transfer `amount` LCC to this contract before calling. Canonical Hub: `ILCC(lcc).hub()`.
+    function unwrapLccViaHub(address lcc, address forwardUnderlyingTo, uint256 amount) external onlyPositionManager {
         if (amount == 0) return;
         if (forwardUnderlyingTo == address(0)) revert Errors.InvalidAddress(forwardUnderlyingTo);
+
+        ILiquidityHub hub = ILiquidityHub(ILCC(lcc).hub());
 
         address underlying = ILCC(lcc).underlying();
         uint256 uBalBefore =
@@ -82,15 +66,14 @@ contract MMQueueCustodian is IMMQueueCustodian {
         hub.unwrap(lcc, amount);
         uint256 queuedDelta = hub.settleQueue(lcc, address(this)) - qBefore;
 
-        uint256 uBalAfter =
-            underlying == address(0) ? address(this).balance : IERC20(underlying).balanceOf(address(this));
-        uint256 immediateReceived = uBalAfter - uBalBefore;
-
         if (queuedDelta > 0) {
             uint256 bal = IERC20(lcc).balanceOf(address(this));
             if (bal < queuedDelta) revert Errors.InsufficientBalance(bal, queuedDelta);
-            _record(lcc, queuedDelta);
         }
+
+        uint256 uBalAfter =
+            underlying == address(0) ? address(this).balance : IERC20(underlying).balanceOf(address(this));
+        uint256 immediateReceived = uBalAfter - uBalBefore;
 
         if (immediateReceived > 0) {
             if (underlying == address(0)) {
@@ -106,18 +89,19 @@ contract MMQueueCustodian is IMMQueueCustodian {
         if (lcc == address(0)) revert Errors.InvalidAddress(lcc);
         if (amount == 0) return;
 
-        uint256 q = _queuedLcc[lcc];
-        if (amount > q) revert Errors.InsufficientBalance(q, amount);
-        _queuedLcc[lcc] = q - amount;
-
         address underlying = ILCC(lcc).underlying();
+        uint256 available =
+            underlying == address(0) ? address(this).balance : IERC20(underlying).balanceOf(address(this));
+        uint256 toSend = Math.min(amount, available);
+        if (toSend == 0) return;
+
         address to = positionManager;
         if (underlying == address(0)) {
-            _payNativeWithWethFallback(to, amount, lcc);
+            _payNativeWithWethFallback(to, toSend, lcc);
         } else {
-            Currency.wrap(underlying).transfer(to, amount);
+            Currency.wrap(underlying).transfer(to, toSend);
         }
-        emit UnderlyingReleasedToManager(lcc, amount);
+        emit UnderlyingReleasedToManager(lcc, toSend);
     }
 
     /// @dev Matches Hub native settlement liveness: direct ETH first, then wrap via canonical Hub `weth9` and transfer ERC20 WETH.
