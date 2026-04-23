@@ -22,7 +22,17 @@ contract HubCallback is AbstractCallback, Ownable {
     event SettlementProcessedReported(
         address indexed recipient, address indexed lcc, uint256 settledAmount, uint256 requestedAmount
     );
-    event SettlementFailedReported(address indexed recipient, address indexed lcc, uint256 maxAmount);
+    event SettlementSucceededReported(
+        address indexed recipient, address indexed lcc, uint256 maxAmount, uint256 attemptId
+    );
+    event SettlementFailedReported(
+        address indexed recipient,
+        address indexed lcc,
+        uint256 maxAmount,
+        uint256 attemptId,
+        bytes4 failureSelector,
+        uint8 failureClass
+    );
     event MoreLiquidityAvailable(address indexed lcc, uint256 amountAvailable);
     event InvalidCallbackSender(address indexed sender);
     event ZeroAmountProvided();
@@ -123,19 +133,38 @@ contract HubCallback is AbstractCallback, Ownable {
         emit SettlementProcessedReported(recipient, lcc, settledAmount, requestedAmount);
     }
 
+    /// @notice Record a trusted settlement-succeeded callback for a recipient.
+    function recordSettlementSucceeded(
+        address spokeRVMId,
+        address lcc,
+        address recipient,
+        uint256 maxAmount,
+        uint256 attemptId,
+        uint256 nonce
+    ) external authorizedSenderOnly {
+        if (!_validateEventParameters(
+                spokeRVMId, lcc, recipient, maxAmount, nonce, ReactiveConstants.RECORD_SETTLEMENT_SUCCEEDED_SELECTOR
+            )) return;
+
+        emit SettlementSucceededReported(recipient, lcc, maxAmount, attemptId);
+    }
+
     /// @notice Record a settlement-failed callback for a recipient.
     function recordSettlementFailed(
         address spokeRVMId,
         address lcc,
         address recipient,
         uint256 maxAmount,
+        uint256 attemptId,
+        bytes4 failureSelector,
+        uint8 failureClass,
         uint256 nonce
     ) external authorizedSenderOnly {
         if (!_validateEventParameters(
                 spokeRVMId, lcc, recipient, maxAmount, nonce, ReactiveConstants.RECORD_SETTLEMENT_FAILED_SELECTOR
             )) return;
 
-        emit SettlementFailedReported(recipient, lcc, maxAmount);
+        emit SettlementFailedReported(recipient, lcc, maxAmount, attemptId, failureSelector, failureClass);
     }
 
     /// @notice Emits a liquidity-available signal from an authorised sender (compatibility overload).
@@ -253,4 +282,3 @@ contract HubCallback is AbstractCallback, Ownable {
         return true;
     }
 }
-

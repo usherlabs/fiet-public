@@ -6,6 +6,7 @@ import {AbstractReactive} from "reactive-lib/abstract-base/AbstractReactive.sol"
 import {IReactive} from "reactive-lib/interfaces/IReactive.sol";
 import {ISystemContract} from "reactive-lib/interfaces/ISystemContract.sol";
 import {ReactiveConstants} from "./libs/ReactiveConstants.sol";
+import {SettlementFailureLib} from "./libs/SettlementFailureLib.sol";
 
 /// @notice Spoke RSC that listens for SettlementQueued and reports to HubCallback.
 contract SpokeRSC is AbstractReactive {
@@ -94,6 +95,15 @@ contract SpokeRSC is AbstractReactive {
                 uint256(uint160(recipient)),
                 REACTIVE_IGNORE
             );
+            // Observe trusted success outcomes from the destination receiver for this recipient.
+            service.subscribe(
+                protocolChainId,
+                destinationReceiverContract,
+                ReactiveConstants.SETTLEMENT_SUCCEEDED_TOPIC,
+                REACTIVE_IGNORE,
+                uint256(uint160(recipient)),
+                REACTIVE_IGNORE
+            );
             // Observe failed settlement attempts for this recipient from the deployed destination receiver.
             service.subscribe(
                 protocolChainId,
@@ -128,6 +138,11 @@ contract SpokeRSC is AbstractReactive {
         }
         if (log._contract == liquidityHub && log.topic_0 == ReactiveConstants.SETTLEMENT_PROCESSED_TOPIC) {
             _forwardSettlementProcessed(log);
+            return;
+        }
+        if (log._contract == destinationReceiverContract && log.topic_0 == ReactiveConstants.SETTLEMENT_SUCCEEDED_TOPIC)
+        {
+            _forwardSettlementSucceeded(log);
             return;
         }
         if (log._contract == destinationReceiverContract && log.topic_0 == ReactiveConstants.SETTLEMENT_FAILED_TOPIC) {
@@ -190,14 +205,42 @@ contract SpokeRSC is AbstractReactive {
         emit Callback(reactChainId, hubCallback, GAS_LIMIT, payload);
     }
 
+    function _forwardSettlementSucceeded(IReactive.LogRecord calldata log) internal {
+        address lcc = address(uint160(log.topic_1));
+        (uint256 maxAmount, uint256 attemptId) = abi.decode(log.data, (uint256, uint256));
+        uint256 eventNonce = _getAndIncrementEventNonce(ReactiveConstants.RECORD_SETTLEMENT_SUCCEEDED_SELECTOR);
+
+        bytes memory payload = abi.encodeWithSelector(
+            ReactiveConstants.RECORD_SETTLEMENT_SUCCEEDED_SELECTOR,
+            address(0),
+            lcc,
+            recipient,
+            maxAmount,
+            attemptId,
+            eventNonce
+        );
+        emit Callback(reactChainId, hubCallback, GAS_LIMIT, payload);
+    }
+
     function _forwardSettlementFailed(IReactive.LogRecord calldata log) internal {
         address lcc = address(uint160(log.topic_1));
-        (uint256 maxAmount,) = abi.decode(log.data, (uint256, bytes));
+        (uint256 maxAmount, uint256 attemptId, bytes memory revertData) =
+            abi.decode(log.data, (uint256, uint256, bytes));
+        bytes4 failureSelector = SettlementFailureLib.selectorFromRevertData(revertData);
+        uint8 failureClass = SettlementFailureLib.classify(failureSelector);
         uint256 eventNonce = _getAndIncrementEventNonce(ReactiveConstants.RECORD_SETTLEMENT_FAILED_SELECTOR);
         // while the first parameter is set to address(0), it is automatically set on the receiving contract to the the RVM id of the calling contract
         // i.e it is the rvm id of this contract, and it is derived as the address of the private key used to deploy the contract
         bytes memory payload = abi.encodeWithSelector(
-            ReactiveConstants.RECORD_SETTLEMENT_FAILED_SELECTOR, address(0), lcc, recipient, maxAmount, eventNonce
+            ReactiveConstants.RECORD_SETTLEMENT_FAILED_SELECTOR,
+            address(0),
+            lcc,
+            recipient,
+            maxAmount,
+            attemptId,
+            failureSelector,
+            failureClass,
+            eventNonce
         );
         emit Callback(reactChainId, hubCallback, GAS_LIMIT, payload);
     }
