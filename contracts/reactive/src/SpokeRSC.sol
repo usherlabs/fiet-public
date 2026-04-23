@@ -224,7 +224,8 @@ contract SpokeRSC is AbstractReactive {
 
     function _forwardSettlementFailed(IReactive.LogRecord calldata log) internal {
         address lcc = address(uint160(log.topic_1));
-        (uint256 maxAmount, uint256 attemptId, bytes memory revertData) = abi.decode(log.data, (uint256, uint256, bytes));
+        (uint256 maxAmount, uint256 attemptId, bytes memory revertData) =
+            abi.decode(log.data, (uint256, uint256, bytes));
         bytes4 failureSelector = SettlementFailureLib.selectorFromRevertData(revertData);
         uint8 failureClass = SettlementFailureLib.classify(failureSelector);
         uint256 eventNonce = _getAndIncrementEventNonce(ReactiveConstants.RECORD_SETTLEMENT_FAILED_SELECTOR);
