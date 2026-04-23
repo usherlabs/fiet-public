@@ -132,6 +132,14 @@ contract HubRSCTest is Test {
         return keccak256(abi.encode(lcc, recipient));
     }
 
+    function _liquiditySemanticKey(address lcc, address underlying, uint256 amount, bytes32 marketId)
+        internal
+        pure
+        returns (bytes32)
+    {
+        return keccak256(abi.encode(lcc, underlying, amount, marketId));
+    }
+
     function _pendingState(HubRSC hub, bytes32 key) internal view returns (uint256, bool) {
         return hub.pendingStateByKey(key);
     }
@@ -731,6 +739,40 @@ contract HubRSCTest is Test {
         assertEq(hub.inFlightByKey(key2), 0);
     }
 
+    /// @notice Replay-like direct liquidity deliveries with different log identities but the same origin block only credit budget once.
+    function test_replayLikeLiquidityAvailableDoesNotDoubleCreditBudget() public {
+        _clearSystemContract();
+        HubRSC hub = new HubRSC(
+            DEFAULT_MAX_DISPATCH_ITEMS,
+            originChainId,
+            destinationChainId,
+            liquidityHub,
+            hubCallback,
+            destinationReceiverContract
+        );
+
+        address underlying = makeAddr("underlying");
+        address lcc = makeAddr("lcc");
+        bytes32 marketId = bytes32("mkt");
+
+        hub.react(_lccCreatedLog(hub, underlying, lcc, marketId, 0x8315, 1));
+
+        IReactive.LogRecord memory first =
+            liquidityAvailableLog(hub.liquidityHub(), lcc, underlying, 55, marketId, 0x8316, 2);
+        first.block_number = 77;
+
+        IReactive.LogRecord memory replayed =
+            liquidityAvailableLog(hub.liquidityHub(), lcc, underlying, 55, marketId, 0x8317, 3);
+        replayed.block_number = 77;
+
+        hub.react(first);
+        hub.react(replayed);
+
+        bytes32 semanticKey = _liquiditySemanticKey(lcc, underlying, 55, marketId);
+        assertEq(hub.availableBudgetByDispatchLane(underlying), 55);
+        assertEq(hub.lastLiquidityAvailableBlockBySemanticKey(semanticKey), 77);
+    }
+
     /// @notice `MoreLiquidityAvailable` stays on the shared-underlying lane when the initial `LiquidityAvailable` used it.
     function test_moreLiquidityAvailableContinuesSharedUnderlyingRoutingAfterBatchLimit() public {
         _clearSystemContract();
@@ -989,6 +1031,49 @@ contract HubRSCTest is Test {
         assertEq(amounts[0], 40);
     }
 
+    /// @notice Shared-underlying backfill spends the bounded wake-up budget across LCCs instead of finishing every sibling in one pass.
+    function test_underlyingBackfillContinuationStaysBoundedAcrossSiblingLccs() public {
+        _clearSystemContract();
+
+        HubRSC hub =
+            new HubRSC(1, originChainId, destinationChainId, liquidityHub, hubCallback, destinationReceiverContract);
+
+        address underlying = makeAddr("underlying");
+        address lccA = makeAddr("lccA");
+        address lccB = makeAddr("lccB");
+        address lccC = makeAddr("lccC");
+        address lccD = makeAddr("lccD");
+
+        hub.react(_settlementLog(hub, address(uint160(101)), lccB, 1, 1, 0x8600, 1));
+        hub.react(_settlementLog(hub, address(uint160(102)), lccB, 1, 2, 0x8601, 2));
+        hub.react(_settlementLog(hub, address(uint160(201)), lccC, 1, 3, 0x8602, 3));
+        hub.react(_settlementLog(hub, address(uint160(202)), lccC, 1, 4, 0x8603, 4));
+        hub.react(_settlementLog(hub, address(uint160(301)), lccD, 1, 5, 0x8604, 5));
+        hub.react(_settlementLog(hub, address(uint160(302)), lccD, 1, 6, 0x8605, 6));
+
+        hub.react(_lccCreatedLog(hub, underlying, lccA, bytes32("mktA"), 0x8606, 7));
+        hub.react(_lccCreatedLog(hub, underlying, lccB, bytes32("mktB"), 0x8607, 8));
+        hub.react(_lccCreatedLog(hub, underlying, lccC, bytes32("mktC"), 0x8608, 9));
+        hub.react(_lccCreatedLog(hub, underlying, lccD, bytes32("mktD"), 0x8609, 10));
+
+        assertEq(hub.underlyingBackfillRemainingByLcc(lccB), 1);
+        assertEq(hub.underlyingBackfillRemainingByLcc(lccC), 1);
+        assertEq(hub.underlyingBackfillRemainingByLcc(lccD), 1);
+
+        vm.recordLogs();
+        hub.react(liquidityAvailableLog(hub.liquidityHub(), lccA, underlying, 3, bytes32("mktA"), 0x8610, 11));
+        Vm.Log[] memory entries = vm.getRecordedLogs();
+
+        assertEq(_findCallbackPayloadBySelector(entries, ReactiveConstants.PROCESS_SETTLEMENTS_SELECTOR).length, 0);
+        assertTrue(
+            _findCallbackPayloadBySelector(entries, ReactiveConstants.TRIGGER_MORE_LIQUIDITY_AVAILABLE_SELECTOR).length
+                > 0
+        );
+        assertEq(hub.underlyingBackfillRemainingByLcc(lccB), 0);
+        assertEq(hub.underlyingBackfillRemainingByLcc(lccC), 1);
+        assertEq(hub.underlyingBackfillRemainingByLcc(lccD), 1);
+    }
+
     /// @notice Large historical backlogs are mirrored into the shared underlying lane across bounded follow-up callbacks.
     function test_chunkedPreRegistrationBackfillContinuesAcrossLiquidityCallbacks() public {
         _clearSystemContract();
@@ -1113,6 +1198,43 @@ contract HubRSCTest is Test {
         _applyProcessedLogsFromBatch(hub, thirdEntries, 0x8819, 10);
         _applyProcessedLogsFromBatch(hub, fourthEntries, 0x8920, 11);
         assertEq(hub.queueSize(), 0);
+    }
+
+    /// @notice Post-registration queue growth mirrors immediately without spending the remaining historical backfill counter.
+    function test_postRegistrationMirrorsDoNotConsumeHistoricalBackfillCounter() public {
+        _clearSystemContract();
+
+        HubRSC hub =
+            new HubRSC(1, originChainId, destinationChainId, liquidityHub, hubCallback, destinationReceiverContract);
+
+        address underlying = makeAddr("underlying");
+        address lccA = makeAddr("lccA");
+        address lccB = makeAddr("lccB");
+
+        hub.react(_settlementLog(hub, address(uint160(1)), lccB, 1, 1, 0x8620, 1));
+        hub.react(_settlementLog(hub, address(uint160(2)), lccB, 1, 2, 0x8621, 2));
+        hub.react(_settlementLog(hub, address(uint160(3)), lccB, 1, 3, 0x8622, 3));
+
+        hub.react(_lccCreatedLog(hub, underlying, lccA, bytes32("mktA"), 0x8623, 4));
+        hub.react(_lccCreatedLog(hub, underlying, lccB, bytes32("mktB"), 0x8624, 5));
+
+        assertEq(hub.underlyingBackfillRemainingByLcc(lccB), 2);
+
+        hub.react(_settlementLog(hub, address(uint160(4)), lccB, 1, 4, 0x8625, 6));
+        hub.react(_settlementLog(hub, address(uint160(5)), lccB, 1, 5, 0x8626, 7));
+
+        assertEq(hub.underlyingBackfillRemainingByLcc(lccB), 2);
+
+        vm.recordLogs();
+        hub.react(liquidityAvailableLog(hub.liquidityHub(), lccA, underlying, 5, bytes32("mktA"), 0x8627, 8));
+        Vm.Log[] memory entries = vm.getRecordedLogs();
+
+        assertEq(_findCallbackPayloadBySelector(entries, ReactiveConstants.PROCESS_SETTLEMENTS_SELECTOR).length, 0);
+        assertTrue(
+            _findCallbackPayloadBySelector(entries, ReactiveConstants.TRIGGER_MORE_LIQUIDITY_AVAILABLE_SELECTOR).length
+                > 0
+        );
+        assertEq(hub.underlyingBackfillRemainingByLcc(lccB), 1);
     }
 
     /// @notice A reserved prefix longer than one scan window still reaches a trailing dispatchable entry after multiple retries.
