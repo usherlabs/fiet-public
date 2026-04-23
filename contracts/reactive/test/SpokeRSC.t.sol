@@ -6,6 +6,7 @@ import {Vm} from "forge-std/Vm.sol";
 import {IReactive} from "reactive-lib/interfaces/IReactive.sol";
 import {SpokeRSC} from "../src/SpokeRSC.sol";
 import {ReactiveConstants} from "../src/libs/ReactiveConstants.sol";
+import {SettlementFailureLib} from "../src/libs/SettlementFailureLib.sol";
 
 contract SpokeRSCTest is Test {
     uint256 private constant SETTLEMENT_QUEUED_TOPIC = ReactiveConstants.SETTLEMENT_QUEUED_TOPIC;
@@ -327,6 +328,7 @@ contract SpokeRSCTest is Test {
         SpokeRSC spoke = _newSpoke(recipient);
         address lcc = makeAddr("lcc");
         uint256 maxAmount = 44;
+        uint256 attemptId = 55;
 
         IReactive.LogRecord memory log = IReactive.LogRecord({
             chain_id: originChainId,
@@ -335,7 +337,7 @@ contract SpokeRSCTest is Test {
             topic_1: uint256(uint160(lcc)),
             topic_2: uint256(uint160(recipient)),
             topic_3: 0,
-            data: abi.encode(maxAmount),
+            data: abi.encode(maxAmount, attemptId),
             block_number: 0,
             op_code: 0,
             block_hash: 0,
@@ -344,7 +346,7 @@ contract SpokeRSCTest is Test {
         });
 
         bytes memory payload = abi.encodeWithSelector(
-            ReactiveConstants.RECORD_SETTLEMENT_SUCCEEDED_SELECTOR, address(0), lcc, recipient, maxAmount, 1
+            ReactiveConstants.RECORD_SETTLEMENT_SUCCEEDED_SELECTOR, address(0), lcc, recipient, maxAmount, attemptId, 1
         );
         vm.expectEmit(true, true, true, true, address(spoke));
         emit IReactive.Callback(destinationChainId, hubCallback, 8000000, payload);
@@ -356,6 +358,8 @@ contract SpokeRSCTest is Test {
         SpokeRSC spoke = _newSpoke(recipient);
         address lcc = makeAddr("lcc");
         uint256 maxAmount = 44;
+        bytes memory revertData = abi.encodeWithSelector(SettlementFailureLib.NOT_APPROVED_SELECTOR, recipient);
+        uint256 attemptId = 56;
 
         IReactive.LogRecord memory log = IReactive.LogRecord({
             chain_id: originChainId,
@@ -364,7 +368,7 @@ contract SpokeRSCTest is Test {
             topic_1: uint256(uint160(lcc)),
             topic_2: uint256(uint160(recipient)),
             topic_3: 0,
-            data: abi.encode(maxAmount, bytes("err")),
+            data: abi.encode(maxAmount, attemptId, revertData),
             block_number: 0,
             op_code: 0,
             block_hash: 0,
@@ -373,7 +377,15 @@ contract SpokeRSCTest is Test {
         });
 
         bytes memory payload = abi.encodeWithSelector(
-            ReactiveConstants.RECORD_SETTLEMENT_FAILED_SELECTOR, address(0), lcc, recipient, maxAmount, 1
+            ReactiveConstants.RECORD_SETTLEMENT_FAILED_SELECTOR,
+            address(0),
+            lcc,
+            recipient,
+            maxAmount,
+            attemptId,
+            SettlementFailureLib.NOT_APPROVED_SELECTOR,
+            SettlementFailureLib.FAILURE_CLASS_TERMINAL_POLICY,
+            1
         );
         vm.expectEmit(true, true, true, true, address(spoke));
         emit IReactive.Callback(destinationChainId, hubCallback, 8000000, payload);
