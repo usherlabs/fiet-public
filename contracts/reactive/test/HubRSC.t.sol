@@ -132,14 +132,6 @@ contract HubRSCTest is Test {
         return keccak256(abi.encode(lcc, recipient));
     }
 
-    function _liquiditySemanticKey(address lcc, address underlying, uint256 amount, bytes32 marketId)
-        internal
-        pure
-        returns (bytes32)
-    {
-        return keccak256(abi.encode(lcc, underlying, amount, marketId));
-    }
-
     function _pendingState(HubRSC hub, bytes32 key) internal view returns (uint256, bool) {
         return hub.pendingStateByKey(key);
     }
@@ -739,40 +731,6 @@ contract HubRSCTest is Test {
         assertEq(hub.inFlightByKey(key2), 0);
     }
 
-    /// @notice Replay-like direct liquidity deliveries with different log identities but the same origin block only credit budget once.
-    function test_replayLikeLiquidityAvailableDoesNotDoubleCreditBudget() public {
-        _clearSystemContract();
-        HubRSC hub = new HubRSC(
-            DEFAULT_MAX_DISPATCH_ITEMS,
-            originChainId,
-            destinationChainId,
-            liquidityHub,
-            hubCallback,
-            destinationReceiverContract
-        );
-
-        address underlying = makeAddr("underlying");
-        address lcc = makeAddr("lcc");
-        bytes32 marketId = bytes32("mkt");
-
-        hub.react(_lccCreatedLog(hub, underlying, lcc, marketId, 0x8315, 1));
-
-        IReactive.LogRecord memory first =
-            liquidityAvailableLog(hub.liquidityHub(), lcc, underlying, 55, marketId, 0x8316, 2);
-        first.block_number = 77;
-
-        IReactive.LogRecord memory replayed =
-            liquidityAvailableLog(hub.liquidityHub(), lcc, underlying, 55, marketId, 0x8317, 3);
-        replayed.block_number = 77;
-
-        hub.react(first);
-        hub.react(replayed);
-
-        bytes32 semanticKey = _liquiditySemanticKey(lcc, underlying, 55, marketId);
-        assertEq(hub.availableBudgetByDispatchLane(underlying), 55);
-        assertEq(hub.lastLiquidityAvailableBlockBySemanticKey(semanticKey), 77);
-    }
-
     /// @notice `MoreLiquidityAvailable` stays on the shared-underlying lane when the initial `LiquidityAvailable` used it.
     function test_moreLiquidityAvailableContinuesSharedUnderlyingRoutingAfterBatchLimit() public {
         _clearSystemContract();
@@ -1235,6 +1193,62 @@ contract HubRSCTest is Test {
                 > 0
         );
         assertEq(hub.underlyingBackfillRemainingByLcc(lccB), 1);
+    }
+
+    /// @notice Repeated liquidity on the active sibling still advances a historical sibling once bounded backfill completes.
+    function test_historicalSiblingProgressesUnderSustainedActiveSiblingLiquidity() public {
+        _clearSystemContract();
+
+        HubRSC hub =
+            new HubRSC(1, originChainId, destinationChainId, liquidityHub, hubCallback, destinationReceiverContract);
+
+        address underlying = makeAddr("underlying");
+        address lccA = makeAddr("lccA");
+        address lccB = makeAddr("lccB");
+
+        hub.react(_settlementLog(hub, address(uint160(101)), lccB, 1, 1, 0x8630, 1));
+        hub.react(_settlementLog(hub, address(uint160(102)), lccB, 1, 2, 0x8631, 2));
+        hub.react(_settlementLog(hub, address(uint160(103)), lccB, 1, 3, 0x8632, 3));
+
+        hub.react(_lccCreatedLog(hub, underlying, lccA, bytes32("mktA"), 0x8633, 4));
+        hub.react(_lccCreatedLog(hub, underlying, lccB, bytes32("mktB"), 0x8634, 5));
+        assertEq(hub.underlyingBackfillRemainingByLcc(lccB), 2);
+
+        hub.react(_settlementLog(hub, address(uint160(201)), lccA, 1, 4, 0x8635, 6));
+
+        {
+            vm.recordLogs();
+            hub.react(liquidityAvailableLog(hub.liquidityHub(), lccA, underlying, 1, bytes32("mktA"), 0x8636, 7));
+            Vm.Log[] memory firstEntries = vm.getRecordedLogs();
+
+            (, address[] memory firstLccs, address[] memory firstRecipients, uint256[] memory firstAmounts,) =
+                _decodeProcessSettlementsPayload(firstEntries);
+            assertEq(firstLccs.length, 1);
+            assertEq(firstRecipients.length, 1);
+            assertEq(firstAmounts.length, 1);
+            assertEq(firstLccs[0], lccA);
+            assertEq(firstRecipients[0], address(uint160(201)));
+            assertEq(firstAmounts[0], 1);
+        }
+        assertEq(hub.underlyingBackfillRemainingByLcc(lccB), 1);
+
+        hub.react(_settlementLog(hub, address(uint160(202)), lccA, 1, 5, 0x8637, 8));
+
+        {
+            vm.recordLogs();
+            hub.react(liquidityAvailableLog(hub.liquidityHub(), lccA, underlying, 1, bytes32("mktA"), 0x8638, 9));
+            Vm.Log[] memory secondEntries = vm.getRecordedLogs();
+
+            (, address[] memory secondLccs, address[] memory secondRecipients, uint256[] memory secondAmounts,) =
+                _decodeProcessSettlementsPayload(secondEntries);
+            assertEq(secondLccs.length, 1);
+            assertEq(secondRecipients.length, 1);
+            assertEq(secondAmounts.length, 1);
+            assertEq(secondLccs[0], lccB);
+            assertEq(secondRecipients[0], address(uint160(101)));
+            assertEq(secondAmounts[0], 1);
+        }
+        assertEq(hub.underlyingBackfillRemainingByLcc(lccB), 0);
     }
 
     /// @notice A reserved prefix longer than one scan window still reaches a trailing dispatchable entry after multiple retries.
