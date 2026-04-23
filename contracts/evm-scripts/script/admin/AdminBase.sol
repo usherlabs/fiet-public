@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: BUSL-1.1
 pragma solidity ^0.8.26;
 
-import {FileHelper} from "../base/FileHelper.sol";
+import {OracleDeploymentBook} from "../base/OracleDeploymentBook.sol";
 
 interface IGlobalConfigProxyCall {
     function proxyCall(address target, bytes calldata data) external returns (bytes memory result);
@@ -18,7 +18,7 @@ interface IVTSOrchestratorAddresses {
     function settlementObserver() external view returns (address);
 }
 
-abstract contract AdminBase is FileHelper {
+abstract contract AdminBase is OracleDeploymentBook {
     string internal networkName;
 
     address internal globalConfig;

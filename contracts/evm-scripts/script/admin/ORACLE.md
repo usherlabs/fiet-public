@@ -23,6 +23,19 @@ When you run `just deploy-oracle`, it will:
 - Write the oracle ProxyAdmin address as a simple text file:
   - `deployments/oracle_deployments/<oracle-network>/DefaultProxyAdmin.address`
 
+### Oracle address book vs `NETWORK`
+
+Core protocol scripts use `NETWORK` to load `deployments/<NETWORK>_deployments.json` (for example `GlobalConfig`).
+
+The oracle stack writes its address book under `deployments/oracle_deployments/<oracle-network>/addresses.json`, where `<oracle-network>` is chosen by `just deploy-oracle` (for example `arbitrumone` when `NETWORK=arbitrum` and `MODE` is not `LOCAL`).
+
+Admin scripts that read the oracle book resolve `<oracle-network>` as follows:
+
+1. If `ORACLE_DEPLOYMENT_NETWORK` is set, use that folder name exactly.
+2. Otherwise, map `NETWORK` + `MODE` the same way as `just deploy-oracle` (for example `arbitrum` → `arbitrumone`, `sepolia` → `arbitrumsepolia`, `LOCAL` → `development`).
+
+For `just admin-oracle-validate-config`, if `ORACLE_DEPLOYMENT_NETWORK` is unset, the script can also derive the folder name from the basename of `ORACLE_CONFIG_FILE` (for example `arbitrumone.json` → `arbitrumone`).
+
 ## Fresh deployment checklist
 
 Use this order when configuring a newly deployed oracle stack for the first time.
@@ -54,19 +67,31 @@ Run one of:
 - `just admin-oracle-transfer-to-globalconfig`
 - `just admin-oracle-transfer-stack-to-globalconfig`
 
-Typical inputs are:
+**Default inputs (recommended):** with `NETWORK` set for your core deployment and `just deploy-oracle` already run, you can omit oracle addresses. The script loads them from:
 
-- `RESILIENT_ORACLE_ADDRESS`
-- `BOUND_VALIDATOR_ADDRESS`
-- `MAIN_ORACLE_ADDRESS`
-- `DEFAULT_PROXY_ADMIN_ADDRESS`
+- `deployments/oracle_deployments/<oracle-network>/addresses.json`
+
+using the same `<oracle-network>` resolution as above (`ORACLE_DEPLOYMENT_NETWORK` override, else `NETWORK`+`MODE` mapping).
+
+**Optional overrides** (each env var, if set, replaces the address book value for that field only):
+
+- `RESILIENT_ORACLE_ADDRESS` → `ResilientOracle_Proxy`
+- `BOUND_VALIDATOR_ADDRESS` → `BoundValidator_Proxy`
+- `MAIN_ORACLE_ADDRESS` → `ChainlinkOracle_Proxy` or `SequencerChainlinkOracle_Proxy` (whichever exists in the book)
+- `ORACLE_PROXY_ADMIN_ADDRESS` → `DefaultProxyAdmin` (**the upgrade-admin contract for the oracle proxies**, from the book key `DefaultProxyAdmin`)
+
+`DEFAULT_PROXY_ADMIN_ADDRESS` is still accepted as a legacy alias when `ORACLE_PROXY_ADMIN_ADDRESS` is unset.
+
+**Skipping a handoff:** set the corresponding env var to the zero address (`0x0000…0000`). Omitting the var means “use the address book”.
+
+**Critical:** `ORACLE_PROXY_ADMIN_ADDRESS` must be the oracle **`DefaultProxyAdmin` contract**, not `GlobalConfig`. `GlobalConfig` is always the **intended owner after** the handoff, never the proxy-admin contract address. Passing `GlobalConfig` as any handoff target is rejected by the script.
 
 What this step is meant to achieve:
 
 - `ResilientOracle.owner() == GlobalConfig`
-- `BoundValidator.owner() == GlobalConfig` (if provided)
-- `MainOracle.owner() == GlobalConfig` (if provided)
-- `DefaultProxyAdmin.owner() == GlobalConfig` (if provided)
+- `BoundValidator.owner() == GlobalConfig` (unless skipped with a zero override)
+- `MainOracle.owner() == GlobalConfig` (unless skipped with a zero override)
+- `DefaultProxyAdmin.owner() == GlobalConfig` (unless skipped with a zero override; the `DefaultProxyAdmin` **contract** is the transfer target)
 
 ### 4) Ensure `GlobalConfig` has ACM `DEFAULT_ADMIN_ROLE`
 
@@ -185,6 +210,8 @@ then `GlobalConfig` does not yet hold ACM `DEFAULT_ADMIN_ROLE`, or the signer yo
 
 Fix that first, then rerun the granular permission grants above.
 
+If `just admin-oracle-transfer-to-globalconfig` reverts with `OracleStackOwnership: GlobalConfig cannot be a handoff target` (or similar), you likely set `ORACLE_PROXY_ADMIN_ADDRESS` (or a legacy `DEFAULT_PROXY_ADMIN_ADDRESS`) to the **`GlobalConfig`** address. Use the `DefaultProxyAdmin` entry from `deployments/oracle_deployments/<oracle-network>/addresses.json` (or `DefaultProxyAdmin.address` beside it), not `GlobalConfig`.
+
 ## Preconditions (one-time)
 
 ### 1) Ensure GlobalConfig is the intended admin surface
@@ -208,7 +235,7 @@ Recommended approach:
 
 1. Set `ACCOUNT_TO_PERMIT` to your `GlobalConfig` address.
 2. Run the permission script for each target contract + signature you need.
-   - `RESILIENT_ORACLE_ADDRESS` is used only to resolve the ACM.
+   - `RESILIENT_ORACLE_ADDRESS` is used only to resolve the ACM (optional if the oracle address book is present; see `script/admin/README.md`).
    - `TARGET_ADDRESS` is the contract you are granting permissions to.
 
 Example (copy/paste):

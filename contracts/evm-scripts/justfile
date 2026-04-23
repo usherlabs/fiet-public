@@ -110,8 +110,12 @@ dev: setup-create3 deploy-tokenA deploy-tokenB set-underlyings deploy allow-orac
 # 3. Deploy: deploy-libraries
 # 4. just deploy-contracts, IF ARB SEPOLIA prefix with FOUNDRY_PROFILE=deploy-arbitrum-sepolia
 #
-# ACM
-# 5. DEFAULT_PROXY_ADMIN_ADDRESS= BOUND_VALIDATOR_ADDRESS= MAIN_ORACLE_ADDRESS= RESILIENT_ORACLE_ADDRESS= just admin-oracle-transfer-to-globalconfig
+# ACM / oracle ownership handoff
+# 5. Oracle stack → GlobalConfig: with NETWORK matching core deployments, addresses default from
+#    deployments/oracle_deployments/<oracle-namespace>/addresses.json (see ORACLE.md). Optional overrides:
+#    RESILIENT_ORACLE_ADDRESS, BOUND_VALIDATOR_ADDRESS, MAIN_ORACLE_ADDRESS, ORACLE_PROXY_ADMIN_ADDRESS
+#    (oracle DefaultProxyAdmin contract — never GlobalConfig). Legacy: DEFAULT_PROXY_ADMIN_ADDRESS.
+#    Example: MODE=LIVE NETWORK=arbitrum BROADCAST=true PRIVATE_KEY=... just admin-oracle-transfer-to-globalconfig
 # 6 ACM Call Permissions:
 # See examples in ORACLE.md
 #

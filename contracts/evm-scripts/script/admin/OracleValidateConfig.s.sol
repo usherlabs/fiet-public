@@ -58,10 +58,8 @@ contract OracleValidateConfigScript is AdminBase {
         string memory cfgPath = string.concat("config/oracle/", cfgFile);
         string memory json = vm.readFile(cfgPath);
 
-        string memory oracleDeploymentNetwork =
-            vm.envOr("ORACLE_DEPLOYMENT_NETWORK", _stripJsonSuffix(_basename(cfgFile)));
-        string memory addrBookPath =
-            string.concat("deployments/oracle_deployments/", oracleDeploymentNetwork, "/addresses.json");
+        string memory oracleDeploymentNetwork = _oracleDeploymentNamespaceForValidate(cfgFile);
+        string memory addrBookPath = _oracleAddressesBookPath(oracleDeploymentNetwork);
         string memory addrBook = vm.readFile(addrBookPath);
 
         address resilientOracle = vm.parseJsonAddress(json, ".contracts.resilientOracle");
@@ -340,37 +338,6 @@ contract OracleValidateConfigScript is AdminBase {
     function _jsonBoolOr(string memory json, string memory key, bool defaultValue) internal view returns (bool) {
         if (!vm.keyExistsJson(json, key)) return defaultValue;
         return vm.parseJsonBool(json, key);
-    }
-
-    function _basename(string memory path) internal pure returns (string memory) {
-        bytes memory data = bytes(path);
-        uint256 start = 0;
-        for (uint256 i = 0; i < data.length; i++) {
-            if (data[i] == bytes1("/")) start = i + 1;
-        }
-        return _substring(data, start, data.length);
-    }
-
-    function _stripJsonSuffix(string memory name) internal pure returns (string memory) {
-        bytes memory data = bytes(name);
-        if (data.length >= 5) {
-            uint256 i = data.length - 5;
-            if (
-                data[i] == bytes1(".") && data[i + 1] == bytes1("j") && data[i + 2] == bytes1("s")
-                    && data[i + 3] == bytes1("o") && data[i + 4] == bytes1("n")
-            ) {
-                return _substring(data, 0, i);
-            }
-        }
-        return name;
-    }
-
-    function _substring(bytes memory data, uint256 start, uint256 end) internal pure returns (string memory) {
-        bytes memory out = new bytes(end - start);
-        for (uint256 i = start; i < end; i++) {
-            out[i - start] = data[i];
-        }
-        return string(out);
     }
 
     function _ok(string memory label) internal pure {
