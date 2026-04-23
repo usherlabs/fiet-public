@@ -703,8 +703,8 @@ contract MMPositionManagerActionsTest is MarketTestBase, MarketMakerTestBase {
     }
 
     /// @notice End-to-end: a real `modifyLiquidities` increase mints LCC principal that still passes the same
-    ///         `VTSCommitLib.validateMmIncreaseLiquidityDelta` bundle (global + marginal) when replayed on live `s`.
-    function test_mmIncrease_e2e_actual_mint_replays_validateMmIncrease_on_live_storage() public {
+    ///         `VTSCommitLib.validateLiquidityDelta` bundle (global + marginal) when replayed on live `s`.
+    function test_mmIncrease_e2e_actual_mint_replays_validateLiquidityDelta_on_live_storage() public {
         uint256 tokenId = 1;
         uint256 positionIndex = 0;
 
@@ -745,7 +745,7 @@ contract MMPositionManagerActionsTest is MarketTestBase, MarketMakerTestBase {
         uint256 minted1 = IERC20(address(lcc1)).balanceOf(locker) - bal1Before;
 
         VTSOrchestratorTestable orch = VTSOrchestratorTestable(address(vtsOrchestrator));
-        (bool ok,,,) = orch.exposedValidateMmIncreaseLiquidityDeltaSoft(
+        (bool ok,,,) = orch.exposedvalidateLiquidityDeltaSoft(
             MmIncreaseAdmissionReplay({
                 commitId: posAfter.commitId,
                 positionId: pid,
@@ -759,7 +759,10 @@ contract MMPositionManagerActionsTest is MarketTestBase, MarketMakerTestBase {
                 mintAmount1: minted1
             })
         );
-        assertTrue(ok, "E2E mint must satisfy validateMmIncrease (global + marginal) on live VTS storage");
+        assertTrue(
+            ok,
+            "E2E mint must satisfy validateLiquidityDelta MM-increase overload (global + marginal) on live VTS storage"
+        );
     }
 
     function _replayIssuedPostForMmIncrease(
@@ -771,7 +774,7 @@ contract MMPositionManagerActionsTest is MarketTestBase, MarketMakerTestBase {
         uint128 postAddLiquidity,
         uint128 preAddLiquidity
     ) internal view returns (uint256 issuedPost) {
-        (, issuedPost,,) = orch.exposedValidateMmIncreaseLiquidityDeltaSoft(
+        (, issuedPost,,) = orch.exposedvalidateLiquidityDeltaSoft(
             MmIncreaseAdmissionReplay({
                 commitId: commitId,
                 positionId: positionId,

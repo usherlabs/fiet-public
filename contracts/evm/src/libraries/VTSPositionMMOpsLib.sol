@@ -433,7 +433,7 @@ library VTSPositionMMOpsLib {
 
         VTSCommitLib.LiquidityDeltaParams memory ld =
             _liquidityDeltaParamsForMmIncrease(poolKey, params, postAddLiquidity);
-        VTSCommitLib.validateMmIncreaseLiquidityDelta(
+        VTSCommitLib.validateLiquidityDelta(
             s, ctx.oracleHelper, p.commitId, p.positionId, ld, preAddLiquidity, amount0, amount1, true
         );
     }

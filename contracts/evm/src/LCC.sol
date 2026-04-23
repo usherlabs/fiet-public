@@ -241,11 +241,12 @@ contract LiquidityCommitmentCertificate is ERC20, ILCC {
         if (!Bounds.isExempt(toLevel)) {
             marketDerivedBalances[to] += fromMarketDerived;
             wrappedBalances[to] += fromWrapped;
-        } else if (fromWrapped > 0 && Bounds.isDex(toLevel)) {
-            // DEX ingress sinks (e.g. PoolManager) are ingress boundaries.
-            // Immediate-consistency: only the wrapped (direct-backed) slice triggers Hub->Vault settlement via
-            // prepareMarketLiquidity. Market-derived-only movement (fromWrapped == 0) does not; that slice is
-            // already accounted for under market-liquidity rules and does not require this direct-reserve path.
+        } else if (Bounds.isDex(toLevel)) {
+            // DEX ingress: always run `prepareMarketLiquidity` so `prepareMarketLiquidityIngress` can enforce
+            // unlock, active `sync(lcc)`, and `balance(PoolManager) == syncedReserves` even when `fromWrapped == 0`
+            // (LCC-03; `handleIngress` only runs when wrappedAmount > 0). Market-derived-only transfers that are not
+            // inside a valid window revert here, blocking stray LCC and later `NestedIngressUnpaidTransferExists`
+            // griefing.
             IMarketFactory(factory).prepareMarketLiquidity(address(this), fromWrapped);
         }
     }
@@ -277,6 +278,9 @@ contract LiquidityCommitmentCertificate is ERC20, ILCC {
             // Bucket-exempt -> protocol: only credit bucket-tracked recipients.
             if (!Bounds.isExempt(toLevel)) {
                 marketDerivedBalances[to] += amount;
+            } else if (Bounds.isDex(toLevel)) {
+                // DEX (bucket-exempt): run zero-wrapped validation when origin has no bucket split (LCC-03).
+                IMarketFactory(factory).prepareMarketLiquidity(address(this), 0);
             }
             return;
         }
@@ -292,9 +296,8 @@ contract LiquidityCommitmentCertificate is ERC20, ILCC {
         if (!Bounds.isExempt(toLevel)) {
             marketDerivedBalances[to] += fromMarketDerived;
             wrappedBalances[to] += fromWrapped;
-        } else if (fromWrapped > 0 && Bounds.isDex(toLevel)) {
-            // Protocol -> bucket-exempt transfers can source wrapped balance from non-exempt protocols.
-            // Same immediate-consistency rule as non-protocol -> DEX: only wrapped slice triggers prepareMarketLiquidity.
+        } else if (Bounds.isDex(toLevel)) {
+            // Non-exempt -> DEX: same as `nonProtocol -> DEX` — always validate ingress; `fromWrapped` may be zero.
             IMarketFactory(factory).prepareMarketLiquidity(address(this), fromWrapped);
         }
     }

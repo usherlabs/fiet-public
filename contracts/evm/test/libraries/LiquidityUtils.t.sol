@@ -192,7 +192,7 @@ contract LiquidityUtilsTest is Test {
     }
 
     function test_calculateEffectiveTokenAmounts_handlesNegativeLiquidityDelta() public view {
-        // Negative liquidity delta should produce negative BalanceDelta amounts, which are abs'd to uints.
+        // Sign is ignored: magnitudes match a positive liquidity of the same size.
         int24 tickLower = -60;
         int24 tickUpper = 60;
         uint160 sqrtPriceMid = TickMath.getSqrtPriceAtTick(0);
@@ -200,6 +200,23 @@ contract LiquidityUtilsTest is Test {
         (uint256 a0, uint256 a1) = h.calculateEffectiveTokenAmounts(sqrtPriceMid, 0, tickLower, tickUpper, -int256(1e6));
         assertGt(a0, 0);
         assertGt(a1, 0);
+    }
+
+    /// @dev Regression: a single leg can exceed `int128.max` (~1.7e38) with very wide ranges and large liquidity.
+    ///      The previous implementation rounded through `int128` on the *amount* and could revert; unsigned math must not.
+    function test_calculateEffectiveTokenAmounts_tokenAmountCanExceedInt128Max() public view {
+        int24 tickLower = -500_000;
+        int24 tickUpper = 500_000;
+        int24 currentTick = -600_000;
+        assertTrue(currentTick < tickLower);
+        uint160 sqrtCurrent = TickMath.getSqrtPriceAtTick(currentTick);
+        // Large but valid v4 position liquidity: drives amount0 past `int128.max` for this range (below range => token0 only).
+        uint128 L = 5_000_000_000_000_000_000_000_000_000; // 5e30; < `type(uint128).max`
+
+        (uint256 a0, uint256 a1) =
+            h.calculateEffectiveTokenAmounts(sqrtCurrent, currentTick, tickLower, tickUpper, int256(uint256(L)));
+        assertEq(a1, 0);
+        assertGt(a0, uint256(uint128(type(int128).max)));
     }
 
     function test_getBaseSettlementAmounts_roundsUp() public view {

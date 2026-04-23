@@ -841,12 +841,15 @@ contract MMPositionActionsImpl is IMMActionsImpl, PositionManagerImpl, DelegateC
         }
     }
 
-    /// @notice Internal helper to decrease liquidity
+    /// @notice Internal helper to decrease liquidity on a loaded position
     /// @param poolKey The pool key
-    /// @param position The position to decrease
-    /// @param salt The position salt
-    /// @param amountToDecrease The amount of liquidity to remove
-    /// @param hookData The hook data for the modification
+    /// @param position The position to decrease (ticks and current liquidity)
+    /// @param salt The Uniswap v4 position salt (for example from `PositionLibrary.generateSalt(tokenId, positionIndex)`)
+    /// @param tokenId The commitment NFT id (VTS / hook context for the modify; all current call sites pass the position’s commit token)
+    /// @param amountToDecrease The amount of liquidity to remove (capped to `int256` max and to `position.liquidity` above)
+    /// @param hookData Encoded VTS / MM hook data for the modify (locker, queue recipient, commit ids, and so on)
+    /// @param amount0Min Minimum per-leg immediate non-fee LCC out on token0 after fee netting; enforced via `validateMinOut` on the forwarded non-fee delta
+    /// @param amount1Min Same as `amount0Min` for token1
     function _decreaseInternal(
         PoolKey calldata poolKey,
         Position memory position,

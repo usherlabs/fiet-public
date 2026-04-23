@@ -35,7 +35,7 @@ contract VTSCommitLibHarness {
         );
     }
 
-    function validateMmIncreaseLiquidityDelta(
+    function validateLiquidityDelta(
         IOracleHelper oracleHelper,
         uint256 commitId,
         PositionId positionId,
@@ -45,7 +45,7 @@ contract VTSCommitLibHarness {
         uint256 mintAmount1,
         bool revertIfInsufficientBacking
     ) external view returns (bool, uint256, uint256, uint256) {
-        return VTSCommitLib.validateMmIncreaseLiquidityDelta(
+        return VTSCommitLib.validateLiquidityDelta(
             s,
             oracleHelper,
             commitId,

@@ -119,11 +119,11 @@ being an informal “should”.
     (`_assertRecipientNotDexSink`) so issuer mints to exempt endpoints (eg ProxyHook) remain valid for pure market-derived balance.
   - **Domain B**: `src/LiquidityHub.sol::issue` is `onlyIssuer(lcc)` and mints market-derived amount via the LCC hub
     mint path; issuer gating is enforced by `LiquidityHub._onlyIssuer` (valid LCC + issuer allowlist).
-  - **Domain C**: `src/libraries/VTSPositionMMOpsLib.sol::_handleLiquidityIncrease` calls
-    `src/libraries/VTSCommitLib.sol::validateMmIncreaseLiquidityDelta(..., revertIfInsufficientBacking=true)`, which
-    enforces **post-add** endpoint-max backing \(issuedPost \le settledUsd + signalUsd\) and a **marginal** cap on the
-    oracle-valued actual minted principal for this step:
-    \(mintDeltaUsd \le issuedAdmission(postL) - issuedAdmission(preL)\). On failure it reverts
+  - **Domain C**: `src/libraries/VTSPositionMMOpsLib.sol::_handleLiquidityIncrease` calls the **MM-increase overload** of
+    `src/libraries/VTSCommitLib.sol::validateLiquidityDelta` (extra args: `preAddLiquidity`, `mintAmount0`, `mintAmount1`,
+    `revertIfInsufficientBacking`), which enforces **post-add** endpoint-max backing
+    \(issuedPost \le settledUsd + signalUsd\) and a **marginal** cap on the oracle-valued actual minted principal for
+    this step: \(mintDeltaUsd \le issuedAdmission(postL) - issuedAdmission(preL)\). On failure it reverts
     `Errors.InvalidLiquiditySignal(...)` (global shortfall) or `Errors.InvalidAdmissionMintDelta(...)` (marginal mint
     vs admission delta).
   - **Domain conversion**: `src/LiquidityHub.sol::_wrapWith` delegates to `LiquidityHubLib.wrapWithPrepare` /
@@ -138,6 +138,7 @@ being an informal “should”.
 ### LCC-EXEMPT-01: `BOUND_EXEMPT` holder ERC20 balance is semantically market-derived for views and issuer cancel
 
 - **Statement**:
+
   - For any `BOUND_EXEMPT` address, `ILCC.balancesOf(account)` returns **`(wrapped=0, marketDerived=balanceOf(account))`**.
     Exempt endpoints do **not** persist `wrappedBalances` / `marketDerivedBalances`; fungible ERC20 balance on the hook
     is therefore not interpreted as durable Domain A (wrapped) **holder** inventory in this view.
@@ -151,6 +152,7 @@ being an informal “should”.
     wrapped-first holder inventory by integrators or Hub helpers.
 
 - **Enforced by**:
+
   - `src/LCC.sol::balancesOf` exempt branch and `src/LCC.sol::_handleProtocolToNonProtocol` exempt-sender branch.
   - `src/LCC.sol::mint` rejects `directAmount > 0` to exempt recipients (`Errors.MintToNotAllowedRecipient`).
   - `src/LiquidityHub.sol::cancel` + `src/LiquidityHub.sol::_safeBurn` exempt path (market-only burn at Hub boundary).
@@ -213,9 +215,11 @@ being an informal “should”.
 - **Non-goal**:
   - Non-canonical flows that perform multiple unpaid `LCC -> PoolManager` transfers inside one active `sync(lcc)`
     window are unsupported and intentionally revert.
-- **Ingress amount**: `prepareMarketLiquidity` is invoked with the **wrapped (direct-backed) slice** of the transfer only;
-  market-derived balance does not trigger Hub→vault mobilisation on that hop. Domain A liquidity must therefore remain in
-  bucket-tracked holders until ingress if that mobilisation is required.
+- **Ingress amount**: `prepareMarketLiquidity` is invoked for every DEX (bucket-exempt) `LCC -> PoolManager` leg. The
+  `wrappedAmount` parameter is the **wrapped (direct-backed) slice** of the transfer. When that slice is zero
+  (market-derived-only), the call still runs so `prepareMarketLiquidityIngress` can enforce the sync snapshot and
+  straying checks; **Hub→vault mobilisation** via `handleIngress` runs only when `wrappedAmount > 0`. Domain A liquidity
+  must remain in bucket-tracked holders until ingress when mobilisation is required.
 
 ### HUB-01: Wrapping mints 1:1 and increases Hub reserves
 
@@ -481,7 +485,7 @@ being an informal “should”.
 - **Statement**: For **non-MM** adds (`hookData` decodes to `commitId == 0`), `CoreHook` requires:
   - `(tickUpper - tickLower) >= MIN_DIRECT_LP_TICK_SPACING_STEPS * poolKey.tickSpacing` (minimum **two** tick-spacing steps of width); and
   - `liquidityDelta >= MIN_DIRECT_LP_LIQUIDITY_DELTA` (configured floor on the core hook).
-  MM adds (`commitId > 0`) bypass this gate so market-maker ranges remain unchanged.
+    MM adds (`commitId > 0`) bypass this gate so market-maker ranges remain unchanged.
 - **Enforced by**: `src/CoreHook.sol::_enforceDirectLiquidityAntiGrief`.
 - **Why**: Permissionless single-step ranges (`width == tickSpacing`) enable dense initialized ticks near `slot0`, amplifying per-swap `VTSSwapLib` replay cost without improving economic liquidity.
 
@@ -506,14 +510,14 @@ being an informal “should”.
   distinct pools ever share the same `(tickLower, tickUpper, salt)` tuple while both positions remain live in VTS.
 - **Supported routers (by design)**:
   - **Uniswap v4 `PositionManager`** (`contracts/evm/lib/v4-periphery/src/PositionManager.sol`): uses `salt =
-    bytes32(tokenId)` where `tokenId` is assigned from monotonic `nextTokenId` at mint time, so each minted position has
+bytes32(tokenId)` where `tokenId` is assigned from monotonic `nextTokenId` at mint time, so each minted position has
     a unique salt for that router instance.
   - **`MMPositionManager`** (`src/MMPositionManager.sol` via `src/MMPositionActionsImpl.sol`): uses
     `salt = PositionLibrary.generateSalt(commitmentTokenId, positionIndex)`, so each `(commitment NFT id, position index)`
     pair yields a distinct salt for that router instance.
 - **Enforced by**: router implementation (not re-checked inside `VTSPositionLib` beyond “slot taken + poolId must match”).
 - **Why**: Without per-router salt discipline, a permissionless third party could register the same `(router, ticks,
-  salt)` in pool A and cause later adds in pool B to fail with `InvalidPosition` (cross-pool griefing). The protocol
+salt)` in pool A and cause later adds in pool B to fail with `InvalidPosition` (cross-pool griefing). The protocol
   relies on the **blessed** routers above to make that collision infeasible in normal operation.
 - **Non-goal**: Arbitrary external modify-liquidity routers are **not** guaranteed compatible unless they preserve the same
   uniqueness property; integrators who deploy custom routers must derive salts accordingly (for example pool-scoped or
@@ -613,13 +617,14 @@ being an informal “should”.
   backing must revert. Additionally, the **oracle-valued** principal minted on this increase must not exceed the
   **marginal** endpoint-max admission budget for the same add:
   \(mintDeltaUsd \le issuedAdmission(postL) - issuedAdmission(preL)\).
-- **Admission valuation (anti-manipulation)**: MM increase admission uses `VTSCommitLib::validateMmIncreaseLiquidityDelta`,
-  which reuses `_issuedAdmissionValueForLiquidity` (same endpoint-max rule as `validateLiquidityDelta`): commitment
-  maxima at the position ticks are valued at the **upper** and **lower** tick endpoint compositions in USD (via
-  `OracleUtils::lccPairValue`), and the **maximum** of those two endpoint valuations is used per liquidity level. This
-  deliberately avoids relying on pool `slot0` / current tick for admission, so same-transaction spot games cannot
-  understate required backing. The protocol does **not** treat “arbitrage will restore the price” as a security
-  invariant for admission.
+- **Admission valuation (anti-manipulation)**: `VTSCommitLib` exposes two **overloads** of `validateLiquidityDelta`:
+  a **global-only** form `(…, params, revertIf…)` and an **MM-increase** form
+  `(…, params, preAddLiquidity, mintAmount0, mintAmount1, revertIf…)` (marginal mint gate). Both reuse
+  `_issuedAdmissionValueForLiquidity` for issued USD: commitment maxima at the position ticks are valued at the
+  **upper** and **lower** tick endpoint compositions in USD (via `OracleUtils::lccPairValue`), and the **maximum** of
+  those two endpoint valuations is used per liquidity level. This deliberately avoids relying on pool `slot0` /
+  current tick for admission, so same-transaction spot games cannot understate required backing. The protocol does
+  **not** treat “arbitrage will restore the price” as a security invariant for admission.
 - **Marginal mint gate**: `mintDeltaUsd` is `OracleUtils.lccPairValue` over the **actual** minted LCC amounts for the
   step (`preL` / `postL` are position liquidity immediately before and after the modify). This bounds spot-shaped minting
   against the incremental endpoint-max admission budget and complements the **global** post-add check
@@ -630,13 +635,14 @@ being an informal “should”.
   `commitmentDeficit` and grace/bypass timers are **enforcement** after admission; they are not substitutes for
   conservative admission.
 - **Enforced by**:
-  - `src/libraries/VTSCommitLib.sol::validateMmIncreaseLiquidityDelta` computes `issuedPost`, settled, signal, admission
-    at `preL` and `postL`, and reverts `Errors.InvalidLiquiditySignal(issuedPost, signalValue, settledValue)` when the
-    global inequality fails, or `Errors.InvalidAdmissionMintDelta(mintValueUsd, admissionDeltaUsd)` when the marginal
-    inequality fails.
-  - `src/libraries/VTSCommitLib.sol::validateLiquidityDelta` remains the shared helper for other callers that only need
-    the global post-add admission check (same `_issuedAdmissionValueForLiquidity` semantics).
-  - Called during MM increases by `src/libraries/VTSPositionMMOpsLib.sol::_handleLiquidityIncrease` with
+  - `src/libraries/VTSCommitLib.sol::validateLiquidityDelta` (**MM-increase** overload) computes `issuedPost`, settled,
+    signal, admission at `preL` and `postL`, and reverts `Errors.InvalidLiquiditySignal(issuedPost, signalValue, settledValue)`
+    when the global inequality fails, or `Errors.InvalidAdmissionMintDelta(mintValueUsd, admissionDeltaUsd)` when the
+    marginal inequality fails.
+  - `src/libraries/VTSCommitLib.sol::validateLiquidityDelta` (**global-only** overload) is the shared helper for callers
+    that only need the post-add **global** inequality (same `_issuedAdmissionValueForLiquidity` valuation semantics; no
+    `preAddLiquidity` / marginal mint path).
+  - MM increases call the MM-increase overload from `src/libraries/VTSPositionMMOpsLib.sol::_handleLiquidityIncrease` with
     `revertIfInsufficientBacking = true` (after non-zero mint amounts are known, before `liquidityHub.issue`).
   - MM increases pass **post-add total position liquidity** as `LiquidityDeltaParams.liquidityDelta` (not the incremental
     Uniswap modify delta alone), so repeated adds cannot each pass on a per-slice global check while cumulative post-add
@@ -659,7 +665,7 @@ being an informal “should”.
 - **Consequence**: Positions with non-zero `commitmentDeficit` can bypass normal grace only when the configured
   token-lane bypass age/severity gates in `SEIZE-01` are satisfied.
 - **Bypass clock (`commitmentDeficitSince`)**: On any checkpoint where live backing is **sufficient** (`issuedUsd <=
-  settledUsd + signalUsd`), `VTSCommitLib::_checkpointWithCommitment` clears both `commitmentDeficitSince` lanes so the
+settledUsd + signalUsd`), `VTSCommitLib::_checkpointWithCommitment` clears both `commitmentDeficitSince` lanes so the
   commitment-deficit bypass timer cannot “bank” wall-clock across a recovered-or-sufficient checkpoint while non-zero
   token residuals remain from proportional netting. When backing is again **insufficient**, any lane with non-zero
   deficit and zero `since` restarts the lane clock at `block.timestamp` (including the residual→fresh-insufficient
