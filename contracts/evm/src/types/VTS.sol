@@ -40,7 +40,7 @@ library GrowthCarryQ128Lib {
 
     /// @notice Returns whole-token `add` attributed this step and updated carry (`< DENOM`).
     function accumulate(GrowthCarryQ128 carryIn, uint256 dGrowth, uint128 liquidity)
-        public
+        internal
         pure
         returns (uint256 add, GrowthCarryQ128 carryOut)
     {

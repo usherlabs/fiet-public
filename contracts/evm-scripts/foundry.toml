@@ -82,8 +82,6 @@ remappings = [
 [profile.deploy]
 # Libraries from main project (deterministic CREATE3 addresses)
 libraries = [
-  "src/types/VTS.sol:GrowthCarryQ128Lib:0x81716C6ADcb2308f39f4897Db2f54c080E3b0Be7",
-  "../evm/src/types/VTS.sol:GrowthCarryQ128Lib:0x81716C6ADcb2308f39f4897Db2f54c080E3b0Be7",
   "src/libraries/VTSPositionLib.sol:VTSPositionLib:0x26e024F42D5F766b562fc35701f13B2d5e01A5C2",
   "src/libraries/VTSSwapLib.sol:VTSSwapLib:0x62ef223B345cF2bCc9c9097F093202c5f8C88f31",
   "src/libraries/VTSCommitLib.sol:VTSCommitLib:0x97D09b290896136360857499EA8f6d6F98c3Fb1B",
@@ -118,8 +116,6 @@ compilation_restrictions = [
 ]
 
 libraries = [
-  "src/types/VTS.sol:GrowthCarryQ128Lib:0xb7519638D8659dB0bB031C9B13a8A18A256A320E",
-  "../evm/src/types/VTS.sol:GrowthCarryQ128Lib:0xb7519638D8659dB0bB031C9B13a8A18A256A320E",
   "src/libraries/VTSPositionLib.sol:VTSPositionLib:0x2C95130C4DE0504c82f4688C657c9A4CC01761EF",
   "src/libraries/VTSSwapLib.sol:VTSSwapLib:0x8AF1433f3d2b0547A63f7004B9dA9C5953fD522D",
   "src/libraries/VTSCommitLib.sol:VTSCommitLib:0x6EBB20A904a9CA505e7d4A253c7FbF72DF5a777b",
