@@ -1,0 +1,9 @@
+{
+  "vtsPositionLib": "0x823bDa51f62B814386408eB4ecC01F4256B1d516",
+  "vtsSwapLib": "0x5eE398A9363aD238Cb1c2b38bA8650a05750Db14",
+  "vtsCommitLib": "0xBab5960fB71f8096dE37497Dd8D41A6a20C9c9a7",
+  "vtsPositionMMOpsLib": "0x76b2ea645Cf439D91391dDb7ca20a2E06C53Ca0d",
+  "vtsLifecycleLinkedLib": "0x61b4D910E7086a30b14fd8A4986b15b844ac27B9",
+  "lccFactoryLinkedLib": "0x875B922e2843373772C8a6d88cb7581bbD91C879",
+  "liquidityHubLinkedLib": "0xaCc580983f745C1c9edDbE3b5F3d221F13D653F9"
+}

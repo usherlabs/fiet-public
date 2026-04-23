@@ -246,7 +246,7 @@ contract MMPositionActionsImpl is IMMActionsImpl, PositionManagerImpl, DelegateC
         bool withInHookProtocolSettlement,
         uint256 credit0,
         uint256 credit1
-    ) private returns (bytes memory) {
+    ) private view returns (bytes memory) {
         address qRec = _queueSettleRecipient(tokenId);
         if (withInHookProtocolSettlement) {
             return PositionModificationHookDataLib.encodeWithInHookProtocolSettlement(
