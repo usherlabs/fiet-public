@@ -7,5 +7,7 @@
   "ResilientOracle_Implementation": "0x01851285C9Da72f3877bfc20105E78F0FCA40582",
   "ResilientOracle_Proxy": "0xE57343fb025FF289B4e0e9D42c448c998E797661",
   "ChainlinkOracle_Implementation": "0xe34541dc16C4aF1BA5Cb1784ce849fcf32a34176",
-  "ChainlinkOracle_Proxy": "0x64e18AE5EDe26359cF83b424Ad9487C61Ebc4911"
+  "ChainlinkOracle_Proxy": "0x64e18AE5EDe26359cF83b424Ad9487C61Ebc4911",
+  "SequencerChainlinkOracle_Implementation": "0xe34541dc16C4aF1BA5Cb1784ce849fcf32a34176",
+  "SequencerChainlinkOracle_Proxy": "0x64e18AE5EDe26359cF83b424Ad9487C61Ebc4911"
 }
