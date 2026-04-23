@@ -128,6 +128,38 @@ contract HubRSCTest is Test {
         return result;
     }
 
+    function _computeKey(address lcc, address recipient) internal pure returns (bytes32) {
+        return keccak256(abi.encode(lcc, recipient));
+    }
+
+    function _pendingState(HubRSC hub, bytes32 key) internal view returns (uint256, bool) {
+        return hub.pendingStateByKey(key);
+    }
+
+    function _reconciliationState(HubRSC hub, bytes32 key) internal view returns (uint256, uint256) {
+        return hub.reconciliationStateByKey(key);
+    }
+
+    function _bufferedProcessedState(HubRSC hub, bytes32 key) internal view returns (uint256, uint256) {
+        return hub.bufferedProcessedStateByKey(key);
+    }
+
+    function _attemptReservationAmount(HubRSC hub, uint256 attemptId) internal view returns (uint256) {
+        return hub.attemptReservationAmountById(attemptId);
+    }
+
+    function _terminalFailureSelector(HubRSC hub, bytes32 key) internal view returns (bytes4) {
+        return bytes4(uint32(hub.terminalFailureByKey(key) >> 8));
+    }
+
+    function _terminalFailureClass(HubRSC hub, bytes32 key) internal view returns (uint8) {
+        return uint8(hub.terminalFailureByKey(key));
+    }
+
+    function _hasTerminalFailure(HubRSC hub, bytes32 key) internal view returns (bool) {
+        return hub.terminalFailureByKey(key) != 0;
+    }
+
     /// @notice Aggregates pending settlements from a SettlementReported log.
     function test_aggregatesPendingFromSettlementReported() public {
         _clearSystemContract();
@@ -146,8 +178,8 @@ contract HubRSCTest is Test {
 
         hub.react(_settlementLog(hub, recipient, lcc, amount, 1, 0x1234, 7));
 
-        bytes32 key = hub.computeKey(lcc, recipient);
-        (,, uint256 storedAmount, bool exists) = hub.pending(key);
+        bytes32 key = _computeKey(lcc, recipient);
+        (uint256 storedAmount, bool exists) = _pendingState(hub, key);
         assertTrue(exists);
         assertEq(storedAmount, amount);
     }
@@ -173,8 +205,8 @@ contract HubRSCTest is Test {
         hub.react(log);
         hub.react(log);
 
-        bytes32 key = hub.computeKey(lcc, recipient);
-        (,, uint256 storedAmount, bool exists) = hub.pending(key);
+        bytes32 key = _computeKey(lcc, recipient);
+        (uint256 storedAmount, bool exists) = _pendingState(hub, key);
         assertTrue(exists);
         assertEq(storedAmount, amount);
     }
@@ -218,8 +250,8 @@ contract HubRSCTest is Test {
         hub.react(_settlementLog(hub, recipient, lcc, 10, 2, 0xabc2, 1));
         hub.react(_settlementLog(hub, recipient, lcc, 10, 1, 0xabc3, 2));
 
-        bytes32 key = hub.computeKey(lcc, recipient);
-        (,, uint256 amountAfter, bool exists) = hub.pending(key);
+        bytes32 key = _computeKey(lcc, recipient);
+        (uint256 amountAfter, bool exists) = _pendingState(hub, key);
         assertTrue(exists);
         assertEq(amountAfter, 20);
     }
@@ -278,9 +310,9 @@ contract HubRSCTest is Test {
         assertEq(lccs.length, amounts.length);
         assertEq(lccs.length, attemptIds.length);
 
-        assertEq(hub.inFlightByKey(hub.computeKey(lcc, recipient1)), 10);
-        assertEq(hub.inFlightByKey(hub.computeKey(lcc, recipient2)), 10);
-        assertEq(hub.inFlightByKey(hub.computeKey(lcc, recipient3)), 10);
+        assertEq(hub.inFlightByKey(_computeKey(lcc, recipient1)), 10);
+        assertEq(hub.inFlightByKey(_computeKey(lcc, recipient2)), 10);
+        assertEq(hub.inFlightByKey(_computeKey(lcc, recipient3)), 10);
     }
 
     /// @notice Multiple recipients on the same LCC are dispatched in FIFO queue order.
@@ -392,14 +424,14 @@ contract HubRSCTest is Test {
 
         hub.react(liqLog);
 
-        bytes32 key = hub.computeKey(lcc, recipient);
-        (,, uint256 remaining, bool exists) = hub.pending(key);
+        bytes32 key = _computeKey(lcc, recipient);
+        (uint256 remaining, bool exists) = _pendingState(hub, key);
         assertTrue(exists);
         assertEq(remaining, 100);
         assertEq(hub.inFlightByKey(key), 40);
 
         hub.react(_settlementProcessedLog(hub, lcc, recipient, 40, 0x902, 2));
-        (,, remaining, exists) = hub.pending(key);
+        (remaining, exists) = _pendingState(hub, key);
         assertTrue(exists);
         assertEq(remaining, 60);
         assertEq(hub.inFlightByKey(key), 40);
@@ -674,8 +706,8 @@ contract HubRSCTest is Test {
         address lccB = makeAddr("lccB");
         address recipient1 = makeAddr("recipient1");
         address recipient2 = makeAddr("recipient2");
-        bytes32 key1 = hub.computeKey(lccB, recipient1);
-        bytes32 key2 = hub.computeKey(lccB, recipient2);
+        bytes32 key1 = _computeKey(lccB, recipient1);
+        bytes32 key2 = _computeKey(lccB, recipient2);
 
         hub.react(_lccCreatedLog(hub, underlying, lccA, bytes32("mktA"), 0x8310, 1));
         hub.react(_lccCreatedLog(hub, underlying, lccB, bytes32("mktB"), 0x8311, 2));
@@ -759,8 +791,8 @@ contract HubRSCTest is Test {
         address lccB = makeAddr("lccB");
         address recipient1 = makeAddr("recipient1");
         address recipient2 = makeAddr("recipient2");
-        bytes32 key1 = hub.computeKey(lccB, recipient1);
-        bytes32 key2 = hub.computeKey(lccB, recipient2);
+        bytes32 key1 = _computeKey(lccB, recipient1);
+        bytes32 key2 = _computeKey(lccB, recipient2);
 
         hub.react(_lccCreatedLog(hub, underlying, lccA, bytes32("mktA"), 0xA510, 1));
         hub.react(_lccCreatedLog(hub, underlying, lccB, bytes32("mktB"), 0xA511, 2));
@@ -878,7 +910,7 @@ contract HubRSCTest is Test {
             address recipient = address(uint160(i + 1));
             hub.react(_settlementLog(hub, recipient, lccB, 1, i + 1, 0x8522 + i, i + 1));
 
-            bytes32 key = hub.computeKey(lccB, recipient);
+            bytes32 key = _computeKey(lccB, recipient);
             stdstore.target(address(hub)).sig("inFlightByKey(bytes32)").with_key(key).checked_write(uint256(1));
         }
 
@@ -1108,7 +1140,7 @@ contract HubRSCTest is Test {
             address recipient = address(uint160(i + 1));
             hub.react(_settlementLog(hub, recipient, lccB, 1, i + 1, 0x9510 + i, i + 1));
 
-            bytes32 key = hub.computeKey(lccB, recipient);
+            bytes32 key = _computeKey(lccB, recipient);
             stdstore.target(address(hub)).sig("inFlightByKey(bytes32)").with_key(key).checked_write(uint256(1));
         }
 
@@ -1219,7 +1251,7 @@ contract HubRSCTest is Test {
             address recipient = address(uint160(i + 1));
             hub.react(_settlementLog(hub, recipient, lccB, 1, i + 1, 0x8612 + i, i + 1));
 
-            bytes32 key = hub.computeKey(lccB, recipient);
+            bytes32 key = _computeKey(lccB, recipient);
             stdstore.target(address(hub)).sig("inFlightByKey(bytes32)").with_key(key).checked_write(uint256(1));
         }
 
@@ -1285,7 +1317,7 @@ contract HubRSCTest is Test {
         address lccA = makeAddr("lccA");
         address lccB = makeAddr("lccB");
         address recipient = makeAddr("recipient");
-        bytes32 key = hub.computeKey(lccB, recipient);
+        bytes32 key = _computeKey(lccB, recipient);
 
         hub.react(_lccCreatedLog(hub, underlying, lccA, bytes32("mktA"), 0x8600, 1));
         hub.react(_lccCreatedLog(hub, underlying, lccB, bytes32("mktB"), 0x8601, 2));
@@ -1297,7 +1329,7 @@ contract HubRSCTest is Test {
         hub.react(_settlementProcessedLogWithRequested(hub, lccB, recipient, 60, 100, 0x8604, 5));
         hub.react(_settlementSucceededLog(hub, lccB, recipient, 100, 1, 0x8605, 6));
 
-        (,, uint256 remaining, bool exists) = hub.pending(key);
+        (uint256 remaining, bool exists) = _pendingState(hub, key);
         assertTrue(exists);
         assertEq(remaining, 40);
         assertEq(hub.inFlightByKey(key), 0);
@@ -1320,8 +1352,8 @@ contract HubRSCTest is Test {
         hub.react(_settlementLog(hub, recipient, lcc, 70, 1, 0x9001, 1));
         hub.react(_settlementAnnulledLog(hub, lcc, recipient, 30, 0x9002, 1));
 
-        bytes32 key = hub.computeKey(lcc, recipient);
-        (,, uint256 remaining, bool exists) = hub.pending(key);
+        bytes32 key = _computeKey(lcc, recipient);
+        (uint256 remaining, bool exists) = _pendingState(hub, key);
         assertTrue(exists);
         assertEq(remaining, 40);
     }
@@ -1350,7 +1382,7 @@ contract HubRSCTest is Test {
         assertEq(lccs.length, 1);
         assertEq(amounts[0], 100);
         assertEq(attemptIds[0], 1);
-        assertEq(hub.inFlightByKey(hub.computeKey(lcc, recipient)), 100);
+        assertEq(hub.inFlightByKey(_computeKey(lcc, recipient)), 100);
 
         vm.recordLogs();
         hub.react(
@@ -1368,8 +1400,8 @@ contract HubRSCTest is Test {
         );
         Vm.Log[] memory retryEntries = vm.getRecordedLogs();
         assertTrue(_pendingExists(hub, lcc, recipient));
-        assertFalse(hub.terminalFailureByKey(hub.computeKey(lcc, recipient)));
-        assertEq(hub.inFlightByKey(hub.computeKey(lcc, recipient)), 100);
+        assertFalse(_hasTerminalFailure(hub, _computeKey(lcc, recipient)));
+        assertEq(hub.inFlightByKey(_computeKey(lcc, recipient)), 100);
 
         (, lccs,, amounts, attemptIds) = _decodeProcessSettlementsPayload(retryEntries);
         assertEq(lccs.length, 1);
@@ -1390,7 +1422,7 @@ contract HubRSCTest is Test {
 
         address recipient = makeAddr("recipient");
         address lcc = makeAddr("lcc");
-        bytes32 key = hub.computeKey(lcc, recipient);
+        bytes32 key = _computeKey(lcc, recipient);
 
         hub.react(_settlementLog(hub, recipient, lcc, 100, 1, 0x9111, 1));
         hub.react(liquidityAvailableLog(hub.liquidityHub(), lcc, 100, bytes32("mkt"), 0x9112, 2));
@@ -1412,13 +1444,13 @@ contract HubRSCTest is Test {
         );
         Vm.Log[] memory quarantineEntries = vm.getRecordedLogs();
 
-        (,, uint256 remaining, bool exists) = hub.pending(key);
+        (uint256 remaining, bool exists) = _pendingState(hub, key);
         assertTrue(exists);
         assertEq(remaining, 100);
         assertEq(hub.inFlightByKey(key), 0);
-        assertTrue(hub.terminalFailureByKey(key));
-        assertEq(hub.terminalFailureSelectorByKey(key), SettlementFailureLib.NOT_APPROVED_SELECTOR);
-        assertEq(hub.terminalFailureClassByKey(key), SettlementFailureLib.FAILURE_CLASS_TERMINAL_POLICY);
+        assertTrue(_hasTerminalFailure(hub, key));
+        assertEq(_terminalFailureSelector(hub, key), SettlementFailureLib.NOT_APPROVED_SELECTOR);
+        assertEq(_terminalFailureClass(hub, key), SettlementFailureLib.FAILURE_CLASS_TERMINAL_POLICY);
         assertFalse(hub.inQueue(key));
         assertEq(
             _findCallbackPayloadBySelector(quarantineEntries, ReactiveConstants.PROCESS_SETTLEMENTS_SELECTOR).length, 0
@@ -1429,7 +1461,7 @@ contract HubRSCTest is Test {
         Vm.Log[] memory laterEntries = vm.getRecordedLogs();
 
         assertEq(_findCallbackPayloadBySelector(laterEntries, ReactiveConstants.PROCESS_SETTLEMENTS_SELECTOR).length, 0);
-        assertTrue(hub.terminalFailureByKey(key));
+        assertTrue(_hasTerminalFailure(hub, key));
         assertEq(hub.inFlightByKey(key), 0);
     }
 
@@ -1458,8 +1490,8 @@ contract HubRSCTest is Test {
         hub.react(_settlementLog(hub, goodRecipient, goodLcc, 50, 1, 0x9124, 5));
 
         hub.react(liquidityAvailableLog(hub.liquidityHub(), triggerLcc, underlying, 100, bytes32("mktA"), 0x9125, 6));
-        assertEq(hub.inFlightByKey(hub.computeKey(badLcc, badRecipient)), 100);
-        assertEq(hub.inFlightByKey(hub.computeKey(goodLcc, goodRecipient)), 0);
+        assertEq(hub.inFlightByKey(_computeKey(badLcc, badRecipient)), 100);
+        assertEq(hub.inFlightByKey(_computeKey(goodLcc, goodRecipient)), 0);
 
         vm.recordLogs();
         hub.react(
@@ -1483,8 +1515,8 @@ contract HubRSCTest is Test {
         assertEq(lccs[0], goodLcc);
         assertEq(recipients[0], goodRecipient);
         assertEq(amounts[0], 50);
-        assertTrue(hub.terminalFailureByKey(hub.computeKey(badLcc, badRecipient)));
-        assertEq(hub.inFlightByKey(hub.computeKey(goodLcc, goodRecipient)), 50);
+        assertTrue(_hasTerminalFailure(hub, _computeKey(badLcc, badRecipient)));
+        assertEq(hub.inFlightByKey(_computeKey(goodLcc, goodRecipient)), 50);
     }
 
     function test_terminalFailureClearsOnFreshQueueMutation() public {
@@ -1500,7 +1532,7 @@ contract HubRSCTest is Test {
 
         address recipient = makeAddr("recipient");
         address lcc = makeAddr("lcc");
-        bytes32 key = hub.computeKey(lcc, recipient);
+        bytes32 key = _computeKey(lcc, recipient);
 
         hub.react(_settlementLog(hub, recipient, lcc, 100, 1, 0x9131, 1));
         hub.react(liquidityAvailableLog(hub.liquidityHub(), lcc, 100, bytes32("mkt"), 0x9132, 2));
@@ -1517,14 +1549,14 @@ contract HubRSCTest is Test {
                 3
             )
         );
-        assertTrue(hub.terminalFailureByKey(key));
+        assertTrue(_hasTerminalFailure(hub, key));
         assertFalse(hub.inQueue(key));
 
         hub.react(_settlementLog(hub, recipient, lcc, 25, 2, 0x9134, 4));
-        (,, uint256 remaining, bool exists) = hub.pending(key);
+        (uint256 remaining, bool exists) = _pendingState(hub, key);
         assertTrue(exists);
         assertEq(remaining, 125);
-        assertFalse(hub.terminalFailureByKey(key));
+        assertFalse(_hasTerminalFailure(hub, key));
         assertTrue(hub.inQueue(key));
         assertEq(hub.inFlightByKey(key), 100);
 
@@ -1553,7 +1585,7 @@ contract HubRSCTest is Test {
 
         address recipient = makeAddr("recipient");
         address lcc = makeAddr("lcc");
-        bytes32 key = hub.computeKey(lcc, recipient);
+        bytes32 key = _computeKey(lcc, recipient);
 
         hub.react(_settlementLog(hub, recipient, lcc, 100, 1, 0x9141, 1));
         hub.react(liquidityAvailableLog(hub.liquidityHub(), lcc, 100, bytes32("mkt"), 0x9142, 2));
@@ -1570,16 +1602,16 @@ contract HubRSCTest is Test {
                 3
             )
         );
-        assertTrue(hub.terminalFailureByKey(key));
+        assertTrue(_hasTerminalFailure(hub, key));
         assertFalse(hub.inQueue(key));
 
         vm.recordLogs();
         hub.react(_settlementProcessedLog(hub, lcc, recipient, 40, 0x9144, 4));
         Vm.Log[] memory processedEntries = vm.getRecordedLogs();
-        (,, uint256 remaining, bool exists) = hub.pending(key);
+        (uint256 remaining, bool exists) = _pendingState(hub, key);
         assertTrue(exists);
         assertEq(remaining, 60);
-        assertFalse(hub.terminalFailureByKey(key));
+        assertFalse(_hasTerminalFailure(hub, key));
         assertTrue(hub.inQueue(key));
 
         (, address[] memory lccs, address[] memory recipients, uint256[] memory amounts,) =
@@ -1612,8 +1644,8 @@ contract HubRSCTest is Test {
         hub.react(_settlementLog(hub, recipient, lcc, 90, 1, 0x9201, 1));
         hub.react(_settlementProcessedLog(hub, lcc, recipient, 40, 0x9202, 1));
 
-        bytes32 key = hub.computeKey(lcc, recipient);
-        (,, uint256 remaining, bool exists) = hub.pending(key);
+        bytes32 key = _computeKey(lcc, recipient);
+        (uint256 remaining, bool exists) = _pendingState(hub, key);
         assertTrue(exists);
         assertEq(remaining, 50);
         assertEq(hub.inFlightByKey(key), 0);
@@ -1632,21 +1664,21 @@ contract HubRSCTest is Test {
 
         address recipient = makeAddr("recipient");
         address lcc = makeAddr("lcc");
-        bytes32 key = hub.computeKey(lcc, recipient);
+        bytes32 key = _computeKey(lcc, recipient);
 
         // Processed arrives first (out-of-order): should buffer, not drop.
         hub.react(_settlementProcessedLog(hub, lcc, recipient, 30, 0x9301, 1));
-        (uint256 bufferedSettled, uint256 bufferedInFlight) = hub.bufferedProcessedDecreaseByKey(key);
+        (uint256 bufferedSettled, uint256 bufferedInFlight) = _bufferedProcessedState(hub, key);
         assertEq(bufferedSettled, 30);
         assertEq(bufferedInFlight, 0);
         assertFalse(_pendingExists(hub, lcc, recipient));
 
         // Settlement queue report arrives later: buffered decrease should be applied immediately.
         hub.react(_settlementLog(hub, recipient, lcc, 50, 1, 0x9302, 2));
-        (,, uint256 remaining, bool exists) = hub.pending(key);
+        (uint256 remaining, bool exists) = _pendingState(hub, key);
         assertTrue(exists);
         assertEq(remaining, 20);
-        (bufferedSettled, bufferedInFlight) = hub.bufferedProcessedDecreaseByKey(key);
+        (bufferedSettled, bufferedInFlight) = _bufferedProcessedState(hub, key);
         assertEq(bufferedSettled, 0);
         assertEq(bufferedInFlight, 0);
     }
@@ -1664,7 +1696,7 @@ contract HubRSCTest is Test {
 
         address recipient = makeAddr("recipient");
         address lcc = makeAddr("lcc");
-        bytes32 key = hub.computeKey(lcc, recipient);
+        bytes32 key = _computeKey(lcc, recipient);
 
         // Annulled arrives first (out-of-order): should buffer, not drop.
         hub.react(_settlementAnnulledLog(hub, lcc, recipient, 20, 0x9401, 1));
@@ -1673,7 +1705,7 @@ contract HubRSCTest is Test {
 
         // Settlement queue report arrives later: buffered decrease should be applied immediately.
         hub.react(_settlementLog(hub, recipient, lcc, 50, 1, 0x9402, 2));
-        (,, uint256 remaining, bool exists) = hub.pending(key);
+        (uint256 remaining, bool exists) = _pendingState(hub, key);
         assertTrue(exists);
         assertEq(remaining, 30);
         assertEq(hub.bufferedAnnulledDecreaseByKey(key), 0);
@@ -1693,21 +1725,21 @@ contract HubRSCTest is Test {
 
         address recipient = makeAddr("recipient");
         address lcc = makeAddr("lcc");
-        bytes32 key = hub.computeKey(lcc, recipient);
+        bytes32 key = _computeKey(lcc, recipient);
 
         hub.react(_settlementAnnulledLog(hub, lcc, recipient, 120, 0x9411, 1));
         assertEq(hub.bufferedAnnulledDecreaseByKey(key), 120);
         assertFalse(_pendingExists(hub, lcc, recipient));
 
         hub.react(_settlementLog(hub, recipient, lcc, 100, 1, 0x9412, 2));
-        (,, uint256 remaining, bool exists) = hub.pending(key);
+        (uint256 remaining, bool exists) = _pendingState(hub, key);
         // Fully netted against the first queue increment; entry pruned while remainder stays buffered.
         assertFalse(exists);
         assertEq(remaining, 0);
         assertEq(hub.bufferedAnnulledDecreaseByKey(key), 20);
 
         hub.react(_settlementLog(hub, recipient, lcc, 50, 1, 0x9413, 3));
-        (,, remaining, exists) = hub.pending(key);
+        (remaining, exists) = _pendingState(hub, key);
         assertTrue(exists);
         assertEq(remaining, 30);
         assertEq(hub.bufferedAnnulledDecreaseByKey(key), 0);
@@ -1727,27 +1759,27 @@ contract HubRSCTest is Test {
 
         address recipient = makeAddr("recipient");
         address lcc = makeAddr("lcc");
-        bytes32 key = hub.computeKey(lcc, recipient);
+        bytes32 key = _computeKey(lcc, recipient);
 
         hub.react(_settlementProcessedLogWithRequested(hub, lcc, recipient, 80, 80, 0x9421, 1));
-        (uint256 bufSettled, uint256 bufInflight) = hub.bufferedProcessedDecreaseByKey(key);
+        (uint256 bufSettled, uint256 bufInflight) = _bufferedProcessedState(hub, key);
         assertEq(bufSettled, 80);
         assertEq(bufInflight, 0);
         assertFalse(_pendingExists(hub, lcc, recipient));
 
         hub.react(_settlementLog(hub, recipient, lcc, 50, 1, 0x9422, 2));
-        (,, uint256 remaining, bool exists) = hub.pending(key);
+        (uint256 remaining, bool exists) = _pendingState(hub, key);
         assertFalse(exists);
         assertEq(remaining, 0);
-        (bufSettled, bufInflight) = hub.bufferedProcessedDecreaseByKey(key);
+        (bufSettled, bufInflight) = _bufferedProcessedState(hub, key);
         assertEq(bufSettled, 30);
         assertEq(bufInflight, 0);
 
         hub.react(_settlementLog(hub, recipient, lcc, 40, 1, 0x9423, 3));
-        (,, remaining, exists) = hub.pending(key);
+        (remaining, exists) = _pendingState(hub, key);
         assertTrue(exists);
         assertEq(remaining, 10);
-        (bufSettled, bufInflight) = hub.bufferedProcessedDecreaseByKey(key);
+        (bufSettled, bufInflight) = _bufferedProcessedState(hub, key);
         assertEq(bufSettled, 0);
         assertEq(bufInflight, 0);
     }
@@ -1766,18 +1798,18 @@ contract HubRSCTest is Test {
 
         address recipient = makeAddr("recipient");
         address lcc = makeAddr("lcc");
-        bytes32 key = hub.computeKey(lcc, recipient);
+        bytes32 key = _computeKey(lcc, recipient);
 
         hub.react(_settlementLog(hub, recipient, lcc, 200, 1, 0x9711, 1));
         hub.react(liquidityAvailableLog(hub.liquidityHub(), lcc, 100, bytes32("mkt"), 0x9712, 2));
         assertEq(hub.inFlightByKey(key), 100);
 
         hub.react(_settlementProcessedLogWithRequested(hub, lcc, recipient, 150, 150, 0x9713, 3));
-        (,, uint256 remaining, bool exists) = hub.pending(key);
+        (uint256 remaining, bool exists) = _pendingState(hub, key);
         assertTrue(exists);
         assertEq(remaining, 50);
         assertEq(hub.inFlightByKey(key), 100);
-        (uint256 bufSettled, uint256 bufInflight) = hub.bufferedProcessedDecreaseByKey(key);
+        (uint256 bufSettled, uint256 bufInflight) = _bufferedProcessedState(hub, key);
         assertEq(bufSettled, 0);
         assertEq(bufInflight, 0);
 
@@ -1786,13 +1818,13 @@ contract HubRSCTest is Test {
 
         hub.react(liquidityAvailableLog(hub.liquidityHub(), lcc, 50, bytes32("mkt"), 0x9715, 5));
         assertEq(hub.inFlightByKey(key), 50);
-        (,, remaining, exists) = hub.pending(key);
+        (remaining, exists) = _pendingState(hub, key);
         assertTrue(exists);
         assertEq(remaining, 50);
 
         hub.react(_settlementLog(hub, recipient, lcc, 10, 1, 0x9716, 6));
         assertEq(hub.inFlightByKey(key), 50);
-        (,, remaining, exists) = hub.pending(key);
+        (remaining, exists) = _pendingState(hub, key);
         assertTrue(exists);
         assertEq(remaining, 60);
     }
@@ -1810,7 +1842,7 @@ contract HubRSCTest is Test {
 
         address recipient = makeAddr("recipient");
         address lcc = makeAddr("lcc");
-        bytes32 key = hub.computeKey(lcc, recipient);
+        bytes32 key = _computeKey(lcc, recipient);
 
         hub.react(_settlementLog(hub, recipient, lcc, 80, 1, 0x9501, 1));
 
@@ -1822,7 +1854,7 @@ contract HubRSCTest is Test {
         hub.react(processedLog);
         hub.react(processedLog); // exact duplicate delivery
 
-        (,, uint256 remaining, bool exists) = hub.pending(key);
+        (uint256 remaining, bool exists) = _pendingState(hub, key);
         assertTrue(exists);
         assertEq(remaining, 50); // applied once only
         assertTrue(hub.processedReport(authoritativeReportId));
@@ -1841,7 +1873,7 @@ contract HubRSCTest is Test {
 
         address recipient = makeAddr("recipient");
         address lcc = makeAddr("lcc");
-        bytes32 key = hub.computeKey(lcc, recipient);
+        bytes32 key = _computeKey(lcc, recipient);
 
         hub.react(_settlementLog(hub, recipient, lcc, 100, 1, 0x9601, 1));
         hub.react(liquidityAvailableLog(hub.liquidityHub(), lcc, 100, bytes32("mkt"), 0x9602, 2));
@@ -1851,12 +1883,13 @@ contract HubRSCTest is Test {
         hub.react(_settlementProcessedLogWithRequested(hub, lcc, recipient, 60, 100, 0x9603, 3));
         hub.react(_settlementSucceededLog(hub, lcc, recipient, 100, 1, 0x9604, 4));
 
-        (,, uint256 remaining, bool exists) = hub.pending(key);
+        (uint256 remaining, bool exists) = _pendingState(hub, key);
         assertTrue(exists);
         assertEq(remaining, 40);
         assertEq(hub.inFlightByKey(key), 0);
-        assertEq(hub.completedAwaitingProcessedByKey(key), 0);
-        assertEq(hub.processedRequestedCreditByKey(key), 0);
+        (uint256 awaitingProcessed, uint256 processedCredit) = _reconciliationState(hub, key);
+        assertEq(awaitingProcessed, 0);
+        assertEq(processedCredit, 0);
     }
 
     function test_successBeforeProcessedDoesNotRedispatchSameKeyUntilProcessedReconciles() public {
@@ -1872,7 +1905,7 @@ contract HubRSCTest is Test {
 
         address recipient = makeAddr("recipient");
         address lcc = makeAddr("lcc");
-        bytes32 key = hub.computeKey(lcc, recipient);
+        bytes32 key = _computeKey(lcc, recipient);
 
         hub.react(_settlementLog(hub, recipient, lcc, 100, 1, 0x9610, 1));
 
@@ -1881,21 +1914,25 @@ contract HubRSCTest is Test {
 
         hub.react(_settlementSucceededLog(hub, lcc, recipient, 100, attemptA, 0x9612, 3));
         assertEq(hub.inFlightByKey(key), 0);
-        assertEq(hub.completedAwaitingProcessedByKey(key), 100);
-        assertEq(hub.processedRequestedCreditByKey(key), 0);
+        (uint256 awaitingProcessed, uint256 processedCredit) = _reconciliationState(hub, key);
+        assertEq(awaitingProcessed, 100);
+        assertEq(processedCredit, 0);
 
         _assertNoProcessSettlementsDispatched(hub, lcc, 100, bytes32("mkt"), 0x9613, 4);
-        assertEq(hub.completedAwaitingProcessedByKey(key), 100);
+        (awaitingProcessed, processedCredit) = _reconciliationState(hub, key);
+        assertEq(awaitingProcessed, 100);
+        assertEq(processedCredit, 0);
 
         vm.recordLogs();
         hub.react(_settlementProcessedLogWithRequested(hub, lcc, recipient, 60, 100, 0x9614, 5));
         Vm.Log[] memory entries = vm.getRecordedLogs();
 
-        (,, uint256 remaining, bool exists) = hub.pending(key);
+        (uint256 remaining, bool exists) = _pendingState(hub, key);
         assertTrue(exists);
         assertEq(remaining, 40);
-        assertEq(hub.completedAwaitingProcessedByKey(key), 0);
-        assertEq(hub.processedRequestedCreditByKey(key), 0);
+        (awaitingProcessed, processedCredit) = _reconciliationState(hub, key);
+        assertEq(awaitingProcessed, 0);
+        assertEq(processedCredit, 0);
         assertEq(hub.inFlightByKey(key), 40);
 
         (, address[] memory lccs, address[] memory recipients, uint256[] memory amounts, uint256[] memory attemptIds) =
@@ -1920,7 +1957,7 @@ contract HubRSCTest is Test {
 
         address recipient = makeAddr("recipient");
         address lcc = makeAddr("lcc");
-        bytes32 key = hub.computeKey(lcc, recipient);
+        bytes32 key = _computeKey(lcc, recipient);
 
         hub.react(_settlementLog(hub, recipient, lcc, 100, 1, 0x9620, 1));
 
@@ -1931,21 +1968,21 @@ contract HubRSCTest is Test {
         uint256 attemptB = _dispatchSingleAttemptId(hub, lcc, 100, bytes32("mkt"), 0x9623, 4);
 
         assertEq(hub.inFlightByKey(key), 200);
-        (,, uint256 attemptAAmount) = hub.attemptReservationById(attemptA);
-        (,, uint256 attemptBAmount) = hub.attemptReservationById(attemptB);
+        uint256 attemptAAmount = _attemptReservationAmount(hub, attemptA);
+        uint256 attemptBAmount = _attemptReservationAmount(hub, attemptB);
         assertEq(attemptAAmount, 100);
         assertEq(attemptBAmount, 100);
 
         hub.react(_settlementProcessedLogWithRequested(hub, lcc, recipient, 100, 100, 0x9624, 5));
         hub.react(_settlementSucceededLog(hub, lcc, recipient, 100, attemptA, 0x9625, 6));
 
-        (,, uint256 remaining, bool exists) = hub.pending(key);
+        (uint256 remaining, bool exists) = _pendingState(hub, key);
         assertTrue(exists);
         assertEq(remaining, 100);
         assertEq(hub.inFlightByKey(key), 100);
 
-        (,, attemptAAmount) = hub.attemptReservationById(attemptA);
-        (,, attemptBAmount) = hub.attemptReservationById(attemptB);
+        attemptAAmount = _attemptReservationAmount(hub, attemptA);
+        attemptBAmount = _attemptReservationAmount(hub, attemptB);
         assertEq(attemptAAmount, 0);
         assertEq(attemptBAmount, 100);
 
@@ -1965,7 +2002,7 @@ contract HubRSCTest is Test {
 
         address recipient = makeAddr("recipient");
         address lcc = makeAddr("lcc");
-        bytes32 key = hub.computeKey(lcc, recipient);
+        bytes32 key = _computeKey(lcc, recipient);
 
         hub.react(_settlementLog(hub, recipient, lcc, 100, 1, 0x9611, 1));
         hub.react(liquidityAvailableLog(hub.liquidityHub(), lcc, 100, bytes32("mkt"), 0x9612, 2));
@@ -1974,7 +2011,7 @@ contract HubRSCTest is Test {
         // Attempt completed with zero settlement, but the trusted success path still releases reservation.
         hub.react(_settlementSucceededLog(hub, lcc, recipient, 100, 1, 0x9613, 3));
 
-        (,, uint256 remaining, bool exists) = hub.pending(key);
+        (uint256 remaining, bool exists) = _pendingState(hub, key);
         assertTrue(exists);
         assertEq(remaining, 100);
         assertEq(hub.inFlightByKey(key), 0);
@@ -2213,7 +2250,7 @@ contract HubRSCTest is Test {
     }
 
     function _pendingExists(HubRSC hub, address lcc, address recipient) internal view returns (bool exists) {
-        (,,, exists) = hub.pending(hub.computeKey(lcc, recipient));
+        (, exists) = _pendingState(hub, _computeKey(lcc, recipient));
     }
 
     function _decodeAndProcess(
@@ -2285,7 +2322,7 @@ contract HubRSCTest is Test {
     ) internal {
         // Some zero-batch tests seed reservation windows directly through storage instead of creating real attempts.
         // Clear the synthetic in-flight marker, then replay an authoritative decrease to trigger pruning.
-        bytes32 key = hub.computeKey(lcc, recipient);
+        bytes32 key = _computeKey(lcc, recipient);
         stdstore.target(address(hub)).sig("inFlightByKey(bytes32)").with_key(key).checked_write(uint256(0));
         hub.react(_settlementProcessedLogWithRequested(hub, lcc, recipient, 1, 1, txHashValue, logIndex));
     }
@@ -2354,7 +2391,7 @@ contract HubRSCTest is Test {
             address recipient = address(uint160(recipientOffset + i + 1));
             hub.react(_settlementLog(hub, recipient, lcc, 1, nonceBase + i, txHashBase + i, i + 1));
 
-            bytes32 key = hub.computeKey(lcc, recipient);
+            bytes32 key = _computeKey(lcc, recipient);
             stdstore.target(address(hub)).sig("inFlightByKey(bytes32)").with_key(key).checked_write(uint256(1));
         }
     }
