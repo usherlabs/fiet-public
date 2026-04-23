@@ -496,7 +496,7 @@ contract VTSCommitLibTest is VTSLibTestBase {
     }
 
     // ============================================================
-    // validateMmIncreaseLiquidityDelta (COMMIT-01 global + marginal)
+    // validateLiquidityDelta (COMMIT-01 global + marginal)
     // ============================================================
 
     /// @dev Admission-only params: `sqrtPriceX96` / `currentTick` dummy (COMMIT-01 ignores them).
@@ -517,33 +517,33 @@ contract VTSCommitLibTest is VTSLibTestBase {
     }
 
     /// @notice Regression: marginal gate rejects oracle-valued mint above `issued(post) - issued(pre)`.
-    function test_validateMmIncrease_reverts_when_mint_exceeds_marginal_admission_budget() public {
+    function test_validateLiquidityDelta_mmIncrease_reverts_when_mint_exceeds_marginal_admission_budget() public {
         harness.setPositionSettled(positionId, 0, 0);
         oracle.setPrices(1e18, 1e18);
 
         int256 Lpost = int256(uint256(LIQ));
         uint128 pre = 0;
 
-        (, uint256 issuedPost,,) = harness.validateMmIncreaseLiquidityDelta(
+        (, uint256 issuedPost,,) = harness.validateLiquidityDelta(
             oracle, commitId, positionId, _liquidityDeltaParamsAdmission(Lpost), pre, 0, 0, false
         );
 
         oracle.setTotalValue(issuedPost);
 
         uint256 mintUsd = issuedPost + 1;
-        (bool ok,,,) = harness.validateMmIncreaseLiquidityDelta(
+        (bool ok,,,) = harness.validateLiquidityDelta(
             oracle, commitId, positionId, _liquidityDeltaParamsAdmission(Lpost), pre, mintUsd, 0, false
         );
         assertFalse(ok, "marginal failure expected while global holds at equality");
 
         vm.expectRevert(abi.encodeWithSelector(Errors.InvalidAdmissionMintDelta.selector, mintUsd, issuedPost));
-        harness.validateMmIncreaseLiquidityDelta(
+        harness.validateLiquidityDelta(
             oracle, commitId, positionId, _liquidityDeltaParamsAdmission(Lpost), pre, mintUsd, 0, true
         );
     }
 
     /// @notice Honest mint fits marginal budget when signal amply covers post-add admission.
-    function test_validateMmIncrease_marginal_passes_when_mint_within_admission_delta() public {
+    function test_validateLiquidityDelta_mmIncrease_marginal_passes_when_mint_within_admission_delta() public {
         harness.setPositionSettled(positionId, 0, 0);
         oracle.setPrices(1e18, 1e18);
         oracle.setTotalValue(1_000_000e18);
@@ -554,17 +554,17 @@ contract VTSCommitLibTest is VTSLibTestBase {
         assertGt(admissionDelta, 0, "pre/post slice must admit positive marginal budget");
 
         uint256 mint0 = admissionDelta / 2;
-        (bool ok,,,) = harness.validateMmIncreaseLiquidityDelta(
+        (bool ok,,,) = harness.validateLiquidityDelta(
             oracle, commitId, positionId, _liquidityDeltaParamsAdmission(Lpost), pre, mint0, 0, false
         );
         assertTrue(ok, "mint oracle value under half of admission delta must pass");
-        harness.validateMmIncreaseLiquidityDelta(
+        harness.validateLiquidityDelta(
             oracle, commitId, positionId, _liquidityDeltaParamsAdmission(Lpost), pre, mint0, 0, true
         );
     }
 
     /// @notice Regression (COMMIT-01): `issuedPost` path must not depend on manipulable `slot0` fields in params.
-    function test_validateMmIncrease_admission_invariant_to_slot0_fields() public {
+    function test_validateLiquidityDelta_mmIncrease_admission_invariant_to_slot0_fields() public {
         harness.setPositionSettled(positionId, 0, 0);
         oracle.setTotalValue(1_000_000e18);
         uint128 pre = uint128(uint256(LIQ / 4));
@@ -592,16 +592,15 @@ contract VTSCommitLibTest is VTSLibTestBase {
             liquidityDelta: Lpost
         });
 
-        (, uint256 issuedLow,,) =
-            harness.validateMmIncreaseLiquidityDelta(oracle, commitId, positionId, pLow, pre, m0, m1, false);
+        (, uint256 issuedLow,,) = harness.validateLiquidityDelta(oracle, commitId, positionId, pLow, pre, m0, m1, false);
         (, uint256 issuedHigh,,) =
-            harness.validateMmIncreaseLiquidityDelta(oracle, commitId, positionId, pHigh, pre, m0, m1, false);
+            harness.validateLiquidityDelta(oracle, commitId, positionId, pHigh, pre, m0, m1, false);
 
         assertEq(issuedLow, issuedHigh, "admission issuedPost must ignore sqrtPriceX96/currentTick");
     }
 
     /// @notice Hard mode surfaces global shortfall before marginal mint checks.
-    function test_validateMmIncrease_reverts_global_signal_before_marginal() public {
+    function test_validateLiquidityDelta_mmIncrease_reverts_global_signal_before_marginal() public {
         harness.setPositionSettled(positionId, 0, 0);
         oracle.setPrices(1e18, 1e18);
 
@@ -613,7 +612,7 @@ contract VTSCommitLibTest is VTSLibTestBase {
         vm.expectRevert(
             abi.encodeWithSelector(Errors.InvalidLiquiditySignal.selector, issuedPost, signalBad, uint256(0))
         );
-        harness.validateMmIncreaseLiquidityDelta(
+        harness.validateLiquidityDelta(
             oracle,
             commitId,
             positionId,
@@ -625,6 +624,7 @@ contract VTSCommitLibTest is VTSLibTestBase {
         );
     }
 
+    /// @notice Regression (finding 36_10): storage-backed valuation must still enforce the unique reserve ticker cap.
     function test_validateLiquidityDelta_reverts_whenSignalHasTooManyUniqueReserveTickers() public {
         LiquiditySignal memory poisonSig =
             abi.decode(_makeSignalWithUniqueReserveCount(mmOwner, address(this), 101), (LiquiditySignal));
@@ -657,6 +657,41 @@ contract VTSCommitLibTest is VTSLibTestBase {
 
         (bool ok,,,) = harness.validateLiquidityDelta(oracle, commitId, positionId, p, false);
         assertTrue(ok, "exact max unique reserve tickers should be accepted");
+    }
+
+    /// @notice Regression (finding 36_10): `signalUsd` from stored commits must depend only on reserves, not MM metadata strings.
+    function test_validateLiquidityDelta_signalUsd_invariant_to_oversizedStoredMmMetadata() public {
+        (uint160 sqrtPriceX96, int24 tick,,) = _getSlot0(poolId);
+
+        VTSCommitLib.LiquidityDeltaParams memory p = VTSCommitLib.LiquidityDeltaParams({
+            currency0: corePoolKey.currency0,
+            currency1: corePoolKey.currency1,
+            sqrtPriceX96: sqrtPriceX96,
+            currentTick: tick,
+            tickLower: TL,
+            tickUpper: TU,
+            liquidityDelta: int256(uint256(LIQ))
+        });
+
+        harness.setPositionSettled(positionId, 0, 0);
+        oracle.setTotalValue(1_000_000e18);
+
+        (bool ok0, uint256 issued0, uint256 settled0, uint256 signal0) =
+            harness.validateLiquidityDelta(oracle, commitId, positionId, p, false);
+
+        MarketMaker.State memory mm = harness.getCommitMmState(commitId);
+        mm.sourceState = _repeatTestString(10_000);
+        mm.prover = _repeatTestString(10_000);
+        mm.nonce = _repeatTestString(10_000);
+        harness.setCommitMmState(commitId, mm);
+
+        (bool ok1, uint256 issued1, uint256 settled1, uint256 signal1) =
+            harness.validateLiquidityDelta(oracle, commitId, positionId, p, false);
+
+        assertEq(ok0, ok1, "backing outcome unchanged");
+        assertEq(issued0, issued1, "issued unchanged");
+        assertEq(settled0, settled1, "settled unchanged");
+        assertEq(signal0, signal1, "signalUsd must ignore oversized non-reserve metadata");
     }
 
     // ============================================================
@@ -1101,6 +1136,15 @@ contract VTSCommitLibTest is VTSLibTestBase {
 
     function _defaultLiquidityDeltaParams() internal view returns (VTSCommitLib.LiquidityDeltaParams memory p) {
         return _liquidityDeltaParamsForLiquidity(int256(uint256(LIQ)));
+    }
+
+    /// @dev Builds `len` repetitions of "a" without stack-heavy literals (test-only).
+    function _repeatTestString(uint256 len) private pure returns (string memory s) {
+        bytes memory buf = new bytes(len);
+        for (uint256 i = 0; i < len; i++) {
+            buf[i] = bytes1("a");
+        }
+        return string(buf);
     }
 
     /// @dev Spot-based issued USD matching `_checkpointWithCommitment` (live `slot0`), not COMMIT-01 admission.

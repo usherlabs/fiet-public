@@ -35,7 +35,7 @@ contract VTSCommitLibHarness {
         );
     }
 
-    function validateMmIncreaseLiquidityDelta(
+    function validateLiquidityDelta(
         IOracleHelper oracleHelper,
         uint256 commitId,
         PositionId positionId,
@@ -45,7 +45,7 @@ contract VTSCommitLibHarness {
         uint256 mintAmount1,
         bool revertIfInsufficientBacking
     ) external view returns (bool, uint256, uint256, uint256) {
-        return VTSCommitLib.validateMmIncreaseLiquidityDelta(
+        return VTSCommitLib.validateLiquidityDelta(
             s,
             oracleHelper,
             commitId,
@@ -74,6 +74,11 @@ contract VTSCommitLibHarness {
     /// @dev TEST-ONLY: overwrite stored commit MM state (e.g. to simulate legacy unpriceable storage).
     function setCommitMmState(uint256 commitId, MarketMaker.State memory mm) external {
         MarketMaker.save(s.commits[commitId].mmState, mm);
+    }
+
+    /// @dev TEST-ONLY: read stored commit MM state (e.g. for metadata bloat regressions).
+    function getCommitMmState(uint256 commitId) external view returns (MarketMaker.State memory) {
+        return s.commits[commitId].mmState;
     }
 
     function checkpoint(IPoolManager poolManager, IOracleHelper oracleHelper, uint256 commitId, PositionId positionId)

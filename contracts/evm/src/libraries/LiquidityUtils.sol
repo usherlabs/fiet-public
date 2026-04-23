@@ -161,14 +161,20 @@ library LiquidityUtils {
     }
 
     /**
-     * @dev This function is used to calculate the token amounts to deposit for a given position params
+     * @notice CLMM **effective** token magnitudes for live liquidity at a spot tick (commitment / solvency valuation).
+     * @dev Returns raw `uint256` token amounts. Uses Uniswap v4's unsigned `SqrtPriceMath` overloads with
+     *      `uint128` liquidity, so an effective leg may exceed `int128.max` without reverts. Callers (for example
+     *      `VTSCommitLib._checkpointWithCommitment`) do not use `BalanceDelta` here, because this is not a transient
+     *      signed pool delta, it is spot exposure in raw units.
+     *      **Sign of `liquidityDelta` is ignored; only the magnitude is used** (Uniswap `modifyLiquidity` also uses
+     *      the absolute liquidity magnitude for the amount math).
      * @param sqrtPriceX96 The sqrt price x96 of the pool
      * @param currentTick The current tick of the pool
      * @param tickLower The lower tick of the position
      * @param tickUpper The upper tick of the position
-     * @param liquidityDelta The liquidity delta of position
-     * @return depositAmount0 The amount of token0 to deposit
-     * @return depositAmount1 The amount of token1 to deposit
+     * @param liquidityDelta Signed or unsigned magnitude of position liquidity (magnitude is clamped to `uint128`)
+     * @return depositAmount0 Effective token0 amount
+     * @return depositAmount1 Effective token1 amount
      */
     function calculateEffectiveTokenAmounts(
         uint160 sqrtPriceX96,
@@ -177,42 +183,36 @@ library LiquidityUtils {
         int24 tickUpper,
         int256 liquidityDelta
     ) internal pure returns (uint256 depositAmount0, uint256 depositAmount1) {
-        BalanceDelta delta;
+        uint256 absL;
+        if (liquidityDelta >= 0) {
+            absL = uint256(liquidityDelta);
+        } else {
+            if (liquidityDelta == type(int256).min) {
+                absL = uint256(1) << 255;
+            } else {
+                absL = uint256(-liquidityDelta);
+            }
+        }
+        uint128 L = SafeCastLib.toUint128(absL);
 
         if (currentTick < tickLower) {
             // current tick is below the passed range; liquidity can only become in range by crossing from left to
             // right, when we'll need _more_ currency0 (it's becoming more valuable) so user must provide it
-            delta = toBalanceDelta(
-                SqrtPriceMath.getAmount0Delta(
-                        TickMath.getSqrtPriceAtTick(tickLower),
-                        TickMath.getSqrtPriceAtTick(tickUpper),
-                        liquidityDelta.toInt128()
-                    ).toInt128(),
-                0
+            depositAmount0 = SqrtPriceMath.getAmount0Delta(
+                TickMath.getSqrtPriceAtTick(tickLower), TickMath.getSqrtPriceAtTick(tickUpper), L, true
             );
         } else if (currentTick < tickUpper) {
-            delta = toBalanceDelta(
-                SqrtPriceMath.getAmount0Delta(
-                        sqrtPriceX96, TickMath.getSqrtPriceAtTick(tickUpper), liquidityDelta.toInt128()
-                    ).toInt128(),
-                SqrtPriceMath.getAmount1Delta(
-                        TickMath.getSqrtPriceAtTick(tickLower), sqrtPriceX96, liquidityDelta.toInt128()
-                    ).toInt128()
-            );
+            depositAmount0 =
+                SqrtPriceMath.getAmount0Delta(sqrtPriceX96, TickMath.getSqrtPriceAtTick(tickUpper), L, true);
+            depositAmount1 =
+                SqrtPriceMath.getAmount1Delta(TickMath.getSqrtPriceAtTick(tickLower), sqrtPriceX96, L, true);
         } else {
             // current tick is above the passed range; liquidity can only become in range by crossing from right to
             // left, when we'll need _more_ currency1 (it's becoming more valuable) so user must provide it
-            delta = toBalanceDelta(
-                0,
-                SqrtPriceMath.getAmount1Delta(
-                        TickMath.getSqrtPriceAtTick(tickLower),
-                        TickMath.getSqrtPriceAtTick(tickUpper),
-                        liquidityDelta.toInt128()
-                    ).toInt128()
+            depositAmount1 = SqrtPriceMath.getAmount1Delta(
+                TickMath.getSqrtPriceAtTick(tickLower), TickMath.getSqrtPriceAtTick(tickUpper), L, true
             );
         }
-
-        return (safeInt128ToUint256(delta.amount0()), safeInt128ToUint256(delta.amount1()));
     }
 
     /**

@@ -1155,8 +1155,13 @@ contract ProxyHookTest is MarketVaultBase {
         assertGt(queuedDeficit, 0, "Expected queued deficit");
         assertEq(LiquidityHub(payable(liquidityHub)).settleQueue(address(lccOut), recipient), queuedDeficit);
 
+        // Move queued-backed LCC away from the holder via a protocol-bound endpoint transfer.
+        // This exercises `annulSettlementBeforeTransfer` directly without depending on DEX ingress windows.
+        address endpointSink = makeAddr("annul_endpoint_sink");
+        vm.prank(marketFactory);
+        LiquidityHub(payable(liquidityHub)).setBoundLevel(endpointSink, Bounds.BOUND_ENDPOINT);
         vm.prank(recipient);
-        lccOut.transfer(address(manager), queuedDeficit);
+        lccOut.transfer(endpointSink, queuedDeficit);
 
         assertEq(
             LiquidityHub(payable(liquidityHub)).settleQueue(address(lccOut), recipient),

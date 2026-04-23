@@ -186,16 +186,18 @@ library VTSCommitLib {
         );
     }
 
-    /// @notice Calculates the USD value of the position's issued commitment
+    /// @notice COMMIT-01 **global** check: endpoint-max issued USD must not exceed `settled + signal` (no marginal mint step).
     /// @param s The central VTS storage
     /// @param oracleHelper The oracle helper for USD price calculations
     /// @param commitId The commit NFT id
     /// @param positionId The position ID
     /// @param params Liquidity delta parameters bundled in a struct
     /// @param revertIfInsufficientBacking Whether to revert if backing is insufficient
-    /// @dev COMMIT-01 admission compares settled + signal against **worst-case range** issued USD
-    ///      (`_issuedAdmissionValueForLiquidity`), not live `slot0` composition. Checkpointing with commitment
-    ///      (`_checkpointWithCommitment`) still uses live spot for current solvency/deficit state.
+    /// @dev For MM **increases** that mint LCC, use the other `validateLiquidityDelta` overload (adds
+    ///      `preAddLiquidity`, `mintAmount0/1`, and the marginal admission gate). This entrypoint compares
+    ///      settled + signal against **worst-case range** issued USD (`_issuedAdmissionValueForLiquidity`), not live
+    ///      `slot0` composition. Checkpointing with commitment (`_checkpointWithCommitment`) still uses live spot for
+    ///      current solvency/deficit state.
     function validateLiquidityDelta(
         VTSStorage storage s,
         IOracleHelper oracleHelper,
@@ -216,7 +218,9 @@ library VTSCommitLib {
         }
     }
 
-    function _mmIncreaseAdmissionScalars(
+    /// @dev Precomputes post-add issued USD, settled/signal, and pre-add admission for the MM-increase overload of
+    ///      `validateLiquidityDelta` (the variant with `preAddLiquidity` and mint amounts).
+    function _evaluateAdmissionScalars(
         VTSStorage storage s,
         IOracleHelper oracleHelper,
         uint256 commitId,
@@ -239,7 +243,8 @@ library VTSCommitLib {
         );
     }
 
-    function _mintDeltaUsdFromLiquidityParams(
+    /// @dev Oracle USD value of the actual LCC amounts minted this step (marginal principal for COMMIT-01).
+    function _valueFromLiquidityDelta(
         IOracleHelper oracleHelper,
         LiquidityDeltaParams memory params,
         uint256 mintAmount0,
@@ -250,15 +255,16 @@ library VTSCommitLib {
         );
     }
 
-    /// @notice COMMIT-01 MM increase: post-add endpoint-max backing plus marginal oracle cap on actual minted principal.
+    /// @notice COMMIT-01 for MM increases: same **global** rule as the six-parameter `validateLiquidityDelta`, plus a
+    ///         **marginal** oracle cap on this step’s actual minted LCC principal.
     /// @dev `params.liquidityDelta` must be **post-add total** position liquidity (positive), matching
-    ///      `validateLiquidityDelta` for MM increases. `preAddLiquidity` must be the liquidity immediately before this
+    ///      the global overload’s convention for MM adds. `preAddLiquidity` is liquidity immediately before this
     ///      increase (typically `post - uint128(liquidityDelta)` from `ModifyLiquidityParams`). `sqrtPriceX96` and
-    ///      `currentTick` in `params` are ignored for admission (same as `validateLiquidityDelta`).
+    ///      `currentTick` in `params` are ignored for admission (same as the global overload). Uses
+    ///      `_evaluateAdmissionScalars` and `_valueFromLiquidityDelta` for the global and marginal checks.
     /// @param mintAmount0 Actual LCC amount minted on `currency0` this increase (pool principal deposited).
     /// @param mintAmount1 Actual LCC amount minted on `currency1` this increase.
-    // TODO: Naming convention here requires some improvement.
-    function validateMmIncreaseLiquidityDelta(
+    function validateLiquidityDelta(
         VTSStorage storage s,
         IOracleHelper oracleHelper,
         uint256 commitId,
@@ -288,7 +294,7 @@ library VTSCommitLib {
 
         uint256 admissionPre;
         (issuedPost, settledValue, signalValue, admissionPre) =
-            _mmIncreaseAdmissionScalars(s, oracleHelper, commitId, positionId, params, preAddLiquidity);
+            _evaluateAdmissionScalars(s, oracleHelper, commitId, positionId, params, preAddLiquidity);
 
         if (admissionPre > issuedPost) {
             if (revertIfInsufficientBacking) {
@@ -298,7 +304,7 @@ library VTSCommitLib {
         }
 
         uint256 admissionDelta = issuedPost - admissionPre;
-        uint256 mintDeltaUsd = _mintDeltaUsdFromLiquidityParams(oracleHelper, params, mintAmount0, mintAmount1);
+        uint256 mintDeltaUsd = _valueFromLiquidityDelta(oracleHelper, params, mintAmount0, mintAmount1);
 
         bool globalOk = issuedPost <= signalValue + settledValue;
         bool marginalOk = mintDeltaUsd <= admissionDelta;
@@ -550,6 +556,9 @@ library VTSCommitLib {
     }
 
     /// @notice Calculates the USD value of the MarketMaker signal reserves for a commit
+    /// @dev Reads only `mmState.reserves` from storage. Avoids copying `sourceState`, `prover`, and `nonce` into
+    ///      memory on every commitment valuation (checkpoint / seize refresh), which otherwise amplified gas when those
+    ///      strings were large but economically irrelevant to `getTotalValue`.
     /// @param s The central VTS storage
     /// @param oracleHelper The oracle helper for USD price calculations
     /// @param commitId The commit NFT id
@@ -559,11 +568,27 @@ library VTSCommitLib {
         view
         returns (uint256 totalUsdValue)
     {
-        Commit storage commit = s.commits[commitId];
-        MarketMaker.State memory mmState = commit.mmState;
+        return _signalValueFromCommitStorage(s.commits[commitId], oracleHelper);
+    }
 
-        // Get reserves from MarketMaker.State
-        return _signalValue(mmState, oracleHelper);
+    /// @dev Same economics as `_signalValue(MarketMaker.State memory, ...)` + `MarketMaker.getReserves`, but without
+    ///      materialising the full stored `MarketMaker.State` in memory.
+    function _signalValueFromCommitStorage(Commit storage commit, IOracleHelper oracleHelper)
+        private
+        view
+        returns (uint256 totalValue)
+    {
+        uint256 n = commit.mmState.reserves.length;
+        if (n > MAX_MM_UNIQUE_RESERVE_TICKERS) {
+            revert Errors.MMReserveTickerLimitExceeded(n, MAX_MM_UNIQUE_RESERVE_TICKERS);
+        }
+        string[] memory tickers = new string[](n);
+        uint256[] memory amounts = new uint256[](n);
+        for (uint256 i = 0; i < n; i++) {
+            tickers[i] = commit.mmState.reserves[i].asset;
+            amounts[i] = commit.mmState.reserves[i].amount;
+        }
+        totalValue = oracleHelper.getTotalValue(tickers, amounts);
     }
 
     /// @notice Calculates the USD value of the MarketMaker signal reserves

@@ -573,8 +573,9 @@ contract LiquidityCommitmentCertificateTest is Test {
         assertEq(lastWrappedIngressWrapped, 4);
     }
 
-    /// @dev Market-derived-only ingress to DEX must not notify factory (no wrapped slice to settle).
-    function test_transfer_toDexSink_marketDerivedOnly_doesNotReportWrappedIngress() public {
+    /// @dev Market-derived-only ingress to DEX must still call `prepareMarketLiquidity` with `wrappedAmount == 0` so
+    ///      ingress validation runs (LCC-03); Hub→vault `handleIngress` is not implied by a zero second argument.
+    function test_transfer_toDexSink_marketDerivedOnly_reportsZeroWrappedIngress() public {
         address dexSink = makeAddr("dexSinkMd");
         _setBoundLevel(dexSink, BOUND_DEX);
         lcc.mint(alice, 0, 10);
@@ -582,7 +583,9 @@ contract LiquidityCommitmentCertificateTest is Test {
         vm.prank(alice);
         lcc.transfer(dexSink, 4);
 
-        assertEq(wrappedIngressCalls, 0);
+        assertEq(wrappedIngressCalls, 1);
+        assertEq(lastWrappedIngressLcc, address(lcc));
+        assertEq(lastWrappedIngressWrapped, 0);
     }
 
     /// @dev Protocol bucket-tracked endpoint to DEX: wrapped slice is passed to `prepareMarketLiquidity`.
