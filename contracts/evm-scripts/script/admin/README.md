@@ -219,6 +219,19 @@ Recommended verification after deployment:
   - `ORACLE_CONFIG_FILE` (optional): filename under `config/oracle/` (default: `example.json`)
 - **Docs**: see `script/admin/ORACLE.md` for the end-to-end flow (including required ACM permissions).
 
+### `just admin-oracle-validate-config`
+
+- **What it does**: validates an oracle config file against the oracle deployment artefacts and the live chain state.
+- **Checks**:
+  - config contract addresses vs `deployments/oracle_deployments/<oracle-network>/addresses.json`
+  - `ResilientOracle`, `MainOracle`, `BoundValidator`, and `DefaultProxyAdmin` ownership against `GlobalConfig`
+  - shared ACM wiring and required `GlobalConfig` permissions
+  - per-asset `MainOracle`, `BoundValidator`, and `ResilientOracle` config values
+- **Script**: `OracleValidateConfig.s.sol:OracleValidateConfigScript`
+- **Env**:
+  - `ORACLE_CONFIG_FILE` (optional): filename under `config/oracle/` (default: `example.json`)
+  - `ORACLE_DEPLOYMENT_NETWORK` (optional): oracle deployment directory name under `deployments/oracle_deployments/`
+
 ## Oracle admin model (Venus `lib/oracle`)
 
 The Venus oracle stack under `contracts/evm/lib/oracle/` has **two separate admin surfaces**:

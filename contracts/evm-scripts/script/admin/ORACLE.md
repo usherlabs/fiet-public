@@ -167,6 +167,14 @@ After configuration:
 - confirm price reads succeed for the configured assets
 - confirm assets using pivot or fallback have valid bounds configured
 
+For a scripted verification pass, run:
+
+- `just admin-oracle-validate-config`
+
+By default this reads `config/oracle/example.json`. For a network config such as Arbitrum One, set:
+
+- `ORACLE_CONFIG_FILE=arbitrumone.json`
+
 ### Common failure mode
 
 If `just admin-oracle-acm-give-call-permission` reverts with:

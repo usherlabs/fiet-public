@@ -933,6 +933,14 @@ admin-oracle-configure-assets:
         {{ if env_var_or_default("NO_RATE_LIMIT", "false") == "true" { "--no-rpc-rate-limit" } else { "" } }} \
         -vvv
 
+admin-oracle-validate-config:
+    forge script {{ script_dir }}/admin/OracleValidateConfig.s.sol:OracleValidateConfigScript \
+        --rpc-url {{ rpc_url }} \
+        --timeout {{ env_var_or_default("ETH_TIMEOUT", "120") }} \
+        --fork-retries {{ env_var_or_default("FORK_RETRIES", "5") }} \
+        {{ if env_var_or_default("NO_RATE_LIMIT", "false") == "true" { "--no-rpc-rate-limit" } else { "" } }} \
+        -vvv
+
 # === Market Operations ===
 
 # Create a new market
