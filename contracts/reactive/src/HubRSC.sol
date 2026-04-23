@@ -95,25 +95,21 @@ contract HubRSC is AbstractReactive {
     mapping(address => address) public spokeForRecipient;
 
     /// @notice Pending settlement by key.
-    mapping(bytes32 => Pending) public pending;
+    mapping(bytes32 => Pending) private pending;
     /// @notice Amount reserved for in-flight dispatch by key.
     mapping(bytes32 => uint256) public inFlightByKey;
-    /// @notice Terminal failure quarantine bit by key.
-    mapping(bytes32 => bool) public terminalFailureByKey;
-    /// @notice Compact terminal failure selector retained for operator visibility.
-    mapping(bytes32 => bytes4) public terminalFailureSelectorByKey;
-    /// @notice Compact terminal failure class retained for operator visibility.
-    mapping(bytes32 => uint8) public terminalFailureClassByKey;
+    /// @notice Packed terminal failure metadata by key (`selector << 8 | class`), zero when retryable.
+    mapping(bytes32 => uint40) public terminalFailureByKey;
     /// @notice Released-success amount that must stay non-dispatchable until authoritative processed reconciliation.
-    mapping(bytes32 => uint256) public completedAwaitingProcessedByKey;
+    mapping(bytes32 => uint256) private _completedAwaitingProcessedByKey;
     /// @notice Processed requested-amount credit that arrived before the matching success release on the same key.
-    mapping(bytes32 => uint256) public processedRequestedCreditByKey;
+    mapping(bytes32 => uint256) private _processedRequestedCreditByKey;
 
     /// @notice Deduplicate logs.
     mapping(bytes32 => bool) public processedReport;
 
     /// @notice Buffered authoritative processed decreases awaiting pending creation.
-    mapping(bytes32 => BufferedProcessedSettlement) public bufferedProcessedDecreaseByKey;
+    mapping(bytes32 => BufferedProcessedSettlement) private bufferedProcessedDecreaseByKey;
     /// @notice Buffered authoritative annulled decreases awaiting pending creation.
     mapping(bytes32 => uint256) public bufferedAnnulledDecreaseByKey;
 
@@ -141,7 +137,7 @@ contract HubRSC is AbstractReactive {
     /// @notice Monotonic identifier assigned to each dispatched settlement attempt.
     uint256 public nextAttemptId;
     /// @notice Active reservation keyed by dispatch attempt id.
-    mapping(uint256 => AttemptReservation) public attemptReservationById;
+    mapping(uint256 => AttemptReservation) private _attemptReservationById;
     /// @notice Whether a pending key has already been mirrored into the shared underlying lane.
     mapping(bytes32 => bool) private mirroredToUnderlyingByKey;
 
@@ -254,9 +250,30 @@ contract HubRSC is AbstractReactive {
         }
     }
 
-    /// @notice Compute pending key for (lcc, recipient).
-    function computeKey(address lcc, address recipient) public pure returns (bytes32) {
+    function _computeKey(address lcc, address recipient) private pure returns (bytes32) {
         return keccak256(abi.encode(lcc, recipient));
+    }
+
+    /// @notice Returns the released-success and early-processed ordering state held on a pending key.
+    function reconciliationStateByKey(bytes32 key) external view returns (uint256, uint256) {
+        return (_completedAwaitingProcessedByKey[key], _processedRequestedCreditByKey[key]);
+    }
+
+    /// @notice Returns the mutable pending amount and existence bit tracked for a key.
+    function pendingStateByKey(bytes32 key) external view returns (uint256, bool) {
+        Pending storage entry = pending[key];
+        return (entry.amount, entry.exists);
+    }
+
+    /// @notice Returns buffered authoritative processed decreases awaiting pending creation.
+    function bufferedProcessedStateByKey(bytes32 key) external view returns (uint256, uint256) {
+        BufferedProcessedSettlement storage buffered = bufferedProcessedDecreaseByKey[key];
+        return (buffered.settledAmount, buffered.inflightAmountToReduce);
+    }
+
+    /// @notice Returns the remaining reserved amount tracked for a dispatch attempt.
+    function attemptReservationAmountById(uint256 attemptId) external view returns (uint256) {
+        return _attemptReservationById[attemptId].amount;
     }
 
     /// @notice React to origin chain logs (ReactVM only).
@@ -316,7 +333,7 @@ contract HubRSC is AbstractReactive {
         // Ignore no-op updates.
         if (amount == 0) return;
 
-        bytes32 key = computeKey(lcc, recipient);
+        bytes32 key = _computeKey(lcc, recipient);
         _clearTerminalFailure(lcc, recipient, key);
         Pending storage entry = pending[key];
 
@@ -363,7 +380,7 @@ contract HubRSC is AbstractReactive {
         address lcc = address(uint160(log.topic_2));
         (uint256 settledAmount, uint256 requestedAmount) = abi.decode(log.data, (uint256, uint256));
 
-        _reconcileProcessedRequestedAmount(computeKey(lcc, recipient), requestedAmount);
+        _reconcileProcessedRequestedAmount(_computeKey(lcc, recipient), requestedAmount);
         _applyAuthoritativeDecreaseOrBuffer(lcc, recipient, settledAmount, 0, true);
         _dispatchLiquidityIfBudgetAvailable(lcc, true);
     }
@@ -379,7 +396,7 @@ contract HubRSC is AbstractReactive {
         if (succeededAmount == 0) return;
 
         uint256 releasedAmount = _releaseInFlightReservation(attemptId, lcc, recipient, false);
-        _registerCompletedAwaitingProcessed(computeKey(lcc, recipient), releasedAmount);
+        _registerCompletedAwaitingProcessed(_computeKey(lcc, recipient), releasedAmount);
         _dispatchLiquidityIfBudgetAvailable(lcc, true);
     }
 
@@ -408,7 +425,7 @@ contract HubRSC is AbstractReactive {
 
         _releaseInFlightReservation(attemptId, lcc, recipient, true);
         if (SettlementFailureLib.isTerminal(failureClass)) {
-            bytes32 key = computeKey(lcc, recipient);
+            bytes32 key = _computeKey(lcc, recipient);
             Pending storage entry = pending[key];
             if (entry.exists) {
                 _markTerminalFailure(entry, key, failedAmount, failureSelector, failureClass);
@@ -430,7 +447,7 @@ contract HubRSC is AbstractReactive {
     ) internal {
         // derive the key for the pending entry
         if (settledAmount == 0 && inflightAmountToReduce == 0) return;
-        bytes32 key = computeKey(lcc, recipient);
+        bytes32 key = _computeKey(lcc, recipient);
         Pending storage entry = pending[key];
 
         // if the pending entry exists, then we can apply the decrease immediately
@@ -638,7 +655,7 @@ contract HubRSC is AbstractReactive {
             return;
         }
 
-        if (terminalFailureByKey[key]) return;
+        if (_isTerminalFailure(terminalFailureByKey[key])) return;
 
         if (!_entryMatchesDispatchLane(entry.lcc, dispatchLane, useSharedUnderlying)) return;
 
@@ -652,7 +669,7 @@ contract HubRSC is AbstractReactive {
         if (reserved >= dispatchable) return;
         dispatchable -= reserved;
 
-        uint256 awaitingProcessed = completedAwaitingProcessedByKey[key];
+        uint256 awaitingProcessed = _completedAwaitingProcessedByKey[key];
         if (awaitingProcessed >= dispatchable) return;
         dispatchable -= awaitingProcessed;
         if (dispatchable == 0) return;
@@ -660,7 +677,7 @@ contract HubRSC is AbstractReactive {
         uint256 settleAmount = dispatchable <= state.remainingLiquidity ? dispatchable : state.remainingLiquidity;
         inFlightByKey[key] = reserved + settleAmount;
         uint256 attemptId = ++nextAttemptId;
-        attemptReservationById[attemptId] =
+        _attemptReservationById[attemptId] =
             AttemptReservation({lcc: entry.lcc, recipient: entry.recipient, amount: settleAmount});
         state.remainingLiquidity -= settleAmount;
 
@@ -700,12 +717,6 @@ contract HubRSC is AbstractReactive {
         availableBudgetByDispatchLane[budgetLane] += amount;
     }
 
-    function _restoreDispatchBudget(address lcc, uint256 amount) internal {
-        if (amount == 0) return;
-        address budgetLane = _dispatchBudgetLane(lcc);
-        availableBudgetByDispatchLane[budgetLane] += amount;
-    }
-
     function _sharedUnderlyingRoutingReady(address lcc, address underlying) internal view returns (bool) {
         if (!hasUnderlyingForLcc[lcc] || queueDataByUnderlying[underlying].size == 0) return false;
         if (pendingBackfillLccsByUnderlying[underlying].size == 0) return true;
@@ -720,20 +731,20 @@ contract HubRSC is AbstractReactive {
         internal
         returns (uint256 release)
     {
-        AttemptReservation memory reservation = attemptReservationById[attemptId];
+        AttemptReservation memory reservation = _attemptReservationById[attemptId];
         if (reservation.amount == 0) return 0;
         if (reservation.lcc != lcc || reservation.recipient != recipient) return 0;
 
-        delete attemptReservationById[attemptId];
+        delete _attemptReservationById[attemptId];
 
-        bytes32 key = computeKey(lcc, recipient);
+        bytes32 key = _computeKey(lcc, recipient);
         uint256 reserved = inFlightByKey[key];
         if (reserved == 0) return 0;
 
         release = reservation.amount < reserved ? reservation.amount : reserved;
         inFlightByKey[key] = reserved - release;
         if (restoreBudget) {
-            _restoreDispatchBudget(lcc, release);
+            _creditDispatchBudget(lcc, release);
         }
 
         Pending storage entry = pending[key];
@@ -751,12 +762,10 @@ contract HubRSC is AbstractReactive {
         bytes4 failureSelector,
         uint8 failureClass
     ) internal {
-        if (terminalFailureByKey[key]) return;
+        if (_isTerminalFailure(terminalFailureByKey[key])) return;
 
         address lcc = entry.lcc;
-        terminalFailureByKey[key] = true;
-        terminalFailureSelectorByKey[key] = failureSelector;
-        terminalFailureClassByKey[key] = failureClass;
+        terminalFailureByKey[key] = _packTerminalFailure(failureSelector, failureClass);
 
         if (mirroredToUnderlyingByKey[key] && hasUnderlyingForLcc[lcc]) {
             queueDataByUnderlying[underlyingByLcc[lcc]].remove(key);
@@ -770,13 +779,12 @@ contract HubRSC is AbstractReactive {
     }
 
     function _clearTerminalFailure(address lcc, address recipient, bytes32 key) internal {
-        if (!terminalFailureByKey[key]) return;
+        uint40 terminalFailure = terminalFailureByKey[key];
+        if (!_isTerminalFailure(terminalFailure)) return;
 
-        bytes4 failureSelector = terminalFailureSelectorByKey[key];
-        uint8 failureClass = terminalFailureClassByKey[key];
+        bytes4 failureSelector = _failureSelector(terminalFailure);
+        uint8 failureClass = _failureClass(terminalFailure);
         delete terminalFailureByKey[key];
-        delete terminalFailureSelectorByKey[key];
-        delete terminalFailureClassByKey[key];
 
         Pending storage entry = pending[key];
         if (entry.exists && entry.amount > 0 && !hasUnderlyingForLcc[lcc] && !mirroredToUnderlyingByKey[key]) {
@@ -787,7 +795,7 @@ contract HubRSC is AbstractReactive {
     }
 
     function _restoreQueueMembership(Pending storage entry, bytes32 key) internal {
-        if (!entry.exists || entry.amount == 0 || terminalFailureByKey[key]) return;
+        if (!entry.exists || entry.amount == 0 || _isTerminalFailure(terminalFailureByKey[key])) return;
 
         if (!queueDataByLcc[entry.lcc].inQueue[key]) {
             queueDataByLcc[entry.lcc].enqueue(key);
@@ -924,36 +932,36 @@ contract HubRSC is AbstractReactive {
     function _registerCompletedAwaitingProcessed(bytes32 key, uint256 amount) internal {
         if (amount == 0) return;
 
-        uint256 processedCredit = processedRequestedCreditByKey[key];
+        uint256 processedCredit = _processedRequestedCreditByKey[key];
         if (processedCredit >= amount) {
-            processedRequestedCreditByKey[key] = processedCredit - amount;
+            _processedRequestedCreditByKey[key] = processedCredit - amount;
             return;
         }
 
         if (processedCredit != 0) {
             amount -= processedCredit;
-            delete processedRequestedCreditByKey[key];
+            delete _processedRequestedCreditByKey[key];
         }
 
-        completedAwaitingProcessedByKey[key] += amount;
+        _completedAwaitingProcessedByKey[key] += amount;
     }
 
     /// @notice Reconciles processed requested-amount ordering against already released successes on the same key.
     function _reconcileProcessedRequestedAmount(bytes32 key, uint256 requestedAmount) internal {
         if (requestedAmount == 0) return;
 
-        uint256 awaitingProcessed = completedAwaitingProcessedByKey[key];
+        uint256 awaitingProcessed = _completedAwaitingProcessedByKey[key];
         if (awaitingProcessed >= requestedAmount) {
-            completedAwaitingProcessedByKey[key] = awaitingProcessed - requestedAmount;
+            _completedAwaitingProcessedByKey[key] = awaitingProcessed - requestedAmount;
             return;
         }
 
         if (awaitingProcessed != 0) {
             requestedAmount -= awaitingProcessed;
-            delete completedAwaitingProcessedByKey[key];
+            delete _completedAwaitingProcessedByKey[key];
         }
 
-        processedRequestedCreditByKey[key] += requestedAmount;
+        _processedRequestedCreditByKey[key] += requestedAmount;
     }
 
     /// @notice Applies buffered authoritative decreases after pending entry creation/increase.
@@ -985,9 +993,9 @@ contract HubRSC is AbstractReactive {
 
     /// @notice Removes queue membership once both pending and in-flight amounts are zero.
     function _pruneIfFullySettled(Pending storage entry, bytes32 key) internal {
-        if (entry.amount != 0 || inFlightByKey[key] != 0 || completedAwaitingProcessedByKey[key] != 0) return;
+        if (entry.amount != 0 || inFlightByKey[key] != 0 || _completedAwaitingProcessedByKey[key] != 0) return;
         address lcc = entry.lcc;
-        bool terminal = terminalFailureByKey[key];
+        bool terminal = _isTerminalFailure(terminalFailureByKey[key]);
         entry.exists = false;
         if (mirroredToUnderlyingByKey[key] && hasUnderlyingForLcc[lcc]) {
             queueDataByUnderlying[underlyingByLcc[lcc]].remove(key);
@@ -999,11 +1007,25 @@ contract HubRSC is AbstractReactive {
             }
         }
         delete terminalFailureByKey[key];
-        delete terminalFailureSelectorByKey[key];
-        delete terminalFailureClassByKey[key];
         delete mirroredToUnderlyingByKey[key];
         queueDataByLcc[lcc].remove(key);
         queueData.remove(key);
+    }
+
+    function _packTerminalFailure(bytes4 failureSelector, uint8 failureClass) internal pure returns (uint40) {
+        return (uint40(uint32(failureSelector)) << 8) | uint40(failureClass);
+    }
+
+    function _failureSelector(uint40 terminalFailure) internal pure returns (bytes4) {
+        return bytes4(uint32(terminalFailure >> 8));
+    }
+
+    function _failureClass(uint40 terminalFailure) internal pure returns (uint8) {
+        return uint8(terminalFailure);
+    }
+
+    function _isTerminalFailure(uint40 terminalFailure) internal pure returns (bool) {
+        return terminalFailure != 0;
     }
 
     /// @notice Continues bounded historical backfill for LCCs registered on a shared underlying lane.
