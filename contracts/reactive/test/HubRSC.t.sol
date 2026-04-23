@@ -1494,6 +1494,34 @@ contract HubRSCTest is Test {
         assertEq(remaining, 40);
     }
 
+    /// @notice A fully settled pre-registration key clears its historical backfill debt when prune removes it.
+    function test_pruneClearsHistoricalBackfillDebtForFullySettledPreRegistrationKey() public {
+        _clearSystemContract();
+        HubRSC hub = new HubRSC(
+            DEFAULT_MAX_DISPATCH_ITEMS,
+            originChainId,
+            destinationChainId,
+            liquidityHub,
+            hubCallback,
+            destinationReceiverContract
+        );
+
+        address recipient = makeAddr("recipient");
+        address lcc = makeAddr("lcc");
+        bytes32 key = _computeKey(lcc, recipient);
+
+        hub.react(_settlementLog(hub, recipient, lcc, 70, 1, 0x9003, 1));
+        assertEq(hub.underlyingBackfillRemainingByLcc(lcc), 1);
+
+        hub.react(_settlementProcessedLog(hub, lcc, recipient, 70, 0x9004, 2));
+
+        (uint256 remaining, bool exists) = _pendingState(hub, key);
+        assertFalse(exists);
+        assertEq(remaining, 0);
+        assertEq(hub.underlyingBackfillRemainingByLcc(lcc), 0);
+        assertFalse(hub.inQueue(key));
+    }
+
     function test_unknownFailureRemainsRetryable() public {
         _clearSystemContract();
         HubRSC hub = new HubRSC(
@@ -1561,6 +1589,7 @@ contract HubRSCTest is Test {
         bytes32 key = _computeKey(lcc, recipient);
 
         hub.react(_settlementLog(hub, recipient, lcc, 100, 1, 0x9111, 1));
+        assertEq(hub.underlyingBackfillRemainingByLcc(lcc), 1);
         hub.react(liquidityAvailableLog(hub.liquidityHub(), lcc, 100, bytes32("mkt"), 0x9112, 2));
         assertEq(hub.inFlightByKey(key), 100);
 
@@ -1588,6 +1617,7 @@ contract HubRSCTest is Test {
         assertEq(_terminalFailureSelector(hub, key), SettlementFailureLib.NOT_APPROVED_SELECTOR);
         assertEq(_terminalFailureClass(hub, key), SettlementFailureLib.FAILURE_CLASS_TERMINAL_POLICY);
         assertFalse(hub.inQueue(key));
+        assertEq(hub.underlyingBackfillRemainingByLcc(lcc), 0);
         assertEq(
             _findCallbackPayloadBySelector(quarantineEntries, ReactiveConstants.PROCESS_SETTLEMENTS_SELECTOR).length, 0
         );
@@ -1687,6 +1717,7 @@ contract HubRSCTest is Test {
         );
         assertTrue(_hasTerminalFailure(hub, key));
         assertFalse(hub.inQueue(key));
+        assertEq(hub.underlyingBackfillRemainingByLcc(lcc), 0);
 
         hub.react(_settlementLog(hub, recipient, lcc, 25, 2, 0x9134, 4));
         (uint256 remaining, bool exists) = _pendingState(hub, key);
@@ -1695,6 +1726,7 @@ contract HubRSCTest is Test {
         assertFalse(_hasTerminalFailure(hub, key));
         assertTrue(hub.inQueue(key));
         assertEq(hub.inFlightByKey(key), 100);
+        assertEq(hub.underlyingBackfillRemainingByLcc(lcc), 0);
 
         vm.recordLogs();
         hub.react(liquidityAvailableLog(hub.liquidityHub(), lcc, 125, bytes32("mkt"), 0x9135, 5));
@@ -1740,6 +1772,7 @@ contract HubRSCTest is Test {
         );
         assertTrue(_hasTerminalFailure(hub, key));
         assertFalse(hub.inQueue(key));
+        assertEq(hub.underlyingBackfillRemainingByLcc(lcc), 0);
 
         vm.recordLogs();
         hub.react(_settlementProcessedLog(hub, lcc, recipient, 40, 0x9144, 4));
@@ -1749,6 +1782,7 @@ contract HubRSCTest is Test {
         assertEq(remaining, 60);
         assertFalse(_hasTerminalFailure(hub, key));
         assertTrue(hub.inQueue(key));
+        assertEq(hub.underlyingBackfillRemainingByLcc(lcc), 0);
 
         (, address[] memory lccs, address[] memory recipients, uint256[] memory amounts,) =
             _decodeProcessSettlementsPayload(processedEntries);
