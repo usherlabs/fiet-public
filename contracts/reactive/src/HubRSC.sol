@@ -134,12 +134,16 @@ contract HubRSC is AbstractReactive {
     mapping(address => uint256) public zeroBatchRetryCreditsRemaining;
     /// @notice Persisted dispatch budget keyed by the economic lane currently funding settlement dispatch.
     mapping(address => uint256) public availableBudgetByDispatchLane;
+    /// @notice Highest origin block credited for a direct-liquidity semantic key (`lcc, underlying, amount, marketId`).
+    mapping(bytes32 => uint256) public lastLiquidityAvailableBlockBySemanticKey;
     /// @notice Monotonic identifier assigned to each dispatched settlement attempt.
     uint256 public nextAttemptId;
     /// @notice Active reservation keyed by dispatch attempt id.
     mapping(uint256 => AttemptReservation) private _attemptReservationById;
     /// @notice Whether a pending key has already been mirrored into the shared underlying lane.
     mapping(bytes32 => bool) private mirroredToUnderlyingByKey;
+    /// @notice Whether a key still counts toward the pre-registration backfill debt for its LCC.
+    mapping(bytes32 => bool) private historicalBackfillPendingByKey;
 
     /// @dev Upper bound on how many consecutive zero-batch windows we will chain per liquidity amount.
     uint256 private constant MAX_ZERO_BATCH_RETRY_WINDOWS = 256;
@@ -347,6 +351,7 @@ contract HubRSC is AbstractReactive {
             if (hasUnderlyingForLcc[lcc]) {
                 _enqueueUnderlyingKey(lcc, key);
             } else {
+                historicalBackfillPendingByKey[key] = true;
                 underlyingBackfillRemainingByLcc[lcc] += 1;
             }
             emit PendingAdded(lcc, recipient, amount);
@@ -489,8 +494,9 @@ contract HubRSC is AbstractReactive {
         if (log.chain_id != protocolChainId || log._contract != liquidityHub) return;
         if (!_markLogProcessed(log)) return;
         address lcc = address(uint160(log.topic_1));
-        (address underlying, uint256 available,) = abi.decode(log.data, (address, uint256, bytes32));
+        (address underlying, uint256 available, bytes32 marketId) = abi.decode(log.data, (address, uint256, bytes32));
         _registerLccUnderlying(lcc, underlying);
+        if (!_markLiquidityAvailableCredit(lcc, underlying, available, marketId, log.block_number)) return;
         _creditDispatchBudget(lcc, available);
         _dispatchLiquidityIfBudgetAvailable(lcc, true);
     }
@@ -769,8 +775,8 @@ contract HubRSC is AbstractReactive {
 
         if (mirroredToUnderlyingByKey[key] && hasUnderlyingForLcc[lcc]) {
             queueDataByUnderlying[underlyingByLcc[lcc]].remove(key);
-        } else if (!hasUnderlyingForLcc[lcc] && underlyingBackfillRemainingByLcc[lcc] > 0) {
-            underlyingBackfillRemainingByLcc[lcc] -= 1;
+        } else if (!hasUnderlyingForLcc[lcc]) {
+            _clearHistoricalBackfillForKey(lcc, key);
         }
         queueDataByLcc[lcc].remove(key);
         queueData.remove(key);
@@ -787,7 +793,11 @@ contract HubRSC is AbstractReactive {
         delete terminalFailureByKey[key];
 
         Pending storage entry = pending[key];
-        if (entry.exists && entry.amount > 0 && !hasUnderlyingForLcc[lcc] && !mirroredToUnderlyingByKey[key]) {
+        if (
+            entry.exists && entry.amount > 0 && !hasUnderlyingForLcc[lcc] && !mirroredToUnderlyingByKey[key]
+                && !historicalBackfillPendingByKey[key]
+        ) {
+            historicalBackfillPendingByKey[key] = true;
             underlyingBackfillRemainingByLcc[lcc] += 1;
         }
 
@@ -895,11 +905,7 @@ contract HubRSC is AbstractReactive {
         queueDataByUnderlying[underlyingByLcc[lcc]].enqueue(key);
         if (!mirroredToUnderlyingByKey[key]) {
             mirroredToUnderlyingByKey[key] = true;
-            uint256 remaining = underlyingBackfillRemainingByLcc[lcc];
-            if (remaining > 0) {
-                underlyingBackfillRemainingByLcc[lcc] = remaining - 1;
-                _syncUnderlyingBackfillState(lcc);
-            }
+            _clearHistoricalBackfillForKey(lcc, key);
         }
     }
 
@@ -991,6 +997,39 @@ contract HubRSC is AbstractReactive {
         return true;
     }
 
+    /// @dev Best-effort semantic replay guard for direct LiquidityAvailable credits. Without a dedicated origin nonce,
+    /// this refuses to re-credit the same semantic event at the same-or-earlier origin block.
+    function _markLiquidityAvailableCredit(
+        address lcc,
+        address underlying,
+        uint256 amount,
+        bytes32 marketId,
+        uint256 blockNumber
+    ) internal returns (bool) {
+        if (blockNumber == 0) return true;
+
+        bytes32 semanticKey = keccak256(abi.encode(lcc, underlying, amount, marketId));
+        uint256 lastBlock = lastLiquidityAvailableBlockBySemanticKey[semanticKey];
+        if (lastBlock >= blockNumber) {
+            emit DuplicateLogIgnored(keccak256(abi.encode(semanticKey, blockNumber)));
+            return false;
+        }
+
+        lastLiquidityAvailableBlockBySemanticKey[semanticKey] = blockNumber;
+        return true;
+    }
+
+    function _clearHistoricalBackfillForKey(address lcc, bytes32 key) internal {
+        if (!historicalBackfillPendingByKey[key]) return;
+
+        delete historicalBackfillPendingByKey[key];
+        uint256 remaining = underlyingBackfillRemainingByLcc[lcc];
+        if (remaining > 0) {
+            underlyingBackfillRemainingByLcc[lcc] = remaining - 1;
+        }
+        _syncUnderlyingBackfillState(lcc);
+    }
+
     /// @notice Removes queue membership once both pending and in-flight amounts are zero.
     function _pruneIfFullySettled(Pending storage entry, bytes32 key) internal {
         if (entry.amount != 0 || inFlightByKey[key] != 0 || _completedAwaitingProcessedByKey[key] != 0) return;
@@ -1000,14 +1039,11 @@ contract HubRSC is AbstractReactive {
         if (mirroredToUnderlyingByKey[key] && hasUnderlyingForLcc[lcc]) {
             queueDataByUnderlying[underlyingByLcc[lcc]].remove(key);
         } else if (!terminal) {
-            uint256 remaining = underlyingBackfillRemainingByLcc[lcc];
-            if (remaining > 0) {
-                underlyingBackfillRemainingByLcc[lcc] = remaining - 1;
-                _syncUnderlyingBackfillState(lcc);
-            }
+            _clearHistoricalBackfillForKey(lcc, key);
         }
         delete terminalFailureByKey[key];
         delete mirroredToUnderlyingByKey[key];
+        delete historicalBackfillPendingByKey[key];
         queueDataByLcc[lcc].remove(key);
         queueData.remove(key);
     }
@@ -1039,15 +1075,14 @@ contract HubRSC is AbstractReactive {
             bytes32 nextLccKey = backfillQueue.nextOrHead(lccKey);
 
             uint256 scanned = _continueUnderlyingBackfillForLcc(lcc, underlying, budget);
-            if (underlyingBackfillRemainingByLcc[lcc] == 0) {
-                backfillQueue.remove(lccKey);
-                continue;
-            }
             if (scanned == 0) {
                 break;
             }
             budget -= scanned;
-
+            if (underlyingBackfillRemainingByLcc[lcc] == 0) {
+                backfillQueue.remove(lccKey);
+                continue;
+            }
             backfillQueue.cursor = nextLccKey;
         }
     }
@@ -1079,7 +1114,10 @@ contract HubRSC is AbstractReactive {
             if (entry.exists && entry.lcc == lcc && !mirroredToUnderlyingByKey[key]) {
                 queueDataByUnderlying[underlying].enqueue(key);
                 mirroredToUnderlyingByKey[key] = true;
-                remaining--;
+                if (historicalBackfillPendingByKey[key]) {
+                    delete historicalBackfillPendingByKey[key];
+                    remaining--;
+                }
             }
             scanned++;
         }
