@@ -52,9 +52,6 @@ Reservations are now released only by trusted completion signals from the destin
 - `SettlementProcessed` reduces pending queue balance only.
 - `SettlementSucceededReported` releases the reserved in-flight amount without restoring budget.
 - `SettlementFailedReported` releases the reserved in-flight amount and restores dispatch budget for retry.
-- Failed settlements now carry a compact `failureSelector` and `failureClass` from the destination revert bytes.
-- Unknown failures keep the existing retry path.
-- Terminal policy failures, currently `NotApproved(address)`, quarantine the key, preserve the pending amount, and stop redispatch until a fresh queue increase or authoritative decrease clears that state.
 - `SettlementAnnulledReported` reduces pending queue balance only.
 
 The split matters because `requestedAmount` on `LiquidityHub.SettlementProcessed` is permissionless input and is not trusted for reservation release anymore.

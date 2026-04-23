@@ -346,13 +346,7 @@ contract SpokeRSCTest is Test {
         });
 
         bytes memory payload = abi.encodeWithSelector(
-            ReactiveConstants.RECORD_SETTLEMENT_SUCCEEDED_SELECTOR,
-            address(0),
-            lcc,
-            recipient,
-            maxAmount,
-            attemptId,
-            1
+            ReactiveConstants.RECORD_SETTLEMENT_SUCCEEDED_SELECTOR, address(0), lcc, recipient, maxAmount, attemptId, 1
         );
         vm.expectEmit(true, true, true, true, address(spoke));
         emit IReactive.Callback(destinationChainId, hubCallback, 8000000, payload);

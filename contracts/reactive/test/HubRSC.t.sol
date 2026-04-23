@@ -1403,6 +1403,7 @@ contract HubRSCTest is Test {
                 lcc,
                 recipient,
                 100,
+                1,
                 SettlementFailureLib.NOT_APPROVED_SELECTOR,
                 SettlementFailureLib.FAILURE_CLASS_TERMINAL_POLICY,
                 0x9113,
@@ -1467,6 +1468,7 @@ contract HubRSCTest is Test {
                 badLcc,
                 badRecipient,
                 100,
+                1,
                 SettlementFailureLib.NOT_APPROVED_SELECTOR,
                 SettlementFailureLib.FAILURE_CLASS_TERMINAL_POLICY,
                 0x9126,
@@ -1475,7 +1477,7 @@ contract HubRSCTest is Test {
         );
         Vm.Log[] memory siblingEntries = vm.getRecordedLogs();
 
-        (, address[] memory lccs, address[] memory recipients, uint256[] memory amounts) =
+        (, address[] memory lccs, address[] memory recipients, uint256[] memory amounts,) =
             _decodeProcessSettlementsPayload(siblingEntries);
         assertEq(lccs.length, 1);
         assertEq(lccs[0], goodLcc);
@@ -1508,6 +1510,7 @@ contract HubRSCTest is Test {
                 lcc,
                 recipient,
                 100,
+                1,
                 SettlementFailureLib.NOT_APPROVED_SELECTOR,
                 SettlementFailureLib.FAILURE_CLASS_TERMINAL_POLICY,
                 0x9133,
@@ -1529,7 +1532,7 @@ contract HubRSCTest is Test {
         hub.react(liquidityAvailableLog(hub.liquidityHub(), lcc, 125, bytes32("mkt"), 0x9135, 5));
         Vm.Log[] memory entries = vm.getRecordedLogs();
 
-        (, address[] memory lccs, address[] memory recipients, uint256[] memory amounts) =
+        (, address[] memory lccs, address[] memory recipients, uint256[] memory amounts,) =
             _decodeProcessSettlementsPayload(entries);
         assertEq(lccs.length, 1);
         assertEq(lccs[0], lcc);
@@ -1560,6 +1563,7 @@ contract HubRSCTest is Test {
                 lcc,
                 recipient,
                 100,
+                1,
                 SettlementFailureLib.NOT_APPROVED_SELECTOR,
                 SettlementFailureLib.FAILURE_CLASS_TERMINAL_POLICY,
                 0x9143,
@@ -1569,23 +1573,26 @@ contract HubRSCTest is Test {
         assertTrue(hub.terminalFailureByKey(key));
         assertFalse(hub.inQueue(key));
 
+        vm.recordLogs();
         hub.react(_settlementProcessedLog(hub, lcc, recipient, 40, 0x9144, 4));
+        Vm.Log[] memory processedEntries = vm.getRecordedLogs();
         (,, uint256 remaining, bool exists) = hub.pending(key);
         assertTrue(exists);
         assertEq(remaining, 60);
         assertFalse(hub.terminalFailureByKey(key));
         assertTrue(hub.inQueue(key));
 
-        vm.recordLogs();
-        hub.react(liquidityAvailableLog(hub.liquidityHub(), lcc, 60, bytes32("mkt"), 0x9145, 5));
-        Vm.Log[] memory entries = vm.getRecordedLogs();
-
-        (, address[] memory lccs, address[] memory recipients, uint256[] memory amounts) =
-            _decodeProcessSettlementsPayload(entries);
+        (, address[] memory lccs, address[] memory recipients, uint256[] memory amounts,) =
+            _decodeProcessSettlementsPayload(processedEntries);
         assertEq(lccs.length, 1);
         assertEq(lccs[0], lcc);
         assertEq(recipients[0], recipient);
         assertEq(amounts[0], 60);
+
+        vm.recordLogs();
+        hub.react(liquidityAvailableLog(hub.liquidityHub(), lcc, 60, bytes32("mkt"), 0x9145, 5));
+        Vm.Log[] memory laterEntries = vm.getRecordedLogs();
+        assertEq(_findCallbackPayloadBySelector(laterEntries, ReactiveConstants.PROCESS_SETTLEMENTS_SELECTOR).length, 0);
     }
 
     function test_manualSettlementProcessedLogReconcilesWithoutDispatch() public {
@@ -1924,8 +1931,8 @@ contract HubRSCTest is Test {
         uint256 attemptB = _dispatchSingleAttemptId(hub, lcc, 100, bytes32("mkt"), 0x9623, 4);
 
         assertEq(hub.inFlightByKey(key), 200);
-        (, , uint256 attemptAAmount) = hub.attemptReservationById(attemptA);
-        (, , uint256 attemptBAmount) = hub.attemptReservationById(attemptB);
+        (,, uint256 attemptAAmount) = hub.attemptReservationById(attemptA);
+        (,, uint256 attemptBAmount) = hub.attemptReservationById(attemptB);
         assertEq(attemptAAmount, 100);
         assertEq(attemptBAmount, 100);
 
@@ -1937,8 +1944,8 @@ contract HubRSCTest is Test {
         assertEq(remaining, 100);
         assertEq(hub.inFlightByKey(key), 100);
 
-        (, , attemptAAmount) = hub.attemptReservationById(attemptA);
-        (, , attemptBAmount) = hub.attemptReservationById(attemptB);
+        (,, attemptAAmount) = hub.attemptReservationById(attemptA);
+        (,, attemptBAmount) = hub.attemptReservationById(attemptB);
         assertEq(attemptAAmount, 0);
         assertEq(attemptBAmount, 100);
 
@@ -2247,13 +2254,8 @@ contract HubRSCTest is Test {
         uint256 txHashBase,
         uint256 logIndexBase
     ) internal {
-        (
-            ,
-            address[] memory lccs,
-            address[] memory recipients,
-            uint256[] memory amounts,
-            uint256[] memory attemptIds
-        ) = _decodeProcessSettlementsPayloadAt(entries, ordinal);
+        (, address[] memory lccs, address[] memory recipients, uint256[] memory amounts, uint256[] memory attemptIds) =
+            _decodeProcessSettlementsPayloadAt(entries, ordinal);
         for (uint256 i = 0; i < lccs.length; i++) {
             _applyProcessedAndSucceeded(
                 hub, lccs[i], recipients[i], amounts[i], attemptIds[i], txHashBase + i, logIndexBase + i
@@ -2301,9 +2303,13 @@ contract HubRSCTest is Test {
         assertEq(lccs.length, expectedLength);
     }
 
-    function _decodeMoreLiquidityAvailablePayload(Vm.Log[] memory entries) internal returns (address lcc, uint256 remaining) {
-        bytes memory payload =
-            _findCallbackPayloadBySelector(entries, ReactiveConstants.TRIGGER_MORE_LIQUIDITY_AVAILABLE_SELECTOR);
+    function _decodeMoreLiquidityAvailablePayload(Vm.Log[] memory entries)
+        internal
+        returns (address lcc, uint256 remaining)
+    {
+        bytes memory payload = _findCallbackPayloadBySelector(
+            entries, ReactiveConstants.TRIGGER_MORE_LIQUIDITY_AVAILABLE_SELECTOR
+        );
         assertTrue(payload.length > 0);
         (, lcc, remaining) = abi.decode(_slice(payload, 4), (address, address, uint256));
     }
@@ -2319,7 +2325,7 @@ contract HubRSCTest is Test {
         vm.recordLogs();
         hub.react(liquidityAvailableLog(hub.liquidityHub(), lcc, amount, market, txHashValue, logIndex));
         Vm.Log[] memory entries = vm.getRecordedLogs();
-        (, , , , uint256[] memory attemptIds) = _decodeProcessSettlementsPayload(entries);
+        (,,,, uint256[] memory attemptIds) = _decodeProcessSettlementsPayload(entries);
         return attemptIds[0];
     }
 
@@ -2385,8 +2391,7 @@ contract HubRSCTest is Test {
             uint256[] memory attemptIds
         )
     {
-        bytes memory
-            rawPayload = _findNthCallbackPayloadBySelector(
+        bytes memory rawPayload = _findNthCallbackPayloadBySelector(
             entries, ReactiveConstants.PROCESS_SETTLEMENTS_SELECTOR, ordinal
         );
         require(rawPayload.length > 0, "missing processSettlements callback payload");

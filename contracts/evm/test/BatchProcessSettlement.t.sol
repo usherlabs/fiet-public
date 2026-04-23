@@ -269,14 +269,15 @@ contract BatchProcessSettlementTest is Test {
 
     /// @notice Verifies each item call is gas-capped in the batch loop.
     function test_process_forwardsPerItemGasCap() public {
-        (address[] memory lcc, address[] memory recipient, uint256[] memory maxAmount) = _buildBatch(2);
+        (address[] memory lcc, address[] memory recipient, uint256[] memory maxAmount, uint256[] memory attemptId) =
+            _buildBatch(2);
         mockHub.setBehaviour(lcc[0], recipient[0], maxAmount[0], MockLiquidityHub.Behaviour.RequireItemGasCap);
         mockHub.setBehaviour(lcc[1], recipient[1], maxAmount[1], MockLiquidityHub.Behaviour.RequireItemGasCap);
 
-        Vm.Log[] memory logs = _recordAndProcess(lcc, recipient, maxAmount);
+        Vm.Log[] memory logs = _recordAndProcess(lcc, recipient, maxAmount, attemptId);
         assertEq(logs.length, 3, "expected batch + two success events");
-        _assertSucceededLog(logs[1], lcc[0], recipient[0], maxAmount[0]);
-        _assertSucceededLog(logs[2], lcc[1], recipient[1], maxAmount[1]);
+        _assertSucceededLog(logs[1], lcc[0], recipient[0], maxAmount[0], attemptId[0]);
+        _assertSucceededLog(logs[2], lcc[1], recipient[1], maxAmount[1], attemptId[1]);
     }
 
     /// @notice Fuzzes item count gate to prove <=30 succeeds and >30 reverts.
@@ -322,10 +323,7 @@ contract BatchProcessSettlementTest is Test {
         address[] memory recipient,
         uint256[] memory maxAmount,
         uint256[] memory attemptId
-    )
-        internal
-        returns (Vm.Log[] memory)
-    {
+    ) internal returns (Vm.Log[] memory) {
         vm.recordLogs();
         harness.process(lcc, recipient, maxAmount, attemptId);
         return vm.getRecordedLogs();

@@ -33,8 +33,13 @@ contract GasGriefingOptInReceiver is ERC165, INativeSettlementReceiver {
 contract BatchProcessSettlementGriefingHarness is AbstractBatchProcessSettlement {
     constructor(address _liquidityHub) AbstractBatchProcessSettlement(_liquidityHub) {}
 
-    function process(address[] memory lcc, address[] memory recipient, uint256[] memory maxAmount) external {
-        processSettlements(lcc, recipient, maxAmount);
+    function process(
+        address[] memory lcc,
+        address[] memory recipient,
+        uint256[] memory maxAmount,
+        uint256[] memory attemptId
+    ) external {
+        processSettlements(lcc, recipient, maxAmount, attemptId);
     }
 }
 
@@ -114,9 +119,12 @@ contract BatchProcessSettlementGriefingTest is LiquidityHubTestBase {
         uint256[] memory maxAmounts = new uint256[](2);
         maxAmounts[0] = type(uint256).max;
         maxAmounts[1] = type(uint256).max;
+        uint256[] memory attemptIds = new uint256[](2);
+        attemptIds[0] = 1;
+        attemptIds[1] = 2;
 
         vm.recordLogs();
-        s.harness.process(lccs, recipients, maxAmounts);
+        s.harness.process(lccs, recipients, maxAmounts, attemptIds);
         Vm.Log[] memory logs = vm.getRecordedLogs();
 
         uint256 successEvents;
