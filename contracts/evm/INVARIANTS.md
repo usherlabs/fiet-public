@@ -16,7 +16,10 @@ being an informal “should”.
 - **Proxy pool**: Uniswap v4 pool whose currencies are **underlyings**.
 - **VTS**: “Value-to-Signal” accounting and settlement system coordinated by `src/VTSOrchestrator.sol`.
 - **Commit (commitId)**: a VRL-verified reserve signal stored in VTS state (`VTSCommitLib.commitSignal`).
-- **Position (positionId)**: a VTS-tracked liquidity position keyed like Uniswap positions.
+- **Position (positionId)**: a VTS-tracked liquidity position keyed like Uniswap positions (`PositionId` from
+  `(modifyLiquidityRouter, tickLower, tickUpper, salt)`). VTS stores these in a **global** `mapping(PositionId => ...)`
+  across pools on the same orchestrator; supported routers must therefore keep salts unique per logical position across
+  pools (**VTS-POS-ID-01**).
 - **RfS / RFS**: “Required for Settlement”; when open, withdrawals are restricted.
 - **Deficits**:
   - **cumulativeDeficit**: swap-driven outflow shortfall accumulated per position; it feeds pool-level deficit
@@ -491,6 +494,30 @@ being an informal “should”.
   therefore assume responsibility for sensible **`poolKey.tickSpacing`** and MM hygiene: very small spacing and wide,
   fragmented liquidity can still produce large swap gas (including first-touch cold slots), and MM ranges bypass the
   direct-LP width floor by policy.
+
+### VTS-POS-ID-01: Supported modify-liquidity routers must supply globally unique `(router, ticks, salt)` per logical position
+
+- **Statement**: `VTSStorage.positions` and `VTSStorage.positionAccounting` are keyed by `PositionId` only. That id is
+  derived from Uniswap v4’s position key: `(modifyLiquidityRouter, tickLower, tickUpper, salt)` (see
+  `src/types/Position.sol::PositionLibrary.generateId` and `VTSLifecycleLinkedLib._processPositionTouchValidated`). If an
+  entry already exists for a given `PositionId` but with a **different** `poolId`, the touch path reverts
+  (`Errors.InvalidPosition`) rather than overwrite. Therefore **every supported router** that calls into the core hook
+  with `commitId == 0` (direct LP) or with MM hook data must choose `salt` so that, for that router address, no two
+  distinct pools ever share the same `(tickLower, tickUpper, salt)` tuple while both positions remain live in VTS.
+- **Supported routers (by design)**:
+  - **Uniswap v4 `PositionManager`** (`contracts/evm/lib/v4-periphery/src/PositionManager.sol`): uses `salt =
+    bytes32(tokenId)` where `tokenId` is assigned from monotonic `nextTokenId` at mint time, so each minted position has
+    a unique salt for that router instance.
+  - **`MMPositionManager`** (`src/MMPositionManager.sol` via `src/MMPositionActionsImpl.sol`): uses
+    `salt = PositionLibrary.generateSalt(commitmentTokenId, positionIndex)`, so each `(commitment NFT id, position index)`
+    pair yields a distinct salt for that router instance.
+- **Enforced by**: router implementation (not re-checked inside `VTSPositionLib` beyond “slot taken + poolId must match”).
+- **Why**: Without per-router salt discipline, a permissionless third party could register the same `(router, ticks,
+  salt)` in pool A and cause later adds in pool B to fail with `InvalidPosition` (cross-pool griefing). The protocol
+  relies on the **blessed** routers above to make that collision infeasible in normal operation.
+- **Non-goal**: Arbitrary external modify-liquidity routers are **not** guaranteed compatible unless they preserve the same
+  uniqueness property; integrators who deploy custom routers must derive salts accordingly (for example pool-scoped or
+  monotonic salts), or accept that VTS may reject cross-pool reuse.
 
 ## Commitment backing, signals, and insolvency gates
 

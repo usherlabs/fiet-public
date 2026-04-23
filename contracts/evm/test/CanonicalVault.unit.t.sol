@@ -297,6 +297,38 @@ contract CanonicalVaultUnitTest is Test {
         assertEq(vault.inMarketBalanceOf(MARKET_ID, Currency.wrap(u0)), amt);
     }
 
+    /// @dev Integration: same sequencing as `VaultCoreActionHandler.handleIngress` after the ingress wake-up fix —
+    ///      Hub→vault funding increases per-market reserve, then obligation settle in the same logical batch must
+    ///      call `confirmTake` when the Hub reports unfunded queue and vault reserve can cover it. Ingress alone
+    ///      must not confirm (that was the liveness gap before the follow-up settle).
+    function test_ingress_wakeUp_sequence_fundsReserve_then_confirmsTake() public {
+        MockERC20 ua = new MockERC20("A", "A", 18);
+        MockERC20 ub = new MockERC20("B", "B", 18);
+        (MockLCC l0,, address u0,) = _deployRegisteredMarket(MARKET_ID, ua, ub);
+
+        uint256 ingress = 40;
+        hub.setTotalQueued(address(l0), 100);
+        hub.setMarketReserve(address(l0), 0);
+        hub.setReserve(address(l0), ingress);
+        MockERC20(u0).mint(address(hub), ingress);
+        vm.prank(address(hub));
+        MockERC20(u0).approve(address(vault), type(uint256).max);
+
+        vm.prank(facade);
+        vault.settleUnderlyingToVaultFromHub(MARKET_ID, address(l0), ingress);
+
+        assertEq(hub.confirmCalls(), 0, "ingress funding alone must not call confirmTake");
+        assertEq(vault.inMarketBalanceOf(MARKET_ID, Currency.wrap(u0)), ingress);
+
+        vm.prank(facade);
+        vault.settleObligationsForLCC(MARKET_ID, address(l0));
+
+        assertEq(hub.confirmCalls(), 1);
+        assertEq(hub.lastConfirmLcc(), address(l0));
+        assertEq(hub.lastConfirmAmount(), ingress);
+        assertTrue(hub.lastConfirmShouldEmit());
+    }
+
     function test_settleUnderlyingToVaultFromHub_revertsInsufficientReserve() public {
         MockERC20 ua = new MockERC20("A", "A", 18);
         (MockLCC lNat,,,) = _deployRegisteredNativeErcMarket(MARKET_ID, ua);

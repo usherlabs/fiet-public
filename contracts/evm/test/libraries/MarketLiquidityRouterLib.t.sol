@@ -364,12 +364,48 @@ contract MarketLiquidityRouterLibTest is Test {
         assertEq(decoded.recipient, unlockData.recipient);
     }
 
-    function test_prepareMarketLiquidityIngress_skipsOnZeroWrappedOrMissingHandler() public {
+    function test_prepareMarketLiquidityIngress_skipsOnlyWhenMissingHandler() public {
         MockLCC_RouterLib lcc = new MockLCC_RouterLib(address(0x1111));
 
-        h.prepareMarketLiquidityIngress(IPoolManager(address(poolManager)), address(ingressHandler), address(lcc), 0);
         h.prepareMarketLiquidityIngress(IPoolManager(address(poolManager)), address(0), address(lcc), 1);
 
+        assertEq(ingressHandler.calls(), 0);
+    }
+
+    /// @dev Zero-wrapped DEX reporting still enforces **LCC-03** sync and reserve equality (no silent skip).
+    function test_prepareMarketLiquidityIngress_zeroWrapped_revertsWithoutActiveSync() public {
+        MockLCC_RouterLib lcc = new MockLCC_RouterLib(address(0x1111));
+        poolManager.setLocked(false);
+
+        vm.expectRevert(Errors.IngressRequiresActiveSync.selector);
+        h.prepareMarketLiquidityIngress(IPoolManager(address(poolManager)), address(ingressHandler), address(lcc), 0);
+
+        assertEq(ingressHandler.calls(), 0);
+    }
+
+    function test_prepareMarketLiquidityIngress_zeroWrapped_succeedsWithValidSync_noHandleIngress() public {
+        MockLCC_RouterLib lcc = new MockLCC_RouterLib(address(0x1111));
+        poolManager.setLocked(false);
+        lcc.mint(address(poolManager), 100);
+        poolManager.sync(Currency.wrap(address(lcc)));
+
+        h.prepareMarketLiquidityIngress(IPoolManager(address(poolManager)), address(ingressHandler), address(lcc), 0);
+
+        assertEq(ingressHandler.calls(), 0);
+        assertEq(address(uint160(uint256(poolManager.exttload(MarketLiquidityRouterLib.CURRENCY_SLOT)))), address(lcc));
+        assertEq(uint256(poolManager.exttload(MarketLiquidityRouterLib.RESERVES_OF_SLOT)), 100);
+    }
+
+    function test_prepareMarketLiquidityIngress_zeroWrapped_revertsWhenUnpaidIngressAlreadyExists() public {
+        MockLCC_RouterLib lcc = new MockLCC_RouterLib(address(0x1111));
+        poolManager.setLocked(false);
+        lcc.mint(address(poolManager), 100);
+        poolManager.sync(Currency.wrap(address(lcc)));
+        lcc.mint(address(this), 1);
+        lcc.transfer(address(poolManager), 1);
+
+        vm.expectRevert(abi.encodeWithSelector(Errors.NestedIngressUnpaidTransferExists.selector, uint256(100), 101));
+        h.prepareMarketLiquidityIngress(IPoolManager(address(poolManager)), address(ingressHandler), address(lcc), 0);
         assertEq(ingressHandler.calls(), 0);
     }
 

@@ -1133,6 +1133,30 @@ contract MarketFactoryUnitTest is Test {
         assertEq(proxyHook.ingressCalls(), 0);
     }
 
+    /// @dev Market-derived-only DEX reporting uses `wrappedAmount == 0` but must still enforce **LCC-03** sync gates.
+    function test_prepareMarketLiquidity_zeroWrapped_withoutActiveSync_reverts() public {
+        (MockLCC_MarketFactory lcc0,,) = _prepareMarketWithMockLcc(address(0x100), address(0x200));
+        poolManager.setExttload(Lock.IS_UNLOCKED_SLOT, bytes32(uint256(1)));
+
+        vm.prank(address(lcc0));
+        vm.expectRevert(Errors.IngressRequiresActiveSync.selector);
+        factory.prepareMarketLiquidity(address(lcc0), 0);
+
+        assertEq(proxyHook.ingressCalls(), 0);
+    }
+
+    function test_prepareMarketLiquidity_zeroWrapped_succeedsWhenSynced_noHandleIngress() public {
+        (MockLCC_MarketFactory lcc0,,) = _prepareMarketWithMockLcc(address(0x100), address(0x200));
+        poolManager.setExttload(Lock.IS_UNLOCKED_SLOT, bytes32(uint256(1)));
+        lcc0.mint(address(poolManager), 100);
+        poolManager.sync(Currency.wrap(address(lcc0)));
+
+        vm.prank(address(lcc0));
+        factory.prepareMarketLiquidity(address(lcc0), 0);
+
+        assertEq(proxyHook.ingressCalls(), 0);
+    }
+
     function test_prepareMarketLiquidity_sameLccSync_restoresAfterNestedErc20Sync() public {
         (MockLCC_MarketFactory lcc0, MockLCC_MarketFactory lcc1,) =
             _prepareMarketWithMockLcc(address(0x100), address(0x200));
