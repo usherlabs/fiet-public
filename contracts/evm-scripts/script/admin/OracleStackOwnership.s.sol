@@ -157,8 +157,8 @@ contract OracleStackTransferToGlobalConfigScript is AdminBase {
         } catch {}
 
         console.log("ResilientOracle:", oracle);
-        console.log("ResilientOracle owner:", oracleOwner);
-        console.log("ResilientOracle pendingOwner:", oraclePending);
+        console.log("ResilientOracle current owner:", oracleOwner);
+        console.log("ResilientOracle current pendingOwner:", oraclePending);
 
         bool skipAcmTransfer = vm.envOr("SKIP_ACM_ADMIN_TRANSFER", false);
         bool requireAcmTransfer = vm.envOr("REQUIRE_ACM_ADMIN_TRANSFER", false);
@@ -210,8 +210,9 @@ contract OracleStackTransferToGlobalConfigScript is AdminBase {
         require(target != globalConfig, "OracleStackOwnership: GlobalConfig cannot be a handoff target");
 
         address currentOwner = IOwnableLike(target).owner();
-        console.log(label, "target:", target);
-        console.log(label, "owner:", currentOwner);
+        console.log(label, "GlobalConfig address:", globalConfig);
+        console.log(label, "deployed address:", target);
+        console.log(label, "current owner:", currentOwner);
 
         if (currentOwner == globalConfig) {
             console.log("SKIP:", label, "already owned by GlobalConfig");
