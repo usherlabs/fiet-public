@@ -45,7 +45,8 @@ contract BatchProcessSettlementGriefingHarness is AbstractBatchProcessSettlement
 
 /// @notice E2E coverage for batched settlement resilience to native payout griefing (per-item gas cap + native stipend).
 contract BatchProcessSettlementGriefingTest is LiquidityHubTestBase {
-    bytes32 internal constant SETTLEMENT_SUCCEEDED_TOPIC = keccak256("SettlementSucceeded(address,address,uint256)");
+    bytes32 internal constant SETTLEMENT_SUCCEEDED_TOPIC =
+        keccak256("SettlementSucceeded(address,address,uint256,uint256)");
 
     struct GriefScenario {
         address lccNative;
