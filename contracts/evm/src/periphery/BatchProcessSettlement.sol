@@ -18,6 +18,9 @@ abstract contract AbstractBatchProcessSettlement {
     /// @notice Max number of items allowed per batch.
     uint256 public constant MAX_BATCH_SIZE = 30;
 
+    /// @notice Upper bound on gas forwarded to each `processSettlementFor` call so one recipient cannot exhaust the batch tx.
+    uint256 public constant SETTLEMENT_ITEM_GAS_LIMIT = 2_500_000;
+
     /// @notice LiquidityHub to call on the destination chain.
     ILiquidityHub public immutable liquidityHub;
 
@@ -44,7 +47,7 @@ abstract contract AbstractBatchProcessSettlement {
         emit BatchReceived(count);
 
         for (uint256 i = 0; i < count; i++) {
-            try liquidityHub.processSettlementFor(lcc[i], recipient[i], maxAmount[i]) {
+            try liquidityHub.processSettlementFor{gas: SETTLEMENT_ITEM_GAS_LIMIT}(lcc[i], recipient[i], maxAmount[i]) {
                 emit SettlementSucceeded(lcc[i], recipient[i], maxAmount[i]);
             } catch (bytes memory reason) {
                 emit SettlementFailed(lcc[i], recipient[i], maxAmount[i], reason);
