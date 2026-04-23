@@ -51,7 +51,9 @@ Reservations are now released only by trusted completion signals from the destin
 
 - `SettlementProcessed` reduces pending queue balance only.
 - `SettlementSucceededReported` releases the reserved in-flight amount without restoring budget.
-- `SettlementFailedReported` releases the reserved in-flight amount and restores dispatch budget for retry.
+- `SettlementFailedReported` releases the reserved in-flight amount. Unknown and policy failures restore
+  dispatch budget, while `LiquidityError(...)` consumes speculative budget and waits for a fresh
+  `LiquidityAvailable(...)` wake-up.
 - `SettlementAnnulledReported` reduces pending queue balance only.
 
 The split matters because `requestedAmount` on `LiquidityHub.SettlementProcessed` is permissionless input and is not trusted for reservation release anymore.
@@ -95,10 +97,13 @@ function _consumeAuthoritativeDecrease(
 ## Key Design Rules
 
 1. **Processed is not completion**: `SettlementProcessed` cannot clear reservations on its own.
-2. **Only trusted completion releases in-flight**: Success releases reservations; failure releases reservations and restores budget.
-3. **Never over-reserve**: `inFlightByKey` is capped at `entry.amount`.
-4. **Pruning trigger**: When both `entry.amount == 0` and `inFlightByKey[key] == 0`, the entry is removed from all queues.
-5. **Buffering interaction**: If an authoritative decrease arrives before the pending entry, it is buffered and applied later via `_applyBufferedDecreases`.
+2. **Only trusted completion releases in-flight**: Success releases reservations; failure releases reservations and
+   then either restores retry budget or burns stale speculative credit, depending on the classified failure.
+3. **Liquidity exhaustion scrubs speculative credit**: `LiquidityError(...)` does not restore budget, so duplicate or stale
+   wake-ups cannot leave persistent phantom dispatch capacity behind.
+4. **Never over-reserve**: `inFlightByKey` is capped at `entry.amount`.
+5. **Pruning trigger**: When both `entry.amount == 0` and `inFlightByKey[key] == 0`, the entry is removed from all queues.
+6. **Buffering interaction**: If an authoritative decrease arrives before the pending entry, it is buffered and applied later via `_applyBufferedDecreases`.
 
 ## Invariant
 
@@ -112,13 +117,15 @@ This invariant is maintained across queuing, dispatch, and authoritative reconci
 
 - Prevents the same liquidity from being dispatched multiple times before confirmation
 - Allows partial processing (e.g. only 60 of 100 requested is settled) without trusting caller-supplied `requestedAmount`
-- Handles failures gracefully by releasing reservations and restoring the persisted dispatch budget so the settlement can retry immediately
+- Handles failures gracefully by releasing reservations while ensuring stale `LiquidityAvailable(...)` credit is scrubbed
+  instead of being retried indefinitely after downstream liquidity exhaustion
 - Works with the buffering system for out-of-order reports
 - Enables the zero-batch retry mechanism to function correctly (reserved entries are skipped during scanning)
 
 ## Test Coverage
 
 - `test_releasesInFlightOnSettlementFailedAndKeepsPendingRetryable()`
+- `test_duplicateLiquiditySignalScrubsPhantomBudgetUntilFreshWakeup()`
 - `test_releasesUnusedInFlightReservationOnTrustedSuccess()`
 - `test_processedRequestedAmountNoLongerReleasesReservation()`
 - `test_sharedUnderlyingPartialInFlightReleaseMatchesPerLccSemantics()`
