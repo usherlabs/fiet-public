@@ -145,6 +145,21 @@ contract LiquidityCommitmentCertificateTest is Test {
         assertEq(lccNative.underlying(), OracleUtils.RESILIENT_ORACLE_NATIVE_TOKEN_ADDR);
     }
 
+    function test_underlying_whenCallerIsOracle_erc20_returnsUnderlyingUnchanged() public {
+        vm.prank(oracle);
+        assertEq(lcc.underlying(), address(0xBEEF));
+    }
+
+    function test_constructor_revertsWhenHubZero() public {
+        vm.expectRevert(abi.encodeWithSelector(Errors.InvalidAddress.selector, address(0)));
+        new LiquidityCommitmentCertificate(address(0xBEEF), "LCC", "LCC", 18, oracle, address(0), address(this));
+    }
+
+    function test_constructor_revertsWhenFactoryZero() public {
+        vm.expectRevert(abi.encodeWithSelector(Errors.InvalidAddress.selector, address(0)));
+        new LiquidityCommitmentCertificate(address(0xBEEF), "LCC", "LCC", 18, oracle, address(this), address(0));
+    }
+
     function test_decimals_returnsConstructorValue() public {
         LiquidityCommitmentCertificate lcc6 = new LiquidityCommitmentCertificate(
             address(0xBEEF), "LCC6", "LCC6", 6, oracle, address(this), address(this)
@@ -169,6 +184,30 @@ contract LiquidityCommitmentCertificateTest is Test {
         lcc.mint(alice, 0, 0);
     }
 
+    /// @dev Finding 14: direct-backed mints to bucket-exempt holders misalign `directSupply` with buckets.
+    function test_mint_revertsWhenDirectBackedToExemptRecipient() public {
+        address exempt = makeAddr("exemptRecipient");
+        _setBoundLevel(exempt, BOUND_EXEMPT);
+        vm.expectRevert(abi.encodeWithSelector(Errors.MintToNotAllowedRecipient.selector, exempt));
+        lcc.mint(exempt, 1, 0);
+    }
+
+    function test_mint_allowsMarketDerivedOnlyToExemptRecipient() public {
+        address exempt = makeAddr("exemptRecipientMarketOnly");
+        _setBoundLevel(exempt, BOUND_EXEMPT);
+        lcc.mint(exempt, 0, 7);
+        assertEq(lcc.balanceOf(exempt), 7);
+    }
+
+    /// @dev Exempt endpoints do not maintain per-address wrapped/market maps; `balancesOf` exposes full balance as market-derived.
+    function test_balancesOf_exemptHolder_reportsZeroWrappedFullMarket() public {
+        lcc.mint(protocol, 0, 11);
+        (uint256 w, uint256 m) = lcc.balancesOf(protocol);
+        assertEq(w, 0);
+        assertEq(m, 11);
+        assertEq(w + m, lcc.balanceOf(protocol));
+    }
+
     function test_mint_updatesBucketsWhenNotIssued() public {
         lcc.mint(alice, 3, 5);
 
@@ -188,9 +227,8 @@ contract LiquidityCommitmentCertificateTest is Test {
         assertEq(marketBal, 7);
     }
 
-    /// @dev Mutation-hardening: balancesOf() must fall back to `(fullBalance, 0)` even if the account is not exempt,
-    ///      when buckets are empty but ERC20 balance is non-zero. This kills the `||` -> `&&` mutant.
-    function test_balancesOf_bucketlessNonExempt_fallsBackToFullBalanceWrapped() public {
+    /// @dev Bucket-tracked holders must never rely on the exempt-holder fallback.
+    function test_balancesOf_bucketlessNonExempt_revertsInvalidBucketState() public {
         address bucketless = makeAddr("bucketless");
 
         // Make the account exempt for mint so bucket maps remain empty.
@@ -201,9 +239,21 @@ contract LiquidityCommitmentCertificateTest is Test {
         // Now make it non-exempt while keeping bucket maps empty.
         _setBoundLevel(bucketless, BOUND_ENDPOINT);
 
-        (uint256 wrappedBal, uint256 marketBal) = lcc.balancesOf(bucketless);
-        assertEq(wrappedBal, 10);
-        assertEq(marketBal, 0);
+        vm.expectRevert(abi.encodeWithSelector(Errors.InvalidBucketState.selector, bucketless, uint256(10)));
+        lcc.balancesOf(bucketless);
+    }
+
+    /// @dev Bucket sum must match `balanceOf` for non-exempt holders (not only the bucketless case).
+    function test_balancesOf_bucketSumMismatchNonExempt_revertsInvalidBucketState() public {
+        lcc.mint(alice, 5, 5);
+        assertEq(lcc.balanceOf(alice), 10);
+
+        // `wrappedBalances` storage slot from `forge inspect ... storage-layout` (ERC20 uses slots 0–4).
+        bytes32 wrappedEntry = keccak256(abi.encode(alice, uint256(5)));
+        vm.store(address(lcc), wrappedEntry, bytes32(uint256(3))); // 3 + 5 != 10
+
+        vm.expectRevert(abi.encodeWithSelector(Errors.InvalidBucketState.selector, alice, uint256(10)));
+        lcc.balancesOf(alice);
     }
 
     function test_burn_revertsWhenAmountIsZero() public {
@@ -254,15 +304,15 @@ contract LiquidityCommitmentCertificateTest is Test {
         lcc.mint(protocol, 0, 10);
 
         (uint256 wrappedBal, uint256 marketBal) = lcc.balancesOf(protocol);
-        assertEq(wrappedBal, 10);
-        assertEq(marketBal, 0);
+        assertEq(wrappedBal, 0);
+        assertEq(marketBal, 10);
 
         // Non-issued burn should still skip buckets because protocol is bucket-exempt.
         lcc.burn(protocol, 0, 4);
         (wrappedBal, marketBal) = lcc.balancesOf(protocol);
         assertEq(lcc.balanceOf(protocol), 6);
-        assertEq(wrappedBal, 6);
-        assertEq(marketBal, 0);
+        assertEq(wrappedBal, 0);
+        assertEq(marketBal, 6);
     }
 
     function test_transfer_revertsForNonProtocolToNonProtocol() public {
@@ -310,11 +360,11 @@ contract LiquidityCommitmentCertificateTest is Test {
         // No annulment for protocol -> protocol.
         assertEq(annulCalls, 0);
 
-        // Protocol recipients don't accumulate bucket maps; balancesOf reports ERC20 balance as wrapped via fallback.
+        // Protocol recipients don't accumulate bucket maps; balancesOf reports full ERC20 balance as market-derived.
         (uint256 wrappedBal, uint256 marketBal) = lcc.balancesOf(protocol2);
         assertEq(lcc.balanceOf(protocol2), 4);
-        assertEq(wrappedBal, 4);
-        assertEq(marketBal, 0);
+        assertEq(wrappedBal, 0);
+        assertEq(marketBal, 4);
 
         assertEq(plannedCancelCalls, 1);
         assertEq(lastCancelSender, protocol);
@@ -453,8 +503,8 @@ contract LiquidityCommitmentCertificateTest is Test {
 
         assertEq(lcc.balanceOf(protocol), 60);
         (uint256 wrappedBalProtocol, uint256 marketBalProtocol) = lcc.balancesOf(protocol);
-        assertEq(wrappedBalProtocol, 60);
-        assertEq(marketBalProtocol, 0);
+        assertEq(wrappedBalProtocol, 0);
+        assertEq(marketBalProtocol, 60);
 
         (uint256 wrappedBalMmpm, uint256 marketBalMmpm) = lcc.balancesOf(mmpm);
         assertEq(wrappedBalMmpm, 20);
@@ -523,6 +573,39 @@ contract LiquidityCommitmentCertificateTest is Test {
         assertEq(lastWrappedIngressWrapped, 4);
     }
 
+    /// @dev Market-derived-only ingress to DEX must still call `prepareMarketLiquidity` with `wrappedAmount == 0` so
+    ///      ingress validation runs (LCC-03); Hub→vault `handleIngress` is not implied by a zero second argument.
+    function test_transfer_toDexSink_marketDerivedOnly_reportsZeroWrappedIngress() public {
+        address dexSink = makeAddr("dexSinkMd");
+        _setBoundLevel(dexSink, BOUND_DEX);
+        lcc.mint(alice, 0, 10);
+
+        vm.prank(alice);
+        lcc.transfer(dexSink, 4);
+
+        assertEq(wrappedIngressCalls, 1);
+        assertEq(lastWrappedIngressLcc, address(lcc));
+        assertEq(lastWrappedIngressWrapped, 0);
+    }
+
+    /// @dev Protocol bucket-tracked endpoint to DEX: wrapped slice is passed to `prepareMarketLiquidity`.
+    function test_transfer_protocolEndpointToDex_mixedBuckets_preparesWrappedSlice() public {
+        address dexSink = makeAddr("dexSinkProt");
+        address mmpm = makeAddr("mmpmDexFrom");
+        _setBoundLevel(dexSink, BOUND_DEX);
+        _setBoundLevel(mmpm, BOUND_ENDPOINT);
+
+        lcc.mint(alice, 40, 60);
+        vm.prank(alice);
+        lcc.transfer(mmpm, 100);
+
+        vm.prank(mmpm);
+        lcc.transfer(dexSink, 70);
+
+        assertEq(wrappedIngressCalls, 1);
+        assertEq(lastWrappedIngressWrapped, 10);
+    }
+
     /// @dev Mutation-hardening: bucket-tracked protocol -> protocol transfer must:
     ///      - not revert on correct total balance arithmetic (kills `+` -> `-` mutant)
     ///      - debit sender buckets (kills `-=` -> `+=` mutants)
@@ -555,9 +638,9 @@ contract LiquidityCommitmentCertificateTest is Test {
         assertEq(toWrapped + toMarket, lcc.balanceOf(to));
     }
 
-    /// @dev Mutation-hardening: bucket-tracked protocol -> bucket-exempt protocol must NOT credit bucket maps
-    ///      while exempt. We flip the recipient to non-exempt afterwards to make bucket pollution observable.
-    function test_transfer_bucketTrackedEndpointToBucketExemptEndpoint_doesNotCreditBucketsWhileExempt_evenAfterFlip()
+    /// @dev Exempt endpoints may stay bucketless while exempt, but flipping them back to bucket-tracked without
+    ///      reconciling buckets must surface as an invalid state rather than silently inferring a wrapped/market split.
+    function test_transfer_bucketTrackedEndpointToBucketExemptEndpoint_flipAfterwards_revertsInvalidBucketState()
         public
     {
         address mmpm = makeAddr("mmpmFlip");
@@ -575,13 +658,11 @@ contract LiquidityCommitmentCertificateTest is Test {
         vm.prank(mmpm);
         lcc.transfer(protocol, 70);
 
-        // Flip recipient to non-exempt; if any buckets were incorrectly credited while exempt,
-        // balancesOf will return the bucket split rather than `(fullBalance, 0)`.
+        // Flip recipient to non-exempt; bucketless state is no longer permitted once the holder is bucket-tracked.
         _setBoundLevel(protocol, BOUND_ENDPOINT);
 
-        (uint256 wrappedBal, uint256 marketBal) = lcc.balancesOf(protocol);
-        assertEq(wrappedBal, 70);
-        assertEq(marketBal, 0);
+        vm.expectRevert(abi.encodeWithSelector(Errors.InvalidBucketState.selector, protocol, uint256(70)));
+        lcc.balancesOf(protocol);
     }
 }
 

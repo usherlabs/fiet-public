@@ -5,6 +5,7 @@ import {IVRLSettlementObserver} from "../../../src/interfaces/IVRLSettlementObse
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
 import {Errors} from "../../../src/libraries/Errors.sol";
+import {PositionId} from "../../../src/types/Position.sol";
 
 /// @notice Configurable settlement observer mock for SEIZE-02 fuzzing.
 contract MockSettlementObserver is IVRLSettlementObserver {
@@ -53,6 +54,7 @@ contract MockSettlementObserver is IVRLSettlementObserver {
         PoolKey memory key,
         uint8 settlementTokenIndex,
         uint32 verifierIndex,
+        PositionId,
         bytes memory,
         bool revertOnInvalid
     ) external view returns (bool isProofValid) {

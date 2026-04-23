@@ -11,10 +11,10 @@ jobs:
     if: ${{ github.event.pull_request.merged }}
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
           fetch-depth: 0
-      - uses: usherlabs/monorepo-package-mirror-action@main
+      - uses: usherlabs/monorepo-package-mirror-action@e511a4be0a5b270051521aa7c99f71d66295938e
         with:
           #          target_repo_url: https://github.com/outerlook/mirror-test-dest.git
           target_repo_url: git@github.com:usherlabs/fiet-public.git

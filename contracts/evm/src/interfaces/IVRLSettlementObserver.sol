@@ -3,6 +3,7 @@ pragma solidity ^0.8.26;
 
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
+import {PositionId} from "../types/Position.sol";
 
 interface IVRLSettlementObserver {
     event VerifierAdded(address indexed verifier, uint256 indexed index);
@@ -10,7 +11,7 @@ interface IVRLSettlementObserver {
     event VerifierAllowed(address indexed token, uint32 indexed verifierIndex);
     event VerifierDisallowed(address indexed token, uint32 indexed verifierIndex);
     event SettlementProofMarkedUsed(
-        bytes32 indexed proofHash, PoolId indexed poolId, uint32 verifierIndex, uint8 tokenIndex
+        bytes32 indexed proofHash, PoolId indexed poolId, uint32 verifierIndex, uint8 tokenIndex, PositionId positionId
     );
 
     function submitter() external view returns (address);
@@ -22,6 +23,7 @@ interface IVRLSettlementObserver {
         PoolKey memory poolKey,
         uint8 tokenIndex,
         uint32 verifierIndex,
+        PositionId positionId,
         bytes memory settlementProof,
         bool revertOnInvalid
     ) external returns (bool isProofValid);

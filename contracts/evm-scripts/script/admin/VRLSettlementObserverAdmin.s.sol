@@ -36,7 +36,7 @@ interface IVRLSettlementObserverAdmin {
 }
 
 abstract contract TokensJsonBase is AdminBase {
-    function _loadTokens() internal returns (address[] memory tokens) {
+    function _loadTokens() internal view returns (address[] memory tokens) {
         string memory json;
         if (vm.envExists("TOKENS_FILE")) {
             string memory path = vm.envString("TOKENS_FILE");

@@ -9,7 +9,7 @@ import {IHooks} from "@uniswap/v4-core/src/interfaces/IHooks.sol";
 import {BaseHook} from "v4-periphery/src/utils/BaseHook.sol";
 import {Errors} from "../../../src/libraries/Errors.sol";
 
-/// @notice Echidna harness for MKT-01 and MKT-02 proxy hook structural guards.
+/// @notice fuzz harness for MKT-01 and MKT-02 proxy hook structural guards.
 contract MKT01_02 {
     uint256 internal constant MAX_VACUOUS_ATTEMPTS = 12;
 
@@ -107,7 +107,7 @@ contract MKT01_02 {
     }
 
     // forge-lint: disable-next-line(mixed-case-function)
-    function echidna_mkt_01_proxy_rejects_add_liquidity() external view returns (bool) {
+    function fuzz_mkt_01_proxy_rejects_add_liquidity() external view returns (bool) {
         if (addChecks == 0) {
             return addAttempts < MAX_VACUOUS_ATTEMPTS;
         }
@@ -115,7 +115,7 @@ contract MKT01_02 {
     }
 
     // forge-lint: disable-next-line(mixed-case-function)
-    function echidna_mkt_02_core_pool_key_write_once() external view returns (bool) {
+    function fuzz_mkt_02_core_pool_key_write_once() external view returns (bool) {
         if (writeChecks == 0) {
             return writeAttempts < MAX_VACUOUS_ATTEMPTS;
         }

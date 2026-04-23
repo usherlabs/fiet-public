@@ -2,10 +2,12 @@
 pragma solidity ^0.8.26;
 
 import {ImmutableVTSState} from "./ImmutableVTSState.sol";
-import {Currency} from "v4-periphery/lib/v4-core/src/types/Currency.sol";
+import {Currency, CurrencyLibrary} from "v4-periphery/lib/v4-core/src/types/Currency.sol";
+import {Math} from "openzeppelin-contracts/contracts/utils/math/Math.sol";
 import {ILCC} from "../interfaces/ILCC.sol";
 import {ILiquidityHub} from "../interfaces/ILiquidityHub.sol";
 import {IMarketFactory} from "../interfaces/IMarketFactory.sol";
+import {Errors} from "../libraries/Errors.sol";
 
 /**
  * @title PositionManagerBase
@@ -14,12 +16,20 @@ import {IMarketFactory} from "../interfaces/IMarketFactory.sol";
  * @dev Note: ImmutableState is provided by inheriting contracts (BaseActionsRouter for entrypoint, direct for impl)
  */
 abstract contract PositionManagerBase is ImmutableVTSState {
+    using CurrencyLibrary for Currency;
+
     ILiquidityHub internal immutable liquidityHub;
     IMarketFactory internal immutable marketFactory;
+    /// @notice Factory-scoped canonical custody used at batch finality and for settlement transfers.
+    address internal immutable canonicalCustody;
 
-    constructor(address _marketFactory, address _vtsOrchestrator) ImmutableVTSState(_vtsOrchestrator) {
+    constructor(address _marketFactory, address _vtsOrchestrator, address _canonicalCustody)
+        ImmutableVTSState(_vtsOrchestrator)
+    {
+        if (_canonicalCustody == address(0)) revert Errors.InvalidAddress(_canonicalCustody);
         marketFactory = IMarketFactory(_marketFactory);
         liquidityHub = marketFactory.liquidityHub();
+        canonicalCustody = _canonicalCustody;
     }
 
     // ------------------------------------------------------------------------------------------------
@@ -66,5 +76,23 @@ abstract contract PositionManagerBase is ImmutableVTSState {
     /// @param amount The exact amount to credit
     function _creditExact(Currency currency, uint256 amount) internal {
         vtsOrchestrator.creditExact(marketFactory, currency, msgSender(), amount);
+    }
+
+    /// @notice Takes currency from delta and transfers to recipient (locker = `msgSender()`).
+    /// @dev Native `TAKE` to `address(this)` is disallowed: it would debit the locker's delta without moving ETH,
+    ///      stranding balance on MMPM with no native `SYNC` path (see `INVARIANTS.md` DELTA-02). ERC20 self-take
+    ///      remains valid and recoverable via `SYNC`.
+    function _take(Currency currency, address to, uint256 maxAmount) internal {
+        if (currency == CurrencyLibrary.ADDRESS_ZERO && to == address(this)) {
+            revert Errors.InvalidAddress(to);
+        }
+        address locker = msgSender();
+        uint256 bal = currency.balanceOfSelf();
+        uint256 trueMaxAmount = (maxAmount == 0) ? bal : Math.min(maxAmount, bal);
+        uint256 takeAmount = vtsOrchestrator.take(currency, locker, trueMaxAmount);
+
+        if (to != address(this)) {
+            currency.transfer(to, takeAmount);
+        }
     }
 }

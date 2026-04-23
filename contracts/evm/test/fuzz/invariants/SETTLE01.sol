@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.26;
 
-import {VTSPositionLibEchidnaHarness} from "../harnesses/VTSPositionLibEchidnaHarness.sol";
+import {VTSPositionLibFuzzHarness} from "../harnesses/VTSPositionLibFuzzHarness.sol";
 import {MockPoolManager} from "../mocks/MockPoolManager.sol";
 import {MockMarketVault} from "../../_mocks/MockMarketVault.sol";
 import {MockLCC} from "../../_mocks/MockLCC.sol";
@@ -14,15 +14,14 @@ import {IPoolManager} from "v4-periphery/lib/v4-core/src/interfaces/IPoolManager
 import {ModifyLiquidityParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
 import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
 import {LiquidityUtils} from "../../../src/libraries/LiquidityUtils.sol";
-import {EchidnaLinkedLibs} from "../base/EchidnaLinkedLibs.sol";
+import {Errors} from "../../../src/libraries/Errors.sol";
 
-/// @notice Echidna harness for SETTLE-01: Withdrawals from active positions are disallowed while RFS is open.
-///         Uses the production `VTSPositionLib.onMMSettle` path via the Echidna harness.
+/// @notice fuzz harness for SETTLE-01: Withdrawals from active positions are disallowed while RFS is open.
+///         Uses the production MM settle path via `VTSLifecycleLinkedLib._executeMMSettleFromParams` (fuzz harness).
 contract SETTLE01 {
     uint256 internal constant MAX_VACUOUS_ATTEMPTS = 12;
-    string internal constant RFS_OPEN_REASON = "VTSPositionLib: RFS open";
 
-    VTSPositionLibEchidnaHarness internal harness;
+    VTSPositionLibFuzzHarness internal harness;
     MockPoolManager internal poolManager;
     MockMarketVault internal vault;
 
@@ -43,10 +42,9 @@ contract SETTLE01 {
     bool internal closedAllOk = true;
 
     constructor() {
-        EchidnaLinkedLibs.deployVTSPositionLib();
-        harness = new VTSPositionLibEchidnaHarness();
+        harness = new VTSPositionLibFuzzHarness();
         poolManager = new MockPoolManager();
-        vault = new MockMarketVault();
+        vault = new MockMarketVault(address(0));
 
         ModifyLiquidityParams memory mlParams =
             ModifyLiquidityParams({tickLower: -60, tickUpper: 60, liquidityDelta: 1e10, salt: bytes32(0)});
@@ -78,7 +76,6 @@ contract SETTLE01 {
                 unbackedCommitmentGraceBypassTime: 0,
                 unbackedCommitmentGraceBypassThreshold: 0
             }),
-            coverageFeeShare: 5000, // 50%
             minResidualUnits: 1000,
             unbackedCommitmentGraceBypassBps: 500
         });
@@ -119,15 +116,22 @@ contract SETTLE01 {
         (uint256 settledBefore0, uint256 settledBefore1) = harness.getSettled(positionId);
         bool revertedWithExpectedReason = false;
         try harness.onMMSettle(
-            IPoolManager(address(poolManager)), vault, positionId, lccCurrency0, lccCurrency1, delta, false
+            VTSPositionLibFuzzHarness.OnMMSettleInput({
+                poolManager: IPoolManager(address(poolManager)),
+                vault: vault,
+                positionId: positionId,
+                lccCurrency0: lccCurrency0,
+                lccCurrency1: lccCurrency1,
+                delta: delta,
+                isSeizing: false,
+                fromDeltas: false
+            })
         ) returns (
             BalanceDelta, bool, uint256
         ) {
             revertedWithExpectedReason = false;
-        } catch Error(string memory reason) {
-            revertedWithExpectedReason = _eq(reason, RFS_OPEN_REASON);
-        } catch {
-            revertedWithExpectedReason = false;
+        } catch (bytes memory reason) {
+            revertedWithExpectedReason = _selectorOf(reason) == Errors.RFSOpenForPosition.selector;
         }
         (uint256 settledAfter0, uint256 settledAfter1) = harness.getSettled(positionId);
 
@@ -159,7 +163,16 @@ contract SETTLE01 {
 
         bool success;
         try harness.onMMSettle(
-            IPoolManager(address(poolManager)), vault, positionId, lccCurrency0, lccCurrency1, delta, false
+            VTSPositionLibFuzzHarness.OnMMSettleInput({
+                poolManager: IPoolManager(address(poolManager)),
+                vault: vault,
+                positionId: positionId,
+                lccCurrency0: lccCurrency0,
+                lccCurrency1: lccCurrency1,
+                delta: delta,
+                isSeizing: false,
+                fromDeltas: false
+            })
         ) returns (
             BalanceDelta, bool, uint256
         ) {
@@ -174,7 +187,7 @@ contract SETTLE01 {
 
     /// @notice Property: non-seizing withdrawals revert while RFS is open, and succeed when RFS is closed.
     // forge-lint: disable-next-line(mixed-case-function)
-    function echidna_settle_01_withdraw_reverts_when_rfs_open() external view returns (bool) {
+    function fuzz_settle_01_withdraw_reverts_when_rfs_open() external view returns (bool) {
         if (openChecks == 0) {
             return openAttempts < MAX_VACUOUS_ATTEMPTS;
         }
@@ -182,15 +195,19 @@ contract SETTLE01 {
     }
 
     // forge-lint: disable-next-line(mixed-case-function)
-    function echidna_settle_01_aux_withdraw_succeeds_when_rfs_closed() external view returns (bool) {
+    function fuzz_settle_01_aux_withdraw_succeeds_when_rfs_closed() external view returns (bool) {
         if (closedChecks == 0) {
             return closedAttempts < MAX_VACUOUS_ATTEMPTS;
         }
         return closedAllOk;
     }
 
-    function _eq(string memory a, string memory b) internal pure returns (bool) {
-        return keccak256(bytes(a)) == keccak256(bytes(b));
+    function _selectorOf(bytes memory reason) internal pure returns (bytes4 selector) {
+        if (reason.length >= 4) {
+            assembly {
+                selector := mload(add(reason, 0x20))
+            }
+        }
     }
 
     function _configureRfsOpen(uint256 commitmentMax0, uint256 commitmentMax1, uint256 settled0, uint256 settled1)
@@ -204,6 +221,7 @@ contract SETTLE01 {
 
         harness.setCommitmentMax(positionId, c0, c1);
         harness.setSettled(positionId, s0, s1);
+        harness.setPoolTotalSettled(POOL_ID, s0, s1);
 
         uint256 def0 = baseReq0 > s0 ? (baseReq0 - s0) + 1 : 1;
         uint256 def1 = baseReq1 > s1 ? (baseReq1 - s1) + 1 : 1;
@@ -218,13 +236,12 @@ contract SETTLE01 {
         harness.setCommitmentMax(positionId, c0, c1);
 
         (uint256 baseReq0, uint256 baseReq1) = LiquidityUtils.getBaseSettlementAmounts(c0, c1, 1000, 1000);
-        uint256 def0 = baseReq0 / 2;
-        uint256 def1 = baseReq1 / 2;
         uint256 req0 = baseReq0;
         uint256 req1 = baseReq1;
         harness.setSettled(positionId, req0, req1);
-        harness.setCumulativeDeficit(positionId, def0, def1);
-        harness.setPoolTotalDeficitPrincipal(POOL_ID, def0, def1);
+        harness.setPoolTotalSettled(POOL_ID, req0, req1);
+        harness.setCumulativeDeficit(positionId, 0, 0);
+        harness.setPoolTotalDeficitPrincipal(POOL_ID, 0, 0);
         harness.setPositionActive(positionId, true);
     }
 }

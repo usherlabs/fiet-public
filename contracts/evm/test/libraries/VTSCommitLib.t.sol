@@ -12,11 +12,13 @@ import {LiquiditySignal} from "../../src/types/Commit.sol";
 import {MarketMaker} from "../../src/libraries/MarketMaker.sol";
 
 import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
+import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
 import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
 import {PositionId} from "../../src/types/Position.sol";
 import {FullMath} from "@uniswap/v4-core/src/libraries/FullMath.sol";
 import {FixedPoint128} from "v4-periphery/lib/v4-core/src/libraries/FixedPoint128.sol";
 import {LiquidityUtils} from "../../src/libraries/LiquidityUtils.sol";
+import {OracleUtils} from "../../src/libraries/OracleUtils.sol";
 
 contract MockOracleHelper is IOracleHelper {
     uint256 internal _price0 = 1e18;
@@ -88,20 +90,10 @@ contract MockOracleHelper is IOracleHelper {
 }
 
 contract MockSignalManager is IVRLSignalManager {
-    uint256 internal _expirySeconds = 3600;
-
-    function setExpirySeconds(uint256 s) external {
-        _expirySeconds = s;
-    }
-
     // ===== IVRLSignalManager (unused surface area: stubbed) =====
 
     function getVerifier() external pure returns (address) {
         return address(0);
-    }
-
-    function signalExpiryInSeconds() external view returns (uint256) {
-        return _expirySeconds;
     }
 
     function mmNonce(address) external pure returns (uint256) {
@@ -120,20 +112,23 @@ contract MockSignalManager is IVRLSignalManager {
         revert("MockSignalManager: not implemented");
     }
 
-    function setSignalExpiryInSeconds(uint256) external pure {
-        revert("MockSignalManager: not implemented");
+    function verifyLiquiditySignal(address, bytes memory liquiditySignal, bool) external view returns (bool, uint256) {
+        LiquiditySignal memory signal = abi.decode(liquiditySignal, (LiquiditySignal));
+        return (true, signal.mmState.expiryAt - block.timestamp);
     }
 
-    function verifyLiquiditySignal(address, bytes memory, bool) external view returns (bool, uint256) {
-        return (true, _expirySeconds);
-    }
-
-    function verifyLiquiditySignalRelayed(address, uint256, bytes memory, uint256, uint256, bytes memory, bool)
-        external
-        view
-        returns (bool, uint256)
-    {
-        return (true, _expirySeconds);
+    function verifyLiquiditySignalRelayed(
+        address,
+        uint256,
+        bytes memory liquiditySignal,
+        uint256,
+        uint256,
+        bytes memory,
+        address,
+        bool
+    ) external view returns (bool, uint256) {
+        LiquiditySignal memory signal = abi.decode(liquiditySignal, (LiquiditySignal));
+        return (true, signal.mmState.expiryAt - block.timestamp);
     }
 }
 
@@ -166,7 +161,12 @@ contract VTSCommitLibTest is VTSLibTestBase {
         mmOwner = makeAddr("mmOwner");
         advancer = makeAddr("advancer");
 
-        commitId = harness.commitSignal(sigMgr, advancer, _makeSignal(mmOwner, advancer));
+        commitId = harness.commitSignal(sigMgr, advancer, oracle, _makeSignal(mmOwner, advancer));
+        assertEq(
+            harness.getCommitAuthorisedRelayer(commitId),
+            address(harness),
+            "authorised relayer is harness (orchestrator caller)"
+        );
 
         positionId = _generatePositionId(DEFAULT_OWNER, TL, TU, DEFAULT_SALT);
         harness.setupPosition(positionId, poolId, commitId, TL, TU, LIQ);
@@ -181,7 +181,7 @@ contract VTSCommitLibTest is VTSLibTestBase {
 
     function test_commitSignal_revertsOnEmptySignal() public {
         vm.expectRevert(abi.encodeWithSelector(Errors.InvalidLiquiditySignal.selector, 0, 0, 0));
-        harness.commitSignal(IVRLSignalManager(makeAddr("signalManager")), address(this), "");
+        harness.commitSignal(IVRLSignalManager(makeAddr("signalManager")), address(this), oracle, "");
     }
 
     function test_commitSignal_incrementsAndStoresState() public {
@@ -189,29 +189,35 @@ contract VTSCommitLibTest is VTSLibTestBase {
 
         address owner2 = makeAddr("owner2");
         address adv2 = makeAddr("adv2");
-        sigMgr.setExpirySeconds(1234);
 
-        uint256 newCommitId = harness.commitSignal(sigMgr, owner2, _makeSignal(owner2, adv2));
+        uint256 newCommitId = harness.commitSignal(sigMgr, owner2, oracle, _makeSignal(owner2, adv2, 1234));
 
         assertEq(newCommitId, beforeNext + 1, "commitId should increment");
         assertEq(harness.getNextCommitId(), newCommitId, "nextCommitId should match latest");
         assertEq(harness.getCommitOwner(newCommitId), owner2, "commit owner should be saved");
         assertEq(harness.getCommitAdvancer(newCommitId), adv2, "commit advancer should be saved");
+        assertEq(harness.getCommitAuthorisedRelayer(newCommitId), address(harness), "authorised relayer is harness");
         assertEq(harness.getCommitExpiresAt(newCommitId), block.timestamp + 1234, "expiry should be set");
+    }
+
+    function test_commitSignal_revertsWhenAdvancerIsZero() public {
+        address owner2 = makeAddr("owner2");
+
+        vm.expectRevert(abi.encodeWithSelector(Errors.InvalidAddress.selector, address(0)));
+        harness.commitSignal(sigMgr, owner2, oracle, _makeSignal(owner2, address(0)));
     }
 
     function test_renewSignal_revertsOnEmptySignal() public {
         vm.expectRevert(abi.encodeWithSelector(Errors.InvalidLiquiditySignal.selector, 0, 0, 0));
-        harness.renewSignal(sigMgr, commitId, "");
+        harness.renewSignal(sigMgr, oracle, commitId, "");
     }
 
     function test_renewSignal_updatesStateAndExpiry() public {
         address owner2 = mmOwner;
         address adv2 = makeAddr("adv2");
-        sigMgr.setExpirySeconds(777);
 
         vm.prank(adv2);
-        harness.renewSignal(sigMgr, commitId, _makeSignal(owner2, adv2));
+        harness.renewSignal(sigMgr, oracle, commitId, _makeSignal(owner2, adv2, 777));
 
         assertEq(harness.getCommitOwner(commitId), owner2, "owner should remain immutable");
         assertEq(harness.getCommitAdvancer(commitId), adv2, "advancer should update");
@@ -221,18 +227,16 @@ contract VTSCommitLibTest is VTSLibTestBase {
     function test_renewSignal_revertsWhenOwnerChanges() public {
         address newOwner = makeAddr("newOwner");
         address adv = address(this);
-        sigMgr.setExpirySeconds(1);
 
         vm.expectRevert(Errors.InvalidSender.selector);
-        harness.renewSignal(sigMgr, commitId, _makeSignal(newOwner, adv));
+        harness.renewSignal(sigMgr, oracle, commitId, _makeSignal(newOwner, adv));
     }
 
     function test_renewSignal_revertsWhenCallerNotAdvancer() public {
         address adv = makeAddr("adv");
-        sigMgr.setExpirySeconds(1);
 
         vm.expectRevert(Errors.InvalidSender.selector);
-        harness.renewSignal(sigMgr, commitId, _makeSignal(mmOwner, adv));
+        harness.renewSignal(sigMgr, oracle, commitId, _makeSignal(mmOwner, adv));
     }
 
     // ============================================================
@@ -302,6 +306,37 @@ contract VTSCommitLibTest is VTSLibTestBase {
         assertEq(settled, settled0 + settled1, "settled USD should equal token amounts at p=1");
     }
 
+    function test_validateLiquidityDelta_success_whenBackedBySettledOverflowOnly() public {
+        (uint160 sqrtPriceX96, int24 tick,,) = _getSlot0(poolId);
+
+        VTSCommitLib.LiquidityDeltaParams memory p = VTSCommitLib.LiquidityDeltaParams({
+            currency0: corePoolKey.currency0,
+            currency1: corePoolKey.currency1,
+            sqrtPriceX96: sqrtPriceX96,
+            currentTick: tick,
+            tickLower: TL,
+            tickUpper: TU,
+            liquidityDelta: int256(uint256(LIQ))
+        });
+
+        oracle.setTotalValue(0);
+        harness.setPositionSettled(positionId, 0, 0);
+
+        (, uint256 issuedBefore,,) = harness.validateLiquidityDelta(oracle, commitId, positionId, p, false);
+        assertGt(issuedBefore, 0, "issued should be non-zero");
+
+        // Live settled zero; economic backing sits entirely in overflow (still priced in validateLiquidityDelta).
+        harness.setPositionSettledOverflow(positionId, issuedBefore + 1, 0);
+
+        (bool ok, uint256 issued, uint256 settled, uint256 signal) =
+            harness.validateLiquidityDelta(oracle, commitId, positionId, p, false);
+
+        assertTrue(ok, "should be backed by overflow alone");
+        assertEq(signal, 0, "signal should remain zero");
+        assertEq(issued, issuedBefore, "issued should be stable");
+        assertEq(settled, issuedBefore + 1, "settled USD should include overflow at p=1");
+    }
+
     function test_validateLiquidityDelta_reverts_whenInsufficientBacking_andFlagTrue() public {
         (uint160 sqrtPriceX96, int24 tick,,) = _getSlot0(poolId);
 
@@ -326,9 +361,274 @@ contract VTSCommitLibTest is VTSLibTestBase {
         harness.validateLiquidityDelta(oracle, commitId, positionId, p, true);
     }
 
+    /// @notice Regression (COMMIT-01): admission issued USD must not depend on manipulable `slot0` fields in params.
+    function test_validateLiquidityDelta_admission_invariant_to_slot0_fields() public {
+        harness.setPositionSettled(positionId, 0, 0);
+        oracle.setTotalValue(1_000_000e18);
+
+        VTSCommitLib.LiquidityDeltaParams memory pLow = VTSCommitLib.LiquidityDeltaParams({
+            currency0: corePoolKey.currency0,
+            currency1: corePoolKey.currency1,
+            sqrtPriceX96: TickMath.getSqrtPriceAtTick(-50),
+            currentTick: -50,
+            tickLower: TL,
+            tickUpper: TU,
+            liquidityDelta: int256(uint256(LIQ))
+        });
+        VTSCommitLib.LiquidityDeltaParams memory pHigh = VTSCommitLib.LiquidityDeltaParams({
+            currency0: corePoolKey.currency0,
+            currency1: corePoolKey.currency1,
+            sqrtPriceX96: TickMath.getSqrtPriceAtTick(50),
+            currentTick: 50,
+            tickLower: TL,
+            tickUpper: TU,
+            liquidityDelta: int256(uint256(LIQ))
+        });
+
+        (, uint256 issuedLow,,) = harness.validateLiquidityDelta(oracle, commitId, positionId, pLow, false);
+        (, uint256 issuedHigh,,) = harness.validateLiquidityDelta(oracle, commitId, positionId, pHigh, false);
+
+        assertEq(issuedLow, issuedHigh, "admission issued USD must ignore sqrtPriceX96/currentTick");
+    }
+
+    /// @notice Regression (COMMIT-01): skewed oracle legs can make worst-case admission exceed live-spot composition.
+    /// @dev Under a spot-based admission rule, `signalUsd` here would clear `issuedSpot` but not `issuedAdmission`.
+    function test_validateLiquidityDelta_reverts_when_backing_covers_spot_only_not_admission() public {
+        oracle.setPrices(1, 1e18);
+        harness.setPositionSettled(positionId, 0, 0);
+
+        uint256 spotIssued = _computeIssuedUsd();
+
+        VTSCommitLib.LiquidityDeltaParams memory p = VTSCommitLib.LiquidityDeltaParams({
+            currency0: corePoolKey.currency0,
+            currency1: corePoolKey.currency1,
+            sqrtPriceX96: 0,
+            currentTick: 0,
+            tickLower: TL,
+            tickUpper: TU,
+            liquidityDelta: int256(uint256(LIQ))
+        });
+
+        (, uint256 admissionIssued,, uint256 signal0) =
+            harness.validateLiquidityDelta(oracle, commitId, positionId, p, false);
+        assertEq(signal0, 0, "pre: signal cleared for backing math");
+        assertGt(admissionIssued, spotIssued, "pre: need oracle skew where admission exceeds live-spot issuance");
+
+        uint256 backing = spotIssued + (admissionIssued - spotIssued) / 2;
+        assertGt(admissionIssued, backing, "backing must sit strictly between spot and admission");
+        assertGt(backing, spotIssued, "backing must exceed live-spot issuance (old rule would pass)");
+
+        oracle.setTotalValue(backing);
+
+        (bool ok,, uint256 settled, uint256 signal) =
+            harness.validateLiquidityDelta(oracle, commitId, positionId, p, false);
+        assertEq(settled, 0, "settled remains zero");
+        assertEq(signal, backing, "signal should match configured total value");
+        assertFalse(ok, "admission must fail when signal covers spot issuance only");
+
+        vm.expectRevert(abi.encodeWithSelector(Errors.InvalidLiquiditySignal.selector, admissionIssued, backing, 0));
+        harness.validateLiquidityDelta(oracle, commitId, positionId, p, true);
+    }
+
+    /// @notice Regression (COMMIT-01): MM-style dummy `slot0` fields still admit when economically backed.
+    function test_validateLiquidityDelta_honest_backing_passes_with_dummy_slot0_fields() public {
+        harness.setPositionSettled(positionId, 0, 0);
+        oracle.setPrices(1e18, 1e18);
+        oracle.setTotalValue(1_000_000e18);
+
+        VTSCommitLib.LiquidityDeltaParams memory p = VTSCommitLib.LiquidityDeltaParams({
+            currency0: corePoolKey.currency0,
+            currency1: corePoolKey.currency1,
+            sqrtPriceX96: 0,
+            currentTick: 0,
+            tickLower: TL,
+            tickUpper: TU,
+            liquidityDelta: int256(uint256(LIQ))
+        });
+
+        (bool ok, uint256 issued,,) = harness.validateLiquidityDelta(oracle, commitId, positionId, p, false);
+        assertTrue(ok, "honest signal backing must pass regardless of dummy slot fields");
+        assertGt(issued, 0, "admission issuance should be non-zero for positive liquidity add");
+        harness.validateLiquidityDelta(oracle, commitId, positionId, p, true);
+    }
+
+    /// @notice Regression (COMMIT-01): cumulative post-add issuance must be checked, not incremental slice alone.
+    /// @dev Uses a fixed reference liquidity `LIQ`, measures `issued(LIQ)`, sets signal `S` between ~54% and ~70% of
+    ///      that issued value, splits `LIQ` into `L1` and `d` (~6:5) so each slice’s isolated issued USD stays below
+    ///      `S` while `issued(LIQ)` exceeds `S`. Hard-revert mode must reject the post-add total but accept each slice.
+    function test_validateLiquidityDelta_postAddTotal_notIncrementalSliceAlone() public {
+        harness.setPositionSettled(positionId, 0, 0);
+
+        int256 LtotI = int256(uint256(LIQ));
+        uint256 issuedRef = _issuedUsdForLiquidity(LtotI);
+        assertGt(issuedRef, 0, "pre: issued USD at LIQ must be non-zero");
+
+        uint256 S = (issuedRef * 7) / 10;
+        assertGt(issuedRef, S);
+        oracle.setTotalValue(S);
+
+        uint256 LtotU = uint256(LIQ);
+        uint256 L1 = (LtotU * 6) / 11;
+        uint256 d = LtotU - L1;
+        assertGt(L1, 0);
+        assertGt(d, 0);
+
+        uint256 issuedTot = _issuedUsdForLiquidity(LtotI);
+        uint256 issued1 = _issuedUsdForLiquidity(int256(L1));
+        uint256 issuedD = _issuedUsdForLiquidity(int256(d));
+
+        assertEq(issuedTot, issuedRef, "total issued at LIQ should match reference");
+        assertGt(issuedTot, S, "post-add total issued must exceed signal backing");
+        assertLt(issued1, S, "6/11 slice issued alone must stay under signal");
+        assertLt(issuedD, S, "5/11 slice issued in isolation must stay under signal");
+
+        // Build params before `expectRevert` so argument evaluation does not consume the expected revert slot.
+        VTSCommitLib.LiquidityDeltaParams memory pTot = _liquidityDeltaParamsForLiquidity(LtotI);
+        VTSCommitLib.LiquidityDeltaParams memory pD = _liquidityDeltaParamsForLiquidity(int256(d));
+        VTSCommitLib.LiquidityDeltaParams memory p1 = _liquidityDeltaParamsForLiquidity(int256(L1));
+
+        // Full encoded error: `expectRevert(bytes4)` only matches a 4-byte revert, not custom-error calldata.
+        vm.expectRevert(abi.encodeWithSelector(Errors.InvalidLiquiditySignal.selector, issuedTot, S, uint256(0)));
+        harness.validateLiquidityDelta(oracle, commitId, positionId, pTot, true);
+
+        harness.validateLiquidityDelta(oracle, commitId, positionId, pD, true);
+        harness.validateLiquidityDelta(oracle, commitId, positionId, p1, true);
+    }
+
+    // ============================================================
+    // validateLiquidityDelta (COMMIT-01 global + marginal)
+    // ============================================================
+
+    /// @dev Admission-only params: `sqrtPriceX96` / `currentTick` dummy (COMMIT-01 ignores them).
+    function _liquidityDeltaParamsAdmission(int256 liquidityAmount)
+        internal
+        view
+        returns (VTSCommitLib.LiquidityDeltaParams memory p)
+    {
+        p = VTSCommitLib.LiquidityDeltaParams({
+            currency0: corePoolKey.currency0,
+            currency1: corePoolKey.currency1,
+            sqrtPriceX96: 0,
+            currentTick: 0,
+            tickLower: TL,
+            tickUpper: TU,
+            liquidityDelta: liquidityAmount
+        });
+    }
+
+    /// @notice Regression: marginal gate rejects oracle-valued mint above `issued(post) - issued(pre)`.
+    function test_validateLiquidityDelta_mmIncrease_reverts_when_mint_exceeds_marginal_admission_budget() public {
+        harness.setPositionSettled(positionId, 0, 0);
+        oracle.setPrices(1e18, 1e18);
+
+        int256 Lpost = int256(uint256(LIQ));
+        uint128 pre = 0;
+
+        (, uint256 issuedPost,,) = harness.validateLiquidityDelta(
+            oracle, commitId, positionId, _liquidityDeltaParamsAdmission(Lpost), pre, 0, 0, false
+        );
+
+        oracle.setTotalValue(issuedPost);
+
+        uint256 mintUsd = issuedPost + 1;
+        (bool ok,,,) = harness.validateLiquidityDelta(
+            oracle, commitId, positionId, _liquidityDeltaParamsAdmission(Lpost), pre, mintUsd, 0, false
+        );
+        assertFalse(ok, "marginal failure expected while global holds at equality");
+
+        vm.expectRevert(abi.encodeWithSelector(Errors.InvalidAdmissionMintDelta.selector, mintUsd, issuedPost));
+        harness.validateLiquidityDelta(
+            oracle, commitId, positionId, _liquidityDeltaParamsAdmission(Lpost), pre, mintUsd, 0, true
+        );
+    }
+
+    /// @notice Honest mint fits marginal budget when signal amply covers post-add admission.
+    function test_validateLiquidityDelta_mmIncrease_marginal_passes_when_mint_within_admission_delta() public {
+        harness.setPositionSettled(positionId, 0, 0);
+        oracle.setPrices(1e18, 1e18);
+        oracle.setTotalValue(1_000_000e18);
+
+        int256 Lpost = int256(uint256(LIQ));
+        uint128 pre = uint128(uint256(LIQ / 2));
+        uint256 admissionDelta = _issuedUsdForLiquidity(Lpost) - _issuedUsdForLiquidity(int256(uint256(pre)));
+        assertGt(admissionDelta, 0, "pre/post slice must admit positive marginal budget");
+
+        uint256 mint0 = admissionDelta / 2;
+        (bool ok,,,) = harness.validateLiquidityDelta(
+            oracle, commitId, positionId, _liquidityDeltaParamsAdmission(Lpost), pre, mint0, 0, false
+        );
+        assertTrue(ok, "mint oracle value under half of admission delta must pass");
+        harness.validateLiquidityDelta(
+            oracle, commitId, positionId, _liquidityDeltaParamsAdmission(Lpost), pre, mint0, 0, true
+        );
+    }
+
+    /// @notice Regression (COMMIT-01): `issuedPost` path must not depend on manipulable `slot0` fields in params.
+    function test_validateLiquidityDelta_mmIncrease_admission_invariant_to_slot0_fields() public {
+        harness.setPositionSettled(positionId, 0, 0);
+        oracle.setTotalValue(1_000_000e18);
+        uint128 pre = uint128(uint256(LIQ / 4));
+
+        int256 Lpost = int256(uint256(LIQ));
+        uint256 m0 = 100;
+        uint256 m1 = 100;
+
+        VTSCommitLib.LiquidityDeltaParams memory pLow = VTSCommitLib.LiquidityDeltaParams({
+            currency0: corePoolKey.currency0,
+            currency1: corePoolKey.currency1,
+            sqrtPriceX96: TickMath.getSqrtPriceAtTick(-50),
+            currentTick: -50,
+            tickLower: TL,
+            tickUpper: TU,
+            liquidityDelta: Lpost
+        });
+        VTSCommitLib.LiquidityDeltaParams memory pHigh = VTSCommitLib.LiquidityDeltaParams({
+            currency0: corePoolKey.currency0,
+            currency1: corePoolKey.currency1,
+            sqrtPriceX96: TickMath.getSqrtPriceAtTick(50),
+            currentTick: 50,
+            tickLower: TL,
+            tickUpper: TU,
+            liquidityDelta: Lpost
+        });
+
+        (, uint256 issuedLow,,) = harness.validateLiquidityDelta(oracle, commitId, positionId, pLow, pre, m0, m1, false);
+        (, uint256 issuedHigh,,) =
+            harness.validateLiquidityDelta(oracle, commitId, positionId, pHigh, pre, m0, m1, false);
+
+        assertEq(issuedLow, issuedHigh, "admission issuedPost must ignore sqrtPriceX96/currentTick");
+    }
+
+    /// @notice Hard mode surfaces global shortfall before marginal mint checks.
+    function test_validateLiquidityDelta_mmIncrease_reverts_global_signal_before_marginal() public {
+        harness.setPositionSettled(positionId, 0, 0);
+        oracle.setPrices(1e18, 1e18);
+
+        int256 Lpost = int256(uint256(LIQ));
+        uint256 issuedPost = _issuedUsdForLiquidity(Lpost);
+        uint256 signalBad = issuedPost > 0 ? issuedPost - 1 : 0;
+        oracle.setTotalValue(signalBad);
+
+        vm.expectRevert(
+            abi.encodeWithSelector(Errors.InvalidLiquiditySignal.selector, issuedPost, signalBad, uint256(0))
+        );
+        harness.validateLiquidityDelta(
+            oracle,
+            commitId,
+            positionId,
+            _liquidityDeltaParamsAdmission(Lpost),
+            uint128(0),
+            type(uint128).max,
+            type(uint128).max,
+            true
+        );
+    }
+
+    /// @notice Regression (finding 36_10): storage-backed valuation must still enforce the unique reserve ticker cap.
     function test_validateLiquidityDelta_reverts_whenSignalHasTooManyUniqueReserveTickers() public {
-        sigMgr.setExpirySeconds(3600);
-        harness.renewSignal(sigMgr, commitId, _makeSignalWithUniqueReserveCount(mmOwner, address(this), 101));
+        LiquiditySignal memory poisonSig =
+            abi.decode(_makeSignalWithUniqueReserveCount(mmOwner, address(this), 101), (LiquiditySignal));
+        harness.setCommitMmState(commitId, poisonSig.mmState);
 
         VTSCommitLib.LiquidityDeltaParams memory p = _defaultLiquidityDeltaParams();
         oracle.setTotalValue(1_000_000e18);
@@ -337,9 +637,20 @@ contract VTSCommitLibTest is VTSLibTestBase {
         harness.validateLiquidityDelta(oracle, commitId, positionId, p, false);
     }
 
+    function test_renewSignal_reverts_whenReserveTickerCountExceedsMax() public {
+        vm.expectRevert(abi.encodeWithSelector(Errors.MMReserveTickerLimitExceeded.selector, 101, 100));
+        harness.renewSignal(sigMgr, oracle, commitId, _makeSignalWithUniqueReserveCount(mmOwner, address(this), 101));
+    }
+
+    function test_commitSignal_reverts_whenReserveTickerCountExceedsMax() public {
+        address owner2 = makeAddr("owner2cap");
+        address adv2 = makeAddr("adv2cap");
+        vm.expectRevert(abi.encodeWithSelector(Errors.MMReserveTickerLimitExceeded.selector, 101, 100));
+        harness.commitSignal(sigMgr, adv2, oracle, _makeSignalWithUniqueReserveCount(owner2, adv2, 101));
+    }
+
     function test_validateLiquidityDelta_allowsSignalAtMaxUniqueReserveTickers() public {
-        sigMgr.setExpirySeconds(3600);
-        harness.renewSignal(sigMgr, commitId, _makeSignalWithUniqueReserveCount(mmOwner, address(this), 100));
+        harness.renewSignal(sigMgr, oracle, commitId, _makeSignalWithUniqueReserveCount(mmOwner, address(this), 100));
 
         VTSCommitLib.LiquidityDeltaParams memory p = _defaultLiquidityDeltaParams();
         oracle.setTotalValue(1_000_000e18);
@@ -348,89 +659,39 @@ contract VTSCommitLibTest is VTSLibTestBase {
         assertTrue(ok, "exact max unique reserve tickers should be accepted");
     }
 
-    // ============================================================
-    // incrementCoverage
-    // ============================================================
+    /// @notice Regression (finding 36_10): `signalUsd` from stored commits must depend only on reserves, not MM metadata strings.
+    function test_validateLiquidityDelta_signalUsd_invariant_to_oversizedStoredMmMetadata() public {
+        (uint160 sqrtPriceX96, int24 tick,,) = _getSlot0(poolId);
 
-    function test_incrementCoverage_earlyReturns_onInvalidTokenIndex_orZeroAmount() public {
-        // invalid token index
-        harness.incrementCoverage(poolId, 2, 100);
-        assertEq(harness.getCoverageResidualDICE(poolId, 0), 0, "no-op");
-        assertEq(harness.getCoverageResidualCISE(poolId, 0), 0, "no-op");
+        VTSCommitLib.LiquidityDeltaParams memory p = VTSCommitLib.LiquidityDeltaParams({
+            currency0: corePoolKey.currency0,
+            currency1: corePoolKey.currency1,
+            sqrtPriceX96: sqrtPriceX96,
+            currentTick: tick,
+            tickLower: TL,
+            tickUpper: TU,
+            liquidityDelta: int256(uint256(LIQ))
+        });
 
-        // zero amount
-        harness.incrementCoverage(poolId, 0, 0);
-        assertEq(harness.getCoverageResidualDICE(poolId, 0), 0, "no-op");
-        assertEq(harness.getCoverageResidualCISE(poolId, 0), 0, "no-op");
-    }
+        harness.setPositionSettled(positionId, 0, 0);
+        oracle.setTotalValue(1_000_000e18);
 
-    /// @notice What it’s checking: Calling incrementCoverage(poolId, 2, 123e18) (i.e., an invalid tokenIndex > 1) must be a complete no-op: it should not change either token0 or token1 coverage accounting (indices or residuals).
-    function test_incrementCoverage_invalidTokenIndex_doesNotMutateToken0OrToken1Accounting() public {
-        // Seed both token0 and token1 totals so a removed early-return would mutate token1 via TokenPairLib branching.
-        harness.setPoolTotalDeficitPrincipal(poolId, 0, 200e18);
-        harness.setPoolTotalSettled(poolId, 0, 500e18);
-        harness.setPoolTotalDeficitPrincipal(poolId, 1, 300e18);
-        harness.setPoolTotalSettled(poolId, 1, 700e18);
+        (bool ok0, uint256 issued0, uint256 settled0, uint256 signal0) =
+            harness.validateLiquidityDelta(oracle, commitId, positionId, p, false);
 
-        uint256 dice0Before = harness.getCoveragePerDeficitIndexX128(poolId, 0);
-        uint256 dice1Before = harness.getCoveragePerDeficitIndexX128(poolId, 1);
-        uint256 cise0Before = harness.getCoveragePerSettledIndexX128(poolId, 0);
-        uint256 cise1Before = harness.getCoveragePerSettledIndexX128(poolId, 1);
-        uint256 rd0Before = harness.getCoverageResidualDICE(poolId, 0);
-        uint256 rd1Before = harness.getCoverageResidualDICE(poolId, 1);
-        uint256 rc0Before = harness.getCoverageResidualCISE(poolId, 0);
-        uint256 rc1Before = harness.getCoverageResidualCISE(poolId, 1);
-        uint256 tcise0Before = harness.getTotalCISEExposureSinceLastMod(poolId, 0);
-        uint256 tcise1Before = harness.getTotalCISEExposureSinceLastMod(poolId, 1);
+        MarketMaker.State memory mm = harness.getCommitMmState(commitId);
+        mm.sourceState = _repeatTestString(10_000);
+        mm.prover = _repeatTestString(10_000);
+        mm.nonce = _repeatTestString(10_000);
+        harness.setCommitMmState(commitId, mm);
 
-        harness.incrementCoverage(poolId, 2, 123e18);
+        (bool ok1, uint256 issued1, uint256 settled1, uint256 signal1) =
+            harness.validateLiquidityDelta(oracle, commitId, positionId, p, false);
 
-        assertEq(harness.getCoveragePerDeficitIndexX128(poolId, 0), dice0Before, "token0 DICE unchanged");
-        assertEq(harness.getCoveragePerDeficitIndexX128(poolId, 1), dice1Before, "token1 DICE unchanged");
-        assertEq(harness.getCoveragePerSettledIndexX128(poolId, 0), cise0Before, "token0 CISE unchanged");
-        assertEq(harness.getCoveragePerSettledIndexX128(poolId, 1), cise1Before, "token1 CISE unchanged");
-        assertEq(harness.getCoverageResidualDICE(poolId, 0), rd0Before, "token0 DICE residual unchanged");
-        assertEq(harness.getCoverageResidualDICE(poolId, 1), rd1Before, "token1 DICE residual unchanged");
-        assertEq(harness.getCoverageResidualCISE(poolId, 0), rc0Before, "token0 CISE residual unchanged");
-        assertEq(harness.getCoverageResidualCISE(poolId, 1), rc1Before, "token1 CISE residual unchanged");
-        assertEq(harness.getTotalCISEExposureSinceLastMod(poolId, 0), tcise0Before, "token0 CISE denominator unchanged");
-        assertEq(harness.getTotalCISEExposureSinceLastMod(poolId, 1), tcise1Before, "token1 CISE denominator unchanged");
-    }
-
-    function test_incrementCoverage_updatesIndexes_whenTotalsNonZero() public {
-        uint256 covered = 50e18;
-
-        // totalPrincipal > 0 -> coveragePerDeficitIndexX128
-        harness.setPoolTotalDeficitPrincipal(poolId, 0, 200e18);
-        // totalSettled > 0 -> coveragePerSettledIndexX128
-        harness.setPoolTotalSettled(poolId, 0, 500e18);
-
-        harness.incrementCoverage(poolId, 0, covered);
-
-        uint256 expectedDice = FullMath.mulDiv(covered, FixedPoint128.Q128, 200e18);
-        uint256 expectedCise = FullMath.mulDiv(covered, FixedPoint128.Q128, 500e18);
-
-        assertEq(harness.getCoveragePerDeficitIndexX128(poolId, 0), expectedDice, "DICE index should advance");
-        assertEq(harness.getCoveragePerSettledIndexX128(poolId, 0), expectedCise, "CISE index should advance");
-        assertEq(harness.getCoverageResidualDICE(poolId, 0), 0, "no DICE residual");
-        assertEq(harness.getCoverageResidualCISE(poolId, 0), 0, "no CISE residual");
-        assertEq(
-            harness.getTotalCISEExposureSinceLastMod(poolId, 0),
-            covered,
-            "CISE bonus denominator should increase by coveredAmount"
-        );
-    }
-
-    function test_incrementCoverage_updatesResiduals_whenTotalsZero() public {
-        uint256 covered = 7e18;
-
-        // totals default to 0 in harness storage
-        harness.incrementCoverage(poolId, 1, covered);
-
-        assertEq(harness.getCoverageResidualDICE(poolId, 1), covered, "DICE residual should accrue");
-        assertEq(harness.getCoverageResidualCISE(poolId, 1), covered, "CISE residual should accrue");
-        assertEq(harness.getCoveragePerDeficitIndexX128(poolId, 1), 0, "no DICE index");
-        assertEq(harness.getCoveragePerSettledIndexX128(poolId, 1), 0, "no CISE index");
+        assertEq(ok0, ok1, "backing outcome unchanged");
+        assertEq(issued0, issued1, "issued unchanged");
+        assertEq(settled0, settled1, "settled unchanged");
+        assertEq(signal0, signal1, "signalUsd must ignore oversized non-reserve metadata");
     }
 
     // ============================================================
@@ -478,6 +739,26 @@ contract VTSCommitLibTest is VTSLibTestBase {
         assertEq(d0, 0, "deficit0 should be cleared");
         assertEq(d1, 0, "deficit1 should be cleared");
         assertEq(harness.getPositionCommitmentDeficitBps(positionId), 0, "deficit bps should clear when fully backed");
+    }
+
+    function test_checkpoint_countsSettledOverflow_towardBacking_whenLiveSettledAloneWouldBeShort() public {
+        uint256 issuedUsd = _computeIssuedUsd();
+        assertGt(issuedUsd, 100, "issued USD should be large enough for headroom test");
+
+        oracle.setTotalValue(0);
+        harness.setPositionCommitmentDeficit(positionId, 0, 0);
+
+        // Live settled alone: issuedUsd - 50 < issuedUsd -> would be under-backed if overflow were ignored.
+        // Effective settled token0: (issuedUsd - 50) + 100 > issuedUsd at 1:1 prices -> fully backed.
+        harness.setPositionSettled(positionId, issuedUsd - 50, 0);
+        harness.setPositionSettledOverflow(positionId, 100, 0);
+
+        harness.checkpoint(manager, oracle, commitId, positionId);
+
+        assertEq(harness.getPositionCommitmentDeficitBps(positionId), 0, "deficit bps should clear with overflow");
+        (uint256 d0, uint256 d1) = harness.getPositionCommitmentDeficit(positionId);
+        assertEq(d0, 0, "deficit0 should be clear");
+        assertEq(d1, 0, "deficit1 should be clear");
     }
 
     function test_checkpoint_sufficientBacking_reducesDeficit_proRata_whenSurplusPartial() public {
@@ -562,11 +843,11 @@ contract VTSCommitLibTest is VTSLibTestBase {
 
         uint256 deficitUsd = issuedUsd - backingUsd;
         uint256 deficitBps = FullMath.mulDiv(deficitUsd, LiquidityUtils.BPS_DENOMINATOR, issuedUsd);
-        uint256 exp0 = FullMath.mulDiv(eff0, deficitBps, LiquidityUtils.BPS_DENOMINATOR);
-        uint256 exp1 = FullMath.mulDiv(eff1, deficitBps, LiquidityUtils.BPS_DENOMINATOR);
+        uint256 exp0 = FullMath.mulDiv(eff0, deficitUsd, issuedUsd);
+        uint256 exp1 = FullMath.mulDiv(eff1, deficitUsd, issuedUsd);
 
-        assertEq(d0, exp0, "deficit0 should match proportional deficit bps");
-        assertEq(d1, exp1, "deficit1 should match proportional deficit bps");
+        assertEq(d0, exp0, "deficit0 should match eff0 * deficitUsd / issuedUsd");
+        assertEq(d1, exp1, "deficit1 should match eff1 * deficitUsd / issuedUsd");
         assertEq(
             harness.getPositionCommitmentDeficitBps(positionId),
             uint16(deficitBps),
@@ -574,14 +855,44 @@ contract VTSCommitLibTest is VTSLibTestBase {
         );
     }
 
+    /// @dev Sub-1 bps USD shortfall floors `commitmentDeficitBps` to 0, but per-lane deficits must not double-floor
+    ///      to zero when eff * deficitUsd / issuedUsd is still positive.
+    function test_checkpoint_subOneBpsShortfall_nonZeroLaneDeficits_andDeficitSince() public {
+        harness.setPositionSettled(positionId, 0, 0);
+        harness.setPositionCommitmentDeficit(positionId, 0, 0);
+
+        uint256 issuedUsd = _computeIssuedUsd();
+        // 0.5 bps shortfall: deficitBps = floor(5000) = 0, but token deficits remain non-zero.
+        uint256 backingUsd = issuedUsd - (issuedUsd / 20_000);
+        oracle.setTotalValue(backingUsd);
+
+        harness.checkpoint(manager, oracle, commitId, positionId);
+
+        assertEq(
+            harness.getPositionCommitmentDeficitBps(positionId),
+            0,
+            "sub-1 bps shortfall should still floor bps severity to 0"
+        );
+
+        (uint256 d0, uint256 d1) = harness.getPositionCommitmentDeficit(positionId);
+        assertTrue(d0 > 0 || d1 > 0, "at least one lane deficit should be non-zero");
+
+        (uint256 since0, uint256 since1) = harness.getPositionCommitmentDeficitSince(positionId);
+        if (d0 > 0) {
+            assertEq(since0, block.timestamp, "deficit0 age should initialise when lane deficit non-zero");
+        }
+        if (d1 > 0) {
+            assertEq(since1, block.timestamp, "deficit1 age should initialise when lane deficit non-zero");
+        }
+    }
+
     function test_checkpoint_expiredSignal_treatsSignalUsdAsZero() public {
         // Make the stored signal expire quickly, but set oracle signal value high; checkpoint should still treat it as 0.
         harness.setPositionSettled(positionId, 0, 0);
         harness.setPositionCommitmentDeficit(positionId, 0, 0);
 
-        sigMgr.setExpirySeconds(1);
         // Renew updates expiresAt; sender must equal advancer in the signal.
-        harness.renewSignal(sigMgr, commitId, _makeSignal(mmOwner, address(this)));
+        harness.renewSignal(sigMgr, oracle, commitId, _makeSignal(mmOwner, address(this), 1));
 
         vm.warp(block.timestamp + 2);
 
@@ -644,14 +955,101 @@ contract VTSCommitLibTest is VTSLibTestBase {
         assertEq(since1, 0, "deficit1 age should remain zero");
     }
 
+    /// @dev Sufficient backing with partial surplus nets deficits down but can leave non-zero token residuals.
+    ///      `commitmentDeficitSince` must still reset so a later under-backed episode cannot reuse banked age.
+    function test_checkpoint_sufficientBacking_proportionalReduction_clearsDeficitSince_whenResidualNonZero() public {
+        uint256 t0 = 5_000_000;
+        vm.warp(t0);
+        harness.setCommitExpiresAt(commitId, t0 + 1 days);
+
+        uint256 deficit0 = 10e18;
+        uint256 deficit1 = 10e18;
+        harness.setPositionCommitmentDeficit(positionId, deficit0, deficit1);
+        harness.setPositionCommitmentDeficitSince(positionId, t0 - 10_000, t0 - 5_000);
+        harness.setPositionSettled(positionId, 0, 0);
+
+        uint256 issuedUsd = _computeIssuedUsd();
+        uint256 surplusUsd = 5e18;
+        oracle.setTotalValue(issuedUsd + surplusUsd);
+
+        harness.checkpoint(manager, oracle, commitId, positionId);
+
+        (uint256 since0, uint256 since1) = harness.getPositionCommitmentDeficitSince(positionId);
+        assertEq(since0, 0, "deficit0 age should clear after sufficient checkpoint even with residual tokens");
+        assertEq(since1, 0, "deficit1 age should clear after sufficient checkpoint even with residual tokens");
+
+        (uint256 d0, uint256 d1) = harness.getPositionCommitmentDeficit(positionId);
+        uint256 currentDeficitUsd = deficit0 + deficit1;
+        uint256 reduce0 = FullMath.mulDiv(deficit0, surplusUsd, currentDeficitUsd);
+        uint256 reduce1 = FullMath.mulDiv(deficit1, surplusUsd, currentDeficitUsd);
+        assertEq(d0, deficit0 - reduce0, "deficit0 should reduce pro-rata");
+        assertEq(d1, deficit1 - reduce1, "deficit1 should reduce pro-rata");
+        assertTrue(d0 > 0 || d1 > 0, "expected non-zero residual deficit on at least one lane");
+    }
+
+    /// @dev After sufficient backing clears `since`, the next insufficient checkpoint must start a fresh bypass clock.
+    function test_checkpoint_freshUnderBacked_afterSufficient_restartDeficitSince() public {
+        uint256 t0 = 8_000_000;
+        vm.warp(t0);
+        harness.setCommitExpiresAt(commitId, t0 + 1 days);
+
+        uint256 deficit0 = 10e18;
+        uint256 deficit1 = 10e18;
+        harness.setPositionCommitmentDeficit(positionId, deficit0, deficit1);
+        harness.setPositionSettled(positionId, 0, 0);
+
+        uint256 issuedUsd = _computeIssuedUsd();
+        oracle.setTotalValue(issuedUsd + 5e18);
+        harness.checkpoint(manager, oracle, commitId, positionId);
+
+        (uint256 sinceMid0, uint256 sinceMid1) = harness.getPositionCommitmentDeficitSince(positionId);
+        assertEq(sinceMid0, 0, "after sufficient checkpoint since0 should be cleared");
+        assertEq(sinceMid1, 0, "after sufficient checkpoint since1 should be cleared");
+
+        uint256 t1 = t0 + 200;
+        vm.warp(t1);
+        oracle.setTotalValue(0);
+        harness.checkpoint(manager, oracle, commitId, positionId);
+
+        (uint256 d0, uint256 d1) = harness.getPositionCommitmentDeficit(positionId);
+        (uint256 since0, uint256 since1) = harness.getPositionCommitmentDeficitSince(positionId);
+        if (d0 > 0) {
+            assertEq(since0, t1, "fresh under-backed episode should set token0 since at checkpoint time");
+        }
+        if (d1 > 0) {
+            assertEq(since1, t1, "fresh under-backed episode should set token1 since at checkpoint time");
+        }
+
+        uint256 t2 = t1 + 50;
+        vm.warp(t2);
+        harness.checkpoint(manager, oracle, commitId, positionId);
+        (uint256 since0b, uint256 since1b) = harness.getPositionCommitmentDeficitSince(positionId);
+        if (d0 > 0) {
+            assertEq(since0b, t1, "continuous under-backed checkpoints should preserve token0 since");
+        }
+        if (d1 > 0) {
+            assertEq(since1b, t1, "continuous under-backed checkpoints should preserve token1 since");
+        }
+    }
+
     // ============================================================
     // helpers
     // ============================================================
 
-    function _makeSignal(address owner, address adv) internal pure returns (bytes memory) {
+    function _makeSignal(address owner, address adv) internal view returns (bytes memory) {
+        return _makeSignal(owner, adv, 365 days);
+    }
+
+    function _makeSignal(address owner, address adv, uint256 ttlSeconds) internal view returns (bytes memory) {
         MarketMaker.Reserve[] memory reserves = new MarketMaker.Reserve[](0);
         MarketMaker.State memory mmState = MarketMaker.State({
-            owner: owner, reserves: reserves, sourceState: "", prover: "", nonce: "", advancer: adv
+            owner: owner,
+            reserves: reserves,
+            sourceState: "",
+            prover: "",
+            nonce: "",
+            advancer: adv,
+            expiryAt: block.timestamp + ttlSeconds
         });
 
         LiquiditySignal memory sig = LiquiditySignal({
@@ -668,23 +1066,37 @@ contract VTSCommitLibTest is VTSLibTestBase {
 
     function _makeSignalWithUniqueReserveCount(address owner, address adv, uint256 reserveCount)
         internal
-        pure
+        view
+        returns (bytes memory)
+    {
+        return _makeSignalWithUniqueReserveCount(owner, adv, reserveCount, 365 days);
+    }
+
+    function _makeSignalWithUniqueReserveCount(address owner, address adv, uint256 reserveCount, uint256 ttlSeconds)
+        internal
+        view
         returns (bytes memory)
     {
         MarketMaker.Reserve[] memory reserves = new MarketMaker.Reserve[](reserveCount);
         for (uint256 i = 0; i < reserveCount; i++) {
             reserves[i] = MarketMaker.Reserve({asset: string.concat("TK", vm.toString(i)), amount: 1e18});
         }
-        return _encodeSignal(owner, adv, reserves);
+        return _encodeSignal(owner, adv, reserves, ttlSeconds);
     }
 
-    function _encodeSignal(address owner, address adv, MarketMaker.Reserve[] memory reserves)
+    function _encodeSignal(address owner, address adv, MarketMaker.Reserve[] memory reserves, uint256 ttlSeconds)
         internal
-        pure
+        view
         returns (bytes memory)
     {
         MarketMaker.State memory mmState = MarketMaker.State({
-            owner: owner, reserves: reserves, sourceState: "", prover: "", nonce: "", advancer: adv
+            owner: owner,
+            reserves: reserves,
+            sourceState: "",
+            prover: "",
+            nonce: "",
+            advancer: adv,
+            expiryAt: block.timestamp + ttlSeconds
         });
 
         LiquiditySignal memory sig = LiquiditySignal({
@@ -699,7 +1111,11 @@ contract VTSCommitLibTest is VTSLibTestBase {
         return abi.encode(sig);
     }
 
-    function _defaultLiquidityDeltaParams() internal view returns (VTSCommitLib.LiquidityDeltaParams memory p) {
+    function _liquidityDeltaParamsForLiquidity(int256 liquidityAmount)
+        internal
+        view
+        returns (VTSCommitLib.LiquidityDeltaParams memory p)
+    {
         (uint160 sqrtPriceX96, int24 tick,,) = _getSlot0(poolId);
         p = VTSCommitLib.LiquidityDeltaParams({
             currency0: corePoolKey.currency0,
@@ -708,24 +1124,37 @@ contract VTSCommitLibTest is VTSLibTestBase {
             currentTick: tick,
             tickLower: TL,
             tickUpper: TU,
-            liquidityDelta: int256(uint256(LIQ))
+            liquidityDelta: liquidityAmount
         });
     }
 
+    function _issuedUsdForLiquidity(int256 liquidityAmount) internal view returns (uint256 issued) {
+        (, issued,,) = harness.validateLiquidityDelta(
+            oracle, commitId, positionId, _liquidityDeltaParamsForLiquidity(liquidityAmount), false
+        );
+    }
+
+    function _defaultLiquidityDeltaParams() internal view returns (VTSCommitLib.LiquidityDeltaParams memory p) {
+        return _liquidityDeltaParamsForLiquidity(int256(uint256(LIQ)));
+    }
+
+    /// @dev Builds `len` repetitions of "a" without stack-heavy literals (test-only).
+    function _repeatTestString(uint256 len) private pure returns (string memory s) {
+        bytes memory buf = new bytes(len);
+        for (uint256 i = 0; i < len; i++) {
+            buf[i] = bytes1("a");
+        }
+        return string(buf);
+    }
+
+    /// @dev Spot-based issued USD matching `_checkpointWithCommitment` (live `slot0`), not COMMIT-01 admission.
     function _computeIssuedUsd() internal view returns (uint256 issuedUsd) {
         (uint160 sqrtPriceX96, int24 tick,,) = _getSlot0(poolId);
-
-        VTSCommitLib.LiquidityDeltaParams memory p = VTSCommitLib.LiquidityDeltaParams({
-            currency0: corePoolKey.currency0,
-            currency1: corePoolKey.currency1,
-            sqrtPriceX96: sqrtPriceX96,
-            currentTick: tick,
-            tickLower: TL,
-            tickUpper: TU,
-            liquidityDelta: int256(uint256(LIQ))
-        });
-
-        (, issuedUsd,,) = harness.validateLiquidityDelta(oracle, commitId, positionId, p, false);
+        (uint256 a0, uint256 a1) =
+            LiquidityUtils.calculateEffectiveTokenAmounts(sqrtPriceX96, tick, TL, TU, int256(uint256(LIQ)));
+        issuedUsd = OracleUtils.lccPairValue(
+            oracle, Currency.unwrap(corePoolKey.currency0), a0, Currency.unwrap(corePoolKey.currency1), a1
+        );
     }
 }
 

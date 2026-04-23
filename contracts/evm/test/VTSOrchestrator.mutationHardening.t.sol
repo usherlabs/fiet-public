@@ -54,7 +54,8 @@ contract ReentrantSignalManagerForMutation {
             (bool ok,) = _reenter(k, liquiditySignal);
             if (ok) revert Reentered();
         }
-        return (true, 3600);
+        LiquiditySignal memory sig = abi.decode(liquiditySignal, (LiquiditySignal));
+        return (true, sig.mmState.expiryAt - block.timestamp);
     }
 
     function _reenter(
@@ -77,16 +78,33 @@ contract ReentrantSignalManagerForMutation {
         return address(0);
     }
 
-    function signalExpiryInSeconds() external pure returns (uint256) {
-        return 3600;
-    }
-
     function mmNonce(address) external pure returns (uint256) {
         return 0;
     }
 
+    function submitAuthNonce(address) external pure returns (uint256) {
+        return 0;
+    }
+
+    function submitter() external pure returns (address) {
+        return address(0xBEEF);
+    }
+
     function setVerifier(address) external {}
-    function setSignalExpiryInSeconds(uint256) external {}
+
+    function verifyLiquiditySignalRelayed(
+        address,
+        uint256,
+        bytes memory liquiditySignal,
+        uint256,
+        uint256,
+        bytes memory,
+        address,
+        bool
+    ) external view returns (bool, uint256) {
+        LiquiditySignal memory sig = abi.decode(liquiditySignal, (LiquiditySignal));
+        return (true, sig.mmState.expiryAt - block.timestamp);
+    }
 }
 
 /**

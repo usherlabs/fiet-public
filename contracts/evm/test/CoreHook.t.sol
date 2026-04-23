@@ -23,6 +23,7 @@ import {HookMiner} from "v4-periphery/src/utils/HookMiner.sol";
 import {MarketTestBase} from "./base/MarketTestBase.sol";
 import {Actions} from "v4-periphery/src/libraries/Actions.sol";
 import {LiquidityHub} from "../src/LiquidityHub.sol";
+import {Bounds} from "../src/libraries/Bounds.sol";
 import {LiquidityCommitmentCertificate} from "../src/LCC.sol";
 import {ILCC} from "../src/interfaces/ILCC.sol";
 import {IERC20Minimal} from "@uniswap/v4-core/src/interfaces/external/IERC20Minimal.sol";
@@ -95,45 +96,42 @@ contract CoreHookTest is Test {
     }
 
     // ------------------------------------------------------------
-    // Mutants: delta - feeAdj -> delta + feeAdj (afterAdd/afterRemove)
-    // Mutant: !isMMPosition -> isMMPosition (afterRemove gate)
+    // afterAddLiquidity / afterRemoveLiquidity: hook return delta is zero; MM gate on add only
     // ------------------------------------------------------------
 
-    function test_afterAddLiquidity_forwardsEffectiveDelta_minusFeeAdj_whenNotMM() public {
+    function test_afterAddLiquidity_returnsZeroHookDelta_andNotifiesVault_whenNotMM() public {
         // Add-liquidity caller legs are negative deltas.
         BalanceDelta delta = toBalanceDelta(int128(-10), int128(-20));
-        BalanceDelta feeAdj = toBalanceDelta(int128(3), int128(5));
 
-        vts.setReturn(feeAdj, false);
+        vts.setReturn(false);
 
-        (bytes4 sel, BalanceDelta returnedFeeAdj) =
+        (bytes4 sel, BalanceDelta hookDelta) =
             hook.exposed_afterAddLiquidity(address(this), key, _dummyParams(), delta, BalanceDelta.wrap(0), "");
         assertEq(sel, hook.afterAddLiquidity.selector);
-        assertEq(BalanceDelta.unwrap(returnedFeeAdj), BalanceDelta.unwrap(feeAdj));
+        assertEq(BalanceDelta.unwrap(hookDelta), BalanceDelta.unwrap(toBalanceDelta(0, 0)));
 
         assertEq(spy.calls(), 1, "spy should be called once");
     }
 
     function test_afterRemoveLiquidity_doesNotForward_whenMM() public {
-        vts.setReturn(toBalanceDelta(int128(1), int128(1)), true);
+        vts.setReturn(true);
 
         hook.exposed_afterRemoveLiquidity(
-            address(this), key, _dummyParams(), toBalanceDelta(int128(7), int128(9)), BalanceDelta.wrap(0), ""
+            address(this), key, _dummyRemoveParams(), toBalanceDelta(int128(7), int128(9)), BalanceDelta.wrap(0), ""
         );
 
         assertEq(spy.calls(), 0, "spy should not be called for MM operations");
     }
 
-    function test_afterRemoveLiquidity_doesNotForward_whenNotMM() public {
+    function test_afterRemoveLiquidity_returnsZeroHookDelta_whenNotMM() public {
         BalanceDelta delta = toBalanceDelta(int128(7), int128(9));
-        BalanceDelta feeAdj = toBalanceDelta(int128(2), int128(4));
 
-        vts.setReturn(feeAdj, false);
+        vts.setReturn(false);
 
-        (bytes4 sel, BalanceDelta returnedFeeAdj) =
-            hook.exposed_afterRemoveLiquidity(address(this), key, _dummyParams(), delta, BalanceDelta.wrap(0), "");
+        (bytes4 sel, BalanceDelta hookDelta) =
+            hook.exposed_afterRemoveLiquidity(address(this), key, _dummyRemoveParams(), delta, BalanceDelta.wrap(0), "");
         assertEq(sel, hook.afterRemoveLiquidity.selector);
-        assertEq(BalanceDelta.unwrap(returnedFeeAdj), BalanceDelta.unwrap(feeAdj));
+        assertEq(BalanceDelta.unwrap(hookDelta), BalanceDelta.unwrap(toBalanceDelta(0, 0)));
 
         assertEq(spy.calls(), 0, "spy must not be called on remove-liquidity");
     }
@@ -221,14 +219,33 @@ contract CoreHookTest is Test {
         uint128 liqBefore = 456;
         SwapParams memory sp = SwapParams({zeroForOne: true, amountSpecified: int256(1), sqrtPriceLimitX96: 0});
 
-        (uint256 sqrtAfter, uint256 liqAfter) = hook.exposed_afterSwap_withPresetSnapshot(
-            key, sp, toBalanceDelta(int128(-1), int128(1)), sqrtPBefore, liqBefore, bytes("")
+        int24 tickBefore = -42;
+        (uint256 sqrtAfter, uint256 liqAfter, uint256 tickAfter) = hook.exposed_afterSwap_withPresetSnapshot(
+            key, sp, toBalanceDelta(int128(-1), int128(1)), sqrtPBefore, liqBefore, tickBefore, bytes("")
         );
 
         assertEq(vts.lastSqrtPBefore(), sqrtPBefore, "VTS should receive sqrtPBefore");
         assertEq(vts.lastLiqBefore(), liqBefore, "VTS should receive liqBefore");
+        assertEq(vts.lastTickBefore(), tickBefore, "VTS should receive tickBefore");
         assertEq(sqrtAfter, 0, "SQRTP_BEFORE_SLOT should be cleared");
         assertEq(liqAfter, 0, "LIQ_BEFORE_SLOT should be cleared");
+        assertEq(tickAfter, 0, "TICK_BEFORE_SLOT should be cleared");
+    }
+
+    function test_afterSwap_preservesBoundaryTickSnapshots() public {
+        uint160 sqrtPBefore = 123;
+        uint128 liqBefore = 456;
+        SwapParams memory sp = SwapParams({zeroForOne: true, amountSpecified: int256(1), sqrtPriceLimitX96: 0});
+
+        hook.exposed_afterSwap_withPresetSnapshot(
+            key, sp, toBalanceDelta(int128(-1), int128(1)), sqrtPBefore, liqBefore, type(int24).min, bytes("")
+        );
+        assertEq(vts.lastTickBefore(), type(int24).min, "expected int24 min tick snapshot");
+
+        hook.exposed_afterSwap_withPresetSnapshot(
+            key, sp, toBalanceDelta(int128(-1), int128(1)), sqrtPBefore, liqBefore, type(int24).max, bytes("")
+        );
+        assertEq(vts.lastTickBefore(), type(int24).max, "expected int24 max tick snapshot");
     }
 
     // ------------------------------------------------------------
@@ -237,6 +254,10 @@ contract CoreHookTest is Test {
 
     function _dummyParams() internal pure returns (ModifyLiquidityParams memory) {
         return ModifyLiquidityParams({tickLower: -60, tickUpper: 60, liquidityDelta: int256(1), salt: bytes32(0)});
+    }
+
+    function _dummyRemoveParams() internal pure returns (ModifyLiquidityParams memory) {
+        return ModifyLiquidityParams({tickLower: -60, tickUpper: 60, liquidityDelta: -int256(1), salt: bytes32(0)});
     }
 }
 
@@ -306,16 +327,19 @@ contract CoreHookHarness is CoreHook {
         BalanceDelta delta,
         uint160 sqrtPBefore,
         uint128 liqBefore,
+        int24 tickBefore,
         bytes calldata hookData
-    ) external returns (uint256 sqrtAfter, uint256 liqAfter) {
+    ) external returns (uint256 sqrtAfter, uint256 liqAfter, uint256 tickAfter) {
         // Pre-seed transient slots to emulate the beforeSwap->afterSwap same-tx lifecycle.
         TransientSlot.asUint256(TransientSlots.SQRTP_BEFORE_SLOT).tstore(uint256(sqrtPBefore));
+        TransientSlot.asUint256(TransientSlots.TICK_BEFORE_SLOT).tstore(TransientSlots.encodeTickBefore(tickBefore));
         TransientSlot.asUint256(TransientSlots.LIQ_BEFORE_SLOT).tstore(uint256(liqBefore));
 
         _afterSwap(address(this), k, params, delta, hookData);
 
         sqrtAfter = TransientSlot.asUint256(TransientSlots.SQRTP_BEFORE_SLOT).tload();
         liqAfter = TransientSlot.asUint256(TransientSlots.LIQ_BEFORE_SLOT).tload();
+        tickAfter = TransientSlot.asUint256(TransientSlots.TICK_BEFORE_SLOT).tload();
     }
 }
 
@@ -394,17 +418,16 @@ contract ProxyHookSpy {
 }
 
 contract MockVTSOrchestrator {
-    BalanceDelta internal _feeAdj;
     bool internal _isMM;
     bool internal _paused;
 
     uint160 internal _lastSqrtPBefore;
     uint128 internal _lastLiqBefore;
+    int24 internal _lastTickBefore;
     PositionId internal _lastSettledPositionId;
     uint256 internal _settlePositionGrowthsCalls;
 
-    function setReturn(BalanceDelta feeAdj, bool isMMPosition) external {
-        _feeAdj = feeAdj;
+    function setReturn(bool isMMPosition) external {
         _isMM = isMMPosition;
     }
 
@@ -419,7 +442,11 @@ contract MockVTSOrchestrator {
         BalanceDelta,
         BalanceDelta,
         bytes calldata
-    ) external view returns (Position memory pos, PositionId id, BalanceDelta feeAdj, bool isMMPosition) {
+    ) external view returns (Position memory pos, PositionId id, bool isMMPosition) {
+        return _positionReturn();
+    }
+
+    function _positionReturn() private view returns (Position memory pos, PositionId id, bool isMMPosition) {
         pos = Position({
             owner: address(0),
             poolId: PoolId.wrap(bytes32(0)),
@@ -434,15 +461,20 @@ contract MockVTSOrchestrator {
             })
         });
         id = PositionId.wrap(bytes32(0));
-        feeAdj = _feeAdj;
         isMMPosition = _isMM;
     }
 
-    function afterCoreSwap(PoolKey calldata, SwapParams calldata, BalanceDelta, uint160 sqrtPBefore, uint128 liqBefore)
-        external
-    {
+    function afterCoreSwap(
+        PoolKey calldata,
+        SwapParams calldata,
+        BalanceDelta,
+        uint160 sqrtPBefore,
+        uint128 liqBefore,
+        int24 tickBefore
+    ) external {
         _lastSqrtPBefore = sqrtPBefore;
         _lastLiqBefore = liqBefore;
+        _lastTickBefore = tickBefore;
     }
 
     function settlePositionGrowths(PositionId positionId) external {
@@ -456,6 +488,10 @@ contract MockVTSOrchestrator {
 
     function lastLiqBefore() external view returns (uint128) {
         return _lastLiqBefore;
+    }
+
+    function lastTickBefore() external view returns (int24) {
+        return _lastTickBefore;
     }
 
     function lastSettledPositionId() external view returns (PositionId) {
@@ -627,7 +663,7 @@ contract FietPositionManager is PositionManager {
 
 /// @dev Multicaller that composes (in a single EOA transaction):
 ///      (1) PosM unlock: DECREASE + TAKE_PAIR (LCC paid to this multicaller)
-///      (2) PoolManager unlock: LiquidityHub.unwrapTo (underlying paid to end recipient)
+///      (2) PoolManager unlock: LiquidityHub.unwrap (underlying to multicaller, then forwarded to end recipient)
 ///      (3) PosM call: SWEEP any residual token balances to end recipient
 contract ThreeStepDecreaseUnwrapSweepMulticaller {
     IPoolManager internal immutable pm;
@@ -666,7 +702,7 @@ contract ThreeStepDecreaseUnwrapSweepMulticaller {
         IPositionManager(posm).modifyLiquidities(abi.encode(actions, params), block.timestamp + 3600);
     }
 
-    function step2_unwrapTo_withOwnUnlock(address lcc0_, address lcc1_, address to_) external {
+    function step2_unwrap_withOwnUnlock(address lcc0_, address lcc1_, address to_) external {
         lcc0 = lcc0_;
         lcc1 = lcc1_;
         to = to_;
@@ -674,14 +710,24 @@ contract ThreeStepDecreaseUnwrapSweepMulticaller {
     }
 
     function unlockCallback(bytes calldata) external returns (bytes memory) {
-        // Unwrap all market-derived LCC held by this contract to the provided recipient.
+        // Unwrap all market-derived LCC held by this contract, then forward underlying to `to`.
         if (lcc0 != address(0)) {
             (, uint256 m0) = ILCC(lcc0).balancesOf(address(this));
-            if (m0 > 0) LiquidityHub(payable(hub)).unwrapTo(lcc0, to, m0);
+            if (m0 > 0) {
+                LiquidityHub(payable(hub)).unwrap(lcc0, m0);
+                address u0 = LiquidityCommitmentCertificate(payable(lcc0)).underlying();
+                uint256 b0 = IERC20Minimal(u0).balanceOf(address(this));
+                if (b0 > 0) IERC20Minimal(u0).transfer(to, b0);
+            }
         }
         if (lcc1 != address(0)) {
             (, uint256 m1) = ILCC(lcc1).balancesOf(address(this));
-            if (m1 > 0) LiquidityHub(payable(hub)).unwrapTo(lcc1, to, m1);
+            if (m1 > 0) {
+                LiquidityHub(payable(hub)).unwrap(lcc1, m1);
+                address u1 = LiquidityCommitmentCertificate(payable(lcc1)).underlying();
+                uint256 b1 = IERC20Minimal(u1).balanceOf(address(this));
+                if (b1 > 0) IERC20Minimal(u1).transfer(to, b1);
+            }
         }
         return bytes("");
     }
@@ -923,13 +969,9 @@ contract CoreHookDirectLPRemoveBucketingTest is MarketTestBase {
         uint256 amount = 1e9;
         UnwrapInUnlockRunner runner = new UnwrapInUnlockRunner(IPoolManager(address(manager)), liquidityHub);
 
-        // Manufacture market-derived LCC for this contract via protocol (proxyHook) -> non-protocol transfer.
-        IERC20Minimal(underlying0).transfer(address(proxyHook), amount);
-        vm.startPrank(address(proxyHook));
-        IERC20Minimal(underlying0).approve(liquidityHub, amount);
-        LiquidityHub(payable(liquidityHub)).wrap(address(lcc0), amount);
-        IERC20Minimal(address(lcc0)).transfer(address(runner), amount);
-        vm.stopPrank();
+        // Market-derived LCC: use issuer mint (`issue`) so we do not hit direct-backed mint restrictions on exempt endpoints.
+        vm.prank(address(proxyHook));
+        LiquidityHub(payable(liquidityHub)).issue(address(lcc0), address(runner), amount);
 
         (uint256 wrappedBal, uint256 marketBal) = ILCC(address(lcc0)).balancesOf(address(runner));
         assertEq(wrappedBal, 0, "precondition: holder should have wrapped=0");
@@ -1130,10 +1172,10 @@ contract CoreHookDirectLPRemoveBucketingTest is MarketTestBase {
         );
     }
 
-    function test_multicall_threeCall_decrease_then_unwrapTo_then_sweepPosm() public {
+    function test_multicall_threeCall_decrease_then_unwrap_then_sweepPosm() public {
         // Use the default PositionManager and a separate multicaller that performs:
         //   (1) PosM unlock: DECREASE+TAKE_PAIR to multicaller
-        //   (2) Separate PoolManager unlock: unwrapTo(lcc, to=EOA)
+        //   (2) Separate PoolManager unlock: unwrap LCC then forward underlying to EOA
         //   (3) Post-unwrap sweep of any residual PosM balances
         PositionManager posm = uniPositionManager;
         ThreeCallMulticallState memory t;
@@ -1176,6 +1218,9 @@ contract CoreHookDirectLPRemoveBucketingTest is MarketTestBase {
             new ThreeStepDecreaseUnwrapSweepMulticaller(IPoolManager(address(manager)), liquidityHub, address(posm));
         t.mc = address(mc);
 
+        vm.prank(marketFactory);
+        LiquidityHub(payable(liquidityHub)).setBoundLevel(address(mc), Bounds.BOUND_ENDPOINT);
+
         // LP approves multicaller to manage the position token (so it can be the PosM "locker" for decrease).
         vm.prank(lp);
         posm.approve(t.mc, t.tokenId);
@@ -1191,7 +1236,7 @@ contract CoreHookDirectLPRemoveBucketingTest is MarketTestBase {
             (t.tokenId, t.liq, corePoolKey.currency0, corePoolKey.currency1)
         );
         calls[1] =
-            abi.encodeCall(ThreeStepDecreaseUnwrapSweepMulticaller.step2_unwrapTo_withOwnUnlock, (t.lcc0, t.lcc1, lp));
+            abi.encodeCall(ThreeStepDecreaseUnwrapSweepMulticaller.step2_unwrap_withOwnUnlock, (t.lcc0, t.lcc1, lp));
         calls[2] = abi.encodeCall(
             ThreeStepDecreaseUnwrapSweepMulticaller.step3_sweepPosmTo, (Currency.wrap(t.ua0), Currency.wrap(t.ua1), lp)
         );
@@ -1209,8 +1254,8 @@ contract CoreHookDirectLPRemoveBucketingTest is MarketTestBase {
         assertFalse(sawPmToFactory1, "underlying1 must not bubble into MarketFactory");
 
         // LCC outcomes: multicaller should have unwrapped everything it received.
-        assertEq(_sumLccBuckets(t.lcc0, t.mc), 0, "Multicaller should not retain LCC0 after unwrapTo");
-        assertEq(_sumLccBuckets(t.lcc1, t.mc), 0, "Multicaller should not retain LCC1 after unwrapTo");
+        assertEq(_sumLccBuckets(t.lcc0, t.mc), 0, "Multicaller should not retain LCC0 after unwrap");
+        assertEq(_sumLccBuckets(t.lcc1, t.mc), 0, "Multicaller should not retain LCC1 after unwrap");
 
         // Underlying outcomes: LP receives underlying, MarketFactory receives nothing.
         assertGt(IERC20Minimal(t.ua0).balanceOf(lp), t.lpUa0Before, "LP should receive underlying0 after flow");

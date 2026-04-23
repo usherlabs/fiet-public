@@ -4,7 +4,7 @@ pragma solidity ^0.8.26;
 import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
 import {ILCC} from "../interfaces/ILCC.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
-import {MarketVault} from "./MarketVault.sol";
+import {MarketVaultFacade} from "./MarketVaultFacade.sol";
 import {IVaultCoreActionHandler} from "../interfaces/IVaultCoreActionHandler.sol";
 import {Errors} from "../libraries/Errors.sol";
 import {CoreActionFlag} from "../libraries/CoreActionFlag.sol";
@@ -13,12 +13,12 @@ import {Exttload} from "v4-periphery/lib/v4-core/src/Exttload.sol";
 /**
  * @title VaultCoreActionHandler
  * @notice Ingress/direct-core reaction layer for canonical market vaults.
- * @dev This module sits between factory coordination and generic vault primitives (`MarketVault`).
+ * @dev This module sits between factory coordination and facade routing primitives (`MarketVaultFacade`).
  *      It also centralises transient direct-core flag toggling plus `exttload` exposure,
  *      so derived hooks inherit one isolated surface for cross-contract action provenance checks.
  */
-abstract contract VaultCoreActionHandler is MarketVault, IVaultCoreActionHandler, Exttload {
-    constructor(address _marketFactory) MarketVault(_marketFactory) {}
+abstract contract VaultCoreActionHandler is MarketVaultFacade, IVaultCoreActionHandler, Exttload {
+    constructor(address _marketFactory) MarketVaultFacade(_marketFactory) {}
 
     /// @dev Derived vaults provide the bound core hook address for direct-action gating.
     function _coreHook() internal view virtual returns (address);
@@ -45,6 +45,9 @@ abstract contract VaultCoreActionHandler is MarketVault, IVaultCoreActionHandler
 
     /**
      * @inheritdoc IVaultCoreActionHandler
+     * @dev After Hub→vault funding for wrapped ingress, settles obligations for this LCC lane so newly
+     *      available per-market reserve can service unfunded Hub queues in the same transaction (before
+     *      `afterAddLiquidity` / `afterSwap` wake-ups, which run before the payment phase that triggers ingress).
      */
     function handleIngress(address lcc, uint256 wrappedAmount) external virtual onlyFactory {
         if (wrappedAmount == 0) {
@@ -56,7 +59,9 @@ abstract contract VaultCoreActionHandler is MarketVault, IVaultCoreActionHandler
         if (lcc != lcc0 && lcc != lcc1) {
             revert Errors.InvalidSender();
         }
-        _settleUnderlyingToVaultFromHub(ILCC(lcc), wrappedAmount);
+        ILCC lccToken = ILCC(lcc);
+        _settleUnderlyingToVaultFromHub(lccToken, wrappedAmount);
+        _settleObligationsForLCC(lccToken);
     }
 
     /**
@@ -68,7 +73,8 @@ abstract contract VaultCoreActionHandler is MarketVault, IVaultCoreActionHandler
             return;
         }
         PoolKey memory key = _corePoolKey();
-        // New core liquidity can unlock queued settlement fulfilment.
+        // Direct-core add wake-up: service queues from existing vault reserve (e.g. market-derived-only adds
+        // never hit `handleIngress`). Complements per-lane settle after wrapped ingress.
         _settleObligations(key);
     }
 

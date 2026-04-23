@@ -6,9 +6,15 @@ import {LCCFactoryLib} from "./LCCFactoryLib.sol";
 import {Math} from "openzeppelin-contracts/contracts/utils/math/Math.sol";
 import {Errors} from "./Errors.sol";
 import {IMarketFactory} from "../interfaces/IMarketFactory.sol";
-import {IMMQueueCustodian} from "../interfaces/IMMQueueCustodian.sol";
 import {Currency} from "v4-periphery/lib/v4-core/src/types/Currency.sol";
 import {CurrencyTransfer} from "./CurrencyTransfer.sol";
+import {IWETH9} from "v4-periphery/src/interfaces/external/IWETH9.sol";
+import {ERC165Checker} from "openzeppelin-contracts/contracts/utils/introspection/ERC165Checker.sol";
+import {INativeSettlementReceiver} from "../interfaces/INativeSettlementReceiver.sol";
+
+interface ILiquidityHubWeth9 {
+    function weth9() external view returns (address);
+}
 
 /// @title LiquidityHubLib
 /// @notice Library for heavy LiquidityHub operations
@@ -16,6 +22,11 @@ import {CurrencyTransfer} from "./CurrencyTransfer.sol";
 ///      Uses adapter pattern to bridge LiquidityHubStorage to LCCFactoryLib functions
 library LiquidityHubLib {
     using CurrencyTransfer for Currency;
+
+    /// @dev Gas forwarded on raw native push to contracts that opt in via `INativeSettlementReceiver` (EIP-165).
+    ///      EOAs still use an uncapped `call{value}` attempt first. This caps griefing where a contract `receive()`
+    ///      burns gas then returns success, which would otherwise starve batch callers.
+    uint256 internal constant NATIVE_PUSH_GAS_STIPEND = 50_000;
 
     // ============ INTERNAL STRUCTS ============
 
@@ -194,12 +205,9 @@ library LiquidityHubLib {
         return ctx;
     }
 
-    /// @notice Step 2: Net market-derived portion against Hub queue using lazy claimed mapping
-    /// @dev Uses lazy-claimed mapping (`nettedLCCsAsUnderlying`) to prevent over-netting.
-    ///      The lazy-claimed mapping tracks how much of the Hub's queue for withLCC has already
-    ///      been netted in previous wrap-with operations. This prevents double-counting when
-    ///      multiple wrap-with operations occur before settlement processing.
-    ///      Effective queue = total queue - already netted (lazy-claimed)
+    /// @notice Step 2: Net market-derived portion against Hub queue for the backing LCC
+    /// @dev Eagerly decrements durable queue state (`settleQueue`, `totalQueued`, `queueOfUnderlying`) when netting,
+    ///      matching Step 0, so shared-underlying metrics and `unfundedQueueOfUnderlying` stay aligned with economic debt.
     /// @param s The liquidity hub storage
     /// @param withLCC The backing LCC token address
     /// @param ctx The wrap context (modified in place via return)
@@ -218,14 +226,13 @@ library LiquidityHubLib {
         if (remainderAmount == 0) return ctx;
 
         uint256 hubQueueForWith = s.settleQueue[withLCC][address(this)];
-        uint256 claimed = s.nettedLCCsAsUnderlying[withLCC];
-        // Effective queue = total queue minus what's already been lazy-claimed in previous operations
-        uint256 effectiveQueue = hubQueueForWith > claimed ? (hubQueueForWith - claimed) : 0;
-        uint256 nettable = Math.min(remainderAmount, Math.min(ctx.fromMarketDerivedAmount, effectiveQueue));
+        uint256 nettable = Math.min(remainderAmount, Math.min(ctx.fromMarketDerivedAmount, hubQueueForWith));
 
         if (nettable > 0) {
-            // Lazy claim: mark this portion as netted (will be reconciled during settlement processing)
-            s.nettedLCCsAsUnderlying[withLCC] = claimed + nettable;
+            // Eager reconciliation: same durable triple as Step 0 / queueSettlement
+            s.settleQueue[withLCC][address(this)] = hubQueueForWith - nettable;
+            s.totalQueued[withLCC] -= nettable;
+            s.queueOfUnderlying[s.lccToUnderlying[withLCC]] -= nettable;
             ctx.backingToBurn += nettable;
             ctx.marketToMint += nettable;
             ctx.fromMarketDerivedAmount -= nettable;
@@ -288,16 +295,11 @@ library LiquidityHubLib {
     }
 
     /// @notice Finalise burns and invariant checks for wrap-with operation
-    /// @dev Clamps burns to current balances and ensures lazy-claimed never exceeds queue.
-    ///      This is a safety check: if queue was processed between netting and finalisation,
-    ///      we ensure lazy-claimed doesn't exceed the new (smaller) queue size.
-    /// @param s The liquidity hub storage
+    /// @dev Clamps burns to current Hub-held balances (defensive check).
     /// @param lcc The target LCC token address
     /// @param withLCC The backing LCC token address
     /// @param ctx The wrap context
-    function _finaliseBurns(LiquidityHubStorage storage s, address lcc, address withLCC, WrapWithContext memory ctx)
-        private
-    {
+    function _finaliseBurns(address lcc, address withLCC, WrapWithContext memory ctx) private {
         // Clamp burns to current Hub-held balances (defensive check)
         uint256 targetToBurn = Math.min(ctx.targetToBurn, balanceOf(lcc, address(this)));
         uint256 backingToBurn = Math.min(ctx.backingToBurn, balanceOf(withLCC, address(this)));
@@ -309,14 +311,6 @@ library LiquidityHubLib {
         if (backingToBurn > 0) {
             burn(withLCC, address(this), 0, backingToBurn);
         }
-
-        // Ensure lazy-claimed never exceeds current queue (invariant check)
-        // This can happen if queue was processed between netting and finalisation
-        // @note: Based on the logical call flow, this should never happen.
-        uint256 currentQueueWith = s.settleQueue[withLCC][address(this)];
-        if (s.nettedLCCsAsUnderlying[withLCC] > currentQueueWith) {
-            s.nettedLCCsAsUnderlying[withLCC] = currentQueueWith;
-        }
     }
 
     // ============ MAIN WRAP-WITH FUNCTION ============
@@ -325,7 +319,7 @@ library LiquidityHubLib {
     /// @dev Multi-step strategy to efficiently convert one LCC to another sharing the same underlying:
     ///      Step 0: Net against target LCC Hub queue (if Hub has queue for target, net backing LCC against it)
     ///      Step 1: Optimise direct conversion (transfer directSupply from withLCC to target, no unwrap needed)
-    ///      Step 2: Net market-derived against Hub queue for withLCC (using lazy-claimed mapping to prevent over-netting)
+    ///      Step 2: Net market-derived against Hub queue for withLCC (eager durable queue updates)
     ///      Step 3: Unwrap residual (consume directSupply then market liquidity, queue shortfall if any)
     ///      Final: Mint target LCC reflecting direct vs market-derived components
     ///
@@ -388,7 +382,7 @@ library LiquidityHubLib {
         ctx = _unwrapResidual(s, withLCC, ctx); // Step 3: Unwrap residual
 
         // Finalise burns and invariant checks
-        _finaliseBurns(s, lcc, withLCC, ctx);
+        _finaliseBurns(lcc, withLCC, ctx);
         return ctx;
     }
 
@@ -397,8 +391,11 @@ library LiquidityHubLib {
     /**
      * @notice Core unwrap logic without external transfer
      * @dev Handles the unwrapping of LCC tokens by consuming direct supply first, then market liquidity.
-     *      Any shortfall is queued for settlement. This function does not transfer underlying assets;
-     *      that is handled by the calling contract.
+     *      External settlement queues are market-derived claims only (`processSettlementLogic` burns market-derived LCC).
+     *      The wrapped / direct-backed slice must redeem fully against `directSupply` in this transaction or revert;
+     *      it must not degrade into a queued external settlement. Only the market-derived slice may queue shortfall
+     *      when `useMarketLiquidity` returns less than requested.
+     *      This function does not transfer underlying assets; that is handled by the calling contract.
      * @param s The liquidity hub storage
      * @param lcc The LCC token address
      * @param queueTo The recipient of the underlying asset (used for queueing shortfall)
@@ -418,29 +415,38 @@ library LiquidityHubLib {
         uint256 wrappedBalance,
         uint256 marketDerivedBalance
     ) internal returns (uint256 directUnwrapped, uint256 marketUnwrapped, uint256 queuedShortfall) {
-        // 1) Consume directSupply[lcc] if available
-        if (wrappedBalance > 0) {
+        // 1) Wrapped / direct-backed slice: must fully satisfy `min(amount, wrappedBalance)` against directSupply or revert.
+        uint256 wrappedNeed = Math.min(amount, wrappedBalance);
+        if (wrappedNeed > 0) {
             uint256 directAvail = s.directSupply[lcc];
-            directUnwrapped = Math.min(Math.min(amount, wrappedBalance), directAvail);
+            directUnwrapped = Math.min(wrappedNeed, directAvail);
+            if (wrappedNeed > directUnwrapped) {
+                // This should never happen - as directAvail is the sum of all wrapped balances
+                revert Errors.InvalidAmount(wrappedNeed, directUnwrapped);
+            }
             if (directUnwrapped > 0) {
                 // Underlying already accounted in reserveOfUnderlying (shared pool), no transfer needed
                 s.directSupply[lcc] = directAvail - directUnwrapped;
             }
         }
 
-        // 2) Pull from market liquidity; increases reserves later via confirmTake callbacks
         uint256 remainingToUnwrap = amount - directUnwrapped;
-        if (remainingToUnwrap > 0 && marketDerivedBalance > 0) {
-            // Get the max amount that can be unwrapped from this market
-            uint256 requestFromMarket = Math.min(remainingToUnwrap, marketDerivedBalance);
 
-            // Unwrap from this market's liquidity - call IMarketFactory directly
-            marketUnwrapped = useMarketLiquidity(s, lcc, requestFromMarket);
-
-            remainingToUnwrap -= marketUnwrapped;
+        // 2) Market-derived slice: pull from market liquidity; queue only market shortfall (never wrapped/direct shortfall).
+        if (remainingToUnwrap == 0) {
+            return (directUnwrapped, 0, 0);
         }
 
-        // 3) Queue any shortfall for later processing
+        if (marketDerivedBalance == 0) {
+            // This should not happen, unless unwrap is for amount > balance.
+            revert Errors.InvalidAmount(remainingToUnwrap, 0);
+        }
+
+        uint256 requestFromMarket = Math.min(remainingToUnwrap, marketDerivedBalance);
+        marketUnwrapped = useMarketLiquidity(s, lcc, requestFromMarket);
+
+        remainingToUnwrap -= marketUnwrapped;
+
         if (remainingToUnwrap > 0) {
             queueSettlement(s, lcc, queueTo, remainingToUnwrap);
             queuedShortfall = remainingToUnwrap;
@@ -488,7 +494,7 @@ library LiquidityHubLib {
     ///      Hub path (recipient == address(this)):
     ///      - Used when LCCs back LCCs (via wrapWithLogic)
     ///      - Burns Hub-held LCC without transferring underlying or decrementing reserves
-    ///      - Reconciles lazy-claimed netting from wrapWithLogic operations
+    ///      - Step-2 wrapWith netting already reduced durable queue when applicable
     ///      - Underlying stays in shared pool (no transfer needed)
     ///
     ///      External path (standard users):
@@ -542,30 +548,9 @@ library LiquidityHubLib {
         s.queueOfUnderlying[underlying] -= toSettle;
 
         if (isForHub) {
-            // Reconcile lazy netting from wrapWith Step 2.
-            //
-            // `nettedLCCsAsUnderlying[lcc]` tracks how much of the Hub's own queued settlement for `lcc` was
-            // already "netted" earlier during wrapWith (market-derived netting) WITHOUT reducing `settleQueue`
-            // at that time. In other words: the queue still exists on-chain, but some of it has already been
-            // economically satisfied via netting. (ie. transferred to a recipient, so we don't need to burn Hub-held LCC for that same portion)
-            //
-            // When we later process the Hub's queue, we still decrement `settleQueue`/`totalQueued` by `toSettle`,
-            // but we must avoid double-accounting by NOT burning Hub-held LCC for the already-netted portion.
-            // So we consume `claimed` first, and only burn the remaining `effectiveToBurn`.
-            //
-            // (The external-recipient path below uses `pay(...)`, which burns the user's LCC and transfers
-            // underlying, decrementing reserves.)
-            uint256 claimed = s.nettedLCCsAsUnderlying[lcc];
-            uint256 decrement = Math.min(claimed, toSettle);
-            if (decrement > 0) {
-                s.nettedLCCsAsUnderlying[lcc] = claimed - decrement;
-            }
-            // Burn the remaining amount after wrapWithLogic lazy netting has been accounted for
-            uint256 effectiveToBurn = toSettle - decrement;
-
-            if (effectiveToBurn > 0) {
-                // Burn Hub-held LCC; protocol-bound burn, skip bucket maps
-                burn(lcc, recipient, 0, effectiveToBurn);
+            // Burn Hub-held LCC for the full settled slice; wrapWith Step 2 already reduced the queue when netting.
+            if (toSettle > 0) {
+                burn(lcc, recipient, 0, toSettle);
             }
         } else {
             // Standard path: burn user's LCC and transfer underlying
@@ -573,7 +558,23 @@ library LiquidityHubLib {
         }
     }
 
+    /// @dev Fail-closed payout sink guard: independent of Hub bound-registry policy so mis-queued payouts cannot target
+    ///      canonical WETH9 (native lane) or the ERC20 token contract itself (which would strand assets).
+    ///      Uses `ILiquidityHubWeth9(address(this)).weth9()` so the Hub (or parity harness) supplies the canonical WETH.
+    function _assertUnderlyingPayoutRecipientNotSink(address underlying, address account) internal view {
+        if (underlying == address(0)) {
+            address wrappedNative = ILiquidityHubWeth9(address(this)).weth9();
+            if (wrappedNative != address(0) && account == wrappedNative) {
+                revert Errors.NotApproved(account);
+            }
+        } else if (account == underlying) {
+            revert Errors.NotApproved(account);
+        }
+    }
+
     /// @notice Transfers underlying assets to an account
+    /// @dev Before mutating reserves, rejects objective sink recipients (`weth9()` for native lane; the underlying
+    ///      token contract for ERC20 lanes). Hub-level admission may still fail closed earlier; this is defence in depth.
     /// @param s The liquidity hub storage
     /// @param underlying The underlying asset address
     /// @param account The account to transfer the underlying assets to
@@ -592,8 +593,33 @@ library LiquidityHubLib {
             uint256 totalReserve = reserve.direct + reserve.marketDerived;
             revert Errors.InvalidAmount(amount, totalReserve);
         }
+        _assertUnderlyingPayoutRecipientNotSink(underlying, account);
         reserve.direct -= directAmount;
         reserve.marketDerived -= marketDerivedAmount;
+
+        if (underlying == address(0)) {
+            address wrappedNative = ILiquidityHubWeth9(address(this)).weth9();
+            if (wrappedNative == address(0)) {
+                revert Errors.InvalidAddress(wrappedNative);
+            }
+
+            // EOAs: uncapped raw ETH attempt first (then WETH fallback per HUB-02C).
+            // Opt-in contracts (`INativeSettlementReceiver`): raw ETH with a fixed gas stipend so a malicious `receive()`
+            // cannot consume the caller's entire gas budget then succeed.
+            // All other contracts (including canonical WETH9) settle as ERC20 WETH so value cannot be absorbed by
+            // payable contracts that credit `msg.sender` instead of the nominal recipient.
+            if (account.code.length == 0) {
+                (bool nativeOk,) = account.call{value: amount}("");
+                if (nativeOk) return;
+            } else if (ERC165Checker.supportsInterface(account, type(INativeSettlementReceiver).interfaceId)) {
+                (bool nativeOk,) = account.call{value: amount, gas: NATIVE_PUSH_GAS_STIPEND}("");
+                if (nativeOk) return;
+            }
+
+            IWETH9(wrappedNative).deposit{value: amount}();
+            Currency.wrap(wrappedNative).transfer(account, amount);
+            return;
+        }
 
         Currency.wrap(underlying).transfer(account, amount);
     }
@@ -619,7 +645,10 @@ library LiquidityHubLib {
 
     // ============ ISSUER / CUSTODIAN HELPERS (called via LiquidityHubLinkedLib) ============
 
-    /// @dev Snapshot for `confirmTake`: reserve bump and whether `LiquidityAvailable` should emit (before Hub settlement).
+    /// @dev Snapshot for `confirmTake`: reserve bump, Hub self-queue before best-effort Hub settlement, and whether
+    ///      `LiquidityAvailable` should emit. Hub self-settlement does not consume underlying reserve; it only
+    ///      collapses Hub-held LCC against queue. The wake-up event must still fire when new reserve arrives that may
+    ///      now service queued external settlements (reactive dispatch listens on this log).
     struct ConfirmTakeContext {
         uint256 hubQueueBeforeSettlement;
         address underlying;
@@ -635,7 +664,10 @@ library LiquidityHubLib {
         s.reserveOfUnderlying[ctx.underlying].marketDerived += amount;
         ctx.hubQueueBeforeSettlement = s.settleQueue[lcc][address(this)];
         ctx.marketId = s.lccToMarket[lcc].id;
-        ctx.emitLiquidityAvailable = shouldEmit && ctx.hubQueueBeforeSettlement < amount;
+        // Intent: `LiquidityAvailable` is a dispatch wake-up, not "reserve minus Hub self-queue". Suppressing emission
+        // when `hubQueueBeforeSettlement >= amount` would strand automation: reserve increased but external queues never
+        // get a liquidity signal because Hub-path settlement does not decrement reserve.
+        ctx.emitLiquidityAvailable = shouldEmit && amount > 0;
     }
 
     function confirmTakeBalanceInvariant(LiquidityHubStorage storage s, address underlying) internal view {
@@ -666,45 +698,6 @@ library LiquidityHubLib {
         } else {
             underlyingCurrency.approve(issuer, amount);
         }
-    }
-
-    function settleFromCustodian(
-        LiquidityHubStorage storage s,
-        address lcc,
-        address custodian,
-        uint256 tokenId,
-        address recipient,
-        uint256 maxAmount
-    ) internal returns (uint256 settled) {
-        if (recipient == address(0) || custodian == address(0) || maxAmount == 0) {
-            return 0;
-        }
-        if (custodian.code.length == 0) {
-            return 0;
-        }
-
-        IMMQueueCustodian queueCustodian = IMMQueueCustodian(custodian);
-        uint256 queued = s.settleQueue[lcc][recipient];
-        if (queued == 0) return 0;
-
-        address underlying = s.lccToUnderlying[lcc];
-        uint256 available = s.reserveOfUnderlying[underlying].marketDerived;
-        uint256 custodied;
-        try queueCustodian.queued(tokenId, lcc, recipient) returns (uint256 q) {
-            custodied = q;
-        } catch {
-            return 0;
-        }
-
-        settled = Math.min(Math.min(queued, available), Math.min(maxAmount, custodied));
-        if (settled == 0) return 0;
-
-        try queueCustodian.release(tokenId, lcc, recipient, settled) returns (uint256 released) {
-            settled = released;
-        } catch {
-            return 0;
-        }
-        if (settled == 0) return 0;
     }
 
     function annulSettlementBeforeTransfer(

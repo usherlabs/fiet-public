@@ -2,7 +2,6 @@
 pragma solidity ^0.8.26;
 
 import {Currency, CurrencyLibrary} from "v4-periphery/lib/v4-core/src/types/Currency.sol";
-import {Math} from "openzeppelin-contracts/contracts/utils/math/Math.sol";
 import {Address} from "openzeppelin-contracts/contracts/utils/Address.sol";
 import {TransientSlots} from "../libraries/TransientSlots.sol";
 import {PositionManagerBase} from "./PositionManagerBase.sol";
@@ -15,24 +14,38 @@ import {Errors} from "../libraries/Errors.sol";
  */
 abstract contract PositionManagerEntrypoint is PositionManagerBase {
     address public immutable actionsImpl;
+    address public immutable utilityActionsImpl;
 
-    constructor(address _marketFactory, address _vtsOrchestrator, address _actionsImpl)
-        PositionManagerBase(_marketFactory, _vtsOrchestrator)
-    {
+    constructor(
+        address _marketFactory,
+        address _vtsOrchestrator,
+        address _canonicalCustody,
+        address _actionsImpl,
+        address _utilityActionsImpl
+    ) PositionManagerBase(_marketFactory, _vtsOrchestrator, _canonicalCustody) {
         if (_actionsImpl == address(0) || _actionsImpl.code.length == 0) {
             revert Errors.InvalidAddress(_actionsImpl);
         }
+        if (_utilityActionsImpl == address(0) || _utilityActionsImpl.code.length == 0) {
+            revert Errors.InvalidAddress(_utilityActionsImpl);
+        }
         actionsImpl = _actionsImpl;
+        utilityActionsImpl = _utilityActionsImpl;
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
     // Delegation Helpers
     // ═══════════════════════════════════════════════════════════════════════════
 
-    /// @dev Delegates a call to the implementation contract
+    /// @dev Delegates a call to the position-actions implementation contract
     function _delegateToImpl(bytes memory data) internal {
         // OZ Address helper verifies target is a contract and bubbles revert reasons.
         Address.functionDelegateCall(actionsImpl, data);
+    }
+
+    /// @dev Delegates a call to the utility-actions implementation contract
+    function _delegateToUtilityImpl(bytes memory data) internal {
+        Address.functionDelegateCall(utilityActionsImpl, data);
     }
 
     // ------------------------------------------------------------------------------------------------
@@ -40,47 +53,30 @@ abstract contract PositionManagerEntrypoint is PositionManagerBase {
     // ------------------------------------------------------------------------------------------------
 
     /// @notice Hook called before batch execution
-    /// @dev Handles native value sent with the transaction and credits the exact msg.value amount
+    /// @dev Credits native ETH to the locker delta using **balance-delta** accounting for the batch:
+    ///      - First batch in the tx: baseline `lastSeen = balance - msg.value` so only this call's `msg.value` is
+    ///        treated as new inflow (ambient ETH already on the router is not credited).
+    ///      - Later batches: `fresh = balance - lastSeen`; credit `min(msg.value, fresh)` so:
+    ///        - `Multicall_v4` inner `delegatecall`s share one outer `msg.value` and do not increase balance between
+    ///          batches → second inner batch gets `fresh == 0` (fixes duplicate credit if we cleared a boolean per batch).
+    ///        - Distinct payable top-level calls each add ETH → `fresh` matches the new wei and each call is credited once.
+    ///      `_afterBatch` snapshots `address(this).balance` into transient storage for the rest of the transaction.
     function _beforeBatch() internal {
-        // Handle native value EXACTLY once per batch.
-        uint256 amount = TransientSlots.readMsgValueOnce();
+        uint256 amount = TransientSlots.nativeEthCreditAmountForBatch(address(this).balance, msg.value);
         if (amount > 0) {
             _creditExact(CurrencyLibrary.ADDRESS_ZERO, amount);
         }
     }
 
     /// @notice Hook called after batch execution
-    /// @dev Asserts that deltas are non-zero after batch execution
+    /// @dev Clears batch-scoped seizure context, asserts deltas net to zero, then records native balance for the next
+    ///      `_beforeBatch` in the same transaction (multicall-safe, multi-entrypoint-safe).
     function _afterBatch() internal {
-        // Clear any per-batch transient context to avoid same-tx leakage into subsequent batches.
         TransientSlots.clearSeizedPositionId();
-        TransientSlots.clearMsgValueRead();
-        // Assert that deltas are non-zero after batch execution
-        vtsOrchestrator.assertNonZeroDeltas();
-    }
-
-    // ------------------------------------------------------------------------------------------------
-    // MM Utility Helpers
-    // ------------------------------------------------------------------------------------------------
-
-    /// @notice Takes currency from delta and transfers to recipient
-    /// @dev Unified flow for both LCC and underlying currencies:
-    ///      - Balance held as ERC20 by MMPM
-    ///      - Delta on locker (LCC fees synced via _syncBalanceAsCredit after position modification)
-    ///      - Flow: debit locker delta -> direct ERC20 transfer
-    /// @param currency The currency to take
-    /// @param to The recipient address
-    /// @param maxAmount The maximum amount to take (0 = take full available credit)
-    function _take(Currency currency, address to, uint256 maxAmount) internal {
-        address locker = msgSender();
-        uint256 bal = currency.balanceOfSelf();
-        // maxAmount == 0 means "take full available credit", but still cap to the actual ERC20 balance held by MMPM.
-        uint256 trueMaxAmount = (maxAmount == 0) ? bal : Math.min(maxAmount, bal);
-        uint256 takeAmount = vtsOrchestrator.take(currency, locker, trueMaxAmount);
-
-        if (to != address(this)) {
-            currency.transfer(to, takeAmount);
-        }
+        TransientSlots.clearSeizurePrimarySettleAllowed();
+        // Owner-scoped and market-scoped transient namespaces both resolve through the orchestrator boundary.
+        vtsOrchestrator.assertNonZeroDeltas(marketFactory);
+        TransientSlots.setNativeLastSeenBalance(address(this).balance);
     }
 }
 

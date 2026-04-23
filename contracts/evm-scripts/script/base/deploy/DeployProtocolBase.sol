@@ -7,9 +7,10 @@ import {PositionManager} from "v4-periphery/src/PositionManager.sol";
 import {CoreHook} from "src/CoreHook.sol";
 import {MarketFactory} from "src/MarketFactory.sol";
 import {HookFlags} from "src/libraries/HookFlags.sol";
-import {MMQueueCustodian} from "src/MMQueueCustodian.sol";
 import {MMPositionManager} from "src/MMPositionManager.sol";
+import {MMQueueCustodianFactory} from "src/MMQueueCustodianFactory.sol";
 import {MMPositionActionsImpl} from "src/MMPositionActionsImpl.sol";
+import {MMUtilityActionsImpl} from "src/MMUtilityActionsImpl.sol";
 import {VRLSignalManager} from "src/VRLSignalManager.sol";
 import {VRLSettlementObserver} from "src/VRLSettlementObserver.sol";
 import {VTSOrchestrator} from "src/VTSOrchestrator.sol";
@@ -19,7 +20,11 @@ import {MMPCommitmentDescriptor} from "src/MMPCommitmentDescriptor.sol";
 import {LiquidityHub} from "src/LiquidityHub.sol";
 import {GlobalConfig} from "src/GlobalConfig.sol";
 import {ECDSASignatureSignalVerifier} from "src/verifiers/ECDSASignatureSignalVerifier.sol";
-import {DirectLPDeltaResolver} from "src/DirectLPDeltaResolver.sol";
+import {DirectLPDeltaResolver} from "src/periphery/DirectLPDeltaResolver.sol";
+import {CanonicalVault} from "src/CanonicalVault.sol";
+import {IPoolManager} from "v4-periphery/lib/v4-core/src/interfaces/IPoolManager.sol";
+import {IWETH9} from "v4-periphery/src/interfaces/external/IWETH9.sol";
+import {IAllowanceTransfer} from "permit2/src/interfaces/IAllowanceTransfer.sol";
 
 import {CREATE3Script} from "../CREATE3Script.sol";
 import {NetworkConfig} from "../NetworkConfig.sol";
@@ -34,13 +39,36 @@ abstract contract DeployProtocolBase is CREATE3Script, NetworkConfig {
     string internal constant VTS_ORCHESTRATOR = "VTSOrchestrator";
     string internal constant COMMITMENT_DESCRIPTOR = "MMPCommitmentDescriptor";
     string internal constant ACTIONS_IMPL = "MMPositionActionsImpl";
-    string internal constant QUEUE_CUSTODIAN = "MMQueueCustodian";
+    string internal constant UTILITY_ACTIONS_IMPL = "MMUtilityActionsImpl";
     string internal constant MM_POSITION_MANAGER = "MMPositionManager";
+    string internal constant MM_QUEUE_CUSTODIAN_FACTORY = "MMQueueCustodianFactory";
     string internal constant DIRECT_LP_DELTA_RESOLVER = "DirectLPDeltaResolver";
     string internal constant MARKET_FACTORY = "MarketFactory";
+    string internal constant CANONICAL_VAULT = "CanonicalVault";
     string internal constant GLOBAL_CONFIG = "GlobalConfig";
 
     constructor() CREATE3Script("1") {}
+
+    /// @dev Fail-fast checks for common misconfigured network constants / stale env RPC combinations.
+    function _assertCorePeripheryConfig() internal view {
+        require(config.poolManager.code.length > 0, "NetworkConfig: poolManager has no code on current RPC");
+        require(config.positionManager.code.length > 0, "NetworkConfig: positionManager has no code on current RPC");
+        require(config.permit2.code.length > 0, "NetworkConfig: permit2 has no code on current RPC");
+
+        // Validate PositionManager wiring explicitly, so failures are clear instead of surfacing as opaque
+        // "call to non-contract address" deep inside deployment logic.
+        (bool okWeth, bytes memory wethData) = config.positionManager.staticcall(abi.encodeWithSignature("WETH9()"));
+        require(okWeth && wethData.length >= 32, "NetworkConfig: PositionManager.WETH9() call failed");
+        address weth9 = abi.decode(wethData, (address));
+        require(weth9 != address(0), "NetworkConfig: PositionManager.WETH9() returned zero address");
+        require(weth9.code.length > 0, "NetworkConfig: WETH9 has no code on current RPC");
+
+        (bool okPermit2, bytes memory permit2Data) =
+            config.positionManager.staticcall(abi.encodeWithSignature("permit2()"));
+        require(okPermit2 && permit2Data.length >= 32, "NetworkConfig: PositionManager.permit2() call failed");
+        address permit2FromPm = abi.decode(permit2Data, (address));
+        require(permit2FromPm == config.permit2, "NetworkConfig: PositionManager.permit2() mismatch vs config");
+    }
 
     function _deployCreate3(string memory name, bytes memory creationCode) internal returns (address deployed) {
         bytes32 salt = getCreate3ContractSalt(name);
@@ -67,13 +95,14 @@ abstract contract DeployProtocolBase is CREATE3Script, NetworkConfig {
         uint8 nativeAssetDecimals,
         address globalConfig
     ) internal returns (address payable) {
+        address weth9 = address(PositionManager(payable(config.positionManager)).WETH9());
         return payable(_deployCreate3(
-            LIQUIDITY_HUB,
-            abi.encodePacked(
-                type(LiquidityHub).creationCode,
-                abi.encode(oracleHelper, nativeAssetName, nativeAssetSymbol, nativeAssetDecimals, globalConfig)
-            )
-        ));
+                LIQUIDITY_HUB,
+                abi.encodePacked(
+                    type(LiquidityHub).creationCode,
+                    abi.encode(oracleHelper, nativeAssetName, nativeAssetSymbol, nativeAssetDecimals, weth9, globalConfig)
+                )
+            ));
     }
 
     function _deployVTSOrchestrator(address oracleHelper, address liquidityHub, address globalConfig)
@@ -82,32 +111,34 @@ abstract contract DeployProtocolBase is CREATE3Script, NetworkConfig {
     {
         return _deployCreate3(
             VTS_ORCHESTRATOR,
-            abi.encodePacked(type(VTSOrchestrator).creationCode, abi.encode(config.poolManager, oracleHelper, liquidityHub, globalConfig))
+            abi.encodePacked(
+                type(VTSOrchestrator).creationCode,
+                abi.encode(config.poolManager, oracleHelper, liquidityHub, globalConfig)
+            )
         );
     }
 
     function _deploySignalVerifier(address publicKeyAddress) internal returns (address) {
         return _deployCreate3(
-            SIGNAL_VERIFIER, abi.encodePacked(type(ECDSASignatureSignalVerifier).creationCode, abi.encode(publicKeyAddress))
+            SIGNAL_VERIFIER,
+            abi.encodePacked(type(ECDSASignatureSignalVerifier).creationCode, abi.encode(publicKeyAddress))
         );
     }
 
-    function _deploySignalManager(address signalVerifier, uint256 signalExpiryInSeconds, address submitter, address globalConfig)
+    function _deploySignalManager(address signalVerifier, address submitter, address globalConfig)
         internal
         returns (address)
     {
         return _deployCreate3(
             SIGNAL_MANAGER,
-            abi.encodePacked(
-                type(VRLSignalManager).creationCode,
-                abi.encode(signalVerifier, signalExpiryInSeconds, submitter, globalConfig)
-            )
+            abi.encodePacked(type(VRLSignalManager).creationCode, abi.encode(signalVerifier, submitter, globalConfig))
         );
     }
 
     function _deploySettlementObserver(address submitter, address globalConfig) internal returns (address) {
         return _deployCreate3(
-            SETTLEMENT_OBSERVER, abi.encodePacked(type(VRLSettlementObserver).creationCode, abi.encode(submitter, globalConfig))
+            SETTLEMENT_OBSERVER,
+            abi.encodePacked(type(VRLSettlementObserver).creationCode, abi.encode(submitter, globalConfig))
         );
     }
 
@@ -117,8 +148,9 @@ abstract contract DeployProtocolBase is CREATE3Script, NetworkConfig {
         address signalManager,
         address settlementObserver
     ) internal {
-        bytes memory callData =
-            abi.encodeWithSelector(IVTSAdmin.registerVRLProofHandlers.selector, signalManager, settlementObserver);
+        bytes memory callData = abi.encodeWithSelector(
+            IVTSAdmin.registerVRLProofHandlers.selector, signalManager, settlementObserver
+        );
         GlobalConfig(globalConfig).proxyCall(vtsOrchestrator, callData);
     }
 
@@ -126,12 +158,21 @@ abstract contract DeployProtocolBase is CREATE3Script, NetworkConfig {
         return _deployCreate3(COMMITMENT_DESCRIPTOR, type(MMPCommitmentDescriptor).creationCode);
     }
 
+    function _deployCanonicalVault(address liquidityHub, address marketFactory) internal returns (address) {
+        return _deployCreate3(
+            CANONICAL_VAULT,
+            abi.encodePacked(
+                type(CanonicalVault).creationCode, abi.encode(config.poolManager, liquidityHub, marketFactory)
+            )
+        );
+    }
+
     function _deployMMStack(
         address marketFactory,
         address vtsOrchestrator,
         address commitmentDescriptor,
-        address queueBinder
-    ) internal returns (address actionsImpl, address queueCustodian, address mmPositionManager) {
+        address canonicalVaultAddr
+    ) internal returns (address actionsImpl, address utilityActionsImpl, address mmPositionManager) {
         address weth9 = address(PositionManager(payable(config.positionManager)).WETH9());
         address permit2 = address(PositionManager(payable(config.positionManager)).permit2());
 
@@ -139,12 +180,20 @@ abstract contract DeployProtocolBase is CREATE3Script, NetworkConfig {
             ACTIONS_IMPL,
             abi.encodePacked(
                 type(MMPositionActionsImpl).creationCode,
-                abi.encode(config.poolManager, marketFactory, vtsOrchestrator)
+                abi.encode(config.poolManager, marketFactory, vtsOrchestrator, canonicalVaultAddr)
             )
         );
 
-        queueCustodian = _deployCreate3(
-            QUEUE_CUSTODIAN, abi.encodePacked(type(MMQueueCustodian).creationCode, abi.encode(queueBinder))
+        utilityActionsImpl = _deployCreate3(
+            UTILITY_ACTIONS_IMPL,
+            abi.encodePacked(
+                type(MMUtilityActionsImpl).creationCode,
+                abi.encode(config.poolManager, marketFactory, vtsOrchestrator, canonicalVaultAddr, weth9)
+            )
+        );
+
+        address queueCustodianFactory = _deployCreate3(
+            MM_QUEUE_CUSTODIAN_FACTORY, abi.encodePacked(type(MMQueueCustodianFactory).creationCode)
         );
 
         mmPositionManager = _deployCreate3(
@@ -152,19 +201,21 @@ abstract contract DeployProtocolBase is CREATE3Script, NetworkConfig {
             abi.encodePacked(
                 type(MMPositionManager).creationCode,
                 abi.encode(
-                    config.poolManager,
-                    marketFactory,
-                    vtsOrchestrator,
-                    commitmentDescriptor,
-                    weth9,
-                    permit2,
-                    actionsImpl,
-                    queueCustodian
+                    MMPositionManager.MMPositionManagerInit({
+                        poolManager: IPoolManager(config.poolManager),
+                        marketFactory: marketFactory,
+                        vtsOrchestrator: vtsOrchestrator,
+                        canonicalCustody: canonicalVaultAddr,
+                        descriptor: commitmentDescriptor,
+                        weth9: IWETH9(weth9),
+                        permit2: IAllowanceTransfer(permit2),
+                        actionsImpl: actionsImpl,
+                        utilityActionsImpl: utilityActionsImpl,
+                        queueCustodianFactory: queueCustodianFactory
+                    })
                 )
             )
         );
-
-        MMQueueCustodian(queueCustodian).setPositionManager(mmPositionManager);
     }
 
     function _deployDirectLPDeltaResolver(address liquidityHub) internal returns (address) {
@@ -174,10 +225,12 @@ abstract contract DeployProtocolBase is CREATE3Script, NetworkConfig {
         );
     }
 
-    function _deployMarketFactory(address liquidityHub, address oracleHelper, address vtsOrchestrator, address globalConfig)
-        internal
-        returns (address)
-    {
+    function _deployMarketFactory(
+        address liquidityHub,
+        address oracleHelper,
+        address vtsOrchestrator,
+        address globalConfig
+    ) internal returns (address) {
         return _deployCreate3(
             MARKET_FACTORY,
             abi.encodePacked(
@@ -201,21 +254,28 @@ abstract contract DeployProtocolBase is CREATE3Script, NetworkConfig {
         coreHook = hookAddress;
     }
 
+    /// @notice Binds MM stack addresses (and optionally `DirectLPDeltaResolver`) as `LiquidityHub` bound endpoints.
+    /// @param directLPDeltaResolver Optional third bound endpoint for native `PositionManager` subscriber wiring. Use
+    ///        `address(0)` to omit; default `DeployContracts` does not deploy the resolver.
     function _initialiseFactory(
         address globalConfig,
         address marketFactory,
+        address canonicalVaultAddr,
         address coreHook,
         address mmPositionManager,
-        address queueCustodian,
         address directLPDeltaResolver
     ) internal {
-        address[] memory initialBounds = new address[](3);
+        uint256 n = directLPDeltaResolver == address(0) ? 1 : 2;
+        address[] memory initialBounds = new address[](n);
+        // Generic protocol endpoint bootstrap for `MarketFactory.initialise` (not a special MM–custodian binding slot).
         initialBounds[0] = mmPositionManager;
-        initialBounds[1] = queueCustodian;
-        initialBounds[2] = directLPDeltaResolver;
+        if (n == 2) {
+            initialBounds[1] = directLPDeltaResolver;
+        }
         GlobalConfig(globalConfig)
             .proxyCall(
-                marketFactory, abi.encodeWithSelector(MarketFactory.initialise.selector, coreHook, initialBounds)
+                marketFactory,
+                abi.encodeWithSelector(MarketFactory.initialise.selector, canonicalVaultAddr, coreHook, initialBounds)
             );
     }
 }

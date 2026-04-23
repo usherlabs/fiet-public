@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.26;
 
-import {VTSPositionLibEchidnaHarness} from "../harnesses/VTSPositionLibEchidnaHarness.sol";
+import {VTSPositionLibFuzzHarness} from "../harnesses/VTSPositionLibFuzzHarness.sol";
 import {MockPoolManager} from "../mocks/MockPoolManager.sol";
 import {MockMarketVault} from "../../_mocks/MockMarketVault.sol";
 import {MockLCC} from "../../_mocks/MockLCC.sol";
@@ -14,10 +14,9 @@ import {IPoolManager} from "v4-periphery/lib/v4-core/src/interfaces/IPoolManager
 import {ModifyLiquidityParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
 import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
 import {LiquidityUtils} from "../../../src/libraries/LiquidityUtils.sol";
-import {EchidnaLinkedLibs} from "../base/EchidnaLinkedLibs.sol";
 
-/// @notice Echidna harness for SETTLE-02: seizure settlement clamps deposit/withdraw bounds.
-/// @dev Exercises the production `VTSPositionLib.onMMSettle` seizing branch via harness wrapper.
+/// @notice fuzz harness for SETTLE-02: seizure settlement clamps deposit/withdraw bounds.
+/// @dev Exercises the production MM settle seizing branch via `VTSLifecycleLinkedLib._executeMMSettleFromParams`.
 contract SETTLE02 {
     uint256 internal constant MAX_NON_VACUOUS_ATTEMPTS = 32;
 
@@ -31,7 +30,7 @@ contract SETTLE02 {
         bool zeroCapBranch;
     }
 
-    VTSPositionLibEchidnaHarness internal harness;
+    VTSPositionLibFuzzHarness internal harness;
     MockPoolManager internal poolManager;
     MockMarketVault internal vault;
 
@@ -52,10 +51,9 @@ contract SETTLE02 {
     bool internal withdrawAllOk = true;
 
     constructor() {
-        EchidnaLinkedLibs.deployVTSPositionLib();
-        harness = new VTSPositionLibEchidnaHarness();
+        harness = new VTSPositionLibFuzzHarness();
         poolManager = new MockPoolManager();
-        vault = new MockMarketVault();
+        vault = new MockMarketVault(address(0));
 
         ModifyLiquidityParams memory mlParams =
             ModifyLiquidityParams({tickLower: -60, tickUpper: 60, liquidityDelta: 1e10, salt: bytes32(0)});
@@ -85,7 +83,6 @@ contract SETTLE02 {
                 unbackedCommitmentGraceBypassTime: 0,
                 unbackedCommitmentGraceBypassThreshold: 0
             }),
-            coverageFeeShare: 5000,
             minResidualUnits: 1000,
             unbackedCommitmentGraceBypassBps: 500
         });
@@ -134,7 +131,16 @@ contract SETTLE02 {
 
             BalanceDelta delta = toBalanceDelta(-int128(uint128(c.requested0)), -int128(uint128(c.requested1)));
             try harness.onMMSettle(
-                IPoolManager(address(poolManager)), vault, positionId, lccCurrency0, lccCurrency1, delta, true
+                VTSPositionLibFuzzHarness.OnMMSettleInput({
+                    poolManager: IPoolManager(address(poolManager)),
+                    vault: vault,
+                    positionId: positionId,
+                    lccCurrency0: lccCurrency0,
+                    lccCurrency1: lccCurrency1,
+                    delta: delta,
+                    isSeizing: true,
+                    fromDeltas: false
+                })
             ) returns (
                 BalanceDelta settlementDelta, bool, uint256
             ) {
@@ -195,12 +201,28 @@ contract SETTLE02 {
 
             BalanceDelta delta = toBalanceDelta(int128(uint128(c.requested0)), int128(uint128(c.requested1)));
             try harness.onMMSettle(
-                IPoolManager(address(poolManager)), vault, positionId, lccCurrency0, lccCurrency1, delta, true
+                VTSPositionLibFuzzHarness.OnMMSettleInput({
+                    poolManager: IPoolManager(address(poolManager)),
+                    vault: vault,
+                    positionId: positionId,
+                    lccCurrency0: lccCurrency0,
+                    lccCurrency1: lccCurrency1,
+                    delta: delta,
+                    isSeizing: true,
+                    fromDeltas: false
+                })
             ) returns (
                 BalanceDelta settlementDelta, bool, uint256
             ) {
                 (uint256 settledAfter0, uint256 settledAfter1) = harness.getSettled(positionId);
-                ok = _withdrawOutcomeOk(c, settlementDelta, settledAfter0, settledAfter1);
+                ok = _withdrawOutcomeOk(
+                    c,
+                    settlementDelta,
+                    settledAfter0,
+                    settledAfter1,
+                    harness.getUnderlyingDeltaSigned(underlyingCurrency0, address(this)),
+                    harness.getUnderlyingDeltaSigned(underlyingCurrency1, address(this))
+                );
             } catch {
                 ok = false;
             }
@@ -216,7 +238,7 @@ contract SETTLE02 {
     }
 
     // forge-lint: disable-next-line(mixed-case-function)
-    function echidna_settle_02_seizing_clamps_hold() external view returns (bool) {
+    function fuzz_settle_02_seizing_clamps_hold() external view returns (bool) {
         uint256 totalAttempts = depositChecks + withdrawChecks;
         if (totalAttempts < MAX_NON_VACUOUS_ATTEMPTS) {
             return true;
@@ -231,7 +253,7 @@ contract SETTLE02 {
     }
 
     // forge-lint: disable-next-line(mixed-case-function)
-    function echidna_settle_02_smoke() external pure returns (bool) {
+    function fuzz_settle_02_smoke() external pure returns (bool) {
         return true;
     }
 
@@ -256,22 +278,16 @@ contract SETTLE02 {
         ClampCase memory c,
         BalanceDelta settlementDelta,
         uint256 settledAfter0,
-        uint256 settledAfter1
+        uint256 settledAfter1,
+        int128 underlyingAfter0,
+        int128 underlyingAfter1
     ) internal pure returns (bool) {
         uint256 expected0 = c.requested0 < c.cap0 ? c.requested0 : c.cap0;
         uint256 expected1 = c.requested1 < c.cap1 ? c.requested1 : c.cap1;
-        if (expected0 > c.settledBefore0) expected0 = c.settledBefore0;
-        if (expected1 > c.settledBefore1) expected1 = c.settledBefore1;
         bool ok = settlementDelta.amount0() == int128(uint128(expected0))
-            && settlementDelta.amount1() == int128(uint128(expected1)) && settledAfter0 <= c.settledBefore0
-            && settledAfter1 <= c.settledBefore1;
-        if (settledAfter0 > c.settledBefore0 || settledAfter1 > c.settledBefore1) {
-            return false;
-        }
-
-        uint256 got0 = c.settledBefore0 - settledAfter0;
-        uint256 got1 = c.settledBefore1 - settledAfter1;
-        ok = ok && got0 == expected0 && got1 == expected1;
+            && settlementDelta.amount1() == int128(uint128(expected1)) && settledAfter0 == c.settledBefore0
+            && settledAfter1 == c.settledBefore1 && _toUintPositive(underlyingAfter0) == c.cap0 - expected0
+            && _toUintPositive(underlyingAfter1) == c.cap1 - expected1;
         if (c.zeroCapBranch) {
             ok = ok && settledAfter0 == c.settledBefore0 && settledAfter1 == c.settledBefore1;
         }
@@ -289,6 +305,7 @@ contract SETTLE02 {
 
         harness.setCommitmentMax(positionId, c0, c1);
         harness.setSettled(positionId, s0, s1);
+        harness.setPoolTotalSettled(POOL_ID, s0, s1);
 
         uint256 def0 = baseReq0 > s0 ? (baseReq0 - s0) + 1 : 1;
         uint256 def1 = baseReq1 > s1 ? (baseReq1 - s1) + 1 : 1;
@@ -308,6 +325,7 @@ contract SETTLE02 {
         uint256 req0 = baseReq0 > def0 ? baseReq0 : def0;
         uint256 req1 = baseReq1 > def1 ? baseReq1 : def1;
         harness.setSettled(positionId, req0, req1);
+        harness.setPoolTotalSettled(POOL_ID, req0, req1);
         harness.setCumulativeDeficit(positionId, def0, def1);
         harness.setPoolTotalDeficitPrincipal(POOL_ID, def0, def1);
         harness.setPositionActive(positionId, true);

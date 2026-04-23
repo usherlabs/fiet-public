@@ -2,7 +2,7 @@
 
 > **Module**: `DynamicCurrencyDelta`, `VTSCurrencyDelta`, `MMPositionManager`, `PositionManagerBase`  
 > **Author**: Fiet Protocol  
-> **Last Updated**: December 2024
+> **Last Updated**: April 2026
 
 ## Overview
 
@@ -59,6 +59,7 @@ When deltas are tracked against MMPM, they represent the **protocol's obligation
 | **Negative (Debt)** | Protocol **is owed** value from external sources |
 
 **Use Cases**:
+
 - LCC fee credits (ERC-6909 claims the protocol owes to users)
 - Settlement obligations from position operations
 - Credits accumulated from position outputs
@@ -73,6 +74,7 @@ When deltas are tracked against the locker, they represent the **external entity
 | **Negative (Debt)** | External entity **owes** value to the protocol |
 
 **Use Cases**:
+
 - Balance syncs from wrap/unwrap operations
 - Direct token credits from external transfers
 - Locker-held delta for take operations
@@ -152,11 +154,13 @@ Balance syncs represent physical tokens held by MMPM that should be takeable by 
 **Behaviour by Currency Type**:
 
 #### LCC Currency (fees, position outputs)
+
 - **Delta on**: MMPM (`address(this)`)
 - **Stored as**: ERC-6909 claims on PoolManager
 - **Flow**: Burn claims → Take actual ERC20 → Debit MMPM delta
 
 #### Underlying Currency (wrap/unwrap results)
+
 - **Delta on**: Locker (`msgSender()`)
 - **Stored as**: ERC20 in MMPM
 - **Flow**: Debit locker delta → Direct ERC20 transfer
@@ -194,6 +198,7 @@ function _take(Currency currency, address to, uint256 maxAmount) internal {
 **Example Scenarios**:
 
 **LCC Take (fees)**:
+
 - LCC delta on MMPM = 100 (ERC-6909 claims)
 - `take(lcc, recipient, 50)`:
   1. Burns 50 ERC-6909 claims
@@ -201,6 +206,7 @@ function _take(Currency currency, address to, uint256 maxAmount) internal {
   3. Debits MMPM delta by 50
 
 **Underlying Take (after unwrap)**:
+
 - Locker underlying delta = 100 (synced from balance)
 - `take(underlying, recipient, 50)`:
   1. Debits locker delta by 50
@@ -378,12 +384,13 @@ _settle()
 ┌─────────────────────────────────────────────────────────────┐
 │  Calculate requiredSettlementDelta                          │
 │  - Based on position params and VTS configuration           │
-│  - Represents market liquidity obligation                   │
+│  - MM decrease: value exported from position accounting     │
+│    (see Amendment 10 April 2026)                            │
 └─────────────────────────────────────────────────────────────┘
                             │
                             ▼
 ┌─────────────────────────────────────────────────────────────┐
-│  accountUnderlyingSettlementDeltaChange()                   │
+│  accountUnderlyingSettlementDelta() / change                │
 │  - Sets underlying currency deltas on MMPM                  │
 │  - These are MARKET CLAIMS, not physical balance            │
 └─────────────────────────────────────────────────────────────┘
@@ -395,6 +402,36 @@ _settle()
 │  - Cannot be cleared by sync() (only adds, never reduces)   │
 └─────────────────────────────────────────────────────────────┘
 ```
+
+### Amendment — 10 April 2026: MM Exported Settlement Conservation
+
+This amendment updates the MM settlement model for decrease/export flows to preserve single-representation accounting across positions.
+
+- **Eager source-side decrement on MM decrease**:
+  - When an MM decrease exports settlement value out of the source position, that exported value must leave live source `pa.settled` / pool `totalSettled` immediately.
+  - This applies to the full exported amount, including both:
+    - the **Hub-backed queued shortfall** portion, and
+    - the **immediate-settle / `DynamicCurrencyDelta`** portion.
+- **Single live representation after export**:
+  - After export, the source position must no longer continue to represent that same value as live `settled`.
+  - The exported value must instead exist on exactly one external surface:
+    - `LiquidityHub` queue accounting, or
+    - MMPM underlying delta via `DynamicCurrencyDelta`.
+- **Consumption-based target-side increment**:
+  - A target position's `pa.settled` must increase only when the protocol actually consumes the relevant funding surface through the authorised settlement path.
+  - Positive MMPM underlying delta, by itself, is not sufficient to credit target `settled`; the increase occurs only when `_settle()` / `onMMSettle()` realises that value.
+- **Intentional asymmetry**:
+  - **Decrease path**: accounting is eager on the source side because value has already left the source position economically.
+  - **Increase / import path**: accounting is deferred on the target side until value transfer or delta consumption is actually effected.
+- **Settlement ordering asymmetry inside `_settle()` / `onMMSettle()`**:
+  - **Deposits** may still update target `pa.settled` before negative underlying delta debt is cleared, because the batch is
+    moving fresh value into the position.
+  - **Withdrawals** must consume positive MMPM underlying delta first; only any residual amount still backed by live
+    position settlement may reduce `pa.settled` / pool `totalSettled`.
+  - Therefore, a delta-backed withdrawal is not allowed to book a settled reduction first and then "restore" it later.
+- **Interpretation of `requiredSettlementDelta`**:
+  - In MM decrease flows, `requiredSettlementDelta` should be interpreted as value already exported from source position accounting and awaiting settlement, queue custody, or later delta consumption.
+  - It should no longer be interpreted as value that remains live in source `settled` until a later follow-on settle action.
 
 ---
 

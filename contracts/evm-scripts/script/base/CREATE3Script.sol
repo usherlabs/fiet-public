@@ -60,14 +60,12 @@ abstract contract CREATE3Script is Script {
 
     constructor(string memory version_) {
         version = version_;
-        address factory;
-        try vm.envAddress("CREATE3_FACTORY") returns (address a) {
-            factory = a;
-        } catch {
-            factory = (block.chainid == ARBITRUM_SEPOLIA_CHAIN_ID)
+        address factory = vm.envOr(
+            "CREATE3_FACTORY",
+            block.chainid == ARBITRUM_SEPOLIA_CHAIN_ID
                 ? DEFAULT_CREATE3_FACTORY_ARBITRUM_SEPOLIA
-                : DEFAULT_CREATE3_FACTORY;
-        }
+                : DEFAULT_CREATE3_FACTORY
+        );
         create3 = ICREATE3Factory(factory);
     }
 
@@ -106,12 +104,20 @@ abstract contract CREATE3Script is Script {
     ///      This preserves unique salts per contract name while allowing deterministic namespace rotation.
     function _buildCreate3SaltSeed(string memory name, string memory _version) internal view returns (string memory) {
         string memory baseSeed = string.concat(name, "-v", _version);
-        try vm.envString("CREATE3_SALT") returns (string memory envSaltSuffix) {
-            if (bytes(envSaltSuffix).length > 0) {
-                return string.concat(baseSeed, "-", envSaltSuffix);
-            }
-        } catch {}
+        // Use envOr to avoid noisy vm.envString reverts when CREATE3_SALT is intentionally unset.
+        string memory envSaltSuffix = vm.envOr("CREATE3_SALT", string(""));
+        if (bytes(envSaltSuffix).length > 0) {
+            return string.concat(baseSeed, "-", envSaltSuffix);
+        }
         return baseSeed;
+    }
+
+    /// @dev Fail-fast sanity check for CREATE3 factory wiring.
+    function _assertCreate3FactoryDeployed() internal view {
+        require(address(create3) != address(0), "CREATE3: factory is zero address");
+        require(
+            address(create3).code.length > 0, "CREATE3: factory has no code (set CREATE3_FACTORY or run setup-create3)"
+        );
     }
 
     function getCreate3SaltFromEnv(string memory name) internal view virtual returns (bytes32) {

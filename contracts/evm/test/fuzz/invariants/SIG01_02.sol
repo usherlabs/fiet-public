@@ -23,7 +23,7 @@ contract SIG01_02Verifier is ISignalVerifier {
     }
 }
 
-/// @notice Echidna harness for SIG-01 and SIG-02.
+/// @notice fuzz harness for SIG-01 and SIG-02.
 ///
 /// SIG-01: VRL nonce must be strictly monotonically increasing per MM.
 ///   - signal.nonce > mmNonce[mmState.owner], otherwise reverts InvalidNonce.
@@ -68,7 +68,7 @@ contract SIG01_02 {
     constructor() {
         verifier = new SIG01_02Verifier();
         // The harness itself is the submitter (onlySubmitter guard uses msg.sender).
-        sigMgr = new VRLSignalManager(address(verifier), 3600, address(this), address(this));
+        sigMgr = new VRLSignalManager(address(verifier), address(this), address(this));
 
         modelNonce = 0;
         highWaterNonce = 0;
@@ -246,31 +246,31 @@ contract SIG01_02 {
 
     /// @dev SIG-01: mmNonce must never decrease (monotonic).
     // forge-lint: disable-next-line(mixed-case-function)
-    function echidna_sig_01_nonce_never_decreases() external view returns (bool) {
+    function fuzz_sig_01_nonce_never_decreases() external view returns (bool) {
         return sigMgr.mmNonce(MM_OWNER) >= highWaterNonce;
     }
 
     /// @dev SIG-01: Valid signal with increasing nonce must succeed.
     // forge-lint: disable-next-line(mixed-case-function)
-    function echidna_sig_01_valid_signal_succeeds() external view returns (bool) {
+    function fuzz_sig_01_valid_signal_succeeds() external view returns (bool) {
         return !checkedValidSignal || lastValidSignalOk;
     }
 
     /// @dev SIG-01: Signal with stale/equal nonce must revert.
     // forge-lint: disable-next-line(mixed-case-function)
-    function echidna_sig_01_stale_nonce_reverts() external view returns (bool) {
+    function fuzz_sig_01_stale_nonce_reverts() external view returns (bool) {
         return !checkedStaleNonce || lastStaleNonceOk;
     }
 
     /// @dev SIG-02: Invalid proof + revertOnInvalid=true must revert.
     // forge-lint: disable-next-line(mixed-case-function)
-    function echidna_sig_02_invalid_proof_reverts() external view returns (bool) {
+    function fuzz_sig_02_invalid_proof_reverts() external view returns (bool) {
         return !checkedInvalidProofReverts || lastInvalidProofRevertsOk;
     }
 
     /// @dev SIG-02: Invalid proof + revertOnInvalid=false must return ok=false.
     // forge-lint: disable-next-line(mixed-case-function)
-    function echidna_sig_02_invalid_proof_returns_false() external view returns (bool) {
+    function fuzz_sig_02_invalid_proof_returns_false() external view returns (bool) {
         return !checkedInvalidProofNoRevert || lastInvalidProofNoRevertOk;
     }
 
@@ -286,7 +286,13 @@ contract SIG01_02 {
     function _makeSignal(address owner, address adv, uint256 nonce) internal pure returns (bytes memory) {
         MarketMaker.Reserve[] memory reserves = new MarketMaker.Reserve[](0);
         MarketMaker.State memory mmState = MarketMaker.State({
-            owner: owner, reserves: reserves, sourceState: "", prover: "", nonce: "", advancer: adv
+            owner: owner,
+            reserves: reserves,
+            sourceState: "",
+            prover: "",
+            nonce: "",
+            advancer: adv,
+            expiryAt: type(uint256).max
         });
         LiquiditySignal memory sig = LiquiditySignal({
             nonce: nonce,

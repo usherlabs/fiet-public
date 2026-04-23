@@ -1,11 +1,10 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.26;
 
-import {VTSPositionLibEchidnaHarness} from "../harnesses/VTSPositionLibEchidnaHarness.sol";
+import {VTSPositionLibFuzzHarness} from "../harnesses/VTSPositionLibFuzzHarness.sol";
 import {MockPoolManager} from "../mocks/MockPoolManager.sol";
 import {MockMarketVault} from "../../_mocks/MockMarketVault.sol";
 import {MockLCC} from "../../_mocks/MockLCC.sol";
-import {EchidnaLinkedLibs} from "../base/EchidnaLinkedLibs.sol";
 
 import {
     MarketVTSConfiguration,
@@ -26,11 +25,11 @@ import {ILiquidityHub} from "../../../src/interfaces/ILiquidityHub.sol";
 import {IOracleHelper} from "../../../src/interfaces/IOracleHelper.sol";
 import {Errors} from "../../../src/libraries/Errors.sol";
 
-/// @notice Echidna harness for SEIZE-03 and SEIZE-04 using the real `VTSPositionLib.touchPosition` path.
+/// @notice fuzz harness for SEIZE-03 and SEIZE-04 using the real `VTSPositionLib.touchPosition` path.
 contract SEIZE03_04 {
     using PoolIdLibrary for PoolKey;
 
-    VTSPositionLibEchidnaHarness internal harness;
+    VTSPositionLibFuzzHarness internal harness;
     MockPoolManager internal poolManager;
     MockMarketVault internal vault;
     PoolKey internal poolKey;
@@ -42,10 +41,9 @@ contract SEIZE03_04 {
     bool internal lastOk04;
 
     constructor() {
-        EchidnaLinkedLibs.deployVTSPositionLib();
-        harness = new VTSPositionLibEchidnaHarness();
+        harness = new VTSPositionLibFuzzHarness();
         poolManager = new MockPoolManager();
-        vault = new MockMarketVault();
+        vault = new MockMarketVault(address(0));
 
         address underlying0 = address(0x2000000000000000000000000000000000000031);
         address underlying1 = address(0x2000000000000000000000000000000000000032);
@@ -67,7 +65,6 @@ contract SEIZE03_04 {
                 unbackedCommitmentGraceBypassTime: 0,
                 unbackedCommitmentGraceBypassThreshold: 0
             }),
-            coverageFeeShare: 5000,
             minResidualUnits: 1000,
             unbackedCommitmentGraceBypassBps: 500
         });
@@ -83,7 +80,7 @@ contract SEIZE03_04 {
         poolManager.setSlot0(poolId, TickMath.getSqrtPriceAtTick(0), 0, 0, 0);
     }
 
-    /// @notice Exercise seizure-path touch logic and require the specific invariant revert.
+    /// @notice Exercise seizure-path touch logic and require the touch to revert before issuing LCCs.
     /// @param tickLower Proposed lower tick, clamped into valid bounds.
     /// @param tickUpper Proposed upper tick, clamped into valid bounds.
     /// @param liqRaw Fuzzed liquidity magnitude for the attempted seizure modification.
@@ -98,7 +95,7 @@ contract SEIZE03_04 {
         uint256 liq = uint256(liqRaw % 1e10) + 1;
         ModifyLiquidityParams memory params =
             ModifyLiquidityParams({tickLower: tl, tickUpper: tu, liquidityDelta: int256(liq), salt: salt});
-        bytes memory hookData = PositionModificationHookDataLib.encodeSeizure(1, 0, address(this), 0, 0);
+        bytes memory hookData = PositionModificationHookDataLib.encodeSeizure(1, 0, address(this), address(0xB0B), 0, 0);
 
         (bool reverted, bytes4 selector) = _touchReverts(address(this), params, hookData);
         checked03 = true;
@@ -106,6 +103,7 @@ contract SEIZE03_04 {
     }
 
     /// @notice Verify that touching an existing MM position with a mismatched commit id reverts.
+    ///         Depending on commit validity, the real path may fail at signal validation before the mismatch guard.
     /// @param storedCommitId Commit id stored on the position before the touch.
     /// @param providedCommitId Commit id supplied in hook data for the touch.
     /// @param salt Position salt used to derive the deterministic test position id.
@@ -128,7 +126,7 @@ contract SEIZE03_04 {
         harness.registerPosition(address(this), poolId, params);
         harness.setPositionCommitId(id, stored);
 
-        bytes memory hookData = PositionModificationHookDataLib.encode(provided, 0, address(this));
+        bytes memory hookData = PositionModificationHookDataLib.encode(provided, 0, address(this), address(0xB0B));
         (bool reverted, bytes4 selector) = _touchReverts(address(this), params, hookData);
         checked04 = true;
         lastOk04 = reverted && selector == Errors.InvariantViolated.selector;
@@ -136,13 +134,13 @@ contract SEIZE03_04 {
 
     /// @notice Invariant: seizure flow must not permit LCC issuance during a touch.
     // forge-lint: disable-next-line(mixed-case-function)
-    function echidna_seize_03_no_lcc_issue_during_seizure() external view returns (bool) {
+    function fuzz_seize_03_no_lcc_issue_during_seizure() external view returns (bool) {
         return !checked03 || lastOk03;
     }
 
     /// @notice Invariant: an existing MM position keeps a fixed commit identity during touch.
     // forge-lint: disable-next-line(mixed-case-function)
-    function echidna_seize_04_commit_identity_fixed() external view returns (bool) {
+    function fuzz_seize_04_commit_identity_fixed() external view returns (bool) {
         return !checked04 || lastOk04;
     }
 
@@ -164,7 +162,7 @@ contract SEIZE03_04 {
             feesAccrued: toBalanceDelta(0, 0),
             hookData: hookData
         });
-        try harness.touchPosition(ctx, tp) returns (Position memory, PositionId, BalanceDelta) {
+        try harness.touchPosition(ctx, tp) returns (Position memory, PositionId) {
             reverted = false;
         } catch (bytes memory reason) {
             reverted = true;
@@ -190,4 +188,3 @@ contract SEIZE03_04 {
         }
     }
 }
-

@@ -34,10 +34,17 @@ contract MMCalldataDecoderHarness {
     function decodeIncreaseLiquidityParams(bytes calldata params)
         external
         pure
-        returns (PoolKey memory poolKey, uint256 tokenId, uint256 positionIndex, uint256 liquidity)
+        returns (
+            PoolKey memory poolKey,
+            uint256 tokenId,
+            uint256 positionIndex,
+            uint256 liquidity,
+            uint128 amount0Max,
+            uint128 amount1Max
+        )
     {
         PoolKey calldata pk;
-        (pk, tokenId, positionIndex, liquidity) = params.decodeIncreaseLiquidityParams();
+        (pk, tokenId, positionIndex, liquidity, amount0Max, amount1Max) = params.decodeIncreaseLiquidityParams();
         poolKey = PoolKey({
             currency0: pk.currency0, currency1: pk.currency1, fee: pk.fee, tickSpacing: pk.tickSpacing, hooks: pk.hooks
         });
@@ -46,10 +53,18 @@ contract MMCalldataDecoderHarness {
     function decodeMintPositionParams(bytes calldata params)
         external
         pure
-        returns (PoolKey memory poolKey, uint256 tokenId, int24 tickLower, int24 tickUpper, uint256 liquidity)
+        returns (
+            PoolKey memory poolKey,
+            uint256 tokenId,
+            int24 tickLower,
+            int24 tickUpper,
+            uint256 liquidity,
+            uint128 amount0Max,
+            uint128 amount1Max
+        )
     {
         PoolKey calldata pk;
-        (pk, tokenId, tickLower, tickUpper, liquidity) = params.decodeMintPositionParams();
+        (pk, tokenId, tickLower, tickUpper, liquidity, amount0Max, amount1Max) = params.decodeMintPositionParams();
         poolKey = PoolKey({
             currency0: pk.currency0, currency1: pk.currency1, fee: pk.fee, tickSpacing: pk.tickSpacing, hooks: pk.hooks
         });
@@ -58,10 +73,17 @@ contract MMCalldataDecoderHarness {
     function decodeDecreaseLiquidityParams(bytes calldata params)
         external
         pure
-        returns (PoolKey memory poolKey, uint256 tokenId, uint256 positionIndex, uint256 amountToDecrease)
+        returns (
+            PoolKey memory poolKey,
+            uint256 tokenId,
+            uint256 positionIndex,
+            uint256 amountToDecrease,
+            uint128 amount0Min,
+            uint128 amount1Min
+        )
     {
         PoolKey calldata pk;
-        (pk, tokenId, positionIndex, amountToDecrease) = params.decodeDecreaseLiquidityParams();
+        (pk, tokenId, positionIndex, amountToDecrease, amount0Min, amount1Min) = params.decodeDecreaseLiquidityParams();
         poolKey = PoolKey({
             currency0: pk.currency0, currency1: pk.currency1, fee: pk.fee, tickSpacing: pk.tickSpacing, hooks: pk.hooks
         });
@@ -70,10 +92,10 @@ contract MMCalldataDecoderHarness {
     function decodeBurnPositionParams(bytes calldata params)
         external
         pure
-        returns (PoolKey memory poolKey, uint256 tokenId, uint256 positionIndex)
+        returns (PoolKey memory poolKey, uint256 tokenId, uint256 positionIndex, uint128 amount0Min, uint128 amount1Min)
     {
         PoolKey calldata pk;
-        (pk, tokenId, positionIndex) = params.decodeBurnPositionParams();
+        (pk, tokenId, positionIndex, amount0Min, amount1Min) = params.decodeBurnPositionParams();
         poolKey = PoolKey({
             currency0: pk.currency0, currency1: pk.currency1, fee: pk.fee, tickSpacing: pk.tickSpacing, hooks: pk.hooks
         });
@@ -178,11 +200,11 @@ contract MMCalldataDecoderHarness {
     function decodeCommitSignalParams(bytes calldata params)
         external
         pure
-        returns (bytes memory liquiditySignal, address owner, bytes memory relayParams)
+        returns (bytes memory liquiditySignal, bytes memory relayParams)
     {
         bytes calldata sig;
         bytes calldata relay;
-        (sig, owner, relay) = params.decodeCommitSignalParams();
+        (sig, relay) = params.decodeCommitSignalParams();
         liquiditySignal = sig;
         relayParams = relay;
     }
@@ -218,9 +240,9 @@ contract MMCalldataDecoderHarness {
     function decodeCollectLiquidityParams(bytes calldata params)
         external
         pure
-        returns (address lcc, uint256 tokenId, uint256 maxAmount)
+        returns (address lcc, uint256 maxAmount)
     {
-        (lcc, tokenId, maxAmount) = params.decodeCollectLiquidityParams();
+        (lcc, maxAmount) = params.decodeCollectLiquidityParams();
     }
 
     function decodeUint256AndBool(bytes calldata params) external pure returns (uint256 amount, bool payerIsUser) {
@@ -250,6 +272,9 @@ contract MMCalldataDecoderTest is Test {
     /// @dev Non-zero bits only above the low 160 (canonical address lives in least-significant 160 bits).
     uint256 internal constant DIRTY_HIGH = uint256(0xA11CE) << 160;
 
+    /// @dev Non-zero bits in the high 128 bits of a 256-bit word that is typed as `uint128` in ABI.
+    uint256 internal constant DIRTY_UINT128_HIGH = uint256(0xB0BAD) << 128;
+
     function setUp() public {
         h = new MMCalldataDecoderHarness();
     }
@@ -263,6 +288,10 @@ contract MMCalldataDecoderTest is Test {
 
     function _dirtyAddressWord(address addr) internal pure returns (uint256) {
         return DIRTY_HIGH | uint256(uint160(addr));
+    }
+
+    function _dirtyUint128Word(uint128 low) internal pure returns (uint256) {
+        return DIRTY_UINT128_HIGH | uint256(low);
     }
 
     function _poolKey() internal pure returns (PoolKey memory key) {
@@ -297,41 +326,82 @@ contract MMCalldataDecoderTest is Test {
 
     function test_decodeIncreaseLiquidityParams_ok() public view {
         PoolKey memory key = _poolKey();
-        bytes memory params = abi.encode(key, uint256(10), uint256(2), uint256(123));
-        (PoolKey memory k, uint256 tokenId, uint256 positionIndex, uint256 liq) =
+        bytes memory params = abi.encode(key, uint256(10), uint256(2), uint256(123), uint128(11), uint128(22));
+        (PoolKey memory k, uint256 tokenId, uint256 positionIndex, uint256 liq, uint128 a0, uint128 a1) =
             h.decodeIncreaseLiquidityParams(params);
         assertEq(k.fee, key.fee);
         assertEq(tokenId, 10);
         assertEq(positionIndex, 2);
         assertEq(liq, 123);
+        assertEq(a0, 11);
+        assertEq(a1, 22);
     }
 
     function test_decodeMintPositionParams_ok() public view {
         PoolKey memory key = _poolKey();
-        bytes memory params = abi.encode(key, uint256(77), int24(-120), int24(120), uint256(999));
-        (PoolKey memory k, uint256 tokenId, int24 tl, int24 tu, uint256 liq) = h.decodeMintPositionParams(params);
+        bytes memory params =
+            abi.encode(key, uint256(77), int24(-120), int24(120), uint256(999), uint128(5), uint128(7));
+        (PoolKey memory k, uint256 tokenId, int24 tl, int24 tu, uint256 liq, uint128 a0, uint128 a1) =
+            h.decodeMintPositionParams(params);
         assertEq(k.tickSpacing, key.tickSpacing);
         assertEq(tokenId, 77);
         assertEq(tl, -120);
         assertEq(tu, 120);
         assertEq(liq, 999);
+        assertEq(a0, 5);
+        assertEq(a1, 7);
     }
 
     function test_decodeDecreaseLiquidityParams_ok() public view {
         PoolKey memory key = _poolKey();
-        bytes memory params = abi.encode(key, uint256(10), uint256(2), uint256(5));
-        (, uint256 tokenId, uint256 positionIndex, uint256 amountToDecrease) = h.decodeDecreaseLiquidityParams(params);
+        bytes memory params = abi.encode(key, uint256(10), uint256(2), uint256(5), uint128(7), uint128(11));
+        (, uint256 tokenId, uint256 positionIndex, uint256 amountToDecrease, uint128 a0, uint128 a1) =
+            h.decodeDecreaseLiquidityParams(params);
         assertEq(tokenId, 10);
         assertEq(positionIndex, 2);
         assertEq(amountToDecrease, 5);
+        assertEq(a0, 7);
+        assertEq(a1, 11);
     }
 
     function test_decodeBurnPositionParams_ok() public view {
         PoolKey memory key = _poolKey();
-        bytes memory params = abi.encode(key, uint256(10), uint256(2));
-        (, uint256 tokenId, uint256 positionIndex) = h.decodeBurnPositionParams(params);
+        bytes memory params = abi.encode(key, uint256(10), uint256(2), uint128(3), uint128(4));
+        (, uint256 tokenId, uint256 positionIndex, uint128 a0, uint128 a1) = h.decodeBurnPositionParams(params);
         assertEq(tokenId, 10);
         assertEq(positionIndex, 2);
+        assertEq(a0, 3);
+        assertEq(a1, 4);
+    }
+
+    function test_decodeDecreaseLiquidityParams_revertsOnLegacyEncodingWithoutMinOut() public {
+        PoolKey memory key = _poolKey();
+        // Pre–min-out ABI: (PoolKey, tokenId, positionIndex, amount) => 0x100 bytes; decoder now requires 0x140.
+        bytes memory legacy = abi.encode(key, uint256(10), uint256(2), uint256(5));
+        vm.expectRevert(MMCalldataDecoder.SliceOutOfBounds.selector);
+        h.decodeDecreaseLiquidityParams(legacy);
+    }
+
+    function test_decodeBurnPositionParams_revertsOnLegacyEncodingWithoutMinOut() public {
+        PoolKey memory key = _poolKey();
+        bytes memory legacy = abi.encode(key, uint256(10), uint256(2));
+        vm.expectRevert(MMCalldataDecoder.SliceOutOfBounds.selector);
+        h.decodeBurnPositionParams(legacy);
+    }
+
+    function test_decodeIncreaseLiquidityParams_revertsOnLegacyEncodingWithoutMaxIn() public {
+        PoolKey memory key = _poolKey();
+        // Pre–max-in ABI: (PoolKey, tokenId, positionIndex, liquidity) => 0x100 bytes; decoder now requires 0x140.
+        bytes memory legacy = abi.encode(key, uint256(10), uint256(2), uint256(123));
+        vm.expectRevert(MMCalldataDecoder.SliceOutOfBounds.selector);
+        h.decodeIncreaseLiquidityParams(legacy);
+    }
+
+    function test_decodeMintPositionParams_revertsOnLegacyEncodingWithoutMaxIn() public {
+        PoolKey memory key = _poolKey();
+        bytes memory legacy = abi.encode(key, uint256(77), int24(-120), int24(120), uint256(999));
+        vm.expectRevert(MMCalldataDecoder.SliceOutOfBounds.selector);
+        h.decodeMintPositionParams(legacy);
     }
 
     function test_decodeSeizePositionParams_ok() public view {
@@ -410,11 +480,9 @@ contract MMCalldataDecoderTest is Test {
 
     function test_decodeCommitSignalParams_ok() public view {
         bytes memory sig = hex"deadbeef";
-        address owner = address(0xBEEF);
         bytes memory relay = abi.encode(uint256(123), uint256(1), bytes("auth"));
-        bytes memory params = abi.encode(sig, owner, relay);
-        (bytes memory outSig, address outOwner, bytes memory outRelay) = h.decodeCommitSignalParams(params);
-        assertEq(outOwner, owner);
+        bytes memory params = abi.encode(sig, relay);
+        (bytes memory outSig, bytes memory outRelay) = h.decodeCommitSignalParams(params);
         assertEq(keccak256(outSig), keccak256(sig));
         assertEq(keccak256(outRelay), keccak256(relay));
     }
@@ -446,12 +514,76 @@ contract MMCalldataDecoderTest is Test {
         assertTrue(payerIsUser);
     }
 
-    function test_decodeCollectLiquidityParams_ok() public view {
-        bytes memory params = abi.encode(address(0x1111), uint256(7), uint256(9));
-        (address lcc, uint256 tokenId, uint256 maxAmount) = h.decodeCollectLiquidityParams(params);
+    function test_decodeCollectLiquidityParams_ok_twoWord() public view {
+        bytes memory params = abi.encode(address(0x1111), uint256(9));
+        (address lcc, uint256 maxAmount) = h.decodeCollectLiquidityParams(params);
         assertEq(lcc, address(0x1111));
-        assertEq(tokenId, 7);
         assertEq(maxAmount, 9);
+    }
+
+    // --- max-in uint128: dirty high 128 bits must not inflate decoded caps ---
+
+    function test_decodeIncreaseLiquidityParams_dirtyAmountMax_truncatesToUint128() public view {
+        PoolKey memory key = _poolKey();
+        bytes memory params = abi.encode(key, uint256(10), uint256(2), uint256(123), uint128(11), uint128(22));
+        // amount0Max @ word 8, amount1Max @ word 9 (PoolKey = words 0..4)
+        _setAbiWord(params, 8, _dirtyUint128Word(11));
+        _setAbiWord(params, 9, _dirtyUint128Word(22));
+        (, uint256 tokenId, uint256 positionIndex, uint256 liq, uint128 a0, uint128 a1) =
+            h.decodeIncreaseLiquidityParams(params);
+        assertEq(tokenId, 10);
+        assertEq(positionIndex, 2);
+        assertEq(liq, 123);
+        assertEq(a0, 11);
+        assertEq(a1, 22);
+    }
+
+    function test_decodeMintPositionParams_dirtyAmountMax_truncatesToUint128() public view {
+        PoolKey memory key = _poolKey();
+        bytes memory params =
+            abi.encode(key, uint256(77), int24(-120), int24(120), uint256(999), uint128(5), uint128(7));
+        // amount0Max @ word 9, amount1Max @ word 10
+        _setAbiWord(params, 9, _dirtyUint128Word(5));
+        _setAbiWord(params, 10, _dirtyUint128Word(7));
+        (, uint256 tokenId, int24 tl, int24 tu, uint256 liq, uint128 a0, uint128 a1) =
+            h.decodeMintPositionParams(params);
+        assertEq(tokenId, 77);
+        assertEq(tl, -120);
+        assertEq(tu, 120);
+        assertEq(liq, 999);
+        assertEq(a0, 5);
+        assertEq(a1, 7);
+    }
+
+    function test_decodeIncreaseFromDeltasParams_dirtyAmountMax_truncatesToUint128() public view {
+        PoolKey memory key = _poolKey();
+        bytes memory params = abi.encode(key, uint256(10), uint256(2), uint128(11), uint128(12), true);
+        // amount0Max @ word 7, amount1Max @ word 8
+        _setAbiWord(params, 7, _dirtyUint128Word(11));
+        _setAbiWord(params, 8, _dirtyUint128Word(12));
+        (, uint256 tokenId, uint256 positionIndex, uint128 amount0Max, uint128 amount1Max, bool payerIsUser) =
+            h.decodeIncreaseFromDeltasParams(params);
+        assertEq(tokenId, 10);
+        assertEq(positionIndex, 2);
+        assertEq(amount0Max, 11);
+        assertEq(amount1Max, 12);
+        assertTrue(payerIsUser);
+    }
+
+    function test_decodeMintFromDeltasParams_dirtyAmountMax_truncatesToUint128() public view {
+        PoolKey memory key = _poolKey();
+        bytes memory params = abi.encode(key, uint256(10), int24(-1), int24(1), uint128(21), uint128(22), false);
+        // amount0Max @ word 8, amount1Max @ word 9
+        _setAbiWord(params, 8, _dirtyUint128Word(21));
+        _setAbiWord(params, 9, _dirtyUint128Word(22));
+        (, uint256 tokenId, int24 tl, int24 tu, uint128 amount0Max, uint128 amount1Max, bool payerIsUser) =
+            h.decodeMintFromDeltasParams(params);
+        assertEq(tokenId, 10);
+        assertEq(tl, -1);
+        assertEq(tu, 1);
+        assertEq(amount0Max, 21);
+        assertEq(amount1Max, 22);
+        assertFalse(payerIsUser);
     }
 
     function test_decodeUint256AndBool_ok() public view {
@@ -548,6 +680,13 @@ contract MMCalldataDecoderTest is Test {
         h.decodeCollectLiquidityParams(hex"");
     }
 
+    function test_decodeCollectLiquidityParams_revertsOnInvalidLength() public {
+        vm.expectRevert(MMCalldataDecoder.SliceOutOfBounds.selector);
+        h.decodeCollectLiquidityParams(new bytes(0x60));
+        vm.expectRevert(MMCalldataDecoder.SliceOutOfBounds.selector);
+        h.decodeCollectLiquidityParams(new bytes(0x20));
+    }
+
     function test_decodeUint256AndBool_revertsOnShortInput() public {
         vm.expectRevert(MMCalldataDecoder.SliceOutOfBounds.selector);
         h.decodeUint256AndBool(hex"");
@@ -569,23 +708,20 @@ contract MMCalldataDecoderTest is Test {
     }
 
     function test_decodeCommitSignalParams_revertsOnTruncatedHead() public {
-        // Prior to the fix, a truncated head/tail could silently default `owner = address(0)` and decode an empty bytes.
-        // The minimum valid length (even for empty bytes fields) is 0xa0.
-        bytes memory truncated = new bytes(0x60);
+        // The minimum valid length (even for empty bytes fields) is 0x80.
+        bytes memory truncated = new bytes(0x40);
         vm.expectRevert(MMCalldataDecoder.SliceOutOfBounds.selector);
         h.decodeCommitSignalParams(truncated);
     }
 
-    /// @notice Regression: assembly `calldataload` into typed `address` must not break sentinel resolution
-    ///         (dirty upper 96 bits in the ABI word). Solidity cleans `address` on use; see audit scan #11 / vuln #11 (false positive).
-    function test_decodeCommitSignalParams_dirtyOwnerWord_mapsToCanonicalSentinel() public view {
-        bytes memory params = abi.encode(bytes(""), ActionConstants.MSG_SENDER, bytes(""));
-        _setAbiWord(params, 1, _dirtyAddressWord(ActionConstants.MSG_SENDER));
-        (bytes memory sig, address owner, bytes memory relay) = h.decodeCommitSignalParams(params);
+    function test_decodeCommitSignalParams_dirtyOffsets_stillDecodeSlices() public view {
+        bytes memory params = abi.encode(bytes(""), bytes(""));
+        // Dirty high bits in dynamic offset words should be masked by decoder.
+        _setAbiWord(params, 0, DIRTY_HIGH | uint256(0x40));
+        _setAbiWord(params, 1, DIRTY_HIGH | uint256(0x60));
+        (bytes memory sig, bytes memory relay) = h.decodeCommitSignalParams(params);
         assertEq(sig.length, 0);
         assertEq(relay.length, 0);
-        assertEq(owner, ActionConstants.MSG_SENDER);
-        assertTrue(owner == ActionConstants.MSG_SENDER, "sentinel compare as in BaseActionsRouter._mapRecipient");
     }
 
     function test_decodeUnwrapLccParams_dirtyRecipient_mapsToCanonicalSentinel() public view {
@@ -612,11 +748,10 @@ contract MMCalldataDecoderTest is Test {
 
     function test_decodeCollectLiquidityParams_dirtyLcc_mapsToCanonicalAddress() public view {
         address lccClean = address(0x1111);
-        bytes memory params = abi.encode(lccClean, uint256(7), uint256(9));
+        bytes memory params = abi.encode(lccClean, uint256(9));
         _setAbiWord(params, 0, _dirtyAddressWord(lccClean));
-        (address lcc, uint256 tokenId, uint256 maxAmount) = h.decodeCollectLiquidityParams(params);
+        (address lcc, uint256 maxAmount) = h.decodeCollectLiquidityParams(params);
         assertEq(lcc, lccClean);
-        assertEq(tokenId, 7);
         assertEq(maxAmount, 9);
     }
 }

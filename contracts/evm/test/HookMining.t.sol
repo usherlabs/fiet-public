@@ -11,13 +11,15 @@ import {ProxyHook} from "../src/ProxyHook.sol";
 import {MarketFactory} from "../src/MarketFactory.sol";
 import {HookFlags} from "../src/libraries/HookFlags.sol";
 import {MMPositionManager} from "../src/MMPositionManager.sol";
+import {MMQueueCustodianFactory} from "../src/MMQueueCustodianFactory.sol";
 import {MMPositionActionsImpl} from "../src/MMPositionActionsImpl.sol";
-import {MMQueueCustodian} from "../src/MMQueueCustodian.sol";
+import {MMUtilityActionsImpl} from "../src/MMUtilityActionsImpl.sol";
 import {WETH} from "@uniswap/v4-core/lib/solmate/src/tokens/WETH.sol";
 import {IWETH9} from "v4-periphery/src/interfaces/external/IWETH9.sol";
 import {IAllowanceTransfer} from "permit2/src/interfaces/IAllowanceTransfer.sol";
 import {VTSOrchestrator} from "../src/VTSOrchestrator.sol";
 import {VRLSettlementObserver} from "../src/VRLSettlementObserver.sol";
+import {CanonicalVault} from "../src/CanonicalVault.sol";
 
 contract HookTest is Test, Deployers {
     IPoolManager poolManager;
@@ -44,25 +46,33 @@ contract HookTest is Test, Deployers {
         factory = new MarketFactory(
             address(poolManager), liquidityHubAddr, oracleHelperAddr, address(vtsOrchestrator), owner
         );
+        vm.prank(owner);
+        CanonicalVault canonicalVault = new CanonicalVault(address(poolManager), liquidityHubAddr, address(factory));
         IWETH9 weth9 = IWETH9(address(new WETH()));
         IAllowanceTransfer permit2 = IAllowanceTransfer(makeAddr("permit2"));
 
         // Deploy MMPositionActionsImpl first
-        MMPositionActionsImpl actionsImpl =
-            new MMPositionActionsImpl(address(poolManager), address(factory), address(vtsOrchestrator));
-        MMQueueCustodian queueCustodian = new MMQueueCustodian(address(this));
-
-        mmPositionManager = new MMPositionManager(
-            address(poolManager),
-            address(factory),
-            address(vtsOrchestrator),
-            makeAddr("descriptor"),
-            weth9,
-            permit2,
-            address(actionsImpl),
-            address(queueCustodian)
+        MMPositionActionsImpl actionsImpl = new MMPositionActionsImpl(
+            address(poolManager), address(factory), address(vtsOrchestrator), address(canonicalVault)
         );
-        queueCustodian.setPositionManager(address(mmPositionManager));
+        MMUtilityActionsImpl utilityActionsImpl = new MMUtilityActionsImpl(
+            poolManager, address(factory), address(vtsOrchestrator), address(canonicalVault), weth9
+        );
+        MMQueueCustodianFactory queueCustodianFactory = new MMQueueCustodianFactory();
+        mmPositionManager = new MMPositionManager(
+            MMPositionManager.MMPositionManagerInit({
+                poolManager: poolManager,
+                marketFactory: address(factory),
+                vtsOrchestrator: address(vtsOrchestrator),
+                canonicalCustody: address(canonicalVault),
+                descriptor: makeAddr("descriptor"),
+                weth9: weth9,
+                permit2: permit2,
+                actionsImpl: address(actionsImpl),
+                utilityActionsImpl: address(utilityActionsImpl),
+                queueCustodianFactory: address(queueCustodianFactory)
+            })
+        );
 
         // Compute flags for CoreHook
         uint160 coreFlags = HookFlags.CORE_HOOK_FLAGS;

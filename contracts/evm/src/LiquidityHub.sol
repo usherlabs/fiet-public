@@ -13,12 +13,13 @@ import {Currency} from "v4-periphery/lib/v4-core/src/types/Currency.sol";
 import {Math} from "openzeppelin-contracts/contracts/utils/math/Math.sol";
 import {ReentrancyGuardTransient} from "openzeppelin-contracts/contracts/utils/ReentrancyGuardTransient.sol";
 import {Errors} from "./libraries/Errors.sol";
-import {IMarketVault} from "./interfaces/IMarketVault.sol";
+import {ICanonicalVault} from "./interfaces/ICanonicalVault.sol";
 import {TransientSlots} from "./libraries/TransientSlots.sol";
 import {ILiquidityHub} from "./interfaces/ILiquidityHub.sol";
 import {ILCC} from "./interfaces/ILCC.sol";
 import {BoundRegistry} from "./modules/BoundRegistry.sol";
 import {Bounds} from "./libraries/Bounds.sol";
+import {IWETH9} from "v4-periphery/src/interfaces/external/IWETH9.sol";
 
 /**
  * @title LiquidityHub
@@ -32,9 +33,13 @@ contract LiquidityHub is BoundRegistry, Ownable, ReentrancyGuardTransient {
     LiquidityHubStorage internal s;
 
     IOracleHelper public immutable oracleHelper;
+    IWETH9 public immutable weth9;
 
     event FactorySet(address indexed factory, bool enabled);
     event LCCCreated(address indexed underlyingAsset, address indexed lccToken, bytes32 marketId);
+    /// @notice New market-derived reserve recorded for this LCC's underlying; may now service queued external settlements.
+    /// @dev Wake-up signal for off-chain / reactive settlement dispatch. Not net of Hub self-queue: Hub settling to
+    ///      itself burns LCC and does not spend reserve, so emission must not be gated on pre-Hub queue size.
     event LiquidityAvailable(address indexed lcc, address underlyingAsset, uint256 amount, bytes32 marketId);
     event SettlementQueued(address indexed lcc, address indexed recipient, uint256 amount);
     event SettlementAnnulled(address indexed lcc, address indexed recipient, uint256 amount);
@@ -57,6 +62,7 @@ contract LiquidityHub is BoundRegistry, Ownable, ReentrancyGuardTransient {
      * @param _nativeAssetName The name of the native asset (e.g., "Ether")
      * @param _nativeAssetSymbol The symbol of the native asset (e.g., "ETH")
      * @param _nativeAssetDecimals The decimals of the native asset (typically 18)
+     * @param _weth9 Wrapped native token used for native settlement fallback
      * @param _initialOwner The initial owner of the contract
      */
     constructor(
@@ -64,9 +70,11 @@ contract LiquidityHub is BoundRegistry, Ownable, ReentrancyGuardTransient {
         string memory _nativeAssetName,
         string memory _nativeAssetSymbol,
         uint8 _nativeAssetDecimals,
+        address _weth9,
         address _initialOwner
     ) Ownable(_initialOwner) {
         oracleHelper = IOracleHelper(_oracleHelper);
+        weth9 = IWETH9(_weth9);
         LCCFactoryLib.initNativeAsset(s, _nativeAssetName, _nativeAssetSymbol, _nativeAssetDecimals);
     }
 
@@ -417,9 +425,21 @@ contract LiquidityHub is BoundRegistry, Ownable, ReentrancyGuardTransient {
         return LCCFactoryLib.balancesOf(lccToken, account);
     }
 
-    function _assertWrapRecipientNotDexSink(address lcc, address to) internal view {
-        if (Bounds.isDex(boundLevel(s.lccToMarket[lcc].factory, to))) {
-            revert Errors.DirectWrapToDexNotAllowed(to);
+    /// @dev Rejects DEX sinks — issuer mints and wrap paths bypass LCC transfer hooks, so DEX ingress must not be bypassed.
+    function _assertRecipientNotDexSink(address lcc, address to) internal view {
+        uint8 level = boundLevel(s.lccToMarket[lcc].factory, to);
+        if (Bounds.isDex(level)) {
+            revert Errors.MintToNotAllowedRecipient(to);
+        }
+    }
+
+    /// @dev User-facing wrap / wrapWith mint surfaces (`_wrap`, `_wrapWith`): minting into any protocol-bound address
+    ///      (endpoint, exempt, or DEX) bypasses normal custody expectations and can strand value or become FCFS-capturable
+    ///      on routers (see **DELTA-02**). Issuer-only `issue` remains the supported path to protocol endpoints.
+    function _assertUserFacingMintRecipient(address lcc, address to) internal view {
+        uint8 level = boundLevel(s.lccToMarket[lcc].factory, to);
+        if (Bounds.isEndpoint(level)) {
+            revert Errors.MintToNotAllowedRecipient(to);
         }
     }
 
@@ -437,9 +457,7 @@ contract LiquidityHub is BoundRegistry, Ownable, ReentrancyGuardTransient {
         address underlying = s.lccToUnderlying[lcc];
         bool isNativeAsset = underlying == address(0);
 
-        // Mint-time ingress to the DEX sink bypasses LCC transfer hooks.
-        // Reject it until there is a safe settlement path that can run under PoolManager lock constraints.
-        _assertWrapRecipientNotDexSink(lcc, to);
+        _assertUserFacingMintRecipient(lcc, to);
 
         // throw error if the native ETH is insufficient and it is a native ETH backed LCC
         if (isNativeAsset) {
@@ -508,8 +526,7 @@ contract LiquidityHub is BoundRegistry, Ownable, ReentrancyGuardTransient {
     function _wrapWith(address lcc, address withLCC, address to, uint256 amount) internal onlyValidLcc(lcc) {
         address from = _msgSender();
 
-        // wrapWithTo shares the same mint surface as direct wrap and must not bypass DEX ingress handling.
-        _assertWrapRecipientNotDexSink(lcc, to);
+        _assertUserFacingMintRecipient(lcc, to);
 
         // Performs all necessary validation and preparation
         LiquidityHubLib.WrapWithContext memory ctx =
@@ -558,6 +575,10 @@ contract LiquidityHub is BoundRegistry, Ownable, ReentrancyGuardTransient {
     /**
      * @dev Unwraps LCC from the account's wallet and transfers underlying assets to recipient
      * @dev Accounts should only be able to unwrap if they have LCC in their wallet
+     * @dev Unwrap headroom (`availableToUnwrap`) nets any existing settlement queue for `queueTo` against the
+     *      caller-held balance (`from`), so the same LCC cannot back repeated queued shortfalls.
+     *      - Self-unwrap paths (`unwrap(...)`): `queueTo == from`, so the queue is netted against the same user's live balance.
+     *      - Immediate payout `to` must be serviceable: not Hub, not exempt/DEX sinks (HUB-02B).
      * @param lcc The LCC token address to unwrap
      * @param to The recipient of the underlying asset
      * @param queueTo The address to queue shortfall to
@@ -571,18 +592,30 @@ contract LiquidityHub is BoundRegistry, Ownable, ReentrancyGuardTransient {
         // Generic queue paths validate queue-owner shape only.
         // Current settleability remains a redemption-time concern for processSettlementFor().
         _assertValidQueueOwner(lcc, queueTo, true);
-        if (amount == 0 || amount > fromBalance) {
-            revert Errors.InvalidAmount(amount, fromBalance);
-        }
+        // Immediate payout recipient must be serviceable: not Hub, not exempt/DEX sinks (see HUB-02B in INVARIANTS.md).
+        _assertValidUnwrapPayoutRecipient(lcc, to);
 
-        (uint256 directUnwrapped, uint256 marketUnwrapped, uint256 queuedShortfall) =
-            LiquidityHubLinkedLib.unwrapInternalLogic(s, lcc, queueTo, amount, wrappedBalance, marketDerivedBalance);
+        (uint256 effectiveFromBalance, uint256 existingQueue) =
+            _unwrapEffectiveFromBalance(lcc, from, queueTo, fromBalance);
+        _assertUnwrapWithinHeadroom(amount, effectiveFromBalance, existingQueue);
 
-        // `unwrapInternalLogic` updates queue state directly in library storage.
-        // Queue owner shape is validated at write time; present settleability is enforced on settlement.
+        _unwrapAndPay(lcc, from, to, queueTo, amount, wrappedBalance, marketDerivedBalance);
+    }
 
-        // Burn the amount that was unwrapped
-        // and transfer the underlying assets to the account
+    /// @dev Executes `unwrapInternalLogic`, underlying payout, and events after admission checks pass.
+    function _unwrapAndPay(
+        address lcc,
+        address from,
+        address to,
+        address queueTo,
+        uint256 amount,
+        uint256 wrappedBalance,
+        uint256 marketDerivedBalance
+    ) private {
+        (uint256 directUnwrapped, uint256 marketUnwrapped, uint256 queuedShortfall) = LiquidityHubLinkedLib.unwrapInternalLogic(
+            s, lcc, queueTo, amount, wrappedBalance, marketDerivedBalance
+        );
+
         if (directUnwrapped + marketUnwrapped > 0) {
             _pay(lcc, from, to, directUnwrapped, marketUnwrapped);
         }
@@ -612,58 +645,6 @@ contract LiquidityHub is BoundRegistry, Ownable, ReentrancyGuardTransient {
         _unwrap(s.marketUnderlyingToLCC[marketId][underlying], _msgSender(), _msgSender(), amount);
     }
 
-    /**
-     * @notice Unwraps LCC tokens back to underlying assets and sends them to a specified recipient
-     * @param lcc The LCC token address to unwrap
-     * @param to The recipient address
-     * @param amount The amount of LCC tokens to unwrap
-     */
-    function unwrapTo(address lcc, address to, uint256 amount) external nonReentrant {
-        // Backwards-compatible: queue shortfalls to the same address receiving the underlying.
-        _unwrap(lcc, to, to, amount);
-    }
-
-    /**
-     * @notice Unwraps LCC tokens back to underlying assets and sends them to a specified recipient, while queueing any
-     *         unfulfilled portion to a separate queue owner.
-     * @dev This exists for protocol flows (e.g. MMPM) where "who receives underlying now" differs from "who owns the
-     *      settlement queue claim".
-     * @param lcc The LCC token address to unwrap
-     * @param to The recipient address for underlying
-     * @param queueTo The address to attribute any queued settlement to
-     * @param amount The amount of LCC tokens to unwrap
-     */
-    function unwrapTo(address lcc, address to, address queueTo, uint256 amount) external nonReentrant {
-        _unwrap(lcc, to, queueTo, amount);
-    }
-
-    /**
-     * @notice Unwraps LCC tokens back to underlying assets and sends them to a specified recipient (overloaded)
-     * @param underlying The underlying asset address
-     * @param marketId The market ID
-     * @param to The recipient address
-     * @param amount The amount of LCC tokens to unwrap
-     */
-    function unwrapTo(address underlying, bytes32 marketId, address to, uint256 amount) external nonReentrant {
-        _unwrap(s.marketUnderlyingToLCC[marketId][underlying], to, to, amount);
-    }
-
-    /**
-     * @notice Unwraps LCC tokens (resolved by underlying+marketId) to underlying assets, while queueing any unfulfilled
-     *         portion to a separate queue owner.
-     * @param underlying The underlying asset address
-     * @param marketId The market ID
-     * @param to The recipient address for underlying
-     * @param queueTo The address to attribute any queued settlement to
-     * @param amount The amount of LCC tokens to unwrap
-     */
-    function unwrapTo(address underlying, bytes32 marketId, address to, address queueTo, uint256 amount)
-        external
-        nonReentrant
-    {
-        _unwrap(s.marketUnderlyingToLCC[marketId][underlying], to, queueTo, amount);
-    }
-
     // ============ LIQUIDITY FUNCTIONS ============
 
     /**
@@ -689,7 +670,8 @@ contract LiquidityHub is BoundRegistry, Ownable, ReentrancyGuardTransient {
     function issue(address lcc, address to, uint256 amount) external onlyIssuer(lcc) nonReentrant {
         // Note: LCC mint path reverts on zero (direct+market) amount.
         // Minting market-derived LCC directly to the DEX sink bypasses transfer hooks and ingress settlement.
-        _assertWrapRecipientNotDexSink(lcc, to);
+        // Issuer mints to bucket-exempt protocol endpoints (eg ProxyHook) remain valid — only DEX sinks are rejected here.
+        _assertRecipientNotDexSink(lcc, to);
         _mint(lcc, to, 0, amount);
     }
 
@@ -698,9 +680,19 @@ contract LiquidityHub is BoundRegistry, Ownable, ReentrancyGuardTransient {
      * @param lcc The LCC token address to cancel for
      * @param from The address to cancel tokens from
      * @param amount The amount to cancel
+     * @dev This path performs a direct market-only burn via `_burn(lcc, from, 0, amount)`.
+     *      For bucket-tracked `from`, `LCC.burn` decrements only `marketDerivedBalances[from]`, so the call reverts if
+     *      `from` does not currently hold at least `amount` market-derived balance. Mixed-bucket (market-then-wrapped)
+     *      burning is provided by `_safeBurn` and is used by `cancelWithQueue`, not by this function.
+     *      For `BOUND_EXEMPT` `from` (e.g. `ProxyHook`), bucket maps are skipped and exempt-held balance is treated as
+     *      market-derived for `balancesOf` / cancel semantics.
      */
     function cancel(address lcc, address from, uint256 amount) external onlyIssuer(lcc) nonReentrant {
         // Note: LCC burn path reverts on zero (direct+market) amount.
+        // `from` is intentionally issuer-selected because issuers are fixed protocol actors (for example ProxyHook and
+        // VTSOrchestrator) that cancel along validated protocol flows, not arbitrary public confiscation surfaces.
+        // Typical callers burn protocol-controlled holders such as queued settlement holders, MarketVault balances,
+        // or staged transfer recipients after the surrounding flow has already proven the accounting path.
         _burn(lcc, from, 0, amount);
     }
 
@@ -728,6 +720,8 @@ contract LiquidityHub is BoundRegistry, Ownable, ReentrancyGuardTransient {
         if (queueAmount > principalAmount) {
             revert Errors.InvalidAmount(queueAmount, principalAmount);
         }
+        // Same trusted-issuer rationale as `cancel`: the issuer chooses `from` because this path is used to unwind
+        // protocol-side LCC holdings while optionally preserving the recipient's queued settlement claim.
         _cancelWithQueue(lcc, from, principalAmount, queueAmount, recipient);
     }
 
@@ -736,9 +730,12 @@ contract LiquidityHub is BoundRegistry, Ownable, ReentrancyGuardTransient {
      * @dev Security checks:
      *      - recipient must be non-zero
      *      - recipient must not be bucket-exempt (external settlement path requires market-derived balance accounting)
+     *      - recipient must not be any other protocol-bound role (`BOUND_ENDPOINT` / `BOUND_EXEMPT` / `BOUND_DEX`)
+     *      - recipient must not be an objective sink (`weth9()` for native-backed LCCs; the ERC20 underlying contract)
      *      - recipient must hold sufficient market-derived LCC to back the queued amount
-     *      This path is stricter than generic queue accounting because it is only used when the issuer
-     *      has already transferred deficit LCC to `recipient`, so queue owner and burn source must match now.
+     *      Non-bound recipients are admitted without proving ERC20/native handling capability; callers must nominate
+     *      serviceable addresses. This path is stricter than generic queue accounting because it is only used when the
+     *      issuer has already transferred deficit LCC to `recipient`, so queue owner and burn source must match now.
      */
     function queueForTransferRecipient(address lcc, address recipient, uint256 amount)
         external
@@ -770,6 +767,9 @@ contract LiquidityHub is BoundRegistry, Ownable, ReentrancyGuardTransient {
     ) internal {
         if (queueAmount > 0) {
             _assertValidQueueOwner(lcc, recipient, true);
+            // Mirror `queueForTransferRecipient` policy: external reserve-funded queues must not target protocol-bound
+            // recipients or objective sink addresses (Hub self-queue exempt via early return).
+            _assertExternalReserveFundedSettlementRecipient(lcc, recipient);
         }
 
         uint256 cancelAmount = principalAmount - queueAmount;
@@ -788,7 +788,8 @@ contract LiquidityHub is BoundRegistry, Ownable, ReentrancyGuardTransient {
 
     /**
      * @dev Burns against a holder's bucket split (market-derived first, then wrapped).
-     * - Bucket-exempt recipients can burn without bucket accounting.
+     * - Bucket-exempt `from` uses market-only burn by design: exempt-held LCC is not tracked as wrapped per-address
+     *   buckets on `LCC`; `balancesOf(exempt)` exposes the full balance as market-derived for consistency.
      * - If `balancesOf` is unavailable (e.g. reentrancy tests that stub LCC), fall back to a full burn.
      */
     function _safeBurn(address lcc, address from, uint256 amount) internal {
@@ -807,8 +808,16 @@ contract LiquidityHub is BoundRegistry, Ownable, ReentrancyGuardTransient {
         try ILCC(lcc).balancesOf(from) returns (uint256 wrapped, uint256 market) {
             wrappedBal = wrapped;
             marketBal = market;
-        } catch {
-            hasBuckets = false;
+        } catch (bytes memory reason) {
+            // Keep fallback only for stubbed / non-implemented `balancesOf` paths (empty revert data).
+            // Integrity and bucket errors (e.g. `Errors.InvalidBucketState`) must surface.
+            if (reason.length == 0) {
+                hasBuckets = false;
+            } else {
+                assembly ("memory-safe") {
+                    revert(add(reason, 0x20), mload(reason))
+                }
+            }
         }
 
         if (!hasBuckets) {
@@ -882,7 +891,8 @@ contract LiquidityHub is BoundRegistry, Ownable, ReentrancyGuardTransient {
      * @notice Called by MarketVault after taking underlying liquidity from the market to LCC
      * @param lcc The LCC token address
      * @param amount The amount of underlying liquidity taken
-     * @param shouldEmit Whether to emit LiquidityAvailable event
+     * @param shouldEmit If true, emit `LiquidityAvailable` when `amount > 0` (wake-up for dispatch; not suppressed when
+     *        Hub self-queue is large—new reserve may still service external queues)
      */
     function confirmTake(address lcc, uint256 amount, bool shouldEmit) external onlyIssuer(lcc) {
         // INTENT:
@@ -900,7 +910,8 @@ contract LiquidityHub is BoundRegistry, Ownable, ReentrancyGuardTransient {
         }
 
         if (ctx.emitLiquidityAvailable) {
-            // Only emit if there is new liquidity available and not consumed greedily by the Hub
+            // New reserve arrived at the Hub; downstream dispatch may clear external `settleQueue` entries. Hub
+            // self-settlement above does not consume this reserve (LCC burn / queue collapse only).
             emit LiquidityAvailable(lcc, ctx.underlying, amount, ctx.marketId);
         }
 
@@ -939,27 +950,6 @@ contract LiquidityHub is BoundRegistry, Ownable, ReentrancyGuardTransient {
     }
 
     /**
-     * @notice Atomically releases queued MM custody and settles it against the recipient's Hub queue
-     * @dev Best-effort path for MM collection flows. Returns 0 when the queue, reserve, or custody
-     *      currently cannot support settlement, instead of reverting.
-     * @param lcc The LCC token address
-     * @param custodian The MM queue custodian holding beneficiary-scoped queued LCC
-     * @param tokenId The commitment token id bucket to debit in the custodian
-     * @param recipient The queue owner and settlement recipient
-     * @param maxAmount The maximum amount to settle
-     */
-    function settleFromCustodian(address lcc, address custodian, uint256 tokenId, address recipient, uint256 maxAmount)
-        external
-        onlyValidLcc(lcc)
-        nonReentrant
-    {
-        uint256 settled = LiquidityHubLinkedLib.settleFromCustodian(s, lcc, custodian, tokenId, recipient, maxAmount);
-        if (settled > 0) {
-            _processSettlementFor(lcc, recipient, settled);
-        }
-    }
-
-    /**
      * @notice Internal function to process settlement for a specific recipient
      * @dev Delegates to LiquidityHubLib.processSettlementLogic
      * @param lcc The LCC token address
@@ -967,6 +957,9 @@ contract LiquidityHub is BoundRegistry, Ownable, ReentrancyGuardTransient {
      * @param maxAmount The maximum amount to settle
      */
     function _processSettlementFor(address lcc, address recipient, uint256 maxAmount) internal {
+        // Defence in depth: reject legacy or regressed external queues that violate reserve-funded recipient policy
+        // before any reserve-consuming settlement logic runs.
+        _assertExternalReserveFundedSettlementRecipient(lcc, recipient);
         uint256 queuedBefore = s.settleQueue[lcc][recipient];
         LiquidityHubLinkedLib.processSettlementLogic(s, lcc, recipient, maxAmount);
         uint256 queuedAfter = s.settleQueue[lcc][recipient];
@@ -984,6 +977,8 @@ contract LiquidityHub is BoundRegistry, Ownable, ReentrancyGuardTransient {
     /// @dev Assumes at most one live plan per `(lcc, sender, recipient)` path at consumption time.
     ///      The current call graph preserves this by staging the plan immediately before the
     ///      matching transfer; this function does not independently disambiguate multiple same-key plans.
+    ///      Planned cancels are intentionally consumed from the transfer path so the burn source is the exact
+    ///      protocol-side recipient that just received the LCC, rather than an arbitrary user-selected address.
     function executePlannedCancel(address sender, address cancelFromRecipient) external onlyValidLcc(_msgSender()) {
         address lcc = _msgSender();
 
@@ -1049,6 +1044,12 @@ contract LiquidityHub is BoundRegistry, Ownable, ReentrancyGuardTransient {
         view
     {
         _assertValidQueueOwner(lcc, recipient, allowHub);
+        _assertExternalReserveFundedSettlementRecipient(lcc, recipient);
+
+        // Native settlements pay `recipient` during `processSettlementFor` via `LiquidityHubLib.transferUnderlying`:
+        // EOAs receive raw ETH first (then WETH on failure); contracts receive raw ETH only if they EIP-165 support
+        // `INativeSettlementReceiver` (for example `MMQueueCustodian`); all other contracts receive WETH directly.
+        // Queue admission still requires `balancesOf` market-derived backing and valid bound level (above).
 
         (, uint256 marketDerivedBalance) = ILCC(lcc).balancesOf(recipient);
         if (marketDerivedBalance < amount) {
@@ -1072,7 +1073,43 @@ contract LiquidityHub is BoundRegistry, Ownable, ReentrancyGuardTransient {
             return;
         }
 
-        if (Bounds.isExempt(boundLevelOfLcc(lcc, recipient))) {
+        uint8 level = boundLevelOfLcc(lcc, recipient);
+        if (Bounds.isExempt(level) || Bounds.isDex(level)) {
+            revert Errors.NotApproved(recipient);
+        }
+    }
+
+    /// @dev External reserve-funded settlement (`recipient != address(this)`): any protocol-bound address in the
+    ///      factory namespace is invalid (`BOUND_ENDPOINT`, `BOUND_EXEMPT`, `BOUND_DEX`). Hub-internal self-settlement
+    ///      uses `recipient == address(this)` and is exempt. Non-bound recipients are admitted without recipient-shape
+    ///      introspection; integrators must nominate addresses capable of receiving ERC20-compatible settlement assets.
+    ///      Additionally rejects objective sink addresses via `LiquidityHubLib._assertUnderlyingPayoutRecipientNotSink`
+    ///      (`weth9()` when the LCC underlying is native; the underlying token when the LCC underlying is an ERC20).
+    function _assertExternalReserveFundedSettlementRecipient(address lcc, address recipient) internal view {
+        if (recipient == address(this)) {
+            return;
+        }
+        uint8 level = boundLevelOfLcc(lcc, recipient);
+        if (level != Bounds.BOUND_NONE) {
+            revert Errors.NotApproved(recipient);
+        }
+        LiquidityHubLib._assertUnderlyingPayoutRecipientNotSink(s.lccToUnderlying[lcc], recipient);
+    }
+
+    /**
+     * @dev Unwrap immediate payout recipient: must not be zero, the Hub, bucket-exempt, or DEX sink.
+     *      Distinct from queue ownership: `queueTo` may be `address(this)` for Hub-internal queue semantics;
+     *      underlying must never be paid to unserviceable sinks (e.g. proxy-hook/facade).
+     */
+    function _assertValidUnwrapPayoutRecipient(address lcc, address recipient) internal view {
+        if (recipient == address(0)) {
+            revert Errors.InvalidAddress(recipient);
+        }
+        if (recipient == address(this)) {
+            revert Errors.NotApproved(recipient);
+        }
+        uint8 level = boundLevelOfLcc(lcc, recipient);
+        if (Bounds.isExempt(level) || Bounds.isDex(level)) {
             revert Errors.NotApproved(recipient);
         }
     }
@@ -1091,56 +1128,47 @@ contract LiquidityHub is BoundRegistry, Ownable, ReentrancyGuardTransient {
 
     // ============ INTERNAL FUNCTIONS ============
 
+    /// @dev Computes unwrap headroom for `_unwrap`: existing queue against `queueTo` nets against `fromBalance`.
+    function _unwrapEffectiveFromBalance(address lcc, address, address queueTo, uint256 fromBalance)
+        private
+        view
+        returns (uint256 effectiveFromBalance, uint256 existingQueue)
+    {
+        existingQueue = s.settleQueue[lcc][queueTo];
+        effectiveFromBalance = fromBalance;
+    }
+
+    /// @dev Reverts unless `0 < amount <= availableToUnwrap` where `availableToUnwrap = max(0, fromBalance - existingQueue)`.
+    ///      For endpoint flows, `fromBalance` may already include capped custody credit (see `_unwrap`).
+    function _assertUnwrapWithinHeadroom(uint256 amount, uint256 fromBalance, uint256 existingQueue) private pure {
+        uint256 availableToUnwrap = fromBalance > existingQueue ? fromBalance - existingQueue : 0;
+        if (amount == 0 || amount > availableToUnwrap) {
+            revert Errors.InvalidAmount(amount, availableToUnwrap);
+        }
+    }
+
     /**
-     * @dev Validates that the sender is the canonical vault for a native-backed market
-     * @dev Reverts if sender identity is not canonical for the market derived from returned LCCs
+     * @dev Validates inbound ETH from the factory-scoped canonical vault only.
+     *      `CanonicalVault` sends native ETH to the Hub; identity is `ICanonicalVault.marketFactory()` plus
+     *      `IMarketFactory.canonicalVault() == sender` for a hub-registered factory.
      */
     function _assertValidEthSender() internal view {
         address sender = _msgSender();
         if (sender.code.length == 0) revert Errors.InvalidEthSender();
 
-        address l0;
-        address l1;
-        // Prefer a typed call + try/catch over low-level staticcall probing.
-        try IMarketVault(sender).lccs() returns (address _l0, address _l1) {
-            l0 = _l0;
-            l1 = _l1;
-        } catch {
-            revert Errors.InvalidEthSender();
-        }
+        try ICanonicalVault(sender).marketFactory() returns (address mf) {
+            if (isFactory[mf] && IMarketFactory(mf).canonicalVault() == sender) {
+                return;
+            }
+        } catch {}
 
-        bool valid0 = LCCFactoryLib.isValidLcc(s, l0);
-        bool valid1 = LCCFactoryLib.isValidLcc(s, l1);
-        if (!valid0 || !valid1) {
-            revert Errors.InvalidEthSender();
-        }
-
-        Market memory m0 = s.lccToMarket[l0];
-        Market memory m1 = s.lccToMarket[l1];
-        if (m0.id == bytes32(0) || m1.id == bytes32(0) || m0.id != m1.id || m0.factory != m1.factory) {
-            revert Errors.InvalidEthSender();
-        }
-        if (!isFactory[m0.factory]) {
-            revert Errors.InvalidEthSender();
-        }
-        if (!IMarketFactory(m0.factory).isCanonicalVault(m0.id, sender)) {
-            revert Errors.InvalidEthSender();
-        }
-
-        // Require a native-backed market.
-        if (s.lccToUnderlying[l0] != address(0) && s.lccToUnderlying[l1] != address(0)) {
-            revert Errors.InvalidEthSender();
-        }
+        revert Errors.InvalidEthSender();
     }
 
     /**
-     * @notice Receives native ETH transfers from MarketVault contracts
-     * @dev Only accepts transfers from valid MarketVault contracts with at least one native ETH LCC.
-     *      This enables the route: PoolManager -> MarketVault -> LiquidityHub for native asset settlements.
-     *      Reverts if the sender is not a valid MarketVault or if neither LCC uses native ETH as underlying.
+     * @notice Receives native ETH from the factory's `canonicalVault` only
      */
     receive() external payable {
-        // plain ETH transfer must come from a market vault.
         _assertValidEthSender();
     }
 }

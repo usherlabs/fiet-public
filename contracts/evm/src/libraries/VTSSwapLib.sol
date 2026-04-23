@@ -42,6 +42,9 @@ library VTSSwapLib {
     /// @param key The pool key
     /// @param sqrtPBefore The sqrt price before the swap
     /// @param liqBefore The liquidity before the swap
+    /// @param tickBefore Authoritative `slot0.tick` before the swap (must match PoolManager at swap start). Using
+    ///        `TickMath.getTickAtSqrtPrice(sqrtPBefore)` alone is wrong at exact tick boundaries: Uniswap may store
+    ///        `tick = T - 1` while `sqrtPrice` equals `getSqrtPriceAtTick(T)` after a leftward cross.
     //#olympix-ignore-reentrancy
     function processSwap(
         VTSStorage storage s,
@@ -50,12 +53,12 @@ library VTSSwapLib {
         SwapParams calldata,
         BalanceDelta, /* delta */
         uint160 sqrtPBefore,
-        uint128 liqBefore
+        uint128 liqBefore,
+        int24 tickBefore
     ) external {
         PoolId poolId = key.toId();
-        // Read start tick from transient sqrtP_before and end tick from state
+        // End tick from post-swap state; start tick from authoritative snapshot (not price-derived).
         (uint160 sqrtPAfter, int24 tickAfter,,) = StateLibrary.getSlot0(poolManager, poolId);
-        int24 tickBefore = TickMath.getTickAtSqrtPrice(sqrtPBefore);
 
         if (tickAfter != tickBefore) {
             // Tick cross flips + per-segment accrual: iterate initialised ticks crossed during the swap
@@ -100,14 +103,28 @@ library VTSSwapLib {
                 ? (st.sqrtPAfter > sqrtNext ? st.sqrtPAfter : sqrtNext)
                 : (st.sqrtPAfter < sqrtNext ? st.sqrtPAfter : sqrtNext);
 
-            if (st.segmentLiquidity > 0 && sqrtTarget != st.sqrtCurrent) {
-                // Accrue growth for this segment
-                _accrueSegmentGrowth(s, st.poolId, st.zeroForOne, st.sqrtCurrent, sqrtTarget, st.segmentLiquidity);
+            // Match Uniswap v4 `Pool.swap`: the realised sqrt price advances every step (`computeSwapStep`), including
+            // across zero-liquidity spans where no fee-style growth accrues. Only call `_accrueSegmentGrowth` when
+            // `segmentLiquidity > 0`; always advance `sqrtCurrent` so the next segment does not replay stale bounds.
+            if (sqrtTarget != st.sqrtCurrent) {
+                if (st.segmentLiquidity > 0) {
+                    _accrueSegmentGrowth(s, st.poolId, st.zeroForOne, st.sqrtCurrent, sqrtTarget, st.segmentLiquidity);
+                }
                 st.sqrtCurrent = sqrtTarget;
             }
 
             // Stop if we've reached final price
-            if (sqrtTarget == st.sqrtPAfter) break;
+            if (sqrtTarget == st.sqrtPAfter) {
+                // Match Uniswap v4 `Pool.swap`: when the swap ends exactly on `sqrtPriceNextX96` for an initialised
+                // tick, `crossTick` runs before persisting slot0. Without this branch we would skip the final flip.
+                if (initialized && sqrtTarget == sqrtNext) {
+                    _onTickCross(s, st.poolId, boundedNext, 0);
+                    _onTickCross(s, st.poolId, boundedNext, 1);
+                    st.segmentLiquidity =
+                        _applyLiquidityNet(poolManager, st.poolId, boundedNext, st.segmentLiquidity, st.zeroForOne);
+                }
+                break;
+            }
 
             // Otherwise, we crossed an initialised tick; flip outside and update liquidity
             if (initialized) {

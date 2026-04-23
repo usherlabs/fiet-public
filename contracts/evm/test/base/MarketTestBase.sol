@@ -3,6 +3,7 @@ pragma solidity ^0.8.26;
 // Sets up the market and the core and proxy pools for testing
 
 import "forge-std/Test.sol";
+import {StdStorage, stdStorage} from "forge-std/StdStorage.sol";
 import {IHooks} from "@uniswap/v4-core/src/interfaces/IHooks.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 
@@ -23,12 +24,14 @@ import {HookFlags} from "../../src/libraries/HookFlags.sol";
 import {HookMiner} from "v4-periphery/src/utils/HookMiner.sol";
 import {MMPositionManager} from "../../src/MMPositionManager.sol";
 import {MMQueueCustodian} from "../../src/MMQueueCustodian.sol";
+import {MMQueueCustodianFactory} from "../../src/MMQueueCustodianFactory.sol";
 import {ECDSASignatureSignalVerifier} from "../../src/verifiers/ECDSASignatureSignalVerifier.sol";
 import {StubSignalVerifier} from "../../src/verifiers/StubSignalVerifier.sol";
 import {WETH} from "@uniswap/v4-core/lib/solmate/src/tokens/WETH.sol";
 import {IWETH9} from "v4-periphery/src/interfaces/external/IWETH9.sol";
 import {IAllowanceTransfer} from "permit2/src/interfaces/IAllowanceTransfer.sol";
 import {VTSConfigs} from "../../src/libraries/VTSConfigs.sol";
+import {MarketVTSConfiguration} from "../../src/types/VTS.sol";
 import {VRLSignalManager} from "../../src/VRLSignalManager.sol";
 import {VRLSettlementObserver} from "../../src/VRLSettlementObserver.sol";
 import {IVRLSettlementObserver} from "../../src/interfaces/IVRLSettlementObserver.sol";
@@ -36,8 +39,10 @@ import {StubSettlementVerifier} from "../../src/verifiers/StubSettlementVerifier
 import {IMarketVault} from "../../src/interfaces/IMarketVault.sol";
 import {MMPCommitmentDescriptor} from "../../src/MMPCommitmentDescriptor.sol";
 import {MMPositionActionsImpl} from "../../src/MMPositionActionsImpl.sol";
+import {MMUtilityActionsImpl} from "../../src/MMUtilityActionsImpl.sol";
 import {CurrencyTransfer} from "../../src/libraries/CurrencyTransfer.sol";
 import {OracleHelper} from "../../src/OracleHelper.sol";
+import {CanonicalVault} from "../../src/CanonicalVault.sol";
 import {IOracleHelper} from "../../src/interfaces/IOracleHelper.sol";
 import {LiquidityHub} from "../../src/LiquidityHub.sol";
 import {ILiquidityHub} from "../../src/interfaces/ILiquidityHub.sol";
@@ -46,7 +51,7 @@ import {DeployPermit2} from "permit2/test/utils/DeployPermit2.sol";
 import {MarketFactory} from "../../src/MarketFactory.sol";
 import {PositionManager} from "v4-periphery/src/PositionManager.sol";
 import {IPositionDescriptor} from "v4-periphery/src/interfaces/IPositionDescriptor.sol";
-import {DirectLPDeltaResolver} from "../../src/DirectLPDeltaResolver.sol";
+import {DirectLPDeltaResolver} from "../../src/periphery/DirectLPDeltaResolver.sol";
 import {IPositionManager} from "v4-periphery/src/interfaces/IPositionManager.sol";
 import {MockPositionDescriptor} from "../_mocks/MockPositionDescriptor.sol";
 import {Bounds} from "../../src/libraries/Bounds.sol";
@@ -55,6 +60,7 @@ abstract contract MarketTestBase is Test, Deployers, DeployPermit2 {
     using PoolIdLibrary for PoolId;
     using CurrencyLibrary for Currency;
     using CurrencyTransfer for Currency;
+    using stdStorage for StdStorage;
 
     // Provide initial liquidity to core pool
     uint256 initialLiquidity = 1000e18;
@@ -72,15 +78,17 @@ abstract contract MarketTestBase is Test, Deployers, DeployPermit2 {
     PoolKey proxyPoolKey;
 
     address marketFactory;
+    /// @dev Set during `_deployCoreContracts` for `initialise` and MM stack wiring.
+    address canonicalVaultAddr;
     address payable liquidityHub;
     address coreHookAddress;
-    address queueCustodian;
-
     address resilientOracle = makeAddr("ResilientOracleAddr");
     ECDSASignatureSignalVerifier icVerifier;
     StubSignalVerifier stubSignalVerifier;
     VRLSignalManager signalManager;
     address mmPositionManager;
+    /// @dev Deployed in `_deployCoreContracts`; required by `MMPositionManager` constructor.
+    address queueCustodianFactory;
     IVRLSettlementObserver settlementObserver;
     IMarketVault mv;
     IWETH9 public weth9;
@@ -93,8 +101,6 @@ abstract contract MarketTestBase is Test, Deployers, DeployPermit2 {
 
     address lccToken0;
     address lccToken1;
-
-    uint256 signalExpiryInSeconds = 3600;
 
     // Approve `Constants.MAX_UINT256` amounts of  LCC tokens to be spent by the market contracts
     // This ensures that the market contracts can spend the LCC tokens without running out of allowance
@@ -179,15 +185,14 @@ abstract contract MarketTestBase is Test, Deployers, DeployPermit2 {
         address commitmentDescriptor = address(new MMPCommitmentDescriptor());
 
         // Deploy LiquidityHub BEFORE VTSOrchestrator (VTSOrchestrator needs liquidityHub address)
-        liquidityHub = payable(address(new LiquidityHub(address(oracleHelper), "Ether", "ETH", 18, testOwner)));
+        liquidityHub =
+            payable(address(new LiquidityHub(address(oracleHelper), "Ether", "ETH", 18, address(weth9), testOwner)));
 
         // Deploy VTSOrchestrator (virtual to allow test overrides)
         vtsOrchestrator =
             _deployVTSOrchestrator(address(manager), address(oracleHelper), address(liquidityHub), testOwner);
 
-        signalManager = new VRLSignalManager(
-            address(stubSignalVerifier), signalExpiryInSeconds, address(vtsOrchestrator), testOwner
-        );
+        signalManager = new VRLSignalManager(address(stubSignalVerifier), address(vtsOrchestrator), testOwner);
 
         // deploy the settlement observer
         settlementObserver = new VRLSettlementObserver(address(vtsOrchestrator), testOwner);
@@ -210,28 +215,37 @@ abstract contract MarketTestBase is Test, Deployers, DeployPermit2 {
             )
         );
 
+        CanonicalVault canonicalVault = new CanonicalVault(address(manager), address(liquidityHub), marketFactory);
+        canonicalVaultAddr = address(canonicalVault);
+
         // After market factory is deployed, set the factory in the liquidity hub
         LiquidityHub(payable(liquidityHub)).setFactory(marketFactory, true);
 
         // Deploy MMPositionActionsImpl first
-        MMPositionActionsImpl actionsImpl =
-            new MMPositionActionsImpl(address(manager), address(marketFactory), address(vtsOrchestrator));
-        queueCustodian = address(new MMQueueCustodian(address(this)));
-
-        // Deploy MMPositionManager
+        MMPositionActionsImpl actionsImpl = new MMPositionActionsImpl(
+            address(manager), address(marketFactory), address(vtsOrchestrator), canonicalVaultAddr
+        );
+        MMUtilityActionsImpl utilityActionsImpl = new MMUtilityActionsImpl(
+            manager, address(marketFactory), address(vtsOrchestrator), canonicalVaultAddr, weth9
+        );
+        queueCustodianFactory = address(new MMQueueCustodianFactory());
+        // Deploy MMPositionManager (recipient-keyed queue custodians are deployed lazily by MMPM)
         mmPositionManager = address(
             new MMPositionManager(
-                address(manager),
-                address(marketFactory),
-                address(vtsOrchestrator),
-                commitmentDescriptor,
-                weth9,
-                permit2,
-                address(actionsImpl),
-                queueCustodian
+                MMPositionManager.MMPositionManagerInit({
+                    poolManager: manager,
+                    marketFactory: address(marketFactory),
+                    vtsOrchestrator: address(vtsOrchestrator),
+                    canonicalCustody: canonicalVaultAddr,
+                    descriptor: commitmentDescriptor,
+                    weth9: weth9,
+                    permit2: permit2,
+                    actionsImpl: address(actionsImpl),
+                    utilityActionsImpl: address(utilityActionsImpl),
+                    queueCustodianFactory: queueCustodianFactory
+                })
             )
         );
-        MMQueueCustodian(queueCustodian).setPositionManager(mmPositionManager);
 
         // Deploy DirectLP delta resolver subscriber (will be protocol-bound after MarketFactory deployment).
         directLPDeltaResolver =
@@ -250,12 +264,16 @@ abstract contract MarketTestBase is Test, Deployers, DeployPermit2 {
             new CoreHook{salt: coreSalt}(address(manager), address(marketFactory), address(vtsOrchestrator));
         require(address(coreDeployed) == coreHookAddress, "CoreHook deployed at unexpected address");
 
-        // Initialise market factory after core hook deployment
-        address[] memory initialBounds = new address[](3);
+        // Initialise market factory after core hook deployment (generic bound endpoints, not custodian-binding).
+        address[] memory initialBounds = new address[](2);
         initialBounds[0] = mmPositionManager;
-        initialBounds[1] = queueCustodian;
-        initialBounds[2] = address(directLPDeltaResolver);
-        MarketFactory(marketFactory).initialise(coreHookAddress, initialBounds);
+        initialBounds[1] = address(directLPDeltaResolver);
+        MarketFactory(marketFactory).initialise(canonicalVaultAddr, coreHookAddress, initialBounds);
+    }
+
+    /// @dev VTS configuration supplied to `MarketFactory.createMarket` during test setup.
+    function _marketVTSConfigurationForCreate() internal pure virtual returns (MarketVTSConfiguration memory) {
+        return VTSConfigs.getDefaultConfig();
     }
 
     // Create and initialize the market i.e deploy core and proxy pools using the market factory
@@ -284,7 +302,7 @@ abstract contract MarketTestBase is Test, Deployers, DeployPermit2 {
                 tickSpacing,
                 initialSqrtPriceX96,
                 proxySalt,
-                VTSConfigs.getDefaultConfig()
+                _marketVTSConfigurationForCreate()
             );
 
         // set the deployed proxy hook address
@@ -404,5 +422,68 @@ abstract contract MarketTestBase is Test, Deployers, DeployPermit2 {
         returns (VTSOrchestrator)
     {
         return new VTSOrchestrator(_poolManager, _oracleHelper, _liquidityHub, _owner);
+    }
+
+    /// @dev Production deploys queue custodians via `INITIALISE`. Tests that need a custodian without that action
+    ///      wire `custodianFor[recipient]` to a fresh `MMQueueCustodian` bound to `mmpm` with immutable `recipient`.
+    function _wireTestQueueCustodianFor(address mmpm, address recipient) internal {
+        if (MMPositionManager(payable(mmpm)).custodianFor(recipient) != address(0)) return;
+        MMQueueCustodian c = new MMQueueCustodian(mmpm, recipient);
+        stdstore.target(mmpm).sig("custodianFor(address)").with_key(recipient)
+            .checked_write(uint256(uint160(address(c))));
+    }
+
+    /// @dev Wires custodians for deterministic `makeAddr` labels used as non-commit lockers in utility tests.
+    function _wireAllUtilityTestQueueCustodians(address mmpm) internal {
+        string[45] memory labels = [
+            "alice",
+            "aliceCustody",
+            "attacker",
+            "attackerNativeSyncTake",
+            "attackerSyncTake",
+            "bob",
+            "differentOwner",
+            "ethRecipient",
+            "eve",
+            "guarantor",
+            "guarantor-auth01a-clear",
+            "guarantor-auth01a-scope",
+            "guarantor-auth01a-settleonly",
+            "locker",
+            "lockerA_custodyIso",
+            "lockerB_custodyIso",
+            "lockerDeltaReconcileAfterAnnul",
+            "lockerNativeShortfallAlign",
+            "lockerPartialCollectThenUnwrap",
+            "lockerQueueEncumber",
+            "lockerSecondBatchFreshDelta",
+            "lockerUnwrapCollect",
+            "lockerZeroHeadroomExplicitRevert",
+            "mcRecipient",
+            "notAdvancer",
+            "recipient",
+            "sharedUtilityDomain",
+            "signedOtherLocker",
+            "syncAttacker",
+            "to",
+            "twoExtRecipient",
+            "twoFundedA",
+            "twoFundedB",
+            "user",
+            "userA_iso",
+            "userB_iso",
+            "userCollectNoop",
+            "userTok0Collect",
+            "victim",
+            "victimAnnulFullMarket",
+            "victimNativeSyncTake",
+            "victimSecondUnwrapQueue",
+            "victimSyncTake",
+            "victimUtilityReconcile",
+            "wethRecipient"
+        ];
+        for (uint256 i = 0; i < labels.length; i++) {
+            _wireTestQueueCustodianFor(mmpm, makeAddr(labels[i]));
+        }
     }
 }

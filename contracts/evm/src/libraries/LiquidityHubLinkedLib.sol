@@ -74,17 +74,6 @@ library LiquidityHubLinkedLib {
         LiquidityHubLib.prepareSettle(s, lcc, amount, issuer);
     }
 
-    function settleFromCustodian(
-        LiquidityHubStorage storage s,
-        address lcc,
-        address custodian,
-        uint256 tokenId,
-        address recipient,
-        uint256 maxAmount
-    ) external returns (uint256 settled) {
-        return LiquidityHubLib.settleFromCustodian(s, lcc, custodian, tokenId, recipient, maxAmount);
-    }
-
     function annulSettlementBeforeTransfer(
         LiquidityHubStorage storage s,
         address lcc,

@@ -110,21 +110,22 @@ contract LiquidityCommitmentCertificate is ERC20, ILCC {
     /**
      * @dev Get the balance breakdown for an account
      * @param account The account address
-     * @return wrapped The wrapped balance
-     * @return marketDerived The market-derived balance
+     * @return wrapped The wrapped (direct-backed) bucket balance for bucket-tracked holders; always zero for
+     *         `BOUND_EXEMPT` endpoints (see invariant: exempt-held LCC is semantically market-derived for views).
+     * @return marketDerived The market-derived bucket balance; for exempt holders equals full ERC20 balance.
      */
     function balancesOf(address account) public view virtual returns (uint256 wrapped, uint256 marketDerived) {
-        // Handle protocol addresses: they don't accumulate balance buckets but may hold ERC20 balance
-        // If balance buckets are 0 but ERC20 balance exists, treat all as wrapped balance
-
-        // Important for settlement semantics: external queue settlement burns market-derived only.
-        // Therefore exempt/bucketless holders can have nonzero ERC20 balance yet remain not currently
-        // serviceable on external processSettlementFor() until bucket state is reconciled.
+        // Only bucket-exempt protocol endpoints are allowed to hold ERC20 balance without per-address bucket maps.
+        // Their ERC20 balance is not durable Domain A (wrapped) holder inventory: issuer paths mint market-only to
+        // exempt; egress to non-protocol credits market-derived; issuer `cancel` burns market-only. Expose that
+        // consistently here so off-chain and Hub helpers do not read exempt balance as wrapped.
         uint256 balanceSum = wrappedBalances[account] + marketDerivedBalances[account];
         uint256 fullBalance = balanceOf(account);
-        if ((balanceSum == 0 && fullBalance > 0) || Bounds.isExempt(ILiquidityHub(hub).boundLevel(factory, account))) {
-            // Bucket-exempt protocol address holding tokens: treat all balance as wrapped
-            return (fullBalance, 0);
+        if (Bounds.isExempt(ILiquidityHub(hub).boundLevel(factory, account))) {
+            return (0, fullBalance);
+        }
+        if (balanceSum != fullBalance) {
+            revert Errors.InvalidBucketState(account, fullBalance);
         }
         return (wrappedBalances[account], marketDerivedBalances[account]);
     }
@@ -139,6 +140,13 @@ contract LiquidityCommitmentCertificate is ERC20, ILCC {
         uint256 amount = directAmount + marketAmount;
         if (amount == 0) {
             revert Errors.InvalidAmount(0, 0);
+        }
+        // Direct-backed mints require bucket accounting; exempt endpoints skip buckets (see early return below).
+        // Allowing directAmount > 0 to exempt would misalign `directSupply` with per-holder buckets and allow
+        // Domain A liquidity to sit on an address that does not carry wrapped bucket state (exempt `balancesOf`
+        // reports market-derived only; egress still reclassifies to recipients as market-derived).
+        if (Bounds.isExempt(ILiquidityHub(hub).boundLevel(factory, to)) && directAmount > 0) {
+            revert Errors.MintToNotAllowedRecipient(to);
         }
         _mint(to, amount);
         // Bucket bookkeeping is skipped only for bucket-exempt protocol endpoints.
@@ -233,11 +241,12 @@ contract LiquidityCommitmentCertificate is ERC20, ILCC {
         if (!Bounds.isExempt(toLevel)) {
             marketDerivedBalances[to] += fromMarketDerived;
             wrappedBalances[to] += fromWrapped;
-        } else if (amount > 0 && Bounds.isDex(toLevel)) {
-            // DEX ingress sinks (e.g. PoolManager) are ingress boundaries.
-            // Immediate-consistency: only the wrapped (direct-backed) slice triggers Hub->Vault settlement via
-            // prepareMarketLiquidity. Market-derived-only movement (fromWrapped == 0) does not; that slice is
-            // already accounted for under market-liquidity rules and does not require this direct-reserve path.
+        } else if (Bounds.isDex(toLevel)) {
+            // DEX ingress: always run `prepareMarketLiquidity` so `prepareMarketLiquidityIngress` can enforce
+            // unlock, active `sync(lcc)`, and `balance(PoolManager) == syncedReserves` even when `fromWrapped == 0`
+            // (LCC-03; `handleIngress` only runs when wrappedAmount > 0). Market-derived-only transfers that are not
+            // inside a valid window revert here, blocking stray LCC and later `NestedIngressUnpaidTransferExists`
+            // griefing.
             IMarketFactory(factory).prepareMarketLiquidity(address(this), fromWrapped);
         }
     }
@@ -269,6 +278,9 @@ contract LiquidityCommitmentCertificate is ERC20, ILCC {
             // Bucket-exempt -> protocol: only credit bucket-tracked recipients.
             if (!Bounds.isExempt(toLevel)) {
                 marketDerivedBalances[to] += amount;
+            } else if (Bounds.isDex(toLevel)) {
+                // DEX (bucket-exempt): run zero-wrapped validation when origin has no bucket split (LCC-03).
+                IMarketFactory(factory).prepareMarketLiquidity(address(this), 0);
             }
             return;
         }
@@ -284,9 +296,8 @@ contract LiquidityCommitmentCertificate is ERC20, ILCC {
         if (!Bounds.isExempt(toLevel)) {
             marketDerivedBalances[to] += fromMarketDerived;
             wrappedBalances[to] += fromWrapped;
-        } else if (amount > 0 && Bounds.isDex(toLevel)) {
-            // Protocol -> bucket-exempt transfers can source wrapped balance from non-exempt protocols.
-            // Same immediate-consistency rule as non-protocol -> DEX: only wrapped slice triggers prepareMarketLiquidity.
+        } else if (Bounds.isDex(toLevel)) {
+            // Non-exempt -> DEX: same as `nonProtocol -> DEX` — always validate ingress; `fromWrapped` may be zero.
             IMarketFactory(factory).prepareMarketLiquidity(address(this), fromWrapped);
         }
     }

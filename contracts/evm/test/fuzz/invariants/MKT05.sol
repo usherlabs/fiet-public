@@ -16,19 +16,20 @@ import {IHooks} from "@uniswap/v4-core/src/interfaces/IHooks.sol";
 import {IERC20Minimal} from "@uniswap/v4-core/src/interfaces/external/IERC20Minimal.sol";
 
 import {ILiquidityHub} from "../../../src/interfaces/ILiquidityHub.sol";
+import {VaultSettlementIntent} from "../../../src/types/VTS.sol";
 
-/// @notice Echidna harness for **MKT-05** that drives the `ProxyHook.beforeSwap` execution path in a stubbed environment.
+/// @notice fuzz harness for **MKT-05** that drives the `ProxyHook.beforeSwap` execution path in a stubbed environment.
 ///
-/// ## What Echidna is doing here (stateful fuzzing)
+/// ## What Medusa is doing here (stateful fuzzing)
 ///
-/// Echidna deploys this contract once, then repeatedly calls arbitrary sequences of `action_*` methods with
-/// adversarial inputs. After (and during) those sequences, it evaluates `echidna_*` properties and treats any
+/// Medusa deploys this contract once, then repeatedly calls arbitrary sequences of `action_*` methods with
+/// adversarial inputs. After (and during) those sequences, it evaluates `fuzz_*` properties and treats any
 /// `false` as a counterexample.
 ///
 /// This harness uses a standard "checked/lastOk" pattern:
 /// - Each action attempts a real `ProxyHook.beforeSwap` call and, if it succeeds, records the last inputs/outputs.
 /// - The property asserts the recorded run satisfied the MKT-05 cancellation relation.
-/// - If an action reverts, we mark the run as "not checked" so Echidna can continue exploring other paths in the
+/// - If an action reverts, we mark the run as "not checked" so Medusa can continue exploring other paths in the
 ///   sequence (we still want reachability across different input shapes).
 ///
 /// ## What is actually being tested (behavioural assurance)
@@ -56,7 +57,7 @@ import {ILiquidityHub} from "../../../src/interfaces/ILiquidityHub.sol";
 ///
 /// ## What is deliberately NOT being tested (scope boundaries)
 ///
-/// To keep Echidna runs fast and targeted, the environment is stubbed:
+/// To keep Medusa runs fast and targeted, the environment is stubbed:
 /// - `MockPoolManager.swap` returns a simple 1:1 `BalanceDelta` (it does not simulate price impact, ticks, fees, etc.).
 /// - The mock Hub implements only `issue/cancel/totalQueued` semantics needed for the proxy settlement path.
 /// - We seed "claim balances" so `_cancelLCCWithDeficit` never enters deficit/overflow sub-paths; this harness is
@@ -78,6 +79,8 @@ contract MKT05 is HookMinerBase {
     MockPoolManager internal manager;
     MockLiquidityHub internal hub;
     MockMarketFactory internal factory;
+    MockCanonicalVault internal canonicalVault;
+    MockMsgSenderZero internal unresolvedSender;
 
     // Underlyings and LCCs (core pool currencies are LCCs, proxy pool currencies are underlyings).
     MockERC20 internal u0;
@@ -90,7 +93,6 @@ contract MKT05 is HookMinerBase {
 
     bool internal checked;
     bool internal lastOk;
-    bool internal allOk = true;
     int256 internal lastAmountSpecified;
     BeforeSwapDelta internal lastDelta;
     int256 internal lastResidual;
@@ -101,7 +103,6 @@ contract MKT05 is HookMinerBase {
     uint256 internal exactInputSuccesses;
     uint256 internal exactOutputAttempts;
     uint256 internal exactOutputReverts;
-    uint256 internal constant MAX_VACUOUS_ATTEMPTS = 10;
     uint8 internal constant FAIL_NONE = 0;
     uint8 internal constant FAIL_NONZERO_RESIDUAL = 1;
 
@@ -109,6 +110,9 @@ contract MKT05 is HookMinerBase {
         manager = new MockPoolManager();
         hub = new MockLiquidityHub();
         factory = new MockMarketFactory(ILiquidityHub(address(hub)));
+        canonicalVault = new MockCanonicalVault(address(factory));
+        unresolvedSender = new MockMsgSenderZero();
+        factory.setCanonicalVault(address(canonicalVault));
 
         u0 = new MockERC20("UNDER0", "U0");
         u1 = new MockERC20("UNDER1", "U1");
@@ -134,6 +138,9 @@ contract MKT05 is HookMinerBase {
             hooks: IHooks(address(0))
         });
         factory.callSetCorePoolKey(hook, coreKey);
+        canonicalVault.seedMarket(
+            PoolId.unwrap(coreKey.toId()), address(lcc0), address(lcc1), address(u0), address(u1), 1e30, 1e30
+        );
 
         // Set the proxy pool key via `beforeInitialize` (sender must be factory, caller must be pool manager).
         proxyKey = PoolKey({
@@ -145,11 +152,22 @@ contract MKT05 is HookMinerBase {
         });
         manager.callBeforeInitialize(hook, address(factory), proxyKey, 0);
 
-        // Seed the MarketVault claim balances so `_cancelLCCWithDeficit` never enters deficit paths.
-        manager.mint(address(hook), proxyKey.currency0.toId(), 1e30);
-        manager.mint(address(hook), proxyKey.currency1.toId(), 1e30);
+        // Seed the CanonicalVault's underlying claims so the hook can burn settled output during proxy swaps.
+        manager.mint(address(canonicalVault), proxyKey.currency0.toId(), 1e30);
+        manager.mint(address(canonicalVault), proxyKey.currency1.toId(), 1e30);
 
         // Seed pool manager LCC balances so `Currency.take(..., claims=false)` can transfer out.
+        lcc0.mint(address(manager), 1e30);
+        lcc1.mint(address(manager), 1e30);
+    }
+
+    /// @dev Re-seed the lightweight reserve / claim state so each action checks MKT-05 cancellation in isolation.
+    function _resetLivePathState() internal {
+        canonicalVault.seedMarket(
+            PoolId.unwrap(hook.getCorePoolId()), address(lcc0), address(lcc1), address(u0), address(u1), 1e30, 1e30
+        );
+        manager.mint(address(canonicalVault), proxyKey.currency0.toId(), 1e30);
+        manager.mint(address(canonicalVault), proxyKey.currency1.toId(), 1e30);
         lcc0.mint(address(manager), 1e30);
         lcc1.mint(address(manager), 1e30);
     }
@@ -160,6 +178,7 @@ contract MKT05 is HookMinerBase {
         unchecked {
             attempts++;
         }
+        _resetLivePathState();
         checked = false;
         lastOk = true;
         lastFailureCode = FAIL_NONE;
@@ -172,7 +191,9 @@ contract MKT05 is HookMinerBase {
         // This avoids deficit-recipient semantics that this lightweight stub model cannot represent faithfully.
         bytes memory hookData = bytes("");
 
-        try manager.callBeforeSwap(hook, address(0xCAFE), proxyKey, params, hookData) returns (BeforeSwapDelta delta) {
+        try manager.callBeforeSwap(hook, address(unresolvedSender), proxyKey, params, hookData) returns (
+            BeforeSwapDelta delta
+        ) {
             lastAmountSpecified = params.amountSpecified;
             lastDelta = delta;
             checked = true;
@@ -187,7 +208,6 @@ contract MKT05 is HookMinerBase {
                 lastFailureCode = FAIL_NONZERO_RESIDUAL;
             }
             lastOk = lastFailureCode == FAIL_NONE;
-            allOk = allOk && lastOk;
         } catch {
             // If the execution path reverts under a particular input, treat it as "not checked" for this action.
             checked = false;
@@ -200,6 +220,7 @@ contract MKT05 is HookMinerBase {
         unchecked {
             exactOutputAttempts++;
         }
+        _resetLivePathState();
         // Exact-output behaviour is exercised here for reachability only.
         // Authoritative exact-output MKT-05 assertions are covered in ProxyHook.t.sol first-take regressions.
 
@@ -210,7 +231,9 @@ contract MKT05 is HookMinerBase {
         // This avoids deficit-recipient semantics that this lightweight stub model cannot represent faithfully.
         bytes memory hookData = bytes("");
 
-        try manager.callBeforeSwap(hook, address(0xCAFE), proxyKey, params, hookData) returns (BeforeSwapDelta delta) {
+        try manager.callBeforeSwap(hook, address(unresolvedSender), proxyKey, params, hookData) returns (
+            BeforeSwapDelta delta
+        ) {
             lastDelta = delta;
         } catch {
             unchecked {
@@ -221,21 +244,15 @@ contract MKT05 is HookMinerBase {
 
     /// @notice MKT-05 live-path property: ProxyHook returns a specified-delta that cancels `amountSpecified`.
     // forge-lint: disable-next-line(mixed-case-function)
-    function echidna_mkt05_live_amountToSwap_is_zero() external view returns (bool) {
-        // Prevent vacuous passes if all fuzzed actions keep reverting:
-        // after some attempts, we require at least one successful checked run.
-        if (successes == 0) {
-            return attempts < MAX_VACUOUS_ATTEMPTS;
-        }
-        if (exactInputSuccesses == 0) {
-            return attempts < MAX_VACUOUS_ATTEMPTS;
-        }
-        return allOk;
+    function fuzz_mkt05_live_amountToSwap_is_zero() external view returns (bool) {
+        // Allow the constructor state to pass before any live-path attempt, then require at least one successful
+        // exact-input run so the cancellation check is non-vacuous.
+        return (!checked || lastOk) && (attempts == 0 || exactInputSuccesses > 0);
     }
 
-    // Keep a second trivial property to avoid rare Echidna instability with single-property targets.
+    // Keep a second trivial property to avoid rare property-runner instability with single-property targets.
     // forge-lint: disable-next-line(mixed-case-function)
-    function echidna_mkt05_live_smoke() external pure returns (bool) {
+    function fuzz_mkt05_live_smoke() external pure returns (bool) {
         return true;
     }
 }
@@ -267,7 +284,9 @@ contract MockPoolManager {
 
     function sync(Currency) external pure {}
 
-    function settle() external payable {}
+    function settle() external payable returns (uint256 paid) {
+        return msg.value;
+    }
 
     function take(Currency currency, address recipient, uint256 amount) external {
         if (currency.isAddressZero()) {
@@ -335,10 +354,127 @@ contract MockLiquidityHub {
     function confirmTake(address, uint256, bool) external pure {}
 }
 
+/// @dev Minimal CanonicalVault stub for proxy-swap MKT-05 fuzzing.
+///      It tracks only durable per-market underlying reserve and LCC->underlying mapping.
+contract MockCanonicalVault {
+    address public immutable marketFactory;
+
+    mapping(bytes32 marketId => mapping(address underlying => uint256 amount)) internal _reserve;
+    mapping(address lcc => address underlying) internal _underlyingOfLcc;
+
+    constructor(address marketFactory_) {
+        marketFactory = marketFactory_;
+    }
+
+    function seedMarket(
+        bytes32 marketId,
+        address lcc0,
+        address lcc1,
+        address underlying0,
+        address underlying1,
+        uint256 reserve0,
+        uint256 reserve1
+    ) external {
+        _underlyingOfLcc[lcc0] = underlying0;
+        _underlyingOfLcc[lcc1] = underlying1;
+        _reserve[marketId][underlying0] = reserve0;
+        _reserve[marketId][underlying1] = reserve1;
+    }
+
+    function inMarketBalanceOf(bytes32 marketId, Currency currency) external view returns (uint256) {
+        return _reserve[marketId][Currency.unwrap(currency)];
+    }
+
+    function cancelLCCWithDeficit(bytes32 marketId, address lccToken, uint256 amount, address deficitRecipient)
+        external
+        returns (uint256 amountToCancel)
+    {
+        address underlying = _underlyingOfLcc[lccToken];
+        uint256 available = _reserve[marketId][underlying];
+        amountToCancel = amount > available ? available : amount;
+        if (amountToCancel < amount && deficitRecipient == address(0)) revert();
+        unchecked {
+            _reserve[marketId][underlying] = available - amountToCancel;
+        }
+    }
+
+    function increaseLiquidityReserve(bytes32 marketId, Currency underlyingCurrency, uint256 amount) external {
+        unchecked {
+            _reserve[marketId][Currency.unwrap(underlyingCurrency)] += amount;
+        }
+    }
+
+    function decreaseLiquidityReserve(bytes32 marketId, Currency underlyingCurrency, uint256 amount) external {
+        address underlying = Currency.unwrap(underlyingCurrency);
+        uint256 available = _reserve[marketId][underlying];
+        require(available >= amount, "MockCanonicalVault: reserve");
+        unchecked {
+            _reserve[marketId][underlying] = available - amount;
+        }
+    }
+
+    function settleUnderlyingToVaultFromHub(bytes32 marketId, address lccToken, uint256 amount) external {
+        unchecked {
+            _reserve[marketId][_underlyingOfLcc[lccToken]] += amount;
+        }
+    }
+
+    function dryModifyLiquidities(bytes32, Currency, Currency, BalanceDelta balanceDelta)
+        external
+        pure
+        returns (BalanceDelta)
+    {
+        return balanceDelta;
+    }
+
+    function dryModifyLiquidities(bytes32, Currency, Currency, VaultSettlementIntent calldata settlementIntent)
+        external
+        pure
+        returns (BalanceDelta)
+    {
+        return settlementIntent.requestedDelta;
+    }
+
+    function modifyLiquidities(bytes32, Currency, Currency, address, address, BalanceDelta, address)
+        external
+        pure
+        returns (BalanceDelta usedDelta)
+    {
+        return toBalanceDelta(0, 0);
+    }
+
+    function modifyLiquidities(bytes32, Currency, Currency, address, address, VaultSettlementIntent calldata, address)
+        external
+        pure
+        returns (BalanceDelta usedDelta)
+    {
+        return toBalanceDelta(0, 0);
+    }
+
+    function settleObligations(bytes32, address, address) external pure {}
+
+    function settleObligationsForLCC(bytes32, address) external pure {}
+
+    function takeUnderlyingClaims(bytes32, Currency, uint256) external pure {}
+
+    function settleUnderlyingFromClaims(bytes32, Currency, uint256) external pure {}
+
+    function issueAndSettleLcc(bytes32, address, uint256) external pure {}
+
+    function takeLccFromPoolManager(bytes32, address, uint256) external pure {}
+}
+
+contract MockMsgSenderZero {
+    function msgSender() external pure returns (address) {
+        return address(0);
+    }
+}
+
 /// @dev Minimal MarketFactory stub: only `liquidityHub()` is required at `MarketVault` construction time,
 ///      and this contract is used as the `onlyFactory` caller for `setCorePoolKey`.
 contract MockMarketFactory {
     ILiquidityHub internal immutable _hub;
+    address internal _canonicalVault;
 
     constructor(ILiquidityHub hub_) {
         _hub = hub_;
@@ -346,6 +482,14 @@ contract MockMarketFactory {
 
     function liquidityHub() external view returns (ILiquidityHub) {
         return _hub;
+    }
+
+    function setCanonicalVault(address canonicalVault_) external {
+        _canonicalVault = canonicalVault_;
+    }
+
+    function canonicalVault() external view returns (address) {
+        return _canonicalVault;
     }
 
     function callSetCorePoolKey(ProxyHook h, PoolKey calldata coreKey) external {

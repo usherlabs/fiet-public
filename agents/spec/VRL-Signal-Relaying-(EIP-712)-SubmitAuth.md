@@ -1,6 +1,8 @@
-# VRL Signal Relaying (EIP-712) — `SubmitAuth`
+# VRL Signal Relaying (EIP-712) — `RelayAuth`
 
 This spec documents how to produce the **off-chain** EIP-712 signature required by `VRLSignalManager.verifyLiquiditySignalRelayed(...)`, and how to pass it through the protocol using the existing `MMPositionManager` actions (`COMMIT_SIGNAL` / `RENEW_SIGNAL`) via `relayParams`.
+
+**Canonical on-chain type**: `RelayAuth` in `contracts/evm/src/VRLSignalManager.sol` (not the historical `SubmitAuth` sketch below). Fields are **`signer`** (proof principal) and **`sender`** (MM batch locker; `address(0)` aliases `signer` on fresh commit). The EIP-712 domain uses version **`"1"`**.
 
 ## On-chain contract references
 
@@ -10,17 +12,17 @@ This spec documents how to produce the **off-chain** EIP-712 signature required 
   - `VTSOrchestrator.commitSignalRelayed(...)`
   - `VTSOrchestrator.renewSignalRelayed(...)`
 - **MMPositionManager action payloads** (relay passthrough):
-  - `COMMIT_SIGNAL`: `(bytes liquiditySignal, address owner, bytes relayParams)`
+  - `COMMIT_SIGNAL`: `(bytes liquiditySignal, bytes relayParams)`
   - `RENEW_SIGNAL`: `(uint256 tokenId, bytes liquiditySignal, bytes relayParams)`
 
 ## Security intent
 
-Relaying allows a third-party submitter (e.g. a router) to submit a `liquiditySignal` **on behalf of** a declared `sender` (either `mmState.owner` or `mmState.advancer`) while still binding:
+Relaying allows a third-party submitter (e.g. a router) to submit a `liquiditySignal` **on behalf of** a declared proof principal (`signer`: either `mmState.owner` or `mmState.advancer`) while still binding:
 
-- **who is authorised**: `sender` must sign the EIP-712 message
+- **who is authorised**: `signer` must sign the EIP-712 message
 - **who may submit**: the caller is enforced on-chain by `onlySubmitter` (constructor-set submitter)
 - **what may be submitted**: the message is bound to the exact `liquiditySignal` bytes
-- **replay protection**: `submitAuthNonce[sender]` is consumed on success
+- **replay protection**: `submitAuthNonce[signer]` is consumed on success
 - **expiry**: `deadline`
 
 ## EIP-712 domain
@@ -36,18 +38,20 @@ Domain fields:
 
 ## Typed data
 
-Type string (must match on-chain `SUBMIT_AUTH_TYPEHASH`):
+Type string (must match on-chain `RELAY_AUTH_TYPEHASH`):
 
 ```text
-SubmitAuth(address sender,bytes32 liquiditySignalHash,uint256 deadline,uint256 nonce)
+RelayAuth(address signer,uint256 commitId,bytes32 liquiditySignalHash,address sender,uint256 deadline,uint256 nonce)
 ```
 
 Fields:
 
-- **sender**: the effective actor (must equal either `mmState.owner` or `mmState.advancer` in the decoded signal)
+- **signer**: the proof principal (must equal either `mmState.owner` or `mmState.advancer` in the decoded signal)
+- **commitId**: `0` for fresh commit relay; existing commit id for renew relay
 - **liquiditySignalHash**: `keccak256(liquiditySignal)` where `liquiditySignal` is the ABI-encoded `LiquiditySignal` bytes blob
+- **sender**: for **fresh commit** (`commitId == 0`), the MM batch locker / NFT recipient — either the explicit address, or **`address(0)`** meaning custody to **`signer`** (i.e. `mmState.owner` when `signer` is owner). For **renew** (`commitId != 0`), **`address(0)`** (legacy) or **`mmState.advancer`** so the signed payload binds to the batch locker; `MMPositionManager` requires the batch locker to match.
 - **deadline**: unix timestamp; verification reverts if `block.timestamp > deadline`
-- **nonce**: must equal `VRLSignalManager.submitAuthNonce(sender)` at submission time
+- **nonce**: must equal `VRLSignalManager.submitAuthNonce(signer)` at submission time (same address as the typed-data `sender` field)
 
 Important:
 
@@ -62,9 +66,11 @@ This example signs the typed data as an EOA using ethers v6.
 ```ts
 import { ethers } from "ethers";
 
-type SubmitAuth = {
-  sender: string;
+type RelayAuth = {
+  signer: string;
+  commitId: bigint;
   liquiditySignalHash: string; // bytes32
+  sender: string; // MM batch locker; zero = alias signer on fresh; zero for renew
   deadline: bigint;
   nonce: bigint;
 };
@@ -77,9 +83,11 @@ const domain = {
 };
 
 const types = {
-  SubmitAuth: [
-    { name: "sender", type: "address" },
+  RelayAuth: [
+    { name: "signer", type: "address" },
+    { name: "commitId", type: "uint256" },
     { name: "liquiditySignalHash", type: "bytes32" },
+    { name: "sender", type: "address" },
     { name: "deadline", type: "uint256" },
     { name: "nonce", type: "uint256" },
   ],
@@ -89,14 +97,16 @@ const types = {
 const liquiditySignal: Uint8Array = /* ... */;
 const liquiditySignalHash = ethers.keccak256(liquiditySignal);
 
-const value: SubmitAuth = {
-  sender: "0xSender",       // must be owner or advancer from mmState
+const value: RelayAuth = {
+  signer: "0xSigner",       // must be owner or advancer from mmState
+  commitId: 0n,             // 0 for fresh commit; existing id for renew
   liquiditySignalHash,
+  sender: "0xLocker", // fresh: batch locker, or ethers.ZeroAddress to alias signer; renew: ZeroAddress or advancer
   deadline: 1710000000n,    // replace
-  nonce: 0n,                // VRLSignalManager.submitAuthNonce(sender)
+  nonce: 0n,                // VRLSignalManager.submitAuthNonce(signer address)
 };
 
-const wallet = new ethers.Wallet("0xPRIVATE_KEY"); // sender's key
+const wallet = new ethers.Wallet("0xPRIVATE_KEY"); // signer's key
 const authSig = await wallet.signTypedData(domain, types, value);
 ```
 
@@ -107,40 +117,43 @@ Notes:
 
 ## How to call on-chain (direct relayed entrypoint)
 
-Call `VRLSignalManager.verifyLiquiditySignalRelayed(...)` from a **trusted caller**:
+Call `VRLSignalManager.verifyLiquiditySignalRelayed(signer, commitId, liquiditySignal, deadline, authNonce, authSig, sender, ...)` from a **trusted caller** (the `submitter`):
 
-- `sender`: same as in the signature
+- `signer`: same as the typed-data `signer` field in `RelayAuth` (proof principal; must match recovered signature)
 - `liquiditySignal`: the exact bytes blob that was hashed
+- `sender`: must match the signed typed-data `sender` (MM batch locker / NFT recipient; `address(0)` aliases `signer` on fresh commit)
 - `deadline`, `nonce`, `authSig`: must match the signature
 
 The function will:
 
-- validate `nonce == submitAuthNonce[sender]`
+- validate `nonce == submitAuthNonce[signer]`
 - validate `keccak256(liquiditySignal)` matches
-- recover `authSig` and require recovered signer equals `sender`
+- recover `authSig` and require recovered signer equals `signer`
 - verify the signal’s merkle inclusion + root signature
-- bump `mmNonce[mmState.owner]` and `submitAuthNonce[sender]` on success
+- bump `mmNonce[mmState.owner]` and `submitAuthNonce[signer]` on success
 
 ## Passing relayed auth through `MMPositionManager` actions (`relayParams`)
 
 `MMPositionManager` supports relayed commit/renew by setting `relayParams` to a non-empty ABI blob:
 
 ```solidity
-relayParams := abi.encode(uint256 deadline, uint256 authNonce, bytes authSig)
+relayParams := abi.encode(uint256 deadline, uint256 authNonce, bytes authSig, address sender)
 ```
+
+The fourth word is the EIP-712 `RelayAuth.sender` value. For renew relay, pass `address(0)` (legacy) or `mmState.advancer` (must match the signed typed data); the batch locker must match per `MMPositionManager`.
 
 ### COMMIT_SIGNAL params
 
 Action payload:
 
 ```solidity
-abi.encode(bytes liquiditySignal, address owner, bytes relayParams)
+abi.encode(bytes liquiditySignal, bytes relayParams)
 ```
 
 Behaviour:
 
-- if `relayParams.length == 0`: calls `VTSOrchestrator.commitSignal(sender, liquiditySignal)`
-- else: decodes `(deadline, authNonce, authSig)` and calls `VTSOrchestrator.commitSignalRelayed(marketFactory, sender, liquiditySignal, deadline, authNonce, authSig)`
+- if `relayParams.length == 0`: direct fresh commit — requires `msgSender() == mmState.owner`; mints the NFT to `mmState.owner`
+- else: decodes `(deadline, authNonce, authSig, sender)` and requires `msgSender()` to equal the NFT recipient (`sender`, or `mmState.owner` when that field is zero), then calls `VTSOrchestrator.commitSignalRelayed(..., sender)`
 
 ### RENEW_SIGNAL params
 
@@ -153,12 +166,12 @@ abi.encode(uint256 tokenId, bytes liquiditySignal, bytes relayParams)
 Behaviour:
 
 - if `relayParams.length == 0`: calls `VTSOrchestrator.renewSignal(sender, tokenId, liquiditySignal)`
-- else: decodes `(deadline, authNonce, authSig)` and calls `VTSOrchestrator.renewSignalRelayed(marketFactory, sender, tokenId, liquiditySignal, deadline, authNonce, authSig)`
+- else: decodes `(deadline, authNonce, authSig, sender)` and requires the batch locker to match `sender` when non-zero or to be `mmState.advancer` when `sender == 0`, then calls `VTSOrchestrator.renewSignalRelayed(..., sender)`
 
 ## Operational checklist
 
 - **Before signing**:
-  - Read `authNonce = VRLSignalManager.submitAuthNonce(sender)`.
+  - Read `authNonce = VRLSignalManager.submitAuthNonce(signer)` (the proof principal address).
   - Choose a short-lived `deadline`.
 - **Before submitting**:
   - Ensure the call reaches `VRLSignalManager` from the configured `submitter`.

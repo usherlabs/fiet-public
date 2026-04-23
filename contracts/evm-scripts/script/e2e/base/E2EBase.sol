@@ -41,6 +41,8 @@ import {CurrencySortHelper} from "../../libraries/CurrencySortHelper.sol";
 abstract contract E2EBase is DeployFullStackBase {
     using StateLibrary for IPoolManager;
 
+    mapping(address marketFactoryAddr => uint256 nextSaltSearchStart) internal s_nextProxyHookSaltSearchStart;
+
     struct CoreDeployment {
         FullStack stack;
     }
@@ -62,6 +64,14 @@ abstract contract E2EBase is DeployFullStackBase {
         int24 tickUpper;
         uint128 liquidity;
         uint256 amountMaxPerAsset;
+    }
+
+    struct CreateMarketArgs {
+        address underlying0;
+        address underlying1;
+        uint24 corePoolFee;
+        bytes32 salt;
+        MarketVTSConfiguration cfg;
     }
 
     function _requireEnvBytes32(string memory key, string memory err) internal view returns (bytes32) {
@@ -96,15 +106,28 @@ abstract contract E2EBase is DeployFullStackBase {
         d.stack = _deployAll();
     }
 
+    /// @dev Deploy full stack and create a standalone market in one call (no intermediate `CoreDeployment`).
+    function _deployAndCreateMarket(address lp, uint24 corePoolFee) internal returns (StandaloneMarket memory m) {
+        return _createMarketFromStack(_deployAll(), lp, corePoolFee);
+    }
+
     /// @dev Create market (deploy underlyings + configure oracle + mine ProxyHook salt + createMarket + resolve LCCs).
     function _createMarket(CoreDeployment memory d, address lp, uint24 corePoolFee)
+        internal
+        returns (StandaloneMarket memory m)
+    {
+        return _createMarketFromStack(d.stack, lp, corePoolFee);
+    }
+
+    /// @dev Same as `_createMarket` but takes an already-deployed `FullStack` (single copy on the deploy+create path).
+    function _createMarketFromStack(FullStack memory stack, address lp, uint24 corePoolFee)
         internal
         returns (StandaloneMarket memory m)
     {
         // Create market via GlobalConfig.proxyCall (MarketFactory is owned by GlobalConfig).
         vm.startBroadcast(_getDeployerPrivateKey());
 
-        m.stack = d.stack;
+        m.stack = stack;
         m.corePoolFee = corePoolFee;
 
         // Deploy two mock underlyings and mint to LP.
@@ -135,36 +158,7 @@ abstract contract E2EBase is DeployFullStackBase {
             );
 
         MarketVTSConfiguration memory cfg = _defaultE2EVTSConfig();
-        // IMPORTANT: ProxyHook is deployed via CREATE2 from `MarketVaultDeployer`.
-        // BaseHook validates the deployed hook address encodes the expected hook flags, so we must mine a salt.
-        address marketVaultDeployer = MarketFactory(m.stack.contracts.marketFactory).marketVaultDeployer();
-        (address expectedProxyHook, bytes32 salt) = HookMiner.find(
-            marketVaultDeployer,
-            HookFlags.PROXY_HOOK_FLAGS,
-            type(ProxyHook).creationCode,
-            abi.encode(config.poolManager, m.stack.contracts.marketFactory)
-        );
-        console.log("Expected ProxyHook:", expectedProxyHook);
-        uint160 initialSqrtPriceX96 = 79228162514264337593543950336; // 1:1
-
-        bytes memory ret = GlobalConfig(m.stack.contracts.globalConfig)
-            .proxyCall(
-                m.stack.contracts.marketFactory,
-                abi.encodeWithSelector(
-                    MarketFactory.createMarket.selector,
-                    m.underlying0,
-                    m.underlying1,
-                    corePoolFee,
-                    int24(60), // tickSpacing
-                    initialSqrtPriceX96,
-                    salt,
-                    cfg
-                )
-            );
-
-        // Decode returned PoolIds (abi-encoded as bytes32).
-        (bytes32 corePoolIdBytes32,) = abi.decode(ret, (bytes32, bytes32));
-        m.marketId = corePoolIdBytes32;
+        m.marketId = _createMarketFromExistingStack(m.stack, m.underlying0, m.underlying1, corePoolFee, cfg);
 
         // Resolve LCCs for the created market.
         ILiquidityHub hub = ILiquidityHub(m.stack.contracts.liquidityHub);
@@ -173,6 +167,116 @@ abstract contract E2EBase is DeployFullStackBase {
         require(m.lcc0 != address(0) && m.lcc1 != address(0), "market: LCCs not created");
 
         vm.stopBroadcast();
+    }
+
+    /// @dev Create an additional market on an already-deployed stack using existing underlying tokens (for
+    ///      multi-market / cross-vault regression scripts that must share the same economic asset pair).
+    /// @param registerOracleTickers When false, skips `OracleHelper.registerTicker` proxy calls (reuse tickers from
+    ///        the first market created on this stack).
+    /// @dev An unnamed `address` argument is retained for API parity with `_createMarketFromStack`; this path does not
+    ///      mint fresh tokens to that address because underlyings already exist on the reused stack.
+    function _createMarketFromStackWithUnderlyings(
+        FullStack memory stack,
+        address,
+        uint24 corePoolFee,
+        address underlying0_,
+        address underlying1_,
+        bool registerOracleTickers
+    ) internal returns (StandaloneMarket memory m) {
+        vm.startBroadcast(_getDeployerPrivateKey());
+
+        m.stack = stack;
+        m.corePoolFee = corePoolFee;
+        (m.underlying0, m.underlying1) = _sort(underlying0_, underlying1_);
+
+        _configureMockOracle(m.stack.contracts.resilientOracle, m.stack.contracts.mainOracle, m.underlying0);
+        _configureMockOracle(m.stack.contracts.resilientOracle, m.stack.contracts.mainOracle, m.underlying1);
+
+        if (registerOracleTickers) {
+            GlobalConfig(m.stack.contracts.globalConfig)
+                .proxyCall(
+                    m.stack.contracts.oracleHelper,
+                    abi.encodeWithSignature("registerTicker(string,address)", "BTC", m.underlying0)
+                );
+            GlobalConfig(m.stack.contracts.globalConfig)
+                .proxyCall(
+                    m.stack.contracts.oracleHelper,
+                    abi.encodeWithSignature("registerTicker(string,address)", "USDT", m.underlying1)
+                );
+        }
+
+        MarketVTSConfiguration memory cfg = _defaultE2EVTSConfig();
+        m.marketId = _createMarketFromExistingStack(m.stack, m.underlying0, m.underlying1, corePoolFee, cfg);
+
+        ILiquidityHub hub = ILiquidityHub(m.stack.contracts.liquidityHub);
+        m.lcc0 = hub.getLCC(m.marketId, m.underlying0);
+        m.lcc1 = hub.getLCC(m.marketId, m.underlying1);
+        require(m.lcc0 != address(0) && m.lcc1 != address(0), "market: LCCs not created (reuse underlyings)");
+
+        vm.stopBroadcast();
+    }
+
+    function _createMarketFromExistingStack(
+        FullStack memory stack,
+        address underlying0,
+        address underlying1,
+        uint24 corePoolFee,
+        MarketVTSConfiguration memory cfg
+    ) internal returns (bytes32 corePoolIdBytes32) {
+        CreateMarketArgs memory args;
+        args.underlying0 = underlying0;
+        args.underlying1 = underlying1;
+        args.corePoolFee = corePoolFee;
+        args.salt = _findProxyHookSalt(stack.contracts.marketFactory);
+        args.cfg = cfg;
+
+        corePoolIdBytes32 = _proxyCreateMarket(
+            stack.contracts.globalConfig,
+            stack.contracts.marketFactory,
+            args
+        );
+    }
+
+    function _findProxyHookSalt(address marketFactoryAddr) internal returns (bytes32 salt) {
+        address deployer = MarketFactory(marketFactoryAddr).marketVaultDeployer();
+        bytes memory creationCodeWithArgs =
+            abi.encodePacked(type(ProxyHook).creationCode, abi.encode(config.poolManager, marketFactoryAddr));
+        uint256 startSalt = s_nextProxyHookSaltSearchStart[marketFactoryAddr];
+        uint160 flags = HookFlags.PROXY_HOOK_FLAGS & HookMiner.FLAG_MASK;
+        uint256 endSalt = startSalt + HookMiner.MAX_LOOP;
+
+        for (uint256 candidateSalt = startSalt; candidateSalt < endSalt; ++candidateSalt) {
+            address expectedProxyHook = HookMiner.computeAddress(deployer, candidateSalt, creationCodeWithArgs);
+            if (uint160(expectedProxyHook) & HookMiner.FLAG_MASK == flags && expectedProxyHook.code.length == 0) {
+                console.log("Expected ProxyHook (extra market):", expectedProxyHook);
+                s_nextProxyHookSaltSearchStart[marketFactoryAddr] = candidateSalt + 1;
+                return bytes32(candidateSalt);
+            }
+        }
+
+        revert("E2EBase: proxy hook salt not found");
+    }
+
+    function _proxyCreateMarket(address globalConfigAddr, address marketFactoryAddr, CreateMarketArgs memory args)
+        internal
+        returns (bytes32 corePoolIdBytes32)
+    {
+        (corePoolIdBytes32,) = abi.decode(
+            GlobalConfig(globalConfigAddr).proxyCall(
+                marketFactoryAddr,
+                abi.encodeWithSelector(
+                    MarketFactory.createMarket.selector,
+                    args.underlying0,
+                    args.underlying1,
+                    args.corePoolFee,
+                    int24(60),
+                    uint160(79228162514264337593543950336), // 1:1
+                    args.salt,
+                    args.cfg
+                )
+            ),
+            (bytes32, bytes32)
+        );
     }
 
     function _defaultE2EVTSConfig() internal pure returns (MarketVTSConfiguration memory cfg) {
@@ -193,7 +297,6 @@ abstract contract E2EBase is DeployFullStackBase {
         cfg = MarketVTSConfiguration({
             token0: token0,
             token1: token1,
-            coverageFeeShare: 5000,
             minResidualUnits: 1,
             unbackedCommitmentGraceBypassBps: 500
         });
@@ -256,6 +359,11 @@ abstract contract E2EBase is DeployFullStackBase {
             IPoolManager poolManager = IPoolManager(config.poolManager);
             IPermit2 permit2 = IPermit2(config.permit2);
             PoolKey memory key = _corePoolKey(m);
+
+            // Reused stacks mint mock underlyings to the MM LP during market creation, not to the DirectLP buffer seeder.
+            // Provision the seeder locally before wrapping so buffered matrix cells can add full-range core liquidity.
+            Token(m.underlying0).mint(lp, wrapAmountPerAsset);
+            Token(m.underlying1).mint(lp, wrapAmountPerAsset);
 
             // Wrap underlying -> LCC so LP has pool currencies.
             _wrapAndMintLccPair(hub, m, lp, wrapAmountPerAsset);
@@ -384,6 +492,22 @@ abstract contract E2EBase is DeployFullStackBase {
         permit2.approve(tokenIn, address(router), type(uint160).max, uint48(block.timestamp + 1 days));
     }
 
+    /// @dev Approves both direct ERC20 allowance and Permit2 allowance for a token/spender pair.
+    function _approveTokenForSpenderAndPermit2(address token, address spender) internal {
+        IPermit2 permit2 = IPermit2(config.permit2);
+        IERC20(token).approve(spender, type(uint256).max);
+        IERC20(token).approve(address(permit2), type(uint256).max);
+        permit2.approve(token, spender, type(uint160).max, uint48(block.timestamp + 1 days));
+    }
+
+    /// @dev Mints mock settlement inventory and grants both direct + Permit2 allowances to the spender.
+    function _mintAndApproveForSpenderAndPermit2(address token, address recipient, address spender, uint256 amount)
+        internal
+    {
+        Token(token).mint(recipient, amount);
+        _approveTokenForSpenderAndPermit2(token, spender);
+    }
+
     function _executeExactOutputSwap(
         uint256 traderPk,
         PoolKey memory key,
@@ -485,4 +609,3 @@ abstract contract E2EBase is DeployFullStackBase {
         );
     }
 }
-

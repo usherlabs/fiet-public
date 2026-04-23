@@ -254,28 +254,36 @@ forge test --match-contract MarketFactory
 forge test -vvv
 ```
 
-### Fuzzing (Echidna)
+### Fuzzing (Medusa)
 
-Echidna harnesses live in `test/fuzz/`.
+Medusa is the supported property-fuzzing path for the repo-owned `FuzzEntry` composition root under
+`contracts/evm/test/fuzz/`. Deferred linked-library harnesses remain in the tree as migration backlog only; they are
+not part of the default Medusa workflow.
 
 ```bash
-# Run all Echidna harnesses (recommended)
+# Run the supported Medusa-backed entry contract
 just fuzz
 just fuzz-deep
+just fuzz-invariants
 
-# Run a single harness
-just echidna-lcc-backing
-just echidna-lcc-transfer
-just echidna-commit-01
-just echidna-commit-02
+# Run a short artifact-preserving smoke campaign
+just medusa-coverage-smoke
+
+# Run the current migrated module directly
+just medusa-mmq-01
 ```
 
 Notes:
 
-- The runner uses Docker + Crytic/Echidna. If you have a local `echidna` binary installed, `scripts/echidna.sh` will prefer it.
-- We use a dedicated Foundry profile `echidna` (see `foundry.toml`) and output to `out-echidna/` (ignored by git).
-- `echidna:sig-backing-01` runs with `--disable-slither` to avoid instability/OOM in the current toolbox environment.
-- The `Justfile` in `contracts/evm/` provides a stable entrypoint and consistent argument passthrough.
+- Install `medusa` plus `crytic-compile`, or bootstrap with `scripts/codex-setup.sh`.
+- The runner is `scripts/medusa.sh`; it uses `[profile.medusa]` in `foundry.toml` and writes build output to
+  `out-medusa/`.
+- `medusa.json` targets `test/fuzz/FuzzEntry.sol` directly; the supported path no longer relies on linked-library
+  CREATE2 preparation.
+- Solidity property functions use the `fuzz_*` prefix, and Medusa is the only supported runner for this suite.
+- Set `MEDUSA_CORPUS_DIR=artifacts/medusa-local` to keep per-harness corpus / coverage-guided artifacts in the repo
+  workspace.
+- See `test/fuzz/README.md` for the migration checklist and `INVARIANTS.md` for canonical invariant IDs.
 
 ### Mutation Testing (Gambit)
 
@@ -348,6 +356,12 @@ Use the **provided wrapper** to generate a summary plus `lcov` output:
 ```
 
 This writes `./lcov.info` and prints a coverage summary to stdout.
+
+For **branch coverage vs mutation testing** (and when to trust “effective 100%” scores), see [`MUTATION_COVERAGE.md`](./MUTATION_COVERAGE.md). For a **faster subset** of tests aimed at low-coverage hotspots during development, run:
+
+```bash
+./scripts/coverage-hotspots.sh
+```
 
 ## Troubleshooting
 

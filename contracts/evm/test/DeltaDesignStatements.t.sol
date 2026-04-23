@@ -11,6 +11,7 @@ import {LiquidityCommitmentCertificate} from "../src/LCC.sol";
 import {MarketVTSConfiguration} from "../src/types/VTS.sol";
 import {IMarketFactory} from "../src/interfaces/IMarketFactory.sol";
 import {IMarketVault} from "../src/interfaces/IMarketVault.sol";
+import {IMarketVaultDryBalanceDelta} from "./_helpers/IMarketVaultDryBalanceDelta.sol";
 import {ILiquidityHub} from "../src/interfaces/ILiquidityHub.sol";
 import {IOracleHelper} from "../src/interfaces/IOracleHelper.sol";
 import {Errors} from "../src/libraries/Errors.sol";
@@ -54,6 +55,15 @@ contract DeltaDesignStatementsTest is MarketTestBase, MarketMakerTestBase {
                 abi.encode(uint256(1e18))
             );
         }
+
+        vm.mockCall(
+            marketFactory,
+            abi.encodeWithSelector(IMarketFactory.bounds.selector, liquiditySignal.mmState.advancer),
+            abi.encode(true)
+        );
+
+        _wireTestQueueCustodianFor(address(mmPositionManager), liquiditySignal.mmState.advancer);
+        _wireAllUtilityTestQueueCustodians(address(mmPositionManager));
     }
 
     function test_delta02_router_residue_is_fcfs_dust() public {
@@ -89,10 +99,9 @@ contract DeltaDesignStatementsTest is MarketTestBase, MarketMakerTestBase {
             address(lcc1)
         );
 
-        positionManager.approve(recipient, tokenId);
         vm.mockCall(
             address(mv),
-            abi.encodeWithSelector(IMarketVault.dryModifyLiquidities.selector),
+            abi.encodeWithSelector(IMarketVaultDryBalanceDelta.dryModifyLiquidities.selector),
             abi.encode(toBalanceDelta(0, 0))
         );
         vm.mockCall(
@@ -102,11 +111,14 @@ contract DeltaDesignStatementsTest is MarketTestBase, MarketMakerTestBase {
         MMA.PreparedAction[] memory actions = new MMA.PreparedAction[](2);
         actions[0] = MMA.prepareDecrease(corePoolKey, tokenId, 0, uint256(liquidityParams.liquidityDelta));
         actions[1] = MMA.prepareSettle(corePoolKey, tokenId, 0, int128(uint128(req0)), int128(uint128(req1)), false);
-        vm.prank(recipient);
+        // Batch must execute as the MM locker (`advancer`); NFT is minted to that EOA by `_setupCommittedPosition`.
+        vm.startPrank(recipient);
         MMA.executeWithUnlock(positionManager, actions, block.timestamp + 3600);
+        vm.stopPrank();
 
-        uint256 queued0 = ILiquidityHub(liquidityHub).settleQueue(address(lcc0), recipient);
-        uint256 queued1 = ILiquidityHub(liquidityHub).settleQueue(address(lcc1), recipient);
+        address queueOwner = positionManager.custodianFor(positionManager.ownerOf(tokenId));
+        uint256 queued0 = ILiquidityHub(liquidityHub).settleQueue(address(lcc0), queueOwner);
+        uint256 queued1 = ILiquidityHub(liquidityHub).settleQueue(address(lcc1), queueOwner);
         assertGt(queued0 + queued1, 0, "decrease path should materialise queued cancel output");
 
         // No deferred entitlement persists: leaving a synced credit without TAKE must still fail at batch end.

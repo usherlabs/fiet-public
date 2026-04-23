@@ -18,6 +18,11 @@ abstract contract FietNativeWrapper is UniNativeWrapper {
     /// @dev Implemented by inheritors with canonical LiquidityHub binding.
     function _liquidityHub() internal view virtual returns (ILiquidityHub);
 
+    /// @dev Bound `MMQueueCustodian` sending native after Hub `unwrap` / release. Inheritors (e.g. `MMPositionManager`) registry-match `beneficiary` to `custodianFor`.
+    function _isCustodian(address) internal view virtual returns (bool) {
+        return false;
+    }
+
     /// @notice Validates that the ETH sender is either WETH9, poolManager, canonical LiquidityHub, or a canonical native vault
     /// @dev Uses MarketFactory registry data to avoid interface-probing based sender spoofing.
     function _assertValidEthSender() internal view {
@@ -28,6 +33,11 @@ abstract contract FietNativeWrapper is UniNativeWrapper {
 
         // Allow canonical Hub-native payouts (e.g. native LCC unwrap-to-self in MMPM).
         if (msg.sender == address(_liquidityHub())) {
+            return;
+        }
+
+        // Native-backed LCC unwrap: bound `MMQueueCustodian` forwards immediate ETH from Hub to this manager for delta credit.
+        if (_isCustodian(msg.sender)) {
             return;
         }
 

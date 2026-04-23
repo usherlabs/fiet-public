@@ -6,6 +6,7 @@ import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
 import {CurrencySettler} from "@uniswap/v4-core/test/utils/CurrencySettler.sol";
+import {CurrencyTransfer} from "./libraries/CurrencyTransfer.sol";
 import {Hooks} from "@uniswap/v4-core/src/libraries/Hooks.sol";
 import {BeforeSwapDelta, toBeforeSwapDelta} from "@uniswap/v4-core/src/types/BeforeSwapDelta.sol";
 import {BaseHook} from "v4-periphery/src/utils/BaseHook.sol";
@@ -22,6 +23,7 @@ import {MarketHandlerLib} from "./libraries/MarketHandlerLib.sol";
 
 contract ProxyHook is BaseHook, VaultCoreActionHandler {
     using CurrencySettler for Currency;
+    using CurrencyTransfer for Currency;
     address internal constant RECIPIENT_LOCKER = address(1);
     address internal constant RECIPIENT_ROUTER = address(2);
 
@@ -184,7 +186,12 @@ contract ProxyHook is BaseHook, VaultCoreActionHandler {
         if (sqrtPriceLimitX96 == minValid) return maxValid;
         if (sqrtPriceLimitX96 == maxValid) return minValid;
 
-        uint256 inverted = (uint256(1) << 192) / sqrtPriceLimitX96;
+        // Direction-aware reciprocal: v4 uses min-price bound for zeroForOne and max-price bound for oneForZero.
+        // Ceil the reciprocal for the min bound; floor for the max bound (conservative vs user intent).
+        uint256 q192 = uint256(1) << 192;
+        uint256 inverted = coreZeroForOne
+            ? (q192 + uint256(sqrtPriceLimitX96) - 1) / uint256(sqrtPriceLimitX96)
+            : q192 / uint256(sqrtPriceLimitX96);
         if (inverted < minValid) return minValid;
         if (inverted > maxValid) return maxValid;
         return SafeCastLib.toUint160(inverted);
@@ -198,24 +205,26 @@ contract ProxyHook is BaseHook, VaultCoreActionHandler {
         uint256 amountOut,
         address excessRecipient
     ) private returns (uint256 amountToSettle) {
-        // Take underlying tokens from PoolManager as Claim Tokens
-        key.currency0.take(poolManager, address(this), amountIn, true);
+        address canonicalVault = address(_canonicalVault());
+        // Swap execution still creates hook-owned active deltas in beforeSwap. Keep the irreducible take/settle calls
+        // local to the hook, but immediately mirror durable reserve effects into CanonicalVault.
+        key.currency0.take(poolManager, canonicalVault, amountIn, true);
+        _increaseLiquidityReserve(key.currency0, amountIn);
 
-        // Mint and settle LCC tokens for input
-        // Note: Proxy-routed issuance still does not mobilise reserve because ProxyHook issues pure market-derived LCC via LiquidityHub.issue().
-        liquidityHub.issue(address(ctx.lccTokenForCurrency0), address(this), amountIn);
+        _liquidityHub().issue(address(ctx.lccTokenForCurrency0), address(this), amountIn);
         ctx.lccCurrencyForCurrency0.settle(poolManager, address(this), amountIn, false);
 
-        // Take LCC tokens for output
         ctx.lccCurrencyForCurrency1.take(poolManager, address(this), amountOut, false);
 
-        // Cancel LCC with deficit handling
-        amountToSettle = _cancelLCCWithDeficit(key.toId(), ctx.lccTokenForCurrency1, amountOut, excessRecipient);
+        amountToSettle = _cancelProxySwapLccWithDeficit(
+            key.toId(), key.currency1, ctx.lccTokenForCurrency1, amountOut, excessRecipient
+        );
 
-        // Settle output token
-        key.currency1.settle(poolManager, address(this), amountToSettle, true);
+        if (amountToSettle > 0) {
+            key.currency1.settle(poolManager, canonicalVault, amountToSettle, true);
+            _decreaseLiquidityReserve(key.currency1, amountToSettle);
+        }
 
-        // Settle obligations
         _settleObligationsForLCC(ctx.lccTokenForCurrency0);
     }
 
@@ -227,24 +236,61 @@ contract ProxyHook is BaseHook, VaultCoreActionHandler {
         uint256 amountOut,
         address excessRecipient
     ) private returns (uint256 amountToSettle) {
-        // Take underlying tokens from PoolManager
-        key.currency1.take(poolManager, address(this), amountIn, true);
+        address canonicalVault = address(_canonicalVault());
+        key.currency1.take(poolManager, canonicalVault, amountIn, true);
+        _increaseLiquidityReserve(key.currency1, amountIn);
 
-        // Mint and settle LCC tokens for input
-        liquidityHub.issue(address(ctx.lccTokenForCurrency1), address(this), amountIn);
+        _liquidityHub().issue(address(ctx.lccTokenForCurrency1), address(this), amountIn);
         ctx.lccCurrencyForCurrency1.settle(poolManager, address(this), amountIn, false);
 
-        // Take LCC tokens for output
         ctx.lccCurrencyForCurrency0.take(poolManager, address(this), amountOut, false);
 
-        // Cancel LCC with deficit handling
-        amountToSettle = _cancelLCCWithDeficit(key.toId(), ctx.lccTokenForCurrency0, amountOut, excessRecipient);
+        amountToSettle = _cancelProxySwapLccWithDeficit(
+            key.toId(), key.currency0, ctx.lccTokenForCurrency0, amountOut, excessRecipient
+        );
 
-        // Settle output token
-        key.currency0.settle(poolManager, address(this), amountToSettle, true);
+        if (amountToSettle > 0) {
+            key.currency0.settle(poolManager, canonicalVault, amountToSettle, true);
+            _decreaseLiquidityReserve(key.currency0, amountToSettle);
+        }
 
-        // Settle obligations
         _settleObligationsForLCC(ctx.lccTokenForCurrency1);
+    }
+
+    /// @dev Cancels output LCC held on this hook via issuer `LiquidityHub.cancel` (market-only burn at Hub). This hook
+    ///      is `BOUND_EXEMPT`: it does not maintain wrapped/market bucket maps; all ERC20 balance here is treated as
+    ///      market-derived for `balancesOf` and cancel semantics. Deficit slices are transferred out and queued
+    ///      without co-mingling on the hook. Direct Domain A provenance is enforced only on bucket-tracked paths
+    ///      (e.g. DEX ingress with wrapped slice per **LCC-03**).
+    function _cancelProxySwapLccWithDeficit(
+        PoolId poolId,
+        Currency outputUnderlying,
+        ILCC lccToken,
+        uint256 amount,
+        address deficitRecipient
+    ) private returns (uint256 amountToCancel) {
+        uint256 available = inMarketBalanceOf(outputUnderlying);
+        uint256 deficitAmount;
+        if (amount > available) {
+            amountToCancel = available;
+            deficitAmount = amount - available;
+        } else {
+            amountToCancel = amount;
+        }
+
+        if (deficitAmount > 0 && deficitRecipient == address(0)) {
+            revert Errors.InvariantViolated("ProxyHook: deficit requires recipient");
+        }
+
+        if (amountToCancel > 0) {
+            _liquidityHub().cancel(address(lccToken), address(this), amountToCancel);
+        }
+
+        if (deficitAmount > 0) {
+            Currency.wrap(address(lccToken)).transfer(deficitRecipient, deficitAmount);
+            _liquidityHub().queueForTransferRecipient(address(lccToken), deficitRecipient, deficitAmount);
+            emit SwapDeficit(poolId, address(lccToken), deficitRecipient, deficitAmount);
+        }
     }
 
     // Proxy swaps route through the core pool and return a delta that cancels proxy `amountToSwap` to zero.
@@ -407,10 +453,12 @@ contract ProxyHook is BaseHook, VaultCoreActionHandler {
         pure
         returns (uint256 expectedInput)
     {
+        // Use `safeInt128ToUint256` on the raw lane: it returns absolute magnitude. Avoid unary `-` on `int128`
+        // before conversion (`type(int128).min` would overflow).
         if (zeroForOne) {
-            expectedInput = LiquidityUtils.safeInt128ToUint256(-swapDelta.amount0());
+            expectedInput = LiquidityUtils.safeInt128ToUint256(swapDelta.amount0());
         } else {
-            expectedInput = LiquidityUtils.safeInt128ToUint256(-swapDelta.amount1());
+            expectedInput = LiquidityUtils.safeInt128ToUint256(swapDelta.amount1());
         }
     }
 

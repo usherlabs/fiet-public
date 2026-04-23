@@ -26,6 +26,9 @@ library MarketMaker {
         string nonce;
         /// The advancer (requestor for VRL state proof) of the market maker. Set to ensure state advancer is not spoofed on Market Chain verification.
         address advancer;
+        /// @dev Absolute unix timestamp after which this signed MM leaf must not be accepted on-chain (enforced in
+        ///      `VRLSignalManager` against `block.timestamp`). Included in the Merkle leaf via `abi.encode(state)`.
+        uint256 expiryAt;
     }
 
     /**
@@ -67,6 +70,7 @@ library MarketMaker {
         dest.prover = src.prover;
         dest.nonce = src.nonce;
         dest.advancer = src.advancer;
+        dest.expiryAt = src.expiryAt;
 
         // Clear existing reserves and copy new ones element by element
         delete dest.reserves;

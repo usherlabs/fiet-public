@@ -8,6 +8,7 @@ import {VTSOrchestrator} from "../src/VTSOrchestrator.sol";
 import {LiquiditySignal} from "../src/types/Commit.sol";
 import {IOracleHelper} from "../src/interfaces/IOracleHelper.sol";
 import {IVRLSettlementObserver} from "../src/interfaces/IVRLSettlementObserver.sol";
+import {PositionId} from "../src/types/Position.sol";
 import {BalanceDelta, toBalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
@@ -129,17 +130,16 @@ contract ReentrantSignalManager {
             (bool ok,) = _reenter(k, liquiditySignal);
             if (ok) revert Reentered();
         }
-        return (true, 3600);
+        LiquiditySignal memory sig = abi.decode(liquiditySignal, (LiquiditySignal));
+        return (true, sig.mmState.expiryAt - block.timestamp);
     }
 
     function _reenter(uint8 k, bytes memory liquiditySignal) internal returns (bool ok, bytes memory data) {
         if (k == 1) {
-            LiquiditySignal memory sig = abi.decode(liquiditySignal, (LiquiditySignal));
-            return target.call(
-                abi.encodeWithSelector(
-                    VTSOrchestrator.commitSignal.selector, marketFactory, sig.mmState.owner, liquiditySignal
-                )
-            );
+            return
+                target.call(
+                    abi.encodeWithSelector(VTSOrchestrator.commitSignal.selector, marketFactory, liquiditySignal)
+                );
         }
         if (k == 2) {
             return target.call(
@@ -159,7 +159,13 @@ contract ReentrantSignalManager {
             BalanceDelta amountDelta = toBalanceDelta(0, 0);
             return target.call(
                 abi.encodeWithSelector(
-                    VTSOrchestrator.onMMSettle.selector, marketFactory, commitId, positionIndex, amountDelta, false
+                    VTSOrchestrator.onMMSettle.selector,
+                    marketFactory,
+                    commitId,
+                    positionIndex,
+                    amountDelta,
+                    false,
+                    false
                 )
             );
         }
@@ -168,15 +174,8 @@ contract ReentrantSignalManager {
         }
         if (k == 5) {
             // Re-enter renewSignal itself.
-            LiquiditySignal memory sig = abi.decode(liquiditySignal, (LiquiditySignal));
             return target.call(
-                abi.encodeWithSelector(
-                    bytes4(keccak256("renewSignal(address,address,uint256,bytes)")),
-                    marketFactory,
-                    sig.mmState.advancer,
-                    commitId,
-                    liquiditySignal
-                )
+                abi.encodeWithSelector(VTSOrchestrator.renewSignal.selector, marketFactory, commitId, liquiditySignal)
             );
         }
         if (k == 6) {
@@ -193,10 +192,6 @@ contract ReentrantSignalManager {
         return address(0);
     }
 
-    function signalExpiryInSeconds() external pure returns (uint256) {
-        return 3600;
-    }
-
     function mmNonce(address) external pure returns (uint256) {
         return 0;
     }
@@ -210,7 +205,20 @@ contract ReentrantSignalManager {
     }
 
     function setVerifier(address) external {}
-    function setSignalExpiryInSeconds(uint256) external {}
+
+    function verifyLiquiditySignalRelayed(
+        address,
+        uint256,
+        bytes memory liquiditySignal,
+        uint256,
+        uint256,
+        bytes memory,
+        address,
+        bool
+    ) external view returns (bool, uint256) {
+        LiquiditySignal memory sig = abi.decode(liquiditySignal, (LiquiditySignal));
+        return (true, sig.mmState.expiryAt - block.timestamp);
+    }
 }
 
 contract VTSOrchestratorReentrancyTest is VTSOrchestratorFixture {
@@ -232,9 +240,7 @@ contract VTSOrchestratorReentrancyTest is VTSOrchestratorFixture {
         // Must run inside unlock context for commitSignal (onlyIfPoolManagerUnlocked).
         bytes memory out = unlockCaller.run(
             address(vtsOrchestrator),
-            abi.encodeWithSelector(
-                VTSOrchestrator.commitSignal.selector, marketFactory, liquiditySignal.mmState.owner, signalBytes
-            )
+            abi.encodeWithSelector(VTSOrchestrator.commitSignal.selector, marketFactory, signalBytes)
         );
         uint256 commitId = abi.decode(out, (uint256));
         assertEq(commitId, 1, "outer commitSignal should still succeed and return first commitId");
@@ -249,9 +255,7 @@ contract VTSOrchestratorReentrancyTest is VTSOrchestratorFixture {
         uint256 commitId = abi.decode(
             unlockCaller.run(
                 address(vtsOrchestrator),
-                abi.encodeWithSelector(
-                    VTSOrchestrator.commitSignal.selector, marketFactory, liquiditySignal.mmState.owner, signalBytes
-                )
+                abi.encodeWithSelector(VTSOrchestrator.commitSignal.selector, marketFactory, signalBytes)
             ),
             (uint256)
         );
@@ -264,13 +268,7 @@ contract VTSOrchestratorReentrancyTest is VTSOrchestratorFixture {
         // Renew should succeed under correct nonReentrant behaviour.
         unlockCaller.run(
             address(vtsOrchestrator),
-            abi.encodeWithSelector(
-                bytes4(keccak256("renewSignal(address,address,uint256,bytes)")),
-                marketFactory,
-                liquiditySignal.mmState.advancer,
-                commitId,
-                signalBytes
-            )
+            abi.encodeWithSelector(VTSOrchestrator.renewSignal.selector, marketFactory, commitId, signalBytes)
         );
     }
 
@@ -297,12 +295,19 @@ contract VTSOrchestratorReentrancyTest is VTSOrchestratorFixture {
         _etchReentrantSignalManager();
 
         (uint256 commitId,,,) = _createCommittedPosition();
+        PositionId extendPid = vtsOrchestrator.getPositionId(commitId, 0);
 
         // Settlement proof verification is view; just force it to succeed.
         vm.mockCall(
             address(settlementObserver),
             abi.encodeWithSelector(
-                IVRLSettlementObserver.verifySettlementProof.selector, corePoolKey, uint8(0), uint32(0), bytes(""), true
+                IVRLSettlementObserver.verifySettlementProof.selector,
+                corePoolKey,
+                uint8(0),
+                uint32(0),
+                extendPid,
+                bytes(""),
+                true
             ),
             abi.encode(true)
         );
@@ -312,13 +317,7 @@ contract VTSOrchestratorReentrancyTest is VTSOrchestratorFixture {
         bytes memory signalBytes = abi.encode(liquiditySignal);
         unlockCaller.run(
             address(vtsOrchestrator),
-            abi.encodeWithSelector(
-                bytes4(keccak256("renewSignal(address,address,uint256,bytes)")),
-                marketFactory,
-                liquiditySignal.mmState.advancer,
-                commitId,
-                signalBytes
-            )
+            abi.encodeWithSelector(VTSOrchestrator.renewSignal.selector, marketFactory, commitId, signalBytes)
         );
     }
 
@@ -334,13 +333,7 @@ contract VTSOrchestratorReentrancyTest is VTSOrchestratorFixture {
         bytes memory signalBytes = abi.encode(liquiditySignal);
         unlockCaller.run(
             address(vtsOrchestrator),
-            abi.encodeWithSelector(
-                bytes4(keccak256("renewSignal(address,address,uint256,bytes)")),
-                marketFactory,
-                liquiditySignal.mmState.advancer,
-                commitId,
-                signalBytes
-            )
+            abi.encodeWithSelector(VTSOrchestrator.renewSignal.selector, marketFactory, commitId, signalBytes)
         );
     }
 
@@ -370,13 +363,7 @@ contract VTSOrchestratorReentrancyTest is VTSOrchestratorFixture {
 
         unlockCaller.run(
             address(vtsOrchestrator),
-            abi.encodeWithSelector(
-                bytes4(keccak256("renewSignal(address,address,uint256,bytes)")),
-                marketFactory,
-                liquiditySignal.mmState.advancer,
-                commitId,
-                signalBytes
-            )
+            abi.encodeWithSelector(VTSOrchestrator.renewSignal.selector, marketFactory, commitId, signalBytes)
         );
     }
 }

@@ -6,7 +6,7 @@ import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
 import {BalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
 import {PositionId, Position} from "../types/Position.sol";
-import {MarketVTSConfiguration} from "../types/VTS.sol";
+import {MarketVTSConfiguration, VaultSettlementIntent} from "../types/VTS.sol";
 import {MarketMaker} from "../libraries/MarketMaker.sol";
 import {ModifyLiquidityParams, SwapParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
 import {RFSCheckpoint} from "../types/Checkpoint.sol";
@@ -26,6 +26,8 @@ interface IVTSOrchestrator is IPausableVTS, IVTSCurrencyDelta, IVTSAdmin {
         int128 settlementDelta1,
         uint256 settledToken0,
         uint256 settledToken1,
+        uint256 settledOverflowToken0,
+        uint256 settledOverflowToken1,
         bool isSeizing,
         bool rfsOpen
     );
@@ -56,6 +58,7 @@ interface IVTSOrchestrator is IPausableVTS, IVTSCurrencyDelta, IVTSAdmin {
     /// @return expiresAt The expiration timestamp
     /// @return positionCount The count of positions in the commit
     /// @return activePositionCount The count of active positions in the commit
+    /// @return inactiveRemnantCount Inactive positions under this commit that still hold non-zero live `pa.settled` or `pa.settledOverflow` (blocks decommit)
     function getCommit(uint256 commitId)
         external
         view
@@ -63,8 +66,13 @@ interface IVTSOrchestrator is IPausableVTS, IVTSCurrencyDelta, IVTSAdmin {
             MarketMaker.State memory mmState,
             uint256 expiresAt,
             uint256 positionCount,
-            uint256 activePositionCount
+            uint256 activePositionCount,
+            uint256 inactiveRemnantCount
         );
+
+    /// @notice The address bound at commit creation as the sole CoreHook MM `owner` (router) for this commit.
+    /// @dev `address(0)` denotes a legacy commit created before per-commit relayer binding.
+    function getCommitAuthorisedRelayer(uint256 commitId) external view returns (address);
 
     /// @notice Get pool information by PoolId
     /// @dev Note: Cannot return Pool directly due to mapping in struct
@@ -92,10 +100,11 @@ interface IVTSOrchestrator is IPausableVTS, IVTSCurrencyDelta, IVTSAdmin {
     /// @return True if the position is valid under the requested constraints
     function isPositionValid(PositionId id, bool requireActive) external view returns (bool);
 
-    /// @notice Checks if a commit exists and optionally checks if signal hasn't expired
+    /// @notice Checks if a commit exists and optionally enforces a live VRL-backed signal
     /// @param commitId The commit identifier
-    /// @param requireLiveSignal If true, checks expiry. If false, skips expiry check.
-    /// @return isValid True if the signal is valid (commit exists and, if requireLiveSignal is true, hasn't expired)
+    /// @param requireLiveSignal If true, requires non-empty reserves, not expired, and a non-zero owner. If false,
+    ///        only requires an initialised commit with a non-zero owner (empty reserves allowed for recovery flows).
+    /// @return isValid True if the commit satisfies the requested constraints
     function isSignalValid(uint256 commitId, bool requireLiveSignal) external view returns (bool isValid);
 
     // VTS Logic & Settlement
@@ -104,29 +113,13 @@ interface IVTSOrchestrator is IPausableVTS, IVTSCurrencyDelta, IVTSAdmin {
     /// @param positionId The position identifier
     function settlePositionGrowths(PositionId positionId) external;
 
-    /// @notice Get the protocol fee accrued (slashed fees) for a pool
+    /// @notice Pool-wide total settled aggregate per token lane
     /// @param poolId The pool identifier
-    /// @return fee0 The accrued fee for token0
-    /// @return fee1 The accrued fee for token1
-    function getProtocolFeeAccrued(PoolId poolId) external view returns (uint256 fee0, uint256 fee1);
+    function getPoolTotalSettled(PoolId poolId) external view returns (uint256 total0, uint256 total1);
 
-    /// @notice Get the materialised slashed pot (claimables available for bonus payouts) for a pool
+    /// @notice Pool-wide outstanding swap-incurred deficit principal per token
     /// @param poolId The pool identifier
-    /// @return pot0 Slashed pot balance for token0
-    /// @return pot1 Slashed pot balance for token1
-    function getSlashedPot(PoolId poolId) external view returns (uint256 pot0, uint256 pot1);
-
-    /// @notice Get fee-sharing accounting for a position
-    /// @dev `pendingFeeAdj` is signed: +slash (funds pot), -bonus (drains pot when materialised)
-    /// @param positionId The position identifier
-    /// @return feesShared0 Total fees attributed to this position for token0
-    /// @return feesShared1 Total fees attributed to this position for token1
-    /// @return pendingFeeAdj0 Pending fee adjustment for token0 (+slash, -bonus)
-    /// @return pendingFeeAdj1 Pending fee adjustment for token1 (+slash, -bonus)
-    function getPositionFeeAccounting(PositionId positionId)
-        external
-        view
-        returns (uint256 feesShared0, uint256 feesShared1, int256 pendingFeeAdj0, int256 pendingFeeAdj1);
+    function getPoolTotalDeficitPrincipal(PoolId poolId) external view returns (uint256 principal0, uint256 principal1);
 
     /// @notice Initialize a market's configuration in the VTS state
     /// @dev Called by MarketFactory contract during market creation
@@ -163,17 +156,17 @@ interface IVTSOrchestrator is IPausableVTS, IVTSCurrencyDelta, IVTSAdmin {
     /// @return The position identifier
     function getPositionId(uint256 commitId, uint256 positionIndex) external view returns (PositionId);
 
-    /// @notice Get the settled amounts for a position
+    /// @notice Effective settled per lane: live `settled` plus `settledOverflow` (canonical economic backing)
     /// @param positionId The position identifier
-    /// @return amount0 Settled amount for token0
-    /// @return amount1 Settled amount for token1
+    /// @return amount0 Effective settled for token0
+    /// @return amount1 Effective settled for token1
     function getPositionSettledAmounts(PositionId positionId) external view returns (uint256 amount0, uint256 amount1);
 
-    /// @notice Increment coverage amounts for a pool
-    /// @param poolId The pool identifier
-    /// @param amount0 Amount to increment for token0
-    /// @param amount1 Amount to increment for token1
-    function incrementCoverage(PoolId poolId, uint256 amount0, uint256 amount1) external;
+    /// @notice Deferred settled amounts above `commitmentMax` (economic backing still tracked; see `_settled` / RFS helpers)
+    function getPositionSettledOverflowAmounts(PositionId positionId)
+        external
+        view
+        returns (uint256 overflow0, uint256 overflow1);
 
     /// @notice Get the maximum commitment amounts for a position
     /// @param positionId The position identifier
@@ -193,7 +186,6 @@ interface IVTSOrchestrator is IPausableVTS, IVTSCurrencyDelta, IVTSAdmin {
     /// @param hookData The hook data containing PositionModificationHookData for MM operations
     /// @return pos The position struct
     /// @return id The position id
-    /// @return feeAdj The fee adjustment delta
     /// @return isMMPosition True if this is an MM position operation with valid signal
     function processPosition(
         address owner,
@@ -202,7 +194,7 @@ interface IVTSOrchestrator is IPausableVTS, IVTSCurrencyDelta, IVTSAdmin {
         BalanceDelta callerDelta,
         BalanceDelta feesAccrued,
         bytes calldata hookData
-    ) external returns (Position memory pos, PositionId id, BalanceDelta feeAdj, bool isMMPosition);
+    ) external returns (Position memory pos, PositionId id, bool isMMPosition);
 
     /// @notice Called by CoreHook after a swap to process swap-related accounting
     /// @param key The pool key
@@ -210,31 +202,37 @@ interface IVTSOrchestrator is IPausableVTS, IVTSCurrencyDelta, IVTSAdmin {
     /// @param delta The balance delta from the swap
     /// @param sqrtPBefore The sqrt price before the swap
     /// @param liqBefore The liquidity before the swap
+    /// @param tickBefore Authoritative `slot0.tick` before the swap (must not be derived from `sqrtPBefore` alone)
     function afterCoreSwap(
         PoolKey calldata key,
         SwapParams calldata params,
         BalanceDelta delta,
         uint160 sqrtPBefore,
-        uint128 liqBefore
+        uint128 liqBefore,
+        int24 tickBefore
     ) external;
 
     // MMPositionManager Functions
     /// @notice Commit a liquidity signal to the VTS state
-    /// @param sender The effective caller (locker) for commit authorisation
+    /// @param factory The market factory namespace for caller-bound validation
     /// @param liquiditySignal The liquidity signal to commit
     /// @return commitId The commit identifier for the committed signal
-    function commitSignal(IMarketFactory factory, address sender, bytes memory liquiditySignal)
-        external
-        returns (uint256 commitId);
+    function commitSignal(IMarketFactory factory, bytes memory liquiditySignal) external returns (uint256 commitId);
     /// @notice Commit a liquidity signal using sender-signed EIP-712 relayer authorisation
     /// @param factory The market factory namespace for caller-bound validation (mirrors non-relayed commit)
+    /// @param liquiditySignal The ABI-encoded liquidity signal
+    /// @param deadline Relay authorisation deadline
+    /// @param authNonce Replay guard nonce for the proof principal (`mmState.owner`)
+    /// @param authSig EIP-712 signature over relay authorisation
+    /// @param sender EIP-712 `RelayAuth.sender`: MM batch locker / NFT recipient for fresh relay (`address(0)`
+    ///        means `mmState.owner`); otherwise must equal the `MMPositionManager` batch locker.
     function commitSignalRelayed(
         IMarketFactory factory,
-        address sender,
         bytes memory liquiditySignal,
         uint256 deadline,
         uint256 authNonce,
-        bytes memory authSig
+        bytes memory authSig,
+        address sender
     ) external returns (uint256 commitId);
     /// @notice Extend the grace period for a position
     /// @param poolKey The pool key for the position
@@ -243,6 +241,8 @@ interface IVTSOrchestrator is IPausableVTS, IVTSCurrencyDelta, IVTSAdmin {
     /// @param settlementTokenIndex The index of the settlement token
     /// @param verifierIndex The verifier index
     /// @param settlementProof The settlement proof
+    /// @dev Does not require a live VRL signal; proof extension may proceed after expiry or empty-reserve renewal when the
+    ///      target lane remains open (see **SEIZE-02**).
     function extendGracePeriod(
         IMarketFactory factory,
         PoolKey memory poolKey,
@@ -254,45 +254,59 @@ interface IVTSOrchestrator is IPausableVTS, IVTSCurrencyDelta, IVTSAdmin {
     ) external;
 
     /// @notice Settle a market maker position
-    /// @dev Called by MMPositionManager to settle a position, handling both normal settlement and seizure
+    /// @dev Called by MMPositionManager to settle a position, handling both normal settlement and seizure.
+    ///      Non-seizing settlement normally requires a live signal; withdrawal-only settlement on an inactive
+    ///      position is exempt so inactive `pa.settled` remnants remain drainable without renewal.
     /// @param factory The market factory namespace for caller-bound validation
     /// @param commitId The commit identifier
     /// @param positionIndex The position index within the commit
     /// @param amountDelta The amount delta for settlement
     /// @param isSeizing Whether the position is being seized
+    /// @param fromDeltas When true, deposit lanes consume existing positive underlying delta (settle-from-deltas).
+    ///        Withdrawal lanes ignore this flag; they always follow the withdrawal path in `VTSLifecycleLinkedLib`.
     /// @return settlementDelta The settlement balance delta
     /// @return rfsOpen Whether the RFS is open after settlement
     /// @return seizedLiquidityUnits The amount of liquidity units seized (0 if not seizing)
+    /// @return vaultSettlementIntent Explicit vault execution intent for downstream custody handling
     function onMMSettle(
         IMarketFactory factory,
         uint256 commitId,
         uint256 positionIndex,
         BalanceDelta amountDelta,
-        bool isSeizing
-    ) external returns (BalanceDelta settlementDelta, bool rfsOpen, uint256 seizedLiquidityUnits);
+        bool isSeizing,
+        bool fromDeltas
+    )
+        external
+        returns (
+            BalanceDelta settlementDelta,
+            bool rfsOpen,
+            uint256 seizedLiquidityUnits,
+            VaultSettlementIntent memory vaultSettlementIntent
+        );
 
     /// @notice Validate that the grace period has elapsed for a position (required before seizure)
     /// @param commitId The commit identifier
     /// @param positionIndex The position index within the commit
     function onSeize(uint256 commitId, uint256 positionIndex) external;
 
-    /// @notice Renew a liquidity signal for an existing commit, using an explicit sender for advancer validation
-    /// @dev Useful for router-style callers where msg.sender is a forwarding contract
-    /// @param sender The effective caller (locker) used for advancer validation
+    /// @notice Renew a liquidity signal for an existing commit
+    /// @dev VRL proof principal is `mmState.advancer` (derived inside `VTSCommitLib`).
     /// @param commitId The commit identifier to renew
     /// @param liquiditySignal The new liquidity signal
-    function renewSignal(IMarketFactory factory, address sender, uint256 commitId, bytes memory liquiditySignal)
-        external;
+    function renewSignal(IMarketFactory factory, uint256 commitId, bytes memory liquiditySignal) external;
     /// @notice Renew a liquidity signal using sender-signed EIP-712 relayer authorisation
     /// @param factory The market factory namespace for caller-bound validation (mirrors non-relayed renew)
+    /// @param authNonce Replay guard nonce for the proof principal (`mmState.advancer`)
+    /// @param sender EIP-712 `RelayAuth.sender` for renew: `address(0)` (legacy) or `mmState.advancer`; `MMPositionManager`
+    ///        enforces the batch locker matches the signed sender or advancer.
     function renewSignalRelayed(
         IMarketFactory factory,
-        address sender,
         uint256 commitId,
         bytes memory liquiditySignal,
         uint256 deadline,
         uint256 authNonce,
-        bytes memory authSig
+        bytes memory authSig,
+        address sender
     ) external;
 
     /// @notice Checkpoint a position and optionally run commitment backing checks

@@ -48,7 +48,7 @@ FILES=(
 
   src/MarketFactory.sol
   src/MarketVaultDeployer.sol
-  src/DirectLPDeltaResolver.sol
+  src/periphery/DirectLPDeltaResolver.sol
 
   src/MMPositionManager.sol
   src/MMPositionActionsImpl.sol
@@ -74,7 +74,8 @@ FILES=(
   src/libraries/Bounds.sol
   src/libraries/Checkpoint.sol
   src/libraries/CurrencyTransfer.sol
-  src/libraries/DynamicCurrencyDelta.sol
+  src/libraries/MarketCurrencyDelta.sol
+  src/libraries/OwnerCurrencyDelta.sol
   src/libraries/LCCFactoryLib.sol
   src/libraries/LiquidityHubLib.sol
   src/libraries/LiquidityUtils.sol
@@ -89,7 +90,6 @@ FILES=(
   src/libraries/TransientSlots.sol
   src/libraries/VTSCommitLib.sol
   src/libraries/VTSConfigs.sol
-  src/libraries/VTSFeeLib.sol
   src/libraries/VTSPositionLib.sol
   src/libraries/VTSSwapLib.sol
 )

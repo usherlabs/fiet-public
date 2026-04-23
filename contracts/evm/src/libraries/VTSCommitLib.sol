@@ -1,11 +1,25 @@
 // SPDX-License-Identifier: BUSL-1.1
 pragma solidity ^0.8.26;
 
-import {VTSStorage, PositionAccounting, TokenPairUint, TokenPairLib} from "../types/VTS.sol";
+import {PoolIdLibrary} from "@uniswap/v4-core/src/types/PoolId.sol";
+import {BalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
+import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
+import {
+    VTSStorage,
+    PositionAccounting,
+    PositionAccountingLib,
+    TokenPairUint,
+    TokenPairLib,
+    VTSLifecycleContext,
+    VTSCommitRouterContext
+} from "../types/VTS.sol";
 import {PositionId, Position} from "../types/Position.sol";
+import {RFSCheckpoint} from "../types/Checkpoint.sol";
+import {IMarketFactory} from "../interfaces/IMarketFactory.sol";
+import {VTSPositionLib} from "./VTSPositionLib.sol";
+import {CheckpointLibrary} from "./Checkpoint.sol";
+import {MarketHandlerLib} from "./MarketHandlerLib.sol";
 import {FullMath} from "@uniswap/v4-core/src/libraries/FullMath.sol";
-import {FixedPoint128} from "v4-periphery/lib/v4-core/src/libraries/FixedPoint128.sol";
-import {PoolAccounting} from "../types/VTS.sol";
 import {LiquidityUtils} from "./LiquidityUtils.sol";
 import {Errors} from "../libraries/Errors.sol";
 import {LiquiditySignal} from "../types/Commit.sol";
@@ -29,6 +43,7 @@ import {IVRLSignalManager} from "../interfaces/IVRLSignalManager.sol";
 library VTSCommitLib {
     using TokenPairLib for TokenPairUint;
     using StateLibrary for IPoolManager;
+    using PoolIdLibrary for PoolKey;
 
     /// @notice Hard cap on unique reserve tickers per MM signal.
     /// @dev This is a per-MM reserve composition limit, not a global protocol ticker registry limit.
@@ -47,7 +62,10 @@ library VTSCommitLib {
         Currency currency1;
     }
 
-    /// @dev Internal struct to reduce stack depth in validateLiquidityDelta
+    /// @dev Internal struct to reduce stack depth in validateLiquidityDelta. Field `liquidityDelta` is the liquidity
+    ///      amount used to compute issued USD (MM increases pass post-add total position liquidity).
+    /// @dev `sqrtPriceX96` and `currentTick` are **ignored** for COMMIT-01 admission: issued value is derived from
+    ///      range-bound worst-case token exposure and oracle prices only, not manipulable pool spot.
     struct LiquidityDeltaParams {
         Currency currency0;
         Currency currency1;
@@ -56,6 +74,17 @@ library VTSCommitLib {
         int24 tickLower;
         int24 tickUpper;
         int256 liquidityDelta;
+    }
+
+    /// @dev Bundles relayed-commit calldata to keep `_commitSignalRelayedRouter` within stack limits.
+    struct CommitRelayedBundle {
+        bytes liquiditySignal;
+        uint256 deadline;
+        uint256 authNonce;
+        bytes authSig;
+        /// @dev EIP-712 `RelayAuth.sender`: MM batch locker / NFT recipient (`address(0)` aliases the `signer`).
+        address sender;
+        address authorisedRelayer;
     }
 
     function _writeCommitmentDeficitToken(PositionAccounting storage pa, uint8 tokenIndex, uint256 nextDeficit)
@@ -68,6 +97,20 @@ library VTSCommitLib {
         } else if (prevDeficit == 0) {
             pa.commitmentDeficitSince.set(tokenIndex, block.timestamp);
         }
+    }
+
+    /// @dev Admission policy after VRL verification: stored MM reserve state must be priceable on-chain (ticker cap,
+    ///      OracleHelper mapping + oracle reads) so `checkpointWithCommitment` and related paths cannot later revert
+    ///      solely because the committed signal is structurally unpriceable.
+    function _assertSignalAdmissible(IOracleHelper oracleHelper, bytes memory liquiditySignal) internal view {
+        if (address(oracleHelper) == address(0)) {
+            revert Errors.InvalidAddress(address(0));
+        }
+        LiquiditySignal memory signal = abi.decode(liquiditySignal, (LiquiditySignal));
+        if (signal.mmState.advancer == address(0)) {
+            revert Errors.InvalidAddress(address(0));
+        }
+        _signalValue(signal.mmState, oracleHelper);
     }
 
     /// @notice Calculates the USD value of the position's issued commitment
@@ -98,6 +141,32 @@ library VTSCommitLib {
         value = OracleUtils.lccPairValue(oracleHelper, Currency.unwrap(currency0), a0, Currency.unwrap(currency1), a1);
     }
 
+    /// @dev MM add admission (COMMIT-01): conservative issued USD independent of pool `slot0`.
+    ///      Uses `LiquidityUtils.calculateCommitmentMaxima` then values the two endpoint compositions:
+    ///      all token0 at the lower tick vs all token1 at the upper tick, and takes the max in USD.
+    ///      This avoids same-transaction spot manipulation while staying less pessimistic than summing both legs
+    ///      (a single position cannot realise both endpoint maxima simultaneously).
+    /// @dev For `liquidityDelta <= 0`, returns zero (no admission issuance to value).
+    function _issuedAdmissionValueForLiquidity(
+        IOracleHelper oracleHelper,
+        Currency currency0,
+        Currency currency1,
+        int24 tickLower,
+        int24 tickUpper,
+        int256 liquidityDelta
+    ) internal view returns (uint256 value) {
+        if (liquidityDelta <= 0) {
+            return 0;
+        }
+        uint128 L = SafeCast.toUint128(uint256(liquidityDelta));
+        (uint256 c0, uint256 c1) = LiquidityUtils.calculateCommitmentMaxima(tickLower, tickUpper, L);
+        address u0 = Currency.unwrap(currency0);
+        address u1 = Currency.unwrap(currency1);
+        uint256 valueLower = OracleUtils.lccPairValue(oracleHelper, u0, c0, u1, 0);
+        uint256 valueUpper = OracleUtils.lccPairValue(oracleHelper, u0, 0, u1, c1);
+        value = valueLower > valueUpper ? valueLower : valueUpper;
+    }
+
     /// @notice Calculates the USD value of the position's settled commitment
     /// @param s The central VTS storage
     /// @param oracleHelper The oracle helper for USD price calculations
@@ -111,20 +180,24 @@ library VTSCommitLib {
         PositionId positionId
     ) internal view returns (uint256 settledValue) {
         PositionAccounting storage pa = s.positionAccounting[positionId];
-        uint256 settled0 = pa.settled.get(0);
-        uint256 settled1 = pa.settled.get(1);
+        (uint256 settled0, uint256 settled1) = PositionAccountingLib.effectiveSettled(pa);
         settledValue = OracleUtils.lccPairValue(
             oracleHelper, Currency.unwrap(currency0), settled0, Currency.unwrap(currency1), settled1
         );
     }
 
-    /// @notice Calculates the USD value of the position's issued commitment
+    /// @notice COMMIT-01 **global** check: endpoint-max issued USD must not exceed `settled + signal` (no marginal mint step).
     /// @param s The central VTS storage
     /// @param oracleHelper The oracle helper for USD price calculations
     /// @param commitId The commit NFT id
     /// @param positionId The position ID
     /// @param params Liquidity delta parameters bundled in a struct
     /// @param revertIfInsufficientBacking Whether to revert if backing is insufficient
+    /// @dev For MM **increases** that mint LCC, use the other `validateLiquidityDelta` overload (adds
+    ///      `preAddLiquidity`, `mintAmount0/1`, and the marginal admission gate). This entrypoint compares
+    ///      settled + signal against **worst-case range** issued USD (`_issuedAdmissionValueForLiquidity`), not live
+    ///      `slot0` composition. Checkpointing with commitment (`_checkpointWithCommitment`) still uses live spot for
+    ///      current solvency/deficit state.
     function validateLiquidityDelta(
         VTSStorage storage s,
         IOracleHelper oracleHelper,
@@ -133,15 +206,8 @@ library VTSCommitLib {
         LiquidityDeltaParams memory params,
         bool revertIfInsufficientBacking
     ) external view returns (bool success, uint256 issuedValue, uint256 settledValue, uint256 signalValue) {
-        issuedValue = _issuedValueForLiquidity(
-            oracleHelper,
-            params.currency0,
-            params.currency1,
-            params.sqrtPriceX96,
-            params.currentTick,
-            params.tickLower,
-            params.tickUpper,
-            params.liquidityDelta
+        issuedValue = _issuedAdmissionValueForLiquidity(
+            oracleHelper, params.currency0, params.currency1, params.tickLower, params.tickUpper, params.liquidityDelta
         );
         settledValue = _settledValueForPosition(s, oracleHelper, params.currency0, params.currency1, positionId);
         signalValue = _signalValueForCommit(s, oracleHelper, commitId);
@@ -152,130 +218,201 @@ library VTSCommitLib {
         }
     }
 
-    /// @notice LCC Unwrap -> Protocol Coverage Function
-    /// @notice Increment protocol or proactive excess liquidity coverage on LCC unwrap, consuming proactive pool first
-    /// @param s The central VTS storage
-    /// @param poolId The pool ID
-    /// @param tokenIndex The token index (0 or 1)
-    /// @param coveredAmount The amount covered
-    function incrementCoverage(VTSStorage storage s, PoolId poolId, uint8 tokenIndex, uint256 coveredAmount) external {
-        if (tokenIndex > 1 || coveredAmount == 0) return;
-        PoolAccounting storage paPool = s.poolAccounting[poolId];
-
-        // DICE: Increment coverage-per-deficit index (for slash attribution)
-        uint256 totalPrincipal = paPool.totalDeficitPrincipal.get(tokenIndex);
-        if (totalPrincipal > 0) {
-            uint256 deltaIndex = FullMath.mulDiv(coveredAmount, FixedPoint128.Q128, totalPrincipal);
-            uint256 currentIndex = paPool.coveragePerDeficitIndexX128.get(tokenIndex);
-            paPool.coveragePerDeficitIndexX128.set(tokenIndex, currentIndex + deltaIndex);
-        } else {
-            // No materialised deficit principal: defer to residual (socialised)
-            uint256 currentResidual = paPool.coverageResidualDICE.get(tokenIndex);
-            paPool.coverageResidualDICE.set(tokenIndex, currentResidual + coveredAmount);
-        }
-
-        // CISE: Increment coverage-per-settled index (for bonus allocation)
-        uint256 totalSettled = paPool.totalSettled.get(tokenIndex);
-        if (totalSettled > 0) {
-            uint256 deltaIndexCISE = FullMath.mulDiv(coveredAmount, FixedPoint128.Q128, totalSettled);
-            uint256 currentIndexCISE = paPool.coveragePerSettledIndexX128.get(tokenIndex);
-            paPool.coveragePerSettledIndexX128.set(tokenIndex, currentIndexCISE + deltaIndexCISE);
-            // Eager bonus denominator: sum_i (settled_i * deltaIndex / Q128) == coveredAmount when pool totalSettled
-            // matches the sum of position settled amounts. Realising exposure on touch only updates numerators.
-            uint256 curTotalCISE = paPool.totalCISEExposureSinceLastMod.get(tokenIndex);
-            paPool.totalCISEExposureSinceLastMod.set(tokenIndex, curTotalCISE + coveredAmount);
-        } else {
-            // No settled liquidity: defer to CISE residual (socialised when settled becomes non-zero)
-            uint256 currentResidualCISE = paPool.coverageResidualCISE.get(tokenIndex);
-            paPool.coverageResidualCISE.set(tokenIndex, currentResidualCISE + coveredAmount);
-        }
-    }
-
-    /// @notice Commits a liquidity signal to the VTS state (linked-library entry)
-    /// @dev Intentionally keeps all commitment logic in the linked library to reduce VTSOrchestrator bytecode size.
-    //#olympix-ignore-reentrancy
-    function commitSignal(
+    /// @dev Precomputes post-add issued USD, settled/signal, and pre-add admission for the MM-increase overload of
+    ///      `validateLiquidityDelta` (the variant with `preAddLiquidity` and mint amounts).
+    function _evaluateAdmissionScalars(
         VTSStorage storage s,
-        address sender,
-        IVRLSignalManager signalManager,
-        bytes memory liquiditySignal
-    ) external returns (uint256 commitId) {
-        // validate the liquidity signal was actually provided
-        if (liquiditySignal.length == 0) {
-            revert Errors.InvalidLiquiditySignal(0, 0, 0);
-        }
-
-        // verify the proofs associated with the state
-        (, uint256 expirySeconds) = signalManager.verifyLiquiditySignal(sender, liquiditySignal, true);
-        commitId = _commitSignalInternal(s, liquiditySignal, expirySeconds);
-    }
-
-    /// @notice Commits a liquidity signal using sender-signed EIP-712 relayer auth (linked-library entry)
-    function commitSignalRelayed(
-        VTSStorage storage s,
-        address sender,
-        IVRLSignalManager signalManager,
-        bytes memory liquiditySignal,
-        uint256 deadline,
-        uint256 authNonce,
-        bytes memory authSig
-    ) external returns (uint256 commitId) {
-        if (liquiditySignal.length == 0) {
-            revert Errors.InvalidLiquiditySignal(0, 0, 0);
-        }
-
-        (, uint256 expirySeconds) =
-            signalManager.verifyLiquiditySignalRelayed(sender, 0, liquiditySignal, deadline, authNonce, authSig, true);
-        commitId = _commitSignalInternal(s, liquiditySignal, expirySeconds);
-    }
-
-    /// @notice Renews a liquidity signal for a commit (linked-library entry)
-    //#olympix-ignore-reentrancy
-    function renewSignal(
-        VTSStorage storage s,
-        address sender,
-        IVRLSignalManager signalManager,
+        IOracleHelper oracleHelper,
         uint256 commitId,
-        bytes memory liquiditySignal
-    ) external {
-        if (liquiditySignal.length == 0) {
-            revert Errors.InvalidLiquiditySignal(0, 0, 0);
-        }
-
-        (, uint256 expirySeconds) = signalManager.verifyLiquiditySignal(sender, liquiditySignal, true);
-        _renewSignalInternal(s, sender, commitId, liquiditySignal, expirySeconds);
-    }
-
-    /// @notice Renews a liquidity signal using sender-signed EIP-712 relayer auth (linked-library entry)
-    function renewSignalRelayed(
-        VTSStorage storage s,
-        address sender,
-        IVRLSignalManager signalManager,
-        uint256 commitId,
-        bytes memory liquiditySignal,
-        uint256 deadline,
-        uint256 authNonce,
-        bytes memory authSig
-    ) external {
-        if (liquiditySignal.length == 0) {
-            revert Errors.InvalidLiquiditySignal(0, 0, 0);
-        }
-
-        (, uint256 expirySeconds) = signalManager.verifyLiquiditySignalRelayed(
-            sender, commitId, liquiditySignal, deadline, authNonce, authSig, true
+        PositionId positionId,
+        LiquidityDeltaParams memory params,
+        uint128 preAddLiquidity
+    ) private view returns (uint256 issuedPost, uint256 settledValue, uint256 signalValue, uint256 admissionPre) {
+        issuedPost = _issuedAdmissionValueForLiquidity(
+            oracleHelper, params.currency0, params.currency1, params.tickLower, params.tickUpper, params.liquidityDelta
         );
+        settledValue = _settledValueForPosition(s, oracleHelper, params.currency0, params.currency1, positionId);
+        signalValue = _signalValueForCommit(s, oracleHelper, commitId);
+        admissionPre = _issuedAdmissionValueForLiquidity(
+            oracleHelper,
+            params.currency0,
+            params.currency1,
+            params.tickLower,
+            params.tickUpper,
+            int256(uint256(preAddLiquidity))
+        );
+    }
+
+    /// @dev Oracle USD value of the actual LCC amounts minted this step (marginal principal for COMMIT-01).
+    function _valueFromLiquidityDelta(
+        IOracleHelper oracleHelper,
+        LiquidityDeltaParams memory params,
+        uint256 mintAmount0,
+        uint256 mintAmount1
+    ) private view returns (uint256 mintDeltaUsd) {
+        mintDeltaUsd = OracleUtils.lccPairValue(
+            oracleHelper, Currency.unwrap(params.currency0), mintAmount0, Currency.unwrap(params.currency1), mintAmount1
+        );
+    }
+
+    /// @notice COMMIT-01 for MM increases: same **global** rule as the six-parameter `validateLiquidityDelta`, plus a
+    ///         **marginal** oracle cap on this step’s actual minted LCC principal.
+    /// @dev `params.liquidityDelta` must be **post-add total** position liquidity (positive), matching
+    ///      the global overload’s convention for MM adds. `preAddLiquidity` is liquidity immediately before this
+    ///      increase (typically `post - uint128(liquidityDelta)` from `ModifyLiquidityParams`). `sqrtPriceX96` and
+    ///      `currentTick` in `params` are ignored for admission (same as the global overload). Uses
+    ///      `_evaluateAdmissionScalars` and `_valueFromLiquidityDelta` for the global and marginal checks.
+    /// @param mintAmount0 Actual LCC amount minted on `currency0` this increase (pool principal deposited).
+    /// @param mintAmount1 Actual LCC amount minted on `currency1` this increase.
+    function validateLiquidityDelta(
+        VTSStorage storage s,
+        IOracleHelper oracleHelper,
+        uint256 commitId,
+        PositionId positionId,
+        LiquidityDeltaParams memory params,
+        uint128 preAddLiquidity,
+        uint256 mintAmount0,
+        uint256 mintAmount1,
+        bool revertIfInsufficientBacking
+    ) external view returns (bool success, uint256 issuedPost, uint256 settledValue, uint256 signalValue) {
+        if (params.liquidityDelta <= 0) {
+            if (revertIfInsufficientBacking) {
+                revert Errors.InvariantViolated("MM increase expects positive post liquidity");
+            }
+            return (false, 0, 0, 0);
+        }
+
+        {
+            uint128 postL = SafeCast.toUint128(uint256(params.liquidityDelta));
+            if (uint256(preAddLiquidity) > uint256(postL)) {
+                if (revertIfInsufficientBacking) {
+                    revert Errors.InvariantViolated("pre liquidity exceeds post");
+                }
+                return (false, 0, 0, 0);
+            }
+        }
+
+        uint256 admissionPre;
+        (issuedPost, settledValue, signalValue, admissionPre) =
+            _evaluateAdmissionScalars(s, oracleHelper, commitId, positionId, params, preAddLiquidity);
+
+        if (admissionPre > issuedPost) {
+            if (revertIfInsufficientBacking) {
+                revert Errors.InvariantViolated("admission non-monotonic");
+            }
+            return (false, 0, 0, 0);
+        }
+
+        uint256 admissionDelta = issuedPost - admissionPre;
+        uint256 mintDeltaUsd = _valueFromLiquidityDelta(oracleHelper, params, mintAmount0, mintAmount1);
+
+        bool globalOk = issuedPost <= signalValue + settledValue;
+        bool marginalOk = mintDeltaUsd <= admissionDelta;
+        success = globalOk && marginalOk;
+
+        if (revertIfInsufficientBacking) {
+            if (!globalOk) {
+                revert Errors.InvalidLiquiditySignal(issuedPost, signalValue, settledValue);
+            }
+            if (!marginalOk) {
+                revert Errors.InvalidAdmissionMintDelta(mintDeltaUsd, admissionDelta);
+            }
+        }
+    }
+
+    /// @dev Shared body for linked `commitSignal` and orchestrator router overload.
+    /// @param sender Address passed to `VRLSignalManager` as the proof-authenticated principal (must satisfy
+    ///        `_assertSenderAuthorised`). For fresh commit this is always `signal.mmState.owner` (see
+    ///        `_resolveFreshCommitProofPrincipal`).
+    /// @param authorisedRelayer The `msg.sender` to `VTSOrchestrator` commit entrypoints (e.g. `MMPositionManager`),
+    ///        persisted so CoreHook MM ops can require `processPosition(owner) == authorisedRelayer`. This is distinct
+    ///        from `sender` passed to VRL (proof principal for verification).
+    //#olympix-ignore-reentrancy
+    function _commitSignalLinked(
+        VTSStorage storage s,
+        address sender,
+        IVRLSignalManager signalManager,
+        IOracleHelper oracleHelper,
+        bytes memory liquiditySignal,
+        address authorisedRelayer
+    ) internal returns (uint256 commitId) {
+        if (liquiditySignal.length == 0) {
+            revert Errors.InvalidLiquiditySignal(0, 0, 0);
+        }
+        (, uint256 expirySeconds) = signalManager.verifyLiquiditySignal(sender, liquiditySignal, true);
+        _assertSignalAdmissible(oracleHelper, liquiditySignal);
+        commitId = _commitSignalInternal(s, liquiditySignal, expirySeconds, authorisedRelayer);
+    }
+
+    function _commitSignalRelayedLinked(
+        VTSStorage storage s,
+        address signer,
+        IVRLSignalManager signalManager,
+        IOracleHelper oracleHelper,
+        CommitRelayedBundle memory b
+    ) internal returns (uint256 commitId) {
+        if (b.liquiditySignal.length == 0) {
+            revert Errors.InvalidLiquiditySignal(0, 0, 0);
+        }
+        (, uint256 expirySeconds) = signalManager.verifyLiquiditySignalRelayed(
+            signer, 0, b.liquiditySignal, b.deadline, b.authNonce, b.authSig, b.sender, true
+        );
+        _assertSignalAdmissible(oracleHelper, b.liquiditySignal);
+        commitId = _commitSignalInternal(s, b.liquiditySignal, expirySeconds, b.authorisedRelayer);
+    }
+
+    function _renewSignalLinked(
+        VTSStorage storage s,
+        address sender,
+        IVRLSignalManager signalManager,
+        IOracleHelper oracleHelper,
+        uint256 commitId,
+        bytes memory liquiditySignal
+    ) internal {
+        if (liquiditySignal.length == 0) {
+            revert Errors.InvalidLiquiditySignal(0, 0, 0);
+        }
+        (, uint256 expirySeconds) = signalManager.verifyLiquiditySignal(sender, liquiditySignal, true);
+        _assertSignalAdmissible(oracleHelper, liquiditySignal);
         _renewSignalInternal(s, sender, commitId, liquiditySignal, expirySeconds);
     }
 
-    function _commitSignalInternal(VTSStorage storage s, bytes memory liquiditySignal, uint256 expirySeconds)
-        internal
-        returns (uint256 commitId)
-    {
+    /// @dev `sender` is EIP-712 `RelayAuth.sender`: for renew, `address(0)` or `signal.mmState.advancer` (see `VRLSignalManager`).
+    function _renewSignalRelayedLinked(
+        VTSStorage storage s,
+        address signer,
+        IVRLSignalManager signalManager,
+        IOracleHelper oracleHelper,
+        uint256 commitId,
+        bytes memory liquiditySignal,
+        uint256 deadline,
+        uint256 authNonce,
+        bytes memory authSig,
+        address sender
+    ) internal {
+        if (liquiditySignal.length == 0) {
+            revert Errors.InvalidLiquiditySignal(0, 0, 0);
+        }
+        (, uint256 expirySeconds) = signalManager.verifyLiquiditySignalRelayed(
+            signer, commitId, liquiditySignal, deadline, authNonce, authSig, sender, true
+        );
+        _assertSignalAdmissible(oracleHelper, liquiditySignal);
+        _renewSignalInternal(s, signer, commitId, liquiditySignal, expirySeconds);
+    }
+
+    /// @param authorisedRelayer See `_commitSignalLinked`; immutable per commit after this write.
+    function _commitSignalInternal(
+        VTSStorage storage s,
+        bytes memory liquiditySignal,
+        uint256 expirySeconds,
+        address authorisedRelayer
+    ) internal returns (uint256 commitId) {
         LiquiditySignal memory signal = abi.decode(liquiditySignal, (LiquiditySignal));
         // increment first then assign because nextCommitId starts at 0 and we want to start at 1
         commitId = ++s.nextCommitId;
         // store the signal state (only state and expiresAt are relevant) and bind commit to pool
         MarketMaker.save(s.commits[commitId].mmState, signal.mmState);
+        s.commits[commitId].authorisedRelayer = authorisedRelayer;
         s.commits[commitId].expiresAt = block.timestamp + expirySeconds;
     }
 
@@ -291,6 +428,8 @@ library VTSCommitLib {
         // Invariants:
         // - Commit ownership must be immutable across renewals (prevents commitId hijack)
         // - Only the designated advancer may renew on-chain (reduces mempool proof sniping)
+        // - `authorisedRelayer` is intentionally not updated here: MM execution remains bound to the router that
+        //   created the commit, independent of advancer rotation in `mmState`.
         if (signal.mmState.owner != commit.mmState.owner || sender != signal.mmState.advancer) {
             revert Errors.InvalidSender();
         }
@@ -298,16 +437,15 @@ library VTSCommitLib {
         commit.expiresAt = block.timestamp + expirySeconds;
     }
 
-    /// @notice Checkpoint with commitment backing checks (single linked-library call)
-    /// @dev Reads stored commit signal state and sets position commitment deficit.
+    /// @dev Core commitment checkpoint; used by growth-settled orchestration and unit tests via internal call.
     //#olympix-ignore-reentrancy
-    function checkpointWithCommitment(
+    function _checkpointWithCommitment(
         VTSStorage storage s,
         IPoolManager poolManager,
         IOracleHelper oracleHelper,
         uint256 commitId,
         PositionId positionId
-    ) external {
+    ) internal {
         // Build checkpoint context in scoped block
         CheckpointContext memory ctx;
         Position memory pos = s.positions[positionId];
@@ -318,7 +456,9 @@ library VTSCommitLib {
             ctx.currency1 = pool.currency1;
         }
         {
-            // Compute effective issued amounts at current price
+            // Checkpoint / commitment deficit: measure issued exposure at **live** pool spot so stored deficit
+            // reflects current economic state. This is intentionally distinct from MM **admission**
+            // (`validateLiquidityDelta`), which uses worst-case range valuation to resist same-tx `slot0` games.
             (uint160 sqrtPriceX96, int24 currentTick,,) = poolManager.getSlot0(pos.poolId);
             (ctx.eff0, ctx.eff1) = LiquidityUtils.calculateEffectiveTokenAmounts(
                 sqrtPriceX96, currentTick, pos.tickLower, pos.tickUpper, SafeCast.toInt256(uint128(pos.liquidity))
@@ -328,12 +468,9 @@ library VTSCommitLib {
             ctx.issuedUsd = OracleUtils.lccPairValue(
                 oracleHelper, Currency.unwrap(ctx.currency0), ctx.eff0, Currency.unwrap(ctx.currency1), ctx.eff1
             );
+            (uint256 eff0, uint256 eff1) = PositionAccountingLib.effectiveSettled(pa);
             ctx.settledUsd = OracleUtils.lccPairValue(
-                oracleHelper,
-                Currency.unwrap(ctx.currency0),
-                pa.settled.token0,
-                Currency.unwrap(ctx.currency1),
-                pa.settled.token1
+                oracleHelper, Currency.unwrap(ctx.currency0), eff0, Currency.unwrap(ctx.currency1), eff1
             );
             // If the stored signal has expired, treat it as having zero backing.
             // This ensures renewal is paramount: expired signals are not recognised as backing.
@@ -389,20 +526,39 @@ library VTSCommitLib {
                 _writeCommitmentDeficitToken(pa, 1, 0);
             }
 
+            // Deficit bypass age (`commitmentDeficitSince`) tracks the current **under-backed** episode for
+            // `CheckpointLibrary.isSeizable`. Once backing is sufficient, reset the clock even if proportional
+            // netting left non-zero token residuals; the next insufficient checkpoint starts a fresh episode.
+            pa.commitmentDeficitSince.set(0, 0);
+            pa.commitmentDeficitSince.set(1, 0);
+
             return;
         }
 
-        // Insufficient backing: derive position-level deficit in token units using deficit BPS
+        // Insufficient backing: severity is still whole bps, but per-lane deficits are proportional to
+        // deficitUsd/issuedUsd in one step so sub-1 bps shortfalls do not double-floor to zero in token units.
         {
             uint256 deficitUsd = ctx.issuedUsd - backingUsd;
             uint256 deficitBps = FullMath.mulDiv(deficitUsd, LiquidityUtils.BPS_DENOMINATOR, ctx.issuedUsd);
             pa.commitmentDeficitBps = uint16(deficitBps);
-            _writeCommitmentDeficitToken(pa, 0, FullMath.mulDiv(ctx.eff0, deficitBps, LiquidityUtils.BPS_DENOMINATOR));
-            _writeCommitmentDeficitToken(pa, 1, FullMath.mulDiv(ctx.eff1, deficitBps, LiquidityUtils.BPS_DENOMINATOR));
+            _writeCommitmentDeficitToken(pa, 0, FullMath.mulDiv(ctx.eff0, deficitUsd, ctx.issuedUsd));
+            _writeCommitmentDeficitToken(pa, 1, FullMath.mulDiv(ctx.eff1, deficitUsd, ctx.issuedUsd));
+            // After sufficient backing we clear `since` above; re-entering under-backed with carried residual token
+            // amounts does not go through `prevDeficit == 0` in `_writeCommitmentDeficitToken`, so restart the lane
+            // clock when there is deficit but no age yet.
+            if (pa.commitmentDeficit.token0 > 0 && pa.commitmentDeficitSince.token0 == 0) {
+                pa.commitmentDeficitSince.set(0, block.timestamp);
+            }
+            if (pa.commitmentDeficit.token1 > 0 && pa.commitmentDeficitSince.token1 == 0) {
+                pa.commitmentDeficitSince.set(1, block.timestamp);
+            }
         }
     }
 
     /// @notice Calculates the USD value of the MarketMaker signal reserves for a commit
+    /// @dev Reads only `mmState.reserves` from storage. Avoids copying `sourceState`, `prover`, and `nonce` into
+    ///      memory on every commitment valuation (checkpoint / seize refresh), which otherwise amplified gas when those
+    ///      strings were large but economically irrelevant to `getTotalValue`.
     /// @param s The central VTS storage
     /// @param oracleHelper The oracle helper for USD price calculations
     /// @param commitId The commit NFT id
@@ -412,11 +568,27 @@ library VTSCommitLib {
         view
         returns (uint256 totalUsdValue)
     {
-        Commit storage commit = s.commits[commitId];
-        MarketMaker.State memory mmState = commit.mmState;
+        return _signalValueFromCommitStorage(s.commits[commitId], oracleHelper);
+    }
 
-        // Get reserves from MarketMaker.State
-        return _signalValue(mmState, oracleHelper);
+    /// @dev Same economics as `_signalValue(MarketMaker.State memory, ...)` + `MarketMaker.getReserves`, but without
+    ///      materialising the full stored `MarketMaker.State` in memory.
+    function _signalValueFromCommitStorage(Commit storage commit, IOracleHelper oracleHelper)
+        private
+        view
+        returns (uint256 totalValue)
+    {
+        uint256 n = commit.mmState.reserves.length;
+        if (n > MAX_MM_UNIQUE_RESERVE_TICKERS) {
+            revert Errors.MMReserveTickerLimitExceeded(n, MAX_MM_UNIQUE_RESERVE_TICKERS);
+        }
+        string[] memory tickers = new string[](n);
+        uint256[] memory amounts = new uint256[](n);
+        for (uint256 i = 0; i < n; i++) {
+            tickers[i] = commit.mmState.reserves[i].asset;
+            amounts[i] = commit.mmState.reserves[i].amount;
+        }
+        totalValue = oracleHelper.getTotalValue(tickers, amounts);
     }
 
     /// @notice Calculates the USD value of the MarketMaker signal reserves
@@ -435,5 +607,213 @@ library VTSCommitLib {
         }
 
         totalValue = oracleHelper.getTotalValue(tickers, amounts);
+    }
+
+    // ============ Orchestrator commit-lifecycle ============
+
+    function _assertRegisteredFactory(VTSCommitRouterContext memory ctx, IMarketFactory factory) private view {
+        if (!ctx.liquidityHub.isFactory(address(factory))) revert Errors.InvalidSender();
+    }
+
+    /// @dev Fresh commit: VRL proof principal is always `signal.mmState.owner`. Factory-bound routers may submit on
+    ///      behalf of that owner; unbound orchestrator callers must be the owner.
+    function _resolveFreshCommitProofPrincipal(
+        VTSCommitRouterContext memory ctx,
+        IMarketFactory factory,
+        address caller,
+        bytes memory liquiditySignal
+    ) private view returns (address mmOwner) {
+        if (liquiditySignal.length == 0) {
+            revert Errors.InvalidLiquiditySignal(0, 0, 0);
+        }
+        LiquiditySignal memory signal = abi.decode(liquiditySignal, (LiquiditySignal));
+        mmOwner = signal.mmState.owner;
+        _assertRegisteredFactory(ctx, factory);
+        if (!MarketHandlerLib.isBounds(factory, caller)) {
+            if (caller != mmOwner) revert Errors.InvalidSender();
+        }
+    }
+
+    /// @dev Renewal: VRL proof principal is `signal.mmState.advancer`. Factory-bound routers may submit on behalf of
+    ///      that advancer; unbound orchestrator callers must be the advancer.
+    function _resolveRenewProofPrincipal(
+        VTSCommitRouterContext memory ctx,
+        IMarketFactory factory,
+        address caller,
+        bytes memory liquiditySignal
+    ) private view returns (address mmAdvancer) {
+        if (liquiditySignal.length == 0) {
+            revert Errors.InvalidLiquiditySignal(0, 0, 0);
+        }
+        LiquiditySignal memory signal = abi.decode(liquiditySignal, (LiquiditySignal));
+        mmAdvancer = signal.mmState.advancer;
+        _assertRegisteredFactory(ctx, factory);
+        if (!MarketHandlerLib.isBounds(factory, caller)) {
+            if (caller != mmAdvancer) revert Errors.InvalidSender();
+        }
+    }
+
+    /// @dev Commitment backing (optional) plus RFS checkpoint marking from current stored accounting.
+    ///      Caller must have settled position growths first when pause gating matters (e.g. via
+    ///      `VTSOrchestrator.settlePositionGrowths`).
+    function _checkpointAfterGrowthSettled(
+        VTSStorage storage s,
+        VTSLifecycleContext memory ctx,
+        uint256 commitId,
+        bool withCommitment,
+        PositionId positionId
+    ) private returns (RFSCheckpoint memory checkpointOut) {
+        if (withCommitment) {
+            _checkpointWithCommitment(s, ctx.poolManager, ctx.oracleHelper, commitId, positionId);
+        }
+        (, BalanceDelta rfsDelta) = VTSPositionLib.getRFS(s, positionId);
+        CheckpointLibrary.markCheckpoint(s, positionId, VTSPositionLib._rfsOpenMask(rfsDelta));
+        checkpointOut = s.positions[positionId].checkpoint;
+    }
+
+    /// @notice RFS checkpoint after growth settlement with commitment-backed deficit update.
+    /// @dev Does not settle growths. The orchestrator must settle growth first.
+    function checkpointAfterGrowthWithCommitment(
+        VTSStorage storage s,
+        VTSLifecycleContext memory ctx,
+        uint256 commitId,
+        PositionId positionId
+    ) external returns (RFSCheckpoint memory checkpointOut) {
+        checkpointOut = _checkpointAfterGrowthSettled(s, ctx, commitId, true, positionId);
+    }
+
+    function extendGracePeriod(
+        VTSStorage storage s,
+        VTSLifecycleContext memory ctx,
+        PoolKey memory poolKey,
+        PositionId positionId,
+        uint8 settlementTokenIndex,
+        uint32 verifierIndex,
+        bytes memory settlementProof
+    ) external returns (RFSCheckpoint memory checkpointOut) {
+        VTSPositionLib.settlePositionGrowths(s, ctx.poolManager, positionId);
+        (, BalanceDelta rfsDelta) = VTSPositionLib.getRFS(s, positionId);
+        CheckpointLibrary.markCheckpoint(s, positionId, VTSPositionLib._rfsOpenMask(rfsDelta));
+        CheckpointLibrary.extendGracePeriod(
+            s, ctx.settlementObserver, poolKey, positionId, settlementTokenIndex, verifierIndex, settlementProof
+        );
+        checkpointOut = s.positions[positionId].checkpoint;
+    }
+
+    function validateSeize(
+        VTSStorage storage s,
+        VTSLifecycleContext memory ctx,
+        uint256 commitId,
+        uint256 positionIndex,
+        PositionId positionId
+    ) external {
+        // When a stored commitment deficit exists, refresh growth and re-run commitment checkpoint before seizability
+        // so bypass eligibility cannot rely on stale `commitmentDeficit` after backing recovers.
+        // We do not always call `_checkpointAfterGrowthSettled(..., true)` here: that would `markCheckpoint` from
+        // live `getRFS` and could materialise the first ordinary RFS checkpoint, which `onSeize` must not do
+        // (see `test_onSeize_doesNotStartOrdinaryGraceWithoutPriorCheckpoint`).
+        bool hasStoredCommitmentDeficit = s.positionAccounting[positionId].commitmentDeficit.token0 > 0
+            || s.positionAccounting[positionId].commitmentDeficit.token1 > 0;
+        if (hasStoredCommitmentDeficit) {
+            VTSPositionLib.settlePositionGrowths(s, ctx.poolManager, positionId);
+            _checkpointAfterGrowthSettled(s, ctx, commitId, true, positionId);
+        }
+
+        CheckpointLibrary.isSeizable(s, commitId, positionIndex, true);
+    }
+
+    function commitSignal(
+        VTSStorage storage s,
+        VTSCommitRouterContext memory ctx,
+        IMarketFactory factory,
+        address caller,
+        bytes memory liquiditySignal
+    ) external returns (uint256 commitId) {
+        address mmOwner = _resolveFreshCommitProofPrincipal(ctx, factory, caller, liquiditySignal);
+        commitId = _commitSignalLinked(s, mmOwner, ctx.signalManager, ctx.oracleHelper, liquiditySignal, caller);
+    }
+
+    function commitSignalRelayed(
+        VTSStorage storage s,
+        VTSCommitRouterContext memory ctx,
+        IMarketFactory factory,
+        address caller,
+        bytes memory liquiditySignal,
+        uint256 deadline,
+        uint256 authNonce,
+        bytes memory authSig,
+        address sender
+    ) external returns (uint256 commitId) {
+        return _commitSignalRelayedRouter(
+            s, ctx, factory, caller, liquiditySignal, deadline, authNonce, authSig, sender
+        );
+    }
+
+    /// @dev Split from `commitSignalRelayed` to avoid stack-too-deep in the external entrypoint.
+    function _commitSignalRelayedRouter(
+        VTSStorage storage s,
+        VTSCommitRouterContext memory ctx,
+        IMarketFactory factory,
+        address caller,
+        bytes memory liquiditySignal,
+        uint256 deadline,
+        uint256 authNonce,
+        bytes memory authSig,
+        address sender
+    ) private returns (uint256 commitId) {
+        address mmOwner = _resolveFreshCommitProofPrincipal(ctx, factory, caller, liquiditySignal);
+        commitId = _commitSignalRelayedLinked(
+            s,
+            mmOwner,
+            ctx.signalManager,
+            ctx.oracleHelper,
+            CommitRelayedBundle({
+                liquiditySignal: liquiditySignal,
+                deadline: deadline,
+                authNonce: authNonce,
+                authSig: authSig,
+                sender: sender,
+                authorisedRelayer: caller
+            })
+        );
+    }
+
+    function renewSignal(
+        VTSStorage storage s,
+        VTSCommitRouterContext memory ctx,
+        IMarketFactory factory,
+        address caller,
+        uint256 commitId,
+        bytes memory liquiditySignal
+    ) external {
+        address mmAdvancer = _resolveRenewProofPrincipal(ctx, factory, caller, liquiditySignal);
+        _renewSignalLinked(s, mmAdvancer, ctx.signalManager, ctx.oracleHelper, commitId, liquiditySignal);
+    }
+
+    function renewSignalRelayed(
+        VTSStorage storage s,
+        VTSCommitRouterContext memory ctx,
+        IMarketFactory factory,
+        address caller,
+        uint256 commitId,
+        bytes memory liquiditySignal,
+        uint256 deadline,
+        uint256 authNonce,
+        bytes memory authSig,
+        address sender
+    ) external {
+        address mmAdvancer = _resolveRenewProofPrincipal(ctx, factory, caller, liquiditySignal);
+        _renewSignalRelayedLinked(
+            s,
+            mmAdvancer,
+            ctx.signalManager,
+            ctx.oracleHelper,
+            commitId,
+            liquiditySignal,
+            deadline,
+            authNonce,
+            authSig,
+            sender
+        );
     }
 }

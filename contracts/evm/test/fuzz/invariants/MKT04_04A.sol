@@ -1,18 +1,17 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.26;
 
-import {LiquidityHub} from "../../../src/LiquidityHub.sol";
+import {FuzzLiquidityHub} from "../harnesses/FuzzLiquidityHub.sol";
 import {LiquidityCommitmentCertificate} from "../../../src/LCC.sol";
 import {MockOracleHelper} from "../mocks/MockOracleHelper.sol";
 import {MockERC20Transferable} from "../mocks/MockERC20Transferable.sol";
 import {Bounds} from "../../../src/libraries/Bounds.sol";
 import {BoundRegistry} from "../../../src/modules/BoundRegistry.sol";
-import {EchidnaLinkedLibs} from "../base/EchidnaLinkedLibs.sol";
 
-/// @notice Echidna harness for MKT-04 and MKT-04A.
+/// @notice fuzz harness for MKT-04 and MKT-04A.
 contract MKT04_04A {
     uint256 internal constant MAX_VACUOUS_ATTEMPTS = 14;
-    LiquidityHub internal hub;
+    FuzzLiquidityHub internal hub;
     LiquidityCommitmentCertificate internal lcc;
     MockERC20Transferable internal underlying0;
     MKT04Actor internal actor;
@@ -26,10 +25,8 @@ contract MKT04_04A {
     bool internal mkt04aAllOk = true;
 
     constructor() {
-        EchidnaLinkedLibs.deployLCCFactoryLinkedLib();
-        EchidnaLinkedLibs.deployLiquidityHubLinkedLib();
         MockOracleHelper oracleHelper = new MockOracleHelper(address(0));
-        hub = new LiquidityHub(address(oracleHelper), "Ether", "ETH", 18, address(this));
+        hub = new FuzzLiquidityHub(address(oracleHelper), "Ether", "ETH", 18, address(0), address(this));
         hub.setFactory(address(this), true);
         hub.setBoundLevel(address(hub), Bounds.BOUND_EXEMPT);
         actor = new MKT04Actor();
@@ -90,7 +87,7 @@ contract MKT04_04A {
     }
 
     // forge-lint: disable-next-line(mixed-case-function)
-    function echidna_mkt_04_factory_and_issuer_gating() external view returns (bool) {
+    function fuzz_mkt_04_factory_and_issuer_gating() external view returns (bool) {
         if (mkt04Checks == 0) {
             return mkt04Attempts < MAX_VACUOUS_ATTEMPTS;
         }
@@ -98,14 +95,14 @@ contract MKT04_04A {
     }
 
     // forge-lint: disable-next-line(mixed-case-function)
-    function echidna_mkt_04a_bound_lifecycle() external view returns (bool) {
+    function fuzz_mkt_04a_bound_lifecycle() external view returns (bool) {
         if (mkt04aChecks == 0) {
             return mkt04aAttempts < MAX_VACUOUS_ATTEMPTS;
         }
         return mkt04aAllOk;
     }
 
-    /// @dev No-liquidity callback for LiquidityHub issuer path.
+    /// @dev No-liquidity callback for FuzzLiquidityHub issuer path.
     function useMarketLiquidity(address, bytes32, uint256) external view returns (uint256) {
         if (msg.sender != address(hub)) revert();
         return 0;

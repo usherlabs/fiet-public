@@ -2,7 +2,7 @@
 pragma solidity ^0.8.26;
 
 import {RFSCheckpoint} from "../types/Checkpoint.sol";
-import {VTSStorage, PositionAccounting} from "../types/VTS.sol";
+import {VTSStorage, PositionAccounting, TokenPairSeizureCarryQ128Lib} from "../types/VTS.sol";
 import {Position, PositionId} from "../types/Position.sol";
 import {MarketVTSConfiguration} from "../types/VTS.sol";
 import {Commit} from "../types/Commit.sol";
@@ -10,10 +10,12 @@ import {Errors} from "./Errors.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {IVRLSettlementObserver} from "../interfaces/IVRLSettlementObserver.sol";
 import {TokenConfiguration} from "../types/VTS.sol";
+import {CarryQ128Lib} from "../types/Carry.sol";
 
 library CheckpointLibrary {
     uint8 internal constant TOKEN0_OPEN_MASK = 1;
     uint8 internal constant TOKEN1_OPEN_MASK = 2;
+    uint8 internal constant BOTH_OPEN_MASK = TOKEN0_OPEN_MASK | TOKEN1_OPEN_MASK;
 
     /**
      * @notice Retrieves the checkpoint for a given position
@@ -33,7 +35,9 @@ library CheckpointLibrary {
      *         - token-specific minimum deficit age is met, and
      *         - `commitmentDeficitBps >= unbackedCommitmentGraceBypassBps`, or
      *         - optional per-token thresholds (when set > 0) are breached
-     *      2. Normal RFS path: checkpoint has open lane(s) AND lane-local grace period elapsed
+     *      2. Normal RFS path: checkpoint has open lane(s) and at least one open lane is grace-eligible
+     *         using the canonical checkpointed RFS-open episode timer (`openSince*`) plus lane-local extension.
+     *         `openSince*` is intentionally inherited across lane-composition changes unless checkpoint state fully closes.
      * @param s The VTS storage struct
      * @param commitId The token ID to check
      * @param positionIndex The position index to check
@@ -89,7 +93,8 @@ library CheckpointLibrary {
             }
         }
 
-        // Normal RFS path: check checkpoint + grace period
+        // Normal RFS path: check checkpoint + grace period.
+        // Seizability is lane-scoped for currently-open lanes and position-aggregated via OR.
         RFSCheckpoint memory checkpoint = getCheckpoint(s, positionId);
 
         if (checkpoint.openMask == 0) {
@@ -127,6 +132,8 @@ library CheckpointLibrary {
      *      a valid settlement proof that gets verified against a Settlement Observer's verifier.
      * @dev "I have a token coming, it's just pending a bank transfer to the stablecoin issuer."
      * @dev IMPORTANT: Callers MUST validate that `positionId` belongs to `poolKey.toId()`.
+     *      Settlement verifiers receive `abi.encode(poolId, settlementTokenIndex, positionId)` and MUST bind proofs to
+     *      that target so the same attestation cannot be spent on a different position in the same lane.
      * @param positionId The position ID
      * @param settlementProof The settlement signal containing the proof
      */
@@ -144,10 +151,15 @@ library CheckpointLibrary {
         }
         MarketVTSConfiguration memory vtsConfiguration = s.pools[poolKey.toId()].vtsConfig;
 
-        // verify the settlement proof and get the grace period extension
-        settlementObserver.verifySettlementProof(poolKey, settlementTokenIndex, verifierIndex, settlementProof, true);
+        // Proof verification is token-lane scoped: the verifier proves settlement for the lane being extended, not a
+        // broader market-wide claim. The verifier authorises "this lane is settling"; protocol configuration still
+        // decides how much grace to add, so verifier output cannot unilaterally widen the extension window.
+        settlementObserver.verifySettlementProof(
+            poolKey, settlementTokenIndex, verifierIndex, positionId, settlementProof, true
+        );
 
-        // extend the grace period for the position
+        // Extension magnitude is capped by protocol policy from TokenConfiguration. If future designs want verifier-
+        // specific sizing, that should be introduced as a bounded suggestion layered on top of these caps.
         TokenConfiguration memory tokenConfiguration =
             settlementTokenIndex == 0 ? vtsConfiguration.token0 : vtsConfiguration.token1;
         bool tokenLaneOpen = settlementTokenIndex == 0
@@ -163,11 +175,23 @@ library CheckpointLibrary {
     /**
      * @notice Marks a checkpoint as open or closed for a given position
      * @dev Updates the checkpoint state by calling the mark function on the checkpoint
+     * @dev Clears per-lane `seizureLiquidityCarry` for lanes not open in `openMask` so fractional Q128 remainder
+     *      from a prior seizure episode cannot survive into a later distinct RFS episode once the lane is cured
+     *      via non-seizing settlement, checkpoints, or MM modifies (audit: stale carry on non-seizing closure).
      * @param s The VTS storage struct
      * @param positionId The position ID to mark the checkpoint for
      * @param openMask Open lane mask (bit0=token0, bit1=token1)
      */
     function markCheckpoint(VTSStorage storage s, PositionId positionId, uint8 openMask) internal {
         s.positions[positionId].checkpoint.mark(openMask);
+
+        uint8 maskedOpen = uint8(openMask & BOTH_OPEN_MASK);
+        PositionAccounting storage pa = s.positionAccounting[positionId];
+        if ((maskedOpen & TOKEN0_OPEN_MASK) == 0) {
+            TokenPairSeizureCarryQ128Lib.set(pa.seizureLiquidityCarry, 0, CarryQ128Lib.zero());
+        }
+        if ((maskedOpen & TOKEN1_OPEN_MASK) == 0) {
+            TokenPairSeizureCarryQ128Lib.set(pa.seizureLiquidityCarry, 1, CarryQ128Lib.zero());
+        }
     }
 }

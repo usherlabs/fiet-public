@@ -24,6 +24,10 @@ contract LiquidityUtilsHarness {
         return LiquidityUtils.exposureBps(rfsAmount, commitment);
     }
 
+    function exposureBpsFloor(uint256 rfsAmount, uint256 commitment) external pure returns (uint256) {
+        return LiquidityUtils.exposureBpsFloor(rfsAmount, commitment);
+    }
+
     function settleOfRfsBps(uint256 settleAmount, uint256 rfsAmount) external pure returns (uint256) {
         return LiquidityUtils.settleOfRfsBps(settleAmount, rfsAmount);
     }
@@ -94,6 +98,25 @@ contract LiquidityUtilsTest is Test {
         assertEq(h.safeInt128ToUint128(-int128(9)), 9);
     }
 
+    /// @dev Unary `-` on `type(int128).min` overflows; abs conversion must still return `2^127`.
+    function test_safeInt128ToUint256_int128Min_returnsAbs() public view {
+        uint256 expected = uint256(int256(type(int128).max)) + 1;
+        assertEq(h.safeInt128ToUint256(type(int128).min), expected);
+    }
+
+    function test_safeInt128ToUint128_int128Min_returnsAbs() public view {
+        uint128 expected = uint128(uint256(int256(type(int128).max)) + 1);
+        assertEq(h.safeInt128ToUint128(type(int128).min), expected);
+    }
+
+    /// @dev Negation uses int256 widening; `amount0 == type(int128).min` must not revert.
+    function test_negateBalanceDelta_int128Min_lane() public view {
+        BalanceDelta d = toBalanceDelta(type(int128).min, int128(0));
+        BalanceDelta n = h.negateBalanceDelta(d);
+        assertEq(n.amount0(), type(int128).max);
+        assertEq(n.amount1(), int128(0));
+    }
+
     function test_calculateCommitmentMaxima_nonzeroOverRange() public view {
         (uint256 c0, uint256 c1) = h.calculateCommitmentMaxima(-120, 120, 1e6);
         assertGt(c0, 0);
@@ -109,6 +132,11 @@ contract LiquidityUtilsTest is Test {
         assertEq(h.exposureBps(1, 3), 3334);
         // cap at 100%
         assertEq(h.exposureBps(999, 1), 10000);
+    }
+
+    function test_exposureBpsFloor_roundsDownAndCapsAt100Percent() public view {
+        assertEq(h.exposureBpsFloor(1, 3), 3333);
+        assertEq(h.exposureBpsFloor(999, 1), 10000);
     }
 
     function test_settleOfRfsBps_handlesZeroRfsAndCapsAt100Percent() public view {
@@ -164,7 +192,7 @@ contract LiquidityUtilsTest is Test {
     }
 
     function test_calculateEffectiveTokenAmounts_handlesNegativeLiquidityDelta() public view {
-        // Negative liquidity delta should produce negative BalanceDelta amounts, which are abs'd to uints.
+        // Sign is ignored: magnitudes match a positive liquidity of the same size.
         int24 tickLower = -60;
         int24 tickUpper = 60;
         uint160 sqrtPriceMid = TickMath.getSqrtPriceAtTick(0);
@@ -172,6 +200,23 @@ contract LiquidityUtilsTest is Test {
         (uint256 a0, uint256 a1) = h.calculateEffectiveTokenAmounts(sqrtPriceMid, 0, tickLower, tickUpper, -int256(1e6));
         assertGt(a0, 0);
         assertGt(a1, 0);
+    }
+
+    /// @dev Regression: a single leg can exceed `int128.max` (~1.7e38) with very wide ranges and large liquidity.
+    ///      The previous implementation rounded through `int128` on the *amount* and could revert; unsigned math must not.
+    function test_calculateEffectiveTokenAmounts_tokenAmountCanExceedInt128Max() public view {
+        int24 tickLower = -500_000;
+        int24 tickUpper = 500_000;
+        int24 currentTick = -600_000;
+        assertTrue(currentTick < tickLower);
+        uint160 sqrtCurrent = TickMath.getSqrtPriceAtTick(currentTick);
+        // Large but valid v4 position liquidity: drives amount0 past `int128.max` for this range (below range => token0 only).
+        uint128 L = 5_000_000_000_000_000_000_000_000_000; // 5e30; < `type(uint128).max`
+
+        (uint256 a0, uint256 a1) =
+            h.calculateEffectiveTokenAmounts(sqrtCurrent, currentTick, tickLower, tickUpper, int256(uint256(L)));
+        assertEq(a1, 0);
+        assertGt(a0, uint256(uint128(type(int128).max)));
     }
 
     function test_getBaseSettlementAmounts_roundsUp() public view {

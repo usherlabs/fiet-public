@@ -10,6 +10,7 @@ import {PositionId, Position} from "../../../src/types/Position.sol";
 import {RFSCheckpoint} from "../../../src/types/Checkpoint.sol";
 import {IVRLSignalManager} from "../../../src/interfaces/IVRLSignalManager.sol";
 import {IOracleHelper} from "../../../src/interfaces/IOracleHelper.sol";
+import {MarketMaker} from "../../../src/libraries/MarketMaker.sol";
 import {IPoolManager} from "v4-periphery/lib/v4-core/src/interfaces/IPoolManager.sol";
 import {StateLibrary} from "v4-periphery/lib/v4-core/src/libraries/StateLibrary.sol";
 
@@ -34,22 +35,56 @@ contract VTSCommitLibHarness {
         );
     }
 
-    function incrementCoverage(PoolId poolId, uint8 tokenIndex, uint256 coveredAmount) external {
-        VTSCommitLib.incrementCoverage(s, poolId, tokenIndex, coveredAmount);
+    function validateLiquidityDelta(
+        IOracleHelper oracleHelper,
+        uint256 commitId,
+        PositionId positionId,
+        VTSCommitLib.LiquidityDeltaParams memory params,
+        uint128 preAddLiquidity,
+        uint256 mintAmount0,
+        uint256 mintAmount1,
+        bool revertIfInsufficientBacking
+    ) external view returns (bool, uint256, uint256, uint256) {
+        return VTSCommitLib.validateLiquidityDelta(
+            s,
+            oracleHelper,
+            commitId,
+            positionId,
+            params,
+            preAddLiquidity,
+            mintAmount0,
+            mintAmount1,
+            revertIfInsufficientBacking
+        );
     }
 
-    function commitSignal(IVRLSignalManager mgr, address sender, bytes memory sig) external returns (uint256) {
-        return VTSCommitLib.commitSignal(s, sender, mgr, sig);
+    function commitSignal(IVRLSignalManager mgr, address sender, IOracleHelper oracleHelper, bytes memory sig)
+        external
+        returns (uint256)
+    {
+        return VTSCommitLib._commitSignalLinked(s, sender, mgr, oracleHelper, sig, address(this));
     }
 
-    function renewSignal(IVRLSignalManager mgr, uint256 commitId, bytes memory sig) external {
-        VTSCommitLib.renewSignal(s, msg.sender, mgr, commitId, sig);
+    function renewSignal(IVRLSignalManager mgr, IOracleHelper oracleHelper, uint256 commitId, bytes memory sig)
+        external
+    {
+        VTSCommitLib._renewSignalLinked(s, msg.sender, mgr, oracleHelper, commitId, sig);
+    }
+
+    /// @dev TEST-ONLY: overwrite stored commit MM state (e.g. to simulate legacy unpriceable storage).
+    function setCommitMmState(uint256 commitId, MarketMaker.State memory mm) external {
+        MarketMaker.save(s.commits[commitId].mmState, mm);
+    }
+
+    /// @dev TEST-ONLY: read stored commit MM state (e.g. for metadata bloat regressions).
+    function getCommitMmState(uint256 commitId) external view returns (MarketMaker.State memory) {
+        return s.commits[commitId].mmState;
     }
 
     function checkpoint(IPoolManager poolManager, IOracleHelper oracleHelper, uint256 commitId, PositionId positionId)
         external
     {
-        VTSCommitLib.checkpointWithCommitment(s, poolManager, oracleHelper, commitId, positionId);
+        VTSCommitLib._checkpointWithCommitment(s, poolManager, oracleHelper, commitId, positionId);
     }
 
     // ============ Storage Setters (for test setup) ============
@@ -84,6 +119,11 @@ contract VTSCommitLibHarness {
     function setPositionSettled(PositionId id, uint256 settled0, uint256 settled1) external {
         s.positionAccounting[id].settled.token0 = settled0;
         s.positionAccounting[id].settled.token1 = settled1;
+    }
+
+    function setPositionSettledOverflow(PositionId id, uint256 overflow0, uint256 overflow1) external {
+        s.positionAccounting[id].settledOverflow.token0 = overflow0;
+        s.positionAccounting[id].settledOverflow.token1 = overflow1;
     }
 
     function setPositionCommitmentDeficit(PositionId id, uint256 deficit0, uint256 deficit1) external {
@@ -128,34 +168,8 @@ contract VTSCommitLibHarness {
         return s.commits[commitId].mmState.advancer;
     }
 
-    function getCoveragePerDeficitIndexX128(PoolId poolId, uint8 tokenIndex) external view returns (uint256) {
-        return tokenIndex == 0
-            ? s.poolAccounting[poolId].coveragePerDeficitIndexX128.token0
-            : s.poolAccounting[poolId].coveragePerDeficitIndexX128.token1;
-    }
-
-    function getCoverageResidualDICE(PoolId poolId, uint8 tokenIndex) external view returns (uint256) {
-        return tokenIndex == 0
-            ? s.poolAccounting[poolId].coverageResidualDICE.token0
-            : s.poolAccounting[poolId].coverageResidualDICE.token1;
-    }
-
-    function getCoveragePerSettledIndexX128(PoolId poolId, uint8 tokenIndex) external view returns (uint256) {
-        return tokenIndex == 0
-            ? s.poolAccounting[poolId].coveragePerSettledIndexX128.token0
-            : s.poolAccounting[poolId].coveragePerSettledIndexX128.token1;
-    }
-
-    function getCoverageResidualCISE(PoolId poolId, uint8 tokenIndex) external view returns (uint256) {
-        return tokenIndex == 0
-            ? s.poolAccounting[poolId].coverageResidualCISE.token0
-            : s.poolAccounting[poolId].coverageResidualCISE.token1;
-    }
-
-    function getTotalCISEExposureSinceLastMod(PoolId poolId, uint8 tokenIndex) external view returns (uint256) {
-        return tokenIndex == 0
-            ? s.poolAccounting[poolId].totalCISEExposureSinceLastMod.token0
-            : s.poolAccounting[poolId].totalCISEExposureSinceLastMod.token1;
+    function getCommitAuthorisedRelayer(uint256 commitId) external view returns (address) {
+        return s.commits[commitId].authorisedRelayer;
     }
 
     function getPositionCommitmentDeficit(PositionId id) external view returns (uint256 deficit0, uint256 deficit1) {
@@ -176,7 +190,6 @@ contract VTSCommitLibHarness {
     // ============ Internal Helpers ============
 
     function _emptyConfig() internal pure returns (MarketVTSConfiguration memory cfg) {
-        // Keep the harness independent from MarketTestBase defaults; commit lib doesn't read config.
         TokenConfiguration memory tc = TokenConfiguration({
             gracePeriodTime: 0,
             baseVTSRate: 0,
@@ -184,9 +197,6 @@ contract VTSCommitLibHarness {
             unbackedCommitmentGraceBypassTime: 0,
             unbackedCommitmentGraceBypassThreshold: 0
         });
-        cfg = MarketVTSConfiguration({
-            token0: tc, token1: tc, coverageFeeShare: 0, minResidualUnits: 0, unbackedCommitmentGraceBypassBps: 0
-        });
+        cfg = MarketVTSConfiguration({token0: tc, token1: tc, minResidualUnits: 0, unbackedCommitmentGraceBypassBps: 0});
     }
 }
-

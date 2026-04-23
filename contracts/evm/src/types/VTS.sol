@@ -7,12 +7,94 @@ import {PositionId, Position} from "./Position.sol";
 import {Pool} from "./Pool.sol";
 import {ILiquidityHub} from "../interfaces/ILiquidityHub.sol";
 import {IOracleHelper} from "../interfaces/IOracleHelper.sol";
+import {IVRLSignalManager} from "../interfaces/IVRLSignalManager.sol";
+import {IVRLSettlementObserver} from "../interfaces/IVRLSettlementObserver.sol";
 import {IPoolManager} from "v4-periphery/lib/v4-core/src/interfaces/IPoolManager.sol";
 import {IMarketVault} from "../interfaces/IMarketVault.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {ModifyLiquidityParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
 import {BalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
 import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
+import {FixedPoint128} from "v4-periphery/lib/v4-core/src/libraries/FixedPoint128.sol";
+import {CarryQ128, CarryQ128Lib} from "./Carry.sol";
+
+/// @dev Semantic alias for deficit/inflow growth carry (same representation as `CarryQ128`).
+type GrowthCarryQ128 is uint256;
+
+/// @title GrowthCarryQ128Lib
+/// @notice Path-independent rounding for Uniswap-style growth settlement (`owed = floor(d * L / Q128)` plus carry).
+library GrowthCarryQ128Lib {
+    uint256 internal constant DENOM = FixedPoint128.Q128;
+
+    function unwrap(GrowthCarryQ128 self) internal pure returns (uint256) {
+        return GrowthCarryQ128.unwrap(self);
+    }
+
+    function wrap(uint256 raw) internal pure returns (GrowthCarryQ128) {
+        return GrowthCarryQ128.wrap(raw % DENOM);
+    }
+
+    function zero() internal pure returns (GrowthCarryQ128) {
+        return GrowthCarryQ128.wrap(0);
+    }
+
+    /// @notice Returns whole-token `add` attributed this step and updated carry (`< DENOM`).
+    function accumulate(GrowthCarryQ128 carryIn, uint256 dGrowth, uint128 liquidity)
+        public
+        pure
+        returns (uint256 add, GrowthCarryQ128 carryOut)
+    {
+        CarryQ128 cOut;
+        (add, cOut) = CarryQ128Lib.accumulateGrowth(CarryQ128.wrap(GrowthCarryQ128.unwrap(carryIn)), dGrowth, liquidity);
+        carryOut = GrowthCarryQ128.wrap(CarryQ128.unwrap(cOut));
+    }
+}
+
+/// @notice Per-token pair of Q128 seizure liquidity carries (one per RFS lane).
+struct TokenPairSeizureCarryQ128 {
+    CarryQ128 token0;
+    CarryQ128 token1;
+}
+
+/// @title TokenPairSeizureCarryQ128Lib
+library TokenPairSeizureCarryQ128Lib {
+    function get(TokenPairSeizureCarryQ128 storage self, uint8 tokenIndex) internal view returns (CarryQ128) {
+        return tokenIndex == 0 ? self.token0 : self.token1;
+    }
+
+    function set(TokenPairSeizureCarryQ128 storage self, uint8 tokenIndex, CarryQ128 value) internal {
+        if (tokenIndex == 0) self.token0 = value;
+        else self.token1 = value;
+    }
+
+    function clear(TokenPairSeizureCarryQ128 storage self) internal {
+        self.token0 = CarryQ128.wrap(0);
+        self.token1 = CarryQ128.wrap(0);
+    }
+}
+
+/// @notice Per-token pair of Q128 growth carries (deficit and inflow paths use separate storage pairs).
+struct TokenPairGrowthCarryQ128 {
+    GrowthCarryQ128 token0;
+    GrowthCarryQ128 token1;
+}
+
+/// @title TokenPairGrowthCarryQ128Lib
+library TokenPairGrowthCarryQ128Lib {
+    function get(TokenPairGrowthCarryQ128 storage self, uint8 tokenIndex) internal view returns (GrowthCarryQ128) {
+        return tokenIndex == 0 ? self.token0 : self.token1;
+    }
+
+    function set(TokenPairGrowthCarryQ128 storage self, uint8 tokenIndex, GrowthCarryQ128 value) internal {
+        if (tokenIndex == 0) self.token0 = value;
+        else self.token1 = value;
+    }
+
+    function clear(TokenPairGrowthCarryQ128 storage self) internal {
+        self.token0 = GrowthCarryQ128.wrap(0);
+        self.token1 = GrowthCarryQ128.wrap(0);
+    }
+}
 
 struct TokenConfiguration {
     // Grace period time
@@ -33,8 +115,6 @@ struct MarketVTSConfiguration {
     TokenConfiguration token0;
     // Token configuration for token1
     TokenConfiguration token1;
-    // Fee share applied to LP fees when protocol covers deficits (in basis points)
-    uint16 coverageFeeShare;
     // Minimum residual liquidity units threshold for full position closure during seizure
     uint256 minResidualUnits;
     // Commitment deficit severity threshold (bps) above which grace bypass is allowed
@@ -52,6 +132,29 @@ struct PositionContext {
     IOracleHelper oracleHelper;
     // Market vault address for settlement clamping
     IMarketVault marketVault;
+}
+
+/// @notice Lightweight orchestrator context for lifecycle library paths
+struct VTSLifecycleContext {
+    IPoolManager poolManager;
+    ILiquidityHub liquidityHub;
+    IOracleHelper oracleHelper;
+    IVRLSettlementObserver settlementObserver;
+}
+
+/// @notice CoreHook processing context before market-vault resolution
+struct VTSCoreHookContext {
+    IPoolManager poolManager;
+    ILiquidityHub liquidityHub;
+    IOracleHelper oracleHelper;
+}
+
+/// @notice Routing context for commit/renew entrypoints
+struct VTSCommitRouterContext {
+    ILiquidityHub liquidityHub;
+    IVRLSignalManager signalManager;
+    /// @dev Used to enforce signal admission (oracle-priceable reserve set) on commit/renew.
+    IOracleHelper oracleHelper;
 }
 
 /// @notice Parameters for touchPosition to reduce stack pressure
@@ -72,14 +175,9 @@ struct TouchPositionParams {
 }
 
 /// @notice Result of touchPosition to reduce stack pressure
-/// @dev Bundles return values into single struct
 struct TouchPositionResult {
-    // The position struct
     Position pos;
-    // The position id
     PositionId id;
-    // The fee adjustment delta
-    BalanceDelta feeAdj;
 }
 
 /// @notice Parameters for onMMSettle to reduce stack pressure
@@ -97,6 +195,18 @@ struct SettleParams {
     BalanceDelta delta;
     // Whether the position is being seized
     bool isSeizing;
+    // When true, deposit lanes settle from existing positive underlying delta (explicit settle-from-deltas path). No-op for withdrawals.
+    bool fromDeltas;
+}
+
+/// @notice Explicit vault execution intent computed by VTS settlement paths.
+/// @dev `requestedDelta` is the final vault delta to execute after VTS-side clamping.
+///      `creditBackedWithdrawal{0,1}` describe the portion of positive withdrawal lanes that
+///      are funded by produced same-underlying credit rather than the destination market reserve.
+struct VaultSettlementIntent {
+    BalanceDelta requestedDelta;
+    uint256 creditBackedWithdrawal0;
+    uint256 creditBackedWithdrawal1;
 }
 
 /// @notice Result of onMMSettle to reduce stack pressure
@@ -104,6 +214,8 @@ struct SettleParams {
 struct SettleResult {
     // The delta actually applied to underlying
     BalanceDelta settlementDelta;
+    // Explicit vault execution intent for downstream custody calls.
+    VaultSettlementIntent vaultSettlementIntent;
     // Whether the RFS is open for the position
     bool rfsOpen;
     // The amount of liquidity units seized (non-zero only when seizing)
@@ -117,79 +229,61 @@ struct PositionAccounting {
     TokenPairUint commitmentMax;
     // Settled amounts per token
     TokenPairUint settled;
+    /// @dev Deferred positive settlement when inflow would exceed `commitmentMax` on the live `settled` lane.
+    ///      Consumed before deficit accrual and migrated into `settled` when headroom reopens.
+    TokenPairUint settledOverflow;
     // Cumulative deficit per token (raw units)
     TokenPairUint cumulativeDeficit;
     // Deficit growth snapshots per token
     TokenPairUint deficitGrowthInsideLast;
     // Inflow growth snapshots per token
     TokenPairUint inflowGrowthInsideLast;
-    // Fee growth snapshots per token
-    TokenPairUint feeGrowthInsideLast;
     // Cumulative outflows per token
     TokenPairUint cumulativeOutflows;
-    // Outflow snapshots at last fee snap per token
-    TokenPairUint outflowsAtFeeSnap;
     // Commitment-scoped deficit (insolvency gate) per token.
-    // Derived from checkpoint backing shortfall; not part of DICE principal accounting.
+    // Derived from checkpoint backing shortfall.
     TokenPairUint commitmentDeficit;
     // Commitment deficit severity in bps (0-10000), updated by commitment checkpoints
     uint16 commitmentDeficitBps;
     // Timestamp at which commitment deficit became non-zero per token (0 when token deficit is zero)
     TokenPairUint commitmentDeficitSince;
-    // Fees shared by position per token
-    TokenPairUint feesShared;
-    // Pending fee adjustments per token: +slash (reduces payout), -bonus (increases payout)
-    TokenPairInt pendingFeeAdj;
-    // DICE: Coverage index checkpoint per token (snapshot of pool index at last settlement)
-    TokenPairUint coverageIndexLastX128;
-    // DICE: Residual-only coverage index checkpoint per token
-    TokenPairUint residualCoverageIndexLastX128;
-    // DICE: Banked residual-derived burn base awaiting a later outflow window
-    TokenPairUint pendingResidualBurnBase;
-    // DICE: Outflow watermark captured when residual burn base is banked
-    TokenPairUint pendingResidualBurnOutflowsFloor;
-    // CISE: Position checkpoint of pool coverage-per-settled index (Q128)
-    TokenPairUint ciseIndexLastX128;
-    // CISE: Banked realised exposure since last bonus allocation
-    TokenPairUint ciseExposureSinceLastMod;
-    // CSI: Position checkpoint of pool spend index (Q128)
-    TokenPairUint feesSharedIndexLastX128;
-    // Remainder numerator for coverage fee-burn baseline checkpoint (see VTSPositionLib._applyBurnBase).
-    // Appended for storage-layout compatibility on upgrade.
-    TokenPairUint feeBurnGrowthRemainder;
+    /// @dev Q128 fractional remainder carry for deficit growth settlement; path-independent across repeated
+    ///      `settlePositionGrowths` calls. Cleared when deficit growth snapshots are rebased (`_initDeficitSnapshot` / tick checkpoint).
+    TokenPairGrowthCarryQ128 deficitGrowthCarry;
+    /// @dev Q128 fractional remainder carry for inflow growth settlement; cleared on inflow snapshot rebase.
+    TokenPairGrowthCarryQ128 inflowGrowthCarry;
+    /// @dev Q128 fractional remainder carry for seizure liquidity sizing per lane; path-independent across repeated
+    ///      guarantor interventions. Cleared when `VTSPositionLib._trackCommitment` runs with zero live liquidity
+    ///      (terminal deactivation), not on ordinary commitment refreshes while liquidity remains positive.
+    TokenPairSeizureCarryQ128 seizureLiquidityCarry;
+}
+
+/// @title PositionAccountingLib
+/// @notice Read helpers for `PositionAccounting` (canonical economic quantities per position)
+library PositionAccountingLib {
+    /// @notice Effective settled per lane: live `settled` + `settledOverflow`
+    function effectiveSettled(PositionAccounting storage pa) internal view returns (uint256 eff0, uint256 eff1) {
+        eff0 = pa.settled.token0 + pa.settledOverflow.token0;
+        eff1 = pa.settled.token1 + pa.settledOverflow.token1;
+    }
+
+    /// @notice Effective settled for a single lane (`tokenIndex` 0 or 1)
+    function effectiveSettledLane(PositionAccounting storage pa, uint8 tokenIndex) internal view returns (uint256) {
+        return TokenPairLib.get(pa.settled, tokenIndex) + TokenPairLib.get(pa.settledOverflow, tokenIndex);
+    }
 }
 
 /// @notice Per-pool accounting data (mirrors VTSManager per-pool mappings)
-/// @dev Split out of VTSManager to follow the Bunni-style storage pattern
+/// @dev Swap growth globals plus pool-wide aggregates for deficit principal and settled liquidity.
 struct PoolAccounting {
     // Deficit growth global per token
     TokenPairUint deficitGrowthGlobal;
     // Inflow growth global per token
     TokenPairUint inflowGrowthGlobal;
-    // Protocol/LPs fee pot accrued from fee sharing per token
-    TokenPairUint protocolFeeAccrued;
-    // Slashed pot balances per token
-    TokenPairUint slashedPot;
-    // DICE: Pool-wide outstanding swap-incurred deficit principal per token.
-    // Mirrors summed cumulativeDeficit and excludes commitmentDeficit.
+    // Pool-wide outstanding swap-incurred deficit principal per token (mirrors summed position cumulativeDeficit, excludes commitmentDeficit)
     TokenPairUint totalDeficitPrincipal;
-    // DICE: Coverage-per-deficit-unit index (Q128) per token
-    TokenPairUint coveragePerDeficitIndexX128;
-    // DICE: Residual-only coverage-per-deficit-unit index (Q128) per token
-    TokenPairUint coveragePerResidualDeficitIndexX128;
-    // DICE: Deferred coverage residual (socialised when totalDeficitPrincipal = 0 at exercise time)
-    TokenPairUint coverageResidualDICE;
-    // CISE: Pool-wide total settled aggregate per token
+    // Pool-wide total settled aggregate per token
     TokenPairUint totalSettled;
-    // CISE: Coverage-per-settled index (Q128) per token
-    TokenPairUint coveragePerSettledIndexX128;
-    // CISE: Deferred residual when totalSettled = 0 at exercise time
-    TokenPairUint coverageResidualCISE;
-    // CISE: Pool-wide bonus denominator window: incremented by coveredAmount on each coverage index step
-    // (and by deferred residual on flush); decremented when bonuses are allocated. Position numerators accrue lazily.
-    TokenPairUint totalCISEExposureSinceLastMod;
-    // CSI: Spend-per-share index (Q128), advances when bonuses allocated
-    TokenPairUint feesSharedSpendIndexX128;
 }
 
 /// @notice Simple pair struct for per-tick growth (replaces uint256[2] arrays)
@@ -206,7 +300,7 @@ struct TokenPairUint {
 }
 
 /// @notice Pair struct for int256 values per token (token0 and token1)
-/// @dev Used for signed accounting fields like net settlement and fee adjustments
+/// @dev Used for signed accounting fields like net settlement
 struct TokenPairInt {
     int256 token0;
     int256 token1;

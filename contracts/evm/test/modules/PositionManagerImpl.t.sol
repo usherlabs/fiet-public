@@ -4,8 +4,6 @@ pragma solidity ^0.8.26;
 import "forge-std/Test.sol";
 
 import {PositionManagerImpl} from "../../src/modules/PositionManagerImpl.sol";
-import {PositionManagerQueueCustodian} from "../../src/modules/PositionManagerQueueCustodian.sol";
-import {IMMQueueCustodian} from "../../src/interfaces/IMMQueueCustodian.sol";
 import {IPoolManager} from "v4-periphery/lib/v4-core/src/interfaces/IPoolManager.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
@@ -41,9 +39,37 @@ contract MockERC20 {
 contract MockMarketFactory {
     event AfterModifyLiquidityCalled(bytes32 poolId);
     address public liquidityHub;
+    address public coreHookAddr;
+
+    mapping(bytes32 corePoolId => bytes32 proxyPoolId) internal _coreToProxy;
+    mapping(bytes32 proxyPoolId => address hook) internal _proxyToHook;
 
     function setLiquidityHub(address hub) external {
         liquidityHub = hub;
+    }
+
+    function setCoreHookAddr(address hook) external {
+        coreHookAddr = hook;
+    }
+
+    function coreHook() external view returns (address) {
+        return coreHookAddr;
+    }
+
+    function setCoreToProxy(PoolId corePoolId, PoolId proxyPoolId) external {
+        _coreToProxy[PoolId.unwrap(corePoolId)] = PoolId.unwrap(proxyPoolId);
+    }
+
+    function coreToProxy(PoolId corePoolId) external view returns (PoolId) {
+        return PoolId.wrap(_coreToProxy[PoolId.unwrap(corePoolId)]);
+    }
+
+    function setProxyToHook(PoolId proxyPoolId, address hook) external {
+        _proxyToHook[PoolId.unwrap(proxyPoolId)] = hook;
+    }
+
+    function proxyToHook(PoolId proxyPoolId) external view returns (address) {
+        return _proxyToHook[PoolId.unwrap(proxyPoolId)];
     }
 
     function afterModifyLiquidity(PoolKey memory key) external {
@@ -54,6 +80,7 @@ contract MockMarketFactory {
 contract MockLiquidityHub {
     mapping(address => bool) public isLCC;
     address public factory;
+    mapping(bytes32 => uint256) internal _settleQueue;
 
     function setIsLCC(address token, bool v) external {
         isLCC[token] = v;
@@ -65,6 +92,11 @@ contract MockLiquidityHub {
 
     function getFactory(address, address) external view returns (MockMarketFactory) {
         return MockMarketFactory(factory);
+    }
+
+    /// @dev Minimal `settleQueue` for router queue-delta reconstruction; defaults to 0.
+    function settleQueue(address lcc, address recipient) external view returns (uint256) {
+        return _settleQueue[keccak256(abi.encode(lcc, recipient))];
     }
 }
 
@@ -172,8 +204,22 @@ contract MockPoolManager {
         return msg.value;
     }
 
-    function take(Currency, address, uint256) external {
+    /// @dev Simulates PoolManager paying out ERC20: mints to `recipient` so `_handleLccBalanceIncrease` sees real `inc`.
+    ///      `takeBps` scales credited amount (10000 = full); use lower bps to emulate transfer-side burn before custody.
+    uint256 public takeBps = 10_000;
+
+    function setTakeBps(uint256 bps) external {
+        takeBps = bps;
+    }
+
+    function take(Currency currency, address recipient, uint256 amount) external {
         takeCount++;
+        address c = Currency.unwrap(currency);
+        if (c.code.length == 0) return;
+        uint256 out = (amount * takeBps) / 10_000;
+        if (out > 0) {
+            MockERC20(c).mint(recipient, out);
+        }
     }
 
     function mint(address, uint256, uint256) external {}
@@ -196,43 +242,58 @@ contract MockPoolManager {
     }
 }
 
-/// @notice Minimal orchestrator for `_handleLccBalanceIncrease` tests (sync/getFullCredit/take only).
-contract MockOrchestratorHandleLcc {
-    uint256 public credit;
+/// @notice State reflects `creditExact` inflows; used by LCC-balance and PM harness tests.
+contract MockOrchestratorHandleLcc is IVTSCurrencyDelta {
     uint256 public lastTakeAmount;
-    uint256 public syncCallCount;
+    address public lastTakeCurrency;
+    address public lastTakeLocker;
 
-    address public lastSyncFactory;
+    address public lastCreditExactCurrency;
+    address public lastCreditTarget;
+    uint256 public lastCreditExactAmount;
+
+    IMarketFactory public lastSyncFactory;
     address public lastSyncCurrency;
     address public lastSyncBalanceHolder;
     address public lastSyncLocker;
 
-    address public lastTakeCurrency;
-    address public lastTakeLocker;
+    /// @dev Bump in `resetCredit` so per-test `vm.mockCall` / mapping state does not leak.
+    uint32 public creditEpoch;
+    mapping(bytes32 => uint256) internal _credits;
+
+    function _creditKey(Currency currency, address account) private pure returns (bytes32) {
+        return keccak256(abi.encode(Currency.unwrap(currency), account));
+    }
 
     function resetCredit() external {
-        credit = 0;
+        creditEpoch++;
         lastTakeAmount = 0;
-        syncCallCount = 0;
-        lastSyncFactory = address(0);
+        lastTakeCurrency = address(0);
+        lastTakeLocker = address(0);
+        lastCreditExactCurrency = address(0);
+        lastCreditTarget = address(0);
+        lastCreditExactAmount = 0;
+        lastSyncFactory = IMarketFactory(address(0));
         lastSyncCurrency = address(0);
         lastSyncBalanceHolder = address(0);
         lastSyncLocker = address(0);
-        lastTakeCurrency = address(0);
-        lastTakeLocker = address(0);
     }
 
-    function sync(IMarketFactory factory, Currency currency, address balanceHolder, address locker_) external {
-        syncCallCount++;
-        lastSyncFactory = address(factory);
-        lastSyncCurrency = Currency.unwrap(currency);
-        lastSyncBalanceHolder = balanceHolder;
-        lastSyncLocker = locker_;
-        credit = 100;
+    function getFullCredit(Currency currency, address owner) external view returns (uint256) {
+        return _credits[_creditKey(currency, owner)];
     }
 
-    function getFullCredit(Currency, address) external view returns (uint256) {
-        return credit;
+    function creditExact(IMarketFactory, Currency currency, address target, uint256 amount)
+        external
+        returns (int128 deltaChange)
+    {
+        address c = Currency.unwrap(currency);
+        (lastCreditExactCurrency, lastCreditTarget, lastCreditExactAmount) = (c, target, amount);
+        _credits[_creditKey(currency, target)] += amount;
+        if (amount > uint256(int256(type(int128).max))) {
+            return type(int128).max;
+        }
+        return int128(int256(uint256(amount)));
     }
 
     function take(Currency currency, address locker_, uint256 maxAmount) external returns (uint256) {
@@ -241,13 +302,44 @@ contract MockOrchestratorHandleLcc {
         lastTakeAmount = maxAmount;
         return maxAmount;
     }
+
+    function getFullDebt(Currency, address) external pure returns (uint256) {
+        return 0;
+    }
+
+    function getFullCreditPair(Currency, Currency, address) external pure returns (uint256, uint256) {
+        return (0, 0);
+    }
+
+    function getFullDebtPair(Currency, Currency, address) external pure returns (uint256, uint256) {
+        return (0, 0);
+    }
+
+    function getUnderlyingDeltaPair(address, Currency, Currency) external pure returns (BalanceDelta) {
+        return toBalanceDelta(0, 0);
+    }
+
+    function assertNonZeroDeltas(IMarketFactory) external view {}
+
+    function sync(IMarketFactory, Currency, address, address) external {}
+
+    function syncPair(IMarketFactory factory, Currency currency0, Currency, address owner, address target)
+        external
+        returns (int128, int128)
+    {
+        lastSyncFactory = factory;
+        lastSyncCurrency = Currency.unwrap(currency0);
+        lastSyncBalanceHolder = owner;
+        lastSyncLocker = target;
+        return (0, 0);
+    }
 }
 
-contract PositionManagerImplHarness is PositionManagerQueueCustodian, PositionManagerImpl {
+contract PositionManagerImplHarness is PositionManagerImpl {
     address internal _locker;
 
-    constructor(IPoolManager pm, address marketFactory, address orch, address locker)
-        PositionManagerImpl(pm, marketFactory, orch)
+    constructor(IPoolManager pm, address marketFactory, address orch, address canonicalCustody, address locker)
+        PositionManagerImpl(pm, marketFactory, orch, canonicalCustody)
     {
         _locker = locker;
     }
@@ -256,8 +348,8 @@ contract PositionManagerImplHarness is PositionManagerQueueCustodian, PositionMa
         return _locker;
     }
 
-    function _queueCustodian() internal view override(PositionManagerQueueCustodian) returns (IMMQueueCustodian) {
-        return IMMQueueCustodian(address(this));
+    function _queueSettleRecipient(uint256) internal view override returns (address) {
+        return msgSender();
     }
 
     function _forwardQueuedLccToCustodian(Currency currency, uint256 tokenId, address beneficiary, uint256 amount)
@@ -284,7 +376,7 @@ contract PositionManagerImplHarness is PositionManagerQueueCustodian, PositionMa
         ModifyLiquidityParams memory params,
         uint256 tokenId,
         bytes memory hookData
-    ) external returns (BalanceDelta, BalanceDelta) {
+    ) external returns (BalanceDelta, BalanceDelta, BalanceDelta) {
         return _modifySyntheticLiquidity(key, params, tokenId, hookData);
     }
 
@@ -307,10 +399,6 @@ contract PositionManagerImplHarness is PositionManagerQueueCustodian, PositionMa
     function exposeSyncPairBalanceAsCredit(Currency c0, Currency c1) external {
         _syncPairBalanceAsCredit(c0, c1);
     }
-
-    function exposeQueueCustodian() external view returns (address) {
-        return address(_queueCustodian());
-    }
 }
 
 contract PositionManagerImplRecordingHarness is PositionManagerImplHarness {
@@ -321,8 +409,8 @@ contract PositionManagerImplRecordingHarness is PositionManagerImplHarness {
     address public lastFwdBeneficiary;
     uint256 public lastFwdAmount;
 
-    constructor(IPoolManager pm, address marketFactory, address orch, address locker)
-        PositionManagerImplHarness(pm, marketFactory, orch, locker)
+    constructor(IPoolManager pm, address marketFactory, address orch, address canonicalCustody, address locker)
+        PositionManagerImplHarness(pm, marketFactory, orch, canonicalCustody, locker)
     {}
 
     function _forwardQueuedLccToCustodian(Currency currency, uint256 tokenId, address beneficiary, uint256 amount)
@@ -343,9 +431,12 @@ contract PositionManagerImplRecordingHarness is PositionManagerImplHarness {
         uint256 balanceAfter,
         int128 feesAccruedAmount,
         address locker_,
-        uint256 tokenId
+        uint256 tokenId,
+        uint256 qCommitted
     ) external {
-        _handleLccBalanceIncrease(key, currency, balanceBefore, balanceAfter, feesAccruedAmount, locker_, tokenId);
+        _handleLccBalanceIncrease(
+            key, currency, balanceBefore, balanceAfter, feesAccruedAmount, locker_, tokenId, qCommitted
+        );
     }
 }
 
@@ -364,6 +455,9 @@ contract PositionManagerImplTest is Test {
     address internal ua0;
     address internal ua1;
     address internal owner;
+    address internal coreHookAddr;
+    address internal canonicalCustody;
+    PoolId internal canonicalProxyPoolId;
 
     function setUp() public {
         poolManager = new MockPoolManager();
@@ -372,9 +466,7 @@ contract PositionManagerImplTest is Test {
         factory.setLiquidityHub(address(hub));
         hub.setFactory(address(factory));
 
-        orch = makeAddr("vtsOrchestrator");
-        // Foundry reverts on interface calls to EOAs ("call to non-contract address").
-        vm.etch(orch, hex"00");
+        orch = address(new MockOrchestratorHandleLcc());
         locker = makeAddr("locker");
         owner = makeAddr("owner");
 
@@ -383,11 +475,22 @@ contract PositionManagerImplTest is Test {
         ua0 = makeAddr("ua0");
         ua1 = makeAddr("ua1");
 
+        coreHookAddr = makeAddr("coreHook");
+        factory.setCoreHookAddr(coreHookAddr);
+        canonicalCustody = makeAddr("canonicalCustody");
+        canonicalProxyPoolId = PoolId.wrap(keccak256("canonicalProxyPool"));
+
         // Mock LCC -> underlying conversion.
         vm.mockCall(lcc0, abi.encodeWithSignature("underlying()"), abi.encode(ua0));
         vm.mockCall(lcc1, abi.encodeWithSignature("underlying()"), abi.encode(ua1));
 
-        h = new PositionManagerImplHarness(IPoolManager(address(poolManager)), address(factory), orch, locker);
+        h = new PositionManagerImplHarness(
+            IPoolManager(address(poolManager)), address(factory), orch, canonicalCustody, locker
+        );
+
+        PoolKey memory canonKey = _defaultKey();
+        factory.setCoreToProxy(canonKey.toId(), canonicalProxyPoolId);
+        factory.setProxyToHook(canonicalProxyPoolId, makeAddr("canonicalProxyVault"));
     }
 
     function _defaultKey() internal view returns (PoolKey memory) {
@@ -396,7 +499,7 @@ contract PositionManagerImplTest is Test {
             currency1: Currency.wrap(lcc1),
             fee: 0,
             tickSpacing: 1,
-            hooks: IHooks(address(0))
+            hooks: IHooks(coreHookAddr)
         });
     }
 
@@ -499,10 +602,6 @@ contract PositionManagerImplTest is Test {
         h.exposeSyncPairBalanceAsCredit(c0, c1);
     }
 
-    function test_queueCustodian_override_returnsHarnessAddress() public view {
-        assertEq(h.exposeQueueCustodian(), address(h));
-    }
-
     function _seedPositionLiquidity(PoolKey memory key, int24 tickLower, int24 tickUpper, bytes32 salt, uint128 liq)
         internal
     {
@@ -533,6 +632,41 @@ contract PositionManagerImplTest is Test {
         h.exposeModifySyntheticLiquidity(key, params, 0, "");
     }
 
+    function test_modifySyntheticLiquidity_revertsInvalidMarket_whenHooksNotCoreHook() public {
+        PoolKey memory key = _defaultKey();
+        key.hooks = IHooks(makeAddr("foreignHook"));
+
+        ModifyLiquidityParams memory params = ModifyLiquidityParams({
+            tickLower: -60, tickUpper: 60, liquidityDelta: int128(1), salt: bytes32(uint256(789))
+        });
+        _seedPositionLiquidity(key, params.tickLower, params.tickUpper, params.salt, 10);
+        poolManager.setModifyLiquidityReturn(BalanceDelta.wrap(0), BalanceDelta.wrap(0));
+
+        vm.expectRevert(abi.encodeWithSelector(Errors.InvalidMarket.selector, key));
+        h.exposeModifySyntheticLiquidity(key, params, 0, "");
+    }
+
+    function test_modifySyntheticLiquidity_revertsInvalidMarket_whenProxyHookUnset() public {
+        PoolKey memory key = PoolKey({
+            currency0: Currency.wrap(lcc0),
+            currency1: Currency.wrap(lcc1),
+            fee: 0,
+            tickSpacing: 1,
+            hooks: IHooks(coreHookAddr)
+        });
+        // Same currencies and hook as canonical, but different fee => different pool id with no factory mapping.
+        key.fee = 1;
+
+        ModifyLiquidityParams memory params = ModifyLiquidityParams({
+            tickLower: -60, tickUpper: 60, liquidityDelta: int128(1), salt: bytes32(uint256(790))
+        });
+        _seedPositionLiquidity(key, params.tickLower, params.tickUpper, params.salt, 10);
+        poolManager.setModifyLiquidityReturn(BalanceDelta.wrap(0), BalanceDelta.wrap(0));
+
+        vm.expectRevert(abi.encodeWithSelector(Errors.InvalidMarket.selector, key));
+        h.exposeModifySyntheticLiquidity(key, params, 0, "");
+    }
+
     function test_modifySyntheticLiquidity_settlesDebts_takesCredits_syncsLCC_andCallsFactory() public {
         PoolKey memory key = _defaultKey();
 
@@ -560,10 +694,6 @@ contract PositionManagerImplTest is Test {
         poolManager.setModifyLiquidityReturn(callerDelta, BalanceDelta.wrap(0));
 
         // Orchestrator sync is called only for positive deltas AND LCC currencies.
-        vm.expectCall(
-            orch,
-            abi.encodeWithSignature("sync(address,address,address,address)", address(factory), lcc1, address(h), locker)
-        );
         vm.mockCall(
             orch, abi.encodeWithSignature("getFullCredit(address,address)", lcc1, locker), abi.encode(uint256(0))
         );
@@ -580,6 +710,106 @@ contract PositionManagerImplTest is Test {
         // take path for delta1>0 does one take on the pool manager.
         assertEq(poolManager.takeCount(), 1);
     }
+
+    /// @notice Third return is post-transfer immediate non-fee LCC forwarded (same as `forwardedNonFeeLccAmount(inc, ...)` when `take` credits the full delta).
+    function test_modifySyntheticLiquidity_returnsActualForwardedNonFee_afterHookDelta_fullTake() public {
+        PoolKey memory key = _defaultKey();
+        hub.setIsLCC(lcc0, true);
+        hub.setIsLCC(lcc1, true);
+
+        ModifyLiquidityParams memory params = ModifyLiquidityParams({
+            tickLower: -60, tickUpper: 60, liquidityDelta: int128(-10), salt: bytes32(uint256(888))
+        });
+        _seedPositionLiquidity(key, params.tickLower, params.tickUpper, params.salt, 100);
+
+        BalanceDelta callerDelta = toBalanceDelta(int128(500), int128(0));
+        BalanceDelta feesAccrued = toBalanceDelta(int128(200), int128(0));
+        poolManager.setModifyLiquidityReturn(callerDelta, feesAccrued);
+        // Positive hook delta on currency0: netFee = max(200 - 10, 0) = 190 => forwarded = 500 - 190 = 310.
+        poolManager.setHookCurrencyDelta(coreHookAddr, Currency.wrap(lcc0), int256(10));
+
+        MockERC20 token0 = new MockERC20();
+        vm.etch(lcc0, address(token0).code);
+        MockERC20(lcc0).mint(address(h), 1_000_000);
+
+        vm.mockCall(
+            orch, abi.encodeWithSignature("getFullCredit(address,address)", lcc0, locker), abi.encode(uint256(0))
+        );
+
+        vm.expectEmit(false, false, false, true, address(factory));
+        emit MockMarketFactory.AfterModifyLiquidityCalled(PoolId.unwrap(key.toId()));
+
+        (,, BalanceDelta mmBasis) = h.exposeModifySyntheticLiquidity(key, params, 0, "");
+        assertEq(mmBasis.amount0(), int128(310));
+        assertEq(mmBasis.amount1(), int128(0));
+    }
+
+    /// @notice When transfer-side burn zeroes net receipt (`takeBps == 0`), min-out basis is zero (not `callerDelta`-based).
+    function test_modifySyntheticLiquidity_returnsActualForwardedNonFee_simulatedFullTransferBurn() public {
+        PoolKey memory key = _defaultKey();
+        hub.setIsLCC(lcc0, true);
+        hub.setIsLCC(lcc1, true);
+
+        ModifyLiquidityParams memory params = ModifyLiquidityParams({
+            tickLower: -60, tickUpper: 60, liquidityDelta: int128(-10), salt: bytes32(uint256(889))
+        });
+        _seedPositionLiquidity(key, params.tickLower, params.tickUpper, params.salt, 100);
+
+        BalanceDelta callerDelta = toBalanceDelta(int128(500), int128(0));
+        BalanceDelta feesAccrued = toBalanceDelta(int128(200), int128(0));
+        poolManager.setModifyLiquidityReturn(callerDelta, feesAccrued);
+        poolManager.setHookCurrencyDelta(coreHookAddr, Currency.wrap(lcc0), int256(10));
+        poolManager.setTakeBps(0);
+
+        MockERC20 token0 = new MockERC20();
+        vm.etch(lcc0, address(token0).code);
+        MockERC20(lcc0).mint(address(h), 1_000_000);
+
+        vm.mockCall(
+            orch, abi.encodeWithSignature("getFullCredit(address,address)", lcc0, locker), abi.encode(uint256(0))
+        );
+
+        vm.expectEmit(false, false, false, true, address(factory));
+        emit MockMarketFactory.AfterModifyLiquidityCalled(PoolId.unwrap(key.toId()));
+
+        (,, BalanceDelta mmBasis) = h.exposeModifySyntheticLiquidity(key, params, 0, "");
+        assertEq(mmBasis.amount0(), int128(0));
+        assertEq(mmBasis.amount1(), int128(0));
+    }
+
+    /// @notice Partial net receipt: basis matches `forwardedNonFeeLccAmount(inc, ...)` not pre-transfer `callerDelta`.
+    function test_modifySyntheticLiquidity_returnsActualForwardedNonFee_simulatedPartialTransferBurn() public {
+        PoolKey memory key = _defaultKey();
+        hub.setIsLCC(lcc0, true);
+        hub.setIsLCC(lcc1, true);
+
+        ModifyLiquidityParams memory params = ModifyLiquidityParams({
+            tickLower: -60, tickUpper: 60, liquidityDelta: int128(-10), salt: bytes32(uint256(890))
+        });
+        _seedPositionLiquidity(key, params.tickLower, params.tickUpper, params.salt, 100);
+
+        BalanceDelta callerDelta = toBalanceDelta(int128(500), int128(0));
+        BalanceDelta feesAccrued = toBalanceDelta(int128(200), int128(0));
+        poolManager.setModifyLiquidityReturn(callerDelta, feesAccrued);
+        poolManager.setHookCurrencyDelta(coreHookAddr, Currency.wrap(lcc0), int256(10));
+        // inc = 500 * 4000 / 10000 = 200; netFee = 190 => nonFee = 10 (not 310 from callerDelta 500).
+        poolManager.setTakeBps(4000);
+
+        MockERC20 token0 = new MockERC20();
+        vm.etch(lcc0, address(token0).code);
+        MockERC20(lcc0).mint(address(h), 1_000_000);
+
+        vm.mockCall(
+            orch, abi.encodeWithSignature("getFullCredit(address,address)", lcc0, locker), abi.encode(uint256(0))
+        );
+
+        vm.expectEmit(false, false, false, true, address(factory));
+        emit MockMarketFactory.AfterModifyLiquidityCalled(PoolId.unwrap(key.toId()));
+
+        (,, BalanceDelta mmBasis) = h.exposeModifySyntheticLiquidity(key, params, 0, "");
+        assertEq(mmBasis.amount0(), int128(10));
+        assertEq(mmBasis.amount1(), int128(0));
+    }
 }
 
 contract PositionManagerHandleLccHardeningTest is Test {
@@ -590,6 +820,7 @@ contract PositionManagerHandleLccHardeningTest is Test {
     MockMarketFactory internal factory;
 
     address internal locker = makeAddr("lockerHcc");
+    address internal canonicalCustody = makeAddr("canonicalCustodyHcc");
     address internal lcc0;
     address internal lcc1;
     address internal ua0;
@@ -613,7 +844,7 @@ contract PositionManagerHandleLccHardeningTest is Test {
         vm.mockCall(lcc1, abi.encodeWithSignature("underlying()"), abi.encode(ua1));
 
         h = new PositionManagerImplRecordingHarness(
-            IPoolManager(address(poolManager)), address(factory), address(orch), locker
+            IPoolManager(address(poolManager)), address(factory), address(orch), canonicalCustody, locker
         );
     }
 
@@ -640,32 +871,70 @@ contract PositionManagerHandleLccHardeningTest is Test {
         orch.resetCredit();
         poolManager.setHookCurrencyDelta(hooksAddr, Currency.wrap(lcc0), int256(10));
 
+        // prev credit, `creditExact(inc)` for this take, re-read for `addedCredit`, then `take(nonFee)`.
         vm.expectCall(address(orch), abi.encodeCall(IVTSCurrencyDelta.getFullCredit, (Currency.wrap(lcc0), locker)));
         vm.expectCall(
             address(orch),
             abi.encodeCall(
-                IVTSCurrencyDelta.sync, (IMarketFactory(address(factory)), Currency.wrap(lcc0), address(h), locker)
+                IVTSCurrencyDelta.creditExact,
+                (IMarketFactory(address(factory)), Currency.wrap(lcc0), locker, uint256(100))
             )
         );
         vm.expectCall(address(orch), abi.encodeCall(IVTSCurrencyDelta.getFullCredit, (Currency.wrap(lcc0), locker)));
         vm.expectCall(address(orch), abi.encodeCall(IVTSCurrencyDelta.take, (Currency.wrap(lcc0), locker, uint256(80))));
 
-        h.exposeHandleLccBalanceIncrease(key, Currency.wrap(lcc0), 0, 100, int128(30), locker, 7);
+        // tokenId 0: forward `nonFee` (no commit-bucket queue delta in this direct harness).
+        h.exposeHandleLccBalanceIncrease(key, Currency.wrap(lcc0), 0, 100, int128(30), locker, 0, 0);
 
-        // fee = max(30 - 10, 0) = 20; nonFee = 100 - 20 = 80
+        // fee = max(30 - 10, 0) = 20; nonFee = 100 - 20 = 80; addedCredit from exact credit = 100; take = 100 - 20 = 80
         assertEq(h.forwardCallCount(), 1);
         assertEq(h.lastFwdAmount(), 80);
-        assertEq(h.lastFwdTokenId(), 7);
+        assertEq(h.lastFwdTokenId(), 0);
         assertEq(h.lastFwdBeneficiary(), locker);
         assertEq(Currency.unwrap(h.lastFwdCurrency()), lcc0);
 
-        assertEq(orch.lastSyncFactory(), address(factory));
-        assertEq(orch.lastSyncCurrency(), lcc0);
-        assertEq(orch.lastSyncBalanceHolder(), address(h));
-        assertEq(orch.lastSyncLocker(), locker);
-
-        // credit after sync = 100; extra = 100 - 20 = 80
+        assertEq(orch.lastCreditExactCurrency(), lcc0);
+        assertEq(orch.lastCreditTarget(), locker);
+        assertEq(orch.lastCreditExactAmount(), 100);
         assertEq(orch.lastTakeAmount(), 80);
+        assertEq(orch.lastTakeCurrency(), lcc0);
+        assertEq(orch.lastTakeLocker(), locker);
+    }
+
+    /// @notice Commit bucket (`tokenId > 0`): debit locker delta only by `qCommitted` forwarded to custody; surplus
+    ///         `nonFee - qCommitted` remains as locker transient LCC credit for `TAKE` / `UNWRAP_LCC`.
+    function test_handleLccBalanceIncrease_commitBucket_takesOnlyCustodyForwardNotFullNonFee() public {
+        hub.setIsLCC(lcc0, true);
+        address hooksAddr = makeAddr("hooksHccCommit");
+        PoolKey memory key = _key(hooksAddr);
+
+        MockERC20 token = new MockERC20();
+        vm.etch(lcc0, address(token).code);
+        MockERC20(lcc0).mint(address(h), 100);
+
+        orch.resetCredit();
+        poolManager.setHookCurrencyDelta(hooksAddr, Currency.wrap(lcc0), int256(10));
+
+        vm.expectCall(address(orch), abi.encodeCall(IVTSCurrencyDelta.getFullCredit, (Currency.wrap(lcc0), locker)));
+        vm.expectCall(
+            address(orch),
+            abi.encodeCall(
+                IVTSCurrencyDelta.creditExact,
+                (IMarketFactory(address(factory)), Currency.wrap(lcc0), locker, uint256(100))
+            )
+        );
+        vm.expectCall(address(orch), abi.encodeCall(IVTSCurrencyDelta.getFullCredit, (Currency.wrap(lcc0), locker)));
+        vm.expectCall(address(orch), abi.encodeCall(IVTSCurrencyDelta.take, (Currency.wrap(lcc0), locker, uint256(50))));
+
+        uint256 tokenId = 1;
+        uint256 qCommitted = 50;
+        h.exposeHandleLccBalanceIncrease(key, Currency.wrap(lcc0), 0, 100, int128(30), locker, tokenId, qCommitted);
+
+        // fee = max(30 - 10, 0) = 20; nonFee = 80; only 50 is custodied; take debits 50 not 80
+        assertEq(h.forwardCallCount(), 1);
+        assertEq(h.lastFwdAmount(), 50);
+        assertEq(h.lastFwdTokenId(), tokenId);
+        assertEq(orch.lastTakeAmount(), 50);
         assertEq(orch.lastTakeCurrency(), lcc0);
         assertEq(orch.lastTakeLocker(), locker);
     }
@@ -683,17 +952,18 @@ contract PositionManagerHandleLccHardeningTest is Test {
         orch.resetCredit();
         poolManager.setHookCurrencyDelta(hooksAddr, Currency.wrap(lcc0), int256(0));
 
+        // `nonFee` is 0, so `creditTake` is 0 and `take` is skipped (orchestrator only `creditExact(50)` and reads).
         vm.expectCall(address(orch), abi.encodeCall(IVTSCurrencyDelta.getFullCredit, (Currency.wrap(lcc0), locker)));
         vm.expectCall(
             address(orch),
             abi.encodeCall(
-                IVTSCurrencyDelta.sync, (IMarketFactory(address(factory)), Currency.wrap(lcc0), address(h), locker)
+                IVTSCurrencyDelta.creditExact,
+                (IMarketFactory(address(factory)), Currency.wrap(lcc0), locker, uint256(50))
             )
         );
         vm.expectCall(address(orch), abi.encodeCall(IVTSCurrencyDelta.getFullCredit, (Currency.wrap(lcc0), locker)));
-        vm.expectCall(address(orch), abi.encodeCall(IVTSCurrencyDelta.take, (Currency.wrap(lcc0), locker, uint256(50))));
 
-        h.exposeHandleLccBalanceIncrease(key, Currency.wrap(lcc0), 0, 50, int128(50), locker, 1);
+        h.exposeHandleLccBalanceIncrease(key, Currency.wrap(lcc0), 0, 50, int128(50), locker, 0, 0);
 
         assertEq(h.forwardCallCount(), 0);
         assertEq(h.lastFwdAmount(), 0);

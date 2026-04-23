@@ -10,6 +10,8 @@ import {ILCC} from "../../src/interfaces/ILCC.sol";
 import {MockERC20} from "../_mocks/MockERC20.sol";
 import {Errors} from "../../src/libraries/Errors.sol";
 import {Bounds} from "../../src/libraries/Bounds.sol";
+import {WETH} from "@uniswap/v4-core/lib/solmate/src/tokens/WETH.sol";
+import {IWETH9} from "v4-periphery/src/interfaces/external/IWETH9.sol";
 
 /**
  * @title LiquidityHubTestBase
@@ -21,6 +23,7 @@ abstract contract LiquidityHubTestBase is Test {
     OracleHelper public oracleHelper;
     IResilientOracle public resilientOracle;
     IMarketFactory public mockMarketFactory;
+    IWETH9 public weth9;
 
     MockERC20 public underlyingAsset1;
     MockERC20 public underlyingAsset2;
@@ -47,9 +50,10 @@ abstract contract LiquidityHubTestBase is Test {
         // Deploy mock oracle
         resilientOracle = IResilientOracle(makeAddr("ResilientOracle"));
         oracleHelper = new OracleHelper(address(resilientOracle), address(this));
+        weth9 = IWETH9(address(new WETH()));
 
         // Deploy LiquidityHub
-        liquidityHub = new LiquidityHub(address(oracleHelper), "Ethereum", "ETH", 18, address(this));
+        liquidityHub = new LiquidityHub(address(oracleHelper), "Ethereum", "ETH", 18, address(weth9), address(this));
 
         // Deploy mock underlying assets
         underlyingAsset1 = new MockERC20("Token1", "TK1", 18);
@@ -115,12 +119,10 @@ abstract contract LiquidityHubTestBase is Test {
 
     /// @notice Helper function to wrap market-derived LCC for a user
     function _wrapMarketDerivedLCC(address user, address lccToken, uint256 amount) public {
-        // mint lcc to a bucket-exempt protocol address to create market-derived balance on transfer
-        _wrapDirectLCC(proxyHook, lccToken, amount);
-
-        // mock the factory and send to user so that the user has a market balance
+        // Issuer-only market-derived mint (directAmount == 0). Do not seed via exempt direct wrap:
+        // direct-backed mints to exempt endpoints are forbidden on user wrap paths (see `MintToNotAllowedRecipient` / `LCC.mint`).
         vm.prank(proxyHook);
-        ILCC(lccToken).transfer(user, amount);
+        liquidityHub.issue(lccToken, user, amount);
 
         (uint256 wrappedBal, uint256 marketBal) = ILCC(lccToken).balancesOf(user);
 

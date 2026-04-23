@@ -2,35 +2,27 @@
 pragma solidity ^0.8.26;
 
 /// @title IMMQueueCustodian
-/// @notice Custody interface for queued MM-backed LCC balances
-/// @dev Custody is keyed by commitment `tokenId`, `lcc`, and `beneficiary`. The beneficiary MUST match the
-///      LiquidityHub `settleQueue(lcc, beneficiary)` recipient for that staged principal so a caller cannot
-///      pair their own queue with another party's commit bucket (see MMPositionManager._collectAvailableLiquidity).
+/// @notice MM queue custodian: one immutable beneficiary; Hub queue ownership for `MMPositionManager`.
+/// @dev Hub queue ownership for MM synthetic principal is keyed to this custodian (`settleQueue(lcc, address(custodian))`).
+///      Receivable state is **on-chain balances** on this contract (LCC + underlying) plus `LiquidityHub.settleQueue`;
+///      there is no separate entitlement ledger. Underlying is released to `MMPositionManager` for pull withdrawal via
+///      locker `TAKE`, not pushed to EOAs from this contract.
 interface IMMQueueCustodian {
     /// @notice Returns the MMPositionManager bound to this custodian
     function positionManager() external view returns (address);
 
-    /// @notice Binds the position manager once
-    /// @dev Must be called by the pre-authorised binder
-    function setPositionManager(address _positionManager) external;
+    /// @notice Immutable beneficiary whose custodian this is (same key as `custodianFor[beneficiary]` on the manager).
+    function beneficiary() external view returns (address);
 
-    /// @notice Records queued LCC that has already been transferred into custody
-    /// @param tokenId The commitment token id whose custody bucket is being credited
-    /// @param lcc The LCC token address
-    /// @param beneficiary The party entitled to release this slice (must match Hub queue recipient for that flow)
-    /// @param amount Amount transferred into custody
-    function record(uint256 tokenId, address lcc, address beneficiary, uint256 amount) external;
+    /// @notice Current **ERC20 LCC** balance held by this custodian for `lcc` (same as `IERC20(lcc).balanceOf(address(this))`).
+    /// @dev This is the on-chain custody balance, not a shadow queue book. Used with Hub queue and reserves for collect caps.
+    function totalQueuedLcc(address lcc) external view returns (uint256);
 
-    /// @notice Releases queued LCC from a beneficiary's slice under a commitment bucket
-    /// @param tokenId The commitment token id bucket to debit
-    /// @param lcc The LCC token address
-    /// @param beneficiary The slice owner; released LCC is transferred to this address
-    /// @param maxAmount Maximum amount requested for release
-    /// @return released Actual amount released (capped by slice balance)
-    function release(uint256 tokenId, address lcc, address beneficiary, uint256 maxAmount)
-        external
-        returns (uint256 released);
+    /// @notice Hub `unwrap` as this contract: shortfall queues to this custodian; immediate underlying is forwarded.
+    /// @dev Uses canonical Hub from `ILCC(lcc).hub()`. `MMPM` must transfer `amount` LCC to this contract before calling.
+    function unwrapLcc(address lcc, address forwardUnderlyingTo, uint256 amount) external;
 
-    /// @notice Reads queued custody balance for a commitment bucket, LCC, and beneficiary
-    function queued(uint256 tokenId, address lcc, address beneficiary) external view returns (uint256);
+    /// @notice After Hub settlement, moves underlying from this custodian to the position manager (pull collect path).
+    /// @dev Transfers up to `min(amount, actual underlying balance)`; caller must be the bound position manager.
+    function release(address lcc, uint256 amount) external;
 }

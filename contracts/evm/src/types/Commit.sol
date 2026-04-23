@@ -24,6 +24,13 @@ struct LiquiditySignal {
 struct Commit {
     /// MarketMaker state
     MarketMaker.State mmState;
+    /// @notice The only address allowed as VTS `owner` on the CoreHook MM path (`processPosition` router) for this commit.
+    /// @dev Set once at commit creation from the actual `VTSOrchestrator` caller (e.g. `MMPositionManager`). This binds
+    ///      MM liquidity operations to the integration surface that created the commit, so `factory.bounds(owner)` alone
+    ///      cannot authorise a different bound endpoint to issue LCC or operate positions under another party's commit.
+    ///      Renewals do not rotate this field (immutable binding). `address(0)` means legacy commits predating this field;
+    ///      those retain the previous authorisation model (bounds + advancer locker only).
+    address authorisedRelayer;
     /// Expiration timestamp
     uint256 expiresAt;
     /// Mapping of position index to PositionId (avoids arrays)
@@ -32,4 +39,6 @@ struct Commit {
     uint256 positionCount;
     /// Count of active positions
     uint256 activePositionCount;
+    /// Inactive positions that still hold live `pa.settled` (withdrawable via MM settle paths; blocks decommit)
+    uint256 inactiveRemnantCount;
 }

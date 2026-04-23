@@ -7,6 +7,8 @@ Earlier designs described an explicit “unbacked commitment declaration” entr
 - **Computed on-demand** via `checkpoint(..., withCommitment=true)` (permissionless).
 - **Enforced economically** by inflating Required for Settlement (RfS) and enabling **immediate seizure** whenever a position has non-zero `commitmentDeficit`.
 
+**Amendment (2026-04-19).** For **normative economic intent** when a guarantor seizes (base tranche, proportional cure, position-wide aggregation), see [`Seizure-and-Base-Tranche-Policy.md`](./Seizure-and-Base-Tranche-Policy.md). This document remains focused on `commitmentDeficit` and RfS inflation mechanics.
+
 This document describes the _current_ mechanism, then elaborates the “single commit, multi-market leverage” scenario and the operational risk model required of market makers.
 
 ## The Backing Invariant (as enforced today)

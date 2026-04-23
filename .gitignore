@@ -10,10 +10,14 @@ forge.lock
 contracts/**/deployments/**
 contracts/**/deployments/.keep
 contracts/**/out/
+contracts/evm/.echidna-gen/
 contracts/**/cache/
 reports
 contracts/evm-scripts/cache/
 contracts/evm-scripts/out/
+
+# Keep human-authored findings under agents/audit-findings/*.md visible; ignore local tool caches only.
+agents/audit-findings/.cache/
 
 # Foundry broadcast artefacts (keep selected mainnet runs)
 contracts/evm-scripts/broadcast/**

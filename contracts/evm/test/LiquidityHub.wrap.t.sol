@@ -5,6 +5,7 @@ import {LiquidityHubTestBase} from "./base/LiquidityHubTestBase.sol";
 import {ILCC} from "../src/interfaces/ILCC.sol";
 import {IMarketFactory} from "../src/interfaces/IMarketFactory.sol";
 import {Errors} from "../src/libraries/Errors.sol";
+import {Bounds} from "../src/libraries/Bounds.sol";
 import {MockERC20} from "./_mocks/MockERC20.sol";
 
 /**
@@ -352,7 +353,7 @@ contract LiquidityHubWrapTest is LiquidityHubTestBase {
 
         vm.startPrank(user1);
         underlyingAsset1.approve(address(liquidityHub), wrapAmount);
-        vm.expectRevert(abi.encodeWithSelector(Errors.DirectWrapToDexNotAllowed.selector, poolManager));
+        vm.expectRevert(abi.encodeWithSelector(Errors.MintToNotAllowedRecipient.selector, poolManager));
         liquidityHub.wrapTo(lccToken1, poolManager, wrapAmount);
         vm.stopPrank();
 
@@ -373,7 +374,7 @@ contract LiquidityHubWrapTest is LiquidityHubTestBase {
 
         vm.startPrank(user1);
         underlyingAsset1.approve(address(liquidityHub), wrapAmount);
-        vm.expectRevert(abi.encodeWithSelector(Errors.DirectWrapToDexNotAllowed.selector, poolManager));
+        vm.expectRevert(abi.encodeWithSelector(Errors.MintToNotAllowedRecipient.selector, poolManager));
         liquidityHub.wrapTo(address(underlyingAsset1), marketId1, poolManager, wrapAmount);
         vm.stopPrank();
 
@@ -391,7 +392,7 @@ contract LiquidityHubWrapTest is LiquidityHubTestBase {
 
         vm.startPrank(user1);
         ILCC(lccToken1).approve(address(liquidityHub), wrapAmount);
-        vm.expectRevert(abi.encodeWithSelector(Errors.DirectWrapToDexNotAllowed.selector, poolManager));
+        vm.expectRevert(abi.encodeWithSelector(Errors.MintToNotAllowedRecipient.selector, poolManager));
         liquidityHub.wrapWithTo(lccToken3, lccToken1, poolManager, wrapAmount);
         vm.stopPrank();
 
@@ -407,7 +408,7 @@ contract LiquidityHubWrapTest is LiquidityHubTestBase {
         _setDexBound(poolManager);
 
         vm.prank(proxyHook);
-        vm.expectRevert(abi.encodeWithSelector(Errors.DirectWrapToDexNotAllowed.selector, poolManager));
+        vm.expectRevert(abi.encodeWithSelector(Errors.MintToNotAllowedRecipient.selector, poolManager));
         liquidityHub.issue(lccToken1, poolManager, 100);
     }
 
@@ -447,10 +448,9 @@ contract LiquidityHubWrapTest is LiquidityHubTestBase {
         // Create mixed balance: first wrapped (direct)
         _wrapDirectLCC(user1, lccToken1, directAmount);
 
-        // Then add market-derived balance manually (don't use helper as it has assertions that conflict)
-        _wrapDirectLCC(proxyHook, lccToken1, marketAmount);
+        // Then add market-derived balance via issuer mint
         vm.prank(proxyHook);
-        ILCC(lccToken1).transfer(user1, marketAmount);
+        liquidityHub.issue(lccToken1, user1, marketAmount);
 
         // Verify user has both balances
         (uint256 userWrapped, uint256 userMarket) = ILCC(lccToken1).balancesOf(user1);
@@ -516,10 +516,9 @@ contract LiquidityHubWrapTest is LiquidityHubTestBase {
         // Create mixed balance: first wrapped (direct)
         _wrapDirectLCC(user1, lccToken1, directAmount);
 
-        // Then add market-derived balance manually (don't use helper as it has assertions that conflict)
-        _wrapDirectLCC(proxyHook, lccToken1, marketAmount);
+        // Then add market-derived balance via issuer mint
         vm.prank(proxyHook);
-        ILCC(lccToken1).transfer(user1, marketAmount);
+        liquidityHub.issue(lccToken1, user1, marketAmount);
 
         // Verify user has both balances
         (uint256 userWrappedBefore, uint256 userMarketBefore) = ILCC(lccToken1).balancesOf(user1);
@@ -573,22 +572,6 @@ contract LiquidityHubWrapTest is LiquidityHubTestBase {
         // Verify underlying returned
         assertEq(underlyingAsset1.balanceOf(user1), wrapAmount, "User should receive underlying");
         assertEq(lcc.balanceOf(user1), 0, "LCC should be burned");
-    }
-
-    /// @notice Tests that unwrapTo still works for external recipients
-    function testUnwrapToExternalRecipient() public {
-        uint256 wrapAmount = 100;
-
-        // Wrap
-        _wrapDirectLCC(user1, lccToken1, wrapAmount);
-
-        // Unwrap to different recipient
-        vm.prank(user1);
-        liquidityHub.unwrapTo(lccToken1, user2, wrapAmount);
-
-        // Verify user2 received underlying
-        assertEq(underlyingAsset1.balanceOf(user2), wrapAmount, "user2 should receive underlying");
-        assertEq(underlyingAsset1.balanceOf(user1), 0, "user1 should not have underlying");
     }
 
     /// @notice Tests unwrap reverts with zero amount
@@ -651,5 +634,49 @@ contract LiquidityHubWrapTest is LiquidityHubTestBase {
         // user2 should have the LCC, not user1
         assertEq(ILCC(lccToken1).balanceOf(user2), wrapAmount, "user2 should receive LCC");
         assertEq(ILCC(lccToken1).balanceOf(user1), 0, "user1 should not have LCC");
+    }
+
+    /// @dev Regression: direct-backed wrap must not target bucket-exempt endpoints (no per-holder buckets; see INVARIANTS LCC-BACKING-01).
+    function test_wrapTo_revertsWhenRecipientIsBucketExempt_hub() public {
+        uint256 amount = 100;
+        underlyingAsset1.mint(user1, amount);
+        vm.startPrank(user1);
+        underlyingAsset1.approve(address(liquidityHub), amount);
+        vm.expectRevert(abi.encodeWithSelector(Errors.MintToNotAllowedRecipient.selector, address(liquidityHub)));
+        liquidityHub.wrapTo(lccToken1, address(liquidityHub), amount);
+        vm.stopPrank();
+    }
+
+    function test_wrapTo_revertsWhenRecipientIsBucketExempt_proxyHook() public {
+        uint256 amount = 100;
+        underlyingAsset1.mint(user1, amount);
+        vm.startPrank(user1);
+        underlyingAsset1.approve(address(liquidityHub), amount);
+        vm.expectRevert(abi.encodeWithSelector(Errors.MintToNotAllowedRecipient.selector, proxyHook));
+        liquidityHub.wrapTo(lccToken1, proxyHook, amount);
+        vm.stopPrank();
+    }
+
+    /// @dev User-facing mints must not target bucket-tracked protocol endpoints (e.g. factory); issuer paths remain separate.
+    function test_wrapTo_revertsWhenRecipientIsProtocolEndpoint_factory() public {
+        uint256 amount = 100;
+        underlyingAsset1.mint(user1, amount);
+        vm.startPrank(user1);
+        underlyingAsset1.approve(address(liquidityHub), amount);
+        vm.expectRevert(abi.encodeWithSelector(Errors.MintToNotAllowedRecipient.selector, factory));
+        liquidityHub.wrapTo(lccToken1, factory, amount);
+        vm.stopPrank();
+    }
+
+    function test_wrapWithTo_revertsWhenRecipientIsProtocolEndpoint_factory() public {
+        uint256 wrapAmount = 100;
+        (address lccToken3,) = _createSecondLCCPair();
+        _wrapDirectLCC(user1, lccToken1, wrapAmount);
+
+        vm.startPrank(user1);
+        ILCC(lccToken1).approve(address(liquidityHub), wrapAmount);
+        vm.expectRevert(abi.encodeWithSelector(Errors.MintToNotAllowedRecipient.selector, factory));
+        liquidityHub.wrapWithTo(lccToken3, lccToken1, factory, wrapAmount);
+        vm.stopPrank();
     }
 }

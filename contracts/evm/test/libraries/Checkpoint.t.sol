@@ -7,6 +7,7 @@ import {CheckpointLibrary} from "../../src/libraries/Checkpoint.sol";
 import {Errors} from "../../src/libraries/Errors.sol";
 
 import {VTSStorage} from "../../src/types/VTS.sol";
+import {CarryQ128} from "../../src/types/Carry.sol";
 import {PositionId, Position} from "../../src/types/Position.sol";
 import {RFSCheckpoint} from "../../src/types/Checkpoint.sol";
 import {IVRLSettlementObserver} from "../../src/interfaces/IVRLSettlementObserver.sol";
@@ -42,7 +43,7 @@ contract VRLSettlementObserverMock is IVRLSettlementObserver {
         return _SUBMITTER;
     }
 
-    function verifySettlementProof(PoolKey memory, uint8, uint32, bytes memory, bool revertOnInvalid)
+    function verifySettlementProof(PoolKey memory, uint8, uint32, PositionId, bytes memory, bool revertOnInvalid)
         external
         view
         returns (bool isProofValid)
@@ -161,6 +162,18 @@ contract CheckpointHarness {
     function get(PositionId positionId) external view returns (RFSCheckpoint memory) {
         return s.positions[positionId].checkpoint;
     }
+
+    function setSeizureCarryRaw(PositionId positionId, uint256 raw0, uint256 raw1) external {
+        s.positionAccounting[positionId].seizureLiquidityCarry.token0 = CarryQ128.wrap(raw0);
+        s.positionAccounting[positionId].seizureLiquidityCarry.token1 = CarryQ128.wrap(raw1);
+    }
+
+    function getSeizureCarryRaw(PositionId positionId) external view returns (uint256, uint256) {
+        return (
+            CarryQ128.unwrap(s.positionAccounting[positionId].seizureLiquidityCarry.token0),
+            CarryQ128.unwrap(s.positionAccounting[positionId].seizureLiquidityCarry.token1)
+        );
+    }
 }
 
 contract CheckpointLibraryTest is Test {
@@ -209,6 +222,32 @@ contract CheckpointLibraryTest is Test {
         RFSCheckpoint memory cp2 = h.get(PID);
         assertEq(cp2.openSince0, 1234);
         assertEq(cp2.openSince1, 1234);
+    }
+
+    /// @dev Non-seizing RFS closure goes through `markCheckpoint`; per-lane Q128 carry must not survive for closed lanes.
+    function test_markCheckpoint_clearsSeizureCarryForClosedLanes() public {
+        h.setSeizureCarryRaw(PID, 0x100, 0x200);
+        h.markMask(PID, 0);
+        (uint256 c0, uint256 c1) = h.getSeizureCarryRaw(PID);
+        assertEq(c0, 0);
+        assertEq(c1, 0);
+    }
+
+    function test_markCheckpoint_preservesSeizureCarryForOpenLanes() public {
+        h.setSeizureCarryRaw(PID, 0x100, 0x200);
+        h.markMask(PID, 3);
+        (uint256 c0, uint256 c1) = h.getSeizureCarryRaw(PID);
+        assertEq(c0, 0x100);
+        assertEq(c1, 0x200);
+    }
+
+    function test_markCheckpoint_clearsSeizureCarryOnlyOnClosedLane() public {
+        h.setSeizureCarryRaw(PID, 0x100, 0x200);
+        // token0 RFS open (bit0), token1 closed
+        h.markMask(PID, 1);
+        (uint256 c0, uint256 c1) = h.getSeizureCarryRaw(PID);
+        assertEq(c0, 0x100);
+        assertEq(c1, 0);
     }
 
     function test_isSeizable_returnsTrueOnCommitmentDeficit() public {
@@ -264,6 +303,19 @@ contract CheckpointLibraryTest is Test {
         h.setUnbackedCommitmentGraceBypassConfig(poolId, 0, 0, 1_000, 0);
         h.setCommitmentDeficit(PID, 1_000, 0);
         h.setCommitmentDeficitBps(PID, 499);
+        assertTrue(h.isSeizable(COMMIT_ID, POSITION_INDEX, false));
+    }
+
+    /// @dev Sub-1 bps USD shortfall checkpoints can store `commitmentDeficitBps == 0` while lane deficits are still
+    ///      non-zero; token-threshold bypass must not require non-zero bps.
+    function test_isSeizable_commitmentDeficitBpsZero_token0ThresholdBypasses() public {
+        PoolKey memory key = _defaultPoolKey();
+        PoolId poolId = key.toId();
+        h.setPosition(PID, poolId);
+        h.setUnbackedCommitmentGraceBypassBps(poolId, 500);
+        h.setUnbackedCommitmentGraceBypassConfig(poolId, 0, 0, 1_000, 0);
+        h.setCommitmentDeficit(PID, 1_000, 0);
+        h.setCommitmentDeficitBps(PID, 0);
         assertTrue(h.isSeizable(COMMIT_ID, POSITION_INDEX, false));
     }
 
@@ -474,6 +526,22 @@ contract CheckpointLibraryTest is Test {
         assertTrue(h.isSeizable(COMMIT_ID, POSITION_INDEX, false));
 
         vm.warp(t1 + 100);
+        assertTrue(h.isSeizable(COMMIT_ID, POSITION_INDEX, false));
+    }
+
+    function test_isSeizable_secondLaneOpen_canUseCanonicalEpisodeTimestampByDesign() public {
+        PoolKey memory key = _defaultPoolKey();
+        PoolId poolId = key.toId();
+        h.setPosition(PID, poolId);
+        h.setGracePeriods(poolId, 10_000, 100, 20_000, 1_000);
+
+        uint256 tEpisode = 2_000;
+        // By design, when checkpoint state moved through a same-episode lane composition change (eg 01 -> 11),
+        // the newly-open lane carries the canonical episode timer instead of a fresh per-lane birth time.
+        h.setCheckpointMask(PID, 3, tEpisode, tEpisode, 0, 0);
+
+        vm.warp(tEpisode + 100);
+        // token1 grace elapsed; token0 grace not elapsed. Position is seizable because checks are lane-scoped and OR-aggregated.
         assertTrue(h.isSeizable(COMMIT_ID, POSITION_INDEX, false));
     }
 

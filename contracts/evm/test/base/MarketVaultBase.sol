@@ -2,15 +2,18 @@
 pragma solidity ^0.8.26;
 
 import {MarketTestBase} from "./MarketTestBase.sol";
+import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
 import {PoolSwapTest} from "@uniswap/v4-core/src/test/PoolSwapTest.sol";
 import {SwapParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
+import {PoolId, PoolIdLibrary} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {BalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
 import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
 import {LiquidityCommitmentCertificate} from "../../src/LCC.sol";
 import {LiquidityUtils} from "../../src/libraries/LiquidityUtils.sol";
 import {SwapSimulator} from "../utils/SwapSimulator.sol";
 import {IMarketFactory} from "../../src/interfaces/IMarketFactory.sol";
+import {ICanonicalVault} from "../../src/interfaces/ICanonicalVault.sol";
 import {ILCC} from "../../src/interfaces/ILCC.sol";
 import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
 import {SafeCast as SafeCastLib} from "openzeppelin-contracts/contracts/utils/math/SafeCast.sol";
@@ -20,6 +23,8 @@ import {SafeCast as SafeCastLib} from "openzeppelin-contracts/contracts/utils/ma
  * @notice Base contract for MarketVault and ProxyHook tests that provides shared helper functions
  */
 abstract contract MarketVaultBase is MarketTestBase {
+    using PoolIdLibrary for PoolKey;
+
     LiquidityCommitmentCertificate lcc0;
     LiquidityCommitmentCertificate lcc1;
 
@@ -45,9 +50,12 @@ abstract contract MarketVaultBase is MarketTestBase {
      * ? rename to _mockLimitedVaultLiquidity
      */
     function _mockLimitedLiquidity(Currency currency, uint256 availableAmount) internal {
+        address canonicalVault = IMarketFactory(marketFactory).canonicalVault();
         vm.mockCall(
-            address(manager),
-            abi.encodeWithSelector(manager.balanceOf.selector, address(proxyHook), currency.toId()),
+            canonicalVault,
+            abi.encodeWithSelector(
+                ICanonicalVault.inMarketBalanceOf.selector, PoolId.unwrap(corePoolKey.toId()), currency
+            ),
             abi.encode(availableAmount)
         );
     }
@@ -155,7 +163,10 @@ abstract contract MarketVaultBase is MarketTestBase {
         if (sqrtPriceLimitX96 == minValid) return maxValid;
         if (sqrtPriceLimitX96 == maxValid) return minValid;
 
-        uint256 inverted = (uint256(1) << 192) / uint256(sqrtPriceLimitX96);
+        uint256 q192 = uint256(1) << 192;
+        uint256 inverted = coreZeroForOne
+            ? (q192 + uint256(sqrtPriceLimitX96) - 1) / uint256(sqrtPriceLimitX96)
+            : q192 / uint256(sqrtPriceLimitX96);
         if (inverted < minValid) return minValid;
         if (inverted > maxValid) return maxValid;
         return SafeCastLib.toUint160(inverted);
@@ -220,6 +231,16 @@ abstract contract MarketVaultBase is MarketTestBase {
             inputAmount = LiquidityUtils.safeInt128ToUint256(-delta.amount1());
             outputAmount = LiquidityUtils.safeInt128ToUint256(delta.amount0());
         }
+    }
+
+    /// @notice Core market id (bytes32) used by `CanonicalVault` for the deployed core pool.
+    function _coreMarketId() internal view returns (bytes32) {
+        return PoolId.unwrap(corePoolKey.toId());
+    }
+
+    /// @notice Durable ERC6909 claim balance on the PoolManager for an underlying `Currency`.
+    function _underlying6909Balance(address owner, Currency c) internal view returns (uint256) {
+        return IPoolManager(address(manager)).balanceOf(owner, c.toId());
     }
 }
 

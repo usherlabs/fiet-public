@@ -80,53 +80,53 @@ library MMActionAdapter {
 
     /**
      * @notice Prepares a COMMIT_SIGNAL action
-     * @dev Params are (bytes liquiditySignal, address owner)
+     * @dev Params are (bytes liquiditySignal, bytes relayParams)
      */
     function prepareCommit(bytes memory liquiditySignal) internal pure returns (PreparedAction memory) {
         return PreparedAction({
-            action: bytes1(uint8(MMActions.COMMIT_SIGNAL)),
-            params: abi.encode(liquiditySignal, ActionConstants.MSG_SENDER, bytes(""))
-        });
-    }
-
-    /**
-     * @notice Prepares a COMMIT_SIGNAL action with a specific owner
-     * @dev Params are (bytes liquiditySignal, address owner)
-     */
-    function prepareCommitWithOwner(bytes memory liquiditySignal, address owner)
-        internal
-        pure
-        returns (PreparedAction memory)
-    {
-        return PreparedAction({
-            action: bytes1(uint8(MMActions.COMMIT_SIGNAL)), params: abi.encode(liquiditySignal, owner, bytes(""))
+            action: bytes1(uint8(MMActions.COMMIT_SIGNAL)), params: abi.encode(liquiditySignal, bytes(""))
         });
     }
 
     function prepareCommitRelayed(
         bytes memory liquiditySignal,
-        address owner,
         uint256 deadline,
         uint256 authNonce,
-        bytes memory authSig
+        bytes memory authSig,
+        address sender
     ) internal pure returns (PreparedAction memory) {
-        bytes memory relayParams = abi.encode(deadline, authNonce, authSig);
+        bytes memory relayParams = abi.encode(deadline, authNonce, authSig, sender);
         return PreparedAction({
-            action: bytes1(uint8(MMActions.COMMIT_SIGNAL)), params: abi.encode(liquiditySignal, owner, relayParams)
+            action: bytes1(uint8(MMActions.COMMIT_SIGNAL)), params: abi.encode(liquiditySignal, relayParams)
         });
     }
 
     /**
-     * @notice Prepares a MINT_POSITION action
+     * @notice Prepares a MINT_POSITION action (no explicit max-in; uses `type(uint128).max` per leg)
      */
     function prepareMint(PoolKey memory poolKey, uint256 tokenId, int24 tickLower, int24 tickUpper, uint256 liquidity)
         internal
         pure
         returns (PreparedAction memory)
     {
+        return prepareMint(poolKey, tokenId, tickLower, tickUpper, liquidity, type(uint128).max, type(uint128).max);
+    }
+
+    /**
+     * @notice Prepares a MINT_POSITION action with per-leg max principal spend (v4-style `validateMaxIn`)
+     */
+    function prepareMint(
+        PoolKey memory poolKey,
+        uint256 tokenId,
+        int24 tickLower,
+        int24 tickUpper,
+        uint256 liquidity,
+        uint128 amount0Max,
+        uint128 amount1Max
+    ) internal pure returns (PreparedAction memory) {
         return PreparedAction({
             action: bytes1(uint8(MMActions.MINT_POSITION)),
-            params: abi.encode(poolKey, tokenId, tickLower, tickUpper, liquidity)
+            params: abi.encode(poolKey, tokenId, tickLower, tickUpper, liquidity, amount0Max, amount1Max)
         });
     }
 
@@ -175,16 +175,30 @@ library MMActionAdapter {
     }
 
     /**
-     * @notice Prepares a DECREASE_LIQUIDITY action
+     * @notice Prepares a DECREASE_LIQUIDITY action (no min-out; same as amount0Min=amount1Min=0)
      */
     function prepareDecrease(PoolKey memory poolKey, uint256 tokenId, uint256 positionIndex, uint256 amount)
         internal
         pure
         returns (PreparedAction memory)
     {
+        return prepareDecrease(poolKey, tokenId, positionIndex, amount, 0, 0);
+    }
+
+    /**
+     * @notice Prepares a DECREASE_LIQUIDITY action with Uniswap-style principal min-out bounds
+     */
+    function prepareDecrease(
+        PoolKey memory poolKey,
+        uint256 tokenId,
+        uint256 positionIndex,
+        uint256 amount,
+        uint128 amount0Min,
+        uint128 amount1Min
+    ) internal pure returns (PreparedAction memory) {
         return PreparedAction({
             action: bytes1(uint8(MMActions.DECREASE_LIQUIDITY)),
-            params: abi.encode(poolKey, tokenId, positionIndex, amount)
+            params: abi.encode(poolKey, tokenId, positionIndex, amount, amount0Min, amount1Min)
         });
     }
 
@@ -205,15 +219,29 @@ library MMActionAdapter {
     }
 
     /**
-     * @notice Prepares a BURN_POSITION action
+     * @notice Prepares a BURN_POSITION action (no min-out; same as amount0Min=amount1Min=0)
      */
     function prepareBurn(PoolKey memory poolKey, uint256 tokenId, uint256 positionIndex)
         internal
         pure
         returns (PreparedAction memory)
     {
+        return prepareBurn(poolKey, tokenId, positionIndex, 0, 0);
+    }
+
+    /**
+     * @notice Prepares a BURN_POSITION action with Uniswap-style principal min-out bounds
+     */
+    function prepareBurn(
+        PoolKey memory poolKey,
+        uint256 tokenId,
+        uint256 positionIndex,
+        uint128 amount0Min,
+        uint128 amount1Min
+    ) internal pure returns (PreparedAction memory) {
         return PreparedAction({
-            action: bytes1(uint8(MMActions.BURN_POSITION)), params: abi.encode(poolKey, tokenId, positionIndex)
+            action: bytes1(uint8(MMActions.BURN_POSITION)),
+            params: abi.encode(poolKey, tokenId, positionIndex, amount0Min, amount1Min)
         });
     }
 
@@ -244,7 +272,7 @@ library MMActionAdapter {
         uint256 authNonce,
         bytes memory authSig
     ) internal pure returns (PreparedAction memory) {
-        bytes memory relayParams = abi.encode(deadline, authNonce, authSig);
+        bytes memory relayParams = abi.encode(deadline, authNonce, authSig, address(0));
         return PreparedAction({
             action: bytes1(uint8(MMActions.RENEW_SIGNAL)), params: abi.encode(tokenId, liquiditySignal, relayParams)
         });
@@ -268,16 +296,30 @@ library MMActionAdapter {
     }
 
     /**
-     * @notice Prepares an INCREASE_LIQUIDITY action
+     * @notice Prepares an INCREASE_LIQUIDITY action (no explicit max-in; uses `type(uint128).max` per leg)
      */
     function prepareIncrease(PoolKey memory poolKey, uint256 tokenId, uint256 positionIndex, uint256 liquidity)
         internal
         pure
         returns (PreparedAction memory)
     {
+        return prepareIncrease(poolKey, tokenId, positionIndex, liquidity, type(uint128).max, type(uint128).max);
+    }
+
+    /**
+     * @notice Prepares an INCREASE_LIQUIDITY action with per-leg max principal spend (v4-style `validateMaxIn`)
+     */
+    function prepareIncrease(
+        PoolKey memory poolKey,
+        uint256 tokenId,
+        uint256 positionIndex,
+        uint256 liquidity,
+        uint128 amount0Max,
+        uint128 amount1Max
+    ) internal pure returns (PreparedAction memory) {
         return PreparedAction({
             action: bytes1(uint8(MMActions.INCREASE_LIQUIDITY)),
-            params: abi.encode(poolKey, tokenId, positionIndex, liquidity)
+            params: abi.encode(poolKey, tokenId, positionIndex, liquidity, amount0Max, amount1Max)
         });
     }
 
@@ -385,19 +427,21 @@ library MMActionAdapter {
     }
 
     /**
-     * @notice Prepares a COLLECT_AVAILABLE_LIQUIDITY action to collect queued settlement
-     * @param lcc The LCC token address
-     * @param tokenId The commitment token id bucket to collect from
-     * @param maxAmount The maximum amount to collect (0 for max)
+     * @notice Prepares a COLLECT_AVAILABLE_LIQUIDITY action (`lcc`, `maxAmount`); locker’s custodian scope.
      */
-    function prepareCollectAvailableLiquidity(address lcc, uint256 tokenId, uint256 maxAmount)
+    function prepareCollectAvailableLiquidity(address lcc, uint256 maxAmount)
         internal
         pure
         returns (PreparedAction memory)
     {
         return PreparedAction({
-            action: bytes1(uint8(MMActions.COLLECT_AVAILABLE_LIQUIDITY)), params: abi.encode(lcc, tokenId, maxAmount)
+            action: bytes1(uint8(MMActions.COLLECT_AVAILABLE_LIQUIDITY)), params: abi.encode(lcc, maxAmount)
         });
+    }
+
+    /// @notice Idempotently deploys `custodianFor[msgSender()]` (`INITIALISE`, empty params).
+    function prepareInitialise() internal pure returns (PreparedAction memory) {
+        return PreparedAction({action: bytes1(uint8(MMActions.INITIALISE)), params: hex""});
     }
 
     /**

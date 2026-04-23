@@ -2,10 +2,11 @@
 pragma solidity ^0.8.26;
 
 import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
-import {CurrencyDelta} from "v4-periphery/lib/v4-core/src/libraries/CurrencyDelta.sol";
+import {CurrencyDelta} from "@uniswap/v4-core/src/libraries/CurrencyDelta.sol";
 import {BalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
 import {VTSStorage} from "../types/VTS.sol";
-import {DynamicCurrencyDelta} from "../libraries/DynamicCurrencyDelta.sol";
+import {OwnerCurrencyDelta} from "../libraries/OwnerCurrencyDelta.sol";
+import {MarketCurrencyDelta} from "../libraries/MarketCurrencyDelta.sol";
 import {IVTSCurrencyDelta} from "../interfaces/IVTSCurrencyDelta.sol";
 import {IMarketFactory} from "../interfaces/IMarketFactory.sol";
 
@@ -13,7 +14,7 @@ import {IMarketFactory} from "../interfaces/IMarketFactory.sol";
  * @title VTSCurrencyDelta
  * @notice Abstract contract providing currency delta management functionality for VTS contracts
  * @dev Inheriting contracts must implement _vtsStorage() to provide storage access.
- *      All currency delta operations delegate to DynamicCurrencyDelta library.
+ *      Owner-scoped currency delta operations delegate to OwnerCurrencyDelta.
  */
 abstract contract VTSCurrencyDelta is IVTSCurrencyDelta {
     using CurrencyDelta for Currency;
@@ -34,12 +35,12 @@ abstract contract VTSCurrencyDelta is IVTSCurrencyDelta {
 
     /// @inheritdoc IVTSCurrencyDelta
     function getFullCredit(Currency currency, address owner) public view returns (uint256) {
-        return DynamicCurrencyDelta.getFullCredit(currency, owner);
+        return OwnerCurrencyDelta.getFullCredit(currency, owner);
     }
 
     /// @inheritdoc IVTSCurrencyDelta
     function getFullDebt(Currency currency, address owner) public view returns (uint256) {
-        return DynamicCurrencyDelta.getFullDebt(currency, owner);
+        return OwnerCurrencyDelta.getFullDebt(currency, owner);
     }
 
     /// @inheritdoc IVTSCurrencyDelta
@@ -48,9 +49,7 @@ abstract contract VTSCurrencyDelta is IVTSCurrencyDelta {
         view
         returns (uint256, uint256)
     {
-        return (
-            DynamicCurrencyDelta.getFullCredit(currency0, owner), DynamicCurrencyDelta.getFullCredit(currency1, owner)
-        );
+        return (OwnerCurrencyDelta.getFullCredit(currency0, owner), OwnerCurrencyDelta.getFullCredit(currency1, owner));
     }
 
     /// @inheritdoc IVTSCurrencyDelta
@@ -59,12 +58,12 @@ abstract contract VTSCurrencyDelta is IVTSCurrencyDelta {
         view
         returns (uint256, uint256)
     {
-        return (DynamicCurrencyDelta.getFullDebt(currency0, owner), DynamicCurrencyDelta.getFullDebt(currency1, owner));
+        return (OwnerCurrencyDelta.getFullDebt(currency0, owner), OwnerCurrencyDelta.getFullDebt(currency1, owner));
     }
 
     /// @inheritdoc IVTSCurrencyDelta
     function take(Currency currency, address target, uint256 maxAmount) public returns (uint256) {
-        return DynamicCurrencyDelta.take(currency, target, maxAmount);
+        return OwnerCurrencyDelta.take(currency, target, maxAmount);
     }
 
     /// @inheritdoc IVTSCurrencyDelta
@@ -73,12 +72,15 @@ abstract contract VTSCurrencyDelta is IVTSCurrencyDelta {
         view
         returns (BalanceDelta)
     {
-        return DynamicCurrencyDelta.getUnderlyingDeltaPair(user, currency0, currency1);
+        return OwnerCurrencyDelta.getUnderlyingDeltaPair(user, currency0, currency1);
     }
 
     /// @inheritdoc IVTSCurrencyDelta
-    function assertNonZeroDeltas() external view {
-        DynamicCurrencyDelta.assertNonZeroDeltas();
+    /// @dev `factory` must be the same `IMarketFactory` bound to the MM entrypoint so produced-credit finality matches
+    ///      the namespace used by `MarketCurrencyDelta.addProduced` / `consumeProduced` for that deployment.
+    function assertNonZeroDeltas(IMarketFactory factory) external view {
+        OwnerCurrencyDelta.assertNonZeroDeltas();
+        MarketCurrencyDelta.assertResolved(address(factory));
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
@@ -88,15 +90,13 @@ abstract contract VTSCurrencyDelta is IVTSCurrencyDelta {
     /// @inheritdoc IVTSCurrencyDelta
     function sync(IMarketFactory factory, Currency currency, address owner, address target) external {
         _assertBoundFactoryCaller(factory);
-        // Sync owner's balance as credit to target's delta
-        // Use case: MMPM receives msg.value (owner=MMPM), credit goes to locker (target=msgSender)
-        DynamicCurrencyDelta.syncBalanceAsCredit(currency, owner, target);
+        // FCFS explicit residue: map omnibus owner balance to target credit (positive-credit only; no debt paydown)
+        OwnerCurrencyDelta.syncBalanceAsCredit(currency, owner, target);
     }
 
-    /// @notice Syncs balance accumulation as credit for multiple currencies
-    /// @dev Only handles balance increases (accumulation), not decreases (consumption).
-    ///      Convenience function to sync both currencies of a pool pair in one call.
-    ///      Useful after operations that increase multiple currency balances.
+    /// @notice FCFS pair sync: same as `sync` for two currencies
+    /// @dev Positive-credit-only; does not reduce negative deltas from omnibus balance. Internal paths use
+    ///      `creditExact` for known inflow amounts.
     /// @param factory The market factory namespace used to validate the caller is protocol-bound
     /// @param currency0 The first currency to sync
     /// @param currency1 The second currency to sync
@@ -109,12 +109,12 @@ abstract contract VTSCurrencyDelta is IVTSCurrencyDelta {
         returns (int128 deltaChange0, int128 deltaChange1)
     {
         _assertBoundFactoryCaller(factory);
-        deltaChange0 = DynamicCurrencyDelta.syncBalanceAsCredit(currency0, owner, target);
-        deltaChange1 = DynamicCurrencyDelta.syncBalanceAsCredit(currency1, owner, target);
+        deltaChange0 = OwnerCurrencyDelta.syncBalanceAsCredit(currency0, owner, target);
+        deltaChange1 = OwnerCurrencyDelta.syncBalanceAsCredit(currency1, owner, target);
     }
 
     function _creditExact(Currency currency, address target, uint256 amount) internal returns (int128 deltaChange) {
-        deltaChange = DynamicCurrencyDelta.creditExact(currency, target, amount);
+        deltaChange = OwnerCurrencyDelta.creditExact(currency, target, amount);
     }
 
     /// @notice Credits an exact known amount to target's delta

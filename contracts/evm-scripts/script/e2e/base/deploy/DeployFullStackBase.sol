@@ -8,12 +8,14 @@ import {MockResilientOracle} from "../../mocks/oracle/MockResilientOracle.sol";
 import {MockChainlinkOracle} from "../../mocks/oracle/MockChainlinkOracle.sol";
 
 // Linked libraries to deploy
+import {GrowthCarryQ128Lib} from "src/types/VTS.sol";
 import {VTSPositionLib} from "src/libraries/VTSPositionLib.sol";
 import {VTSSwapLib} from "src/libraries/VTSSwapLib.sol";
 import {VTSCommitLib} from "src/libraries/VTSCommitLib.sol";
+import {VTSLifecycleLinkedLib} from "src/libraries/VTSLifecycleLinkedLib.sol";
+import {VTSPositionMMOpsLib} from "src/libraries/VTSPositionMMOpsLib.sol";
 import {LCCFactoryLinkedLib} from "src/libraries/LCCFactoryLib.sol";
 import {LiquidityHubLinkedLib} from "src/libraries/LiquidityHubLinkedLib.sol";
-import {VTSFeeLinkedLib} from "src/libraries/VTSFeeLib.sol";
 
 /**
  * @dev E2E deploy base: deploy full stack (libraries + contracts) and return addresses (no JSON writes).
@@ -25,10 +27,12 @@ import {VTSFeeLinkedLib} from "src/libraries/VTSFeeLib.sol";
  */
 abstract contract DeployFullStackBase is DeployProtocolBase {
     struct LibraryAddrs {
+        address growthCarryQ128Lib;
         address vtsPositionLib;
         address vtsSwapLib;
         address vtsCommitLib;
-        address vtsFeeLinkedLib;
+        address vtsPositionMMOpsLib;
+        address vtsLifecycleLinkedLib;
         address lccFactoryLinkedLib;
         address liquidityHubLinkedLib;
     }
@@ -40,7 +44,6 @@ abstract contract DeployFullStackBase is DeployProtocolBase {
         address coreHook;
         address marketFactory;
         address mmPositionManager;
-        address queueCustodian;
         address oracleHelper;
         address payable liquidityHub;
         address signalManager;
@@ -49,7 +52,9 @@ abstract contract DeployFullStackBase is DeployProtocolBase {
         address commitmentDescriptor;
         address vtsOrchestrator;
         address actionsImpl;
+        address utilityActionsImpl;
         address directLPDeltaResolver;
+        address canonicalVault;
     }
 
     struct FullStack {
@@ -68,9 +73,11 @@ abstract contract DeployFullStackBase is DeployProtocolBase {
     string internal constant VTS_POSITION_LIB = "VTSPositionLib";
     string internal constant VTS_SWAP_LIB = "VTSSwapLib";
     string internal constant VTS_COMMIT_LIB = "VTSCommitLib";
+    string internal constant GROWTH_CARRY_Q128_LIB = "GrowthCarryQ128Lib";
+    string internal constant VTS_POSITION_MM_OPS_LIB = "VTSPositionMMOpsLib";
+    string internal constant VTS_LIFECYCLE_LINKED_LIB = "VTSLifecycleLinkedLib";
     string internal constant LCC_FACTORY_LINKED_LIB = "LCCFactoryLinkedLib";
     string internal constant LIQUIDITY_HUB_LINKED_LIB = "LiquidityHubLinkedLib";
-    string internal constant VTS_FEE_LINKED_LIB = "VTSFeeLinkedLib";
 
     function _deployLibrary(string memory name, bytes memory creationCode) internal returns (address deployed) {
         return _deployCreate3(name, creationCode);
@@ -79,6 +86,8 @@ abstract contract DeployFullStackBase is DeployProtocolBase {
     function _deployAll() internal returns (FullStack memory out) {
         // Load network constants + deployment file path (even though we don't write).
         _initNetwork();
+        _assertCreate3FactoryDeployed();
+        _assertCorePeripheryConfig();
 
         console.log("E2E DeployFullStack on %s", networkName);
         console.log("PoolManager:", config.poolManager);
@@ -91,10 +100,14 @@ abstract contract DeployFullStackBase is DeployProtocolBase {
         out.libs.lccFactoryLinkedLib = _deployLibrary(LCC_FACTORY_LINKED_LIB, type(LCCFactoryLinkedLib).creationCode);
         out.libs.liquidityHubLinkedLib =
             _deployLibrary(LIQUIDITY_HUB_LINKED_LIB, type(LiquidityHubLinkedLib).creationCode);
-        out.libs.vtsFeeLinkedLib = _deployLibrary(VTS_FEE_LINKED_LIB, type(VTSFeeLinkedLib).creationCode);
         out.libs.vtsCommitLib = _deployLibrary(VTS_COMMIT_LIB, type(VTSCommitLib).creationCode);
         out.libs.vtsSwapLib = _deployLibrary(VTS_SWAP_LIB, type(VTSSwapLib).creationCode);
+        out.libs.growthCarryQ128Lib = _deployLibrary(GROWTH_CARRY_Q128_LIB, type(GrowthCarryQ128Lib).creationCode);
         out.libs.vtsPositionLib = _deployLibrary(VTS_POSITION_LIB, type(VTSPositionLib).creationCode);
+        out.libs.vtsPositionMMOpsLib =
+            _deployLibrary(VTS_POSITION_MM_OPS_LIB, type(VTSPositionMMOpsLib).creationCode);
+        out.libs.vtsLifecycleLinkedLib =
+            _deployLibrary(VTS_LIFECYCLE_LINKED_LIB, type(VTSLifecycleLinkedLib).creationCode);
 
         // ---- Deploy contracts (CREATE3/CREATE2) ----
         address deployer = _getDeployer();
@@ -128,12 +141,10 @@ abstract contract DeployFullStackBase is DeployProtocolBase {
             _deployVTSOrchestrator(out.contracts.oracleHelper, out.contracts.liquidityHub, out.contracts.globalConfig);
 
         // 7) Verifiers / managers
-        uint256 signalExpiryInSeconds = 3600;
         address signalVerifier = _deploySignalVerifier(deployer);
 
-        out.contracts.signalManager = _deploySignalManager(
-            signalVerifier, signalExpiryInSeconds, out.contracts.vtsOrchestrator, out.contracts.globalConfig
-        );
+        out.contracts.signalManager =
+            _deploySignalManager(signalVerifier, out.contracts.vtsOrchestrator, out.contracts.globalConfig);
 
         out.contracts.settlementObserver =
             _deploySettlementObserver(out.contracts.vtsOrchestrator, out.contracts.globalConfig);
@@ -156,29 +167,36 @@ abstract contract DeployFullStackBase is DeployProtocolBase {
             out.contracts.globalConfig
         );
 
-        // 10) Enable MarketFactory in LiquidityHub (via GlobalConfig)
+        // 10) CanonicalVault (factory-scoped custody)
+        out.contracts.canonicalVault =
+            _deployCanonicalVault(out.contracts.liquidityHub, out.contracts.marketFactory);
+
+        // 11) Enable MarketFactory in LiquidityHub (via GlobalConfig)
         _enableFactoryInLiquidityHub(
             out.contracts.globalConfig, out.contracts.liquidityHub, out.contracts.marketFactory
         );
 
-        // 11) MMPCommitmentDescriptor
+        // 12) MMPCommitmentDescriptor
         out.contracts.commitmentDescriptor = _deployCommitmentDescriptor();
 
-        // 12) MMPositionActionsImpl + MMQueueCustodian + MMPositionManager
-        (out.contracts.actionsImpl, out.contracts.queueCustodian, out.contracts.mmPositionManager) = _deployMMStack(
-            out.contracts.marketFactory, out.contracts.vtsOrchestrator, out.contracts.commitmentDescriptor, deployer
+        // 13) MMPositionActionsImpl + MMUtilityActionsImpl + MMQueueCustodianFactory + MMPositionManager
+        (out.contracts.actionsImpl, out.contracts.utilityActionsImpl, out.contracts.mmPositionManager) = _deployMMStack(
+            out.contracts.marketFactory,
+            out.contracts.vtsOrchestrator,
+            out.contracts.commitmentDescriptor,
+            out.contracts.canonicalVault
         );
 
-        // 13) Deploy CoreHook via CREATE2 HookMiner
+        // 14) Deploy CoreHook via CREATE2 HookMiner
         out.contracts.coreHook = _deployCoreHook(out.contracts.marketFactory, out.contracts.vtsOrchestrator);
 
-        // 14) Initialise MarketFactory (via GlobalConfig)
+        // 15) Initialise MarketFactory (via GlobalConfig)
         _initialiseFactory(
             out.contracts.globalConfig,
             out.contracts.marketFactory,
+            out.contracts.canonicalVault,
             out.contracts.coreHook,
             out.contracts.mmPositionManager,
-            out.contracts.queueCustodian,
             out.contracts.directLPDeltaResolver
         );
 
@@ -191,4 +209,3 @@ abstract contract DeployFullStackBase is DeployProtocolBase {
         return _deployed;
     }
 }
-

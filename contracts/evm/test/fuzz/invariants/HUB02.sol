@@ -1,16 +1,16 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.26;
 
-import {LiquidityHub} from "../../../src/LiquidityHub.sol";
+import {FuzzLiquidityHub} from "../harnesses/FuzzLiquidityHub.sol";
 import {LiquidityCommitmentCertificate} from "../../../src/LCC.sol";
 import {MockOracleHelper} from "../mocks/MockOracleHelper.sol";
 import {MockERC20Transferable} from "../mocks/MockERC20Transferable.sol";
 import {Bounds} from "../../../src/libraries/Bounds.sol";
-import {EchidnaLinkedLibs} from "../base/EchidnaLinkedLibs.sol";
 
-/// @notice Echidna harness for HUB-02: Unwrapping bounds and queue semantics.
-/// @dev "Unwrap requires 0 < amount <= wrappedBalance + marketDerivedBalance;
-///      any unavailable portion is tracked via the settlement queue rather than silently failing."
+/// @notice fuzz harness for HUB-02: Unwrapping bounds and queue semantics.
+/// @dev Unwrap requires `0 < amount <= availableToUnwrap`, where `availableToUnwrap` nets the holder's existing
+///      `settleQueue[lcc][queueTo]` against live bucketed balance; any unavailable portion is still tracked via the
+///      settlement queue rather than silently failing.
 ///
 /// Properties tested:
 ///   1. unwrap(0) always reverts (guard)
@@ -24,7 +24,7 @@ contract HUB02 {
     uint256 internal constant MAX_VACUOUS_ATTEMPTS = 12;
     uint256 internal constant BPS_SCALE = 10_000;
 
-    LiquidityHub internal hub;
+    FuzzLiquidityHub internal hub;
     LiquidityCommitmentCertificate internal lcc;
     MockERC20Transferable internal underlying;
 
@@ -60,11 +60,8 @@ contract HUB02 {
     // ================================================================
 
     constructor() {
-        EchidnaLinkedLibs.deployLCCFactoryLinkedLib();
-        EchidnaLinkedLibs.deployLiquidityHubLinkedLib();
-
         MockOracleHelper oracleHelper = new MockOracleHelper(address(0));
-        hub = new LiquidityHub(address(oracleHelper), "Ether", "ETH", 18, address(this));
+        hub = new FuzzLiquidityHub(address(oracleHelper), "Ether", "ETH", 18, address(0), address(this));
         hub.setFactory(address(this), true);
         hub.setBoundLevel(address(hub), Bounds.BOUND_EXEMPT);
 
@@ -88,13 +85,13 @@ contract HUB02 {
 
     function _seedGuards() internal {
         // Seed zero-amount guard.
-        bool ok = holder.tryUnwrapTo(address(hub), address(lcc), 0);
+        bool ok = holder.tryUnwrap(address(hub), address(lcc), 0);
         checkedZeroGuard = true;
         lastZeroGuardOk = !ok;
 
         // Seed over-balance guard.
         uint256 bal = lcc.balanceOf(address(holder));
-        ok = holder.tryUnwrapTo(address(hub), address(lcc), bal + 1);
+        ok = holder.tryUnwrap(address(hub), address(lcc), bal + 1);
         checkedOverBalanceGuard = true;
         lastOverBalanceGuardOk = !ok;
     }
@@ -182,7 +179,7 @@ contract HUB02 {
     // Actions — unwrap exercisers
     // ================================================================
 
-    /// @dev Valid unwrap: exercises decomposition and queue accounting.
+    /// @dev Valid self-unwrap: exercises decomposition and queue accounting within current headroom.
     // forge-lint: disable-next-line(mixed-case-function)
     function action_hub_02_unwrap(uint256 amount) external {
         unchecked {
@@ -190,14 +187,16 @@ contract HUB02 {
         }
         uint256 bal = lcc.balanceOf(address(holder));
         if (bal == 0) return;
-        uint256 amt = (amount % bal) + 1;
 
         uint256 queueBefore = hub.settleQueue(address(lcc), address(holder));
+        uint256 availableToUnwrap = bal > queueBefore ? bal - queueBefore : 0;
+        if (availableToUnwrap == 0) return;
+        uint256 amt = (amount % availableToUnwrap) + 1;
         uint256 totalQueuedBefore = hub.totalQueued(address(lcc));
         uint256 balBefore = bal;
         uint256 underlyingBefore = underlying.balanceOf(address(holder));
 
-        if (!holder.tryUnwrapTo(address(hub), address(lcc), amt)) {
+        if (!holder.tryUnwrap(address(hub), address(lcc), amt)) {
             _markUnwrapAttemptFailed();
             return;
         }
@@ -234,7 +233,7 @@ contract HUB02 {
     /// @dev Zero-amount guard: unwrap(0) must revert.
     // forge-lint: disable-next-line(mixed-case-function)
     function action_hub_02_unwrap_zero() external {
-        bool ok = holder.tryUnwrapTo(address(hub), address(lcc), 0);
+        bool ok = holder.tryUnwrap(address(hub), address(lcc), 0);
         checkedZeroGuard = true;
         lastZeroGuardOk = !ok;
     }
@@ -245,7 +244,7 @@ contract HUB02 {
         uint256 bal = lcc.balanceOf(address(holder));
         uint256 excess = (delta % MAX_AMOUNT) + 1;
         uint256 overAmount = bal >= type(uint256).max - excess ? type(uint256).max : bal + excess;
-        bool ok = holder.tryUnwrapTo(address(hub), address(lcc), overAmount);
+        bool ok = holder.tryUnwrap(address(hub), address(lcc), overAmount);
         checkedOverBalanceGuard = true;
         lastOverBalanceGuardOk = !ok;
     }
@@ -256,13 +255,13 @@ contract HUB02 {
 
     /// @dev Holder's queue must match our independently tracked model.
     // forge-lint: disable-next-line(mixed-case-function)
-    function echidna_hub_02_holder_queue_matches_model() external view returns (bool) {
+    function fuzz_hub_02_holder_queue_matches_model() external view returns (bool) {
         return hub.settleQueue(address(lcc), address(holder)) == modelHolderQueued;
     }
 
     /// @dev totalQueued must match our independently tracked model.
     // forge-lint: disable-next-line(mixed-case-function)
-    function echidna_hub_02_total_queued_matches_model() external view returns (bool) {
+    function fuzz_hub_02_total_queued_matches_model() external view returns (bool) {
         return hub.totalQueued(address(lcc)) == modelTotalQueued;
     }
 
@@ -272,13 +271,13 @@ contract HUB02 {
 
     /// @dev unwrap(0) must always revert.
     // forge-lint: disable-next-line(mixed-case-function)
-    function echidna_hub_02_zero_amount_reverts() external view returns (bool) {
+    function fuzz_hub_02_zero_amount_reverts() external view returns (bool) {
         return !checkedZeroGuard || lastZeroGuardOk;
     }
 
     /// @dev unwrap(amount > balance) must always revert.
     // forge-lint: disable-next-line(mixed-case-function)
-    function echidna_hub_02_over_balance_reverts() external view returns (bool) {
+    function fuzz_hub_02_over_balance_reverts() external view returns (bool) {
         return !checkedOverBalanceGuard || lastOverBalanceGuardOk;
     }
 
@@ -288,14 +287,14 @@ contract HUB02 {
 
     /// @dev paid-out + queued shortfall == requested amount for every valid unwrap.
     // forge-lint: disable-next-line(mixed-case-function)
-    function echidna_hub_02_unwrap_decomposition_holds() external view returns (bool) {
+    function fuzz_hub_02_unwrap_decomposition_holds() external view returns (bool) {
         if (!checkedDecomposition) return unwrapAttempts < MAX_VACUOUS_ATTEMPTS;
         return lastDecompositionOk;
     }
 
     /// @dev LCC balance decreases by exactly the paid-out (non-queued) portion.
     // forge-lint: disable-next-line(mixed-case-function)
-    function echidna_hub_02_balance_decreases_by_paidout() external view returns (bool) {
+    function fuzz_hub_02_balance_decreases_by_paidout() external view returns (bool) {
         if (!checkedBalanceDelta) return unwrapAttempts < MAX_VACUOUS_ATTEMPTS;
         return lastBalanceDeltaOk;
     }
@@ -310,11 +309,7 @@ contract HUB02 {
 
 /// @dev Non-protocol holder for unwrap testing.
 contract HUB02Holder {
-    function tryUnwrapTo(address hub, address lcc, uint256 amount) external returns (bool ok) {
-        (ok,) = hub.call(
-            abi.encodeWithSignature(
-                "unwrapTo(address,address,address,uint256)", lcc, address(this), address(this), amount
-            )
-        );
+    function tryUnwrap(address hub, address lcc, uint256 amount) external returns (bool ok) {
+        (ok,) = hub.call(abi.encodeWithSignature("unwrap(address,uint256)", lcc, amount));
     }
 }

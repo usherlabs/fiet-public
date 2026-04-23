@@ -19,18 +19,14 @@ contract ECDSASignatureSignalVerifierTest is MarketMakerTestBase {
         verifier = new ECDSASignatureSignalVerifier(signatureVerifier);
     }
 
-    function _verifySignedState(
-        uint256 nonce,
-        bytes32 root,
-        MarketMaker.State memory state,
-        bytes32[] memory proof,
-        uint256 mmSignerPrivateKey
-    ) internal view returns (bool) {
-        bytes memory rootHashSignature = _signEthMessage(
-            signatureVerifierPrivateKey, EfficientHashLib.hash(abi.encodePacked(nonce, root))
-        );
-        mmSignerPrivateKey;
-        return verifier.verifyProof(nonce, root, rootHashSignature, state, proof);
+    function _verifySignedState(uint256 nonce_, bytes32 root, MarketMaker.State memory state, bytes32[] memory proof)
+        internal
+        view
+        returns (bool)
+    {
+        bytes memory rootHashSignature =
+            _signEthMessage(signatureVerifierPrivateKey, EfficientHashLib.hash(abi.encodePacked(nonce_, root)));
+        return verifier.verifyProof(nonce_, root, rootHashSignature, state, proof);
     }
 
     function test_verifyProof_validProofWithSignature() public view {
@@ -57,6 +53,7 @@ contract ECDSASignatureSignalVerifierTest is MarketMakerTestBase {
         state.prover = "0x638a1a9699319025401c605f31464cebc63a03f5";
         state.nonce = "3df23a496fff6a3d99e1d3a6d788c4ba91d9b70afb7f90906b34fadae951d898";
         state.advancer = address(0);
+        state.expiryAt = type(uint256).max;
 
         // Add reserves matching the fixture
         state.reserves = new MarketMaker.Reserve[](2);
@@ -104,7 +101,7 @@ contract ECDSASignatureSignalVerifierTest is MarketMakerTestBase {
         bytes32 root = leaves.generateMerkleRoot();
         bytes32[] memory proof = leaves.generateProof(0);
 
-        bool success = _verifySignedState(1, root, state, proof, ownerPrivateKey);
+        bool success = _verifySignedState(1, root, state, proof);
 
         assertTrue(success, "Fixture-based proof should verify successfully");
     }
@@ -177,7 +174,7 @@ contract ECDSASignatureSignalVerifierTest is MarketMakerTestBase {
         bytes32[] memory leaves = new bytes32[](1);
         leaves[0] = state.toLeafHash();
         bytes32 root = leaves.generateMerkleRoot();
-        bytes32 current_root = bytes32(0x5624139799d892ba75b4fe4ebc89050c4c6c6171778c26d600ce36dbf188cb8f); // current root from proof
+        bytes32 current_root = bytes32(0x7c99044f810470c62e84687471dbbae60f7e315b3d4be77a829d3a2e101e345e); // root includes `State.expiryAt` in leaf encoding
 
         assertEq(root, current_root, "Fixture-based proof should verify successfully");
     }
@@ -241,6 +238,7 @@ contract ECDSASignatureSignalVerifierTest is MarketMakerTestBase {
         state.nonce = "nonce";
         state.advancer = address(0);
         state.reserves = new MarketMaker.Reserve[](0);
+        state.expiryAt = type(uint256).max;
 
         bytes32[] memory leaves = new bytes32[](1);
         leaves[0] = state.toLeafHash();
@@ -334,13 +332,14 @@ contract ECDSASignatureSignalVerifierTest is MarketMakerTestBase {
         state.nonce = "nonce";
         state.advancer = address(0);
         state.reserves = new MarketMaker.Reserve[](0);
+        state.expiryAt = type(uint256).max;
 
         bytes32[] memory leaves = new bytes32[](1);
         leaves[0] = state.toLeafHash();
         bytes32 root = leaves.generateMerkleRoot();
         bytes32[] memory proof = leaves.generateProof(0); // Should be empty for single leaf
 
-        bool success = _verifySignedState(1, root, state, proof, privateKey);
+        bool success = _verifySignedState(1, root, state, proof);
 
         assertTrue(success, "Single leaf proof should verify successfully");
     }
@@ -354,6 +353,7 @@ contract ECDSASignatureSignalVerifierTest is MarketMakerTestBase {
         for (uint256 i = 0; i < numMMs; i++) {
             uint256 privateKey = uint256(keccak256(abi.encodePacked(i)));
             states[i] = _createMarketMakerState(privateKey);
+            states[i].state.expiryAt = type(uint256).max;
             leaves[i] = states[i].state.toLeafHash();
         }
 
@@ -361,7 +361,7 @@ contract ECDSASignatureSignalVerifierTest is MarketMakerTestBase {
         // Test verification for each market maker
         for (uint256 i = 0; i < numMMs; i++) {
             bytes32[] memory proof = leaves.generateProof(i);
-            bool success = _verifySignedState(1, root, states[i].state, proof, states[i].privateKey);
+            bool success = _verifySignedState(1, root, states[i].state, proof);
 
             assertTrue(success, "Multi-MM proof should verify successfully");
         }
@@ -379,13 +379,14 @@ contract ECDSASignatureSignalVerifierTest is MarketMakerTestBase {
         state.nonce = "nonce";
         state.advancer = address(0);
         state.reserves = new MarketMaker.Reserve[](0); // Empty reserves
+        state.expiryAt = type(uint256).max;
 
         bytes32[] memory leaves = new bytes32[](1);
         leaves[0] = state.toLeafHash();
         bytes32 root = leaves.generateMerkleRoot();
         bytes32[] memory proof = leaves.generateProof(0);
 
-        bool success = _verifySignedState(1, root, state, proof, privateKey);
+        bool success = _verifySignedState(1, root, state, proof);
 
         assertTrue(success, "State with empty reserves should verify successfully");
     }
@@ -399,6 +400,7 @@ contract ECDSASignatureSignalVerifierTest is MarketMakerTestBase {
         state.nonce = "nonce";
         state.advancer = address(0);
         state.reserves = new MarketMaker.Reserve[](0);
+        state.expiryAt = type(uint256).max;
 
         bytes32[] memory leaves = new bytes32[](1);
         leaves[0] = state.toLeafHash();

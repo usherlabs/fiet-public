@@ -5,7 +5,7 @@ import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {Hooks} from "@uniswap/v4-core/src/libraries/Hooks.sol";
 import {BaseHook} from "v4-periphery/src/utils/BaseHook.sol";
-import {BalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
+import {BalanceDelta, toBalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
 import {ModifyLiquidityParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
 
 import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
@@ -13,7 +13,7 @@ import {CurrencySettler} from "@uniswap/v4-core/test/utils/CurrencySettler.sol";
 import {SwapParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
 import {TransientSlots} from "./libraries/TransientSlots.sol";
 import {TransientSlot} from "openzeppelin-contracts/contracts/utils/TransientSlot.sol";
-import {PositionLibrary} from "./types/Position.sol";
+import {PositionLibrary, PositionModificationHookDataLib} from "./types/Position.sol";
 import {StateLibrary} from "@uniswap/v4-core/src/libraries/StateLibrary.sol";
 import {BeforeSwapDelta, BeforeSwapDeltaLibrary} from "@uniswap/v4-core/src/types/BeforeSwapDelta.sol";
 import {SafeCast} from "openzeppelin-contracts/contracts/utils/math/SafeCast.sol";
@@ -24,6 +24,7 @@ import {MarketHandlerLib} from "./libraries/MarketHandlerLib.sol";
 import {TransientStateLibrary} from "@uniswap/v4-core/src/libraries/TransientStateLibrary.sol";
 import {ICoreHook} from "./interfaces/ICoreHook.sol";
 import {IVaultCoreActionHandler} from "./interfaces/IVaultCoreActionHandler.sol";
+import {Errors} from "./libraries/Errors.sol";
 
 /**
  * Core Pool should be aware of Positions.
@@ -42,6 +43,12 @@ contract CoreHook is BaseHook, ImmutableMarketState, ImmutableVTSState, ICoreHoo
         ImmutableMarketState(_marketFactory)
         ImmutableVTSState(_vtsOrchestrator)
     {}
+
+    /// @dev Minimum width for non-MM adds on the core pool: `>= this * tickSpacing` ticks (mitigates single-step dust LP bands).
+    uint8 private constant MIN_DIRECT_LP_TICK_SPACING_STEPS = 2;
+
+    /// @notice Minimum liquidity delta for non-MM adds on the core pool (dust mitigation).
+    uint128 private constant MIN_DIRECT_LP_LIQUIDITY_DELTA = 1000;
 
     function getHookPermissions() public pure override returns (Hooks.Permissions memory) {
         return Hooks.Permissions({
@@ -85,13 +92,41 @@ contract CoreHook is BaseHook, ImmutableMarketState, ImmutableVTSState, ICoreHoo
      */
     function _beforeAddLiquidity(
         address sender,
-        PoolKey calldata,
+        PoolKey calldata key,
         ModifyLiquidityParams calldata params,
-        bytes calldata
+        bytes calldata hookData
     ) internal override returns (bytes4) {
         // Settle growths using pre-modification liquidity so prior accruals are not attributed to new units.
         vtsOrchestrator.settlePositionGrowths(PositionLibrary.generateId(sender, params));
+        _enforceDirectLiquidityAntiGrief(key, params, hookData);
         return this.beforeAddLiquidity.selector;
+    }
+
+    /// @notice Rejects ultra-narrow non-MM liquidity on the core pool to limit dense initialized ticks near slot0 (swap/VTS replay gas).
+    /// @dev MM positions always supply `commitId > 0` hook data and bypass this gate.
+    function _enforceDirectLiquidityAntiGrief(
+        PoolKey calldata key,
+        ModifyLiquidityParams calldata params,
+        bytes calldata hookData
+    ) private pure {
+        if (params.liquidityDelta <= 0) return;
+
+        if (PositionModificationHookDataLib.isMMOperation(PositionModificationHookDataLib.decodeCalldata(hookData))) {
+            return;
+        }
+
+        int24 widthTicks = params.tickUpper - params.tickLower;
+        int24 minWidthTicks = key.tickSpacing * int24(uint24(MIN_DIRECT_LP_TICK_SPACING_STEPS));
+        if (widthTicks < minWidthTicks) {
+            revert Errors.DirectLiquidityRangeTooNarrow(widthTicks, minWidthTicks);
+        }
+
+        uint256 lu = uint256(params.liquidityDelta);
+        if (lu > uint256(type(uint128).max)) revert Errors.InvalidAmount(lu, type(uint128).max);
+        uint128 liq = uint128(lu);
+        if (liq < MIN_DIRECT_LP_LIQUIDITY_DELTA) {
+            revert Errors.DirectLiquidityTooSmall(liq, MIN_DIRECT_LP_LIQUIDITY_DELTA);
+        }
     }
 
     function _beforeRemoveLiquidity(
@@ -100,8 +135,9 @@ contract CoreHook is BaseHook, ImmutableMarketState, ImmutableVTSState, ICoreHoo
         ModifyLiquidityParams calldata params,
         bytes calldata
     ) internal override returns (bytes4) {
-        // Always an existing position; settle growths against pre-modification liquidity
-        // so pre-pause accruals cannot be attributed to post-removal liquidity.
+        // Removal must settle growths against pre-modification liquidity first so already-earned accrual is not
+        // reweighted onto the smaller post-removal position. This still applies during pause: remove-liquidity stays
+        // available, but only through the canonical hook path that VTSOrchestrator accepts while paused.
         vtsOrchestrator.settlePositionGrowths(PositionLibrary.generateId(sender, params));
         return this.beforeRemoveLiquidity.selector;
     }
@@ -111,10 +147,11 @@ contract CoreHook is BaseHook, ImmutableMarketState, ImmutableVTSState, ICoreHoo
         override
         returns (bytes4, BeforeSwapDelta, uint24)
     {
-        // store sqrtP_before and liquidity in transient storage for segment processing
-        (uint160 sqrtPBefore,,,) = StateLibrary.getSlot0(poolManager, key.toId());
+        // store sqrtP_before, slot0 tick, and liquidity in transient storage for segment processing
+        (uint160 sqrtPBefore, int24 tickBefore,,) = StateLibrary.getSlot0(poolManager, key.toId());
         uint128 liqBefore = StateLibrary.getLiquidity(poolManager, key.toId());
         TransientSlot.asUint256(TransientSlots.SQRTP_BEFORE_SLOT).tstore(uint256(sqrtPBefore));
+        TransientSlots.storeTickBefore(tickBefore);
         TransientSlot.asUint256(TransientSlots.LIQ_BEFORE_SLOT).tstore(uint256(liqBefore));
         return (this.beforeSwap.selector, BeforeSwapDeltaLibrary.ZERO_DELTA, 0);
     }
@@ -128,10 +165,12 @@ contract CoreHook is BaseHook, ImmutableMarketState, ImmutableVTSState, ICoreHoo
         // Read swap snapshot from transient storage then clear immediately to avoid any same-tx "ghost state"
         // interactions if future refactors introduce nested/interleaved swaps.
         uint160 sqrtPBefore = uint160(TransientSlot.asUint256(TransientSlots.SQRTP_BEFORE_SLOT).tload());
+        int24 tickBefore = TransientSlots.loadTickBefore();
         uint128 liqBefore = uint128(TransientSlot.asUint256(TransientSlots.LIQ_BEFORE_SLOT).tload());
         TransientSlot.asUint256(TransientSlots.SQRTP_BEFORE_SLOT).tstore(0);
+        TransientSlots.clearTickBefore();
         TransientSlot.asUint256(TransientSlots.LIQ_BEFORE_SLOT).tstore(0);
-        vtsOrchestrator.afterCoreSwap(key, params, delta, sqrtPBefore, liqBefore);
+        vtsOrchestrator.afterCoreSwap(key, params, delta, sqrtPBefore, liqBefore, tickBefore);
 
         // Check if this is a direct core pool swap, and if it is, notify canonical vault handler.
         address proxyHook = _getProxyHook(key);
@@ -162,15 +201,14 @@ contract CoreHook is BaseHook, ImmutableMarketState, ImmutableVTSState, ICoreHoo
         // Update VTS position state with registration/update based on actual pool id
         // Pass callerDelta and feesAccrued for consolidated delta management
         // Note: Pause check is enforced in VTSOrchestrator.processPosition
-        (,, BalanceDelta feeAdj, bool isMMPosition) =
-            vtsOrchestrator.processPosition(sender, key, params, delta, feesAccrued, hookData);
+        (,, bool isMMPosition) = vtsOrchestrator.processPosition(sender, key, params, delta, feesAccrued, hookData);
 
         // only add direct liquidity if this is not an MM position operation
         if (!isMMPosition) {
             IVaultCoreActionHandler(_getProxyHook(key)).handleAddLiquidity();
         }
 
-        return (this.afterAddLiquidity.selector, feeAdj);
+        return (this.afterAddLiquidity.selector, toBalanceDelta(0, 0));
     }
 
     /// @notice The hook called after liquidity is removed
@@ -191,27 +229,18 @@ contract CoreHook is BaseHook, ImmutableMarketState, ImmutableVTSState, ICoreHoo
         BalanceDelta feesAccrued,
         bytes calldata hookData
     ) internal virtual override returns (bytes4, BalanceDelta) {
-        if (_isPoolOrGlobalPaused(key)) {
-            return (this.afterRemoveLiquidity.selector, BalanceDelta.wrap(0));
-        }
-
-        // Update VTS position state with registration/update based on actual pool id
-        // Pass callerDelta and feesAccrued for consolidated delta management
-        (,, BalanceDelta feeAdj,) = vtsOrchestrator.processPosition(sender, key, params, delta, feesAccrued, hookData);
+        // All liquidity modifications now share the same VTS entrypoint; pause policy is enforced in touchPosition.
+        vtsOrchestrator.processPosition(sender, key, params, delta, feesAccrued, hookData);
 
         // NOTE: We deliberately do NOT notify ProxyHook on direct-LP removals.
         // Underlying liquidity is sourced during unwrap via market liquidity, keeping a single settlement conduit.
 
-        return (this.afterRemoveLiquidity.selector, feeAdj);
+        return (this.afterRemoveLiquidity.selector, toBalanceDelta(0, 0));
     }
 
     // Helper function to get the proxy hook address from the core pool key
     function _getProxyHook(PoolKey calldata corePoolKey) internal view returns (address) {
         return MarketHandlerLib.getProxyHook(marketFactory, corePoolKey);
-    }
-
-    function _isPoolOrGlobalPaused(PoolKey calldata key) internal view returns (bool) {
-        return vtsOrchestrator.isPoolOrGlobalPaused(key.toId());
     }
 
     /// @dev Emits direct swap lane fact to canonical vault handler for obligation follow-up.

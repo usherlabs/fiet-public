@@ -13,6 +13,7 @@ import {IVRLSettlementObserver} from "../../src/interfaces/IVRLSettlementObserve
 import {VTSStorage, MarketVTSConfiguration} from "../../src/types/VTS.sol";
 import {VTSConfigs} from "../../src/libraries/VTSConfigs.sol";
 import {Errors} from "../../src/libraries/Errors.sol";
+import {PositionId} from "../../src/types/Position.sol";
 
 contract MockSignalManagerForAdmin is IVRLSignalManager {
     address public immutable override submitter;
@@ -25,10 +26,6 @@ contract MockSignalManagerForAdmin is IVRLSignalManager {
         return address(0);
     }
 
-    function signalExpiryInSeconds() external pure returns (uint256) {
-        return 0;
-    }
-
     function mmNonce(address) external pure returns (uint256) {
         return 0;
     }
@@ -39,17 +36,20 @@ contract MockSignalManagerForAdmin is IVRLSignalManager {
 
     function setVerifier(address) external {}
 
-    function setSignalExpiryInSeconds(uint256) external {}
-
     function verifyLiquiditySignal(address, bytes memory, bool) external pure returns (bool, uint256) {
         return (false, 0);
     }
 
-    function verifyLiquiditySignalRelayed(address, uint256, bytes memory, uint256, uint256, bytes memory, bool)
-        external
-        pure
-        returns (bool, uint256)
-    {
+    function verifyLiquiditySignalRelayed(
+        address,
+        uint256,
+        bytes memory,
+        uint256,
+        uint256,
+        bytes memory,
+        address,
+        bool
+    ) external pure returns (bool, uint256) {
         return (false, 0);
     }
 }
@@ -71,7 +71,7 @@ contract MockSignalManagerForAdmin is IVRLSignalManager {
 
         function disallowVerifierForTokens(uint32, address[] memory) external {}
 
-        function verifySettlementProof(PoolKey memory, uint8, uint32, bytes memory, bool)
+        function verifySettlementProof(PoolKey memory, uint8, uint32, PositionId, bytes memory, bool)
             external
             pure
             returns (bool isProofValid)

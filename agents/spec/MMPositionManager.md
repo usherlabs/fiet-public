@@ -2,13 +2,14 @@
 
 > **Module**: `MMPositionManager`, `MMPositionActionsImpl`, `MMActions`  
 > **Author**: Fiet Protocol  
-> **Last Updated**: December 2024
+> **Last Updated**: 19th April 2026
 
 ## Overview
 
 The `MMPositionManager` (MMPM) is the primary entry point for Market Maker (MM) commitment and position management. It handles commitment lifecycle operations locally (as ERC721 tokens) and delegates position operations to `MMPositionActionsImpl` via delegatecall.
 
 Actions are organised into three categories based on their action codes:
+
 - **Position Operations** (`0x00–0x09`): Delegated to `MMPositionActionsImpl`
 - **Commitment Operations** (`0x20–0x24`): Handled locally in `MMPositionManager`
 - **Utility Operations** (`0x40+`): Handled locally in `MMPositionManager`
@@ -57,12 +58,13 @@ Settles underlying assets to/from a position. This is the core settlement operat
 
 **`usePositionManagerBalance` Semantics:**
 
-| Value | Token Flow | Delta Accounting |
-|-------|-----------|------------------|
-| `true` | MMPM ↔ Vault | Locker's deltas adjusted |
-| `false` | Locker ↔ Vault (direct) | No delta adjustment |
+| Value   | Token Flow              | Delta Accounting         |
+| ------- | ----------------------- | ------------------------ |
+| `true`  | MMPM ↔ Vault            | Locker's deltas adjusted |
+| `false` | Locker ↔ Vault (direct) | No delta adjustment      |
 
 **Flow:**
+
 ```
 _settle()
   → vtsOrchestrator.onMMSettle()       // Update VTS accounting
@@ -87,6 +89,7 @@ Mints a new position within an existing commitment. Creates a new liquidity posi
 | `liquidity` | `uint256` | Amount of liquidity units to mint |
 
 **Flow:**
+
 ```
 _mintPosition()
   → vtsOrchestrator.getCommit()         // Get next position index
@@ -123,6 +126,10 @@ Decreases liquidity from an existing position.
 | `tokenId` | `uint256` | The commitment NFT token ID |
 | `positionIndex` | `uint256` | The position index within the commitment |
 | `amountToDecrease` | `uint256` | Amount of liquidity units to remove |
+| `amount0Min` | `uint128` | Minimum per-leg **immediate non-fee LCC after informational fee netting** token0 (`LiquidityUtils.forwardedNonFeeLccAmount`). For commit positions, only the Hub-queued slice is forwarded to the queue custodian; any surplus remains as locker transient LCC credit (`TAKE` / `UNWRAP_LCC`). **Not** the same scalar as VTS queue principal (`callerDelta - feesAccrued`). |
+| `amount1Min` | `uint128` | Minimum per-leg **immediate non-fee LCC after informational fee netting** token1 (same semantics as `amount0Min`). |
+
+**Protocol note:** Min-out protects the user-facing LCC receipt after the PoolManager → MMPM transfer and planned-cancel path; VTS queue/cancel caps still use hook-time principal `callerDelta - feesAccrued` (see **SETTLE-03** / **MMQ-01** in `contracts/evm/INVARIANTS.md`).
 
 ---
 
@@ -136,12 +143,16 @@ Burns (fully decreases) a position, removing all liquidity.
 | `poolKey` | `PoolKey` | The pool key identifying the market |
 | `tokenId` | `uint256` | The commitment NFT token ID |
 | `positionIndex` | `uint256` | The position index within the commitment |
+| `amount0Min` | `uint128` | Minimum per-leg **immediate non-fee LCC after informational fee netting** token0 when burning (same decrease/burn min-out semantics as `DECREASE_LIQUIDITY`). |
+| `amount1Min` | `uint128` | Minimum per-leg **immediate non-fee LCC after informational fee netting** token1 when burning. |
 
 ---
 
 ### SEIZE_POSITION (0x05)
 
 Seizes a position that has failed to meet its backing requirements after the grace period. This is a third-party guarantor action.
+
+**Amendment (2026-04-19).** Economic intent for **how much** liquidity may be seized and how that relates to the **base VTS rate** and **proportional cure** of overdue RfS is documented in [`Seizure-and-Base-Tranche-Policy.md`](./Seizure-and-Base-Tranche-Policy.md). Execution still flows through `onMMSettle` → `_calcSeizure` as implemented in `VTSLifecycleLinkedLib`.
 
 **Parameters:**
 | Name | Type | Description |
@@ -154,6 +165,7 @@ Seizes a position that has failed to meet its backing requirements after the gra
 | `usePositionManagerBalance` | `bool` | Token flow control |
 
 **Flow:**
+
 ```
 _seizePosition()
   → vtsOrchestrator.onSeize()           // Validate grace period elapsed
@@ -180,12 +192,13 @@ Increases liquidity using available delta credits. Calculates liquidity from ava
 
 **`payerIsUser` Semantics:**
 
-| Value | Delta Target | Behaviour |
-|-------|--------------|-----------|
-| `true` | MMPM (`address(this)`) | User consumes credit the **protocol owes them**. LCCs are issued, capitalised by underlying already owed to the MM. No additional settlement. |
-| `false` | Locker (`msgSender()`) | Uses locker's direct credit. After increasing, **settles underlying tokens** into position (clears locker delta). |
+| Value   | Delta Target           | Behaviour                                                                                                                                     |
+| ------- | ---------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| `true`  | MMPM (`address(this)`) | User consumes credit the **protocol owes them**. LCCs are issued, capitalised by underlying already owed to the MM. No additional settlement. |
+| `false` | Locker (`msgSender()`) | Uses locker's direct credit. After increasing, **settles underlying tokens** into position (clears locker delta).                             |
 
 **Flow (payerIsUser = true):**
+
 ```
 _increaseFromDeltas(payerIsUser=true)
   → _getFullCreditPair(MMPM)            // Read protocol's owed credit
@@ -195,6 +208,7 @@ _increaseFromDeltas(payerIsUser=true)
 ```
 
 **Flow (payerIsUser = false):**
+
 ```
 _increaseFromDeltas(payerIsUser=false)
   → _getFullCreditPair(locker)          // Read locker's credit
@@ -236,12 +250,13 @@ Settles into a position using available delta credits. This action deposits unde
 
 **`payerIsUser` Semantics:**
 
-| Value | Delta Target | Behaviour |
-|-------|--------------|-----------|
-| `true` | MMPM | User settles funds **already owed to them**. No token movement — `onMMSettle` called directly for accounting update only. |
-| `false` | Locker | Settle using `usePositionManagerBalance = true` — moves tokens from MMPM balance to vault, debits locker's delta. |
+| Value   | Delta Target | Behaviour                                                                                                                 |
+| ------- | ------------ | ------------------------------------------------------------------------------------------------------------------------- |
+| `true`  | MMPM         | User settles funds **already owed to them**. No token movement — `onMMSettle` called directly for accounting update only. |
+| `false` | Locker       | Settle using `usePositionManagerBalance = true` — moves tokens from MMPM balance to vault, debits locker's delta.         |
 
 **Flow (payerIsUser = true):**
+
 ```
 _settleFromDeltas(payerIsUser=true)
   → _getFullCreditPair(MMPM)            // Read protocol's owed credit
@@ -250,6 +265,7 @@ _settleFromDeltas(payerIsUser=true)
 ```
 
 **Flow (payerIsUser = false):**
+
 ```
 _settleFromDeltas(payerIsUser=false)
   → _getFullCreditPair(locker)          // Read locker's credit
@@ -264,14 +280,15 @@ The `FromDeltas` actions deserve special attention due to their nuanced delta ha
 
 ### Delta Target Semantics
 
-| Delta Target | Positive Delta (Credit) | Meaning |
-|--------------|------------------------|---------|
-| **MMPM** (`address(this)`) | Protocol **owes** external sources | User can consume this credit without providing tokens |
-| **Locker** (`msgSender()`) | External entity **is owed** by protocol | MMPM holds tokens that belong to locker |
+| Delta Target               | Positive Delta (Credit)                 | Meaning                                               |
+| -------------------------- | --------------------------------------- | ----------------------------------------------------- |
+| **MMPM** (`address(this)`) | Protocol **owes** external sources      | User can consume this credit without providing tokens |
+| **Locker** (`msgSender()`) | External entity **is owed** by protocol | MMPM holds tokens that belong to locker               |
 
 ### Token Flow Diagrams
 
 **payerIsUser = true (MMPM delta):**
+
 ```
 ┌────────────────────────────────────────────────────────────┐
 │  Protocol owes user 100 (tracked on MMPM delta)            │
@@ -283,6 +300,7 @@ The `FromDeltas` actions deserve special attention due to their nuanced delta ha
 ```
 
 **payerIsUser = false (Locker delta):**
+
 ```
 ┌────────────────────────────────────────────────────────────┐
 │  Locker has 100 credit (MMPM holds their tokens)           │
@@ -302,19 +320,21 @@ These actions manage commitment lifecycle and are handled directly in `MMPositio
 
 ### COMMIT_SIGNAL (0x20)
 
-Commits a liquidity signal and mints a commitment NFT to the specified owner.
+Commits a liquidity signal and mints a commitment NFT to the **locker** (the batch caller). Params are ABI-encoded as `(bytes liquiditySignal, bytes relayParams)`; there is no separate owner word in the action payload (custody separation uses ERC-721 `transferFrom` after the batch if needed).
 
 **Parameters:**
+
 | Name | Type | Description |
 |------|------|-------------|
 | `liquiditySignal` | `bytes` | ABI-encoded liquidity signal to verify and record |
-| `owner` | `address` | Recipient of the commitment NFT (supports address mapping) |
+| `relayParams` | `bytes` | Optional relay authorisation blob; when empty, direct commit path is used |
 
 **Flow:**
-```
+
+```text
 _commitSignal()
   → vtsOrchestrator.commitSignal()      // Validate and record signal
-  → _mint(owner, tokenId)               // Mint ERC721 NFT
+  → _mint(locker, tokenId)              // Mint ERC721 NFT to msgSender() / locker
   → emit SignalCommitted(tokenId)
 ```
 
@@ -342,8 +362,17 @@ Decommits a signal and burns the commitment NFT. Requires all positions to be re
 | `tokenId` | `uint256` | The commitment NFT token ID |
 
 **Requirements:**
+
 - Caller must be approved or owner of the NFT
-- Commitment must have zero positions (`positionCount == 0`)
+- Commitment must have zero **active** positions (`activePositionCount == 0`)
+- Commitment must have zero inactive live-`settled` remnants (`inactiveRemnantCount == 0`)
+
+**Exit semantics (amended 19th April 2026):**
+
+- `DECOMMIT_SIGNAL` is a valid **terminal exit** for an MM commitment once the active-position and inactive-live-`settled`
+  gates above are satisfied.
+- Historical `positionCount` may remain non-zero because the commit retains position history; decommit is not gated on
+  `positionCount == 0`.
 
 ---
 
@@ -395,6 +424,7 @@ Takes currency from delta and transfers to recipient.
 | `maxAmount` | `uint256` | Maximum amount to take (0 = max available) |
 
 **Behaviour:**
+
 - For **LCC currencies**: Burns ERC-6909 claims → Takes actual ERC20 → Debits MMPM delta
 - For **underlying currencies**: Debits locker delta → Direct ERC20 transfer
 
@@ -409,8 +439,10 @@ Unwraps LCC tokens to underlying asset via the LiquidityHub.
 |------|------|-------------|
 | `lccAddr` | `address` | The LCC token address |
 | `amount` | `uint256` | Amount to unwrap (0 = max available) |
-| `recipient` | `address` | Recipient of underlying (supports address mapping) |
+| `recipient` | `address` | After `_mapRecipient`, must be the locker or `address(this)` (MMPM); arbitrary third-party recipients revert |
 | `payerIsUser` | `bool` | Whether to pull from user wallet or use deltas |
+
+**Policy:** Resolved payout address must be `msgSender()` (locker) or `address(this)` so on-behalf-of unwraps do not route underlying to unserviceable addresses. The Hub additionally rejects exempt/DEX/Hub payout targets (HUB-02B).
 
 ---
 
@@ -424,6 +456,7 @@ Wraps native ETH to WETH. Takes from locker's native delta.
 | `amount` | `uint256` | Amount of ETH to wrap (0 = max available from deltas) |
 
 **Flow:**
+
 ```
 _wrapNative()
   → vtsOrchestrator.take(NATIVE, locker, amount)  // Debit native delta
@@ -444,6 +477,7 @@ Unwraps WETH to native ETH.
 | `payerIsUser` | `bool` | Whether to pull from user wallet or use deltas |
 
 **Flow:**
+
 ```
 _unwrapNative()
   → [if payerIsUser] transferFrom(user, amount)
@@ -456,14 +490,15 @@ _unwrapNative()
 
 ### COLLECT_AVAILABLE_LIQUIDITY (0x44)
 
-Collects available liquidity from the settlement queue for a specific LCC and commitment bucket.
+Manager-mediated pull: collects for the **batch locker’s** `MMQueueCustodian` only. Reconciles `LiquidityHub.settleQueue(lcc, custodian)`, **actual** custodian LCC and underlying balances, and Hub reserves (**balance-as-ledger** — no separate entitlement mapping). Optionally runs `processSettlementFor` for the live queue slice, then releases pre-settled underlying already on the custodian. Credits the locker via **`creditExact`** for known amounts; outward wallet payout requires **`TAKE`**.
 
 **Parameters:**
 | Name | Type | Description |
 |------|------|-------------|
 | `lcc` | `address` | The LCC token address |
-| `tokenId` | `uint256` | Commitment token ID custody bucket to release from |
-| `maxAmount` | `uint256` | Maximum amount to collect |
+| `maxAmount` | `uint256` | Maximum amount (underlying units) to collect |
+
+**Prerequisite:** locker has called **`INITIALISE`** so `custodianFor[locker]` exists.
 
 ---
 

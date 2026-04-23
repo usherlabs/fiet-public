@@ -6,53 +6,34 @@ import {LiquidityHub} from "../../src/LiquidityHub.sol";
 import {ILCC} from "../../src/interfaces/ILCC.sol";
 import {IMarketFactory} from "../../src/interfaces/IMarketFactory.sol";
 import {Errors} from "../../src/libraries/Errors.sol";
-import {Bounds} from "../../src/libraries/Bounds.sol";
 import {StdStorage, stdStorage} from "forge-std/StdStorage.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {IMMQueueCustodian} from "../../src/interfaces/IMMQueueCustodian.sol";
 
-/// @notice Minimal custodian for `LiquidityHub.settleFromCustodian` integration tests.
+/// @notice Minimal custodian stub for `processSettlementFor` queue-owner tests (no MM custody bookkeeping).
 contract MockSettleCustodian is IMMQueueCustodian {
     address public override positionManager;
-
-    mapping(uint256 tokenId => mapping(address lcc => mapping(address beneficiary => uint256 amount))) private _custody;
+    address public override beneficiary;
 
     constructor() {
         positionManager = address(0xDEAD);
+        beneficiary = address(0xBEEF);
     }
 
-    function setPositionManager(address) external override {}
+    function unwrapLcc(address, address, uint256) external pure override {}
 
-    function record(uint256, address, address, uint256) external override {}
-
-    function seed(uint256 tokenId, address lcc, address beneficiary, uint256 amount) external {
-        _custody[tokenId][lcc][beneficiary] = amount;
+    function totalQueuedLcc(address) external pure override returns (uint256) {
+        return 0;
     }
 
-    function queued(uint256 tokenId, address lcc, address beneficiary) external view override returns (uint256) {
-        return _custody[tokenId][lcc][beneficiary];
-    }
-
-    function release(uint256 tokenId, address lcc, address beneficiary, uint256 maxAmount)
-        external
-        override
-        returns (uint256 released)
-    {
-        if (msg.sender != ILCC(lcc).hub()) revert();
-        uint256 avail = _custody[tokenId][lcc][beneficiary];
-        released = avail < maxAmount ? avail : maxAmount;
-        if (released == 0) return 0;
-        _custody[tokenId][lcc][beneficiary] = avail - released;
-        IERC20(lcc).transfer(beneficiary, released);
-        return released;
-    }
+    function release(address, uint256) external pure override {}
 }
 
     /**
      * @title LiquidityHubLibTest
      * @notice Unit tests that specifically harden mutation survivors for LiquidityHubLib logic.
      * @dev These tests intentionally target hard-to-hit branches in:
-     *      - wrapWith lazy-claim netting and clamping (`nettedLCCsAsUnderlying`)
+     *      - wrapWith Step-2 eager Hub queue netting (durable `settleQueue` / `queueOfUnderlying`)
      *      - settlement edge cases (`LiquidityError` path)
      *      - partial market-liquidity returns (exact shortfall queueing)
      */
@@ -185,18 +166,7 @@ contract MockSettleCustodian is IMMQueueCustodian {
             vm.store(address(liquidityHub), _slotReserveOfUnderlyingMarketDerived(underlying), bytes32(value));
         }
 
-        /// @notice Reads `LiquidityHubStorage.nettedLCCsAsUnderlying[lcc]` from the Hub.
-        /// @dev This value is the Hub’s **lazy-claimed netting counter** for a given LCC, used by `LiquidityHubLib`.
-        ///
-        /// Correlation / meaning:
-        /// - It tracks how much of the Hub’s own settlement queue for `lcc` has already been “netted as underlying”
-        ///   during `wrapWith` Step 2 (market-derived netting), without immediately burning Hub-held LCC.
-        /// - Later, when settling the Hub’s queue (`processSettlementFor(lcc, address(hub), ...)`), the Hub path
-        ///   consumes this counter first (`decrement = min(claimed, toSettle)`), and only burns the remaining amount
-        ///   (`effectiveToBurn = toSettle - decrement`).
-        ///
-        /// In short: **higher value == more of the Hub’s queued obligation is considered already netted**, so less LCC
-        /// should be burned during Hub settlement until this counter is reduced back toward zero.
+        /// @notice Reads deprecated `nettedLCCsAsUnderlying` storage (layout slot retained; logic must not use it).
         function _getNetted(address lcc) internal returns (uint256) {
             return uint256(vm.load(address(liquidityHub), _slotNetted(lcc)));
         }
@@ -263,9 +233,9 @@ contract MockSettleCustodian is IMMQueueCustodian {
             liquidityHub.prepareSettle(lccToken1, amount + 1);
         }
 
-        function test_unwrap_whenNoMarketBalance_doesNotCallUseMarketLiquidity_andQueuesAll() public {
+        function test_unwrap_whenNoMarketBalance_andZeroDirectSupply_reverts() public {
             // User has wrapped balance, but we set directSupply to 0 so direct-unwrapping is impossible.
-            // With marketDerivedBalance == 0, unwrapInternalLogic must NOT call useMarketLiquidity at all.
+            // With marketDerivedBalance == 0, the remaining unwrap cannot queue (external queues are market-derived only).
             uint256 amount = 1;
             _wrapDirectLCC(user1, lccToken1, amount);
             _setDirectSupply(lccToken1, 0);
@@ -278,10 +248,8 @@ contract MockSettleCustodian is IMMQueueCustodian {
             );
 
             vm.prank(user1);
+            vm.expectRevert(abi.encodeWithSelector(Errors.InvalidAmount.selector, amount, uint256(0)));
             liquidityHub.unwrap(lccToken1, amount);
-
-            assertEq(liquidityHub.settleQueue(lccToken1, user1), amount, "should queue full amount");
-            assertEq(liquidityHub.totalQueued(lccToken1), amount, "totalQueued should equal queued amount");
         }
 
         function test_processSettlementFor_hub_doesNotDecrementReserveOrTransferUnderlying() public {
@@ -328,8 +296,10 @@ contract MockSettleCustodian is IMMQueueCustodian {
         function test_processSettlementFor_hub_noopsWhenOnlyDirectReserve() public {
             uint256 queued = 6;
 
-            // Hub holds wrapped LCC only (market-derived is 0).
-            _wrapDirectLCC(address(liquidityHub), lccToken1, queued);
+            // Hub holds wrapped LCC only (market-derived is 0). Cannot wrap directly to exempt Hub; fund via user then transfer.
+            _wrapDirectLCC(user1, lccToken1, queued);
+            vm.prank(user1);
+            ILCC(lccToken1).transfer(address(liquidityHub), queued);
 
             // Seed hub queue with only direct reserve (market-derived reserve stays zero).
             _setSettleQueue(lccToken1, address(liquidityHub), queued);
@@ -346,7 +316,7 @@ contract MockSettleCustodian is IMMQueueCustodian {
             assertEq(ILCC(lccToken1).balanceOf(address(liquidityHub)), hubBalanceBefore, "hub LCC should remain");
         }
 
-        function test_wrapWith_step2_lazyClaim_increasesNetted_andDoesNotQueueResidual() public {
+        function test_wrapWith_step2_eagerlyReducesHubQueue_andUnderlyingAggregate() public {
             (address lccToken3,) = _createSecondLCCPair();
 
             uint256 hubQueue = 50;
@@ -355,13 +325,9 @@ contract MockSettleCustodian is IMMQueueCustodian {
             uint256 amount = 30;
             _wrapMarketDerivedLCC(user1, lccToken1, amount);
 
-            // Hub is already protocol-bound (bucket-exempt) in test setup.
-
-            uint256 nettedBefore = _getNetted(lccToken1);
-            assertEq(nettedBefore, 0, "precondition: netted should start at 0");
-
             uint256 queueBefore = liquidityHub.settleQueue(lccToken1, address(liquidityHub));
             uint256 totalQueuedBefore = liquidityHub.totalQueued(lccToken1);
+            uint256 qUnderlyingBefore = liquidityHub.queueOfUnderlying(lccToken1);
             assertEq(queueBefore, hubQueue, "precondition: hub queue should exist");
             assertEq(totalQueuedBefore, hubQueue, "precondition: totalQueued should match hub queue");
 
@@ -370,17 +336,18 @@ contract MockSettleCustodian is IMMQueueCustodian {
             liquidityHub.wrapWith(lccToken3, lccToken1, amount);
             vm.stopPrank();
 
-            // Step 2 should lazy-claim (increase netted) but must NOT mutate the queue itself.
-            assertEq(_getNetted(lccToken1), nettedBefore + amount, "netted should increase by nettable");
+            // Step 2 eagerly reduces durable queue (no lazy overlay).
+            assertEq(_getNetted(lccToken1), 0, "deprecated netted slot should stay zero");
             assertEq(
                 liquidityHub.settleQueue(lccToken1, address(liquidityHub)),
-                queueBefore,
-                "hub queue should not change due to lazy-claim"
+                queueBefore - amount,
+                "hub queue should decrease by nettable amount"
             );
+            assertEq(liquidityHub.totalQueued(lccToken1), totalQueuedBefore - amount, "totalQueued should match");
             assertEq(
-                liquidityHub.totalQueued(lccToken1),
-                totalQueuedBefore,
-                "totalQueued should not change due to lazy-claim"
+                liquidityHub.queueOfUnderlying(lccToken1),
+                qUnderlyingBefore - amount,
+                "shared underlying queue should match"
             );
         }
 
@@ -402,10 +369,10 @@ contract MockSettleCustodian is IMMQueueCustodian {
             _wrapMarketDerivedLCC(user1, lccToken1, marketAmount);
             _wrapDirectLCC(user1, lccToken1, wrappedAmount);
 
-            // Prevent Step 1 direct conversion; we want Step 3 to queue the wrapped residual to the Hub.
-            _setDirectSupply(lccToken1, 0);
+            // Step 3 must redeem the wrapped residual against directSupply; wrapped shortfall cannot enter the queue path.
+            _setDirectSupply(lccToken1, wrappedAmount);
 
-            // If Step 3 tries to use market liquidity (it shouldn't after Step 2 consumes market-derived),
+            // If Step 3 incorrectly tries to use market liquidity (it shouldn't after Step 2 consumes market-derived),
             // revert hard to kill the mutation.
             vm.mockCallRevert(
                 factory,
@@ -421,56 +388,44 @@ contract MockSettleCustodian is IMMQueueCustodian {
             liquidityHub.wrapWith(lccToken3, lccToken1, amount);
             vm.stopPrank();
 
-            // The wrapped residual should be queued to the Hub exactly.
+            // Step 2 nets 10 from Hub queue; wrapped residual redeems via directSupply; no extra wrapped queue.
             assertEq(
                 liquidityHub.settleQueue(lccToken1, address(liquidityHub)),
-                queueBefore + wrappedAmount,
-                "hub queue should increase only by wrapped residual"
+                queueBefore - hubQueue,
+                "hub queue should decrease by Step-2 nettable amount"
             );
             assertEq(
                 liquidityHub.totalQueued(lccToken1),
-                totalQueuedBefore + wrappedAmount,
-                "totalQueued should increase only by wrapped residual"
+                totalQueuedBefore - hubQueue,
+                "totalQueued should match Step-2 netting"
             );
         }
 
-        function test_wrapWith_step2_netting_clampsToEffectiveQueue_whenClaimedPresent() public {
+        function test_wrapWith_step2_netsAgainstFullDurableQueue_whenNoPriorOverlay() public {
             (address targetLcc,) = _createSecondLCCPair();
             address withLcc = lccToken1;
 
             uint256 hubQueue = 50;
-            uint256 claimed = 20;
-            uint256 effectiveQueue = hubQueue - claimed;
-            uint256 amount = effectiveQueue;
+            uint256 amount = 30;
 
             _createSettlementQueueEntry(withLcc, address(liquidityHub), hubQueue);
-            _setNetted(withLcc, claimed);
 
             _wrapMarketDerivedLCC(user1, withLcc, amount);
-            // Hub is already protocol-bound (bucket-exempt) in test setup.
-
-            uint256 nettedBefore = _getNetted(withLcc);
-            assertEq(nettedBefore, claimed, "precondition: netted should be claimed");
 
             uint256 queueBefore = liquidityHub.settleQueue(withLcc, address(liquidityHub));
-            uint256 totalQueuedBefore = liquidityHub.totalQueued(withLcc);
 
             vm.startPrank(user1);
             ILCC(withLcc).approve(address(liquidityHub), amount);
             liquidityHub.wrapWith(targetLcc, withLcc, amount);
             vm.stopPrank();
 
-            assertEq(_getNetted(withLcc), nettedBefore + effectiveQueue, "netted should clamp to effective queue");
+            assertEq(_getNetted(withLcc), 0, "deprecated netted slot unused");
             assertEq(
                 liquidityHub.settleQueue(withLcc, address(liquidityHub)),
-                queueBefore,
-                "queue should remain unchanged by lazy-claim"
+                queueBefore - amount,
+                "durable queue should decrease by nettable amount"
             );
-            assertEq(
-                liquidityHub.totalQueued(withLcc),
-                totalQueuedBefore,
-                "totalQueued should remain unchanged by lazy-claim"
-            );
+            assertEq(liquidityHub.totalQueued(withLcc), hubQueue - amount, "totalQueued should match");
         }
 
         function test_wrapWith_step0_consumesMarketDerived_andQueuesOnlyWrappedResidual() public {
@@ -508,8 +463,8 @@ contract MockSettleCustodian is IMMQueueCustodian {
             _wrapMarketDerivedLCC(user1, withLcc, netTarget);
             _wrapDirectLCC(user1, withLcc, wrappedRemainder);
 
-            // Prevent Step 1 direct conversion AND prevent Step 3 direct unwrapping, so residual must queue.
-            _setDirectSupply(withLcc, 0);
+            // Step 3 must redeem the wrapped remainder against directSupply; wrapped shortfall cannot queue externally.
+            _setDirectSupply(withLcc, wrappedRemainder);
 
             // If any market liquidity is used, the test should fail (Step 0 should consume all market-derived netTarget).
             vm.mockCallRevert(
@@ -540,16 +495,16 @@ contract MockSettleCustodian is IMMQueueCustodian {
             // Step 2 should NOT have netted anything (market-derived was fully consumed by Step 0).
             assertEq(_getNetted(withLcc), 0, "netted should remain 0 when Step 0 consumes market-derived");
 
-            // Only the WRAPPED remainder should be queued to the Hub (since no liquidity is used).
+            // Wrapped remainder is redeemed via directSupply; no wrapped shortfall is queued to the Hub.
             assertEq(
                 liquidityHub.settleQueue(withLcc, address(liquidityHub)),
-                withQueueBefore + wrappedRemainder,
-                "withLCC queue should increase only by wrapped remainder"
+                withQueueBefore,
+                "withLCC queue should not gain wrapped remainder"
             );
             assertEq(
                 liquidityHub.totalQueued(withLcc),
-                withTotalQueuedBefore + wrappedRemainder,
-                "withLCC totalQueued should increase only by wrapped remainder"
+                withTotalQueuedBefore,
+                "withLCC totalQueued should not gain wrapped remainder"
             );
         }
 
@@ -569,8 +524,11 @@ contract MockSettleCustodian is IMMQueueCustodian {
             _wrapMarketDerivedLCC(user1, withLcc, marketAmount);
             _wrapDirectLCC(user1, withLcc, wrappedAmount);
 
-            // Prevent Step 1 direct conversion.
-            _setDirectSupply(withLcc, 0);
+            // Allow Step 3 to redeem the wrapped slice; market-derived shortfall may still queue when useMarketLiquidity returns 0.
+            _setDirectSupply(withLcc, wrappedAmount);
+            vm.mockCall(
+                factory, abi.encodeWithSelector(IMarketFactory.useMarketLiquidity.selector), abi.encode(uint256(0))
+            );
 
             // Hub is already protocol-bound (bucket-exempt) in test setup.
 
@@ -582,17 +540,18 @@ contract MockSettleCustodian is IMMQueueCustodian {
             liquidityHub.wrapWith(targetLcc, withLcc, amount);
             vm.stopPrank();
 
-            // Only the post-Step 0 residual should queue.
+            // Post-Step 0 residual includes a market-derived leg; only that leg may queue when market liquidity is unavailable.
             uint256 expectedResidual = amount - netTarget;
+            uint256 expectedMarketQueue = expectedResidual > wrappedAmount ? (expectedResidual - wrappedAmount) : 0;
             assertEq(
                 liquidityHub.settleQueue(withLcc, address(liquidityHub)),
-                queueBefore + expectedResidual,
-                "queued residual should match amount - netTarget"
+                queueBefore + expectedMarketQueue,
+                "queued residual should be market-derived shortfall only"
             );
             assertEq(
                 liquidityHub.totalQueued(withLcc),
-                totalQueuedBefore + expectedResidual,
-                "totalQueued should match residual"
+                totalQueuedBefore + expectedMarketQueue,
+                "totalQueued should match market-derived queue"
             );
         }
 
@@ -605,9 +564,8 @@ contract MockSettleCustodian is IMMQueueCustodian {
             uint256 amount = wrappedAmount + marketAmount;
 
             _wrapDirectLCC(user1, withLcc, wrappedAmount);
-            _wrapDirectLCC(proxyHook, withLcc, marketAmount);
             vm.prank(proxyHook);
-            ILCC(withLcc).transfer(user1, marketAmount);
+            liquidityHub.issue(withLcc, user1, marketAmount);
 
             (uint256 wrappedBal, uint256 marketBal) = ILCC(withLcc).balancesOf(user1);
             assertEq(wrappedBal, wrappedAmount, "precondition: wrapped balance should match");
@@ -709,77 +667,25 @@ contract MockSettleCustodian is IMMQueueCustodian {
             liquidityHub.processSettlementFor(lccToken1, user1, 0);
         }
 
-        function test_processSettlementFor_hub_consumesClaimedFirst_noBurn_whenClaimedGteToSettle() public {
+        function test_processSettlementFor_hub_burnsFullToSettleAgainstReserveAndBalance() public {
             uint256 queued = 40;
             _createSettlementQueueEntry(lccToken1, address(liquidityHub), queued);
-
-            uint256 claimed = 50;
-            _setNetted(lccToken1, claimed);
 
             uint256 hubLccBefore = ILCC(lccToken1).balanceOf(address(liquidityHub));
             assertEq(hubLccBefore, queued, "precondition: hub must hold queued LCC");
 
             liquidityHub.processSettlementFor(lccToken1, address(liquidityHub), queued);
 
-            // Queue cleared.
             assertEq(liquidityHub.settleQueue(lccToken1, address(liquidityHub)), 0);
             assertEq(liquidityHub.totalQueued(lccToken1), 0);
             assertEq(liquidityHub.queueOfUnderlying(lccToken1), 0);
 
-            // Claimed portion consumed first; no burn when claimed >= toSettle.
-            assertEq(ILCC(lccToken1).balanceOf(address(liquidityHub)), hubLccBefore, "no burn expected");
-            assertEq(_getNetted(lccToken1), claimed - queued, "claimed should decrement by toSettle");
-        }
-
-        function test_processSettlementFor_hub_burnsOnlyExcessOverClaimed_whenClaimedLtToSettle() public {
-            uint256 queued = 40;
-            _createSettlementQueueEntry(lccToken1, address(liquidityHub), queued);
-
-            uint256 claimed = 15;
-            _setNetted(lccToken1, claimed);
-
-            uint256 hubLccBefore = ILCC(lccToken1).balanceOf(address(liquidityHub));
-            assertEq(hubLccBefore, queued, "precondition: hub must hold queued LCC");
-
-            liquidityHub.processSettlementFor(lccToken1, address(liquidityHub), queued);
-
-            // Queue cleared.
-            assertEq(liquidityHub.settleQueue(lccToken1, address(liquidityHub)), 0);
-            assertEq(liquidityHub.totalQueued(lccToken1), 0);
-            assertEq(liquidityHub.queueOfUnderlying(lccToken1), 0);
-
-            // Burn only the unclaimed portion.
-            uint256 expectedBurn = queued - claimed;
             assertEq(
                 ILCC(lccToken1).balanceOf(address(liquidityHub)),
-                hubLccBefore - expectedBurn,
-                "burn should equal (toSettle - claimed)"
+                hubLccBefore - queued,
+                "Hub path burns full toSettle when reserve and balance allow"
             );
-            assertEq(_getNetted(lccToken1), 0, "claimed should be fully consumed");
-        }
-
-        function test_wrapWith_clampsNettedToCurrentQueueInFinaliseBurns() public {
-            // Create a hub queue for withLCC and set a pathological netted value above it.
-            uint256 queueAmount = 10;
-            _createSettlementQueueEntry(lccToken1, address(liquidityHub), queueAmount);
-
-            _setNetted(lccToken1, 100);
-            assertEq(_getNetted(lccToken1), 100, "precondition: netted should be forced above queue");
-
-            (address lccToken3,) = _createSecondLCCPair();
-
-            // Hub is already protocol-bound (bucket-exempt) in test setup.
-
-            // Provide minimal backing LCC to user and perform wrapWith to trigger `_finaliseBurns`.
-            _wrapDirectLCC(user1, lccToken1, 1);
-            vm.startPrank(user1);
-            ILCC(lccToken1).approve(address(liquidityHub), 1);
-            liquidityHub.wrapWith(lccToken3, lccToken1, 1);
-            vm.stopPrank();
-
-            uint256 currentQueue = liquidityHub.settleQueue(lccToken1, address(liquidityHub));
-            assertEq(currentQueue, queueAmount, "queue should remain unchanged in this setup");
-            assertEq(_getNetted(lccToken1), currentQueue, "netted should clamp to current queue");
+            assertEq(_getNetted(lccToken1), 0, "deprecated netted slot unused");
         }
 
         function test_unwrap_marketLiquidityPartial_queuesExactShortfallAndPaysPartial() public {
@@ -794,6 +700,8 @@ contract MockSettleCustodian is IMMQueueCustodian {
             vm.mockCall(factory, abi.encodeWithSelector(IMarketFactory.useMarketLiquidity.selector), abi.encode(used));
             // Simulate confirmTake-side market-derived reserve accrual for the mocked market use.
             _setMarketReserveOfUnderlying(address(underlyingAsset1), used);
+            // Ensure the Hub can actually transfer the paid portion to the user (reserve alone does not mint ERC20).
+            underlyingAsset1.mint(address(liquidityHub), used);
 
             uint256 underlyingBefore = underlyingAsset1.balanceOf(user1);
 
@@ -895,40 +803,22 @@ contract MockSettleCustodian is IMMQueueCustodian {
         }
 
         // ============================================================
-        // Mutation hardening: kill Step 2 arithmetic mutant (Line 220)
-        // _netMarketDerived: `effectiveQueue = hubQueueForWith - claimed` → `+`
+        // Mutation hardening: Step 2 durable queue decrement
         // ============================================================
 
-        /// @notice Kills Line 220 mutant: `hubQueueForWith - claimed` → `hubQueueForWith + claimed`
-        /// @dev When there's a pre-existing lazy-claimed amount (netted), the effective queue
-        ///      should be total queue minus claimed, not plus.
-        function test_wrapWith_step2_effectiveQueue_isHubQueueMinusClaimed_andQueuesResidual() public {
+        /// @notice Step 2 nets up to `min(remainder, marketDerived, hubQueue)` then Step 3 may queue residual.
+        function test_wrapWith_step2_netsThenStep3_queuesResidualWhenMarketExceedsHubQueue() public {
             (address targetLcc,) = _createSecondLCCPair();
             address withLcc = lccToken1;
 
-            // Setup: Hub queue for withLcc = 80, already claimed (netted) = 50.
-            // Effective queue = 30.
             uint256 hubQueue = 80;
-            uint256 claimed = 50;
-            uint256 effectiveQueue = hubQueue - claimed; // 30
+            uint256 marketAmount = 90;
 
             _createSettlementQueueEntry(withLcc, address(liquidityHub), hubQueue);
-            _setNetted(withLcc, claimed);
-
-            // User has market-derived balance > effectiveQueue so Step 2 must clamp.
-            uint256 marketAmount = 60;
             _wrapMarketDerivedLCC(user1, withLcc, marketAmount);
 
-            // Verify preconditions.
-            assertEq(_getNetted(withLcc), claimed, "precondition: netted should be claimed");
-            assertEq(liquidityHub.settleQueue(withLcc, address(liquidityHub)), hubQueue, "precondition: hub queue");
-
-            // Hub is already protocol-bound (bucket-exempt) in test setup.
-
-            // Disable Step 1 direct conversion.
             _setDirectSupply(withLcc, 0);
 
-            // Block market liquidity so any residual must queue.
             vm.mockCall(
                 factory, abi.encodeWithSelector(IMarketFactory.useMarketLiquidity.selector), abi.encode(uint256(0))
             );
@@ -940,15 +830,13 @@ contract MockSettleCustodian is IMMQueueCustodian {
             liquidityHub.wrapWith(targetLcc, withLcc, marketAmount);
             vm.stopPrank();
 
-            // Correct: Step 2 nets only `effectiveQueue` and leaves `marketAmount - effectiveQueue` to be queued.
-            // Mutant (+): Step 2 over-nets, leaving nothing to queue (observable).
-            assertEq(_getNetted(withLcc), claimed + effectiveQueue, "netted should increase by effective queue only");
-
-            uint256 residual = marketAmount - effectiveQueue;
+            assertEq(_getNetted(withLcc), 0, "deprecated netted slot unused");
+            // Step 2 consumes 80 from queue; Step 3 queues 10 market-derived shortfall.
+            uint256 residual = marketAmount - hubQueue;
             assertEq(
                 liquidityHub.settleQueue(withLcc, address(liquidityHub)),
-                queueBefore + residual,
-                "residual should be queued when market liquidity is unavailable"
+                queueBefore - hubQueue + residual,
+                "queue after: netted slice removed then residual queued"
             );
         }
 
@@ -956,40 +844,37 @@ contract MockSettleCustodian is IMMQueueCustodian {
         // Mutation hardening: kill Step 3 arithmetic mutants (Lines 260, 270, 272)
         // ============================================================
 
-        /// @notice Kills Line 260 arithmetic mutant by inducing an overflow in the mutant expression.
-        /// @dev In `_unwrapResidual`, when `residualWrappedForUnwrap > ctx.directToMint`, the correct code computes:
-        ///      `residualWrappedForUnwrap - ctx.directToMint`.
-        ///      The mutant changes this to `+`, which can overflow under large enough values.
+        /// @notice Regression: `_unwrapResidual` uses `residualWrappedForUnwrap - ctx.directToMint` when `directToMint > 0`.
+        ///      (Historical mutation swapped `-` for `+`.) Large uint256 edge cases are no longer used here because the
+        ///      wrapped leg must redeem fully against `directSupply` in the same transaction (no wrapped shortfall queue).
         function test_wrapWith_step3_residualWrappedForUnwrap_minusDoesNotOverflow_plusWouldOverflow() public {
             (address targetLcc,) = _createSecondLCCPair();
             address withLcc = lccToken1;
 
-            // Choose values so that:
-            // - fromWrappedAmount = amount is very large
-            // - directToMint = directSupplyAvail is slightly smaller (so the `>` branch is taken)
-            // - correct residual = 1
-            // - mutant (`+`) overflows
-            uint256 amount = type(uint256).max - 1;
-            uint256 directSupplyAvail = type(uint256).max - 2;
+            uint256 wrappedAmount = 4;
+            uint256 marketAmount = 6;
+            uint256 amount = wrappedAmount + marketAmount;
 
-            _wrapDirectLCC(user1, withLcc, amount); // user has wrapped balance == amount
-            _setDirectSupply(withLcc, directSupplyAvail); // force partial direct conversion (directAvail < wrapped)
+            _wrapDirectLCC(user1, withLcc, wrappedAmount);
+            vm.prank(proxyHook);
+            liquidityHub.issue(withLcc, user1, marketAmount);
 
-            // Prevent any external market liquidity effects.
+            _setDirectSupply(withLcc, wrappedAmount + 6);
+
             vm.mockCall(
                 factory, abi.encodeWithSelector(IMarketFactory.useMarketLiquidity.selector), abi.encode(uint256(0))
             );
-
-            // Hub is already protocol-bound (bucket-exempt) in test setup.
 
             vm.startPrank(user1);
             ILCC(withLcc).approve(address(liquidityHub), amount);
             liquidityHub.wrapWith(targetLcc, withLcc, amount);
             vm.stopPrank();
 
-            // Sanity: the call succeeded under correct code (i.e. no overflow in residual calc).
-            // Any revert here under mutation run indicates the mutant was killed.
-            assertTrue(true);
+            assertEq(
+                liquidityHub.settleQueue(withLcc, address(liquidityHub)),
+                marketAmount,
+                "market-derived shortfall may queue; wrapped residual must not"
+            );
         }
 
         // ============================================================
@@ -1017,50 +902,47 @@ contract MockSettleCustodian is IMMQueueCustodian {
         }
 
         // ============================================================
-        // settleFromCustodian (custody release + processSettlement)
+        // processSettlementFor (queue owner may be a contract MM custodian)
         // ============================================================
 
-        function test_settleFromCustodian_settlesQueuedDebt_whenReserveAndCustodyAlign() public {
+        function test_processSettlementFor_settlesQueuedDebt_whenReserveAndCustodyAlign_forQueueOwner() public {
             uint256 q = 50;
-            uint256 tokenId = 33;
             MockSettleCustodian custodian = new MockSettleCustodian();
 
-            // Custodian must be protocol-tracked so issued LCC populates market-derived buckets (exempt mint skips buckets).
-            vm.prank(factory);
-            liquidityHub.setBoundLevel(address(custodian), Bounds.BOUND_ENDPOINT);
-
-            _createSettlementQueueEntry(lccToken1, user1, q);
+            _createSettlementQueueEntry(lccToken1, address(custodian), q);
             _setMarketReserveOfUnderlying(address(underlyingAsset1), q);
-            // processSettlement pays underlying from Hub balance; reserve-only storage is not enough.
             underlyingAsset1.mint(address(liquidityHub), q);
 
             vm.prank(vtsOrchestrator);
             liquidityHub.issue(lccToken1, address(custodian), q);
 
-            custodian.seed(tokenId, lccToken1, user1, q);
+            uint256 underlyingBefore = underlyingAsset1.balanceOf(address(custodian));
+            liquidityHub.processSettlementFor(lccToken1, address(custodian), q);
 
-            uint256 underlyingBefore = underlyingAsset1.balanceOf(user1);
-            liquidityHub.settleFromCustodian(lccToken1, address(custodian), tokenId, user1, q);
-
-            assertEq(liquidityHub.settleQueue(lccToken1, user1), 0);
+            assertEq(liquidityHub.settleQueue(lccToken1, address(custodian)), 0);
             assertEq(liquidityHub.totalQueued(lccToken1), 0);
-            assertGt(underlyingAsset1.balanceOf(user1), underlyingBefore);
+            assertGt(underlyingAsset1.balanceOf(address(custodian)), underlyingBefore);
         }
 
-        function test_settleFromCustodian_noop_whenMaxAmountZero() public {
-            uint256 q = 10;
-            _createSettlementQueueEntry(lccToken1, user1, q);
-            liquidityHub.settleFromCustodian(lccToken1, address(0x1234), 1, user1, 0);
-            assertEq(liquidityHub.settleQueue(lccToken1, user1), q);
-        }
+        /// @notice `LiquidityHubLib.transferUnderlying` sink backstop is redundant with Hub admission for normal flows;
+        ///         `processSettlementFor` must still fail closed before spending reserve for poisoned ERC20-underlying keys.
+        function test_processSettlementFor_revertsWhenRecipientIsUnderlyingTokenEvenIfQueued() public {
+            uint256 amt = 8;
+            address u = address(underlyingAsset1);
+            vm.prank(proxyHook);
+            liquidityHub.issue(lccToken1, u, amt);
 
-        function test_settleFromCustodian_noop_whenCustodianHasNoCode() public {
-            uint256 q = 10;
-            _createSettlementQueueEntry(lccToken1, user1, q);
-            address noCode = makeAddr("noCodeCustodian");
-            vm.etch(noCode, hex"");
-            liquidityHub.settleFromCustodian(lccToken1, noCode, 1, user1, type(uint256).max);
-            assertEq(liquidityHub.settleQueue(lccToken1, user1), q);
+            _setSettleQueue(lccToken1, u, amt);
+            _setTotalQueued(lccToken1, amt);
+            _setQueueOfUnderlying(address(underlyingAsset1), amt);
+            _setMarketReserveOfUnderlying(address(underlyingAsset1), amt);
+
+            uint256 reserveBefore = liquidityHub.reserveOfUnderlying(lccToken1);
+
+            vm.expectRevert(abi.encodeWithSelector(Errors.NotApproved.selector, u));
+            liquidityHub.processSettlementFor(lccToken1, u, amt);
+
+            assertEq(liquidityHub.reserveOfUnderlying(lccToken1), reserveBefore, "reserve must not be consumed");
         }
 
         /// @notice Regression: `_processSettlementFor` emits `SettlementProcessed` with `settled == queuedBefore - queuedAfter`.

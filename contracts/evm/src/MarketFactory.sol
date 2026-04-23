@@ -15,6 +15,8 @@ import {IOracleHelper} from "./interfaces/IOracleHelper.sol";
 import {ILiquidityHub} from "./interfaces/ILiquidityHub.sol";
 import {BalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
 import {IMarketVault} from "./interfaces/IMarketVault.sol";
+import {ICanonicalVault} from "./interfaces/ICanonicalVault.sol";
+import {IVTSOrchestrator} from "./interfaces/IVTSOrchestrator.sol";
 import {LiquidityUtils} from "./libraries/LiquidityUtils.sol";
 import {MarketLiquidityRouterLib} from "./libraries/MarketLiquidityRouterLib.sol";
 import {Bounds} from "./libraries/Bounds.sol";
@@ -59,6 +61,7 @@ contract MarketFactory is IMarketFactory, Ownable, ImmutableState, ImmutableVTSS
     address public coreHook;
     address public immutable marketVaultDeployer;
     ILiquidityHub public immutable liquidityHub;
+    address public canonicalVault;
 
     // Mapping from core pool ID to proxy pool ID
     mapping(PoolId => PoolId) public coreToProxy;
@@ -121,11 +124,15 @@ contract MarketFactory is IMarketFactory, Ownable, ImmutableState, ImmutableVTSS
     }
 
     /**
-     * @notice Sets the core hook and initial bounds, then marks the factory as initialised
+     * @notice Binds canonical custody, sets the core hook and initial bounds, then marks the factory as initialised
+     * @param _canonicalVault CanonicalVault for this factory (single assignment)
      * @param _coreHook Core hook address used for core pools
      * @param initialBounds Addresses to set as bound endpoints
      */
-    function initialise(address _coreHook, address[] calldata initialBounds) external onlyOwner {
+    function initialise(address _canonicalVault, address _coreHook, address[] calldata initialBounds)
+        external
+        onlyOwner
+    {
         if (initialised) return;
 
         if (_coreHook == address(0)) {
@@ -135,6 +142,8 @@ contract MarketFactory is IMarketFactory, Ownable, ImmutableState, ImmutableVTSS
         if (coreHook != address(0) && coreHook != _coreHook) {
             revert Errors.InvalidAddress(_coreHook);
         }
+
+        _setCanonicalVault(_canonicalVault);
 
         coreHook = _coreHook;
         initialised = true;
@@ -149,6 +158,25 @@ contract MarketFactory is IMarketFactory, Ownable, ImmutableState, ImmutableVTSS
         liquidityHub.setBoundLevel(address(this), Bounds.BOUND_ENDPOINT);
         if (initialBounds.length > 0) {
             liquidityHub.setBoundLevels(initialBounds, Bounds.BOUND_ENDPOINT);
+        }
+    }
+
+    /// @notice VTS orchestrator bound to this factory at construction (immutable).
+    /// @return The orchestrator contract.
+    function vts() external view returns (IVTSOrchestrator) {
+        return vtsOrchestrator;
+    }
+
+    function _setCanonicalVault(address _canonicalVault) internal {
+        if (_canonicalVault == address(0)) revert Errors.InvalidAddress(_canonicalVault);
+        if (_canonicalVault.code.length == 0) revert Errors.InvalidAddress(_canonicalVault);
+        if (ICanonicalVault(_canonicalVault).marketFactory() != address(this)) {
+            revert Errors.InvalidSender();
+        }
+        if (canonicalVault == address(0)) {
+            canonicalVault = _canonicalVault;
+        } else if (canonicalVault != _canonicalVault) {
+            revert Errors.InvariantViolated("MarketFactory: canonical vault already set");
         }
     }
 
@@ -174,6 +202,7 @@ contract MarketFactory is IMarketFactory, Ownable, ImmutableState, ImmutableVTSS
         MarketVTSConfiguration calldata vtsConfiguration
     ) external onlyOwner returns (PoolId corePoolId, PoolId proxyPoolId) {
         if (!initialised) revert Errors.InvalidAddress(coreHook);
+        if (canonicalVault == address(0)) revert Errors.InvalidAddress(canonicalVault);
         if (initialSqrtPriceX96 == 0) revert Errors.InvalidAmount(uint256(initialSqrtPriceX96), 0);
 
         MarketCreationContext memory ctx;
@@ -200,8 +229,10 @@ contract MarketFactory is IMarketFactory, Ownable, ImmutableState, ImmutableVTSS
             lcc0 = Currency.unwrap(corePoolKey.currency0);
             lcc1 = Currency.unwrap(corePoolKey.currency1);
 
-            // For swap deficits overflow, and LCC transfer to recipient the proxy hook must be within protocol bounds.
-            // Use BOUND_EXEMPT as LCCs are issued from ProxyHook, are never unwrapped/wrapped, and sent always as market-derived.
+            // ProxyHook must be protocol-bound for deficit routing and LCC settlement. BOUND_EXEMPT matches issuer-only
+            // `issue` to the hook (market-derived; hub forbids direct-backed mint to exempt). Users can still transfer
+            // bucketed LCC to the hook under LCC-01; that is not the intended holder mode. Swap `cancel` burns LCC taken
+            // from PoolManager for that swap — it does not orphan hub direct reserves by burning unrelated pre-seeded balance.
             liquidityHub.setBoundLevel(ctx.proxyHookAddress, Bounds.BOUND_EXEMPT);
 
             // Activate proxy hook and initialise
@@ -260,6 +291,11 @@ contract MarketFactory is IMarketFactory, Ownable, ImmutableState, ImmutableVTSS
             coreHook,
             ctx.proxyHookAddress
         );
+
+        ICanonicalVault(canonicalVault)
+            .registerMarket(
+                PoolId.unwrap(corePoolId), ctx.proxyHookAddress, lcc0, lcc1, lcc0UnderlyingAsset, lcc1UnderlyingAsset
+            );
     }
 
     /// @dev Deploys the proxy hook, constructs the market reference, and creates the LCC pair.
@@ -270,9 +306,10 @@ contract MarketFactory is IMarketFactory, Ownable, ImmutableState, ImmutableVTSS
     {
         proxyHookAddress = MarketVaultDeployer(marketVaultDeployer).deployProxyHook(address(poolManager), salt);
         marketRef = abi.encodePacked(proxyHookAddress);
-        address[] memory initialIssuers = new address[](2);
+        address[] memory initialIssuers = new address[](3);
         initialIssuers[0] = address(vtsOrchestrator);
         initialIssuers[1] = proxyHookAddress;
+        initialIssuers[2] = canonicalVault;
         (lccToken0, lccToken1) =
             liquidityHub.createLCCPair(marketRef, underlyingAsset0, underlyingAsset1, MARKET_NAME, initialIssuers);
     }
@@ -397,16 +434,10 @@ contract MarketFactory is IMarketFactory, Ownable, ImmutableState, ImmutableVTSS
         address proxyHook = _proxyToHook[coreToProxy[pId]];
         address currency0 = _corePoolToCurrencyPair[pId][0];
         address currency1 = _corePoolToCurrencyPair[pId][1];
-        BalanceDelta requestedDelta = MarketLiquidityRouterLib.toRequestedDelta(lcc, currency0, currency1, amount);
-        BalanceDelta usedDelta = MarketLiquidityRouterLib.useWithOptionalUnlock(
-            poolManager, proxyHook, requestedDelta, address(liquidityHub)
-        );
+        BalanceDelta balanceDelta = MarketLiquidityRouterLib.toRequestedDelta(lcc, currency0, currency1, amount);
+        BalanceDelta usedDelta =
+            MarketLiquidityRouterLib.useWithOptionalUnlock(poolManager, proxyHook, balanceDelta, address(liquidityHub));
 
-        vtsOrchestrator.incrementCoverage(
-            pId,
-            LiquidityUtils.safeInt128ToUint256(usedDelta.amount0()),
-            LiquidityUtils.safeInt128ToUint256(usedDelta.amount1())
-        );
         used = LiquidityUtils.safeInt128ToUint256(usedDelta.amount0() + usedDelta.amount1());
     }
 
@@ -418,7 +449,7 @@ contract MarketFactory is IMarketFactory, Ownable, ImmutableState, ImmutableVTSS
         MarketLiquidityRouterLib.UseMarketLiquidityUnlockData memory unlockData =
             MarketLiquidityRouterLib.decodeUnlockData(data);
         BalanceDelta usedDelta = MarketLiquidityRouterLib.useWithoutUnlock(
-            unlockData.proxyHook, BalanceDelta.wrap(unlockData.requestedDelta), unlockData.recipient
+            unlockData.proxyHook, BalanceDelta.wrap(unlockData.balanceDelta), unlockData.recipient
         );
         return MarketLiquidityRouterLib.encodeUnlockResult(usedDelta);
     }
@@ -493,15 +524,12 @@ contract MarketFactory is IMarketFactory, Ownable, ImmutableState, ImmutableVTSS
         return _proxyHookToCurrencyPair[proxyHook];
     }
 
-    /// @inheritdoc IMarketFactory
-    function isCanonicalVault(bytes32 marketId, address vault) external view returns (bool) {
-        if (vault == address(0)) return false;
+    function isMarketFacade(bytes32 marketId, address facade) external view returns (bool) {
+        if (facade == address(0)) return false;
         PoolId corePoolId = PoolId.wrap(marketId);
         PoolId proxyPoolId = coreToProxy[corePoolId];
         if (PoolId.unwrap(proxyPoolId) == bytes32(0)) return false;
-        address canonicalVault = _proxyToHook[proxyPoolId];
-        if (canonicalVault == address(0)) return false;
-        return canonicalVault == vault;
+        return _proxyToHook[proxyPoolId] == facade;
     }
 
     /**

@@ -10,22 +10,44 @@ import {Lock} from "@uniswap/v4-core/src/libraries/Lock.sol";
 import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
 import {BalanceDelta, toBalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
 import {MockERC20} from "../_mocks/MockERC20.sol";
+import {VaultSettlementIntent} from "../../src/types/VTS.sol";
 
 import {IMarketVault} from "../../src/interfaces/IMarketVault.sol";
 import {MarketLiquidityRouterLib} from "../../src/libraries/MarketLiquidityRouterLib.sol";
 import {Errors} from "../../src/libraries/Errors.sol";
 
+contract MockCanonicalVaultRef_RouterLib {
+    address public immutable marketFactory;
+
+    constructor(address _marketFactory) {
+        marketFactory = _marketFactory;
+    }
+}
+
 contract MockMarketVault_RouterLib is IMarketVault {
     BalanceDelta internal _used;
-    BalanceDelta internal _lastRequested;
+    BalanceDelta internal _lastBalanceDelta;
     address internal _lastRecipient;
+    address internal immutable _canonical;
+
+    constructor() {
+        _canonical = address(new MockCanonicalVaultRef_RouterLib(address(this)));
+    }
+
+    function marketId() external pure returns (bytes32) {
+        return bytes32(0);
+    }
+
+    function canonicalVault() external view returns (address) {
+        return _canonical;
+    }
 
     function setUsed(BalanceDelta usedDelta) external {
         _used = usedDelta;
     }
 
-    function lastRequested() external view returns (BalanceDelta) {
-        return _lastRequested;
+    function lastBalanceDelta() external view returns (BalanceDelta) {
+        return _lastBalanceDelta;
     }
 
     function lastRecipient() external view returns (address) {
@@ -42,15 +64,30 @@ contract MockMarketVault_RouterLib is IMarketVault {
 
     function modifyLiquidities(BalanceDelta) external pure {}
 
+    function modifyLiquidities(VaultSettlementIntent calldata) external pure {}
+
     function tryModifyLiquidities(BalanceDelta) external pure returns (BalanceDelta) {
         return toBalanceDelta(0, 0);
     }
 
-    function tryModifyLiquiditiesWithRecipient(BalanceDelta requested, address recipient)
+    function tryModifyLiquidities(VaultSettlementIntent calldata) external pure returns (BalanceDelta) {
+        return toBalanceDelta(0, 0);
+    }
+
+    function tryModifyLiquiditiesWithRecipient(BalanceDelta balanceDelta, address recipient)
         external
         returns (BalanceDelta)
     {
-        _lastRequested = requested;
+        _lastBalanceDelta = balanceDelta;
+        _lastRecipient = recipient;
+        return _used;
+    }
+
+    function tryModifyLiquiditiesWithRecipient(VaultSettlementIntent calldata settlementIntent, address recipient)
+        external
+        returns (BalanceDelta)
+    {
+        _lastBalanceDelta = settlementIntent.requestedDelta;
         _lastRecipient = recipient;
         return _used;
     }
@@ -58,6 +95,14 @@ contract MockMarketVault_RouterLib is IMarketVault {
     function dryModifyLiquidities(BalanceDelta) external pure returns (BalanceDelta) {
         return toBalanceDelta(0, 0);
     }
+
+    function dryModifyLiquidities(VaultSettlementIntent calldata) external pure returns (BalanceDelta) {
+        return toBalanceDelta(0, 0);
+    }
+
+    function decreaseLiquidityReserve(Currency, uint256) external pure {}
+
+    function increaseLiquidityReserve(Currency, uint256) external pure {}
 }
 
 contract MockPoolManager_RouterLib {
@@ -182,20 +227,20 @@ contract MarketLiquidityRouterLibHarness {
         return MarketLiquidityRouterLib.toRequestedDelta(lcc, currency0, currency1, amount);
     }
 
-    function useWithoutUnlock(address proxyHook, BalanceDelta requestedDelta, address recipient)
+    function useWithoutUnlock(address proxyHook, BalanceDelta balanceDelta, address recipient)
         external
         returns (BalanceDelta)
     {
-        return MarketLiquidityRouterLib.useWithoutUnlock(proxyHook, requestedDelta, recipient);
+        return MarketLiquidityRouterLib.useWithoutUnlock(proxyHook, balanceDelta, recipient);
     }
 
     function useWithOptionalUnlock(
         IPoolManager poolManager,
         address proxyHook,
-        BalanceDelta requestedDelta,
+        BalanceDelta balanceDelta,
         address recipient
     ) external returns (BalanceDelta) {
-        return MarketLiquidityRouterLib.useWithOptionalUnlock(poolManager, proxyHook, requestedDelta, recipient);
+        return MarketLiquidityRouterLib.useWithOptionalUnlock(poolManager, proxyHook, balanceDelta, recipient);
     }
 
     function decodeUnlockData(bytes calldata data)
@@ -256,39 +301,39 @@ contract MarketLiquidityRouterLibTest is Test {
     }
 
     function test_useWithoutUnlock_forwardsRequestedDeltaAndRecipient() public {
-        BalanceDelta requested = toBalanceDelta(int128(4), int128(0));
+        BalanceDelta balanceDelta = toBalanceDelta(int128(4), int128(0));
         BalanceDelta forcedUsed = toBalanceDelta(int128(3), int128(0));
         vault.setUsed(forcedUsed);
 
-        BalanceDelta used = h.useWithoutUnlock(address(vault), requested, address(0xBEEF));
+        BalanceDelta used = h.useWithoutUnlock(address(vault), balanceDelta, address(0xBEEF));
         assertEq(used.amount0(), forcedUsed.amount0());
         assertEq(used.amount1(), forcedUsed.amount1());
 
-        BalanceDelta lastRequested = vault.lastRequested();
-        assertEq(lastRequested.amount0(), requested.amount0());
-        assertEq(lastRequested.amount1(), requested.amount1());
+        BalanceDelta lastBalanceDelta = vault.lastBalanceDelta();
+        assertEq(lastBalanceDelta.amount0(), balanceDelta.amount0());
+        assertEq(lastBalanceDelta.amount1(), balanceDelta.amount1());
         assertEq(vault.lastRecipient(), address(0xBEEF));
     }
 
     function test_useWithOptionalUnlock_unlockedPath_skipsUnlock() public {
         poolManager.setLocked(false);
-        BalanceDelta requested = toBalanceDelta(int128(5), int128(0));
+        BalanceDelta balanceDelta = toBalanceDelta(int128(5), int128(0));
         vault.setUsed(toBalanceDelta(int128(2), int128(0)));
 
         BalanceDelta used =
-            h.useWithOptionalUnlock(IPoolManager(address(poolManager)), address(vault), requested, address(0xA11C));
+            h.useWithOptionalUnlock(IPoolManager(address(poolManager)), address(vault), balanceDelta, address(0xA11C));
         assertEq(used.amount0(), int128(2));
         assertEq(poolManager.unlockCalls(), 0);
     }
 
     function test_useWithOptionalUnlock_lockedPath_callsUnlockAndDecodesResult() public {
         poolManager.setLocked(true);
-        BalanceDelta requested = toBalanceDelta(int128(6), int128(0));
+        BalanceDelta balanceDelta = toBalanceDelta(int128(6), int128(0));
         BalanceDelta expectedUsed = toBalanceDelta(int128(4), int128(1));
         poolManager.setUnlockReturnData(abi.encode(BalanceDelta.unwrap(expectedUsed)));
 
         BalanceDelta used =
-            h.useWithOptionalUnlock(IPoolManager(address(poolManager)), address(vault), requested, address(0xCAFE));
+            h.useWithOptionalUnlock(IPoolManager(address(poolManager)), address(vault), balanceDelta, address(0xCAFE));
         assertEq(used.amount0(), expectedUsed.amount0());
         assertEq(used.amount1(), expectedUsed.amount1());
         assertEq(poolManager.unlockCalls(), 1);
@@ -296,7 +341,7 @@ contract MarketLiquidityRouterLibTest is Test {
         MarketLiquidityRouterLib.UseMarketLiquidityUnlockData memory unlockData =
             abi.decode(poolManager.lastUnlockData(), (MarketLiquidityRouterLib.UseMarketLiquidityUnlockData));
         assertEq(unlockData.proxyHook, address(vault));
-        assertEq(unlockData.requestedDelta, BalanceDelta.unwrap(requested));
+        assertEq(unlockData.balanceDelta, BalanceDelta.unwrap(balanceDelta));
         assertEq(unlockData.recipient, address(0xCAFE));
     }
 
@@ -308,36 +353,71 @@ contract MarketLiquidityRouterLibTest is Test {
         MarketLiquidityRouterLib.UseMarketLiquidityUnlockData memory unlockData =
             MarketLiquidityRouterLib.UseMarketLiquidityUnlockData({
                 proxyHook: address(0x1234),
-                requestedDelta: BalanceDelta.unwrap(toBalanceDelta(int128(1), int128(9))),
+                balanceDelta: BalanceDelta.unwrap(toBalanceDelta(int128(1), int128(9))),
                 recipient: address(0x5678)
             });
         bytes memory encodedData = abi.encode(unlockData);
         MarketLiquidityRouterLib.UseMarketLiquidityUnlockData memory decoded = h.decodeUnlockData(encodedData);
 
         assertEq(decoded.proxyHook, unlockData.proxyHook);
-        assertEq(decoded.requestedDelta, unlockData.requestedDelta);
+        assertEq(decoded.balanceDelta, unlockData.balanceDelta);
         assertEq(decoded.recipient, unlockData.recipient);
     }
 
-    function test_prepareMarketLiquidityIngress_skipsOnZeroWrappedOrMissingHandler() public {
+    function test_prepareMarketLiquidityIngress_skipsOnlyWhenMissingHandler() public {
         MockLCC_RouterLib lcc = new MockLCC_RouterLib(address(0x1111));
 
-        h.prepareMarketLiquidityIngress(IPoolManager(address(poolManager)), address(ingressHandler), address(lcc), 0);
         h.prepareMarketLiquidityIngress(IPoolManager(address(poolManager)), address(0), address(lcc), 1);
 
         assertEq(ingressHandler.calls(), 0);
     }
 
-    function test_prepareMarketLiquidityIngress_noActiveSync_callsHandleIngress() public {
+    /// @dev Zero-wrapped DEX reporting still enforces **LCC-03** sync and reserve equality (no silent skip).
+    function test_prepareMarketLiquidityIngress_zeroWrapped_revertsWithoutActiveSync() public {
         MockLCC_RouterLib lcc = new MockLCC_RouterLib(address(0x1111));
         poolManager.setLocked(false);
 
+        vm.expectRevert(Errors.IngressRequiresActiveSync.selector);
+        h.prepareMarketLiquidityIngress(IPoolManager(address(poolManager)), address(ingressHandler), address(lcc), 0);
+
+        assertEq(ingressHandler.calls(), 0);
+    }
+
+    function test_prepareMarketLiquidityIngress_zeroWrapped_succeedsWithValidSync_noHandleIngress() public {
+        MockLCC_RouterLib lcc = new MockLCC_RouterLib(address(0x1111));
+        poolManager.setLocked(false);
+        lcc.mint(address(poolManager), 100);
+        poolManager.sync(Currency.wrap(address(lcc)));
+
+        h.prepareMarketLiquidityIngress(IPoolManager(address(poolManager)), address(ingressHandler), address(lcc), 0);
+
+        assertEq(ingressHandler.calls(), 0);
+        assertEq(address(uint160(uint256(poolManager.exttload(MarketLiquidityRouterLib.CURRENCY_SLOT)))), address(lcc));
+        assertEq(uint256(poolManager.exttload(MarketLiquidityRouterLib.RESERVES_OF_SLOT)), 100);
+    }
+
+    function test_prepareMarketLiquidityIngress_zeroWrapped_revertsWhenUnpaidIngressAlreadyExists() public {
+        MockLCC_RouterLib lcc = new MockLCC_RouterLib(address(0x1111));
+        poolManager.setLocked(false);
+        lcc.mint(address(poolManager), 100);
+        poolManager.sync(Currency.wrap(address(lcc)));
+        lcc.mint(address(this), 1);
+        lcc.transfer(address(poolManager), 1);
+
+        vm.expectRevert(abi.encodeWithSelector(Errors.NestedIngressUnpaidTransferExists.selector, uint256(100), 101));
+        h.prepareMarketLiquidityIngress(IPoolManager(address(poolManager)), address(ingressHandler), address(lcc), 0);
+        assertEq(ingressHandler.calls(), 0);
+    }
+
+    /// @dev Regression: scan #33 — wrapped ingress must not run without an active `sync(lcc)` (see **LCC-03**).
+    function test_prepareMarketLiquidityIngress_noActiveSync_revertsBeforeHandleIngress() public {
+        MockLCC_RouterLib lcc = new MockLCC_RouterLib(address(0x1111));
+        poolManager.setLocked(false);
+
+        vm.expectRevert(Errors.IngressRequiresActiveSync.selector);
         h.prepareMarketLiquidityIngress(IPoolManager(address(poolManager)), address(ingressHandler), address(lcc), 4);
 
-        assertEq(ingressHandler.calls(), 1);
-        (address gotLcc, uint256 gotAmount) = ingressHandler.lastCall();
-        assertEq(gotLcc, address(lcc));
-        assertEq(gotAmount, 4);
+        assertEq(ingressHandler.calls(), 0);
     }
 
     function test_prepareMarketLiquidityIngress_lockedPoolManager_reverts() public {

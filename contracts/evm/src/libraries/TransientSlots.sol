@@ -2,6 +2,7 @@
 pragma solidity ^0.8.26;
 
 import {TransientSlot} from "openzeppelin-contracts/contracts/utils/TransientSlot.sol";
+import {Math} from "openzeppelin-contracts/contracts/utils/math/Math.sol";
 import {PositionId} from "../types/Position.sol";
 import {EfficientHashLib} from "solady/utils/EfficientHashLib.sol";
 
@@ -11,28 +12,60 @@ library TransientSlots {
     bytes32 internal constant CORE_ACTION_FLAG_SLOT = keccak256("CORE_ACTION_FLAG");
     bytes32 internal constant SQRTP_BEFORE_SLOT = keccak256("SQRTP_BEFORE");
     bytes32 internal constant LIQ_BEFORE_SLOT = keccak256("LIQ_BEFORE");
-    bytes32 internal constant NATIVE_VALUE_READ_SLOT = keccak256("NATIVE_VALUE_READ");
+    /// @dev Authoritative `slot0.tick` before swap (not `TickMath.getTickAtSqrtPrice(sqrtPrice)`), for boundary-safe
+    ///      growth attribution. Payload is the low 24-bit two's-complement lane (see `encodeTickBefore` /
+    ///      `decodeTickBefore`); use `storeTickBefore` / `loadTickBefore` / `clearTickBefore` at call sites.
+    bytes32 internal constant TICK_BEFORE_SLOT = keccak256("TICK_BEFORE");
+    /// @dev Whether native balance-delta tracking has been initialised for this transaction (EIP-1153 clears at tx end).
+    bytes32 internal constant NATIVE_BALANCE_TRACKING_INIT_SLOT = keccak256("NATIVE_BALANCE_TRACKING_INIT");
+    /// @dev Last recorded `address(this).balance` after `_afterBatch` (and baseline before first `_beforeBatch`).
+    bytes32 internal constant NATIVE_LAST_SEEN_BALANCE_SLOT = keccak256("NATIVE_LAST_SEEN_BALANCE");
     bytes32 internal constant SEIZED_POSITION_ID_SLOT = keccak256("SEIZED_POSITION_ID");
+    /// @dev When true, `_settle` may perform seizing deposit lanes for the single authorised `SEIZE_POSITION` phase.
+    ///      Prevents ambient batch-scoped seizure context from running settle-only deposits that advance seizure carry
+    ///      without a coupled liquidity decrease.
+    bytes32 internal constant SEIZURE_PRIMARY_SETTLE_ALLOWED_SLOT = keccak256("SEIZURE_PRIMARY_SETTLE_ALLOWED");
     bytes32 internal constant PLANNED_CANCEL_SLOT = keccak256("PLANNED_CANCEL");
     bytes32 internal constant PLANNED_CANCEL_WITH_QUEUE_SLOT = keccak256("PLANNED_CANCEL_WITH_QUEUE");
 
     // ------------------------------
-    // Native Eth/Asset Msg Value helpers
+    // Native ETH balance-delta helpers (MM entrypoint native credit)
     // ------------------------------
 
-    function readMsgValueOnce() internal returns (uint256) {
-        bool isNativeValueRead = TransientSlot.asBoolean(TransientSlots.NATIVE_VALUE_READ_SLOT).tload();
-        if (isNativeValueRead == true) {
-            return 0;
-        } else {
-            TransientSlot.asBoolean(TransientSlots.NATIVE_VALUE_READ_SLOT).tstore(true);
-            return msg.value;
-        }
+    /// @dev True after the first `_beforeBatch` in the transaction has established a baseline snapshot.
+    function nativeBalanceTrackingInitialized() internal view returns (bool) {
+        return TransientSlot.asBoolean(TransientSlots.NATIVE_BALANCE_TRACKING_INIT_SLOT).tload();
     }
 
-    /// @dev Clears the native msg.value read guard to keep it scoped to a single batch.
-    function clearMsgValueRead() internal {
-        TransientSlot.asBoolean(TransientSlots.NATIVE_VALUE_READ_SLOT).tstore(false);
+    function setNativeBalanceTrackingInitialized(bool v) internal {
+        TransientSlot.asBoolean(TransientSlots.NATIVE_BALANCE_TRACKING_INIT_SLOT).tstore(v);
+    }
+
+    function getNativeLastSeenBalance() internal view returns (uint256) {
+        return TransientSlot.asUint256(TransientSlots.NATIVE_LAST_SEEN_BALANCE_SLOT).tload();
+    }
+
+    function setNativeLastSeenBalance(uint256 v) internal {
+        TransientSlot.asUint256(TransientSlots.NATIVE_LAST_SEEN_BALANCE_SLOT).tstore(v);
+    }
+
+    /// @notice Computes how much native ETH to credit as locker delta for the current payable batch.
+    /// @dev Call from `PositionManagerEntrypoint._beforeBatch` with `balance = address(this).balance` and
+    ///      `msgValue = msg.value`. First batch in the tx sets baseline `lastSeen = balance - msgValue` so ambient ETH
+    ///      is not credited; later batches use `min(msgValue, balance - lastSeen)` so multicall delegatecalls do not
+    ///      re-credit the same outer value while distinct funded calls still credit new wei.
+    /// @param balance Current contract balance (already includes `msgValue` for this call).
+    /// @param msgValue The payable call’s `msg.value`.
+    /// @return creditAmount Wei to pass to `creditExact` for native currency (may be 0).
+    function nativeEthCreditAmountForBatch(uint256 balance, uint256 msgValue) internal returns (uint256 creditAmount) {
+        if (!nativeBalanceTrackingInitialized()) {
+            // `balance` already includes `msgValue` for this payable call.
+            setNativeLastSeenBalance(balance - msgValue);
+            setNativeBalanceTrackingInitialized(true);
+        }
+        uint256 lastSeen = getNativeLastSeenBalance();
+        uint256 freshIncrease = balance > lastSeen ? balance - lastSeen : 0;
+        creditAmount = Math.min(msgValue, freshIncrease);
     }
 
     // ------------------------------
@@ -51,6 +84,18 @@ library TransientSlots {
     /// @dev Clears the seizure context slot to avoid within-tx ambient-authority leakage.
     function clearSeizedPositionId() internal {
         TransientSlot.asBytes32(TransientSlots.SEIZED_POSITION_ID_SLOT).tstore(bytes32(0));
+    }
+
+    function setSeizurePrimarySettleAllowed(bool allowed) internal {
+        TransientSlot.asBoolean(TransientSlots.SEIZURE_PRIMARY_SETTLE_ALLOWED_SLOT).tstore(allowed);
+    }
+
+    function getSeizurePrimarySettleAllowed() internal view returns (bool) {
+        return TransientSlot.asBoolean(TransientSlots.SEIZURE_PRIMARY_SETTLE_ALLOWED_SLOT).tload();
+    }
+
+    function clearSeizurePrimarySettleAllowed() internal {
+        TransientSlot.asBoolean(TransientSlots.SEIZURE_PRIMARY_SETTLE_ALLOWED_SLOT).tstore(false);
     }
 
     // ------------------------------
@@ -123,5 +168,37 @@ library TransientSlots {
         TransientSlot.asUint256(baseSlot).tstore(0);
         TransientSlot.asUint256(bytes32(uint256(baseSlot) + 1)).tstore(0);
         TransientSlot.asUint256(bytes32(uint256(baseSlot) + 2)).tstore(0);
+    }
+
+    // ------------------------------
+    // Core swap tick snapshot (int24 in transient uint256 slot)
+    // ------------------------------
+
+    /// @dev Packs `tick` into the low 24 bits as two's-complement so negative ticks round-trip without relying on a
+    ///      full-word `uint256` -> `int256` reinterpretation at load time.
+    // If negative, the negative value is not stored as a “negative uint256”; it is stored as a 24-bit bit pattern inside the 256-bit slot, and the decode step restores the sign correctly.
+    function encodeTickBefore(int24 tick) internal pure returns (uint256 encoded) {
+        int256 asInt = int256(tick);
+        assembly ("memory-safe") {
+            encoded := and(asInt, 0xFFFFFF)
+        }
+    }
+
+    function decodeTickBefore(uint256 encoded) internal pure returns (int24 tickBefore) {
+        assembly ("memory-safe") {
+            tickBefore := signextend(2, and(encoded, 0xFFFFFF))
+        }
+    }
+
+    function storeTickBefore(int24 tickBefore) internal {
+        TransientSlot.asUint256(TICK_BEFORE_SLOT).tstore(encodeTickBefore(tickBefore));
+    }
+
+    function loadTickBefore() internal view returns (int24 tickBefore) {
+        return decodeTickBefore(TransientSlot.asUint256(TICK_BEFORE_SLOT).tload());
+    }
+
+    function clearTickBefore() internal {
+        TransientSlot.asUint256(TICK_BEFORE_SLOT).tstore(0);
     }
 }

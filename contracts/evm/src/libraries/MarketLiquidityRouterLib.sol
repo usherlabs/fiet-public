@@ -22,7 +22,7 @@ library MarketLiquidityRouterLib {
 
     struct UseMarketLiquidityUnlockData {
         address proxyHook;
-        int256 requestedDelta;
+        int256 balanceDelta;
         address recipient;
     }
 
@@ -36,7 +36,7 @@ library MarketLiquidityRouterLib {
     function toRequestedDelta(address lcc, address currency0, address currency1, uint256 amount)
         internal
         pure
-        returns (BalanceDelta requestedDelta)
+        returns (BalanceDelta balanceDelta)
     {
         uint256 amount0 = 0;
         uint256 amount1 = 0;
@@ -49,28 +49,28 @@ library MarketLiquidityRouterLib {
             revert Errors.InvalidAddress(lcc);
         }
 
-        requestedDelta = LiquidityUtils.safeToBalanceDelta(amount0, amount1, false, false);
+        balanceDelta = LiquidityUtils.safeToBalanceDelta(amount0, amount1, false, false);
     }
 
-    function useWithoutUnlock(address proxyHook, BalanceDelta requestedDelta, address recipient)
+    function useWithoutUnlock(address proxyHook, BalanceDelta balanceDelta, address recipient)
         internal
         returns (BalanceDelta usedDelta)
     {
-        usedDelta = IMarketVault(proxyHook).tryModifyLiquiditiesWithRecipient(requestedDelta, recipient);
+        usedDelta = IMarketVault(proxyHook).tryModifyLiquiditiesWithRecipient(balanceDelta, recipient);
     }
 
     function useWithOptionalUnlock(
         IPoolManager poolManager,
         address proxyHook,
-        BalanceDelta requestedDelta,
+        BalanceDelta balanceDelta,
         address recipient
     ) internal returns (BalanceDelta usedDelta) {
         if (poolManager.isUnlocked()) {
-            return useWithoutUnlock(proxyHook, requestedDelta, recipient);
+            return useWithoutUnlock(proxyHook, balanceDelta, recipient);
         }
 
         UseMarketLiquidityUnlockData memory unlockData = UseMarketLiquidityUnlockData({
-            proxyHook: proxyHook, requestedDelta: BalanceDelta.unwrap(requestedDelta), recipient: recipient
+            proxyHook: proxyHook, balanceDelta: BalanceDelta.unwrap(balanceDelta), recipient: recipient
         });
 
         bytes memory ret = poolManager.unlock(abi.encode(unlockData));
@@ -89,19 +89,24 @@ library MarketLiquidityRouterLib {
         return abi.encode(BalanceDelta.unwrap(usedDelta));
     }
 
-    /// @notice Routes wrapped DEX ingress to the vault handler for Hub→vault→PoolManager settlement.
+    /// @notice Validates DEX ingress windows and routes wrapped DEX ingress to the vault handler for Hub→vault→PoolManager settlement.
+    /// @dev **LCC-03 / market-derived reporting:** `wrappedAmount` may be zero when the LCC transfer is market-derived-only.
+    ///      Those calls still enforce unlock + active `sync(lcc)` + `balance(PoolManager) == syncedReserves` so stray LCC
+    ///      cannot accumulate on `PoolManager` and later brick wrapped ingress (`NestedIngressUnpaidTransferExists`).
+    ///      `handleIngress` runs only when `wrappedAmount > 0`.
     /// @dev Strict same-tx invariant: if this runs with a non-zero wrapped amount and a handler, the PoolManager
     ///      must be unlocked so `handleIngress` can settle in this transaction. If the manager is locked, ingress
     ///      cannot be funded atomically and the call reverts rather than returning with unsettled wrapped flow.
+    ///      Wrapped ingress must also run inside an active `sync(lcc)` window; otherwise stray LCC on PoolManager
+    ///      can desynchronise from synced reserves and brick later canonical settle flows (`IngressRequiresActiveSync`).
 
     function prepareMarketLiquidityIngress(PrepareMarketLiquidityContext memory ctx) internal {
-        if (ctx.wrappedAmount == 0 || ctx.handler == address(0)) return;
+        if (ctx.handler == address(0)) return;
         if (!ctx.poolManager.isUnlocked()) revert Errors.PoolManagerMustBeUnlocked();
 
         address syncedCurrency = poolManagerSyncedCurrency(ctx.poolManager);
         if (syncedCurrency == address(0)) {
-            IVaultCoreActionHandler(ctx.handler).handleIngress(ctx.lcc, ctx.wrappedAmount);
-            return;
+            revert Errors.IngressRequiresActiveSync();
         }
 
         if (syncedCurrency != ctx.lcc) {
@@ -115,6 +120,10 @@ library MarketLiquidityRouterLib {
         }
         if (poolManagerLccBalance < syncedReserves) {
             revert Errors.NestedIngressInvalidSyncSnapshot(syncedReserves, poolManagerLccBalance);
+        }
+
+        if (ctx.wrappedAmount == 0) {
+            return;
         }
 
         if (ILCC(ctx.lcc).underlying() == address(0)) {

@@ -29,22 +29,25 @@ contract PositionLibHarness {
 
     // ============ PositionModificationHookDataLib ============
 
-    function encodeHookData(uint256 commitId, uint256 positionIndex, address locker)
+    function encodeHookData(uint256 commitId, uint256 positionIndex, address locker, address queueRecipient)
         external
         pure
         returns (bytes memory)
     {
-        return PositionModificationHookDataLib.encode(commitId, positionIndex, locker);
+        return PositionModificationHookDataLib.encode(commitId, positionIndex, locker, queueRecipient);
     }
 
     function encodeSeizureHookData(
         uint256 commitId,
         uint256 positionIndex,
         address locker,
+        address queueRecipient,
         int128 settle0,
         int128 settle1
     ) external pure returns (bytes memory) {
-        return PositionModificationHookDataLib.encodeSeizure(commitId, positionIndex, locker, settle0, settle1);
+        return PositionModificationHookDataLib.encodeSeizure(
+            commitId, positionIndex, locker, queueRecipient, settle0, settle1
+        );
     }
 
     function decodeHookData(bytes memory hookData) external pure returns (PositionModificationHookData memory) {
@@ -65,6 +68,10 @@ contract PositionLibHarness {
 
     function getLocker(PositionModificationHookData memory data) external pure returns (address) {
         return PositionModificationHookDataLib.getLocker(data);
+    }
+
+    function getQueueRecipient(PositionModificationHookData memory data) external pure returns (address) {
+        return PositionModificationHookDataLib.getQueueRecipient(data);
     }
 }
 

@@ -4,7 +4,7 @@ pragma solidity ^0.8.26;
 import "forge-std/Test.sol";
 import {VTSOrchestratorFixture} from "./base/VTSOrchestratorFixture.sol";
 import {UnlockCaller} from "./base/VTSOrchestratorFixture.sol";
-import {VTSOrchestratorTestable} from "./base/VTSOrchestratorTestable.sol";
+import {MmIncreaseAdmissionReplay, VTSOrchestratorTestable} from "./base/VTSOrchestratorTestable.sol";
 import {VTSOrchestrator} from "../src/VTSOrchestrator.sol";
 import {PoolId, PoolIdLibrary} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
@@ -15,6 +15,8 @@ import {PositionModificationHookDataLib, PositionLibrary} from "../src/types/Pos
 import {ModifyLiquidityParams, SwapParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
 import {MarketVTSConfiguration} from "../src/types/VTS.sol";
 import {VTSConfigs} from "../src/libraries/VTSConfigs.sol";
+import {LiquidityUtils} from "../src/libraries/LiquidityUtils.sol";
+import {OracleUtils} from "../src/libraries/OracleUtils.sol";
 import {Errors} from "../src/libraries/Errors.sol";
 import {StateLibrary} from "v4-periphery/lib/v4-core/src/libraries/StateLibrary.sol";
 import {IPoolManager} from "v4-periphery/lib/v4-core/src/interfaces/IPoolManager.sol";
@@ -24,11 +26,13 @@ import {MarketFactory} from "../src/MarketFactory.sol";
 import {IOracleHelper} from "../src/interfaces/IOracleHelper.sol";
 import {IVRLSettlementObserver} from "../src/interfaces/IVRLSettlementObserver.sol";
 import {LiquiditySignal} from "../src/types/Commit.sol";
+import {MarketMaker} from "../src/libraries/MarketMaker.sol";
 import {PoolSwapTest} from "@uniswap/v4-core/src/test/PoolSwapTest.sol";
 import {MMActionAdapter as MMA} from "./utils/MMActionAdapter.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 import {IHooks} from "@uniswap/v4-core/src/interfaces/IHooks.sol";
+import {SafeCast} from "@uniswap/v4-core/src/libraries/SafeCast.sol";
 
 contract VTSOrchestratorTest is VTSOrchestratorFixture {
     using PoolIdLibrary for PoolId;
@@ -49,26 +53,11 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
         int128 settlementDelta1,
         uint256 settledToken0,
         uint256 settledToken1,
+        uint256 settledOverflowToken0,
+        uint256 settledOverflowToken1,
         bool isSeizing,
         bool rfsOpen
     );
-
-    struct DICEAccounting {
-        uint256 totalDeficitPrincipal1;
-        uint256 diceIndex1;
-        uint256 diceResidual1;
-    }
-
-    struct CISEAccounting {
-        uint256 totalSettled0;
-        uint256 totalSettled1;
-        uint256 ciseIndex0;
-        uint256 ciseIndex1;
-        uint256 ciseResidual0;
-        uint256 ciseResidual1;
-        uint256 totalCISEExposure0;
-        uint256 totalCISEExposure1;
-    }
 
     // ============================================================
     // Deploy VTSOrchestratorTestable for storage inspection
@@ -112,12 +101,7 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
         vm.expectRevert(abi.encodeWithSelector(Errors.InvalidAddress.selector, address(0)));
         unlockCaller.run(
             address(vtsOrchestrator),
-            abi.encodeWithSelector(
-                VTSOrchestrator.commitSignal.selector,
-                IMarketFactory(marketFactory),
-                liquiditySignal.mmState.owner,
-                signalBytes
-            )
+            abi.encodeWithSelector(VTSOrchestrator.commitSignal.selector, IMarketFactory(marketFactory), signalBytes)
         );
     }
 
@@ -130,11 +114,11 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
             abi.encodeWithSelector(
                 VTSOrchestrator.commitSignalRelayed.selector,
                 IMarketFactory(marketFactory),
-                liquiditySignal.mmState.owner,
                 signalBytes,
                 uint256(0),
                 uint256(0),
-                bytes("")
+                bytes(""),
+                address(0xCAFE)
             )
         );
     }
@@ -165,10 +149,7 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
             unlockCaller.run(
                 address(vtsOrchestrator),
                 abi.encodeWithSelector(
-                    VTSOrchestrator.commitSignal.selector,
-                    IMarketFactory(marketFactory),
-                    liquiditySignal.mmState.owner,
-                    signalBytes
+                    VTSOrchestrator.commitSignal.selector, IMarketFactory(marketFactory), signalBytes
                 )
             ),
             (uint256)
@@ -184,25 +165,19 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
         unlockCaller.run(
             address(vtsOrchestrator),
             abi.encodeWithSelector(
-                bytes4(keccak256("renewSignal(address,address,uint256,bytes)")),
-                IMarketFactory(marketFactory),
-                sameOwnerRenew.mmState.advancer,
-                commitId,
-                renewSignalBytes
+                VTSOrchestrator.renewSignal.selector, IMarketFactory(marketFactory), commitId, renewSignalBytes
             )
         );
     }
 
     function test_revert_renewSignalRelayed_whenVrlHandlersNotRegistered_insideUnlock() public {
+        liquiditySignal.mmState.advancer = makeAddr("renewRelayedSetupAdvancer");
         bytes memory signalBytes = abi.encode(liquiditySignal);
         uint256 commitId = abi.decode(
             unlockCaller.run(
                 address(vtsOrchestrator),
                 abi.encodeWithSelector(
-                    VTSOrchestrator.commitSignal.selector,
-                    IMarketFactory(marketFactory),
-                    liquiditySignal.mmState.owner,
-                    signalBytes
+                    VTSOrchestrator.commitSignal.selector, IMarketFactory(marketFactory), signalBytes
                 )
             ),
             (uint256)
@@ -219,12 +194,12 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
             abi.encodeWithSelector(
                 VTSOrchestrator.renewSignalRelayed.selector,
                 IMarketFactory(marketFactory),
-                sameOwnerRenew.mmState.advancer,
                 commitId,
                 renewSignalBytes,
                 uint256(0),
                 uint256(0),
-                bytes("")
+                bytes(""),
+                address(0)
             )
         );
     }
@@ -238,7 +213,7 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
     }
 
     function _cumulativeDeficit(PositionId positionId) internal view returns (uint256 def0, uint256 def1) {
-        (def0, def1,,,,) = _testableOrchestrator().getPositionAccounting(positionId);
+        (def0, def1,,,,,,) = _testableOrchestrator().getPositionAccounting(positionId);
     }
 
     function _lastPositionSettledMeta()
@@ -246,14 +221,16 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
         returns (uint256 commitId, uint256 positionIndex, bool isSeizing, bool rfsOpen)
     {
         Vm.Log[] memory entries = vm.getRecordedLogs();
-        bytes32 sig = keccak256("PositionSettled(uint256,uint256,int128,int128,uint256,uint256,bool,bool)");
+        bytes32 sig =
+            keccak256("PositionSettled(uint256,uint256,int128,int128,uint256,uint256,uint256,uint256,bool,bool)");
 
         for (uint256 i = entries.length; i > 0; i--) {
             Vm.Log memory entry = entries[i - 1];
             if (entry.emitter == address(vtsOrchestrator) && entry.topics.length == 3 && entry.topics[0] == sig) {
                 commitId = uint256(entry.topics[1]);
                 positionIndex = uint256(entry.topics[2]);
-                (,,,, isSeizing, rfsOpen) = abi.decode(entry.data, (int128, int128, uint256, uint256, bool, bool));
+                (,,,,,, isSeizing, rfsOpen) =
+                    abi.decode(entry.data, (int128, int128, uint256, uint256, uint256, uint256, bool, bool));
                 return (commitId, positionIndex, isSeizing, rfsOpen);
             }
         }
@@ -277,6 +254,47 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
         );
     }
 
+    /// @dev Live `slot0` issued USD for commitment checkpointing (matches `VTSCommitLib._checkpointWithCommitment`).
+    function _checkpointIssuedUsd(PositionId positionId) internal view returns (uint256 issuedUsd) {
+        Position memory pos = vtsOrchestrator.getPosition(positionId);
+        PoolId pid = pos.poolId;
+        (uint160 sqrtP, int24 tick,,) = manager.getSlot0(pid);
+        (uint256 eff0, uint256 eff1) = LiquidityUtils.calculateEffectiveTokenAmounts(
+            sqrtP, tick, pos.tickLower, pos.tickUpper, int256(uint256(pos.liquidity))
+        );
+        issuedUsd = OracleUtils.lccPairValue(
+            IOracleHelper(address(oracleHelper)),
+            Currency.unwrap(corePoolKey.currency0),
+            eff0,
+            Currency.unwrap(corePoolKey.currency1),
+            eff1
+        );
+    }
+
+    /// @dev Effective settled USD for commitment checkpointing (matches `PositionAccountingLib.effectiveSettled` path).
+    function _checkpointSettledUsd(PositionId positionId) internal view returns (uint256 settledUsd) {
+        (uint256 s0, uint256 s1) = _testableOrchestrator().getPositionEffectiveSettledAmounts(positionId);
+        settledUsd = OracleUtils.lccPairValue(
+            IOracleHelper(address(oracleHelper)),
+            Currency.unwrap(corePoolKey.currency0),
+            s0,
+            Currency.unwrap(corePoolKey.currency1),
+            s1
+        );
+    }
+
+    /// @dev VRL signal USD such that `settledUsd + signalUsd = issuedUsd + surplusUsd` (tight surplus for pro-rata netting).
+    function _e2eFinding6_signalForTightSurplus(PositionId positionId, uint256 surplusUsd)
+        internal
+        view
+        returns (uint256 signalUsd)
+    {
+        uint256 issued = _checkpointIssuedUsd(positionId);
+        uint256 settled = _checkpointSettledUsd(positionId);
+        uint256 backingTarget = issued + surplusUsd;
+        signalUsd = backingTarget > settled ? backingTarget - settled : 0;
+    }
+
     // ============================================================
     // Guard Tests - onlyIfPoolManagerUnlocked
     // ============================================================
@@ -284,7 +302,47 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
     function test_revert_commitSignal_whenPoolManagerLocked() public {
         bytes memory signalBytes = abi.encode(liquiditySignal);
         vm.expectRevert(Errors.PoolManagerMustBeUnlocked.selector);
-        vtsOrchestrator.commitSignal(IMarketFactory(marketFactory), liquiditySignal.mmState.owner, signalBytes);
+        vtsOrchestrator.commitSignal(IMarketFactory(marketFactory), signalBytes);
+    }
+
+    /// @dev Authorised relayer is the orchestrator `msg.sender` at commit time (here: `unlockCaller`), not the VRL principal.
+    function test_commitSignal_persistsAuthorisedRelayer_asOrchestratorCaller() public {
+        bytes memory signalBytes = abi.encode(liquiditySignal);
+        unlockCaller.run(
+            address(vtsOrchestrator),
+            abi.encodeWithSelector(VTSOrchestrator.commitSignal.selector, IMarketFactory(marketFactory), signalBytes)
+        );
+        assertEq(vtsOrchestrator.getCommitAuthorisedRelayer(1), address(unlockCaller));
+    }
+
+    /// @dev Orchestrator-level relayed commit with a canonical EIP-7702 advancer and ECDSA `recover(sender)` relay auth.
+    function test_commitSignalRelayed_succeeds_with7702DelegatedAdvancer() public {
+        uint256 advPk = uint256(keccak256(abi.encodePacked("orch7702relay")));
+        address adv7702 = vm.addr(advPk);
+        _orchEtch7702Delegation(adv7702, makeAddr("orch7702DelegateImpl"));
+
+        LiquiditySignal memory sig = generateLiquiditySignalWithAdvancer(adv7702);
+        bytes memory signalBytes = abi.encode(sig);
+
+        uint256 deadline = block.timestamp + 1 hours;
+        uint256 authNonce = signalManager.submitAuthNonce(adv7702);
+        bytes memory authSig =
+            _orchSignRelayAuth(advPk, adv7702, 0, signalBytes, address(unlockCaller), deadline, authNonce);
+
+        uint256 nextBefore = vtsOrchestrator.nextCommitId();
+        unlockCaller.run(
+            address(vtsOrchestrator),
+            abi.encodeWithSelector(
+                VTSOrchestrator.commitSignalRelayed.selector,
+                IMarketFactory(marketFactory),
+                signalBytes,
+                deadline,
+                authNonce,
+                authSig,
+                address(unlockCaller)
+            )
+        );
+        assertEq(vtsOrchestrator.nextCommitId(), nextBefore + 1);
     }
 
     function test_revert_renewSignal_whenPoolManagerLocked() public {
@@ -292,17 +350,12 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
         bytes memory signalBytes = abi.encode(liquiditySignal);
         unlockCaller.run(
             address(vtsOrchestrator),
-            abi.encodeWithSelector(
-                VTSOrchestrator.commitSignal.selector,
-                IMarketFactory(marketFactory),
-                liquiditySignal.mmState.owner,
-                signalBytes
-            )
+            abi.encodeWithSelector(VTSOrchestrator.commitSignal.selector, IMarketFactory(marketFactory), signalBytes)
         );
 
         // Now try to renew when locked
         vm.expectRevert(Errors.PoolManagerMustBeUnlocked.selector);
-        vtsOrchestrator.renewSignal(IMarketFactory(marketFactory), address(this), 1, signalBytes);
+        vtsOrchestrator.renewSignal(IMarketFactory(marketFactory), 1, signalBytes);
     }
 
     function test_creditExact_revert_whenCallerUnboundForFactory() public {
@@ -328,12 +381,7 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
         vm.expectRevert(Errors.InvalidSender.selector);
         unlockCaller.run(
             address(vtsOrchestrator),
-            abi.encodeWithSelector(
-                VTSOrchestrator.commitSignal.selector,
-                IMarketFactory(marketFactory),
-                liquiditySignal.mmState.owner,
-                signalBytes
-            )
+            abi.encodeWithSelector(VTSOrchestrator.commitSignal.selector, IMarketFactory(marketFactory), signalBytes)
         );
     }
 
@@ -354,11 +402,7 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
         unlockCaller.run(
             address(vtsOrchestrator),
             abi.encodeWithSelector(
-                bytes4(keccak256("renewSignal(address,address,uint256,bytes)")),
-                address(marketFactory),
-                sameOwnerRenew.mmState.advancer,
-                commitId,
-                renewSignalBytes
+                VTSOrchestrator.renewSignal.selector, address(marketFactory), commitId, renewSignalBytes
             )
         );
     }
@@ -377,17 +421,27 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
             abi.encodeWithSelector(
                 VTSOrchestrator.commitSignalRelayed.selector,
                 IMarketFactory(marketFactory),
-                liquiditySignal.mmState.owner,
                 signalBytes,
                 uint256(0),
                 uint256(0),
-                bytes("")
+                bytes(""),
+                address(0xCAFE)
             )
         );
     }
 
     function test_revert_renewSignalRelayed_whenUnboundCallerForwardsSender_insideUnlock() public {
-        (uint256 commitId,,,) = _createCommittedPosition();
+        liquiditySignal.mmState.advancer = makeAddr("renewRelayedUnboundAdvancer");
+        bytes memory signalBytes = abi.encode(liquiditySignal);
+        uint256 commitId = abi.decode(
+            unlockCaller.run(
+                address(vtsOrchestrator),
+                abi.encodeWithSelector(
+                    VTSOrchestrator.commitSignal.selector, IMarketFactory(marketFactory), signalBytes
+                )
+            ),
+            (uint256)
+        );
 
         vm.mockCall(
             marketFactory,
@@ -405,12 +459,12 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
             abi.encodeWithSelector(
                 VTSOrchestrator.renewSignalRelayed.selector,
                 IMarketFactory(marketFactory),
-                sameOwnerRenew.mmState.advancer,
                 commitId,
                 renewSignalBytes,
                 uint256(0),
                 uint256(0),
-                bytes("")
+                bytes(""),
+                address(0)
             )
         );
     }
@@ -468,7 +522,7 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
         BalanceDelta amountDelta = toBalanceDelta(-100, -100);
 
         vm.expectRevert(Errors.PoolManagerMustBeUnlocked.selector);
-        vtsOrchestrator.onMMSettle(IMarketFactory(marketFactory), tokenId, 0, amountDelta, false);
+        vtsOrchestrator.onMMSettle(IMarketFactory(marketFactory), tokenId, 0, amountDelta, false, false);
     }
 
     function test_revert_onSeize_whenPoolManagerLocked() public {
@@ -490,99 +544,34 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
 
     function test_initPool_whenFactory() public {
         MarketVTSConfiguration memory config = VTSConfigs.getDefaultConfig();
+        PoolKey memory freshPoolKey = PoolKey({
+            currency0: Currency.wrap(address(0x33333333)),
+            currency1: Currency.wrap(address(0x44444444)),
+            fee: corePoolKey.fee,
+            tickSpacing: corePoolKey.tickSpacing,
+            hooks: IHooks(address(0))
+        });
         vm.prank(marketFactory);
-        vtsOrchestrator.initPool(corePoolKey, config);
+        vtsOrchestrator.initPool(freshPoolKey, config);
         // Should not revert
     }
 
-    function test_revert_incrementCoverage_whenNotFactory() public {
-        vm.expectRevert(Errors.InvalidSender.selector);
-        vtsOrchestrator.incrementCoverage(corePoolKey.toId(), 100, 100);
-    }
-
-    function test_incrementCoverage_whenFactory() public {
-        vm.prank(marketFactory);
-        vtsOrchestrator.incrementCoverage(corePoolKey.toId(), 100, 100);
-        // Should not revert
-    }
-
-    function test_incrementCoverage_amount1_incrementsToken1CoverageAccounting() public {
-        PoolId poolId = corePoolKey.toId();
-
-        DICEAccounting memory diceBefore = _getPoolDICEAccounting(poolId);
-        CISEAccounting memory ciseBefore = _getPoolCISEAccounting(poolId);
-
-        uint256 amount1 = 123;
-        vm.prank(marketFactory);
-        vtsOrchestrator.incrementCoverage(poolId, 0, amount1);
-
-        DICEAccounting memory diceAfter = _getPoolDICEAccounting(poolId);
-        CISEAccounting memory ciseAfter = _getPoolCISEAccounting(poolId);
-
-        // Totals should not change due to incrementCoverage.
-        assertEq(
-            diceAfter.totalDeficitPrincipal1,
-            diceBefore.totalDeficitPrincipal1,
-            "totalDeficitPrincipal1 should not change"
+    function test_revert_initPool_whenAlreadyInitialized() public {
+        MarketVTSConfiguration memory config = VTSConfigs.getDefaultConfig();
+        PoolKey memory poolKeyA = PoolKey({
+            currency0: Currency.wrap(address(0x11111111)),
+            currency1: Currency.wrap(address(0x22222222)),
+            fee: corePoolKey.fee,
+            tickSpacing: corePoolKey.tickSpacing,
+            hooks: IHooks(address(0))
+        });
+        vm.startPrank(marketFactory);
+        vtsOrchestrator.initPool(poolKeyA, config);
+        vm.expectRevert(
+            abi.encodeWithSelector(Errors.InvariantViolated.selector, "VTSOrchestrator: pool already initialized")
         );
-        assertEq(ciseAfter.totalSettled0, ciseBefore.totalSettled0, "totalSettled0 should not change");
-        assertEq(ciseAfter.totalSettled1, ciseBefore.totalSettled1, "totalSettled1 should not change");
-        assertEq(ciseAfter.ciseIndex0, ciseBefore.ciseIndex0, "ciseIndex0 should not change");
-        assertEq(ciseAfter.ciseResidual0, ciseBefore.ciseResidual0, "ciseResidual0 should not change");
-        assertEq(ciseAfter.totalCISEExposure0, ciseBefore.totalCISEExposure0, "totalCISEExposure0 should not change");
-        // Token1 coverage: when pool totalSettled1 > 0, incrementCoverage eagerly bumps CISE exposure (see VTSCommitLib).
-        if (ciseBefore.totalSettled1 > 0) {
-            assertEq(
-                ciseAfter.totalCISEExposure1,
-                ciseBefore.totalCISEExposure1 + amount1,
-                "totalCISEExposure1 should increase by covered amount when settled1 > 0"
-            );
-        } else {
-            assertEq(
-                ciseAfter.totalCISEExposure1,
-                ciseBefore.totalCISEExposure1,
-                "totalCISEExposure1 should not change when settled1 == 0"
-            );
-        }
-
-        // Coverage must land either in the index (if totals > 0) or in residuals (if totals == 0).
-        if (diceBefore.totalDeficitPrincipal1 > 0) {
-            assertGt(diceAfter.diceIndex1, diceBefore.diceIndex1, "DICE index1 should increase when deficits exist");
-        } else {
-            assertGt(
-                diceAfter.diceResidual1,
-                diceBefore.diceResidual1,
-                "DICE residual1 should increase when no deficits exist"
-            );
-        }
-
-        if (ciseBefore.totalSettled1 > 0) {
-            assertGt(ciseAfter.ciseIndex1, ciseBefore.ciseIndex1, "CISE index1 should increase when settled > 0");
-        } else {
-            assertGt(
-                ciseAfter.ciseResidual1,
-                ciseBefore.ciseResidual1,
-                "CISE residual1 should increase when no settled exists"
-            );
-        }
-    }
-
-    function _getPoolDICEAccounting(PoolId poolId) internal view returns (DICEAccounting memory a) {
-        (, a.totalDeficitPrincipal1,, a.diceIndex1,, a.diceResidual1) =
-            _testableOrchestrator().getPoolDICEAccounting(poolId);
-    }
-
-    function _getPoolCISEAccounting(PoolId poolId) internal view returns (CISEAccounting memory a) {
-        (
-            a.totalSettled0,
-            a.totalSettled1,
-            a.ciseIndex0,
-            a.ciseIndex1,
-            a.ciseResidual0,
-            a.ciseResidual1,
-            a.totalCISEExposure0,
-            a.totalCISEExposure1
-        ) = _testableOrchestrator().getPoolCISEAccounting(poolId);
+        vtsOrchestrator.initPool(poolKeyA, config);
+        vm.stopPrank();
     }
 
     // ============================================================
@@ -599,13 +588,23 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
         vtsOrchestrator.processPosition(address(this), corePoolKey, params, callerDelta, feesAccrued, "");
     }
 
+    function test_revert_processPosition_negativeLiquidity_whenNotCoreHook() public {
+        ModifyLiquidityParams memory params =
+            ModifyLiquidityParams({tickLower: -60, tickUpper: 60, liquidityDelta: -1e18, salt: bytes32(0)});
+        BalanceDelta callerDelta = toBalanceDelta(0, 0);
+        BalanceDelta feesAccrued = toBalanceDelta(0, 0);
+
+        vm.expectRevert();
+        vtsOrchestrator.processPosition(address(this), corePoolKey, params, callerDelta, feesAccrued, "");
+    }
+
     function test_revert_afterCoreSwap_whenNotCoreHook() public {
         SwapParams memory swapParams = SwapParams({zeroForOne: true, amountSpecified: -100, sqrtPriceLimitX96: 0});
         BalanceDelta delta = toBalanceDelta(-100, 100);
 
         // Be specific: this must fail due to CoreHook access-control, not due to later swap accounting.
         vm.expectRevert(Errors.InvalidSender.selector);
-        vtsOrchestrator.afterCoreSwap(corePoolKey, swapParams, delta, 0, 0);
+        vtsOrchestrator.afterCoreSwap(corePoolKey, swapParams, delta, 0, 0, int24(0));
     }
 
     function test_constructor_revert_whenPoolManagerZero() public {
@@ -639,7 +638,7 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
 
         vm.prank(coreHookAddress);
         vm.expectRevert(Errors.EnforcedPause.selector);
-        vtsOrchestrator.afterCoreSwap(corePoolKey, swapParams, delta, 0, 0);
+        vtsOrchestrator.afterCoreSwap(corePoolKey, swapParams, delta, 0, 0, int24(0));
     }
 
     function test_revert_settlePositionGrowths_whenPoolPaused_andNotCanonicalCoreHook() public {
@@ -656,6 +655,167 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
 
         vm.prank(coreHookAddress);
         vtsOrchestrator.settlePositionGrowths(positionId);
+    }
+
+    function test_revert_calcRFS_whenPoolPaused_andNotCanonicalCoreHook() public {
+        (, PositionId positionId,,) = _createCommittedPosition();
+        vtsOrchestrator.pausePool(corePoolKey.toId());
+
+        vm.expectRevert(Errors.InvalidSender.selector);
+        vtsOrchestrator.calcRFS(positionId, false);
+    }
+
+    function test_revert_checkpoint_whenPoolPaused_andNotCanonicalCoreHook() public {
+        (uint256 tokenId,,,) = _createCommittedPosition();
+        vtsOrchestrator.pausePool(corePoolKey.toId());
+
+        vm.expectRevert(Errors.InvalidSender.selector);
+        vtsOrchestrator.checkpoint(tokenId, 0, false);
+    }
+
+    /// @dev Regression: paused `checkpoint(..., false)` stays blocked (growth settle is CoreHook-only). Advancer
+    ///      `checkpoint(..., true)` must still persist commitment backing state so insolvency gates are not blind
+    ///      during pause while MM removes remain possible via the hook.
+    function test_checkpoint_withCommitment_succeeds_whenPoolPaused_recordsCommitmentDeficit() public {
+        (uint256 tokenId, PositionId positionId,,) = _createCommittedPosition();
+        address advancer = liquiditySignal.mmState.advancer;
+
+        bytes memory signalBytes = abi.encode(liquiditySignal);
+        vm.mockCall(
+            address(signalManager),
+            abi.encodeWithSelector(
+                bytes4(keccak256("verifyLiquiditySignal(address,bytes,bool)")),
+                liquiditySignal.mmState.owner,
+                signalBytes,
+                true
+            ),
+            abi.encode(true, 10)
+        );
+
+        _mockLccPrices(1e18, 1e18);
+        _mockSignalUsd(0);
+
+        vtsOrchestrator.pausePool(corePoolKey.toId());
+
+        vm.prank(advancer);
+        unlockCaller.run(
+            address(vtsOrchestrator), abi.encodeWithSelector(VTSOrchestrator.checkpoint.selector, tokenId, 0, true)
+        );
+
+        (uint256 cd0, uint256 cd1) = _commitmentDeficit(positionId);
+        assertTrue(cd0 > 0 || cd1 > 0, "paused commitment checkpoint should record deficit");
+    }
+
+    /// @dev Regression (audit finding #2): paused `checkpoint(..., true)` must settle growth before
+    ///      `checkpointWithCommitment` so backing uses post-growth `pa.settled` (same outcome as CoreHook settle
+    ///      then checkpoint).
+    function test_checkpoint_withCommitment_whenPoolPaused_settles_growth_before_commitment_deficit() public {
+        (uint256 tokenId, PositionId positionId,,) = _createCommittedPosition();
+        address advancer = liquiditySignal.mmState.advancer;
+
+        bytes memory signalBytes = abi.encode(liquiditySignal);
+        vm.mockCall(
+            address(signalManager),
+            abi.encodeWithSelector(
+                bytes4(keccak256("verifyLiquiditySignal(address,bytes,bool)")),
+                liquiditySignal.mmState.owner,
+                signalBytes,
+                true
+            ),
+            abi.encode(true, 10)
+        );
+
+        _mockLccPrices(1e18, 1e18);
+        _mockSignalUsd(0);
+
+        (uint256 settled0BeforeSwap, uint256 settled1BeforeSwap) = vtsOrchestrator.getPositionSettledAmounts(positionId);
+        settled1BeforeSwap;
+        _swapCore(false, -int256(50e18));
+        (uint256 settled0AfterSwap, uint256 settled1AfterSwap) = vtsOrchestrator.getPositionSettledAmounts(positionId);
+        settled1AfterSwap;
+        assertEq(
+            settled0AfterSwap,
+            settled0BeforeSwap,
+            "precondition: swap-driven deficit growth must not be crystallised until settlement"
+        );
+
+        vtsOrchestrator.pausePool(corePoolKey.toId());
+
+        vm.prank(advancer);
+        unlockCaller.run(
+            address(vtsOrchestrator), abi.encodeWithSelector(VTSOrchestrator.checkpoint.selector, tokenId, 0, true)
+        );
+
+        (uint256 settled0AfterCheckpoint, uint256 settled1AfterCheckpoint) =
+            vtsOrchestrator.getPositionSettledAmounts(positionId);
+        settled1AfterCheckpoint;
+        assertLt(
+            settled0AfterCheckpoint,
+            settled0BeforeSwap,
+            "paused commitment checkpoint must crystallise deficit growth into settled before commitment math"
+        );
+
+        (uint256 cd0, uint256 cd1) = _commitmentDeficit(positionId);
+        assertTrue(cd0 > 0 || cd1 > 0, "expected commitment deficit after growth-aware paused checkpoint");
+    }
+
+    /// @dev Same as pool-pause regression but under global pause.
+    function test_checkpoint_withCommitment_whenGloballyPaused_settles_growth_before_commitment_deficit() public {
+        (uint256 tokenId, PositionId positionId,,) = _createCommittedPosition();
+        address advancer = liquiditySignal.mmState.advancer;
+
+        bytes memory signalBytes = abi.encode(liquiditySignal);
+        vm.mockCall(
+            address(signalManager),
+            abi.encodeWithSelector(
+                bytes4(keccak256("verifyLiquiditySignal(address,bytes,bool)")),
+                liquiditySignal.mmState.owner,
+                signalBytes,
+                true
+            ),
+            abi.encode(true, 10)
+        );
+
+        _mockLccPrices(1e18, 1e18);
+        _mockSignalUsd(0);
+
+        (uint256 settled0BeforeSwap, uint256 settled1BeforeSwapG) =
+            vtsOrchestrator.getPositionSettledAmounts(positionId);
+        settled1BeforeSwapG;
+        _swapCore(false, -int256(50e18));
+
+        vm.prank(vtsOrchestrator.owner());
+        vtsOrchestrator.setGlobalPause(true);
+
+        vm.prank(advancer);
+        unlockCaller.run(
+            address(vtsOrchestrator), abi.encodeWithSelector(VTSOrchestrator.checkpoint.selector, tokenId, 0, true)
+        );
+
+        (uint256 settled0AfterCheckpoint, uint256 settled1AfterCheckpointG2) =
+            vtsOrchestrator.getPositionSettledAmounts(positionId);
+        settled1AfterCheckpointG2;
+        assertLt(settled0AfterCheckpoint, settled0BeforeSwap, "global pause: growth must crystallise before commitment");
+
+        (uint256 cd0, uint256 cd1) = _commitmentDeficit(positionId);
+        assertTrue(cd0 > 0 || cd1 > 0, "global pause: commitment deficit should be recorded");
+    }
+
+    /// @dev Soft pause: `onSeize` pre-check remains available under pool pause (seizure path is not pause-gated).
+    function test_onSeize_validateSeize_succeeds_whenPoolPaused_after_checkpoint_and_warp() public {
+        (uint256 tokenId,,,) = _createCommittedPosition();
+
+        _mockLccPrices(1e18, 1e18);
+        _mockSignalUsd(0);
+        unlockCaller.run(
+            address(vtsOrchestrator), abi.encodeWithSelector(VTSOrchestrator.checkpoint.selector, tokenId, 0, true)
+        );
+
+        vtsOrchestrator.pausePool(corePoolKey.toId());
+
+        vm.warp(block.timestamp + 10_000_000);
+
+        unlockCaller.run(address(vtsOrchestrator), abi.encodeWithSelector(VTSOrchestrator.onSeize.selector, tokenId, 0));
     }
 
     // ============================================================
@@ -689,12 +849,7 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
 
         bytes memory result = unlockCaller.run(
             address(vtsOrchestrator),
-            abi.encodeWithSelector(
-                VTSOrchestrator.commitSignal.selector,
-                IMarketFactory(marketFactory),
-                liquiditySignal.mmState.owner,
-                signalBytes
-            )
+            abi.encodeWithSelector(VTSOrchestrator.commitSignal.selector, IMarketFactory(marketFactory), signalBytes)
         );
         uint256 commitId = abi.decode(result, (uint256));
 
@@ -718,12 +873,7 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
 
         bytes memory result = unlockCaller.run(
             address(vtsOrchestrator),
-            abi.encodeWithSelector(
-                VTSOrchestrator.commitSignal.selector,
-                IMarketFactory(marketFactory),
-                liquiditySignal.mmState.owner,
-                signalBytes
-            )
+            abi.encodeWithSelector(VTSOrchestrator.commitSignal.selector, IMarketFactory(marketFactory), signalBytes)
         );
         uint256 commitId = abi.decode(result, (uint256));
 
@@ -747,13 +897,7 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
         vm.expectRevert(abi.encodeWithSelector(Errors.InvalidSignal.selector, uint256(0)));
         unlockCaller.run(
             address(vtsOrchestrator),
-            abi.encodeWithSelector(
-                bytes4(keccak256("renewSignal(address,address,uint256,bytes)")),
-                address(marketFactory),
-                address(this),
-                0,
-                signalBytes
-            )
+            abi.encodeWithSelector(VTSOrchestrator.renewSignal.selector, address(marketFactory), 0, signalBytes)
         );
     }
 
@@ -773,16 +917,11 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
 
         bytes memory result = unlockCaller.run(
             address(vtsOrchestrator),
-            abi.encodeWithSelector(
-                VTSOrchestrator.commitSignal.selector,
-                IMarketFactory(marketFactory),
-                liquiditySignal.mmState.owner,
-                signalBytes
-            )
+            abi.encodeWithSelector(VTSOrchestrator.commitSignal.selector, IMarketFactory(marketFactory), signalBytes)
         );
         uint256 commitId = abi.decode(result, (uint256));
 
-        (, uint256 expiresAtBefore,,) = vtsOrchestrator.getCommit(commitId);
+        (, uint256 expiresAtBefore,,,) = vtsOrchestrator.getCommit(commitId);
 
         // Warp forward
         vm.warp(block.timestamp + 1000);
@@ -805,16 +944,344 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
         unlockCaller.run(
             address(vtsOrchestrator),
             abi.encodeWithSelector(
-                bytes4(keccak256("renewSignal(address,address,uint256,bytes)")),
-                address(marketFactory),
-                liquiditySignal.mmState.advancer,
-                commitId,
-                renewSignalBytes
+                VTSOrchestrator.renewSignal.selector, address(marketFactory), commitId, renewSignalBytes
             )
         );
 
-        (, uint256 expiresAtAfter,,) = vtsOrchestrator.getCommit(commitId);
+        (, uint256 expiresAtAfter,,,) = vtsOrchestrator.getCommit(commitId);
         assertGt(expiresAtAfter, expiresAtBefore, "Expiry should be extended");
+    }
+
+    /// @dev VRL may attest empty reserves; recovery flows must not treat that as a missing commit.
+    /// @dev Do not assign `s = base` then mutate: memory struct copies can alias nested dynamic data and corrupt `base`.
+    function _liquiditySignalWithEmptyReservesAndNonce(LiquiditySignal memory base, uint256 newNonce)
+        internal
+        pure
+        returns (LiquiditySignal memory s)
+    {
+        s.rootHash = base.rootHash;
+        s.rootHashSignature = base.rootHashSignature;
+        s.merkleProof = base.merkleProof;
+        s.mmSignature = base.mmSignature;
+        s.nonce = newNonce;
+        MarketMaker.State memory mm;
+        mm.owner = base.mmState.owner;
+        mm.sourceState = base.mmState.sourceState;
+        mm.prover = base.mmState.prover;
+        mm.nonce = base.mmState.nonce;
+        mm.advancer = base.mmState.advancer;
+        mm.reserves = new MarketMaker.Reserve[](0);
+        s.mmState = mm;
+    }
+
+    function test_emptyReserves_isSignalValid_requireLiveSignalFalse_andRecoveryRenew() public {
+        LiquiditySignal memory baseSig = liquiditySignal;
+        bytes memory commitBytes = abi.encode(baseSig);
+        vm.mockCall(
+            address(signalManager),
+            abi.encodeWithSelector(
+                bytes4(keccak256("verifyLiquiditySignal(address,bytes,bool)")), baseSig.mmState.owner, commitBytes, true
+            ),
+            abi.encode(true, 3600)
+        );
+
+        uint256 commitId = abi.decode(
+            unlockCaller.run(
+                address(vtsOrchestrator),
+                abi.encodeWithSelector(
+                    VTSOrchestrator.commitSignal.selector, IMarketFactory(marketFactory), commitBytes
+                )
+            ),
+            (uint256)
+        );
+
+        LiquiditySignal memory emptyRenew = _liquiditySignalWithEmptyReservesAndNonce(baseSig, baseSig.nonce + 1);
+        bytes memory emptyBytes = abi.encode(emptyRenew);
+        vm.mockCall(
+            address(signalManager),
+            abi.encodeWithSelector(
+                bytes4(keccak256("verifyLiquiditySignal(address,bytes,bool)")),
+                emptyRenew.mmState.advancer,
+                emptyBytes,
+                true
+            ),
+            abi.encode(true, 3600)
+        );
+        unlockCaller.run(
+            address(vtsOrchestrator),
+            abi.encodeWithSelector(
+                VTSOrchestrator.renewSignal.selector, IMarketFactory(marketFactory), commitId, emptyBytes
+            )
+        );
+
+        (MarketMaker.State memory mmAfter,,,,) = vtsOrchestrator.getCommit(commitId);
+        assertEq(mmAfter.reserves.length, 0, "renewal should persist empty reserves");
+
+        assertTrue(
+            vtsOrchestrator.isSignalValid(commitId, false), "empty reserves: commit should exist for recovery paths"
+        );
+        assertFalse(
+            vtsOrchestrator.isSignalValid(commitId, true), "empty reserves: must not count as a live VRL-backed signal"
+        );
+
+        // Full deep copy (including nested `string` fields in reserves); struct assignment can alias string buffers.
+        LiquiditySignal memory restore = abi.decode(abi.encode(baseSig), (LiquiditySignal));
+        restore.nonce = baseSig.nonce + 2;
+        bytes memory restoreBytes = abi.encode(restore);
+        vm.mockCall(
+            address(signalManager),
+            abi.encodeWithSelector(
+                bytes4(keccak256("verifyLiquiditySignal(address,bytes,bool)")),
+                restore.mmState.advancer,
+                restoreBytes,
+                true
+            ),
+            abi.encode(true, 3600)
+        );
+        unlockCaller.run(
+            address(vtsOrchestrator),
+            abi.encodeWithSelector(
+                VTSOrchestrator.renewSignal.selector, IMarketFactory(marketFactory), commitId, restoreBytes
+            )
+        );
+
+        (MarketMaker.State memory mmFinal, uint256 expFinal,,,) = vtsOrchestrator.getCommit(commitId);
+        assertGt(mmFinal.reserves.length, 0, "restore renew should persist non-empty reserves");
+        assertGt(expFinal, block.timestamp, "commit should not be expired after recovery renew");
+
+        assertTrue(vtsOrchestrator.isSignalValid(commitId, true), "after recovery renew, live signal should be valid");
+    }
+
+    function test_checkpoint_afterEmptyReservesRenewal_succeeds() public {
+        (uint256 tokenId, PositionId positionId,,) = _createCommittedPosition();
+        LiquiditySignal memory baseSig = liquiditySignal;
+
+        LiquiditySignal memory emptyRenew = _liquiditySignalWithEmptyReservesAndNonce(baseSig, baseSig.nonce + 1);
+        bytes memory emptyBytes = abi.encode(emptyRenew);
+        vm.mockCall(
+            address(signalManager),
+            abi.encodeWithSelector(
+                bytes4(keccak256("verifyLiquiditySignal(address,bytes,bool)")),
+                emptyRenew.mmState.advancer,
+                emptyBytes,
+                true
+            ),
+            abi.encode(true, 3600)
+        );
+        unlockCaller.run(
+            address(vtsOrchestrator),
+            abi.encodeWithSelector(
+                VTSOrchestrator.renewSignal.selector, IMarketFactory(marketFactory), tokenId, emptyBytes
+            )
+        );
+
+        vm.warp(block.timestamp + 1000);
+        vm.expectEmit(false, false, false, false, address(vtsOrchestrator));
+        emit Checkpointed(tokenId, 0, RFSCheckpoint(0, 0, 0, 0, 0), false);
+        unlockCaller.run(
+            address(vtsOrchestrator), abi.encodeWithSelector(VTSOrchestrator.checkpoint.selector, tokenId, 0, false)
+        );
+
+        assertTrue(vtsOrchestrator.isPositionValid(positionId, true));
+    }
+
+    function test_onSeize_afterEmptyReservesRenewal_doesNotRevertInvalidSignal() public {
+        (uint256 tokenId, PositionId positionId,,) = _createCommittedPosition();
+        LiquiditySignal memory baseSig = liquiditySignal;
+
+        LiquiditySignal memory emptyRenew = _liquiditySignalWithEmptyReservesAndNonce(baseSig, baseSig.nonce + 1);
+        bytes memory emptyBytes = abi.encode(emptyRenew);
+        vm.mockCall(
+            address(signalManager),
+            abi.encodeWithSelector(
+                bytes4(keccak256("verifyLiquiditySignal(address,bytes,bool)")),
+                emptyRenew.mmState.advancer,
+                emptyBytes,
+                true
+            ),
+            abi.encode(true, 3600)
+        );
+        unlockCaller.run(
+            address(vtsOrchestrator),
+            abi.encodeWithSelector(
+                VTSOrchestrator.renewSignal.selector, IMarketFactory(marketFactory), tokenId, emptyBytes
+            )
+        );
+
+        _mockLccPrices(1e18, 1e18);
+        _mockSignalUsd(0);
+        unlockCaller.run(
+            address(vtsOrchestrator), abi.encodeWithSelector(VTSOrchestrator.checkpoint.selector, tokenId, 0, true)
+        );
+
+        vm.warp(block.timestamp + 10_000_000);
+        unlockCaller.run(address(vtsOrchestrator), abi.encodeWithSelector(VTSOrchestrator.onSeize.selector, tokenId, 0));
+        assertTrue(vtsOrchestrator.isPositionValid(positionId, true));
+    }
+
+    function test_revert_onMMSettle_nonSeizing_whenCommitHasEmptyReserves() public {
+        (uint256 tokenId,,,) = _createCommittedPosition();
+        LiquiditySignal memory baseSig = liquiditySignal;
+
+        LiquiditySignal memory emptyRenew = _liquiditySignalWithEmptyReservesAndNonce(baseSig, baseSig.nonce + 1);
+        bytes memory emptyBytes = abi.encode(emptyRenew);
+        vm.mockCall(
+            address(signalManager),
+            abi.encodeWithSelector(
+                bytes4(keccak256("verifyLiquiditySignal(address,bytes,bool)")),
+                emptyRenew.mmState.advancer,
+                emptyBytes,
+                true
+            ),
+            abi.encode(true, 3600)
+        );
+        unlockCaller.run(
+            address(vtsOrchestrator),
+            abi.encodeWithSelector(
+                VTSOrchestrator.renewSignal.selector, IMarketFactory(marketFactory), tokenId, emptyBytes
+            )
+        );
+
+        BalanceDelta depositDelta = toBalanceDelta(int128(-1), int128(-1));
+        vm.expectRevert(abi.encodeWithSelector(Errors.InvalidSignal.selector, tokenId));
+        unlockCaller.run(
+            address(vtsOrchestrator),
+            abi.encodeWithSelector(
+                VTSOrchestrator.onMMSettle.selector,
+                IMarketFactory(marketFactory),
+                tokenId,
+                0,
+                depositDelta,
+                false,
+                false
+            )
+        );
+    }
+
+    /// @notice Empty reserves: recovery-style validity vs live-gated MM settle (finding #6 policy boundary).
+    function test_emptyReserves_checkpointAllowed_nonSeizingMMSettleStillReverts() public {
+        (uint256 tokenId,,,) = _createCommittedPosition();
+        LiquiditySignal memory baseSig = liquiditySignal;
+
+        LiquiditySignal memory emptyRenew = _liquiditySignalWithEmptyReservesAndNonce(baseSig, baseSig.nonce + 1);
+        bytes memory emptyBytes = abi.encode(emptyRenew);
+        vm.mockCall(
+            address(signalManager),
+            abi.encodeWithSelector(
+                bytes4(keccak256("verifyLiquiditySignal(address,bytes,bool)")),
+                emptyRenew.mmState.advancer,
+                emptyBytes,
+                true
+            ),
+            abi.encode(true, 3600)
+        );
+        unlockCaller.run(
+            address(vtsOrchestrator),
+            abi.encodeWithSelector(
+                VTSOrchestrator.renewSignal.selector, IMarketFactory(marketFactory), tokenId, emptyBytes
+            )
+        );
+
+        assertTrue(
+            vtsOrchestrator.isSignalValid(tokenId, false), "recovery paths should treat empty reserves as valid enough"
+        );
+        assertFalse(vtsOrchestrator.isSignalValid(tokenId, true), "live-signal flows must reject empty reserves");
+
+        vm.warp(block.timestamp + 1000);
+        unlockCaller.run(
+            address(vtsOrchestrator), abi.encodeWithSelector(VTSOrchestrator.checkpoint.selector, tokenId, 0, false)
+        );
+
+        BalanceDelta depositDelta = toBalanceDelta(int128(-1), int128(-1));
+        vm.expectRevert(abi.encodeWithSelector(Errors.InvalidSignal.selector, tokenId));
+        unlockCaller.run(
+            address(vtsOrchestrator),
+            abi.encodeWithSelector(
+                VTSOrchestrator.onMMSettle.selector,
+                IMarketFactory(marketFactory),
+                tokenId,
+                0,
+                depositDelta,
+                false,
+                false
+            )
+        );
+    }
+
+    function test_revert_processPosition_mmPoke_whenCommitHasEmptyReserves() public {
+        (uint256 tokenId, PositionId positionId,,) = _createCommittedPosition();
+        LiquiditySignal memory baseSig = liquiditySignal;
+
+        LiquiditySignal memory emptyRenew = _liquiditySignalWithEmptyReservesAndNonce(baseSig, baseSig.nonce + 1);
+        bytes memory emptyBytes = abi.encode(emptyRenew);
+        vm.mockCall(
+            address(signalManager),
+            abi.encodeWithSelector(
+                bytes4(keccak256("verifyLiquiditySignal(address,bytes,bool)")),
+                emptyRenew.mmState.advancer,
+                emptyBytes,
+                true
+            ),
+            abi.encode(true, 3600)
+        );
+        unlockCaller.run(
+            address(vtsOrchestrator),
+            abi.encodeWithSelector(
+                VTSOrchestrator.renewSignal.selector, IMarketFactory(marketFactory), tokenId, emptyBytes
+            )
+        );
+
+        ModifyLiquidityParams memory params = ModifyLiquidityParams({
+            tickLower: -60, tickUpper: 60, liquidityDelta: 0, salt: PositionLibrary.generateSalt(tokenId, 0)
+        });
+        bytes memory hookData =
+            PositionModificationHookDataLib.encode(tokenId, 0, address(positionManager), address(0xB0B));
+
+        vm.prank(coreHookAddress);
+        vm.expectRevert(abi.encodeWithSelector(Errors.InvalidSignal.selector, tokenId));
+        vtsOrchestrator.processPosition(
+            address(positionManager), corePoolKey, params, toBalanceDelta(0, 0), toBalanceDelta(0, 0), hookData
+        );
+
+        assertTrue(vtsOrchestrator.isPositionValid(positionId, true));
+    }
+
+    function test_processPosition_seizureHook_passesSignalPreCheck_withEmptyReserves() public {
+        (uint256 tokenId, PositionId positionId,,) = _createCommittedPosition();
+        LiquiditySignal memory baseSig = liquiditySignal;
+
+        LiquiditySignal memory emptyRenew = _liquiditySignalWithEmptyReservesAndNonce(baseSig, baseSig.nonce + 1);
+        bytes memory emptyBytes = abi.encode(emptyRenew);
+        vm.mockCall(
+            address(signalManager),
+            abi.encodeWithSelector(
+                bytes4(keccak256("verifyLiquiditySignal(address,bytes,bool)")),
+                emptyRenew.mmState.advancer,
+                emptyBytes,
+                true
+            ),
+            abi.encode(true, 3600)
+        );
+        unlockCaller.run(
+            address(vtsOrchestrator),
+            abi.encodeWithSelector(
+                VTSOrchestrator.renewSignal.selector, IMarketFactory(marketFactory), tokenId, emptyBytes
+            )
+        );
+
+        ModifyLiquidityParams memory params = ModifyLiquidityParams({
+            tickLower: -60, tickUpper: 60, liquidityDelta: 0, salt: PositionLibrary.generateSalt(tokenId, 0)
+        });
+        bytes memory hookData = PositionModificationHookDataLib.encodeSeizure(
+            tokenId, 0, address(positionManager), address(0xB0B), int128(0), int128(0)
+        );
+
+        vm.prank(coreHookAddress);
+        vtsOrchestrator.processPosition(
+            address(positionManager), corePoolKey, params, toBalanceDelta(0, 0), toBalanceDelta(0, 0), hookData
+        );
+
+        assertTrue(vtsOrchestrator.isPositionValid(positionId, true));
     }
 
     // ============================================================
@@ -887,6 +1354,68 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
         assertTrue(true, "calcRFS should not revert");
     }
 
+    function test_revert_calcRFS_whenRFSOpen_requiresClosedRfS() public {
+        _mockLccPrices(1e18, 1e18);
+        _mockSignalUsd(1e30);
+
+        (, PositionId positionId,,) = _createCommittedPosition();
+
+        _swapCore(false, -int256(50e18));
+        vtsOrchestrator.settlePositionGrowths(positionId);
+
+        (bool rfsOpen,) = vtsOrchestrator.calcRFS(positionId, false);
+        assertTrue(rfsOpen, "precondition: live RFS should be open");
+
+        vm.expectRevert(abi.encodeWithSelector(Errors.RFSOpenForPosition.selector, positionId));
+        vtsOrchestrator.calcRFS(positionId, true);
+    }
+
+    /// @notice E2E regression for permissionless `settlePositionGrowths` path dependence (finding #29_8):
+    /// many tiny exact-output swaps, each followed by growth settlement, must match one aggregated swap
+    /// plus a single settlement for the same total exact output, so fractional growth cannot be discarded
+    /// by checkpoint cadence alone.
+    function test_settlePositionGrowths_pathIndependent_manySmallSwapsVsOneAggregated() public {
+        _mockLccPrices(1e18, 1e18);
+        _mockSignalUsd(1e30);
+
+        uint256 snap = vm.snapshotState();
+
+        // Use `zeroForOne: true` (headroom toward MIN_SQRT from 1:1) and keep aggregate exact output small so
+        // chunked swaps plus per-swap fees still complete `n` times without hitting `ZERO_FOR_ONE_LIMIT`.
+        int256 totalExactOut = -int256(1e17);
+        uint256 n = 8;
+        int256 chunk = totalExactOut / int256(n);
+        bool zeroForOne = true;
+
+        (, PositionId positionId,,) = _createCommittedPosition();
+        bytes32 expectedId = PositionId.unwrap(positionId);
+
+        for (uint256 i = 0; i < n; i++) {
+            _swapCore(zeroForOne, chunk);
+            vtsOrchestrator.settlePositionGrowths(positionId);
+        }
+
+        (bool rfsOpenMany, BalanceDelta deltaMany) = vtsOrchestrator.calcRFS(positionId, false);
+        (uint256 cum0Many, uint256 cum1Many) = _cumulativeDeficit(positionId);
+
+        assertTrue(vm.revertToState(snap), "revert to pre-branch snapshot");
+
+        (, PositionId positionIdB,,) = _createCommittedPosition();
+        assertEq(PositionId.unwrap(positionIdB), expectedId, "PositionId should be deterministic across branches");
+
+        _swapCore(zeroForOne, totalExactOut);
+        vtsOrchestrator.settlePositionGrowths(positionIdB);
+
+        (bool rfsOpenOne, BalanceDelta deltaOne) = vtsOrchestrator.calcRFS(positionIdB, false);
+        (uint256 cum0One, uint256 cum1One) = _cumulativeDeficit(positionIdB);
+
+        assertEq(cum0Many, cum0One, "cumulativeDeficit token0 path-independent");
+        assertEq(cum1Many, cum1One, "cumulativeDeficit token1 path-independent");
+        assertEq(rfsOpenMany, rfsOpenOne, "RFS open flag path-independent");
+        assertEq(deltaMany.amount0(), deltaOne.amount0(), "calcRFS delta0 path-independent");
+        assertEq(deltaMany.amount1(), deltaOne.amount1(), "calcRFS delta1 path-independent");
+    }
+
     function test_revert_calcRFS_whenInvalidPosition() public {
         PositionId invalidId = PositionId.wrap(bytes32(uint256(999)));
         vm.expectRevert(abi.encodeWithSelector(Errors.InvalidPosition.selector, 0, 0, invalidId));
@@ -920,6 +1449,19 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
         vtsOrchestrator.settlePositionGrowths(positionId);
     }
 
+    function test_settlePositionGrowths_inactivePosition_stillSettles() public {
+        (uint256 tokenId, PositionId positionId,,) = _createCommittedPosition();
+        Position memory posBeforeRemove = vtsOrchestrator.getPosition(positionId);
+        _decreasePosition(tokenId, posBeforeRemove.liquidity);
+
+        Position memory posAfterRemove = vtsOrchestrator.getPosition(positionId);
+        assertFalse(posAfterRemove.isActive, "precondition: position should be inactive after full remove");
+
+        bytes4 extsload1 = bytes4(keccak256("extsload(bytes32)"));
+        vm.expectCall(address(manager), abi.encodeWithSelector(extsload1));
+        vtsOrchestrator.settlePositionGrowths(positionId);
+    }
+
     function test_getCommitmentMaxima_returnsNonZero() public {
         (, PositionId positionId,,) = _createCommittedPosition();
 
@@ -943,16 +1485,53 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
         assertEq(amount1, requiredSettlementAmount1, "Settled amount1 should be the required settlement amount");
     }
 
+    function test_getPositionSettledOverflowAmounts_startsAtZero_forNormalCommittedPosition() public {
+        (, PositionId positionId,,) = _createCommittedPosition();
+        (uint256 ov0, uint256 ov1) = vtsOrchestrator.getPositionSettledOverflowAmounts(positionId);
+        assertEq(ov0, 0);
+        assertEq(ov1, 0);
+    }
+
+    function test_getPositionEffectiveSettledAmounts_equalsLivePlusOverflow() public {
+        (, PositionId positionId,,) = _createCommittedPosition();
+        (,, uint256 live0, uint256 live1,,,,) = _testableOrchestrator().getPositionAccounting(positionId);
+        (uint256 ov0, uint256 ov1) = vtsOrchestrator.getPositionSettledOverflowAmounts(positionId);
+        (uint256 eff0, uint256 eff1) = vtsOrchestrator.getPositionSettledAmounts(positionId);
+        (uint256 commitment0, uint256 commitment1) = vtsOrchestrator.getCommitmentMaxima(positionId);
+        assertEq(eff0, live0 + ov0);
+        assertEq(eff1, live1 + ov1);
+
+        _testableOrchestrator()._setSettledOverflow(positionId, 7e18, 11e18);
+        (,, uint256 seededLive0, uint256 seededLive1,,,,) = _testableOrchestrator().getPositionAccounting(positionId);
+        (ov0, ov1) = vtsOrchestrator.getPositionSettledOverflowAmounts(positionId);
+        (eff0, eff1) = vtsOrchestrator.getPositionSettledAmounts(positionId);
+        assertEq(seededLive0, live0, "live token0 should remain unchanged");
+        assertEq(seededLive1, live1, "live token1 should remain unchanged");
+        assertEq(ov0, 7e18, "seeded token0 overflow should be returned");
+        assertEq(ov1, 11e18, "seeded token1 overflow should be returned");
+        assertGt(ov0, 0, "token0 overflow should be non-zero");
+        assertGt(ov1, 0, "token1 overflow should be non-zero");
+        assertLe(seededLive0, commitment0, "live token0 should stay capped by commitmentMax");
+        assertLe(seededLive1, commitment1, "live token1 should stay capped by commitmentMax");
+        assertEq(eff0, live0 + ov0);
+        assertEq(eff1, live1 + ov1);
+    }
+
     function test_revert_CurrencyNotSettled_whenPositionNotSettled() public {
         // Prepare actions for commit and mint WITHOUT settlement
-        (MMA.PreparedAction[] memory actions,,) = _prepareCommitAndMintWithoutSettlement();
+        (MMA.PreparedAction[] memory actions, uint256 req0, uint256 req1) = _prepareCommitAndMintWithoutSettlement();
 
-        // Execute actions - this should revert with CurrencyNotSettled because deltas aren't settled
         (bytes memory actionsBytes, bytes[] memory params) = MMA.concatPrepared(actions);
         bytes memory unlockData = abi.encode(actionsBytes, params);
 
+        address locker = _signalLocker();
+        _fundLockerForSettlement(locker, lcc0.underlying(), lcc1.underlying(), req0, req1);
+        vm.startPrank(locker);
+        _approveTokenForPositionManager(lcc0.underlying(), lcc1.underlying(), address(positionManager), req0, req1);
+
         vm.expectRevert(IPoolManager.CurrencyNotSettled.selector);
         positionManager.modifyLiquidities(unlockData, block.timestamp + 3600);
+        vm.stopPrank();
     }
 
     // ============================================================
@@ -970,7 +1549,7 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
     // For MM positions: fees are credited as LCC delta to MMPositionManager
     // For DirectLP with fee-sharing: fees are shared via the fee pot mechanism
     //
-    // See: VTSPositionLib.processPosition() and VTSFeeLib.processPositionFees()
+    // See: VTSPositionLib.touchPosition()
     // ============================================================
 
     /// @notice Helper to get test contract's fee collection mechanic
@@ -1079,6 +1658,12 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
         (uint256 tokenId,,,) = _createCommittedPosition();
         PositionId positionId = vtsOrchestrator.getPositionId(tokenId, 0);
 
+        _mockLccPrices(1e18, 1e18);
+        _mockSignalUsd(0);
+        unlockCaller.run(
+            address(vtsOrchestrator), abi.encodeWithSelector(VTSOrchestrator.checkpoint.selector, tokenId, 0, true)
+        );
+
         RFSCheckpoint memory checkpointBefore = vtsOrchestrator.positionToCheckpoint(positionId);
 
         bytes memory settlementProof = abi.encode(1);
@@ -1114,6 +1699,53 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
         );
     }
 
+    /// @dev Proof-backed grace extension must succeed after commit expiry when the lane is still open (SEIZE-02).
+    function test_extendGracePeriod_succeedsAfterCommitExpired_whenLaneOpen_andProofValid() public {
+        (uint256 tokenId,,,) = _createCommittedPosition();
+        PositionId positionId = vtsOrchestrator.getPositionId(tokenId, 0);
+
+        (, uint256 expiresAt,,,) = vtsOrchestrator.getCommit(tokenId);
+
+        _mockLccPrices(1e18, 1e18);
+        _mockSignalUsd(0);
+        unlockCaller.run(
+            address(vtsOrchestrator), abi.encodeWithSelector(VTSOrchestrator.checkpoint.selector, tokenId, 0, true)
+        );
+
+        vm.warp(expiresAt + 1);
+        assertFalse(vtsOrchestrator.isSignalValid(tokenId, true), "commit should be expired for live-signal checks");
+
+        RFSCheckpoint memory checkpointBefore = vtsOrchestrator.positionToCheckpoint(positionId);
+
+        bytes memory settlementProof = abi.encode("post-expiry-proof");
+        vm.mockCall(
+            address(settlementObserver),
+            abi.encodeWithSelector(IVRLSettlementObserver.verifySettlementProof.selector),
+            abi.encode(true)
+        );
+
+        unlockCaller.run(
+            address(vtsOrchestrator),
+            abi.encodeWithSelector(
+                VTSOrchestrator.extendGracePeriod.selector,
+                marketFactory,
+                corePoolKey,
+                tokenId,
+                0,
+                0,
+                0,
+                settlementProof
+            )
+        );
+
+        RFSCheckpoint memory checkpointAfter = vtsOrchestrator.positionToCheckpoint(positionId);
+        assertGt(
+            checkpointAfter.gracePeriodExtension0,
+            checkpointBefore.gracePeriodExtension0,
+            "Grace should extend despite expired signal when proof and lane checks pass"
+        );
+    }
+
     function test_revert_onSeize_whenCommitInvalid_insideUnlock() public {
         vm.expectRevert(abi.encodeWithSelector(Errors.InvalidSignal.selector, uint256(0)));
         unlockCaller.run(address(vtsOrchestrator), abi.encodeWithSelector(VTSOrchestrator.onSeize.selector, 0, 0));
@@ -1122,9 +1754,10 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
     function test_onSeize_validatesGracePeriod() public {
         (uint256 tokenId,,,) = _createCommittedPosition();
 
-        // onSeize() always refreshes the RFS checkpoint from live `getRFS` before seizability. A fully settled
-        // position can have closed RFS while storage still reflected an older open lane; only a consistent
-        // open-RFS snapshot + elapsed lane grace (or commitment-deficit bypass) should succeed.
+        // Snapshot commitment + RFS with `checkpoint(..., true)`. `_mockSignalUsd(0)` can yield a non-zero
+        // commitmentDeficit, so after a long warp `onSeize` may succeed via commitment-deficit bypass and/or
+        // checkpointed grace depending on the resulting `isSeizable` branches — not exclusively the normal RFS path.
+        // For an isolated normal RFS grace exercise, see `test_onSeize_validatesGracePeriod_normalRfsPath_isolated`.
         _mockLccPrices(1e18, 1e18);
         _mockSignalUsd(0);
         unlockCaller.run(
@@ -1133,7 +1766,64 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
 
         vm.warp(block.timestamp + 10_000_000);
 
-        // Should not revert (grace / deficit bypass conditions elapsed)
+        // Should not revert once seizability preconditions (per `CheckpointLibrary.isSeizable`) are satisfied.
+        unlockCaller.run(address(vtsOrchestrator), abi.encodeWithSelector(VTSOrchestrator.onSeize.selector, tokenId, 0));
+    }
+
+    /// @dev Open RFS from swap-driven deficit while the liquidity signal stays fully backed, so seizure after grace
+    ///      uses the checkpointed RFS path rather than commitment-deficit bypass.
+    function test_onSeize_validatesGracePeriod_normalRfsPath_isolated() public {
+        _mockLccPrices(1e18, 1e18);
+        _mockSignalUsd(1e30);
+
+        (uint256 tokenId, PositionId positionId,,) = _createCommittedPosition();
+
+        (uint256 cd0, uint256 cd1) = _commitmentDeficit(positionId);
+        assertEq(cd0, 0, "setup: no commitment deficit with backed signal");
+        assertEq(cd1, 0, "setup: no commitment deficit with backed signal");
+
+        _swapCore(false, -int256(50e18));
+        vtsOrchestrator.settlePositionGrowths(positionId);
+
+        (cd0, cd1) = _commitmentDeficit(positionId);
+        assertEq(cd0, 0, "post-swap: still no commitment deficit");
+        assertEq(cd1, 0, "post-swap: still no commitment deficit");
+
+        unlockCaller.run(
+            address(vtsOrchestrator), abi.encodeWithSelector(VTSOrchestrator.checkpoint.selector, tokenId, 0, false)
+        );
+
+        RFSCheckpoint memory cp = vtsOrchestrator.positionToCheckpoint(positionId);
+        assertTrue(cp.openMask != 0, "checkpoint must record open RFS for grace measurement");
+
+        vm.warp(block.timestamp + 10_000_000);
+
+        unlockCaller.run(address(vtsOrchestrator), abi.encodeWithSelector(VTSOrchestrator.onSeize.selector, tokenId, 0));
+    }
+
+    /// @dev Spec regression: `onSeize` must not materialise the first ordinary RFS checkpoint itself.
+    function test_onSeize_doesNotStartOrdinaryGraceWithoutPriorCheckpoint() public {
+        _mockLccPrices(1e18, 1e18);
+        _mockSignalUsd(1e30);
+
+        (uint256 tokenId, PositionId positionId,,) = _createCommittedPosition();
+
+        (uint256 cd0, uint256 cd1) = _commitmentDeficit(positionId);
+        assertEq(cd0, 0, "setup: no commitment deficit with backed signal");
+        assertEq(cd1, 0, "setup: no commitment deficit with backed signal");
+
+        _swapCore(false, -int256(50e18));
+        vtsOrchestrator.settlePositionGrowths(positionId);
+
+        (bool rfsOpen,) = vtsOrchestrator.calcRFS(positionId, false);
+        assertTrue(rfsOpen, "precondition: live RFS should be open");
+
+        RFSCheckpoint memory cpBefore = vtsOrchestrator.positionToCheckpoint(positionId);
+        assertEq(cpBefore.openMask, 0, "precondition: no stored checkpoint yet");
+
+        vm.warp(block.timestamp + 10_000_000);
+
+        vm.expectRevert(abi.encodeWithSelector(Errors.RFSNotOpenForPosition.selector, positionId));
         unlockCaller.run(address(vtsOrchestrator), abi.encodeWithSelector(VTSOrchestrator.onSeize.selector, tokenId, 0));
     }
 
@@ -1183,8 +1873,6 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
         (uint256 tokenId,,,) = _createCommittedPosition();
         PositionId positionId = vtsOrchestrator.getPositionId(tokenId, 0);
 
-        RFSCheckpoint memory checkpointBefore = vtsOrchestrator.positionToCheckpoint(positionId);
-
         // Set the block timestamp
         vm.warp(block.timestamp + 10000000);
 
@@ -1196,11 +1884,16 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
         );
 
         RFSCheckpoint memory checkpointAfter = vtsOrchestrator.positionToCheckpoint(positionId);
-        // Checkpoint lane-open state should be refreshed from current RFS.
-        bool stateChanged = checkpointAfter.openMask != checkpointBefore.openMask
-            || checkpointAfter.openSince0 != checkpointBefore.openSince0
-            || checkpointAfter.openSince1 != checkpointBefore.openSince1;
-        assertTrue(stateChanged, "Checkpoint lane-open state should be updated");
+        (, BalanceDelta rfsDeltaAfter) = vtsOrchestrator.calcRFS(positionId, false);
+        uint8 expectedOpenMask = _expectedOpenMask(rfsDeltaAfter);
+
+        assertEq(checkpointAfter.openMask, expectedOpenMask, "Checkpoint openMask should match current RFS lanes");
+        if ((expectedOpenMask & 1) == 0) {
+            assertEq(checkpointAfter.openSince0, 0, "token0 openSince should clear when token0 RFS closes");
+        }
+        if ((expectedOpenMask & 2) == 0) {
+            assertEq(checkpointAfter.openSince1, 0, "token1 openSince should clear when token1 RFS closes");
+        }
     }
 
     // ============================================================
@@ -1209,7 +1902,7 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
 
     function test_revert_processPosition_mmOperation_whenCommitInvalid() public {
         // MM operation is defined as hookData.commitId > 0, so use a non-existent commitId.
-        bytes memory hookData = PositionModificationHookDataLib.encode(999, 0, address(this));
+        bytes memory hookData = PositionModificationHookDataLib.encode(999, 0, address(this), address(0xB0B));
 
         ModifyLiquidityParams memory params =
             ModifyLiquidityParams({tickLower: -60, tickUpper: 60, liquidityDelta: 0, salt: bytes32(0)});
@@ -1229,13 +1922,14 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
             tickLower: -60, tickUpper: 60, liquidityDelta: 0, salt: PositionLibrary.generateSalt(tokenId, 0)
         });
 
-        bytes memory hookData = PositionModificationHookDataLib.encode(tokenId, 0, address(this));
+        address locker = liquiditySignal.mmState.owner;
+        bytes memory hookData = PositionModificationHookDataLib.encode(tokenId, 0, locker, address(0xB0B));
 
         vm.prank(coreHookAddress);
         BalanceDelta callerDelta = toBalanceDelta(0, 0);
         BalanceDelta feesAccrued = toBalanceDelta(0, 0);
 
-        (Position memory pos, PositionId id, BalanceDelta feeAdj, bool isMMPosition) = vtsOrchestrator.processPosition(
+        (Position memory pos, PositionId id, bool isMMPosition) = vtsOrchestrator.processPosition(
             address(positionManager), corePoolKey, params, callerDelta, feesAccrued, hookData
         );
 
@@ -1244,14 +1938,10 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
         assertEq(pos.commitId, tokenId, "Returned position should reference commitId");
         assertEq(pos.owner, address(positionManager), "Returned position owner should be positionManager");
 
-        // Include explicit assertions for the CoreHook inputs and expected fee adjustment in this scenario.
-        // With no swaps/fees in this test path, we pass zero deltas and expect no fee adjustment to be applied.
         assertEq(callerDelta.amount0(), 0, "callerDelta0 should be 0 for poke");
         assertEq(callerDelta.amount1(), 0, "callerDelta1 should be 0 for poke");
         assertEq(feesAccrued.amount0(), 0, "feesAccrued0 should be 0 for poke");
         assertEq(feesAccrued.amount1(), 0, "feesAccrued1 should be 0 for poke");
-        assertEq(feeAdj.amount0(), 0, "feeAdj0 should be 0 when feesAccrued is 0");
-        assertEq(feeAdj.amount1(), 0, "feeAdj1 should be 0 when feesAccrued is 0");
     }
 
     function test_revert_onMMSettle_whenCommitInvalid_insideUnlock() public {
@@ -1260,7 +1950,7 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
         unlockCaller.run(
             address(vtsOrchestrator),
             abi.encodeWithSelector(
-                VTSOrchestrator.onMMSettle.selector, IMarketFactory(marketFactory), 0, 0, amountDelta, false
+                VTSOrchestrator.onMMSettle.selector, IMarketFactory(marketFactory), 0, 0, amountDelta, false, false
             )
         );
     }
@@ -1273,7 +1963,13 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
         unlockCaller.run(
             address(vtsOrchestrator),
             abi.encodeWithSelector(
-                VTSOrchestrator.onMMSettle.selector, IMarketFactory(marketFactory), tokenId, 0, depositDelta, false
+                VTSOrchestrator.onMMSettle.selector,
+                IMarketFactory(marketFactory),
+                tokenId,
+                0,
+                depositDelta,
+                false,
+                false
             )
         );
     }
@@ -1315,6 +2011,49 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
 
         (bool rfsOpenExpected,) = vtsOrchestrator.calcRFS(positionId, false);
         assertEq(rfsOpen, rfsOpenExpected, "rfsOpen should match calcRFS result");
+    }
+
+    function test_onMMSettle_refreshesCheckpointFromFinalRfsState() public {
+        (uint256 tokenId, PositionId positionId,,) = _createCommittedPosition();
+        address advancer = liquiditySignal.mmState.advancer;
+
+        bytes memory signalBytes = abi.encode(liquiditySignal);
+        vm.mockCall(
+            address(signalManager),
+            abi.encodeWithSelector(
+                bytes4(keccak256("verifyLiquiditySignal(address,bytes,bool)")),
+                liquiditySignal.mmState.owner,
+                signalBytes,
+                true
+            ),
+            abi.encode(true, 10)
+        );
+        _mockLccPrices(1e18, 1e18);
+        _mockSignalUsd(0);
+
+        vm.prank(advancer);
+        unlockCaller.run(
+            address(vtsOrchestrator), abi.encodeWithSelector(VTSOrchestrator.checkpoint.selector, tokenId, 0, true)
+        );
+
+        RFSCheckpoint memory checkpointBefore = vtsOrchestrator.positionToCheckpoint(positionId);
+        assertTrue(checkpointBefore.openMask != 0, "checkpoint should start with at least one open RFS lane");
+
+        (uint256 cd0Before, uint256 cd1Before) = _commitmentDeficit(positionId);
+        _mmSettle(tokenId, 0, _negInt128Capped(cd0Before), _negInt128Capped(cd1Before));
+
+        (bool rfsOpenAfter, BalanceDelta rfsDeltaAfter) = vtsOrchestrator.calcRFS(positionId, false);
+        RFSCheckpoint memory checkpointAfter = vtsOrchestrator.positionToCheckpoint(positionId);
+        uint8 expectedOpenMask = _expectedOpenMask(rfsDeltaAfter);
+
+        assertEq(checkpointAfter.openMask, expectedOpenMask, "checkpoint openMask should match final RFS lanes");
+        assertEq(rfsOpenAfter, expectedOpenMask != 0, "final rfsOpen should match final RFS lanes");
+        if ((expectedOpenMask & 1) == 0) {
+            assertEq(checkpointAfter.openSince0, 0, "token0 openSince should clear when token0 RFS closes");
+        }
+        if ((expectedOpenMask & 2) == 0) {
+            assertEq(checkpointAfter.openSince1, 0, "token1 openSince should clear when token1 RFS closes");
+        }
     }
 
     function test_checkpoint_withCommitment_validatesBacking() public {
@@ -1404,7 +2143,9 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
         vm.expectRevert(Errors.InvalidSender.selector);
         unlockCaller.run(
             address(vtsOrchestrator),
-            abi.encodeWithSelector(VTSOrchestrator.onMMSettle.selector, invalidFactory, tokenId, 0, depositDelta, false)
+            abi.encodeWithSelector(
+                VTSOrchestrator.onMMSettle.selector, invalidFactory, tokenId, 0, depositDelta, false, false
+            )
         );
     }
 
@@ -1421,7 +2162,13 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
         boundCaller.run(
             address(vtsOrchestrator),
             abi.encodeWithSelector(
-                VTSOrchestrator.onMMSettle.selector, IMarketFactory(marketFactory), tokenId, 0, depositDelta, false
+                VTSOrchestrator.onMMSettle.selector,
+                IMarketFactory(marketFactory),
+                tokenId,
+                0,
+                depositDelta,
+                false,
+                false
             )
         );
     }
@@ -1544,47 +2291,362 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
         assertEq(cd1After, cd1Before, "Partial settlement should not affect token1 deficit");
     }
 
-    function test_pausedRemoveLiquidity_preservesPrePauseGrowthAttribution() public {
+    /// @dev Paused remove uses the same RFS gate as unpaused: cannot decrease while RFS is open (non-seizure).
+    /// @dev With a valid NFTable owner as locker, paused partial remove still reverts while RFS is open (CoreHook `WrappedError`).
+    ///      Previously this often surfaced earlier as `NotApproved` when `address(this)` was not the commitment owner.
+    function test_revert_pausedRemoveLiquidity_whenRfsOpen() public {
         uint256 liquidity = 1e10;
         uint256 amountToDecrease = liquidity / 2;
-        (, PositionId controlPositionId,,) = _createCommittedPosition(-60, 60, liquidity);
         (uint256 pausedTokenId, PositionId pausedPositionId,,) =
             _createCommittedPosition(renewSignal, -60, 60, liquidity, bytes32(0));
 
         _swapCore(true, -int256(1e18));
 
-        (bool controlRfsOpenBefore, BalanceDelta controlRfsBefore) = vtsOrchestrator.calcRFS(controlPositionId, false);
-        (uint256 controlDeficit0Before, uint256 controlDeficit1Before) = _cumulativeDeficit(controlPositionId);
-
-        assertTrue(controlDeficit0Before > 0 || controlDeficit1Before > 0, "swap should accrue deficit before pause");
-        assertTrue(controlRfsOpenBefore, "control position should have open RFS after growth settlement");
+        (bool rfsOpenBefore,) = vtsOrchestrator.calcRFS(pausedPositionId, false);
+        assertTrue(rfsOpenBefore, "swap should leave RFS open");
 
         vtsOrchestrator.pausePool(corePoolKey.toId());
-        _decreasePosition(pausedTokenId, amountToDecrease);
+
+        // CoreHook wraps hook reverts as `CustomRevert.WrappedError`, so assert durable state instead of the outer payload.
+        uint128 liqBefore = vtsOrchestrator.getPosition(pausedPositionId).liquidity;
+        address locker = positionManager.ownerOf(pausedTokenId);
+        vm.expectRevert();
+        _decreasePositionFor(locker, pausedTokenId, amountToDecrease);
+        assertEq(
+            uint256(vtsOrchestrator.getPosition(pausedPositionId).liquidity),
+            uint256(liqBefore),
+            "position liquidity must be unchanged when decrease reverts"
+        );
+
+        vtsOrchestrator.unpausePool(corePoolKey.toId());
+    }
+
+    function test_pausedRemoveLiquidity_reconcilesSettledCommitmentOnPartialRemove() public {
+        uint256 liquidity = 1e10;
+        uint256 amountToDecrease = liquidity / 2;
+        (uint256 tokenId, PositionId positionId,,) =
+            _createCommittedPosition(renewSignal, -60, 60, liquidity, bytes32(uint256(1)));
+
+        (uint256 commitment0Before, uint256 commitment1Before) = vtsOrchestrator.getCommitmentMaxima(positionId);
+        (uint256 settled0Before, uint256 settled1Before) = vtsOrchestrator.getPositionSettledAmounts(positionId);
+        assertEq(
+            vtsOrchestrator.getPosition(positionId).liquidity,
+            liquidity,
+            "precondition: stored liquidity should match minted liquidity"
+        );
+        assertGt(commitment0Before, 0, "precondition: commitment0 should be non-zero");
+        assertGt(commitment1Before, 0, "precondition: commitment1 should be non-zero");
+        assertGt(settled0Before, 0, "precondition: settled0 should be non-zero");
+        assertGt(settled1Before, 0, "precondition: settled1 should be non-zero");
+
+        vtsOrchestrator.pausePool(corePoolKey.toId());
+        _decreasePosition(tokenId, amountToDecrease);
         vtsOrchestrator.unpausePool(corePoolKey.toId());
 
-        (bool pausedRfsOpenAfter, BalanceDelta pausedRfsAfter) = vtsOrchestrator.calcRFS(pausedPositionId, false);
-        (uint256 pausedDeficit0After, uint256 pausedDeficit1After) = _cumulativeDeficit(pausedPositionId);
+        (uint256 commitment0AfterHalf, uint256 commitment1AfterHalf) = vtsOrchestrator.getCommitmentMaxima(positionId);
+        (uint256 settled0AfterHalf, uint256 settled1AfterHalf) = vtsOrchestrator.getPositionSettledAmounts(positionId);
+        Position memory posAfterHalf = vtsOrchestrator.getPosition(positionId);
 
-        assertEq(pausedDeficit0After, controlDeficit0Before, "paused removal must preserve token0 deficit growth");
-        assertEq(pausedDeficit1After, controlDeficit1Before, "paused removal must preserve token1 deficit growth");
+        assertLt(commitment0AfterHalf, commitment0Before, "paused half-remove should reduce commitment0");
+        assertLt(commitment1AfterHalf, commitment1Before, "paused half-remove should reduce commitment1");
+        assertLe(settled0AfterHalf, commitment0AfterHalf, "settled0 should not exceed post-remove commitment0");
+        assertLe(settled1AfterHalf, commitment1AfterHalf, "settled1 should not exceed post-remove commitment1");
+        assertLe(settled0AfterHalf, settled0Before, "paused remove should not increase settled0");
+        assertLe(settled1AfterHalf, settled1Before, "paused remove should not increase settled1");
         assertEq(
-            pausedRfsOpenAfter, controlRfsOpenBefore, "paused removal should leave the same RFS-open state as control"
+            posAfterHalf.liquidity, liquidity - amountToDecrease, "liquidity mirror should update after paused remove"
         );
-        assertEq(
-            pausedRfsAfter.amount0(), controlRfsBefore.amount0(), "paused removal must preserve token0 RFS requirement"
+        assertTrue(posAfterHalf.isActive, "partially removed position should remain active");
+    }
+
+    /// @notice E2E (finding 5): paused full remove clears commitment-deficit storage (amounts, since, bps); after
+    ///         reactivation a new underbacking episode restarts the commitment-deficit bypass clock.
+    function test_e2e_pausedFullRemove_resetsCommitmentDeficitAge_beforeReactivation() public {
+        (uint256 tokenId, PositionId positionId, uint256 bypassSecs) = _e2eFinding5_setupMarketAndCommittedPosition();
+        address advancer = renewSignal.mmState.advancer;
+
+        _e2eFinding5_seedOldDeficitEpisode(tokenId, positionId, advancer, bypassSecs);
+
+        _e2eFinding5_pauseFullRemoveUnpause(tokenId, positionId, bypassSecs);
+
+        _e2eFinding5_reactivateCureAndFreshDeficit(tokenId, positionId, advancer, bypassSecs);
+    }
+
+    /// @notice Sufficient backing with partial surplus clears `commitmentDeficitSince` even when token residuals
+    ///         remain; a later under-backed episode must not reuse banked age for `onSeize` bypass.
+    function test_e2e_partialSurplusCheckpoint_clearsDeficitAge_freshDeficitRespectsBypassDelay() public {
+        (uint256 tokenId, PositionId positionId, uint256 bypassSecs) = _e2eFinding5_setupMarketAndCommittedPosition();
+        _e2eFinding6_partialSurplusDeficitAgeBody(tokenId, positionId, bypassSecs, renewSignal.mmState.advancer);
+    }
+
+    function _e2eFinding6_mockRenewVerify() private {
+        bytes memory signalBytes = abi.encode(renewSignal);
+        vm.mockCall(
+            address(signalManager),
+            abi.encodeWithSelector(
+                bytes4(keccak256("verifyLiquiditySignal(address,bytes,bool)")),
+                renewSignal.mmState.owner,
+                signalBytes,
+                true
+            ),
+            abi.encode(true, 10)
         );
-        assertEq(
-            pausedRfsAfter.amount1(), controlRfsBefore.amount1(), "paused removal must preserve token1 RFS requirement"
+    }
+
+    function _e2eFinding6_checkpointWithCommitment(uint256 tokenId, address advancer) private {
+        vm.prank(advancer);
+        unlockCaller.run(
+            address(vtsOrchestrator), abi.encodeWithSelector(VTSOrchestrator.checkpoint.selector, tokenId, 0, true)
         );
-        if (controlDeficit1Before > 0) {
-            DICEAccounting memory diceAfterPaused = _getPoolDICEAccounting(corePoolKey.toId());
-            assertEq(
-                diceAfterPaused.totalDeficitPrincipal1,
-                controlDeficit1Before * 2,
-                "paused removal must preserve pool deficit principal on token1"
-            );
+    }
+
+    function _e2eFinding6_onSeize(uint256 tokenId) private {
+        unlockCaller.run(address(vtsOrchestrator), abi.encodeWithSelector(VTSOrchestrator.onSeize.selector, tokenId, 0));
+    }
+
+    function _e2eFinding6_assertSeizeAfterFreshDeficit(uint256 tokenId, uint256 sinceFresh, uint256 bypassSecs)
+        private
+    {
+        uint256 halfGrace = marketVTSConfiguration.token0.gracePeriodTime / 2;
+        assertLt(halfGrace, bypassSecs, "e2e finding6: need halfGrace < bypassSecs for seize timing wedge");
+        vm.warp(sinceFresh + halfGrace);
+        vm.expectRevert();
+        _e2eFinding6_onSeize(tokenId);
+        vm.warp(sinceFresh + bypassSecs + 1);
+        _e2eFinding6_onSeize(tokenId);
+    }
+
+    function _e2eFinding6_partialSurplusDeficitAgeBody(
+        uint256 tokenId,
+        PositionId positionId,
+        uint256 bypassSecs,
+        address advancer
+    ) internal {
+        _e2eFinding6_mockRenewVerify();
+
+        _mockLccPrices(1e18, 1e18);
+        _mockSignalUsd(0);
+        _e2eFinding6_checkpointWithCommitment(tokenId, advancer);
+        (uint256 s0d, uint256 s1d,) = _testableOrchestrator().getCommitmentDeficitAgeFields(positionId);
+        assertTrue(s0d > 0 || s1d > 0, "deficit checkpoint should record since");
+
+        uint256 issuedForSurplus = _checkpointIssuedUsd(positionId);
+        uint256 tightSurplus = issuedForSurplus / 1000;
+        assertGt(tightSurplus, 0, "tight surplus must be non-zero for pro-rata partial netting");
+        _mockSignalUsd(_e2eFinding6_signalForTightSurplus(positionId, tightSurplus));
+        _e2eFinding6_checkpointWithCommitment(tokenId, advancer);
+
+        (uint256 s0p, uint256 s1p,) = _testableOrchestrator().getCommitmentDeficitAgeFields(positionId);
+        assertEq(s0p, 0, "since0 cleared after sufficient checkpoint with partial surplus");
+        assertEq(s1p, 0, "since1 cleared after sufficient checkpoint with partial surplus");
+        (uint256 r0, uint256 r1) = _commitmentDeficit(positionId);
+        assertTrue(r0 > 0 || r1 > 0, "residual commitment deficit should remain after fractional surplus netting");
+
+        vm.warp(block.timestamp + 120);
+        _mockSignalUsd(0);
+        _e2eFinding6_checkpointWithCommitment(tokenId, advancer);
+
+        (uint256 s0f, uint256 s1f,) = _testableOrchestrator().getCommitmentDeficitAgeFields(positionId);
+        assertTrue(s0f > 0 || s1f > 0, "fresh under-backed episode should record since");
+        uint256 sinceFresh = s0f > 0 ? s0f : s1f;
+        assertEq(sinceFresh, block.timestamp, "fresh episode should reset bypass clock to checkpoint time");
+
+        _e2eFinding6_assertSeizeAfterFreshDeficit(tokenId, sinceFresh, bypassSecs);
+    }
+
+    function _e2eFinding5_setupMarketAndCommittedPosition()
+        internal
+        returns (uint256 tokenId, PositionId positionId, uint256 bypassSecs)
+    {
+        bypassSecs = 1 hours;
+        PoolId pid = corePoolKey.toId();
+        MarketVTSConfiguration memory cfg = vtsOrchestrator.getMarketVTSConfiguration(pid);
+        cfg.token0.unbackedCommitmentGraceBypassTime = bypassSecs;
+        cfg.token1.unbackedCommitmentGraceBypassTime = bypassSecs;
+        vm.prank(vtsOrchestrator.owner());
+        vtsOrchestrator.setMarketVTSConfiguration(pid, cfg);
+        marketVTSConfiguration = vtsOrchestrator.getMarketVTSConfiguration(pid);
+
+        uint256 liquidity = 1e10;
+        bytes32 salt = bytes32(uint256(0xF15EDE));
+        (tokenId, positionId,,) = _createCommittedPosition(renewSignal, -60, 60, liquidity, salt);
+    }
+
+    function _e2eFinding5_seedOldDeficitEpisode(
+        uint256 tokenId,
+        PositionId positionId,
+        address advancer,
+        uint256 /* bypassSecs */
+    )
+        internal
+    {
+        bytes memory signalBytes = abi.encode(renewSignal);
+        vm.mockCall(
+            address(signalManager),
+            abi.encodeWithSelector(
+                bytes4(keccak256("verifyLiquiditySignal(address,bytes,bool)")),
+                renewSignal.mmState.owner,
+                signalBytes,
+                true
+            ),
+            abi.encode(true, 10)
+        );
+
+        _mockLccPrices(1e18, 1e18);
+        _mockSignalUsd(0);
+        vm.prank(advancer);
+        unlockCaller.run(
+            address(vtsOrchestrator), abi.encodeWithSelector(VTSOrchestrator.checkpoint.selector, tokenId, 0, true)
+        );
+
+        (uint256 cd0, uint256 cd1) = _commitmentDeficit(positionId);
+        assertTrue(cd0 > 0 || cd1 > 0, "precondition: non-zero commitment deficit");
+
+        (uint256 since0Old, uint256 since1Old, uint16 bpsOld) =
+            _testableOrchestrator().getCommitmentDeficitAgeFields(positionId);
+        assertTrue(since0Old > 0 || since1Old > 0, "precondition: deficit episode should record since");
+        assertTrue(bpsOld >= marketVTSConfiguration.unbackedCommitmentGraceBypassBps, "precondition: bps bypass gate");
+
+        // Paused remove requires closed RFS; iteratively settle calcRFS shortfall until lanes close.
+        _e2eFinding5_closeRfsBySettlingShortfall(tokenId, positionId);
+
+        // Non-seizure MM liquidity changes are frozen while a material stored commitment deficit applies (COMMIT-02A;
+        // bps / per-token threshold via `CommitmentDeficitMMFreezeLib`). This scenario uses a severe deficit with
+        // non-zero bps, so the MM gate blocks until token deficits and bps are cleared. Full deactivation clears
+        // token deficit amounts as well as age fields (COMMIT-02B), but MM cannot reach remove until cured—cure via a
+        // strong backing signal before any MM liquidity change.
+        _mockLccPrices(1e18, 1e18);
+        _mockSignalUsd(1e30);
+        vm.prank(advancer);
+        unlockCaller.run(
+            address(vtsOrchestrator), abi.encodeWithSelector(VTSOrchestrator.checkpoint.selector, tokenId, 0, true)
+        );
+        (cd0, cd1) = _commitmentDeficit(positionId);
+        assertEq(cd0, 0, "e2e finding5: must clear token0 commitmentDeficit before MM liquidity change");
+        assertEq(cd1, 0, "e2e finding5: must clear token1 commitmentDeficit before MM liquidity change");
+    }
+
+    /// @dev After a commitment checkpoint reveals deficit, RFS is open; pay deposits matching `calcRFS` deltas
+    ///      until `calcRFS` reports closed. Closing RFS alone does not clear stored commitmentDeficit; callers
+    ///      must still cure deficit (e.g. checkpoint with sufficient signal) before non-seizure MM removes.
+    function _e2eFinding5_closeRfsBySettlingShortfall(uint256 tokenId, PositionId positionId) internal {
+        for (uint256 i = 0; i < 12; i++) {
+            (bool open, BalanceDelta d) = vtsOrchestrator.calcRFS(positionId, false);
+            if (!open) return;
+
+            int128 pay0;
+            int128 pay1;
+            if (d.amount0() > 0) {
+                pay0 = _negInt128Capped(uint256(int256(d.amount0())));
+            }
+            if (d.amount1() > 0) {
+                pay1 = _negInt128Capped(uint256(int256(d.amount1())));
+            }
+            if (pay0 == 0 && pay1 == 0) {
+                revert("e2e finding5: calcRFS open but zero payable shortfall");
+            }
+            _mmSettle(tokenId, 0, pay0, pay1);
         }
+        (bool stillOpen,) = vtsOrchestrator.calcRFS(positionId, false);
+        assertFalse(stillOpen, "e2e finding5: failed to close RFS for paused remove");
+    }
+
+    function _e2eFinding5_pauseFullRemoveUnpause(uint256 tokenId, PositionId positionId, uint256 bypassSecs) internal {
+        PoolId pid = corePoolKey.toId();
+        vtsOrchestrator.pausePool(pid);
+        _decreasePosition(tokenId, 1e10);
+        vtsOrchestrator.unpausePool(pid);
+
+        // Simulate a long inactive interval after full remove (must happen after remove so MM signal is not required).
+        vm.warp(block.timestamp + bypassSecs + 1);
+
+        (uint256 since0Cleared, uint256 since1Cleared, uint16 bpsCleared) =
+            _testableOrchestrator().getCommitmentDeficitAgeFields(positionId);
+        assertEq(since0Cleared, 0, "full deactivation should clear commitmentDeficitSince token0");
+        assertEq(since1Cleared, 0, "full deactivation should clear commitmentDeficitSince token1");
+        assertEq(bpsCleared, 0, "full deactivation should clear commitmentDeficitBps");
+        (uint256 cd0Cleared, uint256 cd1Cleared) = _commitmentDeficit(positionId);
+        assertEq(cd0Cleared, 0, "full deactivation should clear commitmentDeficit token0");
+        assertEq(cd1Cleared, 0, "full deactivation should clear commitmentDeficit token1");
+
+        Position memory posAfterRemove = vtsOrchestrator.getPosition(positionId);
+        assertEq(posAfterRemove.liquidity, 0, "position should be fully unwound");
+        assertFalse(posAfterRemove.isActive, "position should be inactive after full remove");
+    }
+
+    function _e2eFinding5_reactivateCureAndFreshDeficit(
+        uint256 tokenId,
+        PositionId positionId,
+        address advancer,
+        uint256 bypassSecs
+    ) internal {
+        _e2eFinding5_renewLiveSignal(tokenId);
+
+        // Increase runs `validateLiquidityDeltaAgainstSignal`; oracle must not still reflect `_mockSignalUsd(0)` from the deficit episode.
+        _mockLccPrices(1e18, 1e18);
+        _mockSignalUsd(1e30);
+
+        _increasePosition(tokenId, positionId, 1e10);
+
+        vm.prank(advancer);
+        unlockCaller.run(
+            address(vtsOrchestrator), abi.encodeWithSelector(VTSOrchestrator.checkpoint.selector, tokenId, 0, true)
+        );
+
+        (uint256 cd0, uint256 cd1) = _commitmentDeficit(positionId);
+        assertEq(cd0, 0, "strong signal should clear stored commitment deficit token0");
+        assertEq(cd1, 0, "strong signal should clear stored commitment deficit token1");
+
+        _mockSignalUsd(0);
+        vm.prank(advancer);
+        unlockCaller.run(
+            address(vtsOrchestrator), abi.encodeWithSelector(VTSOrchestrator.checkpoint.selector, tokenId, 0, true)
+        );
+
+        (cd0, cd1) = _commitmentDeficit(positionId);
+        assertTrue(cd0 > 0 || cd1 > 0, "post-reactivation: underbacking should restore commitment deficit");
+
+        (uint256 since0Fresh, uint256 since1Fresh,) = _testableOrchestrator().getCommitmentDeficitAgeFields(positionId);
+        assertTrue(since0Fresh > 0 || since1Fresh > 0, "fresh episode should set commitmentDeficitSince");
+        uint256 sinceFresh = since0Fresh > 0 ? since0Fresh : since1Fresh;
+        assertEq(sinceFresh, block.timestamp, "fresh episode should start the bypass clock at checkpoint time");
+
+        uint256 tFresh = block.timestamp;
+        // `bypassSecs / 2` can equal default `gracePeriodTime` (1800s), so RFS grace elapses and `isSeizable` becomes
+        // true via the checkpoint path even though commitment-deficit bypass age (`unbackedCommitmentGraceBypassTime`)
+        // is not yet satisfied. Stay strictly inside the RFS grace window while still before deficit bypass age.
+        uint256 halfGrace = marketVTSConfiguration.token0.gracePeriodTime / 2;
+        vm.warp(tFresh + halfGrace);
+
+        vm.expectRevert();
+        unlockCaller.run(address(vtsOrchestrator), abi.encodeWithSelector(VTSOrchestrator.onSeize.selector, tokenId, 0));
+
+        vm.warp(tFresh + bypassSecs + 1);
+
+        unlockCaller.run(address(vtsOrchestrator), abi.encodeWithSelector(VTSOrchestrator.onSeize.selector, tokenId, 0));
+    }
+
+    /// @dev Position was committed with `renewSignal`; restore a live signal after warps so MM liquidity ops succeed.
+    function _e2eFinding5_renewLiveSignal(uint256 tokenId) internal {
+        LiquiditySignal memory sameOwnerRenew = renewSignal;
+        sameOwnerRenew.nonce += 1;
+        bytes memory renewSignalBytes = abi.encode(sameOwnerRenew);
+        vm.mockCall(
+            address(signalManager),
+            abi.encodeWithSelector(
+                bytes4(keccak256("verifyLiquiditySignal(address,bytes,bool)")),
+                sameOwnerRenew.mmState.advancer,
+                renewSignalBytes,
+                true
+            ),
+            abi.encode(true, 10_000_000)
+        );
+        unlockCaller.run(
+            address(vtsOrchestrator),
+            abi.encodeWithSelector(
+                VTSOrchestrator.renewSignal.selector, IMarketFactory(marketFactory), tokenId, renewSignalBytes
+            )
+        );
     }
 
     function test_revert_onMMSettle_whenSeizingButCallerNotPositionOwner_insideUnlock() public {
@@ -1595,7 +2657,13 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
         unlockCaller.run(
             address(vtsOrchestrator),
             abi.encodeWithSelector(
-                VTSOrchestrator.onMMSettle.selector, IMarketFactory(marketFactory), tokenId, 0, depositDelta, true
+                VTSOrchestrator.onMMSettle.selector,
+                IMarketFactory(marketFactory),
+                tokenId,
+                0,
+                depositDelta,
+                true,
+                false
             )
         );
     }
@@ -1653,6 +2721,20 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
         vtsOrchestrator.setMarketVTSConfiguration(pid, cfg);
     }
 
+    function test_revert_setMarketVTSConfiguration_whenBaseVTSRateExceedsBpsDenominator() public {
+        PoolId pid = corePoolKey.toId();
+        MarketVTSConfiguration memory cfg = vtsOrchestrator.getMarketVTSConfiguration(pid);
+        cfg.token0.baseVTSRate = LiquidityUtils.BPS_DENOMINATOR + 1;
+
+        vm.prank(vtsOrchestrator.owner());
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                Errors.InvalidAmount.selector, cfg.token0.baseVTSRate, LiquidityUtils.BPS_DENOMINATOR
+            )
+        );
+        vtsOrchestrator.setMarketVTSConfiguration(pid, cfg);
+    }
+
     function test_getPool_returnsPoolInfo() public view {
         (PoolId id, Currency currency0, Currency currency1,, bool isPaused) =
             vtsOrchestrator.getPool(corePoolKey.toId());
@@ -1663,12 +2745,145 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
         assertFalse(isPaused, "Pool should not be paused");
     }
 
+    bytes32 private constant _ORCH_RELAY_AUTH_TYPEHASH = keccak256(
+        "RelayAuth(address signer,uint256 commitId,bytes32 liquiditySignalHash,address sender,uint256 deadline,uint256 nonce)"
+    );
+    bytes32 private constant _ORCH_EIP712_DOMAIN_TYPEHASH =
+        keccak256("EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)");
+
+    function _orchEtch7702Delegation(address account, address delegate) private {
+        vm.etch(account, abi.encodePacked(hex"ef0100", bytes20(uint160(delegate))));
+    }
+
+    function _orchRelayAuthDigest(
+        address signer,
+        uint256 commitId,
+        bytes memory liquiditySignalBytes,
+        address sender,
+        uint256 deadline,
+        uint256 authNonce
+    ) private view returns (bytes32) {
+        bytes32 domainSeparator = keccak256(
+            abi.encode(
+                _ORCH_EIP712_DOMAIN_TYPEHASH,
+                keccak256(bytes("VRLSignalManager")),
+                keccak256(bytes("1")),
+                block.chainid,
+                address(signalManager)
+            )
+        );
+        bytes32 structHash = keccak256(
+            abi.encode(
+                _ORCH_RELAY_AUTH_TYPEHASH,
+                signer,
+                commitId,
+                keccak256(liquiditySignalBytes),
+                sender,
+                deadline,
+                authNonce
+            )
+        );
+        return keccak256(abi.encodePacked("\x19\x01", domainSeparator, structHash));
+    }
+
+    function _orchSignRelayAuth(
+        uint256 signerPk,
+        address signer,
+        uint256 commitId,
+        bytes memory liquiditySignalBytes,
+        address sender,
+        uint256 deadline,
+        uint256 authNonce
+    ) private view returns (bytes memory) {
+        bytes32 digest = _orchRelayAuthDigest(signer, commitId, liquiditySignalBytes, sender, deadline, authNonce);
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(signerPk, digest);
+        return abi.encodePacked(r, s, v);
+    }
+
     function _decreasePosition(uint256 tokenId, uint256 amountToDecrease) internal {
-        MMA.PreparedAction[] memory actions = new MMA.PreparedAction[](3);
+        _decreasePositionFor(positionManager.ownerOf(tokenId), tokenId, amountToDecrease);
+    }
+
+    /// @dev Separated so tests can resolve `locker` before `vm.expectRevert()` (the next external call must be the reverting one).
+    function _decreasePositionFor(address locker, uint256 tokenId, uint256 amountToDecrease) internal {
+        // Decrease can leave MMPM underlying credits; drain them after LCC `take`s so batch deltas net to zero
+        // (ordering mirrors full withdrawal flows in MMPositionActionsImpl.t.sol).
+        vm.startPrank(locker);
+        MMA.PreparedAction[] memory actions = new MMA.PreparedAction[](4);
         actions[0] = MMA.prepareDecrease(corePoolKey, tokenId, 0, amountToDecrease);
         actions[1] = MMA.prepareTake(lccCurrency0, address(this), 0);
         actions[2] = MMA.prepareTake(lccCurrency1, address(this), 0);
+        actions[3] = MMA.prepareSettleFromDeltas(corePoolKey, tokenId, 0, true, true);
         MMA.executeWithUnlock(positionManager, actions, block.timestamp + 3600);
+        vm.stopPrank();
+    }
+
+    /// @dev Uses on-chain ticks/salt for settlement sizing from `_calculateSettlementAmounts`.
+    function _increasePosition(uint256 tokenId, PositionId positionId, uint256 amountToIncrease) internal {
+        address locker = positionManager.ownerOf(tokenId);
+        Position memory pos = vtsOrchestrator.getPosition(positionId);
+        ModifyLiquidityParams memory p = ModifyLiquidityParams({
+            tickLower: pos.tickLower, tickUpper: pos.tickUpper, liquidityDelta: int256(amountToIncrease), salt: pos.salt
+        });
+        (uint256 req0, uint256 req1) = _calculateSettlementAmounts(p, marketVTSConfiguration);
+
+        vm.startPrank(locker);
+        _fundLockerForSettlement(locker, lcc0.underlying(), lcc1.underlying(), req0, req1);
+        _approveTokenForPositionManager(lcc0.underlying(), lcc1.underlying(), address(positionManager), req0, req1);
+
+        MMA.PreparedAction[] memory actions = new MMA.PreparedAction[](2);
+        actions[0] = MMA.prepareIncrease(corePoolKey, tokenId, 0, amountToIncrease);
+        actions[1] =
+            MMA.prepareSettle(corePoolKey, tokenId, 0, -SafeCast.toInt128(req0), -SafeCast.toInt128(req1), false);
+        MMA.executeWithUnlock(positionManager, actions, block.timestamp + 3600);
+        vm.stopPrank();
+    }
+
+    function _expectedOpenMask(BalanceDelta delta) internal pure returns (uint8 openMask) {
+        if (delta.amount0() > 0) openMask |= 1;
+        if (delta.amount1() > 0) openMask |= 2;
+    }
+
+    /// @dev Builds `len` repetitions of "x" for oversized MM metadata fields (test-only).
+    function _repeatOrchestratorTestString(uint256 len) private pure returns (string memory s) {
+        bytes memory buf = new bytes(len);
+        for (uint256 i = 0; i < len; i++) {
+            buf[i] = bytes1("x");
+        }
+        return string(buf);
+    }
+
+    /// @notice Regression (finding 36_10): commitment-backed `validateLiquidityDelta` signalUsd must ignore bloated stored MM strings.
+    function test_exposedValidateLiquidityDeltaSoft_signalUsd_invariant_to_oversizedStoredMmMetadata() public {
+        (, PositionId pid,,) = _createCommittedPosition();
+
+        Position memory pos = vtsOrchestrator.getPosition(pid);
+
+        VTSOrchestratorTestable orch = _testableOrchestrator();
+
+        MmIncreaseAdmissionReplay memory r = MmIncreaseAdmissionReplay({
+            commitId: pos.commitId,
+            positionId: pid,
+            currency0: corePoolKey.currency0,
+            currency1: corePoolKey.currency1,
+            tickLower: pos.tickLower,
+            tickUpper: pos.tickUpper,
+            postAddLiquidity: pos.liquidity,
+            preAddLiquidity: 0,
+            mintAmount0: 0,
+            mintAmount1: 0
+        });
+
+        (,,, uint256 signal0) = orch.exposedvalidateLiquidityDeltaSoft(r);
+
+        (MarketMaker.State memory mm,,,,) = vtsOrchestrator.getCommit(pos.commitId);
+        mm.sourceState = _repeatOrchestratorTestString(10_000);
+        mm.prover = _repeatOrchestratorTestString(10_000);
+        mm.nonce = _repeatOrchestratorTestString(10_000);
+        orch.testOnly_setCommitMmState(pos.commitId, mm);
+
+        (,,, uint256 signal1) = orch.exposedvalidateLiquidityDeltaSoft(r);
+
+        assertEq(signal0, signal1, "signalUsd must not depend on non-reserve metadata size");
     }
 }
-

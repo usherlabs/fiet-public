@@ -3,8 +3,9 @@ pragma solidity ^0.8.26;
 
 import {VTSCurrencyDeltaHarness} from "../../libraries/harnesses/VTSCurrencyDeltaHarness.sol";
 import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
+import {IMarketFactory} from "../../../src/interfaces/IMarketFactory.sol";
 
-/// @notice Echidna harness for DELTA-01: Deltas must net to zero per unlock/batch.
+/// @notice fuzz harness for DELTA-01: Deltas must net to zero per unlock/batch.
 ///         Any non-zero currency delta at end-of-batch must cause CurrencyNotSettled().
 contract DELTA01 {
     VTSCurrencyDeltaHarness internal deltaHarness;
@@ -12,6 +13,7 @@ contract DELTA01 {
     Currency internal constant C0 = Currency.wrap(address(0x1000));
     Currency internal constant C1 = Currency.wrap(address(0x2000));
     address internal constant TARGET = address(0xBEEF);
+    IMarketFactory internal constant DELTA01_FACTORY = IMarketFactory(address(0xF01));
 
     bool internal checked;
     bool internal lastOk;
@@ -35,7 +37,7 @@ contract DELTA01 {
 
         bool shouldRevert = d0 != 0 || d1 != 0;
         bool reverted;
-        try deltaHarness.assertNonZeroDeltas() {
+        try deltaHarness.assertNonZeroDeltas(DELTA01_FACTORY) {
             reverted = false;
         } catch {
             reverted = true;
@@ -46,13 +48,13 @@ contract DELTA01 {
     }
 
     // forge-lint: disable-next-line(mixed-case-function)
-    function echidna_delta_01_nonzero_deltas_revert() external view returns (bool) {
+    function fuzz_delta_01_nonzero_deltas_revert() external view returns (bool) {
         return !checked || lastOk;
     }
 
-    // Keep a second trivial property to avoid rare Echidna instability with single-property targets.
+    // Keep a second trivial property to avoid rare property-runner instability with single-property targets.
     // forge-lint: disable-next-line(mixed-case-function)
-    function echidna_delta_01_smoke() external pure returns (bool) {
+    function fuzz_delta_01_smoke() external pure returns (bool) {
         return true;
     }
 }

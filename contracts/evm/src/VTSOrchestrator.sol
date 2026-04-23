@@ -7,31 +7,28 @@ import {PoolId, PoolIdLibrary} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {PausableVTS} from "./modules/PausableVTS.sol";
 import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
 import {BalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
-import {
-    PositionId,
-    Position,
-    PositionModificationHookData,
-    PositionModificationHookDataLib
-} from "./types/Position.sol";
+import {PositionId, Position} from "./types/Position.sol";
 import {Commit} from "./types/Commit.sol";
 import {Pool} from "./types/Pool.sol";
 import {
     MarketVTSConfiguration,
     PositionAccounting,
-    PositionContext,
-    TouchPositionParams,
+    PositionAccountingLib,
+    SettleResult,
     TouchPositionResult,
-    SettleParams,
-    SettleResult
+    VaultSettlementIntent,
+    VTSLifecycleContext,
+    VTSCoreHookContext,
+    VTSCommitRouterContext
 } from "./types/VTS.sol";
 import {MarketMaker} from "./libraries/MarketMaker.sol";
 import {IPoolManager} from "v4-periphery/lib/v4-core/src/interfaces/IPoolManager.sol";
 import {VTSStorage} from "./types/VTS.sol";
 import {IVTSOrchestrator} from "./interfaces/IVTSOrchestrator.sol";
 import {VTSPositionLib} from "./libraries/VTSPositionLib.sol";
-import {PositionLibrary} from "./types/Position.sol";
 import {VTSSwapLib} from "./libraries/VTSSwapLib.sol";
 import {VTSCommitLib} from "./libraries/VTSCommitLib.sol";
+import {VTSLifecycleLinkedLib} from "./libraries/VTSLifecycleLinkedLib.sol";
 import {Errors} from "./libraries/Errors.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {ModifyLiquidityParams} from "v4-periphery/lib/v4-core/src/types/PoolOperation.sol";
@@ -47,12 +44,8 @@ import {SwapParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
 import {MarketHandlerLib} from "./libraries/MarketHandlerLib.sol";
 import {VTSCurrencyDelta} from "./modules/VTSCurrencyDelta.sol";
 import {Ownable} from "openzeppelin-contracts/contracts/access/Ownable.sol";
-import {VTSFeeLib} from "./libraries/VTSFeeLib.sol";
-import {IMarketVault} from "./interfaces/IMarketVault.sol";
 import {IMarketFactory} from "./interfaces/IMarketFactory.sol";
 import {LiquidityUtils} from "./libraries/LiquidityUtils.sol";
-import {toBalanceDelta} from "v4-periphery/lib/v4-core/src/types/BalanceDelta.sol";
-import {TransientSlots} from "./libraries/TransientSlots.sol";
 import {PoolAccounting} from "./types/VTS.sol";
 import {ReentrancyGuardTransient} from "openzeppelin-contracts/contracts/utils/ReentrancyGuardTransient.sol";
 import {TokenConfiguration} from "./types/VTS.sol";
@@ -170,25 +163,6 @@ contract VTSOrchestrator is
         if (!_isBoundFactoryCaller(factory, _msgSender())) revert Errors.InvalidSender();
     }
 
-    /// @dev Resolve effective sender for non-relayed signal actions.
-    ///      Forwarded sender is trusted only from protocol-bound endpoints in the provided factory namespace.
-    function _resolveSignalSender(IMarketFactory factory, address sender)
-        internal
-        view
-        returns (address effectiveSender)
-    {
-        // The factory argument is required because sender forwarding is only safe within a specific market's
-        // protocol-bound namespace. Without validating the factory and checking caller bounds against it,
-        // any contract inside PoolManager.unlock() could fabricate `sender = owner/advancer` and bump MM nonce.
-        _assertRegisteredFactory(factory);
-        address caller = _msgSender();
-        if (MarketHandlerLib.isBounds(factory, caller)) {
-            return sender;
-        }
-        if (sender != caller) revert Errors.InvalidSender();
-        return caller;
-    }
-
     function _checkOwner() internal view override(Ownable, VTSAdmin) {
         super._checkOwner();
     }
@@ -210,6 +184,9 @@ contract VTSOrchestrator is
     function _assertValidTokenConfiguration(TokenConfiguration memory cfg) internal pure {
         if (cfg.maxGracePeriodTime < cfg.gracePeriodTime) {
             revert Errors.InvalidVTSConfiguration(cfg.gracePeriodTime, cfg.maxGracePeriodTime);
+        }
+        if (cfg.baseVTSRate > LiquidityUtils.BPS_DENOMINATOR) {
+            revert Errors.InvalidAmount(cfg.baseVTSRate, LiquidityUtils.BPS_DENOMINATOR);
         }
     }
 
@@ -261,81 +238,41 @@ contract VTSOrchestrator is
         }
     }
 
-    /// @notice Checks if a commit exists and optionally checks if signal hasn't expired
+    /// @notice Checks if a commit exists and optionally enforces a live VRL-backed signal
     /// @param commitId The commit identifier
-    /// @param requireLiveSignal If true, checks expiry. If false, skips expiry check.
-    /// @return isValid True if the signal is valid (commit exists and, if requireLiveSignal is true, hasn't expired)
+    /// @param requireLiveSignal If true, requires non-empty reserves, not expired, and a non-zero owner. If false,
+    ///        only requires an initialised commit with a non-zero owner (zero backing / empty reserves allowed).
+    /// @return isValid True if the commit satisfies the requested constraints
     function isSignalValid(uint256 commitId, bool requireLiveSignal) public view returns (bool isValid) {
-        // Check if commit exists (commitId must be > 0)
-        if (commitId == 0) {
-            return false;
-        }
-
-        Commit storage commit = s.commits[commitId];
-
-        // Check if commit actually exists (expiresAt > 0 indicates commit was initialized)
-        if (commit.expiresAt == 0) {
-            return false;
-        }
-
-        // Validate that mmState has valid parameters
-        MarketMaker.State memory mmState = commit.mmState;
-        if (mmState.owner == address(0)) {
-            return false;
-        }
-        if (mmState.reserves.length == 0) {
-            return false;
-        }
-
-        // Only check expiry if requireLiveSignal is true
-        if (requireLiveSignal) {
-            bool isExpired = block.timestamp >= commit.expiresAt;
-            if (isExpired) {
-                return false;
-            }
-        }
-
-        return true;
+        return VTSLifecycleLinkedLib.isSignalValid(s, commitId, requireLiveSignal);
     }
 
-    /// @notice Validates that a commit exists and optionally checks if signal hasn't expired
+    /// @notice Validates that a commit exists and optionally enforces a live VRL-backed signal
     /// @param commitId The commit identifier
-    /// @param requireLiveSignal If true, checks expiry and reverts if expired. If false, skips expiry check.
+    /// @param requireLiveSignal If true, reverts when reserves are empty or expired. If false, only reverts when the
+    ///        commit is missing or has no owner.
     function _assertSignalValid(uint256 commitId, bool requireLiveSignal) internal view {
         if (!isSignalValid(commitId, requireLiveSignal)) {
             revert Errors.InvalidSignal(commitId);
         }
     }
 
-    /// @dev Resolve market vault for a pool key (reduces stack depth in callers)
-    function _resolveVault(PoolKey calldata poolKey) internal view returns (IMarketVault) {
-        IMarketFactory factory =
-            liquidityHub.getFactory(Currency.unwrap(poolKey.currency0), Currency.unwrap(poolKey.currency1));
-        return MarketHandlerLib.getVault(factory, poolKey.toId());
+    function _lifecycleContext() internal view returns (VTSLifecycleContext memory ctx) {
+        ctx = VTSLifecycleContext({
+            poolManager: poolManager,
+            liquidityHub: liquidityHub,
+            oracleHelper: oracleHelper,
+            settlementObserver: settlementObserver
+        });
     }
 
-    /// @dev Build canonical MM settle parameters from stored position context.
-    function _buildMMSettleParams(
-        IMarketFactory factory,
-        PositionId positionId,
-        PoolId poolId,
-        BalanceDelta amountDelta,
-        bool isSeizing
-    ) internal view returns (SettleParams memory params) {
-        Pool memory pool = s.pools[poolId];
-        Currency currency0 = pool.currency0;
-        Currency currency1 = pool.currency1;
-        IMarketFactory canonicalFactory =
-            liquidityHub.getFactory(Currency.unwrap(currency0), Currency.unwrap(currency1));
-        if (address(canonicalFactory) != address(factory)) revert Errors.InvalidSender();
+    function _coreHookContext() internal view returns (VTSCoreHookContext memory ctx) {
+        ctx = VTSCoreHookContext({poolManager: poolManager, liquidityHub: liquidityHub, oracleHelper: oracleHelper});
+    }
 
-        params = SettleParams({
-            vault: MarketHandlerLib.getVault(factory, poolId),
-            positionId: positionId,
-            lccCurrency0: currency0,
-            lccCurrency1: currency1,
-            delta: amountDelta,
-            isSeizing: isSeizing
+    function _commitRouterContext() internal view returns (VTSCommitRouterContext memory ctx) {
+        ctx = VTSCommitRouterContext({
+            liquidityHub: liquidityHub, signalManager: signalManager, oracleHelper: oracleHelper
         });
     }
 
@@ -384,6 +321,8 @@ contract VTSOrchestrator is
     /// @return mmState The MarketMaker state
     /// @return expiresAt The expiration timestamp
     /// @return positionCount The count of positions
+    /// @return activePositionCount The count of active positions
+    /// @return inactiveRemnantCount Inactive positions with non-zero live settled or deferred overflow (blocks decommit)
     function getCommit(uint256 commitId)
         external
         view
@@ -391,11 +330,23 @@ contract VTSOrchestrator is
             MarketMaker.State memory mmState,
             uint256 expiresAt,
             uint256 positionCount,
-            uint256 activePositionCount
+            uint256 activePositionCount,
+            uint256 inactiveRemnantCount
         )
     {
         Commit storage commit = s.commits[commitId];
-        return (commit.mmState, commit.expiresAt, commit.positionCount, commit.activePositionCount);
+        return (
+            commit.mmState,
+            commit.expiresAt,
+            commit.positionCount,
+            commit.activePositionCount,
+            commit.inactiveRemnantCount
+        );
+    }
+
+    /// @inheritdoc IVTSOrchestrator
+    function getCommitAuthorisedRelayer(uint256 commitId) external view returns (address) {
+        return s.commits[commitId].authorisedRelayer;
     }
 
     /// @notice Get pool by PoolId
@@ -432,7 +383,12 @@ contract VTSOrchestrator is
         onlyPositionValid(positionId)
         returns (bool, BalanceDelta)
     {
-        return VTSPositionLib.calcRFS(s, poolManager, positionId, requireClosedRfS);
+        settlePositionGrowths(positionId);
+        (bool rfsOpen, BalanceDelta delta) = VTSPositionLib.getRFS(s, positionId);
+        if (requireClosedRfS && rfsOpen) {
+            revert Errors.RFSOpenForPosition(positionId);
+        }
+        return (rfsOpen, delta);
     }
 
     /// @inheritdoc IVTSOrchestrator
@@ -442,14 +398,28 @@ contract VTSOrchestrator is
     {
         PositionId positionId = getPositionId(commitId, positionIndex);
         _assertPositionValid(positionId, true);
-        (bool rfsOpen, BalanceDelta delta) = VTSPositionLib.calcRFS(s, poolManager, positionId, requireClosedRfS);
+        settlePositionGrowths(positionId);
+        (bool rfsOpen, BalanceDelta delta) = VTSPositionLib.getRFS(s, positionId);
+        if (requireClosedRfS && rfsOpen) {
+            revert Errors.RFSOpenForPosition(positionId);
+        }
         return (positionId, rfsOpen, delta);
     }
 
     /// @inheritdoc IVTSOrchestrator
     function getPositionSettledAmounts(PositionId positionId) external view returns (uint256 amount0, uint256 amount1) {
         PositionAccounting storage pa = s.positionAccounting[positionId];
-        return (pa.settled.token0, pa.settled.token1);
+        return PositionAccountingLib.effectiveSettled(pa);
+    }
+
+    /// @inheritdoc IVTSOrchestrator
+    function getPositionSettledOverflowAmounts(PositionId positionId)
+        external
+        view
+        returns (uint256 overflow0, uint256 overflow1)
+    {
+        PositionAccounting storage pa = s.positionAccounting[positionId];
+        return (pa.settledOverflow.token0, pa.settledOverflow.token1);
     }
 
     /// @inheritdoc IVTSOrchestrator
@@ -464,25 +434,19 @@ contract VTSOrchestrator is
     }
 
     /// @inheritdoc IVTSOrchestrator
-    function getProtocolFeeAccrued(PoolId poolId) external view returns (uint256 fee0, uint256 fee1) {
+    function getPoolTotalSettled(PoolId poolId) external view returns (uint256 total0, uint256 total1) {
         PoolAccounting storage paPool = s.poolAccounting[poolId];
-        return (paPool.protocolFeeAccrued.token0, paPool.protocolFeeAccrued.token1);
+        return (paPool.totalSettled.token0, paPool.totalSettled.token1);
     }
 
     /// @inheritdoc IVTSOrchestrator
-    function getSlashedPot(PoolId poolId) external view returns (uint256 pot0, uint256 pot1) {
-        PoolAccounting storage paPool = s.poolAccounting[poolId];
-        return (paPool.slashedPot.token0, paPool.slashedPot.token1);
-    }
-
-    /// @inheritdoc IVTSOrchestrator
-    function getPositionFeeAccounting(PositionId positionId)
+    function getPoolTotalDeficitPrincipal(PoolId poolId)
         external
         view
-        returns (uint256 feesShared0, uint256 feesShared1, int256 pendingFeeAdj0, int256 pendingFeeAdj1)
+        returns (uint256 principal0, uint256 principal1)
     {
-        PositionAccounting storage pa = s.positionAccounting[positionId];
-        return (pa.feesShared.token0, pa.feesShared.token1, pa.pendingFeeAdj.token0, pa.pendingFeeAdj.token1);
+        PoolAccounting storage paPool = s.poolAccounting[poolId];
+        return (paPool.totalDeficitPrincipal.token0, paPool.totalDeficitPrincipal.token1);
     }
 
     /// @notice Get the checkpoint for a given position
@@ -502,8 +466,12 @@ contract VTSOrchestrator is
     /// @param vtsConfiguration The VTS configuration
     function initPool(PoolKey memory corePoolKey, MarketVTSConfiguration memory vtsConfiguration) external onlyFactory {
         _assertValidMarketVTSConfiguration(vtsConfiguration);
+        PoolId poolId = corePoolKey.toId();
+        if (Currency.unwrap(s.pools[poolId].currency0) != address(0)) {
+            revert Errors.InvariantViolated("VTSOrchestrator: pool already initialized");
+        }
         // Initialize the market details in the VTS state
-        s.pools[corePoolKey.toId()] = Pool({
+        s.pools[poolId] = Pool({
             currency0: corePoolKey.currency0,
             currency1: corePoolKey.currency1,
             vtsConfig: vtsConfiguration,
@@ -511,33 +479,27 @@ contract VTSOrchestrator is
         });
     }
 
-    /// @notice Increment coverage amounts for a pool
-    /// @param poolId The pool identifier
-    /// @param amount0 Amount to increment for token0
-    /// @param amount1 Amount to increment for token1
-    function incrementCoverage(PoolId poolId, uint256 amount0, uint256 amount1) external onlyFactory {
-        if (amount0 > 0) {
-            VTSCommitLib.incrementCoverage(s, poolId, 0, amount0);
-        }
-        if (amount1 > 0) {
-            VTSCommitLib.incrementCoverage(s, poolId, 1, amount1);
-        }
-    }
-
     // --------------------------------------------------
     // CoreHook VTS Functionality
     // --------------------------------------------------
 
     /// @notice Settle position growths before liquidity modifications
-    /// @dev Called by CoreHook to settle position growths before adding or removing liquidity.
-    ///      Only processes valid, active positions.
+    /// @dev This entrypoint intentionally stays public while unpaused so growth crystallisation is permissionless:
+    ///      anyone may refresh fee / deficit / coverage accounting without gaining authority to add liquidity,
+    ///      remove liquidity, or swap on behalf of the owner.
+    ///      During pause we narrow the caller back to the canonical CoreHook for the pool so remove-liquidity flows
+    ///      can still preserve pre-pause attribution, while add-liquidity and swaps remain halted.
+    ///      Only processes valid registered positions; inactive positions are checkpointed with zero live liquidity so
+    ///      stale growth cannot be inherited on later reactivation.
     /// @param positionId The position identifier
     function settlePositionGrowths(PositionId positionId) public {
-        // Only check for active valid position - as new positions are not yet registered in VTS when this method is called.
-        if (isPositionValid(positionId, true)) {
+        // Only check for a registered valid position - as new positions are not yet registered in VTS when this method is called.
+        if (isPositionValid(positionId, false)) {
             PoolId poolId = s.positions[positionId].poolId;
             if (s.isPaused || s.pools[poolId].isPaused) {
-                // During pause, allow growth-only settlement strictly from the canonical CoreHook for this pool.
+                // Pause keeps the settlement path available only for canonical remove-liquidity bookkeeping.
+                // This is intentional: growth must be settled against the pre-removal position even while all other
+                // mutation surfaces that expand risk (swaps, adds, arbitrary third-party refreshes) stay shut.
                 Pool memory pool = s.pools[poolId];
                 IMarketFactory factory =
                     liquidityHub.getFactory(Currency.unwrap(pool.currency0), Currency.unwrap(pool.currency1));
@@ -549,8 +511,26 @@ contract VTSOrchestrator is
         }
     }
 
+    /// @dev Growth must be settled before `checkpointWithCommitment` reads `pa.settled`. When paused, the public
+    ///      `settlePositionGrowths` entrypoint is restricted to CoreHook; this orchestrator-only path performs the
+    ///      same settlement for `checkpoint(..., true)` only, so commitment checkpoints stay growth-consistent without
+    ///      widening who may call the public `settlePositionGrowths` entrypoint during pause (see **PAUSE-01**).
+    function _settleGrowthsBeforeCheckpoint(PositionId positionId, bool withCommitment) internal {
+        if (!isPositionValid(positionId, false)) {
+            return;
+        }
+        PoolId poolId = s.positions[positionId].poolId;
+        bool poolOrGlobalPaused = s.isPaused || s.pools[poolId].isPaused;
+        if (poolOrGlobalPaused && withCommitment) {
+            VTSPositionLib.settlePositionGrowths(s, poolManager, positionId);
+        } else {
+            settlePositionGrowths(positionId);
+        }
+    }
+
     /// @notice Called by CoreHook after add/remove liquidity to update position state and process fees
     /// @dev Consolidates all delta management for both MM and DirectLP positions.
+    ///      Pause policy is enforced inside `VTSPositionLib.touchPosition` based on `liquidityDelta` and VTS storage.
     ///      For MM positions: handles fee accounting, LCC issuance/cancellation, position linking, and delta accounting.
     ///      All position processing logic is delegated to VTSPositionLib.touchPosition.
     /// @param owner The owner of the position (e.g., MMPositionManager or other router)
@@ -561,7 +541,6 @@ contract VTSOrchestrator is
     /// @param hookData The hook data containing PositionModificationHookData for MM operations
     /// @return pos The position struct
     /// @return id The position identifier
-    /// @return feeAdj The fee adjustment delta
     /// @return isMMPosition True if this is an MM position operation with valid signal
     function processPosition(
         address owner,
@@ -573,85 +552,35 @@ contract VTSOrchestrator is
     )
         external
         onlyCoreHook(poolKey.currency0, poolKey.currency1)
-        notPoolPaused(poolKey.toId())
-        returns (Position memory pos, PositionId id, BalanceDelta feeAdj, bool isMMPosition)
+        returns (Position memory pos, PositionId id, bool isMMPosition)
     {
-        isMMPosition = _validateMMOperation(owner, poolKey.currency0, poolKey.currency1, hookData);
-        (pos, id, feeAdj) = _executeProcessPosition(owner, poolKey, params, callerDelta, feesAccrued, hookData);
+        isMMPosition = _validateMMOperationLinked(owner, poolKey, hookData);
+        (pos, id) = _processPositionLinked(owner, poolKey, params, callerDelta, feesAccrued, hookData);
     }
 
-    /// @dev Validate MM operation from hook data (helper to reduce stack depth)
-    function _validateMMOperation(address owner, Currency currency0, Currency currency1, bytes calldata hookData)
+    function _validateMMOperationLinked(address owner, PoolKey calldata poolKey, bytes calldata hookData)
         private
         view
         returns (bool isMMPosition)
     {
-        PositionModificationHookData memory mmData = PositionModificationHookDataLib.decodeCalldata(hookData);
-        if (PositionModificationHookDataLib.isMMOperation(mmData)) {
-            _assertSignalValid(mmData.commitId, !mmData.seizure.isSeizing);
-            IMarketFactory factory = liquidityHub.getFactory(Currency.unwrap(currency0), Currency.unwrap(currency1));
-            // MM operations may only be routed through protocol-bound endpoints.
-            if (!MarketHandlerLib.isBounds(factory, owner)) {
-                revert Errors.InvalidSender();
-            }
-            // For non-seizing MM operations, enforce designated advancer control.
-            if (!mmData.seizure.isSeizing) {
-                address locker = PositionModificationHookDataLib.getLocker(mmData);
-                if (locker != s.commits[mmData.commitId].mmState.advancer) {
-                    revert Errors.InvalidSender();
-                }
-            }
-            return true;
-        }
-        return false;
+        VTSCoreHookContext memory ctx = _coreHookContext();
+        isMMPosition = VTSLifecycleLinkedLib.validateMMOperation(s, ctx, owner, poolKey, hookData);
     }
 
-    /// @dev Execute process position logic (helper to reduce stack depth)
-    function _executeProcessPosition(
+    function _processPositionLinked(
         address owner,
         PoolKey calldata poolKey,
         ModifyLiquidityParams calldata params,
         BalanceDelta callerDelta,
         BalanceDelta feesAccrued,
         bytes calldata hookData
-    ) private returns (Position memory pos, PositionId id, BalanceDelta feeAdj) {
-        // If the position already exists, enforce pool membership from the provided PoolKey.
-        // This prevents poolKey/position mismatches for PoolKey-based entrypoints.
-        PositionId expectedId = PositionLibrary.generateId(owner, params);
-        if (s.positions[expectedId].owner != address(0)) {
-            // We allow inactive positions here (reactivation path), so requireActive=false.
-            _assertPositionValid(expectedId, false, poolKey.toId());
-        }
-
-        // Build context in scoped block
-        PositionContext memory ctx;
-        {
-            ctx = PositionContext({
-                poolManager: poolManager,
-                liquidityHub: liquidityHub,
-                oracleHelper: oracleHelper,
-                marketVault: _resolveVault(poolKey)
-            });
-        }
-
-        // Build params in scoped block
-        TouchPositionParams memory tpParams;
-        {
-            tpParams = TouchPositionParams({
-                owner: owner,
-                poolKey: poolKey,
-                params: params,
-                callerDelta: callerDelta,
-                feesAccrued: feesAccrued,
-                hookData: hookData
-            });
-        }
-
-        // Execute
-        TouchPositionResult memory result = VTSPositionLib.touchPosition(s, ctx, tpParams);
+    ) private returns (Position memory pos, PositionId id) {
+        VTSCoreHookContext memory ctx = _coreHookContext();
+        TouchPositionResult memory result = VTSLifecycleLinkedLib.executeProcessPositionTouch(
+            s, ctx, owner, poolKey, params, callerDelta, feesAccrued, hookData
+        );
         pos = result.pos;
         id = result.id;
-        feeAdj = result.feeAdj;
     }
 
     /// @notice Called by CoreHook after a swap to process swap-related accounting
@@ -660,14 +589,16 @@ contract VTSOrchestrator is
     /// @param delta The balance delta from the swap
     /// @param sqrtPBefore The sqrt price before the swap
     /// @param liqBefore The liquidity before the swap
+    /// @param tickBefore Authoritative `slot0.tick` before the swap (from CoreHook transient snapshot)
     function afterCoreSwap(
         PoolKey calldata key,
         SwapParams calldata params,
         BalanceDelta delta,
         uint160 sqrtPBefore,
-        uint128 liqBefore
+        uint128 liqBefore,
+        int24 tickBefore
     ) external onlyCoreHook(key.currency0, key.currency1) notPoolPaused(key.toId()) {
-        VTSSwapLib.processSwap(s, poolManager, key, params, delta, sqrtPBefore, liqBefore);
+        VTSSwapLib.processSwap(s, poolManager, key, params, delta, sqrtPBefore, liqBefore, tickBefore);
     }
 
     // -----------------------------------------------------------------------------
@@ -675,40 +606,43 @@ contract VTSOrchestrator is
     // -----------------------------------------------------------------------------
 
     /// @notice Commit a liquidity signal to the VTS state
-    /// @dev Verifies the signal via SignalManager and stores it in the VTS state
-    /// @param sender The effective caller (locker) for commit authorisation
+    /// @dev Verifies the signal via SignalManager and stores it in the VTS state. `VTSCommitLib` derives the VRL proof
+    ///      principal as `mmState.owner` from `liquiditySignal`.
     /// @param liquiditySignal The liquidity signal to commit
     /// @return commitId The commit identifier for the committed signal
-    function commitSignal(IMarketFactory factory, address sender, bytes memory liquiditySignal)
+    function commitSignal(IMarketFactory factory, bytes memory liquiditySignal)
         external
         onlyIfPoolManagerUnlocked
         onlyIfVRLHandlersRegistered
         nonReentrant
         returns (uint256 commitId)
     {
-        commitId = VTSCommitLib.commitSignal(s, _resolveSignalSender(factory, sender), signalManager, liquiditySignal);
+        commitId = VTSCommitLib.commitSignal(s, _commitRouterContext(), factory, _msgSender(), liquiditySignal);
     }
 
     /// @notice Commit a liquidity signal using sender-signed EIP-712 relayer authorisation
-    /// @dev Same factory-bound sender resolution as `commitSignal`: unbound callers may only relay for themselves.
-    /// @param factory Market factory namespace for `_resolveSignalSender` / bound-caller checks only. Signature
+    /// @dev Relay auth nonces and EIP-712 `RelayAuth` recover to `mmState.owner` (derived inside `VTSCommitLib`).
+    /// @param factory Market factory namespace for factory registration and bound-caller checks only. Signature
     ///        verification and replay protection are enforced by `signalManager` (EIP-712 domain bound to
     ///        `verifyingContract`) and per-sender nonces — not by per-factory validation inside the signed payload.
     function commitSignalRelayed(
         IMarketFactory factory,
-        address sender,
         bytes memory liquiditySignal,
         uint256 deadline,
         uint256 authNonce,
-        bytes memory authSig
+        bytes memory authSig,
+        address sender
     ) external onlyIfPoolManagerUnlocked onlyIfVRLHandlersRegistered nonReentrant returns (uint256 commitId) {
         commitId = VTSCommitLib.commitSignalRelayed(
-            s, _resolveSignalSender(factory, sender), signalManager, liquiditySignal, deadline, authNonce, authSig
+            s, _commitRouterContext(), factory, _msgSender(), liquiditySignal, deadline, authNonce, authSig, sender
         );
     }
 
     /// @notice Extend the grace period for a position
-    /// @dev Uses the RFSCheckpoint module to extend the grace period after validating the settlement proof
+    /// @dev Uses the RFSCheckpoint module to extend the grace period after validating the settlement proof.
+    ///      Requires only an initialised commit (`requireLiveSignal=false`). Proof-backed grace extension must remain
+    ///      available when the VRL signal is expired or renewed to empty reserves, otherwise seizure could proceed on
+    ///      the normal grace path while this recovery hook is blocked (`SEIZE-02`).
     /// @param poolKey The pool key for the position
     /// @param commitId The commit identifier
     /// @param positionIndex The position index within the commit
@@ -724,88 +658,124 @@ contract VTSOrchestrator is
         uint32 verifierIndex,
         bytes memory settlementProof
     ) external onlyIfPoolManagerUnlocked onlyIfVRLHandlersRegistered nonReentrant {
-        _assertSignalValid(commitId, true);
+        _assertSignalValid(commitId, false);
         // Validate position exists
         PositionId positionId = getPositionId(commitId, positionIndex);
         _assertPositionValid(positionId, true, poolKey.toId());
 
-        // Validate factory is registered and caller is authorized
-        _assertBoundFactoryCaller(factory);
+        IMarketFactory canonicalFactory =
+            liquidityHub.getFactory(Currency.unwrap(poolKey.currency0), Currency.unwrap(poolKey.currency1));
+        if (address(factory) != address(canonicalFactory)) revert Errors.InvalidSender();
+        _assertBoundFactoryCaller(canonicalFactory);
 
-        // Use the RFSCheckpoint module to extend the grace period
-        CheckpointLibrary.extendGracePeriod(
-            s, settlementObserver, poolKey, positionId, settlementTokenIndex, verifierIndex, settlementProof
+        RFSCheckpoint memory checkpointOut = VTSCommitLib.extendGracePeriod(
+            s, _lifecycleContext(), poolKey, positionId, settlementTokenIndex, verifierIndex, settlementProof
         );
+        emit GracePeriodExtended(commitId, positionIndex, settlementTokenIndex, checkpointOut);
+    }
 
-        // Emit event to notify the market maker that the grace period has been extended
-        emit GracePeriodExtended(commitId, positionIndex, settlementTokenIndex, s.positions[positionId].checkpoint);
+    function _runOnMMSettle(
+        IMarketFactory factory,
+        PositionId positionId,
+        PoolId poolId,
+        BalanceDelta amountDelta,
+        bool isSeizing,
+        bool fromDeltas
+    ) internal returns (SettleResult memory result) {
+        return VTSLifecycleLinkedLib.onMMSettle(
+            s, _lifecycleContext(), factory, positionId, poolId, amountDelta, isSeizing, fromDeltas
+        );
+    }
+
+    function _emitPositionSettled(
+        uint256 commitId,
+        uint256 positionIndex,
+        PositionId positionId,
+        BalanceDelta settlementDelta,
+        bool isSeizing,
+        bool rfsOpen
+    ) internal {
+        PositionAccounting storage pa = s.positionAccounting[positionId];
+        emit PositionSettled(
+            commitId,
+            positionIndex,
+            settlementDelta.amount0(),
+            settlementDelta.amount1(),
+            pa.settled.token0,
+            pa.settled.token1,
+            pa.settledOverflow.token0,
+            pa.settledOverflow.token1,
+            isSeizing,
+            rfsOpen
+        );
     }
 
     /// @notice Settle a market maker position
     /// @dev Called by MMPositionManager to settle a position, handling both normal settlement and seizure.
-    ///      Position validation is performed inside VTSPositionLib.onMMSettle.
+    ///      Position validation is performed inside `VTSLifecycleLinkedLib._executeMMSettleFromParams`.
+    ///      Non-seizing calls normally require a live VRL-backed signal; the sole exception is
+    ///      withdrawal-only settlement (`amountDelta` lanes both non-negative) on an inactive position,
+    ///      so inactive `pa.settled` remnants remain drainable after signal expiry or empty-reserve renewals.
     /// @param factory The market factory namespace for caller-bound validation
     /// @param commitId The commit identifier
     /// @param positionIndex The position index within the commit
     /// @param amountDelta The amount delta for settlement
     /// @param isSeizing Whether the position is being seized
+    /// @param fromDeltas When true, deposit lanes consume existing positive underlying delta (settle-from-deltas).
+    ///        Withdrawal lanes ignore this flag; see `VTSLifecycleLinkedLib._executeMMSettleFromParams`.
     /// @return settlementDelta The settlement balance delta
     /// @return rfsOpen Whether the RFS is open after settlement
     /// @return seizedLiquidityUnits The amount of liquidity units seized (0 if not seizing)
+    /// @return vaultSettlementIntent Explicit vault execution intent for downstream custody handling
     function onMMSettle(
         IMarketFactory factory,
         uint256 commitId,
         uint256 positionIndex,
         BalanceDelta amountDelta,
-        bool isSeizing
+        bool isSeizing,
+        bool fromDeltas
     )
         external
         onlyIfPoolManagerUnlocked
         nonReentrant
-        returns (BalanceDelta settlementDelta, bool rfsOpen, uint256 seizedLiquidityUnits)
+        returns (BalanceDelta settlementDelta, bool rfsOpen, uint256 seizedLiquidityUnits, VaultSettlementIntent memory)
     {
-        _assertSignalValid(commitId, !isSeizing);
         _assertBoundFactoryCaller(factory);
+
+        // Commit must exist (initialised). For non-seizing paths, the live-signal check (when required) runs before
+        // the `owner` check so invalid non-live commits revert `InvalidSignal` even when `msg.sender` is not the
+        // position owner (diagnostics / direct unlock-callback probes). Seizure paths defer `isSeizable` until after
+        // `owner` so wrong callers still revert `InvalidSender` instead of RFS checkpoint errors.
+        _assertSignalValid(commitId, false);
 
         PositionId positionId = getPositionId(commitId, positionIndex);
         _assertPositionValid(positionId, false);
 
         Position memory pos = s.positions[positionId];
+        PoolId poolId = pos.poolId;
+
+        if (!isSeizing) {
+            bool inactiveWithdrawOnly = !pos.isActive && amountDelta.amount0() >= 0 && amountDelta.amount1() >= 0;
+            if (!inactiveWithdrawOnly) {
+                _assertSignalValid(commitId, true);
+            }
+        }
+
         if (_msgSender() != pos.owner) revert Errors.InvalidSender();
 
         if (isSeizing) {
             CheckpointLibrary.isSeizable(s, commitId, positionIndex, true);
         }
 
-        SettleParams memory params = _buildMMSettleParams(factory, positionId, pos.poolId, amountDelta, isSeizing);
-
-        // Execute settlement
-        SettleResult memory result = VTSPositionLib.onMMSettle(s, poolManager, params);
-        settlementDelta = result.settlementDelta;
-        rfsOpen = result.rfsOpen;
-        seizedLiquidityUnits = result.seizedLiquidityUnits;
-
-        // Emit event
-        {
-            PositionAccounting storage pa = s.positionAccounting[params.positionId];
-            emit PositionSettled(
-                commitId,
-                positionIndex,
-                settlementDelta.amount0(),
-                settlementDelta.amount1(),
-                pa.settled.token0,
-                pa.settled.token1,
-                isSeizing,
-                rfsOpen
-            );
-        }
+        SettleResult memory result = _runOnMMSettle(factory, positionId, poolId, amountDelta, isSeizing, fromDeltas);
+        _emitPositionSettled(commitId, positionIndex, positionId, result.settlementDelta, isSeizing, result.rfsOpen);
+        return (result.settlementDelta, result.rfsOpen, result.seizedLiquidityUnits, result.vaultSettlementIntent);
     }
 
     /// @notice Validate that the grace period has elapsed for a position (required before seizure)
     /// @dev Called by MMPositionManager before seizing a position. Reverts if grace period has not elapsed.
-    ///      Refreshes stored RFS lane checkpoint from the current snapshot before seizability (so third parties
-    ///      cannot leave stale `openMask` / `openSince` that block seizure). When a stored commitment deficit
-    ///      exists, also recomputes commitment state (`withCommitment=true`) before marking RFS.
+    ///      When a stored commitment deficit exists, recomputes commitment-backed checkpoint state
+    ///      (`withCommitment=true`) before seizability to avoid stale bypass eligibility.
     /// @param commitId The commit identifier
     /// @param positionIndex The position index within the commit
     function onSeize(uint256 commitId, uint256 positionIndex) external onlyIfPoolManagerUnlocked nonReentrant {
@@ -815,29 +785,15 @@ contract VTSOrchestrator is
         PositionId positionId = getPositionId(commitId, positionIndex);
         _assertPositionValid(positionId, true);
 
-        // Hardening: do not trust previously stored commitment-deficit state on its
-        // own. If a deficit exists, recompute it from the latest backing snapshot
-        // before checking seizability so an attacker cannot create durable seize
-        // eligibility from a stale or transiently-manipulated checkpoint.
-        PositionAccounting storage pa = s.positionAccounting[positionId];
-        bool hasStoredCommitmentDeficit = pa.commitmentDeficit.token0 > 0 || pa.commitmentDeficit.token1 > 0;
-        _checkpoint(commitId, positionIndex, hasStoredCommitmentDeficit, positionId);
-
-        // Validate grace period has elapsed (reverts if not)
-        CheckpointLibrary.isSeizable(
-            s,
-            commitId,
-            positionIndex,
-            true // revert if grace period has not elapsed
-        );
+        VTSCommitLib.validateSeize(s, _lifecycleContext(), commitId, positionIndex, positionId);
     }
 
     /// @notice Renew a liquidity signal for an existing commit
-    /// @dev Intended for router-style callers (e.g. MMPositionManager) where msg.sender is a forwarding contract.
-    /// @param sender The effective caller (locker) used for advancer validation
+    /// @dev Intended for router-style callers (e.g. MMPositionManager). `VTSCommitLib` derives the VRL proof principal
+    ///      as `mmState.advancer` from `liquiditySignal`.
     /// @param commitId The commit identifier to renew
     /// @param liquiditySignal The new liquidity signal
-    function renewSignal(IMarketFactory factory, address sender, uint256 commitId, bytes memory liquiditySignal)
+    function renewSignal(IMarketFactory factory, uint256 commitId, bytes memory liquiditySignal)
         external
         onlyIfPoolManagerUnlocked
         onlyIfVRLHandlersRegistered
@@ -845,33 +801,36 @@ contract VTSOrchestrator is
     {
         // Validate commit exists (but don't require live signal - expired signals can be seized)
         _assertSignalValid(commitId, false);
-        VTSCommitLib.renewSignal(s, _resolveSignalSender(factory, sender), signalManager, commitId, liquiditySignal);
+        VTSCommitLib.renewSignal(s, _commitRouterContext(), factory, _msgSender(), commitId, liquiditySignal);
     }
 
     /// @notice Renew a liquidity signal using sender-signed EIP-712 relayer authorisation
-    /// @dev Same factory-bound sender resolution as `renewSignal`: unbound callers may only relay for themselves.
-    /// @param factory Market factory namespace for `_resolveSignalSender` / bound-caller checks only. EIP-712
+    /// @dev Relay auth recovers to `mmState.advancer` (derived inside `VTSCommitLib`).
+    /// @param factory Market factory namespace for factory registration and bound-caller checks only. EIP-712
     ///        verification remains under `signalManager`; renewals are tied to `commitId` and validated liquidity
     ///        signal ownership within `VTSCommitLib.renewSignalRelayed`.
+    /// @param sender EIP-712 `RelayAuth.sender`: `address(0)` or `mmState.advancer` (see `VRLSignalManager`); MMPM binds locker.
     function renewSignalRelayed(
         IMarketFactory factory,
-        address sender,
         uint256 commitId,
         bytes memory liquiditySignal,
         uint256 deadline,
         uint256 authNonce,
-        bytes memory authSig
+        bytes memory authSig,
+        address sender
     ) external onlyIfPoolManagerUnlocked onlyIfVRLHandlersRegistered nonReentrant {
         _assertSignalValid(commitId, false);
         VTSCommitLib.renewSignalRelayed(
             s,
-            _resolveSignalSender(factory, sender),
-            signalManager,
+            _commitRouterContext(),
+            factory,
+            _msgSender(),
             commitId,
             liquiditySignal,
             deadline,
             authNonce,
-            authSig
+            authSig,
+            sender
         );
     }
 
@@ -890,26 +849,16 @@ contract VTSOrchestrator is
         PositionId positionId = getPositionId(commitId, positionIndex);
         _assertPositionValid(positionId, true);
 
-        _checkpoint(commitId, positionIndex, withCommitment, positionId);
-    }
+        ///      When the pool (or VTS globally) is paused, public `settlePositionGrowths` is CoreHook-only so
+        ///      arbitrary third parties cannot refresh growth during pause. Commitment checkpoints must still run on
+        ///      growth-settled accounting (see COMMIT-02 / COMMIT-02A in `INVARIANTS.md`): for paused
+        ///      `withCommitment == true` we settle via this orchestrator path only, then run the linked checkpoint.
+        ///      Paused `checkpoint(..., false)` and public `calcRFS` / `settlePositionGrowths` remain CoreHook-only.
+        _settleGrowthsBeforeCheckpoint(positionId, withCommitment);
 
-    /// @notice Internal checkpoint: settle growths, optional commitment refresh, then mark RFS lane state
-    /// @dev Callers must have already validated `commitId` and `positionId` (e.g. `_assertSignalValid`, `_assertPositionValid`).
-    function _checkpoint(uint256 commitId, uint256 positionIndex, bool withCommitment, PositionId positionId) internal {
-        // Settle growths exactly once up-front so both commitment checks and RFS use the same state snapshot.
-        // We intentionally avoid `calcRFS` here because it settles growths internally.
-        VTSPositionLib.settlePositionGrowths(s, poolManager, positionId);
-
-        if (withCommitment) {
-            // Commitment backing checks use the stored commit signal state.
-            // If the signal is expired, it is treated as 0; callers should renew first if needed.
-            VTSCommitLib.checkpointWithCommitment(s, poolManager, oracleHelper, commitId, positionId);
-        }
-
-        // Compute RFS without re-settling growths, then mark lane-open state from this unified snapshot.
-        (, BalanceDelta rfsDelta) = VTSPositionLib.getRFS(s, positionId);
-
-        CheckpointLibrary.markCheckpoint(s, positionId, VTSPositionLib._rfsOpenMask(rfsDelta));
-        emit Checkpointed(commitId, positionIndex, s.positions[positionId].checkpoint, withCommitment);
+        RFSCheckpoint memory checkpointOut = withCommitment
+            ? VTSCommitLib.checkpointAfterGrowthWithCommitment(s, _lifecycleContext(), commitId, positionId)
+            : VTSLifecycleLinkedLib.checkpointAfterGrowthNoCommitment(s, positionId);
+        emit Checkpointed(commitId, positionIndex, checkpointOut, withCommitment);
     }
 }

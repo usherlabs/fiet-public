@@ -3,6 +3,7 @@ pragma solidity ^0.8.26;
 
 import {
     VTSStorage,
+    PositionAccounting,
     MarketVTSConfiguration,
     TokenConfiguration,
     GrowthPair,
@@ -10,8 +11,11 @@ import {
     TouchPositionParams,
     TouchPositionResult,
     SettleParams,
-    SettleResult
+    SettleResult,
+    VaultSettlementIntent,
+    GrowthCarryQ128
 } from "../../../src/types/VTS.sol";
+import {FixedPoint128} from "v4-periphery/lib/v4-core/src/libraries/FixedPoint128.sol";
 import {PositionId, Position} from "../../../src/types/Position.sol";
 import {Pool} from "../../../src/types/Pool.sol";
 import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
@@ -21,10 +25,17 @@ import {ModifyLiquidityParams} from "@uniswap/v4-core/src/types/PoolOperation.so
 import {BalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
 import {IPoolManager} from "v4-periphery/lib/v4-core/src/interfaces/IPoolManager.sol";
 import {VTSPositionLib} from "../../../src/libraries/VTSPositionLib.sol";
+import {VTSPositionMMOpsLib} from "../../../src/libraries/VTSPositionMMOpsLib.sol";
+import {VTSLifecycleLinkedLib} from "../../../src/libraries/VTSLifecycleLinkedLib.sol";
 import {RFSCheckpoint} from "../../../src/types/Checkpoint.sol";
 import {IMarketVault} from "../../../src/interfaces/IMarketVault.sol";
-import {DynamicCurrencyDelta} from "../../../src/libraries/DynamicCurrencyDelta.sol";
+import {OwnerCurrencyDelta} from "../../../src/libraries/OwnerCurrencyDelta.sol";
+import {MarketCurrencyDelta} from "../../../src/libraries/MarketCurrencyDelta.sol";
+import {ICanonicalVault} from "../../../src/interfaces/ICanonicalVault.sol";
 import {CurrencyDelta} from "v4-periphery/lib/v4-core/src/libraries/CurrencyDelta.sol";
+import {LiquidityUtils} from "../../../src/libraries/LiquidityUtils.sol";
+import {CommitmentDeficitMMFreezeLib} from "../../../src/libraries/CommitmentDeficitMMFreezeLib.sol";
+import {CarryQ128, CarryQ128Lib} from "../../../src/types/Carry.sol";
 
 /// @title VTSPositionLibHarness
 /// @notice Exposes internal VTSPositionLib functions for unit testing
@@ -34,12 +45,21 @@ contract VTSPositionLibHarness {
 
     /// @notice Internal VTSStorage for testing
     VTSStorage internal s;
+    BalanceDelta internal lastSettleableDelta;
+    BalanceDelta internal lastQueuedDelta;
+    BalanceDelta internal lastUnderlyingDeltaSettlement;
+    BalanceDelta internal lastSeizureExportedForSettlementClamp;
+    BalanceDelta internal lastNonSeizureExportedForSettlementClamp;
+    uint256 internal lastSeizureRetainedPrincipal0;
+    uint256 internal lastSeizureRetainedPrincipal1;
+    int256 internal lastUnderlyingDeltaSnapshot0;
+    int256 internal lastUnderlyingDeltaSnapshot1;
 
     // ============ Library Function Exposers ============
 
-    /// @notice Exposes _trackCommitment
-    function trackCommitment(PositionId positionId, ModifyLiquidityParams calldata params) external {
-        VTSPositionLib._trackCommitment(s, positionId, params);
+    /// @notice Exposes `_trackCommitment` (source-of-truth commitment maxima for live liquidity)
+    function trackCommitmentFromLiveLiquidity(PositionId positionId, uint128 liveLiquidity) external {
+        VTSPositionLib._trackCommitment(s, positionId, liveLiquidity);
     }
 
     /// @notice Exposes _updateSettlement
@@ -88,6 +108,14 @@ contract VTSPositionLibHarness {
         return VTSPositionLib.touchPosition(s, ctx, p);
     }
 
+    /// @notice Alias for `touchPosition` (MM tail runs inside `touchPosition`; returned `pos` is refreshed from storage).
+    function touchPositionAndFinalizeMM(PositionContext memory ctx, TouchPositionParams calldata p)
+        external
+        returns (TouchPositionResult memory result)
+    {
+        result = VTSPositionLib.touchPosition(s, ctx, p);
+    }
+
     /// @notice Exposes onMMSettle for testing
     function onMMSettle(
         IPoolManager poolManager,
@@ -96,34 +124,100 @@ contract VTSPositionLibHarness {
         Currency lccCurrency0,
         Currency lccCurrency1,
         BalanceDelta delta,
-        bool isSeizing
+        bool isSeizing,
+        bool fromDeltas
     ) external returns (BalanceDelta settlementDelta, bool rfsOpen, uint256 seizedLiquidityUnits) {
-        SettleResult memory result = VTSPositionLib.onMMSettle(
-            s,
-            poolManager,
-            SettleParams({
-                vault: vault,
-                positionId: positionId,
-                lccCurrency0: lccCurrency0,
-                lccCurrency1: lccCurrency1,
-                delta: delta,
-                isSeizing: isSeizing
-            })
-        );
+        SettleParams memory params;
+        params.vault = vault;
+        params.positionId = positionId;
+        params.lccCurrency0 = lccCurrency0;
+        params.lccCurrency1 = lccCurrency1;
+        params.delta = delta;
+        params.isSeizing = isSeizing;
+        params.fromDeltas = fromDeltas;
+        SettleResult memory result = VTSLifecycleLinkedLib._executeMMSettleFromParams(s, poolManager, params);
         return (result.settlementDelta, result.rfsOpen, result.seizedLiquidityUnits);
     }
 
-    /// @notice Exposes internal coverage burn for direct unit testing
-    /// @dev Useful to kill mutants around `_calculateFeesBurn` / `_applyCoverageBurn` and outflow-window checkpointing.
-    function applyCoverageBurn(
+    function onMMSettleWithIntent(
         IPoolManager poolManager,
+        IMarketVault vault,
         PositionId positionId,
-        PoolId poolId,
-        uint8 tokenIndex,
-        uint256 cov,
-        uint128 positionLiquidity
-    ) external {
-        VTSPositionLib._applyCoverageBurn(s, poolManager, positionId, poolId, tokenIndex, cov, positionLiquidity);
+        Currency lccCurrency0,
+        Currency lccCurrency1,
+        BalanceDelta delta,
+        bool isSeizing,
+        bool fromDeltas
+    ) external returns (BalanceDelta, bool, uint256, VaultSettlementIntent memory) {
+        SettleParams memory params = SettleParams({
+            vault: vault,
+            positionId: positionId,
+            lccCurrency0: lccCurrency0,
+            lccCurrency1: lccCurrency1,
+            delta: delta,
+            isSeizing: isSeizing,
+            fromDeltas: fromDeltas
+        });
+        SettleResult memory result = VTSLifecycleLinkedLib._executeMMSettleFromParams(s, poolManager, params);
+        return (result.settlementDelta, result.rfsOpen, result.seizedLiquidityUnits, result.vaultSettlementIntent);
+    }
+
+    /// @dev Mirrors removed `previewLiquidityDecreaseRouting` early-return + `_computeLiquidityDecreaseRoutingSplit`.
+    function _previewLiquidityDecreaseRoutingHarness(
+        PositionContext memory ctx,
+        BalanceDelta principalDelta,
+        BalanceDelta requiredSettlementDelta
+    )
+        private
+        view
+        returns (
+            uint256 retainedPrincipal0,
+            uint256 retainedPrincipal1,
+            BalanceDelta settleableDelta,
+            BalanceDelta queuedDelta,
+            BalanceDelta underlyingDeltaSettlement
+        )
+    {
+        BalanceDelta exportedForSettlementClampUnused;
+        (
+            retainedPrincipal0,
+            retainedPrincipal1,
+            settleableDelta,
+            queuedDelta,
+            underlyingDeltaSettlement,
+            exportedForSettlementClampUnused
+        ) = VTSPositionMMOpsLib._computeLiquidityDecreaseRoutingSplit(ctx, principalDelta, requiredSettlementDelta);
+    }
+
+    /// @notice Exposes full non-seizure MM decrease routing split (incl. `exportedForSettlementClamp` for SETTLE-03 tests).
+    function previewLiquidityDecreaseRoutingSplitFull(
+        PositionContext memory ctx,
+        BalanceDelta principalDelta,
+        BalanceDelta requiredSettlementDelta
+    )
+        external
+        view
+        returns (
+            uint256 retainedPrincipal0,
+            uint256 retainedPrincipal1,
+            BalanceDelta settleableDelta,
+            BalanceDelta queuedDelta,
+            BalanceDelta underlyingDeltaSettlement,
+            BalanceDelta exportedForSettlementClamp
+        )
+    {
+        return VTSPositionMMOpsLib._computeLiquidityDecreaseRoutingSplit(ctx, principalDelta, requiredSettlementDelta);
+    }
+
+    /// @notice Vault dry-modify view: immediate settleable slice vs per-leg shortfall (shared by decrease + seizure routing).
+    function previewVaultSettleableViewForRequired(PositionContext memory ctx, BalanceDelta requiredSettlementDelta)
+        external
+        view
+        returns (BalanceDelta settleableDelta, uint256 shortfallU0, uint256 shortfallU1)
+    {
+        VTSPositionMMOpsLib.VaultSettleableView memory v =
+            VTSPositionMMOpsLib._vaultSettleableViewForRequired(ctx, requiredSettlementDelta);
+        return (v.settleableDelta, v.shortfallU0, v.shortfallU1);
     }
 
     /// @notice Exposes internal liquidity decrease helper for unit tests (queue clamping, settleableDelta)
@@ -135,9 +229,108 @@ contract VTSPositionLibHarness {
         BalanceDelta requiredSettlementDelta,
         address queueRecipient
     ) external returns (BalanceDelta settleableDelta) {
-        return VTSPositionLib._handleLiquidityDecrease(
+        BalanceDelta exported;
+        (,, settleableDelta, lastQueuedDelta, lastUnderlyingDeltaSettlement, exported) =
+            VTSPositionMMOpsLib._computeLiquidityDecreaseRoutingSplit(ctx, principalDelta, requiredSettlementDelta);
+        lastSettleableDelta = settleableDelta;
+        lastNonSeizureExportedForSettlementClamp = exported;
+        VTSPositionMMOpsLib._handleLiquidityDecrease(
             ctx, owner, poolKey, principalDelta, requiredSettlementDelta, queueRecipient
         );
+        return settleableDelta;
+    }
+
+    /// @notice Exposes full liquidity decrease routing splits for unit tests (preview + same effects as production).
+    function handleLiquidityDecreaseDetailed(
+        PositionContext memory ctx,
+        address owner,
+        PoolKey calldata poolKey,
+        BalanceDelta principalDelta,
+        BalanceDelta requiredSettlementDelta,
+        address queueRecipient
+    )
+        external
+        returns (BalanceDelta settleableDelta, BalanceDelta queuedDelta, BalanceDelta underlyingDeltaSettlement)
+    {
+        BalanceDelta exported;
+        (,, settleableDelta, queuedDelta, underlyingDeltaSettlement, exported) =
+            VTSPositionMMOpsLib._computeLiquidityDecreaseRoutingSplit(ctx, principalDelta, requiredSettlementDelta);
+        lastSettleableDelta = settleableDelta;
+        lastQueuedDelta = queuedDelta;
+        lastUnderlyingDeltaSettlement = underlyingDeltaSettlement;
+        lastNonSeizureExportedForSettlementClamp = exported;
+        VTSPositionMMOpsLib._handleLiquidityDecrease(
+            ctx, owner, poolKey, principalDelta, requiredSettlementDelta, queueRecipient
+        );
+        return (settleableDelta, queuedDelta, underlyingDeltaSettlement);
+    }
+
+    function getLastNonSeizureExportedForSettlementClamp() external view returns (BalanceDelta) {
+        return lastNonSeizureExportedForSettlementClamp;
+    }
+
+    /// @notice Preview seizure-only routing split (no Hub staging).
+    function previewSeizureLiquidityDecreaseRouting(
+        PositionContext memory ctx,
+        BalanceDelta principalDelta,
+        BalanceDelta requiredSettlementDelta
+    )
+        external
+        view
+        returns (
+            uint256 retainedPrincipal0,
+            uint256 retainedPrincipal1,
+            BalanceDelta underlyingDeltaSettlement,
+            BalanceDelta exportedForSettlementClamp
+        )
+    {
+        return VTSPositionMMOpsLib._computeSeizureLiquidityDecreaseRoutingSplit(
+            ctx, principalDelta, requiredSettlementDelta
+        );
+    }
+
+    /// @notice Exposes seizure decrease helper for tests (same Hub staging as production seizure path).
+    function handleSeizureLiquidityDecrease(
+        PositionContext memory ctx,
+        address owner,
+        PoolKey calldata poolKey,
+        BalanceDelta principalDelta,
+        BalanceDelta requiredSettlementDelta,
+        address queueRecipient
+    ) external returns (BalanceDelta underlyingDeltaSettlement) {
+        BalanceDelta exported;
+        (lastSeizureRetainedPrincipal0, lastSeizureRetainedPrincipal1, underlyingDeltaSettlement, exported) =
+            VTSPositionMMOpsLib._computeSeizureLiquidityDecreaseRoutingSplit(
+                ctx, principalDelta, requiredSettlementDelta
+            );
+        lastSeizureExportedForSettlementClamp = exported;
+        lastUnderlyingDeltaSettlement = underlyingDeltaSettlement;
+        VTSPositionMMOpsLib._handleSeizureLiquidityDecrease(
+            ctx, owner, poolKey, principalDelta, requiredSettlementDelta, queueRecipient
+        );
+        return underlyingDeltaSettlement;
+    }
+
+    function getLastSeizureRouting()
+        external
+        view
+        returns (
+            uint256 retainedPrincipal0,
+            uint256 retainedPrincipal1,
+            BalanceDelta exportedForSettlementClamp,
+            BalanceDelta underlyingDeltaSettlement
+        )
+    {
+        return (
+            lastSeizureRetainedPrincipal0,
+            lastSeizureRetainedPrincipal1,
+            lastSeizureExportedForSettlementClamp,
+            lastUnderlyingDeltaSettlement
+        );
+    }
+
+    function getLastSeizureExportedForSettlementClamp() external view returns (BalanceDelta) {
+        return lastSeizureExportedForSettlementClamp;
     }
 
     // ============ Storage Getters (for assertions) ============
@@ -151,17 +344,30 @@ contract VTSPositionLibHarness {
             uint256 settled0,
             uint256 settled1,
             uint256 cumulativeDeficit0,
-            uint256 cumulativeDeficit1
+            uint256 cumulativeDeficit1,
+            uint256 settledOverflow0,
+            uint256 settledOverflow1
         )
     {
+        PositionAccounting storage pa = s.positionAccounting[id];
         return (
-            s.positionAccounting[id].commitmentMax.token0,
-            s.positionAccounting[id].commitmentMax.token1,
-            s.positionAccounting[id].settled.token0,
-            s.positionAccounting[id].settled.token1,
-            s.positionAccounting[id].cumulativeDeficit.token0,
-            s.positionAccounting[id].cumulativeDeficit.token1
+            pa.commitmentMax.token0,
+            pa.commitmentMax.token1,
+            pa.settled.token0,
+            pa.settled.token1,
+            pa.cumulativeDeficit.token0,
+            pa.cumulativeDeficit.token1,
+            pa.settledOverflow.token0,
+            pa.settledOverflow.token1
         );
+    }
+
+    function getLastLiquidityDecreasePreview()
+        external
+        view
+        returns (BalanceDelta settleableDelta, BalanceDelta queuedDelta, BalanceDelta underlyingDeltaSettlement)
+    {
+        return (lastSettleableDelta, lastQueuedDelta, lastUnderlyingDeltaSettlement);
     }
 
     function getPosition(PositionId id) external view returns (Position memory) {
@@ -177,34 +383,19 @@ contract VTSPositionLibHarness {
         return (s.positionAccounting[id].commitmentDeficit.token0, s.positionAccounting[id].commitmentDeficit.token1);
     }
 
-    function getCISEExposure(PositionId id) external view returns (uint256 exposure0, uint256 exposure1) {
-        return (
-            s.positionAccounting[id].ciseExposureSinceLastMod.token0,
-            s.positionAccounting[id].ciseExposureSinceLastMod.token1
-        );
-    }
-
-    function getPoolTotalCISEExposure(PoolId poolId) external view returns (uint256 exposure0, uint256 exposure1) {
-        return (
-            s.poolAccounting[poolId].totalCISEExposureSinceLastMod.token0,
-            s.poolAccounting[poolId].totalCISEExposureSinceLastMod.token1
+    /// @notice Test-only: same predicate as non-seizing MM liquidity freeze in `VTSPositionLib._touchExistingPositionPath`.
+    function materialDeficitBlocksNonSeizingMMLiquidityChange(PoolId poolId, PositionId id)
+        external
+        view
+        returns (bool)
+    {
+        return CommitmentDeficitMMFreezeLib.blocksNonSeizingMMLiquidityChange(
+            s.positionAccounting[id], s.pools[poolId].vtsConfig
         );
     }
 
     function getPoolTotalSettled(PoolId poolId) external view returns (uint256 total0, uint256 total1) {
         return (s.poolAccounting[poolId].totalSettled.token0, s.poolAccounting[poolId].totalSettled.token1);
-    }
-
-    function getPoolProtocolFeeAccrued(PoolId poolId) external view returns (uint256 fee0, uint256 fee1) {
-        return (s.poolAccounting[poolId].protocolFeeAccrued.token0, s.poolAccounting[poolId].protocolFeeAccrued.token1);
-    }
-
-    function getFeesShared(PositionId id) external view returns (uint256 fee0, uint256 fee1) {
-        return (s.positionAccounting[id].feesShared.token0, s.positionAccounting[id].feesShared.token1);
-    }
-
-    function getPendingFeeAdj(PositionId id) external view returns (int256 adj0, int256 adj1) {
-        return (s.positionAccounting[id].pendingFeeAdj.token0, s.positionAccounting[id].pendingFeeAdj.token1);
     }
 
     function getPoolTotalDeficitPrincipal(PoolId poolId)
@@ -217,90 +408,8 @@ contract VTSPositionLibHarness {
         );
     }
 
-    function getPoolCoverageResidualCISE(PoolId poolId) external view returns (uint256 residual0, uint256 residual1) {
-        return
-            (s.poolAccounting[poolId].coverageResidualCISE.token0, s.poolAccounting[poolId].coverageResidualCISE.token1);
-    }
-
-    function getPoolCoverageResidualDICE(PoolId poolId) external view returns (uint256 residual0, uint256 residual1) {
-        return
-            (s.poolAccounting[poolId].coverageResidualDICE.token0, s.poolAccounting[poolId].coverageResidualDICE.token1);
-    }
-
-    function getPoolCoveragePerSettledIndexX128(PoolId poolId) external view returns (uint256 idx0, uint256 idx1) {
-        return (
-            s.poolAccounting[poolId].coveragePerSettledIndexX128.token0,
-            s.poolAccounting[poolId].coveragePerSettledIndexX128.token1
-        );
-    }
-
-    function setPoolCoveragePerSettledIndexX128(PoolId poolId, uint256 idx0, uint256 idx1) external {
-        s.poolAccounting[poolId].coveragePerSettledIndexX128.token0 = idx0;
-        s.poolAccounting[poolId].coveragePerSettledIndexX128.token1 = idx1;
-    }
-
-    function getPoolCoveragePerDeficitIndexX128(PoolId poolId) external view returns (uint256 idx0, uint256 idx1) {
-        return (
-            s.poolAccounting[poolId].coveragePerDeficitIndexX128.token0,
-            s.poolAccounting[poolId].coveragePerDeficitIndexX128.token1
-        );
-    }
-
-    function getPoolCoveragePerResidualDeficitIndexX128(PoolId poolId)
-        external
-        view
-        returns (uint256 idx0, uint256 idx1)
-    {
-        return (
-            s.poolAccounting[poolId].coveragePerResidualDeficitIndexX128.token0,
-            s.poolAccounting[poolId].coveragePerResidualDeficitIndexX128.token1
-        );
-    }
-
-    function getCoverageIndexLastX128(PositionId id) external view returns (uint256 idx0, uint256 idx1) {
-        return
-            (
-                s.positionAccounting[id].coverageIndexLastX128.token0,
-                s.positionAccounting[id].coverageIndexLastX128.token1
-            );
-    }
-
-    function getResidualCoverageIndexLastX128(PositionId id) external view returns (uint256 idx0, uint256 idx1) {
-        return (
-            s.positionAccounting[id].residualCoverageIndexLastX128.token0,
-            s.positionAccounting[id].residualCoverageIndexLastX128.token1
-        );
-    }
-
-    function getPendingResidualBurnBase(PositionId id) external view returns (uint256 burn0, uint256 burn1) {
-        return (
-            s.positionAccounting[id].pendingResidualBurnBase.token0,
-            s.positionAccounting[id].pendingResidualBurnBase.token1
-        );
-    }
-
-    function getPendingResidualBurnOutflowsFloor(PositionId id) external view returns (uint256 floor0, uint256 floor1) {
-        return (
-            s.positionAccounting[id].pendingResidualBurnOutflowsFloor.token0,
-            s.positionAccounting[id].pendingResidualBurnOutflowsFloor.token1
-        );
-    }
-
-    function getCISEIndexLastX128(PositionId id) external view returns (uint256 idx0, uint256 idx1) {
-        return (s.positionAccounting[id].ciseIndexLastX128.token0, s.positionAccounting[id].ciseIndexLastX128.token1);
-    }
-
     function getCumulativeOutflows(PositionId id) external view returns (uint256 out0, uint256 out1) {
         return (s.positionAccounting[id].cumulativeOutflows.token0, s.positionAccounting[id].cumulativeOutflows.token1);
-    }
-
-    function getOutflowsAtFeeSnap(PositionId id) external view returns (uint256 snap0, uint256 snap1) {
-        return (s.positionAccounting[id].outflowsAtFeeSnap.token0, s.positionAccounting[id].outflowsAtFeeSnap.token1);
-    }
-
-    function getFeeGrowthInsideLast(PositionId id) external view returns (uint256 fg0, uint256 fg1) {
-        return
-            (s.positionAccounting[id].feeGrowthInsideLast.token0, s.positionAccounting[id].feeGrowthInsideLast.token1);
     }
 
     function getDeficitGrowthInsideLast(PositionId id) external view returns (uint256 dg0, uint256 dg1) {
@@ -315,6 +424,47 @@ contract VTSPositionLibHarness {
             s.positionAccounting[id].inflowGrowthInsideLast.token0,
             s.positionAccounting[id].inflowGrowthInsideLast.token1
         );
+    }
+
+    /// @notice Test-only: read Q128 deficit growth carries (raw `< Q128`)
+    function getDeficitGrowthCarry(PositionId id) external view returns (uint256 c0, uint256 c1) {
+        return (
+            GrowthCarryQ128.unwrap(s.positionAccounting[id].deficitGrowthCarry.token0),
+            GrowthCarryQ128.unwrap(s.positionAccounting[id].deficitGrowthCarry.token1)
+        );
+    }
+
+    /// @notice Test-only: read Q128 inflow growth carries
+    function getInflowGrowthCarry(PositionId id) external view returns (uint256 c0, uint256 c1) {
+        return (
+            GrowthCarryQ128.unwrap(s.positionAccounting[id].inflowGrowthCarry.token0),
+            GrowthCarryQ128.unwrap(s.positionAccounting[id].inflowGrowthCarry.token1)
+        );
+    }
+
+    /// @notice Test-only: seed carries (values reduced mod Q128)
+    function setDeficitGrowthCarry(PositionId id, uint256 c0, uint256 c1) external {
+        s.positionAccounting[id].deficitGrowthCarry.token0 = GrowthCarryQ128.wrap(c0 % FixedPoint128.Q128);
+        s.positionAccounting[id].deficitGrowthCarry.token1 = GrowthCarryQ128.wrap(c1 % FixedPoint128.Q128);
+    }
+
+    function setInflowGrowthCarry(PositionId id, uint256 c0, uint256 c1) external {
+        s.positionAccounting[id].inflowGrowthCarry.token0 = GrowthCarryQ128.wrap(c0 % FixedPoint128.Q128);
+        s.positionAccounting[id].inflowGrowthCarry.token1 = GrowthCarryQ128.wrap(c1 % FixedPoint128.Q128);
+    }
+
+    /// @notice Test-only: read Q128 seizure liquidity carries per lane (raw `< Q128`)
+    function getSeizureLiquidityCarry(PositionId id) external view returns (uint256 c0, uint256 c1) {
+        return (
+            CarryQ128.unwrap(s.positionAccounting[id].seizureLiquidityCarry.token0),
+            CarryQ128.unwrap(s.positionAccounting[id].seizureLiquidityCarry.token1)
+        );
+    }
+
+    /// @notice Test-only: seed seizure carries (values reduced mod Q128)
+    function setSeizureLiquidityCarry(PositionId id, uint256 c0, uint256 c1) external {
+        s.positionAccounting[id].seizureLiquidityCarry.token0 = CarryQ128Lib.wrap(c0);
+        s.positionAccounting[id].seizureLiquidityCarry.token1 = CarryQ128Lib.wrap(c1);
     }
 
     function getCommitExpiresAt(uint256 commitId) external view returns (uint256 expiresAt) {
@@ -343,6 +493,12 @@ contract VTSPositionLibHarness {
     function setSettled(PositionId id, uint256 s0, uint256 s1) external {
         s.positionAccounting[id].settled.token0 = s0;
         s.positionAccounting[id].settled.token1 = s1;
+    }
+
+    /// @notice TEST-ONLY: sets deferred amounts above `commitmentMax`
+    function setSettledOverflow(PositionId id, uint256 o0, uint256 o1) external {
+        s.positionAccounting[id].settledOverflow.token0 = o0;
+        s.positionAccounting[id].settledOverflow.token1 = o1;
     }
 
     /// @notice Sets cumulative deficit for a position
@@ -377,18 +533,6 @@ contract VTSPositionLibHarness {
         );
     }
 
-    /// @notice Sets CISE exposure for a position
-    function setCISEExposure(PositionId id, uint256 exposure0, uint256 exposure1) external {
-        s.positionAccounting[id].ciseExposureSinceLastMod.token0 = exposure0;
-        s.positionAccounting[id].ciseExposureSinceLastMod.token1 = exposure1;
-    }
-
-    /// @notice Sets pool total CISE exposure
-    function setPoolTotalCISEExposure(PoolId poolId, uint256 exposure0, uint256 exposure1) external {
-        s.poolAccounting[poolId].totalCISEExposureSinceLastMod.token0 = exposure0;
-        s.poolAccounting[poolId].totalCISEExposureSinceLastMod.token1 = exposure1;
-    }
-
     function setPoolTotalSettled(PoolId poolId, uint256 total0, uint256 total1) external {
         s.poolAccounting[poolId].totalSettled.token0 = total0;
         s.poolAccounting[poolId].totalSettled.token1 = total1;
@@ -399,79 +543,9 @@ contract VTSPositionLibHarness {
         s.poolAccounting[poolId].totalDeficitPrincipal.token1 = principal1;
     }
 
-    function setPoolCoverageResidualCISE(PoolId poolId, uint256 residual0, uint256 residual1) external {
-        s.poolAccounting[poolId].coverageResidualCISE.token0 = residual0;
-        s.poolAccounting[poolId].coverageResidualCISE.token1 = residual1;
-    }
-
-    function setPoolCoverageResidualDICE(PoolId poolId, uint256 residual0, uint256 residual1) external {
-        s.poolAccounting[poolId].coverageResidualDICE.token0 = residual0;
-        s.poolAccounting[poolId].coverageResidualDICE.token1 = residual1;
-    }
-
-    function setPoolCoveragePerDeficitIndexX128(PoolId poolId, uint256 idx0, uint256 idx1) external {
-        s.poolAccounting[poolId].coveragePerDeficitIndexX128.token0 = idx0;
-        s.poolAccounting[poolId].coveragePerDeficitIndexX128.token1 = idx1;
-    }
-
-    function setPoolCoveragePerResidualDeficitIndexX128(PoolId poolId, uint256 idx0, uint256 idx1) external {
-        s.poolAccounting[poolId].coveragePerResidualDeficitIndexX128.token0 = idx0;
-        s.poolAccounting[poolId].coveragePerResidualDeficitIndexX128.token1 = idx1;
-    }
-
-    function setCoverageIndexLastX128(PositionId id, uint256 idx0, uint256 idx1) external {
-        s.positionAccounting[id].coverageIndexLastX128.token0 = idx0;
-        s.positionAccounting[id].coverageIndexLastX128.token1 = idx1;
-    }
-
-    function setResidualCoverageIndexLastX128(PositionId id, uint256 idx0, uint256 idx1) external {
-        s.positionAccounting[id].residualCoverageIndexLastX128.token0 = idx0;
-        s.positionAccounting[id].residualCoverageIndexLastX128.token1 = idx1;
-    }
-
-    function setPendingResidualBurnBase(PositionId id, uint256 burn0, uint256 burn1) external {
-        s.positionAccounting[id].pendingResidualBurnBase.token0 = burn0;
-        s.positionAccounting[id].pendingResidualBurnBase.token1 = burn1;
-    }
-
-    function setPendingResidualBurnOutflowsFloor(PositionId id, uint256 floor0, uint256 floor1) external {
-        s.positionAccounting[id].pendingResidualBurnOutflowsFloor.token0 = floor0;
-        s.positionAccounting[id].pendingResidualBurnOutflowsFloor.token1 = floor1;
-    }
-
-    function setCISEIndexLastX128(PositionId id, uint256 idx0, uint256 idx1) external {
-        s.positionAccounting[id].ciseIndexLastX128.token0 = idx0;
-        s.positionAccounting[id].ciseIndexLastX128.token1 = idx1;
-    }
-
     function setCumulativeOutflows(PositionId id, uint256 out0, uint256 out1) external {
         s.positionAccounting[id].cumulativeOutflows.token0 = out0;
         s.positionAccounting[id].cumulativeOutflows.token1 = out1;
-    }
-
-    function setOutflowsAtFeeSnap(PositionId id, uint256 snap0, uint256 snap1) external {
-        s.positionAccounting[id].outflowsAtFeeSnap.token0 = snap0;
-        s.positionAccounting[id].outflowsAtFeeSnap.token1 = snap1;
-    }
-
-    function setFeeGrowthInsideLast(PositionId id, uint256 fg0, uint256 fg1) external {
-        s.positionAccounting[id].feeGrowthInsideLast.token0 = fg0;
-        s.positionAccounting[id].feeGrowthInsideLast.token1 = fg1;
-        s.positionAccounting[id].feeBurnGrowthRemainder.token0 = 0;
-        s.positionAccounting[id].feeBurnGrowthRemainder.token1 = 0;
-    }
-
-    /// @notice TEST-ONLY: set fee-burn remainder (used to assert touchPosition clears it on liquidity change)
-    function setFeeBurnGrowthRemainder(PositionId id, uint256 r0, uint256 r1) external {
-        s.positionAccounting[id].feeBurnGrowthRemainder.token0 = r0;
-        s.positionAccounting[id].feeBurnGrowthRemainder.token1 = r1;
-    }
-
-    function getFeeBurnGrowthRemainder(PositionId id) external view returns (uint256 r0, uint256 r1) {
-        return (
-            s.positionAccounting[id].feeBurnGrowthRemainder.token0,
-            s.positionAccounting[id].feeBurnGrowthRemainder.token1
-        );
     }
 
     function setCommitExpiresAt(uint256 commitId, uint256 expiresAt) external {
@@ -480,6 +554,15 @@ contract VTSPositionLibHarness {
 
     function setCommitActivePositionCount(uint256 commitId, uint256 activeCount) external {
         s.commits[commitId].activePositionCount = activeCount;
+    }
+
+    function getCommitActivePositionCount(uint256 commitId) external view returns (uint256) {
+        return s.commits[commitId].activePositionCount;
+    }
+
+    /// @notice Test-only: reads `Commit.inactiveRemnantCount` from harness storage
+    function inactiveRemnantCount(uint256 commitId) external view returns (uint256) {
+        return s.commits[commitId].inactiveRemnantCount;
     }
 
     /// @notice Sets deficit growth global for a pool
@@ -545,10 +628,18 @@ contract VTSPositionLibHarness {
         s.positions[id].commitId = commitId;
     }
 
-    /// @notice Sets underlying currency delta using DynamicCurrencyDelta.accountDelta
-    /// @dev Uses DynamicCurrencyDelta to match the actual implementation
+    /// @notice Sets underlying currency delta using OwnerCurrencyDelta.accountDelta
+    /// @dev Uses OwnerCurrencyDelta to match the actual implementation
     function setUnderlyingDelta(Currency currency, address target, int128 delta) external {
-        DynamicCurrencyDelta.accountDelta(currency, delta, target);
+        OwnerCurrencyDelta.accountDelta(currency, delta, target);
+    }
+
+    function addMarketProducedCredit(IMarketVault vault, Currency currency, uint256 amount) external {
+        MarketCurrencyDelta.addProduced(ICanonicalVault(vault.canonicalVault()).marketFactory(), currency, amount);
+    }
+
+    function marketProducedCredit(address factory, Currency currency) external view returns (uint256) {
+        return MarketCurrencyDelta.produced(factory, currency);
     }
 
     /// @notice Reads the current currency delta for a target in this harness' transient storage context
@@ -569,5 +660,19 @@ contract VTSPositionLibHarness {
     /// @notice Gets underlying currency delta for a target address
     function getUnderlyingDelta(Currency currency, address target) external view returns (int256) {
         return currency.getDelta(target);
+    }
+
+    function snapshotUnderlyingDeltaPair(Currency currency0, Currency currency1, address target)
+        external
+        returns (int256 delta0, int256 delta1)
+    {
+        delta0 = currency0.getDelta(target);
+        delta1 = currency1.getDelta(target);
+        lastUnderlyingDeltaSnapshot0 = delta0;
+        lastUnderlyingDeltaSnapshot1 = delta1;
+    }
+
+    function getLastUnderlyingDeltaSnapshot() external view returns (int256 delta0, int256 delta1) {
+        return (lastUnderlyingDeltaSnapshot0, lastUnderlyingDeltaSnapshot1);
     }
 }

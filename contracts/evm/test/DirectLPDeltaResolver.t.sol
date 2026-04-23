@@ -3,7 +3,7 @@ pragma solidity ^0.8.26;
 
 import "forge-std/Test.sol";
 
-import {DirectLPDeltaResolver} from "../src/DirectLPDeltaResolver.sol";
+import {DirectLPDeltaResolver} from "../src/periphery/DirectLPDeltaResolver.sol";
 import {IPositionManager} from "v4-periphery/src/interfaces/IPositionManager.sol";
 import {PositionInfo} from "v4-periphery/src/libraries/PositionInfoLibrary.sol";
 import {PositionInfoLibrary} from "v4-periphery/src/libraries/PositionInfoLibrary.sol";
@@ -15,6 +15,8 @@ import {IHooks} from "@uniswap/v4-core/src/interfaces/IHooks.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
 
+/// @notice Unit tests for `DirectLPDeltaResolver` (kept alongside the contract for when a deployment wires native
+///         `PositionManager` + hook return deltas again—see contract devdoc).
 contract DirectLPDeltaResolverTest is Test {
     DirectLPDeltaResolver internal resolver;
 

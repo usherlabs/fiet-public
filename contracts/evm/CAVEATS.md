@@ -15,13 +15,19 @@ They also depend on whether the protocol can immediately source the required und
 Today, proxy swaps read vault availability via `inMarketBalanceOf(...)` and then settle output from the same shared
 inventory. That inventory is also used by other legitimate protocol paths, including:
 
-- direct `unwrap()` / `unwrapTo()` flows that consume market liquidity;
+- direct `unwrap()` flows that consume market liquidity;
 - queue settlement and obligation processing;
 - market-liquidity withdrawals used by protocol paths such as MM flows; and
 - any other path that lawfully draws on the same in-market underlying balance.
 
 As a result, a proxy swap can revert if an earlier transaction has already consumed the relevant output-side
 underlying liquidity, even if the core pool itself would still price the trade.
+
+## Market vault facades do not accept unbooked native ETH
+
+`MarketVaultFacade.receive` (including `ProxyHook`) reverts all plain ETH. Native liquidity for proxy settlement is
+accounted through `CanonicalVault` / `PoolManager` paths, not stray balance on the facade. Integrators must not direct
+native `TAKE` or similar transfers to the proxy-hook address.
 
 ## Why the Protocol Fails Closed
 
@@ -49,7 +55,7 @@ It is true that a prior direct core swap can, in some circumstances, reduce the 
 by a proxy swap. But the same general effect can arise from any protocol action that validly consumes the same shared
 vault liquidity first. In particular, proxy liveness can be affected by:
 
-- `unwrap()` and `unwrapTo()` when they source market liquidity rather than only Hub direct reserve;
+- `unwrap()` when it sources market liquidity rather than only Hub direct reserve;
 - queue settlement / obligation fulfilment paths;
 - MM or other protocol withdrawals that consume the same vault-backed underlying; and
 - adversarial transaction ordering in environments where front-running or preferred ordering is possible.

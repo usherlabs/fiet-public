@@ -13,8 +13,6 @@
     "unbackedCommitmentGraceBypassTime": 450,
     "unbackedCommitmentGraceBypassThreshold": 0
   },
-  "coverageFeeShare": 0,
   "minResidualUnits": 1,
   "unbackedCommitmentGraceBypassBps": 500
 }
-

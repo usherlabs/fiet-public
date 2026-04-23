@@ -77,6 +77,11 @@ interface ILiquidityHub is IBoundRegistry, IMinimalLiquidityHub {
      *      queue ownership must match that recipient. This path performs strict serviceability
      *      checks up front, unlike generic queue accounting paths that defer settleability checks
      *      to `processSettlementFor(...)`.
+     *
+     *      External reserve-funded settlement rejects any protocol-bound recipient (factory namespace) and objective
+     *      sink addresses (`weth9()` for native-backed LCCs; the underlying token for ERC20-backed LCCs). Non-bound
+     *      recipients are admitted without recipient-shape introspection; integrators must nominate addresses capable of
+     *      receiving ERC20-compatible settlement assets (native lanes may still resolve as WETH for unsupported contracts).
      * @param lccToken The LCC token address
      * @param recipient The queue owner / eventual settlement recipient
      * @param amount The amount to queue
@@ -122,7 +127,7 @@ interface ILiquidityHub is IBoundRegistry, IMinimalLiquidityHub {
      * @notice Called by MarketVault after taking underlying liquidity from the market to LCC
      * @param lcc The LCC token address
      * @param amount The amount of underlying liquidity taken
-     * @param shouldEmit Whether to emit LiquidityAvailable event
+     * @param shouldEmit If true, emit `LiquidityAvailable` when amount > 0 (dispatch wake-up; see event NatSpec)
      */
     function confirmTake(address lcc, uint256 amount, bool shouldEmit) external;
 

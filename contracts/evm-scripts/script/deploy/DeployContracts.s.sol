@@ -21,12 +21,12 @@ import {HookFlags} from "src/libraries/HookFlags.sol";
  * 4. Deploy VTSOrchestrator (with GlobalConfig as initialOwner)
  * 5. Deploy Verifiers (submitter-bound to VTSOrchestrator, with GlobalConfig as initialOwner)
  * 6. Register VRL proof handlers in VTSOrchestrator
- * 7. Deploy DirectLPDeltaResolver
- * 8. Deploy MarketFactory (with GlobalConfig as initialOwner)
+ * 7. Deploy MarketFactory (with GlobalConfig as initialOwner)
+ * 8. Deploy CanonicalVault
  * 9. Enable MarketFactory in LiquidityHub
- * 10. Deploy MMPositionManager (requires MarketFactory in constructor path)
+ * 10. Deploy MMPositionManager stack (requires MarketFactory in constructor path)
  * 11. Deploy CoreHook (with proper flags and MarketFactory address) - uses CREATE2 for hook flags
- * 12. Initialise MarketFactory (set hooks + bounds)
+ * 12. Initialise MarketFactory (set hooks + bounds; no `DirectLPDeltaResolver` bound endpoint by default)
  * 13. Verify hooks (set cross-references)
  *
  * @notice Most contracts use CREATE3 for deterministic addresses across chains.
@@ -51,8 +51,8 @@ contract DeployContracts is DeployProtocolBase {
     address public commitmentDescriptor;
     address public vtsOrchestrator;
     address public actionsImpl;
-    address public directLPDeltaResolver;
-    address public queueCustodian;
+    address public utilityActionsImpl;
+    address public canonicalVault;
 
     /**
      * @dev Logs predicted addresses before deployment
@@ -67,10 +67,11 @@ contract DeployContracts is DeployProtocolBase {
         console.log("VTSOrchestrator:", getCreate3Contract(VTS_ORCHESTRATOR));
         console.log("MMPCommitmentDescriptor:", getCreate3Contract(COMMITMENT_DESCRIPTOR));
         console.log("MMPositionActionsImpl:", getCreate3Contract(ACTIONS_IMPL));
-        console.log("MMQueueCustodian:", getCreate3Contract(QUEUE_CUSTODIAN));
+        console.log("MMUtilityActionsImpl:", getCreate3Contract(UTILITY_ACTIONS_IMPL));
+        console.log("MMQueueCustodianFactory:", getCreate3Contract(MM_QUEUE_CUSTODIAN_FACTORY));
         console.log("MMPositionManager:", getCreate3Contract(MM_POSITION_MANAGER));
-        console.log("DirectLPDeltaResolver:", getCreate3Contract(DIRECT_LP_DELTA_RESOLVER));
         console.log("MarketFactory:", getCreate3Contract(MARKET_FACTORY));
+        console.log("CanonicalVault:", getCreate3Contract(CANONICAL_VAULT));
         console.log("GlobalConfig:", getCreate3Contract(GLOBAL_CONFIG));
         console.log("\nNote: CoreHook uses CREATE2 (not CREATE3) due to hook flag requirements");
     }
@@ -134,7 +135,7 @@ contract DeployContracts is DeployProtocolBase {
         console.log("Signal verifier public key address:", publicKeyAddress);
         signalVerifier = _deploySignalVerifier(publicKeyAddress);
         console.log("ECDSASignatureSignalVerifier deployed at:", signalVerifier);
-        signalManager = _deploySignalManager(signalVerifier, 3600, vtsOrchestrator, globalConfig);
+        signalManager = _deploySignalManager(signalVerifier, vtsOrchestrator, globalConfig);
         settlementObserver = _deploySettlementObserver(vtsOrchestrator, globalConfig);
         console.log("SignalManager deployed at:", signalManager);
         console.log("SignalManager owner:", globalConfig);
@@ -146,16 +147,16 @@ contract DeployContracts is DeployProtocolBase {
         _registerVRLProofHandlers(globalConfig, vtsOrchestrator, signalManager, settlementObserver);
         console.log("VRL proof handlers registered in VTSOrchestrator (via GlobalConfig.proxyCall)");
 
-        // Step 7: Deploy DirectLPDeltaResolver (must be protocol-bound for afterModifyLiquidity)
-        console.log("\n=== Step 7: Deploying DirectLPDeltaResolver ===");
-        directLPDeltaResolver = _deployDirectLPDeltaResolver(liquidityHub);
-        console.log("DirectLPDeltaResolver deployed at:", directLPDeltaResolver);
-
-        // Step 8: Deploy MarketFactory (with GlobalConfig as initialOwner)
-        console.log("\n=== Step 8: Deploying MarketFactory ===");
+        // Step 7: Deploy MarketFactory (with GlobalConfig as initialOwner)
+        console.log("\n=== Step 7: Deploying MarketFactory ===");
         marketFactory = _deployMarketFactory(liquidityHub, oracleHelper, vtsOrchestrator, globalConfig);
         console.log("MarketFactory deployed at:", marketFactory);
         console.log("MarketFactory owner:", globalConfig);
+
+        // Step 8: Deploy CanonicalVault
+        console.log("\n=== Step 8: Deploying CanonicalVault ===");
+        canonicalVault = _deployCanonicalVault(liquidityHub, marketFactory);
+        console.log("CanonicalVault deployed at:", canonicalVault);
 
         // Step 9: Enable MarketFactory in LiquidityHub
         console.log("\n=== Step 9: Enabling MarketFactory in LiquidityHub ===");
@@ -165,23 +166,21 @@ contract DeployContracts is DeployProtocolBase {
         // Step 10: Deploy MMPositionManager
         console.log("\n=== Step 10: Deploying MMPositionManager ===");
         commitmentDescriptor = _deployCommitmentDescriptor();
-        (actionsImpl, queueCustodian, mmPositionManager) =
-            _deployMMStack(marketFactory, vtsOrchestrator, commitmentDescriptor, deployer);
+        (actionsImpl, utilityActionsImpl, mmPositionManager) =
+            _deployMMStack(marketFactory, vtsOrchestrator, commitmentDescriptor, canonicalVault);
         console.log("MMPCommitmentDescriptor deployed at:", commitmentDescriptor);
         console.log("MMPositionActionsImpl deployed at:", actionsImpl);
-        console.log("MMQueueCustodian deployed at:", queueCustodian);
-        console.log("MMQueueCustodian authorised binder:", deployer);
+        console.log("MMUtilityActionsImpl deployed at:", utilityActionsImpl);
         console.log("MMPositionManager deployed at:", mmPositionManager);
-        console.log("MMQueueCustodian positionManager bound to:", mmPositionManager);
 
         // Step 11: Deploy CoreHook
         console.log("\n=== Step 11: Deploying CoreHook ===");
         coreHook = _deployCoreHook(marketFactory, vtsOrchestrator);
         console.log("CoreHook deployed at:", coreHook);
 
-        // Step 12: Initialise MarketFactory
+        // Step 12: Initialise MarketFactory (`DirectLPDeltaResolver` not deployed — pass `address(0)`; see `src/periphery/DirectLPDeltaResolver.sol` devdoc)
         console.log("\n=== Step 12: Initialising MarketFactory ===");
-        _initialiseFactory(globalConfig, marketFactory, coreHook, mmPositionManager, queueCustodian, directLPDeltaResolver);
+        _initialiseFactory(globalConfig, marketFactory, canonicalVault, coreHook, mmPositionManager, address(0));
         console.log("MarketFactory initialised successfully (via GlobalConfig.proxyCall)");
 
         // Step 13: Verify hooks addresses across the contracts
@@ -234,7 +233,7 @@ contract DeployContracts is DeployProtocolBase {
         writeAddress("liquidityHub", liquidityHub);
         writeAddress("positionManager", mmPositionManager); // legacy key (actually MMPositionManager)
         writeAddress("mmPositionManager", mmPositionManager);
-        writeAddress("directLPDeltaResolver", directLPDeltaResolver);
+        writeAddress("directLPDeltaResolver", address(0));
         writeAddress("oracleHelper", oracleHelper);
         writeAddress("globalConfig", globalConfig);
         writeAddress("vtsOrchestrator", vtsOrchestrator);
@@ -247,7 +246,7 @@ contract DeployContracts is DeployProtocolBase {
         // MM / market-maker stack
         writeAddress("commitmentDescriptor", commitmentDescriptor);
         writeAddress("actionsImpl", actionsImpl);
-        writeAddress("queueCustodian", queueCustodian);
+        writeAddress("utilityActionsImpl", utilityActionsImpl);
 
         console.log("Deployment addresses written to deployments/%s_deployments.json", networkName);
     }
@@ -279,6 +278,7 @@ contract DeployContracts is DeployProtocolBase {
         require(address(factory.poolManager()) == config.poolManager, "MarketFactory: wrong poolManager");
         require(factory.coreHook() == coreHook, "MarketFactory: wrong coreHook");
         require(factory.isInitialised(), "MarketFactory: not initialised");
+        require(factory.canonicalVault() == canonicalVault, "MarketFactory: wrong canonicalVault");
 
         console.log("MarketFactory configuration verified");
 

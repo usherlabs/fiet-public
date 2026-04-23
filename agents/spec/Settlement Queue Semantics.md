@@ -2,7 +2,7 @@
 
 > **Modules**: `LiquidityHub`, `LiquidityHubLib`, `LCC`, `MMPositionManager`, `MMQueueCustodian`  
 > **Author**: Fiet Protocol  
-> **Last Updated**: March 2026
+> **Last Updated**: April 2026
 
 ## Overview
 
@@ -28,7 +28,9 @@ The model is intentionally eventual rather than eager: queue writes are accounti
 1. `settleQueue[lcc][recipient]`, `totalQueued[lcc]`, and `queueOfUnderlying[underlying]` move together for queue increments/decrements/de-annulments.
 2. Queue ownership is a claim attribution primitive, not proof of immediate redeemability.
 3. External settlement burns market-derived balance only.
-4. Hub settlement follows separate rules (`recipient == address(this)`), including lazy-netting reconciliation.
+4. Hub settlement follows separate rules (`recipient == address(this)`): it burns Hub-held LCC and does not transfer
+   underlying; `wrapWith` Step-2 netting against the backing Hub queue updates durable queue state eagerly (same
+   triple as other queue mutations), so settlement clears the remaining on-chain queue only.
 5. Administrative bound transitions must not move a queued owner into an exempt role while queue is outstanding (operational constraint).
 
 ## Queue Validity vs Present Settleability
@@ -45,6 +47,8 @@ Queue writes do **not** need to prove that settlement can execute immediately.
 - queue exists,
 - reserve is available,
 - recipient backing is currently valid for the selected settlement path.
+- for native-underlying payouts, direct ETH push may fall back to wrapped-native transfer when recipient cannot accept
+  ETH at settlement time.
 
 If these are not reconciled yet, reverting is the expected behaviour and callers should retry later.
 
@@ -62,7 +66,10 @@ This prevents repeated vault-to-Hub drains when queue debt is already reserve-ba
 
 ## Queue-Producing Paths
 
-- `unwrap(...)` / `unwrapTo(...)` via `LiquidityHubLib.unwrapInternalLogic(...)` shortfall queueing.
+- `unwrap(...)` (any caller) and `unwrapTo(...)` (caller must be `BOUND_ENDPOINT` for that LCC’s market) via
+  `LiquidityHubLib.unwrapInternalLogic(...)` shortfall queueing. Admission to `_unwrap` is capped by
+  `availableToUnwrap = max(0, callerBalance - settleQueue[lcc][queueTo])` so an unchanged LCC position cannot back
+  multiple stacked queued shortfalls (see `INVARIANTS.md` HUB-02 / HUB-02A).
 - `cancelWithQueue(...)` and planned-cancel execution.
 - `queueForTransferRecipient(...)` (issuer path after explicit recipient transfer).
 - Hub internal queue usage during wrap-with residual/netting paths.
@@ -70,7 +77,9 @@ This prevents repeated vault-to-Hub drains when queue debt is already reserve-ba
 ### Validation placement
 
 - `_queueSettlement(...)`: accounting helper only.
-- `queueForTransferRecipient(...)`: strict recipient serviceability checks are required because recipient-backed settlement is assumed immediately for this path.
+- `queueForTransferRecipient(...)`: strict recipient serviceability checks are required because recipient-backed
+  settlement is assumed immediately for this path. For native lanes, this remains an early filter (for example reject
+  currently deployed contract recipients) rather than a full future-liveness guarantee.
 - Other queue paths: validate only queue-owner shape (non-zero, non-exempt unless Hub); defer execution-time serviceability to settlement.
 
 ## Settlement Paths
@@ -81,15 +90,17 @@ Enforced in `processSettlementFor(...)` -> `LiquidityHubLib.processSettlementLog
 
 - Uses recipient market-derived balance for serviceability.
 - Burns recipient LCC and transfers underlying when executable.
+- Native-underlying delivery path:
+  - try direct ETH payout first;
+  - if ETH transfer fails, wrap to WETH and transfer ERC20 WETH to preserve queue liveness.
 - Reverts when not yet executable (`reserve` and/or holder backing mismatch).
 
 ### Hub path
 
 For `recipient == address(this)`:
 
-- reconciles lazy-netted claims first,
-- burns Hub-held LCC as required,
-- does not transfer underlying out to external recipient.
+- burns Hub-held LCC for the settled slice (reserve is not decremented; underlying stays in the shared pool),
+- does not transfer underlying out to an external recipient.
 
 ## Bound-Level Constraints
 

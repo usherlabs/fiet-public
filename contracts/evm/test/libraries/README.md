@@ -1,6 +1,6 @@
 # VTS Library Unit Testing Suite
 
-This directory contains comprehensive unit tests for the VTS (Variable Token Staking) libraries, specifically `VTSPositionLib` and `VTSFeeLib`.
+This directory contains unit tests for VTS libraries, primarily `VTSPositionLib` and related harnesses.
 
 ## Architecture
 
@@ -18,7 +18,6 @@ Located at `test/modules/VTSLibTestBase.sol`, this abstract contract provides:
 Located in `test/libraries/harnesses/`:
 
 - **`VTSPositionLibHarness.sol`**: Exposes internal `VTSPositionLib` functions for testing
-- **`VTSFeeLibHarness.sol`**: Exposes internal `VTSFeeLib` functions for testing
 
 These harnesses use the DELEGATECALL pattern, allowing library functions to operate directly on the harness contract's storage.
 
@@ -34,7 +33,7 @@ Located in `test/libraries/mocks/`:
 
 Comprehensive tests covering:
 
-- **Commitment Tracking** (`_trackCommitment`):
+- **Commitment maxima** (`_recomputeCommitmentMaxFromLiveLiquidity` via harness `recomputeCommitmentMaxFromLiveLiquidity`):
   - Adding liquidity increases commitment maxima
   - Removing liquidity decreases commitment maxima
   - Full removal resets to zero
@@ -64,36 +63,6 @@ Comprehensive tests covering:
   - Settlement never exceeds commitment
   - VTS ratio invariants
 
-### `VTSFeeLib.t.sol`
-
-Comprehensive tests covering:
-
-- **Fee Adjustment Peeking** (`_peekFeeAdjustment`):
-  - Returns current pending adjustments
-  - Handles zero values
-
-- **Fee Pot Management**:
-  - Storage access for slashed pot
-  - Protocol fee accrued tracking
-
-- **Fee Processing** (`processPositionFees`):
-  - Fee sharing disabled returns zero
-  - Positive net settlement allocates bonuses
-  - Zero net settlement no bonus
-  - Negative net settlement no bonus
-  - Dust net settlement skipped
-  - Self-contribution excluded from bonus calculation
-
-- **Fee Finalisation** (`_finaliseFeeAdjustment`):
-  - Positive pending funds pot
-  - Negative pending drains pot
-  - Insufficient pot clamps drain
-  - No incremental funding snapshot (proactive funding removed)
-
-- **Fuzz Tests**:
-  - Fee adjustment invariants
-  - Bonus allocation proportionality
-
 ## Usage
 
 ### Running Tests
@@ -109,7 +78,7 @@ forge test --match-path "test/libraries/VTSPositionLib.t.sol"
 forge test --match-path "test/libraries/**/*.t.sol" -vvv
 
 # Run specific test function
-forge test --match-test "test_trackCommitment_addsLiquidity_increasesCommitmentMax"
+forge test --match-test "test_recomputeCommitmentMax_matchesCalculatedMaxima_forRegisteredLiquidity"
 ```
 
 ### Writing New Tests
@@ -139,7 +108,7 @@ forge test --match-test "test_trackCommitment_addsLiquidity_increasesCommitmentM
 
 3. **Assert Results**:
    ```solidity
-   (uint256 settled0,,,) = harness.getPositionAccounting(positionId);
+   (,, uint256 settled0, uint256 settled1,,, uint256 ov0, uint256 ov1) = harness.getPositionAccounting(positionId);
    assertEq(settled0, expectedValue, "Settled should match expected");
    ```
 

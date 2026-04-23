@@ -5,21 +5,22 @@ pragma solidity ^0.8.26;
  * E2E: MMCoverage
  *
  * Goal:
- * - Exercise the MMPositionManager “coverage + fee realisation” path with TWO market makers.
+ * - Exercise the multi-MM MMPositionManager settlement / checkpoint / poke path without relying on
+ *   fee-pot-specific lens surfaces.
  *
  * High-level flow:
  * - Deploy full stack + create a market (core LCC/LCC pool).
  * - MM1: commit → mint → settle a *small* position (intended to be “stressable”).
  * - MM2: commit → mint → settle a *large* position (acts as “deep liquidity / well-backed MM”).
  * - Fund a taker and execute swaps in both directions to generate activity.
- * - Partially unwrap LCCs after swaps to force the “coverage/settlement” mechanics to run.
- * - CHECKPOINT MM1 to ensure its snapshots/deficit state are current before fee materialisation.
- * - POKE both positions (no-op increase + take) to materialise any pending slashes/bonuses into LCC balances.
+ * - Partially unwrap LCCs after swaps to force the settlement path to run.
+ * - CHECKPOINT MM1 to ensure its snapshots / RFS state are current after the stress swap.
+ * - POKE all positions (no-op increase + take) to ensure pending LCC-side realisation still works after fee disablement.
  * - Close RFS (if open), then burn + settle-from-deltas + decommit, and take remaining credits.
  *
  * Notes:
- * - This script is intentionally “mechanics-oriented”: it demonstrates the flows; it does not attempt to
- *   assert the exact slashed-pot math (which depends on protocol parameters and current market state).
+ * - This script is intentionally mechanics-oriented: it demonstrates the multi-MM flow and avoids asserting on
+ *   removed fee-pot / fee-accounting surfaces.
  *
  * Env:
  * - LP_PRIVATE_KEY: MM1
@@ -116,14 +117,43 @@ contract MMCoverageE2E is MME2EBase {
     struct SwapState {
         uint256 lcc0AfterSwap;
         uint256 lcc1AfterSwap;
-        uint256 protoFee0AfterSwap;
-        uint256 protoFee1AfterSwap;
-        uint256 pot0AfterPokeMM1;
-        uint256 pot1AfterPokeMM1;
     }
 
     function _abs(int256 x) internal pure returns (uint256) {
         return uint256(x < 0 ? -x : x);
+    }
+
+    function _expectedOpenMask(BalanceDelta delta) internal pure returns (uint8 openMask) {
+        if (delta.amount0() > 0) {
+            openMask |= 1;
+        }
+        if (delta.amount1() > 0) {
+            openMask |= 2;
+        }
+    }
+
+    function _assertDistinctActors(ActorAddrs memory actors) internal pure {
+        require(actors.mm1 != actors.mm2, "actors: mm1 must differ from mm2");
+        require(actors.mm1 != actors.mm3, "actors: mm1 must differ from mm3");
+        // Taker swap output is measured via `ILCC.balanceOf(taker)`; mm1 must not be the taker or that leg is not isolated.
+        require(actors.mm1 != actors.taker, "actors: mm1 must differ from taker");
+        require(actors.mm2 != actors.mm3, "actors: mm2 must differ from mm3");
+        require(actors.mm2 != actors.taker, "actors: mm2 must differ from taker");
+        require(actors.mm3 != actors.taker, "actors: mm3 must differ from taker");
+    }
+
+    function _assertCheckpointEquals(
+        RFSCheckpoint memory checkpointA,
+        RFSCheckpoint memory checkpointB,
+        string memory err
+    ) internal pure {
+        require(
+            checkpointA.openMask == checkpointB.openMask && checkpointA.openSince0 == checkpointB.openSince0
+                && checkpointA.openSince1 == checkpointB.openSince1
+                && checkpointA.gracePeriodExtension0 == checkpointB.gracePeriodExtension0
+                && checkpointA.gracePeriodExtension1 == checkpointB.gracePeriodExtension1,
+            err
+        );
     }
 
     function _settleRfsRequired(StandaloneMarket memory m, uint256 mmPk, uint256 commitId, int128 need0, int128 need1)
@@ -180,6 +210,8 @@ contract MMCoverageE2E is MME2EBase {
     }
 
     function _setupScenario(ActorKeys memory keys, ActorAddrs memory actors) internal returns (ScenarioState memory s) {
+        _assertDistinctActors(actors);
+
         CoreDeployment memory d = _deployCoreContracts();
         s.market = _createMarket(d, actors.mm1, CORE_POOL_FEE);
         s.vts = IVTSOrchestrator(s.market.stack.contracts.vtsOrchestrator);
@@ -211,20 +243,17 @@ contract MMCoverageE2E is MME2EBase {
         require(mm2Settled0After > mm2Settled0Before && mm2Settled1After > mm2Settled1Before, "mm2: settled not up");
     }
 
-    function _assertMm1CheckpointMatchesRfs(ScenarioState memory s, bool mm1RfsOpen) internal view {
-        bool checkpointOpen = s.vtsLens.positionToCheckpoint(s.mm1PosId).openMask != 0;
-        require(checkpointOpen == mm1RfsOpen, "mm1: checkpoint mismatch");
+    function _assertMm1CheckpointPersistsRfs(ScenarioState memory s, uint256 mm1Pk, uint8 expectedOpenMask) internal {
+        _checkpointPosition(s.market, mm1Pk, s.mm1CommitId, 0, hex"01");
+
+        RFSCheckpoint memory checkpointAfter = s.vtsLens.positionToCheckpoint(s.mm1PosId);
+        require(checkpointAfter.openMask == expectedOpenMask, "mm1: checkpoint openMask mismatch");
     }
 
     function _runSwapAndPreSettlementChecks(ScenarioState memory s, ActorKeys memory keys)
         internal
         returns (SwapState memory swapState)
     {
-        (uint256 initialProtoFee0, uint256 initialProtoFee1) = s.vts.getProtocolFeeAccrued(s.key.toId());
-        (uint256 initialPot0, uint256 initialPot1) = s.vts.getSlashedPot(s.key.toId());
-        require(initialProtoFee0 == 0 && initialProtoFee1 == 0, "initialProtoFee not zero");
-        require(initialPot0 == 0 && initialPot1 == 0, "initialPot not zero");
-
         uint256 amountOut = _mintAndSwap(s.market, keys.takerPk, WRAP_FOR_SWAPS, false, SWAP_AMOUNT_IN);
         require(amountOut > 0, "swap amountOut not greater than zero");
 
@@ -235,11 +264,16 @@ contract MMCoverageE2E is MME2EBase {
         console.log("lcc1After Swap:", swapState.lcc1AfterSwap);
 
         {
+            RFSCheckpoint memory checkpointBefore = s.vtsLens.positionToCheckpoint(s.mm1PosId);
             (, bool mm1RfsOpen, BalanceDelta mm1RfsDelta) = s.vts.calcRFS(s.mm1CommitId, 0, false);
+            RFSCheckpoint memory checkpointAfterCalc = s.vtsLens.positionToCheckpoint(s.mm1PosId);
             int128 need0 = mm1RfsDelta.amount0();
             int128 need1 = mm1RfsDelta.amount1();
             require(mm1RfsOpen && (need0 > 0 || need1 > 0), "mm1: expected RFS>0 after swaps");
-            _assertMm1CheckpointMatchesRfs(s, mm1RfsOpen);
+            _assertCheckpointEquals(
+                checkpointAfterCalc, checkpointBefore, "mm1: calcRFS should not mutate stored checkpoint"
+            );
+            _assertMm1CheckpointPersistsRfs(s, keys.mm1Pk, _expectedOpenMask(mm1RfsDelta));
         }
         s.vts.calcRFS(s.mm2CommitId, 0, true);
         s.vts.calcRFS(s.mm3CommitId, 0, true);
@@ -256,94 +290,30 @@ contract MMCoverageE2E is MME2EBase {
         s.vts.calcRFS(s.mm3CommitId, 0, true);
     }
 
-    function _collectMm1FeesAndPot(ScenarioState memory s, ActorKeys memory keys, SwapState memory swapState)
+    function _materialiseMultiMmLccChanges(ScenarioState memory s, ActorKeys memory keys, SwapState memory swapState)
         internal
-        returns (SwapState memory)
     {
-        (swapState.protoFee0AfterSwap, swapState.protoFee1AfterSwap) = s.vts.getProtocolFeeAccrued(s.key.toId());
-
-        if (swapState.lcc0AfterSwap > 0) {
-            require(swapState.protoFee1AfterSwap > 0, "protocol Fee1 AfterSwap not greater than zero");
-        }
-        if (swapState.lcc1AfterSwap > 0) {
-            require(swapState.protoFee0AfterSwap > 0, "protocol Fee0 AfterSwap not greater than zero");
-        }
-        console.log("protocol Fees 0 AfterSwap:", swapState.protoFee0AfterSwap);
-        console.log("protocol Fees 1 AfterSwap:", swapState.protoFee1AfterSwap);
-
-        (,, int256 mm1Pending0BeforePoke, int256 mm1Pending1BeforePoke) = s.vts.getPositionFeeAccounting(s.mm1PosId);
-        require(
-            uint256(mm1Pending0BeforePoke) == swapState.protoFee0AfterSwap
-                && uint256(mm1Pending1BeforePoke) == swapState.protoFee1AfterSwap,
-            "pending fees not equal to protocol fees"
-        );
-
         (uint256 mm1Amount0Fees, uint256 mm1Amount1Fees) = _pokePosition(s.market, keys.mm1Pk, s.mm1CommitId);
         if (swapState.lcc0AfterSwap > 0) require(mm1Amount1Fees > 0, "mm1Amount1Fees not greater than zero");
         if (swapState.lcc1AfterSwap > 0) require(mm1Amount0Fees > 0, "mm1Amount0Fees not greater than zero");
 
-        (swapState.pot0AfterPokeMM1, swapState.pot1AfterPokeMM1) = s.vts.getSlashedPot(s.key.toId());
-        if (swapState.protoFee0AfterSwap > 0) {
-            require(
-                swapState.pot0AfterPokeMM1 > 0 && swapState.pot0AfterPokeMM1 == swapState.protoFee0AfterSwap,
-                "pot0AfterPokeMM1 not greater than zero"
-            );
-        }
-        if (swapState.protoFee1AfterSwap > 0) {
-            require(
-                swapState.pot1AfterPokeMM1 > 0 && swapState.pot1AfterPokeMM1 == swapState.protoFee1AfterSwap,
-                "pot1AfterPokeMM1 not greater than zero"
-            );
-        }
-        console.log("pot0AfterPokeMM1:", swapState.pot0AfterPokeMM1);
-        console.log("pot1AfterPokeMM1:", swapState.pot1AfterPokeMM1);
-        return swapState;
-    }
-
-    function _pokeRemainingMmsAndAssertPotCleared(ScenarioState memory s, ActorKeys memory keys, SwapState memory swapState)
-        internal
-    {
         (uint256 mm2Amount0Fees, uint256 mm2Amount1Fees) = _pokePosition(s.market, keys.mm2Pk, s.mm2CommitId);
         if (swapState.lcc0AfterSwap > 0) require(mm2Amount1Fees > 0, "mm2Amount1Fees not greater than zero");
         if (swapState.lcc1AfterSwap > 0) require(mm2Amount0Fees > 0, "mm2Amount0Fees not greater than zero");
-        (uint256 mm3Amount0Fees, uint256 mm3Amount1Fees) = _pokePosition(s.market, keys.mm3Pk, s.mm3CommitId);
-        if (swapState.lcc0AfterSwap > 0) require(mm3Amount1Fees > 0, "mm3Amount1Fees not greater than zero");
-        if (swapState.lcc1AfterSwap > 0) require(mm3Amount0Fees > 0, "mm3Amount0Fees not greater than zero");
-
-        (uint256 pot0After, uint256 pot1After) = s.vts.getSlashedPot(s.key.toId());
-        require(pot0After == 0 && pot1After == 0, "pot should be empty");
+        // MM3 is deliberately parked out of range for this scenario, so a touch can legitimately realise zero LCC change.
+        _pokePosition(s.market, keys.mm3Pk, s.mm3CommitId, false);
     }
 
-    function _assertMm1FeeAccounting(ScenarioState memory s, SwapState memory swapState) internal view {
-        (
-            uint256 mm1FeesShared0After,
-            uint256 mm1FeesShared1After,
-            int256 mm1Pending0AfterFeeCollected,
-            int256 mm1Pending1AfterFeeCollected
-        ) = s.vts.getPositionFeeAccounting(s.mm1PosId);
-        require(
-            mm1Pending0AfterFeeCollected == 0 && mm1Pending1AfterFeeCollected == 0, "pending fees not equal to zero"
-        );
-        require(
-            mm1FeesShared0After == swapState.pot0AfterPokeMM1 && mm1FeesShared1After == swapState.pot1AfterPokeMM1,
-            "fees shared not equal to protocol fees"
-        );
-    }
-
-    function _materialiseFeesAndValidate(ScenarioState memory s, ActorKeys memory keys, SwapState memory swapState)
+    function _closeCoveragePosition(StandaloneMarket memory m, uint256 mmPk, uint256 takerPk, uint256 commitId)
         internal
-        returns (SwapState memory)
     {
-        swapState = _collectMm1FeesAndPot(s, keys, swapState);
-        _pokeRemainingMmsAndAssertPotCleared(s, keys, swapState);
-        _assertMm1FeeAccounting(s, swapState);
-        return swapState;
+        _closeRfsBurnDrainRebalanceDecommitAndTakeAllLccs(m, mmPk, takerPk, commitId);
     }
 
     function _closeAllPositions(ScenarioState memory s, ActorKeys memory keys) internal {
-        _closeRfsBurnDecommitAndTakeAllLccs(s.market, keys.mm1Pk, s.mm1CommitId);
-        _closeRfsBurnDecommitAndTakeAllLccs(s.market, keys.mm2Pk, s.mm2CommitId);
-        _closeRfsBurnDecommitAndTakeAllLccs(s.market, keys.mm3Pk, s.mm3CommitId);
+        _closeCoveragePosition(s.market, keys.mm1Pk, keys.takerPk, s.mm1CommitId);
+        _closeCoveragePosition(s.market, keys.mm2Pk, keys.takerPk, s.mm2CommitId);
+        _closeCoveragePosition(s.market, keys.mm3Pk, keys.takerPk, s.mm3CommitId);
     }
 
     function run() external {
@@ -356,8 +326,7 @@ contract MMCoverageE2E is MME2EBase {
 
         _assertPoolAndSettlement(scenario, keys);
         SwapState memory swapState = _runSwapAndPreSettlementChecks(scenario, keys);
-        _materialiseFeesAndValidate(scenario, keys, swapState);
+        _materialiseMultiMmLccChanges(scenario, keys, swapState);
         _closeAllPositions(scenario, keys);
     }
 }
-

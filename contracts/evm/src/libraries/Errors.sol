@@ -71,6 +71,11 @@ library Errors {
     /// @param settledValue Settled value already in-market
     error InvalidLiquiditySignal(uint256 issuedValue, uint256 signalValue, uint256 settledValue);
 
+    /// @notice Thrown when oracle-valued minted LCC principal exceeds the marginal endpoint-max admission budget
+    /// @param mintValueUsd Oracle USD value of the (amount0, amount1) mint for this increase
+    /// @param admissionDeltaUsd `issuedAdmission(postL) - issuedAdmission(preL)` for the same tick range
+    error InvalidAdmissionMintDelta(uint256 mintValueUsd, uint256 admissionDeltaUsd);
+
     /// @notice Thrown when an MM reserve set exceeds the maximum allowed unique ticker count
     /// @param uniqueTickerCount Unique ticker count in the MM reserve set
     /// @param maxUniqueTickerCount Maximum allowed unique ticker count per MM reserve set
@@ -96,6 +101,16 @@ library Errors {
 
     /// @notice Thrown when price limit is outside valid tick bounds
     error PriceLimitOutOfBounds(uint160 sqrtPriceLimitX96);
+
+    /// @notice Thrown when non-MM direct liquidity would initialise a core range narrower than policy allows (dense-tick grief mitigation)
+    /// @param widthTicks tickUpper - tickLower (tick units)
+    /// @param minWidthTicks minimum allowed width in tick units
+    error DirectLiquidityRangeTooNarrow(int24 widthTicks, int24 minWidthTicks);
+
+    /// @notice Thrown when non-MM direct liquidity add is below minimum delta (dust mitigation on core pool)
+    /// @param liquidityDelta requested positive liquidity delta for the add
+    /// @param minLiquidityDelta configured floor
+    error DirectLiquidityTooSmall(uint128 liquidityDelta, uint128 minLiquidityDelta);
 
     // ============ POOL & MARKET ERRORS ============
     // Errors related to pool creation, market operations, and pool state
@@ -156,8 +171,10 @@ library Errors {
     /// @notice Thrown when a transfer is not allowed
     error TransferNotAllowed();
 
-    /// @notice Thrown when direct wrap minting targets a DEX ingress sink.
-    error DirectWrapToDexNotAllowed(address recipient);
+    /// @notice Thrown when an LCC mint targets a disallowed recipient.
+    /// @dev Covers: user-facing wrap/wrapWith to protocol-bound roles; issuer `issue` to a DEX sink; `LCC.mint` direct-backed
+    ///      leg to bucket-exempt endpoints (see **LCC-BACKING-01** / **HUB-01** in INVARIANTS.md).
+    error MintToNotAllowedRecipient(address recipient);
 
     /// @notice Thrown when native ETH transferFrom is attempted from a non-self source
     error NativeTransferFromUnsupported(address from);
@@ -177,6 +194,9 @@ library Errors {
     /// @notice Thrown when synced reserves exceed poolManager token balance for the synced LCC.
     error NestedIngressInvalidSyncSnapshot(uint256 syncedReserves, uint256 poolManagerBalance);
 
+    /// @notice Thrown when wrapped DEX ingress runs without an active `sync(lcc)` on PoolManager (see **LCC-03**).
+    error IngressRequiresActiveSync();
+
     // ============ POSITION & COMMITMENT ERRORS ============
     // Errors related to positions, commitments, and position management
 
@@ -192,12 +212,29 @@ library Errors {
     /// @notice Thrown when RFS (Required for Settlement) is not open for a position
     error RFSNotOpenForPosition(PositionId positionId);
 
+    /// @notice Seizure settlement produced no liquidity removal; continuing would allow a zero-liquidity modify that can still sync accrued LCC fees to the seizer.
+    error SeizureWithoutLiquidityRemoval();
+
+    /// @notice Settle-only deposit while batch-scoped seizure context is active; use `SEIZE_POSITION` so seizure carry and liquidity removal stay coupled.
+    error SeizureSettleOnlyDepositDisallowed();
+
+    /// @notice Thrown when a non-seizure MM liquidity change is attempted while commitment deficit is non-zero
+    error CommitmentDeficitBlocksLiquidityChange(PositionId positionId);
+
     /// @notice Thrown when a commitment descriptor is not set
     error CommitmentDescriptorNotSet();
 
     /// @notice Thrown when attempting to decommit a signal that still has positions attached
     /// @param tokenId The token ID of the commitment that cannot be decommitted
     error CommitNotEmpty(uint256 tokenId);
+
+    /// @notice Thrown when decommit is blocked because inactive position(s) still hold withdrawable `pa.settled`
+    /// @param tokenId The commitment NFT id (commit id)
+    error CommitNotDrained(uint256 tokenId);
+
+    /// @notice Thrown when a queue custodian is required for `recipient` but has not been deployed (call `INITIALISE`)
+    /// @param recipient The NFT recipient / locker domain that must already have a custodian
+    error QueueCustodianNotDeployed(address recipient);
 
     // ============ PAUSE & STATE ERRORS ============
     // Errors related to contract pause state and state transitions
@@ -238,6 +275,9 @@ library Errors {
 
     /// @notice Thrown when an invariant is violated
     error InvariantViolated(string message);
+
+    /// @notice Thrown when a bucket-tracked holder has ERC20 balance but no bucket accounting
+    error InvalidBucketState(address account, uint256 balance);
 
     // ============ VTS ORCHESTRATOR ERRORS ============
     // Errors related to the VTS Orchestrator

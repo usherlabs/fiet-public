@@ -74,8 +74,9 @@ interface IVTSCurrencyDelta {
 
     /**
      * @notice Asserts that all deltas are zero (for end-of-transaction validation)
+     * @param factory The market factory namespace used for market-scoped produced-credit transient checks
      */
-    function assertNonZeroDeltas() external view;
+    function assertNonZeroDeltas(IMarketFactory factory) external view;
 
     /**
      * @notice Syncs owner's balance as credit to target's delta
