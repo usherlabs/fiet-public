@@ -4,7 +4,7 @@ pragma solidity ^0.8.26;
 import "forge-std/Test.sol";
 import {VTSOrchestratorFixture} from "./base/VTSOrchestratorFixture.sol";
 import {UnlockCaller} from "./base/VTSOrchestratorFixture.sol";
-import {VTSOrchestratorTestable} from "./base/VTSOrchestratorTestable.sol";
+import {MmIncreaseAdmissionReplay, VTSOrchestratorTestable} from "./base/VTSOrchestratorTestable.sol";
 import {VTSOrchestrator} from "../src/VTSOrchestrator.sol";
 import {PoolId, PoolIdLibrary} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
@@ -2842,5 +2842,48 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
     function _expectedOpenMask(BalanceDelta delta) internal pure returns (uint8 openMask) {
         if (delta.amount0() > 0) openMask |= 1;
         if (delta.amount1() > 0) openMask |= 2;
+    }
+
+    /// @dev Builds `len` repetitions of "x" for oversized MM metadata fields (test-only).
+    function _repeatOrchestratorTestString(uint256 len) private pure returns (string memory s) {
+        bytes memory buf = new bytes(len);
+        for (uint256 i = 0; i < len; i++) {
+            buf[i] = bytes1("x");
+        }
+        return string(buf);
+    }
+
+    /// @notice Regression (finding 36_10): commitment-backed `validateLiquidityDelta` signalUsd must ignore bloated stored MM strings.
+    function test_exposedValidateLiquidityDeltaSoft_signalUsd_invariant_to_oversizedStoredMmMetadata() public {
+        (, PositionId pid,,) = _createCommittedPosition();
+
+        Position memory pos = vtsOrchestrator.getPosition(pid);
+
+        VTSOrchestratorTestable orch = _testableOrchestrator();
+
+        MmIncreaseAdmissionReplay memory r = MmIncreaseAdmissionReplay({
+            commitId: pos.commitId,
+            positionId: pid,
+            currency0: corePoolKey.currency0,
+            currency1: corePoolKey.currency1,
+            tickLower: pos.tickLower,
+            tickUpper: pos.tickUpper,
+            postAddLiquidity: pos.liquidity,
+            preAddLiquidity: 0,
+            mintAmount0: 0,
+            mintAmount1: 0
+        });
+
+        (,,, uint256 signal0) = orch.exposedvalidateLiquidityDeltaSoft(r);
+
+        (MarketMaker.State memory mm,,,,) = vtsOrchestrator.getCommit(pos.commitId);
+        mm.sourceState = _repeatOrchestratorTestString(10_000);
+        mm.prover = _repeatOrchestratorTestString(10_000);
+        mm.nonce = _repeatOrchestratorTestString(10_000);
+        orch.testOnly_setCommitMmState(pos.commitId, mm);
+
+        (,,, uint256 signal1) = orch.exposedvalidateLiquidityDeltaSoft(r);
+
+        assertEq(signal0, signal1, "signalUsd must not depend on non-reserve metadata size");
     }
 }

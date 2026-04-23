@@ -76,6 +76,11 @@ contract VTSCommitLibHarness {
         MarketMaker.save(s.commits[commitId].mmState, mm);
     }
 
+    /// @dev TEST-ONLY: read stored commit MM state (e.g. for metadata bloat regressions).
+    function getCommitMmState(uint256 commitId) external view returns (MarketMaker.State memory) {
+        return s.commits[commitId].mmState;
+    }
+
     function checkpoint(IPoolManager poolManager, IOracleHelper oracleHelper, uint256 commitId, PositionId positionId)
         external
     {

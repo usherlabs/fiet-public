@@ -624,6 +624,7 @@ contract VTSCommitLibTest is VTSLibTestBase {
         );
     }
 
+    /// @notice Regression (finding 36_10): storage-backed valuation must still enforce the unique reserve ticker cap.
     function test_validateLiquidityDelta_reverts_whenSignalHasTooManyUniqueReserveTickers() public {
         LiquiditySignal memory poisonSig =
             abi.decode(_makeSignalWithUniqueReserveCount(mmOwner, address(this), 101), (LiquiditySignal));
@@ -656,6 +657,41 @@ contract VTSCommitLibTest is VTSLibTestBase {
 
         (bool ok,,,) = harness.validateLiquidityDelta(oracle, commitId, positionId, p, false);
         assertTrue(ok, "exact max unique reserve tickers should be accepted");
+    }
+
+    /// @notice Regression (finding 36_10): `signalUsd` from stored commits must depend only on reserves, not MM metadata strings.
+    function test_validateLiquidityDelta_signalUsd_invariant_to_oversizedStoredMmMetadata() public {
+        (uint160 sqrtPriceX96, int24 tick,,) = _getSlot0(poolId);
+
+        VTSCommitLib.LiquidityDeltaParams memory p = VTSCommitLib.LiquidityDeltaParams({
+            currency0: corePoolKey.currency0,
+            currency1: corePoolKey.currency1,
+            sqrtPriceX96: sqrtPriceX96,
+            currentTick: tick,
+            tickLower: TL,
+            tickUpper: TU,
+            liquidityDelta: int256(uint256(LIQ))
+        });
+
+        harness.setPositionSettled(positionId, 0, 0);
+        oracle.setTotalValue(1_000_000e18);
+
+        (bool ok0, uint256 issued0, uint256 settled0, uint256 signal0) =
+            harness.validateLiquidityDelta(oracle, commitId, positionId, p, false);
+
+        MarketMaker.State memory mm = harness.getCommitMmState(commitId);
+        mm.sourceState = _repeatTestString(10_000);
+        mm.prover = _repeatTestString(10_000);
+        mm.nonce = _repeatTestString(10_000);
+        harness.setCommitMmState(commitId, mm);
+
+        (bool ok1, uint256 issued1, uint256 settled1, uint256 signal1) =
+            harness.validateLiquidityDelta(oracle, commitId, positionId, p, false);
+
+        assertEq(ok0, ok1, "backing outcome unchanged");
+        assertEq(issued0, issued1, "issued unchanged");
+        assertEq(settled0, settled1, "settled unchanged");
+        assertEq(signal0, signal1, "signalUsd must ignore oversized non-reserve metadata");
     }
 
     // ============================================================
@@ -1100,6 +1136,15 @@ contract VTSCommitLibTest is VTSLibTestBase {
 
     function _defaultLiquidityDeltaParams() internal view returns (VTSCommitLib.LiquidityDeltaParams memory p) {
         return _liquidityDeltaParamsForLiquidity(int256(uint256(LIQ)));
+    }
+
+    /// @dev Builds `len` repetitions of "a" without stack-heavy literals (test-only).
+    function _repeatTestString(uint256 len) private pure returns (string memory s) {
+        bytes memory buf = new bytes(len);
+        for (uint256 i = 0; i < len; i++) {
+            buf[i] = bytes1("a");
+        }
+        return string(buf);
     }
 
     /// @dev Spot-based issued USD matching `_checkpointWithCommitment` (live `slot0`), not COMMIT-01 admission.

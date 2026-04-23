@@ -74,6 +74,31 @@ This is now best classified as a **known gas trade-off** rather than a medium vu
 - Add a gas snapshot test suite using Foundry's `gas` cheatcode or `forge test --gas-report`.
 - Benchmark "worst-case dense tick" swaps regularly as the protocol matures.
 
+## Status of Audit Finding 36_8 (Spot-dependent public commitment checkpointing)
+
+**Finding summary (from agents/audit-findings/36__usherlabs-fiet-protocol-2026-04-23-analysis.md and 36_8 variant)**:  
+Public `checkpoint(commitId, positionIndex, true)` reads live `slot0` / current tick to compute effective token amounts via `LiquidityUtils.calculateEffectiveTokenAmounts`, then writes `pa.commitmentDeficit`, `commitmentDeficitBps`, and `commitmentDeficitSince`. A third party can manipulate spot via swaps then checkpoint to force or clear deficits. This can temporarily freeze non-seizing MM liquidity changes (`CommitmentDeficitMMFreezeLib.blocksNonSeizingMMLiquidityChange`) or influence RFS inflation and seizure timing (`getRFS`, `validateSeize`).
+
+**Current implementation status (as of 2026-04-23)**: **Accepted as MEV-driven griefing vector**.
+
+The protocol's explicit premise is that `checkpoint(withCommitment)` must remain fully permissionless. Live spot valuation for solvency enforcement (`COMMIT-02`) is intentional and deliberately distinct from the conservative worst-case endpoint valuation used for admission (`COMMIT-01`). 
+
+The griefing surface exists but is bounded:
+- Attacker must pay real swap costs to move price.
+- Makers can counter with their own checkpoint, settlement, or signal renewal.
+- `COMMIT-02A` narrows the MM modify freeze to **material** deficits only (bps > 0 or configured per-token thresholds).
+- Seizure path has partial hardening: `validateSeize` recomputes when a stored deficit already exists.
+
+This is treated as an acceptable availability / timing risk under the current design rather than a core security vulnerability.
+
+**Residual risk**: Sophisticated MEV participants or competitors can temporarily disrupt MM operations or delay seizure on targeted positions (especially in thinner pools). The economic cost to the attacker is non-zero and the maker retains recovery paths.
+
+**Recommended next steps**:
+- Monitor incidence of checkpoint griefing on live markets.
+- If it becomes material, consider introducing a reference-tick / TWAP mode for commitment checkpoints (while keeping the entrypoint permissionless).
+- Add regression tests for adversarial checkpoint + swap sequences in `test/libraries/VTSCommitLib.t.sol` and fuzz harnesses.
+- Document explicit grief cost / timing bounds in this file or `INVARIANTS.md`.
+
 ## General Guidelines
 
 - **Correctness first**: Never optimise at the expense of `INVARIANTS.md` guarantees (especially VTS-02, VTS-03, COMMIT-01, DELTA-01, SETTLE-03).
@@ -84,6 +109,6 @@ This is now best classified as a **known gas trade-off** rather than a medium vu
 
 ---
 
-**Last updated**: 2026-04-22 (following review of audit finding 33_9 and related swap accounting paths).
+**Last updated**: 2026-04-23 (following review of audit finding 36_8 — accepted as MEV-driven griefing vector under the permissionless `checkpoint(withCommitment)` premise).
 
 Future sections will be added as more optimisations are identified or implemented (e.g. specific PR numbers, gas delta measurements, benchmark results).

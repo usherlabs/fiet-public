@@ -9,6 +9,7 @@ import {IVRLSignalManager} from "../../src/interfaces/IVRLSignalManager.sol";
 import {IVRLSettlementObserver} from "../../src/interfaces/IVRLSettlementObserver.sol";
 import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
 import {VTSCommitLib} from "../../src/libraries/VTSCommitLib.sol";
+import {MarketMaker} from "../../src/libraries/MarketMaker.sol";
 
 // ============================================================
 // Testable VTSOrchestrator with Debug View Functions
@@ -40,6 +41,11 @@ contract VTSOrchestratorTestable is VTSOrchestrator {
     function testOnly_clearVRLHandlers() external {
         signalManager = IVRLSignalManager(address(0));
         settlementObserver = IVRLSettlementObserver(address(0));
+    }
+
+    /// @dev TEST-ONLY: overwrite stored commit MM state (finding 36_10 orchestrator regressions).
+    function testOnly_setCommitMmState(uint256 commitId, MarketMaker.State memory mm) external {
+        MarketMaker.save(s.commits[commitId].mmState, mm);
     }
 
     /// @notice Get position accounting details for debugging

@@ -556,6 +556,9 @@ library VTSCommitLib {
     }
 
     /// @notice Calculates the USD value of the MarketMaker signal reserves for a commit
+    /// @dev Reads only `mmState.reserves` from storage. Avoids copying `sourceState`, `prover`, and `nonce` into
+    ///      memory on every commitment valuation (checkpoint / seize refresh), which otherwise amplified gas when those
+    ///      strings were large but economically irrelevant to `getTotalValue`.
     /// @param s The central VTS storage
     /// @param oracleHelper The oracle helper for USD price calculations
     /// @param commitId The commit NFT id
@@ -565,11 +568,27 @@ library VTSCommitLib {
         view
         returns (uint256 totalUsdValue)
     {
-        Commit storage commit = s.commits[commitId];
-        MarketMaker.State memory mmState = commit.mmState;
+        return _signalValueFromCommitStorage(s.commits[commitId], oracleHelper);
+    }
 
-        // Get reserves from MarketMaker.State
-        return _signalValue(mmState, oracleHelper);
+    /// @dev Same economics as `_signalValue(MarketMaker.State memory, ...)` + `MarketMaker.getReserves`, but without
+    ///      materialising the full stored `MarketMaker.State` in memory.
+    function _signalValueFromCommitStorage(Commit storage commit, IOracleHelper oracleHelper)
+        private
+        view
+        returns (uint256 totalValue)
+    {
+        uint256 n = commit.mmState.reserves.length;
+        if (n > MAX_MM_UNIQUE_RESERVE_TICKERS) {
+            revert Errors.MMReserveTickerLimitExceeded(n, MAX_MM_UNIQUE_RESERVE_TICKERS);
+        }
+        string[] memory tickers = new string[](n);
+        uint256[] memory amounts = new uint256[](n);
+        for (uint256 i = 0; i < n; i++) {
+            tickers[i] = commit.mmState.reserves[i].asset;
+            amounts[i] = commit.mmState.reserves[i].amount;
+        }
+        totalValue = oracleHelper.getTotalValue(tickers, amounts);
     }
 
     /// @notice Calculates the USD value of the MarketMaker signal reserves
