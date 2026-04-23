@@ -426,7 +426,7 @@ contract HubRSC is AbstractReactive {
             abi.decode(log.data, (uint256, uint256, bytes4, uint8));
         if (failedAmount == 0) return;
 
-        _releaseInFlightReservation(attemptId, lcc, recipient, true);
+        _releaseInFlightReservation(attemptId, lcc, recipient, SettlementFailureLib.restoresBudget(failureClass));
         if (SettlementFailureLib.isTerminal(failureClass)) {
             bytes32 key = _computeKey(lcc, recipient);
             Pending storage entry = pending[key];
@@ -436,6 +436,10 @@ contract HubRSC is AbstractReactive {
             _dispatchLiquidityIfBudgetAvailable(lcc, true);
             return;
         }
+
+        // Liquidity-exhausted failures scrub speculative budget and wait for the next authoritative wake-up.
+        if (SettlementFailureLib.requiresFreshLiquidity(failureClass)) return;
+
         _dispatchLiquidityIfBudgetAvailable(lcc, true);
     }
 

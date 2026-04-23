@@ -392,6 +392,45 @@ contract SpokeRSCTest is Test {
         spoke.react(log);
     }
 
+    function test_reactClassifiesLiquidityErrorFailureForFreshWakeupRetry() public {
+        address recipient = makeAddr("recipient");
+        SpokeRSC spoke = _newSpoke(recipient);
+        address lcc = makeAddr("lcc");
+        uint256 maxAmount = 45;
+        uint256 attemptId = 57;
+        bytes memory revertData = abi.encodeWithSelector(SettlementFailureLib.LIQUIDITY_ERROR_SELECTOR, lcc, 0);
+
+        IReactive.LogRecord memory log = IReactive.LogRecord({
+            chain_id: originChainId,
+            _contract: destinationReceiverContract,
+            topic_0: SETTLEMENT_FAILED_TOPIC,
+            topic_1: uint256(uint160(lcc)),
+            topic_2: uint256(uint160(recipient)),
+            topic_3: 0,
+            data: abi.encode(maxAmount, attemptId, revertData),
+            block_number: 0,
+            op_code: 0,
+            block_hash: 0,
+            tx_hash: 24,
+            log_index: 1
+        });
+
+        bytes memory payload = abi.encodeWithSelector(
+            ReactiveConstants.RECORD_SETTLEMENT_FAILED_SELECTOR,
+            address(0),
+            lcc,
+            recipient,
+            maxAmount,
+            attemptId,
+            SettlementFailureLib.LIQUIDITY_ERROR_SELECTOR,
+            SettlementFailureLib.FAILURE_CLASS_REQUIRES_FRESH_LIQUIDITY,
+            1
+        );
+        vm.expectEmit(true, true, true, true, address(spoke));
+        emit IReactive.Callback(destinationChainId, hubCallback, 8000000, payload);
+        spoke.react(log);
+    }
+
     function _newSpoke(address recipient) internal returns (SpokeRSC) {
         return SpokeRSC(
             new SpokeRSC(
