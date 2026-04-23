@@ -51,6 +51,7 @@ fs_permissions = [
   { access = "read", path = "out/" },
   { access = "read", path = "../evm/out/" },
   { access = "read", path = "./config" },
+  { access = "read-write", path = "./config/oracle" },
 ]
 
 remappings = [

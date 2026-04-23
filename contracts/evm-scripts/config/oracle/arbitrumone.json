@@ -61,5 +61,14 @@
         "lowerBoundRatio": "0"
       }
     }
-  ]
+  ],
+  "assets[0]": {
+    "configured": true
+  },
+  "assets[1]": {
+    "configured": true
+  },
+  "assets[2]": {
+    "configured": true
+  }
 }
