@@ -11,9 +11,11 @@ abstract contract AbstractBatchProcessSettlement {
     /// @notice Emitted when a batch is received.
     event BatchReceived(uint256 count);
     /// @notice Emitted when a settlement call succeeds.
-    event SettlementSucceeded(address indexed lcc, address indexed recipient, uint256 maxAmount);
+    event SettlementSucceeded(address indexed lcc, address indexed recipient, uint256 maxAmount, uint256 attemptId);
     /// @notice Emitted when a settlement call fails.
-    event SettlementFailed(address indexed lcc, address indexed recipient, uint256 maxAmount, bytes reason);
+    event SettlementFailed(
+        address indexed lcc, address indexed recipient, uint256 maxAmount, uint256 attemptId, bytes reason
+    );
 
     /// @notice Max number of items allowed per batch.
     uint256 public constant MAX_BATCH_SIZE = 30;
@@ -33,11 +35,17 @@ abstract contract AbstractBatchProcessSettlement {
     /// @param lcc Array of LCC token addresses.
     /// @param recipient Array of recipients.
     /// @param maxAmount Array of max amounts to settle.
+    /// @param attemptId Array of attempt ids supplied by the HubRSC dispatch.
     /// @dev Internal logic intended to be wrapped by protocol-specific access control.
     /// @custom:emits BatchReceived, SettlementSucceeded, SettlementFailed
-    function processSettlements(address[] memory lcc, address[] memory recipient, uint256[] memory maxAmount) internal {
+    function processSettlements(
+        address[] memory lcc,
+        address[] memory recipient,
+        uint256[] memory maxAmount,
+        uint256[] memory attemptId
+    ) internal {
         uint256 count = lcc.length;
-        if (recipient.length != count || maxAmount.length != count) {
+        if (recipient.length != count || maxAmount.length != count || attemptId.length != count) {
             revert InvalidArrayLengths();
         }
         if (count > MAX_BATCH_SIZE) {
@@ -48,9 +56,9 @@ abstract contract AbstractBatchProcessSettlement {
 
         for (uint256 i = 0; i < count; i++) {
             try liquidityHub.processSettlementFor{gas: SETTLEMENT_ITEM_GAS_LIMIT}(lcc[i], recipient[i], maxAmount[i]) {
-                emit SettlementSucceeded(lcc[i], recipient[i], maxAmount[i]);
+                emit SettlementSucceeded(lcc[i], recipient[i], maxAmount[i], attemptId[i]);
             } catch (bytes memory reason) {
-                emit SettlementFailed(lcc[i], recipient[i], maxAmount[i], reason);
+                emit SettlementFailed(lcc[i], recipient[i], maxAmount[i], attemptId[i], reason);
             }
         }
     }

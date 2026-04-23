@@ -2,6 +2,8 @@
 src = "src"
 out = "out"
 libs = ["lib"]
+optimizer = true
+optimizer_runs = 200
 remappings = [
   "reactive-lib/=lib/reactive-lib/src/",
   "openzeppelin-contracts/=../evm/lib/openzeppelin-contracts/",
