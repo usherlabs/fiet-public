@@ -134,8 +134,6 @@ contract HubRSC is AbstractReactive {
     mapping(address => uint256) public zeroBatchRetryCreditsRemaining;
     /// @notice Persisted dispatch budget keyed by the economic lane currently funding settlement dispatch.
     mapping(address => uint256) public availableBudgetByDispatchLane;
-    /// @notice Highest origin block credited for a direct-liquidity semantic key (`lcc, underlying, amount, marketId`).
-    mapping(bytes32 => uint256) public lastLiquidityAvailableBlockBySemanticKey;
     /// @notice Monotonic identifier assigned to each dispatched settlement attempt.
     uint256 public nextAttemptId;
     /// @notice Active reservation keyed by dispatch attempt id.
@@ -494,9 +492,8 @@ contract HubRSC is AbstractReactive {
         if (log.chain_id != protocolChainId || log._contract != liquidityHub) return;
         if (!_markLogProcessed(log)) return;
         address lcc = address(uint160(log.topic_1));
-        (address underlying, uint256 available, bytes32 marketId) = abi.decode(log.data, (address, uint256, bytes32));
+        (address underlying, uint256 available,) = abi.decode(log.data, (address, uint256, bytes32));
         _registerLccUnderlying(lcc, underlying);
-        if (!_markLiquidityAvailableCredit(lcc, underlying, available, marketId, log.block_number)) return;
         _creditDispatchBudget(lcc, available);
         _dispatchLiquidityIfBudgetAvailable(lcc, true);
     }
@@ -994,28 +991,6 @@ contract HubRSC is AbstractReactive {
             return false;
         }
         processedReport[reportId] = true;
-        return true;
-    }
-
-    /// @dev Best-effort semantic replay guard for direct LiquidityAvailable credits. Without a dedicated origin nonce,
-    /// this refuses to re-credit the same semantic event at the same-or-earlier origin block.
-    function _markLiquidityAvailableCredit(
-        address lcc,
-        address underlying,
-        uint256 amount,
-        bytes32 marketId,
-        uint256 blockNumber
-    ) internal returns (bool) {
-        if (blockNumber == 0) return true;
-
-        bytes32 semanticKey = keccak256(abi.encode(lcc, underlying, amount, marketId));
-        uint256 lastBlock = lastLiquidityAvailableBlockBySemanticKey[semanticKey];
-        if (lastBlock >= blockNumber) {
-            emit DuplicateLogIgnored(keccak256(abi.encode(semanticKey, blockNumber)));
-            return false;
-        }
-
-        lastLiquidityAvailableBlockBySemanticKey[semanticKey] = blockNumber;
         return true;
     }
 
