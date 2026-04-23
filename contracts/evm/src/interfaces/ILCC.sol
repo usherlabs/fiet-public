@@ -12,5 +12,7 @@ interface ILCC is IERC20 {
     function hub() external view returns (address);
 
     function underlying() external view returns (address);
+    /// @notice Bucket split for `account`. For `BOUND_EXEMPT` holders, returns `(0, balanceOf(account))` — exempt-held
+    ///         LCC is treated as market-derived for this view; bucket maps are not maintained on exempt endpoints.
     function balancesOf(address account) external view returns (uint256 wrapped, uint256 marketDerived);
 }
