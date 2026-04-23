@@ -30,17 +30,19 @@ contract BatchProcessSettlement is AbstractBatchProcessSettlement, AbstractCallb
     /// @param lcc Array of LCC token addresses.
     /// @param recipient Array of recipients.
     /// @param maxAmount Array of max amounts to settle.
+    /// @param attemptId Array of attempt ids for the requested settlements.
     /// @dev Continues on individual failures and emits per-item success/failure.
     /// @custom:emits BatchReceived, SettlementSucceeded, SettlementFailed
     function processSettlements(
         address callbackOrigin,
         address[] memory lcc,
         address[] memory recipient,
-        uint256[] memory maxAmount
+        uint256[] memory maxAmount,
+        uint256[] memory attemptId
     ) external authorizedSenderOnly {
         if (callbackOrigin != hubRVMId) {
             revert InvalidCallbackOrigin(hubRVMId, callbackOrigin);
         }
-        processSettlements(lcc, recipient, maxAmount);
+        processSettlements(lcc, recipient, maxAmount, attemptId);
     }
 }

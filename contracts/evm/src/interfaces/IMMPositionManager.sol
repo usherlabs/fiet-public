@@ -3,7 +3,6 @@ pragma solidity ^0.8.26;
 
 import {PositionId, Position} from "../types/Position.sol";
 import {MarketMaker} from "../libraries/MarketMaker.sol";
-import {IMMQueueCustodian} from "./IMMQueueCustodian.sol";
 
 /// @title IMMPositionManager
 /// @notice Interface for the MMPositionManager contract
@@ -42,16 +41,24 @@ interface IMMPositionManager {
     /// @return expiresAt the expiry timestamp of the commitment
     /// @return positionCount the number of positions associated with the commitment
     /// @return activePositionCount the number of active positions associated with the commitment
+    /// @return inactiveRemnantCount inactive positions under this commit that still hold non-zero live `pa.settled`
     function commitOf(uint256 tokenId)
         external
         view
-        returns (MarketMaker.State memory state, uint256 expiresAt, uint256 positionCount, uint256 activePositionCount);
+        returns (
+            MarketMaker.State memory state,
+            uint256 expiresAt,
+            uint256 positionCount,
+            uint256 activePositionCount,
+            uint256 inactiveRemnantCount
+        );
 
     /// @notice Get the next token ID that will be assigned
     /// @dev Returns the next commit ID from VTSOrchestrator, matching Uniswap PositionManager interface
     /// @return The next token ID (will be assigned on next commitSignal call)
     function nextTokenId() external view returns (uint256);
 
-    /// @notice Shared queue custodian used for queued MM-backed LCC custody
-    function queueCustodian() external view returns (IMMQueueCustodian);
+    /// @notice Queue custodian for a beneficiary domain (one custodian per beneficiary; immutable beneficiary inside).
+    /// @dev Deployed via `INITIALISE`; use `custodianFor` for queue-owner resolution elsewhere.
+    function custodianFor(address recipient) external view returns (address);
 }
