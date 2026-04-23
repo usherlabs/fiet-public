@@ -51,6 +51,7 @@ fs_permissions = [
   { access = "read", path = "out/" },
   { access = "read", path = "../evm/out/" },
   { access = "read", path = "./config" },
+  { access = "read-write", path = "./config/oracle" },
 ]
 
 remappings = [
@@ -82,15 +83,13 @@ remappings = [
 [profile.deploy]
 # Libraries from main project (deterministic CREATE3 addresses)
 libraries = [
-  "src/types/VTS.sol:GrowthCarryQ128Lib:0x81716C6ADcb2308f39f4897Db2f54c080E3b0Be7",
-  "../evm/src/types/VTS.sol:GrowthCarryQ128Lib:0x81716C6ADcb2308f39f4897Db2f54c080E3b0Be7",
-  "src/libraries/VTSPositionLib.sol:VTSPositionLib:0x26e024F42D5F766b562fc35701f13B2d5e01A5C2",
-  "src/libraries/VTSSwapLib.sol:VTSSwapLib:0x62ef223B345cF2bCc9c9097F093202c5f8C88f31",
-  "src/libraries/VTSCommitLib.sol:VTSCommitLib:0x97D09b290896136360857499EA8f6d6F98c3Fb1B",
-  "src/libraries/VTSPositionMMOpsLib.sol:VTSPositionMMOpsLib:0x83e921567Fe1C6A4E42F77f727a6F7434360B477",
-  "src/libraries/VTSLifecycleLinkedLib.sol:VTSLifecycleLinkedLib:0x4f564C280e60CF5c5d11Ce3eB9aED1eCC0B62839",
-  "src/libraries/LCCFactoryLib.sol:LCCFactoryLinkedLib:0x42B8987753996202F071f1598Eef6B2a7F82299B",
-  "src/libraries/LiquidityHubLinkedLib.sol:LiquidityHubLinkedLib:0x43B8987753996202F071f1598Eef6B2a7F82299B",
+  "src/libraries/VTSPositionLib.sol:VTSPositionLib:0x823bDa51f62B814386408eB4ecC01F4256B1d516",
+  "src/libraries/VTSSwapLib.sol:VTSSwapLib:0x5eE398A9363aD238Cb1c2b38bA8650a05750Db14",
+  "src/libraries/VTSCommitLib.sol:VTSCommitLib:0xBab5960fB71f8096dE37497Dd8D41A6a20C9c9a7",
+  "src/libraries/VTSPositionMMOpsLib.sol:VTSPositionMMOpsLib:0x76b2ea645Cf439D91391dDb7ca20a2E06C53Ca0d",
+  "src/libraries/VTSLifecycleLinkedLib.sol:VTSLifecycleLinkedLib:0x61b4D910E7086a30b14fd8A4986b15b844ac27B9",
+  "src/libraries/LCCFactoryLib.sol:LCCFactoryLinkedLib:0x875B922e2843373772C8a6d88cb7581bbD91C879",
+  "src/libraries/LiquidityHubLinkedLib.sol:LiquidityHubLinkedLib:0xaCc580983f745C1c9edDbE3b5F3d221F13D653F9",
 ]
 
 # Match CI: E2E scripts compile without IR to avoid Yul stack-depth failures under linked-library builds.
@@ -118,8 +117,6 @@ compilation_restrictions = [
 ]
 
 libraries = [
-  "src/types/VTS.sol:GrowthCarryQ128Lib:0xb7519638D8659dB0bB031C9B13a8A18A256A320E",
-  "../evm/src/types/VTS.sol:GrowthCarryQ128Lib:0xb7519638D8659dB0bB031C9B13a8A18A256A320E",
   "src/libraries/VTSPositionLib.sol:VTSPositionLib:0x2C95130C4DE0504c82f4688C657c9A4CC01761EF",
   "src/libraries/VTSSwapLib.sol:VTSSwapLib:0x8AF1433f3d2b0547A63f7004B9dA9C5953fD522D",
   "src/libraries/VTSCommitLib.sol:VTSCommitLib:0x6EBB20A904a9CA505e7d4A253c7FbF72DF5a777b",

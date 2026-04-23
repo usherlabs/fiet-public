@@ -19,7 +19,9 @@ pragma solidity ^0.8.26;
  * - ACCESS_CONTROL_MANAGER: ACM contract address
  *   - If not set, you may instead provide RESILIENT_ORACLE_ADDRESS and this script will resolve the ACM via
  *     `ResilientOracle.accessControlManager()`.
- * - RESILIENT_ORACLE_ADDRESS: (optional) ResilientOracle proxy address (used only to resolve ACM)
+ * - RESILIENT_ORACLE_ADDRESS: (optional) ResilientOracle proxy address (used only to resolve ACM). If neither this
+ *   nor ACCESS_CONTROL_MANAGER is set, the script reads `ResilientOracle_Proxy` from the oracle address book
+ *   (`deployments/oracle_deployments/<ORACLE_DEPLOYMENT_NETWORK|mapped NETWORK>/addresses.json`).
  * - OLD_ADMIN: (optional) address to revoke DEFAULT_ADMIN_ROLE from (e.g. deployer EOA)
  */
 
@@ -53,7 +55,9 @@ contract AccessControlManagerTransferAdminToGlobalConfigScript is AdminBase {
         } else if (vm.envExists("ACCESS_CONTROL_MANAGER")) {
             acm = vm.envAddress("ACCESS_CONTROL_MANAGER");
         } else {
-            revert("ACM: set RESILIENT_ORACLE_ADDRESS (preferred) or ACCESS_CONTROL_MANAGER");
+            string memory ns = _oracleDeploymentNamespace();
+            address oracle = _readOracleAddressBookKey(ns, "ResilientOracle_Proxy");
+            acm = IResilientOracleACMView(oracle).accessControlManager();
         }
 
         _loadAdminAddresses();

@@ -23,7 +23,8 @@ pragma solidity ^0.8.26;
  *
  * Env:
  * - PRIVATE_KEY: the admin EOA (must be allowed to administer ACM, OR be the owner of GlobalConfig if proxying)
- * - RESILIENT_ORACLE_ADDRESS: ResilientOracle proxy address (used to resolve ACM)
+ * - RESILIENT_ORACLE_ADDRESS: ResilientOracle proxy address (used to resolve ACM); if unset, read from
+ *   `deployments/oracle_deployments/<ORACLE_DEPLOYMENT_NETWORK|mapped NETWORK>/addresses.json`
  * - TARGET_ADDRESS: contract to permit (e.g. MainOracle, BoundValidator, ResilientOracle)
  *
  * - FUNCTION_SIG: the exact signature string used by `_checkAccessAllowed`, e.g. "pause()"
@@ -73,12 +74,19 @@ abstract contract ResilientOracleACMBase is AdminBase {
 contract ResilientOracleACMGiveCallPermissionScript is ResilientOracleACMBase {
     function run() external {
         uint256 pk = uint256(vm.envBytes32("PRIVATE_KEY"));
-        address oracle = vm.envAddress("RESILIENT_ORACLE_ADDRESS");
         address target = vm.envAddress("TARGET_ADDRESS");
         string memory functionSig = vm.envString("FUNCTION_SIG");
         address account = vm.envAddress("ACCOUNT_TO_PERMIT");
 
         _loadAdminAddresses();
+
+        address oracle;
+        if (vm.envExists("RESILIENT_ORACLE_ADDRESS")) {
+            oracle = vm.envAddress("RESILIENT_ORACLE_ADDRESS");
+        } else {
+            oracle = _readOracleAddressBookKey(_oracleDeploymentNamespace(), "ResilientOracle_Proxy");
+        }
+        require(oracle != address(0), "ResilientOracleACM: missing RESILIENT_ORACLE_ADDRESS and address book entry");
 
         address acm = _resolveAcm(oracle);
 

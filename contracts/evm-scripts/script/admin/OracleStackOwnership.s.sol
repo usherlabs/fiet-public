@@ -34,7 +34,7 @@ interface IAccessControlLike {
  * - optional ownership handoff for:
  * - BoundValidator
  * - Main oracle (ChainlinkOracle or SequencerChainlinkOracle proxy)
- * - DefaultProxyAdmin (upgrade admin owner)
+ * - DefaultProxyAdmin (upgrade admin contract; GlobalConfig becomes its owner)
  *
  * Run:
  * - `just admin-oracle-transfer-to-globalconfig`
@@ -43,10 +43,12 @@ interface IAccessControlLike {
  * Env:
  * - PRIVATE_KEY: owner EOA (or an account that can initiate transferOwnership)
  * - NETWORK: deployments/<network>_deployments.json selector (for loading GlobalConfig)
- * - RESILIENT_ORACLE_ADDRESS: optional but recommended
- * - BOUND_VALIDATOR_ADDRESS: optional
- * - MAIN_ORACLE_ADDRESS: optional
- * - DEFAULT_PROXY_ADMIN_ADDRESS: optional
+ * - ORACLE_DEPLOYMENT_NETWORK: optional override for `deployments/oracle_deployments/<name>/addresses.json`
+ * - RESILIENT_ORACLE_ADDRESS: optional; defaults from oracle address book
+ * - BOUND_VALIDATOR_ADDRESS: optional; defaults from oracle address book
+ * - MAIN_ORACLE_ADDRESS: optional; defaults from oracle address book
+ * - ORACLE_PROXY_ADMIN_ADDRESS: optional; current oracle `DefaultProxyAdmin` contract (not GlobalConfig).
+ *   Legacy: `DEFAULT_PROXY_ADMIN_ADDRESS` is still accepted if `ORACLE_PROXY_ADMIN_ADDRESS` is unset.
  *
  * Optional env:
  * - SKIP_ACM_ADMIN_TRANSFER: set to "true" to skip ACM admin migration
@@ -56,18 +58,25 @@ contract OracleStackTransferToGlobalConfigScript is AdminBase {
     function run() external {
         uint256 pk = uint256(vm.envBytes32("PRIVATE_KEY"));
         address signer = vm.addr(pk);
-        address resilientOracle = vm.envOr("RESILIENT_ORACLE_ADDRESS", address(0));
-        address boundValidator = vm.envOr("BOUND_VALIDATOR_ADDRESS", address(0));
-        address mainOracle = vm.envOr("MAIN_ORACLE_ADDRESS", address(0));
-        address defaultProxyAdmin = vm.envOr("DEFAULT_PROXY_ADMIN_ADDRESS", address(0));
 
         _loadAdminAddresses();
 
+        string memory oracleNs = _oracleDeploymentNamespace();
+        console.log("ORACLE_DEPLOYMENT_NAMESPACE (resolved):", oracleNs);
+        console.log("ORACLE_ADDRESS_BOOK:", _oracleAddressesBookPath(oracleNs));
+
+        address resilientOracle = _resilientOracleAddress(oracleNs);
+        address boundValidator = _boundValidatorAddress(oracleNs);
+        address mainOracle = _mainOracleAddress(oracleNs);
+        address oracleProxyAdmin = _oracleProxyAdminAddress(oracleNs);
+
         require(
             resilientOracle != address(0) || boundValidator != address(0) || mainOracle != address(0)
-                || defaultProxyAdmin != address(0),
-            "set at least one target address"
+                || oracleProxyAdmin != address(0),
+            "set at least one target address (env or oracle address book)"
         );
+
+        _assertHandoffTargetsSafe(resilientOracle, boundValidator, mainOracle, oracleProxyAdmin);
 
         console.log("NETWORK:", networkName);
         console.log("GlobalConfig:", globalConfig);
@@ -81,11 +90,66 @@ contract OracleStackTransferToGlobalConfigScript is AdminBase {
         }
         _handoff(boundValidator, "BoundValidator", signer);
         _handoff(mainOracle, "MainOracle", signer);
-        _handoff(defaultProxyAdmin, "DefaultProxyAdmin", signer);
+        _handoff(oracleProxyAdmin, "OracleProxyAdmin", signer);
         vm.stopBroadcast();
     }
 
+    function _resilientOracleAddress(string memory ns) internal view returns (address) {
+        if (vm.envExists("RESILIENT_ORACLE_ADDRESS")) {
+            return vm.envAddress("RESILIENT_ORACLE_ADDRESS");
+        }
+        return _readOracleAddressBookKey(ns, "ResilientOracle_Proxy");
+    }
+
+    function _boundValidatorAddress(string memory ns) internal view returns (address) {
+        if (vm.envExists("BOUND_VALIDATOR_ADDRESS")) {
+            return vm.envAddress("BOUND_VALIDATOR_ADDRESS");
+        }
+        return _readOracleAddressBookKey(ns, "BoundValidator_Proxy");
+    }
+
+    function _mainOracleAddress(string memory ns) internal view returns (address) {
+        if (vm.envExists("MAIN_ORACLE_ADDRESS")) {
+            return vm.envAddress("MAIN_ORACLE_ADDRESS");
+        }
+        return _readMainOracleProxyFromBook(ns);
+    }
+
+    /// @notice The deployed `DefaultProxyAdmin` contract for the oracle proxies (transfer target), not `GlobalConfig`.
+    function _oracleProxyAdminAddress(string memory ns) internal view returns (address) {
+        if (vm.envExists("ORACLE_PROXY_ADMIN_ADDRESS")) {
+            return vm.envAddress("ORACLE_PROXY_ADMIN_ADDRESS");
+        }
+        if (vm.envExists("DEFAULT_PROXY_ADMIN_ADDRESS")) {
+            return vm.envAddress("DEFAULT_PROXY_ADMIN_ADDRESS");
+        }
+        return _readOracleAddressBookKeyOrZero(ns, "DefaultProxyAdmin");
+    }
+
+    function _assertHandoffTargetsSafe(
+        address resilientOracle,
+        address boundValidator,
+        address mainOracle,
+        address oracleProxyAdmin
+    ) internal view {
+        require(resilientOracle != globalConfig, "OracleStackOwnership: ResilientOracle must not be GlobalConfig");
+        require(boundValidator != globalConfig, "OracleStackOwnership: BoundValidator must not be GlobalConfig");
+        require(mainOracle != globalConfig, "OracleStackOwnership: MainOracle must not be GlobalConfig");
+        require(oracleProxyAdmin != globalConfig, "OracleStackOwnership: OracleProxyAdmin must not be GlobalConfig");
+
+        address[4] memory addrs = [resilientOracle, boundValidator, mainOracle, oracleProxyAdmin];
+        for (uint256 i = 0; i < 4; i++) {
+            for (uint256 j = i + 1; j < 4; j++) {
+                if (addrs[i] != address(0) && addrs[i] == addrs[j]) {
+                    revert("OracleStackOwnership: duplicate oracle handoff target address");
+                }
+            }
+        }
+    }
+
     function _handoffResilientOracleAndAcm(address oracle, address signer) internal {
+        require(oracle != globalConfig, "OracleStackOwnership: ResilientOracle must not be GlobalConfig");
+
         address oracleOwner = IOwnableLike(oracle).owner();
         address oraclePending = address(0);
         try IOwnable2StepLike(oracle).pendingOwner() returns (address p) {
@@ -93,8 +157,8 @@ contract OracleStackTransferToGlobalConfigScript is AdminBase {
         } catch {}
 
         console.log("ResilientOracle:", oracle);
-        console.log("ResilientOracle owner:", oracleOwner);
-        console.log("ResilientOracle pendingOwner:", oraclePending);
+        console.log("ResilientOracle current owner:", oracleOwner);
+        console.log("ResilientOracle current pendingOwner:", oraclePending);
 
         bool skipAcmTransfer = vm.envOr("SKIP_ACM_ADMIN_TRANSFER", false);
         bool requireAcmTransfer = vm.envOr("REQUIRE_ACM_ADMIN_TRANSFER", false);
@@ -143,9 +207,12 @@ contract OracleStackTransferToGlobalConfigScript is AdminBase {
             return;
         }
 
+        require(target != globalConfig, "OracleStackOwnership: GlobalConfig cannot be a handoff target");
+
         address currentOwner = IOwnableLike(target).owner();
-        console.log(label, "target:", target);
-        console.log(label, "owner:", currentOwner);
+        console.log(label, "GlobalConfig address:", globalConfig);
+        console.log(label, "deployed address:", target);
+        console.log(label, "current owner:", currentOwner);
 
         if (currentOwner == globalConfig) {
             console.log("SKIP:", label, "already owned by GlobalConfig");

@@ -154,7 +154,7 @@ Recommended verification after deployment:
 - **What it does**: hands over Venus oracle ownership/admin surfaces to `GlobalConfig`:
   - `ResilientOracle` ownership (with `acceptOwnership()` via `GlobalConfig.proxyCall`)
   - optional ACM `DEFAULT_ADMIN_ROLE` migration to `GlobalConfig`
-  - optional ownership handoff for `BoundValidator`, main oracle proxy, and `DefaultProxyAdmin`
+  - optional ownership handoff for `BoundValidator`, main oracle proxy, and the oracle `DefaultProxyAdmin` contract
 - **On-chain calls**:
   - `AccessControlManager.grantRole(DEFAULT_ADMIN_ROLE, GlobalConfig)` (direct)
   - `AccessControlManager.revokeRole(DEFAULT_ADMIN_ROLE, OLD_ADMIN)` (direct)
@@ -162,27 +162,31 @@ Recommended verification after deployment:
   - `GlobalConfig.proxyCall(ResilientOracle, acceptOwnership())`
   - `require(ResilientOracle.owner() == GlobalConfig)`
 - **Script**: `OracleStackOwnership.s.sol:OracleStackTransferToGlobalConfigScript`
+- **Address resolution** (same script for both `admin-oracle-transfer-*` recipes):
+  - `NETWORK` selects `deployments/<NETWORK>_deployments.json` (for `GlobalConfig`, `MarketFactory`, etc.).
+  - Oracle proxy addresses default from `deployments/oracle_deployments/<oracle-namespace>/addresses.json`, where `<oracle-namespace>` is `ORACLE_DEPLOYMENT_NETWORK` if set, otherwise mapped from `NETWORK` + `MODE` (for example `NETWORK=arbitrum` + `MODE!=LOCAL` → `arbitrumone`, matching `just deploy-oracle`).
+  - Any of the following env vars **override** the address book for that field only: `RESILIENT_ORACLE_ADDRESS`, `BOUND_VALIDATOR_ADDRESS`, `MAIN_ORACLE_ADDRESS`, `ORACLE_PROXY_ADMIN_ADDRESS`.
+  - To **skip** a handoff for a given contract, set that env var to the zero address (`0x0000…0000`); omitting the var means “read from the address book”.
 - **Env**:
-  - `RESILIENT_ORACLE_ADDRESS`: address (recommended)
-  - `BOUND_VALIDATOR_ADDRESS`: optional
-  - `MAIN_ORACLE_ADDRESS`: optional
-  - `DEFAULT_PROXY_ADMIN_ADDRESS`: optional
+  - `ORACLE_DEPLOYMENT_NETWORK` (optional): folder name under `deployments/oracle_deployments/` when it differs from the automatic mapping.
+  - `RESILIENT_ORACLE_ADDRESS` (optional): overrides `ResilientOracle_Proxy` from the address book.
+  - `BOUND_VALIDATOR_ADDRESS` (optional): overrides `BoundValidator_Proxy` from the address book.
+  - `MAIN_ORACLE_ADDRESS` (optional): overrides `ChainlinkOracle_Proxy` / `SequencerChainlinkOracle_Proxy` from the address book.
+  - `ORACLE_PROXY_ADMIN_ADDRESS` (optional): **the oracle `DefaultProxyAdmin` contract address** (from the address book key `DefaultProxyAdmin`). This is a **transfer target**, not the new owner. The intended owner after handoff is always `GlobalConfig`. Do not set this to the `GlobalConfig` address (the script rejects that).
+  - `DEFAULT_PROXY_ADMIN_ADDRESS` (optional, legacy): accepted only if `ORACLE_PROXY_ADMIN_ADDRESS` is unset; same semantics as `ORACLE_PROXY_ADMIN_ADDRESS`.
 
 ### `just admin-oracle-transfer-stack-to-globalconfig`
 
 - **What it does**: transfers the rest of the Venus oracle ownership surface to `GlobalConfig`:
   - `BoundValidator`
   - main oracle proxy (`ChainlinkOracle` / `SequencerChainlinkOracle`)
-  - `DefaultProxyAdmin` (upgrade admin owner)
+  - oracle `DefaultProxyAdmin` (upgrade admin for oracle proxies; `GlobalConfig` becomes its owner)
 - **On-chain calls**:
   - `target.transferOwnership(GlobalConfig)` (direct, when signer is current owner)
   - `GlobalConfig.proxyCall(target, acceptOwnership())` (for `Ownable2Step` targets)
   - `require(target.owner() == GlobalConfig)`
 - **Script**: `OracleStackOwnership.s.sol:OracleStackTransferToGlobalConfigScript`
-- **Env**:
-  - `BOUND_VALIDATOR_ADDRESS` (optional)
-  - `MAIN_ORACLE_ADDRESS` (optional)
-  - `DEFAULT_PROXY_ADMIN_ADDRESS` (optional)
+- **Env**: same address-resolution rules as `just admin-oracle-transfer-to-globalconfig`; for stack-only runs you will typically rely on the address book or set overrides as needed.
 
 ### `just admin-oracle-acm-give-call-permission`
 
@@ -192,7 +196,7 @@ Recommended verification after deployment:
   - then checks `AccessControlManager.hasPermission(ACCOUNT_TO_PERMIT, oracle, FUNCTION_SIG) == true`
 - **Script**: `ResilientOracleACMPermissions.s.sol:ResilientOracleACMGiveCallPermissionScript`
 - **Env**:
-  - `RESILIENT_ORACLE_ADDRESS`: address (used to resolve ACM)
+  - `RESILIENT_ORACLE_ADDRESS` (optional): used to resolve the ACM; if unset, reads `ResilientOracle_Proxy` from the oracle address book (`ORACLE_DEPLOYMENT_NETWORK` or the same `NETWORK`+`MODE` mapping as `just deploy-oracle`).
   - `TARGET_ADDRESS`: address to permit (e.g. MainOracle, BoundValidator, ResilientOracle)
   - `FUNCTION_SIG`: string (e.g. `pause()`, `setOracle(address,address,uint8)`)
   - `ACCOUNT_TO_PERMIT`: address
@@ -208,7 +212,7 @@ Recommended verification after deployment:
   - `ACCESS_CONTROL_MANAGER`: (optional) address
     - If you ran `just deploy-oracle`, this is auto-populated into `.env` for you.
     - If omitted, you may provide `RESILIENT_ORACLE_ADDRESS` and the ACM will be resolved from it.
-  - `RESILIENT_ORACLE_ADDRESS`: (optional) address (used only to resolve the ACM)
+  - `RESILIENT_ORACLE_ADDRESS` (optional): used only to resolve the ACM. If neither this nor `ACCESS_CONTROL_MANAGER` is set, the script reads `ResilientOracle_Proxy` from the oracle address book (same namespace rules as above).
   - `OLD_ADMIN` (optional): address
 
 ### `just admin-oracle-configure-assets`
@@ -219,6 +223,19 @@ Recommended verification after deployment:
   - `ORACLE_CONFIG_FILE` (optional): filename under `config/oracle/` (default: `example.json`)
 - **Docs**: see `script/admin/ORACLE.md` for the end-to-end flow (including required ACM permissions).
 
+### `just admin-oracle-validate-config`
+
+- **What it does**: validates an oracle config file against the oracle deployment artefacts and the live chain state.
+- **Checks**:
+  - config contract addresses vs `deployments/oracle_deployments/<oracle-network>/addresses.json`
+  - `ResilientOracle`, `MainOracle`, `BoundValidator`, and `DefaultProxyAdmin` ownership against `GlobalConfig`
+  - shared ACM wiring and required `GlobalConfig` permissions
+  - per-asset `MainOracle`, `BoundValidator`, and `ResilientOracle` config values
+- **Script**: `OracleValidateConfig.s.sol:OracleValidateConfigScript`
+- **Env**:
+  - `ORACLE_CONFIG_FILE` (optional): filename under `config/oracle/` (default: `example.json`)
+  - `ORACLE_DEPLOYMENT_NETWORK` (optional): oracle deployment directory name under `deployments/oracle_deployments/`
+
 ## Oracle admin model (Venus `lib/oracle`)
 
 The Venus oracle stack under `contracts/evm/lib/oracle/` has **two separate admin surfaces**:
@@ -228,7 +245,7 @@ The Venus oracle stack under `contracts/evm/lib/oracle/` has **two separate admi
 
 If your goal is **GlobalConfig as the single admin** for _all_ administrative operations in `lib/oracle`, you generally need **both**:
 
-- **`OracleStackOwnership.s.sol`** (`just admin-oracle-transfer-to-globalconfig` / `just admin-oracle-transfer-stack-to-globalconfig`): makes `GlobalConfig` the `ResilientOracle` owner (and, optionally, transfers ACM admin and other oracle-stack ownership surfaces).
+- **`OracleStackOwnership.s.sol`** (`just admin-oracle-transfer-to-globalconfig` / `just admin-oracle-transfer-stack-to-globalconfig`): makes `GlobalConfig` the `ResilientOracle` owner (and, optionally, transfers ACM admin and other oracle-stack ownership surfaces). Oracle contract addresses default from `deployments/oracle_deployments/<namespace>/addresses.json`; `GlobalConfig` itself must never be passed as a handoff target (including as `ORACLE_PROXY_ADMIN_ADDRESS`).
 - **`ResilientOracleACMPermissions.s.sol`** (`just admin-oracle-acm-give-call-permission`): grants ACM call permissions for whichever `ResilientOracle` function signatures you intend to run via `GlobalConfig` (and you should ensure no other accounts retain those permissions).
 
 `AccessControlManagerAdmin.s.sol` (`just admin-acm-transfer-admin-to-globalconfig`) is **not sufficient on its own**: it only transfers the ACM `DEFAULT_ADMIN_ROLE` to `GlobalConfig`. You still need the ownership handover (and, depending on which oracle admin functions you want to exercise, the ACM call permissions as well).
