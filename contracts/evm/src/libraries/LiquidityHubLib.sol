@@ -23,6 +23,11 @@ interface ILiquidityHubWeth9 {
 library LiquidityHubLib {
     using CurrencyTransfer for Currency;
 
+    /// @dev Gas forwarded on raw native push to contracts that opt in via `INativeSettlementReceiver` (EIP-165).
+    ///      EOAs still use an uncapped `call{value}` attempt first. This caps griefing where a contract `receive()`
+    ///      burns gas then returns success, which would otherwise starve batch callers.
+    uint256 internal constant NATIVE_PUSH_GAS_STIPEND = 50_000;
+
     // ============ INTERNAL STRUCTS ============
 
     /// @dev Internal struct to reduce stack depth in wrapWithLogic
@@ -598,14 +603,16 @@ library LiquidityHubLib {
                 revert Errors.InvalidAddress(wrappedNative);
             }
 
-            // EOAs and contracts that explicitly opt in via `INativeSettlementReceiver` (EIP-165) may receive raw ETH.
+            // EOAs: uncapped raw ETH attempt first (then WETH fallback per HUB-02C).
+            // Opt-in contracts (`INativeSettlementReceiver`): raw ETH with a fixed gas stipend so a malicious `receive()`
+            // cannot consume the caller's entire gas budget then succeed.
             // All other contracts (including canonical WETH9) settle as ERC20 WETH so value cannot be absorbed by
             // payable contracts that credit `msg.sender` instead of the nominal recipient.
-            bool tryRawEthPush = account.code.length == 0
-                || ERC165Checker.supportsInterface(account, type(INativeSettlementReceiver).interfaceId);
-
-            if (tryRawEthPush) {
+            if (account.code.length == 0) {
                 (bool nativeOk,) = account.call{value: amount}("");
+                if (nativeOk) return;
+            } else if (ERC165Checker.supportsInterface(account, type(INativeSettlementReceiver).interfaceId)) {
+                (bool nativeOk,) = account.call{value: amount, gas: NATIVE_PUSH_GAS_STIPEND}("");
                 if (nativeOk) return;
             }
 

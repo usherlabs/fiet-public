@@ -920,6 +920,83 @@ contract VTSCommitLibTest is VTSLibTestBase {
         assertEq(since1, 0, "deficit1 age should remain zero");
     }
 
+    /// @dev Sufficient backing with partial surplus nets deficits down but can leave non-zero token residuals.
+    ///      `commitmentDeficitSince` must still reset so a later under-backed episode cannot reuse banked age.
+    function test_checkpoint_sufficientBacking_proportionalReduction_clearsDeficitSince_whenResidualNonZero() public {
+        uint256 t0 = 5_000_000;
+        vm.warp(t0);
+        harness.setCommitExpiresAt(commitId, t0 + 1 days);
+
+        uint256 deficit0 = 10e18;
+        uint256 deficit1 = 10e18;
+        harness.setPositionCommitmentDeficit(positionId, deficit0, deficit1);
+        harness.setPositionCommitmentDeficitSince(positionId, t0 - 10_000, t0 - 5_000);
+        harness.setPositionSettled(positionId, 0, 0);
+
+        uint256 issuedUsd = _computeIssuedUsd();
+        uint256 surplusUsd = 5e18;
+        oracle.setTotalValue(issuedUsd + surplusUsd);
+
+        harness.checkpoint(manager, oracle, commitId, positionId);
+
+        (uint256 since0, uint256 since1) = harness.getPositionCommitmentDeficitSince(positionId);
+        assertEq(since0, 0, "deficit0 age should clear after sufficient checkpoint even with residual tokens");
+        assertEq(since1, 0, "deficit1 age should clear after sufficient checkpoint even with residual tokens");
+
+        (uint256 d0, uint256 d1) = harness.getPositionCommitmentDeficit(positionId);
+        uint256 currentDeficitUsd = deficit0 + deficit1;
+        uint256 reduce0 = FullMath.mulDiv(deficit0, surplusUsd, currentDeficitUsd);
+        uint256 reduce1 = FullMath.mulDiv(deficit1, surplusUsd, currentDeficitUsd);
+        assertEq(d0, deficit0 - reduce0, "deficit0 should reduce pro-rata");
+        assertEq(d1, deficit1 - reduce1, "deficit1 should reduce pro-rata");
+        assertTrue(d0 > 0 || d1 > 0, "expected non-zero residual deficit on at least one lane");
+    }
+
+    /// @dev After sufficient backing clears `since`, the next insufficient checkpoint must start a fresh bypass clock.
+    function test_checkpoint_freshUnderBacked_afterSufficient_restartDeficitSince() public {
+        uint256 t0 = 8_000_000;
+        vm.warp(t0);
+        harness.setCommitExpiresAt(commitId, t0 + 1 days);
+
+        uint256 deficit0 = 10e18;
+        uint256 deficit1 = 10e18;
+        harness.setPositionCommitmentDeficit(positionId, deficit0, deficit1);
+        harness.setPositionSettled(positionId, 0, 0);
+
+        uint256 issuedUsd = _computeIssuedUsd();
+        oracle.setTotalValue(issuedUsd + 5e18);
+        harness.checkpoint(manager, oracle, commitId, positionId);
+
+        (uint256 sinceMid0, uint256 sinceMid1) = harness.getPositionCommitmentDeficitSince(positionId);
+        assertEq(sinceMid0, 0, "after sufficient checkpoint since0 should be cleared");
+        assertEq(sinceMid1, 0, "after sufficient checkpoint since1 should be cleared");
+
+        uint256 t1 = t0 + 200;
+        vm.warp(t1);
+        oracle.setTotalValue(0);
+        harness.checkpoint(manager, oracle, commitId, positionId);
+
+        (uint256 d0, uint256 d1) = harness.getPositionCommitmentDeficit(positionId);
+        (uint256 since0, uint256 since1) = harness.getPositionCommitmentDeficitSince(positionId);
+        if (d0 > 0) {
+            assertEq(since0, t1, "fresh under-backed episode should set token0 since at checkpoint time");
+        }
+        if (d1 > 0) {
+            assertEq(since1, t1, "fresh under-backed episode should set token1 since at checkpoint time");
+        }
+
+        uint256 t2 = t1 + 50;
+        vm.warp(t2);
+        harness.checkpoint(manager, oracle, commitId, positionId);
+        (uint256 since0b, uint256 since1b) = harness.getPositionCommitmentDeficitSince(positionId);
+        if (d0 > 0) {
+            assertEq(since0b, t1, "continuous under-backed checkpoints should preserve token0 since");
+        }
+        if (d1 > 0) {
+            assertEq(since1b, t1, "continuous under-backed checkpoints should preserve token1 since");
+        }
+    }
+
     // ============================================================
     // helpers
     // ============================================================

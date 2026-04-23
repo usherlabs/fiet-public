@@ -241,6 +241,8 @@ interface IVTSOrchestrator is IPausableVTS, IVTSCurrencyDelta, IVTSAdmin {
     /// @param settlementTokenIndex The index of the settlement token
     /// @param verifierIndex The verifier index
     /// @param settlementProof The settlement proof
+    /// @dev Does not require a live VRL signal; proof extension may proceed after expiry or empty-reserve renewal when the
+    ///      target lane remains open (see **SEIZE-02**).
     function extendGracePeriod(
         IMarketFactory factory,
         PoolKey memory poolKey,

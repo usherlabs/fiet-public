@@ -16,7 +16,10 @@ being an informal “should”.
 - **Proxy pool**: Uniswap v4 pool whose currencies are **underlyings**.
 - **VTS**: “Value-to-Signal” accounting and settlement system coordinated by `src/VTSOrchestrator.sol`.
 - **Commit (commitId)**: a VRL-verified reserve signal stored in VTS state (`VTSCommitLib.commitSignal`).
-- **Position (positionId)**: a VTS-tracked liquidity position keyed like Uniswap positions.
+- **Position (positionId)**: a VTS-tracked liquidity position keyed like Uniswap positions (`PositionId` from
+  `(modifyLiquidityRouter, tickLower, tickUpper, salt)`). VTS stores these in a **global** `mapping(PositionId => ...)`
+  across pools on the same orchestrator; supported routers must therefore keep salts unique per logical position across
+  pools (**VTS-POS-ID-01**).
 - **RfS / RFS**: “Required for Settlement”; when open, withdrawals are restricted.
 - **Deficits**:
   - **cumulativeDeficit**: swap-driven outflow shortfall accumulated per position; it feeds pool-level deficit
@@ -85,6 +88,8 @@ being an informal “should”.
 
     - LCC is minted by an **issuer** (eg ProxyHook, VTSOrchestrator) to represent liquidity that exists (or is being
       routed) _inside the market system_ (PoolManager / MarketVault), rather than as Hub-held underlying reserves.
+    - Issuer-only mints to **bucket-exempt** (`BOUND_EXEMPT`) protocol endpoints (eg `ProxyHook`) are **market-derived
+      only** (`directAmount == 0` on `LCC.mint`); exempt holders do not maintain per-address wrapped/market bucket maps.
     - Where immediate underlying is not available for redemption, the claim is represented explicitly via the
       `LiquidityHub` settlement queue (`settleQueue` / `totalQueued`) rather than by pretending Hub reserves back it.
 
@@ -129,6 +134,30 @@ being an informal “should”.
   - LCC token minting is callable only by the Hub (`src/LCC.sol::mint` is `onlyHub`).
   - Issuer-only issuance/cancellation paths are additionally guarded against invalid/uninitialised LCCs
     (`src/LiquidityHub.sol::_onlyIssuer` calls `LiquidityHubLib.assertValidLcc(...)`).
+
+### LCC-EXEMPT-01: `BOUND_EXEMPT` holder ERC20 balance is semantically market-derived for views and issuer cancel
+
+- **Statement**:
+  - For any `BOUND_EXEMPT` address, `ILCC.balancesOf(account)` returns **`(wrapped=0, marketDerived=balanceOf(account))`**.
+    Exempt endpoints do **not** persist `wrappedBalances` / `marketDerivedBalances`; fungible ERC20 balance on the hook
+    is therefore not interpreted as durable Domain A (wrapped) **holder** inventory in this view.
+  - **Egress**: `LCC._handleProtocolToNonProtocol` credits non-protocol recipients as **market-derived** when the sender
+    is exempt (legacy, intentional reclassification at the protocol boundary).
+  - **Issuer cancel**: `LiquidityHub.cancel` burns `(direct=0, market=amount)`; for exempt `from`, `LCC.burn` skips
+    bucket maps, which is consistent with the exempt `balancesOf` semantics above (all balance treated as
+    market-derived for classification purposes).
+  - **Domain A** liquidity that requires wrapped bucket tracking and DEX ingress mobilisation must remain on
+    **bucket-tracked** holders until the wrapped-only ingress path (**LCC-03**); exempt-held balance must not be read as
+    wrapped-first holder inventory by integrators or Hub helpers.
+
+- **Enforced by**:
+  - `src/LCC.sol::balancesOf` exempt branch and `src/LCC.sol::_handleProtocolToNonProtocol` exempt-sender branch.
+  - `src/LCC.sol::mint` rejects `directAmount > 0` to exempt recipients (`Errors.MintToNotAllowedRecipient`).
+  - `src/LiquidityHub.sol::cancel` + `src/LiquidityHub.sol::_safeBurn` exempt path (market-only burn at Hub boundary).
+
+- **Why**: Aligns exempt-endpoint behaviour with issuer mint/cancel and transfer egress so proxy-swap cancellation and
+  optional pre-seeded LCC on `ProxyHook` cannot be mis-read as “direct-backed” in `balancesOf` while Hub burns as
+  market-only.
 
 ## Liquidity, LCC, and “protocol-bounded” transfer semantics
 
@@ -429,6 +458,67 @@ being an informal “should”.
   remainders are carried, not discarded on each checkpoint). Snapshot rebases (`_initDeficitSnapshot` /
   `_initInflowSnapshot` / `_checkpointTickIndexedSnapshots`) zero these carries together with `*GrowthInsideLast`.
 
+### VTS-REF: `VTSSwapLib.processSwap` replay matches Uniswap v4 swap path semantics (reference)
+
+- **Statement**: After a core-pool swap, `VTSSwapLib.processSwap` replays the **realised** price path from authoritative
+  pre-swap `slot0.tick` (and matching `sqrtPBefore`, `liqBefore`) to post-swap `slot0`. The replay must stay aligned with
+  Uniswap v4 `Pool.swap` stepping for:
+  - finding the next initialised tick via the tick bitmap (`TickUtils.nextInitializedTickWithinOneWord`, vendor-derived from v4-core `TickBitmap`);
+  - advancing `sqrtPrice` each segment (including zero-liquidity spans where no VTS growth accrues);
+  - applying **tick crossing** in the same order as v4: when price reaches `sqrtPriceNext`, if the tick is initialised,
+    apply liquidity net exactly as `Pool.crossTick` does for fee growth (here: flip deficit/inflow outside growth per `VTS-02`);
+  - preserving v4’s zero-for-one tick cursor rule (`tickNext - 1` after a leftward cross);
+  - handling the terminal case where the swap ends exactly on an initialised tick boundary (`crossTick` runs before persisting `slot0`).
+- **Reference implementation**: Uniswap v4-core `Pool.swap` / `Pool.crossTick` in
+  `contracts/evm/lib/v4-periphery/lib/v4-core/src/libraries/Pool.sol`.
+- **Enforced by**: library tests under `contracts/evm/test/libraries/VTSSwapLib.t.sol` and the Uniswap-parity harness
+  `contracts/evm/test/libraries/VTSSwapLibUniswapParity.t.sol` (real `PoolManager` + `SwapSimulator` grounding).
+- **Non-goal**: `VTSSwapLib` does not re-run `SwapMath.computeSwapStep` or fee routing from `Pool.swap`; it **reconstructs**
+  the crossed-tick path from final pool state for VTS growth and outside flips only.
+
+### CORE-DIRECT-LP-01: Non-MM direct liquidity on the core pool must not be ultra-narrow dust (dense-tick mitigation)
+
+- **Statement**: For **non-MM** adds (`hookData` decodes to `commitId == 0`), `CoreHook` requires:
+  - `(tickUpper - tickLower) >= MIN_DIRECT_LP_TICK_SPACING_STEPS * poolKey.tickSpacing` (minimum **two** tick-spacing steps of width); and
+  - `liquidityDelta >= MIN_DIRECT_LP_LIQUIDITY_DELTA` (configured floor on the core hook).
+  MM adds (`commitId > 0`) bypass this gate so market-maker ranges remain unchanged.
+- **Enforced by**: `src/CoreHook.sol::_enforceDirectLiquidityAntiGrief`.
+- **Why**: Permissionless single-step ranges (`width == tickSpacing`) enable dense initialized ticks near `slot0`, amplifying per-swap `VTSSwapLib` replay cost without improving economic liquidity.
+
+- **Known assumption — tick-density gas tracks Uniswap crossing plus VTS replay overlay**: The protocol **accepts** that
+  `VTSSwapLib.processSwap` work scales with the number of **initialised ticks crossed** on the realised core-pool swap
+  path (`VTS-REF`), because per-cross outside flips and segment accrual are required for `VTS-02` / `VTS-03`. That cost is
+  **not** removed by design; it is the same class of sensitivity Uniswap pools exhibit when `tickSpacing` and liquidity
+  topology imply many crossings. **`CORE-DIRECT-LP-01`** only constrains the cheapest permissionless dense-topology mint
+  on the core pool (non-MM direct LP); it does **not** guarantee bounded crossing counts in all deployments. Operators
+  therefore assume responsibility for sensible **`poolKey.tickSpacing`** and MM hygiene: very small spacing and wide,
+  fragmented liquidity can still produce large swap gas (including first-touch cold slots), and MM ranges bypass the
+  direct-LP width floor by policy.
+
+### VTS-POS-ID-01: Supported modify-liquidity routers must supply globally unique `(router, ticks, salt)` per logical position
+
+- **Statement**: `VTSStorage.positions` and `VTSStorage.positionAccounting` are keyed by `PositionId` only. That id is
+  derived from Uniswap v4’s position key: `(modifyLiquidityRouter, tickLower, tickUpper, salt)` (see
+  `src/types/Position.sol::PositionLibrary.generateId` and `VTSLifecycleLinkedLib._processPositionTouchValidated`). If an
+  entry already exists for a given `PositionId` but with a **different** `poolId`, the touch path reverts
+  (`Errors.InvalidPosition`) rather than overwrite. Therefore **every supported router** that calls into the core hook
+  with `commitId == 0` (direct LP) or with MM hook data must choose `salt` so that, for that router address, no two
+  distinct pools ever share the same `(tickLower, tickUpper, salt)` tuple while both positions remain live in VTS.
+- **Supported routers (by design)**:
+  - **Uniswap v4 `PositionManager`** (`contracts/evm/lib/v4-periphery/src/PositionManager.sol`): uses `salt =
+    bytes32(tokenId)` where `tokenId` is assigned from monotonic `nextTokenId` at mint time, so each minted position has
+    a unique salt for that router instance.
+  - **`MMPositionManager`** (`src/MMPositionManager.sol` via `src/MMPositionActionsImpl.sol`): uses
+    `salt = PositionLibrary.generateSalt(commitmentTokenId, positionIndex)`, so each `(commitment NFT id, position index)`
+    pair yields a distinct salt for that router instance.
+- **Enforced by**: router implementation (not re-checked inside `VTSPositionLib` beyond “slot taken + poolId must match”).
+- **Why**: Without per-router salt discipline, a permissionless third party could register the same `(router, ticks,
+  salt)` in pool A and cause later adds in pool B to fail with `InvalidPosition` (cross-pool griefing). The protocol
+  relies on the **blessed** routers above to make that collision infeasible in normal operation.
+- **Non-goal**: Arbitrary external modify-liquidity routers are **not** guaranteed compatible unless they preserve the same
+  uniqueness property; integrators who deploy custom routers must derive salts accordingly (for example pool-scoped or
+  monotonic salts), or accept that VTS may reject cross-pool reuse.
+
 ## Commitment backing, signals, and insolvency gates
 
 ### COMMIT-ROLE-01: Commitment owner and advancer are intentionally distinct roles
@@ -568,6 +658,13 @@ being an informal “should”.
   third-party refresh on the public entrypoint.
 - **Consequence**: Positions with non-zero `commitmentDeficit` can bypass normal grace only when the configured
   token-lane bypass age/severity gates in `SEIZE-01` are satisfied.
+- **Bypass clock (`commitmentDeficitSince`)**: On any checkpoint where live backing is **sufficient** (`issuedUsd <=
+  settledUsd + signalUsd`), `VTSCommitLib::_checkpointWithCommitment` clears both `commitmentDeficitSince` lanes so the
+  commitment-deficit bypass timer cannot “bank” wall-clock across a recovered-or-sufficient checkpoint while non-zero
+  token residuals remain from proportional netting. When backing is again **insufficient**, any lane with non-zero
+  deficit and zero `since` restarts the lane clock at `block.timestamp` (including the residual→fresh-insufficient
+  transition where `_writeCommitmentDeficitToken` does not see a `0 → non-zero` lane transition). Continuous
+  under-backed checkpoints still preserve existing non-zero `since` timestamps lane-wise.
 - **Separation invariant**: `commitmentDeficit` is a checkpoint-derived solvency gate and is not the pool swap-attributed
   deficit principal bucket. `totalDeficitPrincipal` tracks swap-incurred `cumulativeDeficit` at the pool level only.
 
@@ -817,9 +914,13 @@ being an informal “should”.
 - **Statement**: A settlement proof must be verified by an indexed verifier that is both registered and allowlisted for
   the relevant token. Verifiers receive `abi.encode(poolId, tokenIndex, positionId)` so attestations can be bound to the
   extension target position (same lane, different positions cannot reuse another position’s proof bytes).
+- **Signal liveness**: Grace extension is proof-backed recovery for an **already-open** RFS lane; it must **not** require a
+  live VRL signal (`isSignalValid(commitId, true)`). Expired commits or commits renewed to empty reserves must still be
+  able to extend grace when lane-open and verifier checks pass, consistent with seizure paths using `requireLiveSignal=false`.
 - **Enforced by**: `src/VRLSettlementObserver.sol::verifySettlementProof` (reverts `Errors.InvalidVerifier` /
   `Errors.InvalidProof`).
-- **Applied by**: `src/libraries/Checkpoint.sol::extendGracePeriod` and `src/VTSOrchestrator.sol::extendGracePeriod`.
+- **Applied by**: `src/libraries/Checkpoint.sol::extendGracePeriod` and `src/VTSOrchestrator.sol::extendGracePeriod`
+  (orchestrator validates commit existence only via `_assertSignalValid(commitId, false)` before delegation).
 
 ### SEIZE-03: Seizure flows cannot issue LCCs
 

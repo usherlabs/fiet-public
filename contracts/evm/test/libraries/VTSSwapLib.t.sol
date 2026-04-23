@@ -482,14 +482,14 @@ contract VTSSwapLibTest is VTSLibTestBase {
             modifyLiquidityRouter.modifyLiquidity(
                 corePoolKey,
                 ModifyLiquidityParams({
-                    tickLower: 60, tickUpper: 120, liquidityDelta: 2 * L, salt: bytes32(uint256(1))
+                    tickLower: 60, tickUpper: 180, liquidityDelta: 2 * L, salt: bytes32(uint256(1))
                 }),
                 ZERO_BYTES
             );
             modifyLiquidityRouter.modifyLiquidity(
                 corePoolKey,
                 ModifyLiquidityParams({
-                    tickLower: 120, tickUpper: 180, liquidityDelta: 2 * L, salt: bytes32(uint256(2))
+                    tickLower: 180, tickUpper: 300, liquidityDelta: 2 * L, salt: bytes32(uint256(2))
                 }),
                 ZERO_BYTES
             );
@@ -564,14 +564,14 @@ contract VTSSwapLibTest is VTSLibTestBase {
             modifyLiquidityRouter.modifyLiquidity(
                 corePoolKey,
                 ModifyLiquidityParams({
-                    tickLower: -180, tickUpper: -120, liquidityDelta: 2 * L, salt: bytes32(uint256(3))
+                    tickLower: -240, tickUpper: -120, liquidityDelta: 2 * L, salt: bytes32(uint256(3))
                 }),
                 ZERO_BYTES
             );
             modifyLiquidityRouter.modifyLiquidity(
                 corePoolKey,
                 ModifyLiquidityParams({
-                    tickLower: -120, tickUpper: -60, liquidityDelta: 2 * L, salt: bytes32(uint256(4))
+                    tickLower: -120, tickUpper: 0, liquidityDelta: 2 * L, salt: bytes32(uint256(4))
                 }),
                 ZERO_BYTES
             );
@@ -609,14 +609,14 @@ contract VTSSwapLibTest is VTSLibTestBase {
         modifyLiquidityRouter.modifyLiquidity(
             corePoolKey,
             ModifyLiquidityParams({
-                tickLower: 60, tickUpper: 120, liquidityDelta: 2 * L, salt: bytes32(uint256(0x6A70))
+                tickLower: 60, tickUpper: 180, liquidityDelta: 2 * L, salt: bytes32(uint256(0x6A70))
             }),
             ZERO_BYTES
         );
         modifyLiquidityRouter.modifyLiquidity(
             corePoolKey,
             ModifyLiquidityParams({
-                tickLower: 300, tickUpper: 360, liquidityDelta: 2 * L, salt: bytes32(uint256(0x6A71))
+                tickLower: 300, tickUpper: 420, liquidityDelta: 2 * L, salt: bytes32(uint256(0x6A71))
             }),
             ZERO_BYTES
         );
@@ -653,14 +653,14 @@ contract VTSSwapLibTest is VTSLibTestBase {
         modifyLiquidityRouter.modifyLiquidity(
             corePoolKey,
             ModifyLiquidityParams({
-                tickLower: -360, tickUpper: -300, liquidityDelta: 2 * L, salt: bytes32(uint256(0x6B70))
+                tickLower: -420, tickUpper: -300, liquidityDelta: 2 * L, salt: bytes32(uint256(0x6B70))
             }),
             ZERO_BYTES
         );
         modifyLiquidityRouter.modifyLiquidity(
             corePoolKey,
             ModifyLiquidityParams({
-                tickLower: -120, tickUpper: -60, liquidityDelta: 2 * L, salt: bytes32(uint256(0x6B71))
+                tickLower: -120, tickUpper: 0, liquidityDelta: 2 * L, salt: bytes32(uint256(0x6B71))
             }),
             ZERO_BYTES
         );
@@ -752,7 +752,7 @@ contract VTSSwapLibTest is VTSLibTestBase {
         modifyLiquidityRouter.modifyLiquidity(
             corePoolKey,
             ModifyLiquidityParams({
-                tickLower: 60, tickUpper: 120, liquidityDelta: 2 * L, salt: bytes32(uint256(0xA11))
+                tickLower: 60, tickUpper: 180, liquidityDelta: 2 * L, salt: bytes32(uint256(0xA11))
             }),
             ZERO_BYTES
         );

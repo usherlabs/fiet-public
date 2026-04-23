@@ -565,6 +565,23 @@ contract LiquidityHubTest is LiquidityHubTestBase {
         assertEq(liquidityHub.totalQueued(lccToken1), 50);
     }
 
+    /// @dev `BOUND_EXEMPT` issuer holder: `balancesOf` reports full balance as market-derived; `cancel` is market-only burn (LCC-EXEMPT-01).
+    function test_cancel_exemptIssuerHolder_balancesOf_allMarketDerived() public {
+        uint256 amount = 33;
+        vm.prank(proxyHook);
+        liquidityHub.issue(lccToken1, address(proxyHook), amount);
+        (uint256 w, uint256 m) = ILCC(lccToken1).balancesOf(address(proxyHook));
+        assertEq(w, 0);
+        assertEq(m, amount);
+
+        vm.prank(proxyHook);
+        liquidityHub.cancel(lccToken1, address(proxyHook), 10);
+        assertEq(ILCC(lccToken1).balanceOf(address(proxyHook)), amount - 10);
+        (w, m) = ILCC(lccToken1).balancesOf(address(proxyHook));
+        assertEq(w, 0);
+        assertEq(m, amount - 10);
+    }
+
     /// @dev Mutation-hardening: ensures `_safeBurn` correctly computes `remaining = amount - burnMarket`
     ///      by burning across mixed bucket balances (market-derived first, then wrapped).
     function test_cancelWithQueue_burnsMarketFirstThenWrapped_forMixedBucketHolder() public {

@@ -19,10 +19,13 @@ contract MockLiquidityHub {
         RevertNoData,
         RevertString,
         RevertCustom,
-        PanicDivByZero
+        PanicDivByZero,
+        RequireItemGasCap
     }
 
     error MockHubError(uint256 code);
+    error GasNotCapped(uint256 gasLeft, uint256 maxAllowed);
+    uint256 internal constant MAX_ALLOWED_GAS_FOR_CAPPED_CALL = 2_800_000;
 
     mapping(bytes32 key => Behaviour behaviour) internal _behaviourFor;
 
@@ -41,6 +44,13 @@ contract MockLiquidityHub {
         }
         if (behaviour == Behaviour.RevertString) revert("mock-string");
         if (behaviour == Behaviour.RevertCustom) revert MockHubError(42);
+        if (behaviour == Behaviour.RequireItemGasCap) {
+            uint256 gasLeft = gasleft();
+            if (gasLeft > MAX_ALLOWED_GAS_FOR_CAPPED_CALL) {
+                revert GasNotCapped(gasLeft, MAX_ALLOWED_GAS_FOR_CAPPED_CALL);
+            }
+            return;
+        }
 
         uint256 x = 0;
         uint256 y = 1 / x;
@@ -227,6 +237,18 @@ contract BatchProcessSettlementTest is Test {
         assertEq(bytes4(reason), PANIC_SELECTOR, "unexpected panic selector");
         uint256 panicCode = abi.decode(_sliceBytes(reason, 4, 32), (uint256));
         assertEq(panicCode, 0x12, "unexpected panic code");
+    }
+
+    /// @notice Verifies each item call is gas-capped in the batch loop.
+    function test_process_forwardsPerItemGasCap() public {
+        (address[] memory lcc, address[] memory recipient, uint256[] memory maxAmount) = _buildBatch(2);
+        mockHub.setBehaviour(lcc[0], recipient[0], maxAmount[0], MockLiquidityHub.Behaviour.RequireItemGasCap);
+        mockHub.setBehaviour(lcc[1], recipient[1], maxAmount[1], MockLiquidityHub.Behaviour.RequireItemGasCap);
+
+        Vm.Log[] memory logs = _recordAndProcess(lcc, recipient, maxAmount);
+        assertEq(logs.length, 3, "expected batch + two success events");
+        _assertSucceededLog(logs[1], lcc[0], recipient[0], maxAmount[0]);
+        _assertSucceededLog(logs[2], lcc[1], recipient[1], maxAmount[1]);
     }
 
     /// @notice Fuzzes item count gate to prove <=30 succeeds and >30 reverts.

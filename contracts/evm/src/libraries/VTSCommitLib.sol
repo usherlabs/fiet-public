@@ -520,6 +520,12 @@ library VTSCommitLib {
                 _writeCommitmentDeficitToken(pa, 1, 0);
             }
 
+            // Deficit bypass age (`commitmentDeficitSince`) tracks the current **under-backed** episode for
+            // `CheckpointLibrary.isSeizable`. Once backing is sufficient, reset the clock even if proportional
+            // netting left non-zero token residuals; the next insufficient checkpoint starts a fresh episode.
+            pa.commitmentDeficitSince.set(0, 0);
+            pa.commitmentDeficitSince.set(1, 0);
+
             return;
         }
 
@@ -531,6 +537,15 @@ library VTSCommitLib {
             pa.commitmentDeficitBps = uint16(deficitBps);
             _writeCommitmentDeficitToken(pa, 0, FullMath.mulDiv(ctx.eff0, deficitUsd, ctx.issuedUsd));
             _writeCommitmentDeficitToken(pa, 1, FullMath.mulDiv(ctx.eff1, deficitUsd, ctx.issuedUsd));
+            // After sufficient backing we clear `since` above; re-entering under-backed with carried residual token
+            // amounts does not go through `prevDeficit == 0` in `_writeCommitmentDeficitToken`, so restart the lane
+            // clock when there is deficit but no age yet.
+            if (pa.commitmentDeficit.token0 > 0 && pa.commitmentDeficitSince.token0 == 0) {
+                pa.commitmentDeficitSince.set(0, block.timestamp);
+            }
+            if (pa.commitmentDeficit.token1 > 0 && pa.commitmentDeficitSince.token1 == 0) {
+                pa.commitmentDeficitSince.set(1, block.timestamp);
+            }
         }
     }
 

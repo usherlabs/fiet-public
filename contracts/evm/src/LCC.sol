@@ -110,18 +110,19 @@ contract LiquidityCommitmentCertificate is ERC20, ILCC {
     /**
      * @dev Get the balance breakdown for an account
      * @param account The account address
-     * @return wrapped The wrapped balance
-     * @return marketDerived The market-derived balance
+     * @return wrapped The wrapped (direct-backed) bucket balance for bucket-tracked holders; always zero for
+     *         `BOUND_EXEMPT` endpoints (see invariant: exempt-held LCC is semantically market-derived for views).
+     * @return marketDerived The market-derived bucket balance; for exempt holders equals full ERC20 balance.
      */
     function balancesOf(address account) public view virtual returns (uint256 wrapped, uint256 marketDerived) {
-        // Only bucket-exempt protocol endpoints are allowed to hold ERC20 balance without bucket accounting.
-        // Bucket-tracked holders must keep `wrappedBalances + marketDerivedBalances` in sync with ERC20 balance;
-        // otherwise unwrap/settlement can misclassify an unbacked holder as directly wrapped liquidity.
+        // Only bucket-exempt protocol endpoints are allowed to hold ERC20 balance without per-address bucket maps.
+        // Their ERC20 balance is not durable Domain A (wrapped) holder inventory: issuer paths mint market-only to
+        // exempt; egress to non-protocol credits market-derived; issuer `cancel` burns market-only. Expose that
+        // consistently here so off-chain and Hub helpers do not read exempt balance as wrapped.
         uint256 balanceSum = wrappedBalances[account] + marketDerivedBalances[account];
         uint256 fullBalance = balanceOf(account);
         if (Bounds.isExempt(ILiquidityHub(hub).boundLevel(factory, account))) {
-            // Bucket-exempt protocol address holding tokens: treat all balance as wrapped
-            return (fullBalance, 0);
+            return (0, fullBalance);
         }
         if (balanceSum != fullBalance) {
             revert Errors.InvalidBucketState(account, fullBalance);
@@ -142,7 +143,8 @@ contract LiquidityCommitmentCertificate is ERC20, ILCC {
         }
         // Direct-backed mints require bucket accounting; exempt endpoints skip buckets (see early return below).
         // Allowing directAmount > 0 to exempt would misalign `directSupply` with per-holder buckets and allow
-        // exempt->non-protocol transfers to reclassify Domain A liquidity as market-derived without `prepareMarketLiquidity`.
+        // Domain A liquidity to sit on an address that does not carry wrapped bucket state (exempt `balancesOf`
+        // reports market-derived only; egress still reclassifies to recipients as market-derived).
         if (Bounds.isExempt(ILiquidityHub(hub).boundLevel(factory, to)) && directAmount > 0) {
             revert Errors.MintToNotAllowedRecipient(to);
         }
@@ -239,7 +241,7 @@ contract LiquidityCommitmentCertificate is ERC20, ILCC {
         if (!Bounds.isExempt(toLevel)) {
             marketDerivedBalances[to] += fromMarketDerived;
             wrappedBalances[to] += fromWrapped;
-        } else if (amount > 0 && Bounds.isDex(toLevel)) {
+        } else if (fromWrapped > 0 && Bounds.isDex(toLevel)) {
             // DEX ingress sinks (e.g. PoolManager) are ingress boundaries.
             // Immediate-consistency: only the wrapped (direct-backed) slice triggers Hub->Vault settlement via
             // prepareMarketLiquidity. Market-derived-only movement (fromWrapped == 0) does not; that slice is
@@ -290,7 +292,7 @@ contract LiquidityCommitmentCertificate is ERC20, ILCC {
         if (!Bounds.isExempt(toLevel)) {
             marketDerivedBalances[to] += fromMarketDerived;
             wrappedBalances[to] += fromWrapped;
-        } else if (amount > 0 && Bounds.isDex(toLevel)) {
+        } else if (fromWrapped > 0 && Bounds.isDex(toLevel)) {
             // Protocol -> bucket-exempt transfers can source wrapped balance from non-exempt protocols.
             // Same immediate-consistency rule as non-protocol -> DEX: only wrapped slice triggers prepareMarketLiquidity.
             IMarketFactory(factory).prepareMarketLiquidity(address(this), fromWrapped);
