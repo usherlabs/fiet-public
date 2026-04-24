@@ -15,7 +15,7 @@ The design solves three core problems:
 
 ### Components
 
-- **SpokeRSC** (legacy / optional): Can still listen to recipient-scoped protocol-chain settlement events and forward them through `HubCallback`, but is no longer required for automation correctness.
+- **SpokeRSC** (legacy / optional): Can still listen to recipient-scoped protocol-chain settlement events and forward them through `HubCallback`, but is no longer required for automation correctness and its forwarded lifecycle copies are not consumed by `HubRSC`.
 - **HubRSC**: Central aggregator that:
   - Listens directly to authoritative protocol-chain `SettlementQueued`, `SettlementProcessed`, `SettlementAnnulled`, `SettlementSucceeded`, and `SettlementFailed` events
   - Maintains per-recipient and per-LCC pending queues

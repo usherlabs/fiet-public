@@ -36,7 +36,7 @@ This project is built for the Reactive Network execution model:
 7. **Bounded dispatch**: `HubRSC` scans dispatchable work (`pending - inFlight`) with explicit bounds and emits a callback to the _protocol chain_ Receiver.
 8. **Settlement execution**: The Receiver calls `LiquidityHub.processSettlementFor(...)` for each batch item.
 9. **Direct reconciliation**: `HubRSC` also subscribes directly to authoritative `SettlementProcessed`, `SettlementAnnulled`, `SettlementSucceeded`, and `SettlementFailed` events.
-10. **Continuation only**: `HubCallback` remains in the flow for `MoreLiquidityAvailable(...)` continuation callbacks. Legacy recipient `SpokeRSC` forwarding is still compatible, but no longer required for queue visibility or trusted release.
+10. **Continuation only**: `HubCallback` remains in the flow for `MoreLiquidityAvailable(...)` continuation callbacks. Legacy recipient `SpokeRSC` forwarding may still be operated for compatibility/observability, but `HubRSC` no longer mutates settlement state from those forwarded lifecycle reports.
 
 ## Contracts and artefacts
 
@@ -49,7 +49,7 @@ This project is built for the Reactive Network execution model:
 - `src/HubCallback.sol`
   - Authorised callback entrypoints.
   - Emits `MoreLiquidityAvailable(...)` continuation signals for the Hub.
-  - Retains the legacy Spoke whitelist/report surface for compatibility, but that path is no longer the default intake source for `HubRSC`.
+  - Retains the legacy Spoke whitelist/report surface for compatibility, but that path is no longer a mutating intake source for `HubRSC`.
 - `src/HubRSC.sol`
   - Aggregates pending settlements in a linked-list queue and dispatches bounded settlement batches when liquidity becomes available.
   - Subscribes directly to contract-scoped protocol-chain settlement lifecycle events so first-queue visibility is independent of recipient onboarding timing.
@@ -102,7 +102,7 @@ restored budget on siblings instead of immediately redispatching the same failin
 deliberately does not restore budget: it burns the speculative credit for that attempt so duplicate or stale
 `LiquidityAvailable(...)` deliveries cannot leave persistent phantom budget behind.
 
-`SettlementProcessed(...)` remains authoritative for queue reduction, but its `requestedAmount` input is not trusted for releasing reservations. In-flight reservations are released only after the hub observes trusted receiver `SettlementSucceeded(...)` or `SettlementFailed(...)` events. Recipient Spokes can still forward legacy normalized reports, but those are no longer required for reservation release.
+`SettlementProcessed(...)` remains authoritative for queue reduction, but its `requestedAmount` input is not trusted for releasing reservations. In-flight reservations are released only after the hub observes trusted receiver `SettlementSucceeded(...)` or `SettlementFailed(...)` events. Recipient Spokes can still forward legacy normalized reports for compatibility, but those forwarded copies are ignored by `HubRSC` so direct and forwarded logs cannot both mutate state.
 
 ### Shared-underlying routing and backfill
 
