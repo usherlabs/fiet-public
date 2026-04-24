@@ -2,7 +2,10 @@
 
 ## Overview
 
-The reactive contracts use a **log-identity-based deduplication** strategy to ensure that the same on-chain event is never processed more than once, even across reorgs, retries, or duplicate deliveries from the Reactive Network.
+The reactive contracts use a **log-identity-based deduplication** strategy to ensure that the exact same on-chain log is
+never processed more than once. Direct `LiquidityAvailable(...)` wake-ups do not carry a semantic nonce, so identical
+reserve arrivals replayed with a different log identity are handled by downstream failure classification rather than by
+semantic deduplication at intake.
 
 This is critical because the system listens to events from two different chains (origin protocol chain and destination chain via HubCallback), and the ReactVM may redeliver logs under certain conditions.
 
@@ -70,10 +73,13 @@ This is called at the beginning of every major handler:
 
 ## Why This Design?
 
-1. **Robust against reorgs**: Using `tx_hash` + `log_index` makes the identity unique even if the same logical event is re-emitted in a different block.
+1. **Robust for exact redelivery**: Using `tx_hash` + `log_index` makes the identity unique for a specific emitted log.
 2. **Allows duplicate logical events**: If LiquidityHub emits two separate `SettlementQueued` events for the same (lcc, recipient, amount) but in different transactions, both are processed (correct behaviour).
 3. **Prevents duplicate processing**: Only exact same on-chain log (same tx, same log index) is deduplicated.
 4. **Observable**: `DuplicateLogIgnored` event and public `processedReport` mapping allow monitoring.
+5. **Bounds stale liquidity wake-ups**: If a semantically duplicated `LiquidityAvailable(...)` causes speculative
+   over-dispatch, the downstream `LiquidityError(...)` path now consumes that speculative budget and waits for a fresh
+   wake-up instead of persisting phantom credit.
 
 ## HubCallback Additional Protections
 
@@ -100,9 +106,12 @@ These tests verify that duplicate logs are ignored while distinct logical events
 
 ## Summary
 
-The deduplication strategy is deliberately **log-identity-based** rather than purely nonce-based. This provides strong protection against redelivery while still allowing multiple distinct settlements for the same (lcc, recipient) pair.
+The deduplication strategy is deliberately **log-identity-based** rather than purely nonce-based. This keeps distinct
+settlements for the same `(lcc, recipient)` pair observable while still filtering exact redelivery.
 
-The combination of per-spoke filtering, HubCallback validation, and HubRSC-level deduplication creates a robust, observable, and replay-safe settlement pipeline.
+The combination of per-spoke filtering, HubCallback validation, HubRSC-level exact-log deduplication, and
+`LiquidityError(...)`-driven speculative-budget scrubbing keeps the settlement pipeline observable and prevents stale
+liquidity wake-ups from persisting phantom dispatch capacity.
 
 **Document created**: `contracts/reactive/docs/deduplication-mechanic.md`
 

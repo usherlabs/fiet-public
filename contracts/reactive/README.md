@@ -87,7 +87,10 @@ This project is built for the Reactive Network execution model:
 
 ### Continue-on-error semantics
 
-The receiver uses `try/catch` per item and **does not revert the whole batch** if one item fails. It emits per‑item success/failure events; `HubRSC` listens to `SettlementFailed` to release in-flight reservations and keep work retryable.
+The receiver uses `try/catch` per item and **does not revert the whole batch** if one item fails. It emits per-item
+success/failure events; `HubRSC` classifies those failures so unknown faults remain retryable behind a per-key retry
+hold, policy failures are quarantined, and downstream `LiquidityError(...)` scrubs speculative budget until a fresh
+liquidity wake-up arrives.
 
 ### Multi-round processing (“recursive” completion)
 
@@ -97,7 +100,12 @@ If a hub dispatch round ends with remaining liquidity, the hub triggers `HubCall
 
 `HubRSC` persists dispatch budget per dispatch lane (`availableBudgetByDispatchLane`) instead of treating a `LiquidityAvailable(...)` payload as a one-shot wake-up. This matters when liquidity arrives before a queued settlement is mirrored into the reactive queue: the budget remains available and the later queue insertion immediately triggers dispatch.
 
-Budget is consumed only when the hub reserves new in-flight work. `MoreLiquidityAvailable(...)` is therefore a continuation signal, not an authoritative liquidity snapshot. Failed settlements restore the reserved amount back into the same dispatch lane before the hub retries.
+Budget is consumed only when the hub reserves new in-flight work. `MoreLiquidityAvailable(...)` is therefore a
+continuation signal, not an authoritative liquidity snapshot. Failed settlements usually restore the reserved amount
+back into the same dispatch lane, but retryable keys are blocked for the rest of that wake chain so the hub can spend
+restored budget on siblings instead of immediately redispatching the same failing key. `LiquidityError(...)`
+deliberately does not restore budget: it burns the speculative credit for that attempt so duplicate or stale
+`LiquidityAvailable(...)` deliveries cannot leave persistent phantom budget behind.
 
 `SettlementProcessed(...)` remains authoritative for queue reduction, but its `requestedAmount` input is not trusted for releasing reservations. In-flight reservations are released only after the spoke/callback path emits trusted `SettlementSucceededReported(...)` or `SettlementFailedReported(...)` events back to the hub.
 
