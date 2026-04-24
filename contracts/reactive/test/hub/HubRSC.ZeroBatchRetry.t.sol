@@ -216,7 +216,9 @@ contract HubRSCZeroBatchRetryTest is HubRSCTestBase {
         vm.recordLogs();
         hub.react(_moreLiquidityAvailableLog(hub, lccA, firstRemainingLiquidity, 0x9A11, 2));
         Vm.Log[] memory secondEntries = vm.getRecordedLogs();
-        assertEq(_findCallbackPayloadBySelector(secondEntries, ReactiveConstants.PROCESS_SETTLEMENTS_SELECTOR).length, 0);
+        assertEq(
+            _findCallbackPayloadBySelector(secondEntries, ReactiveConstants.PROCESS_SETTLEMENTS_SELECTOR).length, 0
+        );
 
         (, uint256 secondRemainingLiquidity) = _decodeMoreLiquidityAvailablePayload(secondEntries);
         assertGt(hub.zeroBatchRetryCreditsRemaining(underlying), 0);
