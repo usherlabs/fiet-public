@@ -29,12 +29,16 @@ jobs:
           RUNNER_AUTH: ${{ secrets.CODEX_RUNNER_BASIC_AUTH }}
           RUNNER_SECRET: ${{ secrets.CODEX_RUNNER_WEBHOOK_SECRET }}
           SCOPE_JSON: ${{ steps.scope.outputs.json }}
+          PR_REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_BASE_REF: ${{ github.event.pull_request.base.ref }}
+          PR_HEAD_REF: ${{ github.event.pull_request.head.ref }}
         run: |
           payload="$(jq -n \
-            --arg repo "${{ github.repository }}" \
-            --argjson pr "${{ github.event.pull_request.number }}" \
-            --arg base "${{ github.event.pull_request.base.ref }}" \
-            --arg head "${{ github.event.pull_request.head.ref }}" \
+            --arg repo "$PR_REPO" \
+            --argjson pr "$PR_NUMBER" \
+            --arg base "$PR_BASE_REF" \
+            --arg head "$PR_HEAD_REF" \
             --argjson scope "$SCOPE_JSON" \
             '{
               provider: "github",
