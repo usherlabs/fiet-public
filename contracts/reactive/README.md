@@ -51,10 +51,17 @@ This project is built for the Reactive Network execution model:
   - Emits `MoreLiquidityAvailable(...)` continuation signals for the Hub.
   - Retains the legacy Spoke whitelist/report surface for compatibility, but that path is no longer a mutating intake source for `HubRSC`.
 - `src/HubRSC.sol`
-  - Aggregates pending settlements in a linked-list queue and dispatches bounded settlement batches when liquidity becomes available.
+  - Public reactive facade for constructor wiring, `react()` ingress, queue accessors, and subscriptions.
   - Subscribes directly to contract-scoped protocol-chain settlement lifecycle events so first-queue visibility is independent of recipient onboarding timing.
-  - Tracks `pending` and `inFlight` separately; dispatch reserves in-flight amount without optimistically decrementing pending.
-  - Reconciles pending state from authoritative LiquidityHub and receiver events, while still using `HubCallback` for bounded continuation wake-ups.
+  - Keeps the surviving Hub runtime contract while delegating storage and policy-heavy internals into focused modules under `src/hub/`.
+- `src/hub/HubRSCStorage.sol`
+  - Declares HubRSC storage, queue structs, constants, events, and constructor-time immutable validation.
+- `src/hub/HubRSCRouting.sol`
+  - Owns dispatch-lane selection, LCC-underlying registration, and bounded shared-underlying backfill accounting.
+- `src/hub/HubRSCReconciliation.sol`
+  - Owns authoritative decrease buffering, in-flight release, retry/terminal failure policy, and processed-success ordering reconciliation.
+- `src/hub/HubRSCDispatch.sol`
+  - Owns queue intake, liquidity wake handling, bounded batch assembly, and zero-batch continuation retries.
 
 ### Protocol chain
 
@@ -65,6 +72,7 @@ This project is built for the Reactive Network execution model:
 
 ### Testing
 
+- Focused Hub suites: `forge test --match-path 'test/hub/*.t.sol'`
 - Unit tests: `forge test`
 - E2E harness: `just e2e` (deploys mocks, deploys Hub/Spoke/Receiver, triggers events, checks observed state)
 
