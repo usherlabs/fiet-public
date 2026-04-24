@@ -25,7 +25,7 @@ If the **first** `SettlementQueued(lcc, recipient, amount)` for a new custodian 
 - the shared reactive contracts must be funded enough to maintain subscriptions and callbacks; and
 - `LCCCreated` / `LiquidityAvailable` still need to reach the hub so shared-underlying routing metadata can form, just as before.
 
-If an integrator still chooses to run legacy `SpokeRSC` instances for recipient-local funding or reporting, provisioning/whitelist order only affects that optional path. It no longer determines whether the first queue entry is visible to automation.
+If an integrator still chooses to run legacy `SpokeRSC` instances for recipient-local funding or reporting, provisioning/whitelist order only affects that optional path. It no longer determines whether the first queue entry is visible to automation, and the hub ignores the forwarded lifecycle copies for queue/success/failure/processed mutation so they cannot double-apply alongside the direct authoritative logs.
 
 ### Scripts (reference)
 

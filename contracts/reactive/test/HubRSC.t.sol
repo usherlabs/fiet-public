@@ -44,13 +44,8 @@ contract HubRSCTest is Test {
     using stdStorage for StdStorage;
 
     address private constant SYSTEM_CONTRACT = 0x0000000000000000000000000000000000fffFfF;
-    uint256 private constant SETTLEMENT_REPORTED_TOPIC = ReactiveConstants.SETTLEMENT_QUEUED_REPORTED_TOPIC;
     uint256 private constant LIQUIDITY_AVAILABLE_TOPIC = ReactiveConstants.LIQUIDITY_AVAILABLE_TOPIC;
     uint256 private constant MORE_LIQUIDITY_AVAILABLE_TOPIC = ReactiveConstants.MORE_LIQUIDITY_AVAILABLE_TOPIC;
-    uint256 private constant SETTLEMENT_ANNULLED_REPORTED_TOPIC = ReactiveConstants.SETTLEMENT_ANNULLED_REPORTED_TOPIC;
-    uint256 private constant SETTLEMENT_PROCESSED_REPORTED_TOPIC =
-        ReactiveConstants.SETTLEMENT_PROCESSED_REPORTED_TOPIC;
-    uint256 private constant SETTLEMENT_FAILED_REPORTED_TOPIC = ReactiveConstants.SETTLEMENT_FAILED_REPORTED_TOPIC;
     uint256 private constant LCC_CREATED_TOPIC = ReactiveConstants.LCC_CREATED_TOPIC;
 
     uint256 private originChainId;
@@ -164,7 +159,7 @@ contract HubRSCTest is Test {
         return hub.terminalFailureByKey(key) != 0;
     }
 
-    /// @notice Aggregates pending settlements from a SettlementReported log.
+    /// @notice Aggregates pending settlements from an authoritative LiquidityHub queue log.
     function test_aggregatesPendingFromSettlementReported() public {
         _clearSystemContract();
         HubRSC hub = new HubRSC(
@@ -257,6 +252,52 @@ contract HubRSCTest is Test {
         (uint256 remaining, bool exists) = _pendingState(hub, key);
         assertFalse(exists);
         assertEq(remaining, 0);
+    }
+
+    /// @notice Legacy callback-forwarded lifecycle copies must not mutate state after direct authoritative intake.
+    function test_forwardedLifecycleCopiesAreIgnoredAfterDirectIntake() public {
+        _clearSystemContract();
+
+        MockLiquidityHub liq = new MockLiquidityHub();
+        MockSettlementReceiver receiver = new MockSettlementReceiver(address(liq));
+        HubRSC hub = new HubRSC(
+            DEFAULT_MAX_DISPATCH_ITEMS, originChainId, destinationChainId, address(liq), hubCallback, address(receiver)
+        );
+
+        address underlying = makeAddr("underlying");
+        address lcc = makeAddr("lcc");
+        address recipient = makeAddr("recipient");
+        bytes32 key = _computeKey(lcc, recipient);
+
+        hub.react(_lccCreatedLog(hub, underlying, lcc, bytes32("mkt"), 0x1220, 1));
+
+        hub.react(_protocolSettlementQueuedLog(hub, lcc, recipient, 50, 0x1221, 2));
+        hub.react(_legacySettlementQueuedReportedLog(hub, recipient, lcc, 50, 1, 0x1222, 3));
+
+        (uint256 pendingAmount, bool exists) = _pendingState(hub, key);
+        assertTrue(exists);
+        assertEq(pendingAmount, 50);
+
+        hub.react(liquidityAvailableLog(address(liq), lcc, underlying, 50, bytes32("mkt"), 0x1223, 4));
+        assertEq(hub.inFlightByKey(key), 50);
+
+        hub.react(_receiverSettlementSucceededLog(hub, lcc, recipient, 50, 1, 0x1224, 5));
+        hub.react(_legacySettlementSucceededReportedLog(hub, recipient, lcc, 50, 1, 0x1225, 6));
+
+        assertEq(hub.inFlightByKey(key), 0);
+        (uint256 completedAwaitingProcessed, uint256 processedCredit) = _reconciliationState(hub, key);
+        assertEq(completedAwaitingProcessed, 50);
+        assertEq(processedCredit, 0);
+
+        hub.react(_protocolSettlementProcessedLog(hub, lcc, recipient, 50, 50, 0x1226, 7));
+        hub.react(_legacySettlementProcessedReportedLog(hub, recipient, lcc, 50, 50, 0x1227, 8));
+
+        (pendingAmount, exists) = _pendingState(hub, key);
+        assertFalse(exists);
+        assertEq(pendingAmount, 0);
+        (completedAwaitingProcessed, processedCredit) = _reconciliationState(hub, key);
+        assertEq(completedAwaitingProcessed, 0);
+        assertEq(processedCredit, 0);
     }
 
     /// @notice Ignores duplicate SettlementReported logs with the same tx/log identity.
@@ -2572,14 +2613,15 @@ contract HubRSCTest is Test {
         uint256 txHash,
         uint256 logIndex
     ) internal view returns (IReactive.LogRecord memory) {
+        nonce;
         return IReactive.LogRecord({
-            chain_id: hub.reactChainId(),
-            _contract: hub.hubCallback(),
-            topic_0: SETTLEMENT_REPORTED_TOPIC,
-            topic_1: uint256(uint160(recipient)),
-            topic_2: uint256(uint160(lcc)),
+            chain_id: hub.protocolChainId(),
+            _contract: hub.liquidityHub(),
+            topic_0: ReactiveConstants.SETTLEMENT_QUEUED_TOPIC,
+            topic_1: uint256(uint160(lcc)),
+            topic_2: uint256(uint160(recipient)),
             topic_3: 0,
-            data: abi.encode(amount, nonce),
+            data: abi.encode(amount),
             block_number: 0,
             op_code: 0,
             block_hash: 0,
@@ -2604,6 +2646,31 @@ contract HubRSCTest is Test {
             topic_2: uint256(uint160(recipient)),
             topic_3: 0,
             data: abi.encode(amount),
+            block_number: 0,
+            op_code: 0,
+            block_hash: 0,
+            tx_hash: txHash,
+            log_index: logIndex
+        });
+    }
+
+    function _legacySettlementQueuedReportedLog(
+        HubRSC hub,
+        address recipient,
+        address lcc,
+        uint256 amount,
+        uint256 nonce,
+        uint256 txHash,
+        uint256 logIndex
+    ) internal view returns (IReactive.LogRecord memory) {
+        return IReactive.LogRecord({
+            chain_id: hub.reactChainId(),
+            _contract: hub.hubCallback(),
+            topic_0: ReactiveConstants.SETTLEMENT_QUEUED_REPORTED_TOPIC,
+            topic_1: uint256(uint160(recipient)),
+            topic_2: uint256(uint160(lcc)),
+            topic_3: 0,
+            data: abi.encode(amount, nonce),
             block_number: 0,
             op_code: 0,
             block_hash: 0,
@@ -2703,11 +2770,11 @@ contract HubRSCTest is Test {
         uint256 logIndex
     ) internal view returns (IReactive.LogRecord memory) {
         return IReactive.LogRecord({
-            chain_id: hub.reactChainId(),
-            _contract: hub.hubCallback(),
-            topic_0: SETTLEMENT_PROCESSED_REPORTED_TOPIC,
-            topic_1: uint256(uint160(recipient)),
-            topic_2: uint256(uint160(lcc)),
+            chain_id: hub.protocolChainId(),
+            _contract: hub.liquidityHub(),
+            topic_0: ReactiveConstants.SETTLEMENT_PROCESSED_TOPIC,
+            topic_1: uint256(uint160(lcc)),
+            topic_2: uint256(uint160(recipient)),
             topic_3: 0,
             data: abi.encode(amount, amount),
             block_number: 0,
@@ -2743,6 +2810,31 @@ contract HubRSCTest is Test {
         });
     }
 
+    function _legacySettlementProcessedReportedLog(
+        HubRSC hub,
+        address recipient,
+        address lcc,
+        uint256 settledAmount,
+        uint256 requestedAmount,
+        uint256 txHash,
+        uint256 logIndex
+    ) internal view returns (IReactive.LogRecord memory) {
+        return IReactive.LogRecord({
+            chain_id: hub.reactChainId(),
+            _contract: hub.hubCallback(),
+            topic_0: ReactiveConstants.SETTLEMENT_PROCESSED_REPORTED_TOPIC,
+            topic_1: uint256(uint160(recipient)),
+            topic_2: uint256(uint160(lcc)),
+            topic_3: 0,
+            data: abi.encode(settledAmount, requestedAmount),
+            block_number: 0,
+            op_code: 0,
+            block_hash: 0,
+            tx_hash: txHash,
+            log_index: logIndex
+        });
+    }
+
     function _settlementProcessedLogWithRequested(
         HubRSC hub,
         address lcc,
@@ -2753,11 +2845,11 @@ contract HubRSCTest is Test {
         uint256 logIndex
     ) internal view returns (IReactive.LogRecord memory) {
         return IReactive.LogRecord({
-            chain_id: hub.reactChainId(),
-            _contract: hub.hubCallback(),
-            topic_0: SETTLEMENT_PROCESSED_REPORTED_TOPIC,
-            topic_1: uint256(uint160(recipient)),
-            topic_2: uint256(uint160(lcc)),
+            chain_id: hub.protocolChainId(),
+            _contract: hub.liquidityHub(),
+            topic_0: ReactiveConstants.SETTLEMENT_PROCESSED_TOPIC,
+            topic_1: uint256(uint160(lcc)),
+            topic_2: uint256(uint160(recipient)),
             topic_3: 0,
             data: abi.encode(settledAmount, requestedAmount),
             block_number: 0,
@@ -2777,11 +2869,11 @@ contract HubRSCTest is Test {
         uint256 logIndex
     ) internal view returns (IReactive.LogRecord memory) {
         return IReactive.LogRecord({
-            chain_id: hub.reactChainId(),
-            _contract: hub.hubCallback(),
-            topic_0: SETTLEMENT_ANNULLED_REPORTED_TOPIC,
-            topic_1: uint256(uint160(recipient)),
-            topic_2: uint256(uint160(lcc)),
+            chain_id: hub.protocolChainId(),
+            _contract: hub.liquidityHub(),
+            topic_0: ReactiveConstants.SETTLEMENT_ANNULLED_TOPIC,
+            topic_1: uint256(uint160(lcc)),
+            topic_2: uint256(uint160(recipient)),
             topic_3: 0,
             data: abi.encode(amount),
             block_number: 0,
@@ -2802,11 +2894,11 @@ contract HubRSCTest is Test {
         uint256 logIndex
     ) internal view returns (IReactive.LogRecord memory) {
         return IReactive.LogRecord({
-            chain_id: hub.reactChainId(),
-            _contract: hub.hubCallback(),
-            topic_0: ReactiveConstants.SETTLEMENT_SUCCEEDED_REPORTED_TOPIC,
-            topic_1: uint256(uint160(recipient)),
-            topic_2: uint256(uint160(lcc)),
+            chain_id: hub.protocolChainId(),
+            _contract: hub.destinationReceiverContract(),
+            topic_0: ReactiveConstants.SETTLEMENT_SUCCEEDED_TOPIC,
+            topic_1: uint256(uint160(lcc)),
+            topic_2: uint256(uint160(recipient)),
             topic_3: 0,
             data: abi.encode(maxAmount, attemptId),
             block_number: 0,
@@ -2842,6 +2934,31 @@ contract HubRSCTest is Test {
         });
     }
 
+    function _legacySettlementSucceededReportedLog(
+        HubRSC hub,
+        address recipient,
+        address lcc,
+        uint256 maxAmount,
+        uint256 attemptId,
+        uint256 txHash,
+        uint256 logIndex
+    ) internal view returns (IReactive.LogRecord memory) {
+        return IReactive.LogRecord({
+            chain_id: hub.reactChainId(),
+            _contract: hub.hubCallback(),
+            topic_0: ReactiveConstants.SETTLEMENT_SUCCEEDED_REPORTED_TOPIC,
+            topic_1: uint256(uint160(recipient)),
+            topic_2: uint256(uint160(lcc)),
+            topic_3: 0,
+            data: abi.encode(maxAmount, attemptId),
+            block_number: 0,
+            op_code: 0,
+            block_hash: 0,
+            tx_hash: txHash,
+            log_index: logIndex
+        });
+    }
+
     function _settlementFailedLog(
         HubRSC hub,
         address lcc,
@@ -2853,14 +2970,15 @@ contract HubRSCTest is Test {
         uint256 txHash,
         uint256 logIndex
     ) internal view returns (IReactive.LogRecord memory) {
+        failureClass;
         return IReactive.LogRecord({
-            chain_id: hub.reactChainId(),
-            _contract: hub.hubCallback(),
-            topic_0: SETTLEMENT_FAILED_REPORTED_TOPIC,
-            topic_1: uint256(uint160(recipient)),
-            topic_2: uint256(uint160(lcc)),
+            chain_id: hub.protocolChainId(),
+            _contract: hub.destinationReceiverContract(),
+            topic_0: ReactiveConstants.SETTLEMENT_FAILED_TOPIC,
+            topic_1: uint256(uint160(lcc)),
+            topic_2: uint256(uint160(recipient)),
             topic_3: 0,
-            data: abi.encode(maxAmount, attemptId, failureSelector, failureClass),
+            data: abi.encode(maxAmount, attemptId, abi.encodePacked(failureSelector)),
             block_number: 0,
             op_code: 0,
             block_hash: 0,
