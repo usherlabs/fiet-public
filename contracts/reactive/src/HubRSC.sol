@@ -104,6 +104,8 @@ contract HubRSC is AbstractReactive {
     mapping(bytes32 => uint256) private _completedAwaitingProcessedByKey;
     /// @notice Processed requested-amount credit that arrived before the matching success release on the same key.
     mapping(bytes32 => uint256) private _processedRequestedCreditByKey;
+    /// @notice Wake epoch of the current non-terminal retry hold on a key. Zero means no retry hold is tracked.
+    mapping(bytes32 => uint256) private _retryBlockedAtWakeEpochByKey;
 
     /// @notice Deduplicate logs.
     mapping(bytes32 => bool) public processedReport;
@@ -134,6 +136,8 @@ contract HubRSC is AbstractReactive {
     mapping(address => uint256) public zeroBatchRetryCreditsRemaining;
     /// @notice Persisted dispatch budget keyed by the economic lane currently funding settlement dispatch.
     mapping(address => uint256) public availableBudgetByDispatchLane;
+    /// @notice Monotonic count of authoritative protocol-chain liquidity wake-ups observed per dispatch lane.
+    mapping(address => uint256) public protocolLiquidityWakeEpochByLane;
     /// @notice Monotonic identifier assigned to each dispatched settlement attempt.
     uint256 public nextAttemptId;
     /// @notice Active reservation keyed by dispatch attempt id.
@@ -161,6 +165,8 @@ contract HubRSC is AbstractReactive {
     event TerminalFailureCleared(
         address indexed lcc, address indexed recipient, bytes4 failureSelector, uint8 failureClass
     );
+    event RetryBlocked(address indexed lcc, address indexed recipient, address indexed lane, uint8 failureClass);
+    event RetryBlockCleared(address indexed lcc, address indexed recipient, address indexed lane);
 
     constructor(
         uint256 _maxDispatchItems,
@@ -261,6 +267,16 @@ contract HubRSC is AbstractReactive {
         return (_completedAwaitingProcessedByKey[key], _processedRequestedCreditByKey[key]);
     }
 
+    /// @notice Returns the current retry-block state for a key.
+    function retryBlockStateByKey(bytes32 key, address lcc)
+        external
+        view
+        returns (uint256 blockedAtWakeEpoch, bool active)
+    {
+        blockedAtWakeEpoch = _retryBlockedAtWakeEpochByKey[key];
+        active = _isRetryBlocked(key, lcc);
+    }
+
     /// @notice Returns the mutable pending amount and existence bit tracked for a key.
     function pendingStateByKey(bytes32 key) external view returns (uint256, bool) {
         Pending storage entry = pending[key];
@@ -337,6 +353,7 @@ contract HubRSC is AbstractReactive {
 
         bytes32 key = _computeKey(lcc, recipient);
         _clearTerminalFailure(lcc, recipient, key);
+        _clearRetryBlock(lcc, recipient, key);
         Pending storage entry = pending[key];
 
         if (!entry.exists) {
@@ -426,16 +443,23 @@ contract HubRSC is AbstractReactive {
             abi.decode(log.data, (uint256, uint256, bytes4, uint8));
         if (failedAmount == 0) return;
 
-        _releaseInFlightReservation(attemptId, lcc, recipient, true);
+        bytes32 key = _computeKey(lcc, recipient);
+        _releaseInFlightReservation(attemptId, lcc, recipient, SettlementFailureLib.restoresBudget(failureClass));
         if (SettlementFailureLib.isTerminal(failureClass)) {
-            bytes32 key = _computeKey(lcc, recipient);
             Pending storage entry = pending[key];
             if (entry.exists) {
+                _clearRetryBlock(lcc, recipient, key);
                 _markTerminalFailure(entry, key, failedAmount, failureSelector, failureClass);
             }
             _dispatchLiquidityIfBudgetAvailable(lcc, true);
             return;
         }
+
+        _markRetryBlocked(lcc, recipient, key, failureClass);
+
+        // Liquidity-exhausted failures scrub speculative budget and wait for the next authoritative wake-up.
+        if (SettlementFailureLib.requiresFreshLiquidity(failureClass)) return;
+
         _dispatchLiquidityIfBudgetAvailable(lcc, true);
     }
 
@@ -451,6 +475,7 @@ contract HubRSC is AbstractReactive {
         // derive the key for the pending entry
         if (settledAmount == 0 && inflightAmountToReduce == 0) return;
         bytes32 key = _computeKey(lcc, recipient);
+        _clearRetryBlock(lcc, recipient, key);
         Pending storage entry = pending[key];
 
         // if the pending entry exists, then we can apply the decrease immediately
@@ -494,6 +519,7 @@ contract HubRSC is AbstractReactive {
         address lcc = address(uint160(log.topic_1));
         (address underlying, uint256 available,) = abi.decode(log.data, (address, uint256, bytes32));
         _registerLccUnderlying(lcc, underlying);
+        protocolLiquidityWakeEpochByLane[_dispatchBudgetLane(lcc)] += 1;
         _creditDispatchBudget(lcc, available);
         _dispatchLiquidityIfBudgetAvailable(lcc, true);
     }
@@ -662,6 +688,8 @@ contract HubRSC is AbstractReactive {
 
         if (!_entryMatchesDispatchLane(entry.lcc, dispatchLane, useSharedUnderlying)) return;
 
+        if (_isRetryBlocked(key, entry.lcc)) return;
+
         uint256 reserved = inFlightByKey[key];
         if (entry.amount == 0 && reserved == 0) {
             _pruneIfFullySettled(entry, key);
@@ -781,6 +809,23 @@ contract HubRSC is AbstractReactive {
         emit TerminalFailureQuarantined(lcc, entry.recipient, failedAmount, failureSelector, failureClass);
     }
 
+    function _markRetryBlocked(address lcc, address recipient, bytes32 key, uint8 failureClass) internal {
+        _retryBlockedAtWakeEpochByKey[key] = protocolLiquidityWakeEpochByLane[_dispatchBudgetLane(lcc)];
+        emit RetryBlocked(lcc, recipient, _dispatchBudgetLane(lcc), failureClass);
+    }
+
+    function _clearRetryBlock(address lcc, address recipient, bytes32 key) internal {
+        if (_retryBlockedAtWakeEpochByKey[key] == 0) return;
+        delete _retryBlockedAtWakeEpochByKey[key];
+        emit RetryBlockCleared(lcc, recipient, _dispatchBudgetLane(lcc));
+    }
+
+    function _isRetryBlocked(bytes32 key, address lcc) internal view returns (bool) {
+        uint256 blockedAtWakeEpoch = _retryBlockedAtWakeEpochByKey[key];
+        if (blockedAtWakeEpoch == 0) return false;
+        return blockedAtWakeEpoch == protocolLiquidityWakeEpochByLane[_dispatchBudgetLane(lcc)];
+    }
+
     function _clearTerminalFailure(address lcc, address recipient, bytes32 key) internal {
         uint40 terminalFailure = terminalFailureByKey[key];
         if (!_isTerminalFailure(terminalFailure)) return;
@@ -875,11 +920,15 @@ contract HubRSC is AbstractReactive {
     function _registerLccUnderlying(address lcc, address underlying) internal {
         if (hasUnderlyingForLcc[lcc]) return;
         uint256 preRegistrationBudget = availableBudgetByDispatchLane[lcc];
+        uint256 preRegistrationWakeEpoch = protocolLiquidityWakeEpochByLane[lcc];
         underlyingByLcc[lcc] = underlying;
         hasUnderlyingForLcc[lcc] = true;
         if (preRegistrationBudget > 0) {
             availableBudgetByDispatchLane[underlying] += preRegistrationBudget;
             delete availableBudgetByDispatchLane[lcc];
+        }
+        if (protocolLiquidityWakeEpochByLane[underlying] < preRegistrationWakeEpoch) {
+            protocolLiquidityWakeEpochByLane[underlying] = preRegistrationWakeEpoch;
         }
         _initializeUnderlyingBackfill(lcc, underlying);
     }
@@ -1017,6 +1066,7 @@ contract HubRSC is AbstractReactive {
             _clearHistoricalBackfillForKey(lcc, key);
         }
         delete terminalFailureByKey[key];
+        delete _retryBlockedAtWakeEpochByKey[key];
         delete mirroredToUnderlyingByKey[key];
         delete historicalBackfillPendingByKey[key];
         queueDataByLcc[lcc].remove(key);
