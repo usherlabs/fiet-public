@@ -51,9 +51,9 @@ Reservations are now released only by trusted completion signals from the destin
 
 - `SettlementProcessed` reduces pending queue balance only.
 - `SettlementSucceededReported` releases the reserved in-flight amount without restoring budget.
-- `SettlementFailedReported` releases the reserved in-flight amount. Unknown and policy failures restore
-  dispatch budget behind a per-key retry hold, while `LiquidityError(...)` consumes speculative budget and waits for a
-  fresh `LiquidityAvailable(...)` wake-up.
+- `SettlementFailedReported` releases the reserved in-flight amount. Unknown failures restore dispatch budget behind a
+  per-key retry hold; terminal policy failures restore budget while quarantining the key; `LiquidityError(...)`
+  consumes speculative budget and waits for a fresh `LiquidityAvailable(...)` wake-up.
 - `SettlementAnnulledReported` reduces pending queue balance only.
 
 The split matters because `requestedAmount` on `LiquidityHub.SettlementProcessed` is permissionless input and is not trusted for reservation release anymore.
@@ -97,8 +97,9 @@ function _consumeAuthoritativeDecrease(
 ## Key Design Rules
 
 1. **Processed is not completion**: `SettlementProcessed` cannot clear reservations on its own.
-2. **Only trusted completion releases in-flight**: Success releases reservations; failure releases reservations and
-   then either restores retry budget or burns stale speculative credit, depending on the classified failure.
+2. **Only trusted completion releases in-flight**: Success releases reservations; unknown failures restore retry budget
+   behind a retry hold; terminal policy failures restore budget while quarantining the key; `LiquidityError(...)`
+   burns stale speculative credit until a fresh authoritative liquidity wake-up.
 3. **Liquidity exhaustion scrubs speculative credit**: `LiquidityError(...)` does not restore budget, so duplicate or stale
    wake-ups cannot leave persistent phantom dispatch capacity behind.
 4. **Retryable failures are lane-scoped holds, not immediate retries**: non-terminal failures block only the failed key
