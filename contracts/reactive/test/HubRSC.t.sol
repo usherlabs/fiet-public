@@ -188,6 +188,77 @@ contract HubRSCTest is Test {
         assertEq(storedAmount, amount);
     }
 
+    /// @notice First queued work is mirrored directly from LiquidityHub without requiring recipient-specific spoke onboarding.
+    function test_firstQueuedSettlementIsVisibleWithoutRecipientSpokeOnboarding() public {
+        _clearSystemContract();
+
+        MockLiquidityHub liq = new MockLiquidityHub();
+        MockSettlementReceiver receiver = new MockSettlementReceiver(address(liq));
+        HubRSC hub = new HubRSC(
+            DEFAULT_MAX_DISPATCH_ITEMS, originChainId, destinationChainId, address(liq), hubCallback, address(receiver)
+        );
+
+        address underlying = makeAddr("underlying");
+        address lcc = makeAddr("lcc");
+        address recipient = makeAddr("recipient");
+
+        hub.react(_lccCreatedLog(hub, underlying, lcc, bytes32("mkt"), 0x1200, 1));
+        hub.react(_protocolSettlementQueuedLog(hub, lcc, recipient, 50, 0x1201, 2));
+
+        bytes32 key = _computeKey(lcc, recipient);
+        (uint256 storedAmount, bool exists) = _pendingState(hub, key);
+        assertTrue(exists);
+        assertEq(storedAmount, 50);
+
+        vm.recordLogs();
+        hub.react(liquidityAvailableLog(address(liq), lcc, underlying, 50, bytes32("mkt"), 0x1202, 3));
+        Vm.Log[] memory entries = vm.getRecordedLogs();
+
+        (, address[] memory lccs, address[] memory recipients, uint256[] memory amounts,) =
+            _decodeProcessSettlementsPayload(entries);
+        assertEq(lccs.length, 1);
+        assertEq(recipients.length, 1);
+        assertEq(amounts.length, 1);
+        assertEq(lccs[0], lcc);
+        assertEq(recipients[0], recipient);
+        assertEq(amounts[0], 50);
+    }
+
+    /// @notice Direct receiver outcomes release reservations and reconcile pending state without any recipient-specific spoke.
+    function test_directReceiverLifecycleDoesNotNeedRecipientSpoke() public {
+        _clearSystemContract();
+
+        MockLiquidityHub liq = new MockLiquidityHub();
+        MockSettlementReceiver receiver = new MockSettlementReceiver(address(liq));
+        HubRSC hub = new HubRSC(
+            DEFAULT_MAX_DISPATCH_ITEMS, originChainId, destinationChainId, address(liq), hubCallback, address(receiver)
+        );
+
+        address underlying = makeAddr("underlying");
+        address lcc = makeAddr("lcc");
+        address recipient = makeAddr("recipient");
+        bytes32 key = _computeKey(lcc, recipient);
+
+        hub.react(_lccCreatedLog(hub, underlying, lcc, bytes32("mkt"), 0x1210, 1));
+        hub.react(_protocolSettlementQueuedLog(hub, lcc, recipient, 50, 0x1211, 2));
+        hub.react(liquidityAvailableLog(address(liq), lcc, underlying, 50, bytes32("mkt"), 0x1212, 3));
+
+        assertEq(hub.inFlightByKey(key), 50);
+
+        hub.react(_receiverSettlementSucceededLog(hub, lcc, recipient, 50, 1, 0x1213, 4));
+        assertEq(hub.inFlightByKey(key), 0);
+
+        (uint256 pendingAmount, bool existsAfterSuccess) = _pendingState(hub, key);
+        assertTrue(existsAfterSuccess);
+        assertEq(pendingAmount, 50);
+
+        hub.react(_protocolSettlementProcessedLog(hub, lcc, recipient, 50, 50, 0x1214, 5));
+
+        (uint256 remaining, bool exists) = _pendingState(hub, key);
+        assertFalse(exists);
+        assertEq(remaining, 0);
+    }
+
     /// @notice Ignores duplicate SettlementReported logs with the same tx/log identity.
     function test_ignoresDuplicateSettlementReportedLog() public {
         _clearSystemContract();
@@ -969,8 +1040,8 @@ contract HubRSCTest is Test {
         address lccB = makeAddr("lccB");
         address recipientB = makeAddr("recipientB");
 
-        // Queue work for `lccB` before any underlying registration exists.
-        hub.react(_settlementLog(hub, recipientB, lccB, 40, 1, 0x8525, 1));
+        // Queue work for `lccB` before any underlying registration exists and without any recipient-spoke onboarding.
+        hub.react(_protocolSettlementQueuedLog(hub, lccB, recipientB, 40, 0x8525, 1));
         assertTrue(_pendingExists(hub, lccB, recipientB));
 
         // Register both sibling LCCs afterwards; `lccB` registration must backfill the historical key.
@@ -2517,6 +2588,30 @@ contract HubRSCTest is Test {
         });
     }
 
+    function _protocolSettlementQueuedLog(
+        HubRSC hub,
+        address lcc,
+        address recipient,
+        uint256 amount,
+        uint256 txHash,
+        uint256 logIndex
+    ) internal view returns (IReactive.LogRecord memory) {
+        return IReactive.LogRecord({
+            chain_id: hub.protocolChainId(),
+            _contract: hub.liquidityHub(),
+            topic_0: ReactiveConstants.SETTLEMENT_QUEUED_TOPIC,
+            topic_1: uint256(uint160(lcc)),
+            topic_2: uint256(uint160(recipient)),
+            topic_3: 0,
+            data: abi.encode(amount),
+            block_number: 0,
+            op_code: 0,
+            block_hash: 0,
+            tx_hash: txHash,
+            log_index: logIndex
+        });
+    }
+
     /// @dev When `underlyingAsset` is `address(0)`, matches legacy tests that omit explicit underlying in the log data.
     function liquidityAvailableLog(
         address sourceContract,
@@ -2623,6 +2718,31 @@ contract HubRSCTest is Test {
         });
     }
 
+    function _protocolSettlementProcessedLog(
+        HubRSC hub,
+        address lcc,
+        address recipient,
+        uint256 settledAmount,
+        uint256 requestedAmount,
+        uint256 txHash,
+        uint256 logIndex
+    ) internal view returns (IReactive.LogRecord memory) {
+        return IReactive.LogRecord({
+            chain_id: hub.protocolChainId(),
+            _contract: hub.liquidityHub(),
+            topic_0: ReactiveConstants.SETTLEMENT_PROCESSED_TOPIC,
+            topic_1: uint256(uint160(lcc)),
+            topic_2: uint256(uint160(recipient)),
+            topic_3: 0,
+            data: abi.encode(settledAmount, requestedAmount),
+            block_number: 0,
+            op_code: 0,
+            block_hash: 0,
+            tx_hash: txHash,
+            log_index: logIndex
+        });
+    }
+
     function _settlementProcessedLogWithRequested(
         HubRSC hub,
         address lcc,
@@ -2687,6 +2807,31 @@ contract HubRSCTest is Test {
             topic_0: ReactiveConstants.SETTLEMENT_SUCCEEDED_REPORTED_TOPIC,
             topic_1: uint256(uint160(recipient)),
             topic_2: uint256(uint160(lcc)),
+            topic_3: 0,
+            data: abi.encode(maxAmount, attemptId),
+            block_number: 0,
+            op_code: 0,
+            block_hash: 0,
+            tx_hash: txHash,
+            log_index: logIndex
+        });
+    }
+
+    function _receiverSettlementSucceededLog(
+        HubRSC hub,
+        address lcc,
+        address recipient,
+        uint256 maxAmount,
+        uint256 attemptId,
+        uint256 txHash,
+        uint256 logIndex
+    ) internal view returns (IReactive.LogRecord memory) {
+        return IReactive.LogRecord({
+            chain_id: hub.protocolChainId(),
+            _contract: hub.destinationReceiverContract(),
+            topic_0: ReactiveConstants.SETTLEMENT_SUCCEEDED_TOPIC,
+            topic_1: uint256(uint160(lcc)),
+            topic_2: uint256(uint160(recipient)),
             topic_3: 0,
             data: abi.encode(maxAmount, attemptId),
             block_number: 0,

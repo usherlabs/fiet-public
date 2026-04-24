@@ -6,21 +6,26 @@ This file records **operational and design constraints** for integrators of the 
 
 On the protocol chain, Fiet’s MM paths (`MMPositionManager` / `PositionManagerImpl` queue routing) attribute `LiquidityHub.settlementQueued` **recipient** to the beneficiary’s **`MMQueueCustodian`** address (`custodianFor[beneficiary]` on `MMPositionManager`), not to the MM locker EOA.
 
-The reactive stack is **recipient-address keyed**:
+The legacy recipient-Spoke path is still **recipient-address keyed**:
 
 - `SpokeRSC` is constructed with a single immutable **`recipient`** and subscribes to `LiquidityHub` logs filtered on that address (`SettlementQueued`, `SettlementProcessed`, `SettlementAnnulled`, and receiver `SettlementFailed`).
 - `HubCallback.setSpokeForRecipient(recipient, spokeRVMId)` must whitelist the Spoke **for that same `recipient` address** or `recordSettlementQueued` (and related record paths) will not accept reports for that queue owner.
 
-**Implication:** automation that mirrors Hub queues into `HubRSC` **must deploy and fund one `SpokeRSC` per distinct queue recipient**. For MM flows, that means **one Spoke per `MMQueueCustodian` instance** (i.e. per deployed custodian contract address), not merely “one Spoke per human operator” or per locker EOA.
+`HubRSC` no longer depends on that recipient-Spoke path for automation correctness. The shared hub now subscribes directly to contract-scoped `LiquidityHub` queue/decrement events and destination-receiver success/failure events, so the first queued settlement is visible even when no recipient Spoke exists yet.
+
+**Implication:** automation no longer requires a pre-provisioned Spoke per queue recipient. For MM flows, queue visibility is preserved even if the custodian address is discovered late. Recipient-Spoke deployment is now optional legacy plumbing rather than a prerequisite for the hub to see queued work.
 
 ### Provisioning order
 
 Custodian addresses are created when the locker runs **`INITIALISE`** on `MMPositionManager` (see `contracts/evm/INVARIANTS.md` **MM-QUEUE-01** and `MMQueueCustodianFactory.QueueCustodianDeployed`). Until that custodian exists, its address is unknown.
 
-If the **first** `SettlementQueued(lcc, recipient, amount)` for a new custodian occurs **before** a Spoke exists for `recipient == custodian` and before `HubCallback.spokeForRecipient[custodian]` is set, that event will not be mirrored into `HubRSC` pending state; `LiquidityAvailable` alone does not create pending entries. Integrators should either:
+If the **first** `SettlementQueued(lcc, recipient, amount)` for a new custodian occurs before any recipient-specific Spoke exists, `HubRSC` still mirrors it directly from `LiquidityHub`. The remaining operational prerequisites are the shared ones:
 
-- observe `QueueCustodianDeployed` (or read `custodianFor` after `INITIALISE`), then **deploy the Spoke**, **whitelist** it on `HubCallback`, and **fund** it **before** any queue-producing MM action for that beneficiary; or  
-- accept that the first backlog slice may require **manual** `processSettlementFor` / a follow-up queue event after provisioning.
+- `HubRSC` must be deployed with the correct `LiquidityHub` and destination receiver addresses;
+- the shared reactive contracts must be funded enough to maintain subscriptions and callbacks; and
+- `LCCCreated` / `LiquidityAvailable` still need to reach the hub so shared-underlying routing metadata can form, just as before.
+
+If an integrator still chooses to run legacy `SpokeRSC` instances for recipient-local funding or reporting, provisioning/whitelist order only affects that optional path. It no longer determines whether the first queue entry is visible to automation.
 
 ### Scripts (reference)
 
@@ -41,12 +46,12 @@ For LCCs whose underlying is not known yet, budget is temporarily tracked on the
 
 `SettlementProcessed(lcc, recipient, settledAmount, requestedAmount)` remains authoritative for reducing pending queue state, but `requestedAmount` is treated as untrusted input for reservation release. `HubRSC` will not free `inFlightByKey` based on that value alone.
 
-Reservation release now happens only after the recipient `SpokeRSC` forwards a receiver outcome back through `HubCallback`:
+Reservation release now happens only after `HubRSC` observes a trusted receiver outcome:
 
 - `SettlementSucceeded(...)` releases the trusted reserved amount without restoring budget;
 - `SettlementFailed(...)` releases the trusted reserved amount, restores the same amount to the dispatch budget, and immediately retries dispatch.
 
-Operators investigating “stuck” in-flight state should therefore trace the full receiver-to-spoke-to-callback path, not only the protocol-chain `SettlementProcessed(...)` log.
+Operators investigating “stuck” in-flight state should therefore trace the receiver events and the hub’s direct intake path first. Legacy recipient-Spoke forwarding may still exist, but it is no longer the required release path.
 
 ## Shared-underlying routing is gated by backfill progress
 

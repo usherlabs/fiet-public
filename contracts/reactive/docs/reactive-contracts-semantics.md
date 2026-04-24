@@ -15,8 +15,9 @@ The design solves three core problems:
 
 ### Components
 
-- **SpokeRSC** (one per recipient): Listens to protocol-chain `SettlementQueued*` events and reports them to the Hub via callbacks.
+- **SpokeRSC** (legacy / optional): Can still listen to recipient-scoped protocol-chain settlement events and forward them through `HubCallback`, but is no longer required for automation correctness.
 - **HubRSC**: Central aggregator that:
+  - Listens directly to authoritative protocol-chain `SettlementQueued`, `SettlementProcessed`, `SettlementAnnulled`, `SettlementSucceeded`, and `SettlementFailed` events
   - Maintains per-recipient and per-LCC pending queues
   - Deduplicates reports using log identity
   - Buffers authoritative decreases (processed/annulled) until pending entries exist
@@ -51,11 +52,11 @@ struct DispatchState {
 
 ## Core Flows
 
-### 1. Settlement Queuing (Spoke → Hub)
+### 1. Settlement Queuing (Direct Hub Intake)
 
 1. Trader calls `queueSettlement` on LiquidityHub
 2. LiquidityHub emits `SettlementQueued`
-3. SpokeRSC reports it via callback to HubRSC
+3. HubRSC observes that protocol-chain log directly
 4. HubRSC:
    - Deduplicates using log identity
    - Creates or increases `Pending` entry
@@ -92,16 +93,16 @@ This guarantees bounded retries while preventing stalls from long reserved prefi
 
 ### 4. Failure Reconciliation And Retry Gating
 
-- `SettlementSucceededReported` releases only the reserved amount for the matching `attemptId`; it does not trust the
+- Direct receiver `SettlementSucceeded(...)` releases only the reserved amount for the matching `attemptId`; it does not trust the
   reported amount to enlarge the release.
-- `SettlementProcessedReported` remains authoritative for queue reduction, but its `requestedAmount` is used only to
+- Direct `SettlementProcessed(...)` remains authoritative for queue reduction, but its `requestedAmount` is used only to
   reconcile success-before-processed ordering; it does not release reservations by itself.
 - Non-terminal failures release only the failed attempt reservation and mark that key retry-blocked for the rest of the
   current `protocolLiquidityWakeEpochByLane` epoch.
 - Unknown failures restore dispatch budget behind that retry block, while `LiquidityError(...)` /
   `FAILURE_CLASS_REQUIRES_FRESH_LIQUIDITY` does not restore budget and must wait for a fresh authoritative
   `LiquidityAvailable(...)` wake on the same lane.
-- Fresh authoritative key mutation (`SettlementQueuedReported`, `SettlementProcessedReported`, `SettlementAnnulledReported`)
+- Fresh authoritative key mutation (`SettlementQueued`, `SettlementProcessed`, `SettlementAnnulled`)
   clears the retry block immediately.
 - Fresh protocol-chain `LiquidityAvailable(...)` on the same dispatch lane advances the epoch and therefore clears
   outstanding retry holds for that lane.
@@ -122,7 +123,7 @@ if (credits == 0 && bootstrapZeroBatchRetry) {
 
 ### Deduplication
 - `processedReport[keccak256(chain, contract, txHash, logIndex)]`
-- Prevents double-processing of the same report
+- Prevents double-processing of the same authoritative log identity across queue intake, liquidity wakes, and receiver outcomes
 
 ### Buffering
 - `bufferedProcessedDecreaseByKey` and `bufferedAnnulledDecreaseByKey`
