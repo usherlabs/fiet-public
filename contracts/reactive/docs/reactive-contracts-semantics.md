@@ -43,6 +43,8 @@ struct DispatchState {
 
 - `LinkedQueue.Data` for FIFO ordering of pending keys (per-LCC, per-underlying, global)
 - `inFlightByKey` tracks reserved amounts during dispatch
+- `protocolLiquidityWakeEpochByLane` tracks fresh authoritative liquidity wake-ups per dispatch lane
+- `retryBlockedAtWakeEpochByKey` blocks non-terminal failed keys for the rest of the current wake chain
 - `zeroBatchRetryCreditsRemaining` prevents infinite retry loops on reserved-only prefixes
 
 ---
@@ -69,7 +71,7 @@ When `LiquidityAvailable(lcc, amount)` is received:
    - Otherwise use per-LCC lane
 2. Clear stale retry credits from inactive lane
 3. Scan up to `maxDispatchItems` entries from current cursor
-4. Skip fully reserved or non-matching entries
+4. Skip fully reserved, retry-blocked, terminally quarantined, or non-matching entries
 5. Build batch of dispatchable settlements
 6. If batch is empty but liquidity remains:
    - Use `_handleZeroBatchRetry` (see below)
@@ -87,6 +89,21 @@ When `LiquidityAvailable(lcc, amount)` is received:
 - Credits are cleared on successful dispatch or when exhausted
 
 This guarantees bounded retries while preventing stalls from long reserved prefixes.
+
+### 4. Failure Reconciliation And Retry Gating
+
+- `SettlementSucceededReported` releases only the reserved amount for the matching `attemptId`; it does not trust the
+  reported amount to enlarge the release.
+- `SettlementProcessedReported` remains authoritative for queue reduction, but its `requestedAmount` is used only to
+  reconcile success-before-processed ordering; it does not release reservations by itself.
+- Non-terminal failures release only the failed attempt reservation and mark that key retry-blocked for the rest of the
+  current `protocolLiquidityWakeEpochByLane` epoch.
+- Fresh authoritative key mutation (`SettlementQueuedReported`, `SettlementProcessedReported`, `SettlementAnnulledReported`)
+  clears the retry block immediately.
+- Fresh protocol-chain `LiquidityAvailable(...)` on the same dispatch lane advances the epoch and therefore clears
+  outstanding retry holds for that lane.
+- `MoreLiquidityAvailable(...)` is continuation-only and does **not** clear retry holds by itself.
+- Terminal policy failures still quarantine the key and remain stronger than retry-blocks.
 
 ```solidity
 // In _handleZeroBatchRetry
@@ -125,6 +142,7 @@ if (credits == 0 && bootstrapZeroBatchRetry) {
 - **Deduplication**: No double-dispatch of the same settlement
 - **Bounded Gas**: Never processes more than `maxDispatchItems` per callback
 - **No Infinite Loops**: Zero-batch retries are credit-bounded
+- **No Same-Wake Redispatch On Retryable Failure**: a failed key cannot be redispatched again until a fresh key mutation or authoritative liquidity wake-up occurs
 - **FIFO Ordering**: Linked queues preserve arrival order
 - **Idempotency**: Duplicate reports are ignored
 - **Stale Credit Clearing**: When routing switches between shared and per-LCC, inactive lane credits are cleared
