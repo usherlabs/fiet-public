@@ -98,6 +98,9 @@ This guarantees bounded retries while preventing stalls from long reserved prefi
   reconcile success-before-processed ordering; it does not release reservations by itself.
 - Non-terminal failures release only the failed attempt reservation and mark that key retry-blocked for the rest of the
   current `protocolLiquidityWakeEpochByLane` epoch.
+- Unknown failures restore dispatch budget behind that retry block, while `LiquidityError(...)` /
+  `FAILURE_CLASS_REQUIRES_FRESH_LIQUIDITY` does not restore budget and must wait for a fresh authoritative
+  `LiquidityAvailable(...)` wake on the same lane.
 - Fresh authoritative key mutation (`SettlementQueuedReported`, `SettlementProcessedReported`, `SettlementAnnulledReported`)
   clears the retry block immediately.
 - Fresh protocol-chain `LiquidityAvailable(...)` on the same dispatch lane advances the epoch and therefore clears
