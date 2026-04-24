@@ -85,9 +85,12 @@ abstract contract HubRSCDispatch is HubRSCReconciliation {
         if (log.chain_id != reactChainId || log._contract != hubCallback) return;
         if (!_markLogProcessed(log)) return;
         address lcc = address(uint160(log.topic_1));
+        address budgetLane = _dispatchBudgetLane(lcc);
         uint256 ignoredAvailable = abi.decode(log.data, (uint256));
         ignoredAvailable;
-        _dispatchLiquidityIfBudgetAvailable(lcc, false);
+        bool allowBootstrapRetry = continuationBootstrapPendingByLane[budgetLane];
+        continuationBootstrapPendingByLane[budgetLane] = false;
+        _dispatchLiquidityIfBudgetAvailable(lcc, allowBootstrapRetry);
     }
 
     /// @notice Dispatches liquidity for a given LCC.
@@ -174,9 +177,7 @@ abstract contract HubRSCDispatch is HubRSCReconciliation {
             uint256 credits = zeroBatchRetryCreditsRemaining[dispatchLane];
             if (credits == 0 && bootstrapZeroBatchRetry) {
                 uint256 remaining = queueSizeAtStart > maxDispatchItems ? queueSizeAtStart - maxDispatchItems : 0;
-                uint256 maxWindows = remaining == 0 ? 0 : (remaining + maxDispatchItems - 1) / maxDispatchItems;
-                if (maxWindows > MAX_ZERO_BATCH_RETRY_WINDOWS) maxWindows = MAX_ZERO_BATCH_RETRY_WINDOWS;
-                credits = maxWindows;
+                credits = _zeroBatchRetryWindowCount(remaining);
             }
             if (credits > 0) {
                 zeroBatchRetryCreditsRemaining[dispatchLane] = credits - 1;
@@ -191,6 +192,12 @@ abstract contract HubRSCDispatch is HubRSCReconciliation {
         }
 
         return false;
+    }
+
+    function _zeroBatchRetryWindowCount(uint256 remainingEntries) internal view returns (uint256 windows) {
+        if (remainingEntries == 0) return 0;
+        windows = (remainingEntries + maxDispatchItems - 1) / maxDispatchItems;
+        if (windows > MAX_ZERO_BATCH_RETRY_WINDOWS) windows = MAX_ZERO_BATCH_RETRY_WINDOWS;
     }
 
     /// @notice Checks whether a pending entry belongs to the current dispatch lane.
@@ -301,6 +308,7 @@ abstract contract HubRSCDispatch is HubRSCReconciliation {
 
     /// @notice Triggers a more liquidity available callback.
     function _triggerMoreLiquidityAvailable(address triggerLcc, uint256 remainingLiquidity) internal {
+        continuationBootstrapPendingByLane[_dispatchBudgetLane(triggerLcc)] = true;
         bytes memory liquidityPayload = abi.encodeWithSelector(
             ReactiveConstants.TRIGGER_MORE_LIQUIDITY_AVAILABLE_SELECTOR, address(0), triggerLcc, remainingLiquidity
         );

@@ -176,6 +176,66 @@ contract HubRSCZeroBatchRetryTest is HubRSCTestBase {
         assertEq(hub.zeroBatchRetryCreditsRemaining(underlying), 0);
     }
 
+    /// @notice A continuation callback that hits a blocked shared-underlying window still reaches a later live sibling entry.
+    function test_nonEmptyBatchContinuationReachesLaterWindowAfterBlockedReentry() public {
+        _clearSystemContract();
+        HubRSC hub = new HubRSC(
+            DEFAULT_MAX_DISPATCH_ITEMS,
+            originChainId,
+            destinationChainId,
+            liquidityHub,
+            hubCallback,
+            destinationReceiverContract
+        );
+
+        address underlying = makeAddr("underlying");
+        address lccA = makeAddr("lccA");
+        address lccB = makeAddr("lccB");
+        uint256 m = hub.maxDispatchItems();
+        hub.react(_lccCreatedLog(hub, underlying, lccA, bytes32("mktA"), 0x9800, 1));
+        hub.react(_lccCreatedLog(hub, underlying, lccB, bytes32("mktB"), 0x9801, 2));
+
+        for (uint256 i = 0; i < m; i++) {
+            address recipient = address(uint160(i + 1));
+            hub.react(_settlementLog(hub, recipient, lccB, 1, i + 1, 0x9810 + i, i + 1));
+        }
+
+        _queueReservedEntries(hub, lccB, m, 0x9900, m + 1);
+
+        address laterRecipient = address(uint160(2 * m + 1));
+        hub.react(_settlementLog(hub, laterRecipient, lccB, 1, 2 * m + 1, 0x9A00, 2 * m + 1));
+
+        vm.recordLogs();
+        hub.react(liquidityAvailableLog(hub.liquidityHub(), lccA, underlying, 1_000, bytes32("mktA"), 0x9A10, 1));
+        Vm.Log[] memory firstEntries = vm.getRecordedLogs();
+        _assertDispatchedLength(firstEntries, m);
+
+        (, uint256 firstRemainingLiquidity) = _decodeMoreLiquidityAvailablePayload(firstEntries);
+        assertEq(hub.zeroBatchRetryCreditsRemaining(underlying), 0);
+
+        vm.recordLogs();
+        hub.react(_moreLiquidityAvailableLog(hub, lccA, firstRemainingLiquidity, 0x9A11, 2));
+        Vm.Log[] memory secondEntries = vm.getRecordedLogs();
+        assertEq(_findCallbackPayloadBySelector(secondEntries, ReactiveConstants.PROCESS_SETTLEMENTS_SELECTOR).length, 0);
+
+        (, uint256 secondRemainingLiquidity) = _decodeMoreLiquidityAvailablePayload(secondEntries);
+        assertGt(hub.zeroBatchRetryCreditsRemaining(underlying), 0);
+
+        vm.recordLogs();
+        hub.react(_moreLiquidityAvailableLog(hub, lccA, secondRemainingLiquidity, 0x9A12, 3));
+        Vm.Log[] memory thirdEntries = vm.getRecordedLogs();
+
+        (, address[] memory lccs, address[] memory recipients, uint256[] memory amounts,) =
+            _decodeProcessSettlementsPayload(thirdEntries);
+        assertEq(lccs.length, 1);
+        assertEq(recipients.length, 1);
+        assertEq(amounts.length, 1);
+        assertEq(lccs[0], lccB);
+        assertEq(recipients[0], laterRecipient);
+        assertEq(amounts[0], 1);
+        assertEq(hub.zeroBatchRetryCreditsRemaining(underlying), 0);
+    }
+
     /// @notice A stale shared-underlying retry credit is cleared if the follow-up callback later falls back to per-LCC routing.
     function test_clearsStaleSharedRetryFlagWhenFollowupFallsBackToPerLcc() public {
         _clearSystemContract();

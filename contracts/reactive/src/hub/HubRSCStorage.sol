@@ -149,6 +149,8 @@ abstract contract HubRSCStorage is AbstractReactive {
     uint256 internal constant MAX_RECEIVER_BATCH_SIZE = 30;
     /// @dev Source marker for the in-flight dispatch call (`true` only for LiquidityHub callbacks).
     bool internal bootstrapZeroBatchRetry;
+    /// @dev Whether the next callback on a budget lane was emitted by HubRSC and may seed zero-batch continuation credits.
+    mapping(address => bool) internal continuationBootstrapPendingByLane;
 
     event SpokeCreated(address indexed recipient, address indexed spoke);
     event PendingAdded(address indexed lcc, address indexed recipient, uint256 amount);
@@ -174,7 +176,8 @@ abstract contract HubRSCStorage is AbstractReactive {
     ) payable {
         if (
             _protocolChainId == 0 || _reactChainId == 0 || _liquidityHub == address(0) || _hubCallback == address(0)
-                || _destinationReceiverContract == address(0) || _maxDispatchItems > MAX_RECEIVER_BATCH_SIZE
+                || _destinationReceiverContract == address(0) || _maxDispatchItems == 0
+                || _maxDispatchItems > MAX_RECEIVER_BATCH_SIZE
         ) {
             revert InvalidConfig();
         }

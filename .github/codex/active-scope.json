@@ -1,0 +1,11 @@
+{
+  "title": "TASK-40.1 HubRSC decomposition",
+  "source_type": "backlog_task",
+  "source_ref": "Backlog:TASK-40.1",
+  "mode": "source-reference-only",
+  "instructions": [
+    "Treat TASK-40.1 as a structural-prep refactor only.",
+    "Honor TASK-40 parent architecture, but keep TASK-40.2 recipient-registration/funding behavior and TASK-40.3 regression revalidation out of scope.",
+    "Keep scope reactive-only and preserve HubRSC public runtime behavior."
+  ]
+}
