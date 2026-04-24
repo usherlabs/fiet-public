@@ -19,7 +19,7 @@ This project is built for the Reactive Network execution model:
 - **LCC**: A Fiet token representing the market maker’s settlement commitment.
 - **Recipient**: The address that ultimately receives underlying when a settlement is processed.
 - **Queued settlement**: A claim created when an unwrap cannot be fulfilled immediately.
-- **Spoke**: A per‑recipient reactive contract that subscribes to queue events and reports them.
+- **Spoke**: A legacy per‑recipient reactive contract that can still forward recipient-scoped events, but is no longer required for automation correctness.
 - **Hub**: A reactive contract that aggregates pending settlements and dispatches settlement batches.
 - **Receiver**: A destination‑chain contract that receives Reactive callbacks and performs batched calls to `LiquidityHub.processSettlementFor(...)`.
 
@@ -30,19 +30,13 @@ This project is built for the Reactive Network execution model:
 ![Reactive Fiet protocol sequence diagram](./reactive-fiet-protocol-sequence-diagram.svg)
 
 1. **Queue**: `LiquidityHub` emits `SettlementQueued(lcc, recipient, amount)` on the _protocol chain_.
-2. **Spoke filter**: The recipient’s `SpokeRSC` (one per recipient) is subscribed with a strict recipient filter and only reacts to that user’s queue events.
-3. **Callback normalisation**: `SpokeRSC` emits a callback to `HubCallback.recordSettlement(...)` on the _reactive chain_.
-4. **Admin whitelist**: `HubCallback` only accepts a settlement report if the recipient is whitelisted to the expected Spoke address (`setSpokeForRecipient(recipient, spoke)`).
-5. **Aggregation**: `HubRSC` reacts to `SettlementReported` events and queues pending work.
+2. **Hub intake**: `HubRSC` subscribes directly to `LiquidityHub` settlement lifecycle events and mirrors the first queue entry without needing recipient-specific pre-onboarding.
+3. **Aggregation**: `HubRSC` queues pending work keyed by `(lcc, recipient)`.
 6. **Liquidity arrival**: `LiquidityHub` emits `LiquidityAvailable(...)` on the _protocol chain_.
 7. **Bounded dispatch**: `HubRSC` scans dispatchable work (`pending - inFlight`) with explicit bounds and emits a callback to the _protocol chain_ Receiver.
 8. **Settlement execution**: The Receiver calls `LiquidityHub.processSettlementFor(...)` for each batch item.
-9. **Spoke-routed reconciliation**: each recipient `SpokeRSC` also subscribes to:
-   - `SettlementProcessed(lcc, recipient, amount)`
-   - `SettlementAnnulled(lcc, recipient, amount)`
-   - receiver `SettlementSucceeded(lcc, recipient, maxAmount)`
-   - receiver `SettlementFailed(lcc, recipient, maxAmount, reason)`
-   and forwards those to `HubCallback`, which emits normalised events consumed by `HubRSC`.
+9. **Direct reconciliation**: `HubRSC` also subscribes directly to authoritative `SettlementProcessed`, `SettlementAnnulled`, `SettlementSucceeded`, and `SettlementFailed` events.
+10. **Continuation only**: `HubCallback` remains in the flow for `MoreLiquidityAvailable(...)` continuation callbacks. Legacy recipient `SpokeRSC` forwarding may still be operated for compatibility/observability, but `HubRSC` no longer mutates settlement state from those forwarded lifecycle reports.
 
 ## Contracts and artefacts
 
@@ -51,15 +45,16 @@ This project is built for the Reactive Network execution model:
 - `src/SpokeRSC.sol`
   - Subscribes to recipient-scoped protocol-chain events (`SettlementQueued`, `SettlementProcessed`, `SettlementAnnulled`, receiver `SettlementSucceeded`, receiver `SettlementFailed`).
   - Deduplicates by on-chain log identity and forwards bounded payloads to `HubCallback`.
-  - This keeps per-recipient subscription cost/funding at the spoke level (deployed by/on behalf of end users).
+  - Preserved as a legacy/optional recipient-scoped integration path; automation no longer depends on deploying one Spoke per queue owner before the first queue event.
 - `src/HubCallback.sol`
   - Authorised callback entrypoints.
-  - Admin whitelist: `setSpokeForRecipient(recipient, spoke)` must be set correctly for reports to be accepted.
-  - Emits `SettlementReported(...)` plus normalised decrement/success/failure events for the Hub.
+  - Emits `MoreLiquidityAvailable(...)` continuation signals for the Hub.
+  - Retains the legacy Spoke whitelist/report surface for compatibility, but that path is no longer a mutating intake source for `HubRSC`.
 - `src/HubRSC.sol`
   - Aggregates pending settlements in a linked-list queue and dispatches bounded settlement batches when liquidity becomes available.
+  - Subscribes directly to contract-scoped protocol-chain settlement lifecycle events so first-queue visibility is independent of recipient onboarding timing.
   - Tracks `pending` and `inFlight` separately; dispatch reserves in-flight amount without optimistically decrementing pending.
-  - Reconciles pending state from normalised `HubCallback` events and only releases reservations from trusted success/failure reports.
+  - Reconciles pending state from authoritative LiquidityHub and receiver events, while still using `HubCallback` for bounded continuation wake-ups.
 
 ### Protocol chain
 
@@ -107,7 +102,7 @@ restored budget on siblings instead of immediately redispatching the same failin
 deliberately does not restore budget: it burns the speculative credit for that attempt so duplicate or stale
 `LiquidityAvailable(...)` deliveries cannot leave persistent phantom budget behind.
 
-`SettlementProcessed(...)` remains authoritative for queue reduction, but its `requestedAmount` input is not trusted for releasing reservations. In-flight reservations are released only after the spoke/callback path emits trusted `SettlementSucceededReported(...)` or `SettlementFailedReported(...)` events back to the hub.
+`SettlementProcessed(...)` remains authoritative for queue reduction, but its `requestedAmount` input is not trusted for releasing reservations. In-flight reservations are released only after the hub observes trusted receiver `SettlementSucceeded(...)` or `SettlementFailed(...)` events. Recipient Spokes can still forward legacy normalized reports for compatibility, but those forwarded copies are ignored by `HubRSC` so direct and forwarded logs cannot both mutate state.
 
 ### Shared-underlying routing and backfill
 
@@ -139,23 +134,24 @@ While backfill is still in progress, the hub prefers the per-LCC lane when it ha
 
 ## Integration flows
 
-### Flow A — “Fiet UI deploys and funds a Spoke for the user”
+### Flow A — “Deploy the shared Hub stack only”
 
-This is the typical “set and forget” UX:
+This is the default automation path:
 
-1. **Deploy the Spoke** for `recipient`.
-2. **Whitelist** that Spoke address for the recipient on `HubCallback` (admin action).
-3. **Fund** the Spoke on Reactive (kREACT deposit) so it can pay for execution.
-4. The user performs swaps/unwraps as normal. When a settlement is queued, their Spoke will report it and the Hub will eventually dispatch settlement when liquidity becomes available.
+1. **Deploy `HubRSC`**, `HubCallback`, and the destination receiver.
+2. **Fund** the shared reactive contracts so they can maintain subscriptions and callbacks.
+3. Users perform swaps/unwraps as normal. When a settlement is queued, `HubRSC` observes it directly from `LiquidityHub` and eventually dispatches settlement when liquidity becomes available.
 
-### Flow B — “Partner deploys Spokes programmatically for their users”
+### Flow B — “Optional legacy recipient Spokes”
 
-Same as Flow A, except the partner manages:
+If an integrator still wants recipient-local forwarding or recipient-local funding isolation, they may additionally manage `SpokeRSC` instances:
 
 - Spoke deployment
 - initial funding
 - requesting or performing the admin whitelist step
 - operational monitoring (alerts when underfunded or misconfigured)
+
+Those legacy Spokes are no longer required for the first queued settlement to become visible to automation.
 
 ## Operational guidance (how to observe what’s going on)
 
@@ -174,7 +170,9 @@ cast call "$LIQUIDITY_HUB" \
   --rpc-url "$PROTOCOL_RPC"
 ```
 
-### Confirm the Spoke is correctly subscribed and reporting (reactive chain)
+### Confirm optional legacy Spokes are correctly subscribed and reporting (reactive chain)
+
+This is only relevant if you intentionally run the legacy recipient-Spoke path.
 
 The most common misconfiguration is **whitelisting the wrong address**.
 

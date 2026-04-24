@@ -7,7 +7,7 @@ import {LinkedQueue} from "./libs/LinkedQueue.sol";
 import {ReactiveConstants} from "./libs/ReactiveConstants.sol";
 import {SettlementFailureLib} from "./libs/SettlementFailureLib.sol";
 
-/// @notice Hub RSC that aggregates Spoke reports and dispatches settlements.
+/// @notice Hub RSC that mirrors authoritative protocol settlement state and dispatches settlements.
 contract HubRSC is AbstractReactive {
     using LinkedQueue for LinkedQueue.Data;
 
@@ -20,24 +20,23 @@ contract HubRSC is AbstractReactive {
     /// @notice LCCCreated(address indexed underlyingAsset, address indexed lccToken, bytes32 marketId).
     uint256 public constant LCC_CREATED_TOPIC = ReactiveConstants.LCC_CREATED_TOPIC;
 
-    /// @notice SettlementeQueuedReported(address indexed recipient, address indexed lcc, uint256 amount, uint256 nonce).
-    // Indicates that a SettlementQueue event from protocol chain is reported.
-    uint256 public constant SETTLEMENT_QUEUED_REPORTED_TOPIC = ReactiveConstants.SETTLEMENT_QUEUED_REPORTED_TOPIC;
+    /// @notice SettlementQueued(address indexed lcc, address indexed recipient, uint256 amount).
+    uint256 public constant SETTLEMENT_QUEUED_TOPIC = ReactiveConstants.SETTLEMENT_QUEUED_TOPIC;
 
     /// @notice MoreLiquidityAvailable(address indexed lcc, uint256 amountAvailable).
     uint256 public constant MORE_LIQUIDITY_AVAILABLE_TOPIC = ReactiveConstants.MORE_LIQUIDITY_AVAILABLE_TOPIC;
 
-    /// @notice SettlementAnnulledReported(address indexed recipient, address indexed lcc, uint256 amount).
-    uint256 public constant SETTLEMENT_ANNULLED_REPORTED_TOPIC = ReactiveConstants.SETTLEMENT_ANNULLED_REPORTED_TOPIC;
+    /// @notice SettlementAnnulled(address indexed lcc, address indexed recipient, uint256 amount).
+    uint256 public constant SETTLEMENT_ANNULLED_TOPIC = ReactiveConstants.SETTLEMENT_ANNULLED_TOPIC;
 
-    /// @notice SettlementProcessedReported(address indexed recipient, address indexed lcc, uint256 amount).
-    uint256 public constant SETTLEMENT_PROCESSED_REPORTED_TOPIC = ReactiveConstants.SETTLEMENT_PROCESSED_REPORTED_TOPIC;
+    /// @notice SettlementProcessed(address indexed lcc, address indexed recipient, uint256 settledAmount, uint256 requestedAmount).
+    uint256 public constant SETTLEMENT_PROCESSED_TOPIC = ReactiveConstants.SETTLEMENT_PROCESSED_TOPIC;
 
-    /// @notice SettlementSucceededReported(address indexed recipient, address indexed lcc, uint256 maxAmount, uint256 attemptId).
-    uint256 public constant SETTLEMENT_SUCCEEDED_REPORTED_TOPIC = ReactiveConstants.SETTLEMENT_SUCCEEDED_REPORTED_TOPIC;
+    /// @notice SettlementSucceeded(address indexed lcc, address indexed recipient, uint256 maxAmount, uint256 attemptId).
+    uint256 public constant SETTLEMENT_SUCCEEDED_TOPIC = ReactiveConstants.SETTLEMENT_SUCCEEDED_TOPIC;
 
-    /// @notice SettlementFailedReported(address indexed recipient, address indexed lcc, uint256 maxAmount, uint256 attemptId, bytes4 failureSelector, uint8 failureClass).
-    uint256 public constant SETTLEMENT_FAILED_REPORTED_TOPIC = ReactiveConstants.SETTLEMENT_FAILED_REPORTED_TOPIC;
+    /// @notice SettlementFailed(address indexed lcc, address indexed recipient, uint256 maxAmount, uint256 attemptId, bytes revertData).
+    uint256 public constant SETTLEMENT_FAILED_TOPIC = ReactiveConstants.SETTLEMENT_FAILED_TOPIC;
 
     struct Pending {
         address lcc;
@@ -82,7 +81,7 @@ contract HubRSC is AbstractReactive {
     /// @notice LiquidityHub emitting LiquidityAvailable.
     address public immutable liquidityHub;
 
-    /// @notice HubCallback emitting SettlementReported.
+    /// @notice HubCallback emitting continuation wake-ups.
     address public immutable hubCallback;
 
     /// @notice Destination receiver contract (processSettlements).
@@ -203,11 +202,27 @@ contract HubRSC is AbstractReactive {
                 REACTIVE_IGNORE,
                 REACTIVE_IGNORE
             );
-            // subscribe to the settlement reported event from the hub callback
+            // subscribe to authoritative queue mutations from LiquidityHub.
             service.subscribe(
-                reactChainId,
-                hubCallback,
-                SETTLEMENT_QUEUED_REPORTED_TOPIC,
+                protocolChainId,
+                liquidityHub,
+                SETTLEMENT_QUEUED_TOPIC,
+                REACTIVE_IGNORE,
+                REACTIVE_IGNORE,
+                REACTIVE_IGNORE
+            );
+            service.subscribe(
+                protocolChainId,
+                liquidityHub,
+                SETTLEMENT_ANNULLED_TOPIC,
+                REACTIVE_IGNORE,
+                REACTIVE_IGNORE,
+                REACTIVE_IGNORE
+            );
+            service.subscribe(
+                protocolChainId,
+                liquidityHub,
+                SETTLEMENT_PROCESSED_TOPIC,
                 REACTIVE_IGNORE,
                 REACTIVE_IGNORE,
                 REACTIVE_IGNORE
@@ -221,36 +236,19 @@ contract HubRSC is AbstractReactive {
                 REACTIVE_IGNORE,
                 REACTIVE_IGNORE
             );
-            // subscribe to authoritative queue decrements normalised by HubCallback
+            // subscribe to authoritative receiver outcomes from the destination receiver.
             service.subscribe(
-                reactChainId,
-                hubCallback,
-                SETTLEMENT_ANNULLED_REPORTED_TOPIC,
+                protocolChainId,
+                destinationReceiverContract,
+                SETTLEMENT_SUCCEEDED_TOPIC,
                 REACTIVE_IGNORE,
                 REACTIVE_IGNORE,
                 REACTIVE_IGNORE
             );
             service.subscribe(
-                reactChainId,
-                hubCallback,
-                SETTLEMENT_PROCESSED_REPORTED_TOPIC,
-                REACTIVE_IGNORE,
-                REACTIVE_IGNORE,
-                REACTIVE_IGNORE
-            );
-            service.subscribe(
-                reactChainId,
-                hubCallback,
-                SETTLEMENT_SUCCEEDED_REPORTED_TOPIC,
-                REACTIVE_IGNORE,
-                REACTIVE_IGNORE,
-                REACTIVE_IGNORE
-            );
-            // subscribe to failed destination execution reports normalised by HubCallback
-            service.subscribe(
-                reactChainId,
-                hubCallback,
-                SETTLEMENT_FAILED_REPORTED_TOPIC,
+                protocolChainId,
+                destinationReceiverContract,
+                SETTLEMENT_FAILED_TOPIC,
                 REACTIVE_IGNORE,
                 REACTIVE_IGNORE,
                 REACTIVE_IGNORE
@@ -301,7 +299,7 @@ contract HubRSC is AbstractReactive {
             return;
         }
 
-        if (log.topic_0 == SETTLEMENT_QUEUED_REPORTED_TOPIC) {
+        if (log.topic_0 == SETTLEMENT_QUEUED_TOPIC) {
             _handleSettlementQueued(log);
             return;
         }
@@ -316,35 +314,35 @@ contract HubRSC is AbstractReactive {
             return;
         }
 
-        if (log.topic_0 == SETTLEMENT_ANNULLED_REPORTED_TOPIC) {
+        if (log.topic_0 == SETTLEMENT_ANNULLED_TOPIC) {
             _handleSettlementAnnulled(log);
             return;
         }
 
-        if (log.topic_0 == SETTLEMENT_PROCESSED_REPORTED_TOPIC) {
+        if (log.topic_0 == SETTLEMENT_PROCESSED_TOPIC) {
             _handleSettlementProcessed(log);
             return;
         }
 
-        if (log.topic_0 == SETTLEMENT_SUCCEEDED_REPORTED_TOPIC) {
+        if (log.topic_0 == SETTLEMENT_SUCCEEDED_TOPIC) {
             _handleSettlementSucceeded(log);
             return;
         }
 
-        if (log.topic_0 == SETTLEMENT_FAILED_REPORTED_TOPIC) {
+        if (log.topic_0 == SETTLEMENT_FAILED_TOPIC) {
             _handleSettlementFailed(log);
             return;
         }
     }
 
-    /// @notice Ingests a SettlementReported log into pending state.
-    /// @dev Deduplicates by log identity, ignores zero amounts, and either creates
-    /// or increments a queued pending entry.
+    /// @notice Ingests an authoritative LiquidityHub `SettlementQueued` log into pending state.
+    /// @dev Deduplicates by log identity, ignores zero amounts, and either creates or increments a queued pending entry.
     function _handleSettlementQueued(IReactive.LogRecord calldata log) internal {
-        if (log.chain_id != reactChainId || log._contract != hubCallback) return;
-        address recipient = address(uint160(log.topic_1));
-        address lcc = address(uint160(log.topic_2));
-        (uint256 amount,) = abi.decode(log.data, (uint256, uint256));
+        if (log.chain_id != protocolChainId || log._contract != liquidityHub) return;
+
+        address lcc = address(uint160(log.topic_1));
+        address recipient = address(uint160(log.topic_2));
+        uint256 amount = abi.decode(log.data, (uint256));
 
         if (!_markLogProcessed(log)) return;
 
@@ -393,11 +391,11 @@ contract HubRSC is AbstractReactive {
 
     /// @notice Reconciles pending amount from authoritative LiquidityHub settlement processing.
     function _handleSettlementProcessed(IReactive.LogRecord calldata log) internal {
-        if (log.chain_id != reactChainId || log._contract != hubCallback) return;
+        if (log.chain_id != protocolChainId || log._contract != liquidityHub) return;
         if (!_markLogProcessed(log)) return;
 
-        address recipient = address(uint160(log.topic_1));
-        address lcc = address(uint160(log.topic_2));
+        address lcc = address(uint160(log.topic_1));
+        address recipient = address(uint160(log.topic_2));
         (uint256 settledAmount, uint256 requestedAmount) = abi.decode(log.data, (uint256, uint256));
 
         _reconcileProcessedRequestedAmount(_computeKey(lcc, recipient), requestedAmount);
@@ -407,11 +405,11 @@ contract HubRSC is AbstractReactive {
 
     /// @notice Releases trusted in-flight amount for completed destination settlements.
     function _handleSettlementSucceeded(IReactive.LogRecord calldata log) internal {
-        if (log.chain_id != reactChainId || log._contract != hubCallback) return;
+        if (log.chain_id != protocolChainId || log._contract != destinationReceiverContract) return;
         if (!_markLogProcessed(log)) return;
 
-        address recipient = address(uint160(log.topic_1));
-        address lcc = address(uint160(log.topic_2));
+        address lcc = address(uint160(log.topic_1));
+        address recipient = address(uint160(log.topic_2));
         (uint256 succeededAmount, uint256 attemptId) = abi.decode(log.data, (uint256, uint256));
         if (succeededAmount == 0) return;
 
@@ -422,11 +420,11 @@ contract HubRSC is AbstractReactive {
 
     /// @notice Reconciles pending amount from authoritative LiquidityHub queue annulments.
     function _handleSettlementAnnulled(IReactive.LogRecord calldata log) internal {
-        if (log.chain_id != reactChainId || log._contract != hubCallback) return;
+        if (log.chain_id != protocolChainId || log._contract != liquidityHub) return;
         if (!_markLogProcessed(log)) return;
 
-        address recipient = address(uint160(log.topic_1));
-        address lcc = address(uint160(log.topic_2));
+        address lcc = address(uint160(log.topic_1));
+        address recipient = address(uint160(log.topic_2));
         uint256 annulledAmount = abi.decode(log.data, (uint256));
 
         _applyAuthoritativeDecreaseOrBuffer(lcc, recipient, annulledAmount, 0, false);
@@ -434,13 +432,15 @@ contract HubRSC is AbstractReactive {
 
     /// @notice Releases reserved in-flight amount for failed destination settlements.
     function _handleSettlementFailed(IReactive.LogRecord calldata log) internal {
-        if (log.chain_id != reactChainId || log._contract != hubCallback) return;
+        if (log.chain_id != protocolChainId || log._contract != destinationReceiverContract) return;
         if (!_markLogProcessed(log)) return;
 
-        address recipient = address(uint160(log.topic_1));
-        address lcc = address(uint160(log.topic_2));
-        (uint256 failedAmount, uint256 attemptId, bytes4 failureSelector, uint8 failureClass) =
-            abi.decode(log.data, (uint256, uint256, bytes4, uint8));
+        address lcc = address(uint160(log.topic_1));
+        address recipient = address(uint160(log.topic_2));
+        (uint256 failedAmount, uint256 attemptId, bytes memory revertData) =
+            abi.decode(log.data, (uint256, uint256, bytes));
+        bytes4 failureSelector = SettlementFailureLib.selectorFromRevertData(revertData);
+        uint8 failureClass = SettlementFailureLib.classify(failureSelector);
         if (failedAmount == 0) return;
 
         bytes32 key = _computeKey(lcc, recipient);
