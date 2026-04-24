@@ -48,6 +48,9 @@ contract HubRSCConfigAndQueueingTest is HubRSCTestBase {
         new HubRSC(DEFAULT_MAX_DISPATCH_ITEMS, originChainId, destinationChainId, liquidityHub, hubCallback, address(0));
 
         vm.expectRevert(abi.encodeWithSelector(invalidConfigSelector));
+        new HubRSC(0, originChainId, destinationChainId, liquidityHub, hubCallback, destinationReceiverContract);
+
+        vm.expectRevert(abi.encodeWithSelector(invalidConfigSelector));
         new HubRSC(
             RECEIVER_BATCH_SIZE_CAP + 1,
             originChainId,
