@@ -4,11 +4,11 @@
 ```json
 {
   "sources": [
-    "Backlog:TASK-40.2"
+    "Backlog:TASK-<id>"
   ],
-  "spec_summary": "Preflight migration before TASK-40.2: use the stable codex-runner PR-scope workflow and managed PR description block so implementation PRs can be verified from live PR context.",
+  "spec_summary": "Describe the intended scope this PR should satisfy.",
   "notes": [
-    "Replace this block for future PRs with that PR's authoritative Backlog or Linear source and intended scope."
+    "Replace this block for this PR with authoritative Backlog or Linear sources and implementation notes."
   ]
 }
 ```
