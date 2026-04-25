@@ -37,7 +37,7 @@ This means the debt from work A is normally allocated when work B, a top-up, or 
 
 ## Debt Context FIFO
 
-HubRSC maintains an indexed FIFO of deferred work attribution contexts. Contexts live directly in the FIFO storage by index; there is no separate pending slot that queued entries are copied into during advancement. Each context contains:
+HubRSC maintains an indexed FIFO of deferred work attribution contexts. Contexts live directly in the FIFO storage by index; every recorded context is appended to the FIFO and remains there until it is charged and advanced. Each context contains:
 
 - `recipients`: the recipient addresses to charge
 - `weights`: each recipient's allocation weight
@@ -70,7 +70,7 @@ HubRSC intentionally preserves FIFO attribution when multiple contexts arrive be
 - After emitting a dispatch callback, HubRSC appends the dispatched batch recipients as the next context.
 - Duplicate or rejected logs do not create a new billable context.
 - Ignored or duplicate logs do not clear already queued contexts.
-- Zero-delta `syncSystemDebt()` calls do not advance or clear pending or queued contexts.
+- Zero-delta `syncSystemDebt()` calls do not advance or clear deferred FIFO contexts.
 - When a debt delta is observed, HubRSC allocates directly against the FIFO head context, clears/deletes that indexed context, and advances the head index.
 - If a debt delta is observed with no context, HubRSC emits `UnallocatedDebtObserved` and does not charge a recipient.
 

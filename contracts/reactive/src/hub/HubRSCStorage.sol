@@ -165,8 +165,6 @@ abstract contract HubRSCStorage is AbstractReactive {
     uint256 public lastObservedSystemDebt;
     /// @notice FIFO work contexts that receive observed debt deltas.
     mapping(uint256 => DebtContext) internal debtContextByIndex;
-    /// @dev Whether a context must survive ignore paths until it is charged.
-    mapping(uint256 => bool) internal debtContextProtectedByIndex;
     uint256 internal debtContextHead;
     uint256 internal debtContextTail;
 
@@ -251,10 +249,7 @@ abstract contract HubRSCStorage is AbstractReactive {
     }
 
     function _acceptMatchingRecipientEvent(address recipient) internal returns (bool) {
-        if (!_recipientServiceActive(recipient)) {
-            _clearDebtContext();
-            return false;
-        }
+        if (!_recipientServiceActive(recipient)) return false;
         _recordLifecycleDebtContext(recipient);
         return true;
     }
@@ -304,7 +299,6 @@ abstract contract HubRSCStorage is AbstractReactive {
         if (debtDelta == 0) return;
         if (_debtContextQueueEmpty()) {
             emit UnallocatedDebtObserved(debtDelta, observedDebt);
-            _clearDebtContext();
             return;
         }
 
@@ -351,14 +345,14 @@ abstract contract HubRSCStorage is AbstractReactive {
     }
 
     function _recordLifecycleDebtContext(address recipient) internal {
-        DebtContext storage context = _prepareWritableDebtContext(true);
+        DebtContext storage context = _prepareWritableDebtContext();
         context.recipients.push(recipient);
         context.weights.push(1);
         context.totalWeight = 1;
     }
 
     function _recordDispatchDebtContext(address[] memory recipients, uint256 count) internal {
-        DebtContext storage context = _prepareWritableDebtContext(true);
+        DebtContext storage context = _prepareWritableDebtContext();
         for (uint256 i = 0; i < count; i++) {
             context.recipients.push(recipients[i]);
             context.weights.push(1);
@@ -366,42 +360,22 @@ abstract contract HubRSCStorage is AbstractReactive {
         context.totalWeight = count;
     }
 
-    function _clearDebtContext() internal {
-        if (_debtContextQueueEmpty()) return;
-        if (debtContextProtectedByIndex[debtContextHead]) return;
-        _advanceDebtContext();
-    }
-
-    function _clearDebtContext(DebtContext storage context) internal {
+    function _deleteDebtContext(DebtContext storage context) internal {
         delete context.recipients;
         delete context.weights;
         context.totalWeight = 0;
     }
 
-    function _prepareWritableDebtContext(bool protectedContext) internal returns (DebtContext storage context) {
-        if (_debtContextQueueEmpty()) {
-            uint256 index = debtContextTail++;
-            debtContextProtectedByIndex[index] = protectedContext;
-            return debtContextByIndex[index];
-        }
-
-        if (debtContextTail == debtContextHead + 1 && !debtContextProtectedByIndex[debtContextHead]) {
-            _clearDebtContext(debtContextByIndex[debtContextHead]);
-            debtContextProtectedByIndex[debtContextHead] = protectedContext;
-            return debtContextByIndex[debtContextHead];
-        }
-
-        uint256 queuedIndex = debtContextTail++;
-        debtContextProtectedByIndex[queuedIndex] = protectedContext;
-        context = debtContextByIndex[queuedIndex];
+    function _prepareWritableDebtContext() internal returns (DebtContext storage context) {
+        uint256 index = debtContextTail++;
+        context = debtContextByIndex[index];
     }
 
     function _advanceDebtContext() internal {
         if (_debtContextQueueEmpty()) return;
 
         uint256 index = debtContextHead++;
-        _clearDebtContext(debtContextByIndex[index]);
-        delete debtContextProtectedByIndex[index];
+        _deleteDebtContext(debtContextByIndex[index]);
     }
 
     function _debtContextQueueEmpty() internal view returns (bool) {
