@@ -23,7 +23,7 @@ Reactive exposes debt per contract address, not per log, recipient, callback, or
 
 1. At each safe boundary, HubRSC calls `_syncObservedSystemDebt()`.
 2. `_syncObservedSystemDebt()` reads current vendor debt.
-3. If the observed debt increased since `lastObservedSystemDebt`, the delta is allocated to the prior `pendingDebtContext`.
+3. If the observed debt increased since `lastObservedSystemDebt`, the delta is allocated to the head debt context in the FIFO.
 4. HubRSC then pays as much vendor debt as its contract balance can cover.
 
 Safe boundaries are:
@@ -37,7 +37,7 @@ This means the debt from work A is normally allocated when work B, a top-up, or 
 
 ## Debt Context FIFO
 
-HubRSC maintains an indexed FIFO of deferred work attribution contexts. Each context contains:
+HubRSC maintains an indexed FIFO of deferred work attribution contexts. Contexts live directly in the FIFO storage by index; there is no separate pending slot that queued entries are copied into during advancement. Each context contains:
 
 - `recipients`: the recipient addresses to charge
 - `weights`: each recipient's allocation weight
@@ -71,10 +71,10 @@ HubRSC intentionally preserves FIFO attribution when multiple contexts arrive be
 - Duplicate or rejected logs do not create a new billable context.
 - Ignored or duplicate logs do not clear already queued contexts.
 - Zero-delta `syncSystemDebt()` calls do not advance or clear pending or queued contexts.
-- When a debt delta is observed, HubRSC allocates against the FIFO head context, clears that context, and advances to the next queued context.
+- When a debt delta is observed, HubRSC allocates directly against the FIFO head context, clears/deletes that indexed context, and advances the head index.
 - If a debt delta is observed with no context, HubRSC emits `UnallocatedDebtObserved` and does not charge a recipient.
 
-Enqueue and dequeue are O(1). The only allocation loop is the necessary bounded loop over recipients in the head context. This preserves sovereign recipient-paid computation when multiple lifecycle and dispatch contexts arrive before their corresponding aggregate Reactive debt is observable, while keeping billing deterministic with the current Reactive API. Attribution is still aggregate and deferred rather than per-instruction metering.
+Enqueue and dequeue are O(1): advancing the queue clears the consumed head index and increments the head pointer without copying recipient or weight arrays between storage contexts. The only allocation loop is the necessary bounded loop over recipients in the head context. This preserves sovereign recipient-paid computation when multiple lifecycle and dispatch contexts arrive before their corresponding aggregate Reactive debt is observable, while keeping billing deterministic with the current Reactive API. Attribution is still aggregate and deferred rather than per-instruction metering.
 
 ## Vendor Payment And Dust
 
