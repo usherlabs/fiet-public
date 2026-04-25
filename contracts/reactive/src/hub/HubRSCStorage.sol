@@ -165,11 +165,14 @@ abstract contract HubRSCStorage is AbstractReactive {
     uint256 public lastObservedSystemDebt;
     /// @notice Work context that receives the next observed debt delta.
     DebtContext internal pendingDebtContext;
-    /// @notice One deferred context retained when new work arrives before the prior context's debt is observable.
-    DebtContext internal queuedDebtContext;
+    /// @notice Deferred work contexts retained when new work arrives before prior debt is observable.
+    mapping(uint256 => DebtContext) internal queuedDebtContextByIndex;
+    /// @dev Whether a queued context must survive ignore paths until it is charged.
+    mapping(uint256 => bool) internal queuedDebtContextProtectedByIndex;
+    uint256 internal queuedDebtContextHead;
+    uint256 internal queuedDebtContextTail;
     /// @dev Dispatch contexts must not be overwritten by later lifecycle work before their debt is observed.
     bool internal pendingDebtContextProtected;
-    bool internal queuedDebtContextProtected;
 
     event RecipientRegistered(address indexed recipient, uint256 depositAmount, int256 balance);
     event RecipientFunded(address indexed recipient, uint256 depositAmount, int256 balance);
@@ -346,37 +349,27 @@ abstract contract HubRSCStorage is AbstractReactive {
     }
 
     function _recordLifecycleDebtContext(address recipient) internal {
-        DebtContext storage context = _nextWritableDebtContext();
-        _clearDebtContext(context);
+        DebtContext storage context = _prepareWritableDebtContext(false);
         context.recipients.push(recipient);
         context.weights.push(1);
         context.totalWeight = 1;
-        _setWritableDebtContextProtected(false);
     }
 
     function _recordDispatchDebtContext(address[] memory recipients, uint256 count) internal {
-        DebtContext storage context = _nextWritableDebtContext();
-        _clearDebtContext(context);
+        DebtContext storage context = _prepareWritableDebtContext(true);
         for (uint256 i = 0; i < count; i++) {
             context.recipients.push(recipients[i]);
             context.weights.push(1);
         }
         context.totalWeight = count;
-        _setWritableDebtContextProtected(true);
     }
 
     function _clearDebtContext() internal {
         if (!pendingDebtContextProtected) {
             _clearDebtContext(pendingDebtContext);
         }
-        if (!queuedDebtContextProtected) {
-            _clearDebtContext(queuedDebtContext);
-        }
         if (pendingDebtContext.totalWeight == 0) {
             pendingDebtContextProtected = false;
-        }
-        if (queuedDebtContext.totalWeight == 0) {
-            queuedDebtContextProtected = false;
         }
     }
 
@@ -386,32 +379,33 @@ abstract contract HubRSCStorage is AbstractReactive {
         context.totalWeight = 0;
     }
 
-    function _nextWritableDebtContext() internal view returns (DebtContext storage context) {
-        return
-            pendingDebtContext.totalWeight == 0 || !pendingDebtContextProtected ? pendingDebtContext : queuedDebtContext;
-    }
-
-    function _setWritableDebtContextProtected(bool protectedContext) internal {
+    function _prepareWritableDebtContext(bool protectedContext) internal returns (DebtContext storage context) {
         if (pendingDebtContext.totalWeight == 0 || !pendingDebtContextProtected) {
+            _clearDebtContext(pendingDebtContext);
             pendingDebtContextProtected = protectedContext;
+            return pendingDebtContext;
         } else {
-            queuedDebtContextProtected = protectedContext;
+            uint256 queuedIndex = queuedDebtContextTail++;
+            queuedDebtContextProtectedByIndex[queuedIndex] = true;
+            context = queuedDebtContextByIndex[queuedIndex];
         }
     }
 
     function _advanceDebtContext() internal {
         _clearDebtContext(pendingDebtContext);
         pendingDebtContextProtected = false;
-        if (queuedDebtContext.totalWeight == 0) return;
+        if (queuedDebtContextHead == queuedDebtContextTail) return;
 
-        for (uint256 i = 0; i < queuedDebtContext.recipients.length; i++) {
-            pendingDebtContext.recipients.push(queuedDebtContext.recipients[i]);
-            pendingDebtContext.weights.push(queuedDebtContext.weights[i]);
+        uint256 queuedIndex = queuedDebtContextHead++;
+        DebtContext storage queuedContext = queuedDebtContextByIndex[queuedIndex];
+        for (uint256 i = 0; i < queuedContext.recipients.length; i++) {
+            pendingDebtContext.recipients.push(queuedContext.recipients[i]);
+            pendingDebtContext.weights.push(queuedContext.weights[i]);
         }
-        pendingDebtContext.totalWeight = queuedDebtContext.totalWeight;
-        pendingDebtContextProtected = queuedDebtContextProtected;
-        _clearDebtContext(queuedDebtContext);
-        queuedDebtContextProtected = false;
+        pendingDebtContext.totalWeight = queuedContext.totalWeight;
+        pendingDebtContextProtected = queuedDebtContextProtectedByIndex[queuedIndex];
+        _clearDebtContext(queuedContext);
+        delete queuedDebtContextProtectedByIndex[queuedIndex];
     }
 
     function _setRecipientLifecycleSubscriptions(address recipient, bool shouldSubscribe) internal {
