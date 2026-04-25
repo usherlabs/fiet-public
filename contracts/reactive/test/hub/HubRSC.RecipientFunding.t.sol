@@ -121,6 +121,63 @@ contract HubRSCRecipientFundingTest is HubRSCTestBase {
         assertTrue(hub.recipientActive(recipient2));
     }
 
+    function test_dispatchDebtRemainderIsChargedToFinalRecipient() public {
+        (HubRSC hub, MockSystemContract system) = _deployHubWithDebtMock();
+        address lcc = makeAddr("lcc");
+        address recipient1 = makeAddr("recipient1");
+        address recipient2 = makeAddr("recipient2");
+        address recipient3 = makeAddr("recipient3");
+
+        hub.registerRecipient{value: 100}(recipient1);
+        hub.registerRecipient{value: 100}(recipient2);
+        hub.registerRecipient{value: 100}(recipient3);
+        hub.react(_rawProtocolSettlementQueuedLog(hub, lcc, recipient1, 1, 0xB044, 1));
+        hub.react(_rawProtocolSettlementQueuedLog(hub, lcc, recipient2, 1, 0xB045, 2));
+        hub.react(_rawProtocolSettlementQueuedLog(hub, lcc, recipient3, 1, 0xB046, 3));
+
+        vm.recordLogs();
+        hub.react(liquidityAvailableLog(hub.liquidityHub(), lcc, 3, bytes32("mkt"), 0xB047, 4));
+        Vm.Log[] memory entries = vm.getRecordedLogs();
+
+        _assertDispatchedLength(entries, 3);
+        _setDebtAndSync(hub, system, 10);
+
+        assertEq(hub.recipientBalance(recipient1), 97);
+        assertEq(hub.recipientBalance(recipient2), 97);
+        assertEq(hub.recipientBalance(recipient3), 96);
+        assertEq(system.debt(address(hub)), 0);
+    }
+
+    function test_partialVendorDebtPaymentDoesNotDoubleChargeRecipientOnTopUp() public {
+        (HubRSC hub, MockSystemContract system) = _deployHubWithDebtMock();
+        address lcc = makeAddr("lcc");
+        address recipient = makeAddr("recipient");
+
+        hub.registerRecipient{value: 1 ether}(recipient);
+        hub.react(_rawProtocolSettlementQueuedLog(hub, lcc, recipient, 50, 0xB048, 1));
+        system.setDebt(address(hub), 5 ether);
+        hub.syncSystemDebt();
+
+        assertEq(hub.recipientBalance(recipient), -4 ether);
+        assertFalse(hub.recipientActive(recipient));
+        assertEq(system.debt(address(hub)), 4 ether);
+        assertEq(system.received(address(hub)), 1 ether);
+
+        hub.fundRecipient{value: 4 ether}(recipient);
+
+        assertEq(hub.recipientBalance(recipient), 0);
+        assertFalse(hub.recipientActive(recipient));
+        assertEq(system.debt(address(hub)), 0);
+        assertEq(system.received(address(hub)), 5 ether);
+
+        hub.fundRecipient{value: 1}(recipient);
+
+        assertEq(hub.recipientBalance(recipient), 1);
+        assertTrue(hub.recipientActive(recipient));
+        assertEq(system.debt(address(hub)), 0);
+        assertEq(system.received(address(hub)), 5 ether);
+    }
+
     function test_negativeBalanceBlocksNewIntakeAndDispatchButAllowsTrackedReconciliation() public {
         (HubRSC hub, MockSystemContract system) = _deployHubWithDebtMock();
         address lcc1 = makeAddr("lcc1");
