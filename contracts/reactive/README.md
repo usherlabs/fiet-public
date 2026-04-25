@@ -158,7 +158,7 @@ Activation requires positive `recipientFundingUnits(recipient)`. On activation, 
 - receiver `SettlementSucceeded`
 - receiver `SettlementFailed`
 
-HubRSC debits one funding unit after accepting a non-duplicate matching lifecycle log for the recipient and one funding unit for each recipient-specific dispatch item reserved into a settlement batch. When the ledger reaches zero, HubRSC deactivates the recipient and unsubscribes its lifecycle filters. Existing pending state is retained, but no new recipient-specific dispatch work is reserved until the recipient is topped up.
+HubRSC debits one funding unit after accepting a non-duplicate matching lifecycle log for the recipient and one funding unit for each recipient-specific dispatch item reserved into a settlement batch. When the ledger reaches zero, HubRSC deactivates the recipient and unsubscribes its lifecycle filters. Existing pending state is retained, but no new recipient intake or dispatch work is reserved until the recipient is topped up. Outcome logs for already tracked pending or in-flight work can still reconcile that tracked state after depletion, so a dispatch that consumes the last funding unit is not stranded before its `SettlementSucceeded`, `SettlementFailed`, or `SettlementProcessed` logs arrive.
 
 Top-up uses `fundRecipient(recipient, fundingUnits)`. If the recipient is registered and the top-up makes funding positive, HubRSC reactivates exact-match subscriptions and pending work can resume on the next queue mutation, liquidity wake, or self-continuation.
 
@@ -204,7 +204,7 @@ cast call "$HUB_RSC" \
 
 `HubRSC` keeps queue mirror state in:
 
-- `HubRSC.pending(HubRSC.computeKey(lcc, recipient))`
+- `HubRSC.pendingStateByKey(HubRSC.computeKey(lcc, recipient))`
 - `HubRSC.inFlightByKey(HubRSC.computeKey(lcc, recipient))`
 - `HubRSC.queueSize()` for total queued keys
 
@@ -218,7 +218,7 @@ KEY="$(cast call "$HUB_RSC" \
   --rpc-url "$REACTIVE_RPC")"
 
 cast call "$HUB_RSC" \
-  "pending(bytes32)(address,address,uint256,bool)" \
+  "pendingStateByKey(bytes32)(uint256,bool)" \
   "$KEY" \
   --rpc-url "$REACTIVE_RPC"
 

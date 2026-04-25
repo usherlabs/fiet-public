@@ -67,6 +67,11 @@ contract HubRSC is HubRSCDispatch {
         _activateRecipient(recipient);
     }
 
+    /// @notice Computes the HubRSC pending-state key for an LCC/recipient pair.
+    function computeKey(address lcc, address recipient) external pure returns (bytes32) {
+        return _computeKey(lcc, recipient);
+    }
+
     /// @notice Returns the released-success and early-processed ordering state held on a pending key.
     function reconciliationStateByKey(bytes32 key) external view returns (uint256, uint256) {
         return (_completedAwaitingProcessedByKey[key], _processedRequestedCreditByKey[key]);

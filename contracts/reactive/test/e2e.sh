@@ -16,6 +16,7 @@ DEPLOY_DEBUG="${DEBUG:-false}"
 # Default only when unset so a sourced `.env` or caller-provided env is not overwritten.
 RECIPIENT_ONE="${RECIPIENT_ONE:-0xb797466544DeB18F1e19185e85400A26FC5d3E95}"
 RECIPIENT_TWO="${RECIPIENT_TWO:-0xa4260A121bC44d085AC9a18e628A5712Ef3Bd49C}"
+RECIPIENT_FUNDING_UNITS="${RECIPIENT_FUNDING_UNITS:-100}"
 export BROADCAST=true
 
 : "${REACTIVE_RPC:?REACTIVE_RPC is required}"
@@ -114,13 +115,13 @@ deploy() {
   cast send "$HUB_RSC" \
     "registerRecipient(address,uint256)" \
     "$RECIPIENT_ONE" \
-    "100" \
+    "$RECIPIENT_FUNDING_UNITS" \
     --rpc-url "$REACTIVE_RPC" \
     --private-key "$PRIVATE_KEY" >/dev/null
   cast send "$HUB_RSC" \
     "registerRecipient(address,uint256)" \
     "$RECIPIENT_TWO" \
-    "100" \
+    "$RECIPIENT_FUNDING_UNITS" \
     --rpc-url "$REACTIVE_RPC" \
     --private-key "$PRIVATE_KEY" >/dev/null
   echo "Recipients registered and funded on HubRSC"
