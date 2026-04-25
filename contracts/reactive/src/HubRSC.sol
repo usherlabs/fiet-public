@@ -12,18 +12,10 @@ contract HubRSC is HubRSCDispatch {
         uint256 _protocolChainId,
         uint256 _reactChainId,
         address _liquidityHub,
-        address _hubCallback,
         address _destinationReceiverContract
     )
         payable
-        HubRSCStorage(
-            _maxDispatchItems,
-            _protocolChainId,
-            _reactChainId,
-            _liquidityHub,
-            _hubCallback,
-            _destinationReceiverContract
-        )
+        HubRSCStorage(_maxDispatchItems, _protocolChainId, _reactChainId, _liquidityHub, _destinationReceiverContract)
     {
         if (!vm) {
             service.subscribe(
@@ -38,54 +30,41 @@ contract HubRSC is HubRSCDispatch {
                 REACTIVE_IGNORE
             );
             service.subscribe(
-                protocolChainId,
-                liquidityHub,
-                SETTLEMENT_QUEUED_TOPIC,
-                REACTIVE_IGNORE,
-                REACTIVE_IGNORE,
-                REACTIVE_IGNORE
-            );
-            service.subscribe(
-                protocolChainId,
-                liquidityHub,
-                SETTLEMENT_ANNULLED_TOPIC,
-                REACTIVE_IGNORE,
-                REACTIVE_IGNORE,
-                REACTIVE_IGNORE
-            );
-            service.subscribe(
-                protocolChainId,
-                liquidityHub,
-                SETTLEMENT_PROCESSED_TOPIC,
-                REACTIVE_IGNORE,
-                REACTIVE_IGNORE,
-                REACTIVE_IGNORE
-            );
-            service.subscribe(
                 reactChainId,
-                hubCallback,
+                address(this),
                 MORE_LIQUIDITY_AVAILABLE_TOPIC,
                 REACTIVE_IGNORE,
                 REACTIVE_IGNORE,
                 REACTIVE_IGNORE
             );
-            service.subscribe(
-                protocolChainId,
-                destinationReceiverContract,
-                SETTLEMENT_SUCCEEDED_TOPIC,
-                REACTIVE_IGNORE,
-                REACTIVE_IGNORE,
-                REACTIVE_IGNORE
-            );
-            service.subscribe(
-                protocolChainId,
-                destinationReceiverContract,
-                SETTLEMENT_FAILED_TOPIC,
-                REACTIVE_IGNORE,
-                REACTIVE_IGNORE,
-                REACTIVE_IGNORE
-            );
         }
+    }
+
+    /// @notice Explicitly registers a recipient and optionally funds immediate activation.
+    function registerRecipient(address recipient, uint256 fundingUnits) external {
+        if (recipient == address(0)) revert InvalidRecipient();
+        if (recipientRegistered[recipient]) revert RecipientAlreadyRegistered(recipient);
+
+        recipientRegistered[recipient] = true;
+        if (fundingUnits > 0) {
+            recipientFundingUnits[recipient] = fundingUnits;
+        }
+
+        emit RecipientRegistered(recipient, fundingUnits);
+        if (fundingUnits > 0) {
+            emit RecipientFunded(recipient, fundingUnits, fundingUnits);
+            _activateRecipient(recipient);
+        }
+    }
+
+    /// @notice Tops up a registered recipient and reactivates exact-match subscriptions when funded.
+    function fundRecipient(address recipient, uint256 fundingUnits) external {
+        if (!recipientRegistered[recipient]) revert RecipientNotRegistered(recipient);
+        if (fundingUnits == 0) return;
+
+        recipientFundingUnits[recipient] += fundingUnits;
+        emit RecipientFunded(recipient, fundingUnits, recipientFundingUnits[recipient]);
+        _activateRecipient(recipient);
     }
 
     /// @notice Returns the released-success and early-processed ordering state held on a pending key.

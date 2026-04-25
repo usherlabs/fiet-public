@@ -16,9 +16,8 @@ contract HubRSCReconciliationTest is HubRSCTestBase {
 
         MockLiquidityHub liq = new MockLiquidityHub();
         MockSettlementReceiver receiver = new MockSettlementReceiver(address(liq));
-        HubRSC hub = new HubRSC(
-            DEFAULT_MAX_DISPATCH_ITEMS, originChainId, destinationChainId, address(liq), hubCallback, address(receiver)
-        );
+        HubRSC hub =
+            new HubRSC(DEFAULT_MAX_DISPATCH_ITEMS, originChainId, destinationChainId, address(liq), address(receiver));
 
         address underlying = makeAddr("underlying");
         address lcc = makeAddr("lcc");
@@ -45,61 +44,10 @@ contract HubRSCReconciliationTest is HubRSCTestBase {
         assertEq(remaining, 0);
     }
 
-    /// @notice Legacy callback-forwarded lifecycle copies must not mutate state after direct authoritative intake.
-    function test_forwardedLifecycleCopiesAreIgnoredAfterDirectIntake() public {
-        _clearSystemContract();
-
-        MockLiquidityHub liq = new MockLiquidityHub();
-        MockSettlementReceiver receiver = new MockSettlementReceiver(address(liq));
-        HubRSC hub = new HubRSC(
-            DEFAULT_MAX_DISPATCH_ITEMS, originChainId, destinationChainId, address(liq), hubCallback, address(receiver)
-        );
-
-        address underlying = makeAddr("underlying");
-        address lcc = makeAddr("lcc");
-        address recipient = makeAddr("recipient");
-        bytes32 key = _computeKey(lcc, recipient);
-
-        hub.react(_lccCreatedLog(hub, underlying, lcc, bytes32("mkt"), 0x1220, 1));
-
-        hub.react(_protocolSettlementQueuedLog(hub, lcc, recipient, 50, 0x1221, 2));
-        hub.react(_legacySettlementQueuedReportedLog(hub, recipient, lcc, 50, 1, 0x1222, 3));
-
-        (uint256 pendingAmount, bool exists) = _pendingState(hub, key);
-        assertTrue(exists);
-        assertEq(pendingAmount, 50);
-
-        hub.react(liquidityAvailableLog(address(liq), lcc, underlying, 50, bytes32("mkt"), 0x1223, 4));
-        assertEq(hub.inFlightByKey(key), 50);
-
-        hub.react(_receiverSettlementSucceededLog(hub, lcc, recipient, 50, 1, 0x1224, 5));
-        hub.react(_legacySettlementSucceededReportedLog(hub, recipient, lcc, 50, 1, 0x1225, 6));
-
-        assertEq(hub.inFlightByKey(key), 0);
-        (uint256 completedAwaitingProcessed, uint256 processedCredit) = _reconciliationState(hub, key);
-        assertEq(completedAwaitingProcessed, 50);
-        assertEq(processedCredit, 0);
-
-        hub.react(_protocolSettlementProcessedLog(hub, lcc, recipient, 50, 50, 0x1226, 7));
-        hub.react(_legacySettlementProcessedReportedLog(hub, recipient, lcc, 50, 50, 0x1227, 8));
-
-        (pendingAmount, exists) = _pendingState(hub, key);
-        assertFalse(exists);
-        assertEq(pendingAmount, 0);
-        (completedAwaitingProcessed, processedCredit) = _reconciliationState(hub, key);
-        assertEq(completedAwaitingProcessed, 0);
-        assertEq(processedCredit, 0);
-    }
-
     function test_reconcilesPendingFromSettlementAnnulled() public {
         _clearSystemContract();
         HubRSC hub = new HubRSC(
-            DEFAULT_MAX_DISPATCH_ITEMS,
-            originChainId,
-            destinationChainId,
-            liquidityHub,
-            hubCallback,
-            destinationReceiverContract
+            DEFAULT_MAX_DISPATCH_ITEMS, originChainId, destinationChainId, liquidityHub, destinationReceiverContract
         );
 
         address recipient = makeAddr("recipient");
@@ -118,12 +66,7 @@ contract HubRSCReconciliationTest is HubRSCTestBase {
     function test_pruneClearsHistoricalBackfillDebtForFullySettledPreRegistrationKey() public {
         _clearSystemContract();
         HubRSC hub = new HubRSC(
-            DEFAULT_MAX_DISPATCH_ITEMS,
-            originChainId,
-            destinationChainId,
-            liquidityHub,
-            hubCallback,
-            destinationReceiverContract
+            DEFAULT_MAX_DISPATCH_ITEMS, originChainId, destinationChainId, liquidityHub, destinationReceiverContract
         );
 
         address recipient = makeAddr("recipient");
@@ -145,12 +88,7 @@ contract HubRSCReconciliationTest is HubRSCTestBase {
     function test_unknownFailureBlocksSameKeyUntilFreshProtocolWakeAndMoreLiquidityDoesNotClear() public {
         _clearSystemContract();
         HubRSC hub = new HubRSC(
-            DEFAULT_MAX_DISPATCH_ITEMS,
-            originChainId,
-            destinationChainId,
-            liquidityHub,
-            hubCallback,
-            destinationReceiverContract
+            DEFAULT_MAX_DISPATCH_ITEMS, originChainId, destinationChainId, liquidityHub, destinationReceiverContract
         );
 
         address recipient = makeAddr("recipient");
@@ -220,12 +158,7 @@ contract HubRSCReconciliationTest is HubRSCTestBase {
     function test_unknownFailureAllowsSiblingDispatchButNotFailedKeyInSameWakeChain() public {
         _clearSystemContract();
         HubRSC hub = new HubRSC(
-            DEFAULT_MAX_DISPATCH_ITEMS,
-            originChainId,
-            destinationChainId,
-            liquidityHub,
-            hubCallback,
-            destinationReceiverContract
+            DEFAULT_MAX_DISPATCH_ITEMS, originChainId, destinationChainId, liquidityHub, destinationReceiverContract
         );
 
         address failedRecipient = makeAddr("failedRecipient");
@@ -272,12 +205,7 @@ contract HubRSCReconciliationTest is HubRSCTestBase {
     function test_retryBlockClearsOnAuthoritativeAnnulmentAndAllowsLaterContinuationDispatch() public {
         _clearSystemContract();
         HubRSC hub = new HubRSC(
-            DEFAULT_MAX_DISPATCH_ITEMS,
-            originChainId,
-            destinationChainId,
-            liquidityHub,
-            hubCallback,
-            destinationReceiverContract
+            DEFAULT_MAX_DISPATCH_ITEMS, originChainId, destinationChainId, liquidityHub, destinationReceiverContract
         );
 
         address recipient = makeAddr("recipient");
@@ -323,12 +251,7 @@ contract HubRSCReconciliationTest is HubRSCTestBase {
     function test_duplicateLiquiditySignalScrubsPhantomBudgetUntilFreshWakeup() public {
         _clearSystemContract();
         HubRSC hub = new HubRSC(
-            DEFAULT_MAX_DISPATCH_ITEMS,
-            originChainId,
-            destinationChainId,
-            liquidityHub,
-            hubCallback,
-            destinationReceiverContract
+            DEFAULT_MAX_DISPATCH_ITEMS, originChainId, destinationChainId, liquidityHub, destinationReceiverContract
         );
 
         address recipientA = makeAddr("recipientA");
@@ -424,12 +347,7 @@ contract HubRSCReconciliationTest is HubRSCTestBase {
     function test_terminalNotApprovedFailureIsQuarantinedAndNotRedispatched() public {
         _clearSystemContract();
         HubRSC hub = new HubRSC(
-            DEFAULT_MAX_DISPATCH_ITEMS,
-            originChainId,
-            destinationChainId,
-            liquidityHub,
-            hubCallback,
-            destinationReceiverContract
+            DEFAULT_MAX_DISPATCH_ITEMS, originChainId, destinationChainId, liquidityHub, destinationReceiverContract
         );
 
         address recipient = makeAddr("recipient");
@@ -482,12 +400,7 @@ contract HubRSCReconciliationTest is HubRSCTestBase {
     function test_terminalFailureOnSameUnderlyingStillAllowsSiblingDispatch() public {
         _clearSystemContract();
         HubRSC hub = new HubRSC(
-            DEFAULT_MAX_DISPATCH_ITEMS,
-            originChainId,
-            destinationChainId,
-            liquidityHub,
-            hubCallback,
-            destinationReceiverContract
+            DEFAULT_MAX_DISPATCH_ITEMS, originChainId, destinationChainId, liquidityHub, destinationReceiverContract
         );
 
         address underlying = makeAddr("underlying");
@@ -536,12 +449,7 @@ contract HubRSCReconciliationTest is HubRSCTestBase {
     function test_terminalFailureClearsOnFreshQueueMutation() public {
         _clearSystemContract();
         HubRSC hub = new HubRSC(
-            DEFAULT_MAX_DISPATCH_ITEMS,
-            originChainId,
-            destinationChainId,
-            liquidityHub,
-            hubCallback,
-            destinationReceiverContract
+            DEFAULT_MAX_DISPATCH_ITEMS, originChainId, destinationChainId, liquidityHub, destinationReceiverContract
         );
 
         address recipient = makeAddr("recipient");
@@ -591,12 +499,7 @@ contract HubRSCReconciliationTest is HubRSCTestBase {
     function test_terminalFailureClearsOnAuthoritativeDecrease() public {
         _clearSystemContract();
         HubRSC hub = new HubRSC(
-            DEFAULT_MAX_DISPATCH_ITEMS,
-            originChainId,
-            destinationChainId,
-            liquidityHub,
-            hubCallback,
-            destinationReceiverContract
+            DEFAULT_MAX_DISPATCH_ITEMS, originChainId, destinationChainId, liquidityHub, destinationReceiverContract
         );
 
         address recipient = makeAddr("recipient");
@@ -648,12 +551,7 @@ contract HubRSCReconciliationTest is HubRSCTestBase {
     function test_manualSettlementProcessedLogReconcilesWithoutDispatch() public {
         _clearSystemContract();
         HubRSC hub = new HubRSC(
-            DEFAULT_MAX_DISPATCH_ITEMS,
-            originChainId,
-            destinationChainId,
-            liquidityHub,
-            hubCallback,
-            destinationReceiverContract
+            DEFAULT_MAX_DISPATCH_ITEMS, originChainId, destinationChainId, liquidityHub, destinationReceiverContract
         );
 
         address recipient = makeAddr("recipient");
@@ -672,12 +570,7 @@ contract HubRSCReconciliationTest is HubRSCTestBase {
     function test_buffersOutOfOrderProcessedAndAppliesOnQueued() public {
         _clearSystemContract();
         HubRSC hub = new HubRSC(
-            DEFAULT_MAX_DISPATCH_ITEMS,
-            originChainId,
-            destinationChainId,
-            liquidityHub,
-            hubCallback,
-            destinationReceiverContract
+            DEFAULT_MAX_DISPATCH_ITEMS, originChainId, destinationChainId, liquidityHub, destinationReceiverContract
         );
 
         address recipient = makeAddr("recipient");
@@ -702,12 +595,7 @@ contract HubRSCReconciliationTest is HubRSCTestBase {
     function test_buffersOutOfOrderAnnulledAndAppliesOnQueued() public {
         _clearSystemContract();
         HubRSC hub = new HubRSC(
-            DEFAULT_MAX_DISPATCH_ITEMS,
-            originChainId,
-            destinationChainId,
-            liquidityHub,
-            hubCallback,
-            destinationReceiverContract
+            DEFAULT_MAX_DISPATCH_ITEMS, originChainId, destinationChainId, liquidityHub, destinationReceiverContract
         );
 
         address recipient = makeAddr("recipient");
@@ -729,12 +617,7 @@ contract HubRSCReconciliationTest is HubRSCTestBase {
     function test_buffersAnnulledLargerThanFirstQueued_carriesRemainderAcrossLaterQueueAdds() public {
         _clearSystemContract();
         HubRSC hub = new HubRSC(
-            DEFAULT_MAX_DISPATCH_ITEMS,
-            originChainId,
-            destinationChainId,
-            liquidityHub,
-            hubCallback,
-            destinationReceiverContract
+            DEFAULT_MAX_DISPATCH_ITEMS, originChainId, destinationChainId, liquidityHub, destinationReceiverContract
         );
 
         address recipient = makeAddr("recipient");
@@ -762,12 +645,7 @@ contract HubRSCReconciliationTest is HubRSCTestBase {
     function test_buffersProcessedLargerThanFirstQueued_carriesSettledRemainder() public {
         _clearSystemContract();
         HubRSC hub = new HubRSC(
-            DEFAULT_MAX_DISPATCH_ITEMS,
-            originChainId,
-            destinationChainId,
-            liquidityHub,
-            hubCallback,
-            destinationReceiverContract
+            DEFAULT_MAX_DISPATCH_ITEMS, originChainId, destinationChainId, liquidityHub, destinationReceiverContract
         );
 
         address recipient = makeAddr("recipient");
@@ -801,12 +679,7 @@ contract HubRSCReconciliationTest is HubRSCTestBase {
     function test_processedRequestedAmountNoLongerReleasesReservation() public {
         _clearSystemContract();
         HubRSC hub = new HubRSC(
-            DEFAULT_MAX_DISPATCH_ITEMS,
-            originChainId,
-            destinationChainId,
-            liquidityHub,
-            hubCallback,
-            destinationReceiverContract
+            DEFAULT_MAX_DISPATCH_ITEMS, originChainId, destinationChainId, liquidityHub, destinationReceiverContract
         );
 
         address recipient = makeAddr("recipient");
@@ -845,12 +718,7 @@ contract HubRSCReconciliationTest is HubRSCTestBase {
     function test_deduplicatesAuthoritativeProcessedByLogIdentity() public {
         _clearSystemContract();
         HubRSC hub = new HubRSC(
-            DEFAULT_MAX_DISPATCH_ITEMS,
-            originChainId,
-            destinationChainId,
-            liquidityHub,
-            hubCallback,
-            destinationReceiverContract
+            DEFAULT_MAX_DISPATCH_ITEMS, originChainId, destinationChainId, liquidityHub, destinationReceiverContract
         );
 
         address recipient = makeAddr("recipient");
@@ -876,12 +744,7 @@ contract HubRSCReconciliationTest is HubRSCTestBase {
     function test_releasesUnusedInFlightReservationOnTrustedSuccess() public {
         _clearSystemContract();
         HubRSC hub = new HubRSC(
-            DEFAULT_MAX_DISPATCH_ITEMS,
-            originChainId,
-            destinationChainId,
-            liquidityHub,
-            hubCallback,
-            destinationReceiverContract
+            DEFAULT_MAX_DISPATCH_ITEMS, originChainId, destinationChainId, liquidityHub, destinationReceiverContract
         );
 
         address recipient = makeAddr("recipient");
@@ -907,12 +770,7 @@ contract HubRSCReconciliationTest is HubRSCTestBase {
     function test_exaggeratedSuccessAmountReleasesOnlyAttemptReservation() public {
         _clearSystemContract();
         HubRSC hub = new HubRSC(
-            DEFAULT_MAX_DISPATCH_ITEMS,
-            originChainId,
-            destinationChainId,
-            liquidityHub,
-            hubCallback,
-            destinationReceiverContract
+            DEFAULT_MAX_DISPATCH_ITEMS, originChainId, destinationChainId, liquidityHub, destinationReceiverContract
         );
 
         address recipient = makeAddr("recipient");
@@ -932,12 +790,7 @@ contract HubRSCReconciliationTest is HubRSCTestBase {
     function test_exaggeratedSuccessAmountDoesNotRedispatchBeforeProcessedReconciliation() public {
         _clearSystemContract();
         HubRSC hub = new HubRSC(
-            DEFAULT_MAX_DISPATCH_ITEMS,
-            originChainId,
-            destinationChainId,
-            liquidityHub,
-            hubCallback,
-            destinationReceiverContract
+            DEFAULT_MAX_DISPATCH_ITEMS, originChainId, destinationChainId, liquidityHub, destinationReceiverContract
         );
 
         address recipient = makeAddr("recipient");
@@ -952,12 +805,7 @@ contract HubRSCReconciliationTest is HubRSCTestBase {
     function test_partialFillOrderingWithExaggeratedSuccessLeavesOnlyRemainderDispatchable() public {
         _clearSystemContract();
         HubRSC hub = new HubRSC(
-            DEFAULT_MAX_DISPATCH_ITEMS,
-            originChainId,
-            destinationChainId,
-            liquidityHub,
-            hubCallback,
-            destinationReceiverContract
+            DEFAULT_MAX_DISPATCH_ITEMS, originChainId, destinationChainId, liquidityHub, destinationReceiverContract
         );
 
         address recipient = makeAddr("recipient");
@@ -980,12 +828,7 @@ contract HubRSCReconciliationTest is HubRSCTestBase {
     function test_successBeforeProcessedDoesNotRedispatchSameKeyUntilProcessedReconciles() public {
         _clearSystemContract();
         HubRSC hub = new HubRSC(
-            DEFAULT_MAX_DISPATCH_ITEMS,
-            originChainId,
-            destinationChainId,
-            liquidityHub,
-            hubCallback,
-            destinationReceiverContract
+            DEFAULT_MAX_DISPATCH_ITEMS, originChainId, destinationChainId, liquidityHub, destinationReceiverContract
         );
 
         address recipient = makeAddr("recipient");
@@ -1032,12 +875,7 @@ contract HubRSCReconciliationTest is HubRSCTestBase {
     function test_trustedSuccessReleasesOnlyMatchingAttemptWhenLaterReservationIsLive() public {
         _clearSystemContract();
         HubRSC hub = new HubRSC(
-            DEFAULT_MAX_DISPATCH_ITEMS,
-            originChainId,
-            destinationChainId,
-            liquidityHub,
-            hubCallback,
-            destinationReceiverContract
+            DEFAULT_MAX_DISPATCH_ITEMS, originChainId, destinationChainId, liquidityHub, destinationReceiverContract
         );
 
         address recipient = makeAddr("recipient");
@@ -1077,12 +915,7 @@ contract HubRSCReconciliationTest is HubRSCTestBase {
     function test_releasesInFlightWhenTrustedSuccessSettlesZero() public {
         _clearSystemContract();
         HubRSC hub = new HubRSC(
-            DEFAULT_MAX_DISPATCH_ITEMS,
-            originChainId,
-            destinationChainId,
-            liquidityHub,
-            hubCallback,
-            destinationReceiverContract
+            DEFAULT_MAX_DISPATCH_ITEMS, originChainId, destinationChainId, liquidityHub, destinationReceiverContract
         );
 
         address recipient = makeAddr("recipient");

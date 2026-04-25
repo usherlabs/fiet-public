@@ -51,14 +51,12 @@ abstract contract HubRSCTestBase is Test {
     uint256 internal originChainId;
     uint256 internal destinationChainId;
     address internal liquidityHub;
-    address internal hubCallback;
     address internal destinationReceiverContract;
 
     function setUp() public virtual {
         originChainId = 1;
         destinationChainId = 2;
         liquidityHub = makeAddr("liquidityHub");
-        hubCallback = makeAddr("hubCallback");
         destinationReceiverContract = makeAddr("destinationReceiverContract");
     }
 
@@ -100,6 +98,16 @@ abstract contract HubRSCTestBase is Test {
         return hub.attemptReservationAmountById(attemptId);
     }
 
+    function _ensureRecipientFunded(HubRSC hub, address recipient) internal {
+        if (!hub.recipientRegistered(recipient)) {
+            hub.registerRecipient(recipient, 1_000_000);
+            return;
+        }
+        if (hub.recipientFundingUnits(recipient) < 1_000) {
+            hub.fundRecipient(recipient, 1_000_000);
+        }
+    }
+
     function _retryBlockState(HubRSC hub, bytes32 key, address lcc) internal view returns (uint256, bool) {
         return hub.retryBlockStateByKey(key, lcc);
     }
@@ -124,8 +132,20 @@ abstract contract HubRSCTestBase is Test {
         uint256 nonce,
         uint256 txHash,
         uint256 logIndex
-    ) internal view returns (IReactive.LogRecord memory) {
+    ) internal returns (IReactive.LogRecord memory) {
         nonce;
+        _ensureRecipientFunded(hub, recipient);
+        return _rawProtocolSettlementQueuedLog(hub, lcc, recipient, amount, txHash, logIndex);
+    }
+
+    function _rawProtocolSettlementQueuedLog(
+        HubRSC hub,
+        address lcc,
+        address recipient,
+        uint256 amount,
+        uint256 txHash,
+        uint256 logIndex
+    ) internal view returns (IReactive.LogRecord memory) {
         return IReactive.LogRecord({
             chain_id: hub.protocolChainId(),
             _contract: hub.liquidityHub(),
@@ -149,46 +169,9 @@ abstract contract HubRSCTestBase is Test {
         uint256 amount,
         uint256 txHash,
         uint256 logIndex
-    ) internal view returns (IReactive.LogRecord memory) {
-        return IReactive.LogRecord({
-            chain_id: hub.protocolChainId(),
-            _contract: hub.liquidityHub(),
-            topic_0: ReactiveConstants.SETTLEMENT_QUEUED_TOPIC,
-            topic_1: uint256(uint160(lcc)),
-            topic_2: uint256(uint160(recipient)),
-            topic_3: 0,
-            data: abi.encode(amount),
-            block_number: 0,
-            op_code: 0,
-            block_hash: 0,
-            tx_hash: txHash,
-            log_index: logIndex
-        });
-    }
-
-    function _legacySettlementQueuedReportedLog(
-        HubRSC hub,
-        address recipient,
-        address lcc,
-        uint256 amount,
-        uint256 nonce,
-        uint256 txHash,
-        uint256 logIndex
-    ) internal view returns (IReactive.LogRecord memory) {
-        return IReactive.LogRecord({
-            chain_id: hub.reactChainId(),
-            _contract: hub.hubCallback(),
-            topic_0: ReactiveConstants.SETTLEMENT_QUEUED_REPORTED_TOPIC,
-            topic_1: uint256(uint160(recipient)),
-            topic_2: uint256(uint160(lcc)),
-            topic_3: 0,
-            data: abi.encode(amount, nonce),
-            block_number: 0,
-            op_code: 0,
-            block_hash: 0,
-            tx_hash: txHash,
-            log_index: logIndex
-        });
+    ) internal returns (IReactive.LogRecord memory) {
+        _ensureRecipientFunded(hub, recipient);
+        return _rawProtocolSettlementQueuedLog(hub, lcc, recipient, amount, txHash, logIndex);
     }
 
     /// @dev When `underlyingAsset` is `address(0)`, matches legacy tests that omit explicit underlying in the log data.
@@ -259,7 +242,7 @@ abstract contract HubRSCTestBase is Test {
     {
         return IReactive.LogRecord({
             chain_id: hub.reactChainId(),
-            _contract: hub.hubCallback(),
+            _contract: address(hub),
             topic_0: MORE_LIQUIDITY_AVAILABLE_TOPIC,
             topic_1: uint256(uint160(lcc)),
             topic_2: 0,
@@ -280,7 +263,8 @@ abstract contract HubRSCTestBase is Test {
         uint256 amount,
         uint256 txHash,
         uint256 logIndex
-    ) internal view returns (IReactive.LogRecord memory) {
+    ) internal returns (IReactive.LogRecord memory) {
+        _ensureRecipientFunded(hub, recipient);
         return IReactive.LogRecord({
             chain_id: hub.protocolChainId(),
             _contract: hub.liquidityHub(),
@@ -305,38 +289,14 @@ abstract contract HubRSCTestBase is Test {
         uint256 requestedAmount,
         uint256 txHash,
         uint256 logIndex
-    ) internal view returns (IReactive.LogRecord memory) {
+    ) internal returns (IReactive.LogRecord memory) {
+        _ensureRecipientFunded(hub, recipient);
         return IReactive.LogRecord({
             chain_id: hub.protocolChainId(),
             _contract: hub.liquidityHub(),
             topic_0: ReactiveConstants.SETTLEMENT_PROCESSED_TOPIC,
             topic_1: uint256(uint160(lcc)),
             topic_2: uint256(uint160(recipient)),
-            topic_3: 0,
-            data: abi.encode(settledAmount, requestedAmount),
-            block_number: 0,
-            op_code: 0,
-            block_hash: 0,
-            tx_hash: txHash,
-            log_index: logIndex
-        });
-    }
-
-    function _legacySettlementProcessedReportedLog(
-        HubRSC hub,
-        address recipient,
-        address lcc,
-        uint256 settledAmount,
-        uint256 requestedAmount,
-        uint256 txHash,
-        uint256 logIndex
-    ) internal view returns (IReactive.LogRecord memory) {
-        return IReactive.LogRecord({
-            chain_id: hub.reactChainId(),
-            _contract: hub.hubCallback(),
-            topic_0: ReactiveConstants.SETTLEMENT_PROCESSED_REPORTED_TOPIC,
-            topic_1: uint256(uint160(recipient)),
-            topic_2: uint256(uint160(lcc)),
             topic_3: 0,
             data: abi.encode(settledAmount, requestedAmount),
             block_number: 0,
@@ -355,7 +315,8 @@ abstract contract HubRSCTestBase is Test {
         uint256 requestedAmount,
         uint256 txHash,
         uint256 logIndex
-    ) internal view returns (IReactive.LogRecord memory) {
+    ) internal returns (IReactive.LogRecord memory) {
+        _ensureRecipientFunded(hub, recipient);
         return IReactive.LogRecord({
             chain_id: hub.protocolChainId(),
             _contract: hub.liquidityHub(),
@@ -379,7 +340,8 @@ abstract contract HubRSCTestBase is Test {
         uint256 amount,
         uint256 txHash,
         uint256 logIndex
-    ) internal view returns (IReactive.LogRecord memory) {
+    ) internal returns (IReactive.LogRecord memory) {
+        _ensureRecipientFunded(hub, recipient);
         return IReactive.LogRecord({
             chain_id: hub.protocolChainId(),
             _contract: hub.liquidityHub(),
@@ -404,7 +366,8 @@ abstract contract HubRSCTestBase is Test {
         uint256 attemptId,
         uint256 txHash,
         uint256 logIndex
-    ) internal view returns (IReactive.LogRecord memory) {
+    ) internal returns (IReactive.LogRecord memory) {
+        _ensureRecipientFunded(hub, recipient);
         return IReactive.LogRecord({
             chain_id: hub.protocolChainId(),
             _contract: hub.destinationReceiverContract(),
@@ -429,38 +392,14 @@ abstract contract HubRSCTestBase is Test {
         uint256 attemptId,
         uint256 txHash,
         uint256 logIndex
-    ) internal view returns (IReactive.LogRecord memory) {
+    ) internal returns (IReactive.LogRecord memory) {
+        _ensureRecipientFunded(hub, recipient);
         return IReactive.LogRecord({
             chain_id: hub.protocolChainId(),
             _contract: hub.destinationReceiverContract(),
             topic_0: ReactiveConstants.SETTLEMENT_SUCCEEDED_TOPIC,
             topic_1: uint256(uint160(lcc)),
             topic_2: uint256(uint160(recipient)),
-            topic_3: 0,
-            data: abi.encode(maxAmount, attemptId),
-            block_number: 0,
-            op_code: 0,
-            block_hash: 0,
-            tx_hash: txHash,
-            log_index: logIndex
-        });
-    }
-
-    function _legacySettlementSucceededReportedLog(
-        HubRSC hub,
-        address recipient,
-        address lcc,
-        uint256 maxAmount,
-        uint256 attemptId,
-        uint256 txHash,
-        uint256 logIndex
-    ) internal view returns (IReactive.LogRecord memory) {
-        return IReactive.LogRecord({
-            chain_id: hub.reactChainId(),
-            _contract: hub.hubCallback(),
-            topic_0: ReactiveConstants.SETTLEMENT_SUCCEEDED_REPORTED_TOPIC,
-            topic_1: uint256(uint160(recipient)),
-            topic_2: uint256(uint160(lcc)),
             topic_3: 0,
             data: abi.encode(maxAmount, attemptId),
             block_number: 0,
@@ -481,7 +420,8 @@ abstract contract HubRSCTestBase is Test {
         uint8 failureClass,
         uint256 txHash,
         uint256 logIndex
-    ) internal view returns (IReactive.LogRecord memory) {
+    ) internal returns (IReactive.LogRecord memory) {
+        _ensureRecipientFunded(hub, recipient);
         failureClass;
         return IReactive.LogRecord({
             chain_id: hub.protocolChainId(),
@@ -590,13 +530,18 @@ abstract contract HubRSCTestBase is Test {
 
     function _decodeMoreLiquidityAvailablePayload(Vm.Log[] memory entries)
         internal
+        pure
         returns (address lcc, uint256 remaining)
     {
-        bytes memory payload = _findCallbackPayloadBySelector(
-            entries, ReactiveConstants.TRIGGER_MORE_LIQUIDITY_AVAILABLE_SELECTOR
-        );
-        assertTrue(payload.length > 0);
-        (, lcc, remaining) = abi.decode(_slice(payload, 4), (address, address, uint256));
+        bytes32 eventSig = keccak256("MoreLiquidityAvailable(address,uint256)");
+        for (uint256 i = 0; i < entries.length; i++) {
+            if (entries[i].topics.length > 1 && entries[i].topics[0] == eventSig) {
+                lcc = address(uint160(uint256(entries[i].topics[1])));
+                remaining = abi.decode(entries[i].data, (uint256));
+                return (lcc, remaining);
+            }
+        }
+        revert("missing MoreLiquidityAvailable event");
     }
 
     function _dispatchSingleAttemptId(
@@ -740,6 +685,15 @@ abstract contract HubRSCTestBase is Test {
         bytes32 callbackSig = keccak256("Callback(uint256,address,uint64,bytes)");
         for (uint256 i = 0; i < entries.length; i++) {
             if (entries[i].topics.length > 0 && entries[i].topics[0] == callbackSig) {
+                count++;
+            }
+        }
+    }
+
+    function _moreLiquidityAvailableEventCount(Vm.Log[] memory entries) internal pure returns (uint256 count) {
+        bytes32 eventSig = keccak256("MoreLiquidityAvailable(address,uint256)");
+        for (uint256 i = 0; i < entries.length; i++) {
+            if (entries[i].topics.length > 1 && entries[i].topics[0] == eventSig) {
                 count++;
             }
         }
