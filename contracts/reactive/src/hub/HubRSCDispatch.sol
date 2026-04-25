@@ -12,19 +12,13 @@ abstract contract HubRSCDispatch is HubRSCReconciliation {
     /// @notice Ingests an authoritative LiquidityHub `SettlementQueued` log into pending state.
     /// @dev Deduplicates by log identity, ignores zero amounts, and either creates or increments a queued pending entry.
     function _handleSettlementQueued(IReactive.LogRecord calldata log) internal {
-        if (log.chain_id != protocolChainId || log._contract != liquidityHub) {
-            _clearDebtContext();
-            return;
-        }
+        if (log.chain_id != protocolChainId || log._contract != liquidityHub) return;
 
         address lcc = address(uint160(log.topic_1));
         address recipient = address(uint160(log.topic_2));
         uint256 amount = abi.decode(log.data, (uint256));
 
-        if (!_markLogProcessed(log)) {
-            _clearDebtContext();
-            return;
-        }
+        if (!_markLogProcessed(log)) return;
         if (!_acceptMatchingRecipientEvent(recipient)) return;
         if (amount == 0) return;
 
@@ -67,7 +61,6 @@ abstract contract HubRSCDispatch is HubRSCReconciliation {
 
     /// @notice Registers canonical underlying from LiquidityHub `LCCCreated` logs.
     function _handleLccCreated(IReactive.LogRecord calldata log) internal {
-        _clearDebtContext();
         if (log.chain_id != protocolChainId || log._contract != liquidityHub) return;
 
         address underlying = address(uint160(log.topic_1));
@@ -78,7 +71,6 @@ abstract contract HubRSCDispatch is HubRSCReconciliation {
     /// @notice Builds and dispatches a bounded settlement batch when liquidity is available.
     /// @dev Decodes LiquidityAvailable log fields, registers `lcc -> underlying`, then routes dispatch.
     function _handleLiquidityAvailable(IReactive.LogRecord calldata log) internal {
-        _clearDebtContext();
         if (log.chain_id != protocolChainId || log._contract != liquidityHub) return;
         if (!_markLogProcessed(log)) return;
         address lcc = address(uint160(log.topic_1));
@@ -91,7 +83,6 @@ abstract contract HubRSCDispatch is HubRSCReconciliation {
 
     /// @notice Handles HubRSC self-continuation liquidity notices.
     function _handleMoreLiquidityAvailable(IReactive.LogRecord calldata log) internal {
-        _clearDebtContext();
         if (log.chain_id != reactChainId || log._contract != address(this)) return;
         if (!_markLogProcessed(log)) return;
         address lcc = address(uint160(log.topic_1));

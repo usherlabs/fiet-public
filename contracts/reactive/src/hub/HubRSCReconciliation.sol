@@ -11,14 +11,8 @@ abstract contract HubRSCReconciliation is HubRSCRouting {
 
     /// @notice Reconciles pending amount from authoritative LiquidityHub settlement processing.
     function _handleSettlementProcessed(IReactive.LogRecord calldata log) internal {
-        if (log.chain_id != protocolChainId || log._contract != liquidityHub) {
-            _clearDebtContext();
-            return;
-        }
-        if (!_markLogProcessed(log)) {
-            _clearDebtContext();
-            return;
-        }
+        if (log.chain_id != protocolChainId || log._contract != liquidityHub) return;
+        if (!_markLogProcessed(log)) return;
 
         address lcc = address(uint160(log.topic_1));
         address recipient = address(uint160(log.topic_2));
@@ -33,14 +27,8 @@ abstract contract HubRSCReconciliation is HubRSCRouting {
 
     /// @notice Releases trusted in-flight amount for completed destination settlements.
     function _handleSettlementSucceeded(IReactive.LogRecord calldata log) internal {
-        if (log.chain_id != protocolChainId || log._contract != destinationReceiverContract) {
-            _clearDebtContext();
-            return;
-        }
-        if (!_markLogProcessed(log)) {
-            _clearDebtContext();
-            return;
-        }
+        if (log.chain_id != protocolChainId || log._contract != destinationReceiverContract) return;
+        if (!_markLogProcessed(log)) return;
 
         address lcc = address(uint160(log.topic_1));
         address recipient = address(uint160(log.topic_2));
@@ -55,14 +43,8 @@ abstract contract HubRSCReconciliation is HubRSCRouting {
 
     /// @notice Reconciles pending amount from authoritative LiquidityHub queue annulments.
     function _handleSettlementAnnulled(IReactive.LogRecord calldata log) internal {
-        if (log.chain_id != protocolChainId || log._contract != liquidityHub) {
-            _clearDebtContext();
-            return;
-        }
-        if (!_markLogProcessed(log)) {
-            _clearDebtContext();
-            return;
-        }
+        if (log.chain_id != protocolChainId || log._contract != liquidityHub) return;
+        if (!_markLogProcessed(log)) return;
 
         address lcc = address(uint160(log.topic_1));
         address recipient = address(uint160(log.topic_2));
@@ -74,14 +56,8 @@ abstract contract HubRSCReconciliation is HubRSCRouting {
 
     /// @notice Releases reserved in-flight amount for failed destination settlements.
     function _handleSettlementFailed(IReactive.LogRecord calldata log) internal {
-        if (log.chain_id != protocolChainId || log._contract != destinationReceiverContract) {
-            _clearDebtContext();
-            return;
-        }
-        if (!_markLogProcessed(log)) {
-            _clearDebtContext();
-            return;
-        }
+        if (log.chain_id != protocolChainId || log._contract != destinationReceiverContract) return;
+        if (!_markLogProcessed(log)) return;
 
         address lcc = address(uint160(log.topic_1));
         address recipient = address(uint160(log.topic_2));

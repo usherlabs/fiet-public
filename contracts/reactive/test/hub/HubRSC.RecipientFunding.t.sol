@@ -384,7 +384,7 @@ contract HubRSCRecipientFundingTest is HubRSCTestBase {
         assertEq(system.debt(address(hub)), 0);
     }
 
-    function test_queuedDeferredDebtContextsSurviveIgnoredAndDuplicateLogsBeforePromotion() public {
+    function test_queuedDeferredDebtContextsSurviveIgnoredAndDuplicateLogsBeforeAllocation() public {
         (HubRSC hub, MockSystemContract system) = _deployHubWithDebtMock();
         address lcc = makeAddr("lcc");
         address recipient1 = makeAddr("recipient1");
