@@ -70,7 +70,7 @@ This project is built for the Reactive Network execution model:
 - Focused Hub suites: `forge test --match-path 'test/hub/*.t.sol'`
 - Unit tests: `forge test`
 - E2E harness: `just e2e` (deploys mocks, deploys Hub/Receiver, registers funded recipients, triggers events, checks observed state)
-- TASK-35 post-refactor regression proof: [`docs/task-40.3-task-35-regression-validation.md`](docs/task-40.3-task-35-regression-validation.md)
+- Post-refactor reactive findings matrix: [`docs/task-40.3-task-35-regression-validation.md`](docs/task-40.3-task-35-regression-validation.md)
 
 ## Bounds, throughput, and failure semantics (important for expectations)
 
