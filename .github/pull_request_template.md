@@ -4,11 +4,12 @@
 ```json
 {
   "sources": [
-    "Backlog:TASK-<id>"
+    "Backlog:TASK-<id>",
+    "Linear:ISSUE_ID"
   ],
   "spec_summary": "Describe the intended scope this PR should satisfy.",
   "notes": [
-    "Replace this block for this PR with authoritative Backlog or Linear sources and implementation notes."
+    "Replace placeholders with the actual authoritative source(s) and implementation notes for this PR."
   ]
 }
 ```
