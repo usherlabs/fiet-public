@@ -1,45 +1,29 @@
-name: codex-scope-verify
+name: codex-pr-verify
 
 on:
   pull_request:
-    types: [opened, synchronize, reopened]
+    types: [opened, edited, synchronize, reopened]
 
 jobs:
   verify:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Load active scope
-        id: scope
-        run: |
-          scope_file=".github/codex/active-scope.json"
-          if [ ! -f "$scope_file" ]; then
-            echo "Missing active scope file: $scope_file"
-            exit 1
-          fi
-          compact_scope="$(jq -c . "$scope_file")"
-          echo "json=$compact_scope" >> "$GITHUB_OUTPUT"
-
       - name: Submit verification job
         id: submit
         env:
           RUNNER_URL: ${{ secrets.CODEX_RUNNER_URL }}
           RUNNER_AUTH: ${{ secrets.CODEX_RUNNER_BASIC_AUTH }}
           RUNNER_SECRET: ${{ secrets.CODEX_RUNNER_WEBHOOK_SECRET }}
-          SCOPE_JSON: ${{ steps.scope.outputs.json }}
-          PR_REPO: ${{ github.repository }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-          PR_BASE_REF: ${{ github.event.pull_request.base.ref }}
-          PR_HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_BODY: ${{ github.event.pull_request.body }}
         run: |
           payload="$(jq -n \
-            --arg repo "$PR_REPO" \
-            --argjson pr "$PR_NUMBER" \
-            --arg base "$PR_BASE_REF" \
-            --arg head "$PR_HEAD_REF" \
-            --argjson scope "$SCOPE_JSON" \
+            --arg repo "${{ github.repository }}" \
+            --argjson pr "${{ github.event.pull_request.number }}" \
+            --arg base "${{ github.event.pull_request.base.ref }}" \
+            --arg head "${{ github.event.pull_request.head.ref }}" \
+            --arg title "$PR_TITLE" \
+            --arg body "$PR_BODY" \
             '{
               provider: "github",
               repo: $repo,
@@ -47,10 +31,14 @@ jobs:
               base_ref: $base,
               head_ref: $head,
               prompt_profile: "pr_plan_verify",
-              verification_scope: $scope,
+              pr_context: {
+                title: $title,
+                body: $body,
+                source: "pull_request.body"
+              },
               metadata: {
                 trigger: "pull_request",
-                scope_source: ".github/codex/active-scope.json"
+                context_source: "github.event.pull_request.body"
               }
             }')"
           ts="$(date +%s)"
@@ -79,13 +67,22 @@ jobs:
               -H "X-Codex-Runner-Signature: sha256=$sig" \
               "$RUNNER_URL/jobs/${{ steps.submit.outputs.job_id }}")"
             status="$(printf '%s' "$response" | jq -r '.status')"
+            verdict="$(printf '%s' "$response" | jq -r '.verification.verdict // empty')"
             if [ "$status" = "succeeded" ] || [ "$status" = "failed" ] || [ "$status" = "timed_out" ] || [ "$status" = "cancelled" ]; then
               printf '%s\n' "$response" | jq .
-              printf '%s\n' "$response" | jq -r '.summary' >> "$GITHUB_STEP_SUMMARY"
-              test "$status" = "succeeded"
-              exit $?
+              {
+                echo "## Codex Runner"
+                printf '%s\n' "$response" | jq -r '.summary // "No summary returned."'
+              } >> "$GITHUB_STEP_SUMMARY"
+              if [ "$status" != "succeeded" ]; then
+                exit 1
+              fi
+              if [ "$verdict" = "fail" ] || [ "$verdict" = "needs-human" ]; then
+                exit 1
+              fi
+              exit 0
             fi
             sleep 10
           done
-          echo "Timed out waiting for codex runner"
+          echo "Timed out waiting for codex runner" >> "$GITHUB_STEP_SUMMARY"
           exit 1
