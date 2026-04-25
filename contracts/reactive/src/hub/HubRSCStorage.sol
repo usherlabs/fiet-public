@@ -69,6 +69,12 @@ abstract contract HubRSCStorage is AbstractReactive {
         uint256 amount;
     }
 
+    struct DebtContext {
+        address[] recipients;
+        uint256[] weights;
+        uint256 totalWeight;
+    }
+
     uint256 public immutable maxDispatchItems;
 
     /// @notice The Chain the protocol lives on i.e DestinationContract.sol
@@ -86,18 +92,12 @@ abstract contract HubRSCStorage is AbstractReactive {
     /// @notice Callback gas limit for destination receiver.
     uint64 public constant CALLBACK_GAS_LIMIT = 8000000;
 
-    /// @dev Abstract funding units charged per matching recipient lifecycle log.
-    uint256 public constant MATCHING_EVENT_DEBIT_UNITS = 1;
-
-    /// @dev Abstract funding units charged per recipient-specific dispatch item.
-    uint256 public constant PROCESSING_DEBIT_UNITS = 1;
-
     /// @notice Recipients explicitly registered for HubRSC-owned lifecycle subscriptions.
     mapping(address => bool) public recipientRegistered;
     /// @notice Recipients with active exact-match subscriptions.
     mapping(address => bool) public recipientActive;
-    /// @notice Abstract per-recipient funding units available for matching events and dispatch work.
-    mapping(address => uint256) public recipientFundingUnits;
+    /// @notice Native-token recipient balance. Positive balances activate service; negative balances represent debt.
+    mapping(address => int256) public recipientBalance;
 
     /// @notice Pending settlement by key.
     mapping(bytes32 => Pending) internal pending;
@@ -161,12 +161,17 @@ abstract contract HubRSCStorage is AbstractReactive {
     /// @dev One-shot permit for HubRSC-emitted callbacks to seed zero-batch continuation credits on their budget lane.
     ///      Manual/stale follow-up callbacks consume no permit, which prevents repeated credit reseeding.
     mapping(address => bool) internal continuationBootstrapPendingByLane;
+    /// @notice Last Reactive system debt observed after allocation/payment.
+    uint256 public lastObservedSystemDebt;
+    /// @notice Work context that receives the next observed debt delta.
+    DebtContext internal pendingDebtContext;
 
-    event RecipientRegistered(address indexed recipient, uint256 fundingUnits);
-    event RecipientFunded(address indexed recipient, uint256 fundingUnits, uint256 remainingFundingUnits);
-    event RecipientActivated(address indexed recipient, uint256 remainingFundingUnits);
-    event RecipientDeactivated(address indexed recipient, uint256 remainingFundingUnits);
-    event RecipientFundingDebited(address indexed recipient, uint256 debitUnits, uint256 remainingFundingUnits);
+    event RecipientRegistered(address indexed recipient, uint256 depositAmount, int256 balance);
+    event RecipientFunded(address indexed recipient, uint256 depositAmount, int256 balance);
+    event RecipientActivated(address indexed recipient, int256 balance);
+    event RecipientDeactivated(address indexed recipient, int256 balance);
+    event RecipientDebtAllocated(address indexed recipient, uint256 debtAmount, int256 balance);
+    event UnallocatedDebtObserved(uint256 debtAmount, uint256 observedDebt);
     event MoreLiquidityAvailable(address indexed lcc, uint256 amountAvailable);
     event PendingAdded(address indexed lcc, address indexed recipient, uint256 amount);
     event PendingIncreased(address indexed lcc, address indexed recipient, uint256 amount);
@@ -208,11 +213,11 @@ abstract contract HubRSCStorage is AbstractReactive {
     }
 
     function _activateRecipient(address recipient) internal {
-        if (recipientActive[recipient] || recipientFundingUnits[recipient] == 0) return;
+        if (recipientActive[recipient] || recipientBalance[recipient] <= 0) return;
 
         recipientActive[recipient] = true;
         _setRecipientLifecycleSubscriptions(recipient, true);
-        emit RecipientActivated(recipient, recipientFundingUnits[recipient]);
+        emit RecipientActivated(recipient, recipientBalance[recipient]);
     }
 
     function _deactivateRecipient(address recipient) internal {
@@ -220,29 +225,58 @@ abstract contract HubRSCStorage is AbstractReactive {
 
         recipientActive[recipient] = false;
         _setRecipientLifecycleSubscriptions(recipient, false);
-        emit RecipientDeactivated(recipient, recipientFundingUnits[recipient]);
+        emit RecipientDeactivated(recipient, recipientBalance[recipient]);
     }
 
-    function _chargeMatchingRecipientEvent(address recipient) internal returns (bool) {
-        return _debitRecipientFunding(recipient, MATCHING_EVENT_DEBIT_UNITS);
+    function _syncRecipientActivation(address recipient) internal {
+        if (recipientBalance[recipient] > 0) {
+            _activateRecipient(recipient);
+        } else {
+            _deactivateRecipient(recipient);
+        }
     }
 
-    function _chargeRecipientProcessing(address recipient) internal returns (bool) {
-        return _debitRecipientFunding(recipient, PROCESSING_DEBIT_UNITS);
+    function _creditRecipientDeposit(address recipient, uint256 amount) internal {
+        if (amount == 0) return;
+        recipientBalance[recipient] += int256(amount);
+        emit RecipientFunded(recipient, amount, recipientBalance[recipient]);
     }
 
-    function _chargeMatchingRecipientEventOrTrackedKey(address recipient, bytes32 key) internal returns (bool) {
-        if (_chargeMatchingRecipientEvent(recipient)) return true;
-        return _hasTrackedRecipientKey(key);
+    function _recipientServiceActive(address recipient) internal view returns (bool) {
+        return recipientRegistered[recipient] && recipientActive[recipient] && recipientBalance[recipient] > 0;
     }
 
-    function _chargeMatchingRecipientEventOrTrackedAttempt(address recipient, address lcc, uint256 attemptId)
+    function _acceptMatchingRecipientEvent(address recipient) internal returns (bool) {
+        if (!_recipientServiceActive(recipient)) {
+            _clearDebtContext();
+            return false;
+        }
+        _recordLifecycleDebtContext(recipient);
+        return true;
+    }
+
+    function _acceptMatchingRecipientEventOrTrackedKey(address recipient, bytes32 key) internal returns (bool) {
+        if (_recipientServiceActive(recipient)) {
+            _recordLifecycleDebtContext(recipient);
+            return true;
+        }
+        if (!_hasTrackedRecipientKey(key)) return false;
+        _recordLifecycleDebtContext(recipient);
+        return true;
+    }
+
+    function _acceptMatchingRecipientEventOrTrackedAttempt(address recipient, address lcc, uint256 attemptId)
         internal
         returns (bool)
     {
-        if (_chargeMatchingRecipientEvent(recipient)) return true;
+        if (_recipientServiceActive(recipient)) {
+            _recordLifecycleDebtContext(recipient);
+            return true;
+        }
         AttemptReservation storage reservation = _attemptReservationById[attemptId];
-        return reservation.lcc == lcc && reservation.recipient == recipient && reservation.amount > 0;
+        if (reservation.lcc != lcc || reservation.recipient != recipient || reservation.amount == 0) return false;
+        _recordLifecycleDebtContext(recipient);
+        return true;
     }
 
     function _hasTrackedRecipientKey(bytes32 key) internal view returns (bool) {
@@ -252,23 +286,80 @@ abstract contract HubRSCStorage is AbstractReactive {
             || bufferedProcessed.inflightAmountToReduce > 0 || bufferedAnnulledDecreaseByKey[key] > 0;
     }
 
-    function _debitRecipientFunding(address recipient, uint256 debitUnits) internal returns (bool) {
-        if (!recipientRegistered[recipient] || !recipientActive[recipient]) return false;
+    function _syncObservedSystemDebt() internal {
+        uint256 observedDebt = _currentVendorDebt();
+        if (observedDebt > lastObservedSystemDebt) {
+            uint256 debtDelta = observedDebt - lastObservedSystemDebt;
+            _allocateDebtDelta(debtDelta, observedDebt);
+        }
+        lastObservedSystemDebt = observedDebt;
+        _coverObservedDebtIfFunded();
+    }
 
-        uint256 remaining = recipientFundingUnits[recipient];
-        if (remaining < debitUnits) {
-            _deactivateRecipient(recipient);
-            return false;
+    function _allocateDebtDelta(uint256 debtDelta, uint256 observedDebt) internal {
+        if (debtDelta == 0) return;
+        if (pendingDebtContext.totalWeight == 0) {
+            emit UnallocatedDebtObserved(debtDelta, observedDebt);
+            _clearDebtContext();
+            return;
         }
 
-        remaining -= debitUnits;
-        recipientFundingUnits[recipient] = remaining;
-        emit RecipientFundingDebited(recipient, debitUnits, remaining);
-
-        if (remaining == 0) {
-            _deactivateRecipient(recipient);
+        uint256 allocated;
+        uint256 lastIndex = pendingDebtContext.recipients.length - 1;
+        for (uint256 i = 0; i < pendingDebtContext.recipients.length; i++) {
+            address recipient = pendingDebtContext.recipients[i];
+            uint256 share = i == lastIndex
+                ? debtDelta - allocated
+                : debtDelta * pendingDebtContext.weights[i] / pendingDebtContext.totalWeight;
+            allocated += share;
+            recipientBalance[recipient] -= int256(share);
+            emit RecipientDebtAllocated(recipient, share, recipientBalance[recipient]);
+            _syncRecipientActivation(recipient);
         }
-        return true;
+        _clearDebtContext();
+    }
+
+    function _coverObservedDebtIfFunded() internal {
+        if (address(vendor).code.length == 0 || address(this).balance == 0) return;
+        uint256 debt = _currentVendorDebt();
+        if (debt == 0) {
+            lastObservedSystemDebt = 0;
+            return;
+        }
+        uint256 payment = debt < address(this).balance ? debt : address(this).balance;
+        _pay(payable(address(vendor)), payment);
+        lastObservedSystemDebt = _currentVendorDebt();
+    }
+
+    function _currentVendorDebt() internal view returns (uint256) {
+        if (address(vendor).code.length == 0) return lastObservedSystemDebt;
+        try vendor.debt(address(this)) returns (uint256 debt) {
+            return debt;
+        } catch {
+            return lastObservedSystemDebt;
+        }
+    }
+
+    function _recordLifecycleDebtContext(address recipient) internal {
+        _clearDebtContext();
+        pendingDebtContext.recipients.push(recipient);
+        pendingDebtContext.weights.push(1);
+        pendingDebtContext.totalWeight = 1;
+    }
+
+    function _recordDispatchDebtContext(address[] memory recipients, uint256 count) internal {
+        _clearDebtContext();
+        for (uint256 i = 0; i < count; i++) {
+            pendingDebtContext.recipients.push(recipients[i]);
+            pendingDebtContext.weights.push(1);
+        }
+        pendingDebtContext.totalWeight = count;
+    }
+
+    function _clearDebtContext() internal {
+        delete pendingDebtContext.recipients;
+        delete pendingDebtContext.weights;
+        pendingDebtContext.totalWeight = 0;
     }
 
     function _setRecipientLifecycleSubscriptions(address recipient, bool shouldSubscribe) internal {

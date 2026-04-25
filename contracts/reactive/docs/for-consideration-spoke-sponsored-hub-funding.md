@@ -1,6 +1,6 @@
 # For Consideration: Spoke-Sponsored Hub Funding Model
 
-> Historical note: this document describes the superseded `SpokeRSC` / `HubCallback` funding idea retained for design history only. It is not part of the active runtime. The shipped TASK-40.2 model is HubRSC-owned recipient registration plus per-recipient funding units on HubRSC.
+> Historical note: this document describes the superseded `SpokeRSC` / `HubCallback` funding idea retained for design history only. It is not part of the active runtime. The shipped TASK-40.2 model is HubRSC-owned payable recipient registration plus signed per-recipient native balances on HubRSC.
 
 ## Current Funding Model (as of 2026-03-31)
 
