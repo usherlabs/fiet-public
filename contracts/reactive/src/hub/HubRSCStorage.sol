@@ -163,8 +163,10 @@ abstract contract HubRSCStorage is AbstractReactive {
     mapping(address => bool) internal continuationBootstrapPendingByLane;
     /// @notice Last Reactive system debt observed after allocation/payment.
     uint256 public lastObservedSystemDebt;
-    /// @notice Work context that receives the next observed debt delta.
-    DebtContext internal pendingDebtContext;
+    /// @notice FIFO work contexts that receive observed debt deltas.
+    mapping(uint256 => DebtContext) internal debtContextByIndex;
+    uint256 internal debtContextHead;
+    uint256 internal debtContextTail;
 
     event RecipientRegistered(address indexed recipient, uint256 depositAmount, int256 balance);
     event RecipientFunded(address indexed recipient, uint256 depositAmount, int256 balance);
@@ -247,10 +249,7 @@ abstract contract HubRSCStorage is AbstractReactive {
     }
 
     function _acceptMatchingRecipientEvent(address recipient) internal returns (bool) {
-        if (!_recipientServiceActive(recipient)) {
-            _clearDebtContext();
-            return false;
-        }
+        if (!_recipientServiceActive(recipient)) return false;
         _recordLifecycleDebtContext(recipient);
         return true;
     }
@@ -298,25 +297,30 @@ abstract contract HubRSCStorage is AbstractReactive {
 
     function _allocateDebtDelta(uint256 debtDelta, uint256 observedDebt) internal {
         if (debtDelta == 0) return;
-        if (pendingDebtContext.totalWeight == 0) {
+        if (_debtContextQueueEmpty()) {
             emit UnallocatedDebtObserved(debtDelta, observedDebt);
-            _clearDebtContext();
+            return;
+        }
+
+        DebtContext storage context = debtContextByIndex[debtContextHead];
+        if (context.totalWeight == 0) {
+            emit UnallocatedDebtObserved(debtDelta, observedDebt);
+            _advanceDebtContext();
             return;
         }
 
         uint256 allocated;
-        uint256 lastIndex = pendingDebtContext.recipients.length - 1;
-        for (uint256 i = 0; i < pendingDebtContext.recipients.length; i++) {
-            address recipient = pendingDebtContext.recipients[i];
-            uint256 share = i == lastIndex
-                ? debtDelta - allocated
-                : debtDelta * pendingDebtContext.weights[i] / pendingDebtContext.totalWeight;
+        uint256 lastIndex = context.recipients.length - 1;
+        for (uint256 i = 0; i < context.recipients.length; i++) {
+            address recipient = context.recipients[i];
+            uint256 share =
+                i == lastIndex ? debtDelta - allocated : debtDelta * context.weights[i] / context.totalWeight;
             allocated += share;
             recipientBalance[recipient] -= int256(share);
             emit RecipientDebtAllocated(recipient, share, recipientBalance[recipient]);
             _syncRecipientActivation(recipient);
         }
-        _clearDebtContext();
+        _advanceDebtContext();
     }
 
     function _coverObservedDebtIfFunded() internal {
@@ -341,25 +345,41 @@ abstract contract HubRSCStorage is AbstractReactive {
     }
 
     function _recordLifecycleDebtContext(address recipient) internal {
-        _clearDebtContext();
-        pendingDebtContext.recipients.push(recipient);
-        pendingDebtContext.weights.push(1);
-        pendingDebtContext.totalWeight = 1;
+        DebtContext storage context = _prepareWritableDebtContext();
+        context.recipients.push(recipient);
+        context.weights.push(1);
+        context.totalWeight = 1;
     }
 
     function _recordDispatchDebtContext(address[] memory recipients, uint256 count) internal {
-        _clearDebtContext();
+        DebtContext storage context = _prepareWritableDebtContext();
         for (uint256 i = 0; i < count; i++) {
-            pendingDebtContext.recipients.push(recipients[i]);
-            pendingDebtContext.weights.push(1);
+            context.recipients.push(recipients[i]);
+            context.weights.push(1);
         }
-        pendingDebtContext.totalWeight = count;
+        context.totalWeight = count;
     }
 
-    function _clearDebtContext() internal {
-        delete pendingDebtContext.recipients;
-        delete pendingDebtContext.weights;
-        pendingDebtContext.totalWeight = 0;
+    function _deleteDebtContext(DebtContext storage context) internal {
+        delete context.recipients;
+        delete context.weights;
+        context.totalWeight = 0;
+    }
+
+    function _prepareWritableDebtContext() internal returns (DebtContext storage context) {
+        uint256 index = debtContextTail++;
+        context = debtContextByIndex[index];
+    }
+
+    function _advanceDebtContext() internal {
+        if (_debtContextQueueEmpty()) return;
+
+        uint256 index = debtContextHead++;
+        _deleteDebtContext(debtContextByIndex[index]);
+    }
+
+    function _debtContextQueueEmpty() internal view returns (bool) {
+        return debtContextHead == debtContextTail;
     }
 
     function _setRecipientLifecycleSubscriptions(address recipient, bool shouldSubscribe) internal {

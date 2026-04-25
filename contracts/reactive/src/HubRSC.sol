@@ -52,8 +52,6 @@ contract HubRSC is HubRSCDispatch {
         _syncRecipientActivation(recipient);
         if (recipientActive[recipient]) {
             _recordLifecycleDebtContext(recipient);
-        } else {
-            _clearDebtContext();
         }
         _coverObservedDebtIfFunded();
     }
@@ -68,8 +66,6 @@ contract HubRSC is HubRSCDispatch {
         _syncRecipientActivation(recipient);
         if (recipientActive[recipient]) {
             _recordLifecycleDebtContext(recipient);
-        } else {
-            _clearDebtContext();
         }
         _coverObservedDebtIfFunded();
     }
@@ -158,8 +154,6 @@ contract HubRSC is HubRSCDispatch {
             _handleSettlementFailed(log);
             return;
         }
-
-        _clearDebtContext();
     }
 
     /// @notice Queue size accessor.
