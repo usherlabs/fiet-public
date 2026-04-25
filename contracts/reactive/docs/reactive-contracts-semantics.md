@@ -19,7 +19,7 @@ The design solves three core problems:
 - **HubRSC**: Central aggregator that:
   - Registers recipients explicitly and activates recipient-scoped exact-match subscriptions only while `recipientBalance` is positive
   - Listens directly to authoritative protocol-chain `SettlementQueued`, `SettlementProcessed`, `SettlementAnnulled`, `SettlementSucceeded`, and `SettlementFailed` events for active recipients
-  - Allocates newly observed Reactive system debt to the previous lifecycle recipient or previous dispatch batch recipients
+  - Appends lifecycle and dispatch debt contexts to an indexed FIFO and allocates newly observed Reactive system debt to the FIFO head
   - Deactivates and unsubscribes recipients whose balance is not positive until top-up
   - Maintains per-recipient and per-LCC pending queues
   - Deduplicates reports using log identity
@@ -72,7 +72,7 @@ struct DispatchState {
 3. HubRSC observes that protocol-chain log directly only if the recipient is registered, active, and has a positive balance
 4. HubRSC:
    - Deduplicates using log identity
-   - Records the recipient as the lifecycle debt context for the next observed system-debt delta
+   - Appends the recipient as the next lifecycle debt context in the FIFO
    - Creates or increases `Pending` entry
    - Enqueues key in appropriate queues (LCC + underlying if registered)
    - Applies any buffered authoritative decreases
@@ -88,7 +88,7 @@ When `LiquidityAvailable(lcc, amount)` is received:
 3. Scan up to `maxDispatchItems` entries from current cursor
 4. Skip fully reserved, retry-blocked, terminally quarantined, inactive-recipient, non-positive-balance recipient, or non-matching entries
 5. Build batch of dispatchable settlements
-6. Record the batch recipients as the dispatch debt context; the next observed system-debt delta is split across them
+6. Append the batch recipients as the next dispatch debt context in the FIFO; a later observed system-debt delta is split across that context when it reaches the FIFO head
 7. If batch is empty but liquidity remains:
    - Use `_handleZeroBatchRetry` (see below)
 8. Otherwise emit `DispatchRequested` and callback to destination receiver
@@ -139,18 +139,19 @@ if (credits == 0 && bootstrapZeroBatchRetry) {
 ### Deduplication
 - `processedReport[keccak256(chain, contract, txHash, logIndex)]`
 - Prevents double-processing of the same authoritative log identity across queue intake, liquidity wakes, and receiver outcomes
-- Matching lifecycle debt context is recorded after log deduplication, so duplicate redelivery does not allocate a second recipient debt context.
+- Matching lifecycle debt context is appended after log deduplication, so duplicate redelivery does not allocate a second recipient debt context or clear already deferred contexts.
 
 ### Recipient Balance And Debt Attribution
 - `recipientBalance[recipient]` is signed native-token accounting for HubRSC service funding.
 - Payable `registerRecipient` and `fundRecipient` credit recipient balances.
 - HubRSC observes actual Reactive service cost through `debt(address(this))`.
-- Because same-transaction debt attribution is not exposed by `reactive-lib`, HubRSC uses deferred attribution: each safe boundary first allocates any newly observed debt to the previous recorded work context.
-- Lifecycle contexts allocate all observed debt to one recipient.
-- Dispatch contexts split observed debt across the prior batch recipients.
-- If no context exists, HubRSC emits `UnallocatedDebtObserved` and leaves recipient balances unchanged.
+- Because same-transaction debt attribution is not exposed by `reactive-lib`, HubRSC uses deferred attribution: every recorded lifecycle or dispatch context appends to an indexed FIFO and remains there until charged.
+- Ignored, duplicate, wrong-chain, and other non-billable paths do not clear deferred contexts, and zero-delta syncs do not advance the FIFO.
+- Lifecycle contexts allocate all observed debt to one recipient when they reach the FIFO head.
+- Dispatch contexts split observed debt across the batch recipients when they reach the FIFO head.
+- A positive observed debt delta allocates to the FIFO head, clears/deletes that indexed context, and increments the head. If no context exists, HubRSC emits `UnallocatedDebtObserved` and leaves recipient balances unchanged.
 - Non-positive balances deactivate/unsubscribe the recipient path until payable `fundRecipient` makes the balance positive again.
-- See [`recipient-payment-model.md`](recipient-payment-model.md) for the full payment model and `pendingDebtContext` lifecycle.
+- See [`recipient-payment-model.md`](recipient-payment-model.md) for the full indexed FIFO debt-context attribution model.
 
 ### Buffering
 - `bufferedProcessedDecreaseByKey` and `bufferedAnnulledDecreaseByKey`
