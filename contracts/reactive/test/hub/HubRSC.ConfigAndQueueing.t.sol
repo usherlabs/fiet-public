@@ -17,47 +17,25 @@ contract HubRSCConfigAndQueueingTest is HubRSCTestBase {
         bytes4 invalidConfigSelector = bytes4(keccak256("InvalidConfig()"));
 
         vm.expectRevert(abi.encodeWithSelector(invalidConfigSelector));
+        new HubRSC(DEFAULT_MAX_DISPATCH_ITEMS, 0, destinationChainId, liquidityHub, destinationReceiverContract);
+
+        vm.expectRevert(abi.encodeWithSelector(invalidConfigSelector));
+        new HubRSC(DEFAULT_MAX_DISPATCH_ITEMS, originChainId, 0, liquidityHub, destinationReceiverContract);
+
+        vm.expectRevert(abi.encodeWithSelector(invalidConfigSelector));
         new HubRSC(
-            DEFAULT_MAX_DISPATCH_ITEMS, 0, destinationChainId, liquidityHub, hubCallback, destinationReceiverContract
+            DEFAULT_MAX_DISPATCH_ITEMS, originChainId, destinationChainId, address(0), destinationReceiverContract
         );
 
         vm.expectRevert(abi.encodeWithSelector(invalidConfigSelector));
-        new HubRSC(DEFAULT_MAX_DISPATCH_ITEMS, originChainId, 0, liquidityHub, hubCallback, destinationReceiverContract);
+        new HubRSC(DEFAULT_MAX_DISPATCH_ITEMS, originChainId, destinationChainId, liquidityHub, address(0));
+
+        vm.expectRevert(abi.encodeWithSelector(invalidConfigSelector));
+        new HubRSC(0, originChainId, destinationChainId, liquidityHub, destinationReceiverContract);
 
         vm.expectRevert(abi.encodeWithSelector(invalidConfigSelector));
         new HubRSC(
-            DEFAULT_MAX_DISPATCH_ITEMS,
-            originChainId,
-            destinationChainId,
-            address(0),
-            hubCallback,
-            destinationReceiverContract
-        );
-
-        vm.expectRevert(abi.encodeWithSelector(invalidConfigSelector));
-        new HubRSC(
-            DEFAULT_MAX_DISPATCH_ITEMS,
-            originChainId,
-            destinationChainId,
-            liquidityHub,
-            address(0),
-            destinationReceiverContract
-        );
-
-        vm.expectRevert(abi.encodeWithSelector(invalidConfigSelector));
-        new HubRSC(DEFAULT_MAX_DISPATCH_ITEMS, originChainId, destinationChainId, liquidityHub, hubCallback, address(0));
-
-        vm.expectRevert(abi.encodeWithSelector(invalidConfigSelector));
-        new HubRSC(0, originChainId, destinationChainId, liquidityHub, hubCallback, destinationReceiverContract);
-
-        vm.expectRevert(abi.encodeWithSelector(invalidConfigSelector));
-        new HubRSC(
-            RECEIVER_BATCH_SIZE_CAP + 1,
-            originChainId,
-            destinationChainId,
-            liquidityHub,
-            hubCallback,
-            destinationReceiverContract
+            RECEIVER_BATCH_SIZE_CAP + 1, originChainId, destinationChainId, liquidityHub, destinationReceiverContract
         );
     }
 
@@ -65,12 +43,7 @@ contract HubRSCConfigAndQueueingTest is HubRSCTestBase {
     function test_aggregatesPendingFromSettlementReported() public {
         _clearSystemContract();
         HubRSC hub = new HubRSC(
-            DEFAULT_MAX_DISPATCH_ITEMS,
-            originChainId,
-            destinationChainId,
-            liquidityHub,
-            hubCallback,
-            destinationReceiverContract
+            DEFAULT_MAX_DISPATCH_ITEMS, originChainId, destinationChainId, liquidityHub, destinationReceiverContract
         );
 
         address recipient = makeAddr("recipient");
@@ -91,9 +64,8 @@ contract HubRSCConfigAndQueueingTest is HubRSCTestBase {
 
         MockLiquidityHub liq = new MockLiquidityHub();
         MockSettlementReceiver receiver = new MockSettlementReceiver(address(liq));
-        HubRSC hub = new HubRSC(
-            DEFAULT_MAX_DISPATCH_ITEMS, originChainId, destinationChainId, address(liq), hubCallback, address(receiver)
-        );
+        HubRSC hub =
+            new HubRSC(DEFAULT_MAX_DISPATCH_ITEMS, originChainId, destinationChainId, address(liq), address(receiver));
 
         address underlying = makeAddr("underlying");
         address lcc = makeAddr("lcc");
@@ -125,12 +97,7 @@ contract HubRSCConfigAndQueueingTest is HubRSCTestBase {
     function test_ignoresDuplicateSettlementReportedLog() public {
         _clearSystemContract();
         HubRSC hub = new HubRSC(
-            DEFAULT_MAX_DISPATCH_ITEMS,
-            originChainId,
-            destinationChainId,
-            liquidityHub,
-            hubCallback,
-            destinationReceiverContract
+            DEFAULT_MAX_DISPATCH_ITEMS, originChainId, destinationChainId, liquidityHub, destinationReceiverContract
         );
 
         address recipient = makeAddr("recipient");
@@ -151,12 +118,7 @@ contract HubRSCConfigAndQueueingTest is HubRSCTestBase {
     function test_ignoresZeroAmountSettlementReported() public {
         _clearSystemContract();
         HubRSC hub = new HubRSC(
-            DEFAULT_MAX_DISPATCH_ITEMS,
-            originChainId,
-            destinationChainId,
-            liquidityHub,
-            hubCallback,
-            destinationReceiverContract
+            DEFAULT_MAX_DISPATCH_ITEMS, originChainId, destinationChainId, liquidityHub, destinationReceiverContract
         );
 
         address recipient = makeAddr("recipient");
@@ -172,12 +134,7 @@ contract HubRSCConfigAndQueueingTest is HubRSCTestBase {
     function test_acceptsLowerNonceWhenLogIdentityIsNew() public {
         _clearSystemContract();
         HubRSC hub = new HubRSC(
-            DEFAULT_MAX_DISPATCH_ITEMS,
-            originChainId,
-            destinationChainId,
-            liquidityHub,
-            hubCallback,
-            destinationReceiverContract
+            DEFAULT_MAX_DISPATCH_ITEMS, originChainId, destinationChainId, liquidityHub, destinationReceiverContract
         );
 
         address recipient = makeAddr("recipient");

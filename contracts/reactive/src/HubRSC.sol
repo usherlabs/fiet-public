@@ -12,18 +12,10 @@ contract HubRSC is HubRSCDispatch {
         uint256 _protocolChainId,
         uint256 _reactChainId,
         address _liquidityHub,
-        address _hubCallback,
         address _destinationReceiverContract
     )
         payable
-        HubRSCStorage(
-            _maxDispatchItems,
-            _protocolChainId,
-            _reactChainId,
-            _liquidityHub,
-            _hubCallback,
-            _destinationReceiverContract
-        )
+        HubRSCStorage(_maxDispatchItems, _protocolChainId, _reactChainId, _liquidityHub, _destinationReceiverContract)
     {
         if (!vm) {
             service.subscribe(
@@ -38,54 +30,58 @@ contract HubRSC is HubRSCDispatch {
                 REACTIVE_IGNORE
             );
             service.subscribe(
-                protocolChainId,
-                liquidityHub,
-                SETTLEMENT_QUEUED_TOPIC,
-                REACTIVE_IGNORE,
-                REACTIVE_IGNORE,
-                REACTIVE_IGNORE
-            );
-            service.subscribe(
-                protocolChainId,
-                liquidityHub,
-                SETTLEMENT_ANNULLED_TOPIC,
-                REACTIVE_IGNORE,
-                REACTIVE_IGNORE,
-                REACTIVE_IGNORE
-            );
-            service.subscribe(
-                protocolChainId,
-                liquidityHub,
-                SETTLEMENT_PROCESSED_TOPIC,
-                REACTIVE_IGNORE,
-                REACTIVE_IGNORE,
-                REACTIVE_IGNORE
-            );
-            service.subscribe(
                 reactChainId,
-                hubCallback,
+                address(this),
                 MORE_LIQUIDITY_AVAILABLE_TOPIC,
                 REACTIVE_IGNORE,
                 REACTIVE_IGNORE,
                 REACTIVE_IGNORE
             );
-            service.subscribe(
-                protocolChainId,
-                destinationReceiverContract,
-                SETTLEMENT_SUCCEEDED_TOPIC,
-                REACTIVE_IGNORE,
-                REACTIVE_IGNORE,
-                REACTIVE_IGNORE
-            );
-            service.subscribe(
-                protocolChainId,
-                destinationReceiverContract,
-                SETTLEMENT_FAILED_TOPIC,
-                REACTIVE_IGNORE,
-                REACTIVE_IGNORE,
-                REACTIVE_IGNORE
-            );
         }
+    }
+
+    /// @notice Explicitly registers a recipient and optionally funds immediate activation with native value.
+    function registerRecipient(address recipient) external payable {
+        _syncObservedSystemDebt();
+        if (recipient == address(0)) revert InvalidRecipient();
+        if (recipientRegistered[recipient]) revert RecipientAlreadyRegistered(recipient);
+
+        recipientRegistered[recipient] = true;
+        emit RecipientRegistered(recipient, msg.value, recipientBalance[recipient] + int256(msg.value));
+        _creditRecipientDeposit(recipient, msg.value);
+        _syncRecipientActivation(recipient);
+        if (recipientActive[recipient]) {
+            _recordLifecycleDebtContext(recipient);
+        } else {
+            _clearDebtContext();
+        }
+        _coverObservedDebtIfFunded();
+    }
+
+    /// @notice Tops up a registered recipient with native value and reactivates when the balance is positive.
+    function fundRecipient(address recipient) external payable {
+        _syncObservedSystemDebt();
+        if (!recipientRegistered[recipient]) revert RecipientNotRegistered(recipient);
+        if (msg.value == 0) return;
+
+        _creditRecipientDeposit(recipient, msg.value);
+        _syncRecipientActivation(recipient);
+        if (recipientActive[recipient]) {
+            _recordLifecycleDebtContext(recipient);
+        } else {
+            _clearDebtContext();
+        }
+        _coverObservedDebtIfFunded();
+    }
+
+    /// @notice Allocates newly observed Reactive system debt to the previous work context and pays what it can.
+    function syncSystemDebt() external {
+        _syncObservedSystemDebt();
+    }
+
+    /// @notice Computes the HubRSC pending-state key for an LCC/recipient pair.
+    function computeKey(address lcc, address recipient) external pure returns (bytes32) {
+        return _computeKey(lcc, recipient);
     }
 
     /// @notice Returns the released-success and early-processed ordering state held on a pending key.
@@ -122,6 +118,7 @@ contract HubRSC is HubRSCDispatch {
 
     /// @notice React to origin chain logs (ReactVM only).
     function react(IReactive.LogRecord calldata log) external vmOnly {
+        _syncObservedSystemDebt();
         if (log.topic_0 == LCC_CREATED_TOPIC) {
             _handleLccCreated(log);
             return;
@@ -161,6 +158,8 @@ contract HubRSC is HubRSCDispatch {
             _handleSettlementFailed(log);
             return;
         }
+
+        _clearDebtContext();
     }
 
     /// @notice Queue size accessor.

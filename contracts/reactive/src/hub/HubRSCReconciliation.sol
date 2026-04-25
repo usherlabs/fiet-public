@@ -11,26 +11,41 @@ abstract contract HubRSCReconciliation is HubRSCRouting {
 
     /// @notice Reconciles pending amount from authoritative LiquidityHub settlement processing.
     function _handleSettlementProcessed(IReactive.LogRecord calldata log) internal {
-        if (log.chain_id != protocolChainId || log._contract != liquidityHub) return;
-        if (!_markLogProcessed(log)) return;
+        if (log.chain_id != protocolChainId || log._contract != liquidityHub) {
+            _clearDebtContext();
+            return;
+        }
+        if (!_markLogProcessed(log)) {
+            _clearDebtContext();
+            return;
+        }
 
         address lcc = address(uint160(log.topic_1));
         address recipient = address(uint160(log.topic_2));
+        bytes32 key = _computeKey(lcc, recipient);
+        if (!_acceptMatchingRecipientEventOrTrackedKey(recipient, key)) return;
         (uint256 settledAmount, uint256 requestedAmount) = abi.decode(log.data, (uint256, uint256));
 
-        _reconcileProcessedRequestedAmount(_computeKey(lcc, recipient), requestedAmount);
+        _reconcileProcessedRequestedAmount(key, requestedAmount);
         _applyAuthoritativeDecreaseOrBuffer(lcc, recipient, settledAmount, 0, true);
         _dispatchLiquidityIfBudgetAvailable(lcc, true);
     }
 
     /// @notice Releases trusted in-flight amount for completed destination settlements.
     function _handleSettlementSucceeded(IReactive.LogRecord calldata log) internal {
-        if (log.chain_id != protocolChainId || log._contract != destinationReceiverContract) return;
-        if (!_markLogProcessed(log)) return;
+        if (log.chain_id != protocolChainId || log._contract != destinationReceiverContract) {
+            _clearDebtContext();
+            return;
+        }
+        if (!_markLogProcessed(log)) {
+            _clearDebtContext();
+            return;
+        }
 
         address lcc = address(uint160(log.topic_1));
         address recipient = address(uint160(log.topic_2));
         (uint256 succeededAmount, uint256 attemptId) = abi.decode(log.data, (uint256, uint256));
+        if (!_acceptMatchingRecipientEventOrTrackedAttempt(recipient, lcc, attemptId)) return;
         if (succeededAmount == 0) return;
 
         uint256 releasedAmount = _releaseInFlightReservation(attemptId, lcc, recipient, false);
@@ -40,11 +55,18 @@ abstract contract HubRSCReconciliation is HubRSCRouting {
 
     /// @notice Reconciles pending amount from authoritative LiquidityHub queue annulments.
     function _handleSettlementAnnulled(IReactive.LogRecord calldata log) internal {
-        if (log.chain_id != protocolChainId || log._contract != liquidityHub) return;
-        if (!_markLogProcessed(log)) return;
+        if (log.chain_id != protocolChainId || log._contract != liquidityHub) {
+            _clearDebtContext();
+            return;
+        }
+        if (!_markLogProcessed(log)) {
+            _clearDebtContext();
+            return;
+        }
 
         address lcc = address(uint160(log.topic_1));
         address recipient = address(uint160(log.topic_2));
+        if (!_acceptMatchingRecipientEventOrTrackedKey(recipient, _computeKey(lcc, recipient))) return;
         uint256 annulledAmount = abi.decode(log.data, (uint256));
 
         _applyAuthoritativeDecreaseOrBuffer(lcc, recipient, annulledAmount, 0, false);
@@ -52,13 +74,20 @@ abstract contract HubRSCReconciliation is HubRSCRouting {
 
     /// @notice Releases reserved in-flight amount for failed destination settlements.
     function _handleSettlementFailed(IReactive.LogRecord calldata log) internal {
-        if (log.chain_id != protocolChainId || log._contract != destinationReceiverContract) return;
-        if (!_markLogProcessed(log)) return;
+        if (log.chain_id != protocolChainId || log._contract != destinationReceiverContract) {
+            _clearDebtContext();
+            return;
+        }
+        if (!_markLogProcessed(log)) {
+            _clearDebtContext();
+            return;
+        }
 
         address lcc = address(uint160(log.topic_1));
         address recipient = address(uint160(log.topic_2));
         (uint256 failedAmount, uint256 attemptId, bytes memory revertData) =
             abi.decode(log.data, (uint256, uint256, bytes));
+        if (!_acceptMatchingRecipientEventOrTrackedAttempt(recipient, lcc, attemptId)) return;
         bytes4 failureSelector = SettlementFailureLib.selectorFromRevertData(revertData);
         uint8 failureClass = SettlementFailureLib.classify(failureSelector);
         if (failedAmount == 0) return;

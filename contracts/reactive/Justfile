@@ -38,14 +38,8 @@ deploy-reactive-hub:
 deploy-hub:
     @just deploy-reactive-hub
 
-deploy-spoke recipient:
-    bash scripts/deployreactivespoke.sh {{ recipient }}
-
 e2e:
     bash test/e2e.sh
-
-whitelistspokeforrecipient:
-    forge script scripts/WhitelistSpokeForRecipient.s.sol:WhitelistSpokeForRecipient --rpc-url {{ reactive_rpc }} {{ broadcast_flag }}
 
 fund-contract contract_addr amount_wei:
     bash scripts/fundcontract.sh {{ contract_addr }} {{ amount_wei }}
