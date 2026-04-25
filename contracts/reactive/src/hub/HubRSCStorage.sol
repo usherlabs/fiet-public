@@ -366,10 +366,18 @@ abstract contract HubRSCStorage is AbstractReactive {
     }
 
     function _clearDebtContext() internal {
-        _clearDebtContext(pendingDebtContext);
-        _clearDebtContext(queuedDebtContext);
-        pendingDebtContextProtected = false;
-        queuedDebtContextProtected = false;
+        if (!pendingDebtContextProtected) {
+            _clearDebtContext(pendingDebtContext);
+        }
+        if (!queuedDebtContextProtected) {
+            _clearDebtContext(queuedDebtContext);
+        }
+        if (pendingDebtContext.totalWeight == 0) {
+            pendingDebtContextProtected = false;
+        }
+        if (queuedDebtContext.totalWeight == 0) {
+            queuedDebtContextProtected = false;
+        }
     }
 
     function _clearDebtContext(DebtContext storage context) internal {
