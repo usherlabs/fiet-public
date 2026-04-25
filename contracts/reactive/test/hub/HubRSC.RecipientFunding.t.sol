@@ -58,6 +58,18 @@ contract HubRSCRecipientFundingTest is HubRSCTestBase {
         assertTrue(hub.recipientActive(recipient));
     }
 
+    function test_computeKeyExposesPendingKeyDerivation() public {
+        _clearSystemContract();
+        HubRSC hub = new HubRSC(
+            DEFAULT_MAX_DISPATCH_ITEMS, originChainId, destinationChainId, liquidityHub, destinationReceiverContract
+        );
+
+        address lcc = makeAddr("lcc");
+        address recipient = makeAddr("recipient");
+
+        assertEq(hub.computeKey(lcc, recipient), _computeKey(lcc, recipient));
+    }
+
     function test_duplicateMatchingEventDoesNotDebitTwice() public {
         _clearSystemContract();
         HubRSC hub = new HubRSC(
@@ -131,14 +143,105 @@ contract HubRSCRecipientFundingTest is HubRSCTestBase {
         assertFalse(hub.recipientActive(recipient));
     }
 
-    function test_selfContinuationDoesNotDependOnHubCallbackRuntime() public {
+    function test_depletionOnDispatchStillAcceptsSuccessAndProcessedReconciliation() public {
+        _clearSystemContract();
+        HubRSC hub = new HubRSC(
+            DEFAULT_MAX_DISPATCH_ITEMS, originChainId, destinationChainId, liquidityHub, destinationReceiverContract
+        );
+
+        address lcc = makeAddr("lcc");
+        address recipient = makeAddr("recipient");
+        bytes32 key = _computeKey(lcc, recipient);
+
+        hub.registerRecipient(recipient, 2);
+        hub.react(_rawProtocolSettlementQueuedLog(hub, lcc, recipient, 50, 0xB061, 1));
+
+        vm.recordLogs();
+        hub.react(liquidityAvailableLog(hub.liquidityHub(), lcc, 50, bytes32("mkt"), 0xB062, 2));
+        Vm.Log[] memory entries = vm.getRecordedLogs();
+
+        (,,,, uint256[] memory attemptIds) = _decodeProcessSettlementsPayload(entries);
+        assertEq(hub.recipientFundingUnits(recipient), 0);
+        assertFalse(hub.recipientActive(recipient));
+        assertEq(hub.inFlightByKey(key), 50);
+
+        hub.react(_rawSettlementSucceededLog(hub, lcc, recipient, 50, attemptIds[0], 0xB063, 3));
+
+        assertEq(hub.inFlightByKey(key), 0);
+        (uint256 awaitingProcessed,) = hub.reconciliationStateByKey(key);
+        assertEq(awaitingProcessed, 50);
+
+        hub.react(_rawSettlementProcessedLogWithRequested(hub, lcc, recipient, 50, 50, 0xB064, 4));
+
+        (, bool exists) = hub.pendingStateByKey(key);
+        assertFalse(exists);
+        assertEq(hub.inFlightByKey(key), 0);
+
+        hub.fundRecipient(recipient, 2);
+        assertTrue(hub.recipientActive(recipient));
+
+        hub.react(_rawProtocolSettlementQueuedLog(hub, lcc, recipient, 25, 0xB065, 5));
+        assertEq(hub.recipientFundingUnits(recipient), 1);
+
+        vm.recordLogs();
+        hub.react(liquidityAvailableLog(hub.liquidityHub(), lcc, 25, bytes32("mkt"), 0xB066, 6));
+        entries = vm.getRecordedLogs();
+
+        _assertDispatchedLength(entries, 1);
+        assertEq(hub.inFlightByKey(key), 25);
+        assertEq(hub.recipientFundingUnits(recipient), 0);
+        assertFalse(hub.recipientActive(recipient));
+    }
+
+    function test_depletionOnDispatchStillAcceptsFailureAndTopUpRedispatches() public {
+        _clearSystemContract();
+        HubRSC hub = new HubRSC(
+            DEFAULT_MAX_DISPATCH_ITEMS, originChainId, destinationChainId, liquidityHub, destinationReceiverContract
+        );
+
+        address lcc = makeAddr("lcc");
+        address recipient = makeAddr("recipient");
+        bytes32 key = _computeKey(lcc, recipient);
+
+        hub.registerRecipient(recipient, 2);
+        hub.react(_rawProtocolSettlementQueuedLog(hub, lcc, recipient, 50, 0xB071, 1));
+
+        vm.recordLogs();
+        hub.react(liquidityAvailableLog(hub.liquidityHub(), lcc, 50, bytes32("mkt"), 0xB072, 2));
+        Vm.Log[] memory entries = vm.getRecordedLogs();
+
+        (,,,, uint256[] memory attemptIds) = _decodeProcessSettlementsPayload(entries);
+        assertEq(hub.recipientFundingUnits(recipient), 0);
+        assertFalse(hub.recipientActive(recipient));
+        assertEq(hub.inFlightByKey(key), 50);
+
+        hub.react(_rawSettlementFailedLog(hub, lcc, recipient, 50, attemptIds[0], bytes4(0), 0xB073, 3));
+
+        assertEq(hub.inFlightByKey(key), 0);
+        (, bool retryActive) = hub.retryBlockStateByKey(key, lcc);
+        assertTrue(retryActive);
+
+        hub.fundRecipient(recipient, 1);
+        assertTrue(hub.recipientActive(recipient));
+
+        vm.recordLogs();
+        hub.react(liquidityAvailableLog(hub.liquidityHub(), lcc, 50, bytes32("mkt"), 0xB074, 4));
+        entries = vm.getRecordedLogs();
+
+        _assertDispatchedLength(entries, 1);
+        assertEq(hub.inFlightByKey(key), 50);
+        assertEq(hub.recipientFundingUnits(recipient), 0);
+        assertFalse(hub.recipientActive(recipient));
+    }
+
+    function test_selfContinuationIgnoresLegacyExternalContinuationOrigin() public {
         _clearSystemContract();
         HubRSC hub = new HubRSC(1, originChainId, destinationChainId, liquidityHub, destinationReceiverContract);
 
         address lcc = makeAddr("lcc");
         address recipient1 = makeAddr("recipient1");
         address recipient2 = makeAddr("recipient2");
-        address legacyHubCallback = makeAddr("legacyHubCallback");
+        address legacyContinuationOrigin = makeAddr("legacyContinuationOrigin");
 
         hub.registerRecipient(recipient1, 10);
         hub.registerRecipient(recipient2, 10);
@@ -156,7 +259,7 @@ contract HubRSCRecipientFundingTest is HubRSCTestBase {
         assertEq(remaining, 10);
 
         IReactive.LogRecord memory legacyContinuation = _moreLiquidityAvailableLog(hub, lcc, remaining, 0xB054, 4);
-        legacyContinuation._contract = legacyHubCallback;
+        legacyContinuation._contract = legacyContinuationOrigin;
 
         vm.recordLogs();
         hub.react(legacyContinuation);
@@ -167,5 +270,81 @@ contract HubRSCRecipientFundingTest is HubRSCTestBase {
         Vm.Log[] memory secondEntries = vm.getRecordedLogs();
 
         _assertDispatchedLength(secondEntries, 1);
+    }
+
+    function _rawSettlementProcessedLogWithRequested(
+        HubRSC hub,
+        address lcc,
+        address recipient,
+        uint256 settledAmount,
+        uint256 requestedAmount,
+        uint256 txHash,
+        uint256 logIndex
+    ) private view returns (IReactive.LogRecord memory) {
+        return IReactive.LogRecord({
+            chain_id: hub.protocolChainId(),
+            _contract: hub.liquidityHub(),
+            topic_0: hub.SETTLEMENT_PROCESSED_TOPIC(),
+            topic_1: uint256(uint160(lcc)),
+            topic_2: uint256(uint160(recipient)),
+            topic_3: 0,
+            data: abi.encode(settledAmount, requestedAmount),
+            block_number: 0,
+            op_code: 0,
+            block_hash: 0,
+            tx_hash: txHash,
+            log_index: logIndex
+        });
+    }
+
+    function _rawSettlementSucceededLog(
+        HubRSC hub,
+        address lcc,
+        address recipient,
+        uint256 maxAmount,
+        uint256 attemptId,
+        uint256 txHash,
+        uint256 logIndex
+    ) private view returns (IReactive.LogRecord memory) {
+        return IReactive.LogRecord({
+            chain_id: hub.protocolChainId(),
+            _contract: hub.destinationReceiverContract(),
+            topic_0: hub.SETTLEMENT_SUCCEEDED_TOPIC(),
+            topic_1: uint256(uint160(lcc)),
+            topic_2: uint256(uint160(recipient)),
+            topic_3: 0,
+            data: abi.encode(maxAmount, attemptId),
+            block_number: 0,
+            op_code: 0,
+            block_hash: 0,
+            tx_hash: txHash,
+            log_index: logIndex
+        });
+    }
+
+    function _rawSettlementFailedLog(
+        HubRSC hub,
+        address lcc,
+        address recipient,
+        uint256 maxAmount,
+        uint256 attemptId,
+        bytes4 failureSelector,
+        uint256 txHash,
+        uint256 logIndex
+    ) private view returns (IReactive.LogRecord memory) {
+        return IReactive.LogRecord({
+            chain_id: hub.protocolChainId(),
+            _contract: hub.destinationReceiverContract(),
+            topic_0: hub.SETTLEMENT_FAILED_TOPIC(),
+            topic_1: uint256(uint160(lcc)),
+            topic_2: uint256(uint160(recipient)),
+            topic_3: 0,
+            data: abi.encode(maxAmount, attemptId, abi.encodePacked(failureSelector)),
+            block_number: 0,
+            op_code: 0,
+            block_hash: 0,
+            tx_hash: txHash,
+            log_index: logIndex
+        });
     }
 }

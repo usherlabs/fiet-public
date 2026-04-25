@@ -31,8 +31,8 @@ DEPLOYER_PRIVATE_KEY="${PRIVATE_KEY:-}"
 
 # Hub RVM id is the deployer address for this deployment flow.
 DEPLOYER_ADDRESS="$(cast wallet address --private-key "$DEPLOYER_PRIVATE_KEY")"
-RVM_ID="$DEPLOYER_ADDRESS"
-export RVM_ID
+HUB_RVM_ID="$DEPLOYER_ADDRESS"
+export HUB_RVM_ID
 
 # Optional prefunding value for hub deployment.
 HUB_RSC_VALUE="${HUB_RSC_VALUE:-1ether}"
@@ -46,7 +46,7 @@ echo "  REACTIVE_CHAIN_ID=$REACTIVE_CHAIN_ID"
 echo "  LIQUIDITY_HUB=$LIQUIDITY_HUB"
 echo "  BATCH_RECEIVER=$BATCH_RECEIVER"
 echo "  HUB_RSC_VALUE=$HUB_RSC_VALUE"
-echo "  RVM_ID=$RVM_ID"
+echo "  HUB_RVM_ID=$HUB_RVM_ID"
 echo "  BATCH_SIZE=${BATCH_SIZE:-20}"
 
 hub_rsc_output="$(
@@ -77,5 +77,5 @@ fi
 # using the format contract_name:address
 # that way it can be parsed from the stdout of the script execution
 echo "========================================"
-echo "RVM_ID:     $RVM_ID"
+echo "HUB_RVM_ID: $HUB_RVM_ID"
 echo "HubRSC:      $HUB_RSC"

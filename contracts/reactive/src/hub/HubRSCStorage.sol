@@ -231,6 +231,27 @@ abstract contract HubRSCStorage is AbstractReactive {
         return _debitRecipientFunding(recipient, PROCESSING_DEBIT_UNITS);
     }
 
+    function _chargeMatchingRecipientEventOrTrackedKey(address recipient, bytes32 key) internal returns (bool) {
+        if (_chargeMatchingRecipientEvent(recipient)) return true;
+        return _hasTrackedRecipientKey(key);
+    }
+
+    function _chargeMatchingRecipientEventOrTrackedAttempt(address recipient, address lcc, uint256 attemptId)
+        internal
+        returns (bool)
+    {
+        if (_chargeMatchingRecipientEvent(recipient)) return true;
+        AttemptReservation storage reservation = _attemptReservationById[attemptId];
+        return reservation.lcc == lcc && reservation.recipient == recipient && reservation.amount > 0;
+    }
+
+    function _hasTrackedRecipientKey(bytes32 key) internal view returns (bool) {
+        BufferedProcessedSettlement storage bufferedProcessed = bufferedProcessedDecreaseByKey[key];
+        return pending[key].exists || inFlightByKey[key] > 0 || _completedAwaitingProcessedByKey[key] > 0
+            || _processedRequestedCreditByKey[key] > 0 || bufferedProcessed.settledAmount > 0
+            || bufferedProcessed.inflightAmountToReduce > 0 || bufferedAnnulledDecreaseByKey[key] > 0;
+    }
+
     function _debitRecipientFunding(address recipient, uint256 debitUnits) internal returns (bool) {
         if (!recipientRegistered[recipient] || !recipientActive[recipient]) return false;
 
