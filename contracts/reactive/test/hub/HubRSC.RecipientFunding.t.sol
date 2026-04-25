@@ -378,6 +378,106 @@ contract HubRSCRecipientFundingTest is HubRSCTestBase {
         assertEq(system.debt(address(hub)), 0);
     }
 
+    function test_queuedDeferredDebtContextsSurviveIgnoredAndDuplicateLogsBeforePromotion() public {
+        (HubRSC hub, MockSystemContract system) = _deployHubWithDebtMock();
+        address lcc = makeAddr("lcc");
+        address recipient1 = makeAddr("recipient1");
+        address recipient2 = makeAddr("recipient2");
+        IReactive.LogRecord memory firstQueued = _rawProtocolSettlementQueuedLog(hub, lcc, recipient1, 1, 0xB060, 1);
+        IReactive.LogRecord memory secondQueued = _rawProtocolSettlementQueuedLog(hub, lcc, recipient2, 1, 0xB061, 3);
+
+        hub.registerRecipient{value: 100}(recipient1);
+        hub.registerRecipient{value: 100}(recipient2);
+        hub.react(firstQueued);
+
+        vm.recordLogs();
+        hub.react(liquidityAvailableLog(hub.liquidityHub(), lcc, 1, bytes32("mkt"), 0xB062, 2));
+        Vm.Log[] memory entries = vm.getRecordedLogs();
+        _assertDispatchedLength(entries, 1);
+
+        hub.react(secondQueued);
+
+        vm.recordLogs();
+        hub.react(liquidityAvailableLog(hub.liquidityHub(), lcc, 1, bytes32("mkt"), 0xB063, 4));
+        entries = vm.getRecordedLogs();
+        _assertDispatchedLength(entries, 1);
+
+        hub.react(
+            IReactive.LogRecord({
+                chain_id: hub.protocolChainId(),
+                _contract: hub.liquidityHub(),
+                topic_0: 0xDEAD,
+                topic_1: 0,
+                topic_2: 0,
+                topic_3: 0,
+                data: "",
+                block_number: 0,
+                op_code: 0,
+                block_hash: 0,
+                tx_hash: 0xB064,
+                log_index: 5
+            })
+        );
+        hub.react(secondQueued);
+
+        _setDebtAndSync(hub, system, 4);
+
+        assertEq(hub.recipientBalance(recipient1), 96);
+        assertEq(hub.recipientBalance(recipient2), 100);
+
+        _setDebtAndSync(hub, system, 6);
+
+        assertEq(hub.recipientBalance(recipient1), 96);
+        assertEq(hub.recipientBalance(recipient2), 94);
+        assertEq(system.debt(address(hub)), 0);
+    }
+
+    function test_zeroDeltaSyncSystemDebtDoesNotAdvanceOrClearDeferredDebtContexts() public {
+        (HubRSC hub, MockSystemContract system) = _deployHubWithDebtMock();
+        address lcc = makeAddr("lcc");
+        address recipient1 = makeAddr("recipient1");
+        address recipient2 = makeAddr("recipient2");
+
+        hub.registerRecipient{value: 100}(recipient1);
+        hub.registerRecipient{value: 100}(recipient2);
+        hub.react(_rawProtocolSettlementQueuedLog(hub, lcc, recipient1, 1, 0xB06A, 1));
+
+        vm.recordLogs();
+        hub.react(liquidityAvailableLog(hub.liquidityHub(), lcc, 1, bytes32("mkt"), 0xB06B, 2));
+        Vm.Log[] memory entries = vm.getRecordedLogs();
+        _assertDispatchedLength(entries, 1);
+
+        hub.react(_rawProtocolSettlementQueuedLog(hub, lcc, recipient2, 1, 0xB06C, 3));
+
+        vm.recordLogs();
+        hub.react(liquidityAvailableLog(hub.liquidityHub(), lcc, 1, bytes32("mkt"), 0xB06D, 4));
+        entries = vm.getRecordedLogs();
+        _assertDispatchedLength(entries, 1);
+
+        hub.syncSystemDebt();
+        hub.syncSystemDebt();
+
+        assertEq(hub.recipientBalance(recipient1), 100);
+        assertEq(hub.recipientBalance(recipient2), 100);
+        assertEq(system.debt(address(hub)), 0);
+
+        _setDebtAndSync(hub, system, 4);
+
+        assertEq(hub.recipientBalance(recipient1), 96);
+        assertEq(hub.recipientBalance(recipient2), 100);
+
+        hub.syncSystemDebt();
+
+        assertEq(hub.recipientBalance(recipient1), 96);
+        assertEq(hub.recipientBalance(recipient2), 100);
+
+        _setDebtAndSync(hub, system, 6);
+
+        assertEq(hub.recipientBalance(recipient1), 96);
+        assertEq(hub.recipientBalance(recipient2), 94);
+        assertEq(system.debt(address(hub)), 0);
+    }
+
     function test_multipleDeferredDebtContextsAreChargedInFifoOrder() public {
         (HubRSC hub, MockSystemContract system) = _deployHubWithDebtMock();
         address lcc = makeAddr("lcc");
