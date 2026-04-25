@@ -14,14 +14,18 @@ jobs:
           RUNNER_URL: ${{ secrets.CODEX_RUNNER_URL }}
           RUNNER_AUTH: ${{ secrets.CODEX_RUNNER_BASIC_AUTH }}
           RUNNER_SECRET: ${{ secrets.CODEX_RUNNER_WEBHOOK_SECRET }}
+          PR_REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_BASE_REF: ${{ github.event.pull_request.base.ref }}
+          PR_HEAD_REF: ${{ github.event.pull_request.head.ref }}
           PR_TITLE: ${{ github.event.pull_request.title }}
           PR_BODY: ${{ github.event.pull_request.body }}
         run: |
           payload="$(jq -n \
-            --arg repo "${{ github.repository }}" \
-            --argjson pr "${{ github.event.pull_request.number }}" \
-            --arg base "${{ github.event.pull_request.base.ref }}" \
-            --arg head "${{ github.event.pull_request.head.ref }}" \
+            --arg repo "$PR_REPO" \
+            --argjson pr "$PR_NUMBER" \
+            --arg base "$PR_BASE_REF" \
+            --arg head "$PR_HEAD_REF" \
             --arg title "$PR_TITLE" \
             --arg body "$PR_BODY" \
             '{
@@ -57,6 +61,7 @@ jobs:
           RUNNER_URL: ${{ secrets.CODEX_RUNNER_URL }}
           RUNNER_AUTH: ${{ secrets.CODEX_RUNNER_BASIC_AUTH }}
           RUNNER_SECRET: ${{ secrets.CODEX_RUNNER_WEBHOOK_SECRET }}
+          JOB_ID: ${{ steps.submit.outputs.job_id }}
         run: |
           for _ in $(seq 1 120); do
             ts="$(date +%s)"
@@ -65,7 +70,7 @@ jobs:
               -u "$RUNNER_AUTH" \
               -H "X-Codex-Runner-Timestamp: $ts" \
               -H "X-Codex-Runner-Signature: sha256=$sig" \
-              "$RUNNER_URL/jobs/${{ steps.submit.outputs.job_id }}")"
+              "$RUNNER_URL/jobs/$JOB_ID")"
             status="$(printf '%s' "$response" | jq -r '.status')"
             verdict="$(printf '%s' "$response" | jq -r '.verification.verdict // empty')"
             if [ "$status" = "succeeded" ] || [ "$status" = "failed" ] || [ "$status" = "timed_out" ] || [ "$status" = "cancelled" ]; then
