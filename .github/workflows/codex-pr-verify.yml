@@ -1,0 +1,154 @@
+name: codex-pr-verify
+
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened]
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validate PR scope block
+        env:
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          import re
+          import sys
+
+          start = "<!-- codex-runner-scope:start -->"
+          end = "<!-- codex-runner-scope:end -->"
+          body = os.environ.get("PR_BODY") or ""
+
+          if body.count(start) != 1 or body.count(end) != 1:
+              print("PR body must contain exactly one codex-runner-scope block.", file=sys.stderr)
+              sys.exit(1)
+
+          block = body.split(start, 1)[1].split(end, 1)[0]
+          match = re.search(r"```json\s*(\{[\s\S]*?\})\s*```", block)
+          if not match:
+              print("codex-runner-scope block must contain a fenced json object.", file=sys.stderr)
+              sys.exit(1)
+
+          try:
+              scope = json.loads(match.group(1))
+          except json.JSONDecodeError as exc:
+              print(f"codex-runner-scope JSON is malformed: {exc}", file=sys.stderr)
+              sys.exit(1)
+
+          sources = scope.get("sources")
+          if not isinstance(sources, list) or not sources or not all(isinstance(source, str) and source.strip() for source in sources):
+              print("codex-runner-scope sources must be a non-empty string array.", file=sys.stderr)
+              sys.exit(1)
+
+          placeholders = {"REPLACE_ME", "Backlog:TASK-<id>", "Linear:ISSUE_ID"}
+          for source in sources:
+              if source in placeholders or "<" in source or ">" in source:
+                  print(f"Replace placeholder source before verification: {source}", file=sys.stderr)
+                  sys.exit(1)
+              if not (
+                  re.fullmatch(r"Backlog:TASK-\d+(?:\.\d+)*", source)
+                  or (source.startswith("Linear:") and source != "Linear:ISSUE_ID" and len(source) > len("Linear:"))
+                  or source.startswith("https://linear.app/")
+              ):
+                  print(f"Unsupported codex-runner source reference: {source}", file=sys.stderr)
+                  sys.exit(1)
+
+          summary = scope.get("spec_summary")
+          if not isinstance(summary, str) or not summary.strip() or summary == "Describe the intended scope this PR should satisfy.":
+              print("Replace codex-runner-scope spec_summary before verification.", file=sys.stderr)
+              sys.exit(1)
+
+          notes = scope.get("notes", [])
+          if notes is not None and not isinstance(notes, list):
+              print("codex-runner-scope notes must be an array when present.", file=sys.stderr)
+              sys.exit(1)
+
+          print("codex-runner-scope block is valid.")
+          PY
+
+      - name: Submit verification job
+        id: submit
+        env:
+          RUNNER_URL: ${{ secrets.CODEX_RUNNER_URL }}
+          RUNNER_AUTH: ${{ secrets.CODEX_RUNNER_BASIC_AUTH }}
+          RUNNER_SECRET: ${{ secrets.CODEX_RUNNER_WEBHOOK_SECRET }}
+          PR_REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_BASE_REF: ${{ github.event.pull_request.base.ref }}
+          PR_HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: |
+          payload="$(jq -n \
+            --arg repo "$PR_REPO" \
+            --argjson pr "$PR_NUMBER" \
+            --arg base "$PR_BASE_REF" \
+            --arg head "$PR_HEAD_REF" \
+            --arg title "$PR_TITLE" \
+            --arg body "$PR_BODY" \
+            '{
+              provider: "github",
+              repo: $repo,
+              pr_number: $pr,
+              base_ref: $base,
+              head_ref: $head,
+              prompt_profile: "pr_plan_verify",
+              pr_context: {
+                title: $title,
+                body: $body,
+                source: "pull_request.body"
+              },
+              metadata: {
+                trigger: "pull_request",
+                context_source: "github.event.pull_request.body"
+              }
+            }')"
+          ts="$(date +%s)"
+          sig="$(printf '%s.%s' "$ts" "$payload" | openssl dgst -sha256 -hmac "$RUNNER_SECRET" -hex | awk '{print $2}')"
+          response="$(curl --fail --silent --show-error \
+            -u "$RUNNER_AUTH" \
+            -H "Content-Type: application/json" \
+            -H "X-Codex-Runner-Timestamp: $ts" \
+            -H "X-Codex-Runner-Signature: sha256=$sig" \
+            -d "$payload" \
+            "$RUNNER_URL/jobs/pr-verify")"
+          echo "job_id=$(printf '%s' "$response" | jq -r '.job_id')" >> "$GITHUB_OUTPUT"
+
+      - name: Poll verification job
+        env:
+          RUNNER_URL: ${{ secrets.CODEX_RUNNER_URL }}
+          RUNNER_AUTH: ${{ secrets.CODEX_RUNNER_BASIC_AUTH }}
+          RUNNER_SECRET: ${{ secrets.CODEX_RUNNER_WEBHOOK_SECRET }}
+          JOB_ID: ${{ steps.submit.outputs.job_id }}
+        run: |
+          for _ in $(seq 1 120); do
+            ts="$(date +%s)"
+            sig="$(printf '%s.' "$ts" | openssl dgst -sha256 -hmac "$RUNNER_SECRET" -hex | awk '{print $2}')"
+            response="$(curl --fail --silent --show-error \
+              -u "$RUNNER_AUTH" \
+              -H "X-Codex-Runner-Timestamp: $ts" \
+              -H "X-Codex-Runner-Signature: sha256=$sig" \
+              "$RUNNER_URL/jobs/$JOB_ID")"
+            status="$(printf '%s' "$response" | jq -r '.status')"
+            verdict="$(printf '%s' "$response" | jq -r '.verification.verdict // empty')"
+            if [ "$status" = "succeeded" ] || [ "$status" = "failed" ] || [ "$status" = "timed_out" ] || [ "$status" = "cancelled" ]; then
+              printf '%s\n' "$response" | jq .
+              {
+                echo "## Codex Runner"
+                printf '%s\n' "$response" | jq -r '.summary // "No summary returned."'
+              } >> "$GITHUB_STEP_SUMMARY"
+              if [ "$status" != "succeeded" ]; then
+                exit 1
+              fi
+              if [ "$verdict" = "fail" ] || [ "$verdict" = "needs-human" ]; then
+                exit 1
+              fi
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "Timed out waiting for codex runner" >> "$GITHUB_STEP_SUMMARY"
+          exit 1
