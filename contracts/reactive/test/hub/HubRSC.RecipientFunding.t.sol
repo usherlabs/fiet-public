@@ -109,10 +109,9 @@ contract HubRSCRecipientFundingTest is HubRSCTestBase {
 
     function test_unallocatedDebtIsPaidWithoutChangingRecipientBalances() public {
         (HubRSC hub, MockSystemContract system) = _deployHubWithDebtMock();
-        address recipient = makeAddr("recipient");
-        int256 startingBalance = 10 ether;
+        (bool success,) = payable(address(hub)).call{value: 10 ether}("");
+        assertTrue(success);
 
-        hub.registerRecipient{value: uint256(startingBalance)}(recipient);
         hub.react(
             IReactive.LogRecord({
                 chain_id: hub.protocolChainId(),
@@ -135,8 +134,6 @@ contract HubRSCRecipientFundingTest is HubRSCTestBase {
         emit UnallocatedDebtObserved(3 ether, 3 ether);
         hub.syncSystemDebt();
 
-        assertEq(hub.recipientBalance(recipient), startingBalance);
-        assertTrue(hub.recipientActive(recipient));
         assertEq(system.debt(address(hub)), 0);
         assertEq(system.received(address(hub)), 3 ether);
     }
@@ -156,11 +153,15 @@ contract HubRSCRecipientFundingTest is HubRSCTestBase {
         assertTrue(_pendingExists(hub, lcc, recipient));
 
         system.setDebt(address(hub), 3 ether);
-        vm.expectEmit(false, false, false, true, address(hub));
-        emit UnallocatedDebtObserved(3 ether, 3 ether);
         hub.syncSystemDebt();
 
-        assertEq(hub.recipientBalance(recipient), 90 ether);
+        assertEq(hub.recipientBalance(recipient), 87 ether);
+        system.setDebt(address(hub), 2 ether);
+        vm.expectEmit(false, false, false, true, address(hub));
+        emit UnallocatedDebtObserved(2 ether, 2 ether);
+        hub.syncSystemDebt();
+
+        assertEq(hub.recipientBalance(recipient), 87 ether);
         assertEq(system.debt(address(hub)), 0);
     }
 
@@ -174,6 +175,7 @@ contract HubRSCRecipientFundingTest is HubRSCTestBase {
         hub.registerRecipient{value: 100 ether}(recipient2);
         hub.react(_rawProtocolSettlementQueuedLog(hub, lcc, recipient1, 50, 0xB041, 1));
         hub.react(_rawProtocolSettlementQueuedLog(hub, lcc, recipient2, 50, 0xB042, 2));
+        _consumeDebtContexts(hub, system, 4);
 
         vm.recordLogs();
         hub.react(liquidityAvailableLog(hub.liquidityHub(), lcc, 100, bytes32("mkt"), 0xB043, 3));
@@ -182,8 +184,8 @@ contract HubRSCRecipientFundingTest is HubRSCTestBase {
         _assertDispatchedLength(entries, 2);
         _setDebtAndSync(hub, system, 10 ether);
 
-        assertEq(hub.recipientBalance(recipient1), 95 ether);
-        assertEq(hub.recipientBalance(recipient2), 95 ether);
+        assertEq(hub.recipientBalance(recipient1), 95 ether - 2);
+        assertEq(hub.recipientBalance(recipient2), 95 ether - 2);
         assertTrue(hub.recipientActive(recipient1));
         assertTrue(hub.recipientActive(recipient2));
     }
@@ -201,6 +203,7 @@ contract HubRSCRecipientFundingTest is HubRSCTestBase {
         hub.react(_rawProtocolSettlementQueuedLog(hub, lcc, recipient1, 1, 0xB044, 1));
         hub.react(_rawProtocolSettlementQueuedLog(hub, lcc, recipient2, 1, 0xB045, 2));
         hub.react(_rawProtocolSettlementQueuedLog(hub, lcc, recipient3, 1, 0xB046, 3));
+        _consumeDebtContexts(hub, system, 6);
 
         vm.recordLogs();
         hub.react(liquidityAvailableLog(hub.liquidityHub(), lcc, 3, bytes32("mkt"), 0xB047, 4));
@@ -209,9 +212,9 @@ contract HubRSCRecipientFundingTest is HubRSCTestBase {
         _assertDispatchedLength(entries, 3);
         _setDebtAndSync(hub, system, 10);
 
-        assertEq(hub.recipientBalance(recipient1), 97);
-        assertEq(hub.recipientBalance(recipient2), 97);
-        assertEq(hub.recipientBalance(recipient3), 96);
+        assertEq(hub.recipientBalance(recipient1), 95);
+        assertEq(hub.recipientBalance(recipient2), 95);
+        assertEq(hub.recipientBalance(recipient3), 94);
         assertEq(system.debt(address(hub)), 0);
     }
 
@@ -257,6 +260,7 @@ contract HubRSCRecipientFundingTest is HubRSCTestBase {
         hub.registerRecipient{value: 100}(lifecycleRecipient);
         hub.react(_rawProtocolSettlementQueuedLog(hub, lcc, dispatchRecipient1, 1, 0xB049, 1));
         hub.react(_rawProtocolSettlementQueuedLog(hub, lcc, dispatchRecipient2, 1, 0xB04A, 2));
+        _consumeDebtContexts(hub, system, 5);
 
         vm.recordLogs();
         hub.react(liquidityAvailableLog(hub.liquidityHub(), lcc, 2, bytes32("mkt"), 0xB04B, 3));
@@ -267,16 +271,16 @@ contract HubRSCRecipientFundingTest is HubRSCTestBase {
         system.setDebt(address(hub), 9);
         hub.syncSystemDebt();
 
-        assertEq(hub.recipientBalance(dispatchRecipient1), 96);
-        assertEq(hub.recipientBalance(dispatchRecipient2), 95);
-        assertEq(hub.recipientBalance(lifecycleRecipient), 100);
+        assertEq(hub.recipientBalance(dispatchRecipient1), 94);
+        assertEq(hub.recipientBalance(dispatchRecipient2), 93);
+        assertEq(hub.recipientBalance(lifecycleRecipient), 99);
 
         system.setDebt(address(hub), 2);
         hub.syncSystemDebt();
 
-        assertEq(hub.recipientBalance(dispatchRecipient1), 96);
-        assertEq(hub.recipientBalance(dispatchRecipient2), 95);
-        assertEq(hub.recipientBalance(lifecycleRecipient), 98);
+        assertEq(hub.recipientBalance(dispatchRecipient1), 94);
+        assertEq(hub.recipientBalance(dispatchRecipient2), 93);
+        assertEq(hub.recipientBalance(lifecycleRecipient), 97);
         assertEq(system.debt(address(hub)), 0);
     }
 
@@ -290,6 +294,7 @@ contract HubRSCRecipientFundingTest is HubRSCTestBase {
         hub.registerRecipient{value: 100}(recipient2);
         hub.react(_rawProtocolSettlementQueuedLog(hub, lcc, recipient1, 1, 0xB04D, 1));
         hub.react(_rawProtocolSettlementQueuedLog(hub, lcc, recipient2, 1, 0xB04E, 2));
+        _consumeDebtContexts(hub, system, 4);
 
         vm.recordLogs();
         hub.react(liquidityAvailableLog(hub.liquidityHub(), lcc, 2, bytes32("mkt"), 0xB04F, 3));
@@ -314,8 +319,8 @@ contract HubRSCRecipientFundingTest is HubRSCTestBase {
         );
         _setDebtAndSync(hub, system, 7);
 
-        assertEq(hub.recipientBalance(recipient1), 97);
-        assertEq(hub.recipientBalance(recipient2), 96);
+        assertEq(hub.recipientBalance(recipient1), 95);
+        assertEq(hub.recipientBalance(recipient2), 94);
         assertEq(system.debt(address(hub)), 0);
     }
 
@@ -330,6 +335,7 @@ contract HubRSCRecipientFundingTest is HubRSCTestBase {
         hub.registerRecipient{value: 100}(recipient2);
         hub.react(firstQueued);
         hub.react(_rawProtocolSettlementQueuedLog(hub, lcc, recipient2, 1, 0xB05A, 2));
+        _consumeDebtContexts(hub, system, 4);
 
         vm.recordLogs();
         hub.react(liquidityAvailableLog(hub.liquidityHub(), lcc, 2, bytes32("mkt"), 0xB05B, 3));
@@ -339,8 +345,8 @@ contract HubRSCRecipientFundingTest is HubRSCTestBase {
         hub.react(firstQueued);
         _setDebtAndSync(hub, system, 5);
 
-        assertEq(hub.recipientBalance(recipient1), 98);
-        assertEq(hub.recipientBalance(recipient2), 97);
+        assertEq(hub.recipientBalance(recipient1), 96);
+        assertEq(hub.recipientBalance(recipient2), 95);
         assertEq(system.debt(address(hub)), 0);
     }
 
@@ -478,6 +484,99 @@ contract HubRSCRecipientFundingTest is HubRSCTestBase {
         assertEq(system.debt(address(hub)), 0);
     }
 
+    function test_lifecycleContextsQueueInOrderBeforeDebtIsObserved() public {
+        (HubRSC hub, MockSystemContract system) = _deployHubWithDebtMock();
+        address recipient1 = makeAddr("lifecycleRecipient1");
+        address recipient2 = makeAddr("lifecycleRecipient2");
+
+        hub.registerRecipient{value: 100}(recipient1);
+        hub.registerRecipient{value: 100}(recipient2);
+
+        _setDebtAndSync(hub, system, 4);
+
+        assertEq(hub.recipientBalance(recipient1), 96);
+        assertEq(hub.recipientBalance(recipient2), 100);
+
+        _setDebtAndSync(hub, system, 6);
+
+        assertEq(hub.recipientBalance(recipient1), 96);
+        assertEq(hub.recipientBalance(recipient2), 94);
+        assertEq(system.debt(address(hub)), 0);
+    }
+
+    function test_lifecycleContextPrecedesDispatchBeforeDebtIsObserved() public {
+        (HubRSC hub, MockSystemContract system) = _deployHubWithDebtMock();
+        address lcc = makeAddr("lcc");
+        address lifecycleRecipient = makeAddr("lifecycleRecipient");
+        address dispatchRecipient = makeAddr("dispatchRecipient");
+
+        hub.registerRecipient{value: 100}(dispatchRecipient);
+        hub.react(_rawProtocolSettlementQueuedLog(hub, lcc, dispatchRecipient, 1, 0xB06E, 1));
+        _consumeDebtContexts(hub, system, 2);
+
+        hub.registerRecipient{value: 100}(lifecycleRecipient);
+
+        vm.recordLogs();
+        hub.react(liquidityAvailableLog(hub.liquidityHub(), lcc, 1, bytes32("mkt"), 0xB06F, 2));
+        Vm.Log[] memory entries = vm.getRecordedLogs();
+        _assertDispatchedLength(entries, 1);
+
+        _setDebtAndSync(hub, system, 4);
+
+        assertEq(hub.recipientBalance(lifecycleRecipient), 96);
+        assertEq(hub.recipientBalance(dispatchRecipient), 98);
+
+        _setDebtAndSync(hub, system, 6);
+
+        assertEq(hub.recipientBalance(lifecycleRecipient), 96);
+        assertEq(hub.recipientBalance(dispatchRecipient), 92);
+        assertEq(system.debt(address(hub)), 0);
+    }
+
+    function test_lifecycleContextSurvivesIgnoredAndDuplicateLogsBeforeDebtIsObserved() public {
+        (HubRSC hub, MockSystemContract system) = _deployHubWithDebtMock();
+        address lcc = makeAddr("lcc");
+        address recipient1 = makeAddr("lifecycleRecipient1");
+        address recipient2 = makeAddr("lifecycleRecipient2");
+        IReactive.LogRecord memory firstQueued = _rawProtocolSettlementQueuedLog(hub, lcc, recipient1, 1, 0xB070, 1);
+        IReactive.LogRecord memory duplicateQueued = _rawProtocolSettlementQueuedLog(hub, lcc, recipient2, 1, 0xB071, 2);
+
+        hub.registerRecipient{value: 100}(recipient1);
+        hub.registerRecipient{value: 100}(recipient2);
+        _consumeDebtContexts(hub, system, 2);
+        hub.react(firstQueued);
+        hub.react(duplicateQueued);
+
+        hub.react(
+            IReactive.LogRecord({
+                chain_id: hub.protocolChainId(),
+                _contract: hub.liquidityHub(),
+                topic_0: 0xDEAD,
+                topic_1: 0,
+                topic_2: 0,
+                topic_3: 0,
+                data: "",
+                block_number: 0,
+                op_code: 0,
+                block_hash: 0,
+                tx_hash: 0xB072,
+                log_index: 3
+            })
+        );
+        hub.react(duplicateQueued);
+
+        _setDebtAndSync(hub, system, 4);
+
+        assertEq(hub.recipientBalance(recipient1), 95);
+        assertEq(hub.recipientBalance(recipient2), 99);
+
+        _setDebtAndSync(hub, system, 6);
+
+        assertEq(hub.recipientBalance(recipient1), 95);
+        assertEq(hub.recipientBalance(recipient2), 93);
+        assertEq(system.debt(address(hub)), 0);
+    }
+
     function test_multipleDeferredDebtContextsAreChargedInFifoOrder() public {
         (HubRSC hub, MockSystemContract system) = _deployHubWithDebtMock();
         address lcc = makeAddr("lcc");
@@ -518,14 +617,14 @@ contract HubRSCRecipientFundingTest is HubRSCTestBase {
         _setDebtAndSync(hub, system, 3);
 
         assertEq(hub.recipientBalance(recipient1), 96);
-        assertEq(hub.recipientBalance(recipient2), 91);
-        assertEq(hub.recipientBalance(recipient3), 100);
+        assertEq(hub.recipientBalance(recipient2), 94);
+        assertEq(hub.recipientBalance(recipient3), 97);
 
         _setDebtAndSync(hub, system, 2);
 
-        assertEq(hub.recipientBalance(recipient1), 96);
-        assertEq(hub.recipientBalance(recipient2), 91);
-        assertEq(hub.recipientBalance(recipient3), 98);
+        assertEq(hub.recipientBalance(recipient1), 94);
+        assertEq(hub.recipientBalance(recipient2), 94);
+        assertEq(hub.recipientBalance(recipient3), 97);
         assertEq(system.debt(address(hub)), 0);
     }
 
@@ -684,6 +783,12 @@ contract HubRSCRecipientFundingTest is HubRSCTestBase {
     function _setDebtAndSync(HubRSC hub, MockSystemContract system, uint256 debt) private {
         system.setDebt(address(hub), debt);
         hub.syncSystemDebt();
+    }
+
+    function _consumeDebtContexts(HubRSC hub, MockSystemContract system, uint256 count) private {
+        for (uint256 i = 0; i < count; i++) {
+            _setDebtAndSync(hub, system, 1);
+        }
     }
 
     function _rawSettlementProcessedLogWithRequested(

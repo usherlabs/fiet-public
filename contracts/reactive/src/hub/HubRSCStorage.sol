@@ -351,7 +351,7 @@ abstract contract HubRSCStorage is AbstractReactive {
     }
 
     function _recordLifecycleDebtContext(address recipient) internal {
-        DebtContext storage context = _prepareWritableDebtContext(false);
+        DebtContext storage context = _prepareWritableDebtContext(true);
         context.recipients.push(recipient);
         context.weights.push(1);
         context.totalWeight = 1;
