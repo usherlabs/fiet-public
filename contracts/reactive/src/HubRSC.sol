@@ -40,31 +40,43 @@ contract HubRSC is HubRSCDispatch {
         }
     }
 
-    /// @notice Explicitly registers a recipient and optionally funds immediate activation.
-    function registerRecipient(address recipient, uint256 fundingUnits) external {
+    /// @notice Explicitly registers a recipient and optionally funds immediate activation with native value.
+    function registerRecipient(address recipient) external payable {
+        _syncObservedSystemDebt();
         if (recipient == address(0)) revert InvalidRecipient();
         if (recipientRegistered[recipient]) revert RecipientAlreadyRegistered(recipient);
 
         recipientRegistered[recipient] = true;
-        if (fundingUnits > 0) {
-            recipientFundingUnits[recipient] = fundingUnits;
+        emit RecipientRegistered(recipient, msg.value, recipientBalance[recipient] + int256(msg.value));
+        _creditRecipientDeposit(recipient, msg.value);
+        _syncRecipientActivation(recipient);
+        if (recipientActive[recipient]) {
+            _recordLifecycleDebtContext(recipient);
+        } else {
+            _clearDebtContext();
         }
-
-        emit RecipientRegistered(recipient, fundingUnits);
-        if (fundingUnits > 0) {
-            emit RecipientFunded(recipient, fundingUnits, fundingUnits);
-            _activateRecipient(recipient);
-        }
+        _coverObservedDebtIfFunded();
     }
 
-    /// @notice Tops up a registered recipient and reactivates exact-match subscriptions when funded.
-    function fundRecipient(address recipient, uint256 fundingUnits) external {
+    /// @notice Tops up a registered recipient with native value and reactivates when the balance is positive.
+    function fundRecipient(address recipient) external payable {
+        _syncObservedSystemDebt();
         if (!recipientRegistered[recipient]) revert RecipientNotRegistered(recipient);
-        if (fundingUnits == 0) return;
+        if (msg.value == 0) return;
 
-        recipientFundingUnits[recipient] += fundingUnits;
-        emit RecipientFunded(recipient, fundingUnits, recipientFundingUnits[recipient]);
-        _activateRecipient(recipient);
+        _creditRecipientDeposit(recipient, msg.value);
+        _syncRecipientActivation(recipient);
+        if (recipientActive[recipient]) {
+            _recordLifecycleDebtContext(recipient);
+        } else {
+            _clearDebtContext();
+        }
+        _coverObservedDebtIfFunded();
+    }
+
+    /// @notice Allocates newly observed Reactive system debt to the previous work context and pays what it can.
+    function syncSystemDebt() external {
+        _syncObservedSystemDebt();
     }
 
     /// @notice Computes the HubRSC pending-state key for an LCC/recipient pair.
@@ -106,6 +118,7 @@ contract HubRSC is HubRSCDispatch {
 
     /// @notice React to origin chain logs (ReactVM only).
     function react(IReactive.LogRecord calldata log) external vmOnly {
+        _syncObservedSystemDebt();
         if (log.topic_0 == LCC_CREATED_TOPIC) {
             _handleLccCreated(log);
             return;
@@ -145,6 +158,8 @@ contract HubRSC is HubRSCDispatch {
             _handleSettlementFailed(log);
             return;
         }
+
+        _clearDebtContext();
     }
 
     /// @notice Queue size accessor.

@@ -8,9 +8,9 @@ On the protocol chain, Fiet’s MM paths (`MMPositionManager` / `PositionManager
 
 HubRSC registration is recipient-address keyed:
 
-- `registerRecipient(recipient, fundingUnits)` must use the exact settlement recipient address emitted by `LiquidityHub`.
+- Payable `registerRecipient(recipient)` must use the exact settlement recipient address emitted by `LiquidityHub`.
 - For MM flows this is the custodian address, not the locker EOA.
-- Registration with zero funding is inert; exact-match subscriptions activate only after the recipient has positive funding units.
+- Registration with no native value is inert; exact-match subscriptions activate only after the recipient has a positive `recipientBalance`.
 
 **Implication:** automation now requires explicit recipient registration and funding before recipient-scoped intake is active. There is no active `SpokeRSC` or `HubCallback` runtime fallback.
 
@@ -18,7 +18,7 @@ HubRSC registration is recipient-address keyed:
 
 Custodian addresses are created when the locker runs **`INITIALISE`** on `MMPositionManager` (see `contracts/evm/INVARIANTS.md` **MM-QUEUE-01** and `MMQueueCustodianFactory.QueueCustodianDeployed`). Until that custodian exists, its address is unknown.
 
-If the first `SettlementQueued(lcc, recipient, amount)` for a new custodian occurs before the custodian is registered and funded on HubRSC, HubRSC will not mirror it. Operators should register and fund the custodian recipient before relying on automated intake for that recipient.
+If the first `SettlementQueued(lcc, recipient, amount)` for a new custodian occurs before the custodian is registered and has a positive HubRSC balance, HubRSC will not mirror it. Operators should register the custodian recipient with native value before relying on automated intake for that recipient.
 
 Once registered and funded, HubRSC owns exact-match subscriptions for that recipient’s lifecycle logs:
 
@@ -28,11 +28,11 @@ Once registered and funded, HubRSC owns exact-match subscriptions for that recip
 - receiver `SettlementSucceeded`
 - receiver `SettlementFailed`
 
-## Recipient funding depletion pauses service
+## Recipient balance depletion pauses service
 
-HubRSC tracks abstract funding units per registered recipient. It debits one unit for each accepted non-duplicate matching lifecycle event and one unit for each recipient-specific dispatch item. When a recipient’s units reach zero, HubRSC deactivates that recipient and unsubscribes its exact-match lifecycle filters.
+HubRSC tracks a signed native-token `recipientBalance` per registered recipient. Payable registration and top-up credit that balance. Newly observed Reactive system debt is allocated to the previous accepted lifecycle recipient or split across the previous dispatch batch recipients. Because Reactive debt is only observable as aggregate `debt(address(this))`, attribution is deferred to safe entry boundaries such as the next `react()`, top-up, registration, or explicit `syncSystemDebt()`.
 
-Pending queue state is not deleted on depletion. Top up with `fundRecipient(recipient, fundingUnits)` to reactivate subscriptions and allow pending work to resume on future wakes.
+When a recipient balance is not positive, HubRSC deactivates that recipient and unsubscribes its exact-match lifecycle filters. Pending queue state is not deleted on depletion, and tracked receiver/protocol outcome logs may still reconcile already pending or in-flight work. Top up with payable `fundRecipient(recipient)` until the balance is positive to reactivate subscriptions and allow pending work to resume on future wakes.
 
 ## Liquidity budget is persisted per dispatch lane
 

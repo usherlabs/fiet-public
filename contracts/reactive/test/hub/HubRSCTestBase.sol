@@ -14,8 +14,21 @@ uint256 constant DEFAULT_MAX_DISPATCH_ITEMS = 20;
 uint256 constant RECEIVER_BATCH_SIZE_CAP = 30;
 
 contract MockSystemContract {
+    mapping(address => uint256) public debt;
+    mapping(address => uint256) public received;
+
+    receive() external payable {
+        received[msg.sender] += msg.value;
+        uint256 currentDebt = debt[msg.sender];
+        debt[msg.sender] = msg.value >= currentDebt ? 0 : currentDebt - msg.value;
+    }
+
     function subscribe(uint256, address, uint256, uint256, uint256, uint256) external {}
     function unsubscribe(uint256, address, uint256, uint256, uint256, uint256) external {}
+
+    function setDebt(address payer, uint256 amount) external {
+        debt[payer] = amount;
+    }
 }
 
 contract MockSettlementReceiver {
@@ -54,6 +67,7 @@ abstract contract HubRSCTestBase is Test {
     address internal destinationReceiverContract;
 
     function setUp() public virtual {
+        vm.deal(address(this), 1_000 ether);
         originChainId = 1;
         destinationChainId = 2;
         liquidityHub = makeAddr("liquidityHub");
@@ -100,11 +114,11 @@ abstract contract HubRSCTestBase is Test {
 
     function _ensureRecipientFunded(HubRSC hub, address recipient) internal {
         if (!hub.recipientRegistered(recipient)) {
-            hub.registerRecipient(recipient, 1_000_000);
+            hub.registerRecipient{value: 1 ether}(recipient);
             return;
         }
-        if (hub.recipientFundingUnits(recipient) < 1_000) {
-            hub.fundRecipient(recipient, 1_000_000);
+        if (hub.recipientBalance(recipient) < 0.1 ether) {
+            hub.fundRecipient{value: 1 ether}(recipient);
         }
     }
 

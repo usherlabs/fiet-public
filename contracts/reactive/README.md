@@ -21,7 +21,7 @@ This project is built for the Reactive Network execution model:
 - **Queued settlement**: A claim created when an unwrap cannot be fulfilled immediately.
 - **Hub**: A reactive contract that aggregates pending settlements and dispatches settlement batches.
 - **Receiver**: A destination‑chain contract that receives Reactive callbacks and performs batched calls to `LiquidityHub.processSettlementFor(...)`.
-- **Funding unit**: HubRSC’s abstract per-recipient accounting unit. One unit is charged for each accepted matching lifecycle log and one unit for each recipient-specific dispatch item.
+- **Recipient balance**: HubRSC’s signed native-token accounting balance for a registered recipient. Payable registration/top-up credits the balance; newly observed Reactive system debt is allocated to the prior lifecycle or dispatch context and can drive the balance negative.
 
 ## High-level flow
 
@@ -30,8 +30,8 @@ This project is built for the Reactive Network execution model:
 ![Reactive Fiet protocol sequence diagram](./reactive-fiet-protocol-sequence-diagram.svg)
 
 1. **Queue**: `LiquidityHub` emits `SettlementQueued(lcc, recipient, amount)` on the _protocol chain_.
-2. **Recipient activation**: An operator calls `HubRSC.registerRecipient(recipient, fundingUnits)` or later `fundRecipient(recipient, fundingUnits)`.
-3. **Exact-match subscriptions**: Once a registered recipient has positive funding units, `HubRSC` owns recipient-scoped exact-match subscriptions for that recipient’s settlement lifecycle logs.
+2. **Recipient activation**: An operator calls payable `HubRSC.registerRecipient(recipient)` or later `fundRecipient(recipient)` with native value.
+3. **Exact-match subscriptions**: Once a registered recipient has a positive `recipientBalance`, `HubRSC` owns recipient-scoped exact-match subscriptions for that recipient’s settlement lifecycle logs.
 4. **Hub intake**: `HubRSC` mirrors matching lifecycle logs only for registered, funded, active recipients.
 5. **Aggregation**: `HubRSC` queues pending work keyed by `(lcc, recipient)`.
 6. **Liquidity arrival**: `LiquidityHub` emits `LiquidityAvailable(...)` on the _protocol chain_.
@@ -46,8 +46,8 @@ This project is built for the Reactive Network execution model:
 
 - `src/HubRSC.sol`
   - Public reactive facade for constructor wiring, `react()` ingress, queue accessors, and subscriptions.
-  - Registers recipients, tracks per-recipient funding units, and owns recipient-scoped exact-match lifecycle subscriptions.
-  - Deactivates and unsubscribes depleted recipients until top-up reactivation.
+  - Registers recipients, tracks signed per-recipient native balances, and owns recipient-scoped exact-match lifecycle subscriptions.
+  - Deactivates and unsubscribes recipients whose balance is not positive until top-up reactivation.
   - Keeps the surviving Hub runtime contract while delegating storage and policy-heavy internals into focused modules under `src/hub/`.
 - `src/hub/HubRSCStorage.sol`
   - Declares HubRSC storage, queue structs, constants, events, and constructor-time immutable validation.
@@ -140,17 +140,17 @@ This is the default automation path:
 
 1. **Deploy `HubRSC`** and the destination receiver.
 2. **Fund** the reactive HubRSC contract with kREACT so it can maintain subscriptions and callbacks.
-3. **Register each recipient** with `registerRecipient(recipient, fundingUnits)`.
-4. **Top up recipients** with `fundRecipient(recipient, fundingUnits)` before their units deplete.
+3. **Register each recipient** with payable `registerRecipient(recipient)` and native value.
+4. **Top up recipients** with payable `fundRecipient(recipient)` before their balance is exhausted.
 5. Users perform swaps/unwraps as normal. When a settlement is queued for an active recipient, `HubRSC` observes it directly from `LiquidityHub` and eventually dispatches settlement when liquidity becomes available.
 
 `SpokeRSC` and `HubCallback` have been retired from the active runtime and deployment model. Recipient filtering remains exact-match and recipient-driven, but HubRSC now owns the subscriptions directly.
 
 ### Recipient registration and funding policy
 
-Registration is explicit. A recipient with no `recipientRegistered(recipient)` entry receives no lifecycle intake, even if matching protocol-chain logs exist. Registration with zero funding records the recipient but does not activate subscriptions.
+Registration is explicit. A recipient with no `recipientRegistered(recipient)` entry receives no lifecycle intake, even if matching protocol-chain logs exist. Registration with no native value records the recipient but does not activate subscriptions.
 
-Activation requires positive `recipientFundingUnits(recipient)`. On activation, HubRSC subscribes to exact-match lifecycle logs where indexed `recipient` equals the registered address:
+Activation requires a positive `recipientBalance(recipient)`. On activation, HubRSC subscribes to exact-match lifecycle logs where indexed `recipient` equals the registered address:
 
 - `SettlementQueued`
 - `SettlementAnnulled`
@@ -158,9 +158,9 @@ Activation requires positive `recipientFundingUnits(recipient)`. On activation, 
 - receiver `SettlementSucceeded`
 - receiver `SettlementFailed`
 
-HubRSC debits one funding unit after accepting a non-duplicate matching lifecycle log for the recipient and one funding unit for each recipient-specific dispatch item reserved into a settlement batch. When the ledger reaches zero, HubRSC deactivates the recipient and unsubscribes its lifecycle filters. Existing pending state is retained, but no new recipient intake or dispatch work is reserved until the recipient is topped up. Outcome logs for already tracked pending or in-flight work can still reconcile that tracked state after depletion, so a dispatch that consumes the last funding unit is not stranded before its `SettlementSucceeded`, `SettlementFailed`, or `SettlementProcessed` logs arrive.
+HubRSC uses the Reactive system contract’s `debt(address(this))` as the source of actual service cost. Because `reactive-lib` exposes debt only as an observed aggregate, HubRSC uses deferred attribution at safe boundaries: each `react()`, registration, top-up, or explicit `syncSystemDebt()` first allocates any newly observed debt to the prior recorded work context. Lifecycle debt is allocated to that recipient; dispatch callback debt is split across the recipients included in the prior batch. If no context exists, `UnallocatedDebtObserved` is emitted and no recipient is charged. Existing pending state is retained when a balance becomes non-positive, but no new recipient intake or dispatch work is reserved until the recipient is topped up. Outcome logs for already tracked pending or in-flight work can still reconcile after depletion, so a dispatch is not stranded before its `SettlementSucceeded`, `SettlementFailed`, or `SettlementProcessed` logs arrive.
 
-Top-up uses `fundRecipient(recipient, fundingUnits)`. If the recipient is registered and the top-up makes funding positive, HubRSC reactivates exact-match subscriptions and pending work can resume on the next queue mutation, liquidity wake, or self-continuation.
+Top-up uses payable `fundRecipient(recipient)`. If the recipient is registered and the top-up makes `recipientBalance(recipient)` positive, HubRSC reactivates exact-match subscriptions and pending work can resume on the next queue mutation, liquidity wake, or self-continuation.
 
 ## Operational guidance (how to observe what’s going on)
 
@@ -195,7 +195,7 @@ cast call "$HUB_RSC" \
   --rpc-url "$REACTIVE_RPC"
 
 cast call "$HUB_RSC" \
-  "recipientFundingUnits(address)(uint256)" \
+  "recipientBalance(address)(int256)" \
   "$RECIPIENT" \
   --rpc-url "$REACTIVE_RPC"
 ```
@@ -254,8 +254,8 @@ Check the usual suspects:
 
 - **Recipient not registered or inactive**:
   - `HubRSC.recipientRegistered(recipient)` must be true.
-  - `HubRSC.recipientActive(recipient)` must be true and `recipientFundingUnits(recipient)` must be positive.
-  - Fix: call `registerRecipient(recipient, units)` or `fundRecipient(recipient, units)`.
+  - `HubRSC.recipientActive(recipient)` must be true and `recipientBalance(recipient)` must be positive.
+  - Fix: call payable `registerRecipient(recipient)` or `fundRecipient(recipient)` with enough native value to make the balance positive.
 - **Underfunded reactive HubRSC contract**:
   - HubRSC must have enough kREACT deposited to execute subscriptions/callbacks.
   - Fix: fund via the system contract `depositTo(address)` (see below).
@@ -337,8 +337,8 @@ just deploy-hub
 #### 4) Register or top up a recipient (reactive chain)
 
 ```solidity
-registerRecipient(recipient, fundingUnits)
-fundRecipient(recipient, fundingUnits)
+registerRecipient(recipient) payable
+fundRecipient(recipient) payable
 ```
 
 ## Funding reactive contracts (kREACT deposit)

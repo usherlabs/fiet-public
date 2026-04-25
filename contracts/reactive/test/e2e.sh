@@ -16,7 +16,7 @@ DEPLOY_DEBUG="${DEBUG:-false}"
 # Default only when unset so a sourced `.env` or caller-provided env is not overwritten.
 RECIPIENT_ONE="${RECIPIENT_ONE:-0xb797466544DeB18F1e19185e85400A26FC5d3E95}"
 RECIPIENT_TWO="${RECIPIENT_TWO:-0xa4260A121bC44d085AC9a18e628A5712Ef3Bd49C}"
-RECIPIENT_FUNDING_UNITS="${RECIPIENT_FUNDING_UNITS:-100}"
+RECIPIENT_DEPOSIT_WEI="${RECIPIENT_DEPOSIT_WEI:-100000000000000000}"
 export BROADCAST=true
 
 : "${REACTIVE_RPC:?REACTIVE_RPC is required}"
@@ -113,17 +113,17 @@ deploy() {
 
   # 4) Register and fund recipients on HubRSC so exact-match subscriptions become active.
   cast send "$HUB_RSC" \
-    "registerRecipient(address,uint256)" \
+    "registerRecipient(address)" \
     "$RECIPIENT_ONE" \
-    "$RECIPIENT_FUNDING_UNITS" \
     --rpc-url "$REACTIVE_RPC" \
-    --private-key "$PRIVATE_KEY" >/dev/null
+    --private-key "$PRIVATE_KEY" \
+    --value "$RECIPIENT_DEPOSIT_WEI" >/dev/null
   cast send "$HUB_RSC" \
-    "registerRecipient(address,uint256)" \
+    "registerRecipient(address)" \
     "$RECIPIENT_TWO" \
-    "$RECIPIENT_FUNDING_UNITS" \
     --rpc-url "$REACTIVE_RPC" \
-    --private-key "$PRIVATE_KEY" >/dev/null
+    --private-key "$PRIVATE_KEY" \
+    --value "$RECIPIENT_DEPOSIT_WEI" >/dev/null
   echo "Recipients registered and funded on HubRSC"
 
   echo "================== DEPLOYMENT COMPLETE ======================"

@@ -5,7 +5,7 @@
 `HubRSC` forms the active reactive settlement layer of the Fiet protocol. It is deployed on a Reactive Network (ReactVM) and responds to exact-match recipient-scoped events from the origin protocol chain and the LiquidityHub to perform **verified, bounded, and efficient settlement of liquidity commitments**.
 
 The design solves three core problems:
-1. **Explicit recipient registration and funding-gated subscriptions**
+1. **Explicit recipient registration and balance-gated subscriptions**
 2. **Deduplication** of settlement reports
 3. **Bounded dispatch** of liquidity to prevent gas exhaustion
 4. **Zero-batch stall prevention** when only reserved entries exist in the scan window
@@ -17,10 +17,10 @@ The design solves three core problems:
 ### Components
 
 - **HubRSC**: Central aggregator that:
-  - Registers recipients explicitly and activates recipient-scoped exact-match subscriptions only while recipient funding is positive
+  - Registers recipients explicitly and activates recipient-scoped exact-match subscriptions only while `recipientBalance` is positive
   - Listens directly to authoritative protocol-chain `SettlementQueued`, `SettlementProcessed`, `SettlementAnnulled`, `SettlementSucceeded`, and `SettlementFailed` events for active recipients
-  - Debits one recipient funding unit per accepted matching lifecycle event and one unit per recipient-specific dispatch item
-  - Deactivates and unsubscribes depleted recipients until top-up
+  - Allocates newly observed Reactive system debt to the previous lifecycle recipient or previous dispatch batch recipients
+  - Deactivates and unsubscribes recipients whose balance is not positive until top-up
   - Maintains per-recipient and per-LCC pending queues
   - Deduplicates reports using log identity
   - Buffers authoritative decreases (processed/annulled) until pending entries exist
@@ -51,7 +51,7 @@ struct DispatchState {
 - `protocolLiquidityWakeEpochByLane` tracks fresh authoritative liquidity wake-ups per dispatch lane
 - `retryBlockedAtWakeEpochByKey` blocks non-terminal failed keys for the rest of the current wake chain
 - `zeroBatchRetryCreditsRemaining` prevents infinite retry loops on reserved-only prefixes
-- `recipientRegistered`, `recipientActive`, and `recipientFundingUnits` define the recipient service state
+- `recipientRegistered`, `recipientActive`, and signed native-token `recipientBalance` define the recipient service state
 
 ---
 
@@ -59,20 +59,20 @@ struct DispatchState {
 
 ### 1. Recipient Registration And Activation
 
-1. Operator calls `registerRecipient(recipient, fundingUnits)`.
-2. HubRSC records the recipient. If `fundingUnits > 0`, it activates recipient service.
+1. Operator calls payable `registerRecipient(recipient)`.
+2. HubRSC records the recipient. If the native deposit makes `recipientBalance > 0`, it activates recipient service.
 3. Activation subscribes HubRSC to exact-match lifecycle filters where indexed recipient equals that address.
-4. If funding reaches zero, HubRSC deactivates the recipient and unsubscribes those filters.
-5. Operator calls `fundRecipient(recipient, fundingUnits)` to top up and reactivate.
+4. If the balance is not positive, HubRSC deactivates the recipient and unsubscribes those filters.
+5. Operator calls payable `fundRecipient(recipient)` to top up and reactivate once the balance is positive.
 
 ### 2. Settlement Queuing (Direct Hub Intake)
 
 1. Trader calls `queueSettlement` on LiquidityHub
 2. LiquidityHub emits `SettlementQueued`
-3. HubRSC observes that protocol-chain log directly only if the recipient is registered, funded, and active
+3. HubRSC observes that protocol-chain log directly only if the recipient is registered, active, and has a positive balance
 4. HubRSC:
    - Deduplicates using log identity
-   - Debits one matching-event funding unit
+   - Records the recipient as the lifecycle debt context for the next observed system-debt delta
    - Creates or increases `Pending` entry
    - Enqueues key in appropriate queues (LCC + underlying if registered)
    - Applies any buffered authoritative decreases
@@ -86,9 +86,9 @@ When `LiquidityAvailable(lcc, amount)` is received:
    - Otherwise use per-LCC lane
 2. Clear stale retry credits from inactive lane
 3. Scan up to `maxDispatchItems` entries from current cursor
-4. Skip fully reserved, retry-blocked, terminally quarantined, inactive-recipient, underfunded-recipient, or non-matching entries
+4. Skip fully reserved, retry-blocked, terminally quarantined, inactive-recipient, non-positive-balance recipient, or non-matching entries
 5. Build batch of dispatchable settlements
-6. Debit one processing funding unit for each recipient-specific batch item
+6. Record the batch recipients as the dispatch debt context; the next observed system-debt delta is split across them
 7. If batch is empty but liquidity remains:
    - Use `_handleZeroBatchRetry` (see below)
 8. Otherwise emit `DispatchRequested` and callback to destination receiver
@@ -139,13 +139,17 @@ if (credits == 0 && bootstrapZeroBatchRetry) {
 ### Deduplication
 - `processedReport[keccak256(chain, contract, txHash, logIndex)]`
 - Prevents double-processing of the same authoritative log identity across queue intake, liquidity wakes, and receiver outcomes
-- Matching-event funding debit happens after log deduplication, so duplicate redelivery does not burn recipient funding.
+- Matching lifecycle debt context is recorded after log deduplication, so duplicate redelivery does not allocate a second recipient debt context.
 
-### Recipient Funding
-- `recipientFundingUnits[recipient]` is abstract internal funding for HubRSC service accounting.
-- `MATCHING_EVENT_DEBIT_UNITS == 1` for each accepted matching lifecycle log.
-- `PROCESSING_DEBIT_UNITS == 1` for each recipient-specific dispatch item.
-- Depletion deactivates/unsubscribes the recipient path until `fundRecipient` reactivates it.
+### Recipient Balance And Debt Attribution
+- `recipientBalance[recipient]` is signed native-token accounting for HubRSC service funding.
+- Payable `registerRecipient` and `fundRecipient` credit recipient balances.
+- HubRSC observes actual Reactive service cost through `debt(address(this))`.
+- Because same-transaction debt attribution is not exposed by `reactive-lib`, HubRSC uses deferred attribution: each safe boundary first allocates any newly observed debt to the previous recorded work context.
+- Lifecycle contexts allocate all observed debt to one recipient.
+- Dispatch contexts split observed debt across the prior batch recipients.
+- If no context exists, HubRSC emits `UnallocatedDebtObserved` and leaves recipient balances unchanged.
+- Non-positive balances deactivate/unsubscribe the recipient path until payable `fundRecipient` makes the balance positive again.
 
 ### Buffering
 - `bufferedProcessedDecreaseByKey` and `bufferedAnnulledDecreaseByKey`
