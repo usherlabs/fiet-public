@@ -15,12 +15,7 @@ contract HubRSCZeroBatchRetryTest is HubRSCTestBase {
     function test_zeroBatchSharedUnderlyingScanEmitsRetryThenDispatchesNextWindow() public {
         _clearSystemContract();
         HubRSC hub = new HubRSC(
-            DEFAULT_MAX_DISPATCH_ITEMS,
-            originChainId,
-            destinationChainId,
-            liquidityHub,
-            hubCallback,
-            destinationReceiverContract
+            DEFAULT_MAX_DISPATCH_ITEMS, originChainId, destinationChainId, liquidityHub, destinationReceiverContract
         );
 
         address underlying = makeAddr("underlying");
@@ -51,9 +46,7 @@ contract HubRSCZeroBatchRetryTest is HubRSCTestBase {
             _findCallbackPayloadBySelector(firstEntries, ReactiveConstants.PROCESS_SETTLEMENTS_SELECTOR);
         assertEq(firstProcessPayload.length, 0);
 
-        bytes memory firstMoreLiquidityPayload =
-            _findCallbackPayloadBySelector(firstEntries, ReactiveConstants.TRIGGER_MORE_LIQUIDITY_AVAILABLE_SELECTOR);
-        assertTrue(firstMoreLiquidityPayload.length > 0);
+        assertTrue(_moreLiquidityAvailableEventCount(firstEntries) > 0);
         assertEq(hub.zeroBatchRetryCreditsRemaining(underlying), 0);
 
         vm.recordLogs();
@@ -75,12 +68,7 @@ contract HubRSCZeroBatchRetryTest is HubRSCTestBase {
     function test_zeroBatchSharedUnderlyingLongReservedPrefixDispatchesAfterMultipleRetries() public {
         _clearSystemContract();
         HubRSC hub = new HubRSC(
-            DEFAULT_MAX_DISPATCH_ITEMS,
-            originChainId,
-            destinationChainId,
-            liquidityHub,
-            hubCallback,
-            destinationReceiverContract
+            DEFAULT_MAX_DISPATCH_ITEMS, originChainId, destinationChainId, liquidityHub, destinationReceiverContract
         );
 
         address underlying = makeAddr("underlying");
@@ -106,10 +94,7 @@ contract HubRSCZeroBatchRetryTest is HubRSCTestBase {
         hub.react(liquidityAvailableLog(hub.liquidityHub(), lccA, underlying, 100, bytes32("mktA"), 0x8601, 1));
         Vm.Log[] memory firstEntries = vm.getRecordedLogs();
         assertEq(_findCallbackPayloadBySelector(firstEntries, ReactiveConstants.PROCESS_SETTLEMENTS_SELECTOR).length, 0);
-        assertTrue(
-            _findCallbackPayloadBySelector(firstEntries, ReactiveConstants.TRIGGER_MORE_LIQUIDITY_AVAILABLE_SELECTOR)
-            .length > 0
-        );
+        assertTrue(_moreLiquidityAvailableEventCount(firstEntries) > 0);
 
         vm.recordLogs();
         hub.react(_moreLiquidityAvailableLog(hub, lccA, 100, 0x8602, 2));
@@ -117,10 +102,7 @@ contract HubRSCZeroBatchRetryTest is HubRSCTestBase {
         assertEq(
             _findCallbackPayloadBySelector(secondEntries, ReactiveConstants.PROCESS_SETTLEMENTS_SELECTOR).length, 0
         );
-        assertTrue(
-            _findCallbackPayloadBySelector(secondEntries, ReactiveConstants.TRIGGER_MORE_LIQUIDITY_AVAILABLE_SELECTOR)
-            .length > 0
-        );
+        assertTrue(_moreLiquidityAvailableEventCount(secondEntries) > 0);
 
         vm.recordLogs();
         hub.react(_moreLiquidityAvailableLog(hub, lccA, 100, 0x8603, 3));
@@ -141,12 +123,7 @@ contract HubRSCZeroBatchRetryTest is HubRSCTestBase {
     function test_zeroBatchRetryCreditsDoNotReseedOnFollowupWhenAllReserved() public {
         _clearSystemContract();
         HubRSC hub = new HubRSC(
-            DEFAULT_MAX_DISPATCH_ITEMS,
-            originChainId,
-            destinationChainId,
-            liquidityHub,
-            hubCallback,
-            destinationReceiverContract
+            DEFAULT_MAX_DISPATCH_ITEMS, originChainId, destinationChainId, liquidityHub, destinationReceiverContract
         );
 
         address underlying = makeAddr("underlying");
@@ -162,11 +139,7 @@ contract HubRSCZeroBatchRetryTest is HubRSCTestBase {
         hub.react(liquidityAvailableLog(hub.liquidityHub(), lccA, underlying, 100, bytes32("mktA"), 0x9720, 1));
         Vm.Log[] memory firstEntries = vm.getRecordedLogs();
         assertEq(_findCallbackPayloadBySelector(firstEntries, ReactiveConstants.PROCESS_SETTLEMENTS_SELECTOR).length, 0);
-        assertEq(
-            _findCallbackPayloadBySelector(firstEntries, ReactiveConstants.TRIGGER_MORE_LIQUIDITY_AVAILABLE_SELECTOR)
-            .length,
-            0
-        );
+        assertEq(_moreLiquidityAvailableEventCount(firstEntries), 0);
         assertEq(hub.zeroBatchRetryCreditsRemaining(underlying), 0);
 
         vm.recordLogs();
@@ -180,12 +153,7 @@ contract HubRSCZeroBatchRetryTest is HubRSCTestBase {
     function test_nonEmptyBatchContinuationReachesLaterWindowAfterBlockedReentry() public {
         _clearSystemContract();
         HubRSC hub = new HubRSC(
-            DEFAULT_MAX_DISPATCH_ITEMS,
-            originChainId,
-            destinationChainId,
-            liquidityHub,
-            hubCallback,
-            destinationReceiverContract
+            DEFAULT_MAX_DISPATCH_ITEMS, originChainId, destinationChainId, liquidityHub, destinationReceiverContract
         );
 
         address underlying = makeAddr("underlying");
@@ -242,12 +210,7 @@ contract HubRSCZeroBatchRetryTest is HubRSCTestBase {
     function test_clearsStaleSharedRetryFlagWhenFollowupFallsBackToPerLcc() public {
         _clearSystemContract();
         HubRSC hub = new HubRSC(
-            DEFAULT_MAX_DISPATCH_ITEMS,
-            originChainId,
-            destinationChainId,
-            liquidityHub,
-            hubCallback,
-            destinationReceiverContract
+            DEFAULT_MAX_DISPATCH_ITEMS, originChainId, destinationChainId, liquidityHub, destinationReceiverContract
         );
 
         address underlying = makeAddr("underlying");
@@ -270,9 +233,7 @@ contract HubRSCZeroBatchRetryTest is HubRSCTestBase {
         hub.react(liquidityAvailableLog(hub.liquidityHub(), lccA, underlying, 100, bytes32("mktA"), 0x8620, 1));
         Vm.Log[] memory firstEntries = vm.getRecordedLogs();
 
-        bytes memory firstMoreLiquidityPayload =
-            _findCallbackPayloadBySelector(firstEntries, ReactiveConstants.TRIGGER_MORE_LIQUIDITY_AVAILABLE_SELECTOR);
-        assertTrue(firstMoreLiquidityPayload.length > 0);
+        assertTrue(_moreLiquidityAvailableEventCount(firstEntries) > 0);
         assertGt(hub.zeroBatchRetryCreditsRemaining(underlying), 0);
 
         for (uint256 i = 0; i < 2 * m + 1; i++) {
@@ -296,9 +257,7 @@ contract HubRSCZeroBatchRetryTest is HubRSCTestBase {
         hub.react(liquidityAvailableLog(hub.liquidityHub(), lccA, underlying, 100, bytes32("mktA"), 0x8660, 1));
         Vm.Log[] memory secondEntries = vm.getRecordedLogs();
 
-        bytes memory secondMoreLiquidityPayload =
-            _findCallbackPayloadBySelector(secondEntries, ReactiveConstants.TRIGGER_MORE_LIQUIDITY_AVAILABLE_SELECTOR);
-        assertTrue(secondMoreLiquidityPayload.length > 0);
+        assertTrue(_moreLiquidityAvailableEventCount(secondEntries) > 0);
         assertEq(hub.zeroBatchRetryCreditsRemaining(underlying), 0);
     }
 }

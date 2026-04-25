@@ -25,7 +25,7 @@ mapping(bytes32 => uint256) public bufferedAnnulledDecreaseByKey;
 
 ## Why Buffering Is Necessary
 
-1. **Asynchronous chains**: Settlement queuing happens on the origin chain. Authoritative outcomes (processed/annulled) are reported from the destination chain via the HubCallback.
+1. **Asynchronous chains**: Settlement queuing happens on the origin chain. Authoritative outcomes (processed/annulled/succeeded/failed) are observed directly by HubRSC through recipient-scoped exact-match subscriptions.
 2. **Race conditions**: Network latency, different block times, or reorgs can cause authoritative reports to arrive before the original queue report.
 3. **Deduplication safety**: The system uses log identity for deduplication. A report that arrives early must not be discarded — it must be remembered.
 4. **Correct accounting**: In-flight reservations (created during dispatch) must be properly reduced when settlements are processed.

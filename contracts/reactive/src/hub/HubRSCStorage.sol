@@ -9,7 +9,9 @@ abstract contract HubRSCStorage is AbstractReactive {
     using LinkedQueue for LinkedQueue.Data;
 
     error InvalidConfig();
-    error SpokeExists(address recipient);
+    error InvalidRecipient();
+    error RecipientAlreadyRegistered(address recipient);
+    error RecipientNotRegistered(address recipient);
 
     /// @notice LiquidityAvailable(address indexed lcc, address underlyingAsset, uint256 amount, bytes32 marketId).
     uint256 public constant LIQUIDITY_AVAILABLE_TOPIC = ReactiveConstants.LIQUIDITY_AVAILABLE_TOPIC;
@@ -67,6 +69,12 @@ abstract contract HubRSCStorage is AbstractReactive {
         uint256 amount;
     }
 
+    struct DebtContext {
+        address[] recipients;
+        uint256[] weights;
+        uint256 totalWeight;
+    }
+
     uint256 public immutable maxDispatchItems;
 
     /// @notice The Chain the protocol lives on i.e DestinationContract.sol
@@ -78,17 +86,18 @@ abstract contract HubRSCStorage is AbstractReactive {
     /// @notice LiquidityHub emitting LiquidityAvailable.
     address public immutable liquidityHub;
 
-    /// @notice HubCallback emitting continuation wake-ups.
-    address public immutable hubCallback;
-
     /// @notice Destination receiver contract (processSettlements).
     address public immutable destinationReceiverContract;
 
     /// @notice Callback gas limit for destination receiver.
     uint64 public constant CALLBACK_GAS_LIMIT = 8000000;
 
-    /// @notice Recipient -> Spoke mapping (factory behavior).
-    mapping(address => address) public spokeForRecipient;
+    /// @notice Recipients explicitly registered for HubRSC-owned lifecycle subscriptions.
+    mapping(address => bool) public recipientRegistered;
+    /// @notice Recipients with active exact-match subscriptions.
+    mapping(address => bool) public recipientActive;
+    /// @notice Native-token recipient balance. Positive balances activate service; negative balances represent debt.
+    mapping(address => int256) public recipientBalance;
 
     /// @notice Pending settlement by key.
     mapping(bytes32 => Pending) internal pending;
@@ -152,8 +161,18 @@ abstract contract HubRSCStorage is AbstractReactive {
     /// @dev One-shot permit for HubRSC-emitted callbacks to seed zero-batch continuation credits on their budget lane.
     ///      Manual/stale follow-up callbacks consume no permit, which prevents repeated credit reseeding.
     mapping(address => bool) internal continuationBootstrapPendingByLane;
+    /// @notice Last Reactive system debt observed after allocation/payment.
+    uint256 public lastObservedSystemDebt;
+    /// @notice Work context that receives the next observed debt delta.
+    DebtContext internal pendingDebtContext;
 
-    event SpokeCreated(address indexed recipient, address indexed spoke);
+    event RecipientRegistered(address indexed recipient, uint256 depositAmount, int256 balance);
+    event RecipientFunded(address indexed recipient, uint256 depositAmount, int256 balance);
+    event RecipientActivated(address indexed recipient, int256 balance);
+    event RecipientDeactivated(address indexed recipient, int256 balance);
+    event RecipientDebtAllocated(address indexed recipient, uint256 debtAmount, int256 balance);
+    event UnallocatedDebtObserved(uint256 debtAmount, uint256 observedDebt);
+    event MoreLiquidityAvailable(address indexed lcc, uint256 amountAvailable);
     event PendingAdded(address indexed lcc, address indexed recipient, uint256 amount);
     event PendingIncreased(address indexed lcc, address indexed recipient, uint256 amount);
     event DuplicateLogIgnored(bytes32 indexed reportId);
@@ -172,11 +191,10 @@ abstract contract HubRSCStorage is AbstractReactive {
         uint256 _protocolChainId,
         uint256 _reactChainId,
         address _liquidityHub,
-        address _hubCallback,
         address _destinationReceiverContract
     ) payable {
         if (
-            _protocolChainId == 0 || _reactChainId == 0 || _liquidityHub == address(0) || _hubCallback == address(0)
+            _protocolChainId == 0 || _reactChainId == 0 || _liquidityHub == address(0)
                 || _destinationReceiverContract == address(0) || _maxDispatchItems == 0
                 || _maxDispatchItems > MAX_RECEIVER_BATCH_SIZE
         ) {
@@ -187,11 +205,230 @@ abstract contract HubRSCStorage is AbstractReactive {
         reactChainId = _reactChainId;
         maxDispatchItems = _maxDispatchItems;
         liquidityHub = _liquidityHub;
-        hubCallback = _hubCallback;
         destinationReceiverContract = _destinationReceiverContract;
     }
 
     function _computeKey(address lcc, address recipient) internal pure returns (bytes32) {
         return keccak256(abi.encode(lcc, recipient));
+    }
+
+    function _activateRecipient(address recipient) internal {
+        if (recipientActive[recipient] || recipientBalance[recipient] <= 0) return;
+
+        recipientActive[recipient] = true;
+        _setRecipientLifecycleSubscriptions(recipient, true);
+        emit RecipientActivated(recipient, recipientBalance[recipient]);
+    }
+
+    function _deactivateRecipient(address recipient) internal {
+        if (!recipientActive[recipient]) return;
+
+        recipientActive[recipient] = false;
+        _setRecipientLifecycleSubscriptions(recipient, false);
+        emit RecipientDeactivated(recipient, recipientBalance[recipient]);
+    }
+
+    function _syncRecipientActivation(address recipient) internal {
+        if (recipientBalance[recipient] > 0) {
+            _activateRecipient(recipient);
+        } else {
+            _deactivateRecipient(recipient);
+        }
+    }
+
+    function _creditRecipientDeposit(address recipient, uint256 amount) internal {
+        if (amount == 0) return;
+        recipientBalance[recipient] += int256(amount);
+        emit RecipientFunded(recipient, amount, recipientBalance[recipient]);
+    }
+
+    function _recipientServiceActive(address recipient) internal view returns (bool) {
+        return recipientRegistered[recipient] && recipientActive[recipient] && recipientBalance[recipient] > 0;
+    }
+
+    function _acceptMatchingRecipientEvent(address recipient) internal returns (bool) {
+        if (!_recipientServiceActive(recipient)) {
+            _clearDebtContext();
+            return false;
+        }
+        _recordLifecycleDebtContext(recipient);
+        return true;
+    }
+
+    function _acceptMatchingRecipientEventOrTrackedKey(address recipient, bytes32 key) internal returns (bool) {
+        if (_recipientServiceActive(recipient)) {
+            _recordLifecycleDebtContext(recipient);
+            return true;
+        }
+        if (!_hasTrackedRecipientKey(key)) return false;
+        _recordLifecycleDebtContext(recipient);
+        return true;
+    }
+
+    function _acceptMatchingRecipientEventOrTrackedAttempt(address recipient, address lcc, uint256 attemptId)
+        internal
+        returns (bool)
+    {
+        if (_recipientServiceActive(recipient)) {
+            _recordLifecycleDebtContext(recipient);
+            return true;
+        }
+        AttemptReservation storage reservation = _attemptReservationById[attemptId];
+        if (reservation.lcc != lcc || reservation.recipient != recipient || reservation.amount == 0) return false;
+        _recordLifecycleDebtContext(recipient);
+        return true;
+    }
+
+    function _hasTrackedRecipientKey(bytes32 key) internal view returns (bool) {
+        BufferedProcessedSettlement storage bufferedProcessed = bufferedProcessedDecreaseByKey[key];
+        return pending[key].exists || inFlightByKey[key] > 0 || _completedAwaitingProcessedByKey[key] > 0
+            || _processedRequestedCreditByKey[key] > 0 || bufferedProcessed.settledAmount > 0
+            || bufferedProcessed.inflightAmountToReduce > 0 || bufferedAnnulledDecreaseByKey[key] > 0;
+    }
+
+    function _syncObservedSystemDebt() internal {
+        uint256 observedDebt = _currentVendorDebt();
+        if (observedDebt > lastObservedSystemDebt) {
+            uint256 debtDelta = observedDebt - lastObservedSystemDebt;
+            _allocateDebtDelta(debtDelta, observedDebt);
+        }
+        lastObservedSystemDebt = observedDebt;
+        _coverObservedDebtIfFunded();
+    }
+
+    function _allocateDebtDelta(uint256 debtDelta, uint256 observedDebt) internal {
+        if (debtDelta == 0) return;
+        if (pendingDebtContext.totalWeight == 0) {
+            emit UnallocatedDebtObserved(debtDelta, observedDebt);
+            _clearDebtContext();
+            return;
+        }
+
+        uint256 allocated;
+        uint256 lastIndex = pendingDebtContext.recipients.length - 1;
+        for (uint256 i = 0; i < pendingDebtContext.recipients.length; i++) {
+            address recipient = pendingDebtContext.recipients[i];
+            uint256 share = i == lastIndex
+                ? debtDelta - allocated
+                : debtDelta * pendingDebtContext.weights[i] / pendingDebtContext.totalWeight;
+            allocated += share;
+            recipientBalance[recipient] -= int256(share);
+            emit RecipientDebtAllocated(recipient, share, recipientBalance[recipient]);
+            _syncRecipientActivation(recipient);
+        }
+        _clearDebtContext();
+    }
+
+    function _coverObservedDebtIfFunded() internal {
+        if (address(vendor).code.length == 0 || address(this).balance == 0) return;
+        uint256 debt = _currentVendorDebt();
+        if (debt == 0) {
+            lastObservedSystemDebt = 0;
+            return;
+        }
+        uint256 payment = debt < address(this).balance ? debt : address(this).balance;
+        _pay(payable(address(vendor)), payment);
+        lastObservedSystemDebt = _currentVendorDebt();
+    }
+
+    function _currentVendorDebt() internal view returns (uint256) {
+        if (address(vendor).code.length == 0) return lastObservedSystemDebt;
+        try vendor.debt(address(this)) returns (uint256 debt) {
+            return debt;
+        } catch {
+            return lastObservedSystemDebt;
+        }
+    }
+
+    function _recordLifecycleDebtContext(address recipient) internal {
+        _clearDebtContext();
+        pendingDebtContext.recipients.push(recipient);
+        pendingDebtContext.weights.push(1);
+        pendingDebtContext.totalWeight = 1;
+    }
+
+    function _recordDispatchDebtContext(address[] memory recipients, uint256 count) internal {
+        _clearDebtContext();
+        for (uint256 i = 0; i < count; i++) {
+            pendingDebtContext.recipients.push(recipients[i]);
+            pendingDebtContext.weights.push(1);
+        }
+        pendingDebtContext.totalWeight = count;
+    }
+
+    function _clearDebtContext() internal {
+        delete pendingDebtContext.recipients;
+        delete pendingDebtContext.weights;
+        pendingDebtContext.totalWeight = 0;
+    }
+
+    function _setRecipientLifecycleSubscriptions(address recipient, bool shouldSubscribe) internal {
+        if (vm) return;
+
+        uint256 recipientTopic = uint256(uint160(recipient));
+        if (shouldSubscribe) {
+            service.subscribe(
+                protocolChainId, liquidityHub, SETTLEMENT_QUEUED_TOPIC, REACTIVE_IGNORE, recipientTopic, REACTIVE_IGNORE
+            );
+            service.subscribe(
+                protocolChainId,
+                liquidityHub,
+                SETTLEMENT_ANNULLED_TOPIC,
+                REACTIVE_IGNORE,
+                recipientTopic,
+                REACTIVE_IGNORE
+            );
+            service.subscribe(
+                protocolChainId,
+                liquidityHub,
+                SETTLEMENT_PROCESSED_TOPIC,
+                REACTIVE_IGNORE,
+                recipientTopic,
+                REACTIVE_IGNORE
+            );
+            service.subscribe(
+                protocolChainId,
+                destinationReceiverContract,
+                SETTLEMENT_SUCCEEDED_TOPIC,
+                REACTIVE_IGNORE,
+                recipientTopic,
+                REACTIVE_IGNORE
+            );
+            service.subscribe(
+                protocolChainId,
+                destinationReceiverContract,
+                SETTLEMENT_FAILED_TOPIC,
+                REACTIVE_IGNORE,
+                recipientTopic,
+                REACTIVE_IGNORE
+            );
+            return;
+        }
+
+        service.unsubscribe(
+            protocolChainId, liquidityHub, SETTLEMENT_QUEUED_TOPIC, REACTIVE_IGNORE, recipientTopic, REACTIVE_IGNORE
+        );
+        service.unsubscribe(
+            protocolChainId, liquidityHub, SETTLEMENT_ANNULLED_TOPIC, REACTIVE_IGNORE, recipientTopic, REACTIVE_IGNORE
+        );
+        service.unsubscribe(
+            protocolChainId, liquidityHub, SETTLEMENT_PROCESSED_TOPIC, REACTIVE_IGNORE, recipientTopic, REACTIVE_IGNORE
+        );
+        service.unsubscribe(
+            protocolChainId,
+            destinationReceiverContract,
+            SETTLEMENT_SUCCEEDED_TOPIC,
+            REACTIVE_IGNORE,
+            recipientTopic,
+            REACTIVE_IGNORE
+        );
+        service.unsubscribe(
+            protocolChainId,
+            destinationReceiverContract,
+            SETTLEMENT_FAILED_TOPIC,
+            REACTIVE_IGNORE,
+            recipientTopic,
+            REACTIVE_IGNORE
+        );
     }
 }

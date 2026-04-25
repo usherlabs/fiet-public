@@ -11,7 +11,7 @@ library ReactiveConstants {
     /// @notice LCCCreated(address indexed underlyingAsset, address indexed lccToken, bytes32 marketId).
     uint256 internal constant LCC_CREATED_TOPIC = uint256(keccak256("LCCCreated(address,address,bytes32)"));
 
-    // Protocol-chain events observed by SpokeRSC.
+    // Protocol-chain lifecycle events observed by HubRSC.
     uint256 internal constant SETTLEMENT_QUEUED_TOPIC = uint256(keccak256("SettlementQueued(address,address,uint256)"));
     uint256 internal constant SETTLEMENT_ANNULLED_TOPIC =
         uint256(keccak256("SettlementAnnulled(address,address,uint256)"));
@@ -21,30 +21,8 @@ library ReactiveConstants {
         uint256(keccak256("SettlementSucceeded(address,address,uint256,uint256)"));
     uint256 internal constant SETTLEMENT_FAILED_TOPIC =
         uint256(keccak256("SettlementFailed(address,address,uint256,uint256,bytes)"));
-    uint256 internal constant SETTLEMENT_QUEUED_REPORTED_TOPIC =
-        uint256(keccak256("SettlementQueuedReported(address,address,uint256,uint256)"));
-    uint256 internal constant SETTLEMENT_ANNULLED_REPORTED_TOPIC =
-        uint256(keccak256("SettlementAnnulledReported(address,address,uint256)"));
-    uint256 internal constant SETTLEMENT_PROCESSED_REPORTED_TOPIC =
-        uint256(keccak256("SettlementProcessedReported(address,address,uint256,uint256)"));
-    uint256 internal constant SETTLEMENT_SUCCEEDED_REPORTED_TOPIC =
-        uint256(keccak256("SettlementSucceededReported(address,address,uint256,uint256)"));
-    uint256 internal constant SETTLEMENT_FAILED_REPORTED_TOPIC =
-        uint256(keccak256("SettlementFailedReported(address,address,uint256,uint256,bytes4,uint8)"));
 
-    // HubCallback function selectors used for callbacks.
-    bytes4 internal constant RECORD_SETTLEMENT_QUEUED_SELECTOR =
-        bytes4(keccak256("recordSettlementQueued(address,address,address,uint256,uint256)"));
-    bytes4 internal constant RECORD_SETTLEMENT_ANNULLED_SELECTOR =
-        bytes4(keccak256("recordSettlementAnnulled(address,address,address,uint256,uint256)"));
-    bytes4 internal constant RECORD_SETTLEMENT_PROCESSED_SELECTOR =
-        bytes4(keccak256("recordSettlementProcessed(address,address,address,uint256,uint256,uint256)"));
-    bytes4 internal constant RECORD_SETTLEMENT_SUCCEEDED_SELECTOR =
-        bytes4(keccak256("recordSettlementSucceeded(address,address,address,uint256,uint256,uint256)"));
-    bytes4 internal constant RECORD_SETTLEMENT_FAILED_SELECTOR =
-        bytes4(keccak256("recordSettlementFailed(address,address,address,uint256,uint256,bytes4,uint8,uint256)"));
+    // Destination receiver function selector used for callbacks.
     bytes4 internal constant PROCESS_SETTLEMENTS_SELECTOR =
         bytes4(keccak256("processSettlements(address,address[],address[],uint256[],uint256[])"));
-    bytes4 internal constant TRIGGER_MORE_LIQUIDITY_AVAILABLE_SELECTOR =
-        bytes4(keccak256("triggerMoreLiquidityAvailable(address,address,uint256)"));
 }
