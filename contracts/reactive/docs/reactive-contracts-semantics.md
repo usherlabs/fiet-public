@@ -23,6 +23,7 @@ The design solves three core problems:
   - Buffers authoritative decreases (processed/annulled) until pending entries exist
   - Dispatches liquidity in bounded batches when `LiquidityAvailable` events arrive
   - Supports both per-LCC and shared-underlying routing
+  - Is decomposed internally into `HubRSCStorage`, `HubRSCRouting`, `HubRSCReconciliation`, and `HubRSCDispatch` so queue mutation, backfill, reconciliation, and dispatch policy remain reviewable without changing the public runtime contract
 
 ### Key Data Structures
 
@@ -166,7 +167,14 @@ if (credits == 0 && bootstrapZeroBatchRetry) {
 
 ## Testing
 
-See `contracts/reactive/test/HubRSC.t.sol` for comprehensive test coverage including:
+See the behavior-grouped suites under `contracts/reactive/test/hub/` for comprehensive coverage, especially:
+- `HubRSC.ConfigAndQueueing.t.sol`
+- `HubRSC.DispatchBasic.t.sol`
+- `HubRSC.SharedUnderlying.t.sol`
+- `HubRSC.ZeroBatchRetry.t.sol`
+- `HubRSC.Reconciliation.t.sol`
+
+Coverage includes:
 - Zero-batch retry with single and multiple windows
 - Long reserved prefix handling
 - Stale credit clearing on routing changes
