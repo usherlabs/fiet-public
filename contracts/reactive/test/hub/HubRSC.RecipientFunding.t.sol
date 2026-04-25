@@ -378,6 +378,57 @@ contract HubRSCRecipientFundingTest is HubRSCTestBase {
         assertEq(system.debt(address(hub)), 0);
     }
 
+    function test_multipleDeferredDebtContextsAreChargedInFifoOrder() public {
+        (HubRSC hub, MockSystemContract system) = _deployHubWithDebtMock();
+        address lcc = makeAddr("lcc");
+        address recipient1 = makeAddr("recipient1");
+        address recipient2 = makeAddr("recipient2");
+        address recipient3 = makeAddr("recipient3");
+
+        hub.registerRecipient{value: 100}(recipient1);
+        hub.registerRecipient{value: 100}(recipient2);
+        hub.registerRecipient{value: 100}(recipient3);
+        hub.react(_rawProtocolSettlementQueuedLog(hub, lcc, recipient1, 1, 0xB064, 1));
+
+        vm.recordLogs();
+        hub.react(liquidityAvailableLog(hub.liquidityHub(), lcc, 1, bytes32("mkt"), 0xB065, 2));
+        Vm.Log[] memory entries = vm.getRecordedLogs();
+        _assertDispatchedLength(entries, 1);
+
+        hub.react(_rawProtocolSettlementQueuedLog(hub, lcc, recipient2, 1, 0xB066, 3));
+
+        vm.recordLogs();
+        hub.react(liquidityAvailableLog(hub.liquidityHub(), lcc, 1, bytes32("mkt"), 0xB067, 4));
+        entries = vm.getRecordedLogs();
+        _assertDispatchedLength(entries, 1);
+
+        hub.react(_rawProtocolSettlementQueuedLog(hub, lcc, recipient3, 1, 0xB068, 5));
+        _setDebtAndSync(hub, system, 4);
+
+        assertEq(hub.recipientBalance(recipient1), 96);
+        assertEq(hub.recipientBalance(recipient2), 100);
+        assertEq(hub.recipientBalance(recipient3), 100);
+
+        _setDebtAndSync(hub, system, 6);
+
+        assertEq(hub.recipientBalance(recipient1), 96);
+        assertEq(hub.recipientBalance(recipient2), 94);
+        assertEq(hub.recipientBalance(recipient3), 100);
+
+        _setDebtAndSync(hub, system, 3);
+
+        assertEq(hub.recipientBalance(recipient1), 96);
+        assertEq(hub.recipientBalance(recipient2), 91);
+        assertEq(hub.recipientBalance(recipient3), 100);
+
+        _setDebtAndSync(hub, system, 2);
+
+        assertEq(hub.recipientBalance(recipient1), 96);
+        assertEq(hub.recipientBalance(recipient2), 91);
+        assertEq(hub.recipientBalance(recipient3), 98);
+        assertEq(system.debt(address(hub)), 0);
+    }
+
     function test_trackedInactiveRecipientReconciliationAllocatesDebt() public {
         (HubRSC hub, MockSystemContract system) = _deployHubWithDebtMock();
         address lcc = makeAddr("lcc");
