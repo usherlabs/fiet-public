@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# deploys the hub rsc and hub callback on the reactive chain
+# deploys the hub rsc on the reactive chain
 set -euo pipefail
 
 # Load local env overrides when present.
@@ -28,51 +28,22 @@ DEPLOYER_PRIVATE_KEY="${PRIVATE_KEY:-}"
 : "${LIQUIDITY_HUB:?LIQUIDITY_HUB is required}"
 : "${PROTOCOL_RPC:?PROTOCOL_RPC is required}"
 : "${BATCH_RECEIVER:?BATCH_RECEIVER is required}"
-: "${REACTIVE_CALLBACK_PROXY:?REACTIVE_CALLBACK_PROXY is required}"
 
 # Hub RVM id is the deployer address for this deployment flow.
 DEPLOYER_ADDRESS="$(cast wallet address --private-key "$DEPLOYER_PRIVATE_KEY")"
 RVM_ID="$DEPLOYER_ADDRESS"
 export RVM_ID
 
-CALLBACK_PROXY="${REACTIVE_CALLBACK_PROXY}"
-
-# Optional prefunding values for callback and hub deployments.
+# Optional prefunding value for hub deployment.
 HUB_RSC_VALUE="${HUB_RSC_VALUE:-1ether}"
-HUB_CALLBACK_VALUE="${HUB_CALLBACK_VALUE:-1ether}"
 BROADCAST_FLAG="--broadcast"
 
-# 1) Deploy HubCallback on the reactive chain (origin event emitter).
-echo "Deploying HubCallback on reactive chain..."
-hub_callback_output="$(
-  forge create "$BROADCAST_FLAG" \
-    --rpc-url "$REACTIVE_RPC" \
-    --private-key "$DEPLOYER_PRIVATE_KEY" \
-    src/HubCallback.sol:HubCallback \
-    --value "$HUB_CALLBACK_VALUE" \
-    --constructor-args "$CALLBACK_PROXY" "$RVM_ID" 2>&1
-)"
-echo "$hub_callback_output"
-
-# Parse deployed callback address for use in the hub reactive contract deployment.
-HUB_CALLBACK="$(extract_deployed_address "$hub_callback_output")"
-if [ -z "${HUB_CALLBACK:-}" ]; then
-  echo "Failed to parse HubCallback address from forge output."
-  echo "---- raw forge output (HubCallback) ----"
-  echo "$hub_callback_output"
-  exit 1
-fi
-echo "Parsed HUB_CALLBACK=$HUB_CALLBACK"
-
-sleep 10
-
-# 2) Deploy HubRSC on the reactive chain with the protocol callback address wired in.
+# Deploy HubRSC on the reactive chain.
 echo "Deploying HubRSC with:"
 echo "  REACTIVE_RPC=$REACTIVE_RPC"
 echo "  PROTOCOL_CHAIN_ID=$PROTOCOL_CHAIN_ID"
 echo "  REACTIVE_CHAIN_ID=$REACTIVE_CHAIN_ID"
 echo "  LIQUIDITY_HUB=$LIQUIDITY_HUB"
-echo "  HUB_CALLBACK=$HUB_CALLBACK"
 echo "  BATCH_RECEIVER=$BATCH_RECEIVER"
 echo "  HUB_RSC_VALUE=$HUB_RSC_VALUE"
 echo "  RVM_ID=$RVM_ID"
@@ -89,7 +60,6 @@ hub_rsc_output="$(
       "$PROTOCOL_CHAIN_ID" \
       "$REACTIVE_CHAIN_ID" \
       "$LIQUIDITY_HUB" \
-      "$HUB_CALLBACK" \
       "$BATCH_RECEIVER" 2>&1
 )"
 echo "$hub_rsc_output"
@@ -108,5 +78,4 @@ fi
 # that way it can be parsed from the stdout of the script execution
 echo "========================================"
 echo "RVM_ID:     $RVM_ID"
-echo "HubCallback: $HUB_CALLBACK"
 echo "HubRSC:      $HUB_RSC"

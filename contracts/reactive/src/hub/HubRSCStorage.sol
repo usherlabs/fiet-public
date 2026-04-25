@@ -9,7 +9,9 @@ abstract contract HubRSCStorage is AbstractReactive {
     using LinkedQueue for LinkedQueue.Data;
 
     error InvalidConfig();
-    error SpokeExists(address recipient);
+    error InvalidRecipient();
+    error RecipientAlreadyRegistered(address recipient);
+    error RecipientNotRegistered(address recipient);
 
     /// @notice LiquidityAvailable(address indexed lcc, address underlyingAsset, uint256 amount, bytes32 marketId).
     uint256 public constant LIQUIDITY_AVAILABLE_TOPIC = ReactiveConstants.LIQUIDITY_AVAILABLE_TOPIC;
@@ -78,17 +80,24 @@ abstract contract HubRSCStorage is AbstractReactive {
     /// @notice LiquidityHub emitting LiquidityAvailable.
     address public immutable liquidityHub;
 
-    /// @notice HubCallback emitting continuation wake-ups.
-    address public immutable hubCallback;
-
     /// @notice Destination receiver contract (processSettlements).
     address public immutable destinationReceiverContract;
 
     /// @notice Callback gas limit for destination receiver.
     uint64 public constant CALLBACK_GAS_LIMIT = 8000000;
 
-    /// @notice Recipient -> Spoke mapping (factory behavior).
-    mapping(address => address) public spokeForRecipient;
+    /// @dev Abstract funding units charged per matching recipient lifecycle log.
+    uint256 public constant MATCHING_EVENT_DEBIT_UNITS = 1;
+
+    /// @dev Abstract funding units charged per recipient-specific dispatch item.
+    uint256 public constant PROCESSING_DEBIT_UNITS = 1;
+
+    /// @notice Recipients explicitly registered for HubRSC-owned lifecycle subscriptions.
+    mapping(address => bool) public recipientRegistered;
+    /// @notice Recipients with active exact-match subscriptions.
+    mapping(address => bool) public recipientActive;
+    /// @notice Abstract per-recipient funding units available for matching events and dispatch work.
+    mapping(address => uint256) public recipientFundingUnits;
 
     /// @notice Pending settlement by key.
     mapping(bytes32 => Pending) internal pending;
@@ -153,7 +162,12 @@ abstract contract HubRSCStorage is AbstractReactive {
     ///      Manual/stale follow-up callbacks consume no permit, which prevents repeated credit reseeding.
     mapping(address => bool) internal continuationBootstrapPendingByLane;
 
-    event SpokeCreated(address indexed recipient, address indexed spoke);
+    event RecipientRegistered(address indexed recipient, uint256 fundingUnits);
+    event RecipientFunded(address indexed recipient, uint256 fundingUnits, uint256 remainingFundingUnits);
+    event RecipientActivated(address indexed recipient, uint256 remainingFundingUnits);
+    event RecipientDeactivated(address indexed recipient, uint256 remainingFundingUnits);
+    event RecipientFundingDebited(address indexed recipient, uint256 debitUnits, uint256 remainingFundingUnits);
+    event MoreLiquidityAvailable(address indexed lcc, uint256 amountAvailable);
     event PendingAdded(address indexed lcc, address indexed recipient, uint256 amount);
     event PendingIncreased(address indexed lcc, address indexed recipient, uint256 amount);
     event DuplicateLogIgnored(bytes32 indexed reportId);
@@ -172,11 +186,10 @@ abstract contract HubRSCStorage is AbstractReactive {
         uint256 _protocolChainId,
         uint256 _reactChainId,
         address _liquidityHub,
-        address _hubCallback,
         address _destinationReceiverContract
     ) payable {
         if (
-            _protocolChainId == 0 || _reactChainId == 0 || _liquidityHub == address(0) || _hubCallback == address(0)
+            _protocolChainId == 0 || _reactChainId == 0 || _liquidityHub == address(0)
                 || _destinationReceiverContract == address(0) || _maxDispatchItems == 0
                 || _maxDispatchItems > MAX_RECEIVER_BATCH_SIZE
         ) {
@@ -187,11 +200,123 @@ abstract contract HubRSCStorage is AbstractReactive {
         reactChainId = _reactChainId;
         maxDispatchItems = _maxDispatchItems;
         liquidityHub = _liquidityHub;
-        hubCallback = _hubCallback;
         destinationReceiverContract = _destinationReceiverContract;
     }
 
     function _computeKey(address lcc, address recipient) internal pure returns (bytes32) {
         return keccak256(abi.encode(lcc, recipient));
+    }
+
+    function _activateRecipient(address recipient) internal {
+        if (recipientActive[recipient] || recipientFundingUnits[recipient] == 0) return;
+
+        recipientActive[recipient] = true;
+        _setRecipientLifecycleSubscriptions(recipient, true);
+        emit RecipientActivated(recipient, recipientFundingUnits[recipient]);
+    }
+
+    function _deactivateRecipient(address recipient) internal {
+        if (!recipientActive[recipient]) return;
+
+        recipientActive[recipient] = false;
+        _setRecipientLifecycleSubscriptions(recipient, false);
+        emit RecipientDeactivated(recipient, recipientFundingUnits[recipient]);
+    }
+
+    function _chargeMatchingRecipientEvent(address recipient) internal returns (bool) {
+        return _debitRecipientFunding(recipient, MATCHING_EVENT_DEBIT_UNITS);
+    }
+
+    function _chargeRecipientProcessing(address recipient) internal returns (bool) {
+        return _debitRecipientFunding(recipient, PROCESSING_DEBIT_UNITS);
+    }
+
+    function _debitRecipientFunding(address recipient, uint256 debitUnits) internal returns (bool) {
+        if (!recipientRegistered[recipient] || !recipientActive[recipient]) return false;
+
+        uint256 remaining = recipientFundingUnits[recipient];
+        if (remaining < debitUnits) {
+            _deactivateRecipient(recipient);
+            return false;
+        }
+
+        remaining -= debitUnits;
+        recipientFundingUnits[recipient] = remaining;
+        emit RecipientFundingDebited(recipient, debitUnits, remaining);
+
+        if (remaining == 0) {
+            _deactivateRecipient(recipient);
+        }
+        return true;
+    }
+
+    function _setRecipientLifecycleSubscriptions(address recipient, bool shouldSubscribe) internal {
+        if (vm) return;
+
+        uint256 recipientTopic = uint256(uint160(recipient));
+        if (shouldSubscribe) {
+            service.subscribe(
+                protocolChainId, liquidityHub, SETTLEMENT_QUEUED_TOPIC, REACTIVE_IGNORE, recipientTopic, REACTIVE_IGNORE
+            );
+            service.subscribe(
+                protocolChainId,
+                liquidityHub,
+                SETTLEMENT_ANNULLED_TOPIC,
+                REACTIVE_IGNORE,
+                recipientTopic,
+                REACTIVE_IGNORE
+            );
+            service.subscribe(
+                protocolChainId,
+                liquidityHub,
+                SETTLEMENT_PROCESSED_TOPIC,
+                REACTIVE_IGNORE,
+                recipientTopic,
+                REACTIVE_IGNORE
+            );
+            service.subscribe(
+                protocolChainId,
+                destinationReceiverContract,
+                SETTLEMENT_SUCCEEDED_TOPIC,
+                REACTIVE_IGNORE,
+                recipientTopic,
+                REACTIVE_IGNORE
+            );
+            service.subscribe(
+                protocolChainId,
+                destinationReceiverContract,
+                SETTLEMENT_FAILED_TOPIC,
+                REACTIVE_IGNORE,
+                recipientTopic,
+                REACTIVE_IGNORE
+            );
+            return;
+        }
+
+        service.unsubscribe(
+            protocolChainId, liquidityHub, SETTLEMENT_QUEUED_TOPIC, REACTIVE_IGNORE, recipientTopic, REACTIVE_IGNORE
+        );
+        service.unsubscribe(
+            protocolChainId, liquidityHub, SETTLEMENT_ANNULLED_TOPIC, REACTIVE_IGNORE, recipientTopic, REACTIVE_IGNORE
+        );
+        service.unsubscribe(
+            protocolChainId, liquidityHub, SETTLEMENT_PROCESSED_TOPIC, REACTIVE_IGNORE, recipientTopic, REACTIVE_IGNORE
+        );
+        service.unsubscribe(
+            protocolChainId,
+            destinationReceiverContract,
+            SETTLEMENT_SUCCEEDED_TOPIC,
+            REACTIVE_IGNORE,
+            recipientTopic,
+            REACTIVE_IGNORE
+        );
+        service.unsubscribe(
+            protocolChainId,
+            destinationReceiverContract,
+            SETTLEMENT_FAILED_TOPIC,
+            REACTIVE_IGNORE,
+            recipientTopic,
+            REACTIVE_IGNORE
+        );
     }
 }

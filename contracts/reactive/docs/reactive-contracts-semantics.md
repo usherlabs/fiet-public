@@ -2,12 +2,13 @@
 
 ## Overview
 
-The reactive contracts (`HubRSC` and `SpokeRSC`) form the settlement layer of the Fiet protocol. They are deployed on a Reactive Network (ReactVM) and respond to events from the origin protocol chain and the LiquidityHub to perform **verified, bounded, and efficient settlement of liquidity commitments**.
+`HubRSC` forms the active reactive settlement layer of the Fiet protocol. It is deployed on a Reactive Network (ReactVM) and responds to exact-match recipient-scoped events from the origin protocol chain and the LiquidityHub to perform **verified, bounded, and efficient settlement of liquidity commitments**.
 
 The design solves three core problems:
-1. **Deduplication** of settlement reports
-2. **Bounded dispatch** of liquidity to prevent gas exhaustion
-3. **Zero-batch stall prevention** when only reserved entries exist in the scan window
+1. **Explicit recipient registration and funding-gated subscriptions**
+2. **Deduplication** of settlement reports
+3. **Bounded dispatch** of liquidity to prevent gas exhaustion
+4. **Zero-batch stall prevention** when only reserved entries exist in the scan window
 
 ---
 
@@ -15,9 +16,11 @@ The design solves three core problems:
 
 ### Components
 
-- **SpokeRSC** (legacy / optional): Can still listen to recipient-scoped protocol-chain settlement events and forward them through `HubCallback`, but is no longer required for automation correctness and its forwarded lifecycle copies are not consumed by `HubRSC`.
 - **HubRSC**: Central aggregator that:
-  - Listens directly to authoritative protocol-chain `SettlementQueued`, `SettlementProcessed`, `SettlementAnnulled`, `SettlementSucceeded`, and `SettlementFailed` events
+  - Registers recipients explicitly and activates recipient-scoped exact-match subscriptions only while recipient funding is positive
+  - Listens directly to authoritative protocol-chain `SettlementQueued`, `SettlementProcessed`, `SettlementAnnulled`, `SettlementSucceeded`, and `SettlementFailed` events for active recipients
+  - Debits one recipient funding unit per accepted matching lifecycle event and one unit per recipient-specific dispatch item
+  - Deactivates and unsubscribes depleted recipients until top-up
   - Maintains per-recipient and per-LCC pending queues
   - Deduplicates reports using log identity
   - Buffers authoritative decreases (processed/annulled) until pending entries exist
@@ -48,23 +51,33 @@ struct DispatchState {
 - `protocolLiquidityWakeEpochByLane` tracks fresh authoritative liquidity wake-ups per dispatch lane
 - `retryBlockedAtWakeEpochByKey` blocks non-terminal failed keys for the rest of the current wake chain
 - `zeroBatchRetryCreditsRemaining` prevents infinite retry loops on reserved-only prefixes
+- `recipientRegistered`, `recipientActive`, and `recipientFundingUnits` define the recipient service state
 
 ---
 
 ## Core Flows
 
-### 1. Settlement Queuing (Direct Hub Intake)
+### 1. Recipient Registration And Activation
+
+1. Operator calls `registerRecipient(recipient, fundingUnits)`.
+2. HubRSC records the recipient. If `fundingUnits > 0`, it activates recipient service.
+3. Activation subscribes HubRSC to exact-match lifecycle filters where indexed recipient equals that address.
+4. If funding reaches zero, HubRSC deactivates the recipient and unsubscribes those filters.
+5. Operator calls `fundRecipient(recipient, fundingUnits)` to top up and reactivate.
+
+### 2. Settlement Queuing (Direct Hub Intake)
 
 1. Trader calls `queueSettlement` on LiquidityHub
 2. LiquidityHub emits `SettlementQueued`
-3. HubRSC observes that protocol-chain log directly
+3. HubRSC observes that protocol-chain log directly only if the recipient is registered, funded, and active
 4. HubRSC:
    - Deduplicates using log identity
+   - Debits one matching-event funding unit
    - Creates or increases `Pending` entry
    - Enqueues key in appropriate queues (LCC + underlying if registered)
    - Applies any buffered authoritative decreases
 
-### 2. Liquidity Dispatch (HubRSC)
+### 3. Liquidity Dispatch (HubRSC)
 
 When `LiquidityAvailable(lcc, amount)` is received:
 
@@ -73,26 +86,27 @@ When `LiquidityAvailable(lcc, amount)` is received:
    - Otherwise use per-LCC lane
 2. Clear stale retry credits from inactive lane
 3. Scan up to `maxDispatchItems` entries from current cursor
-4. Skip fully reserved, retry-blocked, terminally quarantined, or non-matching entries
+4. Skip fully reserved, retry-blocked, terminally quarantined, inactive-recipient, underfunded-recipient, or non-matching entries
 5. Build batch of dispatchable settlements
-6. If batch is empty but liquidity remains:
+6. Debit one processing funding unit for each recipient-specific batch item
+7. If batch is empty but liquidity remains:
    - Use `_handleZeroBatchRetry` (see below)
-7. Otherwise emit `DispatchRequested` and callback to destination receiver
+8. Otherwise emit `DispatchRequested` and callback to destination receiver
 
-### 3. Zero-Batch Retry Mechanism
+### 4. Zero-Batch Retry Mechanism
 
 **Problem**: A scan window may contain only reserved entries, so no dispatch happens even though liquidity and later dispatchable entries exist.
 
 **Solution**:
 - Track `zeroBatchRetryCreditsRemaining[lane]`
 - On initial `LiquidityAvailable`, seed credits based on queue size
-- Each zero-batch pass decrements credits and emits `MoreLiquidityAvailable`
+- Each zero-batch pass decrements credits and emits HubRSC-local `MoreLiquidityAvailable`
 - Credits are **not** re-seeded on follow-up callbacks
 - Credits are cleared on successful dispatch or when exhausted
 
 This guarantees bounded retries while preventing stalls from long reserved prefixes.
 
-### 4. Failure Reconciliation And Retry Gating
+### 5. Failure Reconciliation And Retry Gating
 
 - Direct receiver `SettlementSucceeded(...)` releases only the reserved amount for the matching `attemptId`; it does not trust the
   reported amount to enlarge the release.
@@ -125,6 +139,13 @@ if (credits == 0 && bootstrapZeroBatchRetry) {
 ### Deduplication
 - `processedReport[keccak256(chain, contract, txHash, logIndex)]`
 - Prevents double-processing of the same authoritative log identity across queue intake, liquidity wakes, and receiver outcomes
+- Matching-event funding debit happens after log deduplication, so duplicate redelivery does not burn recipient funding.
+
+### Recipient Funding
+- `recipientFundingUnits[recipient]` is abstract internal funding for HubRSC service accounting.
+- `MATCHING_EVENT_DEBIT_UNITS == 1` for each accepted matching lifecycle log.
+- `PROCESSING_DEBIT_UNITS == 1` for each recipient-specific dispatch item.
+- Depletion deactivates/unsubscribes the recipient path until `fundRecipient` reactivates it.
 
 ### Buffering
 - `bufferedProcessedDecreaseByKey` and `bufferedAnnulledDecreaseByKey`
@@ -162,6 +183,8 @@ if (credits == 0 && bootstrapZeroBatchRetry) {
 3. `zeroBatchRetryCreditsRemaining` is only seeded from initial liquidity events
 4. Every dispatched settlement corresponds to exactly one `LiquidityAvailable` or `MoreLiquidityAvailable` event
 5. All queues are pruned when entries are fully settled
+6. No unregistered or inactive recipient creates pending work or dispatch reservations
+7. Duplicate lifecycle logs do not debit recipient funding more than once
 
 ---
 
@@ -173,6 +196,7 @@ See the behavior-grouped suites under `contracts/reactive/test/hub/` for compreh
 - `HubRSC.SharedUnderlying.t.sol`
 - `HubRSC.ZeroBatchRetry.t.sol`
 - `HubRSC.Reconciliation.t.sol`
+- `HubRSC.RecipientFunding.t.sol`
 
 Coverage includes:
 - Zero-batch retry with single and multiple windows
@@ -180,6 +204,7 @@ Coverage includes:
 - Stale credit clearing on routing changes
 - Deduplication, buffering, and authoritative reconciliation
 - Shared-underlying vs per-LCC routing
+- Registration required, activation required, matching-event debit, processing debit, depletion pause, top-up reactivation, and no HubCallback continuation dependency
 
 ---
 

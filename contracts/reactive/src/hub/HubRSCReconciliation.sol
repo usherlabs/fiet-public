@@ -16,6 +16,7 @@ abstract contract HubRSCReconciliation is HubRSCRouting {
 
         address lcc = address(uint160(log.topic_1));
         address recipient = address(uint160(log.topic_2));
+        if (!_chargeMatchingRecipientEvent(recipient)) return;
         (uint256 settledAmount, uint256 requestedAmount) = abi.decode(log.data, (uint256, uint256));
 
         _reconcileProcessedRequestedAmount(_computeKey(lcc, recipient), requestedAmount);
@@ -30,6 +31,7 @@ abstract contract HubRSCReconciliation is HubRSCRouting {
 
         address lcc = address(uint160(log.topic_1));
         address recipient = address(uint160(log.topic_2));
+        if (!_chargeMatchingRecipientEvent(recipient)) return;
         (uint256 succeededAmount, uint256 attemptId) = abi.decode(log.data, (uint256, uint256));
         if (succeededAmount == 0) return;
 
@@ -45,6 +47,7 @@ abstract contract HubRSCReconciliation is HubRSCRouting {
 
         address lcc = address(uint160(log.topic_1));
         address recipient = address(uint160(log.topic_2));
+        if (!_chargeMatchingRecipientEvent(recipient)) return;
         uint256 annulledAmount = abi.decode(log.data, (uint256));
 
         _applyAuthoritativeDecreaseOrBuffer(lcc, recipient, annulledAmount, 0, false);
@@ -57,6 +60,7 @@ abstract contract HubRSCReconciliation is HubRSCRouting {
 
         address lcc = address(uint160(log.topic_1));
         address recipient = address(uint160(log.topic_2));
+        if (!_chargeMatchingRecipientEvent(recipient)) return;
         (uint256 failedAmount, uint256 attemptId, bytes memory revertData) =
             abi.decode(log.data, (uint256, uint256, bytes));
         bytes4 failureSelector = SettlementFailureLib.selectorFromRevertData(revertData);

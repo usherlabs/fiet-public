@@ -15,9 +15,8 @@ contract HubRSCSharedUnderlyingTest is HubRSCTestBase {
 
         MockLiquidityHub liq = new MockLiquidityHub();
         MockSettlementReceiver receiver = new MockSettlementReceiver(address(liq));
-        HubRSC hub = new HubRSC(
-            DEFAULT_MAX_DISPATCH_ITEMS, originChainId, destinationChainId, address(liq), hubCallback, address(receiver)
-        );
+        HubRSC hub =
+            new HubRSC(DEFAULT_MAX_DISPATCH_ITEMS, originChainId, destinationChainId, address(liq), address(receiver));
 
         address underlying = makeAddr("underlying");
         address lccA = makeAddr("lccA");
@@ -42,9 +41,8 @@ contract HubRSCSharedUnderlyingTest is HubRSCTestBase {
 
         MockLiquidityHub liq = new MockLiquidityHub();
         MockSettlementReceiver receiver = new MockSettlementReceiver(address(liq));
-        HubRSC hub = new HubRSC(
-            DEFAULT_MAX_DISPATCH_ITEMS, originChainId, destinationChainId, address(liq), hubCallback, address(receiver)
-        );
+        HubRSC hub =
+            new HubRSC(DEFAULT_MAX_DISPATCH_ITEMS, originChainId, destinationChainId, address(liq), address(receiver));
 
         address underlying = makeAddr("underlying");
         address lccA = makeAddr("lccA");
@@ -73,12 +71,7 @@ contract HubRSCSharedUnderlyingTest is HubRSCTestBase {
     function test_deduplicatesDuplicateSharedUnderlyingLiquidityAvailableLog() public {
         _clearSystemContract();
         HubRSC hub = new HubRSC(
-            DEFAULT_MAX_DISPATCH_ITEMS,
-            originChainId,
-            destinationChainId,
-            liquidityHub,
-            hubCallback,
-            destinationReceiverContract
+            DEFAULT_MAX_DISPATCH_ITEMS, originChainId, destinationChainId, liquidityHub, destinationReceiverContract
         );
 
         address underlying = makeAddr("underlying");
@@ -115,12 +108,7 @@ contract HubRSCSharedUnderlyingTest is HubRSCTestBase {
     function test_moreLiquidityAvailableContinuesSharedUnderlyingRoutingAfterBatchLimit() public {
         _clearSystemContract();
         HubRSC hub = new HubRSC(
-            DEFAULT_MAX_DISPATCH_ITEMS,
-            originChainId,
-            destinationChainId,
-            liquidityHub,
-            hubCallback,
-            destinationReceiverContract
+            DEFAULT_MAX_DISPATCH_ITEMS, originChainId, destinationChainId, liquidityHub, destinationReceiverContract
         );
 
         address underlying = makeAddr("underlying");
@@ -163,8 +151,7 @@ contract HubRSCSharedUnderlyingTest is HubRSCTestBase {
     /// @notice Exact duplicate `MoreLiquidityAvailable` delivery is ignored so it cannot reserve another sibling key.
     function test_deduplicatesDuplicateMoreLiquidityAvailableLog() public {
         _clearSystemContract();
-        HubRSC hub =
-            new HubRSC(1, originChainId, destinationChainId, liquidityHub, hubCallback, destinationReceiverContract);
+        HubRSC hub = new HubRSC(1, originChainId, destinationChainId, liquidityHub, destinationReceiverContract);
 
         address underlying = makeAddr("underlying");
         address lccA = makeAddr("lccA");
@@ -209,9 +196,8 @@ contract HubRSCSharedUnderlyingTest is HubRSCTestBase {
 
         MockLiquidityHub liq = new MockLiquidityHub();
         MockSettlementReceiver receiver = new MockSettlementReceiver(address(liq));
-        HubRSC hub = new HubRSC(
-            DEFAULT_MAX_DISPATCH_ITEMS, originChainId, destinationChainId, address(liq), hubCallback, address(receiver)
-        );
+        HubRSC hub =
+            new HubRSC(DEFAULT_MAX_DISPATCH_ITEMS, originChainId, destinationChainId, address(liq), address(receiver));
 
         address underlying = makeAddr("underlying");
         address lccA = makeAddr("lccA");
@@ -236,9 +222,8 @@ contract HubRSCSharedUnderlyingTest is HubRSCTestBase {
 
         MockLiquidityHub liq = new MockLiquidityHub();
         MockSettlementReceiver receiver = new MockSettlementReceiver(address(liq));
-        HubRSC hub = new HubRSC(
-            DEFAULT_MAX_DISPATCH_ITEMS, originChainId, destinationChainId, address(liq), hubCallback, address(receiver)
-        );
+        HubRSC hub =
+            new HubRSC(DEFAULT_MAX_DISPATCH_ITEMS, originChainId, destinationChainId, address(liq), address(receiver));
 
         address lccEth = makeAddr("lccEth");
         address lccUnregistered = makeAddr("lccUnregistered");
@@ -265,9 +250,8 @@ contract HubRSCSharedUnderlyingTest is HubRSCTestBase {
 
         MockLiquidityHub liq = new MockLiquidityHub();
         MockSettlementReceiver receiver = new MockSettlementReceiver(address(liq));
-        HubRSC hub = new HubRSC(
-            DEFAULT_MAX_DISPATCH_ITEMS, originChainId, destinationChainId, address(liq), hubCallback, address(receiver)
-        );
+        HubRSC hub =
+            new HubRSC(DEFAULT_MAX_DISPATCH_ITEMS, originChainId, destinationChainId, address(liq), address(receiver));
 
         address underlying = makeAddr("underlying");
         address lccA = makeAddr("lccA");
@@ -298,8 +282,7 @@ contract HubRSCSharedUnderlyingTest is HubRSCTestBase {
     function test_underlyingBackfillContinuationStaysBoundedAcrossSiblingLccs() public {
         _clearSystemContract();
 
-        HubRSC hub =
-            new HubRSC(1, originChainId, destinationChainId, liquidityHub, hubCallback, destinationReceiverContract);
+        HubRSC hub = new HubRSC(1, originChainId, destinationChainId, liquidityHub, destinationReceiverContract);
 
         address underlying = makeAddr("underlying");
         address lccA = makeAddr("lccA");
@@ -328,10 +311,7 @@ contract HubRSCSharedUnderlyingTest is HubRSCTestBase {
         Vm.Log[] memory entries = vm.getRecordedLogs();
 
         assertEq(_findCallbackPayloadBySelector(entries, ReactiveConstants.PROCESS_SETTLEMENTS_SELECTOR).length, 0);
-        assertTrue(
-            _findCallbackPayloadBySelector(entries, ReactiveConstants.TRIGGER_MORE_LIQUIDITY_AVAILABLE_SELECTOR).length
-                > 0
-        );
+        assertTrue(_moreLiquidityAvailableEventCount(entries) > 0);
         assertEq(hub.underlyingBackfillRemainingByLcc(lccB), 0);
         assertEq(hub.underlyingBackfillRemainingByLcc(lccC), 1);
         assertEq(hub.underlyingBackfillRemainingByLcc(lccD), 1);
@@ -344,9 +324,8 @@ contract HubRSCSharedUnderlyingTest is HubRSCTestBase {
         uint256 boundedDispatchItems = 2;
         MockLiquidityHub liq = new MockLiquidityHub();
         MockSettlementReceiver receiver = new MockSettlementReceiver(address(liq));
-        HubRSC hub = new HubRSC(
-            boundedDispatchItems, originChainId, destinationChainId, address(liq), hubCallback, address(receiver)
-        );
+        HubRSC hub =
+            new HubRSC(boundedDispatchItems, originChainId, destinationChainId, address(liq), address(receiver));
 
         address underlying = makeAddr("underlying");
         address lccA = makeAddr("lccA");
@@ -372,10 +351,7 @@ contract HubRSCSharedUnderlyingTest is HubRSCTestBase {
         bytes memory firstProcessPayload =
             _findCallbackPayloadBySelector(firstEntries, ReactiveConstants.PROCESS_SETTLEMENTS_SELECTOR);
         assertEq(firstProcessPayload.length, 0);
-        assertTrue(
-            _findCallbackPayloadBySelector(firstEntries, ReactiveConstants.TRIGGER_MORE_LIQUIDITY_AVAILABLE_SELECTOR)
-            .length > 0
-        );
+        assertTrue(_moreLiquidityAvailableEventCount(firstEntries) > 0);
         assertEq(hub.underlyingBackfillRemainingByLcc(lccB), 1);
 
         vm.recordLogs();
@@ -402,10 +378,7 @@ contract HubRSCSharedUnderlyingTest is HubRSCTestBase {
             assertEq(secondAmounts[0], 1);
             assertEq(secondAmounts[1], 1);
         }
-        assertTrue(
-            _findCallbackPayloadBySelector(secondEntries, ReactiveConstants.TRIGGER_MORE_LIQUIDITY_AVAILABLE_SELECTOR)
-            .length > 0
-        );
+        assertTrue(_moreLiquidityAvailableEventCount(secondEntries) > 0);
         assertEq(hub.underlyingBackfillRemainingByLcc(lccB), 0);
 
         vm.recordLogs();
@@ -431,10 +404,7 @@ contract HubRSCSharedUnderlyingTest is HubRSCTestBase {
             assertEq(thirdAmounts[0], 1);
             assertEq(thirdAmounts[1], 1);
         }
-        assertTrue(
-            _findCallbackPayloadBySelector(thirdEntries, ReactiveConstants.TRIGGER_MORE_LIQUIDITY_AVAILABLE_SELECTOR)
-            .length > 0
-        );
+        assertTrue(_moreLiquidityAvailableEventCount(thirdEntries) > 0);
 
         vm.recordLogs();
         hub.react(_moreLiquidityAvailableLog(hub, lccA, 1, 0x8620, 11));
@@ -467,8 +437,7 @@ contract HubRSCSharedUnderlyingTest is HubRSCTestBase {
     function test_postRegistrationMirrorsDoNotConsumeHistoricalBackfillCounter() public {
         _clearSystemContract();
 
-        HubRSC hub =
-            new HubRSC(1, originChainId, destinationChainId, liquidityHub, hubCallback, destinationReceiverContract);
+        HubRSC hub = new HubRSC(1, originChainId, destinationChainId, liquidityHub, destinationReceiverContract);
 
         address underlying = makeAddr("underlying");
         address lccA = makeAddr("lccA");
@@ -493,10 +462,7 @@ contract HubRSCSharedUnderlyingTest is HubRSCTestBase {
         Vm.Log[] memory entries = vm.getRecordedLogs();
 
         assertEq(_findCallbackPayloadBySelector(entries, ReactiveConstants.PROCESS_SETTLEMENTS_SELECTOR).length, 0);
-        assertTrue(
-            _findCallbackPayloadBySelector(entries, ReactiveConstants.TRIGGER_MORE_LIQUIDITY_AVAILABLE_SELECTOR).length
-                > 0
-        );
+        assertTrue(_moreLiquidityAvailableEventCount(entries) > 0);
         assertEq(hub.underlyingBackfillRemainingByLcc(lccB), 1);
     }
 
@@ -504,8 +470,7 @@ contract HubRSCSharedUnderlyingTest is HubRSCTestBase {
     function test_historicalSiblingProgressesUnderSustainedActiveSiblingLiquidity() public {
         _clearSystemContract();
 
-        HubRSC hub =
-            new HubRSC(1, originChainId, destinationChainId, liquidityHub, hubCallback, destinationReceiverContract);
+        HubRSC hub = new HubRSC(1, originChainId, destinationChainId, liquidityHub, destinationReceiverContract);
 
         address underlying = makeAddr("underlying");
         address lccA = makeAddr("lccA");
@@ -560,12 +525,7 @@ contract HubRSCSharedUnderlyingTest is HubRSCTestBase {
     function test_sharedUnderlyingPartialInFlightReleaseMatchesPerLccSemantics() public {
         _clearSystemContract();
         HubRSC hub = new HubRSC(
-            DEFAULT_MAX_DISPATCH_ITEMS,
-            originChainId,
-            destinationChainId,
-            liquidityHub,
-            hubCallback,
-            destinationReceiverContract
+            DEFAULT_MAX_DISPATCH_ITEMS, originChainId, destinationChainId, liquidityHub, destinationReceiverContract
         );
 
         address underlying = makeAddr("underlying");

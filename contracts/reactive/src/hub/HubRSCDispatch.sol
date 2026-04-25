@@ -19,6 +19,7 @@ abstract contract HubRSCDispatch is HubRSCReconciliation {
         uint256 amount = abi.decode(log.data, (uint256));
 
         if (!_markLogProcessed(log)) return;
+        if (!_chargeMatchingRecipientEvent(recipient)) return;
         if (amount == 0) return;
 
         bytes32 key = _computeKey(lcc, recipient);
@@ -80,9 +81,9 @@ abstract contract HubRSCDispatch is HubRSCReconciliation {
         _dispatchLiquidityIfBudgetAvailable(lcc, true);
     }
 
-    /// @notice Handles follow-up liquidity notices emitted via HubCallback.
+    /// @notice Handles HubRSC self-continuation liquidity notices.
     function _handleMoreLiquidityAvailable(IReactive.LogRecord calldata log) internal {
-        if (log.chain_id != reactChainId || log._contract != hubCallback) return;
+        if (log.chain_id != reactChainId || log._contract != address(this)) return;
         if (!_markLogProcessed(log)) return;
         address lcc = address(uint160(log.topic_1));
         address budgetLane = _dispatchBudgetLane(lcc);
@@ -243,6 +244,7 @@ abstract contract HubRSCDispatch is HubRSCReconciliation {
         if (awaitingProcessed >= dispatchable) return;
         dispatchable -= awaitingProcessed;
         if (dispatchable == 0) return;
+        if (!_chargeRecipientProcessing(entry.recipient)) return;
 
         uint256 settleAmount = dispatchable <= state.remainingLiquidity ? dispatchable : state.remainingLiquidity;
         inFlightByKey[key] = reserved + settleAmount;
@@ -305,13 +307,10 @@ abstract contract HubRSCDispatch is HubRSCReconciliation {
         }
     }
 
-    /// @notice Triggers a more liquidity available callback.
+    /// @notice Triggers a HubRSC-local continuation event.
     function _triggerMoreLiquidityAvailable(address triggerLcc, uint256 remainingLiquidity) internal {
         continuationBootstrapPendingByLane[_dispatchBudgetLane(triggerLcc)] = true;
-        bytes memory liquidityPayload = abi.encodeWithSelector(
-            ReactiveConstants.TRIGGER_MORE_LIQUIDITY_AVAILABLE_SELECTOR, address(0), triggerLcc, remainingLiquidity
-        );
-        emit Callback(reactChainId, hubCallback, CALLBACK_GAS_LIMIT, liquidityPayload);
+        emit MoreLiquidityAvailable(triggerLcc, remainingLiquidity);
     }
 
     /// @dev Zero-batch retry credits are keyed by the lane that was actually scanned.

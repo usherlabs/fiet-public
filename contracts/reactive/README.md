@@ -15,13 +15,13 @@ This project is built for the Reactive Network execution model:
 ## Terminology
 
 - **Protocol chain**: The chain where Fiet’s `LiquidityHub` lives (e.g. Arbitrum One for MVP).
-- **Reactive chain**: The Reactive Network chain where `SpokeRSC` and `HubRSC` execute.
+- **Reactive chain**: The Reactive Network chain where `HubRSC` executes.
 - **LCC**: A Fiet token representing the market maker’s settlement commitment.
 - **Recipient**: The address that ultimately receives underlying when a settlement is processed.
 - **Queued settlement**: A claim created when an unwrap cannot be fulfilled immediately.
-- **Spoke**: A legacy per‑recipient reactive contract that can still forward recipient-scoped events, but is no longer required for automation correctness.
 - **Hub**: A reactive contract that aggregates pending settlements and dispatches settlement batches.
 - **Receiver**: A destination‑chain contract that receives Reactive callbacks and performs batched calls to `LiquidityHub.processSettlementFor(...)`.
+- **Funding unit**: HubRSC’s abstract per-recipient accounting unit. One unit is charged for each accepted matching lifecycle log and one unit for each recipient-specific dispatch item.
 
 ## High-level flow
 
@@ -30,29 +30,24 @@ This project is built for the Reactive Network execution model:
 ![Reactive Fiet protocol sequence diagram](./reactive-fiet-protocol-sequence-diagram.svg)
 
 1. **Queue**: `LiquidityHub` emits `SettlementQueued(lcc, recipient, amount)` on the _protocol chain_.
-2. **Hub intake**: `HubRSC` subscribes directly to `LiquidityHub` settlement lifecycle events and mirrors the first queue entry without needing recipient-specific pre-onboarding.
-3. **Aggregation**: `HubRSC` queues pending work keyed by `(lcc, recipient)`.
+2. **Recipient activation**: An operator calls `HubRSC.registerRecipient(recipient, fundingUnits)` or later `fundRecipient(recipient, fundingUnits)`.
+3. **Exact-match subscriptions**: Once a registered recipient has positive funding units, `HubRSC` owns recipient-scoped exact-match subscriptions for that recipient’s settlement lifecycle logs.
+4. **Hub intake**: `HubRSC` mirrors matching lifecycle logs only for registered, funded, active recipients.
+5. **Aggregation**: `HubRSC` queues pending work keyed by `(lcc, recipient)`.
 6. **Liquidity arrival**: `LiquidityHub` emits `LiquidityAvailable(...)` on the _protocol chain_.
 7. **Bounded dispatch**: `HubRSC` scans dispatchable work (`pending - inFlight`) with explicit bounds and emits a callback to the _protocol chain_ Receiver.
 8. **Settlement execution**: The Receiver calls `LiquidityHub.processSettlementFor(...)` for each batch item.
-9. **Direct reconciliation**: `HubRSC` also subscribes directly to authoritative `SettlementProcessed`, `SettlementAnnulled`, `SettlementSucceeded`, and `SettlementFailed` events.
-10. **Continuation only**: `HubCallback` remains in the flow for `MoreLiquidityAvailable(...)` continuation callbacks. Legacy recipient `SpokeRSC` forwarding may still be operated for compatibility/observability, but `HubRSC` no longer mutates settlement state from those forwarded lifecycle reports.
+9. **Direct reconciliation**: `HubRSC` subscribes directly to authoritative `SettlementProcessed`, `SettlementAnnulled`, `SettlementSucceeded`, and `SettlementFailed` events for active recipients.
+10. **Self-continuation**: Large backlogs continue through `HubRSC`-emitted `MoreLiquidityAvailable(...)` events. `HubCallback` and `SpokeRSC` are no longer part of the shipped runtime path.
 
 ## Contracts and artefacts
 
 ### Reactive chain
 
-- `src/SpokeRSC.sol`
-  - Subscribes to recipient-scoped protocol-chain events (`SettlementQueued`, `SettlementProcessed`, `SettlementAnnulled`, receiver `SettlementSucceeded`, receiver `SettlementFailed`).
-  - Deduplicates by on-chain log identity and forwards bounded payloads to `HubCallback`.
-  - Preserved as a legacy/optional recipient-scoped integration path; automation no longer depends on deploying one Spoke per queue owner before the first queue event.
-- `src/HubCallback.sol`
-  - Authorised callback entrypoints.
-  - Emits `MoreLiquidityAvailable(...)` continuation signals for the Hub.
-  - Retains the legacy Spoke whitelist/report surface for compatibility, but that path is no longer a mutating intake source for `HubRSC`.
 - `src/HubRSC.sol`
   - Public reactive facade for constructor wiring, `react()` ingress, queue accessors, and subscriptions.
-  - Subscribes directly to contract-scoped protocol-chain settlement lifecycle events so first-queue visibility is independent of recipient onboarding timing.
+  - Registers recipients, tracks per-recipient funding units, and owns recipient-scoped exact-match lifecycle subscriptions.
+  - Deactivates and unsubscribes depleted recipients until top-up reactivation.
   - Keeps the surviving Hub runtime contract while delegating storage and policy-heavy internals into focused modules under `src/hub/`.
 - `src/hub/HubRSCStorage.sol`
   - Declares HubRSC storage, queue structs, constants, events, and constructor-time immutable validation.
@@ -74,7 +69,7 @@ This project is built for the Reactive Network execution model:
 
 - Focused Hub suites: `forge test --match-path 'test/hub/*.t.sol'`
 - Unit tests: `forge test`
-- E2E harness: `just e2e` (deploys mocks, deploys Hub/Spoke/Receiver, triggers events, checks observed state)
+- E2E harness: `just e2e` (deploys mocks, deploys Hub/Receiver, registers funded recipients, triggers events, checks observed state)
 
 ## Bounds, throughput, and failure semantics (important for expectations)
 
@@ -97,7 +92,7 @@ liquidity wake-up arrives.
 
 ### Multi-round processing (“recursive” completion)
 
-If a hub dispatch round ends with remaining liquidity, the hub triggers `HubCallback.triggerMoreLiquidityAvailable(...)` to emit a `MoreLiquidityAvailable` event, which starts another bounded dispatch round. This avoids unbounded loops while still allowing large backlogs to be drained over multiple callback rounds.
+If a hub dispatch round ends with remaining liquidity, the hub emits `MoreLiquidityAvailable(...)` from `HubRSC` itself, which starts another bounded dispatch round through the same contract. This avoids unbounded loops while still allowing large backlogs to be drained over multiple rounds without a `HubCallback` dependency.
 
 ### Persisted liquidity budget and trusted release
 
@@ -110,7 +105,7 @@ restored budget on siblings instead of immediately redispatching the same failin
 deliberately does not restore budget: it burns the speculative credit for that attempt so duplicate or stale
 `LiquidityAvailable(...)` deliveries cannot leave persistent phantom budget behind.
 
-`SettlementProcessed(...)` remains authoritative for queue reduction, but its `requestedAmount` input is not trusted for releasing reservations. In-flight reservations are released only after the hub observes trusted receiver `SettlementSucceeded(...)` or `SettlementFailed(...)` events. Recipient Spokes can still forward legacy normalized reports for compatibility, but those forwarded copies are ignored by `HubRSC` so direct and forwarded logs cannot both mutate state.
+`SettlementProcessed(...)` remains authoritative for queue reduction, but its `requestedAmount` input is not trusted for releasing reservations. In-flight reservations are released only after the hub observes trusted receiver `SettlementSucceeded(...)` or `SettlementFailed(...)` events.
 
 ### Shared-underlying routing and backfill
 
@@ -126,7 +121,7 @@ While backfill is still in progress, the hub prefers the per-LCC lane when it ha
 - The correct **Reactive callback proxy addresses** for each chain (Reactive publishes these per network).
 - Funds for:
   - Protocol chain gas (to deploy Receiver, if you deploy it)
-  - Reactive chain gas and kREACT (to deploy/fund Hub/Spoke/Callback and cover execution)
+  - Reactive chain gas and kREACT (to deploy/fund HubRSC and cover execution)
 
 ### Address & version registry (fill this in per deployment)
 
@@ -134,32 +129,38 @@ While backfill is still in progress, the hub prefers the per-LCC lane when it ha
 | --------------------------------- | -------- | ------- | --------------------------------------------------- |
 | LiquidityHub                      | protocol | `0x…`   | canonical Fiet protocol contract                    |
 | BatchProcessSettlement (Receiver) | protocol | `0x…`   | destination receiver                                |
-| HubCallback                       | reactive | `0x…`   | whitelist admin                                     |
 | HubRSC                            | reactive | `0x…`   | aggregator/dispatcher                               |
-| SpokeRSC (per recipient)          | reactive | `0x…`   | one per user                                        |
 | PROTOCOL_CALLBACK_PROXY           | protocol | `0x…`   | from [Reactive docs](https://dev.reactive.network/) |
-| REACTIVE_CALLBACK_PROXY           | reactive | `0x…`   | from [Reactive docs](https://dev.reactive.network/) |
 
 ## Integration flows
 
-### Flow A — “Deploy the shared Hub stack only”
+### Flow A — “Deploy the single Hub stack”
 
 This is the default automation path:
 
-1. **Deploy `HubRSC`**, `HubCallback`, and the destination receiver.
-2. **Fund** the shared reactive contracts so they can maintain subscriptions and callbacks.
-3. Users perform swaps/unwraps as normal. When a settlement is queued, `HubRSC` observes it directly from `LiquidityHub` and eventually dispatches settlement when liquidity becomes available.
+1. **Deploy `HubRSC`** and the destination receiver.
+2. **Fund** the reactive HubRSC contract with kREACT so it can maintain subscriptions and callbacks.
+3. **Register each recipient** with `registerRecipient(recipient, fundingUnits)`.
+4. **Top up recipients** with `fundRecipient(recipient, fundingUnits)` before their units deplete.
+5. Users perform swaps/unwraps as normal. When a settlement is queued for an active recipient, `HubRSC` observes it directly from `LiquidityHub` and eventually dispatches settlement when liquidity becomes available.
 
-### Flow B — “Optional legacy recipient Spokes”
+`SpokeRSC` and `HubCallback` have been retired from the active runtime and deployment model. Recipient filtering remains exact-match and recipient-driven, but HubRSC now owns the subscriptions directly.
 
-If an integrator still wants recipient-local forwarding or recipient-local funding isolation, they may additionally manage `SpokeRSC` instances:
+### Recipient registration and funding policy
 
-- Spoke deployment
-- initial funding
-- requesting or performing the admin whitelist step
-- operational monitoring (alerts when underfunded or misconfigured)
+Registration is explicit. A recipient with no `recipientRegistered(recipient)` entry receives no lifecycle intake, even if matching protocol-chain logs exist. Registration with zero funding records the recipient but does not activate subscriptions.
 
-Those legacy Spokes are no longer required for the first queued settlement to become visible to automation.
+Activation requires positive `recipientFundingUnits(recipient)`. On activation, HubRSC subscribes to exact-match lifecycle logs where indexed `recipient` equals the registered address:
+
+- `SettlementQueued`
+- `SettlementAnnulled`
+- `SettlementProcessed`
+- receiver `SettlementSucceeded`
+- receiver `SettlementFailed`
+
+HubRSC debits one funding unit after accepting a non-duplicate matching lifecycle log for the recipient and one funding unit for each recipient-specific dispatch item reserved into a settlement batch. When the ledger reaches zero, HubRSC deactivates the recipient and unsubscribes its lifecycle filters. Existing pending state is retained, but no new recipient-specific dispatch work is reserved until the recipient is topped up.
+
+Top-up uses `fundRecipient(recipient, fundingUnits)`. If the recipient is registered and the top-up makes funding positive, HubRSC reactivates exact-match subscriptions and pending work can resume on the next queue mutation, liquidity wake, or self-continuation.
 
 ## Operational guidance (how to observe what’s going on)
 
@@ -178,25 +179,23 @@ cast call "$LIQUIDITY_HUB" \
   --rpc-url "$PROTOCOL_RPC"
 ```
 
-### Confirm optional legacy Spokes are correctly subscribed and reporting (reactive chain)
-
-This is only relevant if you intentionally run the legacy recipient-Spoke path.
-
-The most common misconfiguration is **whitelisting the wrong address**.
-
-- `SpokeRSC` calls `HubCallback.recordSettlement(...)` with `spokeAddress = address(this)` (the Spoke contract address).
-- Therefore, `HubCallback.setSpokeForRecipient(recipient, spoke)` must be set to the **deployed SpokeRSC address**, not an EOA.
-
-Useful read:
-
-- `HubCallback.getTotalAmountProcessed(lcc, recipient)` should increase after queue events are observed and accepted.
+### Confirm recipient registration and funding (reactive chain)
 
 Copy-paste read (example):
 
 ```bash
-cast call "$HUB_CALLBACK" \
-  "getTotalAmountProcessed(address,address)(uint256)" \
-  "$LCC" \
+cast call "$HUB_RSC" \
+  "recipientRegistered(address)(bool)" \
+  "$RECIPIENT" \
+  --rpc-url "$REACTIVE_RPC"
+
+cast call "$HUB_RSC" \
+  "recipientActive(address)(bool)" \
+  "$RECIPIENT" \
+  --rpc-url "$REACTIVE_RPC"
+
+cast call "$HUB_RSC" \
+  "recipientFundingUnits(address)(uint256)" \
   "$RECIPIENT" \
   --rpc-url "$REACTIVE_RPC"
 ```
@@ -253,11 +252,12 @@ This system is event-driven. “Time to process” depends on:
 
 Check the usual suspects:
 
-- **Spoke not whitelisted** (or whitelisted to the wrong address):
-  - `HubCallback` will emit `SpokeNotForRecipient(recipient, expectedSpoke, actualSpoke)` and drop the report.
-  - Fix: whitelist the **SpokeRSC contract address** for that recipient.
-- **Underfunded reactive contracts**:
-  - The Spoke and Hub must have enough kREACT deposited to execute subscriptions/callbacks.
+- **Recipient not registered or inactive**:
+  - `HubRSC.recipientRegistered(recipient)` must be true.
+  - `HubRSC.recipientActive(recipient)` must be true and `recipientFundingUnits(recipient)` must be positive.
+  - Fix: call `registerRecipient(recipient, units)` or `fundRecipient(recipient, units)`.
+- **Underfunded reactive HubRSC contract**:
+  - HubRSC must have enough kREACT deposited to execute subscriptions/callbacks.
   - Fix: fund via the system contract `depositTo(address)` (see below).
 - **Wrong callback proxies / chain IDs**:
   - If callback proxy addresses or chain IDs are incorrect, callbacks will not be authorised or delivered as expected.
@@ -323,7 +323,7 @@ Required env vars:
 just deploy-receiver
 ```
 
-#### 3) Deploy HubCallback + HubRSC (reactive chain)
+#### 3) Deploy HubRSC (reactive chain)
 
 Required env vars:
 
@@ -334,33 +334,11 @@ Required env vars:
 just deploy-hub
 ```
 
-#### 4) Deploy SpokeRSC (reactive chain, per recipient)
-
-Required env vars:
-
-- `LIQUIDITY_HUB`
-- `HUB_CALLBACK`
-
-```bash
-just deploy-spoke 0xb797466544DeB18F1e19185e85400A26FC5d3E95
-```
-
-#### 5) Whitelist spoke for recipient (reactive chain, admin step)
-
-Required env vars:
-
-- `HUB_CALLBACK`
-- `RECIPIENT`
-- `RVM_ID` (set this to the **deployed SpokeRSC address** for the recipient)
-
-```bash
-just whitelistspokeforrecipient
-```
-
-This calls:
+#### 4) Register or top up a recipient (reactive chain)
 
 ```solidity
-setSpokeForRecipient(recipient, spoke)
+registerRecipient(recipient, fundingUnits)
+fundRecipient(recipient, fundingUnits)
 ```
 
 ## Funding reactive contracts (kREACT deposit)

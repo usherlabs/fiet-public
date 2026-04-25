@@ -1,5 +1,7 @@
 # For Consideration: Spoke-Sponsored Hub Funding Model
 
+> Historical note: this document describes the superseded `SpokeRSC` / `HubCallback` funding idea retained for design history only. It is not part of the active runtime. The shipped TASK-40.2 model is HubRSC-owned recipient registration plus per-recipient funding units on HubRSC.
+
 ## Current Funding Model (as of 2026-03-31)
 
 The reactive contracts currently operate with **per-contract funding** on the Reactive Network:
