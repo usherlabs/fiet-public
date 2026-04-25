@@ -165,6 +165,11 @@ abstract contract HubRSCStorage is AbstractReactive {
     uint256 public lastObservedSystemDebt;
     /// @notice Work context that receives the next observed debt delta.
     DebtContext internal pendingDebtContext;
+    /// @notice One deferred context retained when new work arrives before the prior context's debt is observable.
+    DebtContext internal queuedDebtContext;
+    /// @dev Dispatch contexts must not be overwritten by later lifecycle work before their debt is observed.
+    bool internal pendingDebtContextProtected;
+    bool internal queuedDebtContextProtected;
 
     event RecipientRegistered(address indexed recipient, uint256 depositAmount, int256 balance);
     event RecipientFunded(address indexed recipient, uint256 depositAmount, int256 balance);
@@ -316,7 +321,7 @@ abstract contract HubRSCStorage is AbstractReactive {
             emit RecipientDebtAllocated(recipient, share, recipientBalance[recipient]);
             _syncRecipientActivation(recipient);
         }
-        _clearDebtContext();
+        _advanceDebtContext();
     }
 
     function _coverObservedDebtIfFunded() internal {
@@ -341,25 +346,64 @@ abstract contract HubRSCStorage is AbstractReactive {
     }
 
     function _recordLifecycleDebtContext(address recipient) internal {
-        _clearDebtContext();
-        pendingDebtContext.recipients.push(recipient);
-        pendingDebtContext.weights.push(1);
-        pendingDebtContext.totalWeight = 1;
+        DebtContext storage context = _nextWritableDebtContext();
+        _clearDebtContext(context);
+        context.recipients.push(recipient);
+        context.weights.push(1);
+        context.totalWeight = 1;
+        _setWritableDebtContextProtected(false);
     }
 
     function _recordDispatchDebtContext(address[] memory recipients, uint256 count) internal {
-        _clearDebtContext();
+        DebtContext storage context = _nextWritableDebtContext();
+        _clearDebtContext(context);
         for (uint256 i = 0; i < count; i++) {
-            pendingDebtContext.recipients.push(recipients[i]);
-            pendingDebtContext.weights.push(1);
+            context.recipients.push(recipients[i]);
+            context.weights.push(1);
         }
-        pendingDebtContext.totalWeight = count;
+        context.totalWeight = count;
+        _setWritableDebtContextProtected(true);
     }
 
     function _clearDebtContext() internal {
-        delete pendingDebtContext.recipients;
-        delete pendingDebtContext.weights;
-        pendingDebtContext.totalWeight = 0;
+        _clearDebtContext(pendingDebtContext);
+        _clearDebtContext(queuedDebtContext);
+        pendingDebtContextProtected = false;
+        queuedDebtContextProtected = false;
+    }
+
+    function _clearDebtContext(DebtContext storage context) internal {
+        delete context.recipients;
+        delete context.weights;
+        context.totalWeight = 0;
+    }
+
+    function _nextWritableDebtContext() internal view returns (DebtContext storage context) {
+        return
+            pendingDebtContext.totalWeight == 0 || !pendingDebtContextProtected ? pendingDebtContext : queuedDebtContext;
+    }
+
+    function _setWritableDebtContextProtected(bool protectedContext) internal {
+        if (pendingDebtContext.totalWeight == 0 || !pendingDebtContextProtected) {
+            pendingDebtContextProtected = protectedContext;
+        } else {
+            queuedDebtContextProtected = protectedContext;
+        }
+    }
+
+    function _advanceDebtContext() internal {
+        _clearDebtContext(pendingDebtContext);
+        pendingDebtContextProtected = false;
+        if (queuedDebtContext.totalWeight == 0) return;
+
+        for (uint256 i = 0; i < queuedDebtContext.recipients.length; i++) {
+            pendingDebtContext.recipients.push(queuedDebtContext.recipients[i]);
+            pendingDebtContext.weights.push(queuedDebtContext.weights[i]);
+        }
+        pendingDebtContext.totalWeight = queuedDebtContext.totalWeight;
+        pendingDebtContextProtected = queuedDebtContextProtected;
+        _clearDebtContext(queuedDebtContext);
+        queuedDebtContextProtected = false;
     }
 
     function _setRecipientLifecycleSubscriptions(address recipient, bool shouldSubscribe) internal {
