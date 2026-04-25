@@ -149,7 +149,8 @@ abstract contract HubRSCStorage is AbstractReactive {
     uint256 internal constant MAX_RECEIVER_BATCH_SIZE = 30;
     /// @dev Source marker for the in-flight dispatch call (`true` only for LiquidityHub callbacks).
     bool internal bootstrapZeroBatchRetry;
-    /// @dev Whether the next callback on a budget lane was emitted by HubRSC and may seed zero-batch continuation credits.
+    /// @dev One-shot permit for HubRSC-emitted callbacks to seed zero-batch continuation credits on their budget lane.
+    ///      Manual/stale follow-up callbacks consume no permit, which prevents repeated credit reseeding.
     mapping(address => bool) internal continuationBootstrapPendingByLane;
 
     event SpokeCreated(address indexed recipient, address indexed spoke);

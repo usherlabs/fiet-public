@@ -86,8 +86,7 @@ abstract contract HubRSCDispatch is HubRSCReconciliation {
         if (!_markLogProcessed(log)) return;
         address lcc = address(uint160(log.topic_1));
         address budgetLane = _dispatchBudgetLane(lcc);
-        uint256 ignoredAvailable = abi.decode(log.data, (uint256));
-        ignoredAvailable;
+        // The callback amount is informational; persisted lane budget remains the dispatch source of truth.
         bool allowBootstrapRetry = continuationBootstrapPendingByLane[budgetLane];
         continuationBootstrapPendingByLane[budgetLane] = false;
         _dispatchLiquidityIfBudgetAvailable(lcc, allowBootstrapRetry);
