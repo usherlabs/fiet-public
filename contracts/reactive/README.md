@@ -160,6 +160,8 @@ Activation requires a positive `recipientBalance(recipient)`. On activation, Hub
 
 HubRSC uses the Reactive system contract’s `debt(address(this))` as the source of actual service cost. Because `reactive-lib` exposes debt only as an observed aggregate, HubRSC uses deferred attribution at safe boundaries: each `react()`, registration, top-up, or explicit `syncSystemDebt()` first allocates any newly observed debt to the prior recorded work context. Lifecycle debt is allocated to that recipient; dispatch callback debt is split across the recipients included in the prior batch. If no context exists, `UnallocatedDebtObserved` is emitted and no recipient is charged. Existing pending state is retained when a balance becomes non-positive, but no new recipient intake or dispatch work is reserved until the recipient is topped up. Outcome logs for already tracked pending or in-flight work can still reconcile after depletion, so a dispatch is not stranded before its `SettlementSucceeded`, `SettlementFailed`, or `SettlementProcessed` logs arrive.
 
+See [`docs/recipient-payment-model.md`](docs/recipient-payment-model.md) for the full recipient payment and `pendingDebtContext` attribution model.
+
 Top-up uses payable `fundRecipient(recipient)`. If the recipient is registered and the top-up makes `recipientBalance(recipient)` positive, HubRSC reactivates exact-match subscriptions and pending work can resume on the next queue mutation, liquidity wake, or self-continuation.
 
 ## Operational guidance (how to observe what’s going on)

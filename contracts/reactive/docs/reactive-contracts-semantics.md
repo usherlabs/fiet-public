@@ -150,6 +150,7 @@ if (credits == 0 && bootstrapZeroBatchRetry) {
 - Dispatch contexts split observed debt across the prior batch recipients.
 - If no context exists, HubRSC emits `UnallocatedDebtObserved` and leaves recipient balances unchanged.
 - Non-positive balances deactivate/unsubscribe the recipient path until payable `fundRecipient` makes the balance positive again.
+- See [`recipient-payment-model.md`](recipient-payment-model.md) for the full payment model and `pendingDebtContext` lifecycle.
 
 ### Buffering
 - `bufferedProcessedDecreaseByKey` and `bufferedAnnulledDecreaseByKey`
