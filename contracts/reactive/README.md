@@ -68,9 +68,11 @@ This project is built for the Reactive Network execution model:
 ### Testing
 
 - Focused Hub suites: `forge test --match-path 'test/hub/*.t.sol'`
+- Deterministic pseudo-e2e: `just pseudo-e2e` (single-contract HubRSC coverage using Foundry mocks and direct `react()` calls; no live Reactive Network access or secrets)
 - Unit tests: `forge test`
-- E2E harness: `just e2e` (deploys mocks, deploys Hub/Receiver, registers funded recipients, triggers events, checks observed state)
+- Live Lasna smoke harness: `just e2e` (deploys mocks, deploys Hub/Receiver, registers funded recipients, triggers events, checks observed state; gated manually and requires live RPCs plus a funded key)
 - Post-refactor reactive findings matrix: [`docs/task-40.3-task-35-regression-validation.md`](docs/task-40.3-task-35-regression-validation.md)
+- Post-single-hub validation plan: [`docs/post-single-hub-validation-plan.md`](docs/post-single-hub-validation-plan.md)
 
 ## Bounds, throughput, and failure semantics (important for expectations)
 
@@ -288,12 +290,32 @@ Some environments use case-sensitive filesystems. Ensure the script name referen
 forge test
 ```
 
-### End-to-end harness
+### Deterministic pseudo-e2e
+
+This is the default validation lane for single-contract HubRSC changes. It runs fully inside Foundry with
+`HubRSCTestBase`, `MockLiquidityHub`, `MockSystemContract`, receiver mocks, and direct `react()` calls. It covers:
+
+- unregistered, registered-underfunded, and active funded recipient intake;
+- matching lifecycle and processing debt attribution;
+- depletion pause and top-up reactivation;
+- duplicate log dedupe, bounded self-continuation, retry blocking, terminal quarantine, shared-underlying dispatch, and an MM-custodian-shaped recipient.
+
+Run:
+
+```bash
+just pseudo-e2e
+```
+
+### Live Lasna smoke harness
 
 Important:
 
-- To run integration tests, fund the deployer wallet with at least `0.01` Sepolia ETH and `5` kREACT.
-- You can obtain testnet REACT (kREACT) from the Reactive documentation.
+- This lane is manually gated and is not required for deterministic CI.
+- Pull-request live smoke runs require relevant `contracts/reactive/src/**`, `contracts/reactive/scripts/**`, `contracts/reactive/test/e2e.sh`, or `.github/workflows/reactive-e2e.yml` changes plus the `reactive-e2e` label; manual runs require `workflow_dispatch` with `run_smoke=true`.
+- Use a funded live key only for this lane, for example `REACTIVE_CI_PRIVATE_KEY` from GitHub Actions secrets or Vault.
+- The live key deploys/funds the HubRSC, registers and funds recipients, emits protocol-chain mock events, and polls HubRSC/receiver state for Reactive Network callback delivery.
+- Ephemeral wallets are not used by the current single-HubRSC smoke harness. The same funded live key signs deployment, recipient registration/funding, and mock protocol events so the HubRSC RVM id, receiver callback origin, and funded recipient lifecycle are stable for the run. Do not reuse this key in deterministic pseudo-e2e coverage.
+- To run manually, fund the deployer wallet with at least `0.01` Sepolia ETH and `5` kREACT. You can obtain testnet REACT (kREACT) from the Reactive documentation.
 
 Run:
 
