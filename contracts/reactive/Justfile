@@ -3,8 +3,8 @@
 set dotenv-load := true
 set export := true
 
-reactive_rpc := env_var("REACTIVE_RPC")
-protocol_rpc := env_var("PROTOCOL_RPC")
+reactive_rpc := env_var_or_default("REACTIVE_RPC", "")
+protocol_rpc := env_var_or_default("PROTOCOL_RPC", "")
 broadcast := env_var_or_default("BROADCAST", "false")
 broadcast_flag := if broadcast == "true" { "--broadcast" } else { "" }
 
@@ -21,6 +21,9 @@ build:
 
 test:
     forge test
+
+pseudo-e2e:
+    FOUNDRY_PROFILE=debug forge test --match-path 'test/hub/HubRSC.PseudoE2E.t.sol' -vvv
 
 # ----------------------------
 # Deploy scripts

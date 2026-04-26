@@ -34,6 +34,14 @@ HubRSC tracks a signed native-token `recipientBalance` per registered recipient.
 
 When a recipient balance is not positive, HubRSC deactivates that recipient and unsubscribes its exact-match lifecycle filters. Pending queue state is not deleted on depletion, and tracked receiver/protocol outcome logs may still reconcile already pending or in-flight work. Top up with payable `fundRecipient(recipient)` until the balance is positive to reactivate subscriptions and allow pending work to resume on future wakes.
 
+## Validation lanes
+
+Use deterministic pseudo-e2e as the default development and CI validation lane. `just pseudo-e2e` runs Foundry-only coverage against the single `HubRSC` runtime by simulating Reactive VM ingress with direct `react()` calls and mocks. It must not require live Reactive Network RPCs, `REACTIVE_CI_PRIVATE_KEY`, or any other live secret.
+
+Use the live Lasna smoke harness only when explicitly gated for a deployment or operator validation. Pull-request live smoke runs require relevant Reactive changes and the `reactive-e2e` label; manual runs require `workflow_dispatch` with `run_smoke=true`. That lane may use a funded master key from GitHub Actions secrets or Vault to deploy/fund HubRSC, register/fund recipients, and prove end-to-end callback delivery against live infrastructure by polling HubRSC and receiver state. Keep failures in this lane separate from deterministic pseudo-e2e regressions because they can depend on RPC, funding, and Reactive Network availability.
+
+The current live smoke harness intentionally does not create a separate per-run ephemeral signer. `REACTIVE_CI_PRIVATE_KEY` is the funded signer for deployment, HubRSC RVM id derivation, recipient registration/funding, and mock protocol event emission. If operators want per-run recipient addresses, pass `RECIPIENT_ONE` and `RECIPIENT_TWO`; those addresses are registered and funded by the master signer.
+
 ## Liquidity budget is persisted per dispatch lane
 
 `HubRSC` persists available dispatch budget in `availableBudgetByDispatchLane` instead of relying on `LiquidityAvailable(...)` as a one-shot trigger. Integrators should read this as the hub's liveness source of truth:
