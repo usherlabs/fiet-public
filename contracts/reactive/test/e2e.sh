@@ -17,14 +17,6 @@ DEPLOY_DEBUG="${DEBUG:-false}"
 RECIPIENT_ONE="${RECIPIENT_ONE:-0xb797466544DeB18F1e19185e85400A26FC5d3E95}"
 RECIPIENT_TWO="${RECIPIENT_TWO:-0xa4260A121bC44d085AC9a18e628A5712Ef3Bd49C}"
 RECIPIENT_DEPOSIT_WEI="${RECIPIENT_DEPOSIT_WEI:-100000000000000000}"
-if [ -z "${RECEIVER_PREFUND_WEI:-}" ]; then
-  if [ "${PROTOCOL_CHAIN_ID:-}" = "${REACTIVE_CHAIN_ID:-}" ]; then
-    RECEIVER_PREFUND_WEI=0
-  else
-    RECEIVER_PREFUND_WEI=10000000000000000
-  fi
-fi
-export RECEIVER_PREFUND_WEI
 export BROADCAST=true
 
 : "${REACTIVE_RPC:?REACTIVE_RPC is required}"
@@ -50,21 +42,6 @@ extract_labeled_address() {
   local text="$2"
   # Match even when forge prefixes log lines with spaces or extra text.
   printf '%s\n' "$text" | sed -n "s/.*${label}:[[:space:]]*\(0x[a-fA-F0-9]\{40\}\).*/\1/p" | tail -n1
-}
-
-extract_broadcast_address() {
-  local script_name="$1"
-  local chain_id="$2"
-  local contract_name="$3"
-  local file="broadcast/${script_name}/${chain_id}/run-latest.json"
-
-  if [ ! -f "$file" ] || ! command -v jq >/dev/null 2>&1; then
-    return 0
-  fi
-
-  jq -r --arg contract_name "$contract_name" \
-    '.transactions[]? | select(.contractName == $contract_name and .contractAddress != null) | .contractAddress' \
-    "$file" 2>/dev/null | tail -n1
 }
 
 # UTILITY HELPER FUNCTION TO RUN A COMMAND AND PRINT THE OUTPUT
@@ -211,10 +188,19 @@ deploy() {
 
   BATCH_RECEIVER="$(extract_labeled_address "BatchProcessSettlementReceiver" "$receiver_out")"
   if [ -z "${BATCH_RECEIVER:-}" ]; then
-    BATCH_RECEIVER="$(extract_broadcast_address "DeployReceiver.s.sol" "$PROTOCOL_CHAIN_ID" "BatchProcessSettlement")"
-  fi
-  if [ -z "${BATCH_RECEIVER:-}" ]; then
     echo "Failed to parse BatchProcessSettlementReceiver address."
+    echo "---- raw output ----"
+    echo "$receiver_out"
+    exit 1
+  fi
+  if [ "$(printf '%s' "$BATCH_RECEIVER" | tr '[:upper:]' '[:lower:]')" = "$(printf '%s' "$LIQUIDITY_HUB" | tr '[:upper:]' '[:lower:]')" ]; then
+    echo "BatchProcessSettlementReceiver address equals LIQUIDITY_HUB, refusing to continue: $BATCH_RECEIVER"
+    echo "---- raw output ----"
+    echo "$receiver_out"
+    exit 1
+  fi
+  if ! wait_until "BatchProcessSettlementReceiver code on protocol chain" contract_code_exists "$BATCH_RECEIVER" "$PROTOCOL_RPC"; then
+    echo "BatchProcessSettlementReceiver has no deployed code at: $BATCH_RECEIVER"
     echo "---- raw output ----"
     echo "$receiver_out"
     exit 1
