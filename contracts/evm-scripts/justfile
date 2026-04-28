@@ -102,7 +102,8 @@ help:
 # === Development Workflows ===
 
 # Complete development setup (setup create3, deploy tokens, configure underlyings, deploy contracts, configure oracle, create market)
-dev: setup-create3 deploy-tokenA deploy-tokenB set-underlyings deploy allow-oracle-configure configure-oracle create-market
+# Include ACM admin handoff so allow-oracle-configure can grant permissions via GlobalConfig.proxyCall.
+dev: setup-create3 deploy-tokenA deploy-tokenB set-underlyings deploy admin-acm-transfer-admin-to-globalconfig allow-oracle-configure configure-oracle create-market
 
 # Production Steps:
 # 1. deploy-oracle
@@ -444,13 +445,16 @@ deploy-oracle:
     # Main oracle contract name differs by chain. On sequencer-based L2s (e.g. Arbitrum One),
     # the oracle deploy uses Venus `SequencerChainlinkOracle` instead of `ChainlinkOracle`.
     MAIN_ORACLE_CONTRACT="ChainlinkOracle"
-    if [ -f "${ORACLE_DIR}/SequencerChainlinkOracle_Proxy.json" ]; then
+
+    if [ "$MODE_NORM" = "LOCAL" ] && [ -f "${ORACLE_DIR}/MockChainlinkOracle_Proxy.json" ]; then
+        MAIN_ORACLE_CONTRACT="MockChainlinkOracle"
+    elif [ -f "${ORACLE_DIR}/SequencerChainlinkOracle_Proxy.json" ]; then
         MAIN_ORACLE_CONTRACT="SequencerChainlinkOracle"
     elif [ -f "${ORACLE_DIR}/ChainlinkOracle_Proxy.json" ]; then
         MAIN_ORACLE_CONTRACT="ChainlinkOracle"
     else
         echo "Expected main oracle deployment file not found under: ${ORACLE_DIR}"
-        echo "Looked for: SequencerChainlinkOracle_Proxy.json or ChainlinkOracle_Proxy.json"
+        echo "Looked for: MockChainlinkOracle_Proxy.json (LOCAL mode), SequencerChainlinkOracle_Proxy.json, or ChainlinkOracle_Proxy.json"
         exit 1
     fi
     MAIN_ORACLE_IMPL_FILE="${MAIN_ORACLE_CONTRACT}_Implementation.json"
