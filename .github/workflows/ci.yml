@@ -11,29 +11,6 @@ env:
   FOUNDRY_PROFILE: ci
 
 jobs:
-  reactive-pseudo-e2e:
-    name: Reactive Pseudo E2E
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          submodules: recursive
-          token: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Install Foundry
-        run: ./.github/scripts/install-foundry.sh v1.4.2
-
-      - name: Install Just
-        run: |
-          curl --proto '=https' --tlsv1.2 -sSf https://just.systems/install.sh | bash -s -- --to /usr/local/bin
-
-      - name: Run deterministic reactive pseudo-e2e
-        run: just pseudo-e2e
-        working-directory: contracts/reactive
-
   solidity:
     name: Solidity Tests
     runs-on: ubuntu-latest

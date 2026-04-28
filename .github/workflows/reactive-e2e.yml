@@ -1,18 +1,23 @@
-# Gated Reactive live smoke tests.
+# Reactive validation tests.
 #
-# Deterministic reactive coverage lives in CI as `just pseudo-e2e` under
-# `contracts/reactive` and does not use live secrets. This workflow is reserved
-# for explicitly requested Lasna smoke validation with a funded live key.
-name: Reactive E2E
+# The deterministic job runs `just local-simulation` under `contracts/reactive`
+# without live secrets. The live smoke job is explicitly gated and reserved for
+# Lasna pseudo-e2e validation with a funded live key.
+name: Reactive Validation
 
 on:
   pull_request:
     branches: [main, develop]
     types: [opened, synchronize, reopened, labeled]
     paths:
+      - "contracts/reactive/CAVEATS.md"
+      - "contracts/reactive/README.md"
+      - "contracts/reactive/env.sample"
+      - "contracts/reactive/Justfile"
+      - "contracts/reactive/docs/**"
       - "contracts/reactive/src/**"
       - "contracts/reactive/scripts/**"
-      - "contracts/reactive/test/e2e.sh"
+      - "contracts/reactive/test/**"
       - ".github/workflows/reactive-e2e.yml"
   workflow_dispatch:
     inputs:
@@ -23,17 +28,32 @@ on:
         default: false
 
 env:
-  BROADCAST: "true"
   FOUNDRY_PROFILE: "ci"
-  REACTIVE_CHAIN_ID: "5318007"
-  PROTOCOL_CHAIN_ID: "11155111"
-  REACTIVE_RPC: ${{ secrets.REACTIVE_RPC }}
-  PROTOCOL_RPC: ${{ secrets.ETH_SEPOLIA_RPC_URL }}
-  REACTIVE_CI_PRIVATE_KEY: ${{ secrets.REACTIVE_CI_PRIVATE_KEY }}
-  PRIVATE_KEY: ${{ secrets.REACTIVE_CI_PRIVATE_KEY }}
-  RECIPIENT_DEPOSIT_WEI: "100000000000000000"
 
 jobs:
+  reactive-local-simulation:
+    name: Reactive Local Simulation
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install Foundry
+        run: ./.github/scripts/install-foundry.sh v1.4.2
+
+      - name: Install Just
+        run: |
+          curl --proto '=https' --tlsv1.2 -sSf https://just.systems/install.sh | bash -s -- --to /usr/local/bin
+
+      - name: Run deterministic reactive local simulation
+        run: just local-simulation
+        working-directory: contracts/reactive
+
   reactive-live-smoke:
     name: Reactive Live Smoke
     if: >-
@@ -45,6 +65,15 @@ jobs:
     timeout-minutes: 45
     permissions:
       contents: read
+    env:
+      BROADCAST: "true"
+      REACTIVE_CHAIN_ID: "5318007"
+      PROTOCOL_CHAIN_ID: "11155111"
+      REACTIVE_RPC: ${{ secrets.REACTIVE_RPC }}
+      PROTOCOL_RPC: ${{ secrets.ETH_SEPOLIA_RPC_URL }}
+      REACTIVE_CI_PRIVATE_KEY: ${{ secrets.REACTIVE_CI_PRIVATE_KEY }}
+      PRIVATE_KEY: ${{ secrets.REACTIVE_CI_PRIVATE_KEY }}
+      RECIPIENT_DEPOSIT_WEI: "100000000000000000"
     steps:
       - uses: actions/checkout@v4
         with:
