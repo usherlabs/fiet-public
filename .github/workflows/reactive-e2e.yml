@@ -118,6 +118,7 @@ jobs:
       PRIVATE_KEY: ${{ secrets.REACTIVE_CI_PRIVATE_KEY }}
       RECIPIENT_DEPOSIT_WEI: "100000000000000000"
       RECEIVER_PREFUND_WEI: "0"
+      LASNA_LIVE_SMOKE_MIN_BALANCE_WEI: "1000000000000000000"
     steps:
       - uses: actions/checkout@v4
         with:
@@ -176,6 +177,29 @@ jobs:
           fi
           echo "REACTIVE_RPC=$resolved_rpc" >> "$GITHUB_ENV"
           echo "PROTOCOL_RPC=$resolved_rpc" >> "$GITHUB_ENV"
+
+          signer="$(cast wallet address --private-key "$REACTIVE_CI_PRIVATE_KEY")"
+          if ! balance="$(cast balance --rpc-url "$resolved_rpc" "$signer" 2>/dev/null)"; then
+            echo "Unable to query Lasna balance for live smoke signer $signer." >&2
+            if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+              exit 1
+            fi
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+            echo "::notice title=Reactive live smoke skipped::Unable to query Lasna balance for the REACTIVE_CI_PRIVATE_KEY signer."
+            exit 0
+          fi
+          min_balance="${LASNA_LIVE_SMOKE_MIN_BALANCE_WEI:-1000000000000000000}"
+          if node -e 'const [balance, minimum] = process.argv.slice(1); process.exit(BigInt(balance || "0") < BigInt(minimum) ? 0 : 1)' "${balance:-0}" "$min_balance"; then
+            echo "Lasna balance for live smoke signer $signer is below required preflight minimum." >&2
+            echo "balance=$balance min=$min_balance" >&2
+            if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+              exit 1
+            fi
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+            echo "::notice title=Reactive live smoke skipped::REACTIVE_CI_PRIVATE_KEY signer has insufficient Lasna kREACT for live smoke."
+            exit 0
+          fi
+
           echo "configured=true" >> "$GITHUB_OUTPUT"
 
       - name: Run Reactive live smoke
