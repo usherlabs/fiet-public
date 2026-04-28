@@ -118,6 +118,7 @@ jobs:
       PRIVATE_KEY: ${{ secrets.REACTIVE_CI_PRIVATE_KEY }}
       RECIPIENT_DEPOSIT_WEI: "100000000000000000"
       RECEIVER_PREFUND_WEI: "0"
+      SUBSCRIPTION_PROPAGATION_SECONDS: "60"
     steps:
       - uses: actions/checkout@v4
         with:
@@ -231,6 +232,7 @@ jobs:
       PRIVATE_KEY: ${{ secrets.REACTIVE_CI_PRIVATE_KEY }}
       RECIPIENT_DEPOSIT_WEI: "100000000000000000"
       RECEIVER_PREFUND_WEI: "0"
+      SUBSCRIPTION_PROPAGATION_SECONDS: "60"
     steps:
       - uses: actions/checkout@v4
         with:

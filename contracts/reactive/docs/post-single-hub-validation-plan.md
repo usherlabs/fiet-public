@@ -43,6 +43,8 @@ The workflow accepts either Lasna RPC slash form by probing the configured `REAC
 
 GitHub Actions live smoke jobs set `RECEIVER_PREFUND_WEI=0` so PR CI only needs deploy and test gas. Operators can set `RECEIVER_PREFUND_WEI` for local/manual runs when the receiver should be prefunded.
 
+GitHub Actions live smoke jobs also set a short `SUBSCRIPTION_PROPAGATION_SECONDS` delay after recipient activation before emitting protocol events, so the live Reactive Network has time to install exact-recipient subscriptions.
+
 Optional Sepolia cross-chain smoke wiring:
 
 - `REACTIVE_CHAIN_ID=5318007`
