@@ -41,6 +41,8 @@ Default Lasna-only smoke wiring:
 
 The workflow accepts either Lasna RPC slash form by probing the configured `REACTIVE_RPC` first and then the alternate trailing-slash form. It exports the first candidate whose `cast chain-id` returns `5318007` as both `REACTIVE_RPC` and `PROTOCOL_RPC` for the Lasna-only lane.
 
+The same-chain Lasna smoke harness defaults `RECEIVER_PREFUND_WEI=0`. Foreign-chain profiles keep the receiver prefund default at `0.01 ether` unless overridden.
+
 Optional Sepolia cross-chain smoke wiring:
 
 - `REACTIVE_CHAIN_ID=5318007`
