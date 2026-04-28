@@ -131,6 +131,7 @@ jobs:
           curl --proto '=https' --tlsv1.2 -sSf https://just.systems/install.sh | bash -s -- --to /usr/local/bin
 
       - name: Validate live smoke secrets
+        id: live-smoke-secrets
         run: |
           missing=false
           for name in REACTIVE_RPC REACTIVE_CI_PRIVATE_KEY; do
@@ -140,9 +141,16 @@ jobs:
             fi
           done
           if [ "$missing" = "true" ]; then
-            exit 1
+            if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+              exit 1
+            fi
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+            echo "Skipping optional PR live smoke because required live secrets are unavailable." >&2
+            exit 0
           fi
+          echo "configured=true" >> "$GITHUB_OUTPUT"
 
       - name: Run Reactive live smoke
+        if: steps.live-smoke-secrets.outputs.configured == 'true'
         run: just e2e
         working-directory: contracts/reactive
