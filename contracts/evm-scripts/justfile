@@ -446,8 +446,13 @@ deploy-oracle:
     # the oracle deploy uses Venus `SequencerChainlinkOracle` instead of `ChainlinkOracle`.
     MAIN_ORACLE_CONTRACT="ChainlinkOracle"
 
-    if [ "$MODE_NORM" = "LOCAL" ] && [ -f "${ORACLE_DIR}/MockChainlinkOracle_Proxy.json" ]; then
-        MAIN_ORACLE_CONTRACT="MockChainlinkOracle"
+    if [ "$MODE_NORM" = "LOCAL" ]; then
+        if [ -f "${ORACLE_DIR}/MockChainlinkOracle_Proxy.json" ]; then
+            MAIN_ORACLE_CONTRACT="MockChainlinkOracle"
+        else
+            echo "Expected MockChainlinkOracle_Proxy.json in LOCAL mode under: ${ORACLE_DIR}"
+            exit 1
+        fi
     elif [ -f "${ORACLE_DIR}/SequencerChainlinkOracle_Proxy.json" ]; then
         MAIN_ORACLE_CONTRACT="SequencerChainlinkOracle"
     elif [ -f "${ORACLE_DIR}/ChainlinkOracle_Proxy.json" ]; then

@@ -102,7 +102,7 @@ const config: HardhatUserConfig = {
       url: "http://127.0.0.1:8545/",
       chainId: process.env.CHAIN_ID ? Number(process.env.CHAIN_ID) : 31337,
       live: false,
-      accounts: process.env.PRIVATE_KEY ? [process.env.PRIVATE_KEY] : [],
+      ...(process.env.PRIVATE_KEY ? { accounts: [process.env.PRIVATE_KEY] } : {}),
       timeout: httpTimeoutMs,
     },
     sepolia: {
