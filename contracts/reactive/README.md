@@ -326,7 +326,7 @@ CI delivery:
 - Deterministic Reactive local simulation runs automatically for Reactive path changes.
 - Live smoke runs on pull requests only when the `reactive-e2e` label is present and relevant live-smoke files changed.
 - Manual full smoke uses the `Reactive Validation` workflow with `workflow_dispatch` and `run_smoke=true`.
-- Required repository secrets for the default Lasna-only smoke are `REACTIVE_RPC` and `REACTIVE_CI_PRIVATE_KEY`.
+- Required repository secrets for the default Lasna-only smoke are `REACTIVE_RPC` and `REACTIVE_CI_PRIVATE_KEY`; pull-request live smoke skips the live run when those secrets are unavailable, while manual `workflow_dispatch` remains strict and fails if they are missing.
 
 Optional stronger full cross-chain validation can point `PROTOCOL_RPC`, `PROTOCOL_CHAIN_ID`, and `PROTOCOL_CALLBACK_PROXY` at a foreign protocol chain such as Ethereum Sepolia. That profile is not required for TASK-38.1 CI and would additionally require `ETH_SEPOLIA_RPC_URL` and Sepolia gas funding.
 
