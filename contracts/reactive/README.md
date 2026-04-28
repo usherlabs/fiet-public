@@ -336,7 +336,8 @@ CI delivery:
 
 - Deterministic Reactive local simulation runs automatically for Reactive path changes.
 - Default Lasna-only live smoke and optional Sepolia cross-chain smoke run on pull requests only when the `reactive-e2e` label is present and relevant live-smoke files changed.
-- Manual full smoke uses the `Reactive Validation` workflow with `workflow_dispatch` and `run_smoke=true`.
+- Pull-request live smoke is optional and reports live-network/RPC/funding/harness unavailability as a notice so deterministic regressions are not blocked by Lasna or Reactive Network availability.
+- Manual full smoke uses the `Reactive Validation` workflow with `workflow_dispatch` and `run_smoke=true`; manual runs remain strict and fail on live-smoke errors.
 - Required repository secrets for the default Lasna-only smoke are `REACTIVE_RPC` and `REACTIVE_CI_PRIVATE_KEY`; pull-request live smoke skips the live run when those secrets are unavailable, the signer lacks enough native Lasna lREACT gas, or the balance query fails, while manual `workflow_dispatch` remains strict and fails.
 - Optional Sepolia cross-chain smoke additionally requires `ETH_SEPOLIA_RPC_URL` and Sepolia ETH on the `REACTIVE_CI_PRIVATE_KEY` wallet. It preflights the Sepolia RPC and signer balance with `cast balance`, then skips cleanly with a notice when either requirement is missing.
 
