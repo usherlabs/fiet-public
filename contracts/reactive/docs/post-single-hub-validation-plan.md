@@ -17,7 +17,7 @@ Deterministic local simulation must remain the default validation lane. Lasna ps
 - Deterministic Reactive local simulation runs automatically for Reactive path changes.
 - Default Lasna-only live smoke and optional Sepolia cross-chain smoke run on pull requests only when the `reactive-e2e` label is present and relevant live-smoke files changed.
 - Manual full smoke uses the `Reactive Validation` workflow with `workflow_dispatch` and `run_smoke=true`.
-- Required repository secrets for the default Lasna-only smoke are `REACTIVE_RPC` and `REACTIVE_CI_PRIVATE_KEY`; pull-request live smoke skips the live run when those secrets are unavailable, the signer has zero native Lasna lREACT gas, or the balance query fails, while manual `workflow_dispatch` remains strict and fails.
+- Required repository secrets for the default Lasna-only smoke are `REACTIVE_RPC` and `REACTIVE_CI_PRIVATE_KEY`; pull-request live smoke skips the live run when those secrets are unavailable, the signer lacks enough native Lasna lREACT gas, or the balance query fails, while manual `workflow_dispatch` remains strict and fails.
 - Optional Sepolia cross-chain smoke additionally requires `ETH_SEPOLIA_RPC_URL` and Sepolia ETH on the `REACTIVE_CI_PRIVATE_KEY` wallet. The workflow checks Sepolia signer balance with `cast balance` and skips this optional job with a notice when the RPC or funding is missing.
 
 ## Live wallet model
@@ -43,7 +43,7 @@ The workflow accepts either Lasna RPC slash form by probing the configured `REAC
 
 GitHub Actions live smoke jobs set `RECEIVER_PREFUND_WEI=0` so PR CI only needs deploy and test gas. Operators can set `RECEIVER_PREFUND_WEI` for local/manual runs when the receiver should be prefunded.
 
-GitHub Actions live smoke jobs also set a short `SUBSCRIPTION_PROPAGATION_SECONDS` delay after recipient activation before emitting protocol events, so the live Reactive Network has time to install exact-recipient subscriptions.
+GitHub Actions live smoke jobs also set `SUBSCRIPTION_PROPAGATION_SECONDS` after recipient activation and a longer `POLL_TIMEOUT_SECONDS` window, so the live Reactive Network has time to install exact-recipient subscriptions and deliver callbacks.
 
 Optional Sepolia cross-chain smoke wiring:
 

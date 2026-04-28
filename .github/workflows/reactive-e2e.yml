@@ -118,7 +118,9 @@ jobs:
       PRIVATE_KEY: ${{ secrets.REACTIVE_CI_PRIVATE_KEY }}
       RECIPIENT_DEPOSIT_WEI: "100000000000000000"
       RECEIVER_PREFUND_WEI: "0"
-      SUBSCRIPTION_PROPAGATION_SECONDS: "60"
+      LASNA_LIVE_SMOKE_MIN_BALANCE_WEI: "1000000000000000000"
+      SUBSCRIPTION_PROPAGATION_SECONDS: "180"
+      POLL_TIMEOUT_SECONDS: "600"
     steps:
       - uses: actions/checkout@v4
         with:
@@ -188,13 +190,15 @@ jobs:
             echo "::notice title=Reactive live smoke skipped::Unable to query native Lasna lREACT gas balance for the REACTIVE_CI_PRIVATE_KEY signer."
             exit 0
           fi
-          if [ "${balance:-0}" = "0" ]; then
-            echo "Native Lasna lREACT gas balance for live smoke signer $signer is zero." >&2
+          min_balance="${LASNA_LIVE_SMOKE_MIN_BALANCE_WEI:-1000000000000000000}"
+          if node -e 'const [balance, minimum] = process.argv.slice(1); process.exit(BigInt(balance || "0") < BigInt(minimum) ? 0 : 1)' "${balance:-0}" "$min_balance"; then
+            echo "Native Lasna lREACT gas balance for live smoke signer $signer is below required preflight minimum." >&2
+            echo "balance=$balance min=$min_balance" >&2
             if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
               exit 1
             fi
             echo "configured=false" >> "$GITHUB_OUTPUT"
-            echo "::notice title=Reactive live smoke skipped::REACTIVE_CI_PRIVATE_KEY signer has no native Lasna lREACT gas for live smoke."
+            echo "::notice title=Reactive live smoke skipped::REACTIVE_CI_PRIVATE_KEY signer has insufficient native Lasna lREACT gas for live smoke."
             exit 0
           fi
 
@@ -232,7 +236,9 @@ jobs:
       PRIVATE_KEY: ${{ secrets.REACTIVE_CI_PRIVATE_KEY }}
       RECIPIENT_DEPOSIT_WEI: "100000000000000000"
       RECEIVER_PREFUND_WEI: "0"
-      SUBSCRIPTION_PROPAGATION_SECONDS: "60"
+      LASNA_LIVE_SMOKE_MIN_BALANCE_WEI: "1000000000000000000"
+      SUBSCRIPTION_PROPAGATION_SECONDS: "180"
+      POLL_TIMEOUT_SECONDS: "600"
     steps:
       - uses: actions/checkout@v4
         with:
