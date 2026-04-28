@@ -148,9 +148,94 @@ jobs:
             echo "Skipping optional PR live smoke because required live secrets are unavailable." >&2
             exit 0
           fi
+          if ! cast chain-id --rpc-url "$REACTIVE_RPC" >/dev/null 2>&1; then
+            echo "Lasna RPC is not reachable for optional PR live smoke." >&2
+            if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+              exit 1
+            fi
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+            echo "::notice title=Reactive live smoke skipped::Lasna RPC was unavailable during PR preflight."
+            exit 0
+          fi
           echo "configured=true" >> "$GITHUB_OUTPUT"
 
       - name: Run Reactive live smoke
         if: steps.live-smoke-secrets.outputs.configured == 'true'
+        run: just e2e
+        working-directory: contracts/reactive
+
+  reactive-live-cross-chain-smoke:
+    name: Reactive Live Cross-Chain Smoke
+    needs: reactive-live-smoke-scope
+    if: >-
+      ${{
+        (github.event_name == 'workflow_dispatch' && inputs.run_smoke == true) ||
+        (
+          github.event_name == 'pull_request' &&
+          contains(github.event.pull_request.labels.*.name, 'reactive-e2e') &&
+          needs.reactive-live-smoke-scope.outputs.changed == 'true'
+        )
+      }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    env:
+      BROADCAST: "true"
+      REACTIVE_CHAIN_ID: "5318007"
+      PROTOCOL_CHAIN_ID: "11155111"
+      REACTIVE_RPC: ${{ secrets.REACTIVE_RPC }}
+      PROTOCOL_RPC: ${{ secrets.ETH_SEPOLIA_RPC_URL }}
+      PROTOCOL_CALLBACK_PROXY: "0xc9f36411C9897e7F959D99ffca2a0Ba7ee0D7bDA"
+      REACTIVE_CI_PRIVATE_KEY: ${{ secrets.REACTIVE_CI_PRIVATE_KEY }}
+      PRIVATE_KEY: ${{ secrets.REACTIVE_CI_PRIVATE_KEY }}
+      RECIPIENT_DEPOSIT_WEI: "100000000000000000"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install Foundry
+        run: ./.github/scripts/install-foundry.sh v1.4.2
+
+      - name: Install Just
+        run: |
+          curl --proto '=https' --tlsv1.2 -sSf https://just.systems/install.sh | bash -s -- --to /usr/local/bin
+
+      - name: Preflight Sepolia cross-chain smoke
+        id: cross-chain-preflight
+        run: |
+          missing=false
+          for name in REACTIVE_RPC PROTOCOL_RPC REACTIVE_CI_PRIVATE_KEY; do
+            if [ -z "${!name:-}" ]; then
+              echo "Missing optional Sepolia cross-chain smoke secret or env: $name" >&2
+              missing=true
+            fi
+          done
+          if [ "$missing" = "true" ]; then
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+            echo "::notice title=Reactive cross-chain smoke skipped::Missing REACTIVE_RPC, ETH_SEPOLIA_RPC_URL, or REACTIVE_CI_PRIVATE_KEY."
+            exit 0
+          fi
+
+          signer="$(cast wallet address --private-key "$REACTIVE_CI_PRIVATE_KEY")"
+          if ! balance="$(cast balance --rpc-url "$PROTOCOL_RPC" "$signer" 2>/dev/null)"; then
+            echo "Unable to query Sepolia balance for optional cross-chain smoke." >&2
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+            echo "::notice title=Reactive cross-chain smoke skipped::ETH_SEPOLIA_RPC_URL was unavailable during preflight."
+            exit 0
+          fi
+          if [ "${balance:-0}" = "0" ]; then
+            echo "Sepolia balance is zero for optional cross-chain smoke signer $signer." >&2
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+            echo "::notice title=Reactive cross-chain smoke skipped::REACTIVE_CI_PRIVATE_KEY signer has no Sepolia ETH."
+            exit 0
+          fi
+
+          echo "configured=true" >> "$GITHUB_OUTPUT"
+
+      - name: Run Reactive cross-chain live smoke
+        if: steps.cross-chain-preflight.outputs.configured == 'true'
         run: just e2e
         working-directory: contracts/reactive

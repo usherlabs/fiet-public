@@ -309,6 +309,14 @@ just local-simulation
 
 `just pseudo-e2e` remains as a compatibility alias for the same local simulation suite.
 
+### Reactive validation lanes
+
+There are three Reactive validation lanes:
+
+- Deterministic local simulation: `just local-simulation`, no live secrets, runs automatically for Reactive path changes.
+- Default Lasna-only live smoke: `just e2e` with both Reactive and protocol-side mock event producer on Lasna.
+- Optional Ethereum Sepolia cross-chain smoke: the same live harness with the protocol side pointed at Ethereum Sepolia for stronger cross-chain validation.
+
 ### Lasna-only Reactive Network pseudo-e2e smoke harness
 
 Important:
@@ -324,11 +332,12 @@ Important:
 CI delivery:
 
 - Deterministic Reactive local simulation runs automatically for Reactive path changes.
-- Live smoke runs on pull requests only when the `reactive-e2e` label is present and relevant live-smoke files changed.
+- Default Lasna-only live smoke and optional Sepolia cross-chain smoke run on pull requests only when the `reactive-e2e` label is present and relevant live-smoke files changed.
 - Manual full smoke uses the `Reactive Validation` workflow with `workflow_dispatch` and `run_smoke=true`.
 - Required repository secrets for the default Lasna-only smoke are `REACTIVE_RPC` and `REACTIVE_CI_PRIVATE_KEY`; pull-request live smoke skips the live run when those secrets are unavailable, while manual `workflow_dispatch` remains strict and fails if they are missing.
+- Optional Sepolia cross-chain smoke additionally requires `ETH_SEPOLIA_RPC_URL` and Sepolia ETH on the `REACTIVE_CI_PRIVATE_KEY` wallet. It preflights the Sepolia RPC and signer balance with `cast balance`, then skips cleanly with a notice when either requirement is missing.
 
-Optional stronger full cross-chain validation can point `PROTOCOL_RPC`, `PROTOCOL_CHAIN_ID`, and `PROTOCOL_CALLBACK_PROXY` at a foreign protocol chain such as Ethereum Sepolia. That profile is not required for TASK-38.1 CI and would additionally require `ETH_SEPOLIA_RPC_URL` and Sepolia gas funding.
+Optional stronger full cross-chain validation uses `PROTOCOL_RPC=${ETH_SEPOLIA_RPC_URL}`, `PROTOCOL_CHAIN_ID=11155111`, and `PROTOCOL_CALLBACK_PROXY=0xc9f36411C9897e7F959D99ffca2a0Ba7ee0D7bDA`. That profile is not required for TASK-38.1 default CI and is separate from the canonical Lasna-only live smoke lane.
 
 Run:
 

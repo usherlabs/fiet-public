@@ -8,16 +8,17 @@ TASK-38 validates the TASK-40 single-contract `HubRSC` runtime after `SpokeRSC` 
 | --- | --- | --- | --- |
 | Deterministic local simulation | Required local and CI supporting coverage for `HubRSC` behavior using Foundry mocks and direct `react()` calls. This is not the full Lasna pseudo-e2e proof. | `just local-simulation` from `contracts/reactive` | None |
 | Lasna-only Reactive Network pseudo-e2e smoke | Optional operator/deployment validation against live Lasna infrastructure, with the mock protocol event producer and HubRSC both on Lasna. | PRs with relevant `contracts/reactive/src/**`, `contracts/reactive/scripts/**`, `contracts/reactive/test/e2e.sh`, or `.github/workflows/reactive-e2e.yml` changes and `reactive-e2e` label; manual Reactive Validation workflow with `run_smoke=true`; or `just e2e` with live env | `REACTIVE_RPC` plus kREACT-funded `REACTIVE_CI_PRIVATE_KEY` |
+| Ethereum Sepolia cross-chain smoke | Optional stronger cross-chain validation using Lasna for HubRSC and Ethereum Sepolia for the protocol-side mock event producer. This is separate from the canonical Lasna-only live smoke lane. | Same `reactive-e2e` label and live-smoke surface gate as Lasna smoke; manual Reactive Validation workflow with `run_smoke=true`; or `just e2e` with Sepolia protocol env | `REACTIVE_RPC`, `REACTIVE_CI_PRIVATE_KEY`, `ETH_SEPOLIA_RPC_URL`, and Sepolia ETH on the `REACTIVE_CI_PRIVATE_KEY` wallet |
 
 Deterministic local simulation must remain the default validation lane. Lasna pseudo-e2e smoke validation can fail for funding, RPC, or Reactive Network availability reasons and must not be required to prove local regressions. The default live smoke does not require `ETH_SEPOLIA_RPC_URL` or Sepolia ETH.
 
 ## CI delivery
 
 - Deterministic Reactive local simulation runs automatically for Reactive path changes.
-- Live smoke runs on pull requests only when the `reactive-e2e` label is present and relevant live-smoke files changed.
+- Default Lasna-only live smoke and optional Sepolia cross-chain smoke run on pull requests only when the `reactive-e2e` label is present and relevant live-smoke files changed.
 - Manual full smoke uses the `Reactive Validation` workflow with `workflow_dispatch` and `run_smoke=true`.
 - Required repository secrets for the default Lasna-only smoke are `REACTIVE_RPC` and `REACTIVE_CI_PRIVATE_KEY`; pull-request live smoke skips the live run when those secrets are unavailable, while manual `workflow_dispatch` remains strict and fails if they are missing.
-- Optional future full cross-chain validation can use `ETH_SEPOLIA_RPC_URL` and Sepolia funding, but that profile is not required for TASK-38.1 CI.
+- Optional Sepolia cross-chain smoke additionally requires `ETH_SEPOLIA_RPC_URL` and Sepolia ETH on the `REACTIVE_CI_PRIVATE_KEY` wallet. The workflow checks Sepolia signer balance with `cast balance` and skips this optional job with a notice when the RPC or funding is missing.
 
 ## Live wallet model
 
@@ -38,7 +39,15 @@ Default Lasna-only smoke wiring:
 - `PROTOCOL_RPC=$REACTIVE_RPC`
 - `PROTOCOL_CALLBACK_PROXY=0x0000000000000000000000000000000000fffFfF`
 
-Sepolia or another foreign protocol chain is optional stronger full cross-chain validation. It should override `PROTOCOL_RPC`, `PROTOCOL_CHAIN_ID`, and `PROTOCOL_CALLBACK_PROXY`, and requires foreign-chain gas such as Sepolia ETH.
+Optional Sepolia cross-chain smoke wiring:
+
+- `REACTIVE_CHAIN_ID=5318007`
+- `PROTOCOL_CHAIN_ID=11155111`
+- `REACTIVE_RPC=$REACTIVE_RPC`
+- `PROTOCOL_RPC=$ETH_SEPOLIA_RPC_URL`
+- `PROTOCOL_CALLBACK_PROXY=0xc9f36411C9897e7F959D99ffca2a0Ba7ee0D7bDA`
+
+Sepolia or another foreign protocol chain is optional stronger full cross-chain validation and requires foreign-chain gas such as Sepolia ETH.
 
 ## Scenario matrix
 
