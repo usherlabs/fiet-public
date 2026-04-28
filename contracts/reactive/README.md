@@ -324,6 +324,7 @@ Important:
 - This lane is manually gated and is not required for deterministic CI.
 - Pull-request live smoke runs require relevant `contracts/reactive/src/**`, `contracts/reactive/scripts/**`, `contracts/reactive/test/e2e.sh`, or `.github/workflows/reactive-e2e.yml` changes plus the `reactive-e2e` label; manual runs require `workflow_dispatch` with `run_smoke=true`.
 - The default GitHub Actions smoke lane is Lasna-only: `REACTIVE_CHAIN_ID=5318007`, `PROTOCOL_CHAIN_ID=5318007`, `REACTIVE_RPC=${REACTIVE_RPC}`, `PROTOCOL_RPC=${REACTIVE_RPC}`, and `PROTOCOL_CALLBACK_PROXY=0x0000000000000000000000000000000000fffFfF`.
+- The workflow probes the configured Lasna `REACTIVE_RPC` value first and then the alternate trailing-slash form, accepting the first URL whose `cast chain-id` returns `5318007`.
 - Use a kREACT-funded live key only for this lane, for example `REACTIVE_CI_PRIVATE_KEY` from GitHub Actions secrets or Vault.
 - The live key deploys/funds the HubRSC, registers and funds recipients, emits mock protocol events on Lasna, and polls HubRSC/receiver state for Reactive Network callback delivery.
 - Ephemeral wallets are not used by the current single-HubRSC smoke harness. The same funded live key signs deployment, recipient registration/funding, and mock protocol events so the HubRSC RVM id, receiver callback origin, and funded recipient lifecycle are stable for the run. Do not reuse this key in deterministic local simulation coverage.
