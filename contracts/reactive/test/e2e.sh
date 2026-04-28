@@ -240,6 +240,11 @@ deploy() {
   wait_until "recipient one active on HubRSC" recipient_is_active "$HUB_RSC" "$RECIPIENT_ONE"
   wait_until "recipient two active on HubRSC" recipient_is_active "$HUB_RSC" "$RECIPIENT_TWO"
 
+  if [ "${SUBSCRIPTION_PROPAGATION_SECONDS:-0}" -gt 0 ]; then
+    echo "Waiting ${SUBSCRIPTION_PROPAGATION_SECONDS}s for live Reactive subscriptions to propagate..."
+    sleep "$SUBSCRIPTION_PROPAGATION_SECONDS"
+  fi
+
   echo "================== DEPLOYMENT COMPLETE ======================"
   echo "MockLiquidityHub:              $MOCK_LIQUIDITY_HUB"
   echo "BatchProcessSettlementReceiver: $BATCH_RECEIVER"
