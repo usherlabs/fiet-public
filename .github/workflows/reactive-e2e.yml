@@ -110,9 +110,10 @@ jobs:
     env:
       BROADCAST: "true"
       REACTIVE_CHAIN_ID: "5318007"
-      PROTOCOL_CHAIN_ID: "11155111"
+      PROTOCOL_CHAIN_ID: "5318007"
       REACTIVE_RPC: ${{ secrets.REACTIVE_RPC }}
-      PROTOCOL_RPC: ${{ secrets.ETH_SEPOLIA_RPC_URL }}
+      PROTOCOL_RPC: ${{ secrets.REACTIVE_RPC }}
+      PROTOCOL_CALLBACK_PROXY: "0x0000000000000000000000000000000000fffFfF"
       REACTIVE_CI_PRIVATE_KEY: ${{ secrets.REACTIVE_CI_PRIVATE_KEY }}
       PRIVATE_KEY: ${{ secrets.REACTIVE_CI_PRIVATE_KEY }}
       RECIPIENT_DEPOSIT_WEI: "100000000000000000"
@@ -132,9 +133,9 @@ jobs:
       - name: Validate live smoke secrets
         run: |
           missing=false
-          for name in REACTIVE_RPC PROTOCOL_RPC REACTIVE_CI_PRIVATE_KEY; do
+          for name in REACTIVE_RPC REACTIVE_CI_PRIVATE_KEY; do
             if [ -z "${!name:-}" ]; then
-              echo "Missing required live smoke secret or env: $name" >&2
+              echo "Missing required Lasna live smoke secret or env: $name" >&2
               missing=true
             fi
           done
