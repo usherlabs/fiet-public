@@ -39,6 +39,8 @@ Default Lasna-only smoke wiring:
 - `PROTOCOL_RPC=$REACTIVE_RPC`
 - `PROTOCOL_CALLBACK_PROXY=0x0000000000000000000000000000000000fffFfF`
 
+The workflow accepts either Lasna RPC slash form by probing the configured `REACTIVE_RPC` first and then the alternate trailing-slash form. It exports the first candidate whose `cast chain-id` returns `5318007` as both `REACTIVE_RPC` and `PROTOCOL_RPC` for the Lasna-only lane.
+
 Optional Sepolia cross-chain smoke wiring:
 
 - `REACTIVE_CHAIN_ID=5318007`

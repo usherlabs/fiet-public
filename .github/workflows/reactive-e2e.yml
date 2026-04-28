@@ -148,15 +148,33 @@ jobs:
             echo "Skipping optional PR live smoke because required live secrets are unavailable." >&2
             exit 0
           fi
-          if ! cast chain-id --rpc-url "$REACTIVE_RPC" >/dev/null 2>&1; then
-            echo "Lasna RPC is not reachable for optional PR live smoke." >&2
+          candidates=("$REACTIVE_RPC")
+          if [[ "$REACTIVE_RPC" == */ ]]; then
+            candidates+=("${REACTIVE_RPC%/}")
+          else
+            candidates+=("${REACTIVE_RPC}/")
+          fi
+
+          resolved_rpc=""
+          for candidate in "${candidates[@]}"; do
+            chain_id="$(cast chain-id --rpc-url "$candidate" 2>/dev/null | tr -d '[:space:]' || true)"
+            if [ "$chain_id" = "5318007" ]; then
+              resolved_rpc="$candidate"
+              break
+            fi
+          done
+
+          if [ -z "$resolved_rpc" ]; then
+            echo "Lasna RPC is not reachable with the configured URL or alternate trailing-slash form." >&2
             if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
               exit 1
             fi
             echo "configured=false" >> "$GITHUB_OUTPUT"
-            echo "::notice title=Reactive live smoke skipped::Lasna RPC was unavailable during PR preflight."
+            echo "::notice title=Reactive live smoke skipped::Lasna RPC preflight failed for both configured and alternate trailing-slash URL forms."
             exit 0
           fi
+          echo "REACTIVE_RPC=$resolved_rpc" >> "$GITHUB_ENV"
+          echo "PROTOCOL_RPC=$resolved_rpc" >> "$GITHUB_ENV"
           echo "configured=true" >> "$GITHUB_OUTPUT"
 
       - name: Run Reactive live smoke
