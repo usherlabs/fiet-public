@@ -70,7 +70,7 @@ This project is built for the Reactive Network execution model:
 - Focused Hub suites: `forge test --match-path 'test/hub/*.t.sol'`
 - Deterministic local simulation: `just local-simulation` (single-contract HubRSC coverage using Foundry mocks and direct `react()` calls; no live Reactive Network access or secrets)
 - Unit tests: `forge test`
-- Lasna-only Reactive Network pseudo-e2e smoke harness: `just e2e` (deploys mocks, deploys Hub/Receiver, registers funded recipients, triggers events, checks observed state; gated manually and requires `REACTIVE_RPC` plus a kREACT-funded key)
+- Lasna-only Reactive Network pseudo-e2e smoke harness: `just e2e` (deploys mocks, deploys Hub/Receiver, registers funded recipients, triggers events, checks observed state; gated manually and requires `REACTIVE_RPC` plus an lREACT-funded key)
 - Post-refactor reactive findings matrix: [`docs/task-40.3-task-35-regression-validation.md`](docs/task-40.3-task-35-regression-validation.md)
 - Post-single-hub validation plan: [`docs/post-single-hub-validation-plan.md`](docs/post-single-hub-validation-plan.md)
 
@@ -123,7 +123,7 @@ While backfill is still in progress, the hub prefers the per-LCC lane when it ha
 - A deployed `LiquidityHub` on the protocol chain.
 - The correct **Reactive callback proxy addresses** for each chain (Reactive publishes these per network).
 - Funds for the default Lasna-only smoke lane:
-  - kREACT on the `REACTIVE_CI_PRIVATE_KEY` / `PRIVATE_KEY` signer to deploy the mock protocol producer, receiver, and HubRSC, register/fund recipients, and cover execution.
+  - Native Lasna lREACT gas on the `REACTIVE_CI_PRIVATE_KEY` / `PRIVATE_KEY` signer to deploy the mock protocol producer, receiver, and HubRSC, register/fund recipients, and cover execution.
   - No Sepolia ETH is required by default.
 - Optional stronger full cross-chain validation can use a foreign protocol chain such as Ethereum Sepolia, but that is outside the required TASK-38.1 CI lane and needs its own RPC, callback proxy, chain id, and gas funding.
 
@@ -143,7 +143,7 @@ While backfill is still in progress, the hub prefers the per-LCC lane when it ha
 This is the default automation path:
 
 1. **Deploy `HubRSC`** and the destination receiver.
-2. **Fund** the reactive HubRSC contract with kREACT so it can maintain subscriptions and callbacks.
+2. **Fund** the reactive HubRSC contract with lREACT so it can maintain subscriptions and callbacks.
 3. **Register each recipient** with payable `registerRecipient(recipient)` and native value.
 4. **Top up recipients** with payable `fundRecipient(recipient)` before their balance is exhausted.
 5. Users perform swaps/unwraps as normal. When a settlement is queued for an active recipient, `HubRSC` observes it directly from `LiquidityHub` and eventually dispatches settlement when liquidity becomes available.
@@ -263,7 +263,7 @@ Check the usual suspects:
   - `HubRSC.recipientActive(recipient)` must be true and `recipientBalance(recipient)` must be positive.
   - Fix: call payable `registerRecipient(recipient)` or `fundRecipient(recipient)` with enough native value to make the balance positive.
 - **Underfunded reactive HubRSC contract**:
-  - HubRSC must have enough kREACT deposited to execute subscriptions/callbacks.
+  - HubRSC must have enough lREACT deposited to execute subscriptions/callbacks.
   - Fix: fund via the system contract `depositTo(address)` (see below).
 - **Wrong callback proxies / chain IDs**:
   - If callback proxy addresses or chain IDs are incorrect, callbacks will not be authorised or delivered as expected.
@@ -326,17 +326,17 @@ Important:
 - The default GitHub Actions smoke lane is Lasna-only: `REACTIVE_CHAIN_ID=5318007`, `PROTOCOL_CHAIN_ID=5318007`, `REACTIVE_RPC=${REACTIVE_RPC}`, `PROTOCOL_RPC=${REACTIVE_RPC}`, and `PROTOCOL_CALLBACK_PROXY=0x0000000000000000000000000000000000fffFfF`.
 - The workflow probes the configured Lasna `REACTIVE_RPC` value first and then the alternate trailing-slash form, accepting the first URL whose `cast chain-id` returns `5318007`.
 - GitHub Actions live smoke jobs set `RECEIVER_PREFUND_WEI=0` so PR CI only needs deploy and test gas. Operators can set `RECEIVER_PREFUND_WEI` for local/manual runs when the receiver should be prefunded.
-- Use a kREACT-funded live key only for this lane, for example `REACTIVE_CI_PRIVATE_KEY` from GitHub Actions secrets or Vault. PR live smoke preflights the signer balance on Lasna and skips with a notice when the key is underfunded; manual `workflow_dispatch` remains strict.
+- Use an lREACT-funded live key only for this lane, for example `REACTIVE_CI_PRIVATE_KEY` from GitHub Actions secrets or Vault. PR live smoke preflights the signer's native Lasna gas balance and skips with a notice when the key is underfunded; manual `workflow_dispatch` remains strict.
 - The live key deploys/funds the HubRSC, registers and funds recipients, emits mock protocol events on Lasna, and polls HubRSC/receiver state for Reactive Network callback delivery.
 - Ephemeral wallets are not used by the current single-HubRSC smoke harness. The same funded live key signs deployment, recipient registration/funding, and mock protocol events so the HubRSC RVM id, receiver callback origin, and funded recipient lifecycle are stable for the run. Do not reuse this key in deterministic local simulation coverage.
-- To run the default smoke manually, set `REACTIVE_RPC`, set both `PRIVATE_KEY` and `REACTIVE_CI_PRIVATE_KEY` to the funded signer, set `PROTOCOL_RPC=$REACTIVE_RPC`, and fund the signer with kREACT. You can obtain testnet REACT (kREACT) from the Reactive documentation.
+- To run the default smoke manually, set `REACTIVE_RPC`, set both `PRIVATE_KEY` and `REACTIVE_CI_PRIVATE_KEY` to the funded signer, set `PROTOCOL_RPC=$REACTIVE_RPC`, and fund the signer with native Lasna lREACT. You can obtain testnet REACT (lREACT) from the Reactive documentation. Funding a deployed contract, receiver, faucet target, or a different wallet does not satisfy the signer preflight; verify the signer with `cast balance --rpc-url https://lasna-rpc.rnk.dev/ <signer>`.
 
 CI delivery:
 
 - Deterministic Reactive local simulation runs automatically for Reactive path changes.
 - Default Lasna-only live smoke and optional Sepolia cross-chain smoke run on pull requests only when the `reactive-e2e` label is present and relevant live-smoke files changed.
 - Manual full smoke uses the `Reactive Validation` workflow with `workflow_dispatch` and `run_smoke=true`.
-- Required repository secrets for the default Lasna-only smoke are `REACTIVE_RPC` and `REACTIVE_CI_PRIVATE_KEY`; pull-request live smoke skips the live run when those secrets are unavailable or the signer lacks enough Lasna kREACT, while manual `workflow_dispatch` remains strict and fails.
+- Required repository secrets for the default Lasna-only smoke are `REACTIVE_RPC` and `REACTIVE_CI_PRIVATE_KEY`; pull-request live smoke skips the live run when those secrets are unavailable or the signer lacks enough native Lasna lREACT gas, while manual `workflow_dispatch` remains strict and fails.
 - Optional Sepolia cross-chain smoke additionally requires `ETH_SEPOLIA_RPC_URL` and Sepolia ETH on the `REACTIVE_CI_PRIVATE_KEY` wallet. It preflights the Sepolia RPC and signer balance with `cast balance`, then skips cleanly with a notice when either requirement is missing.
 
 Optional stronger full cross-chain validation uses `PROTOCOL_RPC=${ETH_SEPOLIA_RPC_URL}`, `PROTOCOL_CHAIN_ID=11155111`, and `PROTOCOL_CALLBACK_PROXY=0xc9f36411C9897e7F959D99ffca2a0Ba7ee0D7bDA`. That profile is not required for TASK-38.1 default CI and is separate from the canonical Lasna-only live smoke lane.
@@ -390,7 +390,7 @@ registerRecipient(recipient) payable
 fundRecipient(recipient) payable
 ```
 
-## Funding reactive contracts (kREACT deposit)
+## Funding reactive contracts (lREACT deposit)
 
 On Reactive, the system contract and callback proxy share this fixed address:
 
