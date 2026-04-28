@@ -24,31 +24,10 @@ asset="foundry_${VERSION}_${os}_${arch}.tar.gz"
 tmpdir="$(mktemp -d)"
 trap 'rm -rf "$tmpdir"' EXIT
 
-asset_api_url="$(
-python3 - "$VERSION" "$asset" <<'PY'
-import json
-import sys
-import urllib.request
-
-version = sys.argv[1]
-asset_name = sys.argv[2]
-url = f"https://api.github.com/repos/foundry-rs/foundry/releases/tags/{version}"
-
-with urllib.request.urlopen(url) as response:
-    payload = json.load(response)
-
-for asset in payload.get("assets", []):
-    if asset.get("name") == asset_name:
-        print(asset["url"])
-        break
-else:
-    raise SystemExit(f"missing asset: {asset_name}")
-PY
-)"
+asset_url="https://github.com/foundry-rs/foundry/releases/download/${VERSION}/${asset}"
 
 curl -fsSL \
-    -H "Accept: application/octet-stream" \
-    "$asset_api_url" \
+    "$asset_url" \
     -o "$tmpdir/foundry.tar.gz"
 
 tar -xzf "$tmpdir/foundry.tar.gz" -C "$tmpdir"
