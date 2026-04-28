@@ -44,6 +44,21 @@ extract_labeled_address() {
   printf '%s\n' "$text" | sed -n "s/.*${label}:[[:space:]]*\(0x[a-fA-F0-9]\{40\}\).*/\1/p" | tail -n1
 }
 
+extract_broadcast_address() {
+  local script_name="$1"
+  local chain_id="$2"
+  local contract_name="$3"
+  local file="broadcast/${script_name}/${chain_id}/run-latest.json"
+
+  if [ ! -f "$file" ] || ! command -v jq >/dev/null 2>&1; then
+    return 0
+  fi
+
+  jq -r --arg contract_name "$contract_name" \
+    '.transactions[]? | select(.contractName == $contract_name and .contractAddress != null) | .contractAddress' \
+    "$file" 2>/dev/null | tail -n1
+}
+
 # UTILITY HELPER FUNCTION TO RUN A COMMAND AND PRINT THE OUTPUT
 run_and_print() {
   local title="$1"
@@ -188,7 +203,12 @@ deploy() {
 
   BATCH_RECEIVER="$(extract_labeled_address "BatchProcessSettlementReceiver" "$receiver_out")"
   if [ -z "${BATCH_RECEIVER:-}" ]; then
+    BATCH_RECEIVER="$(extract_broadcast_address "DeployReceiver.s.sol" "$PROTOCOL_CHAIN_ID" "BatchProcessSettlement")"
+  fi
+  if [ -z "${BATCH_RECEIVER:-}" ]; then
     echo "Failed to parse BatchProcessSettlementReceiver address."
+    echo "---- raw output ----"
+    echo "$receiver_out"
     exit 1
   fi
   echo "BatchProcessSettlementReceiver deployed to: $BATCH_RECEIVER"
