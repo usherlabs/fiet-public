@@ -7,7 +7,7 @@ TASK-38 validates the TASK-40 single-contract `HubRSC` runtime after `SpokeRSC` 
 | Lane | Purpose | Command or trigger | Secrets |
 | --- | --- | --- | --- |
 | Deterministic local simulation | Required local and CI supporting coverage for `HubRSC` behavior using Foundry mocks and direct `react()` calls. This is not the full Lasna pseudo-e2e proof. | `just local-simulation` from `contracts/reactive` | None |
-| Lasna-only Reactive Network pseudo-e2e smoke | Optional operator/deployment validation against live Lasna infrastructure, with the mock protocol event producer and HubRSC both on Lasna. | PRs with relevant `contracts/reactive/src/**`, `contracts/reactive/scripts/**`, `contracts/reactive/test/e2e.sh`, or `.github/workflows/reactive-e2e.yml` changes and `reactive-e2e` label; manual Reactive Validation workflow with `run_smoke=true`; or `just e2e` with live env | `REACTIVE_RPC` plus kREACT-funded `REACTIVE_CI_PRIVATE_KEY` |
+| Lasna-only Reactive Network pseudo-e2e smoke | Optional operator/deployment validation against live Lasna infrastructure, with the mock protocol event producer and HubRSC both on Lasna. | PRs with relevant `contracts/reactive/src/**`, `contracts/reactive/scripts/**`, `contracts/reactive/test/e2e.sh`, or `.github/workflows/reactive-e2e.yml` changes and `reactive-e2e` label; manual Reactive Validation workflow with `run_smoke=true`; or `just e2e` with live env | `REACTIVE_RPC` plus lREACT-funded `REACTIVE_CI_PRIVATE_KEY` |
 | Ethereum Sepolia cross-chain smoke | Optional stronger cross-chain validation using Lasna for HubRSC and Ethereum Sepolia for the protocol-side mock event producer. This is separate from the canonical Lasna-only live smoke lane. | Same `reactive-e2e` label and live-smoke surface gate as Lasna smoke; manual Reactive Validation workflow with `run_smoke=true`; or `just e2e` with Sepolia protocol env | `REACTIVE_RPC`, `REACTIVE_CI_PRIVATE_KEY`, `ETH_SEPOLIA_RPC_URL`, and Sepolia ETH on the `REACTIVE_CI_PRIVATE_KEY` wallet |
 
 Deterministic local simulation must remain the default validation lane. Lasna pseudo-e2e smoke validation can fail for funding, RPC, or Reactive Network availability reasons and must not be required to prove local regressions. The default live smoke does not require `ETH_SEPOLIA_RPC_URL` or Sepolia ETH.
@@ -17,12 +17,12 @@ Deterministic local simulation must remain the default validation lane. Lasna ps
 - Deterministic Reactive local simulation runs automatically for Reactive path changes.
 - Default Lasna-only live smoke and optional Sepolia cross-chain smoke run on pull requests only when the `reactive-e2e` label is present and relevant live-smoke files changed.
 - Manual full smoke uses the `Reactive Validation` workflow with `workflow_dispatch` and `run_smoke=true`.
-- Required repository secrets for the default Lasna-only smoke are `REACTIVE_RPC` and `REACTIVE_CI_PRIVATE_KEY`; pull-request live smoke skips the live run when those secrets are unavailable or the signer lacks enough Lasna kREACT, while manual `workflow_dispatch` remains strict and fails.
+- Required repository secrets for the default Lasna-only smoke are `REACTIVE_RPC` and `REACTIVE_CI_PRIVATE_KEY`; pull-request live smoke skips the live run when those secrets are unavailable or the signer lacks enough native Lasna lREACT gas, while manual `workflow_dispatch` remains strict and fails.
 - Optional Sepolia cross-chain smoke additionally requires `ETH_SEPOLIA_RPC_URL` and Sepolia ETH on the `REACTIVE_CI_PRIVATE_KEY` wallet. The workflow checks Sepolia signer balance with `cast balance` and skips this optional job with a notice when the RPC or funding is missing.
 
 ## Live wallet model
 
-The live Lasna smoke lane does not derive a per-run ephemeral wallet in the current single-HubRSC model. It uses one kREACT-funded CI/operator key, exposed as `REACTIVE_CI_PRIVATE_KEY` and passed to the harness as `PRIVATE_KEY`, for all live-smoke signing:
+The live Lasna smoke lane does not derive a per-run ephemeral wallet in the current single-HubRSC model. It uses one lREACT-funded CI/operator key, exposed as `REACTIVE_CI_PRIVATE_KEY` and passed to the harness as `PRIVATE_KEY`, for all live-smoke signing:
 
 - deploy `MockLiquidityHub`, `BatchProcessSettlement`, and `HubRSC`;
 - derive the expected `HUB_RVM_ID` callback origin from the same key;
