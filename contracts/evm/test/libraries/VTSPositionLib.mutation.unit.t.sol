@@ -6,6 +6,7 @@ import "forge-std/Test.sol";
 import {VTSPositionLibHarness} from "./harnesses/VTSPositionLibHarness.sol";
 
 import {MarketVTSConfiguration, TokenConfiguration} from "../../src/types/VTS.sol";
+import {PositionContext, TouchPositionParams} from "../../src/types/VTS.sol";
 import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {ModifyLiquidityParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
 import {PositionId, PositionLibrary} from "../../src/types/Position.sol";
@@ -14,6 +15,9 @@ import {Errors} from "../../src/libraries/Errors.sol";
 import {VTSLifecycleLinkedLib} from "../../src/libraries/VTSLifecycleLinkedLib.sol";
 import {FullMath} from "@uniswap/v4-core/src/libraries/FullMath.sol";
 import {FixedPoint128} from "v4-periphery/lib/v4-core/src/libraries/FixedPoint128.sol";
+import {ILiquidityHub} from "../../src/interfaces/ILiquidityHub.sol";
+import {IMarketVault} from "../../src/interfaces/IMarketVault.sol";
+import {IOracleHelper} from "../../src/interfaces/IOracleHelper.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
 import {IHooks} from "@uniswap/v4-core/src/interfaces/IHooks.sol";
@@ -259,6 +263,47 @@ contract VTSPositionLibMutationUnitTest is Test {
         assertEq(poolPrincipal0, 5e18, "pool deficit principal should shrink by the covered amount");
     }
 
+    function test_updateSettlement_negativeDelta_doesNotCoverCommitmentDeficit() public {
+        (PositionId id,) = _register(bytes32(uint256(331)), 1);
+        harness.setCommitmentMax(id, 100e18, 0);
+        harness.setSettled(id, 60e18, 0);
+        harness.setPoolTotalSettled(poolId, 60e18, 0);
+        harness.setCommitmentDeficit(id, 20e18, 0);
+        harness.setCommitmentDeficitSince(id, 123, 0);
+        harness.setCommitmentDeficitBps(id, 444);
+
+        assertEq(harness.updateSettlement(id, 0, -int256(15e18)), -int256(15e18));
+
+        (uint256 cd0, uint256 cd1) = harness.getCommitmentDeficit(id);
+        assertEq(cd0, 20e18, "withdrawals must not cure commitment deficit");
+        assertEq(cd1, 0);
+        (uint256 since0,) = harness.getCommitmentDeficitSince(id);
+        assertEq(since0, 123, "negative deltas must not clear the lane timer");
+        assertEq(harness.getCommitmentDeficitBps(id), 444, "negative deltas must not clear severity");
+        (,, uint256 settled0,,,,,) = harness.getPositionAccounting(id);
+        assertEq(settled0, 45e18, "negative delta should only reduce effective settled");
+    }
+
+    function test_updateSettlement_returnsExactAppliedWhenCumulativeAndCommitmentDeficitsAreCovered() public {
+        (PositionId id,) = _register(bytes32(uint256(332)), 1);
+        harness.setCommitmentMax(id, 100e18, 0);
+        harness.setCumulativeDeficit(id, 10e18, 0);
+        harness.setCommitmentDeficit(id, 20e18, 0);
+        harness.setPoolTotalDeficitPrincipal(poolId, 10e18, 0);
+
+        assertEq(harness.updateSettlement(id, 0, int256(35e18)), int256(35e18));
+
+        (,, uint256 settled0,, uint256 cumulativeDeficit0,,,) = harness.getPositionAccounting(id);
+        assertEq(settled0, 5e18, "only the post-deficit remainder should settle");
+        assertEq(cumulativeDeficit0, 0);
+        (uint256 cd0,) = harness.getCommitmentDeficit(id);
+        assertEq(cd0, 0);
+        (uint256 poolSettled0,) = harness.getPoolTotalSettled(poolId);
+        assertEq(poolSettled0, 5e18, "pool settled tracks economic backing, not deficit coverage");
+        (uint256 poolPrincipal0,) = harness.getPoolTotalDeficitPrincipal(poolId);
+        assertEq(poolPrincipal0, 0, "cumulative deficit principal should be fully covered");
+    }
+
     function test_updateSettlement_positiveDelta_clearsCommitmentDeficitAndBpsOnlyWhenBothLanesResolved() public {
         (PositionId id,) = _register(bytes32(uint256(34)), 1);
         harness.setCommitmentMax(id, 100e18, 0);
@@ -435,6 +480,138 @@ contract VTSPositionLibMutationUnitTest is Test {
         assertEq(poolPrincipal1, expDeficitIncrease);
     }
 
+    function test_settlePositionDeficitGrowth_inRange_consumesSettledAndOverflowBeforePrincipalDeficit() public {
+        (PositionId id, ModifyLiquidityParams memory p) = _register(bytes32(uint256(11)), 1);
+        uint128 liq = 10;
+        harness.setDeficitGrowthGlobal(poolId, 7 * FixedPoint128.Q128, 0);
+        harness.setDeficitGrowthOutside(poolId, p.tickLower, 1 * FixedPoint128.Q128, 0);
+        harness.setDeficitGrowthOutside(poolId, p.tickUpper, 2 * FixedPoint128.Q128, 0);
+        harness.setDeficitGrowthInsideLast(id, 1 * FixedPoint128.Q128, 0);
+        harness.setInflowGrowthGlobal(poolId, 0, 0);
+        harness.setInflowGrowthInsideLast(id, 0, 0);
+        _pmSetSlot0Tick(poolId, 0);
+        _pmSetPositionLiquidity(poolId, PositionId.unwrap(id), liq);
+        harness.setCommitmentMax(id, 10e18, 0);
+        harness.setSettled(id, 10, 0);
+        harness.setSettledOverflow(id, 5, 0);
+        harness.setPoolTotalSettled(poolId, 15, 0);
+
+        harness.settlePositionGrowths(IPoolManager(address(pm)), id);
+
+        uint256 expAdd0 = 30;
+        (,, uint256 settled0,, uint256 deficit0,,, uint256 overflow1) = harness.getPositionAccounting(id);
+        assertEq(settled0, 0, "deficit growth should consume live settled");
+        assertEq(deficit0, expAdd0 - 15, "deficit should be only the amount above settled plus overflow");
+        assertEq(overflow1, 0, "untouched lane overflow should remain zero");
+        (uint256 poolSettled0,) = harness.getPoolTotalSettled(poolId);
+        assertEq(poolSettled0, 0, "pool settled should drop by consumed live plus overflow backing");
+        (uint256 poolPrincipal0,) = harness.getPoolTotalDeficitPrincipal(poolId);
+        assertEq(poolPrincipal0, expAdd0 - 15);
+    }
+
+    function test_settlePositionGrowths_inflowUsesSeparateCarryAndDoesNotBorrowDeficitCarry() public {
+        (PositionId id,) = _register(bytes32(uint256(12)), 1);
+        uint128 liq = 1;
+        harness.setDeficitGrowthCarry(id, FixedPoint128.Q128 / 2, 0);
+        harness.setInflowGrowthCarry(id, 0, 0);
+        harness.setDeficitGrowthGlobal(poolId, 0, 0);
+        harness.setDeficitGrowthInsideLast(id, 0, 0);
+        harness.setInflowGrowthGlobal(poolId, FixedPoint128.Q128 / 2, 0);
+        harness.setInflowGrowthInsideLast(id, 0, 0);
+        _pmSetSlot0Tick(poolId, 0);
+        _pmSetPositionLiquidity(poolId, PositionId.unwrap(id), liq);
+
+        harness.settlePositionGrowths(IPoolManager(address(pm)), id);
+
+        (,, uint256 settled0,,,,,) = harness.getPositionAccounting(id);
+        assertEq(settled0, 0, "half-Q128 inflow with zero inflow carry should not settle a whole unit");
+        (uint256 deficitCarry0,) = harness.getDeficitGrowthCarry(id);
+        (uint256 inflowCarry0,) = harness.getInflowGrowthCarry(id);
+        assertEq(deficitCarry0, FixedPoint128.Q128 / 2, "deficit carry must not be consumed by inflow settlement");
+        assertEq(inflowCarry0, FixedPoint128.Q128 / 2, "inflow carry should receive the fractional remainder");
+    }
+
+    function test_touchPosition_newDirectLP_seedsOnlyInitializedTicksAtOrBelowCurrentTick() public {
+        uint128 liq = 1000;
+        ModifyLiquidityParams memory p = ModifyLiquidityParams({
+            tickLower: TICK_LOWER,
+            tickUpper: TICK_UPPER,
+            liquidityDelta: int256(uint256(liq)),
+            salt: bytes32(uint256(13))
+        });
+        PositionId id = PositionLibrary.generateId(owner, p);
+        harness.setDeficitGrowthGlobal(poolId, 11 * FixedPoint128.Q128, 13 * FixedPoint128.Q128);
+        harness.setInflowGrowthGlobal(poolId, 17 * FixedPoint128.Q128, 19 * FixedPoint128.Q128);
+        _pmSetSlot0Tick(poolId, 0);
+        _pmSetPositionLiquidity(poolId, PositionId.unwrap(id), liq);
+        _pmSetTickLiquidity(poolId, TICK_LOWER, liq, int128(uint128(liq)));
+        _pmSetTickLiquidity(poolId, TICK_UPPER, liq, -int128(uint128(liq)));
+
+        TouchPositionParams memory tp = TouchPositionParams({
+            owner: owner,
+            poolKey: _poolKey(),
+            params: p,
+            callerDelta: BalanceDelta.wrap(0),
+            feesAccrued: BalanceDelta.wrap(0),
+            hookData: ""
+        });
+        PositionContext memory ctx = PositionContext({
+            poolManager: IPoolManager(address(pm)),
+            liquidityHub: ILiquidityHub(address(0)),
+            oracleHelper: IOracleHelper(address(0)),
+            marketVault: IMarketVault(address(0))
+        });
+
+        harness.touchPosition(ctx, tp);
+
+        (uint256 deficitLower0, uint256 deficitLower1) = harness.getDeficitGrowthOutside(poolId, TICK_LOWER);
+        (uint256 deficitUpper0, uint256 deficitUpper1) = harness.getDeficitGrowthOutside(poolId, TICK_UPPER);
+        (uint256 inflowLower0, uint256 inflowLower1) = harness.getInflowGrowthOutside(poolId, TICK_LOWER);
+        (uint256 inflowUpper0, uint256 inflowUpper1) = harness.getInflowGrowthOutside(poolId, TICK_UPPER);
+        assertEq(deficitLower0, 11 * FixedPoint128.Q128);
+        assertEq(deficitLower1, 13 * FixedPoint128.Q128);
+        assertEq(inflowLower0, 17 * FixedPoint128.Q128);
+        assertEq(inflowLower1, 19 * FixedPoint128.Q128);
+        assertEq(deficitUpper0, 0, "upper tick above current should not be seeded");
+        assertEq(deficitUpper1, 0);
+        assertEq(inflowUpper0, 0);
+        assertEq(inflowUpper1, 0);
+    }
+
+    function test_deriveIncreaseTransitionLiquidity_distinguishesLiveBeforeAddAndFallbackNextLiquidity() public view {
+        (uint128 beforeExisting, uint128 nextExisting) = harness.deriveIncreaseTransitionLiquidity(100, 25);
+        assertEq(beforeExisting, 75, "live liquidity before add should subtract added liquidity");
+        assertEq(nextExisting, 100, "next liquidity should be the live post-add pool value");
+
+        (uint128 beforeHarness, uint128 nextHarness) = harness.deriveIncreaseTransitionLiquidity(0, 25);
+        assertEq(beforeHarness, 0, "zero live pool value means no pre-add liquidity in unit harness mode");
+        assertEq(nextHarness, 25, "unit harness fallback should derive next liquidity from added liquidity");
+
+        (uint128 beforeNoop, uint128 nextNoop) = harness.deriveIncreaseTransitionLiquidity(77, 0);
+        assertEq(beforeNoop, 77);
+        assertEq(nextNoop, 77);
+    }
+
+    function test_applyLiquidityMirrorTransition_zeroToZeroDoesNotClearCommitmentDeficit() public {
+        (PositionId id,) = _register(bytes32(uint256(14)), 1);
+        harness.setPositionCommitId(id, 314);
+        harness.setPositionActive(id, false);
+        harness.setCommitmentDeficit(id, 12, 34);
+        harness.setCommitmentDeficitSince(id, 56, 78);
+        harness.setCommitmentDeficitBps(id, 90);
+
+        harness.applyLiquidityMirrorTransition(id, 0, 0);
+
+        (uint256 cd0, uint256 cd1) = harness.getCommitmentDeficit(id);
+        assertEq(cd0, 12, "non-transition zero mirror must not clear token0 deficit");
+        assertEq(cd1, 34, "non-transition zero mirror must not clear token1 deficit");
+        (uint256 since0, uint256 since1) = harness.getCommitmentDeficitSince(id);
+        assertEq(since0, 56);
+        assertEq(since1, 78);
+        assertEq(harness.getCommitmentDeficitBps(id), 90);
+        assertEq(harness.getCommitActivePositionCount(314), 0);
+    }
+
     function test_calcDeltaClearance_truthTable() public view {
         assertEq(clearanceExpose.calc(-100, -50), 50);
         assertEq(clearanceExpose.calc(-50, -100), 50);
@@ -476,6 +653,14 @@ contract VTSPositionLibMutationUnitTest is Test {
         bytes32 positionMapping = bytes32(uint256(stateSlot) + POSITIONS_OFFSET);
         bytes32 slot = keccak256(abi.encodePacked(positionId, positionMapping));
         pm.setSlot(slot, bytes32(uint256(liquidity)));
+    }
+
+    function _pmSetTickLiquidity(PoolId pId, int24 tick, uint128 liquidityGross, int128 liquidityNet) internal {
+        bytes32 stateSlot = keccak256(abi.encodePacked(PoolId.unwrap(pId), POOLS_SLOT));
+        bytes32 ticksMapping = bytes32(uint256(stateSlot) + TICKS_OFFSET);
+        bytes32 slot = keccak256(abi.encodePacked(int256(tick), ticksMapping));
+        uint256 data = uint256(liquidityGross) | (uint256(uint128(liquidityNet)) << 128);
+        pm.setSlot(slot, bytes32(data));
     }
 }
 

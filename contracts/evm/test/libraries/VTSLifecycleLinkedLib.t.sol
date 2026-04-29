@@ -722,7 +722,49 @@ contract VTSLifecycleLinkedLibTest is Test {
         );
     }
 
+    function test_onMMSettle_revertsWhenPositionPoolMismatchAfterCanonicalFactoryCheck() public {
+        PoolId pid = poolKey.toId();
+        PoolId otherPid = PoolId.wrap(bytes32(uint256(0xBADBEEF)));
+        harness.testSeedPool(pid, c0, c1);
+
+        PositionId posId = PositionId.wrap(keccak256("wrong-pool-position"));
+        harness.testSeedPosition(posId, mmOwner, otherPid, 0, true);
+
+        vm.expectRevert(abi.encodeWithSelector(Errors.InvalidPosition.selector, 0, 0, posId));
+        harness.onMMSettle(
+            VTSLifecycleContext({
+                poolManager: IPoolManager(address(0)),
+                liquidityHub: ILiquidityHub(address(hub)),
+                oracleHelper: IOracleHelper(address(0)),
+                settlementObserver: settlementObserver
+            }),
+            IMarketFactory(address(factory)),
+            posId,
+            pid,
+            toBalanceDelta(0, 0),
+            false,
+            false
+        );
+    }
+
     // --- processPosition: existing position wrong pool ---
+
+    function test_assertPositionValid_revertsWhenInactivePositionRequiresActive() public {
+        PoolId pid = poolKey.toId();
+        PositionId posId = PositionId.wrap(keccak256("inactive-position"));
+        harness.testSeedPosition(posId, mmOwner, pid, 1, false);
+
+        vm.expectRevert(abi.encodeWithSelector(Errors.InvalidPosition.selector, uint256(0), uint256(0), posId));
+        harness.exposedAssertPositionValid(posId, true, pid);
+    }
+
+    function test_assertPositionValid_allowsInactivePositionWhenActiveNotRequired() public {
+        PoolId pid = poolKey.toId();
+        PositionId posId = PositionId.wrap(keccak256("inactive-position-nonrequired"));
+        harness.testSeedPosition(posId, mmOwner, pid, 1, false);
+
+        harness.exposedAssertPositionValid(posId, false, pid);
+    }
 
     function test_processPosition_revertsWhenExistingPositionPoolMismatch() public {
         address owner = address(0x0A11CE);

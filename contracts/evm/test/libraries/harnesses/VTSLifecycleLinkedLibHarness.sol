@@ -93,6 +93,10 @@ contract VTSLifecycleLinkedLibHarness {
         return VTSLifecycleLinkedLib.validateMMOperation(s, ctx, owner, poolKey, hookData);
     }
 
+    function exposedAssertPositionValid(PositionId id, bool requireActive, PoolId poolId) external view {
+        VTSLifecycleLinkedLib._assertPositionValid(s, id, requireActive, poolId);
+    }
+
     function processPosition(
         VTSCoreHookContext memory ctx,
         address owner,

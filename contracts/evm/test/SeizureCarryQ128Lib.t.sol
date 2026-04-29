@@ -167,4 +167,40 @@ contract SeizureCarryQ128LibTest is Test {
         (uint256 w,) = SeizureCarryQ128Lib.accumulateLane(CarryQ128Lib.zero(), L, s, rPre, commitment, baseBps, bpsDen);
         assertEq(w, FullMath.mulDiv(L, baseBps * s, bpsDen * rPre));
     }
+
+    /// @dev Strict base-binding branch: protects the `baseBps * commitment` product from operator mutations.
+    function test_accumulateLane_baseBinding_productGreaterThanDenomProduct() public pure {
+        uint256 rPre = 10_000;
+        uint256 commitment = 200_000;
+        uint256 baseBps = 1000;
+        uint256 bpsDen = 10_000;
+        assertGt(baseBps * commitment, bpsDen * rPre);
+
+        uint256 L = 5_000_000;
+        uint256 s = 123;
+        (uint256 w, CarryQ128 cOut) =
+            SeizureCarryQ128Lib.accumulateLane(CarryQ128Lib.zero(), L, s, rPre, commitment, baseBps, bpsDen);
+
+        assertEq(w, FullMath.mulDiv(L, baseBps * s, bpsDen * rPre));
+        assertEq(CarryQ128.unwrap(cOut), 0, "exact base branch leaves no carry");
+    }
+
+    /// @dev Any zero input must short-circuit independently, not only when all zero inputs coincide.
+    function test_accumulateLane_zeroInputsShortCircuitIndependently() public pure {
+        CarryQ128 existingCarry = CarryQ128.wrap(123);
+        uint256 w;
+        CarryQ128 cOut;
+
+        (w, cOut) = SeizureCarryQ128Lib.accumulateLane(existingCarry, 0, 7, 11, 13, 1000, 10_000);
+        assertEq(w, 0, "zero L should not accumulate whole units");
+        assertEq(CarryQ128.unwrap(cOut), CarryQ128.unwrap(existingCarry), "zero L preserves carry");
+
+        (w, cOut) = SeizureCarryQ128Lib.accumulateLane(existingCarry, 5, 0, 11, 13, 1000, 10_000);
+        assertEq(w, 0, "zero seizure amount should not accumulate whole units");
+        assertEq(CarryQ128.unwrap(cOut), CarryQ128.unwrap(existingCarry), "zero seizure amount preserves carry");
+
+        (w, cOut) = SeizureCarryQ128Lib.accumulateLane(existingCarry, 5, 7, 0, 13, 1000, 10_000);
+        assertEq(w, 0, "zero pre-cure requirement should not accumulate whole units");
+        assertEq(CarryQ128.unwrap(cOut), CarryQ128.unwrap(existingCarry), "zero pre-cure requirement preserves carry");
+    }
 }
