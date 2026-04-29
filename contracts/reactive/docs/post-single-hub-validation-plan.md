@@ -10,15 +10,15 @@ TASK-38 validates the TASK-40 single-contract `HubRSC` runtime after `SpokeRSC` 
 | Lasna-only Reactive Network pseudo-e2e smoke | Optional operator/deployment validation against live Lasna infrastructure, with the mock protocol event producer and HubRSC both on Lasna. | PRs with relevant `contracts/reactive/src/**`, `contracts/reactive/scripts/**`, `contracts/reactive/test/e2e.sh`, or `.github/workflows/reactive-e2e.yml` changes and `reactive-e2e` label; manual Reactive Validation workflow with `run_smoke=true`; or `just e2e` with live env | `REACTIVE_RPC` plus lREACT-funded `REACTIVE_CI_PRIVATE_KEY` |
 | Ethereum Sepolia cross-chain smoke | Optional stronger cross-chain validation using Lasna for HubRSC and Ethereum Sepolia for the protocol-side mock event producer. This is separate from the canonical Lasna-only live smoke lane. | Same `reactive-e2e` label and live-smoke surface gate as Lasna smoke; manual Reactive Validation workflow with `run_smoke=true`; or `just e2e` with Sepolia protocol env | `REACTIVE_RPC`, `REACTIVE_CI_PRIVATE_KEY`, `ETH_SEPOLIA_RPC_URL`, and Sepolia ETH on the `REACTIVE_CI_PRIVATE_KEY` wallet |
 
-Deterministic local simulation must remain the default validation lane. Lasna pseudo-e2e smoke validation can fail for funding, RPC, or Reactive Network availability reasons and must not be required to prove local regressions. The default live smoke does not require `ETH_SEPOLIA_RPC_URL` or Sepolia ETH.
+Deterministic local simulation must remain the default validation lane. Lasna pseudo-e2e smoke validation may skip during preflight for missing secrets, unreachable RPC, or insufficient signer gas, and must not be required to prove local regressions. Once preflight passes, `just e2e` is strict and post-preflight harness/runtime failures fail CI. The default live smoke does not require `ETH_SEPOLIA_RPC_URL` or Sepolia ETH.
 
 ## CI delivery
 
 - Deterministic Reactive local simulation runs automatically for Reactive path changes.
 - Default Lasna-only live smoke and optional Sepolia cross-chain smoke run on pull requests only when the `reactive-e2e` label is present and relevant live-smoke files changed.
-- Pull-request live smoke is optional and reports live-network/RPC/funding/harness unavailability as a notice so deterministic regressions are not blocked by Lasna or Reactive Network availability.
-- Manual full smoke uses the `Reactive Validation` workflow with `workflow_dispatch` and `run_smoke=true`; manual runs remain strict and fail on live-smoke errors.
-- Required repository secrets for the default Lasna-only smoke are `REACTIVE_RPC` and `REACTIVE_CI_PRIVATE_KEY`; pull-request live smoke skips the live run when those secrets are unavailable, the signer lacks enough native Lasna lREACT gas, or the balance query fails, while manual `workflow_dispatch` remains strict and fails.
+- Pull-request live smoke permits green preflight skips only for setup prerequisites: missing secrets, Lasna RPC preflight failure, or insufficient/query-failed signer gas. Pending settlement timeouts and other `just e2e` failures after preflight fail CI.
+- Manual full smoke uses the `Reactive Validation` workflow with `workflow_dispatch` and `run_smoke=true`; manual runs also fail on live-smoke errors.
+- Required repository secrets for the default Lasna-only smoke are `REACTIVE_RPC` and `REACTIVE_CI_PRIVATE_KEY`; pull-request live smoke skips the live run when those secrets are unavailable, Lasna RPC preflight fails, the signer lacks enough native Lasna lREACT gas, or the balance query fails.
 - Optional Sepolia cross-chain smoke additionally requires `ETH_SEPOLIA_RPC_URL` and Sepolia ETH on the `REACTIVE_CI_PRIVATE_KEY` wallet. The workflow checks Sepolia signer balance with `cast balance` and skips this optional job with a notice when the RPC or funding is missing.
 
 ## Live wallet model
@@ -44,7 +44,7 @@ The workflow accepts either Lasna RPC slash form by probing the configured `REAC
 
 GitHub Actions live smoke jobs set `RECEIVER_PREFUND_WEI=0` so PR CI only needs deploy and test gas. Operators can set `RECEIVER_PREFUND_WEI` for local/manual runs when the receiver should be prefunded.
 
-GitHub Actions live smoke jobs also set `SUBSCRIPTION_PROPAGATION_SECONDS` after recipient activation and a longer `POLL_TIMEOUT_SECONDS` window, so the live Reactive Network has time to install exact-recipient subscriptions and deliver callbacks. PR-triggered live-smoke harness failures emit a notice instead of failing the workflow; manual `workflow_dispatch` runs remain strict.
+GitHub Actions live smoke jobs also set `SUBSCRIPTION_PROPAGATION_SECONDS` after recipient activation and a longer `POLL_TIMEOUT_SECONDS` window, so the live Reactive Network has time to install exact-recipient subscriptions and deliver callbacks. PR-triggered preflight setup failures can skip with a notice, but once preflight passes, `just e2e` is the CI contract and any live-smoke harness/runtime failure fails the workflow.
 
 Optional Sepolia cross-chain smoke wiring:
 
