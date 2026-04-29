@@ -469,6 +469,68 @@ contract CheckpointLibraryTest is Test {
         assertTrue(h.isSeizable(COMMIT_ID, POSITION_INDEX, false));
     }
 
+    function test_isSeizable_token0GraceExtensionAddsToBaseGrace() public {
+        PoolKey memory key = _defaultPoolKey();
+        PoolId poolId = key.toId();
+
+        h.setPosition(PID, poolId);
+        h.setGracePeriods(poolId, 100, 1_000, 1_000, 2_000);
+
+        uint256 t0 = 10_000;
+        h.setCheckpointMask(PID, 1, t0, 0, 40, 0);
+
+        vm.warp(t0 + 139);
+        assertFalse(h.isSeizable(COMMIT_ID, POSITION_INDEX, false), "token0 grace+extension not elapsed");
+
+        vm.warp(t0 + 140);
+        assertTrue(h.isSeizable(COMMIT_ID, POSITION_INDEX, false), "token0 grace+extension elapsed");
+    }
+
+    function test_isSeizable_token0ExtensionPreventsSeizureAfterBaseGraceOnly() public {
+        PoolKey memory key = _defaultPoolKey();
+        PoolId poolId = key.toId();
+
+        h.setPosition(PID, poolId);
+        h.setGracePeriods(poolId, 100, 1_000, 1_000, 2_000);
+
+        uint256 t0 = 30_000;
+        h.setCheckpointMask(PID, 1, t0, 0, 40, 0);
+
+        vm.warp(t0 + 100);
+        assertFalse(h.isSeizable(COMMIT_ID, POSITION_INDEX, false), "token0 extension must add to base grace");
+    }
+
+    function test_isSeizable_token1GraceExtensionAddsToBaseGrace() public {
+        PoolKey memory key = _defaultPoolKey();
+        PoolId poolId = key.toId();
+
+        h.setPosition(PID, poolId);
+        h.setGracePeriods(poolId, 1_000, 80, 2_000, 1_000);
+
+        uint256 t0 = 20_000;
+        h.setCheckpointMask(PID, 2, 0, t0, 0, 55);
+
+        vm.warp(t0 + 134);
+        assertFalse(h.isSeizable(COMMIT_ID, POSITION_INDEX, false), "token1 grace+extension not elapsed");
+
+        vm.warp(t0 + 135);
+        assertTrue(h.isSeizable(COMMIT_ID, POSITION_INDEX, false), "token1 grace+extension elapsed");
+    }
+
+    function test_isSeizable_token1ExtensionPreventsSeizureAfterBaseGraceOnly() public {
+        PoolKey memory key = _defaultPoolKey();
+        PoolId poolId = key.toId();
+
+        h.setPosition(PID, poolId);
+        h.setGracePeriods(poolId, 1_000, 80, 2_000, 1_000);
+
+        uint256 t0 = 40_000;
+        h.setCheckpointMask(PID, 2, 0, t0, 0, 55);
+
+        vm.warp(t0 + 80);
+        assertFalse(h.isSeizable(COMMIT_ID, POSITION_INDEX, false), "token1 extension must add to base grace");
+    }
+
     function test_isSeizable_returnsFalseAtToken0BoundaryMinusOne() public {
         PoolKey memory key = _defaultPoolKey();
         PoolId poolId = key.toId();
@@ -598,4 +660,3 @@ contract CheckpointLibraryTest is Test {
         h.extendGracePeriod(observer, key, PID, 1, 9, hex"beef");
     }
 }
-
