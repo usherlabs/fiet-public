@@ -116,6 +116,24 @@ contract VTSPositionLibHarness {
         result = VTSPositionLib.touchPosition(s, ctx, p);
     }
 
+    /// @notice Exposes increase-transition derivation for mutation tests of live-liquidity arithmetic.
+    function deriveIncreaseTransitionLiquidity(uint128 liq, int256 liquidityDelta)
+        external
+        pure
+        returns (uint128 liveLiquidityBeforeAdd, uint128 nextLiquidity)
+    {
+        return VTSPositionLib._deriveIncreaseTransitionLiquidity(liq, liquidityDelta);
+    }
+
+    /// @notice Exposes the shared liquidity mirror transition for terminal/inactive branch tests.
+    function applyLiquidityMirrorTransition(PositionId positionId, uint256 initialLiquidity, uint128 nextLiquidity)
+        external
+    {
+        PositionAccounting storage pa = s.positionAccounting[positionId];
+        Position storage pos = s.positions[positionId];
+        VTSPositionLib._applyLiquidityMirrorTransition(s, positionId, pa, pos, initialLiquidity, nextLiquidity);
+    }
+
     /// @notice Exposes onMMSettle for testing
     function onMMSettle(
         IPoolManager poolManager,

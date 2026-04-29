@@ -123,6 +123,20 @@ contract LiquidityHubMutationHardeningTest is LiquidityHubTestBase {
         liquidityHub.processSettlementFor(invalid, user1, type(uint256).max);
     }
 
+    function test_queueOfUnderlying_revertsForInvalidLcc() public {
+        address invalid = makeAddr("invalidLcc_queueAccessor");
+
+        vm.expectRevert(abi.encodeWithSelector(Errors.InvalidLcc.selector, invalid));
+        liquidityHub.queueOfUnderlying(invalid);
+    }
+
+    function test_unfundedQueueOfUnderlying_revertsForInvalidLcc() public {
+        address invalid = makeAddr("invalidLcc_unfundedQueueAccessor");
+
+        vm.expectRevert(abi.encodeWithSelector(Errors.InvalidLcc.selector, invalid));
+        liquidityHub.unfundedQueueOfUnderlying(invalid);
+    }
+
     function test_executePlannedCancel_revertsWhenMsgSenderIsNotValidLcc() public {
         address notLcc = makeAddr("notLccToken");
         vm.prank(notLcc);
@@ -265,6 +279,31 @@ contract LiquidityHubMutationHardeningTest is LiquidityHubTestBase {
         assertTrue(found, "missing SettlementQueued");
     }
 
+    function test_queueForTransferRecipient_revertsWhenRecipientIsHubWithoutAllowHub() public {
+        uint256 amount = 5;
+        vm.prank(proxyHook);
+        liquidityHub.issue(lccToken1, proxyHook, amount);
+        vm.prank(proxyHook);
+        ILCC(lccToken1).transfer(address(liquidityHub), amount);
+
+        vm.prank(proxyHook);
+        vm.expectRevert(abi.encodeWithSelector(Errors.NotApproved.selector, address(liquidityHub)));
+        liquidityHub.queueForTransferRecipient(lccToken1, address(liquidityHub), amount);
+    }
+
+    function test_wrapWithTo_revertsWhenRecipientIsDexBound() public {
+        (address lccToken3,) = _createSecondLCCPair();
+        uint256 amount = 8;
+        _wrapDirectLCC(user1, lccToken1, amount);
+        _setDexBound(user3);
+
+        vm.startPrank(user1);
+        ILCC(lccToken1).approve(address(liquidityHub), amount);
+        vm.expectRevert(abi.encodeWithSelector(Errors.MintToNotAllowedRecipient.selector, user3));
+        liquidityHub.wrapWithTo(lccToken3, lccToken1, user3, amount);
+        vm.stopPrank();
+    }
+
     function test_issue_revertsForInvalidLcc_evenIfCallerIsIssuer() public {
         address invalid = makeAddr("invalidLcc");
 
@@ -373,5 +412,26 @@ contract LiquidityHubMutationHardeningTest is LiquidityHubTestBase {
         assertEq(liquidityHub.settleQueue(lccToken1, user1), queued);
         assertEq(liquidityHub.totalQueued(lccToken1), queued);
     }
-}
 
+    function test_processSettlementForHub_clearsQueueWithoutDecrementingReserve() public {
+        uint256 queued = 9;
+        _createSettlementQueueEntry(lccToken1, address(liquidityHub), queued);
+
+        (uint256 directBefore, uint256 marketBefore) = liquidityHub.reserveOfUnderlyingTuple(lccToken1);
+        uint256 reserveBefore = liquidityHub.reserveOfUnderlying(lccToken1);
+        uint256 queueBefore = liquidityHub.queueOfUnderlying(lccToken1);
+        uint256 hubBalanceBefore = ILCC(lccToken1).balanceOf(address(liquidityHub));
+        assertEq(queueBefore, queued, "underlying queue should include Hub claim");
+        assertEq(hubBalanceBefore, queued, "Hub must hold queued LCC");
+
+        liquidityHub.processSettlementFor(lccToken1, address(liquidityHub), queued);
+
+        (uint256 directAfter, uint256 marketAfter) = liquidityHub.reserveOfUnderlyingTuple(lccToken1);
+        assertEq(directAfter, directBefore, "Hub settlement keeps direct reserve in shared pool");
+        assertEq(marketAfter, marketBefore, "Hub settlement keeps market reserve in shared pool");
+        assertEq(liquidityHub.reserveOfUnderlying(lccToken1), reserveBefore, "aggregate reserve unchanged");
+        assertEq(liquidityHub.settleQueue(lccToken1, address(liquidityHub)), 0, "Hub queue cleared");
+        assertEq(liquidityHub.queueOfUnderlying(lccToken1), queueBefore - queued, "shared queue decremented");
+        assertEq(ILCC(lccToken1).balanceOf(address(liquidityHub)), hubBalanceBefore - queued, "Hub LCC burned");
+    }
+}

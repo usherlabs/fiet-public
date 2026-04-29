@@ -242,5 +242,55 @@ contract MMPositionActionsImplMutationHardeningTest is MarketTestBase, MarketMak
         MMA.executeWithUnlock(positionManager, attackerActions, block.timestamp + 3600);
         vm.stopPrank();
     }
-}
 
+    function test_mintPosition_revertsWhenToken0PrincipalSpendExceedsMax() public {
+        // Kills survivor:
+        // - `_validateMaxIn` token0 spend predicate `amount0 < 0` -> `amount0 > 0`
+        uint256 tokenId = 1;
+        uint256 positionIndex = 0;
+
+        (uint256 requiredSettlementAmount0, uint256 requiredSettlementAmount1) =
+            _calculateSettlementAmounts(defaultLiquidityParams, marketVTSConfiguration);
+        assertGt(requiredSettlementAmount0, 0, "fixture must require token0 principal");
+
+        address locker = liquiditySignal.mmState.advancer;
+        address underlying0 = lcc0.underlying();
+        address underlying1 = lcc1.underlying();
+        _fundLockerForSettlement(locker, underlying0, underlying1, requiredSettlementAmount0, requiredSettlementAmount1);
+
+        vm.startPrank(locker);
+        _approveTokenForPositionManager(
+            underlying0, underlying1, address(positionManager), requiredSettlementAmount0, requiredSettlementAmount1
+        );
+
+        MMA.PreparedAction[] memory actions = new MMA.PreparedAction[](3);
+        actions[0] = MMA.prepareCommit(abi.encode(liquiditySignal));
+        actions[1] = MMA.prepareMint(
+            corePoolKey,
+            tokenId,
+            defaultLiquidityParams.tickLower,
+            defaultLiquidityParams.tickUpper,
+            uint256(defaultLiquidityParams.liquidityDelta),
+            uint128(requiredSettlementAmount0 - 1),
+            type(uint128).max
+        );
+        actions[2] = MMA.prepareSettle(
+            corePoolKey,
+            tokenId,
+            positionIndex,
+            -SafeCast.toInt128(requiredSettlementAmount0),
+            -SafeCast.toInt128(requiredSettlementAmount1),
+            false
+        );
+
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                Errors.MaximumAmountExceeded.selector,
+                uint128(requiredSettlementAmount0 - 1),
+                uint128(2_995_354_955_910_781)
+            )
+        );
+        MMA.executeWithUnlock(positionManager, actions, block.timestamp + 3600);
+        vm.stopPrank();
+    }
+}
