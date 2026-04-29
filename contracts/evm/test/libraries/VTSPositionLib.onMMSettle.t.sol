@@ -493,6 +493,33 @@ contract VTSPositionLibOnMMSettleTest is VTSLibTestBase {
         );
     }
 
+    function test_onMMSettle_withdrawals_positiveCurrencyDelta_residualReducesSettled() public {
+        _initMarket();
+        PositionId positionId = _registerActivePosition();
+        address owner = DEFAULT_OWNER;
+
+        harness.setCommitmentMax(positionId, 1000e18, 1000e18);
+        harness.setSettled(positionId, 200e18, 200e18);
+        harness.setPoolTotalSettled(testPoolId, 200e18, 200e18);
+        harness.setPositionActive(positionId, true);
+
+        harness.setUnderlyingDelta(underlyingCurrency0, owner, 30e18);
+        harness.addMarketProducedCredit(mockVault, underlyingCurrency0, 30e18);
+        mockVault.setAvailableLiquidity(type(int128).max, type(int128).max);
+
+        (BalanceDelta settlementDelta, bool rfsOpen,) = harness.onMMSettle(
+            manager, mockVault, positionId, lccCurrency0, lccCurrency1, toBalanceDelta(50e18, 0), false, false
+        );
+
+        assertFalse(rfsOpen, "RFS should remain closed after delta-backed residual withdrawal");
+        assertEq(settlementDelta.amount0(), 50e18, "withdrawal should include delta-backed and settled-backed parts");
+
+        (,, uint256 settled0, uint256 settled1,,,,) = harness.getPositionAccounting(positionId);
+        assertEq(settled0, 180e18, "only the residual above positive delta should reduce live settled");
+        assertEq(settled1, 200e18, "untouched lane should remain unchanged");
+        assertEq(harness.getUnderlyingDelta(underlyingCurrency0, owner), 0, "positive delta should be fully consumed");
+    }
+
     function test_onMMSettle_withdrawals_returnsExplicitVaultIntentForDeltaBackedClamp() public {
         _initMarket();
         PositionId positionId = _registerActivePosition();
@@ -860,6 +887,142 @@ contract VTSPositionLibOnMMSettleTest is VTSLibTestBase {
         assertEq(c1end, 0);
     }
 
+    function test_onMMSettle_seizing_oneLaneFullCureClearsOnlyClosedLaneCarry() public {
+        _initMarket();
+
+        MarketVTSConfiguration memory cfg = _createDefaultVTSConfig();
+        cfg.token0.baseVTSRate = 100;
+        cfg.token1.baseVTSRate = 100;
+        cfg.minResidualUnits = 1;
+        harness.setupPool(testPoolId, cfg);
+
+        ModifyLiquidityParams memory params = ModifyLiquidityParams({
+            tickLower: DEFAULT_TICK_LOWER, tickUpper: DEFAULT_TICK_UPPER, liquidityDelta: 99, salt: DEFAULT_SALT
+        });
+        harness.registerPosition(DEFAULT_OWNER, testPoolId, params);
+        PositionId positionId = PositionLibrary.generateId(DEFAULT_OWNER, params);
+        harness.setPositionActive(positionId, true);
+        harness.setCommitmentMax(positionId, 1e18, 1e18);
+        harness.setSettled(positionId, 0, 0);
+        harness.setSeizureLiquidityCarry(positionId, 123, 456);
+
+        (, BalanceDelta rfsBefore) = harness.getRFS(positionId);
+        assertGt(rfsBefore.amount0(), 0, "pre: token0 RFS open");
+        assertGt(rfsBefore.amount1(), 0, "pre: token1 RFS open");
+
+        harness.onMMSettle(
+            manager,
+            mockVault,
+            positionId,
+            lccCurrency0,
+            lccCurrency1,
+            toBalanceDelta(-rfsBefore.amount0(), 0),
+            true,
+            false
+        );
+
+        (, BalanceDelta rfsAfter) = harness.getRFS(positionId);
+        assertFalse(rfsAfter.amount0() > 0, "token0 RFS should close");
+        assertGt(rfsAfter.amount1(), 0, "token1 RFS should remain open");
+
+        (uint256 carry0, uint256 carry1) = harness.getSeizureLiquidityCarry(positionId);
+        assertEq(carry0, 0, "closed token0 lane carry should clear");
+        assertEq(carry1, 456, "open token1 lane carry should be retained");
+    }
+
+    function test_onMMSettle_seizing_token1DepositIgnoredWhenOnlyToken0RfsOpen() public {
+        _initMarket();
+        PositionId positionId = _registerActivePosition();
+
+        harness.setCommitmentMax(positionId, 1000e18, 1000e18);
+        harness.setSettled(positionId, 0, 100e18);
+        harness.setPositionActive(positionId, true);
+
+        (BalanceDelta settlementDelta, bool rfsOpen,) = harness.onMMSettle(
+            manager, mockVault, positionId, lccCurrency0, lccCurrency1, toBalanceDelta(-100e18, -100e18), true, false
+        );
+
+        assertFalse(rfsOpen, "token0 cure should close the only open RFS lane");
+        assertEq(settlementDelta.amount0(), -50e18, "token0 deposit should clamp to open RFS");
+        assertEq(settlementDelta.amount1(), 0, "token1 deposit must be ignored when token1 RFS is closed");
+
+        (,, uint256 settled0, uint256 settled1,,,,) = harness.getPositionAccounting(positionId);
+        assertEq(settled0, 50e18, "token0 settled should increase by the open RFS amount");
+        assertEq(settled1, 100e18, "token1 settled should not change");
+    }
+
+    function test_onMMSettle_seizing_minResidualClampSeizesAllLiquidity() public {
+        _initMarket();
+
+        MarketVTSConfiguration memory cfg = _createDefaultVTSConfig();
+        cfg.token0.baseVTSRate = 500;
+        cfg.token1.baseVTSRate = 500;
+        cfg.minResidualUnits = 960;
+        harness.setupPool(testPoolId, cfg);
+
+        ModifyLiquidityParams memory params = ModifyLiquidityParams({
+            tickLower: DEFAULT_TICK_LOWER, tickUpper: DEFAULT_TICK_UPPER, liquidityDelta: 1000, salt: DEFAULT_SALT
+        });
+        harness.registerPosition(DEFAULT_OWNER, testPoolId, params);
+        PositionId positionId = PositionLibrary.generateId(DEFAULT_OWNER, params);
+        harness.setPositionActive(positionId, true);
+        harness.setCommitmentMax(positionId, 1e18, 1e18);
+        harness.setSettled(positionId, 0, 0);
+
+        (, BalanceDelta rfsBefore) = harness.getRFS(positionId);
+        assertGt(rfsBefore.amount0(), 0, "pre: token0 RFS open");
+        assertGt(rfsBefore.amount1(), 0, "pre: token1 RFS open");
+
+        (,, uint256 seizedLiquidityUnits) = harness.onMMSettle(
+            manager,
+            mockVault,
+            positionId,
+            lccCurrency0,
+            lccCurrency1,
+            toBalanceDelta(-rfsBefore.amount0(), -rfsBefore.amount1()),
+            true,
+            false
+        );
+
+        assertEq(seizedLiquidityUnits, 1000, "residual below configured floor should seize the whole position");
+    }
+
+    function test_onMMSettle_seizing_twoTokenContributionsAccumulate() public {
+        _initMarket();
+
+        MarketVTSConfiguration memory cfg = _createDefaultVTSConfig();
+        cfg.token0.baseVTSRate = 1000;
+        cfg.token1.baseVTSRate = 1000;
+        cfg.minResidualUnits = 1;
+        harness.setupPool(testPoolId, cfg);
+
+        ModifyLiquidityParams memory params = ModifyLiquidityParams({
+            tickLower: DEFAULT_TICK_LOWER, tickUpper: DEFAULT_TICK_UPPER, liquidityDelta: 1000, salt: DEFAULT_SALT
+        });
+        harness.registerPosition(DEFAULT_OWNER, testPoolId, params);
+        PositionId positionId = PositionLibrary.generateId(DEFAULT_OWNER, params);
+        harness.setPositionActive(positionId, true);
+        harness.setCommitmentMax(positionId, 1e18, 1e18);
+        harness.setSettled(positionId, 0, 0);
+
+        (, BalanceDelta rfsBefore) = harness.getRFS(positionId);
+        assertGt(rfsBefore.amount0(), 0, "pre: token0 RFS open");
+        assertGt(rfsBefore.amount1(), 0, "pre: token1 RFS open");
+
+        (,, uint256 seizedLiquidityUnits) = harness.onMMSettle(
+            manager,
+            mockVault,
+            positionId,
+            lccCurrency0,
+            lccCurrency1,
+            toBalanceDelta(-rfsBefore.amount0(), -rfsBefore.amount1()),
+            true,
+            false
+        );
+
+        assertEq(seizedLiquidityUnits, 200, "token0 and token1 seizure contributions should add together");
+    }
+
     function test_onMMSettle_seizing_deposits_noRfSRequirement_clampsToZero() public {
         _initMarket();
         PositionId positionId = _registerActivePosition();
@@ -1146,4 +1309,3 @@ contract VTSPositionLibOnMMSettleTest is VTSLibTestBase {
         return positionId;
     }
 }
-

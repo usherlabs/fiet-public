@@ -30,12 +30,12 @@ paths and are excluded from the effective-score target.
 | --- | --- | --- |
 | 257 | `!pos.isActive` -> `pos.isActive` | `VTSLifecycleLinkedLibTest.test_assertPositionValid_revertsWhenInactivePositionRequiresActive`, `test_assertPositionValid_allowsInactivePositionWhenActiveNotRequired` |
 | 260 | wrong-pool OR -> AND | `VTSLifecycleLinkedLibTest.test_onMMSettle_revertsWhenPositionPoolMismatchAfterCanonicalFactoryCheck`, `test_processPosition_revertsWhenExistingPositionPoolMismatch` |
-| 262-263 | post-seizing carry clear lane predicates inverted | `VTSPositionLibOnMMSettleTest.test_onMMSettle_seizing_splitCure_thenFullClose_clearsCarryWhenRfsCloses`, plus `CheckpointLibraryTest.test_markCheckpoint_clearsSeizureCarryOnlyOnClosedLane` for non-seizing close behavior |
-| 264 | withdrawal remainder `requested - deltaBacked` -> addition | `VTSPositionLibOnMMSettleTest.test_onMMSettle_seizing_withdrawals_positiveCurrencyDelta_clampsToDelta` |
-| 266-267 | token1 RFS/deposit sign handling inverted | `VTSPositionLibOnMMSettleTest.test_onMMSettle_seizing_deposits_clampsByOpenRfS`, `test_onMMSettle_seizing_deposits_noRfSRequirement_clampsToZero` |
-| 268-270 | min-residual clamp and total/liquidity comparison arithmetic | `VTSPositionLibOnMMSettleTest.test_onMMSettle_seizing_twoLaneFractionalFloors_noCrossLaneNetting_audit30_4`, `test_onMMSettle_seizing_splitCure_thenFullClose_clearsCarryWhenRfsCloses` |
-| 271 | token1 no-RFS guard inverted | `VTSPositionLibOnMMSettleTest.test_onMMSettle_seizing_deposits_noRfSRequirement_clampsToZero` |
-| 274 | token1 seizure contribution accumulation changed from addition to subtraction | `VTSPositionLibOnMMSettleTest.test_onMMSettle_seizing_deposits_clampsByOpenRfS`, `test_onMMSettle_seizing_twoLaneFractionalFloors_noCrossLaneNetting_audit30_4` |
+| 262-263 | post-seizing carry clear lane predicates inverted | `VTSPositionLibOnMMSettleTest.test_onMMSettle_seizing_oneLaneFullCureClearsOnlyClosedLaneCarry`, `test_onMMSettle_seizing_splitCure_thenFullClose_clearsCarryWhenRfsCloses`, plus `CheckpointLibraryTest.test_markCheckpoint_clearsSeizureCarryOnlyOnClosedLane` for non-seizing close behavior |
+| 264 | withdrawal remainder `requested - deltaBacked` -> addition | `VTSPositionLibOnMMSettleTest.test_onMMSettle_withdrawals_positiveCurrencyDelta_residualReducesSettled`, `test_onMMSettle_seizing_withdrawals_clampsByCurrencyDelta` |
+| 266-267 | token1 RFS/deposit sign handling inverted | `VTSPositionLibOnMMSettleTest.test_onMMSettle_seizing_token1DepositIgnoredWhenOnlyToken0RfsOpen`, `test_onMMSettle_seizing_deposits_clampsByOpenRfS`, `test_onMMSettle_seizing_deposits_noRfSRequirement_clampsToZero` |
+| 268-270 | min-residual clamp and total/liquidity comparison arithmetic | `VTSPositionLibOnMMSettleTest.test_onMMSettle_seizing_minResidualClampSeizesAllLiquidity`, `test_onMMSettle_seizing_twoLaneFractionalFloors_noCrossLaneNetting_audit30_4`, `test_onMMSettle_seizing_splitCure_thenFullClose_clearsCarryWhenRfsCloses` |
+| 271 | token1 no-RFS guard inverted | `VTSPositionLibOnMMSettleTest.test_onMMSettle_seizing_token1DepositIgnoredWhenOnlyToken0RfsOpen`, `test_onMMSettle_seizing_deposits_noRfSRequirement_clampsToZero` |
+| 274 | token1 seizure contribution accumulation changed from addition to subtraction | `VTSPositionLibOnMMSettleTest.test_onMMSettle_seizing_twoTokenContributionsAccumulate`, `test_onMMSettle_seizing_deposits_clampsByOpenRfS`, `test_onMMSettle_seizing_twoLaneFractionalFloors_noCrossLaneNetting_audit30_4` |
 
 ### VTSLifecycleLinkedLib effective exclusions
 
