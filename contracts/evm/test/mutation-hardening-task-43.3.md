@@ -27,8 +27,8 @@ a row is intentionally promoted to contractual behavior.
 
 | Partition metric | Count | Score |
 | --- | ---: | ---: |
-| Pre-work targeted meaningful rows killed | 0 / 31 | 0.0% |
-| Projected post-change targeted meaningful rows killed | 31 / 31 | 100.0% |
+| Pre-work targeted meaningful rows killed | 0 / 28 | 0.0% |
+| Projected post-change targeted meaningful rows killed | 28 / 28 | 100.0% |
 | Targeted effective exclusions | 6 | n/a |
 
 Projected result is based on each meaningful survivor row being mapped to at least one added or existing strengthened
