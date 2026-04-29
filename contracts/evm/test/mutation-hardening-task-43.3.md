@@ -27,13 +27,21 @@ a row is intentionally promoted to contractual behavior.
 
 | Partition metric | Count | Score |
 | --- | ---: | ---: |
-| Pre-work targeted meaningful rows killed | 0 / 28 | 0.0% |
-| Projected post-change targeted meaningful rows killed | 28 / 28 | 100.0% |
+| Pre-work TASK-43.3 newly addressed rows killed | 0 / 9 | 0.0% |
+| Projected post-change TASK-43.3 newly addressed rows killed | 9 / 9 | 100.0% |
 | Targeted effective exclusions | 6 | n/a |
 
-Projected result is based on each meaningful survivor row being mapped to at least one added or existing strengthened
-assertion that observes the mutated behavior. Gambit was not rerun in this environment because `gambit` is not installed
-on PATH.
+Projected result is based on each newly addressed survivor row being mapped to at least one added or strengthened
+assertion in this PR that observes the mutated behavior. The row tables below also include inherited coverage from the
+stacked base for full 28-row partition auditability, but those inherited rows are not counted in the 9/9 TASK-43.3 new
+score claim. Gambit was not rerun in this environment because `gambit` is not installed on PATH.
+
+Newly addressed rows in this PR:
+
+- `LiquidityHub.sol:284`, `:294`, `:1072`, `:1112`.
+- `LiquidityHubLib.sol:525`, `:593`.
+- `MMPositionActionsImpl.sol:263`.
+- `SeizureCarryQ128Lib.sol:28`, `:75`.
 
 ## Targeted LiquidityHub rows
 
