@@ -31,8 +31,6 @@ jobs:
 
       - name: Install Foundry
         working-directory: .
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
         run: ./.github/scripts/install-foundry.sh v1.4.2
 
       - name: Setup Python

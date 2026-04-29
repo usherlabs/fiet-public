@@ -27,19 +27,14 @@ trap 'rm -rf "$tmpdir"' EXIT
 asset_api_url="$(
 python3 - "$VERSION" "$asset" <<'PY'
 import json
-import os
 import sys
 import urllib.request
 
 version = sys.argv[1]
 asset_name = sys.argv[2]
 url = f"https://api.github.com/repos/foundry-rs/foundry/releases/tags/{version}"
-request = urllib.request.Request(url)
-token = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
-if token:
-    request.add_header("Authorization", f"Bearer {token}")
 
-with urllib.request.urlopen(request) as response:
+with urllib.request.urlopen(url) as response:
     payload = json.load(response)
 
 for asset in payload.get("assets", []):
