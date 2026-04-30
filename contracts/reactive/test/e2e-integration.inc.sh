@@ -46,14 +46,14 @@ e2e_integration() {
   reactive_diagnostic_start_block="$(cast block-number --rpc-url "$REACTIVE_RPC" 2>/dev/null || true)"
 
   echo "Emitting LCCCreated pair..."
-  cast send "$mock_liq_hub" \
+  cast_send_with_nonce_retry "$mock_liq_hub" \
     "triggerLccCreated(address,address,bytes32)" \
     "$underlying_addr" \
     "$lcc_addr" \
     "$market_id" \
     --rpc-url "$rpc_url" \
     --private-key "$deployer_private_key" >/dev/null
-  cast send "$mock_liq_hub" \
+  cast_send_with_nonce_retry "$mock_liq_hub" \
     "triggerLccCreated(address,address,bytes32)" \
     "$sibling_underlying_addr" \
     "$sibling_lcc_addr" \
@@ -64,7 +64,7 @@ e2e_integration() {
 
   echo "Emitting settlement queued event..."
   local queue_one_out queue_two_out queue_one_tx queue_two_tx
-  queue_one_out="$(cast send "$mock_liq_hub" \
+  queue_one_out="$(cast_send_with_nonce_retry "$mock_liq_hub" \
     "triggerSettlementQueued(address,address,uint256)" \
     "$lcc_addr" \
     "$recipient_one_addr" \
@@ -73,7 +73,7 @@ e2e_integration() {
     --private-key "$deployer_private_key")"
   queue_one_tx="$(extract_transaction_hash "$queue_one_out")"
 
-  queue_two_out="$(cast send "$mock_liq_hub" \
+  queue_two_out="$(cast_send_with_nonce_retry "$mock_liq_hub" \
     "triggerSettlementQueued(address,address,uint256)" \
     "$lcc_addr" \
     "$recipient_two_addr" \
@@ -99,7 +99,7 @@ e2e_integration() {
   echo "Emitting liquidity available event to disburse queued settlements"
   local liquidity_out liquidity_tx
   liquidity_out="$(
-  cast send "$mock_liq_hub" \
+  cast_send_with_nonce_retry "$mock_liq_hub" \
     "triggerLiquidityAvailable(address,address,uint256,bytes32)" \
     "$lcc_addr" \
     "$underlying_addr" \
