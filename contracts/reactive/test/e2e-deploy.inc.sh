@@ -77,6 +77,12 @@ e2e_deploy() {
   wait_until "HubRSC code on reactive chain" contract_code_exists "$HUB_RSC" "$REACTIVE_RPC"
 
   cast send "$HUB_RSC" \
+    "activateBaseSubscriptions()" \
+    --rpc-url "$REACTIVE_RPC" \
+    --private-key "$PRIVATE_KEY" >/dev/null
+  echo "HubRSC base subscriptions activated"
+
+  cast send "$HUB_RSC" \
     "registerRecipient(address)" \
     "$RECIPIENT_ONE" \
     --rpc-url "$REACTIVE_RPC" \

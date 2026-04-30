@@ -16,6 +16,8 @@ uint256 constant RECEIVER_BATCH_SIZE_CAP = 30;
 contract MockSystemContract {
     mapping(address => uint256) public debt;
     mapping(address => uint256) public received;
+    uint256 public subscriptionCount;
+    mapping(uint256 => bytes32) public subscriptionHashByIndex;
 
     receive() external payable {
         received[msg.sender] += msg.value;
@@ -23,7 +25,18 @@ contract MockSystemContract {
         debt[msg.sender] = msg.value >= currentDebt ? 0 : currentDebt - msg.value;
     }
 
-    function subscribe(uint256, address, uint256, uint256, uint256, uint256) external {}
+    function subscribe(
+        uint256 chainId,
+        address sourceContract,
+        uint256 topic0,
+        uint256 topic1,
+        uint256 topic2,
+        uint256 topic3
+    ) external {
+        subscriptionHashByIndex[subscriptionCount++] =
+            keccak256(abi.encode(msg.sender, chainId, sourceContract, topic0, topic1, topic2, topic3));
+    }
+
     function unsubscribe(uint256, address, uint256, uint256, uint256, uint256) external {}
 
     function setDebt(address payer, uint256 amount) external {

@@ -109,6 +109,8 @@ abstract contract HubRSCStorage is AbstractReactive {
     mapping(address => bool) public recipientRegistered;
     /// @notice Recipients with active exact-match subscriptions.
     mapping(address => bool) public recipientActive;
+    /// @notice Whether HubRSC-wide protocol/self subscriptions have been activated after deployment.
+    bool public baseSubscriptionsActive;
     /// @notice Native-token recipient balance. Positive balances activate service; negative balances represent debt.
     mapping(address => int256) public recipientBalance;
 
@@ -185,6 +187,7 @@ abstract contract HubRSCStorage is AbstractReactive {
     event RecipientFunded(address indexed recipient, uint256 depositAmount, int256 balance);
     event RecipientActivated(address indexed recipient, int256 balance);
     event RecipientDeactivated(address indexed recipient, int256 balance);
+    event BaseSubscriptionsActivated(address indexed activator);
     event RecipientDebtAllocated(address indexed recipient, uint256 debtAmount, int256 balance);
     event UnallocatedDebtObserved(uint256 debtAmount, uint256 observedDebt);
     event CanonicalProtocolLogCallback(
@@ -406,6 +409,23 @@ abstract contract HubRSCStorage is AbstractReactive {
 
     function _debtContextQueueEmpty() internal view returns (bool) {
         return debtContextHead == debtContextTail;
+    }
+
+    function _subscribeBaseLogs() internal {
+        service.subscribe(
+            protocolChainId, liquidityHub, LCC_CREATED_TOPIC, REACTIVE_IGNORE, REACTIVE_IGNORE, REACTIVE_IGNORE
+        );
+        service.subscribe(
+            protocolChainId, liquidityHub, LIQUIDITY_AVAILABLE_TOPIC, REACTIVE_IGNORE, REACTIVE_IGNORE, REACTIVE_IGNORE
+        );
+        service.subscribe(
+            reactChainId,
+            address(this),
+            MORE_LIQUIDITY_AVAILABLE_TOPIC,
+            REACTIVE_IGNORE,
+            REACTIVE_IGNORE,
+            REACTIVE_IGNORE
+        );
     }
 
     function _setRecipientLifecycleSubscriptions(address recipient, bool shouldSubscribe) internal {

@@ -24,28 +24,14 @@ contract HubRSC is HubRSCDispatch {
             _destinationReceiverContract,
             _reactiveCallbackProxy
         )
-    {
-        if (!vm) {
-            service.subscribe(
-                protocolChainId, liquidityHub, LCC_CREATED_TOPIC, REACTIVE_IGNORE, REACTIVE_IGNORE, REACTIVE_IGNORE
-            );
-            service.subscribe(
-                protocolChainId,
-                liquidityHub,
-                LIQUIDITY_AVAILABLE_TOPIC,
-                REACTIVE_IGNORE,
-                REACTIVE_IGNORE,
-                REACTIVE_IGNORE
-            );
-            service.subscribe(
-                reactChainId,
-                address(this),
-                MORE_LIQUIDITY_AVAILABLE_TOPIC,
-                REACTIVE_IGNORE,
-                REACTIVE_IGNORE,
-                REACTIVE_IGNORE
-            );
-        }
+    {}
+
+    /// @notice Activates HubRSC-wide subscriptions that are not scoped to one recipient.
+    function activateBaseSubscriptions() external rnOnly {
+        if (baseSubscriptionsActive) return;
+        baseSubscriptionsActive = true;
+        _subscribeBaseLogs();
+        emit BaseSubscriptionsActivated(msg.sender);
     }
 
     /// @notice Explicitly registers a recipient and optionally funds immediate activation with native value.
