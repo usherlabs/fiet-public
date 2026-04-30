@@ -38,6 +38,10 @@ abstract contract HubRSCStorage is AbstractReactive {
     /// @notice SettlementFailed(address indexed lcc, address indexed recipient, uint256 maxAmount, uint256 attemptId, bytes revertData).
     uint256 public constant SETTLEMENT_FAILED_TOPIC = ReactiveConstants.SETTLEMENT_FAILED_TOPIC;
 
+    /// @notice DestinationCallbackRequested(bytes payload).
+    uint256 public constant DESTINATION_CALLBACK_REQUESTED_TOPIC =
+        uint256(keccak256("DestinationCallbackRequested(bytes)"));
+
     struct Pending {
         address lcc;
         address recipient;
@@ -193,6 +197,7 @@ abstract contract HubRSCStorage is AbstractReactive {
     event CanonicalProtocolLogCallback(
         address indexed callbackOrigin, uint256 indexed originChainId, address indexed origin
     );
+    event DestinationCallbackRequested(bytes payload);
     event MoreLiquidityAvailable(address indexed lcc, uint256 amountAvailable);
     event PendingAdded(address indexed lcc, address indexed recipient, uint256 amount);
     event PendingIncreased(address indexed lcc, address indexed recipient, uint256 amount);
@@ -422,6 +427,14 @@ abstract contract HubRSCStorage is AbstractReactive {
             reactChainId,
             address(this),
             MORE_LIQUIDITY_AVAILABLE_TOPIC,
+            REACTIVE_IGNORE,
+            REACTIVE_IGNORE,
+            REACTIVE_IGNORE
+        );
+        service.subscribe(
+            reactChainId,
+            address(this),
+            DESTINATION_CALLBACK_REQUESTED_TOPIC,
             REACTIVE_IGNORE,
             REACTIVE_IGNORE,
             REACTIVE_IGNORE

@@ -300,7 +300,10 @@ abstract contract HubRSCDispatch is HubRSCReconciliation {
         );
 
         emit DispatchRequested(triggerLcc, available, batchCount, remainingLiquidity);
-        emit Callback(protocolChainId, destinationReceiverContract, CALLBACK_GAS_LIMIT, payload);
+        emit DestinationCallbackRequested(payload);
+        if (vm) {
+            emit Callback(protocolChainId, destinationReceiverContract, CALLBACK_GAS_LIMIT, payload);
+        }
         _recordDispatchDebtContext(recipients, batchCount);
 
         if (remainingLiquidity > 0) {

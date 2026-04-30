@@ -70,11 +70,11 @@ contract HubRSCConfigAndQueueingTest is HubRSCTestBase {
         hub.activateBaseSubscriptions();
 
         assertTrue(hub.baseSubscriptionsActive());
-        assertEq(system.subscriptionCount(), 3);
+        assertEq(system.subscriptionCount(), 4);
 
         hub.activateBaseSubscriptions();
 
-        assertEq(system.subscriptionCount(), 3);
+        assertEq(system.subscriptionCount(), 4);
     }
 
     /// @notice Aggregates pending settlements from an authoritative LiquidityHub queue log.

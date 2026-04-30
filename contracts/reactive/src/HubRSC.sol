@@ -110,6 +110,15 @@ contract HubRSC is HubRSCDispatch {
     /// @dev ReactVM execution must not assume canonical storage persistence. This entrypoint only emits
     ///      `Callback` to the reactive network, which delivers `applyCanonicalProtocolLog` on the canonical deployment.
     function react(IReactive.LogRecord calldata log) external vmOnly {
+        if (
+            log.chain_id == reactChainId && log._contract == canonicalReactiveHub
+                && log.topic_0 == DESTINATION_CALLBACK_REQUESTED_TOPIC
+        ) {
+            bytes memory payload = abi.decode(log.data, (bytes));
+            emit Callback(protocolChainId, destinationReceiverContract, CALLBACK_GAS_LIMIT, payload);
+            return;
+        }
+
         emit Callback(
             reactChainId,
             canonicalReactiveHub,
