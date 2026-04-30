@@ -135,6 +135,61 @@ settled_at_least() {
   [ "$total_settled" -ge "$expected_amount" ]
 }
 
+print_dispatch_state_diagnostics() {
+  local hub_addr="$1"
+  local liquidity_hub_addr="$2"
+  local lcc_addr="$3"
+  local recipient_addr="$4"
+  local expected_amount="$5"
+
+  local key pending_state pending_amount pending_exists inflight budget wake_epoch total_settled
+  key="$(cast call "$hub_addr" \
+    "computeKey(address,address)(bytes32)" \
+    "$lcc_addr" \
+    "$recipient_addr" \
+    --rpc-url "$REACTIVE_RPC" 2>/dev/null || true)"
+  pending_state="$(cast call "$hub_addr" \
+    "pendingStateByKey(bytes32)(uint256,bool)" \
+    "$key" \
+    --rpc-url "$REACTIVE_RPC" 2>/dev/null || true)"
+  pending_amount="$(uint_or_zero "$(printf '%s\n' "$pending_state" | sed -n '1p')")"
+  pending_exists="$(printf '%s\n' "$pending_state" | sed -n '2p' | tr -d '[:space:]')"
+  inflight="$(cast call "$hub_addr" \
+    "inFlightByKey(bytes32)(uint256)" \
+    "$key" \
+    --rpc-url "$REACTIVE_RPC" 2>/dev/null || true)"
+  inflight="$(uint_or_zero "$inflight")"
+  budget="$(cast call "$hub_addr" \
+    "availableBudgetByDispatchLane(address)(uint256)" \
+    "$lcc_addr" \
+    --rpc-url "$REACTIVE_RPC" 2>/dev/null || true)"
+  budget="$(uint_or_zero "$budget")"
+  wake_epoch="$(cast call "$hub_addr" \
+    "protocolLiquidityWakeEpochByLane(address)(uint256)" \
+    "$lcc_addr" \
+    --rpc-url "$REACTIVE_RPC" 2>/dev/null || true)"
+  wake_epoch="$(uint_or_zero "$wake_epoch")"
+  total_settled="$(cast call "$liquidity_hub_addr" \
+    "getTotalAmountSettled(address,address)(uint256)" \
+    "$lcc_addr" \
+    "$recipient_addr" \
+    --rpc-url "$PROTOCOL_RPC" 2>/dev/null || true)"
+  total_settled="$(uint_or_zero "$total_settled")"
+
+  echo "---- reactive dispatch state diagnostics ----" >&2
+  echo "HubRSC: $hub_addr" >&2
+  echo "LCC: $lcc_addr" >&2
+  echo "Recipient: $recipient_addr" >&2
+  echo "Expected settlement: $expected_amount" >&2
+  echo "Pending key: ${key:-unknown}" >&2
+  echo "Pending state: amount=$pending_amount exists=${pending_exists:-unknown}" >&2
+  echo "In-flight amount: $inflight" >&2
+  echo "Available budget for LCC lane: $budget" >&2
+  echo "Protocol liquidity wake epoch for LCC lane: $wake_epoch" >&2
+  echo "Protocol total settled: $total_settled" >&2
+  echo "---- end reactive dispatch state diagnostics ----" >&2
+}
+
 print_callback_bridge_diagnostics() {
   local from_block="$1"
   local hub_addr="$2"

@@ -7,6 +7,7 @@ import {HubRSC} from "../../src/HubRSC.sol";
 import {MockLiquidityHub} from "../_mocks/MockLiquidityHub.sol";
 import {
     HubRSCTestBase,
+    MockSystemContract,
     MockSettlementReceiver,
     DEFAULT_MAX_DISPATCH_ITEMS,
     RECEIVER_BATCH_SIZE_CAP
@@ -49,6 +50,31 @@ contract HubRSCConfigAndQueueingTest is HubRSCTestBase {
             destinationReceiverContract,
             address(1)
         );
+    }
+
+    function test_activateBaseSubscriptionsInstallsHubWideSubscriptionsOnce() public {
+        _etchSystemContract();
+        MockSystemContract system = MockSystemContract(payable(SYSTEM_CONTRACT));
+        HubRSC hub = new HubRSC(
+            DEFAULT_MAX_DISPATCH_ITEMS,
+            originChainId,
+            destinationChainId,
+            liquidityHub,
+            destinationReceiverContract,
+            REACTIVE_CALLBACK_PROXY_FOR_TESTS
+        );
+
+        assertFalse(hub.baseSubscriptionsActive());
+        assertEq(system.subscriptionCount(), 0);
+
+        hub.activateBaseSubscriptions();
+
+        assertTrue(hub.baseSubscriptionsActive());
+        assertEq(system.subscriptionCount(), 3);
+
+        hub.activateBaseSubscriptions();
+
+        assertEq(system.subscriptionCount(), 3);
     }
 
     /// @notice Aggregates pending settlements from an authoritative LiquidityHub queue log.

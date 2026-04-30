@@ -97,6 +97,8 @@ e2e_integration() {
   fi
 
   echo "Emitting liquidity available event to disburse queued settlements"
+  local liquidity_out liquidity_tx
+  liquidity_out="$(
   cast send "$mock_liq_hub" \
     "triggerLiquidityAvailable(address,address,uint256,bytes32)" \
     "$lcc_addr" \
@@ -104,13 +106,24 @@ e2e_integration() {
     "$liquidity_amount" \
     "$market_id" \
     --rpc-url "$rpc_url" \
-    --private-key "$deployer_private_key" >/dev/null
+    --private-key "$deployer_private_key"
+  )"
+  liquidity_tx="$(extract_transaction_hash "$liquidity_out")"
+  echo "  liquidity protocol tx: ${liquidity_tx:-unknown}"
 
   echo "Waiting for settlement to be processed and dispatched..."
-  wait_until "recipient one protocol settlement" \
-    settled_at_least "$mock_liq_hub" "$lcc_addr" "$recipient_one_addr" "$queue_amount_one"
-  wait_until "recipient two protocol settlement" \
-    settled_at_least "$mock_liq_hub" "$lcc_addr" "$recipient_two_addr" "$queue_amount_two"
+  if ! wait_until "recipient one protocol settlement" \
+    settled_at_least "$mock_liq_hub" "$lcc_addr" "$recipient_one_addr" "$queue_amount_one"; then
+    print_callback_bridge_diagnostics "$reactive_diagnostic_start_block" "$HUB_RSC" "$queue_one_tx" "$queue_two_tx" "$liquidity_tx"
+    print_dispatch_state_diagnostics "$HUB_RSC" "$mock_liq_hub" "$lcc_addr" "$recipient_one_addr" "$queue_amount_one"
+    exit 1
+  fi
+  if ! wait_until "recipient two protocol settlement" \
+    settled_at_least "$mock_liq_hub" "$lcc_addr" "$recipient_two_addr" "$queue_amount_two"; then
+    print_callback_bridge_diagnostics "$reactive_diagnostic_start_block" "$HUB_RSC" "$queue_one_tx" "$queue_two_tx" "$liquidity_tx"
+    print_dispatch_state_diagnostics "$HUB_RSC" "$mock_liq_hub" "$lcc_addr" "$recipient_two_addr" "$queue_amount_two"
+    exit 1
+  fi
 
   echo "Reading settled amount for the given lcc and recipient to ensure the settlement was paid out to the recipient"
   local total_settled
