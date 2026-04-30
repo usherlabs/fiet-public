@@ -126,7 +126,7 @@ contract HubRSC is HubRSCDispatch {
     function react(IReactive.LogRecord calldata log) external vmOnly {
         emit Callback(
             reactChainId,
-            address(this),
+            canonicalReactiveHub,
             CANONICAL_APPLY_CALLBACK_GAS_LIMIT,
             abi.encodeWithSelector(this.applyCanonicalProtocolLog.selector, log)
         );

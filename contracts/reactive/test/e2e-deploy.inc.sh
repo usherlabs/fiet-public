@@ -6,10 +6,16 @@
 # What they contain: Only function definitions (e.g. e2e_deploy, e2e_integration). No top-level “do the work” steps when sourced.
 # Why they exist: So the same deploy/integration logic can be used in two ways:
 # Standalone entrypoints (e2e-deploy.sh, e2e-integration.sh) source the .inc and call the function once.
-# e2e.sh sources both .inc files in one shell, runs e2e_deploy then e2e_integration, so exports such as LIQUIDITY_HUB and HUB_R_SC set during deploy are still visible for integration (they would not carry over if deploy and integration were two separate bash processes).
+# e2e.sh sources both .inc files in one shell, runs e2e_deploy then e2e_integration, so exports such as LIQUIDITY_HUB,
+# BATCH_RECEIVER, and HUB_RSC set during deploy are still visible for integration (they would not carry over if deploy
+# and integration were two separate bash processes).
+#
+# Do not declare HUB_RSC or BATCH_RECEIVER with `local`: `export` inside the function only promotes locals to the
+# environment for child processes, not the caller's global scope, so integration would see empty HUB_RSC.
 
 e2e_deploy() {
-  local mock_out MOCK_LIQUIDITY_HUB receiver_out BATCH_RECEIVER hub_out HUB_RSC
+  local mock_out receiver_out hub_out
+  local MOCK_LIQUIDITY_HUB
 
   mock_out="$(run_and_print \
     "Deploying MockLiquidityHub..." \

@@ -21,7 +21,7 @@ Reactive materialises **two logical faces** of the same `HubRSC` bytecode:
 
 End-to-end pipeline for a protocol log:
 
-1. **ReactVM observation** — `react()` validates/normalises the record and emits `Callback(reactChainId, address(this), gasLimit, abi.encodeCall(HubRSC.applyCanonicalProtocolLog, (log)))`.
+1. **ReactVM observation** — `react()` emits `Callback(reactChainId, canonicalReactiveHub, gasLimit, abi.encodeCall(HubRSC.applyCanonicalProtocolLog, (log)))`, where `canonicalReactiveHub` is the hub address fixed at deploy time (not the ReactVM instance’s `address(this)`).
 2. **Callback emission** — Reactive records the outbound callback (this is distinct from destination-chain `processSettlements` callbacks).
 3. **Callback-proxy delivery** — the configured `reactiveCallbackProxy` invokes `applyCanonicalProtocolLog` on the **canonical** Reactive deployment.
 4. **Canonical state application** — `_syncObservedSystemDebt()` then `_dispatchCanonicalInboundLog(log)` route to the same topic handlers as before (`LCCCreated`, `SettlementQueued`, liquidity wakes, reconciliation topics, and so on).
