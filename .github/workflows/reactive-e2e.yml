@@ -105,6 +105,9 @@ jobs:
       }}
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    concurrency:
+      group: reactive-live-smoke-${{ github.repository }}
+      cancel-in-progress: false
     permissions:
       contents: read
     env:
@@ -117,7 +120,7 @@ jobs:
       PRIVATE_KEY: ${{ secrets.REACTIVE_CI_PRIVATE_KEY }}
       RECIPIENT_DEPOSIT_WEI: "100000000000000000"
       RECEIVER_PREFUND_WEI: "0"
-      LASNA_LIVE_SMOKE_MIN_BALANCE_WEI: "1000000000000000000"
+      LASNA_LIVE_SMOKE_MIN_BALANCE_WEI: "3000000000000000000"
       SUBSCRIPTION_PROPAGATION_SECONDS: "180"
       POLL_TIMEOUT_SECONDS: "600"
     steps:
@@ -222,6 +225,9 @@ jobs:
       }}
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    concurrency:
+      group: reactive-live-smoke-${{ github.repository }}
+      cancel-in-progress: false
     permissions:
       contents: read
     env:
@@ -234,7 +240,7 @@ jobs:
       PRIVATE_KEY: ${{ secrets.REACTIVE_CI_PRIVATE_KEY }}
       RECIPIENT_DEPOSIT_WEI: "100000000000000000"
       RECEIVER_PREFUND_WEI: "0"
-      LASNA_LIVE_SMOKE_MIN_BALANCE_WEI: "1000000000000000000"
+      LASNA_LIVE_SMOKE_MIN_BALANCE_WEI: "3000000000000000000"
       SUBSCRIPTION_PROPAGATION_SECONDS: "180"
       POLL_TIMEOUT_SECONDS: "600"
     steps:
@@ -267,6 +273,46 @@ jobs:
           fi
 
           signer="$(cast wallet address --private-key "$REACTIVE_CI_PRIVATE_KEY")"
+
+          candidates=("$REACTIVE_RPC")
+          if [[ "$REACTIVE_RPC" == */ ]]; then
+            candidates+=("${REACTIVE_RPC%/}")
+          else
+            candidates+=("${REACTIVE_RPC}/")
+          fi
+
+          resolved_reactive_rpc=""
+          for candidate in "${candidates[@]}"; do
+            chain_id="$(cast chain-id --rpc-url "$candidate" 2>/dev/null | tr -d '[:space:]' || true)"
+            if [ "$chain_id" = "5318007" ]; then
+              resolved_reactive_rpc="$candidate"
+              break
+            fi
+          done
+
+          if [ -z "$resolved_reactive_rpc" ]; then
+            echo "Lasna RPC is not reachable with the configured URL or alternate trailing-slash form." >&2
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+            echo "::notice title=Reactive cross-chain smoke skipped::Lasna RPC preflight failed for both configured and alternate trailing-slash URL forms."
+            exit 0
+          fi
+          echo "REACTIVE_RPC=$resolved_reactive_rpc" >> "$GITHUB_ENV"
+
+          if ! reactive_balance="$(cast balance --rpc-url "$resolved_reactive_rpc" "$signer" 2>/dev/null)"; then
+            echo "Unable to query native Lasna lREACT gas balance for cross-chain smoke signer $signer." >&2
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+            echo "::notice title=Reactive cross-chain smoke skipped::Unable to query native Lasna lREACT gas balance for the REACTIVE_CI_PRIVATE_KEY signer."
+            exit 0
+          fi
+          min_balance="${LASNA_LIVE_SMOKE_MIN_BALANCE_WEI:-3000000000000000000}"
+          if node -e 'const [balance, minimum] = process.argv.slice(1); process.exit(BigInt(balance || "0") < BigInt(minimum) ? 0 : 1)' "${reactive_balance:-0}" "$min_balance"; then
+            echo "Native Lasna lREACT gas balance for cross-chain smoke signer $signer is below required preflight minimum." >&2
+            echo "balance=$reactive_balance min=$min_balance" >&2
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+            echo "::notice title=Reactive cross-chain smoke skipped::REACTIVE_CI_PRIVATE_KEY signer has insufficient native Lasna lREACT gas for cross-chain smoke."
+            exit 0
+          fi
+
           if ! balance="$(cast balance --rpc-url "$PROTOCOL_RPC" "$signer" 2>/dev/null)"; then
             echo "Unable to query Sepolia balance for optional cross-chain smoke." >&2
             echo "configured=false" >> "$GITHUB_OUTPUT"
