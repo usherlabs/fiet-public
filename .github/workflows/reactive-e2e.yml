@@ -30,6 +30,10 @@ on:
 env:
   FOUNDRY_PROFILE: "ci"
 
+concurrency:
+  group: reactive-live-smoke-${{ github.repository }}
+  cancel-in-progress: false
+
 jobs:
   reactive-live-smoke-scope:
     name: Reactive Live Smoke Scope
@@ -82,9 +86,6 @@ jobs:
       }}
     runs-on: ubuntu-latest
     timeout-minutes: 45
-    concurrency:
-      group: reactive-live-smoke-${{ github.repository }}
-      cancel-in-progress: false
     permissions:
       contents: read
     env:
@@ -190,7 +191,9 @@ jobs:
 
   reactive-live-cross-chain-smoke:
     name: Reactive Live Cross-Chain Smoke
-    needs: reactive-live-smoke-scope
+    needs:
+      - reactive-live-smoke-scope
+      - reactive-live-smoke
     if: >-
       ${{
         (github.event_name == 'workflow_dispatch' && inputs.run_smoke == true) ||
@@ -202,9 +205,6 @@ jobs:
       }}
     runs-on: ubuntu-latest
     timeout-minutes: 45
-    concurrency:
-      group: reactive-live-smoke-${{ github.repository }}
-      cancel-in-progress: false
     permissions:
       contents: read
     env:
