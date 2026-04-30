@@ -16,12 +16,16 @@
 e2e_deploy() {
   local mock_out receiver_out hub_out
   local MOCK_LIQUIDITY_HUB
+  local -a maybe_broadcast=()
+  if [ -n "${broadcast_flag:-}" ]; then
+    maybe_broadcast+=("$broadcast_flag")
+  fi
 
   mock_out="$(run_and_print \
     "Deploying MockLiquidityHub..." \
     forge script scripts/_mocks/DeployMockLiquidityHub.s.sol:DeployMockLiquidityHub \
       --rpc-url "$PROTOCOL_RPC" \
-      $broadcast_flag)"
+      "${maybe_broadcast[@]}")"
 
   MOCK_LIQUIDITY_HUB="$(extract_labeled_address "MockLiquidityHub" "$mock_out")"
   if [ -z "${MOCK_LIQUIDITY_HUB:-}" ]; then
@@ -38,7 +42,7 @@ e2e_deploy() {
     "Deploying BatchProcessSettlement receiver..." \
     forge script scripts/DeployReceiver.s.sol:DeployReceiver \
       --rpc-url "$PROTOCOL_RPC" \
-      $broadcast_flag)"
+      "${maybe_broadcast[@]}")"
 
   BATCH_RECEIVER="$(extract_labeled_address "BatchProcessSettlementReceiver" "$receiver_out")"
   if [ -z "${BATCH_RECEIVER:-}" ]; then
