@@ -68,7 +68,7 @@ This project is built for the Reactive Network execution model:
 ### Testing
 
 - Focused Hub suites: `forge test --match-path 'test/hub/*.t.sol'`
-- Deterministic local simulation: `just local-simulation` (single-contract HubRSC coverage using Foundry mocks and direct `react()` calls; no live Reactive Network access or secrets)
+- Deterministic local simulation: `forge test` (includes single-contract HubRSC coverage using Foundry mocks and direct `react()` calls; no live Reactive Network access or secrets)
 - Unit tests: `forge test`
 - Lasna-only Reactive Network pseudo-e2e smoke harness: `just e2e` (deploys mocks, deploys Hub/Receiver, registers funded recipients, triggers events, checks observed state; gated manually and requires `REACTIVE_RPC` plus an lREACT-funded key)
 - Post-refactor reactive findings matrix: [`docs/task-40.3-task-35-regression-validation.md`](docs/task-40.3-task-35-regression-validation.md)
@@ -121,20 +121,20 @@ While backfill is still in progress, the hub prefers the per-LCC lane when it ha
 ### Prerequisites
 
 - A deployed `LiquidityHub` on the protocol chain.
-- The correct **Reactive callback proxy addresses** for each chain (Reactive publishes these per network).
+- A supported `PROTOCOL_CHAIN_ID` for the destination chain. The receiver deploy script derives the published Reactive callback proxy from this chain id.
 - Funds for the default Lasna-only smoke lane:
   - Native Lasna lREACT gas on the `REACTIVE_CI_PRIVATE_KEY` / `PRIVATE_KEY` signer to deploy the mock protocol producer, receiver, and HubRSC, register/fund recipients, and cover execution.
   - No Sepolia ETH is required by default.
-- Optional stronger full cross-chain validation can use a foreign protocol chain such as Ethereum Sepolia, but that is outside the required TASK-38.1 CI lane and needs its own RPC, callback proxy, chain id, and gas funding.
+- Optional stronger full cross-chain validation can use a foreign protocol chain such as Ethereum Sepolia, but that is outside the required TASK-38.1 CI lane and needs its own RPC, chain id, and gas funding.
 
 ### Address & version registry (fill this in per deployment)
 
-| Name                              | Chain    | Address | Notes                                               |
-| --------------------------------- | -------- | ------- | --------------------------------------------------- |
-| LiquidityHub                      | protocol | `0x…`   | canonical Fiet protocol contract                    |
-| BatchProcessSettlement (Receiver) | protocol | `0x…`   | destination receiver                                |
-| HubRSC                            | reactive | `0x…`   | aggregator/dispatcher                               |
-| PROTOCOL_CALLBACK_PROXY           | protocol | `0x0000000000000000000000000000000000fffFfF` by default | Lasna-only smoke callback proxy; override only for optional foreign-chain validation |
+| Name                              | Chain    | Address                            | Notes                                                                      |
+| --------------------------------- | -------- | ---------------------------------- | -------------------------------------------------------------------------- |
+| LiquidityHub                      | protocol | `0x…`                              | canonical Fiet protocol contract                                           |
+| BatchProcessSettlement (Receiver) | protocol | `0x…`                              | destination receiver                                                       |
+| HubRSC                            | reactive | `0x…`                              | aggregator/dispatcher                                                      |
+| Receiver callback proxy           | protocol | derived from `PROTOCOL_CHAIN_ID`   | lookup is embedded in `DeployReceiver.s.sol` using the published mapping   |
 
 ## Integration flows
 
@@ -304,50 +304,82 @@ This is the default validation lane for single-contract HubRSC changes. It runs 
 Run:
 
 ```bash
-just local-simulation
+forge test
 ```
-
-`just pseudo-e2e` remains as a compatibility alias for the same local simulation suite.
 
 ### Reactive validation lanes
 
 There are three Reactive validation lanes:
 
-- Deterministic local simulation: `just local-simulation`, no live secrets, runs automatically for Reactive path changes.
+- Deterministic local simulation: `forge test`, no live secrets, runs automatically for Reactive path changes.
 - Default Lasna-only live smoke: `just e2e` with both Reactive and protocol-side mock event producer on Lasna.
 - Optional Ethereum Sepolia cross-chain smoke: the same live harness with the protocol side pointed at Ethereum Sepolia for stronger cross-chain validation.
 
+### End-to-End Test Suite
+
+From `contracts/reactive`, `just e2e` runs `bash test/e2e.sh` against your configured RPCs. The script deploys contracts, registers recipients on `HubRSC`, then drives a short settlement story on the protocol chain using the deployed `MockLiquidityHub`.
+
+1. **Read environment** — Loads `.env` when present; requires `REACTIVE_RPC`, `PROTOCOL_RPC`, `PRIVATE_KEY`, `RECIPIENT_ONE`, and `RECIPIENT_TWO` (defaults exist for the two recipient addresses only when unset).
+2. **Deploy mock hub** — Broadcasts `DeployMockLiquidityHub` to `PROTOCOL_RPC` and records the `MockLiquidityHub` address as `LIQUIDITY_HUB`.
+3. **Deploy batch receiver** — Broadcasts `DeployReceiver` to `PROTOCOL_RPC` and records the receiver as `BATCH_RECEIVER` (must differ from the hub address).
+4. **Deploy HubRSC** — Runs `scripts/deployreactivehub.sh` with `BATCH_SIZE=1` on the reactive RPC, parses the `HubRSC` address, and waits until contract code is visible on `REACTIVE_RPC`.
+5. **Activate recipients** — Sends `registerRecipient` on `HubRSC` for each configured recipient with `RECIPIENT_DEPOSIT_WEI` native value, then optionally sleeps `SUBSCRIPTION_PROPAGATION_SECONDS` so live subscriptions can propagate.
+6. **Emit a market LCC pair** — Calls `triggerLccCreated` twice on the mock hub with one shared `market_id`, producing two stand-in LCC/underlying pairs so `HubRSC` sees the same two-LCC-per-market shape as the real `LiquidityHub`.
+7. **Emit `SettlementQueued` twice** — Calls `triggerSettlementQueued` for one of those LCCs against `RECIPIENT_ONE` and `RECIPIENT_TWO` with fixed small amounts.
+8. **Poll HubRSC pending** — Loops `cast call` on `computeKey` / `pendingStateByKey` until each recipient’s pending amount is at least the queued amount.
+9. **Emit `LiquidityAvailable`** — Calls `triggerLiquidityAvailable` for the queued LCC with the matching underlying and shared market id so dispatch has a coherent lane and budget.
+10. **Poll mock settlement counters** — Loops `getTotalAmountSettled` on the mock hub until each recipient’s settled total meets the queued amounts (receiver callbacks have run on the protocol chain).
+11. **Final read** — Calls `getTotalAmountSettled` again for each recipient and exits non-zero if either total is still zero.
+
 ### Lasna-only Reactive Network pseudo-e2e smoke harness
 
-Important:
+This optional lane runs a live end-to-end test on the Lasna testnet. It deploys the mock `LiquidityHub`, a batch receiver, and the `HubRSC`, registers funded recipients, emits protocol events, and verifies that the Reactive Network correctly processes everything and delivers callbacks.
 
-- This lane is manually gated and is not required for deterministic CI.
-- Pull-request live smoke runs require relevant `contracts/reactive/src/**`, `contracts/reactive/scripts/**`, `contracts/reactive/test/e2e.sh`, or `.github/workflows/reactive-e2e.yml` changes plus the `reactive-e2e` label; manual runs require `workflow_dispatch` with `run_smoke=true`.
-- The default GitHub Actions smoke lane is Lasna-only: `REACTIVE_CHAIN_ID=5318007`, `PROTOCOL_CHAIN_ID=5318007`, `REACTIVE_RPC=${REACTIVE_RPC}`, `PROTOCOL_RPC=${REACTIVE_RPC}`, and `PROTOCOL_CALLBACK_PROXY=0x0000000000000000000000000000000000fffFfF`.
-- The workflow probes the configured Lasna `REACTIVE_RPC` value first and then the alternate trailing-slash form, accepting the first URL whose `cast chain-id` returns `5318007`.
-- GitHub Actions live smoke jobs set `RECEIVER_PREFUND_WEI=0` so PR CI only needs deploy and test gas. Operators can set `RECEIVER_PREFUND_WEI` for local/manual runs when the receiver should be prefunded.
-- GitHub Actions live smoke jobs wait after recipient activation before emitting protocol events and use a longer poll window so live exact-recipient subscriptions and callbacks can propagate.
-- Use an lREACT-funded live key only for this lane, for example `REACTIVE_CI_PRIVATE_KEY` from GitHub Actions secrets or Vault. PR live smoke preflights the signer's native Lasna gas balance and skips with a notice only when setup prerequisites are unavailable: missing secrets, unreachable Lasna RPC during preflight, or insufficient/query-failed signer gas. After preflight passes, `just e2e` failures fail CI.
-- The live key deploys/funds the HubRSC, registers and funds recipients, emits mock protocol events on Lasna, and polls HubRSC/receiver state for Reactive Network callback delivery.
-- Ephemeral wallets are not used by the current single-HubRSC smoke harness. The same funded live key signs deployment, recipient registration/funding, and mock protocol events so the HubRSC RVM id, receiver callback origin, and funded recipient lifecycle are stable for the run. Do not reuse this key in deterministic local simulation coverage.
-- To run the default smoke manually, set `REACTIVE_RPC`, set both `PRIVATE_KEY` and `REACTIVE_CI_PRIVATE_KEY` to the funded signer, set `PROTOCOL_RPC=$REACTIVE_RPC`, and fund the signer with native Lasna lREACT. You can obtain testnet REACT (lREACT) from the Reactive documentation. Funding a deployed contract, receiver, faucet target, or a different wallet does not satisfy the signer preflight; verify the signer with `cast balance --rpc-url https://lasna-rpc.rnk.dev/ <signer>`.
+#### Key points
 
-CI delivery:
+- It is **manually gated** and **not required** for normal deterministic CI (which uses `forge test`).
+- On pull requests it only runs when you add the `reactive-e2e` label **and** change relevant files (`contracts/reactive/src/**`, `contracts/reactive/scripts/**`, `contracts/reactive/test/e2e.sh`, or the workflow).
+- You can also trigger it manually via the "Reactive Validation" workflow with `run_smoke=true`.
+- The default configuration uses **Lasna for both sides**: `REACTIVE_CHAIN_ID=5318007`, `PROTOCOL_CHAIN_ID=5318007`, and the same RPC for both. The workflow automatically detects a valid Lasna RPC (it tries the configured URL and a trailing-slash variant, accepting the first that returns chain ID 5318007).
 
-- Deterministic Reactive local simulation runs automatically for Reactive path changes.
-- Default Lasna-only live smoke and optional Sepolia cross-chain smoke run on pull requests only when the `reactive-e2e` label is present and relevant live-smoke files changed.
-- Pull-request live smoke permits green preflight skips only for setup prerequisites: missing secrets, Lasna RPC preflight failure, or insufficient/query-failed signer gas. Any `just e2e` failure after preflight, including pending settlement timeout or other harness/runtime failure, fails CI.
-- Manual full smoke uses the `Reactive Validation` workflow with `workflow_dispatch` and `run_smoke=true`; manual runs also fail on live-smoke errors.
-- Required repository secrets for the default Lasna-only smoke are `REACTIVE_RPC` and `REACTIVE_CI_PRIVATE_KEY`; pull-request live smoke skips the live run when those secrets are unavailable, Lasna RPC preflight fails, the signer lacks enough native Lasna lREACT gas, or the balance query fails.
-- Optional Sepolia cross-chain smoke additionally requires `ETH_SEPOLIA_RPC_URL` and Sepolia ETH on the `REACTIVE_CI_PRIVATE_KEY` wallet. It preflights the Sepolia RPC and signer balance with `cast balance`, then skips cleanly with a notice when either requirement is missing.
+#### GitHub Actions behaviour
 
-Optional stronger full cross-chain validation uses `PROTOCOL_RPC=${ETH_SEPOLIA_RPC_URL}`, `PROTOCOL_CHAIN_ID=11155111`, and `PROTOCOL_CALLBACK_PROXY=0xc9f36411C9897e7F959D99ffca2a0Ba7ee0D7bDA`. That profile is not required for TASK-38.1 default CI and is separate from the canonical Lasna-only live smoke lane.
+- CI jobs set `RECEIVER_PREFUND_WEI=0` so they only consume gas for deployment and tests.
+- After registering recipients, the job waits a configurable time (`SUBSCRIPTION_PROPAGATION_SECONDS`) so live subscriptions can become active.
+- It uses a single **lREACT-funded key** (`REACTIVE_CI_PRIVATE_KEY`). This key signs deployment, recipient registration/funding, and the mock protocol events. The same key is also used as the HubRSC RVM identity and callback origin.
+- Before running, it performs a **preflight check**:
+  - Are the required secrets present?
+  - Can it reach the Lasna RPC?
+  - Does the signer have enough native gas?
+- If any preflight fails, the job **skips cleanly** with a notice. Once preflight passes, **any failure** of `just e2e` (including timeouts or harness errors) will fail the CI run.
 
-Run:
+#### Running it yourself
 
 ```bash
+# Minimal setup for Lasna-only smoke
+export REACTIVE_RPC="https://lasna-rpc.rnk.dev/"
+export PROTOCOL_RPC="$REACTIVE_RPC"
+export PRIVATE_KEY=0x...
+export REACTIVE_CI_PRIVATE_KEY="$PRIVATE_KEY"   # same funded signer
+export RECEIVER_PREFUND_WEI=0   # optional, matches CI
+
 just e2e
 ```
+
+You will need some testnet lREACT on the signer. Get it from the Reactive documentation. Do **not** reuse this key for local deterministic tests (`forge test`).
+
+#### Optional stronger cross-chain validation
+
+You can point the protocol side at Ethereum Sepolia for fuller testing:
+
+```bash
+export PROTOCOL_RPC="https://eth-sepolia.g.alchemy.com/v2/..."
+export PROTOCOL_CHAIN_ID=11155111
+```
+
+This variant requires Sepolia ETH on the signer and is **not** part of the default CI lane. The receiver callback proxy is derived automatically from `PROTOCOL_CHAIN_ID=11155111`.
+
+For full details on environment variables and deployment scripts, see the [Deployment guide](#deployment-guide-scripts) below.
 
 ## Deployment guide (scripts)
 
@@ -369,6 +401,7 @@ Required env vars:
 
 - `LIQUIDITY_HUB` (deployed LiquidityHub address on protocol chain)
 - `HUB_RVM_ID` (deployed HubRSC RVM id allowed as `callbackOrigin`)
+- `PROTOCOL_CHAIN_ID` (used to derive the published Reactive callback proxy for the destination chain)
 
 ```bash
 just deploy-receiver
