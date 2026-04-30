@@ -425,6 +425,42 @@ registerRecipient(recipient) payable
 fundRecipient(recipient) payable
 ```
 
+### Reactive funding: recipient deposits vs system deposits
+
+On Lasna / Reactive mainnet, **native value attached to `HubRSC` is not all one bucket**. Two payment models exist, and they answer different questions:
+
+| Question | Recipient deposits (`registerRecipient` / `fundRecipient`) | System deposits (`depositTo` via `just fund-contract`) |
+| --- | --- | --- |
+| **Who is charged in the protocol model?** | The named `recipient`: value is credited to `recipientBalance[recipient]` and gates activation (`recipientActive`). | The **contract address** you pass to `depositTo`: the Reactive system tracks **reserves** and **debts** for that contract, independent of any recipient’s balance. |
+| **Intent / model** | **Retrospective recipient accounting**: track what a recipient has prepaid and charge observed Reactive cost back to that recipient over time. | **Prospective contract reserve**: keep the shared Reactive execution account solvent even when recipient balances lag, go negative, or have not yet topped up. |
+| **What does it buy?** | Sovereign, per-recipient funding so that recipient can stay active and participate in lifecycle and dispatch debt attribution. | Operator or treasury **subsidy** of the same contract’s Reactive execution account (subscriptions, callbacks, vendor `debt(address)`), without pretending a specific recipient paid. |
+| **When is the money applied?** | Value first lands in `HubRSC` and increases `recipientBalance[recipient]`; later, when Reactive debt is observed, `HubRSC` may use its own balance to pay the vendor and allocate the debt delta back to the recipient context. | Value is applied immediately through the Reactive system contract to increase that contract’s system-level reserve. |
+| **Does it increase `HubRSC`’s on-chain balance?** | Yes: payable calls send native lREACT into `HubRSC`. | The system contract debits the signer and credits the target contract’s **reserve**; `fundcontract.sh` prints `reserves` / `debts` before and after so you can verify the effect. |
+| **Typical use** | Product default: each recipient pays for their own consumed automation slice and must stay positive to remain active. | Smoke tests, spikes, deploy-time float, or operator guarantees: keep `HubRSC` solvent when aggregate Reactive cost grows faster than recipient top-ups, or when you want an explicit reserve buffer. |
+
+#### How `HubRSC` spends money
+
+`HubRSC` observes Reactive service cost through the vendor’s `debt(address(this))` and, when it has a non-zero balance, pays the vendor from the contract’s own native balance (`_coverObservedDebtIfFunded` in `HubRSCStorage`). That means **recipient deposits and deploy-time float can overlap with system funding in practice**: both can keep the same Reactive services alive. The difference is that recipient deposits do so via **HubRSC-held liquidity plus internal recipient accounting**, whereas `depositTo` does so via an explicit **system reserve** for the contract. The **signed `recipientBalance` ledger** still tracks who the protocol considers “prepaid” for attributed debt deltas (see `RecipientDebtAllocated` and the FIFO debt-context model in `CAVEATS.md` / `docs/recipient-payment-model.md`).
+
+#### Overlap and non-goals
+
+These two models are **complementary**, not contradictory:
+
+- **Recipient deposits** answer: "Which recipient should be charged for consumed Reactive work?"
+- **System deposits** answer: "Does the shared contract currently have enough system-level reserve to keep operating smoothly?"
+
+The current model intentionally does **not** auto-convert every recipient top-up into a `depositTo` call. Recipient funding is primarily the **recipient debt / activation model**; `depositTo` is the **shared solvency / reserve model**.
+
+#### Why the smoke harness can look “recipient-only”
+
+`test/e2e.sh` registers recipients with `RECIPIENT_DEPOSIT_WEI`, and `deployreactivehub.sh` deploys `HubRSC` with a non-zero constructor value (`HUB_RSC_VALUE`, default `1ether`). Together that often suffices for a **small** live run because the hub can pay observed debt from its own balance. It is **not** a substitute for understanding the two funding paths: if Reactive debt outpaces what you have put into the contract (via recipients, deploy value, or `depositTo`), behaviour degrades (inactive recipients, stalled callbacks, or unallocated debt events).
+
+#### Practical guidance
+
+- Prefer **recipient + deploy** funding when you want recipient-paid retrospective charging with enough float for simple lanes and CI-style smoke.
+- Add **`just fund-contract <HUB_RSC> <amount_wei>`** when you need a clear **system reserve** buffer, or when monitoring shows `debts(HubRSC)` climbing ahead of recipient funding.
+- Optionally fund **`BATCH_RECEIVER`** the same way if callback execution on the protocol chain needs its own reserve (see `RECEIVER_PREFUND_WEI` on deploy).
+
 ## Funding reactive contracts (lREACT deposit)
 
 On Reactive, the system contract and callback proxy share this fixed address:
