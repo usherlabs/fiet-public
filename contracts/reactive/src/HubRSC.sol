@@ -12,32 +12,26 @@ contract HubRSC is HubRSCDispatch {
         uint256 _protocolChainId,
         uint256 _reactChainId,
         address _liquidityHub,
-        address _destinationReceiverContract
+        address _destinationReceiverContract,
+        address _reactiveCallbackProxy
     )
         payable
-        HubRSCStorage(_maxDispatchItems, _protocolChainId, _reactChainId, _liquidityHub, _destinationReceiverContract)
-    {
-        if (!vm) {
-            service.subscribe(
-                protocolChainId, liquidityHub, LCC_CREATED_TOPIC, REACTIVE_IGNORE, REACTIVE_IGNORE, REACTIVE_IGNORE
-            );
-            service.subscribe(
-                protocolChainId,
-                liquidityHub,
-                LIQUIDITY_AVAILABLE_TOPIC,
-                REACTIVE_IGNORE,
-                REACTIVE_IGNORE,
-                REACTIVE_IGNORE
-            );
-            service.subscribe(
-                reactChainId,
-                address(this),
-                MORE_LIQUIDITY_AVAILABLE_TOPIC,
-                REACTIVE_IGNORE,
-                REACTIVE_IGNORE,
-                REACTIVE_IGNORE
-            );
-        }
+        HubRSCStorage(
+            _maxDispatchItems,
+            _protocolChainId,
+            _reactChainId,
+            _liquidityHub,
+            _destinationReceiverContract,
+            _reactiveCallbackProxy
+        )
+    {}
+
+    /// @notice Activates HubRSC-wide subscriptions that are not scoped to one recipient.
+    function activateBaseSubscriptions() external rnOnly {
+        if (baseSubscriptionsActive) return;
+        baseSubscriptionsActive = true;
+        _subscribeBaseLogs();
+        emit BaseSubscriptionsActivated(msg.sender);
     }
 
     /// @notice Explicitly registers a recipient and optionally funds immediate activation with native value.
@@ -113,8 +107,40 @@ contract HubRSC is HubRSCDispatch {
     }
 
     /// @notice React to origin chain logs (ReactVM only).
+    /// @dev ReactVM execution must not assume canonical storage persistence. This entrypoint only emits
+    ///      `Callback` to the reactive network, which delivers `applyCanonicalProtocolLog` on the canonical deployment.
     function react(IReactive.LogRecord calldata log) external vmOnly {
+        if (
+            log.chain_id == reactChainId && log._contract == canonicalReactiveHub
+                && log.topic_0 == DESTINATION_CALLBACK_REQUESTED_TOPIC
+        ) {
+            bytes memory payload = abi.decode(log.data, (bytes));
+            emit Callback(protocolChainId, destinationReceiverContract, CALLBACK_GAS_LIMIT, payload);
+            return;
+        }
+
+        emit Callback(
+            reactChainId,
+            canonicalReactiveHub,
+            CANONICAL_APPLY_CALLBACK_GAS_LIMIT,
+            abi.encodeWithSelector(this.applyCanonicalProtocolLog.selector, address(0), log)
+        );
+    }
+
+    /// @notice Applies an observed protocol or self-continuation log to canonical HubRSC storage.
+    /// @dev Callable only by `reactiveCallbackProxy` after the ReactVM `react` path emits `Callback`.
+    /// @param callbackOrigin Reactive callback origin injected by the callback proxy.
+    function applyCanonicalProtocolLog(address callbackOrigin, IReactive.LogRecord calldata log)
+        external
+        onlyReactiveCallbackProxy
+    {
+        emit CanonicalProtocolLogCallback(callbackOrigin, log.chain_id, log._contract);
         _syncObservedSystemDebt();
+        _dispatchCanonicalInboundLog(log);
+    }
+
+    /// @notice Routes decoded inbound logs to the same handlers used for canonical state updates.
+    function _dispatchCanonicalInboundLog(IReactive.LogRecord calldata log) internal {
         if (log.topic_0 == LCC_CREATED_TOPIC) {
             _handleLccCreated(log);
             return;

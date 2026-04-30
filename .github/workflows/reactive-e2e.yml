@@ -1,0 +1,311 @@
+# Reactive Lasna live validation.
+#
+# Deterministic Reactive contract coverage is handled by `Reactive Contracts Tests`
+# in ci.yml via forge test. This workflow keeps only gated live smoke lanes that
+# exercise Reactive Lasna behavior with funded live keys.
+name: Reactive Validation
+
+on:
+  pull_request:
+    branches: [main, develop]
+    types: [opened, synchronize, reopened, labeled]
+    paths:
+      - "contracts/reactive/CAVEATS.md"
+      - "contracts/reactive/README.md"
+      - "contracts/reactive/env.sample"
+      - "contracts/reactive/Justfile"
+      - "contracts/reactive/docs/**"
+      - "contracts/reactive/src/**"
+      - "contracts/reactive/scripts/**"
+      - "contracts/reactive/test/**"
+      - ".github/workflows/reactive-e2e.yml"
+  workflow_dispatch:
+    inputs:
+      run_smoke:
+        description: "Run the gated Reactive live smoke lane"
+        required: true
+        type: boolean
+        default: false
+
+env:
+  FOUNDRY_PROFILE: "ci"
+
+concurrency:
+  group: reactive-live-smoke-${{ github.repository }}
+  cancel-in-progress: false
+
+jobs:
+  reactive-live-smoke-scope:
+    name: Reactive Live Smoke Scope
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      changed: ${{ steps.scope.outputs.changed }}
+    steps:
+      - uses: actions/checkout@v4
+        if: github.event_name == 'pull_request'
+        with:
+          submodules: false
+          token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 0
+
+      - name: Detect live smoke surfaces
+        id: scope
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" != "pull_request" ]; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          changed=false
+          while IFS= read -r path; do
+            case "$path" in
+              contracts/reactive/src/*|contracts/reactive/scripts/*|contracts/reactive/test/e2e*|.github/workflows/reactive-e2e.yml)
+                changed=true
+                break
+                ;;
+            esac
+          done < <(git diff --name-only "origin/${{ github.base_ref }}...HEAD")
+
+          echo "changed=$changed" >> "$GITHUB_OUTPUT"
+
+  reactive-live-smoke:
+    name: Reactive Live Smoke
+    needs: reactive-live-smoke-scope
+    if: >-
+      ${{
+        (github.event_name == 'workflow_dispatch' && inputs.run_smoke == true) ||
+        (
+          github.event_name == 'pull_request' &&
+          contains(github.event.pull_request.labels.*.name, 'reactive-e2e') &&
+          needs.reactive-live-smoke-scope.outputs.changed == 'true'
+        )
+      }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    env:
+      BROADCAST: "true"
+      REACTIVE_CHAIN_ID: "5318007"
+      PROTOCOL_CHAIN_ID: "5318007"
+      REACTIVE_RPC: ${{ secrets.REACTIVE_RPC }}
+      PROTOCOL_RPC: ${{ secrets.REACTIVE_RPC }}
+      REACTIVE_CI_PRIVATE_KEY: ${{ secrets.REACTIVE_CI_PRIVATE_KEY }}
+      PRIVATE_KEY: ${{ secrets.REACTIVE_CI_PRIVATE_KEY }}
+      RECIPIENT_DEPOSIT_WEI: "100000000000000000"
+      RECEIVER_PREFUND_WEI: "0"
+      LASNA_LIVE_SMOKE_MIN_BALANCE_WEI: "3000000000000000000"
+      SUBSCRIPTION_PROPAGATION_SECONDS: "180"
+      POLL_TIMEOUT_SECONDS: "600"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install Foundry
+        run: ./.github/scripts/install-foundry.sh v1.4.2
+
+      - name: Install Just
+        run: |
+          curl --proto '=https' --tlsv1.2 -sSf https://just.systems/install.sh | bash -s -- --to /usr/local/bin
+
+      - name: Validate live smoke secrets
+        id: live-smoke-secrets
+        run: |
+          missing=false
+          for name in REACTIVE_RPC REACTIVE_CI_PRIVATE_KEY; do
+            if [ -z "${!name:-}" ]; then
+              echo "Missing required Lasna live smoke secret or env: $name" >&2
+              missing=true
+            fi
+          done
+          if [ "$missing" = "true" ]; then
+            if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+              exit 1
+            fi
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+            echo "Skipping optional PR live smoke because required live secrets are unavailable." >&2
+            exit 0
+          fi
+          candidates=("$REACTIVE_RPC")
+          if [[ "$REACTIVE_RPC" == */ ]]; then
+            candidates+=("${REACTIVE_RPC%/}")
+          else
+            candidates+=("${REACTIVE_RPC}/")
+          fi
+
+          resolved_rpc=""
+          for candidate in "${candidates[@]}"; do
+            chain_id="$(cast chain-id --rpc-url "$candidate" 2>/dev/null | tr -d '[:space:]' || true)"
+            if [ "$chain_id" = "5318007" ]; then
+              resolved_rpc="$candidate"
+              break
+            fi
+          done
+
+          if [ -z "$resolved_rpc" ]; then
+            echo "Lasna RPC is not reachable with the configured URL or alternate trailing-slash form." >&2
+            if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+              exit 1
+            fi
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+            echo "::notice title=Reactive live smoke skipped::Lasna RPC preflight failed for both configured and alternate trailing-slash URL forms."
+            exit 0
+          fi
+          echo "REACTIVE_RPC=$resolved_rpc" >> "$GITHUB_ENV"
+          echo "PROTOCOL_RPC=$resolved_rpc" >> "$GITHUB_ENV"
+
+          signer="$(cast wallet address --private-key "$REACTIVE_CI_PRIVATE_KEY")"
+          if ! balance="$(cast balance --rpc-url "$resolved_rpc" "$signer" 2>/dev/null)"; then
+            echo "Unable to query native Lasna lREACT gas balance for live smoke signer $signer." >&2
+            if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+              exit 1
+            fi
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+            echo "::notice title=Reactive live smoke skipped::Unable to query native Lasna lREACT gas balance for the REACTIVE_CI_PRIVATE_KEY signer."
+            exit 0
+          fi
+          min_balance="${LASNA_LIVE_SMOKE_MIN_BALANCE_WEI:-1000000000000000000}"
+          if node -e 'const [balance, minimum] = process.argv.slice(1); process.exit(BigInt(balance || "0") < BigInt(minimum) ? 0 : 1)' "${balance:-0}" "$min_balance"; then
+            echo "Native Lasna lREACT gas balance for live smoke signer $signer is below required preflight minimum." >&2
+            echo "balance=$balance min=$min_balance" >&2
+            if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+              exit 1
+            fi
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+            echo "::notice title=Reactive live smoke skipped::REACTIVE_CI_PRIVATE_KEY signer has insufficient native Lasna lREACT gas for live smoke."
+            exit 0
+          fi
+
+          echo "configured=true" >> "$GITHUB_OUTPUT"
+
+      - name: Run Reactive live smoke
+        if: steps.live-smoke-secrets.outputs.configured == 'true'
+        run: just e2e
+        working-directory: contracts/reactive
+
+  reactive-live-cross-chain-smoke:
+    name: Reactive Live Cross-Chain Smoke
+    needs:
+      - reactive-live-smoke-scope
+      - reactive-live-smoke
+    if: >-
+      ${{
+        (github.event_name == 'workflow_dispatch' && inputs.run_smoke == true) ||
+        (
+          github.event_name == 'pull_request' &&
+          contains(github.event.pull_request.labels.*.name, 'reactive-e2e') &&
+          needs.reactive-live-smoke-scope.outputs.changed == 'true'
+        )
+      }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    env:
+      BROADCAST: "true"
+      REACTIVE_CHAIN_ID: "5318007"
+      PROTOCOL_CHAIN_ID: "11155111"
+      REACTIVE_RPC: ${{ secrets.REACTIVE_RPC }}
+      PROTOCOL_RPC: ${{ secrets.ETH_SEPOLIA_RPC_URL }}
+      REACTIVE_CI_PRIVATE_KEY: ${{ secrets.REACTIVE_CI_PRIVATE_KEY }}
+      PRIVATE_KEY: ${{ secrets.REACTIVE_CI_PRIVATE_KEY }}
+      RECIPIENT_DEPOSIT_WEI: "100000000000000000"
+      RECEIVER_PREFUND_WEI: "0"
+      LASNA_LIVE_SMOKE_MIN_BALANCE_WEI: "3000000000000000000"
+      SUBSCRIPTION_PROPAGATION_SECONDS: "180"
+      POLL_TIMEOUT_SECONDS: "600"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install Foundry
+        run: ./.github/scripts/install-foundry.sh v1.4.2
+
+      - name: Install Just
+        run: |
+          curl --proto '=https' --tlsv1.2 -sSf https://just.systems/install.sh | bash -s -- --to /usr/local/bin
+
+      - name: Preflight Sepolia cross-chain smoke
+        id: cross-chain-preflight
+        run: |
+          missing=false
+          for name in REACTIVE_RPC PROTOCOL_RPC REACTIVE_CI_PRIVATE_KEY; do
+            if [ -z "${!name:-}" ]; then
+              echo "Missing optional Sepolia cross-chain smoke secret or env: $name" >&2
+              missing=true
+            fi
+          done
+          if [ "$missing" = "true" ]; then
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+            echo "::notice title=Reactive cross-chain smoke skipped::Missing REACTIVE_RPC, ETH_SEPOLIA_RPC_URL, or REACTIVE_CI_PRIVATE_KEY."
+            exit 0
+          fi
+
+          signer="$(cast wallet address --private-key "$REACTIVE_CI_PRIVATE_KEY")"
+
+          candidates=("$REACTIVE_RPC")
+          if [[ "$REACTIVE_RPC" == */ ]]; then
+            candidates+=("${REACTIVE_RPC%/}")
+          else
+            candidates+=("${REACTIVE_RPC}/")
+          fi
+
+          resolved_reactive_rpc=""
+          for candidate in "${candidates[@]}"; do
+            chain_id="$(cast chain-id --rpc-url "$candidate" 2>/dev/null | tr -d '[:space:]' || true)"
+            if [ "$chain_id" = "5318007" ]; then
+              resolved_reactive_rpc="$candidate"
+              break
+            fi
+          done
+
+          if [ -z "$resolved_reactive_rpc" ]; then
+            echo "Lasna RPC is not reachable with the configured URL or alternate trailing-slash form." >&2
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+            echo "::notice title=Reactive cross-chain smoke skipped::Lasna RPC preflight failed for both configured and alternate trailing-slash URL forms."
+            exit 0
+          fi
+          echo "REACTIVE_RPC=$resolved_reactive_rpc" >> "$GITHUB_ENV"
+
+          if ! reactive_balance="$(cast balance --rpc-url "$resolved_reactive_rpc" "$signer" 2>/dev/null)"; then
+            echo "Unable to query native Lasna lREACT gas balance for cross-chain smoke signer $signer." >&2
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+            echo "::notice title=Reactive cross-chain smoke skipped::Unable to query native Lasna lREACT gas balance for the REACTIVE_CI_PRIVATE_KEY signer."
+            exit 0
+          fi
+          min_balance="${LASNA_LIVE_SMOKE_MIN_BALANCE_WEI:-3000000000000000000}"
+          if node -e 'const [balance, minimum] = process.argv.slice(1); process.exit(BigInt(balance || "0") < BigInt(minimum) ? 0 : 1)' "${reactive_balance:-0}" "$min_balance"; then
+            echo "Native Lasna lREACT gas balance for cross-chain smoke signer $signer is below required preflight minimum." >&2
+            echo "balance=$reactive_balance min=$min_balance" >&2
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+            echo "::notice title=Reactive cross-chain smoke skipped::REACTIVE_CI_PRIVATE_KEY signer has insufficient native Lasna lREACT gas for cross-chain smoke."
+            exit 0
+          fi
+
+          if ! balance="$(cast balance --rpc-url "$PROTOCOL_RPC" "$signer" 2>/dev/null)"; then
+            echo "Unable to query Sepolia balance for optional cross-chain smoke." >&2
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+            echo "::notice title=Reactive cross-chain smoke skipped::ETH_SEPOLIA_RPC_URL was unavailable during preflight."
+            exit 0
+          fi
+          if [ "${balance:-0}" = "0" ]; then
+            echo "Sepolia balance is zero for optional cross-chain smoke signer $signer." >&2
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+            echo "::notice title=Reactive cross-chain smoke skipped::REACTIVE_CI_PRIVATE_KEY signer has no Sepolia ETH."
+            exit 0
+          fi
+
+          echo "configured=true" >> "$GITHUB_OUTPUT"
+
+      - name: Run Reactive cross-chain live smoke
+        if: steps.cross-chain-preflight.outputs.configured == 'true'
+        run: just e2e
+        working-directory: contracts/reactive

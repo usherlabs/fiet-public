@@ -12,6 +12,25 @@ This project is built for the Reactive Network execution model:
 - Reactive contracts execute `react()` logic in ReactVM.
 - Cross-chain actions are emitted as callbacks and executed on destination chains.
 
+## ReactVM isolation and the canonical apply pipeline
+
+Reactive materialises **two logical faces** of the same `HubRSC` bytecode:
+
+1. **ReactVM** (`vm == true` in `AbstractReactive`): runs `react(IReactive.LogRecord)` when a subscribed log matches. Storage writes here **must not** be treated as persisting on the canonical deployment; the supported VM-side effect is emitting Reactive **`Callback`** intents.
+2. **Canonical hub** (`vm == false`): holds queues, budgets, deduplication, recipient balances, and subscriptions. Intake that mirrors protocol state runs only after the callback infrastructure delivers the payload to **`applyCanonicalProtocolLog`**, which is gated by **`onlyReactiveCallbackProxy`**.
+
+End-to-end pipeline for a protocol log:
+
+1. **ReactVM observation** — `react()` emits `Callback(reactChainId, canonicalReactiveHub, gasLimit, abi.encodeCall(HubRSC.applyCanonicalProtocolLog, (address(0), log)))`, where `canonicalReactiveHub` is the hub address fixed at deploy time (not the ReactVM instance’s `address(this)`). The leading address is the Reactive callback-origin placeholder.
+2. **Callback emission** — Reactive records the outbound callback (this is distinct from destination-chain `processSettlements` callbacks).
+3. **Callback-proxy delivery** — the configured `reactiveCallbackProxy` invokes `applyCanonicalProtocolLog` on the **canonical** Reactive deployment.
+4. **Canonical state application** — `_syncObservedSystemDebt()` then `_dispatchCanonicalInboundLog(log)` route to the same topic handlers as before (`LCCCreated`, `SettlementQueued`, liquidity wakes, reconciliation topics, and so on).
+5. **Destination receiver callbacks** — unchanged: authorised `BatchProcessSettlement` still receives `processSettlements` callbacks for protocol-chain execution.
+
+**Operational debugging:** an RVM transaction that only shows `react` activity confirms observation and bridge intent emission; canonical queue, pending, `hasUnderlyingForLcc`, and similar storage only move after a successful **`applyCanonicalProtocolLog`** (or other canonical entrypoints such as `registerRecipient`). If intake appears “missing”, trace whether the bridge hop was delivered, not only whether the log was observed in ReactVM.
+
+See also `src/libs/AbstractHubReactiveBridge.sol` (NatSpec) and `test/hub/HubRSC.ReactVmStateBridge.t.sol` for regression coverage that **`react` alone does not register LCC underlying state** until the proxy-gated apply step runs.
+
 ## Terminology
 
 - **Protocol chain**: The chain where Fiet’s `LiquidityHub` lives (e.g. Arbitrum One for MVP).
@@ -45,12 +64,12 @@ This project is built for the Reactive Network execution model:
 ### Reactive chain
 
 - `src/HubRSC.sol`
-  - Public reactive facade for constructor wiring, `react()` ingress, queue accessors, and subscriptions.
+  - Public reactive facade for constructor wiring, **`react()`** ingress (ReactVM-only), **`applyCanonicalProtocolLog`** (callback-proxy only), queue accessors, and subscriptions.
   - Registers recipients, tracks signed per-recipient native balances, and owns recipient-scoped exact-match lifecycle subscriptions.
   - Deactivates and unsubscribes recipients whose balance is not positive until top-up reactivation.
   - Keeps the surviving Hub runtime contract while delegating storage and policy-heavy internals into focused modules under `src/hub/`.
 - `src/hub/HubRSCStorage.sol`
-  - Declares HubRSC storage, queue structs, constants, events, and constructor-time immutable validation.
+  - Declares HubRSC storage, queue structs, constants, events, constructor-time immutable validation, and **`reactiveCallbackProxy`** (authorised caller for `applyCanonicalProtocolLog`).
 - `src/hub/HubRSCRouting.sol`
   - Owns dispatch-lane selection, LCC-underlying registration, and bounded shared-underlying backfill accounting.
 - `src/hub/HubRSCReconciliation.sol`
@@ -68,9 +87,11 @@ This project is built for the Reactive Network execution model:
 ### Testing
 
 - Focused Hub suites: `forge test --match-path 'test/hub/*.t.sol'`
+- Deterministic local simulation: `forge test` (includes single-contract HubRSC coverage using Foundry mocks; hub tests simulate the full bridge via **`_deliverReactiveVmLog`**, i.e. `react` then `vm.prank(reactiveCallbackProxy)` + `applyCanonicalProtocolLog`, matching production isolation; no live Reactive Network access or secrets)
 - Unit tests: `forge test`
-- E2E harness: `just e2e` (deploys mocks, deploys Hub/Receiver, registers funded recipients, triggers events, checks observed state)
+- Lasna-only Reactive Network pseudo-e2e smoke harness: `just e2e` (deploys mocks, deploys Hub/Receiver, registers funded recipients, triggers events, checks observed state; gated manually and requires `REACTIVE_RPC` plus an lREACT-funded key)
 - Post-refactor reactive findings matrix: [`docs/task-40.3-task-35-regression-validation.md`](docs/task-40.3-task-35-regression-validation.md)
+- Post-single-hub validation plan: [`docs/post-single-hub-validation-plan.md`](docs/post-single-hub-validation-plan.md)
 
 ## Bounds, throughput, and failure semantics (important for expectations)
 
@@ -119,19 +140,20 @@ While backfill is still in progress, the hub prefers the per-LCC lane when it ha
 ### Prerequisites
 
 - A deployed `LiquidityHub` on the protocol chain.
-- The correct **Reactive callback proxy addresses** for each chain (Reactive publishes these per network).
-- Funds for:
-  - Protocol chain gas (to deploy Receiver, if you deploy it)
-  - Reactive chain gas and kREACT (to deploy/fund HubRSC and cover execution)
+- A supported `PROTOCOL_CHAIN_ID` for the destination chain. The receiver deploy script derives the published Reactive callback proxy from this chain id.
+- Funds for the default Lasna-only smoke lane:
+  - Native Lasna lREACT gas on the `REACTIVE_CI_PRIVATE_KEY` / `PRIVATE_KEY` signer to deploy the mock protocol producer, receiver, and HubRSC, register/fund recipients, and cover execution.
+  - No Sepolia ETH is required by default.
+- Optional stronger full cross-chain validation can use a foreign protocol chain such as Ethereum Sepolia, but that is outside the required TASK-38.1 CI lane and needs its own RPC, chain id, and gas funding.
 
 ### Address & version registry (fill this in per deployment)
 
-| Name                              | Chain    | Address | Notes                                               |
-| --------------------------------- | -------- | ------- | --------------------------------------------------- |
-| LiquidityHub                      | protocol | `0x…`   | canonical Fiet protocol contract                    |
-| BatchProcessSettlement (Receiver) | protocol | `0x…`   | destination receiver                                |
-| HubRSC                            | reactive | `0x…`   | aggregator/dispatcher                               |
-| PROTOCOL_CALLBACK_PROXY           | protocol | `0x…`   | from [Reactive docs](https://dev.reactive.network/) |
+| Name                              | Chain    | Address                            | Notes                                                                      |
+| --------------------------------- | -------- | ---------------------------------- | -------------------------------------------------------------------------- |
+| LiquidityHub                      | protocol | `0x…`                              | canonical Fiet protocol contract                                           |
+| BatchProcessSettlement (Receiver) | protocol | `0x…`                              | destination receiver                                                       |
+| HubRSC                            | reactive | `0x…`                              | aggregator/dispatcher                                                      |
+| Receiver callback proxy           | protocol | derived from `PROTOCOL_CHAIN_ID`   | lookup is embedded in `DeployReceiver.s.sol` using the published mapping   |
 
 ## Integration flows
 
@@ -140,7 +162,7 @@ While backfill is still in progress, the hub prefers the per-LCC lane when it ha
 This is the default automation path:
 
 1. **Deploy `HubRSC`** and the destination receiver.
-2. **Fund** the reactive HubRSC contract with kREACT so it can maintain subscriptions and callbacks.
+2. **Fund** the reactive HubRSC contract with lREACT so it can maintain subscriptions and callbacks.
 3. **Register each recipient** with payable `registerRecipient(recipient)` and native value.
 4. **Top up recipients** with payable `fundRecipient(recipient)` before their balance is exhausted.
 5. Users perform swaps/unwraps as normal. When a settlement is queued for an active recipient, `HubRSC` observes it directly from `LiquidityHub` and eventually dispatches settlement when liquidity becomes available.
@@ -260,7 +282,7 @@ Check the usual suspects:
   - `HubRSC.recipientActive(recipient)` must be true and `recipientBalance(recipient)` must be positive.
   - Fix: call payable `registerRecipient(recipient)` or `fundRecipient(recipient)` with enough native value to make the balance positive.
 - **Underfunded reactive HubRSC contract**:
-  - HubRSC must have enough kREACT deposited to execute subscriptions/callbacks.
+  - HubRSC must have enough lREACT deposited to execute subscriptions/callbacks.
   - Fix: fund via the system contract `depositTo(address)` (see below).
 - **Wrong callback proxies / chain IDs**:
   - If callback proxy addresses or chain IDs are incorrect, callbacks will not be authorised or delivered as expected.
@@ -288,18 +310,95 @@ Some environments use case-sensitive filesystems. Ensure the script name referen
 forge test
 ```
 
-### End-to-end harness
+### Deterministic local simulation
 
-Important:
+This is the default validation lane for single-contract HubRSC changes. It runs fully inside Foundry with
+`HubRSCTestBase`, `MockLiquidityHub`, `MockSystemContract`, receiver mocks, and direct `react()` calls. It is supporting local simulation coverage rather than the full Lasna pseudo-e2e proof. It covers:
 
-- To run integration tests, fund the deployer wallet with at least `0.01` Sepolia ETH and `5` kREACT.
-- You can obtain testnet REACT (kREACT) from the Reactive documentation.
+- unregistered, registered-underfunded, and active funded recipient intake;
+- matching lifecycle and processing debt attribution;
+- depletion pause and top-up reactivation;
+- duplicate log dedupe, bounded self-continuation, retry blocking, terminal quarantine, shared-underlying dispatch, and an MM-custodian-shaped recipient.
 
 Run:
 
 ```bash
+forge test
+```
+
+### Reactive validation lanes
+
+There are three Reactive validation lanes:
+
+- Deterministic local simulation: `forge test`, no live secrets, runs automatically for Reactive path changes.
+- Default Lasna-only live smoke: `just e2e` with both Reactive and protocol-side mock event producer on Lasna.
+- Optional Ethereum Sepolia cross-chain smoke: the same live harness with the protocol side pointed at Ethereum Sepolia for stronger cross-chain validation.
+
+### End-to-End Test Suite
+
+From `contracts/reactive`, `just e2e` runs `bash test/e2e.sh` against your configured RPCs. The script deploys contracts, registers recipients on `HubRSC`, then drives a short settlement story on the protocol chain using the deployed `MockLiquidityHub`.
+
+1. **Read environment** — Loads `.env` when present; requires `REACTIVE_RPC`, `PROTOCOL_RPC`, `PRIVATE_KEY`, `RECIPIENT_ONE`, and `RECIPIENT_TWO` (defaults exist for the two recipient addresses only when unset).
+2. **Deploy mock hub** — Broadcasts `DeployMockLiquidityHub` to `PROTOCOL_RPC` and records the `MockLiquidityHub` address as `LIQUIDITY_HUB`.
+3. **Deploy batch receiver** — Broadcasts `DeployReceiver` to `PROTOCOL_RPC` and records the receiver as `BATCH_RECEIVER` (must differ from the hub address).
+4. **Deploy HubRSC** — Runs `scripts/deployreactivehub.sh` with `BATCH_SIZE=2` by default on the reactive RPC, parses the `HubRSC` address, and waits until contract code is visible on `REACTIVE_RPC`. The script passes **`REACTIVE_CALLBACK_PROXY`** (sixth constructor argument); when unset it derives the published proxy from **`REACTIVE_CHAIN_ID`** (currently Lasna / Reactive mainnet both resolve to `0x000…fffFfF`).
+5. **Activate recipients** — Sends `registerRecipient` on `HubRSC` for each configured recipient with `RECIPIENT_DEPOSIT_WEI` native value, then optionally sleeps `SUBSCRIPTION_PROPAGATION_SECONDS` so live subscriptions can propagate.
+6. **Emit a market LCC pair** — Calls `triggerLccCreated` twice on the mock hub with one shared `market_id`, producing two stand-in LCC/underlying pairs so `HubRSC` sees the same two-LCC-per-market shape as the real `LiquidityHub`.
+7. **Emit `SettlementQueued` twice** — Calls `triggerSettlementQueued` for one of those LCCs against `RECIPIENT_ONE` and `RECIPIENT_TWO` with fixed small amounts.
+8. **Poll HubRSC pending** — Loops `cast call` on `computeKey` / `pendingStateByKey` until each recipient’s pending amount is at least the queued amount.
+9. **Emit `LiquidityAvailable`** — Calls `triggerLiquidityAvailable` for the queued LCC with the matching underlying and shared market id so dispatch has a coherent lane and budget.
+10. **Poll mock settlement counters** — Loops `getTotalAmountSettled` on the mock hub until each recipient’s settled total meets the queued amounts (receiver callbacks have run on the protocol chain).
+11. **Final read** — Calls `getTotalAmountSettled` again for each recipient and exits non-zero if either total is still zero.
+
+### Lasna-only Reactive Network pseudo-e2e smoke harness
+
+This optional lane runs a live end-to-end test on the Lasna testnet. It deploys the mock `LiquidityHub`, a batch receiver, and the `HubRSC`, registers funded recipients, emits protocol events, and verifies that the Reactive Network correctly processes everything and delivers callbacks.
+
+#### Key points
+
+- It is **manually gated** and **not required** for normal deterministic CI (which uses `forge test`).
+- On pull requests it only runs when you add the `reactive-e2e` label **and** change relevant files (`contracts/reactive/src/**`, `contracts/reactive/scripts/**`, `contracts/reactive/test/e2e.sh`, or the workflow).
+- You can also trigger it manually via the "Reactive Validation" workflow with `run_smoke=true`.
+- The default configuration uses **Lasna for both sides**: `REACTIVE_CHAIN_ID=5318007`, `PROTOCOL_CHAIN_ID=5318007`, and the same RPC for both. The workflow automatically detects a valid Lasna RPC (it tries the configured URL and a trailing-slash variant, accepting the first that returns chain ID 5318007).
+
+#### GitHub Actions behaviour
+
+- CI jobs set `RECEIVER_PREFUND_WEI=0` so they only consume gas for deployment and tests.
+- After registering recipients, the job waits a configurable time (`SUBSCRIPTION_PROPAGATION_SECONDS`) so live subscriptions can become active.
+- It uses a single **lREACT-funded key** (`REACTIVE_CI_PRIVATE_KEY`). This key signs deployment, recipient registration/funding, and the mock protocol events. The same key is also used as the HubRSC RVM identity and callback origin.
+- Before running, it performs a **preflight check**:
+  - Are the required secrets present?
+  - Can it reach the Lasna RPC?
+  - Does the signer have enough native gas?
+- If any preflight fails, the job **skips cleanly** with a notice. Once preflight passes, **any failure** of `just e2e` (including timeouts or harness errors) will fail the CI run.
+
+#### Running it yourself
+
+```bash
+# Minimal setup for Lasna-only smoke
+export REACTIVE_RPC="https://lasna-rpc.rnk.dev/"
+export PROTOCOL_RPC="$REACTIVE_RPC"
+export PRIVATE_KEY=0x...
+export REACTIVE_CI_PRIVATE_KEY="$PRIVATE_KEY"   # same funded signer
+export RECEIVER_PREFUND_WEI=0   # optional, matches CI
+
 just e2e
 ```
+
+You will need some testnet lREACT on the signer. Get it from the Reactive documentation. Do **not** reuse this key for local deterministic tests (`forge test`).
+
+#### Optional stronger cross-chain validation
+
+You can point the protocol side at Ethereum Sepolia for fuller testing:
+
+```bash
+export PROTOCOL_RPC="https://eth-sepolia.g.alchemy.com/v2/..."
+export PROTOCOL_CHAIN_ID=11155111
+```
+
+This variant requires Sepolia ETH on the signer and is **not** part of the default CI lane. The receiver callback proxy is derived automatically from `PROTOCOL_CHAIN_ID=11155111`.
+
+For full details on environment variables and deployment scripts, see the [Deployment guide](#deployment-guide-scripts) below.
 
 ## Deployment guide (scripts)
 
@@ -321,6 +420,7 @@ Required env vars:
 
 - `LIQUIDITY_HUB` (deployed LiquidityHub address on protocol chain)
 - `HUB_RVM_ID` (deployed HubRSC RVM id allowed as `callbackOrigin`)
+- `PROTOCOL_CHAIN_ID` (used to derive the published Reactive callback proxy for the destination chain)
 
 ```bash
 just deploy-receiver
@@ -344,7 +444,43 @@ registerRecipient(recipient) payable
 fundRecipient(recipient) payable
 ```
 
-## Funding reactive contracts (kREACT deposit)
+### Reactive funding: recipient deposits vs system deposits
+
+On Lasna / Reactive mainnet, **native value attached to `HubRSC` is not all one bucket**. Two payment models exist, and they answer different questions:
+
+| Question | Recipient deposits (`registerRecipient` / `fundRecipient`) | System deposits (`depositTo` via `just fund-contract`) |
+| --- | --- | --- |
+| **Who is charged in the protocol model?** | The named `recipient`: value is credited to `recipientBalance[recipient]` and gates activation (`recipientActive`). | The **contract address** you pass to `depositTo`: the Reactive system tracks **reserves** and **debts** for that contract, independent of any recipient’s balance. |
+| **Intent / model** | **Retrospective recipient accounting**: track what a recipient has prepaid and charge observed Reactive cost back to that recipient over time. | **Prospective contract reserve**: keep the shared Reactive execution account solvent even when recipient balances lag, go negative, or have not yet topped up. |
+| **What does it buy?** | Sovereign, per-recipient funding so that recipient can stay active and participate in lifecycle and dispatch debt attribution. | Operator or treasury **subsidy** of the same contract’s Reactive execution account (subscriptions, callbacks, vendor `debt(address)`), without pretending a specific recipient paid. |
+| **When is the money applied?** | Value first lands in `HubRSC` and increases `recipientBalance[recipient]`; later, when Reactive debt is observed, `HubRSC` may use its own balance to pay the vendor and allocate the debt delta back to the recipient context. | Value is applied immediately through the Reactive system contract to increase that contract’s system-level reserve. |
+| **Does it increase `HubRSC`’s on-chain balance?** | Yes: payable calls send native lREACT into `HubRSC`. | The system contract debits the signer and credits the target contract’s **reserve**; `fundcontract.sh` prints `reserves` / `debts` before and after so you can verify the effect. |
+| **Typical use** | Product default: each recipient pays for their own consumed automation slice and must stay positive to remain active. | Smoke tests, spikes, deploy-time float, or operator guarantees: keep `HubRSC` solvent when aggregate Reactive cost grows faster than recipient top-ups, or when you want an explicit reserve buffer. |
+
+#### How `HubRSC` spends money
+
+`HubRSC` observes Reactive service cost through the vendor’s `debt(address(this))` and, when it has a non-zero balance, pays the vendor from the contract’s own native balance (`_coverObservedDebtIfFunded` in `HubRSCStorage`). That means **recipient deposits and deploy-time float can overlap with system funding in practice**: both can keep the same Reactive services alive. The difference is that recipient deposits do so via **HubRSC-held liquidity plus internal recipient accounting**, whereas `depositTo` does so via an explicit **system reserve** for the contract. The **signed `recipientBalance` ledger** still tracks who the protocol considers “prepaid” for attributed debt deltas (see `RecipientDebtAllocated` and the FIFO debt-context model in `CAVEATS.md` / `docs/recipient-payment-model.md`).
+
+#### Overlap and non-goals
+
+These two models are **complementary**, not contradictory:
+
+- **Recipient deposits** answer: "Which recipient should be charged for consumed Reactive work?"
+- **System deposits** answer: "Does the shared contract currently have enough system-level reserve to keep operating smoothly?"
+
+The current model intentionally does **not** auto-convert every recipient top-up into a `depositTo` call. Recipient funding is primarily the **recipient debt / activation model**; `depositTo` is the **shared solvency / reserve model**.
+
+#### Why the smoke harness can look “recipient-only”
+
+`test/e2e.sh` registers recipients with `RECIPIENT_DEPOSIT_WEI`, and `deployreactivehub.sh` deploys `HubRSC` with a non-zero constructor value (`HUB_RSC_VALUE`, default `1ether`). Together that often suffices for a **small** live run because the hub can pay observed debt from its own balance. It is **not** a substitute for understanding the two funding paths: if Reactive debt outpaces what you have put into the contract (via recipients, deploy value, or `depositTo`), behaviour degrades (inactive recipients, stalled callbacks, or unallocated debt events).
+
+#### Practical guidance
+
+- Prefer **recipient + deploy** funding when you want recipient-paid retrospective charging with enough float for simple lanes and CI-style smoke.
+- Add **`just fund-contract <HUB_RSC> <amount_wei>`** when you need a clear **system reserve** buffer, or when monitoring shows `debts(HubRSC)` climbing ahead of recipient funding.
+- Optionally fund **`BATCH_RECEIVER`** the same way if callback execution on the protocol chain needs its own reserve (see `RECEIVER_PREFUND_WEI` on deploy).
+
+## Funding reactive contracts (lREACT deposit)
 
 On Reactive, the system contract and callback proxy share this fixed address:
 

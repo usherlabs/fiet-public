@@ -2,6 +2,7 @@
 pragma solidity ^0.8.26;
 
 import {AbstractReactive} from "reactive-lib/abstract-base/AbstractReactive.sol";
+import {AbstractHubReactiveBridge} from "../libs/AbstractHubReactiveBridge.sol";
 import {LinkedQueue} from "../libs/LinkedQueue.sol";
 import {ReactiveConstants} from "../libs/ReactiveConstants.sol";
 
@@ -36,6 +37,10 @@ abstract contract HubRSCStorage is AbstractReactive {
 
     /// @notice SettlementFailed(address indexed lcc, address indexed recipient, uint256 maxAmount, uint256 attemptId, bytes revertData).
     uint256 public constant SETTLEMENT_FAILED_TOPIC = ReactiveConstants.SETTLEMENT_FAILED_TOPIC;
+
+    /// @notice DestinationCallbackRequested(bytes payload).
+    uint256 public constant DESTINATION_CALLBACK_REQUESTED_TOPIC =
+        uint256(keccak256("DestinationCallbackRequested(bytes)"));
 
     struct Pending {
         address lcc;
@@ -89,13 +94,27 @@ abstract contract HubRSCStorage is AbstractReactive {
     /// @notice Destination receiver contract (processSettlements).
     address public immutable destinationReceiverContract;
 
+    /// @notice Reactive-network callback proxy authorised to call `applyCanonicalProtocolLog` on the canonical HubRSC.
+    /// @dev See `AbstractHubReactiveBridge` for the ReactVM -> canonical pipeline.
+    address public immutable reactiveCallbackProxy;
+
+    /// @notice Canonical `HubRSC` deployment on the Reactive chain (RNK), captured once at construction.
+    /// @dev ReactVM runs `react()` under a different `address(this)` than this deployment. Same-chain `Callback`
+    ///      delivery must target this address, not the ReactVM copy, per Reactive callback semantics.
+    address public immutable canonicalReactiveHub;
+
     /// @notice Callback gas limit for destination receiver.
     uint64 public constant CALLBACK_GAS_LIMIT = 8000000;
+
+    /// @notice Gas limit for self-callback that applies canonical state after a ReactVM `react` observation.
+    uint64 public constant CANONICAL_APPLY_CALLBACK_GAS_LIMIT = 8000000;
 
     /// @notice Recipients explicitly registered for HubRSC-owned lifecycle subscriptions.
     mapping(address => bool) public recipientRegistered;
     /// @notice Recipients with active exact-match subscriptions.
     mapping(address => bool) public recipientActive;
+    /// @notice Whether HubRSC-wide protocol/self subscriptions have been activated after deployment.
+    bool public baseSubscriptionsActive;
     /// @notice Native-token recipient balance. Positive balances activate service; negative balances represent debt.
     mapping(address => int256) public recipientBalance;
 
@@ -172,8 +191,13 @@ abstract contract HubRSCStorage is AbstractReactive {
     event RecipientFunded(address indexed recipient, uint256 depositAmount, int256 balance);
     event RecipientActivated(address indexed recipient, int256 balance);
     event RecipientDeactivated(address indexed recipient, int256 balance);
+    event BaseSubscriptionsActivated(address indexed activator);
     event RecipientDebtAllocated(address indexed recipient, uint256 debtAmount, int256 balance);
     event UnallocatedDebtObserved(uint256 debtAmount, uint256 observedDebt);
+    event CanonicalProtocolLogCallback(
+        address indexed callbackOrigin, uint256 indexed originChainId, address indexed origin
+    );
+    event DestinationCallbackRequested(bytes payload);
     event MoreLiquidityAvailable(address indexed lcc, uint256 amountAvailable);
     event PendingAdded(address indexed lcc, address indexed recipient, uint256 amount);
     event PendingIncreased(address indexed lcc, address indexed recipient, uint256 amount);
@@ -193,12 +217,13 @@ abstract contract HubRSCStorage is AbstractReactive {
         uint256 _protocolChainId,
         uint256 _reactChainId,
         address _liquidityHub,
-        address _destinationReceiverContract
+        address _destinationReceiverContract,
+        address _reactiveCallbackProxy
     ) payable {
         if (
             _protocolChainId == 0 || _reactChainId == 0 || _liquidityHub == address(0)
                 || _destinationReceiverContract == address(0) || _maxDispatchItems == 0
-                || _maxDispatchItems > MAX_RECEIVER_BATCH_SIZE
+                || _maxDispatchItems > MAX_RECEIVER_BATCH_SIZE || _reactiveCallbackProxy == address(0)
         ) {
             revert InvalidConfig();
         }
@@ -208,6 +233,15 @@ abstract contract HubRSCStorage is AbstractReactive {
         maxDispatchItems = _maxDispatchItems;
         liquidityHub = _liquidityHub;
         destinationReceiverContract = _destinationReceiverContract;
+        reactiveCallbackProxy = _reactiveCallbackProxy;
+        canonicalReactiveHub = address(this);
+    }
+
+    modifier onlyReactiveCallbackProxy() {
+        if (msg.sender != reactiveCallbackProxy) {
+            revert AbstractHubReactiveBridge.UnauthorizedReactiveCallback();
+        }
+        _;
     }
 
     function _computeKey(address lcc, address recipient) internal pure returns (bytes32) {
@@ -380,6 +414,31 @@ abstract contract HubRSCStorage is AbstractReactive {
 
     function _debtContextQueueEmpty() internal view returns (bool) {
         return debtContextHead == debtContextTail;
+    }
+
+    function _subscribeBaseLogs() internal {
+        service.subscribe(
+            protocolChainId, liquidityHub, LCC_CREATED_TOPIC, REACTIVE_IGNORE, REACTIVE_IGNORE, REACTIVE_IGNORE
+        );
+        service.subscribe(
+            protocolChainId, liquidityHub, LIQUIDITY_AVAILABLE_TOPIC, REACTIVE_IGNORE, REACTIVE_IGNORE, REACTIVE_IGNORE
+        );
+        service.subscribe(
+            reactChainId,
+            address(this),
+            MORE_LIQUIDITY_AVAILABLE_TOPIC,
+            REACTIVE_IGNORE,
+            REACTIVE_IGNORE,
+            REACTIVE_IGNORE
+        );
+        service.subscribe(
+            reactChainId,
+            address(this),
+            DESTINATION_CALLBACK_REQUESTED_TOPIC,
+            REACTIVE_IGNORE,
+            REACTIVE_IGNORE,
+            REACTIVE_IGNORE
+        );
     }
 
     function _setRecipientLifecycleSubscriptions(address recipient, bool shouldSubscribe) internal {
