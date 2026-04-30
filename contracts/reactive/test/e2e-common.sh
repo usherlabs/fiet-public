@@ -8,6 +8,11 @@ extract_labeled_address() {
   printf '%s\n' "$text" | sed -n "s/.*${label}:[[:space:]]*\(0x[a-fA-F0-9]\{40\}\).*/\1/p" | tail -n1
 }
 
+extract_transaction_hash() {
+  local text="$1"
+  printf '%s\n' "$text" | sed -n 's/.*transactionHash[[:space:]]*\(0x[a-fA-F0-9]\{64\}\).*/\1/p' | tail -n1
+}
+
 run_and_print() {
   local title="$1"
   shift
@@ -118,4 +123,41 @@ settled_at_least() {
   total_settled="$(to_dec "$total_settled")"
 
   [ "$total_settled" -ge "$expected_amount" ]
+}
+
+print_callback_bridge_diagnostics() {
+  local from_block="$1"
+  local hub_addr="$2"
+  shift 2
+
+  local callback_failure_topic="0xc8313f695443128e273f1edfcec40b94b7deea8dfbeafd0043290d6601d999db"
+  local callback_proxy="0x0000000000000000000000000000000000fffFfF"
+  local callback_selector
+  callback_selector="$(cast sig "applyCanonicalProtocolLog(address,(uint256,address,uint256,uint256,uint256,uint256,bytes,uint256,uint256,uint256,uint256,uint256))" 2>/dev/null || true)"
+
+  echo "---- reactive callback bridge diagnostics ----" >&2
+  echo "HubRSC target: $hub_addr" >&2
+  echo "Expected canonical callback selector: ${callback_selector:-unknown}" >&2
+  echo "Reactive callback proxy: $callback_proxy" >&2
+  echo "Reactive CallbackFailure topic: $callback_failure_topic" >&2
+  echo "Reactive diagnostic block range: ${from_block:-latest}..latest" >&2
+
+  local tx_hash
+  for tx_hash in "$@"; do
+    if [ -n "$tx_hash" ]; then
+      echo "Protocol trigger tx: $tx_hash" >&2
+      cast receipt "$tx_hash" --rpc-url "$PROTOCOL_RPC" 2>/dev/null | sed -n '1,80p' >&2 || true
+    fi
+  done
+
+  if [ -n "${from_block:-}" ]; then
+    echo "Recent Reactive CallbackFailure logs:" >&2
+    cast logs \
+      --from-block "$from_block" \
+      --to-block latest \
+      --address "$callback_proxy" \
+      "$callback_failure_topic" \
+      --rpc-url "$REACTIVE_RPC" 2>/dev/null | sed -n '1,120p' >&2 || true
+  fi
+  echo "---- end reactive callback bridge diagnostics ----" >&2
 }

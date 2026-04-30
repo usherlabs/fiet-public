@@ -18,7 +18,7 @@ contract HubRSCRecipientFundingTest is HubRSCTestBase {
         address lcc = makeAddr("lcc");
         address recipient = makeAddr("recipient");
 
-        _deliverReactiveVmLog(hub,_rawProtocolSettlementQueuedLog(hub, lcc, recipient, 50, 0xB001, 1));
+        _deliverReactiveVmLog(hub, _rawProtocolSettlementQueuedLog(hub, lcc, recipient, 50, 0xB001, 1));
 
         assertFalse(hub.recipientRegistered(recipient));
         assertFalse(hub.recipientActive(recipient));
@@ -48,7 +48,7 @@ contract HubRSCRecipientFundingTest is HubRSCTestBase {
         address recipient = makeAddr("recipient");
 
         hub.registerRecipient{value: 1 ether}(recipient);
-        _deliverReactiveVmLog(hub,_rawProtocolSettlementQueuedLog(hub, lcc, recipient, 50, 0xB011, 1));
+        _deliverReactiveVmLog(hub, _rawProtocolSettlementQueuedLog(hub, lcc, recipient, 50, 0xB011, 1));
         _setDebtAndSync(hub, system, 2 ether);
 
         assertEq(hub.recipientBalance(recipient), -1 ether);
@@ -76,7 +76,7 @@ contract HubRSCRecipientFundingTest is HubRSCTestBase {
         emit RecipientActivated(recipient, 1 ether);
         hub.fundRecipient{value: 1 ether}(recipient);
 
-        _deliverReactiveVmLog(hub,_rawProtocolSettlementQueuedLog(hub, lcc, recipient, 50, 0xB019, 1));
+        _deliverReactiveVmLog(hub, _rawProtocolSettlementQueuedLog(hub, lcc, recipient, 50, 0xB019, 1));
         system.setDebt(address(hub), 2 ether);
 
         vm.expectEmit(true, false, false, true, address(hub));
@@ -98,7 +98,7 @@ contract HubRSCRecipientFundingTest is HubRSCTestBase {
         address recipient = makeAddr("recipient");
 
         hub.registerRecipient{value: 100 ether}(recipient);
-        _deliverReactiveVmLog(hub,_rawProtocolSettlementQueuedLog(hub, lcc, recipient, 50, 0xB021, 1));
+        _deliverReactiveVmLog(hub, _rawProtocolSettlementQueuedLog(hub, lcc, recipient, 50, 0xB021, 1));
         _setDebtAndSync(hub, system, 7 ether);
 
         assertTrue(_pendingExists(hub, lcc, recipient));
@@ -112,7 +112,8 @@ contract HubRSCRecipientFundingTest is HubRSCTestBase {
         (bool success,) = payable(address(hub)).call{value: 10 ether}("");
         assertTrue(success);
 
-        _deliverReactiveVmLog(hub,
+        _deliverReactiveVmLog(
+            hub,
             IReactive.LogRecord({
                 chain_id: hub.protocolChainId(),
                 _contract: hub.liquidityHub(),
@@ -145,9 +146,9 @@ contract HubRSCRecipientFundingTest is HubRSCTestBase {
         IReactive.LogRecord memory log = _rawProtocolSettlementQueuedLog(hub, lcc, recipient, 50, 0xB031, 1);
 
         hub.registerRecipient{value: 100 ether}(recipient);
-        _deliverReactiveVmLog(hub,log);
+        _deliverReactiveVmLog(hub, log);
         system.setDebt(address(hub), 10 ether);
-        _deliverReactiveVmLog(hub,log);
+        _deliverReactiveVmLog(hub, log);
 
         assertEq(hub.recipientBalance(recipient), 90 ether);
         assertTrue(_pendingExists(hub, lcc, recipient));
@@ -173,12 +174,12 @@ contract HubRSCRecipientFundingTest is HubRSCTestBase {
 
         hub.registerRecipient{value: 100 ether}(recipient1);
         hub.registerRecipient{value: 100 ether}(recipient2);
-        _deliverReactiveVmLog(hub,_rawProtocolSettlementQueuedLog(hub, lcc, recipient1, 50, 0xB041, 1));
-        _deliverReactiveVmLog(hub,_rawProtocolSettlementQueuedLog(hub, lcc, recipient2, 50, 0xB042, 2));
+        _deliverReactiveVmLog(hub, _rawProtocolSettlementQueuedLog(hub, lcc, recipient1, 50, 0xB041, 1));
+        _deliverReactiveVmLog(hub, _rawProtocolSettlementQueuedLog(hub, lcc, recipient2, 50, 0xB042, 2));
         _consumeDebtContexts(hub, system, 4);
 
         vm.recordLogs();
-        _deliverReactiveVmLog(hub,liquidityAvailableLog(hub.liquidityHub(), lcc, 100, bytes32("mkt"), 0xB043, 3));
+        _deliverReactiveVmLog(hub, liquidityAvailableLog(hub.liquidityHub(), lcc, 100, bytes32("mkt"), 0xB043, 3));
         Vm.Log[] memory entries = vm.getRecordedLogs();
 
         _assertDispatchedLength(entries, 2);
@@ -200,13 +201,13 @@ contract HubRSCRecipientFundingTest is HubRSCTestBase {
         hub.registerRecipient{value: 100}(recipient1);
         hub.registerRecipient{value: 100}(recipient2);
         hub.registerRecipient{value: 100}(recipient3);
-        _deliverReactiveVmLog(hub,_rawProtocolSettlementQueuedLog(hub, lcc, recipient1, 1, 0xB044, 1));
-        _deliverReactiveVmLog(hub,_rawProtocolSettlementQueuedLog(hub, lcc, recipient2, 1, 0xB045, 2));
-        _deliverReactiveVmLog(hub,_rawProtocolSettlementQueuedLog(hub, lcc, recipient3, 1, 0xB046, 3));
+        _deliverReactiveVmLog(hub, _rawProtocolSettlementQueuedLog(hub, lcc, recipient1, 1, 0xB044, 1));
+        _deliverReactiveVmLog(hub, _rawProtocolSettlementQueuedLog(hub, lcc, recipient2, 1, 0xB045, 2));
+        _deliverReactiveVmLog(hub, _rawProtocolSettlementQueuedLog(hub, lcc, recipient3, 1, 0xB046, 3));
         _consumeDebtContexts(hub, system, 6);
 
         vm.recordLogs();
-        _deliverReactiveVmLog(hub,liquidityAvailableLog(hub.liquidityHub(), lcc, 3, bytes32("mkt"), 0xB047, 4));
+        _deliverReactiveVmLog(hub, liquidityAvailableLog(hub.liquidityHub(), lcc, 3, bytes32("mkt"), 0xB047, 4));
         Vm.Log[] memory entries = vm.getRecordedLogs();
 
         _assertDispatchedLength(entries, 3);
@@ -224,7 +225,7 @@ contract HubRSCRecipientFundingTest is HubRSCTestBase {
         address recipient = makeAddr("recipient");
 
         hub.registerRecipient{value: 1 ether}(recipient);
-        _deliverReactiveVmLog(hub,_rawProtocolSettlementQueuedLog(hub, lcc, recipient, 50, 0xB048, 1));
+        _deliverReactiveVmLog(hub, _rawProtocolSettlementQueuedLog(hub, lcc, recipient, 50, 0xB048, 1));
         system.setDebt(address(hub), 5 ether);
         hub.syncSystemDebt();
 
@@ -258,16 +259,16 @@ contract HubRSCRecipientFundingTest is HubRSCTestBase {
         hub.registerRecipient{value: 100}(dispatchRecipient1);
         hub.registerRecipient{value: 100}(dispatchRecipient2);
         hub.registerRecipient{value: 100}(lifecycleRecipient);
-        _deliverReactiveVmLog(hub,_rawProtocolSettlementQueuedLog(hub, lcc, dispatchRecipient1, 1, 0xB049, 1));
-        _deliverReactiveVmLog(hub,_rawProtocolSettlementQueuedLog(hub, lcc, dispatchRecipient2, 1, 0xB04A, 2));
+        _deliverReactiveVmLog(hub, _rawProtocolSettlementQueuedLog(hub, lcc, dispatchRecipient1, 1, 0xB049, 1));
+        _deliverReactiveVmLog(hub, _rawProtocolSettlementQueuedLog(hub, lcc, dispatchRecipient2, 1, 0xB04A, 2));
         _consumeDebtContexts(hub, system, 5);
 
         vm.recordLogs();
-        _deliverReactiveVmLog(hub,liquidityAvailableLog(hub.liquidityHub(), lcc, 2, bytes32("mkt"), 0xB04B, 3));
+        _deliverReactiveVmLog(hub, liquidityAvailableLog(hub.liquidityHub(), lcc, 2, bytes32("mkt"), 0xB04B, 3));
         Vm.Log[] memory entries = vm.getRecordedLogs();
         _assertDispatchedLength(entries, 2);
 
-        _deliverReactiveVmLog(hub,_rawProtocolSettlementQueuedLog(hub, lcc, lifecycleRecipient, 1, 0xB04C, 4));
+        _deliverReactiveVmLog(hub, _rawProtocolSettlementQueuedLog(hub, lcc, lifecycleRecipient, 1, 0xB04C, 4));
         system.setDebt(address(hub), 9);
         hub.syncSystemDebt();
 
@@ -292,16 +293,17 @@ contract HubRSCRecipientFundingTest is HubRSCTestBase {
 
         hub.registerRecipient{value: 100}(recipient1);
         hub.registerRecipient{value: 100}(recipient2);
-        _deliverReactiveVmLog(hub,_rawProtocolSettlementQueuedLog(hub, lcc, recipient1, 1, 0xB04D, 1));
-        _deliverReactiveVmLog(hub,_rawProtocolSettlementQueuedLog(hub, lcc, recipient2, 1, 0xB04E, 2));
+        _deliverReactiveVmLog(hub, _rawProtocolSettlementQueuedLog(hub, lcc, recipient1, 1, 0xB04D, 1));
+        _deliverReactiveVmLog(hub, _rawProtocolSettlementQueuedLog(hub, lcc, recipient2, 1, 0xB04E, 2));
         _consumeDebtContexts(hub, system, 4);
 
         vm.recordLogs();
-        _deliverReactiveVmLog(hub,liquidityAvailableLog(hub.liquidityHub(), lcc, 2, bytes32("mkt"), 0xB04F, 3));
+        _deliverReactiveVmLog(hub, liquidityAvailableLog(hub.liquidityHub(), lcc, 2, bytes32("mkt"), 0xB04F, 3));
         Vm.Log[] memory entries = vm.getRecordedLogs();
         _assertDispatchedLength(entries, 2);
 
-        _deliverReactiveVmLog(hub,
+        _deliverReactiveVmLog(
+            hub,
             IReactive.LogRecord({
                 chain_id: hub.protocolChainId(),
                 _contract: hub.liquidityHub(),
@@ -333,16 +335,16 @@ contract HubRSCRecipientFundingTest is HubRSCTestBase {
 
         hub.registerRecipient{value: 100}(recipient1);
         hub.registerRecipient{value: 100}(recipient2);
-        _deliverReactiveVmLog(hub,firstQueued);
-        _deliverReactiveVmLog(hub,_rawProtocolSettlementQueuedLog(hub, lcc, recipient2, 1, 0xB05A, 2));
+        _deliverReactiveVmLog(hub, firstQueued);
+        _deliverReactiveVmLog(hub, _rawProtocolSettlementQueuedLog(hub, lcc, recipient2, 1, 0xB05A, 2));
         _consumeDebtContexts(hub, system, 4);
 
         vm.recordLogs();
-        _deliverReactiveVmLog(hub,liquidityAvailableLog(hub.liquidityHub(), lcc, 2, bytes32("mkt"), 0xB05B, 3));
+        _deliverReactiveVmLog(hub, liquidityAvailableLog(hub.liquidityHub(), lcc, 2, bytes32("mkt"), 0xB05B, 3));
         Vm.Log[] memory entries = vm.getRecordedLogs();
         _assertDispatchedLength(entries, 2);
 
-        _deliverReactiveVmLog(hub,firstQueued);
+        _deliverReactiveVmLog(hub, firstQueued);
         _setDebtAndSync(hub, system, 5);
 
         assertEq(hub.recipientBalance(recipient1), 96);
@@ -358,17 +360,17 @@ contract HubRSCRecipientFundingTest is HubRSCTestBase {
 
         hub.registerRecipient{value: 100}(recipient1);
         hub.registerRecipient{value: 100}(recipient2);
-        _deliverReactiveVmLog(hub,_rawProtocolSettlementQueuedLog(hub, lcc, recipient1, 1, 0xB05C, 1));
+        _deliverReactiveVmLog(hub, _rawProtocolSettlementQueuedLog(hub, lcc, recipient1, 1, 0xB05C, 1));
 
         vm.recordLogs();
-        _deliverReactiveVmLog(hub,liquidityAvailableLog(hub.liquidityHub(), lcc, 1, bytes32("mkt"), 0xB05D, 2));
+        _deliverReactiveVmLog(hub, liquidityAvailableLog(hub.liquidityHub(), lcc, 1, bytes32("mkt"), 0xB05D, 2));
         Vm.Log[] memory entries = vm.getRecordedLogs();
         _assertDispatchedLength(entries, 1);
 
-        _deliverReactiveVmLog(hub,_rawProtocolSettlementQueuedLog(hub, lcc, recipient2, 1, 0xB05E, 3));
+        _deliverReactiveVmLog(hub, _rawProtocolSettlementQueuedLog(hub, lcc, recipient2, 1, 0xB05E, 3));
 
         vm.recordLogs();
-        _deliverReactiveVmLog(hub,liquidityAvailableLog(hub.liquidityHub(), lcc, 1, bytes32("mkt"), 0xB05F, 4));
+        _deliverReactiveVmLog(hub, liquidityAvailableLog(hub.liquidityHub(), lcc, 1, bytes32("mkt"), 0xB05F, 4));
         entries = vm.getRecordedLogs();
         _assertDispatchedLength(entries, 1);
 
@@ -394,21 +396,22 @@ contract HubRSCRecipientFundingTest is HubRSCTestBase {
 
         hub.registerRecipient{value: 100}(recipient1);
         hub.registerRecipient{value: 100}(recipient2);
-        _deliverReactiveVmLog(hub,firstQueued);
+        _deliverReactiveVmLog(hub, firstQueued);
 
         vm.recordLogs();
-        _deliverReactiveVmLog(hub,liquidityAvailableLog(hub.liquidityHub(), lcc, 1, bytes32("mkt"), 0xB062, 2));
+        _deliverReactiveVmLog(hub, liquidityAvailableLog(hub.liquidityHub(), lcc, 1, bytes32("mkt"), 0xB062, 2));
         Vm.Log[] memory entries = vm.getRecordedLogs();
         _assertDispatchedLength(entries, 1);
 
-        _deliverReactiveVmLog(hub,secondQueued);
+        _deliverReactiveVmLog(hub, secondQueued);
 
         vm.recordLogs();
-        _deliverReactiveVmLog(hub,liquidityAvailableLog(hub.liquidityHub(), lcc, 1, bytes32("mkt"), 0xB063, 4));
+        _deliverReactiveVmLog(hub, liquidityAvailableLog(hub.liquidityHub(), lcc, 1, bytes32("mkt"), 0xB063, 4));
         entries = vm.getRecordedLogs();
         _assertDispatchedLength(entries, 1);
 
-        _deliverReactiveVmLog(hub,
+        _deliverReactiveVmLog(
+            hub,
             IReactive.LogRecord({
                 chain_id: hub.protocolChainId(),
                 _contract: hub.liquidityHub(),
@@ -424,7 +427,7 @@ contract HubRSCRecipientFundingTest is HubRSCTestBase {
                 log_index: 5
             })
         );
-        _deliverReactiveVmLog(hub,secondQueued);
+        _deliverReactiveVmLog(hub, secondQueued);
 
         _setDebtAndSync(hub, system, 4);
 
@@ -446,17 +449,17 @@ contract HubRSCRecipientFundingTest is HubRSCTestBase {
 
         hub.registerRecipient{value: 100}(recipient1);
         hub.registerRecipient{value: 100}(recipient2);
-        _deliverReactiveVmLog(hub,_rawProtocolSettlementQueuedLog(hub, lcc, recipient1, 1, 0xB06A, 1));
+        _deliverReactiveVmLog(hub, _rawProtocolSettlementQueuedLog(hub, lcc, recipient1, 1, 0xB06A, 1));
 
         vm.recordLogs();
-        _deliverReactiveVmLog(hub,liquidityAvailableLog(hub.liquidityHub(), lcc, 1, bytes32("mkt"), 0xB06B, 2));
+        _deliverReactiveVmLog(hub, liquidityAvailableLog(hub.liquidityHub(), lcc, 1, bytes32("mkt"), 0xB06B, 2));
         Vm.Log[] memory entries = vm.getRecordedLogs();
         _assertDispatchedLength(entries, 1);
 
-        _deliverReactiveVmLog(hub,_rawProtocolSettlementQueuedLog(hub, lcc, recipient2, 1, 0xB06C, 3));
+        _deliverReactiveVmLog(hub, _rawProtocolSettlementQueuedLog(hub, lcc, recipient2, 1, 0xB06C, 3));
 
         vm.recordLogs();
-        _deliverReactiveVmLog(hub,liquidityAvailableLog(hub.liquidityHub(), lcc, 1, bytes32("mkt"), 0xB06D, 4));
+        _deliverReactiveVmLog(hub, liquidityAvailableLog(hub.liquidityHub(), lcc, 1, bytes32("mkt"), 0xB06D, 4));
         entries = vm.getRecordedLogs();
         _assertDispatchedLength(entries, 1);
 
@@ -511,13 +514,13 @@ contract HubRSCRecipientFundingTest is HubRSCTestBase {
         address dispatchRecipient = makeAddr("dispatchRecipient");
 
         hub.registerRecipient{value: 100}(dispatchRecipient);
-        _deliverReactiveVmLog(hub,_rawProtocolSettlementQueuedLog(hub, lcc, dispatchRecipient, 1, 0xB06E, 1));
+        _deliverReactiveVmLog(hub, _rawProtocolSettlementQueuedLog(hub, lcc, dispatchRecipient, 1, 0xB06E, 1));
         _consumeDebtContexts(hub, system, 2);
 
         hub.registerRecipient{value: 100}(lifecycleRecipient);
 
         vm.recordLogs();
-        _deliverReactiveVmLog(hub,liquidityAvailableLog(hub.liquidityHub(), lcc, 1, bytes32("mkt"), 0xB06F, 2));
+        _deliverReactiveVmLog(hub, liquidityAvailableLog(hub.liquidityHub(), lcc, 1, bytes32("mkt"), 0xB06F, 2));
         Vm.Log[] memory entries = vm.getRecordedLogs();
         _assertDispatchedLength(entries, 1);
 
@@ -544,10 +547,11 @@ contract HubRSCRecipientFundingTest is HubRSCTestBase {
         hub.registerRecipient{value: 100}(recipient1);
         hub.registerRecipient{value: 100}(recipient2);
         _consumeDebtContexts(hub, system, 2);
-        _deliverReactiveVmLog(hub,firstQueued);
-        _deliverReactiveVmLog(hub,duplicateQueued);
+        _deliverReactiveVmLog(hub, firstQueued);
+        _deliverReactiveVmLog(hub, duplicateQueued);
 
-        _deliverReactiveVmLog(hub,
+        _deliverReactiveVmLog(
+            hub,
             IReactive.LogRecord({
                 chain_id: hub.protocolChainId(),
                 _contract: hub.liquidityHub(),
@@ -563,7 +567,7 @@ contract HubRSCRecipientFundingTest is HubRSCTestBase {
                 log_index: 3
             })
         );
-        _deliverReactiveVmLog(hub,duplicateQueued);
+        _deliverReactiveVmLog(hub, duplicateQueued);
 
         _setDebtAndSync(hub, system, 4);
 
@@ -587,21 +591,21 @@ contract HubRSCRecipientFundingTest is HubRSCTestBase {
         hub.registerRecipient{value: 100}(recipient1);
         hub.registerRecipient{value: 100}(recipient2);
         hub.registerRecipient{value: 100}(recipient3);
-        _deliverReactiveVmLog(hub,_rawProtocolSettlementQueuedLog(hub, lcc, recipient1, 1, 0xB064, 1));
+        _deliverReactiveVmLog(hub, _rawProtocolSettlementQueuedLog(hub, lcc, recipient1, 1, 0xB064, 1));
 
         vm.recordLogs();
-        _deliverReactiveVmLog(hub,liquidityAvailableLog(hub.liquidityHub(), lcc, 1, bytes32("mkt"), 0xB065, 2));
+        _deliverReactiveVmLog(hub, liquidityAvailableLog(hub.liquidityHub(), lcc, 1, bytes32("mkt"), 0xB065, 2));
         Vm.Log[] memory entries = vm.getRecordedLogs();
         _assertDispatchedLength(entries, 1);
 
-        _deliverReactiveVmLog(hub,_rawProtocolSettlementQueuedLog(hub, lcc, recipient2, 1, 0xB066, 3));
+        _deliverReactiveVmLog(hub, _rawProtocolSettlementQueuedLog(hub, lcc, recipient2, 1, 0xB066, 3));
 
         vm.recordLogs();
-        _deliverReactiveVmLog(hub,liquidityAvailableLog(hub.liquidityHub(), lcc, 1, bytes32("mkt"), 0xB067, 4));
+        _deliverReactiveVmLog(hub, liquidityAvailableLog(hub.liquidityHub(), lcc, 1, bytes32("mkt"), 0xB067, 4));
         entries = vm.getRecordedLogs();
         _assertDispatchedLength(entries, 1);
 
-        _deliverReactiveVmLog(hub,_rawProtocolSettlementQueuedLog(hub, lcc, recipient3, 1, 0xB068, 5));
+        _deliverReactiveVmLog(hub, _rawProtocolSettlementQueuedLog(hub, lcc, recipient3, 1, 0xB068, 5));
         _setDebtAndSync(hub, system, 4);
 
         assertEq(hub.recipientBalance(recipient1), 96);
@@ -635,10 +639,10 @@ contract HubRSCRecipientFundingTest is HubRSCTestBase {
         bytes32 key = _computeKey(lcc, recipient);
 
         hub.registerRecipient{value: 10 ether}(recipient);
-        _deliverReactiveVmLog(hub,_rawProtocolSettlementQueuedLog(hub, lcc, recipient, 50, 0xB060, 1));
+        _deliverReactiveVmLog(hub, _rawProtocolSettlementQueuedLog(hub, lcc, recipient, 50, 0xB060, 1));
 
         vm.recordLogs();
-        _deliverReactiveVmLog(hub,liquidityAvailableLog(hub.liquidityHub(), lcc, 50, bytes32("mkt"), 0xB062, 2));
+        _deliverReactiveVmLog(hub, liquidityAvailableLog(hub.liquidityHub(), lcc, 50, bytes32("mkt"), 0xB062, 2));
         Vm.Log[] memory entries = vm.getRecordedLogs();
         (,,,, uint256[] memory attemptIds) = _decodeProcessSettlementsPayload(entries);
 
@@ -648,7 +652,7 @@ contract HubRSCRecipientFundingTest is HubRSCTestBase {
         assertFalse(hub.recipientActive(recipient));
         assertEq(hub.inFlightByKey(key), 50);
 
-        _deliverReactiveVmLog(hub,_rawSettlementSucceededLog(hub, lcc, recipient, 50, attemptIds[0], 0xB063, 3));
+        _deliverReactiveVmLog(hub, _rawSettlementSucceededLog(hub, lcc, recipient, 50, attemptIds[0], 0xB063, 3));
         _setDebtAndSync(hub, system, 7 ether);
 
         assertEq(hub.recipientBalance(recipient), -7 ether);
@@ -666,11 +670,11 @@ contract HubRSCRecipientFundingTest is HubRSCTestBase {
         bytes32 pausedKey = _computeKey(lcc2, recipient);
 
         hub.registerRecipient{value: 10 ether}(recipient);
-        _deliverReactiveVmLog(hub,_rawProtocolSettlementQueuedLog(hub, lcc1, recipient, 50, 0xB051, 1));
-        _deliverReactiveVmLog(hub,_rawProtocolSettlementQueuedLog(hub, lcc2, recipient, 20, 0xB052, 2));
+        _deliverReactiveVmLog(hub, _rawProtocolSettlementQueuedLog(hub, lcc1, recipient, 50, 0xB051, 1));
+        _deliverReactiveVmLog(hub, _rawProtocolSettlementQueuedLog(hub, lcc2, recipient, 20, 0xB052, 2));
 
         vm.recordLogs();
-        _deliverReactiveVmLog(hub,liquidityAvailableLog(hub.liquidityHub(), lcc1, 50, bytes32("mkt"), 0xB053, 3));
+        _deliverReactiveVmLog(hub, liquidityAvailableLog(hub.liquidityHub(), lcc1, 50, bytes32("mkt"), 0xB053, 3));
         Vm.Log[] memory entries = vm.getRecordedLogs();
         (,,,, uint256[] memory attemptIds) = _decodeProcessSettlementsPayload(entries);
 
@@ -678,15 +682,15 @@ contract HubRSCRecipientFundingTest is HubRSCTestBase {
         assertEq(hub.recipientBalance(recipient), -5 ether);
         assertFalse(hub.recipientActive(recipient));
 
-        _deliverReactiveVmLog(hub,_rawProtocolSettlementQueuedLog(hub, lcc3, recipient, 30, 0xB054, 4));
+        _deliverReactiveVmLog(hub, _rawProtocolSettlementQueuedLog(hub, lcc3, recipient, 30, 0xB054, 4));
         assertFalse(_pendingExists(hub, lcc3, recipient));
 
         _assertNoProcessSettlementsDispatched(hub, lcc2, 20, bytes32("mkt"), 0xB055, 5);
         assertEq(hub.inFlightByKey(pausedKey), 0);
 
-        _deliverReactiveVmLog(hub,_rawSettlementSucceededLog(hub, lcc1, recipient, 50, attemptIds[0], 0xB056, 6));
+        _deliverReactiveVmLog(hub, _rawSettlementSucceededLog(hub, lcc1, recipient, 50, attemptIds[0], 0xB056, 6));
         assertEq(hub.inFlightByKey(dispatchedKey), 0);
-        _deliverReactiveVmLog(hub,_rawSettlementProcessedLogWithRequested(hub, lcc1, recipient, 50, 50, 0xB057, 7));
+        _deliverReactiveVmLog(hub, _rawSettlementProcessedLogWithRequested(hub, lcc1, recipient, 50, 50, 0xB057, 7));
         (, bool dispatchedExists) = hub.pendingStateByKey(dispatchedKey);
         assertFalse(dispatchedExists);
 
@@ -695,7 +699,7 @@ contract HubRSCRecipientFundingTest is HubRSCTestBase {
         assertTrue(hub.recipientActive(recipient));
 
         vm.recordLogs();
-        _deliverReactiveVmLog(hub,liquidityAvailableLog(hub.liquidityHub(), lcc2, 20, bytes32("mkt"), 0xB058, 8));
+        _deliverReactiveVmLog(hub, liquidityAvailableLog(hub.liquidityHub(), lcc2, 20, bytes32("mkt"), 0xB058, 8));
         entries = vm.getRecordedLogs();
 
         _assertDispatchedLength(entries, 1);
@@ -708,7 +712,7 @@ contract HubRSCRecipientFundingTest is HubRSCTestBase {
         address recipient = makeAddr("recipient");
 
         hub.registerRecipient{value: 1 ether}(recipient);
-        _deliverReactiveVmLog(hub,_rawProtocolSettlementQueuedLog(hub, lcc, recipient, 50, 0xB061, 1));
+        _deliverReactiveVmLog(hub, _rawProtocolSettlementQueuedLog(hub, lcc, recipient, 50, 0xB061, 1));
         system.setDebt(address(hub), 5 ether);
 
         (bool success,) = payable(address(hub)).call{value: 4 ether}("");
@@ -731,7 +735,14 @@ contract HubRSCRecipientFundingTest is HubRSCTestBase {
     }
 
     function test_selfContinuationIgnoresLegacyExternalContinuationOrigin() public {
-        HubRSC hub = new HubRSC(1, originChainId, destinationChainId, liquidityHub, destinationReceiverContract, REACTIVE_CALLBACK_PROXY_FOR_TESTS);
+        HubRSC hub = new HubRSC(
+            1,
+            originChainId,
+            destinationChainId,
+            liquidityHub,
+            destinationReceiverContract,
+            REACTIVE_CALLBACK_PROXY_FOR_TESTS
+        );
 
         address lcc = makeAddr("lcc");
         address recipient1 = makeAddr("recipient1");
@@ -740,11 +751,11 @@ contract HubRSCRecipientFundingTest is HubRSCTestBase {
 
         hub.registerRecipient{value: 10 ether}(recipient1);
         hub.registerRecipient{value: 10 ether}(recipient2);
-        _deliverReactiveVmLog(hub,_rawProtocolSettlementQueuedLog(hub, lcc, recipient1, 10, 0xB071, 1));
-        _deliverReactiveVmLog(hub,_rawProtocolSettlementQueuedLog(hub, lcc, recipient2, 10, 0xB072, 2));
+        _deliverReactiveVmLog(hub, _rawProtocolSettlementQueuedLog(hub, lcc, recipient1, 10, 0xB071, 1));
+        _deliverReactiveVmLog(hub, _rawProtocolSettlementQueuedLog(hub, lcc, recipient2, 10, 0xB072, 2));
 
         vm.recordLogs();
-        _deliverReactiveVmLog(hub,liquidityAvailableLog(hub.liquidityHub(), lcc, 20, bytes32("mkt"), 0xB073, 3));
+        _deliverReactiveVmLog(hub, liquidityAvailableLog(hub.liquidityHub(), lcc, 20, bytes32("mkt"), 0xB073, 3));
         Vm.Log[] memory firstEntries = vm.getRecordedLogs();
 
         _assertDispatchedLength(firstEntries, 1);
@@ -757,11 +768,11 @@ contract HubRSCRecipientFundingTest is HubRSCTestBase {
         legacyContinuation._contract = legacyContinuationOrigin;
 
         vm.recordLogs();
-        _deliverReactiveVmLog(hub,legacyContinuation);
+        _deliverReactiveVmLog(hub, legacyContinuation);
         assertEq(_callbackCount(vm.getRecordedLogs()), 0);
 
         vm.recordLogs();
-        _deliverReactiveVmLog(hub,_moreLiquidityAvailableLog(hub, lcc, remaining, 0xB075, 5));
+        _deliverReactiveVmLog(hub, _moreLiquidityAvailableLog(hub, lcc, remaining, 0xB075, 5));
         Vm.Log[] memory secondEntries = vm.getRecordedLogs();
 
         _assertDispatchedLength(secondEntries, 1);
@@ -770,7 +781,11 @@ contract HubRSCRecipientFundingTest is HubRSCTestBase {
     function _deployHub() private returns (HubRSC hub) {
         _clearSystemContract();
         hub = new HubRSC(
-            DEFAULT_MAX_DISPATCH_ITEMS, originChainId, destinationChainId, liquidityHub, destinationReceiverContract,
+            DEFAULT_MAX_DISPATCH_ITEMS,
+            originChainId,
+            destinationChainId,
+            liquidityHub,
+            destinationReceiverContract,
             REACTIVE_CALLBACK_PROXY_FOR_TESTS
         );
     }

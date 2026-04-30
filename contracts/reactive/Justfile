@@ -22,6 +22,9 @@ build:
 test:
     forge test
 
+local-simulation:
+    forge test --match-contract HubRSCPseudoE2ETest
+
 # ----------------------------
 # Deploy scripts
 

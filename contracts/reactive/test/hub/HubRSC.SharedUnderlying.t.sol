@@ -15,20 +15,28 @@ contract HubRSCSharedUnderlyingTest is HubRSCTestBase {
 
         MockLiquidityHub liq = new MockLiquidityHub();
         MockSettlementReceiver receiver = new MockSettlementReceiver(address(liq));
-        HubRSC hub =
-            new HubRSC(DEFAULT_MAX_DISPATCH_ITEMS, originChainId, destinationChainId, address(liq), address(receiver), REACTIVE_CALLBACK_PROXY_FOR_TESTS);
+        HubRSC hub = new HubRSC(
+            DEFAULT_MAX_DISPATCH_ITEMS,
+            originChainId,
+            destinationChainId,
+            address(liq),
+            address(receiver),
+            REACTIVE_CALLBACK_PROXY_FOR_TESTS
+        );
 
         address underlying = makeAddr("underlying");
         address lccA = makeAddr("lccA");
         address lccB = makeAddr("lccB");
         address recipientB = makeAddr("recipientB");
 
-        _deliverReactiveVmLog(hub,_lccCreatedLog(hub, underlying, lccA, bytes32("mktA"), 0x8300, 1));
-        _deliverReactiveVmLog(hub,_lccCreatedLog(hub, underlying, lccB, bytes32("mktB"), 0x8301, 2));
-        _deliverReactiveVmLog(hub,_settlementLog(hub, recipientB, lccB, 40, 1, 0x8302, 3));
+        _deliverReactiveVmLog(hub, _lccCreatedLog(hub, underlying, lccA, bytes32("mktA"), 0x8300, 1));
+        _deliverReactiveVmLog(hub, _lccCreatedLog(hub, underlying, lccB, bytes32("mktB"), 0x8301, 2));
+        _deliverReactiveVmLog(hub, _settlementLog(hub, recipientB, lccB, 40, 1, 0x8302, 3));
 
         vm.recordLogs();
-        _deliverReactiveVmLog(hub,liquidityAvailableLog(address(liq), lccA, underlying, 1_000, bytes32("mktA"), 0x8303, 4));
+        _deliverReactiveVmLog(
+            hub, liquidityAvailableLog(address(liq), lccA, underlying, 1_000, bytes32("mktA"), 0x8303, 4)
+        );
         _decodeAndProcess(hub, vm.getRecordedLogs(), receiver, 0x8304, 1);
 
         assertEq(liq.getTotalAmountSettled(lccA, recipientB), 0);
@@ -41,21 +49,29 @@ contract HubRSCSharedUnderlyingTest is HubRSCTestBase {
 
         MockLiquidityHub liq = new MockLiquidityHub();
         MockSettlementReceiver receiver = new MockSettlementReceiver(address(liq));
-        HubRSC hub =
-            new HubRSC(DEFAULT_MAX_DISPATCH_ITEMS, originChainId, destinationChainId, address(liq), address(receiver), REACTIVE_CALLBACK_PROXY_FOR_TESTS);
+        HubRSC hub = new HubRSC(
+            DEFAULT_MAX_DISPATCH_ITEMS,
+            originChainId,
+            destinationChainId,
+            address(liq),
+            address(receiver),
+            REACTIVE_CALLBACK_PROXY_FOR_TESTS
+        );
 
         address underlying = makeAddr("underlying");
         address lccA = makeAddr("lccA");
         address lccB = makeAddr("lccB");
         address recipientB = makeAddr("recipientB");
 
-        _deliverReactiveVmLog(hub,_lccCreatedLog(hub, underlying, lccA, bytes32("mktA"), 0x8310, 1));
-        _deliverReactiveVmLog(hub,_lccCreatedLog(hub, underlying, lccB, bytes32("mktB"), 0x8311, 2));
-        _deliverReactiveVmLog(hub,liquidityAvailableLog(address(liq), lccA, underlying, 55, bytes32("mktA"), 0x8312, 3));
+        _deliverReactiveVmLog(hub, _lccCreatedLog(hub, underlying, lccA, bytes32("mktA"), 0x8310, 1));
+        _deliverReactiveVmLog(hub, _lccCreatedLog(hub, underlying, lccB, bytes32("mktB"), 0x8311, 2));
+        _deliverReactiveVmLog(
+            hub, liquidityAvailableLog(address(liq), lccA, underlying, 55, bytes32("mktA"), 0x8312, 3)
+        );
         assertEq(hub.availableBudgetByDispatchLane(underlying), 55);
 
         vm.recordLogs();
-        _deliverReactiveVmLog(hub,_settlementLog(hub, recipientB, lccB, 40, 1, 0x8313, 4));
+        _deliverReactiveVmLog(hub, _settlementLog(hub, recipientB, lccB, 40, 1, 0x8313, 4));
         Vm.Log[] memory entries = vm.getRecordedLogs();
 
         (, address[] memory lccs, address[] memory recipients, uint256[] memory amounts,) =
@@ -71,7 +87,11 @@ contract HubRSCSharedUnderlyingTest is HubRSCTestBase {
     function test_deduplicatesDuplicateSharedUnderlyingLiquidityAvailableLog() public {
         _clearSystemContract();
         HubRSC hub = new HubRSC(
-            DEFAULT_MAX_DISPATCH_ITEMS, originChainId, destinationChainId, liquidityHub, destinationReceiverContract,
+            DEFAULT_MAX_DISPATCH_ITEMS,
+            originChainId,
+            destinationChainId,
+            liquidityHub,
+            destinationReceiverContract,
             REACTIVE_CALLBACK_PROXY_FOR_TESTS
         );
 
@@ -83,10 +103,10 @@ contract HubRSCSharedUnderlyingTest is HubRSCTestBase {
         bytes32 key1 = _computeKey(lccB, recipient1);
         bytes32 key2 = _computeKey(lccB, recipient2);
 
-        _deliverReactiveVmLog(hub,_lccCreatedLog(hub, underlying, lccA, bytes32("mktA"), 0x8310, 1));
-        _deliverReactiveVmLog(hub,_lccCreatedLog(hub, underlying, lccB, bytes32("mktB"), 0x8311, 2));
-        _deliverReactiveVmLog(hub,_settlementLog(hub, recipient1, lccB, 10, 1, 0x8312, 3));
-        _deliverReactiveVmLog(hub,_settlementLog(hub, recipient2, lccB, 10, 2, 0x8313, 4));
+        _deliverReactiveVmLog(hub, _lccCreatedLog(hub, underlying, lccA, bytes32("mktA"), 0x8310, 1));
+        _deliverReactiveVmLog(hub, _lccCreatedLog(hub, underlying, lccB, bytes32("mktB"), 0x8311, 2));
+        _deliverReactiveVmLog(hub, _settlementLog(hub, recipient1, lccB, 10, 1, 0x8312, 3));
+        _deliverReactiveVmLog(hub, _settlementLog(hub, recipient2, lccB, 10, 2, 0x8313, 4));
 
         IReactive.LogRecord memory liquidityLog =
             liquidityAvailableLog(hub.liquidityHub(), lccA, underlying, 10, bytes32("mktA"), 0x8314, 5);
@@ -95,8 +115,8 @@ contract HubRSCSharedUnderlyingTest is HubRSCTestBase {
         );
 
         vm.recordLogs();
-        _deliverReactiveVmLog(hub,liquidityLog);
-        _deliverReactiveVmLog(hub,liquidityLog);
+        _deliverReactiveVmLog(hub, liquidityLog);
+        _deliverReactiveVmLog(hub, liquidityLog);
         Vm.Log[] memory entries = vm.getRecordedLogs();
 
         assertTrue(hub.processedReport(reportId));
@@ -109,7 +129,11 @@ contract HubRSCSharedUnderlyingTest is HubRSCTestBase {
     function test_moreLiquidityAvailableContinuesSharedUnderlyingRoutingAfterBatchLimit() public {
         _clearSystemContract();
         HubRSC hub = new HubRSC(
-            DEFAULT_MAX_DISPATCH_ITEMS, originChainId, destinationChainId, liquidityHub, destinationReceiverContract,
+            DEFAULT_MAX_DISPATCH_ITEMS,
+            originChainId,
+            destinationChainId,
+            liquidityHub,
+            destinationReceiverContract,
             REACTIVE_CALLBACK_PROXY_FOR_TESTS
         );
 
@@ -119,17 +143,19 @@ contract HubRSCSharedUnderlyingTest is HubRSCTestBase {
         uint256 extra = 5;
         uint256 totalEntries = hub.maxDispatchItems() + extra;
 
-        _deliverReactiveVmLog(hub,_lccCreatedLog(hub, underlying, lccA, bytes32("mktA"), 0x8400, 1));
-        _deliverReactiveVmLog(hub,_lccCreatedLog(hub, underlying, lccB, bytes32("mktB"), 0x8401, 2));
+        _deliverReactiveVmLog(hub, _lccCreatedLog(hub, underlying, lccA, bytes32("mktA"), 0x8400, 1));
+        _deliverReactiveVmLog(hub, _lccCreatedLog(hub, underlying, lccB, bytes32("mktB"), 0x8401, 2));
 
         for (uint256 i = 0; i < totalEntries; i++) {
             address recipient = address(uint160(i + 1));
-            _deliverReactiveVmLog(hub,_settlementLog(hub, recipient, lccB, 1, i + 1, 0xA400 + i, i + 1));
+            _deliverReactiveVmLog(hub, _settlementLog(hub, recipient, lccB, 1, i + 1, 0xA400 + i, i + 1));
         }
         assertEq(hub.queueSize(), totalEntries);
 
         vm.recordLogs();
-        _deliverReactiveVmLog(hub,liquidityAvailableLog(hub.liquidityHub(), lccA, underlying, totalEntries, bytes32("mktA"), 0xA500, 1));
+        _deliverReactiveVmLog(
+            hub, liquidityAvailableLog(hub.liquidityHub(), lccA, underlying, totalEntries, bytes32("mktA"), 0xA500, 1)
+        );
         Vm.Log[] memory firstEntries = vm.getRecordedLogs();
 
         _assertDispatchedLccs(firstEntries, lccB, hub.maxDispatchItems());
@@ -140,7 +166,7 @@ contract HubRSCSharedUnderlyingTest is HubRSCTestBase {
         assertEq(hub.queueSize(), totalEntries);
 
         vm.recordLogs();
-        _deliverReactiveVmLog(hub,_moreLiquidityAvailableLog(hub, lccA, emittedRemaining, 0xA501, 2));
+        _deliverReactiveVmLog(hub, _moreLiquidityAvailableLog(hub, lccA, emittedRemaining, 0xA501, 2));
         Vm.Log[] memory secondEntries = vm.getRecordedLogs();
 
         _assertDispatchedLccs(secondEntries, lccB, extra);
@@ -153,7 +179,14 @@ contract HubRSCSharedUnderlyingTest is HubRSCTestBase {
     /// @notice Exact duplicate `MoreLiquidityAvailable` delivery is ignored so it cannot reserve another sibling key.
     function test_deduplicatesDuplicateMoreLiquidityAvailableLog() public {
         _clearSystemContract();
-        HubRSC hub = new HubRSC(1, originChainId, destinationChainId, liquidityHub, destinationReceiverContract, REACTIVE_CALLBACK_PROXY_FOR_TESTS);
+        HubRSC hub = new HubRSC(
+            1,
+            originChainId,
+            destinationChainId,
+            liquidityHub,
+            destinationReceiverContract,
+            REACTIVE_CALLBACK_PROXY_FOR_TESTS
+        );
 
         address underlying = makeAddr("underlying");
         address lccA = makeAddr("lccA");
@@ -163,11 +196,13 @@ contract HubRSCSharedUnderlyingTest is HubRSCTestBase {
         bytes32 key1 = _computeKey(lccB, recipient1);
         bytes32 key2 = _computeKey(lccB, recipient2);
 
-        _deliverReactiveVmLog(hub,_lccCreatedLog(hub, underlying, lccA, bytes32("mktA"), 0xA510, 1));
-        _deliverReactiveVmLog(hub,_lccCreatedLog(hub, underlying, lccB, bytes32("mktB"), 0xA511, 2));
-        _deliverReactiveVmLog(hub,_settlementLog(hub, recipient1, lccB, 10, 1, 0xA512, 3));
-        _deliverReactiveVmLog(hub,_settlementLog(hub, recipient2, lccB, 10, 2, 0xA513, 4));
-        _deliverReactiveVmLog(hub,liquidityAvailableLog(hub.liquidityHub(), lccA, underlying, 20, bytes32("mktA"), 0xA5131, 5));
+        _deliverReactiveVmLog(hub, _lccCreatedLog(hub, underlying, lccA, bytes32("mktA"), 0xA510, 1));
+        _deliverReactiveVmLog(hub, _lccCreatedLog(hub, underlying, lccB, bytes32("mktB"), 0xA511, 2));
+        _deliverReactiveVmLog(hub, _settlementLog(hub, recipient1, lccB, 10, 1, 0xA512, 3));
+        _deliverReactiveVmLog(hub, _settlementLog(hub, recipient2, lccB, 10, 2, 0xA513, 4));
+        _deliverReactiveVmLog(
+            hub, liquidityAvailableLog(hub.liquidityHub(), lccA, underlying, 20, bytes32("mktA"), 0xA5131, 5)
+        );
         assertEq(hub.inFlightByKey(key1), 10);
         assertEq(hub.inFlightByKey(key2), 0);
 
@@ -182,8 +217,8 @@ contract HubRSCSharedUnderlyingTest is HubRSCTestBase {
         );
 
         vm.recordLogs();
-        _deliverReactiveVmLog(hub,moreLiquidityLog);
-        _deliverReactiveVmLog(hub,moreLiquidityLog);
+        _deliverReactiveVmLog(hub, moreLiquidityLog);
+        _deliverReactiveVmLog(hub, moreLiquidityLog);
         Vm.Log[] memory entries = vm.getRecordedLogs();
 
         assertTrue(hub.processedReport(reportId));
@@ -198,18 +233,26 @@ contract HubRSCSharedUnderlyingTest is HubRSCTestBase {
 
         MockLiquidityHub liq = new MockLiquidityHub();
         MockSettlementReceiver receiver = new MockSettlementReceiver(address(liq));
-        HubRSC hub =
-            new HubRSC(DEFAULT_MAX_DISPATCH_ITEMS, originChainId, destinationChainId, address(liq), address(receiver), REACTIVE_CALLBACK_PROXY_FOR_TESTS);
+        HubRSC hub = new HubRSC(
+            DEFAULT_MAX_DISPATCH_ITEMS,
+            originChainId,
+            destinationChainId,
+            address(liq),
+            address(receiver),
+            REACTIVE_CALLBACK_PROXY_FOR_TESTS
+        );
 
         address underlying = makeAddr("underlying");
         address lccA = makeAddr("lccA");
         address lccB = makeAddr("lccB");
         address recipientB = makeAddr("recipientB");
 
-        _deliverReactiveVmLog(hub,_settlementLog(hub, recipientB, lccB, 40, 1, 0x8501, 1));
+        _deliverReactiveVmLog(hub, _settlementLog(hub, recipientB, lccB, 40, 1, 0x8501, 1));
 
         vm.recordLogs();
-        _deliverReactiveVmLog(hub,liquidityAvailableLog(address(liq), lccA, underlying, 1_000, bytes32("mktA"), 0x8502, 2));
+        _deliverReactiveVmLog(
+            hub, liquidityAvailableLog(address(liq), lccA, underlying, 1_000, bytes32("mktA"), 0x8502, 2)
+        );
         Vm.Log[] memory entries = vm.getRecordedLogs();
 
         bytes memory processPayload =
@@ -224,17 +267,25 @@ contract HubRSCSharedUnderlyingTest is HubRSCTestBase {
 
         MockLiquidityHub liq = new MockLiquidityHub();
         MockSettlementReceiver receiver = new MockSettlementReceiver(address(liq));
-        HubRSC hub =
-            new HubRSC(DEFAULT_MAX_DISPATCH_ITEMS, originChainId, destinationChainId, address(liq), address(receiver), REACTIVE_CALLBACK_PROXY_FOR_TESTS);
+        HubRSC hub = new HubRSC(
+            DEFAULT_MAX_DISPATCH_ITEMS,
+            originChainId,
+            destinationChainId,
+            address(liq),
+            address(receiver),
+            REACTIVE_CALLBACK_PROXY_FOR_TESTS
+        );
 
         address lccEth = makeAddr("lccEth");
         address lccUnregistered = makeAddr("lccUnregistered");
         address recipient = makeAddr("recipient");
 
-        _deliverReactiveVmLog(hub,_settlementLog(hub, recipient, lccUnregistered, 40, 1, 0x8511, 1));
+        _deliverReactiveVmLog(hub, _settlementLog(hub, recipient, lccUnregistered, 40, 1, 0x8511, 1));
 
         vm.recordLogs();
-        _deliverReactiveVmLog(hub,liquidityAvailableLog(address(liq), lccEth, address(0), 1_000, bytes32("mktEth"), 0x8512, 2));
+        _deliverReactiveVmLog(
+            hub, liquidityAvailableLog(address(liq), lccEth, address(0), 1_000, bytes32("mktEth"), 0x8512, 2)
+        );
         Vm.Log[] memory entries = vm.getRecordedLogs();
 
         bytes memory processPayload =
@@ -252,22 +303,30 @@ contract HubRSCSharedUnderlyingTest is HubRSCTestBase {
 
         MockLiquidityHub liq = new MockLiquidityHub();
         MockSettlementReceiver receiver = new MockSettlementReceiver(address(liq));
-        HubRSC hub =
-            new HubRSC(DEFAULT_MAX_DISPATCH_ITEMS, originChainId, destinationChainId, address(liq), address(receiver), REACTIVE_CALLBACK_PROXY_FOR_TESTS);
+        HubRSC hub = new HubRSC(
+            DEFAULT_MAX_DISPATCH_ITEMS,
+            originChainId,
+            destinationChainId,
+            address(liq),
+            address(receiver),
+            REACTIVE_CALLBACK_PROXY_FOR_TESTS
+        );
 
         address underlying = makeAddr("underlying");
         address lccA = makeAddr("lccA");
         address lccB = makeAddr("lccB");
         address recipientB = makeAddr("recipientB");
 
-        _deliverReactiveVmLog(hub,_protocolSettlementQueuedLog(hub, lccB, recipientB, 40, 0x8525, 1));
+        _deliverReactiveVmLog(hub, _protocolSettlementQueuedLog(hub, lccB, recipientB, 40, 0x8525, 1));
         assertTrue(_pendingExists(hub, lccB, recipientB));
 
-        _deliverReactiveVmLog(hub,_lccCreatedLog(hub, underlying, lccA, bytes32("mktA"), 0x8526, 2));
-        _deliverReactiveVmLog(hub,_lccCreatedLog(hub, underlying, lccB, bytes32("mktB"), 0x8527, 3));
+        _deliverReactiveVmLog(hub, _lccCreatedLog(hub, underlying, lccA, bytes32("mktA"), 0x8526, 2));
+        _deliverReactiveVmLog(hub, _lccCreatedLog(hub, underlying, lccB, bytes32("mktB"), 0x8527, 3));
 
         vm.recordLogs();
-        _deliverReactiveVmLog(hub,liquidityAvailableLog(address(liq), lccA, underlying, 40, bytes32("mktA"), 0x8528, 4));
+        _deliverReactiveVmLog(
+            hub, liquidityAvailableLog(address(liq), lccA, underlying, 40, bytes32("mktA"), 0x8528, 4)
+        );
         Vm.Log[] memory entries = vm.getRecordedLogs();
 
         (, address[] memory lccs, address[] memory recipients, uint256[] memory amounts,) =
@@ -284,7 +343,14 @@ contract HubRSCSharedUnderlyingTest is HubRSCTestBase {
     function test_underlyingBackfillContinuationStaysBoundedAcrossSiblingLccs() public {
         _clearSystemContract();
 
-        HubRSC hub = new HubRSC(1, originChainId, destinationChainId, liquidityHub, destinationReceiverContract, REACTIVE_CALLBACK_PROXY_FOR_TESTS);
+        HubRSC hub = new HubRSC(
+            1,
+            originChainId,
+            destinationChainId,
+            liquidityHub,
+            destinationReceiverContract,
+            REACTIVE_CALLBACK_PROXY_FOR_TESTS
+        );
 
         address underlying = makeAddr("underlying");
         address lccA = makeAddr("lccA");
@@ -292,24 +358,26 @@ contract HubRSCSharedUnderlyingTest is HubRSCTestBase {
         address lccC = makeAddr("lccC");
         address lccD = makeAddr("lccD");
 
-        _deliverReactiveVmLog(hub,_settlementLog(hub, address(uint160(101)), lccB, 1, 1, 0x8600, 1));
-        _deliverReactiveVmLog(hub,_settlementLog(hub, address(uint160(102)), lccB, 1, 2, 0x8601, 2));
-        _deliverReactiveVmLog(hub,_settlementLog(hub, address(uint160(201)), lccC, 1, 3, 0x8602, 3));
-        _deliverReactiveVmLog(hub,_settlementLog(hub, address(uint160(202)), lccC, 1, 4, 0x8603, 4));
-        _deliverReactiveVmLog(hub,_settlementLog(hub, address(uint160(301)), lccD, 1, 5, 0x8604, 5));
-        _deliverReactiveVmLog(hub,_settlementLog(hub, address(uint160(302)), lccD, 1, 6, 0x8605, 6));
+        _deliverReactiveVmLog(hub, _settlementLog(hub, address(uint160(101)), lccB, 1, 1, 0x8600, 1));
+        _deliverReactiveVmLog(hub, _settlementLog(hub, address(uint160(102)), lccB, 1, 2, 0x8601, 2));
+        _deliverReactiveVmLog(hub, _settlementLog(hub, address(uint160(201)), lccC, 1, 3, 0x8602, 3));
+        _deliverReactiveVmLog(hub, _settlementLog(hub, address(uint160(202)), lccC, 1, 4, 0x8603, 4));
+        _deliverReactiveVmLog(hub, _settlementLog(hub, address(uint160(301)), lccD, 1, 5, 0x8604, 5));
+        _deliverReactiveVmLog(hub, _settlementLog(hub, address(uint160(302)), lccD, 1, 6, 0x8605, 6));
 
-        _deliverReactiveVmLog(hub,_lccCreatedLog(hub, underlying, lccA, bytes32("mktA"), 0x8606, 7));
-        _deliverReactiveVmLog(hub,_lccCreatedLog(hub, underlying, lccB, bytes32("mktB"), 0x8607, 8));
-        _deliverReactiveVmLog(hub,_lccCreatedLog(hub, underlying, lccC, bytes32("mktC"), 0x8608, 9));
-        _deliverReactiveVmLog(hub,_lccCreatedLog(hub, underlying, lccD, bytes32("mktD"), 0x8609, 10));
+        _deliverReactiveVmLog(hub, _lccCreatedLog(hub, underlying, lccA, bytes32("mktA"), 0x8606, 7));
+        _deliverReactiveVmLog(hub, _lccCreatedLog(hub, underlying, lccB, bytes32("mktB"), 0x8607, 8));
+        _deliverReactiveVmLog(hub, _lccCreatedLog(hub, underlying, lccC, bytes32("mktC"), 0x8608, 9));
+        _deliverReactiveVmLog(hub, _lccCreatedLog(hub, underlying, lccD, bytes32("mktD"), 0x8609, 10));
 
         assertEq(hub.underlyingBackfillRemainingByLcc(lccB), 1);
         assertEq(hub.underlyingBackfillRemainingByLcc(lccC), 1);
         assertEq(hub.underlyingBackfillRemainingByLcc(lccD), 1);
 
         vm.recordLogs();
-        _deliverReactiveVmLog(hub,liquidityAvailableLog(hub.liquidityHub(), lccA, underlying, 3, bytes32("mktA"), 0x8610, 11));
+        _deliverReactiveVmLog(
+            hub, liquidityAvailableLog(hub.liquidityHub(), lccA, underlying, 3, bytes32("mktA"), 0x8610, 11)
+        );
         Vm.Log[] memory entries = vm.getRecordedLogs();
 
         assertEq(_findCallbackPayloadBySelector(entries, ReactiveConstants.PROCESS_SETTLEMENTS_SELECTOR).length, 0);
@@ -326,8 +394,14 @@ contract HubRSCSharedUnderlyingTest is HubRSCTestBase {
         uint256 boundedDispatchItems = 2;
         MockLiquidityHub liq = new MockLiquidityHub();
         MockSettlementReceiver receiver = new MockSettlementReceiver(address(liq));
-        HubRSC hub =
-            new HubRSC(boundedDispatchItems, originChainId, destinationChainId, address(liq), address(receiver), REACTIVE_CALLBACK_PROXY_FOR_TESTS);
+        HubRSC hub = new HubRSC(
+            boundedDispatchItems,
+            originChainId,
+            destinationChainId,
+            address(liq),
+            address(receiver),
+            REACTIVE_CALLBACK_PROXY_FOR_TESTS
+        );
 
         address underlying = makeAddr("underlying");
         address lccA = makeAddr("lccA");
@@ -335,19 +409,19 @@ contract HubRSCSharedUnderlyingTest is HubRSCTestBase {
         address[5] memory recipients =
             [address(uint160(1)), address(uint160(2)), address(uint160(3)), address(uint160(4)), address(uint160(5))];
 
-        _deliverReactiveVmLog(hub,_settlementLog(hub, recipients[0], lccB, 1, 1, 0x8610, 1));
-        _deliverReactiveVmLog(hub,_settlementLog(hub, recipients[1], lccB, 1, 2, 0x8611, 2));
-        _deliverReactiveVmLog(hub,_settlementLog(hub, recipients[2], lccB, 1, 3, 0x8612, 3));
-        _deliverReactiveVmLog(hub,_settlementLog(hub, recipients[3], lccB, 1, 4, 0x8613, 4));
-        _deliverReactiveVmLog(hub,_settlementLog(hub, recipients[4], lccB, 1, 5, 0x8614, 5));
+        _deliverReactiveVmLog(hub, _settlementLog(hub, recipients[0], lccB, 1, 1, 0x8610, 1));
+        _deliverReactiveVmLog(hub, _settlementLog(hub, recipients[1], lccB, 1, 2, 0x8611, 2));
+        _deliverReactiveVmLog(hub, _settlementLog(hub, recipients[2], lccB, 1, 3, 0x8612, 3));
+        _deliverReactiveVmLog(hub, _settlementLog(hub, recipients[3], lccB, 1, 4, 0x8613, 4));
+        _deliverReactiveVmLog(hub, _settlementLog(hub, recipients[4], lccB, 1, 5, 0x8614, 5));
 
-        _deliverReactiveVmLog(hub,_lccCreatedLog(hub, underlying, lccA, bytes32("mktA"), 0x8615, 6));
-        _deliverReactiveVmLog(hub,_lccCreatedLog(hub, underlying, lccB, bytes32("mktB"), 0x8616, 7));
+        _deliverReactiveVmLog(hub, _lccCreatedLog(hub, underlying, lccA, bytes32("mktA"), 0x8615, 6));
+        _deliverReactiveVmLog(hub, _lccCreatedLog(hub, underlying, lccB, bytes32("mktB"), 0x8616, 7));
 
         assertEq(hub.underlyingBackfillRemainingByLcc(lccB), 3);
 
         vm.recordLogs();
-        _deliverReactiveVmLog(hub,liquidityAvailableLog(address(liq), lccA, underlying, 5, bytes32("mktA"), 0x8617, 8));
+        _deliverReactiveVmLog(hub, liquidityAvailableLog(address(liq), lccA, underlying, 5, bytes32("mktA"), 0x8617, 8));
         Vm.Log[] memory firstEntries = vm.getRecordedLogs();
 
         bytes memory firstProcessPayload =
@@ -357,7 +431,7 @@ contract HubRSCSharedUnderlyingTest is HubRSCTestBase {
         assertEq(hub.underlyingBackfillRemainingByLcc(lccB), 1);
 
         vm.recordLogs();
-        _deliverReactiveVmLog(hub,_moreLiquidityAvailableLog(hub, lccA, 5, 0x8618, 9));
+        _deliverReactiveVmLog(hub, _moreLiquidityAvailableLog(hub, lccA, 5, 0x8618, 9));
         Vm.Log[] memory secondEntries = vm.getRecordedLogs();
 
         {
@@ -384,7 +458,7 @@ contract HubRSCSharedUnderlyingTest is HubRSCTestBase {
         assertEq(hub.underlyingBackfillRemainingByLcc(lccB), 0);
 
         vm.recordLogs();
-        _deliverReactiveVmLog(hub,_moreLiquidityAvailableLog(hub, lccA, 3, 0x8619, 10));
+        _deliverReactiveVmLog(hub, _moreLiquidityAvailableLog(hub, lccA, 3, 0x8619, 10));
         Vm.Log[] memory thirdEntries = vm.getRecordedLogs();
 
         {
@@ -409,7 +483,7 @@ contract HubRSCSharedUnderlyingTest is HubRSCTestBase {
         assertTrue(_moreLiquidityAvailableEventCount(thirdEntries) > 0);
 
         vm.recordLogs();
-        _deliverReactiveVmLog(hub,_moreLiquidityAvailableLog(hub, lccA, 1, 0x8620, 11));
+        _deliverReactiveVmLog(hub, _moreLiquidityAvailableLog(hub, lccA, 1, 0x8620, 11));
         Vm.Log[] memory fourthEntries = vm.getRecordedLogs();
 
         {
@@ -439,28 +513,37 @@ contract HubRSCSharedUnderlyingTest is HubRSCTestBase {
     function test_postRegistrationMirrorsDoNotConsumeHistoricalBackfillCounter() public {
         _clearSystemContract();
 
-        HubRSC hub = new HubRSC(1, originChainId, destinationChainId, liquidityHub, destinationReceiverContract, REACTIVE_CALLBACK_PROXY_FOR_TESTS);
+        HubRSC hub = new HubRSC(
+            1,
+            originChainId,
+            destinationChainId,
+            liquidityHub,
+            destinationReceiverContract,
+            REACTIVE_CALLBACK_PROXY_FOR_TESTS
+        );
 
         address underlying = makeAddr("underlying");
         address lccA = makeAddr("lccA");
         address lccB = makeAddr("lccB");
 
-        _deliverReactiveVmLog(hub,_settlementLog(hub, address(uint160(1)), lccB, 1, 1, 0x8620, 1));
-        _deliverReactiveVmLog(hub,_settlementLog(hub, address(uint160(2)), lccB, 1, 2, 0x8621, 2));
-        _deliverReactiveVmLog(hub,_settlementLog(hub, address(uint160(3)), lccB, 1, 3, 0x8622, 3));
+        _deliverReactiveVmLog(hub, _settlementLog(hub, address(uint160(1)), lccB, 1, 1, 0x8620, 1));
+        _deliverReactiveVmLog(hub, _settlementLog(hub, address(uint160(2)), lccB, 1, 2, 0x8621, 2));
+        _deliverReactiveVmLog(hub, _settlementLog(hub, address(uint160(3)), lccB, 1, 3, 0x8622, 3));
 
-        _deliverReactiveVmLog(hub,_lccCreatedLog(hub, underlying, lccA, bytes32("mktA"), 0x8623, 4));
-        _deliverReactiveVmLog(hub,_lccCreatedLog(hub, underlying, lccB, bytes32("mktB"), 0x8624, 5));
+        _deliverReactiveVmLog(hub, _lccCreatedLog(hub, underlying, lccA, bytes32("mktA"), 0x8623, 4));
+        _deliverReactiveVmLog(hub, _lccCreatedLog(hub, underlying, lccB, bytes32("mktB"), 0x8624, 5));
 
         assertEq(hub.underlyingBackfillRemainingByLcc(lccB), 2);
 
-        _deliverReactiveVmLog(hub,_settlementLog(hub, address(uint160(4)), lccB, 1, 4, 0x8625, 6));
-        _deliverReactiveVmLog(hub,_settlementLog(hub, address(uint160(5)), lccB, 1, 5, 0x8626, 7));
+        _deliverReactiveVmLog(hub, _settlementLog(hub, address(uint160(4)), lccB, 1, 4, 0x8625, 6));
+        _deliverReactiveVmLog(hub, _settlementLog(hub, address(uint160(5)), lccB, 1, 5, 0x8626, 7));
 
         assertEq(hub.underlyingBackfillRemainingByLcc(lccB), 2);
 
         vm.recordLogs();
-        _deliverReactiveVmLog(hub,liquidityAvailableLog(hub.liquidityHub(), lccA, underlying, 5, bytes32("mktA"), 0x8627, 8));
+        _deliverReactiveVmLog(
+            hub, liquidityAvailableLog(hub.liquidityHub(), lccA, underlying, 5, bytes32("mktA"), 0x8627, 8)
+        );
         Vm.Log[] memory entries = vm.getRecordedLogs();
 
         assertEq(_findCallbackPayloadBySelector(entries, ReactiveConstants.PROCESS_SETTLEMENTS_SELECTOR).length, 0);
@@ -472,25 +555,34 @@ contract HubRSCSharedUnderlyingTest is HubRSCTestBase {
     function test_historicalSiblingProgressesUnderSustainedActiveSiblingLiquidity() public {
         _clearSystemContract();
 
-        HubRSC hub = new HubRSC(1, originChainId, destinationChainId, liquidityHub, destinationReceiverContract, REACTIVE_CALLBACK_PROXY_FOR_TESTS);
+        HubRSC hub = new HubRSC(
+            1,
+            originChainId,
+            destinationChainId,
+            liquidityHub,
+            destinationReceiverContract,
+            REACTIVE_CALLBACK_PROXY_FOR_TESTS
+        );
 
         address underlying = makeAddr("underlying");
         address lccA = makeAddr("lccA");
         address lccB = makeAddr("lccB");
 
-        _deliverReactiveVmLog(hub,_settlementLog(hub, address(uint160(101)), lccB, 1, 1, 0x8630, 1));
-        _deliverReactiveVmLog(hub,_settlementLog(hub, address(uint160(102)), lccB, 1, 2, 0x8631, 2));
-        _deliverReactiveVmLog(hub,_settlementLog(hub, address(uint160(103)), lccB, 1, 3, 0x8632, 3));
+        _deliverReactiveVmLog(hub, _settlementLog(hub, address(uint160(101)), lccB, 1, 1, 0x8630, 1));
+        _deliverReactiveVmLog(hub, _settlementLog(hub, address(uint160(102)), lccB, 1, 2, 0x8631, 2));
+        _deliverReactiveVmLog(hub, _settlementLog(hub, address(uint160(103)), lccB, 1, 3, 0x8632, 3));
 
-        _deliverReactiveVmLog(hub,_lccCreatedLog(hub, underlying, lccA, bytes32("mktA"), 0x8633, 4));
-        _deliverReactiveVmLog(hub,_lccCreatedLog(hub, underlying, lccB, bytes32("mktB"), 0x8634, 5));
+        _deliverReactiveVmLog(hub, _lccCreatedLog(hub, underlying, lccA, bytes32("mktA"), 0x8633, 4));
+        _deliverReactiveVmLog(hub, _lccCreatedLog(hub, underlying, lccB, bytes32("mktB"), 0x8634, 5));
         assertEq(hub.underlyingBackfillRemainingByLcc(lccB), 2);
 
-        _deliverReactiveVmLog(hub,_settlementLog(hub, address(uint160(201)), lccA, 1, 4, 0x8635, 6));
+        _deliverReactiveVmLog(hub, _settlementLog(hub, address(uint160(201)), lccA, 1, 4, 0x8635, 6));
 
         {
             vm.recordLogs();
-            _deliverReactiveVmLog(hub,liquidityAvailableLog(hub.liquidityHub(), lccA, underlying, 1, bytes32("mktA"), 0x8636, 7));
+            _deliverReactiveVmLog(
+                hub, liquidityAvailableLog(hub.liquidityHub(), lccA, underlying, 1, bytes32("mktA"), 0x8636, 7)
+            );
             Vm.Log[] memory firstEntries = vm.getRecordedLogs();
 
             (, address[] memory firstLccs, address[] memory firstRecipients, uint256[] memory firstAmounts,) =
@@ -504,11 +596,13 @@ contract HubRSCSharedUnderlyingTest is HubRSCTestBase {
         }
         assertEq(hub.underlyingBackfillRemainingByLcc(lccB), 1);
 
-        _deliverReactiveVmLog(hub,_settlementLog(hub, address(uint160(202)), lccA, 1, 5, 0x8637, 8));
+        _deliverReactiveVmLog(hub, _settlementLog(hub, address(uint160(202)), lccA, 1, 5, 0x8637, 8));
 
         {
             vm.recordLogs();
-            _deliverReactiveVmLog(hub,liquidityAvailableLog(hub.liquidityHub(), lccA, underlying, 1, bytes32("mktA"), 0x8638, 9));
+            _deliverReactiveVmLog(
+                hub, liquidityAvailableLog(hub.liquidityHub(), lccA, underlying, 1, bytes32("mktA"), 0x8638, 9)
+            );
             Vm.Log[] memory secondEntries = vm.getRecordedLogs();
 
             (, address[] memory secondLccs, address[] memory secondRecipients, uint256[] memory secondAmounts,) =
@@ -527,7 +621,11 @@ contract HubRSCSharedUnderlyingTest is HubRSCTestBase {
     function test_sharedUnderlyingPartialInFlightReleaseMatchesPerLccSemantics() public {
         _clearSystemContract();
         HubRSC hub = new HubRSC(
-            DEFAULT_MAX_DISPATCH_ITEMS, originChainId, destinationChainId, liquidityHub, destinationReceiverContract,
+            DEFAULT_MAX_DISPATCH_ITEMS,
+            originChainId,
+            destinationChainId,
+            liquidityHub,
+            destinationReceiverContract,
             REACTIVE_CALLBACK_PROXY_FOR_TESTS
         );
 
@@ -537,15 +635,17 @@ contract HubRSCSharedUnderlyingTest is HubRSCTestBase {
         address recipient = makeAddr("recipient");
         bytes32 key = _computeKey(lccB, recipient);
 
-        _deliverReactiveVmLog(hub,_lccCreatedLog(hub, underlying, lccA, bytes32("mktA"), 0x8600, 1));
-        _deliverReactiveVmLog(hub,_lccCreatedLog(hub, underlying, lccB, bytes32("mktB"), 0x8601, 2));
-        _deliverReactiveVmLog(hub,_settlementLog(hub, recipient, lccB, 100, 1, 0x8602, 3));
+        _deliverReactiveVmLog(hub, _lccCreatedLog(hub, underlying, lccA, bytes32("mktA"), 0x8600, 1));
+        _deliverReactiveVmLog(hub, _lccCreatedLog(hub, underlying, lccB, bytes32("mktB"), 0x8601, 2));
+        _deliverReactiveVmLog(hub, _settlementLog(hub, recipient, lccB, 100, 1, 0x8602, 3));
 
-        _deliverReactiveVmLog(hub,liquidityAvailableLog(hub.liquidityHub(), lccA, underlying, 100, bytes32("mktA"), 0x8603, 4));
+        _deliverReactiveVmLog(
+            hub, liquidityAvailableLog(hub.liquidityHub(), lccA, underlying, 100, bytes32("mktA"), 0x8603, 4)
+        );
         assertEq(hub.inFlightByKey(key), 100);
 
-        _deliverReactiveVmLog(hub,_settlementProcessedLogWithRequested(hub, lccB, recipient, 60, 100, 0x8604, 5));
-        _deliverReactiveVmLog(hub,_settlementSucceededLog(hub, lccB, recipient, 100, 1, 0x8605, 6));
+        _deliverReactiveVmLog(hub, _settlementProcessedLogWithRequested(hub, lccB, recipient, 60, 100, 0x8604, 5));
+        _deliverReactiveVmLog(hub, _settlementSucceededLog(hub, lccB, recipient, 100, 1, 0x8605, 6));
 
         (uint256 remaining, bool exists) = _pendingState(hub, key);
         assertTrue(exists);
