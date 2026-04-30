@@ -12,6 +12,14 @@ broadcast_flag := if broadcast == "true" { "--broadcast" } else { "" }
 default:
     @just --list --unsorted
 
+[private]
+require-reactive-rpc:
+    @if [ -z "$REACTIVE_RPC" ]; then echo "Missing REACTIVE_RPC" >&2; exit 1; fi
+
+[private]
+require-protocol-rpc:
+    @if [ -z "$PROTOCOL_RPC" ]; then echo "Missing PROTOCOL_RPC" >&2; exit 1; fi
+
 # ----------------------------
 # Build & test
 
@@ -29,25 +37,25 @@ local-simulation:
 # Deploy scripts
 
 # ----------------------------
-deploy-mock-liquidity-hub:
+deploy-mock-liquidity-hub: require-protocol-rpc
     forge script scripts/_mocks/DeployMockLiquidityHub.s.sol:DeployMockLiquidityHub --rpc-url {{ protocol_rpc }} {{ broadcast_flag }}
 
-deploy-receiver:
+deploy-receiver: require-protocol-rpc
     forge script scripts/DeployReceiver.s.sol:DeployReceiver --rpc-url {{ protocol_rpc }} {{ broadcast_flag }}
 
-deploy-reactive-hub:
+deploy-reactive-hub: require-reactive-rpc
     bash scripts/deployreactivehub.sh
 
 deploy-hub:
     @just deploy-reactive-hub
 
 # Full e2e: fresh deploy on protocol + reactive chains, then integration assertions.
-e2e:
+e2e: require-reactive-rpc require-protocol-rpc
     bash test/e2e.sh
 
 # Deploy MockLiquidityHub, BatchProcessSettlementReceiver, HubRSC; register recipients.
 # Requires REACTIVE_RPC, PROTOCOL_RPC, PRIVATE_KEY (or REACTIVE_CI_PRIVATE_KEY), RECIPIENT_ONE, RECIPIENT_TWO.
-e2e-deploy:
+e2e-deploy: require-reactive-rpc require-protocol-rpc
     bash test/e2e-deploy.sh
 
 # Integration only against an existing deployment. Set at least:
@@ -55,7 +63,7 @@ e2e-deploy:
 # Optional: LCC, SIBLING_LCC, UNDERLYING, SIBLING_UNDERLYING, MARKET_ID,
 #           CHECK_AMOUNT_ONE, CHECK_AMOUNT_TWO, LIQUIDITY_AMOUNT,
 #           POLL_TIMEOUT_SECONDS, POLL_INTERVAL_SECONDS
-e2e-integration:
+e2e-integration: require-reactive-rpc require-protocol-rpc
     bash test/e2e-integration.sh
 
 fund-contract contract_addr amount_wei:

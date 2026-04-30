@@ -139,7 +139,7 @@ contract HubRSC is HubRSCDispatch {
         external
         onlyReactiveCallbackProxy
     {
-        callbackOrigin;
+        emit CanonicalProtocolLogCallback(callbackOrigin, log.chain_id, log._contract);
         _syncObservedSystemDebt();
         _dispatchCanonicalInboundLog(log);
     }
