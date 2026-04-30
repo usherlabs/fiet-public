@@ -24,6 +24,8 @@ contract HubRSCReactVmStateBridgeTest is HubRSCTestBase {
 
         IReactive.LogRecord memory log = _lccCreatedLog(hub, underlying, lcc, bytes32("mkt"), 0xA001, 1);
 
+        assertEq(hub.canonicalReactiveHub(), address(hub));
+
         hub.react(log);
         assertFalse(hub.hasUnderlyingForLcc(lcc));
 

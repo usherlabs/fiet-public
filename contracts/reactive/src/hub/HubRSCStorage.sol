@@ -94,6 +94,11 @@ abstract contract HubRSCStorage is AbstractReactive {
     /// @dev See `AbstractHubReactiveBridge` for the ReactVM -> canonical pipeline.
     address public immutable reactiveCallbackProxy;
 
+    /// @notice Canonical `HubRSC` deployment on the Reactive chain (RNK), captured once at construction.
+    /// @dev ReactVM runs `react()` under a different `address(this)` than this deployment. Same-chain `Callback`
+    ///      delivery must target this address, not the ReactVM copy, per Reactive callback semantics.
+    address public immutable canonicalReactiveHub;
+
     /// @notice Callback gas limit for destination receiver.
     uint64 public constant CALLBACK_GAS_LIMIT = 8000000;
 
@@ -218,6 +223,7 @@ abstract contract HubRSCStorage is AbstractReactive {
         liquidityHub = _liquidityHub;
         destinationReceiverContract = _destinationReceiverContract;
         reactiveCallbackProxy = _reactiveCallbackProxy;
+        canonicalReactiveHub = address(this);
     }
 
     modifier onlyReactiveCallbackProxy() {

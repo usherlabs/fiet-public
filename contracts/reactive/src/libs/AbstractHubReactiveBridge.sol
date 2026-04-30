@@ -22,9 +22,12 @@ pragma solidity ^0.8.26;
 /// ## Required pipeline (state channel)
 ///
 /// ```text
-/// protocol log -> react() [vmOnly] -> emit Callback(reactChainId, hub, gas, abi.encodeCall(applyCanonicalProtocolLog, (log)))
+/// protocol log -> react() [vmOnly] -> emit Callback(reactChainId, canonicalReactiveHub, gas, abi.encodeCall(applyCanonicalProtocolLog, (log)))
 ///     -> callback proxy -> applyCanonicalProtocolLog [onlyReactiveCallbackProxy] -> _syncObservedSystemDebt + _handle*
 /// ```
+///
+/// The `_contract` field must be the **canonical** hub address on the Reactive chain (`canonicalReactiveHub`),
+/// not `address(this)` from the ReactVM instance, which is a separate deployment identity.
 ///
 /// Any new intake that mutates hub mirror state must follow this pipeline (or an equivalent callback-gated path).
 ///
