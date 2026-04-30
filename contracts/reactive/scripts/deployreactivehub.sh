@@ -68,6 +68,22 @@ extract_deployed_address() {
   printf '%s\n' "$forge_output" | sed -n 's/.*Deployed to:[[:space:]]*\(0x[a-fA-F0-9]\{40\}\).*/\1/p' | tail -n1
 }
 
+unsupported_reactive_chain_id() {
+  local chain_id="$1"
+  echo "Unsupported REACTIVE_CHAIN_ID for HubRSC callback proxy lookup: $chain_id" >&2
+  echo "Set REACTIVE_CALLBACK_PROXY explicitly to override the built-in mapping." >&2
+  exit 1
+}
+
+callback_proxy_for_reactive_chain_id() {
+  local chain_id="$1"
+  case "$chain_id" in
+    1597) echo "0x0000000000000000000000000000000000fffFfF" ;; # Reactive mainnet
+    5318007) echo "0x0000000000000000000000000000000000fffFfF" ;; # Reactive Lasna
+    *) unsupported_reactive_chain_id "$chain_id" ;;
+  esac
+}
+
 # Use one deployer key for both protocol- and reactive-chain deployments.
 DEPLOYER_PRIVATE_KEY="${PRIVATE_KEY:-}"
 
@@ -81,8 +97,8 @@ DEPLOYER_PRIVATE_KEY="${PRIVATE_KEY:-}"
 : "${BATCH_RECEIVER:?BATCH_RECEIVER is required}"
 
 # Authorised caller for `applyCanonicalProtocolLog` on the canonical Reactive deployment (Reactive chain).
-# Defaults to the Reactive system contract address, which is the published callback executor on Lasna/Reactive testnets.
-REACTIVE_CALLBACK_PROXY="${REACTIVE_CALLBACK_PROXY:-0x0000000000000000000000000000000000fffFfF}"
+# Derive from `REACTIVE_CHAIN_ID` by default, matching the receiver-side published-proxy lookup pattern.
+REACTIVE_CALLBACK_PROXY="${REACTIVE_CALLBACK_PROXY:-$(callback_proxy_for_reactive_chain_id "$REACTIVE_CHAIN_ID")}"
 
 # Hub RVM id is the deployer address for this deployment flow.
 DEPLOYER_ADDRESS="$(cast wallet address --private-key "$DEPLOYER_PRIVATE_KEY")"
