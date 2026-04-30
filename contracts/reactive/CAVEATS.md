@@ -42,6 +42,12 @@ Use the Lasna-only Reactive Network pseudo-e2e smoke harness only when explicitl
 
 The current Lasna pseudo-e2e smoke harness intentionally does not create a separate per-run ephemeral signer. `REACTIVE_CI_PRIVATE_KEY` is the funded signer for deployment, HubRSC RVM id derivation, recipient registration/funding, and mock protocol event emission. If operators want per-run recipient addresses, pass `RECIPIENT_ONE` and `RECIPIENT_TWO`; those addresses are registered and funded by the master signer. Sepolia or another foreign protocol chain is optional stronger full cross-chain validation, not the TASK-38.1 default, and requires separate RPC, callback proxy, chain id, and gas funding.
 
+## Destination callbacks are intentionally two-hop
+
+`HubRSC` cannot rely on ReactVM storage writes for canonical queue or accounting state. Protocol logs first flow through `react()` into the proxy-gated `applyCanonicalProtocolLog(...)` callback, where canonical storage is updated. If that canonical update needs to dispatch settlements, `HubRSC` emits `DestinationCallbackRequested(bytes payload)` and relies on its self-subscription for that event. When ReactVM observes the self-event, `react()` emits the actual destination `Callback(...)` to the configured `BatchProcessSettlement` receiver.
+
+When debugging a live run, distinguish these two hops: a successful pending-state update proves the protocol-log-to-canonical bridge, while receiver settlement counters prove the later canonical-to-RVM-to-destination callback relay.
+
 ## Liquidity budget is persisted per dispatch lane
 
 `HubRSC` persists available dispatch budget in `availableBudgetByDispatchLane` instead of relying on `LiquidityAvailable(...)` as a one-shot trigger. Integrators should read this as the hub's liveness source of truth:

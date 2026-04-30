@@ -25,7 +25,9 @@ End-to-end pipeline for a protocol log:
 2. **Callback emission** — Reactive records the outbound callback (this is distinct from destination-chain `processSettlements` callbacks).
 3. **Callback-proxy delivery** — the configured `reactiveCallbackProxy` invokes `applyCanonicalProtocolLog` on the **canonical** Reactive deployment.
 4. **Canonical state application** — `_syncObservedSystemDebt()` then `_dispatchCanonicalInboundLog(log)` route to the same topic handlers as before (`LCCCreated`, `SettlementQueued`, liquidity wakes, reconciliation topics, and so on).
-5. **Destination receiver callbacks** — unchanged: authorised `BatchProcessSettlement` still receives `processSettlements` callbacks for protocol-chain execution.
+5. **Destination receiver callbacks** — authorised `BatchProcessSettlement` receives `processSettlements` callbacks for protocol-chain execution.
+
+Destination dispatch uses the same isolation model. Canonical `HubRSC` builds the settlement batch while applying a liquidity log, records the dispatch debt context, and emits `DestinationCallbackRequested(bytes payload)` from canonical storage. A HubRSC base self-subscription delivers that event back through ReactVM; `react()` recognizes the self-event and emits the actual `Callback(protocolChainId, destinationReceiverContract, ...)` to `BatchProcessSettlement`. This second hop is required because canonical execution is where durable queue/accounting state changes, while ReactVM execution is the context allowed to emit cross-chain callback intents.
 
 **Operational debugging:** an RVM transaction that only shows `react` activity confirms observation and bridge intent emission; canonical queue, pending, `hasUnderlyingForLcc`, and similar storage only move after a successful **`applyCanonicalProtocolLog`** (or other canonical entrypoints such as `registerRecipient`). If intake appears “missing”, trace whether the bridge hop was delivered, not only whether the log was observed in ReactVM.
 
