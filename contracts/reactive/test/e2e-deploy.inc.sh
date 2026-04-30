@@ -74,7 +74,12 @@ e2e_deploy() {
   echo "HubRSC deployed to: $HUB_RSC"
   export HUB_RSC
 
-  wait_until "HubRSC code on reactive chain" contract_code_exists "$HUB_RSC" "$REACTIVE_RPC"
+  if ! wait_until "HubRSC code on reactive chain" contract_code_exists "$HUB_RSC" "$REACTIVE_RPC"; then
+    echo "HubRSC has no deployed code at: $HUB_RSC"
+    echo "---- raw output ----"
+    echo "$hub_out"
+    exit 1
+  fi
 
   cast send "$HUB_RSC" \
     "activateBaseSubscriptions()" \
