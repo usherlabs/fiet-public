@@ -128,13 +128,18 @@ contract HubRSC is HubRSCDispatch {
             reactChainId,
             canonicalReactiveHub,
             CANONICAL_APPLY_CALLBACK_GAS_LIMIT,
-            abi.encodeWithSelector(this.applyCanonicalProtocolLog.selector, log)
+            abi.encodeWithSelector(this.applyCanonicalProtocolLog.selector, address(0), log)
         );
     }
 
     /// @notice Applies an observed protocol or self-continuation log to canonical HubRSC storage.
     /// @dev Callable only by `reactiveCallbackProxy` after the ReactVM `react` path emits `Callback`.
-    function applyCanonicalProtocolLog(IReactive.LogRecord calldata log) external onlyReactiveCallbackProxy {
+    /// @param callbackOrigin Reactive callback origin injected by the callback proxy.
+    function applyCanonicalProtocolLog(address callbackOrigin, IReactive.LogRecord calldata log)
+        external
+        onlyReactiveCallbackProxy
+    {
+        callbackOrigin;
         _syncObservedSystemDebt();
         _dispatchCanonicalInboundLog(log);
     }

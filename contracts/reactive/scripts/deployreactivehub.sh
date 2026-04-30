@@ -121,6 +121,7 @@ echo "  HUB_RSC_VALUE=$HUB_RSC_VALUE"
 echo "  HUB_RVM_ID=$HUB_RVM_ID"
 echo "  BATCH_SIZE=${BATCH_SIZE:-20}"
 
+set +e
 hub_rsc_output="$(
   forge create "$BROADCAST_FLAG" \
     --rpc-url "$REACTIVE_RPC" \
@@ -135,7 +136,15 @@ hub_rsc_output="$(
       "$BATCH_RECEIVER" \
       "$REACTIVE_CALLBACK_PROXY" 2>&1
 )"
+hub_rsc_status=$?
+set -e
 echo "$hub_rsc_output"
+if [ "$hub_rsc_status" -ne 0 ]; then
+  echo "HubRSC deployment failed with exit code $hub_rsc_status."
+  echo "---- raw forge output (HubRSC) ----"
+  echo "$hub_rsc_output"
+  exit "$hub_rsc_status"
+fi
 
 HUB_RSC="$(extract_deployed_address "$hub_rsc_output")"
 if [ -z "${HUB_RSC:-}" ]; then

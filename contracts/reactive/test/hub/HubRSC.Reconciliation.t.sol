@@ -16,28 +16,34 @@ contract HubRSCReconciliationTest is HubRSCTestBase {
 
         MockLiquidityHub liq = new MockLiquidityHub();
         MockSettlementReceiver receiver = new MockSettlementReceiver(address(liq));
-        HubRSC hub =
-            new HubRSC(DEFAULT_MAX_DISPATCH_ITEMS, originChainId, destinationChainId, address(liq), address(receiver), REACTIVE_CALLBACK_PROXY_FOR_TESTS);
+        HubRSC hub = new HubRSC(
+            DEFAULT_MAX_DISPATCH_ITEMS,
+            originChainId,
+            destinationChainId,
+            address(liq),
+            address(receiver),
+            REACTIVE_CALLBACK_PROXY_FOR_TESTS
+        );
 
         address underlying = makeAddr("underlying");
         address lcc = makeAddr("lcc");
         address recipient = makeAddr("recipient");
         bytes32 key = _computeKey(lcc, recipient);
 
-        _deliverReactiveVmLog(hub,_lccCreatedLog(hub, underlying, lcc, bytes32("mkt"), 0x1210, 1));
-        _deliverReactiveVmLog(hub,_protocolSettlementQueuedLog(hub, lcc, recipient, 50, 0x1211, 2));
-        _deliverReactiveVmLog(hub,liquidityAvailableLog(address(liq), lcc, underlying, 50, bytes32("mkt"), 0x1212, 3));
+        _deliverReactiveVmLog(hub, _lccCreatedLog(hub, underlying, lcc, bytes32("mkt"), 0x1210, 1));
+        _deliverReactiveVmLog(hub, _protocolSettlementQueuedLog(hub, lcc, recipient, 50, 0x1211, 2));
+        _deliverReactiveVmLog(hub, liquidityAvailableLog(address(liq), lcc, underlying, 50, bytes32("mkt"), 0x1212, 3));
 
         assertEq(hub.inFlightByKey(key), 50);
 
-        _deliverReactiveVmLog(hub,_receiverSettlementSucceededLog(hub, lcc, recipient, 50, 1, 0x1213, 4));
+        _deliverReactiveVmLog(hub, _receiverSettlementSucceededLog(hub, lcc, recipient, 50, 1, 0x1213, 4));
         assertEq(hub.inFlightByKey(key), 0);
 
         (uint256 pendingAmount, bool existsAfterSuccess) = _pendingState(hub, key);
         assertTrue(existsAfterSuccess);
         assertEq(pendingAmount, 50);
 
-        _deliverReactiveVmLog(hub,_protocolSettlementProcessedLog(hub, lcc, recipient, 50, 50, 0x1214, 5));
+        _deliverReactiveVmLog(hub, _protocolSettlementProcessedLog(hub, lcc, recipient, 50, 50, 0x1214, 5));
 
         (uint256 remaining, bool exists) = _pendingState(hub, key);
         assertFalse(exists);
@@ -47,15 +53,19 @@ contract HubRSCReconciliationTest is HubRSCTestBase {
     function test_reconcilesPendingFromSettlementAnnulled() public {
         _clearSystemContract();
         HubRSC hub = new HubRSC(
-            DEFAULT_MAX_DISPATCH_ITEMS, originChainId, destinationChainId, liquidityHub, destinationReceiverContract,
+            DEFAULT_MAX_DISPATCH_ITEMS,
+            originChainId,
+            destinationChainId,
+            liquidityHub,
+            destinationReceiverContract,
             REACTIVE_CALLBACK_PROXY_FOR_TESTS
         );
 
         address recipient = makeAddr("recipient");
         address lcc = makeAddr("lcc");
 
-        _deliverReactiveVmLog(hub,_settlementLog(hub, recipient, lcc, 70, 1, 0x9001, 1));
-        _deliverReactiveVmLog(hub,_settlementAnnulledLog(hub, lcc, recipient, 30, 0x9002, 1));
+        _deliverReactiveVmLog(hub, _settlementLog(hub, recipient, lcc, 70, 1, 0x9001, 1));
+        _deliverReactiveVmLog(hub, _settlementAnnulledLog(hub, lcc, recipient, 30, 0x9002, 1));
 
         bytes32 key = _computeKey(lcc, recipient);
         (uint256 remaining, bool exists) = _pendingState(hub, key);
@@ -67,7 +77,11 @@ contract HubRSCReconciliationTest is HubRSCTestBase {
     function test_pruneClearsHistoricalBackfillDebtForFullySettledPreRegistrationKey() public {
         _clearSystemContract();
         HubRSC hub = new HubRSC(
-            DEFAULT_MAX_DISPATCH_ITEMS, originChainId, destinationChainId, liquidityHub, destinationReceiverContract,
+            DEFAULT_MAX_DISPATCH_ITEMS,
+            originChainId,
+            destinationChainId,
+            liquidityHub,
+            destinationReceiverContract,
             REACTIVE_CALLBACK_PROXY_FOR_TESTS
         );
 
@@ -75,10 +89,10 @@ contract HubRSCReconciliationTest is HubRSCTestBase {
         address lcc = makeAddr("lcc");
         bytes32 key = _computeKey(lcc, recipient);
 
-        _deliverReactiveVmLog(hub,_settlementLog(hub, recipient, lcc, 70, 1, 0x9003, 1));
+        _deliverReactiveVmLog(hub, _settlementLog(hub, recipient, lcc, 70, 1, 0x9003, 1));
         assertEq(hub.underlyingBackfillRemainingByLcc(lcc), 1);
 
-        _deliverReactiveVmLog(hub,_settlementProcessedLog(hub, lcc, recipient, 70, 0x9004, 2));
+        _deliverReactiveVmLog(hub, _settlementProcessedLog(hub, lcc, recipient, 70, 0x9004, 2));
 
         (uint256 remaining, bool exists) = _pendingState(hub, key);
         assertFalse(exists);
@@ -90,7 +104,11 @@ contract HubRSCReconciliationTest is HubRSCTestBase {
     function test_unknownFailureBlocksSameKeyUntilFreshProtocolWakeAndMoreLiquidityDoesNotClear() public {
         _clearSystemContract();
         HubRSC hub = new HubRSC(
-            DEFAULT_MAX_DISPATCH_ITEMS, originChainId, destinationChainId, liquidityHub, destinationReceiverContract,
+            DEFAULT_MAX_DISPATCH_ITEMS,
+            originChainId,
+            destinationChainId,
+            liquidityHub,
+            destinationReceiverContract,
             REACTIVE_CALLBACK_PROXY_FOR_TESTS
         );
 
@@ -98,10 +116,10 @@ contract HubRSCReconciliationTest is HubRSCTestBase {
         address lcc = makeAddr("lcc");
         bytes32 key = _computeKey(lcc, recipient);
 
-        _deliverReactiveVmLog(hub,_settlementLog(hub, recipient, lcc, 100, 1, 0x9101, 1));
+        _deliverReactiveVmLog(hub, _settlementLog(hub, recipient, lcc, 100, 1, 0x9101, 1));
 
         vm.recordLogs();
-        _deliverReactiveVmLog(hub,liquidityAvailableLog(hub.liquidityHub(), lcc, 100, bytes32("mkt"), 0x9102, 2));
+        _deliverReactiveVmLog(hub, liquidityAvailableLog(hub.liquidityHub(), lcc, 100, bytes32("mkt"), 0x9102, 2));
         Vm.Log[] memory firstDispatch = vm.getRecordedLogs();
         (, address[] memory lccs,, uint256[] memory amounts, uint256[] memory attemptIds) =
             _decodeProcessSettlementsPayload(firstDispatch);
@@ -111,7 +129,8 @@ contract HubRSCReconciliationTest is HubRSCTestBase {
         assertEq(hub.inFlightByKey(_computeKey(lcc, recipient)), 100);
 
         vm.recordLogs();
-        _deliverReactiveVmLog(hub,
+        _deliverReactiveVmLog(
+            hub,
             _settlementFailedLog(
                 hub,
                 lcc,
@@ -136,7 +155,7 @@ contract HubRSCReconciliationTest is HubRSCTestBase {
         assertEq(_findCallbackPayloadBySelector(retryEntries, ReactiveConstants.PROCESS_SETTLEMENTS_SELECTOR).length, 0);
 
         vm.recordLogs();
-        _deliverReactiveVmLog(hub,_moreLiquidityAvailableLog(hub, lcc, 100, 0x9104, 2));
+        _deliverReactiveVmLog(hub, _moreLiquidityAvailableLog(hub, lcc, 100, 0x9104, 2));
         Vm.Log[] memory moreLiquidityEntries = vm.getRecordedLogs();
         assertEq(
             _findCallbackPayloadBySelector(moreLiquidityEntries, ReactiveConstants.PROCESS_SETTLEMENTS_SELECTOR).length,
@@ -147,7 +166,7 @@ contract HubRSCReconciliationTest is HubRSCTestBase {
         assertTrue(active);
 
         vm.recordLogs();
-        _deliverReactiveVmLog(hub,liquidityAvailableLog(hub.liquidityHub(), lcc, 100, bytes32("mkt"), 0x9105, 3));
+        _deliverReactiveVmLog(hub, liquidityAvailableLog(hub.liquidityHub(), lcc, 100, bytes32("mkt"), 0x9105, 3));
         Vm.Log[] memory wakeEntries = vm.getRecordedLogs();
         (, lccs,, amounts, attemptIds) = _decodeProcessSettlementsPayload(wakeEntries);
         assertEq(lccs.length, 1);
@@ -161,7 +180,11 @@ contract HubRSCReconciliationTest is HubRSCTestBase {
     function test_unknownFailureAllowsSiblingDispatchButNotFailedKeyInSameWakeChain() public {
         _clearSystemContract();
         HubRSC hub = new HubRSC(
-            DEFAULT_MAX_DISPATCH_ITEMS, originChainId, destinationChainId, liquidityHub, destinationReceiverContract,
+            DEFAULT_MAX_DISPATCH_ITEMS,
+            originChainId,
+            destinationChainId,
+            liquidityHub,
+            destinationReceiverContract,
             REACTIVE_CALLBACK_PROXY_FOR_TESTS
         );
 
@@ -171,15 +194,16 @@ contract HubRSCReconciliationTest is HubRSCTestBase {
         bytes32 failedKey = _computeKey(lcc, failedRecipient);
         bytes32 siblingKey = _computeKey(lcc, siblingRecipient);
 
-        _deliverReactiveVmLog(hub,_settlementLog(hub, failedRecipient, lcc, 100, 1, 0x9110, 1));
-        _deliverReactiveVmLog(hub,_settlementLog(hub, siblingRecipient, lcc, 100, 2, 0x9111, 2));
+        _deliverReactiveVmLog(hub, _settlementLog(hub, failedRecipient, lcc, 100, 1, 0x9110, 1));
+        _deliverReactiveVmLog(hub, _settlementLog(hub, siblingRecipient, lcc, 100, 2, 0x9111, 2));
 
         uint256 failedAttemptId = _dispatchSingleAttemptId(hub, lcc, 100, bytes32("mkt"), 0x9112, 3);
         assertEq(hub.inFlightByKey(failedKey), 100);
         assertEq(hub.inFlightByKey(siblingKey), 0);
 
         vm.recordLogs();
-        _deliverReactiveVmLog(hub,
+        _deliverReactiveVmLog(
+            hub,
             _settlementFailedLog(
                 hub,
                 lcc,
@@ -209,7 +233,11 @@ contract HubRSCReconciliationTest is HubRSCTestBase {
     function test_retryBlockClearsOnAuthoritativeAnnulmentAndAllowsLaterContinuationDispatch() public {
         _clearSystemContract();
         HubRSC hub = new HubRSC(
-            DEFAULT_MAX_DISPATCH_ITEMS, originChainId, destinationChainId, liquidityHub, destinationReceiverContract,
+            DEFAULT_MAX_DISPATCH_ITEMS,
+            originChainId,
+            destinationChainId,
+            liquidityHub,
+            destinationReceiverContract,
             REACTIVE_CALLBACK_PROXY_FOR_TESTS
         );
 
@@ -218,7 +246,8 @@ contract HubRSCReconciliationTest is HubRSCTestBase {
         bytes32 key = _computeKey(lcc, recipient);
 
         uint256 failedAttemptId = _dispatchSingleAttemptIdAfterQueue(hub, lcc, recipient, 100, 0x9114, 1, 0x9115, 2);
-        _deliverReactiveVmLog(hub,
+        _deliverReactiveVmLog(
+            hub,
             _settlementFailedLog(
                 hub,
                 lcc,
@@ -232,7 +261,7 @@ contract HubRSCReconciliationTest is HubRSCTestBase {
             )
         );
 
-        _deliverReactiveVmLog(hub,_settlementAnnulledLog(hub, lcc, recipient, 10, 0x9117, 4));
+        _deliverReactiveVmLog(hub, _settlementAnnulledLog(hub, lcc, recipient, 10, 0x9117, 4));
         (uint256 remaining, bool exists) = _pendingState(hub, key);
         assertTrue(exists);
         assertEq(remaining, 90);
@@ -241,7 +270,7 @@ contract HubRSCReconciliationTest is HubRSCTestBase {
         assertFalse(active);
 
         vm.recordLogs();
-        _deliverReactiveVmLog(hub,_moreLiquidityAvailableLog(hub, lcc, 100, 0x9118, 5));
+        _deliverReactiveVmLog(hub, _moreLiquidityAvailableLog(hub, lcc, 100, 0x9118, 5));
         Vm.Log[] memory continuationEntries = vm.getRecordedLogs();
         (, address[] memory lccs, address[] memory recipients, uint256[] memory amounts, uint256[] memory attemptIds) =
             _decodeProcessSettlementsPayload(continuationEntries);
@@ -256,7 +285,11 @@ contract HubRSCReconciliationTest is HubRSCTestBase {
     function test_duplicateLiquiditySignalScrubsPhantomBudgetUntilFreshWakeup() public {
         _clearSystemContract();
         HubRSC hub = new HubRSC(
-            DEFAULT_MAX_DISPATCH_ITEMS, originChainId, destinationChainId, liquidityHub, destinationReceiverContract,
+            DEFAULT_MAX_DISPATCH_ITEMS,
+            originChainId,
+            destinationChainId,
+            liquidityHub,
+            destinationReceiverContract,
             REACTIVE_CALLBACK_PROXY_FOR_TESTS
         );
 
@@ -268,11 +301,11 @@ contract HubRSCReconciliationTest is HubRSCTestBase {
         address secondRecipient;
         uint256 secondAttemptId;
 
-        _deliverReactiveVmLog(hub,_settlementLog(hub, recipientA, lcc, 100, 1, 0x9201, 1));
-        _deliverReactiveVmLog(hub,_settlementLog(hub, recipientB, lcc, 100, 2, 0x9202, 2));
+        _deliverReactiveVmLog(hub, _settlementLog(hub, recipientA, lcc, 100, 1, 0x9201, 1));
+        _deliverReactiveVmLog(hub, _settlementLog(hub, recipientB, lcc, 100, 2, 0x9202, 2));
 
         vm.recordLogs();
-        _deliverReactiveVmLog(hub,liquidityAvailableLog(hub.liquidityHub(), lcc, 100, bytes32("mkt"), 0x9203, 3));
+        _deliverReactiveVmLog(hub, liquidityAvailableLog(hub.liquidityHub(), lcc, 100, bytes32("mkt"), 0x9203, 3));
         Vm.Log[] memory firstDispatch = vm.getRecordedLogs();
         {
             (
@@ -290,7 +323,7 @@ contract HubRSCReconciliationTest is HubRSCTestBase {
         }
 
         vm.recordLogs();
-        _deliverReactiveVmLog(hub,liquidityAvailableLog(hub.liquidityHub(), lcc, 100, bytes32("mkt"), 0x9204, 4));
+        _deliverReactiveVmLog(hub, liquidityAvailableLog(hub.liquidityHub(), lcc, 100, bytes32("mkt"), 0x9204, 4));
         Vm.Log[] memory secondDispatch = vm.getRecordedLogs();
         {
             (
@@ -311,7 +344,8 @@ contract HubRSCReconciliationTest is HubRSCTestBase {
 
         bytes32 failedKey = _computeKey(lcc, secondRecipient);
         vm.recordLogs();
-        _deliverReactiveVmLog(hub,
+        _deliverReactiveVmLog(
+            hub,
             _settlementFailedLog(
                 hub,
                 lcc,
@@ -334,7 +368,7 @@ contract HubRSCReconciliationTest is HubRSCTestBase {
         );
 
         vm.recordLogs();
-        _deliverReactiveVmLog(hub,liquidityAvailableLog(hub.liquidityHub(), lcc, 100, bytes32("mkt"), 0x9230, 5));
+        _deliverReactiveVmLog(hub, liquidityAvailableLog(hub.liquidityHub(), lcc, 100, bytes32("mkt"), 0x9230, 5));
         Vm.Log[] memory wakeEntries = vm.getRecordedLogs();
         (
             ,
@@ -353,7 +387,11 @@ contract HubRSCReconciliationTest is HubRSCTestBase {
     function test_terminalNotApprovedFailureIsQuarantinedAndNotRedispatched() public {
         _clearSystemContract();
         HubRSC hub = new HubRSC(
-            DEFAULT_MAX_DISPATCH_ITEMS, originChainId, destinationChainId, liquidityHub, destinationReceiverContract,
+            DEFAULT_MAX_DISPATCH_ITEMS,
+            originChainId,
+            destinationChainId,
+            liquidityHub,
+            destinationReceiverContract,
             REACTIVE_CALLBACK_PROXY_FOR_TESTS
         );
 
@@ -361,13 +399,14 @@ contract HubRSCReconciliationTest is HubRSCTestBase {
         address lcc = makeAddr("lcc");
         bytes32 key = _computeKey(lcc, recipient);
 
-        _deliverReactiveVmLog(hub,_settlementLog(hub, recipient, lcc, 100, 1, 0x9111, 1));
+        _deliverReactiveVmLog(hub, _settlementLog(hub, recipient, lcc, 100, 1, 0x9111, 1));
         assertEq(hub.underlyingBackfillRemainingByLcc(lcc), 1);
-        _deliverReactiveVmLog(hub,liquidityAvailableLog(hub.liquidityHub(), lcc, 100, bytes32("mkt"), 0x9112, 2));
+        _deliverReactiveVmLog(hub, liquidityAvailableLog(hub.liquidityHub(), lcc, 100, bytes32("mkt"), 0x9112, 2));
         assertEq(hub.inFlightByKey(key), 100);
 
         vm.recordLogs();
-        _deliverReactiveVmLog(hub,
+        _deliverReactiveVmLog(
+            hub,
             _settlementFailedLog(
                 hub,
                 lcc,
@@ -396,7 +435,7 @@ contract HubRSCReconciliationTest is HubRSCTestBase {
         );
 
         vm.recordLogs();
-        _deliverReactiveVmLog(hub,liquidityAvailableLog(hub.liquidityHub(), lcc, 100, bytes32("mkt"), 0x9114, 4));
+        _deliverReactiveVmLog(hub, liquidityAvailableLog(hub.liquidityHub(), lcc, 100, bytes32("mkt"), 0x9114, 4));
         Vm.Log[] memory laterEntries = vm.getRecordedLogs();
 
         assertEq(_findCallbackPayloadBySelector(laterEntries, ReactiveConstants.PROCESS_SETTLEMENTS_SELECTOR).length, 0);
@@ -407,7 +446,11 @@ contract HubRSCReconciliationTest is HubRSCTestBase {
     function test_terminalFailureOnSameUnderlyingStillAllowsSiblingDispatch() public {
         _clearSystemContract();
         HubRSC hub = new HubRSC(
-            DEFAULT_MAX_DISPATCH_ITEMS, originChainId, destinationChainId, liquidityHub, destinationReceiverContract,
+            DEFAULT_MAX_DISPATCH_ITEMS,
+            originChainId,
+            destinationChainId,
+            liquidityHub,
+            destinationReceiverContract,
             REACTIVE_CALLBACK_PROXY_FOR_TESTS
         );
 
@@ -418,18 +461,21 @@ contract HubRSCReconciliationTest is HubRSCTestBase {
         address badRecipient = makeAddr("badRecipient");
         address goodRecipient = makeAddr("goodRecipient");
 
-        _deliverReactiveVmLog(hub,_lccCreatedLog(hub, underlying, triggerLcc, bytes32("mktA"), 0x9120, 1));
-        _deliverReactiveVmLog(hub,_lccCreatedLog(hub, underlying, badLcc, bytes32("mktB"), 0x9121, 2));
-        _deliverReactiveVmLog(hub,_lccCreatedLog(hub, underlying, goodLcc, bytes32("mktC"), 0x9122, 3));
-        _deliverReactiveVmLog(hub,_settlementLog(hub, badRecipient, badLcc, 100, 1, 0x9123, 4));
-        _deliverReactiveVmLog(hub,_settlementLog(hub, goodRecipient, goodLcc, 50, 1, 0x9124, 5));
+        _deliverReactiveVmLog(hub, _lccCreatedLog(hub, underlying, triggerLcc, bytes32("mktA"), 0x9120, 1));
+        _deliverReactiveVmLog(hub, _lccCreatedLog(hub, underlying, badLcc, bytes32("mktB"), 0x9121, 2));
+        _deliverReactiveVmLog(hub, _lccCreatedLog(hub, underlying, goodLcc, bytes32("mktC"), 0x9122, 3));
+        _deliverReactiveVmLog(hub, _settlementLog(hub, badRecipient, badLcc, 100, 1, 0x9123, 4));
+        _deliverReactiveVmLog(hub, _settlementLog(hub, goodRecipient, goodLcc, 50, 1, 0x9124, 5));
 
-        _deliverReactiveVmLog(hub,liquidityAvailableLog(hub.liquidityHub(), triggerLcc, underlying, 100, bytes32("mktA"), 0x9125, 6));
+        _deliverReactiveVmLog(
+            hub, liquidityAvailableLog(hub.liquidityHub(), triggerLcc, underlying, 100, bytes32("mktA"), 0x9125, 6)
+        );
         assertEq(hub.inFlightByKey(_computeKey(badLcc, badRecipient)), 100);
         assertEq(hub.inFlightByKey(_computeKey(goodLcc, goodRecipient)), 0);
 
         vm.recordLogs();
-        _deliverReactiveVmLog(hub,
+        _deliverReactiveVmLog(
+            hub,
             _settlementFailedLog(
                 hub,
                 badLcc,
@@ -457,7 +503,11 @@ contract HubRSCReconciliationTest is HubRSCTestBase {
     function test_terminalFailureClearsOnFreshQueueMutation() public {
         _clearSystemContract();
         HubRSC hub = new HubRSC(
-            DEFAULT_MAX_DISPATCH_ITEMS, originChainId, destinationChainId, liquidityHub, destinationReceiverContract,
+            DEFAULT_MAX_DISPATCH_ITEMS,
+            originChainId,
+            destinationChainId,
+            liquidityHub,
+            destinationReceiverContract,
             REACTIVE_CALLBACK_PROXY_FOR_TESTS
         );
 
@@ -465,9 +515,10 @@ contract HubRSCReconciliationTest is HubRSCTestBase {
         address lcc = makeAddr("lcc");
         bytes32 key = _computeKey(lcc, recipient);
 
-        _deliverReactiveVmLog(hub,_settlementLog(hub, recipient, lcc, 100, 1, 0x9131, 1));
-        _deliverReactiveVmLog(hub,liquidityAvailableLog(hub.liquidityHub(), lcc, 100, bytes32("mkt"), 0x9132, 2));
-        _deliverReactiveVmLog(hub,
+        _deliverReactiveVmLog(hub, _settlementLog(hub, recipient, lcc, 100, 1, 0x9131, 1));
+        _deliverReactiveVmLog(hub, liquidityAvailableLog(hub.liquidityHub(), lcc, 100, bytes32("mkt"), 0x9132, 2));
+        _deliverReactiveVmLog(
+            hub,
             _settlementFailedLog(
                 hub,
                 lcc,
@@ -484,7 +535,7 @@ contract HubRSCReconciliationTest is HubRSCTestBase {
         assertFalse(hub.inQueue(key));
         assertEq(hub.underlyingBackfillRemainingByLcc(lcc), 0);
 
-        _deliverReactiveVmLog(hub,_settlementLog(hub, recipient, lcc, 25, 2, 0x9134, 4));
+        _deliverReactiveVmLog(hub, _settlementLog(hub, recipient, lcc, 25, 2, 0x9134, 4));
         (uint256 remaining, bool exists) = _pendingState(hub, key);
         assertTrue(exists);
         assertEq(remaining, 125);
@@ -494,7 +545,7 @@ contract HubRSCReconciliationTest is HubRSCTestBase {
         assertEq(hub.underlyingBackfillRemainingByLcc(lcc), 0);
 
         vm.recordLogs();
-        _deliverReactiveVmLog(hub,liquidityAvailableLog(hub.liquidityHub(), lcc, 125, bytes32("mkt"), 0x9135, 5));
+        _deliverReactiveVmLog(hub, liquidityAvailableLog(hub.liquidityHub(), lcc, 125, bytes32("mkt"), 0x9135, 5));
         Vm.Log[] memory entries = vm.getRecordedLogs();
 
         (, address[] memory lccs, address[] memory recipients, uint256[] memory amounts,) =
@@ -508,7 +559,11 @@ contract HubRSCReconciliationTest is HubRSCTestBase {
     function test_terminalFailureClearsOnAuthoritativeDecrease() public {
         _clearSystemContract();
         HubRSC hub = new HubRSC(
-            DEFAULT_MAX_DISPATCH_ITEMS, originChainId, destinationChainId, liquidityHub, destinationReceiverContract,
+            DEFAULT_MAX_DISPATCH_ITEMS,
+            originChainId,
+            destinationChainId,
+            liquidityHub,
+            destinationReceiverContract,
             REACTIVE_CALLBACK_PROXY_FOR_TESTS
         );
 
@@ -516,9 +571,10 @@ contract HubRSCReconciliationTest is HubRSCTestBase {
         address lcc = makeAddr("lcc");
         bytes32 key = _computeKey(lcc, recipient);
 
-        _deliverReactiveVmLog(hub,_settlementLog(hub, recipient, lcc, 100, 1, 0x9141, 1));
-        _deliverReactiveVmLog(hub,liquidityAvailableLog(hub.liquidityHub(), lcc, 100, bytes32("mkt"), 0x9142, 2));
-        _deliverReactiveVmLog(hub,
+        _deliverReactiveVmLog(hub, _settlementLog(hub, recipient, lcc, 100, 1, 0x9141, 1));
+        _deliverReactiveVmLog(hub, liquidityAvailableLog(hub.liquidityHub(), lcc, 100, bytes32("mkt"), 0x9142, 2));
+        _deliverReactiveVmLog(
+            hub,
             _settlementFailedLog(
                 hub,
                 lcc,
@@ -536,7 +592,7 @@ contract HubRSCReconciliationTest is HubRSCTestBase {
         assertEq(hub.underlyingBackfillRemainingByLcc(lcc), 0);
 
         vm.recordLogs();
-        _deliverReactiveVmLog(hub,_settlementProcessedLog(hub, lcc, recipient, 40, 0x9144, 4));
+        _deliverReactiveVmLog(hub, _settlementProcessedLog(hub, lcc, recipient, 40, 0x9144, 4));
         Vm.Log[] memory processedEntries = vm.getRecordedLogs();
         (uint256 remaining, bool exists) = _pendingState(hub, key);
         assertTrue(exists);
@@ -553,7 +609,7 @@ contract HubRSCReconciliationTest is HubRSCTestBase {
         assertEq(amounts[0], 60);
 
         vm.recordLogs();
-        _deliverReactiveVmLog(hub,liquidityAvailableLog(hub.liquidityHub(), lcc, 60, bytes32("mkt"), 0x9145, 5));
+        _deliverReactiveVmLog(hub, liquidityAvailableLog(hub.liquidityHub(), lcc, 60, bytes32("mkt"), 0x9145, 5));
         Vm.Log[] memory laterEntries = vm.getRecordedLogs();
         assertEq(_findCallbackPayloadBySelector(laterEntries, ReactiveConstants.PROCESS_SETTLEMENTS_SELECTOR).length, 0);
     }
@@ -561,15 +617,19 @@ contract HubRSCReconciliationTest is HubRSCTestBase {
     function test_manualSettlementProcessedLogReconcilesWithoutDispatch() public {
         _clearSystemContract();
         HubRSC hub = new HubRSC(
-            DEFAULT_MAX_DISPATCH_ITEMS, originChainId, destinationChainId, liquidityHub, destinationReceiverContract,
+            DEFAULT_MAX_DISPATCH_ITEMS,
+            originChainId,
+            destinationChainId,
+            liquidityHub,
+            destinationReceiverContract,
             REACTIVE_CALLBACK_PROXY_FOR_TESTS
         );
 
         address recipient = makeAddr("recipient");
         address lcc = makeAddr("lcc");
 
-        _deliverReactiveVmLog(hub,_settlementLog(hub, recipient, lcc, 90, 1, 0x9201, 1));
-        _deliverReactiveVmLog(hub,_settlementProcessedLog(hub, lcc, recipient, 40, 0x9202, 1));
+        _deliverReactiveVmLog(hub, _settlementLog(hub, recipient, lcc, 90, 1, 0x9201, 1));
+        _deliverReactiveVmLog(hub, _settlementProcessedLog(hub, lcc, recipient, 40, 0x9202, 1));
 
         bytes32 key = _computeKey(lcc, recipient);
         (uint256 remaining, bool exists) = _pendingState(hub, key);
@@ -581,7 +641,11 @@ contract HubRSCReconciliationTest is HubRSCTestBase {
     function test_buffersOutOfOrderProcessedAndAppliesOnQueued() public {
         _clearSystemContract();
         HubRSC hub = new HubRSC(
-            DEFAULT_MAX_DISPATCH_ITEMS, originChainId, destinationChainId, liquidityHub, destinationReceiverContract,
+            DEFAULT_MAX_DISPATCH_ITEMS,
+            originChainId,
+            destinationChainId,
+            liquidityHub,
+            destinationReceiverContract,
             REACTIVE_CALLBACK_PROXY_FOR_TESTS
         );
 
@@ -589,13 +653,13 @@ contract HubRSCReconciliationTest is HubRSCTestBase {
         address lcc = makeAddr("lcc");
         bytes32 key = _computeKey(lcc, recipient);
 
-        _deliverReactiveVmLog(hub,_settlementProcessedLog(hub, lcc, recipient, 30, 0x9301, 1));
+        _deliverReactiveVmLog(hub, _settlementProcessedLog(hub, lcc, recipient, 30, 0x9301, 1));
         (uint256 bufferedSettled, uint256 bufferedInFlight) = _bufferedProcessedState(hub, key);
         assertEq(bufferedSettled, 30);
         assertEq(bufferedInFlight, 0);
         assertFalse(_pendingExists(hub, lcc, recipient));
 
-        _deliverReactiveVmLog(hub,_settlementLog(hub, recipient, lcc, 50, 1, 0x9302, 2));
+        _deliverReactiveVmLog(hub, _settlementLog(hub, recipient, lcc, 50, 1, 0x9302, 2));
         (uint256 remaining, bool exists) = _pendingState(hub, key);
         assertTrue(exists);
         assertEq(remaining, 20);
@@ -607,7 +671,11 @@ contract HubRSCReconciliationTest is HubRSCTestBase {
     function test_buffersOutOfOrderAnnulledAndAppliesOnQueued() public {
         _clearSystemContract();
         HubRSC hub = new HubRSC(
-            DEFAULT_MAX_DISPATCH_ITEMS, originChainId, destinationChainId, liquidityHub, destinationReceiverContract,
+            DEFAULT_MAX_DISPATCH_ITEMS,
+            originChainId,
+            destinationChainId,
+            liquidityHub,
+            destinationReceiverContract,
             REACTIVE_CALLBACK_PROXY_FOR_TESTS
         );
 
@@ -615,11 +683,11 @@ contract HubRSCReconciliationTest is HubRSCTestBase {
         address lcc = makeAddr("lcc");
         bytes32 key = _computeKey(lcc, recipient);
 
-        _deliverReactiveVmLog(hub,_settlementAnnulledLog(hub, lcc, recipient, 20, 0x9401, 1));
+        _deliverReactiveVmLog(hub, _settlementAnnulledLog(hub, lcc, recipient, 20, 0x9401, 1));
         assertEq(hub.bufferedAnnulledDecreaseByKey(key), 20);
         assertFalse(_pendingExists(hub, lcc, recipient));
 
-        _deliverReactiveVmLog(hub,_settlementLog(hub, recipient, lcc, 50, 1, 0x9402, 2));
+        _deliverReactiveVmLog(hub, _settlementLog(hub, recipient, lcc, 50, 1, 0x9402, 2));
         (uint256 remaining, bool exists) = _pendingState(hub, key);
         assertTrue(exists);
         assertEq(remaining, 30);
@@ -630,7 +698,11 @@ contract HubRSCReconciliationTest is HubRSCTestBase {
     function test_buffersAnnulledLargerThanFirstQueued_carriesRemainderAcrossLaterQueueAdds() public {
         _clearSystemContract();
         HubRSC hub = new HubRSC(
-            DEFAULT_MAX_DISPATCH_ITEMS, originChainId, destinationChainId, liquidityHub, destinationReceiverContract,
+            DEFAULT_MAX_DISPATCH_ITEMS,
+            originChainId,
+            destinationChainId,
+            liquidityHub,
+            destinationReceiverContract,
             REACTIVE_CALLBACK_PROXY_FOR_TESTS
         );
 
@@ -638,17 +710,17 @@ contract HubRSCReconciliationTest is HubRSCTestBase {
         address lcc = makeAddr("lcc");
         bytes32 key = _computeKey(lcc, recipient);
 
-        _deliverReactiveVmLog(hub,_settlementAnnulledLog(hub, lcc, recipient, 120, 0x9411, 1));
+        _deliverReactiveVmLog(hub, _settlementAnnulledLog(hub, lcc, recipient, 120, 0x9411, 1));
         assertEq(hub.bufferedAnnulledDecreaseByKey(key), 120);
         assertFalse(_pendingExists(hub, lcc, recipient));
 
-        _deliverReactiveVmLog(hub,_settlementLog(hub, recipient, lcc, 100, 1, 0x9412, 2));
+        _deliverReactiveVmLog(hub, _settlementLog(hub, recipient, lcc, 100, 1, 0x9412, 2));
         (uint256 remaining, bool exists) = _pendingState(hub, key);
         assertFalse(exists);
         assertEq(remaining, 0);
         assertEq(hub.bufferedAnnulledDecreaseByKey(key), 20);
 
-        _deliverReactiveVmLog(hub,_settlementLog(hub, recipient, lcc, 50, 1, 0x9413, 3));
+        _deliverReactiveVmLog(hub, _settlementLog(hub, recipient, lcc, 50, 1, 0x9413, 3));
         (remaining, exists) = _pendingState(hub, key);
         assertTrue(exists);
         assertEq(remaining, 30);
@@ -659,7 +731,11 @@ contract HubRSCReconciliationTest is HubRSCTestBase {
     function test_buffersProcessedLargerThanFirstQueued_carriesSettledRemainder() public {
         _clearSystemContract();
         HubRSC hub = new HubRSC(
-            DEFAULT_MAX_DISPATCH_ITEMS, originChainId, destinationChainId, liquidityHub, destinationReceiverContract,
+            DEFAULT_MAX_DISPATCH_ITEMS,
+            originChainId,
+            destinationChainId,
+            liquidityHub,
+            destinationReceiverContract,
             REACTIVE_CALLBACK_PROXY_FOR_TESTS
         );
 
@@ -667,13 +743,13 @@ contract HubRSCReconciliationTest is HubRSCTestBase {
         address lcc = makeAddr("lcc");
         bytes32 key = _computeKey(lcc, recipient);
 
-        _deliverReactiveVmLog(hub,_settlementProcessedLogWithRequested(hub, lcc, recipient, 80, 80, 0x9421, 1));
+        _deliverReactiveVmLog(hub, _settlementProcessedLogWithRequested(hub, lcc, recipient, 80, 80, 0x9421, 1));
         (uint256 bufSettled, uint256 bufInflight) = _bufferedProcessedState(hub, key);
         assertEq(bufSettled, 80);
         assertEq(bufInflight, 0);
         assertFalse(_pendingExists(hub, lcc, recipient));
 
-        _deliverReactiveVmLog(hub,_settlementLog(hub, recipient, lcc, 50, 1, 0x9422, 2));
+        _deliverReactiveVmLog(hub, _settlementLog(hub, recipient, lcc, 50, 1, 0x9422, 2));
         (uint256 remaining, bool exists) = _pendingState(hub, key);
         assertFalse(exists);
         assertEq(remaining, 0);
@@ -681,7 +757,7 @@ contract HubRSCReconciliationTest is HubRSCTestBase {
         assertEq(bufSettled, 30);
         assertEq(bufInflight, 0);
 
-        _deliverReactiveVmLog(hub,_settlementLog(hub, recipient, lcc, 40, 1, 0x9423, 3));
+        _deliverReactiveVmLog(hub, _settlementLog(hub, recipient, lcc, 40, 1, 0x9423, 3));
         (remaining, exists) = _pendingState(hub, key);
         assertTrue(exists);
         assertEq(remaining, 10);
@@ -694,7 +770,11 @@ contract HubRSCReconciliationTest is HubRSCTestBase {
     function test_processedRequestedAmountNoLongerReleasesReservation() public {
         _clearSystemContract();
         HubRSC hub = new HubRSC(
-            DEFAULT_MAX_DISPATCH_ITEMS, originChainId, destinationChainId, liquidityHub, destinationReceiverContract,
+            DEFAULT_MAX_DISPATCH_ITEMS,
+            originChainId,
+            destinationChainId,
+            liquidityHub,
+            destinationReceiverContract,
             REACTIVE_CALLBACK_PROXY_FOR_TESTS
         );
 
@@ -702,11 +782,11 @@ contract HubRSCReconciliationTest is HubRSCTestBase {
         address lcc = makeAddr("lcc");
         bytes32 key = _computeKey(lcc, recipient);
 
-        _deliverReactiveVmLog(hub,_settlementLog(hub, recipient, lcc, 200, 1, 0x9711, 1));
-        _deliverReactiveVmLog(hub,liquidityAvailableLog(hub.liquidityHub(), lcc, 100, bytes32("mkt"), 0x9712, 2));
+        _deliverReactiveVmLog(hub, _settlementLog(hub, recipient, lcc, 200, 1, 0x9711, 1));
+        _deliverReactiveVmLog(hub, liquidityAvailableLog(hub.liquidityHub(), lcc, 100, bytes32("mkt"), 0x9712, 2));
         assertEq(hub.inFlightByKey(key), 100);
 
-        _deliverReactiveVmLog(hub,_settlementProcessedLogWithRequested(hub, lcc, recipient, 150, 150, 0x9713, 3));
+        _deliverReactiveVmLog(hub, _settlementProcessedLogWithRequested(hub, lcc, recipient, 150, 150, 0x9713, 3));
         (uint256 remaining, bool exists) = _pendingState(hub, key);
         assertTrue(exists);
         assertEq(remaining, 50);
@@ -715,16 +795,16 @@ contract HubRSCReconciliationTest is HubRSCTestBase {
         assertEq(bufSettled, 0);
         assertEq(bufInflight, 0);
 
-        _deliverReactiveVmLog(hub,_settlementSucceededLog(hub, lcc, recipient, 150, 1, 0x9714, 4));
+        _deliverReactiveVmLog(hub, _settlementSucceededLog(hub, lcc, recipient, 150, 1, 0x9714, 4));
         assertEq(hub.inFlightByKey(key), 0);
 
-        _deliverReactiveVmLog(hub,liquidityAvailableLog(hub.liquidityHub(), lcc, 50, bytes32("mkt"), 0x9715, 5));
+        _deliverReactiveVmLog(hub, liquidityAvailableLog(hub.liquidityHub(), lcc, 50, bytes32("mkt"), 0x9715, 5));
         assertEq(hub.inFlightByKey(key), 50);
         (remaining, exists) = _pendingState(hub, key);
         assertTrue(exists);
         assertEq(remaining, 50);
 
-        _deliverReactiveVmLog(hub,_settlementLog(hub, recipient, lcc, 10, 1, 0x9716, 6));
+        _deliverReactiveVmLog(hub, _settlementLog(hub, recipient, lcc, 10, 1, 0x9716, 6));
         assertEq(hub.inFlightByKey(key), 50);
         (remaining, exists) = _pendingState(hub, key);
         assertTrue(exists);
@@ -734,7 +814,11 @@ contract HubRSCReconciliationTest is HubRSCTestBase {
     function test_deduplicatesAuthoritativeProcessedByLogIdentity() public {
         _clearSystemContract();
         HubRSC hub = new HubRSC(
-            DEFAULT_MAX_DISPATCH_ITEMS, originChainId, destinationChainId, liquidityHub, destinationReceiverContract,
+            DEFAULT_MAX_DISPATCH_ITEMS,
+            originChainId,
+            destinationChainId,
+            liquidityHub,
+            destinationReceiverContract,
             REACTIVE_CALLBACK_PROXY_FOR_TESTS
         );
 
@@ -742,15 +826,15 @@ contract HubRSCReconciliationTest is HubRSCTestBase {
         address lcc = makeAddr("lcc");
         bytes32 key = _computeKey(lcc, recipient);
 
-        _deliverReactiveVmLog(hub,_settlementLog(hub, recipient, lcc, 80, 1, 0x9501, 1));
+        _deliverReactiveVmLog(hub, _settlementLog(hub, recipient, lcc, 80, 1, 0x9501, 1));
 
         IReactive.LogRecord memory processedLog = _settlementProcessedLog(hub, lcc, recipient, 30, 0x9502, 2);
         bytes32 authoritativeReportId = keccak256(
             abi.encode(processedLog.chain_id, processedLog._contract, processedLog.tx_hash, processedLog.log_index)
         );
 
-        _deliverReactiveVmLog(hub,processedLog);
-        _deliverReactiveVmLog(hub,processedLog);
+        _deliverReactiveVmLog(hub, processedLog);
+        _deliverReactiveVmLog(hub, processedLog);
 
         (uint256 remaining, bool exists) = _pendingState(hub, key);
         assertTrue(exists);
@@ -761,7 +845,11 @@ contract HubRSCReconciliationTest is HubRSCTestBase {
     function test_releasesUnusedInFlightReservationOnTrustedSuccess() public {
         _clearSystemContract();
         HubRSC hub = new HubRSC(
-            DEFAULT_MAX_DISPATCH_ITEMS, originChainId, destinationChainId, liquidityHub, destinationReceiverContract,
+            DEFAULT_MAX_DISPATCH_ITEMS,
+            originChainId,
+            destinationChainId,
+            liquidityHub,
+            destinationReceiverContract,
             REACTIVE_CALLBACK_PROXY_FOR_TESTS
         );
 
@@ -769,12 +857,12 @@ contract HubRSCReconciliationTest is HubRSCTestBase {
         address lcc = makeAddr("lcc");
         bytes32 key = _computeKey(lcc, recipient);
 
-        _deliverReactiveVmLog(hub,_settlementLog(hub, recipient, lcc, 100, 1, 0x9601, 1));
-        _deliverReactiveVmLog(hub,liquidityAvailableLog(hub.liquidityHub(), lcc, 100, bytes32("mkt"), 0x9602, 2));
+        _deliverReactiveVmLog(hub, _settlementLog(hub, recipient, lcc, 100, 1, 0x9601, 1));
+        _deliverReactiveVmLog(hub, liquidityAvailableLog(hub.liquidityHub(), lcc, 100, bytes32("mkt"), 0x9602, 2));
         assertEq(hub.inFlightByKey(key), 100);
 
-        _deliverReactiveVmLog(hub,_settlementProcessedLogWithRequested(hub, lcc, recipient, 60, 100, 0x9603, 3));
-        _deliverReactiveVmLog(hub,_settlementSucceededLog(hub, lcc, recipient, 100, 1, 0x9604, 4));
+        _deliverReactiveVmLog(hub, _settlementProcessedLogWithRequested(hub, lcc, recipient, 60, 100, 0x9603, 3));
+        _deliverReactiveVmLog(hub, _settlementSucceededLog(hub, lcc, recipient, 100, 1, 0x9604, 4));
 
         (uint256 remaining, bool exists) = _pendingState(hub, key);
         assertTrue(exists);
@@ -788,7 +876,11 @@ contract HubRSCReconciliationTest is HubRSCTestBase {
     function test_exaggeratedSuccessAmountReleasesOnlyAttemptReservation() public {
         _clearSystemContract();
         HubRSC hub = new HubRSC(
-            DEFAULT_MAX_DISPATCH_ITEMS, originChainId, destinationChainId, liquidityHub, destinationReceiverContract,
+            DEFAULT_MAX_DISPATCH_ITEMS,
+            originChainId,
+            destinationChainId,
+            liquidityHub,
+            destinationReceiverContract,
             REACTIVE_CALLBACK_PROXY_FOR_TESTS
         );
 
@@ -797,7 +889,7 @@ contract HubRSCReconciliationTest is HubRSCTestBase {
         bytes32 key = _computeKey(lcc, recipient);
 
         uint256 attemptId = _dispatchSingleAttemptIdAfterQueue(hub, lcc, recipient, 100, 0x9605, 1, 0x9606, 2);
-        _deliverReactiveVmLog(hub,_settlementSucceededLog(hub, lcc, recipient, 1_000_000, attemptId, 0x9607, 3));
+        _deliverReactiveVmLog(hub, _settlementSucceededLog(hub, lcc, recipient, 1_000_000, attemptId, 0x9607, 3));
 
         assertEq(hub.inFlightByKey(key), 0);
         assertEq(_attemptReservationAmount(hub, attemptId), 0);
@@ -809,7 +901,11 @@ contract HubRSCReconciliationTest is HubRSCTestBase {
     function test_exaggeratedSuccessAmountDoesNotRedispatchBeforeProcessedReconciliation() public {
         _clearSystemContract();
         HubRSC hub = new HubRSC(
-            DEFAULT_MAX_DISPATCH_ITEMS, originChainId, destinationChainId, liquidityHub, destinationReceiverContract,
+            DEFAULT_MAX_DISPATCH_ITEMS,
+            originChainId,
+            destinationChainId,
+            liquidityHub,
+            destinationReceiverContract,
             REACTIVE_CALLBACK_PROXY_FOR_TESTS
         );
 
@@ -817,7 +913,7 @@ contract HubRSCReconciliationTest is HubRSCTestBase {
         address lcc = makeAddr("lcc");
 
         uint256 attemptId = _dispatchSingleAttemptIdAfterQueue(hub, lcc, recipient, 100, 0x9608, 1, 0x9609, 2);
-        _deliverReactiveVmLog(hub,_settlementSucceededLog(hub, lcc, recipient, 1_000_000, attemptId, 0x960A, 3));
+        _deliverReactiveVmLog(hub, _settlementSucceededLog(hub, lcc, recipient, 1_000_000, attemptId, 0x960A, 3));
 
         _assertNoProcessSettlementsDispatched(hub, lcc, 100, bytes32("mkt"), 0x960B, 4);
     }
@@ -825,7 +921,11 @@ contract HubRSCReconciliationTest is HubRSCTestBase {
     function test_partialFillOrderingWithExaggeratedSuccessLeavesOnlyRemainderDispatchable() public {
         _clearSystemContract();
         HubRSC hub = new HubRSC(
-            DEFAULT_MAX_DISPATCH_ITEMS, originChainId, destinationChainId, liquidityHub, destinationReceiverContract,
+            DEFAULT_MAX_DISPATCH_ITEMS,
+            originChainId,
+            destinationChainId,
+            liquidityHub,
+            destinationReceiverContract,
             REACTIVE_CALLBACK_PROXY_FOR_TESTS
         );
 
@@ -834,8 +934,8 @@ contract HubRSCReconciliationTest is HubRSCTestBase {
         bytes32 key = _computeKey(lcc, recipient);
 
         uint256 attemptId = _dispatchSingleAttemptIdAfterQueue(hub, lcc, recipient, 100, 0x960C, 1, 0x960D, 2);
-        _deliverReactiveVmLog(hub,_settlementProcessedLogWithRequested(hub, lcc, recipient, 60, 100, 0x960E, 3));
-        _deliverReactiveVmLog(hub,_settlementSucceededLog(hub, lcc, recipient, 1_000_000, attemptId, 0x960F, 4));
+        _deliverReactiveVmLog(hub, _settlementProcessedLogWithRequested(hub, lcc, recipient, 60, 100, 0x960E, 3));
+        _deliverReactiveVmLog(hub, _settlementSucceededLog(hub, lcc, recipient, 1_000_000, attemptId, 0x960F, 4));
 
         (uint256 remaining, bool exists) = _pendingState(hub, key);
         assertTrue(exists);
@@ -849,7 +949,11 @@ contract HubRSCReconciliationTest is HubRSCTestBase {
     function test_successBeforeProcessedDoesNotRedispatchSameKeyUntilProcessedReconciles() public {
         _clearSystemContract();
         HubRSC hub = new HubRSC(
-            DEFAULT_MAX_DISPATCH_ITEMS, originChainId, destinationChainId, liquidityHub, destinationReceiverContract,
+            DEFAULT_MAX_DISPATCH_ITEMS,
+            originChainId,
+            destinationChainId,
+            liquidityHub,
+            destinationReceiverContract,
             REACTIVE_CALLBACK_PROXY_FOR_TESTS
         );
 
@@ -857,12 +961,12 @@ contract HubRSCReconciliationTest is HubRSCTestBase {
         address lcc = makeAddr("lcc");
         bytes32 key = _computeKey(lcc, recipient);
 
-        _deliverReactiveVmLog(hub,_settlementLog(hub, recipient, lcc, 100, 1, 0x9610, 1));
+        _deliverReactiveVmLog(hub, _settlementLog(hub, recipient, lcc, 100, 1, 0x9610, 1));
 
         uint256 attemptA = _dispatchSingleAttemptId(hub, lcc, 100, bytes32("mkt"), 0x9611, 2);
         assertEq(hub.inFlightByKey(key), 100);
 
-        _deliverReactiveVmLog(hub,_settlementSucceededLog(hub, lcc, recipient, 100, attemptA, 0x9612, 3));
+        _deliverReactiveVmLog(hub, _settlementSucceededLog(hub, lcc, recipient, 100, attemptA, 0x9612, 3));
         assertEq(hub.inFlightByKey(key), 0);
         (uint256 awaitingProcessed, uint256 processedCredit) = _reconciliationState(hub, key);
         assertEq(awaitingProcessed, 100);
@@ -874,7 +978,7 @@ contract HubRSCReconciliationTest is HubRSCTestBase {
         assertEq(processedCredit, 0);
 
         vm.recordLogs();
-        _deliverReactiveVmLog(hub,_settlementProcessedLogWithRequested(hub, lcc, recipient, 60, 100, 0x9614, 5));
+        _deliverReactiveVmLog(hub, _settlementProcessedLogWithRequested(hub, lcc, recipient, 60, 100, 0x9614, 5));
         Vm.Log[] memory entries = vm.getRecordedLogs();
 
         (uint256 remaining, bool exists) = _pendingState(hub, key);
@@ -897,7 +1001,11 @@ contract HubRSCReconciliationTest is HubRSCTestBase {
     function test_trustedSuccessReleasesOnlyMatchingAttemptWhenLaterReservationIsLive() public {
         _clearSystemContract();
         HubRSC hub = new HubRSC(
-            DEFAULT_MAX_DISPATCH_ITEMS, originChainId, destinationChainId, liquidityHub, destinationReceiverContract,
+            DEFAULT_MAX_DISPATCH_ITEMS,
+            originChainId,
+            destinationChainId,
+            liquidityHub,
+            destinationReceiverContract,
             REACTIVE_CALLBACK_PROXY_FOR_TESTS
         );
 
@@ -905,11 +1013,11 @@ contract HubRSCReconciliationTest is HubRSCTestBase {
         address lcc = makeAddr("lcc");
         bytes32 key = _computeKey(lcc, recipient);
 
-        _deliverReactiveVmLog(hub,_settlementLog(hub, recipient, lcc, 100, 1, 0x9620, 1));
+        _deliverReactiveVmLog(hub, _settlementLog(hub, recipient, lcc, 100, 1, 0x9620, 1));
 
         uint256 attemptA = _dispatchSingleAttemptId(hub, lcc, 100, bytes32("mkt"), 0x9621, 2);
 
-        _deliverReactiveVmLog(hub,_settlementLog(hub, recipient, lcc, 100, 2, 0x9622, 3));
+        _deliverReactiveVmLog(hub, _settlementLog(hub, recipient, lcc, 100, 2, 0x9622, 3));
 
         uint256 attemptB = _dispatchSingleAttemptId(hub, lcc, 100, bytes32("mkt"), 0x9623, 4);
 
@@ -919,8 +1027,8 @@ contract HubRSCReconciliationTest is HubRSCTestBase {
         assertEq(attemptAAmount, 100);
         assertEq(attemptBAmount, 100);
 
-        _deliverReactiveVmLog(hub,_settlementProcessedLogWithRequested(hub, lcc, recipient, 100, 100, 0x9624, 5));
-        _deliverReactiveVmLog(hub,_settlementSucceededLog(hub, lcc, recipient, 100, attemptA, 0x9625, 6));
+        _deliverReactiveVmLog(hub, _settlementProcessedLogWithRequested(hub, lcc, recipient, 100, 100, 0x9624, 5));
+        _deliverReactiveVmLog(hub, _settlementSucceededLog(hub, lcc, recipient, 100, attemptA, 0x9625, 6));
 
         (uint256 remaining, bool exists) = _pendingState(hub, key);
         assertTrue(exists);
@@ -938,7 +1046,11 @@ contract HubRSCReconciliationTest is HubRSCTestBase {
     function test_releasesInFlightWhenTrustedSuccessSettlesZero() public {
         _clearSystemContract();
         HubRSC hub = new HubRSC(
-            DEFAULT_MAX_DISPATCH_ITEMS, originChainId, destinationChainId, liquidityHub, destinationReceiverContract,
+            DEFAULT_MAX_DISPATCH_ITEMS,
+            originChainId,
+            destinationChainId,
+            liquidityHub,
+            destinationReceiverContract,
             REACTIVE_CALLBACK_PROXY_FOR_TESTS
         );
 
@@ -946,11 +1058,11 @@ contract HubRSCReconciliationTest is HubRSCTestBase {
         address lcc = makeAddr("lcc");
         bytes32 key = _computeKey(lcc, recipient);
 
-        _deliverReactiveVmLog(hub,_settlementLog(hub, recipient, lcc, 100, 1, 0x9611, 1));
-        _deliverReactiveVmLog(hub,liquidityAvailableLog(hub.liquidityHub(), lcc, 100, bytes32("mkt"), 0x9612, 2));
+        _deliverReactiveVmLog(hub, _settlementLog(hub, recipient, lcc, 100, 1, 0x9611, 1));
+        _deliverReactiveVmLog(hub, liquidityAvailableLog(hub.liquidityHub(), lcc, 100, bytes32("mkt"), 0x9612, 2));
         assertEq(hub.inFlightByKey(key), 100);
 
-        _deliverReactiveVmLog(hub,_settlementSucceededLog(hub, lcc, recipient, 100, 1, 0x9613, 3));
+        _deliverReactiveVmLog(hub, _settlementSucceededLog(hub, lcc, recipient, 100, 1, 0x9613, 3));
 
         (uint256 remaining, bool exists) = _pendingState(hub, key);
         assertTrue(exists);

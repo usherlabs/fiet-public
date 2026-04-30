@@ -15,7 +15,11 @@ contract HubRSCZeroBatchRetryTest is HubRSCTestBase {
     function test_zeroBatchSharedUnderlyingScanEmitsRetryThenDispatchesNextWindow() public {
         _clearSystemContract();
         HubRSC hub = new HubRSC(
-            DEFAULT_MAX_DISPATCH_ITEMS, originChainId, destinationChainId, liquidityHub, destinationReceiverContract,
+            DEFAULT_MAX_DISPATCH_ITEMS,
+            originChainId,
+            destinationChainId,
+            liquidityHub,
+            destinationReceiverContract,
             REACTIVE_CALLBACK_PROXY_FOR_TESTS
         );
 
@@ -23,24 +27,27 @@ contract HubRSCZeroBatchRetryTest is HubRSCTestBase {
         address lccA = makeAddr("lccA");
         address lccB = makeAddr("lccB");
 
-        _deliverReactiveVmLog(hub,_lccCreatedLog(hub, underlying, lccA, bytes32("mktA"), 0x8520, 1));
-        _deliverReactiveVmLog(hub,_lccCreatedLog(hub, underlying, lccB, bytes32("mktB"), 0x8521, 2));
+        _deliverReactiveVmLog(hub, _lccCreatedLog(hub, underlying, lccA, bytes32("mktA"), 0x8520, 1));
+        _deliverReactiveVmLog(hub, _lccCreatedLog(hub, underlying, lccB, bytes32("mktB"), 0x8521, 2));
 
         for (uint256 i = 0; i < hub.maxDispatchItems(); i++) {
             address recipient = address(uint160(i + 1));
-            _deliverReactiveVmLog(hub,_settlementLog(hub, recipient, lccB, 1, i + 1, 0x8522 + i, i + 1));
+            _deliverReactiveVmLog(hub, _settlementLog(hub, recipient, lccB, 1, i + 1, 0x8522 + i, i + 1));
 
             bytes32 key = _computeKey(lccB, recipient);
             stdstore.target(address(hub)).sig("inFlightByKey(bytes32)").with_key(key).checked_write(uint256(1));
         }
 
         address laterRecipient = address(uint160(hub.maxDispatchItems() + 1));
-        _deliverReactiveVmLog(hub,
+        _deliverReactiveVmLog(
+            hub,
             _settlementLog(hub, laterRecipient, lccB, 1, hub.maxDispatchItems() + 1, 0x8600, hub.maxDispatchItems() + 1)
         );
 
         vm.recordLogs();
-        _deliverReactiveVmLog(hub,liquidityAvailableLog(hub.liquidityHub(), lccA, underlying, 100, bytes32("mktA"), 0x8601, 1));
+        _deliverReactiveVmLog(
+            hub, liquidityAvailableLog(hub.liquidityHub(), lccA, underlying, 100, bytes32("mktA"), 0x8601, 1)
+        );
         Vm.Log[] memory firstEntries = vm.getRecordedLogs();
 
         bytes memory firstProcessPayload =
@@ -51,7 +58,7 @@ contract HubRSCZeroBatchRetryTest is HubRSCTestBase {
         assertEq(hub.zeroBatchRetryCreditsRemaining(underlying), 0);
 
         vm.recordLogs();
-        _deliverReactiveVmLog(hub,_moreLiquidityAvailableLog(hub, lccA, 100, 0x8602, 2));
+        _deliverReactiveVmLog(hub, _moreLiquidityAvailableLog(hub, lccA, 100, 0x8602, 2));
         Vm.Log[] memory secondEntries = vm.getRecordedLogs();
 
         (, address[] memory lccs, address[] memory recipients, uint256[] memory amounts,) =
@@ -69,7 +76,11 @@ contract HubRSCZeroBatchRetryTest is HubRSCTestBase {
     function test_zeroBatchSharedUnderlyingLongReservedPrefixDispatchesAfterMultipleRetries() public {
         _clearSystemContract();
         HubRSC hub = new HubRSC(
-            DEFAULT_MAX_DISPATCH_ITEMS, originChainId, destinationChainId, liquidityHub, destinationReceiverContract,
+            DEFAULT_MAX_DISPATCH_ITEMS,
+            originChainId,
+            destinationChainId,
+            liquidityHub,
+            destinationReceiverContract,
             REACTIVE_CALLBACK_PROXY_FOR_TESTS
         );
 
@@ -77,29 +88,31 @@ contract HubRSCZeroBatchRetryTest is HubRSCTestBase {
         address lccA = makeAddr("lccA");
         address lccB = makeAddr("lccB");
 
-        _deliverReactiveVmLog(hub,_lccCreatedLog(hub, underlying, lccA, bytes32("mktA"), 0x9500, 1));
-        _deliverReactiveVmLog(hub,_lccCreatedLog(hub, underlying, lccB, bytes32("mktB"), 0x9501, 2));
+        _deliverReactiveVmLog(hub, _lccCreatedLog(hub, underlying, lccA, bytes32("mktA"), 0x9500, 1));
+        _deliverReactiveVmLog(hub, _lccCreatedLog(hub, underlying, lccB, bytes32("mktB"), 0x9501, 2));
 
         uint256 m = hub.maxDispatchItems();
         for (uint256 i = 0; i < 2 * m + 1; i++) {
             address recipient = address(uint160(i + 1));
-            _deliverReactiveVmLog(hub,_settlementLog(hub, recipient, lccB, 1, i + 1, 0x9510 + i, i + 1));
+            _deliverReactiveVmLog(hub, _settlementLog(hub, recipient, lccB, 1, i + 1, 0x9510 + i, i + 1));
 
             bytes32 key = _computeKey(lccB, recipient);
             stdstore.target(address(hub)).sig("inFlightByKey(bytes32)").with_key(key).checked_write(uint256(1));
         }
 
         address laterRecipient = address(uint160(2 * m + 2));
-        _deliverReactiveVmLog(hub,_settlementLog(hub, laterRecipient, lccB, 1, 2 * m + 2, 0x9600, 2 * m + 2));
+        _deliverReactiveVmLog(hub, _settlementLog(hub, laterRecipient, lccB, 1, 2 * m + 2, 0x9600, 2 * m + 2));
 
         vm.recordLogs();
-        _deliverReactiveVmLog(hub,liquidityAvailableLog(hub.liquidityHub(), lccA, underlying, 100, bytes32("mktA"), 0x8601, 1));
+        _deliverReactiveVmLog(
+            hub, liquidityAvailableLog(hub.liquidityHub(), lccA, underlying, 100, bytes32("mktA"), 0x8601, 1)
+        );
         Vm.Log[] memory firstEntries = vm.getRecordedLogs();
         assertEq(_findCallbackPayloadBySelector(firstEntries, ReactiveConstants.PROCESS_SETTLEMENTS_SELECTOR).length, 0);
         assertTrue(_moreLiquidityAvailableEventCount(firstEntries) > 0);
 
         vm.recordLogs();
-        _deliverReactiveVmLog(hub,_moreLiquidityAvailableLog(hub, lccA, 100, 0x8602, 2));
+        _deliverReactiveVmLog(hub, _moreLiquidityAvailableLog(hub, lccA, 100, 0x8602, 2));
         Vm.Log[] memory secondEntries = vm.getRecordedLogs();
         assertEq(
             _findCallbackPayloadBySelector(secondEntries, ReactiveConstants.PROCESS_SETTLEMENTS_SELECTOR).length, 0
@@ -107,7 +120,7 @@ contract HubRSCZeroBatchRetryTest is HubRSCTestBase {
         assertTrue(_moreLiquidityAvailableEventCount(secondEntries) > 0);
 
         vm.recordLogs();
-        _deliverReactiveVmLog(hub,_moreLiquidityAvailableLog(hub, lccA, 100, 0x8603, 3));
+        _deliverReactiveVmLog(hub, _moreLiquidityAvailableLog(hub, lccA, 100, 0x8603, 3));
         Vm.Log[] memory thirdEntries = vm.getRecordedLogs();
 
         (, address[] memory lccs, address[] memory recipients, uint256[] memory amounts,) =
@@ -125,7 +138,11 @@ contract HubRSCZeroBatchRetryTest is HubRSCTestBase {
     function test_zeroBatchRetryCreditsDoNotReseedOnFollowupWhenAllReserved() public {
         _clearSystemContract();
         HubRSC hub = new HubRSC(
-            DEFAULT_MAX_DISPATCH_ITEMS, originChainId, destinationChainId, liquidityHub, destinationReceiverContract,
+            DEFAULT_MAX_DISPATCH_ITEMS,
+            originChainId,
+            destinationChainId,
+            liquidityHub,
+            destinationReceiverContract,
             REACTIVE_CALLBACK_PROXY_FOR_TESTS
         );
 
@@ -133,20 +150,22 @@ contract HubRSCZeroBatchRetryTest is HubRSCTestBase {
         address lccA = makeAddr("lccA");
         address lccB = makeAddr("lccB");
 
-        _deliverReactiveVmLog(hub,_lccCreatedLog(hub, underlying, lccA, bytes32("mktA"), 0x9700, 1));
-        _deliverReactiveVmLog(hub,_lccCreatedLog(hub, underlying, lccB, bytes32("mktB"), 0x9701, 2));
+        _deliverReactiveVmLog(hub, _lccCreatedLog(hub, underlying, lccA, bytes32("mktA"), 0x9700, 1));
+        _deliverReactiveVmLog(hub, _lccCreatedLog(hub, underlying, lccB, bytes32("mktB"), 0x9701, 2));
 
         _queueReservedEntries(hub, lccB, 0, 0x9710, 1);
 
         vm.recordLogs();
-        _deliverReactiveVmLog(hub,liquidityAvailableLog(hub.liquidityHub(), lccA, underlying, 100, bytes32("mktA"), 0x9720, 1));
+        _deliverReactiveVmLog(
+            hub, liquidityAvailableLog(hub.liquidityHub(), lccA, underlying, 100, bytes32("mktA"), 0x9720, 1)
+        );
         Vm.Log[] memory firstEntries = vm.getRecordedLogs();
         assertEq(_findCallbackPayloadBySelector(firstEntries, ReactiveConstants.PROCESS_SETTLEMENTS_SELECTOR).length, 0);
         assertEq(_moreLiquidityAvailableEventCount(firstEntries), 0);
         assertEq(hub.zeroBatchRetryCreditsRemaining(underlying), 0);
 
         vm.recordLogs();
-        _deliverReactiveVmLog(hub,_moreLiquidityAvailableLog(hub, lccA, 100, 0x9721, 2));
+        _deliverReactiveVmLog(hub, _moreLiquidityAvailableLog(hub, lccA, 100, 0x9721, 2));
         Vm.Log[] memory secondEntries = vm.getRecordedLogs();
         assertEq(_callbackCount(secondEntries), 0);
         assertEq(hub.zeroBatchRetryCreditsRemaining(underlying), 0);
@@ -156,7 +175,11 @@ contract HubRSCZeroBatchRetryTest is HubRSCTestBase {
     function test_nonEmptyBatchContinuationReachesLaterWindowAfterBlockedReentry() public {
         _clearSystemContract();
         HubRSC hub = new HubRSC(
-            DEFAULT_MAX_DISPATCH_ITEMS, originChainId, destinationChainId, liquidityHub, destinationReceiverContract,
+            DEFAULT_MAX_DISPATCH_ITEMS,
+            originChainId,
+            destinationChainId,
+            liquidityHub,
+            destinationReceiverContract,
             REACTIVE_CALLBACK_PROXY_FOR_TESTS
         );
 
@@ -164,21 +187,23 @@ contract HubRSCZeroBatchRetryTest is HubRSCTestBase {
         address lccA = makeAddr("lccA");
         address lccB = makeAddr("lccB");
         uint256 m = hub.maxDispatchItems();
-        _deliverReactiveVmLog(hub,_lccCreatedLog(hub, underlying, lccA, bytes32("mktA"), 0x9800, 1));
-        _deliverReactiveVmLog(hub,_lccCreatedLog(hub, underlying, lccB, bytes32("mktB"), 0x9801, 2));
+        _deliverReactiveVmLog(hub, _lccCreatedLog(hub, underlying, lccA, bytes32("mktA"), 0x9800, 1));
+        _deliverReactiveVmLog(hub, _lccCreatedLog(hub, underlying, lccB, bytes32("mktB"), 0x9801, 2));
 
         for (uint256 i = 0; i < m; i++) {
             address recipient = address(uint160(i + 1));
-            _deliverReactiveVmLog(hub,_settlementLog(hub, recipient, lccB, 1, i + 1, 0x9810 + i, i + 1));
+            _deliverReactiveVmLog(hub, _settlementLog(hub, recipient, lccB, 1, i + 1, 0x9810 + i, i + 1));
         }
 
         _queueReservedEntries(hub, lccB, m, 0x9900, m + 1);
 
         address laterRecipient = address(uint160(2 * m + 1));
-        _deliverReactiveVmLog(hub,_settlementLog(hub, laterRecipient, lccB, 1, 2 * m + 1, 0x9A00, 2 * m + 1));
+        _deliverReactiveVmLog(hub, _settlementLog(hub, laterRecipient, lccB, 1, 2 * m + 1, 0x9A00, 2 * m + 1));
 
         vm.recordLogs();
-        _deliverReactiveVmLog(hub,liquidityAvailableLog(hub.liquidityHub(), lccA, underlying, 1_000, bytes32("mktA"), 0x9A10, 1));
+        _deliverReactiveVmLog(
+            hub, liquidityAvailableLog(hub.liquidityHub(), lccA, underlying, 1_000, bytes32("mktA"), 0x9A10, 1)
+        );
         Vm.Log[] memory firstEntries = vm.getRecordedLogs();
         _assertDispatchedLength(firstEntries, m);
 
@@ -186,7 +211,7 @@ contract HubRSCZeroBatchRetryTest is HubRSCTestBase {
         assertEq(hub.zeroBatchRetryCreditsRemaining(underlying), 0);
 
         vm.recordLogs();
-        _deliverReactiveVmLog(hub,_moreLiquidityAvailableLog(hub, lccA, firstRemainingLiquidity, 0x9A11, 2));
+        _deliverReactiveVmLog(hub, _moreLiquidityAvailableLog(hub, lccA, firstRemainingLiquidity, 0x9A11, 2));
         Vm.Log[] memory secondEntries = vm.getRecordedLogs();
         assertEq(
             _findCallbackPayloadBySelector(secondEntries, ReactiveConstants.PROCESS_SETTLEMENTS_SELECTOR).length, 0
@@ -196,7 +221,7 @@ contract HubRSCZeroBatchRetryTest is HubRSCTestBase {
         assertGt(hub.zeroBatchRetryCreditsRemaining(underlying), 0);
 
         vm.recordLogs();
-        _deliverReactiveVmLog(hub,_moreLiquidityAvailableLog(hub, lccA, secondRemainingLiquidity, 0x9A12, 3));
+        _deliverReactiveVmLog(hub, _moreLiquidityAvailableLog(hub, lccA, secondRemainingLiquidity, 0x9A12, 3));
         Vm.Log[] memory thirdEntries = vm.getRecordedLogs();
 
         (, address[] memory lccs, address[] memory recipients, uint256[] memory amounts,) =
@@ -214,7 +239,11 @@ contract HubRSCZeroBatchRetryTest is HubRSCTestBase {
     function test_clearsStaleSharedRetryFlagWhenFollowupFallsBackToPerLcc() public {
         _clearSystemContract();
         HubRSC hub = new HubRSC(
-            DEFAULT_MAX_DISPATCH_ITEMS, originChainId, destinationChainId, liquidityHub, destinationReceiverContract,
+            DEFAULT_MAX_DISPATCH_ITEMS,
+            originChainId,
+            destinationChainId,
+            liquidityHub,
+            destinationReceiverContract,
             REACTIVE_CALLBACK_PROXY_FOR_TESTS
         );
 
@@ -222,20 +251,22 @@ contract HubRSCZeroBatchRetryTest is HubRSCTestBase {
         address lccA = makeAddr("lccA");
         address lccB = makeAddr("lccB");
 
-        _deliverReactiveVmLog(hub,_lccCreatedLog(hub, underlying, lccA, bytes32("mktA"), 0x8610, 1));
-        _deliverReactiveVmLog(hub,_lccCreatedLog(hub, underlying, lccB, bytes32("mktB"), 0x8611, 2));
+        _deliverReactiveVmLog(hub, _lccCreatedLog(hub, underlying, lccA, bytes32("mktA"), 0x8610, 1));
+        _deliverReactiveVmLog(hub, _lccCreatedLog(hub, underlying, lccB, bytes32("mktB"), 0x8611, 2));
 
         uint256 m = hub.maxDispatchItems();
         for (uint256 i = 0; i < 2 * m + 1; i++) {
             address recipient = address(uint160(i + 1));
-            _deliverReactiveVmLog(hub,_settlementLog(hub, recipient, lccB, 1, i + 1, 0x8612 + i, i + 1));
+            _deliverReactiveVmLog(hub, _settlementLog(hub, recipient, lccB, 1, i + 1, 0x8612 + i, i + 1));
 
             bytes32 key = _computeKey(lccB, recipient);
             stdstore.target(address(hub)).sig("inFlightByKey(bytes32)").with_key(key).checked_write(uint256(1));
         }
 
         vm.recordLogs();
-        _deliverReactiveVmLog(hub,liquidityAvailableLog(hub.liquidityHub(), lccA, underlying, 100, bytes32("mktA"), 0x8620, 1));
+        _deliverReactiveVmLog(
+            hub, liquidityAvailableLog(hub.liquidityHub(), lccA, underlying, 100, bytes32("mktA"), 0x8620, 1)
+        );
         Vm.Log[] memory firstEntries = vm.getRecordedLogs();
 
         assertTrue(_moreLiquidityAvailableEventCount(firstEntries) > 0);
@@ -243,23 +274,27 @@ contract HubRSCZeroBatchRetryTest is HubRSCTestBase {
 
         for (uint256 i = 0; i < 2 * m + 1; i++) {
             address recipient = address(uint160(i + 1));
-            _deliverReactiveVmLog(hub,_settlementProcessedLogWithRequested(hub, lccB, recipient, 1, 1, 0x8630 + i, i + 1));
+            _deliverReactiveVmLog(
+                hub, _settlementProcessedLogWithRequested(hub, lccB, recipient, 1, 1, 0x8630 + i, i + 1)
+            );
             _clearSyntheticReservationAndPrune(hub, lccB, recipient, 0x8730 + i, i + 1);
         }
         assertEq(hub.queueSize(), 0);
 
         vm.recordLogs();
-        _deliverReactiveVmLog(hub,_moreLiquidityAvailableLog(hub, lccA, 100, 0x8640, 1));
+        _deliverReactiveVmLog(hub, _moreLiquidityAvailableLog(hub, lccA, 100, 0x8640, 1));
         Vm.Log[] memory fallbackEntries = vm.getRecordedLogs();
         assertEq(_callbackCount(fallbackEntries), 0);
         assertEq(hub.zeroBatchRetryCreditsRemaining(underlying), 0);
 
         _queueReservedEntries(hub, lccB, 100, 0x8650, 101);
         address laterRecipient = address(uint160(m + 101));
-        _deliverReactiveVmLog(hub,_settlementLog(hub, laterRecipient, lccB, 1, m + 101, 0x8661, m + 101));
+        _deliverReactiveVmLog(hub, _settlementLog(hub, laterRecipient, lccB, 1, m + 101, 0x8661, m + 101));
 
         vm.recordLogs();
-        _deliverReactiveVmLog(hub,liquidityAvailableLog(hub.liquidityHub(), lccA, underlying, 100, bytes32("mktA"), 0x8660, 1));
+        _deliverReactiveVmLog(
+            hub, liquidityAvailableLog(hub.liquidityHub(), lccA, underlying, 100, bytes32("mktA"), 0x8660, 1)
+        );
         Vm.Log[] memory secondEntries = vm.getRecordedLogs();
 
         assertTrue(_moreLiquidityAvailableEventCount(secondEntries) > 0);

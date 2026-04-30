@@ -51,12 +51,9 @@ contract MockLiquidityHub {
     }
 
     /// @notice Helper to emit `SettlementProcessed` without mutating settlement counters.
-    function triggerSettlementProcessed(
-        address lcc,
-        address recipient,
-        uint256 settledAmount,
-        uint256 requestedAmount
-    ) external {
+    function triggerSettlementProcessed(address lcc, address recipient, uint256 settledAmount, uint256 requestedAmount)
+        external
+    {
         emit SettlementProcessed(lcc, recipient, settledAmount, requestedAmount);
     }
 

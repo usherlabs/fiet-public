@@ -22,8 +22,11 @@ pragma solidity ^0.8.26;
 /// ## Required pipeline (state channel)
 ///
 /// ```text
-/// protocol log -> react() [vmOnly] -> emit Callback(reactChainId, canonicalReactiveHub, gas, abi.encodeCall(applyCanonicalProtocolLog, (log)))
-///     -> callback proxy -> applyCanonicalProtocolLog [onlyReactiveCallbackProxy] -> _syncObservedSystemDebt + _handle*
+/// protocol log -> react() [vmOnly] -> emit Callback(reactChainId, canonicalReactiveHub, gas, abi.encodeCall(applyCanonicalProtocolLog, (address(0), log)))
+///     -> callback proxy -> applyCanonicalProtocolLog(callbackOrigin, log) [onlyReactiveCallbackProxy] -> _syncObservedSystemDebt + _handle*
+///
+/// The leading `callbackOrigin` placeholder matches Reactive's callback ABI convention used by destination callbacks:
+/// the callback proxy injects the ReactVM origin into the first callback argument before invoking the target.
 /// ```
 ///
 /// The `_contract` field must be the **canonical** hub address on the Reactive chain (`canonicalReactiveHub`),

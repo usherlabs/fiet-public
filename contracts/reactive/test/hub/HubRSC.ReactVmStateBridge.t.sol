@@ -30,7 +30,30 @@ contract HubRSCReactVmStateBridgeTest is HubRSCTestBase {
         assertFalse(hub.hasUnderlyingForLcc(lcc));
 
         vm.prank(REACTIVE_CALLBACK_PROXY_FOR_TESTS);
-        hub.applyCanonicalProtocolLog(log);
+        hub.applyCanonicalProtocolLog(address(this), log);
+        assertTrue(hub.hasUnderlyingForLcc(lcc));
+    }
+
+    function test_applyCanonicalProtocolLogAcceptsInjectedCallbackOrigin() public {
+        _clearSystemContract();
+        HubRSC hub = new HubRSC(
+            DEFAULT_MAX_DISPATCH_ITEMS,
+            originChainId,
+            destinationChainId,
+            liquidityHub,
+            destinationReceiverContract,
+            REACTIVE_CALLBACK_PROXY_FOR_TESTS
+        );
+
+        address rvmOrigin = makeAddr("rvmOrigin");
+        address underlying = makeAddr("underlying");
+        address lcc = makeAddr("lcc");
+        IReactive.LogRecord memory log = _lccCreatedLog(hub, underlying, lcc, bytes32("mkt"), 0xA003, 1);
+
+        vm.prank(REACTIVE_CALLBACK_PROXY_FOR_TESTS);
+        hub.applyCanonicalProtocolLog(rvmOrigin, log);
+
+        assertEq(hub.underlyingByLcc(lcc), underlying);
         assertTrue(hub.hasUnderlyingForLcc(lcc));
     }
 
@@ -49,6 +72,6 @@ contract HubRSCReactVmStateBridgeTest is HubRSCTestBase {
             _lccCreatedLog(hub, makeAddr("underlying"), makeAddr("lcc"), bytes32("mkt"), 0xA002, 1);
 
         vm.expectRevert(AbstractHubReactiveBridge.UnauthorizedReactiveCallback.selector);
-        hub.applyCanonicalProtocolLog(log);
+        hub.applyCanonicalProtocolLog(address(this), log);
     }
 }

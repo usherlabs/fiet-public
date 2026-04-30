@@ -42,6 +42,9 @@ e2e_integration() {
   echo "  POLL_TIMEOUT_SECONDS=${POLL_TIMEOUT_SECONDS:-180}"
   echo "  POLL_INTERVAL_SECONDS=${POLL_INTERVAL_SECONDS:-5}"
 
+  local reactive_diagnostic_start_block
+  reactive_diagnostic_start_block="$(cast block-number --rpc-url "$REACTIVE_RPC" 2>/dev/null || true)"
+
   echo "Emitting LCCCreated pair..."
   cast send "$mock_liq_hub" \
     "triggerLccCreated(address,address,bytes32)" \
@@ -60,27 +63,38 @@ e2e_integration() {
   echo "LCCCreated pair emitted"
 
   echo "Emitting settlement queued event..."
-  cast send "$mock_liq_hub" \
+  local queue_one_out queue_two_out queue_one_tx queue_two_tx
+  queue_one_out="$(cast send "$mock_liq_hub" \
     "triggerSettlementQueued(address,address,uint256)" \
     "$lcc_addr" \
     "$recipient_one_addr" \
     "$queue_amount_one" \
     --rpc-url "$rpc_url" \
-    --private-key "$deployer_private_key" >/dev/null
+    --private-key "$deployer_private_key")"
+  queue_one_tx="$(extract_transaction_hash "$queue_one_out")"
 
-  cast send "$mock_liq_hub" \
+  queue_two_out="$(cast send "$mock_liq_hub" \
     "triggerSettlementQueued(address,address,uint256)" \
     "$lcc_addr" \
     "$recipient_two_addr" \
     "$queue_amount_two" \
     --rpc-url "$rpc_url" \
-    --private-key "$deployer_private_key" >/dev/null
+    --private-key "$deployer_private_key")"
+  queue_two_tx="$(extract_transaction_hash "$queue_two_out")"
   echo "Settlement queued"
+  echo "  recipient one protocol tx: ${queue_one_tx:-unknown}"
+  echo "  recipient two protocol tx: ${queue_two_tx:-unknown}"
 
-  wait_until "recipient one pending settlement on HubRSC" \
-    pending_at_least "$HUB_RSC" "$lcc_addr" "$recipient_one_addr" "$queue_amount_one"
-  wait_until "recipient two pending settlement on HubRSC" \
-    pending_at_least "$HUB_RSC" "$lcc_addr" "$recipient_two_addr" "$queue_amount_two"
+  if ! wait_until "recipient one pending settlement on HubRSC" \
+    pending_at_least "$HUB_RSC" "$lcc_addr" "$recipient_one_addr" "$queue_amount_one"; then
+    print_callback_bridge_diagnostics "$reactive_diagnostic_start_block" "$HUB_RSC" "$queue_one_tx" "$queue_two_tx"
+    exit 1
+  fi
+  if ! wait_until "recipient two pending settlement on HubRSC" \
+    pending_at_least "$HUB_RSC" "$lcc_addr" "$recipient_two_addr" "$queue_amount_two"; then
+    print_callback_bridge_diagnostics "$reactive_diagnostic_start_block" "$HUB_RSC" "$queue_one_tx" "$queue_two_tx"
+    exit 1
+  fi
 
   echo "Emitting liquidity available event to disburse queued settlements"
   cast send "$mock_liq_hub" \

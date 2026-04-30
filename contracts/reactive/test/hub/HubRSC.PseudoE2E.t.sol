@@ -29,18 +29,18 @@ contract HubRSCPseudoE2ETest is HubRSCTestBase {
         address underfundedRecipient = makeAddr("underfundedRecipient");
         address activeRecipient = makeAddr("activeRecipient");
 
-        _deliverReactiveVmLog(stack.hub,_rawSettlementQueued(stack.hub, lcc, unregisteredRecipient, 10, 0xE001, 1));
+        _deliverReactiveVmLog(stack.hub, _rawSettlementQueued(stack.hub, lcc, unregisteredRecipient, 10, 0xE001, 1));
         assertFalse(stack.hub.recipientRegistered(unregisteredRecipient));
         assertFalse(_pendingExists(stack.hub, lcc, unregisteredRecipient));
 
         stack.hub.registerRecipient(underfundedRecipient);
-        _deliverReactiveVmLog(stack.hub,_rawSettlementQueued(stack.hub, lcc, underfundedRecipient, 10, 0xE002, 2));
+        _deliverReactiveVmLog(stack.hub, _rawSettlementQueued(stack.hub, lcc, underfundedRecipient, 10, 0xE002, 2));
         assertTrue(stack.hub.recipientRegistered(underfundedRecipient));
         assertFalse(stack.hub.recipientActive(underfundedRecipient));
         assertFalse(_pendingExists(stack.hub, lcc, underfundedRecipient));
 
         stack.hub.registerRecipient{value: 100}(activeRecipient);
-        _deliverReactiveVmLog(stack.hub,_rawSettlementQueued(stack.hub, lcc, activeRecipient, 30, 0xE003, 3));
+        _deliverReactiveVmLog(stack.hub, _rawSettlementQueued(stack.hub, lcc, activeRecipient, 30, 0xE003, 3));
 
         (uint256 pendingAmount, bool exists) = _pendingState(stack.hub, _computeKey(lcc, activeRecipient));
         assertTrue(stack.hub.recipientActive(activeRecipient));
@@ -57,12 +57,14 @@ contract HubRSCPseudoE2ETest is HubRSCTestBase {
         _setDebtAndSync(stack.hub, stack.system, 1);
         assertEq(stack.hub.recipientBalance(recipient), 99);
 
-        _deliverReactiveVmLog(stack.hub,_rawSettlementQueued(stack.hub, lcc, recipient, 100, 0xE011, 1));
+        _deliverReactiveVmLog(stack.hub, _rawSettlementQueued(stack.hub, lcc, recipient, 100, 0xE011, 1));
         _setDebtAndSync(stack.hub, stack.system, 2);
         assertEq(stack.hub.recipientBalance(recipient), 97);
 
         vm.recordLogs();
-        _deliverReactiveVmLog(stack.hub,liquidityAvailableLog(address(stack.liquidityHub), lcc, 60, bytes32("mkt"), 0xE012, 2));
+        _deliverReactiveVmLog(
+            stack.hub, liquidityAvailableLog(address(stack.liquidityHub), lcc, 60, bytes32("mkt"), 0xE012, 2)
+        );
         Vm.Log[] memory dispatchEntries = vm.getRecordedLogs();
         _assertDispatchedLength(dispatchEntries, 1);
         _setDebtAndSync(stack.hub, stack.system, 3);
@@ -77,16 +79,18 @@ contract HubRSCPseudoE2ETest is HubRSCTestBase {
         ) = _decodeProcessSettlementsPayload(dispatchEntries);
         stack.receiver.processSettlements(dispatcher, lccs, recipients, amounts, attemptIds);
 
-        _deliverReactiveVmLog(stack.hub,_rawSettlementProcessed(stack.hub, lcc, recipient, 60, 60, 0xE013, 3));
+        _deliverReactiveVmLog(stack.hub, _rawSettlementProcessed(stack.hub, lcc, recipient, 60, 60, 0xE013, 3));
         _setDebtAndSync(stack.hub, stack.system, 4);
         assertEq(stack.hub.recipientBalance(recipient), 90);
 
-        _deliverReactiveVmLog(stack.hub,_rawSettlementSucceeded(stack.hub, lcc, recipient, 60, attemptIds[0], 0xE014, 4));
+        _deliverReactiveVmLog(
+            stack.hub, _rawSettlementSucceeded(stack.hub, lcc, recipient, 60, attemptIds[0], 0xE014, 4)
+        );
         _setDebtAndSync(stack.hub, stack.system, 200);
         assertEq(stack.hub.recipientBalance(recipient), -110);
         assertFalse(stack.hub.recipientActive(recipient));
 
-        _deliverReactiveVmLog(stack.hub,_rawSettlementQueued(stack.hub, lcc, recipient, 25, 0xE015, 5));
+        _deliverReactiveVmLog(stack.hub, _rawSettlementQueued(stack.hub, lcc, recipient, 25, 0xE015, 5));
         (uint256 pendingAmount, bool exists) = _pendingState(stack.hub, _computeKey(lcc, recipient));
         assertTrue(exists);
         assertEq(pendingAmount, 40);
@@ -96,7 +100,9 @@ contract HubRSCPseudoE2ETest is HubRSCTestBase {
         assertEq(stack.hub.recipientBalance(recipient), 10);
 
         vm.recordLogs();
-        _deliverReactiveVmLog(stack.hub,liquidityAvailableLog(address(stack.liquidityHub), lcc, 1_000, bytes32("mkt"), 0xE016, 6));
+        _deliverReactiveVmLog(
+            stack.hub, liquidityAvailableLog(address(stack.liquidityHub), lcc, 1_000, bytes32("mkt"), 0xE016, 6)
+        );
         _decodeAndProcess(stack.hub, vm.getRecordedLogs(), stack.receiver, 0xE017, 1);
 
         assertFalse(_pendingExists(stack.hub, lcc, recipient));
@@ -115,14 +121,16 @@ contract HubRSCPseudoE2ETest is HubRSCTestBase {
         stack.hub.registerRecipient{value: 100}(siblingRecipient);
         _consumeDebtContexts(stack.hub, stack.system, 2);
 
-        _deliverReactiveVmLog(stack.hub,_lccCreatedLog(stack.hub, underlying, liquidityLcc, bytes32("mktA"), 0xE021, 1));
-        _deliverReactiveVmLog(stack.hub,_lccCreatedLog(stack.hub, underlying, queuedLcc, bytes32("mktB"), 0xE022, 2));
+        _deliverReactiveVmLog(
+            stack.hub, _lccCreatedLog(stack.hub, underlying, liquidityLcc, bytes32("mktA"), 0xE021, 1)
+        );
+        _deliverReactiveVmLog(stack.hub, _lccCreatedLog(stack.hub, underlying, queuedLcc, bytes32("mktB"), 0xE022, 2));
 
         IReactive.LogRecord memory duplicateQueue =
             _rawSettlementQueued(stack.hub, queuedLcc, custodianRecipient, 20, 0xE023, 3);
-        _deliverReactiveVmLog(stack.hub,duplicateQueue);
-        _deliverReactiveVmLog(stack.hub,duplicateQueue);
-        _deliverReactiveVmLog(stack.hub,_rawSettlementQueued(stack.hub, queuedLcc, siblingRecipient, 20, 0xE024, 4));
+        _deliverReactiveVmLog(stack.hub, duplicateQueue);
+        _deliverReactiveVmLog(stack.hub, duplicateQueue);
+        _deliverReactiveVmLog(stack.hub, _rawSettlementQueued(stack.hub, queuedLcc, siblingRecipient, 20, 0xE024, 4));
         _consumeDebtContexts(stack.hub, stack.system, 2);
 
         (uint256 duplicatePending,) = _pendingState(stack.hub, _computeKey(queuedLcc, custodianRecipient));
@@ -131,9 +139,7 @@ contract HubRSCPseudoE2ETest is HubRSCTestBase {
         vm.recordLogs();
         _deliverReactiveVmLog(
             stack.hub,
-            liquidityAvailableLog(
-                address(stack.liquidityHub), liquidityLcc, underlying, 40, bytes32("mktA"), 0xE025, 5
-            )
+            liquidityAvailableLog(address(stack.liquidityHub), liquidityLcc, underlying, 40, bytes32("mktA"), 0xE025, 5)
         );
         Vm.Log[] memory firstDispatch = vm.getRecordedLogs();
         _assertDispatchedLength(firstDispatch, 1);
@@ -157,7 +163,7 @@ contract HubRSCPseudoE2ETest is HubRSCTestBase {
         assertTrue(retryActive);
 
         vm.recordLogs();
-        _deliverReactiveVmLog(stack.hub,_moreLiquidityAvailableLog(stack.hub, liquidityLcc, 20, 0xE027, 7));
+        _deliverReactiveVmLog(stack.hub, _moreLiquidityAvailableLog(stack.hub, liquidityLcc, 20, 0xE027, 7));
         Vm.Log[] memory secondDispatch = vm.getRecordedLogs();
         _assertDispatchedLength(secondDispatch, 1);
         _decodeAndProcess(stack.hub, secondDispatch, stack.receiver, 0xE028, 1);
@@ -173,16 +179,14 @@ contract HubRSCPseudoE2ETest is HubRSCTestBase {
 
         stack.hub.registerRecipient{value: 100}(custodianRecipient);
         _consumeDebtContexts(stack.hub, stack.system, 1);
-        _deliverReactiveVmLog(stack.hub,_lccCreatedLog(stack.hub, underlying, queuedLcc, bytes32("mktB"), 0xE029, 1));
-        _deliverReactiveVmLog(stack.hub,_rawSettlementQueued(stack.hub, queuedLcc, custodianRecipient, 10, 0xE02A, 2));
+        _deliverReactiveVmLog(stack.hub, _lccCreatedLog(stack.hub, underlying, queuedLcc, bytes32("mktB"), 0xE029, 1));
+        _deliverReactiveVmLog(stack.hub, _rawSettlementQueued(stack.hub, queuedLcc, custodianRecipient, 10, 0xE02A, 2));
         _consumeDebtContexts(stack.hub, stack.system, 1);
 
         vm.recordLogs();
         _deliverReactiveVmLog(
             stack.hub,
-            liquidityAvailableLog(
-                address(stack.liquidityHub), queuedLcc, underlying, 10, bytes32("mktB"), 0xE02B, 3
-            )
+            liquidityAvailableLog(address(stack.liquidityHub), queuedLcc, underlying, 10, bytes32("mktB"), 0xE02B, 3)
         );
         Vm.Log[] memory terminalDispatch = vm.getRecordedLogs();
         _assertDispatchedLength(terminalDispatch, 1);
