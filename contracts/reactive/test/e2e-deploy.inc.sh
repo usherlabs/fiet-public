@@ -66,7 +66,7 @@ e2e_deploy() {
   echo "BatchProcessSettlementReceiver deployed to: $BATCH_RECEIVER"
   export BATCH_RECEIVER
 
-  hub_out="$(run_and_print "Deploying reactive HubRSC..." env BATCH_SIZE=1 bash scripts/deployreactivehub.sh)"
+  hub_out="$(run_and_print "Deploying reactive HubRSC..." env BATCH_SIZE="${BATCH_SIZE:-2}" bash scripts/deployreactivehub.sh)"
 
   HUB_RSC="$(extract_labeled_address "HubRSC" "$hub_out")"
   if [ -z "${HUB_RSC:-}" ]; then
