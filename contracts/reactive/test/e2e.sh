@@ -252,19 +252,27 @@ deploy() {
   echo "Recipient:                     $RECIPIENT_ONE"
 }
 
-# run an intergration test that follows this flow:
-# 1) Emit queue event for recipient one and recipient two.
+# run an integration test that follows this flow:
+# 0) Emit two LCCCreated events on the mock hub so HubRSC mirrors canonical market pair registration.
+# 1) Emit SettlementQueued for recipient one and recipient two.
 # 2) Poll HubRSC until off-chain reactive processing mirrors pending work.
-# 3) Emit liquidity available event to disburse queued settlements.
+# 3) Emit LiquidityAvailable to fund dispatch and trigger settlement callbacks.
 # 4) Poll the protocol mock until settlement processing is observed.
 # 5) Assert the settlement was paid out to each registered recipient on the destination chain.
 integration() {
   local rpc_url="$PROTOCOL_RPC"
   local deployer_private_key="$PRIVATE_KEY"
   local mock_liq_hub="$LIQUIDITY_HUB"
+  # Arbitrary recipient addresses
   local recipient_one_addr="$RECIPIENT_ONE"
   local recipient_two_addr="$RECIPIENT_TWO"
+  # Arbitrary LCC addresses.
   local lcc_addr="0x5FbDB2315678afecb367f032d93F642f64180aa3"
+  local sibling_lcc_addr="0xe7f1725E7734CE288F8367e1Bb143E90bb3F0512"
+  # Stand-in market pair for the mock; neither underlying should be confused with settlement recipients.
+  local underlying_addr="0xDeaD000000000000000000000000000000000001"
+  local sibling_underlying_addr="0xDeaD000000000000000000000000000000000002"
+  local market_id="0x0000000000000000000000000000000000000000000000000000000000000001"
   local queue_amount_one="111"
   local queue_amount_two="222"
   local liquidity_amount="1000"
@@ -273,6 +281,9 @@ integration() {
   echo "  RPC_URL=$rpc_url"
   echo "  LIQUIDITY_HUB=$mock_liq_hub"
   echo "  LCC=$lcc_addr"
+  echo "  SIBLING_LCC=$sibling_lcc_addr"
+  echo "  UNDERLYING=$underlying_addr"
+  echo "  SIBLING_UNDERLYING=$sibling_underlying_addr"
   echo "  RECIPIENT_ONE=$recipient_one_addr"
   echo "  RECIPIENT_TWO=$recipient_two_addr"
   echo "  CHECK_AMOUNT_ONE=$queue_amount_one"
@@ -280,7 +291,25 @@ integration() {
   echo "  POLL_TIMEOUT_SECONDS=${POLL_TIMEOUT_SECONDS:-180}"
   echo "  POLL_INTERVAL_SECONDS=${POLL_INTERVAL_SECONDS:-5}"
 
-  # 1) Emit queue event.
+  # 0) Register both market LCCs up front (matches LiquidityHub createLCCPair semantics).
+  echo "Emitting LCCCreated pair..."
+  cast send "$mock_liq_hub" \
+    "triggerLccCreated(address,address,bytes32)" \
+    "$underlying_addr" \
+    "$lcc_addr" \
+    "$market_id" \
+    --rpc-url "$rpc_url" \
+    --private-key "$deployer_private_key" >/dev/null
+  cast send "$mock_liq_hub" \
+    "triggerLccCreated(address,address,bytes32)" \
+    "$sibling_underlying_addr" \
+    "$sibling_lcc_addr" \
+    "$market_id" \
+    --rpc-url "$rpc_url" \
+    --private-key "$deployer_private_key" >/dev/null
+  echo "LCCCreated pair emitted"
+
+  # 1) Emit queue events.
   echo "Emitting settlement queued event..."
   cast send "$mock_liq_hub" \
     "triggerSettlementQueued(address,address,uint256)" \
@@ -305,14 +334,14 @@ integration() {
   wait_until "recipient two pending settlement on HubRSC" \
     pending_at_least "$HUB_RSC" "$lcc_addr" "$recipient_two_addr" "$queue_amount_two"
 
-  # 3) Emitting liquidity available event to disburse queued settlements
+  # 3) Emit liquidity available (underlying must match LCCCreated for coherent HubRSC state).
   echo "Emitting liquidity available event to disburse queued settlements"
   cast send "$mock_liq_hub" \
     "triggerLiquidityAvailable(address,address,uint256,bytes32)" \
     "$lcc_addr" \
-    "$recipient_two_addr" \
+    "$underlying_addr" \
     "$liquidity_amount" \
-    "0x0000000000000000000000000000000000000000000000000000000000000001" \
+    "$market_id" \
     --rpc-url "$rpc_url" \
     --private-key "$deployer_private_key" >/dev/null
 

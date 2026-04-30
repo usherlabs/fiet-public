@@ -22,12 +22,6 @@ build:
 test:
     forge test
 
-local-simulation:
-    FOUNDRY_PROFILE=debug forge test --match-path 'test/hub/HubRSC.PseudoE2E.t.sol' -vvv
-
-pseudo-e2e:
-    @just local-simulation
-
 # ----------------------------
 # Deploy scripts
 

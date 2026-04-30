@@ -6,7 +6,7 @@ TASK-38 validates the TASK-40 single-contract `HubRSC` runtime after `SpokeRSC` 
 
 | Lane | Purpose | Command or trigger | Secrets |
 | --- | --- | --- | --- |
-| Deterministic local simulation | Required local and CI supporting coverage for `HubRSC` behavior using Foundry mocks and direct `react()` calls. This is not the full Lasna pseudo-e2e proof. | `just local-simulation` from `contracts/reactive` | None |
+| Deterministic local simulation | Required local and CI supporting coverage for `HubRSC` behavior using Foundry mocks and direct `react()` calls. This is not the full Lasna pseudo-e2e proof. | `forge test` from `contracts/reactive` | None |
 | Lasna-only Reactive Network pseudo-e2e smoke | Optional operator/deployment validation against live Lasna infrastructure, with the mock protocol event producer and HubRSC both on Lasna. | PRs with relevant `contracts/reactive/src/**`, `contracts/reactive/scripts/**`, `contracts/reactive/test/e2e.sh`, or `.github/workflows/reactive-e2e.yml` changes and `reactive-e2e` label; manual Reactive Validation workflow with `run_smoke=true`; or `just e2e` with live env | `REACTIVE_RPC` plus lREACT-funded `REACTIVE_CI_PRIVATE_KEY` |
 | Ethereum Sepolia cross-chain smoke | Optional stronger cross-chain validation using Lasna for HubRSC and Ethereum Sepolia for the protocol-side mock event producer. This is separate from the canonical Lasna-only live smoke lane. | Same `reactive-e2e` label and live-smoke surface gate as Lasna smoke; manual Reactive Validation workflow with `run_smoke=true`; or `just e2e` with Sepolia protocol env | `REACTIVE_RPC`, `REACTIVE_CI_PRIVATE_KEY`, `ETH_SEPOLIA_RPC_URL`, and Sepolia ETH on the `REACTIVE_CI_PRIVATE_KEY` wallet |
 
@@ -38,7 +38,7 @@ Default Lasna-only smoke wiring:
 - `PROTOCOL_CHAIN_ID=5318007`
 - `REACTIVE_RPC=$REACTIVE_RPC`
 - `PROTOCOL_RPC=$REACTIVE_RPC`
-- `PROTOCOL_CALLBACK_PROXY=0x0000000000000000000000000000000000fffFfF`
+- receiver callback proxy derived automatically from `PROTOCOL_CHAIN_ID=5318007`
 
 The workflow accepts either Lasna RPC slash form by probing the configured `REACTIVE_RPC` first and then the alternate trailing-slash form. It exports the first candidate whose `cast chain-id` returns `5318007` as both `REACTIVE_RPC` and `PROTOCOL_RPC` for the Lasna-only lane.
 
@@ -52,7 +52,7 @@ Optional Sepolia cross-chain smoke wiring:
 - `PROTOCOL_CHAIN_ID=11155111`
 - `REACTIVE_RPC=$REACTIVE_RPC`
 - `PROTOCOL_RPC=$ETH_SEPOLIA_RPC_URL`
-- `PROTOCOL_CALLBACK_PROXY=0xc9f36411C9897e7F959D99ffca2a0Ba7ee0D7bDA`
+- receiver callback proxy derived automatically from `PROTOCOL_CHAIN_ID=11155111`
 
 Sepolia or another foreign protocol chain is optional stronger full cross-chain validation and requires foreign-chain gas such as Sepolia ETH.
 
@@ -78,7 +78,7 @@ Sepolia or another foreign protocol chain is optional stronger full cross-chain 
 ## Surfaces updated
 
 - `contracts/reactive/test/hub/HubRSC.PseudoE2E.t.sol`: deterministic local simulation suite.
-- `contracts/reactive/Justfile`: `local-simulation` developer command plus the compatibility `pseudo-e2e` alias.
+- `contracts/reactive/Justfile`: local developer commands for build, full test, deploy scripts, and live `e2e`.
 - `.github/workflows/e2e.yml`: existing core contract fork E2E lane.
 - `.github/workflows/reactive-e2e.yml`: standalone Reactive workflow containing deterministic local simulation and the label/path gated Lasna pseudo-e2e smoke lane.
 - `contracts/reactive/README.md`, `CAVEATS.md`, and `env.sample`: lane separation and live-secret guidance.
