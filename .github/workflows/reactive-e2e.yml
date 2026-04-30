@@ -59,7 +59,7 @@ jobs:
           changed=false
           while IFS= read -r path; do
             case "$path" in
-              contracts/reactive/src/*|contracts/reactive/scripts/*|contracts/reactive/test/e2e.sh|.github/workflows/reactive-e2e.yml)
+              contracts/reactive/src/*|contracts/reactive/scripts/*|contracts/reactive/test/e2e*|.github/workflows/reactive-e2e.yml)
                 changed=true
                 break
                 ;;

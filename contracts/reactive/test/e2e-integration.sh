@@ -15,29 +15,11 @@ fi
 REACTIVE_RPC="${REACTIVE_RPC:-}"
 PROTOCOL_RPC="${PROTOCOL_RPC:-}"
 PRIVATE_KEY="${PRIVATE_KEY:-${REACTIVE_CI_PRIVATE_KEY:-}}"
-DEPLOY_DEBUG="${DEBUG:-false}"
 RECIPIENT_ONE="${RECIPIENT_ONE:-0xb797466544DeB18F1e19185e85400A26FC5d3E95}"
 RECIPIENT_TWO="${RECIPIENT_TWO:-0xa4260A121bC44d085AC9a18e628A5712Ef3Bd49C}"
-RECIPIENT_DEPOSIT_WEI="${RECIPIENT_DEPOSIT_WEI:-100000000000000000}"
-export BROADCAST=true
 
-: "${REACTIVE_RPC:?REACTIVE_RPC is required}"
-: "${PROTOCOL_RPC:?PROTOCOL_RPC is required}"
-: "${PRIVATE_KEY:?PRIVATE_KEY is required}"
-: "${RECIPIENT_ONE:?RECIPIENT_ONE is required}"
-: "${RECIPIENT_TWO:?RECIPIENT_TWO is required}"
-
-HUB_RVM_ID="$(cast wallet address --private-key "$PRIVATE_KEY")"
-export HUB_RVM_ID
-
-broadcast_flag=""
-if [ "$BROADCAST" = "true" ]; then
-  broadcast_flag="--broadcast"
-fi
-
-# shellcheck source=e2e-deploy.inc.sh
-source "$SCRIPT_DIR/e2e-deploy.inc.sh"
-e2e_deploy
+LIQUIDITY_HUB="${LIQUIDITY_HUB:-}"
+HUB_RSC="${HUB_RSC:-}"
 
 export LCC="${LCC:-0x5FbDB2315678afecb367f032d93F642f64180aa3}"
 export SIBLING_LCC="${SIBLING_LCC:-0xe7f1725E7734CE288F8367e1Bb143E90bb3F0512}"
@@ -47,6 +29,14 @@ export MARKET_ID="${MARKET_ID:-0x00000000000000000000000000000000000000000000000
 export CHECK_AMOUNT_ONE="${CHECK_AMOUNT_ONE:-111}"
 export CHECK_AMOUNT_TWO="${CHECK_AMOUNT_TWO:-222}"
 export LIQUIDITY_AMOUNT="${LIQUIDITY_AMOUNT:-1000}"
+
+: "${REACTIVE_RPC:?REACTIVE_RPC is required}"
+: "${PROTOCOL_RPC:?PROTOCOL_RPC is required}"
+: "${PRIVATE_KEY:?PRIVATE_KEY is required}"
+: "${LIQUIDITY_HUB:?LIQUIDITY_HUB is required (mock hub address)}"
+: "${HUB_RSC:?HUB_RSC is required (reactive HubRSC address)}"
+: "${RECIPIENT_ONE:?RECIPIENT_ONE is required}"
+: "${RECIPIENT_TWO:?RECIPIENT_TWO is required}"
 
 # shellcheck source=e2e-integration.inc.sh
 source "$SCRIPT_DIR/e2e-integration.inc.sh"

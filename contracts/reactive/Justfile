@@ -38,8 +38,22 @@ deploy-reactive-hub:
 deploy-hub:
     @just deploy-reactive-hub
 
+# Full e2e: fresh deploy on protocol + reactive chains, then integration assertions.
 e2e:
     bash test/e2e.sh
+
+# Deploy MockLiquidityHub, BatchProcessSettlementReceiver, HubRSC; register recipients.
+# Requires REACTIVE_RPC, PROTOCOL_RPC, PRIVATE_KEY (or REACTIVE_CI_PRIVATE_KEY), RECIPIENT_ONE, RECIPIENT_TWO.
+e2e-deploy:
+    bash test/e2e-deploy.sh
+
+# Integration only against an existing deployment. Set at least:
+#   REACTIVE_RPC, PROTOCOL_RPC, PRIVATE_KEY, LIQUIDITY_HUB, HUB_RSC, RECIPIENT_ONE, RECIPIENT_TWO
+# Optional: LCC, SIBLING_LCC, UNDERLYING, SIBLING_UNDERLYING, MARKET_ID,
+#           CHECK_AMOUNT_ONE, CHECK_AMOUNT_TWO, LIQUIDITY_AMOUNT,
+#           POLL_TIMEOUT_SECONDS, POLL_INTERVAL_SECONDS
+e2e-integration:
+    bash test/e2e-integration.sh
 
 fund-contract contract_addr amount_wei:
     bash scripts/fundcontract.sh {{ contract_addr }} {{ amount_wei }}

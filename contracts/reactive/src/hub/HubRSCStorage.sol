@@ -2,6 +2,7 @@
 pragma solidity ^0.8.26;
 
 import {AbstractReactive} from "reactive-lib/abstract-base/AbstractReactive.sol";
+import {AbstractHubReactiveBridge} from "../libs/AbstractHubReactiveBridge.sol";
 import {LinkedQueue} from "../libs/LinkedQueue.sol";
 import {ReactiveConstants} from "../libs/ReactiveConstants.sol";
 
@@ -89,8 +90,15 @@ abstract contract HubRSCStorage is AbstractReactive {
     /// @notice Destination receiver contract (processSettlements).
     address public immutable destinationReceiverContract;
 
+    /// @notice Reactive-network callback proxy authorised to call `applyCanonicalProtocolLog` on the canonical HubRSC.
+    /// @dev See `AbstractHubReactiveBridge` for the ReactVM -> canonical pipeline.
+    address public immutable reactiveCallbackProxy;
+
     /// @notice Callback gas limit for destination receiver.
     uint64 public constant CALLBACK_GAS_LIMIT = 8000000;
+
+    /// @notice Gas limit for self-callback that applies canonical state after a ReactVM `react` observation.
+    uint64 public constant CANONICAL_APPLY_CALLBACK_GAS_LIMIT = 8000000;
 
     /// @notice Recipients explicitly registered for HubRSC-owned lifecycle subscriptions.
     mapping(address => bool) public recipientRegistered;
@@ -193,12 +201,13 @@ abstract contract HubRSCStorage is AbstractReactive {
         uint256 _protocolChainId,
         uint256 _reactChainId,
         address _liquidityHub,
-        address _destinationReceiverContract
+        address _destinationReceiverContract,
+        address _reactiveCallbackProxy
     ) payable {
         if (
             _protocolChainId == 0 || _reactChainId == 0 || _liquidityHub == address(0)
                 || _destinationReceiverContract == address(0) || _maxDispatchItems == 0
-                || _maxDispatchItems > MAX_RECEIVER_BATCH_SIZE
+                || _maxDispatchItems > MAX_RECEIVER_BATCH_SIZE || _reactiveCallbackProxy == address(0)
         ) {
             revert InvalidConfig();
         }
@@ -208,6 +217,14 @@ abstract contract HubRSCStorage is AbstractReactive {
         maxDispatchItems = _maxDispatchItems;
         liquidityHub = _liquidityHub;
         destinationReceiverContract = _destinationReceiverContract;
+        reactiveCallbackProxy = _reactiveCallbackProxy;
+    }
+
+    modifier onlyReactiveCallbackProxy() {
+        if (msg.sender != reactiveCallbackProxy) {
+            revert AbstractHubReactiveBridge.UnauthorizedReactiveCallback();
+        }
+        _;
     }
 
     function _computeKey(address lcc, address recipient) internal pure returns (bytes32) {

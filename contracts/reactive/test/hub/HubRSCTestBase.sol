@@ -56,6 +56,16 @@ contract MockSettlementReceiver {
 abstract contract HubRSCTestBase is Test {
     using stdStorage for StdStorage;
 
+    /// @dev Fixed address used as `reactiveCallbackProxy` in Foundry tests; prank this address when calling
+    ///      `applyCanonicalProtocolLog` after `react` to simulate reactive callback delivery.
+    address internal constant REACTIVE_CALLBACK_PROXY_FOR_TESTS =
+        address(0x000000000000000000000000000000C0FFEE11);
+
+    /// @dev Inner payload selector for the ReactVM→canonical bridge `Callback` emitted from `react()`.
+    ///      Helpers that count `Callback` logs typically mean **protocol-chain** callbacks (for example
+    ///      `processSettlements`), not this bridge hop.
+    bytes4 internal constant APPLY_CANONICAL_PROTOCOL_LOG_SELECTOR = HubRSC.applyCanonicalProtocolLog.selector;
+
     address internal constant SYSTEM_CONTRACT = 0x0000000000000000000000000000000000fffFfF;
     uint256 internal constant LIQUIDITY_AVAILABLE_TOPIC = ReactiveConstants.LIQUIDITY_AVAILABLE_TOPIC;
     uint256 internal constant MORE_LIQUIDITY_AVAILABLE_TOPIC = ReactiveConstants.MORE_LIQUIDITY_AVAILABLE_TOPIC;
@@ -94,6 +104,13 @@ abstract contract HubRSCTestBase is Test {
 
     function _computeKey(address lcc, address recipient) internal pure returns (bytes32) {
         return keccak256(abi.encode(lcc, recipient));
+    }
+
+    /// @notice Simulates ReactVM `react` followed by canonical callback application (Foundry only).
+    function _deliverReactiveVmLog(HubRSC hub, IReactive.LogRecord memory log) internal {
+        hub.react(log);
+        vm.prank(REACTIVE_CALLBACK_PROXY_FOR_TESTS);
+        hub.applyCanonicalProtocolLog(log);
     }
 
     function _pendingState(HubRSC hub, bytes32 key) internal view returns (uint256, bool) {
@@ -513,8 +530,8 @@ abstract contract HubRSCTestBase is Test {
         uint256 txHashValue,
         uint256 logIndex
     ) internal {
-        hub.react(_settlementProcessedLog(hub, lcc, recipient, amount, txHashValue, logIndex));
-        hub.react(_settlementSucceededLog(hub, lcc, recipient, amount, attemptId, txHashValue + 1000, logIndex));
+        _deliverReactiveVmLog(hub, _settlementProcessedLog(hub, lcc, recipient, amount, txHashValue, logIndex));
+        _deliverReactiveVmLog(hub, _settlementSucceededLog(hub, lcc, recipient, amount, attemptId, txHashValue + 1000, logIndex));
     }
 
     function _clearSyntheticReservationAndPrune(
@@ -526,7 +543,7 @@ abstract contract HubRSCTestBase is Test {
     ) internal {
         bytes32 key = _computeKey(lcc, recipient);
         stdstore.target(address(hub)).sig("inFlightByKey(bytes32)").with_key(key).checked_write(uint256(0));
-        hub.react(_settlementProcessedLogWithRequested(hub, lcc, recipient, 1, 1, txHashValue, logIndex));
+        _deliverReactiveVmLog(hub, _settlementProcessedLogWithRequested(hub, lcc, recipient, 1, 1, txHashValue, logIndex));
     }
 
     function _assertDispatchedLccs(Vm.Log[] memory entries, address expectedLcc, uint256 expectedLength) internal {
@@ -567,7 +584,7 @@ abstract contract HubRSCTestBase is Test {
         uint256 logIndex
     ) internal returns (uint256 attemptId) {
         vm.recordLogs();
-        hub.react(liquidityAvailableLog(hub.liquidityHub(), lcc, amount, market, txHashValue, logIndex));
+        _deliverReactiveVmLog(hub, liquidityAvailableLog(hub.liquidityHub(), lcc, amount, market, txHashValue, logIndex));
         Vm.Log[] memory entries = vm.getRecordedLogs();
         (,,,, uint256[] memory attemptIds) = _decodeProcessSettlementsPayload(entries);
         return attemptIds[0];
@@ -583,7 +600,7 @@ abstract contract HubRSCTestBase is Test {
         uint256 liquidityTxHash,
         uint256 liquidityLogIndex
     ) internal returns (uint256 attemptId) {
-        hub.react(_settlementLog(hub, recipient, lcc, amount, queueNonce, queueTxHash, 1));
+        _deliverReactiveVmLog(hub, _settlementLog(hub, recipient, lcc, amount, queueNonce, queueTxHash, 1));
         return _dispatchSingleAttemptId(hub, lcc, amount, bytes32("mkt"), liquidityTxHash, liquidityLogIndex);
     }
 
@@ -596,7 +613,7 @@ abstract contract HubRSCTestBase is Test {
         uint256 logIndex
     ) internal {
         vm.recordLogs();
-        hub.react(liquidityAvailableLog(hub.liquidityHub(), lcc, amount, market, txHashValue, logIndex));
+        _deliverReactiveVmLog(hub, liquidityAvailableLog(hub.liquidityHub(), lcc, amount, market, txHashValue, logIndex));
         Vm.Log[] memory entries = vm.getRecordedLogs();
         assertEq(_findCallbackPayloadBySelector(entries, ReactiveConstants.PROCESS_SETTLEMENTS_SELECTOR).length, 0);
     }
@@ -610,7 +627,7 @@ abstract contract HubRSCTestBase is Test {
     ) internal {
         for (uint256 i = 0; i < hub.maxDispatchItems(); i++) {
             address recipient = address(uint160(recipientOffset + i + 1));
-            hub.react(_settlementLog(hub, recipient, lcc, 1, nonceBase + i, txHashBase + i, i + 1));
+            _deliverReactiveVmLog(hub, _settlementLog(hub, recipient, lcc, 1, nonceBase + i, txHashBase + i, i + 1));
 
             bytes32 key = _computeKey(lcc, recipient);
             stdstore.target(address(hub)).sig("inFlightByKey(bytes32)").with_key(key).checked_write(uint256(1));
@@ -620,7 +637,7 @@ abstract contract HubRSCTestBase is Test {
     function _drainQueuedEntries(HubRSC hub, address lcc, uint256 recipientOffset, uint256 txHashBase) internal {
         for (uint256 i = 0; i < hub.maxDispatchItems(); i++) {
             address recipient = address(uint160(recipientOffset + i + 1));
-            hub.react(_settlementProcessedLogWithRequested(hub, lcc, recipient, 1, 1, txHashBase + i, i + 1));
+            _deliverReactiveVmLog(hub, _settlementProcessedLogWithRequested(hub, lcc, recipient, 1, 1, txHashBase + i, i + 1));
         }
     }
 
@@ -699,6 +716,10 @@ abstract contract HubRSCTestBase is Test {
         bytes32 callbackSig = keccak256("Callback(uint256,address,uint64,bytes)");
         for (uint256 i = 0; i < entries.length; i++) {
             if (entries[i].topics.length > 0 && entries[i].topics[0] == callbackSig) {
+                bytes memory inner = abi.decode(entries[i].data, (bytes));
+                if (_startsWithSelector(inner, APPLY_CANONICAL_PROTOCOL_LOG_SELECTOR)) {
+                    continue;
+                }
                 count++;
             }
         }
