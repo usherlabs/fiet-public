@@ -82,15 +82,15 @@ remappings = [
 
 [profile.deploy]
 # Libraries from main project (deterministic CREATE3 addresses)
-libraries = [
-  "src/libraries/VTSPositionLib.sol:VTSPositionLib:0x823bDa51f62B814386408eB4ecC01F4256B1d516",
-  "src/libraries/VTSSwapLib.sol:VTSSwapLib:0x5eE398A9363aD238Cb1c2b38bA8650a05750Db14",
-  "src/libraries/VTSCommitLib.sol:VTSCommitLib:0xBab5960fB71f8096dE37497Dd8D41A6a20C9c9a7",
-  "src/libraries/VTSPositionMMOpsLib.sol:VTSPositionMMOpsLib:0x76b2ea645Cf439D91391dDb7ca20a2E06C53Ca0d",
-  "src/libraries/VTSLifecycleLinkedLib.sol:VTSLifecycleLinkedLib:0x61b4D910E7086a30b14fd8A4986b15b844ac27B9",
-  "src/libraries/LCCFactoryLib.sol:LCCFactoryLinkedLib:0x875B922e2843373772C8a6d88cb7581bbD91C879",
-  "src/libraries/LiquidityHubLinkedLib.sol:LiquidityHubLinkedLib:0xaCc580983f745C1c9edDbE3b5F3d221F13D653F9",
-]
+  libraries = [
+    "src/libraries/VTSPositionLib.sol:VTSPositionLib:0x4f0158596235B9d82094ec2DB7f9B53bB613dC05",
+    "src/libraries/VTSSwapLib.sol:VTSSwapLib:0xc2A9780a962425a722D528c039cccc43A0736C40",
+    "src/libraries/VTSCommitLib.sol:VTSCommitLib:0x47Bf7f8a11bCCD258005f26E69964522B8f17BdC",
+    "src/libraries/VTSPositionMMOpsLib.sol:VTSPositionMMOpsLib:0xD7e5EE03f7dd4593052884fDfc8DEA33bf392773",
+    "src/libraries/VTSLifecycleLinkedLib.sol:VTSLifecycleLinkedLib:0xFbF3bE88441305e7F5c22f657F9713c0776fb6DD",
+    "src/libraries/LCCFactoryLib.sol:LCCFactoryLinkedLib:0xDCeAADaB98478fD5B66D50b29825f3CEd4d79086",
+    "src/libraries/LiquidityHubLinkedLib.sol:LiquidityHubLinkedLib:0x5bd840bE7355741888F391A00D046eAF8AB0E344",
+  ]
 
 # Match CI: E2E scripts compile without IR to avoid Yul stack-depth failures under linked-library builds.
 additional_compiler_profiles = [

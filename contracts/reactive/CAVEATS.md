@@ -1,39 +1,60 @@
 # Reactive settlement — integration caveats
 
-This file records **operational and design constraints** for integrators of the Reactive Network settlement stack under `contracts/reactive/`. For the main flow and tooling, see `README.md`.
+This file records operational and design constraints for integrators of the Reactive Network settlement stack under `contracts/reactive/`. For the main flow and tooling, see `README.md`.
 
 ## MM queue recipients are `MMQueueCustodian` contracts, not locker EOAs
 
 On the protocol chain, Fiet’s MM paths (`MMPositionManager` / `PositionManagerImpl` queue routing) attribute `LiquidityHub.settlementQueued` **recipient** to the beneficiary’s **`MMQueueCustodian`** address (`custodianFor[beneficiary]` on `MMPositionManager`), not to the MM locker EOA.
 
-The reactive stack is **recipient-address keyed**:
+HubRSC registration is recipient-address keyed:
 
-- `SpokeRSC` is constructed with a single immutable **`recipient`** and subscribes to `LiquidityHub` logs filtered on that address (`SettlementQueued`, `SettlementProcessed`, `SettlementAnnulled`, and receiver `SettlementFailed`).
-- `HubCallback.setSpokeForRecipient(recipient, spokeRVMId)` must whitelist the Spoke **for that same `recipient` address** or `recordSettlementQueued` (and related record paths) will not accept reports for that queue owner.
+- Payable `registerRecipient(recipient)` must use the exact settlement recipient address emitted by `LiquidityHub`.
+- For MM flows this is the custodian address, not the locker EOA.
+- Registration with no native value is inert; exact-match subscriptions activate only after the recipient has a positive `recipientBalance`.
 
-**Implication:** automation that mirrors Hub queues into `HubRSC` **must deploy and fund one `SpokeRSC` per distinct queue recipient**. For MM flows, that means **one Spoke per `MMQueueCustodian` instance** (i.e. per deployed custodian contract address), not merely “one Spoke per human operator” or per locker EOA.
+**Implication:** automation now requires explicit recipient registration and funding before recipient-scoped intake is active. There is no active `SpokeRSC` or `HubCallback` runtime fallback.
 
-### Provisioning order
+## Provisioning order
 
 Custodian addresses are created when the locker runs **`INITIALISE`** on `MMPositionManager` (see `contracts/evm/INVARIANTS.md` **MM-QUEUE-01** and `MMQueueCustodianFactory.QueueCustodianDeployed`). Until that custodian exists, its address is unknown.
 
-If the **first** `SettlementQueued(lcc, recipient, amount)` for a new custodian occurs **before** a Spoke exists for `recipient == custodian` and before `HubCallback.spokeForRecipient[custodian]` is set, that event will not be mirrored into `HubRSC` pending state; `LiquidityAvailable` alone does not create pending entries. Integrators should either:
+If the first `SettlementQueued(lcc, recipient, amount)` for a new custodian occurs before the custodian is registered and has a positive HubRSC balance, HubRSC will not mirror it. Operators should register the custodian recipient with native value before relying on automated intake for that recipient.
 
-- observe `QueueCustodianDeployed` (or read `custodianFor` after `INITIALISE`), then **deploy the Spoke**, **whitelist** it on `HubCallback`, and **fund** it **before** any queue-producing MM action for that beneficiary; or  
-- accept that the first backlog slice may require **manual** `processSettlementFor` / a follow-up queue event after provisioning.
+Once registered and funded, HubRSC owns exact-match subscriptions for that recipient’s lifecycle logs:
 
-### Scripts (reference)
+- `SettlementQueued`
+- `SettlementAnnulled`
+- `SettlementProcessed`
+- receiver `SettlementSucceeded`
+- receiver `SettlementFailed`
 
-- `scripts/deployreactivespoke.sh` — pass the **custodian** address as `RECIPIENT` when wiring MM queue automation.
-- `scripts/WhitelistSpokeForRecipient.s.sol` — set `RECIPIENT` to that same custodian address when registering the Spoke RVM id.
+## Recipient balance depletion pauses service
+
+HubRSC tracks a signed native-token `recipientBalance` per registered recipient. Payable registration and top-up credit that balance. Newly observed Reactive system debt is allocated to the previous accepted lifecycle recipient or split across the previous dispatch batch recipients. Because Reactive debt is only observable as aggregate `debt(address(this))`, attribution is deferred to safe entry boundaries such as the next `react()`, top-up, registration, or explicit `syncSystemDebt()`.
+
+When a recipient balance is not positive, HubRSC deactivates that recipient and unsubscribes its exact-match lifecycle filters. Pending queue state is not deleted on depletion, and tracked receiver/protocol outcome logs may still reconcile already pending or in-flight work. Top up with payable `fundRecipient(recipient)` until the balance is positive to reactivate subscriptions and allow pending work to resume on future wakes.
+
+## Validation lanes
+
+Use deterministic local simulation as the default development and CI validation lane. `forge test` runs Foundry-only coverage against the single `HubRSC` runtime by simulating the Reactive pipeline: tests call **`react`** under ReactVM conditions, then **`applyCanonicalProtocolLog`** while pranking the configured **`reactiveCallbackProxy`** (see `HubRSCTestBase._deliverReactiveVmLog`). That pair mirrors production separation between observation and canonical application. It is supporting coverage, not the full Lasna pseudo-e2e proof, and must not require live Reactive Network RPCs, `REACTIVE_CI_PRIVATE_KEY`, or any other live secret.
+
+Use the Lasna-only Reactive Network pseudo-e2e smoke harness only when explicitly gated for a deployment or operator validation. Pull-request live smoke runs require relevant Reactive live-smoke changes and the `reactive-e2e` label; manual runs require `workflow_dispatch` with `run_smoke=true`. The default lane keeps both the mock protocol event producer and HubRSC on Lasna: `REACTIVE_RPC` and `PROTOCOL_RPC` both point to the Lasna RPC, and both chain ids are `5318007`. The receiver deploy script derives the correct Reactive callback proxy from `PROTOCOL_CHAIN_ID`, so the Lasna lane resolves to the published Lasna proxy automatically. That lane uses an lREACT-funded master key from GitHub Actions secrets or Vault to deploy/fund HubRSC, register/fund recipients, and prove end-to-end callback delivery against live Lasna infrastructure by polling HubRSC and receiver state. Pull-request live smoke preflights required secrets, Lasna RPC reachability, and the `REACTIVE_CI_PRIVATE_KEY` signer balance; only those setup prerequisite failures skip with a notice. Once preflight passes, pending settlement timeouts and other `just e2e` harness/runtime failures fail CI. Keep failures in this lane separate from deterministic local simulation regressions because they can depend on RPC, funding, and Reactive Network availability.
+
+The current Lasna pseudo-e2e smoke harness intentionally does not create a separate per-run ephemeral signer. `REACTIVE_CI_PRIVATE_KEY` is the funded signer for deployment, HubRSC RVM id derivation, recipient registration/funding, and mock protocol event emission. If operators want per-run recipient addresses, pass `RECIPIENT_ONE` and `RECIPIENT_TWO`; those addresses are registered and funded by the master signer. Sepolia or another foreign protocol chain is optional stronger full cross-chain validation, not the TASK-38.1 default, and requires separate RPC, callback proxy, chain id, and gas funding.
+
+## Destination callbacks are intentionally two-hop
+
+`HubRSC` cannot rely on ReactVM storage writes for canonical queue or accounting state. Protocol logs first flow through `react()` into the proxy-gated `applyCanonicalProtocolLog(...)` callback, where canonical storage is updated. If that canonical update needs to dispatch settlements, `HubRSC` emits `DestinationCallbackRequested(bytes payload)` and relies on its self-subscription for that event. When ReactVM observes the self-event, `react()` emits the actual destination `Callback(...)` to the configured `BatchProcessSettlement` receiver.
+
+When debugging a live run, distinguish these two hops: a successful pending-state update proves the protocol-log-to-canonical bridge, while receiver settlement counters prove the later canonical-to-RVM-to-destination callback relay.
 
 ## Liquidity budget is persisted per dispatch lane
 
-`HubRSC` now persists available dispatch budget in `availableBudgetByDispatchLane` instead of relying on `LiquidityAvailable(...)` as a one-shot trigger. Integrators should read this as the hub's liveness source of truth:
+`HubRSC` persists available dispatch budget in `availableBudgetByDispatchLane` instead of relying on `LiquidityAvailable(...)` as a one-shot trigger. Integrators should read this as the hub's liveness source of truth:
 
 - liquidity that arrives before a queue item is mirrored is retained and used when the queue entry later appears;
 - repeated liquidity notifications accumulate until dispatch consumes budget; and
-- `MoreLiquidityAvailable(...)` is only a continuation signal, not an authoritative replacement for stored budget.
+- `MoreLiquidityAvailable(...)` is only a HubRSC self-continuation signal, not an authoritative replacement for stored budget.
 
 For LCCs whose underlying is not known yet, budget is temporarily tracked on the LCC lane and migrated to the underlying lane once `lccToUnderlying` is registered.
 
@@ -41,12 +62,12 @@ For LCCs whose underlying is not known yet, budget is temporarily tracked on the
 
 `SettlementProcessed(lcc, recipient, settledAmount, requestedAmount)` remains authoritative for reducing pending queue state, but `requestedAmount` is treated as untrusted input for reservation release. `HubRSC` will not free `inFlightByKey` based on that value alone.
 
-Reservation release now happens only after the recipient `SpokeRSC` forwards a receiver outcome back through `HubCallback`:
+Reservation release happens only after `HubRSC` observes a trusted receiver outcome:
 
 - `SettlementSucceeded(...)` releases the trusted reserved amount without restoring budget;
-- `SettlementFailed(...)` releases the trusted reserved amount, restores the same amount to the dispatch budget, and immediately retries dispatch.
+- `SettlementFailed(...)` releases the trusted reserved amount and may restore budget according to failure classification.
 
-Operators investigating “stuck” in-flight state should therefore trace the full receiver-to-spoke-to-callback path, not only the protocol-chain `SettlementProcessed(...)` log.
+Operators investigating stuck in-flight state should trace receiver events and HubRSC direct intake first.
 
 ## Shared-underlying routing is gated by backfill progress
 

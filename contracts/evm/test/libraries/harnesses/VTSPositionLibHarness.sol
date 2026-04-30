@@ -116,6 +116,24 @@ contract VTSPositionLibHarness {
         result = VTSPositionLib.touchPosition(s, ctx, p);
     }
 
+    /// @notice Exposes increase-transition derivation for mutation tests of live-liquidity arithmetic.
+    function deriveIncreaseTransitionLiquidity(uint128 liq, int256 liquidityDelta)
+        external
+        pure
+        returns (uint128 liveLiquidityBeforeAdd, uint128 nextLiquidity)
+    {
+        return VTSPositionLib._deriveIncreaseTransitionLiquidity(liq, liquidityDelta);
+    }
+
+    /// @notice Exposes the shared liquidity mirror transition for terminal/inactive branch tests.
+    function applyLiquidityMirrorTransition(PositionId positionId, uint256 initialLiquidity, uint128 nextLiquidity)
+        external
+    {
+        PositionAccounting storage pa = s.positionAccounting[positionId];
+        Position storage pos = s.positions[positionId];
+        VTSPositionLib._applyLiquidityMirrorTransition(s, positionId, pa, pos, initialLiquidity, nextLiquidity);
+    }
+
     /// @notice Exposes onMMSettle for testing
     function onMMSettle(
         IPoolManager poolManager,
@@ -218,6 +236,37 @@ contract VTSPositionLibHarness {
         VTSPositionMMOpsLib.VaultSettleableView memory v =
             VTSPositionMMOpsLib._vaultSettleableViewForRequired(ctx, requiredSettlementDelta);
         return (v.settleableDelta, v.shortfallU0, v.shortfallU1);
+    }
+
+    function settleFromPositiveUnderlyingDeltaForTest(
+        IMarketVault marketVault,
+        PositionId positionId,
+        address owner,
+        Currency lccCurrency0,
+        Currency lccCurrency1,
+        uint256 intendedSettle0,
+        uint256 intendedSettle1,
+        BalanceDelta requiredSettlementDelta,
+        BalanceDelta rfsDelta,
+        bool clampToRequiredSettlement,
+        bool isSeizing
+    ) external returns (BalanceDelta settlementDelta, BalanceDelta remainingRequiredSettlementDelta) {
+        VTSPositionMMOpsLib.ProtocolCreditSettlementParams memory params;
+        params.marketVault = marketVault;
+        params.positionId = positionId;
+        params.owner = owner;
+        params.lccCurrency0 = lccCurrency0;
+        params.lccCurrency1 = lccCurrency1;
+        params.intendedSettle0 = intendedSettle0;
+        params.intendedSettle1 = intendedSettle1;
+        params.requiredSettlementDelta = requiredSettlementDelta;
+        params.rfsDelta = rfsDelta;
+        params.clampToRequiredSettlement = clampToRequiredSettlement;
+        params.isSeizing = isSeizing;
+
+        VTSPositionMMOpsLib.ProtocolCreditSettlementResult memory result =
+            VTSPositionMMOpsLib.settleFromPositiveUnderlyingDelta(s, params);
+        return (result.settlementDelta, result.remainingRequiredSettlementDelta);
     }
 
     /// @notice Exposes internal liquidity decrease helper for unit tests (queue clamping, settleableDelta)

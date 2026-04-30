@@ -83,20 +83,22 @@ const func: DeployFunction = async function ({
   });
 
   const sequencer = SEQUENCER[network.name];
-  const mainOracleName = sequencer !== undefined ? "SequencerChainlinkOracle" : "ChainlinkOracle";
+  let mainOracleName = sequencer !== undefined ? "SequencerChainlinkOracle" : "ChainlinkOracle";
+  mainOracleName = network.live ? mainOracleName : "MockChainlinkOracle";
+
   await deploy(mainOracleName, {
     contract: mainOracleName,
     from: deployer,
     log: true,
     deterministicDeployment: false,
     skipIfAlreadyDeployed: true,
-    args: sequencer ? [sequencer] : [],
+    args: sequencer && network.live ? [sequencer] : [],
     proxy: {
       owner: proxyOwnerAddress,
       proxyContract: "OptimizedTransparentUpgradeableProxy",
       execute: {
         methodName: "initialize",
-        args: [acmDeployment.address],
+        args: network.live ? [acmDeployment.address] : [],
       },
       viaAdminContract: {
         name: "DefaultProxyAdmin",
