@@ -27,6 +27,41 @@ run_and_print() {
   printf '%s' "$out"
 }
 
+cast_send_with_nonce_retry() {
+  local out status next_nonce attempt=1
+  local -a nonce_arg=()
+
+  while [ "$attempt" -le 3 ]; do
+    set +e
+    out="$(cast send "$@" "${nonce_arg[@]}" 2>&1)"
+    status=$?
+    set -e
+
+    if [ "$status" -eq 0 ]; then
+      printf '%s' "$out"
+      return 0
+    fi
+
+    next_nonce="$(
+      printf '%s\n' "$out" \
+        | sed -n 's/.*nonce too low: next nonce \([0-9][0-9]*\), tx nonce [0-9][0-9]*.*/\1/p' \
+        | tail -n1
+    )"
+    if [ -z "$next_nonce" ]; then
+      printf '%s\n' "$out" >&2
+      return "$status"
+    fi
+
+    echo "cast send hit stale nonce; retrying with node-reported nonce $next_nonce" >&2
+    nonce_arg=(--nonce "$next_nonce")
+    attempt=$((attempt + 1))
+    sleep 2
+  done
+
+  printf '%s\n' "$out" >&2
+  return "$status"
+}
+
 to_dec() {
   local value
   value="$(printf '%s\n' "${1:-}" | sed -n '1p' | tr -d '[:space:]')"
