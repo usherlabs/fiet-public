@@ -17,7 +17,7 @@ TASK-40 removed the active `SpokeRSC` / `HubCallback` runtime path. That removal
 - terminal failures must be classified and quarantined;
 - continuation callbacks must originate from `HubRSC` itself.
 
-The matrix below does not treat removed files as a fix by itself. Each superseded row cites the current `HubRSC` code and tests that preserve the old invariant.
+The matrix below does not treat removed files as a fix by itself. Each superseded row cites the current `HubRSC` code and tests that preserve the old invariant. The historical **`SpokeRSC` / `HubCallback`** pattern applied canonical writes through access-gated external functions after VM-side **`emit Callback`**; the single-hub design restores that separation using **`react` → `Callback` → `applyCanonicalProtocolLog`** on the canonical Reactive deployment.
 
 ## Findings Matrix
 

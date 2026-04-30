@@ -12,10 +12,18 @@ contract HubRSC is HubRSCDispatch {
         uint256 _protocolChainId,
         uint256 _reactChainId,
         address _liquidityHub,
-        address _destinationReceiverContract
+        address _destinationReceiverContract,
+        address _reactiveCallbackProxy
     )
         payable
-        HubRSCStorage(_maxDispatchItems, _protocolChainId, _reactChainId, _liquidityHub, _destinationReceiverContract)
+        HubRSCStorage(
+            _maxDispatchItems,
+            _protocolChainId,
+            _reactChainId,
+            _liquidityHub,
+            _destinationReceiverContract,
+            _reactiveCallbackProxy
+        )
     {
         if (!vm) {
             service.subscribe(
@@ -113,8 +121,26 @@ contract HubRSC is HubRSCDispatch {
     }
 
     /// @notice React to origin chain logs (ReactVM only).
+    /// @dev ReactVM execution must not assume canonical storage persistence. This entrypoint only emits
+    ///      `Callback` to the reactive network, which delivers `applyCanonicalProtocolLog` on the canonical deployment.
     function react(IReactive.LogRecord calldata log) external vmOnly {
+        emit Callback(
+            reactChainId,
+            address(this),
+            CANONICAL_APPLY_CALLBACK_GAS_LIMIT,
+            abi.encodeWithSelector(this.applyCanonicalProtocolLog.selector, log)
+        );
+    }
+
+    /// @notice Applies an observed protocol or self-continuation log to canonical HubRSC storage.
+    /// @dev Callable only by `reactiveCallbackProxy` after the ReactVM `react` path emits `Callback`.
+    function applyCanonicalProtocolLog(IReactive.LogRecord calldata log) external onlyReactiveCallbackProxy {
         _syncObservedSystemDebt();
+        _dispatchCanonicalInboundLog(log);
+    }
+
+    /// @notice Routes decoded inbound logs to the same handlers used for canonical state updates.
+    function _dispatchCanonicalInboundLog(IReactive.LogRecord calldata log) internal {
         if (log.topic_0 == LCC_CREATED_TOPIC) {
             _handleLccCreated(log);
             return;

@@ -12,6 +12,25 @@ This project is built for the Reactive Network execution model:
 - Reactive contracts execute `react()` logic in ReactVM.
 - Cross-chain actions are emitted as callbacks and executed on destination chains.
 
+## ReactVM isolation and the canonical apply pipeline
+
+Reactive materialises **two logical faces** of the same `HubRSC` bytecode:
+
+1. **ReactVM** (`vm == true` in `AbstractReactive`): runs `react(IReactive.LogRecord)` when a subscribed log matches. Storage writes here **must not** be treated as persisting on the canonical deployment; the supported VM-side effect is emitting Reactive **`Callback`** intents.
+2. **Canonical hub** (`vm == false`): holds queues, budgets, deduplication, recipient balances, and subscriptions. Intake that mirrors protocol state runs only after the callback infrastructure delivers the payload to **`applyCanonicalProtocolLog`**, which is gated by **`onlyReactiveCallbackProxy`**.
+
+End-to-end pipeline for a protocol log:
+
+1. **ReactVM observation** — `react()` validates/normalises the record and emits `Callback(reactChainId, address(this), gasLimit, abi.encodeCall(HubRSC.applyCanonicalProtocolLog, (log)))`.
+2. **Callback emission** — Reactive records the outbound callback (this is distinct from destination-chain `processSettlements` callbacks).
+3. **Callback-proxy delivery** — the configured `reactiveCallbackProxy` invokes `applyCanonicalProtocolLog` on the **canonical** Reactive deployment.
+4. **Canonical state application** — `_syncObservedSystemDebt()` then `_dispatchCanonicalInboundLog(log)` route to the same topic handlers as before (`LCCCreated`, `SettlementQueued`, liquidity wakes, reconciliation topics, and so on).
+5. **Destination receiver callbacks** — unchanged: authorised `BatchProcessSettlement` still receives `processSettlements` callbacks for protocol-chain execution.
+
+**Operational debugging:** an RVM transaction that only shows `react` activity confirms observation and bridge intent emission; canonical queue, pending, `hasUnderlyingForLcc`, and similar storage only move after a successful **`applyCanonicalProtocolLog`** (or other canonical entrypoints such as `registerRecipient`). If intake appears “missing”, trace whether the bridge hop was delivered, not only whether the log was observed in ReactVM.
+
+See also `src/libs/AbstractHubReactiveBridge.sol` (NatSpec) and `test/hub/HubRSC.ReactVmStateBridge.t.sol` for regression coverage that **`react` alone does not register LCC underlying state** until the proxy-gated apply step runs.
+
 ## Terminology
 
 - **Protocol chain**: The chain where Fiet’s `LiquidityHub` lives (e.g. Arbitrum One for MVP).
@@ -45,12 +64,12 @@ This project is built for the Reactive Network execution model:
 ### Reactive chain
 
 - `src/HubRSC.sol`
-  - Public reactive facade for constructor wiring, `react()` ingress, queue accessors, and subscriptions.
+  - Public reactive facade for constructor wiring, **`react()`** ingress (ReactVM-only), **`applyCanonicalProtocolLog`** (callback-proxy only), queue accessors, and subscriptions.
   - Registers recipients, tracks signed per-recipient native balances, and owns recipient-scoped exact-match lifecycle subscriptions.
   - Deactivates and unsubscribes recipients whose balance is not positive until top-up reactivation.
   - Keeps the surviving Hub runtime contract while delegating storage and policy-heavy internals into focused modules under `src/hub/`.
 - `src/hub/HubRSCStorage.sol`
-  - Declares HubRSC storage, queue structs, constants, events, and constructor-time immutable validation.
+  - Declares HubRSC storage, queue structs, constants, events, constructor-time immutable validation, and **`reactiveCallbackProxy`** (authorised caller for `applyCanonicalProtocolLog`).
 - `src/hub/HubRSCRouting.sol`
   - Owns dispatch-lane selection, LCC-underlying registration, and bounded shared-underlying backfill accounting.
 - `src/hub/HubRSCReconciliation.sol`
@@ -68,7 +87,7 @@ This project is built for the Reactive Network execution model:
 ### Testing
 
 - Focused Hub suites: `forge test --match-path 'test/hub/*.t.sol'`
-- Deterministic local simulation: `forge test` (includes single-contract HubRSC coverage using Foundry mocks and direct `react()` calls; no live Reactive Network access or secrets)
+- Deterministic local simulation: `forge test` (includes single-contract HubRSC coverage using Foundry mocks; hub tests simulate the full bridge via **`_deliverReactiveVmLog`**, i.e. `react` then `vm.prank(reactiveCallbackProxy)` + `applyCanonicalProtocolLog`, matching production isolation; no live Reactive Network access or secrets)
 - Unit tests: `forge test`
 - Lasna-only Reactive Network pseudo-e2e smoke harness: `just e2e` (deploys mocks, deploys Hub/Receiver, registers funded recipients, triggers events, checks observed state; gated manually and requires `REACTIVE_RPC` plus an lREACT-funded key)
 - Post-refactor reactive findings matrix: [`docs/task-40.3-task-35-regression-validation.md`](docs/task-40.3-task-35-regression-validation.md)
@@ -322,7 +341,7 @@ From `contracts/reactive`, `just e2e` runs `bash test/e2e.sh` against your confi
 1. **Read environment** — Loads `.env` when present; requires `REACTIVE_RPC`, `PROTOCOL_RPC`, `PRIVATE_KEY`, `RECIPIENT_ONE`, and `RECIPIENT_TWO` (defaults exist for the two recipient addresses only when unset).
 2. **Deploy mock hub** — Broadcasts `DeployMockLiquidityHub` to `PROTOCOL_RPC` and records the `MockLiquidityHub` address as `LIQUIDITY_HUB`.
 3. **Deploy batch receiver** — Broadcasts `DeployReceiver` to `PROTOCOL_RPC` and records the receiver as `BATCH_RECEIVER` (must differ from the hub address).
-4. **Deploy HubRSC** — Runs `scripts/deployreactivehub.sh` with `BATCH_SIZE=1` on the reactive RPC, parses the `HubRSC` address, and waits until contract code is visible on `REACTIVE_RPC`.
+4. **Deploy HubRSC** — Runs `scripts/deployreactivehub.sh` with `BATCH_SIZE=1` on the reactive RPC, parses the `HubRSC` address, and waits until contract code is visible on `REACTIVE_RPC`. The script passes **`REACTIVE_CALLBACK_PROXY`** (sixth constructor argument); when unset it defaults to `0x000…fffFfF`, the Reactive system / callback-executor address used on Lasna.
 5. **Activate recipients** — Sends `registerRecipient` on `HubRSC` for each configured recipient with `RECIPIENT_DEPOSIT_WEI` native value, then optionally sleeps `SUBSCRIPTION_PROPAGATION_SECONDS` so live subscriptions can propagate.
 6. **Emit a market LCC pair** — Calls `triggerLccCreated` twice on the mock hub with one shared `market_id`, producing two stand-in LCC/underlying pairs so `HubRSC` sees the same two-LCC-per-market shape as the real `LiquidityHub`.
 7. **Emit `SettlementQueued` twice** — Calls `triggerSettlementQueued` for one of those LCCs against `RECIPIENT_ONE` and `RECIPIENT_TWO` with fixed small amounts.

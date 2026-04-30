@@ -32,6 +32,7 @@ for env_name in \
   LIQUIDITY_HUB \
   PROTOCOL_RPC \
   BATCH_RECEIVER \
+  REACTIVE_CALLBACK_PROXY \
   HUB_RSC_VALUE \
   HUB_RVM_ID \
   BATCH_SIZE; do
@@ -53,6 +54,7 @@ for env_name in \
   LIQUIDITY_HUB \
   PROTOCOL_RPC \
   BATCH_RECEIVER \
+  REACTIVE_CALLBACK_PROXY \
   HUB_RSC_VALUE \
   HUB_RVM_ID \
   BATCH_SIZE; do
@@ -78,6 +80,10 @@ DEPLOYER_PRIVATE_KEY="${PRIVATE_KEY:-}"
 : "${PROTOCOL_RPC:?PROTOCOL_RPC is required}"
 : "${BATCH_RECEIVER:?BATCH_RECEIVER is required}"
 
+# Authorised caller for `applyCanonicalProtocolLog` on the canonical Reactive deployment (Reactive chain).
+# Defaults to the Reactive system contract address, which is the published callback executor on Lasna/Reactive testnets.
+REACTIVE_CALLBACK_PROXY="${REACTIVE_CALLBACK_PROXY:-0x0000000000000000000000000000000000fffFfF}"
+
 # Hub RVM id is the deployer address for this deployment flow.
 DEPLOYER_ADDRESS="$(cast wallet address --private-key "$DEPLOYER_PRIVATE_KEY")"
 HUB_RVM_ID="$DEPLOYER_ADDRESS"
@@ -94,6 +100,7 @@ echo "  PROTOCOL_CHAIN_ID=$PROTOCOL_CHAIN_ID"
 echo "  REACTIVE_CHAIN_ID=$REACTIVE_CHAIN_ID"
 echo "  LIQUIDITY_HUB=$LIQUIDITY_HUB"
 echo "  BATCH_RECEIVER=$BATCH_RECEIVER"
+echo "  REACTIVE_CALLBACK_PROXY=$REACTIVE_CALLBACK_PROXY"
 echo "  HUB_RSC_VALUE=$HUB_RSC_VALUE"
 echo "  HUB_RVM_ID=$HUB_RVM_ID"
 echo "  BATCH_SIZE=${BATCH_SIZE:-20}"
@@ -109,7 +116,8 @@ hub_rsc_output="$(
       "$PROTOCOL_CHAIN_ID" \
       "$REACTIVE_CHAIN_ID" \
       "$LIQUIDITY_HUB" \
-      "$BATCH_RECEIVER" 2>&1
+      "$BATCH_RECEIVER" \
+      "$REACTIVE_CALLBACK_PROXY" 2>&1
 )"
 echo "$hub_rsc_output"
 
