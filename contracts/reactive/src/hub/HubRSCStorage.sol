@@ -187,6 +187,9 @@ abstract contract HubRSCStorage is AbstractReactive {
     event RecipientDeactivated(address indexed recipient, int256 balance);
     event RecipientDebtAllocated(address indexed recipient, uint256 debtAmount, int256 balance);
     event UnallocatedDebtObserved(uint256 debtAmount, uint256 observedDebt);
+    event CanonicalProtocolLogCallback(
+        address indexed callbackOrigin, uint256 indexed originChainId, address indexed origin
+    );
     event MoreLiquidityAvailable(address indexed lcc, uint256 amountAvailable);
     event PendingAdded(address indexed lcc, address indexed recipient, uint256 amount);
     event PendingIncreased(address indexed lcc, address indexed recipient, uint256 amount);

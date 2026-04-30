@@ -35,10 +35,20 @@ to_dec() {
     return
   fi
   if [[ "$value" == 0x* ]]; then
-    cast to-dec "$value"
+    cast to-dec "$value" 2>/dev/null || printf '0'
     return
   fi
   printf '%s' "$value"
+}
+
+uint_or_zero() {
+  local value
+  value="$(to_dec "${1:-}")"
+  if [[ "$value" =~ ^[0-9]+$ ]]; then
+    printf '%s' "$value"
+    return
+  fi
+  printf '0'
 }
 
 wait_until() {
@@ -103,7 +113,7 @@ pending_at_least() {
     "pendingStateByKey(bytes32)(uint256,bool)" \
     "$key" \
     --rpc-url "$REACTIVE_RPC" 2>/dev/null || true)"
-  amount="$(to_dec "$(printf '%s\n' "$state" | sed -n '1p')")"
+  amount="$(uint_or_zero "$(printf '%s\n' "$state" | sed -n '1p')")"
   exists="$(printf '%s\n' "$state" | sed -n '2p' | tr -d '[:space:]')"
 
   [ "$exists" = "true" ] && [ "$amount" -ge "$expected_amount" ]
@@ -120,7 +130,7 @@ settled_at_least() {
     "$lcc_addr" \
     "$recipient_addr" \
     --rpc-url "$PROTOCOL_RPC" 2>/dev/null || true)"
-  total_settled="$(to_dec "$total_settled")"
+  total_settled="$(uint_or_zero "$total_settled")"
 
   [ "$total_settled" -ge "$expected_amount" ]
 }
