@@ -2,13 +2,62 @@
 # deploys the hub rsc on the reactive chain
 set -euo pipefail
 
-# Load local env overrides when present.
+# Load local env defaults when present, but preserve any values already
+# provided by the caller (for example `test/e2e.sh` exporting fresh deploy
+# addresses for `LIQUIDITY_HUB` and `BATCH_RECEIVER`).
+preserve_env_var() {
+  local name="$1"
+  local marker_var="PRESERVED_${name}__SET"
+  local value_var="PRESERVED_${name}__VALUE"
+  if [ "${!name+x}" = "x" ]; then
+    printf -v "$marker_var" '%s' "1"
+    printf -v "$value_var" '%s' "${!name}"
+  fi
+}
+
+restore_env_var() {
+  local name="$1"
+  local marker_var="PRESERVED_${name}__SET"
+  local value_var="PRESERVED_${name}__VALUE"
+  if [ "${!marker_var:-}" = "1" ]; then
+    export "$name=${!value_var}"
+  fi
+}
+
+for env_name in \
+  REACTIVE_RPC \
+  PRIVATE_KEY \
+  PROTOCOL_CHAIN_ID \
+  REACTIVE_CHAIN_ID \
+  LIQUIDITY_HUB \
+  PROTOCOL_RPC \
+  BATCH_RECEIVER \
+  HUB_RSC_VALUE \
+  HUB_RVM_ID \
+  BATCH_SIZE; do
+  preserve_env_var "$env_name"
+done
+
 if [ -f ".env" ]; then
   set -a
   # shellcheck disable=SC1091
   source .env
   set +a
 fi
+
+for env_name in \
+  REACTIVE_RPC \
+  PRIVATE_KEY \
+  PROTOCOL_CHAIN_ID \
+  REACTIVE_CHAIN_ID \
+  LIQUIDITY_HUB \
+  PROTOCOL_RPC \
+  BATCH_RECEIVER \
+  HUB_RSC_VALUE \
+  HUB_RVM_ID \
+  BATCH_SIZE; do
+  restore_env_var "$env_name"
+done
 
 # Extracts the last deployed contract address from `forge create` output.
 # Matches flexible formats, e.g. with leading spaces or extra log prefixes.
