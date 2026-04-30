@@ -1,8 +1,8 @@
-# Reactive validation tests.
+# Reactive Lasna live validation.
 #
-# The deterministic job runs `just local-simulation` under `contracts/reactive`
-# without live secrets. The live smoke job is explicitly gated and reserved for
-# Lasna pseudo-e2e validation with a funded live key.
+# Deterministic Reactive contract coverage is handled by `Reactive Contracts Tests`
+# in ci.yml via forge test. This workflow keeps only gated live smoke lanes that
+# exercise Reactive Lasna behavior with funded live keys.
 name: Reactive Validation
 
 on:
@@ -67,29 +67,6 @@ jobs:
           done < <(git diff --name-only "origin/${{ github.base_ref }}...HEAD")
 
           echo "changed=$changed" >> "$GITHUB_OUTPUT"
-
-  reactive-local-simulation:
-    name: Reactive Local Simulation
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          submodules: recursive
-          token: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Install Foundry
-        run: ./.github/scripts/install-foundry.sh v1.4.2
-
-      - name: Install Just
-        run: |
-          curl --proto '=https' --tlsv1.2 -sSf https://just.systems/install.sh | bash -s -- --to /usr/local/bin
-
-      - name: Run deterministic reactive local simulation
-        run: just local-simulation
-        working-directory: contracts/reactive
 
   reactive-live-smoke:
     name: Reactive Live Smoke
