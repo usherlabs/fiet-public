@@ -86,12 +86,6 @@ e2e_deploy() {
   fi
 
   cast_send_with_nonce_retry "$HUB_RSC" \
-    "activateBaseSubscriptions()" \
-    --rpc-url "$REACTIVE_RPC" \
-    --private-key "$PRIVATE_KEY" >/dev/null
-  echo "HubRSC base subscriptions activated"
-
-  cast_send_with_nonce_retry "$HUB_RSC" \
     "registerRecipient(address)" \
     "$RECIPIENT_ONE" \
     --rpc-url "$REACTIVE_RPC" \

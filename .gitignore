@@ -6,9 +6,7 @@ forge.toml
 forge.lock
 !contracts/**/foundry.toml
 !contracts/**/foundry.lock
-!contracts/**/broadcast/
 contracts/**/deployments/**
-contracts/**/deployments/.keep
 contracts/**/out/
 contracts/evm/.echidna-gen/
 contracts/**/cache/
@@ -49,6 +47,16 @@ contracts/evm-scripts/deployments/oracle_deployments/**
 
 # Oracle local deployments
 contracts/evm-scripts/deployments/oracle_deployments/development
+
+# Reactive deployments
+!contracts/reactive/deployments
+contracts/reactive/broadcast/**
+!contracts/reactive/broadcast/
+!contracts/reactive/broadcast/*/
+!contracts/reactive/broadcast/*/42161/
+!contracts/reactive/broadcast/*/42161/**
+!contracts/reactive/broadcast/*/1597/
+!contracts/reactive/broadcast/*/1597/**
 
 # Node.js
 node_modules/
