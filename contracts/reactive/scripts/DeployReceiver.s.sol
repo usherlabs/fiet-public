@@ -15,12 +15,14 @@ contract DeployReceiver is Script {
         uint256 protocolChainId = vm.envUint("PROTOCOL_CHAIN_ID");
         address callbackProxy = _callbackProxyForChainId(protocolChainId);
         address liquidityHub = vm.envAddress("LIQUIDITY_HUB");
-        address hubRVMId = vm.envAddress("HUB_RVM_ID");
+        address deployerAddress = vm.addr(deployerKey);
+        address hubRVMId = vm.envOr("HUB_RVM_ID", deployerAddress);
 
         uint256 prefund = vm.envOr("RECEIVER_PREFUND_WEI", uint256(0.01 ether));
 
         vm.startBroadcast(deployerKey);
         console2.log("deploying with liquidity hub:", address(liquidityHub));
+        console2.log("deploying with deployer address:", deployerAddress);
         console2.log("deploying with hub RVM id:", hubRVMId);
         BatchProcessSettlement receiver = new BatchProcessSettlement{value: prefund}(callbackProxy, liquidityHub, hubRVMId);
         vm.stopBroadcast();
