@@ -68,3 +68,9 @@ e2e-integration: require-reactive-rpc require-protocol-rpc
 
 fund-contract contract_addr amount_wei:
     bash scripts/fundcontract.sh {{ contract_addr }} {{ amount_wei }}
+
+register-recipient recipient amount_wei: require-reactive-rpc
+    bash scripts/registerrecipient.sh {{ recipient }} {{ amount_wei }}
+
+fund-recipient recipient amount_wei: require-reactive-rpc
+    bash scripts/fundrecipient.sh {{ recipient }} {{ amount_wei }}
