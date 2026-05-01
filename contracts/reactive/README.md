@@ -418,7 +418,7 @@ Use this order for a real deployment:
 4. Deploy `BatchProcessSettlement` on the protocol chain. This must happen before `HubRSC`, because `HubRSC` stores the receiver address as an immutable constructor argument.
 5. Deploy `HubRSC` on the Reactive chain with the production `LIQUIDITY_HUB`, deployed `BATCH_RECEIVER`, and the correct `REACTIVE_CALLBACK_PROXY`.
 6. Fund `HubRSC` and, if required for your lane, the receiver with enough native value / reserve for subscriptions and callbacks.
-7. Call `activateBaseSubscriptions()` on `HubRSC`.
+7. Activate HubRSC-wide subscriptions. `just deploy-hub` now does this automatically after deploy, or run `just activate-base-subscriptions` against an existing `HUB_RSC`.
 8. Register and fund each production recipient with `registerRecipient(recipient)` or top up existing recipients with `fundRecipient(recipient)`.
 9. Wait for subscription propagation before relying on live automation.
 
@@ -459,6 +459,8 @@ Required env vars:
 ```bash
 just deploy-hub
 ```
+
+This deploy helper also calls `activateBaseSubscriptions()` once the `HUB_RSC` address is known.
 
 #### 4) Register or top up a recipient (reactive chain)
 
