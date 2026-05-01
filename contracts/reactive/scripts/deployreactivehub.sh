@@ -154,6 +154,9 @@ if [ -z "${HUB_RSC:-}" ]; then
   exit 1
 fi
 
+export HUB_RSC
+bash scripts/activatebasesubscriptions.sh
+
 
 # ensure to log the address of the deployed contract
 # using the format contract_name:address

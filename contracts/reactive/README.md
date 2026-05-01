@@ -163,7 +163,7 @@ While backfill is still in progress, the hub prefers the per-LCC lane when it ha
 
 This is the default automation path:
 
-1. **Deploy `HubRSC`** and the destination receiver.
+1. **Deploy the destination receiver**, then deploy **`HubRSC`** with that receiver address.
 2. **Fund** the reactive HubRSC contract with lREACT so it can maintain subscriptions and callbacks.
 3. **Register each recipient** with payable `registerRecipient(recipient)` and native value.
 4. **Top up recipients** with payable `fundRecipient(recipient)` before their balance is exhausted.
@@ -408,6 +408,27 @@ For full details on environment variables and deployment scripts, see the [Deplo
 
 Review `contracts/reactive/env.sample`, copy it into `.env`, then fill in values for your target chains and deployment addresses.
 
+### Production / mainnet deployment flow
+
+Use this order for a real deployment:
+
+1. Deploy or identify the production `LiquidityHub` on the protocol chain.
+2. Choose the signer that will own the Reactive deployment flow.
+3. Derive `HUB_RVM_ID` from that signer address. `DeployReceiver` now defaults `HUB_RVM_ID` to the `PRIVATE_KEY` address when the env var is unset, but you can still override it explicitly if your callback origin differs from the deployer.
+4. Deploy `BatchProcessSettlement` on the protocol chain. This must happen before `HubRSC`, because `HubRSC` stores the receiver address as an immutable constructor argument.
+5. Deploy `HubRSC` on the Reactive chain with the production `LIQUIDITY_HUB`, deployed `BATCH_RECEIVER`, and the correct `REACTIVE_CALLBACK_PROXY`.
+6. Fund `HubRSC` and, if required for your lane, the receiver with enough native value / reserve for subscriptions and callbacks.
+7. Activate HubRSC-wide subscriptions. `just deploy-hub` now does this automatically after deploy, or run `just activate-base-subscriptions` against an existing `HUB_RSC`.
+8. Register and fund each production recipient with `registerRecipient(recipient)` or top up existing recipients with `fundRecipient(recipient)`.
+9. Wait for subscription propagation before relying on live automation.
+
+The deployment dependency is intentionally one-way:
+
+- `BatchProcessSettlement` needs `LIQUIDITY_HUB` and the expected `HUB_RVM_ID` callback origin.
+- `HubRSC` needs `BATCH_RECEIVER`.
+
+That means the receiver is deployed first, while the receiver's `HUB_RVM_ID` is the expected Reactive callback origin rather than the deployed `HubRSC` address.
+
 ### Steps
 
 #### 1) Deploy mock LiquidityHub (protocol chain, test only)
@@ -421,7 +442,7 @@ just deploy-mock-liquidity-hub
 Required env vars:
 
 - `LIQUIDITY_HUB` (deployed LiquidityHub address on protocol chain)
-- `HUB_RVM_ID` (deployed HubRSC RVM id allowed as `callbackOrigin`)
+- `HUB_RVM_ID` (optional override for the allowed `callbackOrigin`; defaults to the `PRIVATE_KEY` address)
 - `PROTOCOL_CHAIN_ID` (used to derive the published Reactive callback proxy for the destination chain)
 
 ```bash
@@ -439,12 +460,24 @@ Required env vars:
 just deploy-hub
 ```
 
+This deploy helper also calls `activateBaseSubscriptions()` once the `HUB_RSC` address is known.
+
 #### 4) Register or top up a recipient (reactive chain)
 
-```solidity
-registerRecipient(recipient) payable
-fundRecipient(recipient) payable
+Operator helpers:
+
+```bash
+just register-recipient <RECIPIENT> <AMOUNT_WEI>
+just fund-recipient <RECIPIENT> <AMOUNT_WEI>
 ```
+
+These commands require:
+
+- `HUB_RSC`
+- `REACTIVE_RPC`
+- `PRIVATE_KEY`
+
+They also fall back to `.env` values for `RECIPIENT` and `RECIPIENT_DEPOSIT_WEI` when the shell scripts are called directly.
 
 ### Reactive funding: recipient deposits vs system deposits
 

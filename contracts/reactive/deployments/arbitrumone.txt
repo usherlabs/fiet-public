@@ -1,0 +1,42 @@
+
+forge script scripts/DeployReceiver.s.sol:DeployReceiver --rpc-url https://arb-mainnet.g.alchemy.com/v2/UfOKI-Yjm8uyF8aRr1s7e --broadcast
+[⠊] Compiling...
+No files changed, compilation skipped
+Script ran successfully.
+
+== Logs ==
+  deploying with liquidity hub: 0x55Aea7D8595812b71653B5a9e4cF37B3B74b0E7E
+  deploying with deployer address: 0x93Af6d19a1738E52295014AC0103b005048DF388
+  deploying with hub RVM id: 0x93Af6d19a1738E52295014AC0103b005048DF388
+  BatchProcessSettlementReceiver: 0x663e527CbC7aDb089Adb81687dd4D7420f114201
+
+## Setting up 1 EVM.
+
+==========================
+
+Chain 42161
+
+Estimated gas price: 0.040000001 gwei
+
+Estimated total gas used for script: 940186
+
+Estimated amount required: 0.000037607440940186 ETH
+
+==========================
+
+##### arbitrum
+✅  [Success] Hash: 0x04a32a81e7b009cddff73d4199a6920c907d8d4e187626110eee4a530f617e66
+Contract Address: 0x663e527CbC7aDb089Adb81687dd4D7420f114201
+Block: 458118009
+Paid: 0.00001430666 ETH (715333 gas * 0.02 gwei)
+
+✅ Sequence #1 on arbitrum | Total Paid: 0.00001430666 ETH (715333 gas * avg 0.02 gwei)
+
+
+==========================
+
+ONCHAIN EXECUTION COMPLETE & SUCCESSFUL.
+
+Transactions saved to: /Users/ryansoury/dev/fiet/protocol/contracts/reactive/broadcast/DeployReceiver.s.sol/42161/run-latest.json
+
+Sensitive values saved to: /Users/ryansoury/dev/fiet/protocol/contracts/reactive/cache/DeployReceiver.s.sol/42161/run-latest.json
