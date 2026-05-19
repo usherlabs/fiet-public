@@ -273,6 +273,50 @@ This system is event-driven. “Time to process” depends on:
 - available liquidity events (`LiquidityAvailable(...)`) on the protocol chain
 - bounded dispatch behaviour (large backlogs may take multiple bounded rounds)
 
+## Live queued-settlement demo harness
+
+`scripts/live-demo.sh` drives an operator demo against existing deployments. It does **not** deploy Reactive
+infrastructure. It preflights RPC reachability, deployed code, `LiquidityHub` / `BatchProcessSettlement` / `HubRSC`
+wiring, recipient registration and activation, Reactive funding, and `HubRSC.maxDispatchItems() > 0`; then it runs:
+
+1. `contracts/evm-scripts/script/CreateMMPosition.s.sol`
+2. `contracts/evm-scripts/script/SwapV4.s.sol` with exact-input `SWAP_RECIPIENT=$RECIPIENT`
+3. `contracts/evm-scripts/script/SettleMMPosition.s.sol`
+4. bounded polling of `LiquidityHub.settleQueue(lccOut, RECIPIENT)` and `HubRSC` pending / in-flight mirror state
+
+Required live-demo env, in addition to the existing Reactive/protocol addresses:
+
+```bash
+export NETWORK=arbitrum
+export PROTOCOL_RPC=...
+export REACTIVE_RPC=...
+export LIQUIDITY_HUB=...
+export BATCH_RECEIVER=...
+export HUB_RSC=...
+export RECIPIENT=...
+export CORE_POOL_ID=0x...
+export MM_PRIVATE_KEY=0x...
+export MM_TICK_LOWER=-60
+export MM_TICK_UPPER=60
+export MM_LIQUIDITY=10000000000
+export LIQUIDITY_SIGNAL_HEX=0x...
+export AMOUNT=1000000
+export BROADCAST=true
+```
+
+`SWAP_PRIVATE_KEY` defaults to `LP_PRIVATE_KEY`, then `MM_PRIVATE_KEY`. `MAX_WAIT_SECONDS` and
+`POLL_INTERVAL_SECONDS` bound waits. With `BROADCAST=false`, the harness only performs Forge dry-runs where possible
+and does not claim a live queue was processed.
+
+### RVM id versus deployed contract address
+
+`BatchProcessSettlement.hubRVMId()` authorises the Reactive callback **origin id**. In current deployments that id is
+derived from the Reactive deployer key used for the HubRSC runtime; it is not automatically the deployed `HubRSC`
+address, and it is not a legacy deployed `SpokeRSC` address. The live demo reads `hubRVMId()` from the receiver and
+compares it to `HUB_RVM_ID` or `SPOKE_RVM_ID` when either is set. `SpokeRSC` and `HubCallback` remain retired in the
+current single-HubRSC runtime; the harness only checks legacy `SPOKE_RSC` / `HUB_CALLBACK` code when those optional envs
+are explicitly supplied.
+
 ## Troubleshooting & FAQ
 
 ### “Queue events exist, but nothing is processed”

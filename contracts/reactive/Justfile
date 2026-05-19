@@ -85,3 +85,7 @@ register-recipient recipient amount_wei: require-reactive-rpc
 
 fund-recipient recipient amount_wei: require-reactive-rpc
     bash scripts/fundrecipient.sh {{ recipient }} {{ amount_wei }}
+
+# Operator live demo against existing Fiet + Reactive deployments.
+live-demo: require-reactive-rpc require-protocol-rpc
+    bash scripts/live-demo.sh
