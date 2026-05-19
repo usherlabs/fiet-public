@@ -297,13 +297,17 @@ export RECIPIENT=...
 export SWAP_PRIVATE_KEY=0x... # must derive RECIPIENT
 export CORE_POOL_ID=0x...
 export MM_PRIVATE_KEY=0x...
-export MM_TICK_LOWER=-60
-export MM_TICK_UPPER=60
-export MM_LIQUIDITY=10000000000
+export MM_RANGE_WIDTH=600
+export MM_POSITION_USD_WAD=1000000000000000000000
 export LIQUIDITY_SIGNAL_HEX=0x...
 export AMOUNT=1000000
 export BROADCAST=true
 ```
+
+`CreateMMPosition.s.sol` derives `TickLower` / `TickUpper` around the current core-pool tick using
+`MM_RANGE_WIDTH`, selects `Liquidity` from the effective USD exposure target, and prints `Amount0Max`,
+`Amount1Max`, `PositionUsdWad`, `BaseSettle0`, and `BaseSettle1` for the run summary. `Amount0Max` and
+`Amount1Max` are the computed commitment maxima used for base-rate settlement sizing.
 
 `SWAP_PRIVATE_KEY` defaults to `LP_PRIVATE_KEY`, then `MM_PRIVATE_KEY`, and the derived signer must equal
 `RECIPIENT`. The swap intentionally leaves hook data empty so `ProxyHook` resolves the queue recipient through its

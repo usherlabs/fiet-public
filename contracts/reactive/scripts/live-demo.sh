@@ -216,7 +216,9 @@ derive_swap_signer() {
 extract_label() {
   local label="$1"
   local text="$2"
-  printf '%s\n' "$text" | sed -n "s/.*${label}:[[:space:]]*//p" | awk 'NF {print $1}' | tail -n1
+  printf '%s\n' "$text" | sed -n \
+    -e "s/^${label}:[[:space:]]*//p" \
+    -e "s/.*[[:space:]]${label}:[[:space:]]*//p" | awk 'NF {print $1}' | tail -n1
 }
 
 extract_tx_hash() {
@@ -239,13 +241,10 @@ run_create_position() {
       NETWORK="$NETWORK" \
       CORE_POOL_ID="$CORE_POOL_ID" \
       MM_PRIVATE_KEY="$MM_PRIVATE_KEY" \
-      MM_TICK_LOWER="$MM_TICK_LOWER" \
-      MM_TICK_UPPER="$MM_TICK_UPPER" \
-      MM_LIQUIDITY="$MM_LIQUIDITY" \
+      MM_RANGE_WIDTH="$MM_RANGE_WIDTH" \
+      MM_POSITION_USD_WAD="$MM_POSITION_USD_WAD" \
       LIQUIDITY_SIGNAL_HEX="$LIQUIDITY_SIGNAL_HEX" \
       POSITION_INDEX="${POSITION_INDEX:-0}" \
-      MM_INITIAL_SETTLE0="${MM_INITIAL_SETTLE0:-0}" \
-      MM_INITIAL_SETTLE1="${MM_INITIAL_SETTLE1:-0}" \
       FOUNDRY_PROFILE="${EVM_SCRIPTS_FOUNDRY_PROFILE:-deploy}" \
       forge script script/CreateMMPosition.s.sol:CreateMMPosition \
         --rpc-url "$PROTOCOL_RPC" "${broadcast_flag[@]}" -vvv
@@ -306,7 +305,7 @@ preflight() {
   require_cmd forge
 
   for name in PROTOCOL_RPC REACTIVE_RPC NETWORK CORE_POOL_ID LIQUIDITY_HUB HUB_RSC BATCH_RECEIVER RECIPIENT \
-    MM_PRIVATE_KEY MM_TICK_LOWER MM_TICK_UPPER MM_LIQUIDITY LIQUIDITY_SIGNAL_HEX; do
+    MM_PRIVATE_KEY MM_RANGE_WIDTH MM_POSITION_USD_WAD LIQUIDITY_SIGNAL_HEX; do
     require_env "$name"
   done
   [ -n "$SWAP_PRIVATE_KEY_VALUE" ] || fail "Missing SWAP_PRIVATE_KEY, LP_PRIVATE_KEY, or MM_PRIVATE_KEY for SwapV4."
@@ -409,6 +408,15 @@ print_summary() {
   echo "  status: $status"
   echo "  commitId: ${COMMIT_ID:-unknown}"
   echo "  positionIndex: ${POSITION_INDEX:-0}"
+  echo "  tickLower: ${CREATED_TICK_LOWER:-unknown}"
+  echo "  tickUpper: ${CREATED_TICK_UPPER:-unknown}"
+  echo "  liquidity: ${POSITION_LIQUIDITY:-unknown}"
+  echo "  amount0Max: ${AMOUNT0_MAX:-unknown}"
+  echo "  amount1Max: ${AMOUNT1_MAX:-unknown}"
+  echo "  positionUsdWad: ${POSITION_USD_WAD_ACTUAL:-unknown}"
+  echo "  targetPositionUsdWad: ${TARGET_POSITION_USD_WAD:-${MM_POSITION_USD_WAD:-unknown}}"
+  echo "  baseSettle0: ${BASE_SETTLE0:-unknown}"
+  echo "  baseSettle1: ${BASE_SETTLE1:-unknown}"
   echo "  lccOut: ${LCC_OUT:-unknown}"
   echo "  recipient: $RECIPIENT"
   echo "  queuedBefore: ${QUEUED_BEFORE:-unknown}"
@@ -429,10 +437,27 @@ main() {
 
   create_out="$(run_checked "Create live MM position" run_create_position)"
   COMMIT_ID="$(extract_label "CommitId" "$create_out")"
+  CREATED_TICK_LOWER="$(extract_label "TickLower" "$create_out")"
+  CREATED_TICK_UPPER="$(extract_label "TickUpper" "$create_out")"
+  POSITION_LIQUIDITY="$(extract_label "Liquidity" "$create_out")"
+  AMOUNT0_MAX="$(extract_label "Amount0Max" "$create_out")"
+  AMOUNT1_MAX="$(extract_label "Amount1Max" "$create_out")"
+  POSITION_USD_WAD_ACTUAL="$(extract_label "PositionUsdWad" "$create_out")"
+  TARGET_POSITION_USD_WAD="$(extract_label "TargetPositionUsdWad" "$create_out")"
+  BASE_SETTLE0="$(extract_label "BaseSettle0" "$create_out")"
+  BASE_SETTLE1="$(extract_label "BaseSettle1" "$create_out")"
   LCC0="$(extract_label "LCC0" "$create_out")"
   LCC1="$(extract_label "LCC1" "$create_out")"
   CREATE_TX="$(extract_tx_hash "$create_out")"
   [ -n "$COMMIT_ID" ] || fail "Could not parse CommitId from CreateMMPosition output"
+  [ -n "$CREATED_TICK_LOWER" ] || fail "Could not parse TickLower from CreateMMPosition output"
+  [ -n "$CREATED_TICK_UPPER" ] || fail "Could not parse TickUpper from CreateMMPosition output"
+  [ -n "$POSITION_LIQUIDITY" ] || fail "Could not parse Liquidity from CreateMMPosition output"
+  [ -n "$AMOUNT0_MAX" ] || fail "Could not parse Amount0Max from CreateMMPosition output"
+  [ -n "$AMOUNT1_MAX" ] || fail "Could not parse Amount1Max from CreateMMPosition output"
+  [ -n "$POSITION_USD_WAD_ACTUAL" ] || fail "Could not parse PositionUsdWad from CreateMMPosition output"
+  [ -n "$BASE_SETTLE0" ] || fail "Could not parse BaseSettle0 from CreateMMPosition output"
+  [ -n "$BASE_SETTLE1" ] || fail "Could not parse BaseSettle1 from CreateMMPosition output"
   [ -n "$LCC0" ] || fail "Could not parse LCC0 from CreateMMPosition output"
   [ -n "$LCC1" ] || fail "Could not parse LCC1 from CreateMMPosition output"
   export COMMIT_ID
