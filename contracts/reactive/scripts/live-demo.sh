@@ -207,6 +207,12 @@ queue_decreased() {
   dec_lt "$current" "$QUEUED_AFTER_SWAP"
 }
 
+derive_swap_signer() {
+  local signer
+  signer="$(cast wallet address --private-key "$SWAP_PRIVATE_KEY_VALUE" 2>/dev/null || true)"
+  printf '%s' "$signer" | tr -d '[:space:]'
+}
+
 extract_label() {
   local label="$1"
   local text="$2"
@@ -255,7 +261,6 @@ run_swap() {
       PRIVATE_KEY="${PRIVATE_KEY:-$MM_PRIVATE_KEY}" \
       LP_PRIVATE_KEY="$SWAP_PRIVATE_KEY_VALUE" \
       SWAP_TYPE="$SWAP_TYPE" \
-      SWAP_RECIPIENT="$RECIPIENT" \
       AMOUNT="${AMOUNT:-}" \
       EAMOUNT="${EAMOUNT:-}" \
       FOUNDRY_PROFILE="${EVM_SCRIPTS_FOUNDRY_PROFILE:-deploy}" \
@@ -316,9 +321,16 @@ preflight() {
 
   case "$SWAP_TYPE" in
     0|1|2) ;;
-    3|4|5) fail "SWAP_RECIPIENT exact-input demo cannot use exact-output SWAP_TYPE=$SWAP_TYPE" ;;
+    3|4|5) fail "Recipient-signed exact-input demo cannot use exact-output SWAP_TYPE=$SWAP_TYPE" ;;
     *) fail "Invalid SWAP_TYPE=$SWAP_TYPE. Use 0, 1, or 2 for this live demo." ;;
   esac
+
+  local swap_signer
+  swap_signer="$(derive_swap_signer)"
+  is_address "$swap_signer" || fail "Could not derive swap signer from SWAP_PRIVATE_KEY, LP_PRIVATE_KEY, or MM_PRIVATE_KEY"
+  same_address "$swap_signer" "$RECIPIENT" \
+    || fail "RECIPIENT must equal the swap signer ($swap_signer). Empty hook data relies on ProxyHook locker/msgSender resolution."
+  echo "Swap signer / queue recipient: $swap_signer"
 
   local protocol_chain reactive_chain
   protocol_chain="$(cast chain-id --rpc-url "$PROTOCOL_RPC")"
@@ -426,7 +438,7 @@ main() {
   export COMMIT_ID
 
   if [ "$BROADCAST" != "true" ]; then
-    swap_out="$(run_checked "Dry-run exact-input swap with SWAP_RECIPIENT" run_swap)"
+    swap_out="$(run_checked "Dry-run recipient-signed exact-input swap" run_swap)"
     LCC_OUT="$(extract_label "LccOut" "$swap_out")"
     SWAP_TX="$(extract_tx_hash "$swap_out")"
     QUEUED_BEFORE="0"
@@ -440,7 +452,7 @@ main() {
   q0_before="$(read_queue "$LCC0" "$RECIPIENT")"
   q1_before="$(read_queue "$LCC1" "$RECIPIENT")"
 
-  swap_out="$(run_checked "Broadcast exact-input swap with SWAP_RECIPIENT" run_swap)"
+  swap_out="$(run_checked "Broadcast recipient-signed exact-input swap" run_swap)"
   LCC_OUT="$(extract_label "LccOut" "$swap_out")"
   SWAP_TX="$(extract_tx_hash "$swap_out")"
   [ -n "$LCC_OUT" ] || fail "Could not parse LccOut from SwapV4 output"
@@ -458,14 +470,14 @@ main() {
     QUEUED_AFTER_SWAP="$(read_queue "$LCC_OUT" "$RECIPIENT")"
     QUEUED_FINAL="$QUEUED_AFTER_SWAP"
     print_summary "FAIL"
-    fail "No queued settlement was observed. Try a larger AMOUNT/EAMOUNT or verify the swap creates an output deficit."
+    fail "No queued settlement was observed. Try a larger AMOUNT/EAMOUNT, verify the recipient signed the swap, and verify the swap creates an output deficit."
   fi
   QUEUED_AFTER_SWAP="$(read_queue "$LCC_OUT" "$RECIPIENT")"
 
   if ! wait_until "HubRSC mirrored pending or in-flight work" hub_work_observed; then
     QUEUED_FINAL="$QUEUED_AFTER_SWAP"
     print_summary "FAIL"
-    fail "HubRSC did not mirror queued work. Check recipient subscriptions, callback proxy delivery, and Reactive funding."
+    fail "HubRSC did not mirror queued work. Check recipient registration/funding, callback proxy delivery, and Reactive funding."
   fi
 
   settle_out="$(run_checked "Broadcast maker settlement for MM position" run_settle_position)"

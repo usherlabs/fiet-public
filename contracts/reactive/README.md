@@ -280,7 +280,7 @@ infrastructure. It preflights RPC reachability, deployed code, `LiquidityHub` / 
 wiring, recipient registration and activation, Reactive funding, and `HubRSC.maxDispatchItems() > 0`; then it runs:
 
 1. `contracts/evm-scripts/script/CreateMMPosition.s.sol`
-2. `contracts/evm-scripts/script/SwapV4.s.sol` with exact-input `SWAP_RECIPIENT=$RECIPIENT`
+2. `contracts/evm-scripts/script/SwapV4.s.sol` with the recipient wallet signing an exact-input swap and empty hook data
 3. `contracts/evm-scripts/script/SettleMMPosition.s.sol`
 4. bounded polling of `LiquidityHub.settleQueue(lccOut, RECIPIENT)` and `HubRSC` pending / in-flight mirror state
 
@@ -294,6 +294,7 @@ export LIQUIDITY_HUB=...
 export BATCH_RECEIVER=...
 export HUB_RSC=...
 export RECIPIENT=...
+export SWAP_PRIVATE_KEY=0x... # must derive RECIPIENT
 export CORE_POOL_ID=0x...
 export MM_PRIVATE_KEY=0x...
 export MM_TICK_LOWER=-60
@@ -304,9 +305,11 @@ export AMOUNT=1000000
 export BROADCAST=true
 ```
 
-`SWAP_PRIVATE_KEY` defaults to `LP_PRIVATE_KEY`, then `MM_PRIVATE_KEY`. `MAX_WAIT_SECONDS` and
-`POLL_INTERVAL_SECONDS` bound waits. With `BROADCAST=false`, the harness only performs Forge dry-runs where possible
-and does not claim a live queue was processed.
+`SWAP_PRIVATE_KEY` defaults to `LP_PRIVATE_KEY`, then `MM_PRIVATE_KEY`, and the derived signer must equal
+`RECIPIENT`. The swap intentionally leaves hook data empty so `ProxyHook` resolves the queue recipient through its
+default locker / `msgSender()` path. `MAX_WAIT_SECONDS` and `POLL_INTERVAL_SECONDS` bound waits. With
+`BROADCAST=false`, the harness only performs Forge dry-runs where possible and does not claim a live queue was
+processed.
 
 ### RVM id versus deployed contract address
 
