@@ -41,6 +41,11 @@ require_env() {
   fi
 }
 
+has_env_value() {
+  local name="$1"
+  [ -n "${!name:-}" ]
+}
+
 is_address() {
   [[ "${1:-}" =~ ^0x[a-fA-F0-9]{40}$ ]]
 }
@@ -240,10 +245,12 @@ run_create_position() {
     env \
       NETWORK="$NETWORK" \
       CORE_POOL_ID="$CORE_POOL_ID" \
+      COMMIT_ID="${COMMIT_ID:-}" \
+      COMMIT_MIN_VALIDITY_SECONDS="${COMMIT_MIN_VALIDITY_SECONDS:-300}" \
       MM_PRIVATE_KEY="$MM_PRIVATE_KEY" \
       MM_RANGE_WIDTH="$MM_RANGE_WIDTH" \
       MM_POSITION_USD_WAD="$MM_POSITION_USD_WAD" \
-      LIQUIDITY_SIGNAL_HEX="$LIQUIDITY_SIGNAL_HEX" \
+      LIQUIDITY_SIGNAL_HEX="${LIQUIDITY_SIGNAL_HEX:-}" \
       POSITION_INDEX="${POSITION_INDEX:-0}" \
       FOUNDRY_PROFILE="${EVM_SCRIPTS_FOUNDRY_PROFILE:-deploy}" \
       forge script script/CreateMMPosition.s.sol:CreateMMPosition \
@@ -305,9 +312,12 @@ preflight() {
   require_cmd forge
 
   for name in PROTOCOL_RPC REACTIVE_RPC NETWORK CORE_POOL_ID LIQUIDITY_HUB HUB_RSC BATCH_RECEIVER RECIPIENT \
-    MM_PRIVATE_KEY MM_RANGE_WIDTH MM_POSITION_USD_WAD LIQUIDITY_SIGNAL_HEX; do
+    MM_PRIVATE_KEY MM_RANGE_WIDTH MM_POSITION_USD_WAD; do
     require_env "$name"
   done
+  if ! has_env_value COMMIT_ID; then
+    require_env LIQUIDITY_SIGNAL_HEX
+  fi
   [ -n "$SWAP_PRIVATE_KEY_VALUE" ] || fail "Missing SWAP_PRIVATE_KEY, LP_PRIVATE_KEY, or MM_PRIVATE_KEY for SwapV4."
   [ -n "${AMOUNT:-}" ] || [ -n "${EAMOUNT:-}" ] || fail "Missing AMOUNT or EAMOUNT for SwapV4."
 
@@ -406,7 +416,9 @@ print_summary() {
   echo "========================================"
   echo "Live Reactive Settlement demo summary"
   echo "  status: $status"
+  echo "  commitMode: ${COMMIT_MODE:-unknown}"
   echo "  commitId: ${COMMIT_ID:-unknown}"
+  echo "  commitExpiresAt: ${COMMIT_EXPIRES_AT:-unknown}"
   echo "  positionIndex: ${POSITION_INDEX:-0}"
   echo "  tickLower: ${CREATED_TICK_LOWER:-unknown}"
   echo "  tickUpper: ${CREATED_TICK_UPPER:-unknown}"
@@ -437,6 +449,9 @@ main() {
 
   create_out="$(run_checked "Create live MM position" run_create_position)"
   COMMIT_ID="$(extract_label "CommitId" "$create_out")"
+  POSITION_INDEX="$(extract_label "PositionIndex" "$create_out")"
+  COMMIT_MODE="$(extract_label "CommitMode" "$create_out")"
+  COMMIT_EXPIRES_AT="$(extract_label "CommitExpiresAt" "$create_out")"
   CREATED_TICK_LOWER="$(extract_label "TickLower" "$create_out")"
   CREATED_TICK_UPPER="$(extract_label "TickUpper" "$create_out")"
   POSITION_LIQUIDITY="$(extract_label "Liquidity" "$create_out")"
@@ -450,6 +465,9 @@ main() {
   LCC1="$(extract_label "LCC1" "$create_out")"
   CREATE_TX="$(extract_tx_hash "$create_out")"
   [ -n "$COMMIT_ID" ] || fail "Could not parse CommitId from CreateMMPosition output"
+  [ -n "$POSITION_INDEX" ] || fail "Could not parse PositionIndex from CreateMMPosition output"
+  [ -n "$COMMIT_MODE" ] || fail "Could not parse CommitMode from CreateMMPosition output"
+  [ -n "$COMMIT_EXPIRES_AT" ] || fail "Could not parse CommitExpiresAt from CreateMMPosition output"
   [ -n "$CREATED_TICK_LOWER" ] || fail "Could not parse TickLower from CreateMMPosition output"
   [ -n "$CREATED_TICK_UPPER" ] || fail "Could not parse TickUpper from CreateMMPosition output"
   [ -n "$POSITION_LIQUIDITY" ] || fail "Could not parse Liquidity from CreateMMPosition output"
@@ -460,7 +478,7 @@ main() {
   [ -n "$BASE_SETTLE1" ] || fail "Could not parse BaseSettle1 from CreateMMPosition output"
   [ -n "$LCC0" ] || fail "Could not parse LCC0 from CreateMMPosition output"
   [ -n "$LCC1" ] || fail "Could not parse LCC1 from CreateMMPosition output"
-  export COMMIT_ID
+  export COMMIT_ID POSITION_INDEX
 
   if [ "$BROADCAST" != "true" ]; then
     swap_out="$(run_checked "Dry-run recipient-signed exact-input swap" run_swap)"

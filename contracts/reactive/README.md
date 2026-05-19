@@ -296,18 +296,26 @@ export HUB_RSC=...
 export RECIPIENT=...
 export SWAP_PRIVATE_KEY=0x... # must derive RECIPIENT
 export CORE_POOL_ID=0x...
+export COMMIT_ID=123 # preferred: existing live Maker commitment
+export COMMIT_MIN_VALIDITY_SECONDS=300
 export MM_PRIVATE_KEY=0x...
 export MM_RANGE_WIDTH=600
 export MM_POSITION_USD_WAD=1000000000000000000000
+# Only required when COMMIT_ID is unset:
 export LIQUIDITY_SIGNAL_HEX=0x...
 export AMOUNT=1000000
 export BROADCAST=true
 ```
 
-`CreateMMPosition.s.sol` derives `TickLower` / `TickUpper` around the current core-pool tick using
-`MM_RANGE_WIDTH`, selects `Liquidity` from the effective USD exposure target, and prints `Amount0Max`,
-`Amount1Max`, `PositionUsdWad`, `BaseSettle0`, and `BaseSettle1` for the run summary. `Amount0Max` and
-`Amount1Max` are the computed commitment maxima used for base-rate settlement sizing.
+`COMMIT_ID` is the preferred live path. When set, `CreateMMPosition.s.sol` verifies the commitment owner is
+`MM_PRIVATE_KEY`, requires it to remain valid for at least `COMMIT_MIN_VALIDITY_SECONDS`, uses its current
+`positionCount` as the new `PositionIndex`, and batches `MINT_POSITION -> SETTLE_POSITION`. When `COMMIT_ID` is
+unset, it falls back to `LIQUIDITY_SIGNAL_HEX` and batches `COMMIT_SIGNAL -> MINT_POSITION -> SETTLE_POSITION`.
+In both modes, it derives `TickLower` / `TickUpper` around the current core-pool tick using `MM_RANGE_WIDTH`,
+selects `Liquidity` from the effective USD exposure target, and prints `CommitMode`, `CommitExpiresAt`,
+`Amount0Max`, `Amount1Max`, `PositionUsdWad`, `BaseSettle0`, and `BaseSettle1` for the run summary.
+`Amount0Max` and `Amount1Max` are the computed commitment maxima used for base-rate settlement sizing. See
+[`LIVE_DEMO.md`](./LIVE_DEMO.md) for the external Maker dependency boundary.
 
 `SWAP_PRIVATE_KEY` defaults to `LP_PRIVATE_KEY`, then `MM_PRIVATE_KEY`, and the derived signer must equal
 `RECIPIENT`. The swap intentionally leaves hook data empty so `ProxyHook` resolves the queue recipient through its
