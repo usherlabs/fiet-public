@@ -283,6 +283,7 @@ wiring, recipient registration and activation, Reactive funding, and `HubRSC.max
 2. `contracts/evm-scripts/script/SwapV4.s.sol` with the recipient wallet signing an exact-input swap and empty hook data
 3. `contracts/evm-scripts/script/SettleMMPosition.s.sol`
 4. bounded polling of `LiquidityHub.settleQueue(lccOut, RECIPIENT)` and `HubRSC` pending / in-flight mirror state
+5. optional `contracts/evm-scripts/script/CloseMMPosition.s.sol` cleanup after the protocol queue decreases
 
 Required live-demo env, in addition to the existing Reactive/protocol addresses:
 
@@ -304,6 +305,7 @@ export MM_POSITION_USD_WAD=1000000000000000000000
 # Only required when COMMIT_ID is unset:
 export LIQUIDITY_SIGNAL_HEX=0x...
 export AMOUNT=1000000
+export CLOSE_POSITION_AFTER_DEMO=true
 export BROADCAST=true
 ```
 
@@ -317,11 +319,21 @@ selects `Liquidity` from the effective USD exposure target, and prints `CommitMo
 `Amount0Max` and `Amount1Max` are the computed commitment maxima used for base-rate settlement sizing. See
 [`LIVE_DEMO.md`](./LIVE_DEMO.md) for the external Maker dependency boundary.
 
+The final Maker settlement is runtime-derived from `calcRFS(COMMIT_ID, POSITION_INDEX, false)`, so the summary reports
+`makerSettle0` / `makerSettle1` from `SettleMMPosition.s.sol`. These are distinct from `queueSettledAmount`, which is
+the observed protocol queue reduction (`queuedAfterSwap - queuedFinal`) after Reactive settlement processing.
+
 `SWAP_PRIVATE_KEY` defaults to `LP_PRIVATE_KEY`, then `MM_PRIVATE_KEY`, and the derived signer must equal
 `RECIPIENT`. The swap intentionally leaves hook data empty so `ProxyHook` resolves the queue recipient through its
 default locker / `msgSender()` path. `MAX_WAIT_SECONDS` and `POLL_INTERVAL_SECONDS` bound waits. With
 `BROADCAST=false`, the harness only performs Forge dry-runs where possible and does not claim a live queue was
 processed.
+
+`CLOSE_POSITION_AFTER_DEMO` defaults to `true`. When enabled, cleanup runs only after `settleQueue(lccOut, RECIPIENT)`
+has decreased, requires the demo position's RFS to be closed, and burns that one position with
+`BURN_POSITION -> SETTLE_POSITION_FROM_DELTAS -> TAKE -> TAKE`. It never adds a `DECOMMIT_SIGNAL` action and never
+decommits an existing Maker commitment. Set `CLOSE_POSITION_AFTER_DEMO=false` only when intentionally leaving the demo
+position open for follow-up inspection.
 
 ### RVM id versus deployed contract address
 

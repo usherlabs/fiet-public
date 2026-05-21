@@ -20,6 +20,7 @@ POLL_INTERVAL_SECONDS="${POLL_INTERVAL_SECONDS:-5}"
 SWAP_TYPE="${SWAP_TYPE:-0}"
 BATCH_RECEIVER="${BATCH_RECEIVER:-${BATCH_PROCESS_SETTLEMENT:-}}"
 SWAP_PRIVATE_KEY_VALUE="${SWAP_PRIVATE_KEY:-${LP_PRIVATE_KEY:-${MM_PRIVATE_KEY:-}}}"
+CLOSE_POSITION_AFTER_DEMO="${CLOSE_POSITION_AFTER_DEMO:-true}"
 
 fail() {
   echo "ERROR: $*" >&2
@@ -290,6 +291,21 @@ run_settle_position() {
   )
 }
 
+run_close_position() {
+  (
+    cd "$EVM_SCRIPTS_DIR"
+    env \
+      NETWORK="$NETWORK" \
+      CORE_POOL_ID="$CORE_POOL_ID" \
+      MM_PRIVATE_KEY="$MM_PRIVATE_KEY" \
+      COMMIT_ID="$COMMIT_ID" \
+      POSITION_INDEX="${POSITION_INDEX:-0}" \
+      FOUNDRY_PROFILE="${EVM_SCRIPTS_FOUNDRY_PROFILE:-deploy}" \
+      forge script script/CloseMMPosition.s.sol:CloseMMPosition \
+        --rpc-url "$PROTOCOL_RPC" "${broadcast_flag[@]}" -vvv
+  )
+}
+
 run_checked() {
   local title="$1"
   shift
@@ -332,6 +348,10 @@ preflight() {
     0|1|2) ;;
     3|4|5) fail "Recipient-signed exact-input demo cannot use exact-output SWAP_TYPE=$SWAP_TYPE" ;;
     *) fail "Invalid SWAP_TYPE=$SWAP_TYPE. Use 0, 1, or 2 for this live demo." ;;
+  esac
+  case "$CLOSE_POSITION_AFTER_DEMO" in
+    true|false) ;;
+    *) fail "Invalid CLOSE_POSITION_AFTER_DEMO=$CLOSE_POSITION_AFTER_DEMO. Use true or false." ;;
   esac
 
   local swap_signer
@@ -405,13 +425,13 @@ preflight() {
 
 print_summary() {
   local status="$1"
-  local state pending exists inflight remaining settled_amount
+  local state pending exists inflight remaining queue_settled_amount
   state="$(read_hub_state "${LCC_OUT:-${LCC0:-0x0000000000000000000000000000000000000000}}" "$RECIPIENT" 2>/dev/null || true)"
   pending="$(printf '%s\n' "$state" | awk '{print $2}')"
   exists="$(printf '%s\n' "$state" | awk '{print $3}')"
   inflight="$(printf '%s\n' "$state" | awk '{print $4}')"
   remaining="${QUEUED_FINAL:-${QUEUED_AFTER_SWAP:-0}}"
-  settled_amount="$(dec_sub_nonneg "${QUEUED_AFTER_SWAP:-0}" "${QUEUED_FINAL:-${QUEUED_AFTER_SWAP:-0}}")"
+  queue_settled_amount="$(dec_sub_nonneg "${QUEUED_AFTER_SWAP:-0}" "${QUEUED_FINAL:-${QUEUED_AFTER_SWAP:-0}}")"
 
   echo "========================================"
   echo "Live Reactive Settlement demo summary"
@@ -429,17 +449,26 @@ print_summary() {
   echo "  targetPositionUsdWad: ${TARGET_POSITION_USD_WAD:-${MM_POSITION_USD_WAD:-unknown}}"
   echo "  baseSettle0: ${BASE_SETTLE0:-unknown}"
   echo "  baseSettle1: ${BASE_SETTLE1:-unknown}"
+  echo "  makerSettle0: ${MAKER_SETTLE0:-unknown}"
+  echo "  makerSettle1: ${MAKER_SETTLE1:-unknown}"
+  echo "  rfsOpenAfterSettle: ${RFS_OPEN_AFTER_SETTLE:-unknown}"
   echo "  lccOut: ${LCC_OUT:-unknown}"
   echo "  recipient: $RECIPIENT"
   echo "  queuedBefore: ${QUEUED_BEFORE:-unknown}"
   echo "  queuedAfterSwap: ${QUEUED_AFTER_SWAP:-unknown}"
   echo "  queuedFinal: ${QUEUED_FINAL:-unknown}"
+  echo "  queueSettledAmount: $queue_settled_amount"
   echo "  createTx: ${CREATE_TX:-unknown}"
   echo "  swapTx: ${SWAP_TX:-unknown}"
   echo "  settleTx: ${SETTLE_TX:-unknown}"
+  echo "  closeTx: ${CLOSE_TX:-unknown}"
+  echo "  closePositionAfterDemo: $CLOSE_POSITION_AFTER_DEMO"
+  echo "  closeStatus: ${CLOSE_STATUS:-unknown}"
+  echo "  closedLiquidity: ${CLOSED_LIQUIDITY:-unknown}"
+  echo "  positionActiveAfterClose: ${POSITION_ACTIVE_AFTER_CLOSE:-unknown}"
+  echo "  positionLiquidityAfterClose: ${POSITION_LIQUIDITY_AFTER_CLOSE:-unknown}"
   echo "  pending: ${pending:-unknown} (exists=${exists:-unknown})"
   echo "  inFlight: ${inflight:-unknown}"
-  echo "  settledAmount: $settled_amount"
   echo "  remainingQueue: $remaining"
 }
 
@@ -487,6 +516,7 @@ main() {
     QUEUED_BEFORE="0"
     QUEUED_AFTER_SWAP="0"
     QUEUED_FINAL="0"
+    CLOSE_STATUS="not-run"
     print_summary "PASS (dry-run only; no live transactions broadcast)"
     return 0
   fi
@@ -525,6 +555,17 @@ main() {
 
   settle_out="$(run_checked "Broadcast maker settlement for MM position" run_settle_position)"
   SETTLE_TX="$(extract_tx_hash "$settle_out")"
+  MAKER_SETTLE0="$(extract_label "Settle0" "$settle_out")"
+  MAKER_SETTLE1="$(extract_label "Settle1" "$settle_out")"
+  RFS_OPEN_AFTER_SETTLE="$(extract_label "RfsOpenAfter" "$settle_out")"
+  [ -n "$MAKER_SETTLE0" ] || fail "Could not parse Settle0 from SettleMMPosition output"
+  [ -n "$MAKER_SETTLE1" ] || fail "Could not parse Settle1 from SettleMMPosition output"
+  [ -n "$RFS_OPEN_AFTER_SETTLE" ] || fail "Could not parse RfsOpenAfter from SettleMMPosition output"
+  if [ "$RFS_OPEN_AFTER_SETTLE" != "false" ]; then
+    QUEUED_FINAL="$QUEUED_AFTER_SWAP"
+    print_summary "FAIL"
+    fail "Maker RFS remained open after settlement; refusing to continue to queue settlement or cleanup."
+  fi
 
   if ! wait_until "protocol settleQueue decrease after maker settlement" queue_decreased; then
     QUEUED_FINAL="$(read_queue "$LCC_OUT" "$RECIPIENT")"
@@ -533,6 +574,20 @@ main() {
   fi
 
   QUEUED_FINAL="$(read_queue "$LCC_OUT" "$RECIPIENT")"
+  if [ "$CLOSE_POSITION_AFTER_DEMO" = "true" ]; then
+    close_out="$(run_checked "Broadcast close live MM position" run_close_position)"
+    CLOSE_TX="$(extract_tx_hash "$close_out")"
+    CLOSE_STATUS="$(extract_label "CloseStatus" "$close_out")"
+    CLOSED_LIQUIDITY="$(extract_label "ClosedLiquidity" "$close_out")"
+    POSITION_ACTIVE_AFTER_CLOSE="$(extract_label "PositionActiveAfter" "$close_out")"
+    POSITION_LIQUIDITY_AFTER_CLOSE="$(extract_label "PositionLiquidityAfter" "$close_out")"
+    [ -n "$CLOSE_STATUS" ] || fail "Could not parse CloseStatus from CloseMMPosition output"
+    [ -n "$CLOSED_LIQUIDITY" ] || fail "Could not parse ClosedLiquidity from CloseMMPosition output"
+    [ -n "$POSITION_ACTIVE_AFTER_CLOSE" ] || fail "Could not parse PositionActiveAfter from CloseMMPosition output"
+    [ -n "$POSITION_LIQUIDITY_AFTER_CLOSE" ] || fail "Could not parse PositionLiquidityAfter from CloseMMPosition output"
+  else
+    CLOSE_STATUS="skipped"
+  fi
   print_summary "PASS"
 }
 
