@@ -91,9 +91,6 @@ jobs:
         with:
           node-version: "20"
 
-      - name: Enable Corepack (yarn)
-        run: corepack enable
-
       - name: Build artifacts tarball
         env:
           VERSION: ${{ needs.version.outputs.version }}

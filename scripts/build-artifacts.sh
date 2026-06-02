@@ -15,7 +15,7 @@ Produces:
 Reads VERSION from the env var of the same name, falling back to the
 top-level VERSION file.
 
-Required tools: forge, jq, node, npm, tar, sha256sum, yarn.
+Required tools: forge, jq, node, npm, tar, sha256sum.
 EOF
 }
 
@@ -38,7 +38,6 @@ require_tool node
 require_tool npm
 require_tool sha256sum
 require_tool tar
-require_tool yarn
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
@@ -70,13 +69,6 @@ BUILD_ROOT="$TMP_ROOT/build"
 
 mkdir -p "$ABI_DIR" "$BYTECODE_DIR" "$BUILD_ROOT" "$DIST_DIR"
 echo "$VERSION" >"$STAGE_DIR/VERSION"
-
-echo "==> Preparing protocol workspace (yarn install + patch-oracle)..."
-(
-  cd "$EVM_DIR"
-  node ./patch-oracle.cjs
-  yarn install --frozen-lockfile
-)
 
 echo "==> Building protocol contracts (default profile)..."
 (
@@ -154,10 +146,9 @@ write_abi_from_json \
   "$ABI_DIR/LCC.abi.json" \
   "$BUILD_ROOT/protocol/LCC.sol/LiquidityCommitmentCertificate.json"
 
-# The yarn workspace remaps @venusprotocol/oracle to the source-only sibling
-# submodule (lib/oracle), so it never produces Hardhat artifacts locally.
-# Fetch the published npm package at the same pinned version so the ABI
-# snapshots use the official artifacts.
+# lib/oracle is a source-only sibling submodule with no Hardhat artifacts.
+# Fetch the published npm packages at the version lib/oracle pins so the ABI
+# snapshots use the official artifacts — no yarn install required.
 ORACLE_VERSION="$(node -p "require('$EVM_DIR/lib/oracle/package.json').version")"
 ORACLE_PACKAGE_DIR="$(fetch_npm_package "@venusprotocol/oracle" "$ORACLE_VERSION" "$TMP_ROOT/npm/oracle")"
 
@@ -167,9 +158,31 @@ write_abi_from_json \
 write_abi_from_json \
   "$ABI_DIR/ResilientOracle.abi.json" \
   "$ORACLE_PACKAGE_DIR/artifacts/contracts/ResilientOracle.sol/ResilientOracle.json"
+
+GOVERNANCE_RANGE="$(node -e '
+const candidates = [
+  require("'"$EVM_DIR"'/lib/oracle/package.json"),
+  require("'"$ORACLE_PACKAGE_DIR"'/package.json"),
+];
+const fields = ["dependencies", "devDependencies", "peerDependencies"];
+let found;
+for (const pkg of candidates) {
+  for (const field of fields) {
+    if (pkg[field] && pkg[field]["@venusprotocol/governance-contracts"]) {
+      found = pkg[field]["@venusprotocol/governance-contracts"];
+      break;
+    }
+  }
+  if (found) break;
+}
+if (!found) throw new Error("governance-contracts version not declared by lib/oracle or @venusprotocol/oracle");
+process.stdout.write(found);
+')"
+GOVERNANCE_PACKAGE_DIR="$(fetch_npm_package "@venusprotocol/governance-contracts" "$GOVERNANCE_RANGE" "$TMP_ROOT/npm/governance")"
+
 write_abi_from_json \
   "$ABI_DIR/AccessControlManager.abi.json" \
-  "$EVM_DIR/node_modules/@venusprotocol/governance-contracts/artifacts/contracts/Governance/AccessControlManager.sol/AccessControlManager.json"
+  "$GOVERNANCE_PACKAGE_DIR/artifacts/contracts/Governance/AccessControlManager.sol/AccessControlManager.json"
 
 echo "==> Copying ProxyHook bytecode artifact..."
 PROXY_HOOK_SRC="$EVM_SCRIPTS_DIR/out/ProxyHook.sol/ProxyHook.json"
