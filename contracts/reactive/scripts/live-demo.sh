@@ -235,6 +235,99 @@ extract_tx_hash() {
     -e 's/.*Hash:[[:space:]]*\(0x[a-fA-F0-9]\{64\}\).*/\1/p' | tail -n1
 }
 
+WF_CREATE="not-run"
+WF_SWAP="not-run"
+WF_QUEUE_INCREASE="not-run"
+WF_HUB_MIRROR="not-run"
+WF_SETTLE="not-run"
+WF_QUEUE_DECREASE="not-run"
+WF_CLOSE="not-run"
+
+tx_mining_detail() {
+  local rpc="$1"
+  local hash="${2:-}"
+  local block status
+  if [ -z "$hash" ]; then
+    printf 'no tx hash captured'
+    return
+  fi
+  status="$(cast receipt "$hash" --rpc-url "$rpc" status 2>/dev/null || true)"
+  block="$(cast receipt "$hash" --rpc-url "$rpc" blockNumber 2>/dev/null || true)"
+  if [ -n "$block" ]; then
+    if [ "$status" = "0x1" ] || [ "$status" = "1" ]; then
+      printf 'mined block=%s %s' "$(to_dec "$block")" "$hash"
+      return
+    fi
+    if [ "$status" = "0x0" ] || [ "$status" = "0" ]; then
+      printf 'reverted block=%s %s' "$(to_dec "$block")" "$hash"
+      return
+    fi
+    printf 'mined block=%s %s' "$(to_dec "$block")" "$hash"
+    return
+  fi
+  printf 'tx=%s' "$hash"
+}
+
+print_workflow_row() {
+  local step="$1"
+  local label="$2"
+  local result="$3"
+  local detail="$4"
+  printf '  %-4s %-40s %-8s %s\n' "$step" "$label" "$result" "$detail"
+}
+
+print_workflow() {
+  local status="$1"
+  local queue_settled_amount
+  queue_settled_amount="$(dec_sub_nonneg "${QUEUED_AFTER_SWAP:-0}" "${QUEUED_FINAL:-${QUEUED_AFTER_SWAP:-0}}")"
+
+  echo ""
+  echo "========================================"
+  echo "Live Reactive Settlement demo workflow"
+  echo "  overall: $status"
+  echo "========================================"
+  printf '  %-4s %-40s %-8s %s\n' "Step" "Action" "Result" "Detail"
+  printf '  %-4s %-40s %-8s %s\n' "----" "----------------------------------------" "--------" "----------------------------------------"
+
+  if [ "$BROADCAST" = "true" ]; then
+    print_workflow_row "1" "Create MM position" "$WF_CREATE" "$(tx_mining_detail "$PROTOCOL_RPC" "${CREATE_TX:-}")"
+    print_workflow_row "2" "Recipient exact-input swap" "$WF_SWAP" "$(tx_mining_detail "$PROTOCOL_RPC" "${SWAP_TX:-}")"
+    print_workflow_row "3" "Protocol settleQueue increase" "$WF_QUEUE_INCREASE" \
+      "${QUEUED_BEFORE:-?} -> ${QUEUED_AFTER_SWAP:-?} (lccOut=${LCC_OUT:-unknown})"
+    print_workflow_row "4" "HubRSC pending / in-flight mirror" "$WF_HUB_MIRROR" \
+      "hub=${HUB_RSC:-unknown} recipient=${RECIPIENT:-unknown}"
+    print_workflow_row "5" "Maker position settlement" "$WF_SETTLE" "$(tx_mining_detail "$PROTOCOL_RPC" "${SETTLE_TX:-}")"
+    print_workflow_row "6" "Reactive queue settlement decrease" "$WF_QUEUE_DECREASE" \
+      "${QUEUED_AFTER_SWAP:-?} -> ${QUEUED_FINAL:-?} (settled=$queue_settled_amount)"
+    if [ "$CLOSE_POSITION_AFTER_DEMO" = "true" ]; then
+      print_workflow_row "7" "Close demo MM position" "$WF_CLOSE" "$(tx_mining_detail "$PROTOCOL_RPC" "${CLOSE_TX:-}")"
+    else
+      print_workflow_row "7" "Close demo MM position" "$WF_CLOSE" "CLOSE_POSITION_AFTER_DEMO=false"
+    fi
+  else
+    print_workflow_row "1" "Create MM position (dry-run)" "$WF_CREATE" "simulated only"
+    print_workflow_row "2" "Recipient exact-input swap (dry-run)" "$WF_SWAP" "simulated only"
+    print_workflow_row "3" "Protocol settleQueue increase" "$WF_QUEUE_INCREASE" "skipped (no broadcast)"
+    print_workflow_row "4" "HubRSC pending / in-flight mirror" "$WF_HUB_MIRROR" "skipped (no broadcast)"
+    print_workflow_row "5" "Maker position settlement" "$WF_SETTLE" "skipped (no broadcast)"
+    print_workflow_row "6" "Reactive queue settlement decrease" "$WF_QUEUE_DECREASE" "skipped (no broadcast)"
+    print_workflow_row "7" "Close demo MM position" "$WF_CLOSE" "skipped (no broadcast)"
+  fi
+
+  echo ""
+  echo "Reactive automation path (steps 5-6 when live):"
+  echo "  Protocol SettlementQueued"
+  echo "    -> HubRSC.react() / applyCanonicalProtocolLog (Reactive)"
+  echo "    -> BatchProcessSettlement.processSettlements (protocol)"
+  echo "    -> LiquidityHub.processSettlementFor (protocol)"
+  echo ""
+  echo "Deployed contracts:"
+  echo "  liquidityHub:     ${LIQUIDITY_HUB:-unknown}"
+  echo "  batchReceiver:    ${BATCH_RECEIVER:-unknown}"
+  echo "  hubRsc:           ${HUB_RSC:-unknown}"
+  echo "========================================"
+}
+
 broadcast_flag=()
 if [ "$BROADCAST" = "true" ]; then
   broadcast_flag=(--broadcast)
@@ -433,6 +526,9 @@ print_summary() {
   remaining="${QUEUED_FINAL:-${QUEUED_AFTER_SWAP:-0}}"
   queue_settled_amount="$(dec_sub_nonneg "${QUEUED_AFTER_SWAP:-0}" "${QUEUED_FINAL:-${QUEUED_AFTER_SWAP:-0}}")"
 
+  print_workflow "$status"
+
+  echo ""
   echo "========================================"
   echo "Live Reactive Settlement demo summary"
   echo "  status: $status"
@@ -508,6 +604,11 @@ main() {
   [ -n "$LCC0" ] || fail "Could not parse LCC0 from CreateMMPosition output"
   [ -n "$LCC1" ] || fail "Could not parse LCC1 from CreateMMPosition output"
   export COMMIT_ID POSITION_INDEX
+  if [ "$BROADCAST" = "true" ]; then
+    WF_CREATE="PASS"
+  else
+    WF_CREATE="DRY-RUN"
+  fi
 
   if [ "$BROADCAST" != "true" ]; then
     swap_out="$(run_checked "Dry-run recipient-signed exact-input swap" run_swap)"
@@ -517,6 +618,12 @@ main() {
     QUEUED_AFTER_SWAP="0"
     QUEUED_FINAL="0"
     CLOSE_STATUS="not-run"
+    WF_SWAP="DRY-RUN"
+    WF_QUEUE_INCREASE="SKIP"
+    WF_HUB_MIRROR="SKIP"
+    WF_SETTLE="SKIP"
+    WF_QUEUE_DECREASE="SKIP"
+    WF_CLOSE="SKIP"
     print_summary "PASS (dry-run only; no live transactions broadcast)"
     return 0
   fi
@@ -528,6 +635,7 @@ main() {
   swap_out="$(run_checked "Broadcast recipient-signed exact-input swap" run_swap)"
   LCC_OUT="$(extract_label "LccOut" "$swap_out")"
   SWAP_TX="$(extract_tx_hash "$swap_out")"
+  WF_SWAP="PASS"
   [ -n "$LCC_OUT" ] || fail "Could not parse LccOut from SwapV4 output"
 
   if same_address "$LCC_OUT" "$LCC0"; then
@@ -542,16 +650,20 @@ main() {
   if ! wait_until "protocol settleQueue increase for LccOut/recipient" queue_increased; then
     QUEUED_AFTER_SWAP="$(read_queue "$LCC_OUT" "$RECIPIENT")"
     QUEUED_FINAL="$QUEUED_AFTER_SWAP"
+    WF_QUEUE_INCREASE="FAIL"
     print_summary "FAIL"
     fail "No queued settlement was observed. Try a larger AMOUNT/EAMOUNT, verify the recipient signed the swap, and verify the swap creates an output deficit."
   fi
   QUEUED_AFTER_SWAP="$(read_queue "$LCC_OUT" "$RECIPIENT")"
+  WF_QUEUE_INCREASE="PASS"
 
   if ! wait_until "HubRSC mirrored pending or in-flight work" hub_work_observed; then
     QUEUED_FINAL="$QUEUED_AFTER_SWAP"
+    WF_HUB_MIRROR="FAIL"
     print_summary "FAIL"
     fail "HubRSC did not mirror queued work. Check recipient registration/funding, callback proxy delivery, and Reactive funding."
   fi
+  WF_HUB_MIRROR="PASS"
 
   settle_out="$(run_checked "Broadcast maker settlement for MM position" run_settle_position)"
   SETTLE_TX="$(extract_tx_hash "$settle_out")"
@@ -563,17 +675,21 @@ main() {
   [ -n "$RFS_OPEN_AFTER_SETTLE" ] || fail "Could not parse RfsOpenAfter from SettleMMPosition output"
   if [ "$RFS_OPEN_AFTER_SETTLE" != "false" ]; then
     QUEUED_FINAL="$QUEUED_AFTER_SWAP"
+    WF_SETTLE="FAIL"
     print_summary "FAIL"
     fail "Maker RFS remained open after settlement; refusing to continue to queue settlement or cleanup."
   fi
+  WF_SETTLE="PASS"
 
   if ! wait_until "protocol settleQueue decrease after maker settlement" queue_decreased; then
     QUEUED_FINAL="$(read_queue "$LCC_OUT" "$RECIPIENT")"
+    WF_QUEUE_DECREASE="FAIL"
     print_summary "FAIL"
     fail "Settlement queue did not decrease. Check BatchProcessSettlement events and HubRSC retry/terminal state."
   fi
 
   QUEUED_FINAL="$(read_queue "$LCC_OUT" "$RECIPIENT")"
+  WF_QUEUE_DECREASE="PASS"
   if [ "$CLOSE_POSITION_AFTER_DEMO" = "true" ]; then
     close_out="$(run_checked "Broadcast close live MM position" run_close_position)"
     CLOSE_TX="$(extract_tx_hash "$close_out")"
@@ -585,8 +701,10 @@ main() {
     [ -n "$CLOSED_LIQUIDITY" ] || fail "Could not parse ClosedLiquidity from CloseMMPosition output"
     [ -n "$POSITION_ACTIVE_AFTER_CLOSE" ] || fail "Could not parse PositionActiveAfter from CloseMMPosition output"
     [ -n "$POSITION_LIQUIDITY_AFTER_CLOSE" ] || fail "Could not parse PositionLiquidityAfter from CloseMMPosition output"
+    WF_CLOSE="PASS"
   else
     CLOSE_STATUS="skipped"
+    WF_CLOSE="SKIP"
   fi
   print_summary "PASS"
 }
