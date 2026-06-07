@@ -2,7 +2,7 @@
 
 `scripts/live-demo.sh` is an operator harness for existing Fiet and Reactive deployments. It does not run, emulate, or integrate with a Maker service.
 
-See also [`README.md`](./README.md) for deployment wiring, env variables, and troubleshooting.
+See also [`README.md`](./README.md) for deployment wiring, env variables, and troubleshooting. For an executed run with Arbiscan/Reactscan links, see [`LIVE_DEMO_RUN-07062026.md`](./LIVE_DEMO_RUN-07062026.md).
 
 ## Maker Dependency
 

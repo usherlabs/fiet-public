@@ -241,6 +241,32 @@ extract_tx_hash() {
     -e 's/.*Hash:[[:space:]]*\(0x[a-fA-F0-9]\{64\}\).*/\1/p' | tail -n1
 }
 
+broadcast_json_path() {
+  local script_name="$1"
+  local chain_id="${PROTOCOL_CHAIN_ID:-42161}"
+  printf '%s/broadcast/%s/%s/run-latest.json' "$EVM_SCRIPTS_DIR" "$script_name" "$chain_id"
+}
+
+last_broadcast_hash() {
+  local script_name="$1"
+  local json hash
+  json="$(broadcast_json_path "$script_name")"
+  [ -f "$json" ] || return 0
+  hash="$(jq -r '(.transactions // []) | map(select(.hash != null and .hash != "")) | last | .hash // empty' "$json" 2>/dev/null || true)"
+  printf '%s' "$hash"
+}
+
+extract_tx_hash_with_fallback() {
+  local text="$1"
+  local script_name="${2:-}"
+  local hash
+  hash="$(extract_tx_hash "$text")"
+  if [ -z "$hash" ] && [ -n "$script_name" ]; then
+    hash="$(last_broadcast_hash "$script_name")"
+  fi
+  printf '%s' "$hash"
+}
+
 WF_CREATE="not-run"
 WF_SWAP="not-run"
 WF_QUEUE_INCREASE="not-run"
@@ -726,7 +752,7 @@ run_settle_until_rfs_closed() {
   while [ "$attempt" -le "$MAX_SETTLE_ATTEMPTS" ]; do
     title="Broadcast maker settlement for MM position (attempt ${attempt}/${MAX_SETTLE_ATTEMPTS})"
     settle_out="$(run_checked "$title" run_settle_position)"
-    SETTLE_TX="$(extract_tx_hash "$settle_out")"
+    SETTLE_TX="$(extract_tx_hash_with_fallback "$settle_out" "SettleMMPosition.s.sol")"
     MAKER_SETTLE0="$(extract_label "Settle0" "$settle_out")"
     MAKER_SETTLE1="$(extract_label "Settle1" "$settle_out")"
     RFS_OPEN_BEFORE_SETTLE="$(extract_label "RfsOpenBefore" "$settle_out")"
@@ -752,7 +778,7 @@ run_close_if_enabled() {
   if [ "$CLOSE_POSITION_AFTER_DEMO" = "true" ]; then
     local close_out
     close_out="$(run_checked "Broadcast close live MM position" run_close_position)"
-    CLOSE_TX="$(extract_tx_hash "$close_out")"
+    CLOSE_TX="$(extract_tx_hash_with_fallback "$close_out" "CloseMMPosition.s.sol")"
     CLOSE_STATUS="$(extract_label "CloseStatus" "$close_out")"
     CLOSED_LIQUIDITY="$(extract_label "ClosedLiquidity" "$close_out")"
     POSITION_ACTIVE_AFTER_CLOSE="$(extract_label "PositionActiveAfter" "$close_out")"

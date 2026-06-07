@@ -25,7 +25,7 @@ main() {
   BASE_SETTLE1="$(extract_label "BaseSettle1" "$create_out")"
   LCC0="$(extract_label "LCC0" "$create_out")"
   LCC1="$(extract_label "LCC1" "$create_out")"
-  CREATE_TX="$(extract_tx_hash "$create_out")"
+  CREATE_TX="$(extract_tx_hash_with_fallback "$create_out" "CreateMMPosition.s.sol")"
   [ -n "$COMMIT_ID" ] || fail "Could not parse CommitId from CreateMMPosition output"
   [ -n "$POSITION_INDEX" ] || fail "Could not parse PositionIndex from CreateMMPosition output"
   [ -n "$COMMIT_MODE" ] || fail "Could not parse CommitMode from CreateMMPosition output"
@@ -50,7 +50,7 @@ main() {
   if [ "$BROADCAST" != "true" ]; then
     swap_out="$(run_checked "Dry-run recipient-signed exact-input swap" run_swap)"
     LCC_OUT="$(extract_label "LccOut" "$swap_out")"
-    SWAP_TX="$(extract_tx_hash "$swap_out")"
+    SWAP_TX="$(extract_tx_hash_with_fallback "$swap_out" "SwapV4.s.sol")"
     QUEUED_BEFORE="0"
     QUEUED_AFTER_SWAP="0"
     QUEUED_FINAL="0"
@@ -71,7 +71,7 @@ main() {
 
   swap_out="$(run_checked "Broadcast recipient-signed exact-input swap" run_swap)"
   LCC_OUT="$(extract_label "LccOut" "$swap_out")"
-  SWAP_TX="$(extract_tx_hash "$swap_out")"
+  SWAP_TX="$(extract_tx_hash_with_fallback "$swap_out" "SwapV4.s.sol")"
   WF_SWAP="PASS"
   [ -n "$LCC_OUT" ] || fail "Could not parse LccOut from SwapV4 output"
 

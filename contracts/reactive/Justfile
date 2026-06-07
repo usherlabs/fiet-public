@@ -99,3 +99,7 @@ live-demo: require-reactive-rpc require-protocol-rpc
 # Resume live demo after create+swap succeeded but settlement/queue/cleanup did not finish.
 live-demo-from-rfs: require-reactive-rpc require-protocol-rpc
     bash scripts/live-demo-from-rfs.sh
+
+# Print markdown-ready explorer links for a live demo run (broadcast JSON + TX_* overrides).
+collect-live-demo-txs:
+    bash scripts/collect-live-demo-txs.sh
