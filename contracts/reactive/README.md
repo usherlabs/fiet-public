@@ -273,6 +273,81 @@ This system is event-driven. “Time to process” depends on:
 - available liquidity events (`LiquidityAvailable(...)`) on the protocol chain
 - bounded dispatch behaviour (large backlogs may take multiple bounded rounds)
 
+## Live queued-settlement demo harness
+
+`scripts/live-demo.sh` drives an operator demo against existing deployments. It does **not** deploy Reactive
+infrastructure. It preflights RPC reachability, deployed code, `LiquidityHub` / `BatchProcessSettlement` / `HubRSC`
+wiring, recipient registration and activation, Reactive funding, and `HubRSC.maxDispatchItems() > 0`; then it runs:
+
+1. `contracts/evm-scripts/script/CreateMMPosition.s.sol`
+2. `contracts/evm-scripts/script/SwapV4.s.sol` with the recipient wallet signing an exact-input swap and empty hook data
+3. `contracts/evm-scripts/script/SettleMMPosition.s.sol`
+4. bounded polling of `LiquidityHub.settleQueue(lccOut, RECIPIENT)` and `HubRSC` pending / in-flight mirror state
+5. optional `contracts/evm-scripts/script/CloseMMPosition.s.sol` cleanup after the protocol queue decreases
+
+Required live-demo env, in addition to the existing Reactive/protocol addresses:
+
+```bash
+export NETWORK=arbitrum
+export PROTOCOL_RPC=...
+export REACTIVE_RPC=...
+export LIQUIDITY_HUB=...
+export BATCH_RECEIVER=...
+export HUB_RSC=...
+export RECIPIENT=...
+export SWAP_PRIVATE_KEY=0x... # must derive RECIPIENT
+export CORE_POOL_ID=0x...
+export COMMIT_ID=123 # preferred: existing live Maker commitment with an MMPM NFT
+export COMMIT_MIN_VALIDITY_SECONDS=300
+export MM_LOCKER_PRIVATE_KEY=0x... # signs MMPositionManager actions; legacy fallback: MM_PRIVATE_KEY
+export MM_PROOF_OWNER=0x... # optional split-role validation; alternatively MM_PROOF_OWNER_PRIVATE_KEY
+export MM_RANGE_WIDTH=600
+export MM_POSITION_USD_WAD=1000000000000000000000
+# Only required when COMMIT_ID is unset:
+export LIQUIDITY_SIGNAL_HEX=0x...
+export AMOUNT=1000000
+export CLOSE_POSITION_AFTER_DEMO=true
+export BROADCAST=true
+```
+
+`COMMIT_ID` is the preferred live path. When set, `CreateMMPosition.s.sol` verifies the commitment advancer is the
+locker signer, optionally verifies the proof owner, requires `ownerOf(COMMIT_ID)` to exist on `MMPositionManager` and
+be owned by or approved to the locker, requires it to remain valid for at least `COMMIT_MIN_VALIDITY_SECONDS`, uses its
+current `positionCount` as the new `PositionIndex`, and batches `MINT_POSITION -> SETTLE_POSITION`. A VTS-only commit
+without an MMPM NFT is rejected before position actions. When `COMMIT_ID` is unset, it falls back to
+`LIQUIDITY_SIGNAL_HEX` and batches `COMMIT_SIGNAL -> MINT_POSITION -> SETTLE_POSITION`; this fresh fallback remains a
+unified direct-commit path where signal owner and advancer both match the locker signer.
+In both modes, it derives `TickLower` / `TickUpper` around the current core-pool tick using `MM_RANGE_WIDTH`,
+selects `Liquidity` from the effective USD exposure target, and prints `CommitMode`, `CommitExpiresAt`,
+`Amount0Max`, `Amount1Max`, `PositionUsdWad`, `BaseSettle0`, and `BaseSettle1` for the run summary.
+`Amount0Max` and `Amount1Max` are the computed commitment maxima used for base-rate settlement sizing. See
+[`LIVE_DEMO.md`](./LIVE_DEMO.md) for the external Maker dependency boundary.
+
+The final Maker settlement is runtime-derived from `calcRFS(COMMIT_ID, POSITION_INDEX, false)`, so the summary reports
+`makerSettle0` / `makerSettle1` from `SettleMMPosition.s.sol`. These are distinct from `queueSettledAmount`, which is
+the observed protocol queue reduction (`queuedAfterSwap - queuedFinal`) after Reactive settlement processing.
+
+`SWAP_PRIVATE_KEY` defaults to `LP_PRIVATE_KEY`, then `MM_LOCKER_PRIVATE_KEY`, then legacy `MM_PRIVATE_KEY`, and the
+derived signer must equal `RECIPIENT`. The swap intentionally leaves hook data empty so `ProxyHook` resolves the queue
+recipient through its default locker / `msgSender()` path. `MAX_WAIT_SECONDS` and `POLL_INTERVAL_SECONDS` bound waits. With
+`BROADCAST=false`, the harness only performs Forge dry-runs where possible and does not claim a live queue was
+processed.
+
+`CLOSE_POSITION_AFTER_DEMO` defaults to `true`. When enabled, cleanup runs only after `settleQueue(lccOut, RECIPIENT)`
+has decreased, requires the demo position's RFS to be closed, and burns that one position with
+`BURN_POSITION -> SETTLE_POSITION_FROM_DELTAS -> TAKE -> TAKE`. It never adds a `DECOMMIT_SIGNAL` action and never
+decommits an existing Maker commitment. Set `CLOSE_POSITION_AFTER_DEMO=false` only when intentionally leaving the demo
+position open for follow-up inspection.
+
+### RVM id versus deployed contract address
+
+`BatchProcessSettlement.hubRVMId()` authorises the Reactive callback **origin id**. In current deployments that id is
+derived from the Reactive deployer key used for the HubRSC runtime; it is not automatically the deployed `HubRSC`
+address, and it is not a legacy deployed `SpokeRSC` address. The live demo reads `hubRVMId()` from the receiver and
+compares it to `HUB_RVM_ID` or `SPOKE_RVM_ID` when either is set. `SpokeRSC` and `HubCallback` remain retired in the
+current single-HubRSC runtime; the harness only checks legacy `SPOKE_RSC` / `HUB_CALLBACK` code when those optional envs
+are explicitly supplied.
+
 ## Troubleshooting & FAQ
 
 ### “Queue events exist, but nothing is processed”

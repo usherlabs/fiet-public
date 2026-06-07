@@ -85,3 +85,21 @@ register-recipient recipient amount_wei: require-reactive-rpc
 
 fund-recipient recipient amount_wei: require-reactive-rpc
     bash scripts/fundrecipient.sh {{ recipient }} {{ amount_wei }}
+
+recipient: require-reactive-rpc
+    bash scripts/recipientbalance.sh
+
+recipient-balance recipient: require-reactive-rpc
+    bash scripts/recipientbalance.sh {{ recipient }}
+
+# Operator live demo against existing Fiet + Reactive deployments.
+live-demo: require-reactive-rpc require-protocol-rpc
+    bash scripts/live-demo.sh
+
+# Resume live demo after create+swap succeeded but settlement/queue/cleanup did not finish.
+live-demo-from-rfs: require-reactive-rpc require-protocol-rpc
+    bash scripts/live-demo-from-rfs.sh
+
+# Print markdown-ready explorer links for a live demo run (broadcast JSON + TX_* overrides).
+collect-live-demo-txs:
+    bash scripts/collect-live-demo-txs.sh
