@@ -74,44 +74,44 @@ closes the maker RFS and emits the liquidity the batch receiver needs.
 
 ```mermaid
 sequenceDiagram
-  participant Op as Operator / live-demo.sh
-  participant R as Recipient wallet
-  participant PH as ProxyHook / LiquidityHub
+  participant Op as "Operator (live-demo.sh)"
+  participant R as "Recipient wallet"
+  participant PH as "ProxyHook"
   participant MM as MMPositionManager
-  participant H as HubRSC (Reactive)
+  participant H as "HubRSC (Reactive)"
   participant B as BatchProcessSettlement
   participant LH as LiquidityHub
 
-  Note over Op,LH: Step 1 — Create MM position
+  Note over Op,LH: Step 1 - Create MM position
   Op->>MM: MINT_POSITION + SETTLE_POSITION (base rates)
   MM-->>Op: CommitId, LCC0, LCC1, tick range, base settles
 
-  Note over Op,LH: Step 2 — Recipient swap
+  Note over Op,LH: Step 2 - Recipient swap
   R->>PH: exact-input swap (empty hook data)
-  PH->>LH: queue settlement for lccOut / recipient
+  PH->>LH: queue settlement for lccOut and recipient
   PH-->>Op: LccOut
 
-  Note over Op,LH: Step 3 — Protocol queue increase
+  Note over Op,LH: Step 3 - Protocol queue increase
   Op->>LH: poll settleQueue(lccOut, recipient)
-  LH-->>Op: queuedAfterSwap > queuedBefore
+  LH-->>Op: "queuedAfterSwap greater than queuedBefore"
 
-  Note over Op,LH: Step 4 — Reactive mirror
+  Note over Op,LH: Step 4 - Reactive mirror
   LH-->>H: SettlementQueued (via subscription)
-  H->>H: react / applyCanonicalProtocolLog
-  H-->>Op: pendingStateByKey / inFlightByKey > 0
+  H->>H: react then applyCanonicalProtocolLog
+  H-->>Op: "pendingStateByKey or inFlightByKey positive"
 
-  Note over Op,LH: Step 5 — Maker settlement (unblocks Reactive dispatch)
+  Note over Op,LH: Step 5 - Maker settlement (unblocks Reactive dispatch)
   Op->>MM: SETTLE_POSITION (calcRFS deposits)
-  MM-->>Op: makerSettle0/1, rfsOpenAfter=false
+  MM-->>Op: makerSettle0 and makerSettle1, rfsOpenAfter false
 
-  Note over Op,LH: Step 6 — Reactive batch settlement
+  Note over Op,LH: Step 6 - Reactive batch settlement
   H->>B: processSettlements callback (authorized RVM id)
   B->>LH: processSettlementFor(lccOut, recipient, amount)
   LH-->>Op: settleQueue decreases
 
-  Note over Op,LH: Step 7 — Optional cleanup
-  Op->>MM: BURN_POSITION + settle/take deltas
-  MM-->>Op: position burned; COMMIT_ID not decommitted
+  Note over Op,LH: Step 7 - Optional cleanup
+  Op->>MM: BURN_POSITION plus settle and take deltas
+  MM-->>Op: "position burned, COMMIT_ID not decommitted"
 ```
 
 ## Step-by-Step Walkthrough
