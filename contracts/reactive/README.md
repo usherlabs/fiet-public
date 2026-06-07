@@ -297,9 +297,10 @@ export HUB_RSC=...
 export RECIPIENT=...
 export SWAP_PRIVATE_KEY=0x... # must derive RECIPIENT
 export CORE_POOL_ID=0x...
-export COMMIT_ID=123 # preferred: existing live Maker commitment
+export COMMIT_ID=123 # preferred: existing live Maker commitment with an MMPM NFT
 export COMMIT_MIN_VALIDITY_SECONDS=300
-export MM_PRIVATE_KEY=0x...
+export MM_LOCKER_PRIVATE_KEY=0x... # signs MMPositionManager actions; legacy fallback: MM_PRIVATE_KEY
+export MM_PROOF_OWNER=0x... # optional split-role validation; alternatively MM_PROOF_OWNER_PRIVATE_KEY
 export MM_RANGE_WIDTH=600
 export MM_POSITION_USD_WAD=1000000000000000000000
 # Only required when COMMIT_ID is unset:
@@ -309,10 +310,13 @@ export CLOSE_POSITION_AFTER_DEMO=true
 export BROADCAST=true
 ```
 
-`COMMIT_ID` is the preferred live path. When set, `CreateMMPosition.s.sol` verifies the commitment owner is
-`MM_PRIVATE_KEY`, requires it to remain valid for at least `COMMIT_MIN_VALIDITY_SECONDS`, uses its current
-`positionCount` as the new `PositionIndex`, and batches `MINT_POSITION -> SETTLE_POSITION`. When `COMMIT_ID` is
-unset, it falls back to `LIQUIDITY_SIGNAL_HEX` and batches `COMMIT_SIGNAL -> MINT_POSITION -> SETTLE_POSITION`.
+`COMMIT_ID` is the preferred live path. When set, `CreateMMPosition.s.sol` verifies the commitment advancer is the
+locker signer, optionally verifies the proof owner, requires `ownerOf(COMMIT_ID)` to exist on `MMPositionManager` and
+be owned by or approved to the locker, requires it to remain valid for at least `COMMIT_MIN_VALIDITY_SECONDS`, uses its
+current `positionCount` as the new `PositionIndex`, and batches `MINT_POSITION -> SETTLE_POSITION`. A VTS-only commit
+without an MMPM NFT is rejected before position actions. When `COMMIT_ID` is unset, it falls back to
+`LIQUIDITY_SIGNAL_HEX` and batches `COMMIT_SIGNAL -> MINT_POSITION -> SETTLE_POSITION`; this fresh fallback remains a
+unified direct-commit path where signal owner and advancer both match the locker signer.
 In both modes, it derives `TickLower` / `TickUpper` around the current core-pool tick using `MM_RANGE_WIDTH`,
 selects `Liquidity` from the effective USD exposure target, and prints `CommitMode`, `CommitExpiresAt`,
 `Amount0Max`, `Amount1Max`, `PositionUsdWad`, `BaseSettle0`, and `BaseSettle1` for the run summary.
@@ -323,9 +327,9 @@ The final Maker settlement is runtime-derived from `calcRFS(COMMIT_ID, POSITION_
 `makerSettle0` / `makerSettle1` from `SettleMMPosition.s.sol`. These are distinct from `queueSettledAmount`, which is
 the observed protocol queue reduction (`queuedAfterSwap - queuedFinal`) after Reactive settlement processing.
 
-`SWAP_PRIVATE_KEY` defaults to `LP_PRIVATE_KEY`, then `MM_PRIVATE_KEY`, and the derived signer must equal
-`RECIPIENT`. The swap intentionally leaves hook data empty so `ProxyHook` resolves the queue recipient through its
-default locker / `msgSender()` path. `MAX_WAIT_SECONDS` and `POLL_INTERVAL_SECONDS` bound waits. With
+`SWAP_PRIVATE_KEY` defaults to `LP_PRIVATE_KEY`, then `MM_LOCKER_PRIVATE_KEY`, then legacy `MM_PRIVATE_KEY`, and the
+derived signer must equal `RECIPIENT`. The swap intentionally leaves hook data empty so `ProxyHook` resolves the queue
+recipient through its default locker / `msgSender()` path. `MAX_WAIT_SECONDS` and `POLL_INTERVAL_SECONDS` bound waits. With
 `BROADCAST=false`, the harness only performs Forge dry-runs where possible and does not claim a live queue was
 processed.
 

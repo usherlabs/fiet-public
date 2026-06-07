@@ -19,7 +19,8 @@ MAX_WAIT_SECONDS="${MAX_WAIT_SECONDS:-${POLL_TIMEOUT_SECONDS:-180}}"
 POLL_INTERVAL_SECONDS="${POLL_INTERVAL_SECONDS:-5}"
 SWAP_TYPE="${SWAP_TYPE:-0}"
 BATCH_RECEIVER="${BATCH_RECEIVER:-${BATCH_PROCESS_SETTLEMENT:-}}"
-SWAP_PRIVATE_KEY_VALUE="${SWAP_PRIVATE_KEY:-${LP_PRIVATE_KEY:-${MM_PRIVATE_KEY:-}}}"
+MM_LOCKER_PRIVATE_KEY_VALUE="${MM_LOCKER_PRIVATE_KEY:-${MM_PRIVATE_KEY:-}}"
+SWAP_PRIVATE_KEY_VALUE="${SWAP_PRIVATE_KEY:-${LP_PRIVATE_KEY:-${MM_LOCKER_PRIVATE_KEY_VALUE:-}}}"
 CLOSE_POSITION_AFTER_DEMO="${CLOSE_POSITION_AFTER_DEMO:-true}"
 
 fail() {
@@ -341,7 +342,10 @@ run_create_position() {
       CORE_POOL_ID="$CORE_POOL_ID" \
       COMMIT_ID="${COMMIT_ID:-}" \
       COMMIT_MIN_VALIDITY_SECONDS="${COMMIT_MIN_VALIDITY_SECONDS:-300}" \
-      MM_PRIVATE_KEY="$MM_PRIVATE_KEY" \
+      MM_PRIVATE_KEY="${MM_PRIVATE_KEY:-}" \
+      MM_LOCKER_PRIVATE_KEY="${MM_LOCKER_PRIVATE_KEY:-}" \
+      MM_PROOF_OWNER="${MM_PROOF_OWNER:-}" \
+      MM_PROOF_OWNER_PRIVATE_KEY="${MM_PROOF_OWNER_PRIVATE_KEY:-}" \
       MM_RANGE_WIDTH="$MM_RANGE_WIDTH" \
       MM_POSITION_USD_WAD="$MM_POSITION_USD_WAD" \
       LIQUIDITY_SIGNAL_HEX="${LIQUIDITY_SIGNAL_HEX:-}" \
@@ -358,7 +362,7 @@ run_swap() {
     env \
       NETWORK="$NETWORK" \
       CORE_POOL_ID="$CORE_POOL_ID" \
-      PRIVATE_KEY="${PRIVATE_KEY:-$MM_PRIVATE_KEY}" \
+      PRIVATE_KEY="${PRIVATE_KEY:-$MM_LOCKER_PRIVATE_KEY_VALUE}" \
       LP_PRIVATE_KEY="$SWAP_PRIVATE_KEY_VALUE" \
       SWAP_TYPE="$SWAP_TYPE" \
       AMOUNT="${AMOUNT:-}" \
@@ -375,7 +379,8 @@ run_settle_position() {
     env \
       NETWORK="$NETWORK" \
       CORE_POOL_ID="$CORE_POOL_ID" \
-      MM_PRIVATE_KEY="$MM_PRIVATE_KEY" \
+      MM_PRIVATE_KEY="${MM_PRIVATE_KEY:-}" \
+      MM_LOCKER_PRIVATE_KEY="${MM_LOCKER_PRIVATE_KEY:-}" \
       COMMIT_ID="$COMMIT_ID" \
       POSITION_INDEX="${POSITION_INDEX:-0}" \
       FOUNDRY_PROFILE="${EVM_SCRIPTS_FOUNDRY_PROFILE:-deploy}" \
@@ -390,7 +395,8 @@ run_close_position() {
     env \
       NETWORK="$NETWORK" \
       CORE_POOL_ID="$CORE_POOL_ID" \
-      MM_PRIVATE_KEY="$MM_PRIVATE_KEY" \
+      MM_PRIVATE_KEY="${MM_PRIVATE_KEY:-}" \
+      MM_LOCKER_PRIVATE_KEY="${MM_LOCKER_PRIVATE_KEY:-}" \
       COMMIT_ID="$COMMIT_ID" \
       POSITION_INDEX="${POSITION_INDEX:-0}" \
       FOUNDRY_PROFILE="${EVM_SCRIPTS_FOUNDRY_PROFILE:-deploy}" \
@@ -421,19 +427,21 @@ preflight() {
   require_cmd forge
 
   for name in PROTOCOL_RPC REACTIVE_RPC NETWORK CORE_POOL_ID LIQUIDITY_HUB HUB_RSC BATCH_RECEIVER RECIPIENT \
-    MM_PRIVATE_KEY MM_RANGE_WIDTH MM_POSITION_USD_WAD; do
+    MM_RANGE_WIDTH MM_POSITION_USD_WAD; do
     require_env "$name"
   done
+  [ -n "$MM_LOCKER_PRIVATE_KEY_VALUE" ] || fail "Missing MM_LOCKER_PRIVATE_KEY or legacy MM_PRIVATE_KEY for MMPositionManager actions."
   if ! has_env_value COMMIT_ID; then
     require_env LIQUIDITY_SIGNAL_HEX
   fi
-  [ -n "$SWAP_PRIVATE_KEY_VALUE" ] || fail "Missing SWAP_PRIVATE_KEY, LP_PRIVATE_KEY, or MM_PRIVATE_KEY for SwapV4."
+  [ -n "$SWAP_PRIVATE_KEY_VALUE" ] || fail "Missing SWAP_PRIVATE_KEY, LP_PRIVATE_KEY, MM_LOCKER_PRIVATE_KEY, or MM_PRIVATE_KEY for SwapV4."
   [ -n "${AMOUNT:-}" ] || [ -n "${EAMOUNT:-}" ] || fail "Missing AMOUNT or EAMOUNT for SwapV4."
 
   require_address LIQUIDITY_HUB
   require_address HUB_RSC
   require_address BATCH_RECEIVER
   require_address RECIPIENT
+  if [ -n "${MM_PROOF_OWNER:-}" ]; then require_address MM_PROOF_OWNER; fi
   if [ -n "${HUB_CALLBACK:-}" ]; then require_address HUB_CALLBACK; fi
   if [ -n "${SPOKE_RSC:-}" ]; then require_address SPOKE_RSC; fi
 
@@ -449,7 +457,7 @@ preflight() {
 
   local swap_signer
   swap_signer="$(derive_swap_signer)"
-  is_address "$swap_signer" || fail "Could not derive swap signer from SWAP_PRIVATE_KEY, LP_PRIVATE_KEY, or MM_PRIVATE_KEY"
+  is_address "$swap_signer" || fail "Could not derive swap signer from SWAP_PRIVATE_KEY, LP_PRIVATE_KEY, MM_LOCKER_PRIVATE_KEY, or MM_PRIVATE_KEY"
   same_address "$swap_signer" "$RECIPIENT" \
     || fail "RECIPIENT must equal the swap signer ($swap_signer). Empty hook data relies on ProxyHook locker/msgSender resolution."
   echo "Swap signer / queue recipient: $swap_signer"
